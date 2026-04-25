@@ -52,6 +52,37 @@ logger = logging.getLogger(__name__)
 _TEXT_FALLBACK_LIMIT = 39_000   # text field (notification fallback) — hard limit ~40K
 _BLOCK_SECTION_LIMIT = 3_000   # single section block text limit
 _MAX_BLOCKS_PER_MSG = 50       # max blocks array length per message
+_MAX_BLOCKS_TEXT_BYTES = 38_000  # total text across all blocks in one API call (~40K payload limit)
+
+
+def _split_blocks_for_payload(
+    blocks: list[dict],
+    max_blocks: int = _MAX_BLOCKS_PER_MSG,
+    max_text_bytes: int = _MAX_BLOCKS_TEXT_BYTES,
+) -> list[list[dict]]:
+    """Split blocks into chunks that fit Slack's payload limits.
+
+    Enforces both block count (50) and total text size (~38K) per chunk.
+    Returns a list of block-lists, each safe for one API call.
+    """
+    if not blocks:
+        return [[]]
+    chunks: list[list[dict]] = []
+    current: list[dict] = []
+    current_bytes = 0
+    for block in blocks:
+        block_text = block.get("text", {}).get("text", "") if isinstance(block.get("text"), dict) else ""
+        block_bytes = len(block_text.encode("utf-8", errors="replace"))
+        if current and (len(current) >= max_blocks or current_bytes + block_bytes > max_text_bytes):
+            chunks.append(current)
+            current = []
+            current_bytes = 0
+        current.append(block)
+        current_bytes += block_bytes
+    if current:
+        chunks.append(current)
+    return chunks or [[]]
+
 
 # Errors that indicate corp proxy / network blocking (trigger MCP fallback)
 _PROXY_ERRORS = (ConnectionError, OSError, TimeoutError)
@@ -907,34 +938,32 @@ class SlackChannelAdapter(ChannelAdapter):
                 blocks = self._text_to_blocks(text)
                 fallback = text[:_TEXT_FALLBACK_LIMIT]
 
-                if len(blocks) <= _MAX_BLOCKS_PER_MSG:
-                    await loop.run_in_executor(None, lambda: client.chat_update(
-                        channel=external_chat_id,
-                        ts=message_id,
-                        text=fallback,
-                        blocks=blocks,
-                    ))
-                else:
-                    first_chunk = blocks[:_MAX_BLOCKS_PER_MSG]
-                    await loop.run_in_executor(None, lambda: client.chat_update(
-                        channel=external_chat_id,
-                        ts=message_id,
-                        text=fallback,
-                        blocks=first_chunk,
-                    ))
-                    remaining = blocks[_MAX_BLOCKS_PER_MSG:]
-                    while remaining:
-                        chunk = remaining[:_MAX_BLOCKS_PER_MSG]
-                        remaining = remaining[_MAX_BLOCKS_PER_MSG:]
-                        try:
-                            await loop.run_in_executor(None, lambda c=chunk: client.chat_postMessage(
-                                channel=external_chat_id,
-                                text="(continued)",
-                                blocks=c,
-                            ))
-                        except Exception:
-                            logger.warning("Failed to post overflow chunk")
-                            break
+                # Split blocks into chunks that fit within Slack's payload
+                # limit (~40K total text).  Both block count (50) and total
+                # text bytes (38K) are enforced — whichever limit is hit first.
+                chunks = _split_blocks_for_payload(blocks)
+
+                # First chunk updates the original message
+                first_chunk = chunks[0] if chunks else blocks[:1]
+                await loop.run_in_executor(None, lambda: client.chat_update(
+                    channel=external_chat_id,
+                    ts=message_id,
+                    text=fallback,
+                    blocks=first_chunk,
+                ))
+
+                # Overflow chunks go as threaded replies
+                for chunk in chunks[1:]:
+                    try:
+                        await loop.run_in_executor(None, lambda c=chunk: client.chat_postMessage(
+                            channel=external_chat_id,
+                            thread_ts=message_id,
+                            text="(continued)",
+                            blocks=c,
+                        ))
+                    except Exception:
+                        logger.warning("Failed to post overflow chunk")
+                        break
             else:
                 display = self._md_to_mrkdwn(text) + " :writing_hand:"
                 if len(display) > _BLOCK_SECTION_LIMIT:
@@ -1444,12 +1473,9 @@ class SlackChannelAdapter(ChannelAdapter):
 
             thread_ts = message.external_thread_id or None
 
-            # Split blocks into chunks of _MAX_BLOCKS_PER_MSG
+            # Split blocks by both count (50) and text size (38K) per API call
             first_ts: Optional[str] = None
-            block_chunks = [
-                blocks[i:i + _MAX_BLOCKS_PER_MSG]
-                for i in range(0, len(blocks), _MAX_BLOCKS_PER_MSG)
-            ] or [[{"type": "section", "text": {"type": "mrkdwn", "text": " "}}]]
+            block_chunks = _split_blocks_for_payload(blocks)
 
             for idx, chunk in enumerate(block_chunks):
                 kwargs = {
