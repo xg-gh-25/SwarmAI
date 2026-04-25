@@ -294,16 +294,18 @@ def _add_language_switch_breaks(ssml: str) -> str:
 
     When switching between Chinese and English within a sentence,
     a 150ms pause helps the voice engine transition smoothly.
+    Matches closing tags (</lang>, </sub>, </say-as>) followed by CJK,
+    and CJK followed by opening tags (<lang, <sub, <phoneme, <say-as).
     """
-    # After closing </lang> followed by CJK
+    # After closing English-related tag followed by CJK
     ssml = re.sub(
-        r'(</lang>)(\s*[一-鿿㐀-䶿])',
+        r'(</(?:lang|sub|say-as)>)(\s*[一-鿿㐀-䶿])',
         r'\1<break time="150ms"/>\2',
         ssml,
     )
-    # Before opening <lang preceded by CJK
+    # Before opening English-related tag preceded by CJK
     ssml = re.sub(
-        r'([一-鿿㐀-䶿]\s*)(<lang)',
+        r'([一-鿿㐀-䶿]\s*)(<(?:lang|sub|phoneme|say-as))',
         r'\1<break time="150ms"/>\2',
         ssml,
     )
@@ -356,8 +358,24 @@ def _prepare_neural(text: str, language: str) -> tuple[str, str]:
     result = _expand_abbreviations(result)
 
     # 4. English term wrapping (CJK languages only)
+    # Protect existing SSML tags from steps 1-3 so _wrap_english_terms
+    # doesn't match attribute names ("alphabet", "interpret") as English words.
+    # Placeholders use CJK private-use chars so the ASCII-only regex ignores them.
     if language in _CJK_LANGUAGES:
+        _tag_re = re.compile(r'(<[^>]+>)')
+        _tag_map: dict[str, str] = {}
+        _tag_n = [0]
+
+        def _ph_tag(m: re.Match) -> str:
+            key = f"{_tag_n[0]}"
+            _tag_map[key] = m.group(0)
+            _tag_n[0] += 1
+            return key
+
+        result = _tag_re.sub(_ph_tag, result)
         result = _wrap_english_terms(result)
+        for key, tag in _tag_map.items():
+            result = result.replace(key, tag)
 
     # 5. XML-escape non-tag portions
     result = _escape_non_tags(result)
