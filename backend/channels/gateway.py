@@ -109,6 +109,10 @@ class ChannelGateway:
         # external conversation from racing through _resolve_session +
         # run_conversation simultaneously.  Key: (channel_id, external_chat_id).
         self._conv_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        # Pre-warmed session ID (MeshClaw pattern): eliminates ~4s cold-start
+        # latency on the owner's first message after daemon restart.
+        self._prewarmed_session_id: Optional[str] = None
+        self._prewarm_task: Optional[asyncio.Task] = None
 
     @property
     def startup_state(self) -> str:
@@ -157,12 +161,29 @@ class ChannelGateway:
         # Set Slack bot presence to "auto" (online) on startup
         await self._set_all_slack_presence("auto")
 
+        # Pre-warm one IDLE session for the channel owner's first message.
+        # Fire-and-forget — never blocks startup.
+        if channels:
+            self._prewarm_task = asyncio.create_task(
+                self._prewarm_owner_session(channels[0])
+            )
+
     async def shutdown(self) -> None:
         """Gracefully stop every running channel and cancel pending retries."""
         logger.info("ChannelGateway shutting down")
         # Set Slack bot presence to "away" before stopping adapters
         await self._set_all_slack_presence("away")
         self._shutting_down = True
+
+        # Cancel pre-warm task if still running
+        if self._prewarm_task and not self._prewarm_task.done():
+            self._prewarm_task.cancel()
+            try:
+                await self._prewarm_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._prewarm_task = None
+        self._prewarmed_session_id = None
 
         # Cancel all pending retry tasks first
         for channel_id, task in list(self._retry_tasks.items()):
@@ -300,6 +321,101 @@ class ChannelGateway:
                     logger.info("Slack presence set to '%s' for channel %s", presence, adapter.channel_id)
                 except Exception:
                     logger.debug("Failed to set Slack presence for channel %s", adapter.channel_id)
+
+    # ------------------------------------------------------------------
+    # Session pre-warming (MeshClaw pattern)
+    # ------------------------------------------------------------------
+
+    async def _prewarm_owner_session(self, channel: dict) -> None:
+        """Pre-warm one IDLE subprocess for instant first-message response.
+
+        Spawns a CLI subprocess (with full system prompt) during startup so
+        the owner's first Slack message after daemon restart doesn't suffer
+        ~4s cold-start latency.
+
+        Best-effort: any failure is logged and silently ignored.  The first
+        message will fall back to the normal cold-start path.
+        """
+        try:
+            agent_id = channel.get("agent_id")
+            if not agent_id:
+                return
+
+            router = session_registry.session_router
+            if router is None:
+                return
+
+            # Build owner channel_context so the pre-warmed subprocess gets
+            # Channel Security rules (sender identity, Slack formatting).
+            # Without this, the first message lacks permission tier context.
+            channel_config = channel.get("config", {})
+            if isinstance(channel_config, str):
+                import json as _json
+                try:
+                    channel_config = _json.loads(channel_config)
+                except (ValueError, TypeError):
+                    channel_config = {}
+
+            allowed = channel_config.get("allowed_senders", [])
+            if isinstance(allowed, str):
+                import json as _json
+                try:
+                    allowed = _json.loads(allowed)
+                except (ValueError, TypeError):
+                    allowed = []
+
+            owner_id = allowed[0] if allowed else None
+            channel_context = {
+                "channel_type": channel.get("channel_type", ""),
+                "channel_id": channel.get("id", ""),
+                "is_group": False,
+                "is_owner": True,
+                **({"sender_identity": SenderIdentity(
+                    external_id=owner_id or "owner",
+                    display_name="Owner",
+                    permission_tier=PermissionTier.OWNER,
+                    is_owner=True,
+                ).to_dict()} if owner_id else {}),
+            }
+
+            temp_id = await router.prewarm_channel_session(
+                agent_id, channel_context=channel_context,
+            )
+            if temp_id:
+                self._prewarmed_session_id = temp_id
+                logger.info(
+                    "channel_gateway.prewarm_ready session_id=%s", temp_id,
+                )
+            else:
+                logger.info("channel_gateway.prewarm_skipped (spawn failed or blocked)")
+        except Exception as exc:
+            logger.warning("channel_gateway.prewarm_failed: %s", exc)
+
+    def _try_adopt_prewarmed(self, session_id: str) -> bool:
+        """Adopt the pre-warmed unit for a real session. Returns True on success."""
+        prewarm_id = self._prewarmed_session_id
+        if not prewarm_id:
+            return False
+
+        router = session_registry.session_router
+        if router is None:
+            return False
+
+        adopted = router.adopt_prewarmed_unit(prewarm_id, session_id)
+        # Always clear — if rejection means unit died/evicted, retrying is
+        # noise. Let the next message take the normal cold-start path.
+        self._prewarmed_session_id = None
+        if adopted:
+            logger.info(
+                "channel_gateway.prewarm_adopted %s → %s",
+                prewarm_id, session_id,
+            )
+        else:
+            logger.info(
+                "channel_gateway.prewarm_rejected %s (unit not IDLE), cleared",
+                prewarm_id,
+            )
+        return adopted
 
     # ------------------------------------------------------------------
     # Channel start / stop / restart
@@ -809,7 +925,7 @@ class ChannelGateway:
             resolved_name = (
                 sender_identity.display_name if sender_identity else None
             ) or msg.sender_display_name
-            session_id, channel_session_id, _is_new, prior_session_id = (
+            session_id, channel_session_id, is_new_session, prior_session_id = (
                 await self._resolve_session(
                     channel_id=channel_id,
                     agent_id=agent_id,
@@ -822,6 +938,12 @@ class ChannelGateway:
         except Exception:
             logger.exception(f"Failed to resolve session for channel {channel_id}")
             return
+
+        # ── Pre-warm adoption: if the owner's session is new (cold)
+        # and we have a pre-warmed IDLE subprocess, adopt it to skip
+        # the ~4s CLI spawn latency.
+        if is_new_session and is_owner and self._prewarmed_session_id:
+            self._try_adopt_prewarmed(session_id)
 
         # Log inbound message to channel_messages ---------------------------------
         inbound_record_id = str(uuid4())
@@ -1121,7 +1243,7 @@ class ChannelGateway:
         error_occurred = False
         _thinking_set = False
         try:
-            resume_sid = None if _is_new else session_id
+            resume_sid = None if is_new_session else session_id
             async for event in session_registry.session_router.run_conversation(
                 agent_id=agent_id,
                 user_message=final_text,

@@ -11,6 +11,7 @@ import hljs from 'highlight.js';
 import { getBackendPort } from '../../services/tauri';
 import { useTheme } from '../../contexts/ThemeContext';
 import { copyToClipboard } from '../../utils/clipboard';
+import { openExternal } from '../../utils/openExternal';
 
 interface MarkdownRendererProps {
   content: string;
@@ -721,7 +722,7 @@ const baseMarkdownComponents: Record<string, React.ComponentType<any>> = {
       onClick={(e) => {
         if (href) {
           e.preventDefault();
-          import('@tauri-apps/plugin-opener').then(({ openUrl }) => openUrl(href)).catch(() => window.open(href, '_blank', 'noopener,noreferrer'));
+          openExternal(href);
         }
       }}
       className="text-primary hover:text-primary-hover underline decoration-primary/50 hover:decoration-primary transition-colors cursor-pointer"

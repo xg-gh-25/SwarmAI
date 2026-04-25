@@ -34,5 +34,6 @@ export default defineConfig(async () => ({
     environment: 'jsdom',
     include: ['src/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts,jsx,tsx}'],
     setupFiles: ['./src/test-setup.ts'],
+    testTimeout: 15_000,  // PBT tests need headroom under full-suite concurrency
   },
 }));

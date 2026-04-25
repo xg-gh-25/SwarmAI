@@ -958,3 +958,204 @@ class TestSystemPromptChannelSecurity:
         prompt = builder.build()
         # Should NOT crash, just skip the section
         assert "Channel Security" not in prompt
+
+
+# ===================================================================
+# Session Pre-warming (MeshClaw pattern)
+# ===================================================================
+
+class TestSessionPrewarming:
+    """Pre-warm one IDLE subprocess during startup for instant first-message response."""
+
+    def test_prewarm_session_id_none_on_init(self, gateway):
+        """Gateway initializes with no pre-warmed session."""
+        assert gateway._prewarmed_session_id is None
+
+    @pytest.mark.asyncio
+    async def test_prewarm_sets_session_id_on_success(self, gateway, mock_db):
+        """Successful pre-warm stores the temporary session_id."""
+        fake_temp_id = "prewarm-abc123"
+
+        mock_router = MagicMock()
+        mock_router.prewarm_channel_session = AsyncMock(return_value=fake_temp_id)
+
+        with patch("channels.gateway.session_registry") as mock_reg:
+            mock_reg.session_router = mock_router
+            channel = {"id": "ch1", "agent_id": "default"}
+            await gateway._prewarm_owner_session(channel)
+
+        assert gateway._prewarmed_session_id == fake_temp_id
+        # Verify called with agent_id and channel_context (owner=True)
+        mock_router.prewarm_channel_session.assert_awaited_once()
+        call_args = mock_router.prewarm_channel_session.call_args
+        assert call_args[0][0] == "default"
+        assert call_args[1]["channel_context"]["is_owner"] is True
+        assert call_args[1]["channel_context"]["channel_id"] == "ch1"
+
+    @pytest.mark.asyncio
+    async def test_prewarm_none_on_failure(self, gateway, mock_db):
+        """Failed pre-warm leaves _prewarmed_session_id as None."""
+        mock_router = MagicMock()
+        mock_router.prewarm_channel_session = AsyncMock(return_value=None)
+
+        with patch("channels.gateway.session_registry") as mock_reg:
+            mock_reg.session_router = mock_router
+            channel = {"id": "ch1", "agent_id": "default"}
+            await gateway._prewarm_owner_session(channel)
+
+        assert gateway._prewarmed_session_id is None
+
+    @pytest.mark.asyncio
+    async def test_prewarm_skipped_without_agent_id(self, gateway, mock_db):
+        """Pre-warm skips channels without agent_id."""
+        with patch("channels.gateway.session_registry") as mock_reg:
+            mock_reg.session_router = MagicMock()
+            channel = {"id": "ch1"}  # No agent_id
+            await gateway._prewarm_owner_session(channel)
+
+        assert gateway._prewarmed_session_id is None
+
+    @pytest.mark.asyncio
+    async def test_prewarm_exception_handled(self, gateway, mock_db):
+        """Pre-warm swallows exceptions gracefully."""
+        mock_router = MagicMock()
+        mock_router.prewarm_channel_session = AsyncMock(
+            side_effect=RuntimeError("boom"),
+        )
+
+        with patch("channels.gateway.session_registry") as mock_reg:
+            mock_reg.session_router = mock_router
+            channel = {"id": "ch1", "agent_id": "default"}
+            # Should not raise
+            await gateway._prewarm_owner_session(channel)
+
+        assert gateway._prewarmed_session_id is None
+
+    def test_try_adopt_prewarmed_success(self, gateway):
+        """Adoption clears _prewarmed_session_id and delegates to router."""
+        gateway._prewarmed_session_id = "prewarm-xyz"
+
+        mock_router = MagicMock()
+        mock_router.adopt_prewarmed_unit = MagicMock(return_value=True)
+
+        with patch("channels.gateway.session_registry") as mock_reg:
+            mock_reg.session_router = mock_router
+            result = gateway._try_adopt_prewarmed("real-session-1")
+
+        assert result is True
+        assert gateway._prewarmed_session_id is None
+        mock_router.adopt_prewarmed_unit.assert_called_once_with(
+            "prewarm-xyz", "real-session-1",
+        )
+
+    def test_try_adopt_prewarmed_no_prewarm(self, gateway):
+        """Adoption returns False when no pre-warm exists."""
+        assert gateway._prewarmed_session_id is None
+        result = gateway._try_adopt_prewarmed("real-session-1")
+        assert result is False
+
+    def test_try_adopt_prewarmed_router_rejects(self, gateway):
+        """Adoption returns False and clears _prewarmed_session_id on rejection."""
+        gateway._prewarmed_session_id = "prewarm-xyz"
+
+        mock_router = MagicMock()
+        mock_router.adopt_prewarmed_unit = MagicMock(return_value=False)
+
+        with patch("channels.gateway.session_registry") as mock_reg:
+            mock_reg.session_router = mock_router
+            result = gateway._try_adopt_prewarmed("real-session-1")
+
+        assert result is False
+        # Always cleared — avoids repeated failed adoption attempts.
+        # Let subsequent messages take normal cold-start path.
+        assert gateway._prewarmed_session_id is None
+
+
+class TestSessionRouterPrewarm:
+    """SessionRouter.prewarm_channel_session and adopt_prewarmed_unit."""
+
+    @pytest.mark.asyncio
+    async def test_prewarm_creates_idle_unit(self):
+        """prewarm_channel_session registers a COLD→IDLE unit."""
+        from core.session_unit import SessionState
+
+        mock_prompt_builder = MagicMock()
+        mock_options = MagicMock()
+        mock_options.system_prompt = "test"
+        mock_prompt_builder.build_options = AsyncMock(return_value=mock_options)
+
+        from core.session_router import SessionRouter
+        router = SessionRouter(prompt_builder=mock_prompt_builder)
+
+        # Mock the SessionUnit to skip real subprocess spawn
+        with patch("core.session_router.SessionUnit") as MockUnit:
+            mock_unit = MagicMock()
+            mock_unit.state = SessionState.IDLE
+            mock_unit.session_id = "temp"
+
+            async def fake_ensure_spawned(*a, **kw):
+                return
+                yield  # make it an async generator
+
+            mock_unit._ensure_spawned = fake_ensure_spawned
+            MockUnit.return_value = mock_unit
+
+            with patch(
+                "core.agent_defaults.build_agent_config",
+                new_callable=AsyncMock,
+                return_value={"name": "Swarm"},
+            ):
+                result = await router.prewarm_channel_session("default")
+
+        assert result is not None
+        assert result.startswith("prewarm-")
+        assert result in router._units
+
+    def test_adopt_prewarmed_unit_rekeys(self):
+        """adopt_prewarmed_unit moves unit from temp key to real key."""
+        from core.session_unit import SessionState
+
+        mock_prompt_builder = MagicMock()
+        from core.session_router import SessionRouter
+        router = SessionRouter(prompt_builder=mock_prompt_builder)
+
+        # Create a fake IDLE unit under the pre-warm key
+        mock_unit = MagicMock()
+        mock_unit.state = SessionState.IDLE
+        router._units["prewarm-abc"] = mock_unit
+
+        result = router.adopt_prewarmed_unit("prewarm-abc", "real-session-1")
+
+        assert result is True
+        assert "prewarm-abc" not in router._units
+        assert "real-session-1" in router._units
+        assert router._units["real-session-1"] is mock_unit
+        assert mock_unit.session_id == "real-session-1"
+
+    def test_adopt_prewarmed_unit_rejects_dead(self):
+        """adopt_prewarmed_unit rejects if unit is not IDLE."""
+        from core.session_unit import SessionState
+
+        mock_prompt_builder = MagicMock()
+        from core.session_router import SessionRouter
+        router = SessionRouter(prompt_builder=mock_prompt_builder)
+
+        mock_unit = MagicMock()
+        mock_unit.state = SessionState.COLD  # Not IDLE
+        router._units["prewarm-abc"] = mock_unit
+
+        result = router.adopt_prewarmed_unit("prewarm-abc", "real-session-1")
+
+        assert result is False
+        # Unit should be put back at original key
+        assert "prewarm-abc" in router._units
+        assert "real-session-1" not in router._units
+
+    def test_adopt_prewarmed_unit_missing(self):
+        """adopt_prewarmed_unit returns False for missing key."""
+        mock_prompt_builder = MagicMock()
+        from core.session_router import SessionRouter
+        router = SessionRouter(prompt_builder=mock_prompt_builder)
+
+        result = router.adopt_prewarmed_unit("nonexistent", "real-session-1")
+        assert result is False

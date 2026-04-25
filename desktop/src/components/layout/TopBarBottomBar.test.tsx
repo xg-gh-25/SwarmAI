@@ -14,6 +14,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { ReactNode } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 // Mock Tauri window API
 vi.mock('@tauri-apps/api/window', () => ({
@@ -108,16 +109,25 @@ function setupMocks(overrides: {
 // ---------- TopBar Tests ----------
 
 describe('TopBar', () => {
-  it('renders token usage placeholder', () => {
+  function renderTopBar() {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(
+      <QueryClientProvider client={qc}>
+        <TopBar />
+      </QueryClientProvider>,
+    );
+  }
+
+  it('renders token usage labels', () => {
     setupMocks({ sessionMeta: null });
-    render(<TopBar />);
+    renderTopBar();
     expect(screen.getByText('Today')).toBeDefined();
-    expect(screen.getByText('MTD')).toBeDefined();
+    expect(screen.getByText('Total')).toBeDefined();
   });
 
   it('does not render context ring (moved to ChatInput)', () => {
     setupMocks({ sessionMeta: { contextPct: 72 } });
-    render(<TopBar />);
+    renderTopBar();
     // No SVG ring in TopBar anymore
     const bar = screen.getByTestId('top-bar');
     expect(bar.querySelector('svg')).toBeNull();
@@ -125,7 +135,7 @@ describe('TopBar', () => {
 
   it('has data-tauri-drag-region for window dragging', () => {
     setupMocks({ sessionMeta: null });
-    render(<TopBar />);
+    renderTopBar();
     const bar = screen.getByTestId('top-bar');
     expect(bar.getAttribute('data-tauri-drag-region')).toBeDefined();
   });

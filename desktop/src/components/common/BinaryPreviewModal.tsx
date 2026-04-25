@@ -14,6 +14,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import clsx from 'clsx';
 import api from '../../services/api';
 import { copyToClipboard } from '../../utils/clipboard';
+import { openInSystemApp } from '../../utils/openExternal';
 
 export interface BinaryPreviewModalProps {
   isOpen: boolean;
@@ -300,8 +301,7 @@ export default function BinaryPreviewModal({
   const handleOpenInDefaultApp = useCallback(async () => {
     try {
       const absolutePath = await getAbsolutePath();
-      const { openPath } = await import('@tauri-apps/plugin-opener');
-      await openPath(absolutePath);
+      await openInSystemApp(absolutePath);
     } catch {
       // Fallback: copy path to clipboard
       try {

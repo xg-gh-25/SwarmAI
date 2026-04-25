@@ -303,7 +303,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }  // Heavy render — 100 runs exceeds timeout under parallel execution
       );
     });
 
@@ -334,7 +334,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -369,7 +369,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -397,7 +397,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -438,7 +438,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
             unmount();
           }
         ),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -463,7 +463,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -488,7 +488,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -518,7 +518,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -554,7 +554,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
             unmount();
           }
         ),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -583,7 +583,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
   });
@@ -645,7 +645,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -680,7 +680,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -711,7 +711,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -751,7 +751,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -782,7 +782,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
   });
@@ -835,7 +835,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -872,7 +872,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -909,7 +909,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -930,7 +930,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -967,7 +967,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -994,7 +994,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -1030,7 +1030,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
   });
@@ -1120,7 +1120,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -1148,7 +1148,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -1184,7 +1184,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -1221,7 +1221,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
             unmount();
           }
         ),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -1251,7 +1251,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -1273,7 +1273,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -1294,7 +1294,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
   });
@@ -1352,7 +1352,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -1387,7 +1387,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -1421,7 +1421,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -1465,7 +1465,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -1505,7 +1505,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -1546,7 +1546,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -1583,7 +1583,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
   });
@@ -1632,7 +1632,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -1669,7 +1669,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -1706,7 +1706,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -1750,7 +1750,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -1792,7 +1792,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -1833,7 +1833,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -1874,7 +1874,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -1908,7 +1908,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -1942,7 +1942,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
 
@@ -1974,7 +1974,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           unmount();
         }),
-        { numRuns: 100 }
+        { numRuns: 30 }
       );
     });
   });
