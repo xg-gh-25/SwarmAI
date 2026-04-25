@@ -11,7 +11,7 @@ import logging
 import time
 from collections import deque
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -26,8 +26,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # In-memory sliding window rate limiter for synthesize endpoint.
-# 60 requests per 60 seconds — prevents Polly cost runaway from buggy loops.
-_RATE_LIMIT_MAX = 60
+# 120 requests per 60 seconds — high enough for sustained voice conversation
+# (20-sentence response = 20 calls in ~30s) while still capping runaway loops.
+_RATE_LIMIT_MAX = 120
 _RATE_LIMIT_WINDOW = 60.0
 _request_timestamps: deque[float] = deque()
 
@@ -36,8 +37,8 @@ class SynthesizeRequest(BaseModel):
     """Request body for text-to-speech synthesis."""
 
     text: str = Field(..., min_length=1, max_length=MAX_TEXT_LENGTH, description="Text to synthesize (max 3000 chars)")
-    language: str = Field(default="en-US", description="BCP-47 language code")
-    voice_id: str | None = Field(default=None, description="Polly voice ID override")
+    language: str = Field(default="en-US", pattern=r"^[a-z]{2}(-[A-Z]{2})?$", description="BCP-47 language code (e.g., en-US, zh-CN)")
+    voice_id: str | None = Field(default=None, pattern=r"^[A-Za-z]{2,20}$", description="Polly voice ID (letters only, e.g., Matthew, Zhiyu)")
 
 
 @router.post("/synthesize")
@@ -54,7 +55,7 @@ async def synthesize(request: SynthesizeRequest):
     while _request_timestamps and _request_timestamps[0] < now - _RATE_LIMIT_WINDOW:
         _request_timestamps.popleft()
     if len(_request_timestamps) >= _RATE_LIMIT_MAX:
-        raise HTTPException(status_code=429, detail="Rate limit exceeded — max 60 TTS requests/minute")
+        raise HTTPException(status_code=429, detail="Rate limit exceeded — max 120 TTS requests/minute")
     _request_timestamps.append(now)
 
     try:

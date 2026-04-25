@@ -1151,55 +1151,39 @@ def build_session_briefing_data(
             except OSError:
                 pass
 
-        # Pending Radar todos — surface in briefing so agent is aware at session start
+        # Pending Radar todos — direct SQLite read (sync, WAL mode safe).
+        # This function is always called from sync context, so no async needed.
         todos: list[dict[str, Any]] = []
         try:
-            from database import db
-            import asyncio
-
-            async def _fetch_todos() -> list[dict]:
-                return await db.todos.list_active()
-
-            # Run async DB query synchronously (briefing is sync context)
-            try:
-                loop = asyncio.get_running_loop()
-                # Already in async context — schedule as task
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    active = loop.run_in_executor(pool, lambda: asyncio.run(_fetch_todos()))
-                    # Can't await here in sync function — use direct DB access
-                    raise RuntimeError("fallback to direct")
-            except RuntimeError:
-                # Direct SQLite read (sync, safe — DB is WAL mode)
-                import sqlite3
-                db_path = Path.home() / ".swarm-ai" / "data.db"
-                if db_path.exists():
-                    conn = sqlite3.connect(str(db_path), timeout=5)
-                    conn.row_factory = sqlite3.Row
-                    try:
-                        rows = conn.execute(
-                            "SELECT id, title, priority, status, due_date, linked_context "
-                            "FROM todos WHERE status IN ('pending', 'overdue') "
-                            "ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 "
-                            "WHEN 'low' THEN 2 ELSE 3 END, created_at DESC LIMIT 5"
-                        ).fetchall()
-                        for row in rows:
-                            ctx = {}
-                            if row["linked_context"]:
-                                try:
-                                    ctx = json.loads(row["linked_context"])
-                                except (json.JSONDecodeError, TypeError):
-                                    pass
-                            todos.append({
-                                "id": row["id"][:8],
-                                "title": row["title"],
-                                "priority": row["priority"],
-                                "status": row["status"],
-                                "due_date": row["due_date"],
-                                "next_step": ctx.get("next_step", ""),
-                            })
-                    finally:
-                        conn.close()
+            import sqlite3
+            db_path = Path.home() / ".swarm-ai" / "data.db"
+            if db_path.exists():
+                conn = sqlite3.connect(str(db_path), timeout=5)
+                conn.row_factory = sqlite3.Row
+                try:
+                    rows = conn.execute(
+                        "SELECT id, title, priority, status, due_date, linked_context "
+                        "FROM todos WHERE status IN ('pending', 'overdue') "
+                        "ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 "
+                        "WHEN 'low' THEN 2 ELSE 3 END, created_at DESC LIMIT 5"
+                    ).fetchall()
+                    for row in rows:
+                        ctx = {}
+                        if row["linked_context"]:
+                            try:
+                                ctx = json.loads(row["linked_context"])
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+                        todos.append({
+                            "id": row["id"][:8],
+                            "title": row["title"],
+                            "priority": row["priority"],
+                            "status": row["status"],
+                            "due_date": row["due_date"],
+                            "next_step": ctx.get("next_step", ""),
+                        })
+                finally:
+                    conn.close()
         except Exception as exc:
             logger.debug("Todo briefing fetch failed (non-blocking): %s", exc)
 
