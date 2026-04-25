@@ -9,7 +9,7 @@ Zero dependency on SwarmAI backend.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Literal
 
@@ -128,7 +128,7 @@ class Job(BaseModel):
 class JobResult(BaseModel):
     """Outcome of a single job execution."""
     job_id: str
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     status: Literal["success", "partial", "failed", "skipped", "auth_failed"]
     summary: str = ""
     output_path: str | None = None

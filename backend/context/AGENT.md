@@ -490,20 +490,22 @@ Every coding task uses one of three modes. **When the user explicitly requests a
 
 | Mode | When to Use | Process |
 |------|-------------|---------|
-| **Direct** | Bug fix, config change, 1-file tweak, known pattern, P0 urgent, user says "just do it" | Read → code → test → commit. No ceremony. Still run post-task scan. |
-| **TDD-only** | 2-4 files, clear requirements, no design ambiguity, user says "TDD this" | RED (failing tests from requirements) → GREEN (implement until pass) → VERIFY (full suite, 0 regressions). No pipeline artifacts. |
-| **Full Pipeline** | New subsystem, 5+ files, cross-cutting architecture, ambiguous scope, first-time pattern, user says "use pipeline" | Invoke `s_autonomous-pipeline`. EVALUATE → THINK → PLAN → BUILD(TDD) → REVIEW → TEST → DELIVER → REFLECT. Artifacts, validator, REPORT.md. |
+| **Direct** | Bug fix, config change, 1-file tweak, P0 urgent, user says "just do it" | Read → code → test → commit. No ceremony. Still run post-task scan. |
+| **TDD-only** | Modifying existing patterns with clear scope, user says "TDD this" | RED (failing tests from requirements) → GREEN (implement until pass) → VERIFY (full suite, 0 regressions). No pipeline artifacts. |
+| **Full Pipeline** | **All new features (default).** User says "use pipeline" | Invoke `s_autonomous-pipeline`. EVALUATE → THINK → PLAN → BUILD(TDD) → REVIEW → TEST → DELIVER → REFLECT. Artifacts, validator, REPORT.md. |
 
 **Decision tree (when user doesn't specify):**
+
+**Full Pipeline is the default for any new feature.** Direct and TDD-only are exceptions for non-feature work.
+
 ```
+New feature (any size)?                               → Full Pipeline (DEFAULT)
 Bug fix / config / typo?                              → Direct
-"Done" is obvious + touches 1 file?                   → Direct
-"Done" is obvious + touches 2-4 files?                → TDD-only
-Touches 5+ files or new architecture?                 → Full Pipeline
-First time doing this pattern?                        → Full Pipeline
-Could EVALUATE reasonably say DEFER/REJECT?           → Full Pipeline
-User waiting for quick answer?                        → Direct
+Modifying existing pattern, no new concept?           → TDD-only
+P0 urgent?                                            → Direct (then follow-up pipeline)
 ```
+
+A "new feature" = anything that adds capability the system didn't have before. Size doesn't matter — a 3-file pre-warm and a 15-file voice mode both deserve the pipeline. The pipeline's EVALUATE catches bad ideas early, REVIEW catches cross-boundary bugs, REFLECT compounds lessons. Skipping it saves 10 minutes but risks shipping bugs that cost hours.
 
 **Pre-Implementation Checkpoint (any task touching >1 file or introducing a new mechanism):**
 

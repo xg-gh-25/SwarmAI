@@ -196,7 +196,12 @@ def check_circuit_breaker(job: Job, state: SchedulerState) -> bool:
     if job_state and job_state.consecutive_failures >= 3:
         # Auto-reset after 24h cooldown
         if job_state.last_run:
-            cooldown = datetime.now(timezone.utc) - job_state.last_run
+            # last_run may be naive (from datetime.now()) or aware (from
+            # tests / future code).  Normalize both sides to UTC-aware.
+            last = job_state.last_run
+            if last.tzinfo is None:
+                last = last.replace(tzinfo=timezone.utc)
+            cooldown = datetime.now(timezone.utc) - last
             if cooldown > timedelta(hours=24):
                 logger.info(
                     f"Circuit breaker reset for '{job.id}' "
