@@ -309,6 +309,12 @@ The BUILD stage follows TDD methodology: tests before code, code until tests pas
     - If new code is in a try/except → temporarily remove the except to
       verify the try body doesn't crash (the except silently swallows
       bugs like `self.config_manager` → `self._config`)
+    - **Multi-context callers:** If new code is called from both sync
+      AND async contexts (e.g., `record_token_usage()` called from
+      async `session_unit` AND sync `bedrock.invoke()`), smoke test
+      BOTH calling contexts. A function that works in async FastAPI
+      may silently fail from a sync background job. Don't assume one
+      passing smoke test covers all callers.
     - Smoke tests are **inline verification only** — don't commit them.
       They're a build-time gate, not regression tests.
     - If a smoke test crashes → fix the bug before proceeding to REVIEW.
@@ -471,6 +477,7 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state revie
    | New config key in DEFAULT_CONFIG | Trace: `DEFAULT_CONFIG` → `config_manager.get()` → consumer | `memory_progressive_disclosure` read by prompt_builder ✅ |
    | `agent_config.get("key")` or `config.get("key")` | Verify key has a setter | `_first_user_message` — no setter ❌ |
    | New CLI flag / argument | >= 1 caller passes it | `--regenerate-index` — 0 callers ❌ |
+   | **Calling convention mismatch** | async callee called from sync caller → explicit bridge exists (`asyncio.run()`, `get_running_loop().create_task()` with loop guard) | sync `bedrock.invoke()` calls `async record_token_usage()` via bare `create_task` — no running loop in job context → task silently lost ❌ (run_6823b0d4 E2E review) |
 
    **Action on findings:**
    - 0 production callers → **WARN** (not BLOCK). Agent must either:
@@ -543,6 +550,8 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state revie
    | RP15 | **setTimeout for state propagation** | `setTimeout(() => fn(), 0)` to sequence React state + side effects | verify the ref/state the deferred fn reads is set BEFORE the timeout, not by a concurrent React render | Voice send `setTimeout(0)` reads `inputValueRef` which could be overwritten by React re-render before timeout fires (2026-04-25 E2E review) |
    | RP16 | **concurrent async without ordering** | N async calls fired in a loop with `.then()` enqueue | responses may resolve out of order; use sequential `await` or `Promise.all` + indexed insert | 3 concurrent Polly calls → sentence 2 (short) resolves before sentence 1 (long) → audio plays out of order (2026-04-25 E2E review) |
    | RP17 | **unsanitized string in structured format** | user/dynamic text embedded in HTML, JSON template, SQL, or shell | escape for target format: `html.escape()`, `json.dumps()[1:-1]`, parameterized query, `shlex.quote()` | `<pre>{message}</pre>` with raw message → XSS in email; `payload_template.replace("{title}", title)` → JSON parse failure on quotes (2026-04-25 E2E review) |
+   | RP18 | **timezone-sensitive date boundary** | SQL uses `date('now')`, `datetime('now')`, or `strftime(...,'now')` for filtering (e.g. "today's records") | write and query use the same timezone; desktop apps should use local time (`datetime.now()`), not SQLite UTC `date('now')`. Tests always pass because test runner and DB share a timezone — the bug only appears when user is in a different TZ from UTC. | `WHERE date(timestamp) = date('now')` but timestamps written in UTC → "today" boundary is 8h off for UTC+8 user, tokens after midnight local show as yesterday (run_6823b0d4 E2E review) |
+   | RP19 | **deprecated stdlib API** | `asyncio.get_event_loop()`, `datetime.utcnow()`, `logging.warn()`, `imp.reload()` | use Python 3.12+ recommended replacements: `get_running_loop()` / `get_event_loop_policy().get_event_loop()`, `datetime.now(UTC)`, `logging.warning()`. Deprecated APIs emit warnings and may raise `RuntimeError` in future Python versions. | `asyncio.get_event_loop().create_task()` in async generator → DeprecationWarning in 3.12, potential RuntimeError in 3.13+ (run_6823b0d4 E2E review) |
 
    **Output format:** For each applicable pattern, one line:
    ```
