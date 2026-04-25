@@ -281,12 +281,16 @@ def _write_l4_json(signals: list[RawSignal], scored_items: list[dict]) -> None:
         except (json.JSONDecodeError, OSError):
             pass
 
-    # Evict items older than 48h — matches the consumer's freshness cutoff
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
-    existing_items = [
-        it for it in existing_items
-        if it.get("fetched_at", "") >= cutoff
-    ]
+    # Evict items older than 48h — but only if new items are coming in.
+    # Without this guard, a run with 0 new scored_items evicts all existing
+    # items and leaves L4 JSON empty (the Welcome Screen Signals section
+    # shows nothing). Better to show stale items than nothing.
+    if scored_items:
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+        existing_items = [
+            it for it in existing_items
+            if it.get("fetched_at", "") >= cutoff
+        ]
 
     # Dedup: keep existing items whose titles don't overlap with new ones
     new_titles = {item["title"] for item in scored_items}
