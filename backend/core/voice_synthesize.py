@@ -38,13 +38,16 @@ DEFAULT_REGION = os.environ.get("TRANSCRIBE_REGION", "us-east-1")
 
 
 @lru_cache(maxsize=1)
-def _get_polly_client(region: str = "us-east-1"):
+def _get_polly_client():
     """Lazy singleton Polly client — created once, cached.
+
+    Always uses DEFAULT_REGION. The lru_cache(maxsize=1) is safe because
+    there's no region parameter to vary — one client per process lifetime.
 
     Uses existing AWS SSO credentials (same credential chain as Transcribe).
     """
     import boto3
-    return boto3.client("polly", region_name=region)
+    return boto3.client("polly", region_name=DEFAULT_REGION)
 
 
 def get_voice_for_language(language: str) -> tuple[str, str]:
@@ -76,7 +79,6 @@ async def synthesize_speech(
     text: str,
     voice_id: str | None = None,
     language: str = "en-US",
-    region: str | None = None,
 ) -> bytes:
     """Synthesize text to MP3 audio via Amazon Polly.
 
@@ -84,7 +86,6 @@ async def synthesize_speech(
         text: Text to speak (max 3000 chars for neural engine)
         voice_id: Polly voice ID override (auto-selected from language if None)
         language: BCP-47 language code for voice selection
-        region: AWS region (defaults to TRANSCRIBE_REGION env var or us-east-1)
 
     Returns:
         MP3 audio bytes
@@ -116,8 +117,7 @@ async def synthesize_speech(
         vid, engine = get_voice_for_language(language)
         lang_code = language
 
-    effective_region = region or DEFAULT_REGION
-    client = _get_polly_client(effective_region)
+    client = _get_polly_client()
 
     # Run synchronous boto3 call in executor to avoid blocking event loop
     loop = asyncio.get_event_loop()
@@ -139,7 +139,7 @@ async def synthesize_speech(
 
     logger.info(
         "Polly TTS: %d chars → %d bytes MP3 (voice=%s, lang=%s, region=%s)",
-        len(clean_text), len(audio_stream), vid, language, effective_region,
+        len(clean_text), len(audio_stream), vid, language, DEFAULT_REGION,
     )
 
     return audio_stream

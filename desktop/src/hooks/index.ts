@@ -4,3 +4,7 @@ export { useRateLimiter } from './useRateLimiter';
 export { useRateLimitCountdown } from './useRateLimitCountdown';
 export { useVoiceRecorder } from './useVoiceRecorder';
 export type { VoiceState } from './useVoiceRecorder';
+export { useVoiceConversation } from './useVoiceConversation';
+export type { VoiceConversationState, UseVoiceConversationReturn } from './useVoiceConversation';
+export { useAudioPlayer } from './useAudioPlayer';
+export type { UseAudioPlayerReturn } from './useAudioPlayer';
