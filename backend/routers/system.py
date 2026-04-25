@@ -1,4 +1,5 @@
 """System status API endpoints."""
+import asyncio
 import json as _json
 import logging
 import os
@@ -605,19 +606,36 @@ async def get_max_tabs() -> MaxTabsResponse:
         return MaxTabsResponse(max_tabs=1, chat_max=1, memory_pressure="critical")
 
 
+# ── Briefing cache ──────────────────────────────────────────────────
+# In-memory cache with 60s TTL.  Briefing data changes infrequently
+# (signals update 3×/day, jobs hourly, focus on new sessions) — no
+# need to re-read 6 files on every tab open.
+_briefing_cache: dict = {"data": None, "expires_at": 0.0}
+_BRIEFING_CACHE_TTL = 60  # seconds
+
+
 @router.get("/briefing")
 async def get_session_briefing() -> dict:
     """Return structured session briefing data for the Welcome Screen.
 
     Calls proactive_intelligence.build_session_briefing_data() which
-    reads MEMORY.md, signal_digest.json, and job results. Never fails
-    — returns an empty structure on any error.
+    reads MEMORY.md, signal_digest.json, and job results.  Offloaded
+    to a thread to avoid blocking the event loop.  Results cached for
+    60s.  Never fails — returns an empty structure on any error.
     """
+    now = time.monotonic()
+    if _briefing_cache["data"] is not None and now < _briefing_cache["expires_at"]:
+        return _briefing_cache["data"]
+
     from core.proactive_intelligence import build_session_briefing_data
     ws_path = swarm_workspace_manager.get_workspace_path()
     if not ws_path:
-        return {"focus": [], "signals": [], "jobs": [], "learning": None, "generated_at": None}
-    return build_session_briefing_data(ws_path)
+        return {"focus": [], "signals": [], "jobs": [], "todos": [], "learning": None, "generated_at": None}
+
+    result = await asyncio.to_thread(build_session_briefing_data, ws_path)
+    _briefing_cache["data"] = result
+    _briefing_cache["expires_at"] = time.monotonic() + _BRIEFING_CACHE_TTL
+    return result
 
 
 @router.post("/briefing/dismiss")
@@ -634,6 +652,9 @@ async def dismiss_focus_item(body: dict) -> dict:
         return {"ok": False, "error": "workspace not found"}
     from core.proactive_learning import dismiss_focus_item as _dismiss
     _dismiss(Path(ws_path), title)
+    # Invalidate briefing cache so dismiss takes effect immediately
+    _briefing_cache["data"] = None
+    _briefing_cache["expires_at"] = 0.0
     return {"ok": True}
 
 

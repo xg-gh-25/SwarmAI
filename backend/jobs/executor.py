@@ -252,6 +252,17 @@ def execute_job(
             error=str(e),
         )
         _update_job_state(state, job.id, result)
+
+        # Persist failure to JSONL + markdown so it appears in briefing
+        # and job history — not just state.json.
+        try:
+            _write_job_result(
+                job, error_msg, start, tokens=0, duration=duration,
+                status="failed",
+            )
+        except Exception:
+            logger.warning("Failed to persist crash result to JSONL (non-blocking)")
+
         return result
 
 
@@ -582,6 +593,7 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
         if result_text:
             output_path = _write_job_result(
                 job, result_text, start, tokens_in + tokens_out, duration,
+                status=status,
             )
 
         # If signal mode, inject into raw_signals buffer
@@ -1529,9 +1541,14 @@ def _estimate_cost(input_tokens: int, output_tokens: int, model: str = "sonnet")
 
 def _write_job_result(
     job: Job, result_text: str, run_at: datetime,
-    tokens: int, duration: float,
+    tokens: int, duration: float, status: str = "success",
 ) -> Path:
-    """Write job result as markdown + append to JSONL."""
+    """Write job result as markdown + append to JSONL.
+
+    Args:
+        status: Actual job status — "success", "failed", "auth_failed",
+                "partial", etc. Persisted to both markdown and JSONL.
+    """
     JOB_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     # Markdown report
@@ -1543,7 +1560,7 @@ def _write_job_result(
 job_id: {job.id}
 job_name: {job.name}
 run_at: {run_at.isoformat()}
-status: success
+status: {status}
 tokens_used: {tokens}
 duration: {duration:.1f}s
 ---
@@ -1559,7 +1576,7 @@ duration: {duration:.1f}s
         "job_id": job.id,
         "job_name": job.name,
         "run_at": run_at.isoformat(),
-        "status": "success",
+        "status": status,
         "summary": result_text[:300],
         "tokens_used": tokens,
         "duration_seconds": duration,
