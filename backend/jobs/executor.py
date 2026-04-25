@@ -829,6 +829,21 @@ def _handle_notify(job: Job, state: SchedulerState) -> JobResult:
             duration_seconds=0,
         )
 
+    # Pre-flight: verify notify config exists and Slack is enabled.
+    # Prevents circuit-breaker death from config-not-found errors.
+    try:
+        from skills.s_notify.notify import load_notify_config
+        config = load_notify_config()
+        slack_cfg = config.get("channels", {}).get("slack", {})
+        if not slack_cfg.get("enabled", False):
+            return JobResult(
+                job_id=job.id, timestamp=start, status="skipped",
+                summary="Slack not enabled in notify-channels.yaml",
+                duration_seconds=0,
+            )
+    except Exception:
+        pass  # Non-blocking — CLI fallback doesn't need config
+
     # Source: auto-format from signal_digest.json
     source = job.config.get("source", "")
     if source == "signal_digest" and not message:

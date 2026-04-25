@@ -102,15 +102,15 @@ SYSTEM_JOBS: list[Job] = [
 
     # --- Signal Digest → Slack Notification ---
     # Fires after each digest, reads signal_digest.json, sends top items as Slack DM.
-    # Disabled by default — requires ~/.swarm-ai/notify-channels.yaml with a
-    # slack channel configured.  Enable via user-jobs.yaml override or by
-    # creating the notify config file.
+    # Requires ~/.swarm-ai/notify-channels.yaml with slack.enabled=true.
+    # Handler pre-flight skips gracefully (status="skipped") when config missing
+    # — won't trigger circuit breaker.
     Job(
         id="signal-notify-slack",
         name="Signal Digest → Slack",
         type="notify",
         schedule="after:signal-digest",
-        enabled=False,
+        enabled=True,
         category="system",
         config={
             "channel": "slack",

@@ -184,15 +184,10 @@ class TestSystemJobs:
         ids = [j.id for j in SYSTEM_JOBS]
         assert len(ids) == len(set(ids))
 
-    def test_system_jobs_enabled_except_notify(self):
-        """All system jobs should be enabled except signal-notify-slack
-        which requires notify config."""
+    def test_system_jobs_all_enabled(self):
+        """All system jobs should be enabled (pre-flight handles missing config)."""
         from jobs.system_jobs import SYSTEM_JOBS
-        for j in SYSTEM_JOBS:
-            if j.id == "signal-notify-slack":
-                assert not j.enabled, "signal-notify-slack should be disabled by default"
-            else:
-                assert j.enabled, f"{j.id} should be enabled"
+        assert all(j.enabled for j in SYSTEM_JOBS)
 
     def test_system_jobs_all_system_category(self):
         from jobs.system_jobs import SYSTEM_JOBS
