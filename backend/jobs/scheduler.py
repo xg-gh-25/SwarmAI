@@ -17,7 +17,7 @@ import argparse
 import json
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
@@ -187,9 +187,23 @@ def is_job_due(job: Job, state: SchedulerState) -> bool:
 
 
 def check_circuit_breaker(job: Job, state: SchedulerState) -> bool:
-    """Skip jobs that have failed too many times consecutively."""
+    """Skip jobs that have failed too many times consecutively.
+
+    Auto-resets after 24h cooldown — gives transient issues (network,
+    auth, DNS) a chance to resolve without manual state.json editing.
+    """
     job_state = state.jobs.get(job.id)
     if job_state and job_state.consecutive_failures >= 3:
+        # Auto-reset after 24h cooldown
+        if job_state.last_run:
+            cooldown = datetime.now(timezone.utc) - job_state.last_run
+            if cooldown > timedelta(hours=24):
+                logger.info(
+                    f"Circuit breaker reset for '{job.id}' "
+                    f"(24h cooldown elapsed, was {job_state.consecutive_failures} failures)"
+                )
+                job_state.consecutive_failures = 0
+                return True
         logger.warning(
             f"Circuit breaker: skipping '{job.id}' "
             f"({job_state.consecutive_failures} consecutive failures)"

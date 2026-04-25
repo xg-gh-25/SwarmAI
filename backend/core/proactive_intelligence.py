@@ -1074,6 +1074,29 @@ def build_session_briefing(
         return None
 
 
+def _tail_read_lines(path: Path, max_bytes: int = 4096) -> list[str]:
+    """Read the last `max_bytes` of a file and return complete lines.
+
+    O(1) regardless of total file size — seeks to end and reads backward.
+    Discards the first (likely partial) line to ensure valid JSON per line.
+    Falls back to full read for files smaller than max_bytes.
+    """
+    file_size = path.stat().st_size
+    if file_size <= max_bytes:
+        # Small file — read all
+        return path.read_text(encoding="utf-8").strip().splitlines()
+
+    with open(path, "rb") as f:
+        f.seek(-max_bytes, 2)  # seek from end
+        tail = f.read().decode("utf-8", errors="replace")
+
+    lines = tail.splitlines()
+    # First line is likely partial (we seeked into the middle) — discard it
+    if len(lines) > 1:
+        lines = lines[1:]
+    return [ln for ln in lines if ln.strip()]
+
+
 def build_session_briefing_data(
     workspace_dir: str | Path,
 ) -> dict[str, Any]:
@@ -1171,13 +1194,16 @@ def build_session_briefing_data(
             except (json.JSONDecodeError, OSError):
                 pass
 
-        # Job results
+        # Job results — tail-read optimization: only read the last ~4KB
+        # of the JSONL file instead of loading the entire file into memory.
+        # This is O(1) regardless of file size (the file grows unbounded).
         jobs = []
         jsonl_path = workspace / "Knowledge" / "JobResults" / ".job-results.jsonl"
         if jsonl_path.exists():
             try:
                 cutoff_24h = time.time() - 24 * 3600
-                for line in reversed(jsonl_path.read_text(encoding="utf-8").strip().splitlines()):
+                tail_lines = _tail_read_lines(jsonl_path, max_bytes=4096)
+                for line in reversed(tail_lines):
                     if len(jobs) >= 5:
                         break
                     try:

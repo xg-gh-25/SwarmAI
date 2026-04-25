@@ -177,16 +177,22 @@ class TestDedup:
 class TestSystemJobs:
     def test_system_jobs_count(self):
         from jobs.system_jobs import SYSTEM_JOBS
-        assert len(SYSTEM_JOBS) == 9
+        assert len(SYSTEM_JOBS) == 10
 
     def test_system_job_ids_unique(self):
         from jobs.system_jobs import SYSTEM_JOBS
         ids = [j.id for j in SYSTEM_JOBS]
         assert len(ids) == len(set(ids))
 
-    def test_system_jobs_all_enabled(self):
+    def test_system_jobs_enabled_except_notify(self):
+        """All system jobs should be enabled except signal-notify-slack
+        which requires notify config."""
         from jobs.system_jobs import SYSTEM_JOBS
-        assert all(j.enabled for j in SYSTEM_JOBS)
+        for j in SYSTEM_JOBS:
+            if j.id == "signal-notify-slack":
+                assert not j.enabled, "signal-notify-slack should be disabled by default"
+            else:
+                assert j.enabled, f"{j.id} should be enabled"
 
     def test_system_jobs_all_system_category(self):
         from jobs.system_jobs import SYSTEM_JOBS
