@@ -80,8 +80,8 @@ def fetch_trending(feed: Feed, max_age_hours: int = 48) -> list[RawSignal]:
                 continue
 
             try:
-                url = f"{NEWSNOW_API}?id={platform_id}&latest"
-                resp = client.get(url)
+                api_url = f"{NEWSNOW_API}?id={platform_id}&latest"
+                resp = client.get(api_url)
                 resp.raise_for_status()
                 data = resp.json()
 
@@ -99,13 +99,13 @@ def fetch_trending(feed: Feed, max_age_hours: int = 48) -> list[RawSignal]:
                         continue
 
                     title = str(title).strip()
-                    url = item.get("url", "")
+                    item_url = item.get("url", "")
                     mobile_url = item.get("mobileUrl", "")
 
                     signals.append(RawSignal(
                         feed_id=feed.id,
                         title=title,
-                        url=url or mobile_url,
+                        url=item_url or mobile_url,
                         summary=f"Top {rank} on {platform_name}",
                         published=datetime.now(timezone.utc),
                         source=platform_name,

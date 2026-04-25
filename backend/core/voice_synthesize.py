@@ -120,7 +120,7 @@ async def synthesize_speech(
     client = _get_polly_client()
 
     # Run synchronous boto3 call in executor to avoid blocking event loop
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         response = await loop.run_in_executor(
             None,

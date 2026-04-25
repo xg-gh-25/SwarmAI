@@ -422,10 +422,10 @@ class TestVoiceRateLimit:
     """Rate limiter on /api/voice/synthesize."""
 
     def test_rate_limit_rejects_after_threshold(self):
-        """More than 60 requests in a window should return 429."""
+        """More than _RATE_LIMIT_MAX requests in a window should return 429."""
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
-        from routers.voice import router, _request_timestamps
+        from routers.voice import router, _request_timestamps, _RATE_LIMIT_MAX
 
         # Clear any existing timestamps
         _request_timestamps.clear()
@@ -442,14 +442,14 @@ class TestVoiceRateLimit:
 
         with patch("core.voice_synthesize._get_polly_client", return_value=mock_client):
             # Fill up the rate limit window
-            for _ in range(60):
+            for _ in range(_RATE_LIMIT_MAX):
                 resp = client.post(
                     "/api/voice/synthesize",
                     json={"text": "Hello world test", "language": "en-US"},
                 )
                 assert resp.status_code == 200
 
-            # 61st request should be rejected
+            # Next request should be rejected
             resp = client.post(
                 "/api/voice/synthesize",
                 json={"text": "This should fail", "language": "en-US"},
