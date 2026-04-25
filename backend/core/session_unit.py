@@ -1819,7 +1819,6 @@ class SessionUnit:
                 if usage:
                     try:
                         import database
-                        import asyncio
                         asyncio.get_running_loop().create_task(
                             database.db.record_token_usage(
                                 session_id=self.session_id,
