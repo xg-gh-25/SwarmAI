@@ -56,6 +56,7 @@ from core.proactive_learning import (
     update_effectiveness as _update_effectiveness,
     classify_work_type as _classify_work_type,
     extract_deliverables as _extract_deliverables,
+    get_dismissed_titles as _get_dismissed_titles,
 )
 
 logger = logging.getLogger(__name__)
@@ -328,6 +329,61 @@ def _filter_completed_threads(
             )
 
     return filtered
+
+
+def _filter_completed_hints(
+    hints: list[str],
+    daily_dir: Path,
+    dismissed_titles: set[str],
+) -> list[str]:
+    """Remove continue hints that match recent deliverables or dismissed items.
+
+    Same fuzzy-matching heuristic as _filter_completed_threads — ≥50% word
+    overlap or substring match.  Also filters hints the user explicitly dismissed.
+    """
+    deliverables = _extract_recent_deliverables(daily_dir)
+    if not deliverables and not dismissed_titles:
+        return hints
+
+    deliv_word_sets = [set(d.split()) for d in deliverables]
+    dismissed_word_sets = [set(t.split()) for t in dismissed_titles]
+
+    filtered: list[str] = []
+    for hint in hints:
+        # Check against deliverables
+        if deliverables and fuzzy_title_matches_deliverable(
+            hint, deliverables, deliv_word_sets,
+        ):
+            logger.debug("Filtered completed hint from briefing: %s", hint)
+            continue
+
+        # Check against dismissed titles (same fuzzy match)
+        if dismissed_titles and fuzzy_title_matches_deliverable(
+            hint, list(dismissed_titles), dismissed_word_sets,
+        ):
+            logger.debug("Filtered dismissed hint from briefing: %s", hint)
+            continue
+
+        filtered.append(hint)
+
+    return filtered
+
+
+def _filter_dismissed_ranked(
+    ranked: list,
+    dismissed: set[str],
+) -> list:
+    """Remove ranked ScoredItems whose titles fuzzy-match dismissed titles."""
+    if not dismissed:
+        return ranked
+    dismissed_list = list(dismissed)
+    dismissed_word_sets = [set(t.split()) for t in dismissed_list]
+    return [
+        item for item in ranked
+        if not fuzzy_title_matches_deliverable(
+            item.title, dismissed_list, dismissed_word_sets,
+        )
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -913,6 +969,10 @@ def build_session_briefing(
         learning_state = _load_learning_state(workspace)
         learning_state = _update_learning_from_activity(learning_state, daily_dir)
 
+        # -- Filter continue hints against deliverables + dismissed items --
+        dismissed = _get_dismissed_titles(learning_state)
+        continue_hints = _filter_completed_hints(continue_hints, daily_dir, dismissed)
+
         # -- Build briefing (L2: ranked suggestions + L3: learning adjustments) --
         ranked = _build_suggestions(threads, continue_hints, signals)
 
@@ -922,6 +982,9 @@ def build_session_briefing(
         # Re-sort after adjustments
         priority_order = {"P0": 0, "P1": 1, "P2": 2}
         ranked.sort(key=lambda x: (-x.score, priority_order.get(x.priority, 3), x.title))
+
+        # Filter ranked items against user-dismissed titles
+        ranked = _filter_dismissed_ranked(ranked, dismissed)
 
         if not ranked and not signals:
             return None
@@ -1050,11 +1113,19 @@ def build_session_briefing_data(
         # Score and rank
         learning_state = _load_learning_state(workspace)
         learning_state = _update_learning_from_activity(learning_state, daily_dir)
+
+        # Filter continue hints against deliverables + dismissed items
+        dismissed = _get_dismissed_titles(learning_state)
+        continue_hints = _filter_completed_hints(continue_hints, daily_dir, dismissed)
+
         ranked = _build_suggestions(threads, continue_hints, signals)
         for item in ranked:
             _apply_learning(item, learning_state)
         priority_order = {"P0": 0, "P1": 1, "P2": 2}
         ranked.sort(key=lambda x: (-x.score, priority_order.get(x.priority, 3), x.title))
+
+        # Filter ranked items against user-dismissed titles
+        ranked = _filter_dismissed_ranked(ranked, dismissed)
 
         # Build focus items
         focus = []
