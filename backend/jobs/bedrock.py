@@ -269,6 +269,26 @@ def invoke(
                 "Bedrock invoke: model=%s, %d in / %d out tokens",
                 model_id, input_tok, output_tok,
             )
+
+            # Fire-and-forget token recording for background jobs
+            try:
+                import asyncio
+                import database
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(
+                        database.db.record_token_usage(
+                            session_id=None,
+                            source="background_job",
+                            input_tokens=input_tok,
+                            output_tokens=output_tok,
+                            cost_usd=None,
+                            model=model_id,
+                        )
+                    )
+            except Exception:
+                pass  # fire-and-forget — never break the job
+
             return text, input_tok, output_tok
 
         except Exception as e:

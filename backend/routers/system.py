@@ -635,6 +635,24 @@ async def get_engine_metrics() -> dict:
     return collect_engine_metrics(ws_path)
 
 
+@router.get("/tokens/usage")
+async def get_token_usage() -> dict:
+    """Return token usage summary for TopBar display.
+
+    Returns today and total token counts in millions (1 decimal)
+    plus cost in USD. Zero external deps — reads from local SQLite.
+    """
+    import database
+
+    summary = await database.db.get_token_usage_summary()
+    return {
+        "today_tokens_m": round(summary["today_tokens"] / 1_000_000, 1),
+        "total_tokens_m": round(summary["total_tokens"] / 1_000_000, 1),
+        "today_cost_usd": round(summary["today_cost_usd"], 2),
+        "total_cost_usd": round(summary["total_cost_usd"], 2),
+    }
+
+
 @router.post("/reset-to-defaults", response_model=ResetToDefaultsResponse)
 async def reset_to_defaults() -> ResetToDefaultsResponse:
     """Reset application to default state and re-run initialization.
