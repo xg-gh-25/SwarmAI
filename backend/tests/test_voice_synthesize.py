@@ -256,6 +256,120 @@ class TestSynthesizeSpeech:
 
 
 # ---------------------------------------------------------------------------
+# SSML: English term wrapping for CJK languages
+# ---------------------------------------------------------------------------
+
+class TestSSMLWrapping:
+    """SSML <lang> tag wrapping for English terms in CJK text."""
+
+    def test_wrap_english_in_chinese(self):
+        """English terms in Chinese text get <lang> tags."""
+        from core.voice_synthesize import _wrap_english_terms
+        result = _wrap_english_terms("我们用API来调用Claude")
+        assert '<lang xml:lang="en-US">API</lang>' in result
+        assert '<lang xml:lang="en-US">Claude</lang>' in result
+
+    def test_skip_single_char(self):
+        """Single characters (I, a) are NOT wrapped."""
+        from core.voice_synthesize import _wrap_english_terms
+        # This is CJK context — single ASCII chars are likely part of Chinese text
+        result = _wrap_english_terms("这是a测试")
+        assert "<lang" not in result
+
+    def test_wrap_hyphenated(self):
+        """Hyphenated terms like TTS-API get wrapped."""
+        from core.voice_synthesize import _wrap_english_terms
+        result = _wrap_english_terms("使用Content-Type头")
+        assert '<lang xml:lang="en-US">Content-Type</lang>' in result
+
+    def test_wrap_acronyms(self):
+        """Acronyms like LLM, SDK, TTS get wrapped."""
+        from core.voice_synthesize import _wrap_english_terms
+        result = _wrap_english_terms("LLM和SDK是AI的基础")
+        assert '<lang xml:lang="en-US">LLM</lang>' in result
+        assert '<lang xml:lang="en-US">SDK</lang>' in result
+        assert '<lang xml:lang="en-US">AI</lang>' in result
+
+    def test_pure_chinese_no_wrap(self):
+        """Pure Chinese text is NOT wrapped."""
+        from core.voice_synthesize import _wrap_english_terms
+        result = _wrap_english_terms("这是一段纯中文")
+        assert "<lang" not in result
+
+    def test_to_ssml_chinese_with_english(self):
+        """Chinese text with English → SSML output."""
+        from core.voice_synthesize import _to_ssml
+        ssml, text_type = _to_ssml("调用API接口", "zh-CN")
+        assert text_type == "ssml"
+        assert ssml.startswith("<speak>")
+        assert ssml.endswith("</speak>")
+        assert '<lang xml:lang="en-US">API</lang>' in ssml
+
+    def test_to_ssml_english_stays_plain(self):
+        """English text stays as plain text — no SSML needed."""
+        from core.voice_synthesize import _to_ssml
+        text, text_type = _to_ssml("Hello world API", "en-US")
+        assert text_type == "text"
+        assert text == "Hello world API"
+
+    def test_to_ssml_pure_chinese_stays_plain(self):
+        """Pure Chinese text without English terms stays as plain text."""
+        from core.voice_synthesize import _to_ssml
+        text, text_type = _to_ssml("这是纯中文内容", "zh-CN")
+        assert text_type == "text"
+
+    def test_to_ssml_escapes_xml_special_chars(self):
+        """XML special chars (&, <, >) are escaped before SSML tags are inserted."""
+        from core.voice_synthesize import _to_ssml
+        ssml, text_type = _to_ssml("用API处理a<b>c的数据", "zh-CN")
+        assert text_type == "ssml"
+        assert "&lt;" in ssml  # < was escaped
+        assert "&gt;" in ssml  # > was escaped
+        # The SSML <lang> tags are NOT escaped (they're our tags)
+        assert '<lang xml:lang="en-US">API</lang>' in ssml
+
+    @pytest.mark.asyncio
+    async def test_synthesize_chinese_uses_ssml(self):
+        """Chinese text with English sends SSML TextType to Polly."""
+        from core.voice_synthesize import synthesize_speech, _get_polly_client
+
+        _get_polly_client.cache_clear()
+
+        mock_client = MagicMock()
+        fake_audio = b"\xff\xfb\x90\x00" * 50
+        mock_stream = MagicMock()
+        mock_stream.read.return_value = fake_audio
+        mock_client.synthesize_speech.return_value = {"AudioStream": mock_stream}
+
+        with patch("core.voice_synthesize._get_polly_client", return_value=mock_client):
+            await synthesize_speech("调用API接口", language="zh-CN")
+
+        call_kwargs = mock_client.synthesize_speech.call_args[1]
+        assert call_kwargs["TextType"] == "ssml"
+        assert '<lang xml:lang="en-US">API</lang>' in call_kwargs["Text"]
+        assert call_kwargs["Text"].startswith("<speak>")
+
+    @pytest.mark.asyncio
+    async def test_synthesize_english_uses_plain_text(self):
+        """English text sends plain TextType to Polly."""
+        from core.voice_synthesize import synthesize_speech, _get_polly_client
+
+        _get_polly_client.cache_clear()
+
+        mock_client = MagicMock()
+        fake_audio = b"\xff\xfb\x90\x00" * 50
+        mock_stream = MagicMock()
+        mock_stream.read.return_value = fake_audio
+        mock_client.synthesize_speech.return_value = {"AudioStream": mock_stream}
+
+        with patch("core.voice_synthesize._get_polly_client", return_value=mock_client):
+            await synthesize_speech("Hello world", language="en-US")
+
+        call_kwargs = mock_client.synthesize_speech.call_args[1]
+        assert call_kwargs["TextType"] == "text"
+
+
+# ---------------------------------------------------------------------------
 # AC1+AC2: FastAPI endpoints
 # ---------------------------------------------------------------------------
 
