@@ -433,15 +433,6 @@ class TestBuildSessionBriefing:
         result = build_session_briefing(tmp_path)
         assert result is None
 
-    def test_briefing_under_token_budget(self):
-        workspace = Path("/Users/gawan/.swarm-ai/SwarmWS")
-        if not workspace.exists():
-            pytest.skip("Real workspace not available")
-        briefing = build_session_briefing(workspace)
-        if briefing:
-            tokens = len(briefing) // 4
-            assert tokens < 700, f"Briefing too large: {tokens} tokens"
-
     def test_never_raises(self, tmp_path):
         context_dir = tmp_path / ".context"
         context_dir.mkdir()

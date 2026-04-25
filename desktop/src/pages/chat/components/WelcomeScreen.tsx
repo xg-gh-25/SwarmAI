@@ -49,38 +49,65 @@ const PRIORITY_BORDER: Record<string, string> = {
   P2: 'border-l-blue-400',
 };
 
-function FocusItem({ item, onClick }: { item: BriefingFocusItem; onClick?: (title: string) => void }) {
+function FocusItem({
+  item,
+  onClick,
+  onDismiss,
+}: {
+  item: BriefingFocusItem;
+  onClick?: (title: string) => void;
+  onDismiss?: (title: string) => void;
+}) {
   const badge = PRIORITY_BADGES[item.priority] ?? PRIORITY_BADGES.P2;
   const borderCls = PRIORITY_BORDER[item.priority] ?? PRIORITY_BORDER.P2;
   return (
-    <button
-      type="button"
-      onClick={() => onClick?.(item.title)}
-      className={`border-l-2 ${borderCls} pl-2.5 py-1.5 group w-full text-left rounded-r px-2 -mx-1 transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer`}
+    <div
+      className={`border-l-2 ${borderCls} pl-2.5 py-1.5 group w-full text-left rounded-r px-2 -mx-1 transition-colors hover:bg-[var(--color-bg-hover)] flex items-center gap-1`}
     >
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border shrink-0 ${badge.cls}`}>
-            {badge.label}
-          </span>
-          <span className="text-sm text-[var(--color-text)] truncate">{item.title}</span>
-        </div>
-        <div className="flex items-center gap-1.5 shrink-0">
-          {item.momentum && (
-            <span className="text-[10px] bg-green-500/15 text-green-400 px-1.5 py-0.5 rounded font-mono" title="Momentum from last session">
-              &#x26A1; active
+      <button
+        type="button"
+        onClick={() => onClick?.(item.title)}
+        className="flex-1 min-w-0 cursor-pointer text-left"
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border shrink-0 ${badge.cls}`}>
+              {badge.label}
             </span>
-          )}
-          <svg
-            width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-            className="text-[var(--color-text-secondary)] opacity-0 group-hover:opacity-100 transition-opacity"
-            aria-hidden="true"
-          >
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-          </svg>
+            <span className="text-sm text-[var(--color-text)] truncate">{item.title}</span>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {item.momentum && (
+              <span className="text-[10px] bg-green-500/15 text-green-400 px-1.5 py-0.5 rounded font-mono" title="Momentum from last session">
+                &#x26A1; active
+              </span>
+            )}
+            <svg
+              width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+              className="text-[var(--color-text-secondary)] opacity-0 group-hover:opacity-100 transition-opacity"
+              aria-hidden="true"
+            >
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+          </div>
         </div>
-      </div>
-    </button>
+      </button>
+      {/* Dismiss button — appears on hover */}
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onDismiss?.(item.title);
+        }}
+        className="shrink-0 p-0.5 rounded opacity-0 group-hover:opacity-60 hover:!opacity-100 hover:bg-[var(--color-bg-hover)] transition-all cursor-pointer"
+        title="Dismiss this suggestion"
+        aria-label={`Dismiss: ${item.title}`}
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+        </svg>
+      </button>
+    </div>
   );
 }
 
@@ -336,6 +363,18 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick }) =>
     return () => { cancelled = true; };
   }, []);
 
+  const handleDismissFocus = (title: string) => {
+    // Optimistic: remove from UI immediately
+    if (briefing) {
+      setBriefing({
+        ...briefing,
+        focus: briefing.focus.filter((f) => f.title !== title),
+      });
+    }
+    // Persist server-side (fire-and-forget — already removed from UI)
+    systemService.dismissFocus(title).catch(() => {});
+  };
+
   const hasFocus = briefing && briefing.focus.length > 0;
   const hasSignals = briefing && briefing.signals.length > 0;
   const hasJobs = briefing && briefing.jobs.length > 0;
@@ -386,7 +425,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick }) =>
               <BriefingSection title="Suggested Focus">
                 <div className="space-y-0.5">
                   {briefing!.focus.map((item, i) => (
-                    <FocusItem key={i} item={item} onClick={onFocusClick} />
+                    <FocusItem key={i} item={item} onClick={onFocusClick} onDismiss={handleDismissFocus} />
                   ))}
                 </div>
               </BriefingSection>

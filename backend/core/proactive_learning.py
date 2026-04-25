@@ -100,6 +100,10 @@ class LearningState:
         "trend": "gathering",  # gathering | improving | declining | stable
     })
 
+    # User-dismissed focus items — title + timestamp, TTL 7 days, cap 50.
+    # Prevents dismissed items from re-appearing in "Suggested Focus".
+    dismissed_focus: list[dict[str, str]] = field(default_factory=list)
+
     def preferred_work_type(self) -> Optional[str]:
         """Return the work type with highest count, or None if no data."""
         if not self.work_type_distribution:
@@ -175,6 +179,7 @@ def load_learning_state(workspace_dir: Path) -> LearningState:
                 "total_suggestions": 0, "followed": 0, "skipped": 0,
                 "follow_rate": 0.0, "trend": "gathering",
             }),
+            dismissed_focus=data.get("dismissed_focus", []),
         )
         return state
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
@@ -203,6 +208,7 @@ def save_learning_state(workspace_dir: Path, state: LearningState) -> None:
         "observations": state.observations[-_OBSERVATIONS_CAP:],
         "last_processed_activity_key": state.last_processed_activity_key,
         "effectiveness": state.effectiveness,
+        "dismissed_focus": state.dismissed_focus,
     }
     tmp_path = path.with_suffix(".tmp")
     try:
@@ -218,6 +224,66 @@ def save_learning_state(workspace_dir: Path, state: LearningState) -> None:
             tmp_path.unlink(missing_ok=True)
         except OSError:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Focus dismissal
+# ---------------------------------------------------------------------------
+
+_DISMISSED_TTL_DAYS = 7
+_DISMISSED_CAP = 50
+
+
+def dismiss_focus_item(workspace_dir: Path, title: str) -> None:
+    """Dismiss a focus item so it won't appear in future briefings.
+
+    Adds the title (lowercased) + timestamp to learning state.
+    Prunes expired entries (>7 days) and caps at 50 to prevent unbounded growth.
+    """
+    state = load_learning_state(workspace_dir)
+    _prune_dismissed(state)
+
+    # Avoid duplicates
+    title_lower = title.lower()
+    if not any(d.get("title") == title_lower for d in state.dismissed_focus):
+        state.dismissed_focus.append({
+            "title": title_lower,
+            "dismissed_at": datetime.now().isoformat(timespec="seconds"),
+        })
+        # Cap at _DISMISSED_CAP (evict oldest)
+        if len(state.dismissed_focus) > _DISMISSED_CAP:
+            state.dismissed_focus = state.dismissed_focus[-_DISMISSED_CAP:]
+
+    save_learning_state(workspace_dir, state)
+
+
+def get_dismissed_titles(state: LearningState) -> set[str]:
+    """Return the set of currently dismissed (non-expired) focus titles.
+
+    Caller should use fuzzy matching against this set.
+    """
+    _prune_dismissed(state)
+    return {d["title"] for d in state.dismissed_focus if "title" in d}
+
+
+def _prune_dismissed(state: LearningState) -> None:
+    """Remove dismissed entries older than _DISMISSED_TTL_DAYS."""
+    cutoff = datetime.now().timestamp() - _DISMISSED_TTL_DAYS * 86400
+    pruned: list[dict[str, str]] = []
+    for d in state.dismissed_focus:
+        ts_str = d.get("dismissed_at", "")
+        if ts_str:
+            try:
+                ts = datetime.fromisoformat(ts_str).timestamp()
+                if ts < cutoff:
+                    continue  # expired — drop it
+                pruned.append(d)
+                continue
+            except (ValueError, TypeError):
+                pass
+        # No valid timestamp — keep it (safe default)
+        pruned.append(d)
+    state.dismissed_focus = pruned
 
 
 # ---------------------------------------------------------------------------

@@ -620,6 +620,23 @@ async def get_session_briefing() -> dict:
     return build_session_briefing_data(ws_path)
 
 
+@router.post("/briefing/dismiss")
+async def dismiss_focus_item(body: dict) -> dict:
+    """Dismiss a focus item so it won't appear in future briefings.
+
+    Stores the title in proactive_state.json with a 7-day TTL.
+    """
+    title = body.get("title", "").strip()
+    if not title:
+        return {"ok": False, "error": "title is required"}
+    ws_path = swarm_workspace_manager.get_workspace_path()
+    if not ws_path:
+        return {"ok": False, "error": "workspace not found"}
+    from core.proactive_learning import dismiss_focus_item as _dismiss
+    _dismiss(Path(ws_path), title)
+    return {"ok": True}
+
+
 @router.get("/engine-metrics")
 async def get_engine_metrics() -> dict:
     """Return Core Engine growth metrics for the dashboard.

@@ -271,6 +271,14 @@ export const systemService = {
   },
 
   /**
+   * Dismiss a focus item so it won't appear in future briefings.
+   * Stored server-side with a 7-day TTL.
+   */
+  async dismissFocus(title: string): Promise<void> {
+    await api.post('/system/briefing/dismiss', { title });
+  },
+
+  /**
    * Verify LLM authentication by making a real API call.
    * Returns success/failure with model name, latency, and error details.
    */
