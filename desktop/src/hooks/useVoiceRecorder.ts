@@ -20,6 +20,16 @@ interface UseVoiceRecorderOptions {
   onError?: (error: string) => void;
   /** Minimum recording duration in ms (default: 500) */
   minDurationMs?: number;
+  /**
+   * Enable Voice Activity Detection — auto-stop recording after silence.
+   * When true, recording auto-stops after `silenceThresholdMs` of silence.
+   * Used by voice conversation mode for hands-free operation.
+   */
+  enableVAD?: boolean;
+  /** Silence threshold in ms before auto-stop (default: 1500) */
+  silenceThresholdMs?: number;
+  /** RMS amplitude below this is considered silence (0-1, default: 0.01) */
+  silenceLevel?: number;
 }
 
 interface UseVoiceRecorderReturn {
@@ -39,6 +49,9 @@ export function useVoiceRecorder({
   onTranscript,
   onError,
   minDurationMs = 500,
+  enableVAD = false,
+  silenceThresholdMs = 1500,
+  silenceLevel = 0.01,
 }: UseVoiceRecorderOptions): UseVoiceRecorderReturn {
   const [voiceState, setVoiceState] = useState<VoiceState>('idle');
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -48,16 +61,30 @@ export function useVoiceRecorder({
   // Track whether the hook is still mounted to prevent stale setState calls
   const mountedRef = useRef(true);
 
+  // VAD refs — AnalyserNode for silence detection
+  const vadContextRef = useRef<AudioContext | null>(null);
+  const vadIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const silenceStartRef = useRef<number>(0);
+  const stopRecordingRef = useRef<(() => void) | null>(null);
+
   const isSupported =
     typeof navigator !== 'undefined' &&
     typeof navigator.mediaDevices !== 'undefined' &&
     typeof MediaRecorder !== 'undefined';
 
-  // Cleanup on unmount: release mic + kill recording
+  // Cleanup on unmount: release mic + kill recording + tear down VAD
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      if (vadIntervalRef.current) {
+        clearInterval(vadIntervalRef.current);
+        vadIntervalRef.current = null;
+      }
+      if (vadContextRef.current && vadContextRef.current.state !== 'closed') {
+        vadContextRef.current.close().catch(() => {});
+        vadContextRef.current = null;
+      }
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
       }
@@ -152,6 +179,58 @@ export function useVoiceRecorder({
       startTimeRef.current = Date.now();
       mediaRecorderRef.current = recorder;
       setVoiceState('recording');
+
+      // ─── VAD: silence detection via AnalyserNode ─────────────
+      if (enableVAD) {
+        try {
+          const vadCtx = new AudioContext();
+          const source = vadCtx.createMediaStreamSource(stream);
+          const analyser = vadCtx.createAnalyser();
+          analyser.fftSize = 512;
+          source.connect(analyser);
+          vadContextRef.current = vadCtx;
+          silenceStartRef.current = 0;
+
+          const dataArray = new Float32Array(analyser.fftSize);
+
+          vadIntervalRef.current = setInterval(() => {
+            if (!mountedRef.current || recorder.state !== 'recording') {
+              return;
+            }
+
+            analyser.getFloatTimeDomainData(dataArray);
+
+            // Compute RMS amplitude
+            let sum = 0;
+            for (let j = 0; j < dataArray.length; j++) {
+              sum += dataArray[j] * dataArray[j];
+            }
+            const rms = Math.sqrt(sum / dataArray.length);
+
+            const now = Date.now();
+            const elapsed = now - startTimeRef.current;
+
+            if (rms < silenceLevel) {
+              // Silence detected
+              if (silenceStartRef.current === 0) {
+                silenceStartRef.current = now;
+              } else if (
+                now - silenceStartRef.current >= silenceThresholdMs &&
+                elapsed >= minDurationMs
+              ) {
+                // Enough silence after enough speech → auto-stop
+                stopRecordingRef.current?.();
+              }
+            } else {
+              // Speech detected — reset silence timer
+              silenceStartRef.current = 0;
+            }
+          }, 100); // Check every 100ms
+        } catch {
+          // VAD setup failed — fall back to manual stop (non-blocking)
+          console.warn('VAD setup failed — voice conversation requires manual stop');
+        }
+      }
     } catch (err: unknown) {
       if (!mountedRef.current) return;
       const message =
@@ -161,9 +240,20 @@ export function useVoiceRecorder({
       onError?.(message);
       setVoiceState('idle');
     }
-  }, [isSupported, onError]);
+  }, [isSupported, onError, enableVAD, silenceThresholdMs, silenceLevel, minDurationMs]);
 
   const stopRecording = useCallback(async () => {
+    // ─── Tear down VAD first ─────────────────────────────────
+    if (vadIntervalRef.current) {
+      clearInterval(vadIntervalRef.current);
+      vadIntervalRef.current = null;
+    }
+    if (vadContextRef.current && vadContextRef.current.state !== 'closed') {
+      vadContextRef.current.close().catch(() => {});
+      vadContextRef.current = null;
+    }
+    silenceStartRef.current = 0;
+
     const recorder = mediaRecorderRef.current;
     if (!recorder || recorder.state === 'inactive') {
       if (mountedRef.current) setVoiceState('idle');
@@ -231,6 +321,11 @@ export function useVoiceRecorder({
       if (mountedRef.current) setVoiceState('idle');
     }
   }, [minDurationMs, onTranscript, onError]);
+
+  // Wire up ref so VAD interval can call stopRecording (must be after definition)
+  useEffect(() => {
+    stopRecordingRef.current = stopRecording;
+  }, [stopRecording]);
 
   const toggleRecording = useCallback(() => {
     if (voiceState === 'idle') {

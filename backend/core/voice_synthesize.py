@@ -101,11 +101,20 @@ async def synthesize_speech(
     if len(clean_text) > MAX_TEXT_LENGTH:
         clean_text = clean_text[:MAX_TEXT_LENGTH]
 
-    # Resolve voice
+    # Resolve voice + matching LanguageCode
+    # When voice_id is overridden, we must send the correct LanguageCode
+    # or Polly rejects the request (e.g., Zhiyu requires zh-CN, not en-US).
     if voice_id:
         vid, engine = voice_id, "neural"
+        # Reverse-lookup: find the language for this voice
+        lang_code = language  # default to caller's language
+        for lc, (v, _e) in VOICE_MAP.items():
+            if v == voice_id:
+                lang_code = lc
+                break
     else:
         vid, engine = get_voice_for_language(language)
+        lang_code = language
 
     effective_region = region or DEFAULT_REGION
     client = _get_polly_client(effective_region)
@@ -120,7 +129,7 @@ async def synthesize_speech(
                 OutputFormat="mp3",
                 VoiceId=vid,
                 Engine=engine,
-                LanguageCode=language,
+                LanguageCode=lang_code,
             ),
         )
     except Exception as e:

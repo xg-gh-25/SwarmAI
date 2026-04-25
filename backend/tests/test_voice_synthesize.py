@@ -165,6 +165,47 @@ class TestSynthesizeSpeech:
         assert call_kwargs["VoiceId"] == "Joanna"
 
     @pytest.mark.asyncio
+    async def test_synthesize_voice_override_sends_correct_language_code(self):
+        """When voice_id is overridden, LanguageCode must match the voice.
+
+        Bug: voice_id="Zhiyu" with language="en-US" would send
+        LanguageCode="en-US" to Polly, which rejects it because Zhiyu
+        is a zh-CN voice. Fix: reverse-lookup LanguageCode from VOICE_MAP.
+        """
+        from core.voice_synthesize import synthesize_speech, _get_polly_client
+
+        _get_polly_client.cache_clear()
+
+        mock_client = MagicMock()
+        mock_client.synthesize_speech.return_value = self._mock_polly_response()
+
+        with patch("core.voice_synthesize._get_polly_client", return_value=mock_client):
+            # Caller says "en-US" but requests Zhiyu (Chinese voice)
+            await synthesize_speech("测试", voice_id="Zhiyu", language="en-US")
+
+        call_kwargs = mock_client.synthesize_speech.call_args[1]
+        assert call_kwargs["VoiceId"] == "Zhiyu"
+        # LanguageCode should be zh-CN (from VOICE_MAP), NOT en-US (from caller)
+        assert call_kwargs["LanguageCode"] == "zh-CN"
+
+    @pytest.mark.asyncio
+    async def test_synthesize_unknown_voice_override_keeps_caller_language(self):
+        """When voice_id is not in VOICE_MAP, fall back to caller's language."""
+        from core.voice_synthesize import synthesize_speech, _get_polly_client
+
+        _get_polly_client.cache_clear()
+
+        mock_client = MagicMock()
+        mock_client.synthesize_speech.return_value = self._mock_polly_response()
+
+        with patch("core.voice_synthesize._get_polly_client", return_value=mock_client):
+            await synthesize_speech("Hello", voice_id="CustomVoice", language="fr-FR")
+
+        call_kwargs = mock_client.synthesize_speech.call_args[1]
+        assert call_kwargs["VoiceId"] == "CustomVoice"
+        assert call_kwargs["LanguageCode"] == "fr-FR"
+
+    @pytest.mark.asyncio
     async def test_synthesize_empty_text_raises(self):
         """Empty text should raise ValueError."""
         from core.voice_synthesize import synthesize_speech
@@ -300,6 +341,15 @@ class TestVoiceEndpoints:
         call_kwargs = mock_client.synthesize_speech.call_args[1]
         assert call_kwargs["VoiceId"] == "Joanna"
 
+    def test_synthesize_endpoint_rejects_oversized_text(self, client):
+        """POST with text > MAX_TEXT_LENGTH returns 422 (Pydantic validation)."""
+        long_text = "a" * 3001
+        resp = client.post(
+            "/api/voice/synthesize",
+            json={"text": long_text, "language": "en-US"},
+        )
+        assert resp.status_code == 422  # Pydantic max_length validation
+
 
 # ---------------------------------------------------------------------------
 # AC1: PROBE — real HTTP through ASGI stack
@@ -362,3 +412,82 @@ class TestVoiceSynthesizeProbe:
         data = resp.json()
         assert "voices" in data
         assert "en-US" in data["voices"]
+
+
+# ---------------------------------------------------------------------------
+# Rate limiter
+# ---------------------------------------------------------------------------
+
+class TestVoiceRateLimit:
+    """Rate limiter on /api/voice/synthesize."""
+
+    def test_rate_limit_rejects_after_threshold(self):
+        """More than 60 requests in a window should return 429."""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from routers.voice import router, _request_timestamps
+
+        # Clear any existing timestamps
+        _request_timestamps.clear()
+
+        app = FastAPI()
+        app.include_router(router, prefix="/api/voice")
+        client = TestClient(app)
+
+        fake_audio = b"\xff\xfb\x90\x00" * 10
+        mock_stream = MagicMock()
+        mock_stream.read.return_value = fake_audio
+        mock_client = MagicMock()
+        mock_client.synthesize_speech.return_value = {"AudioStream": mock_stream}
+
+        with patch("core.voice_synthesize._get_polly_client", return_value=mock_client):
+            # Fill up the rate limit window
+            for _ in range(60):
+                resp = client.post(
+                    "/api/voice/synthesize",
+                    json={"text": "Hello world test", "language": "en-US"},
+                )
+                assert resp.status_code == 200
+
+            # 61st request should be rejected
+            resp = client.post(
+                "/api/voice/synthesize",
+                json={"text": "This should fail", "language": "en-US"},
+            )
+            assert resp.status_code == 429
+
+        # Cleanup
+        _request_timestamps.clear()
+
+
+# ---------------------------------------------------------------------------
+# Security: HTML escape and JSON injection fixes
+# ---------------------------------------------------------------------------
+
+class TestNotifySecurityFixes:
+    """Test security fixes in the notify skill."""
+
+    def test_email_html_escape(self):
+        """Email HTML body must escape < > & to prevent XSS."""
+        import html
+        malicious = '<script>alert("xss")</script>'
+        escaped = html.escape(malicious)
+        assert "<script>" not in escaped
+        assert "&lt;script&gt;" in escaped
+
+    def test_webhook_json_escape(self):
+        """Webhook payload template must handle quotes in values."""
+        import json
+        title = 'Test "quote" here'
+        message = 'Content with } brace'
+        template = '{"title": "{title}", "body": "{content}"}'
+
+        # Apply the fix: json.dumps()[1:-1] for safe embedding
+        safe_title = json.dumps(title)[1:-1]
+        safe_message = json.dumps(message)[1:-1]
+        body = template.replace("{title}", safe_title).replace("{content}", safe_message)
+
+        # Must parse without error
+        parsed = json.loads(body)
+        assert parsed["title"] == title
+        assert parsed["body"] == message

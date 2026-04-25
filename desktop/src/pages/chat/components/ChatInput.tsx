@@ -49,6 +49,8 @@ interface ChatInputProps {
   voiceConversationState?: VoiceConversationState;
   /** Toggle voice conversation mode on/off */
   onVoiceConversationToggle?: () => void;
+  /** Interrupt TTS playback and return to listening */
+  onVoiceConversationInterrupt?: () => void;
 }
 
 const MAX_ROWS = 20;
@@ -81,6 +83,7 @@ export function ChatInput({
   isLikelyStalled = false,
   voiceConversationState = 'off',
   onVoiceConversationToggle,
+  onVoiceConversationInterrupt,
 }: ChatInputProps) {
   const { t } = useTranslation();
   const [showCommandSuggestions, setShowCommandSuggestions] = useState(false);
@@ -675,7 +678,7 @@ export function ChatInput({
               {voiceConversationState !== 'off' && (
                 <VoiceConversationIndicator
                   state={voiceConversationState}
-                  onInterrupt={onVoiceConversationToggle}
+                  onInterrupt={onVoiceConversationInterrupt}
                 />
               )}
               {lineCount > 5 && (

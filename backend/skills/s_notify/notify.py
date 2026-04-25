@@ -15,6 +15,7 @@ Usage:
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import smtplib
@@ -170,7 +171,7 @@ def _send_email(
         msg["To"] = to
         msg["Subject"] = title
         msg.attach(MIMEText(message, "plain", "utf-8"))
-        msg.attach(MIMEText(f"<pre>{message}</pre>", "html", "utf-8"))
+        msg.attach(MIMEText(f"<pre>{html.escape(message)}</pre>", "html", "utf-8"))
 
         with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15) as server:
             server.login(smtp_from, password)
@@ -245,7 +246,11 @@ def _send_webhook(url: str, title: str, message: str,
 
     try:
         if payload_template:
-            body = payload_template.replace("{title}", title).replace("{content}", message)
+            # Escape values for safe JSON embedding — prevents injection
+            # when title/message contain quotes, braces, or backslashes.
+            safe_title = json.dumps(title)[1:-1]  # strip outer quotes
+            safe_message = json.dumps(message)[1:-1]
+            body = payload_template.replace("{title}", safe_title).replace("{content}", safe_message)
             payload = json.loads(body)
         else:
             payload = {"title": title, "content": message}
