@@ -1,0 +1,14 @@
+name: frontend-design
+version: 2.0.0
+description: "Production-grade frontend interfaces with design intelligence database"
+
+scripts:
+  - name: search
+    path: scripts/search.py
+    runtime: python3
+    description: "BM25 search engine for UI/UX design knowledge (67 styles, 161 palettes, 57 fonts, 99 UX rules)"
+    usage: 'python3 scripts/search.py "<query>" [--domain style|color|chart|landing|product|ux|typography] [--design-system -p "Name"]'
+
+data:
+  - path: data/
+    description: "CSV knowledge bases: styles, colors, typography, ui-reasoning, ux-guidelines, landing, products, charts"

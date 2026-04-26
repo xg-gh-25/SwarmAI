@@ -16,17 +16,65 @@ For standalone pages / quick prototypes:
 
 Entry file must always be named `index.html`.
 
+## Design Intelligence Database
+
+This skill includes a searchable design knowledge base (67 UI styles, 161 color palettes, 57 font pairings, 161 industry reasoning rules, 99 UX guidelines, 25 chart types). Use it **before coding** to make informed design decisions.
+
+### Scripts & Entry Points
+
+All scripts are in the `scripts/` directory relative to this skill. Run from the skill directory.
+
+| Script | Purpose | Usage |
+|--------|---------|-------|
+| `search.py` | BM25 search across all design databases | `python3 scripts/search.py "<query>" [--domain <d>]` |
+| `search.py --design-system` | Generate complete design system recommendation | `python3 scripts/search.py "<query>" --design-system -p "ProjectName"` |
+
+**Search domains:** `style`, `color`, `chart`, `landing`, `product`, `ux`, `typography`
+
+**Examples:**
+```bash
+# Generate a full design system for a product type
+python3 scripts/search.py "beauty spa wellness" --design-system -p "Serenity Spa" -f markdown
+
+# Search for a specific style
+python3 scripts/search.py "glassmorphism" --domain style
+
+# Find typography pairings
+python3 scripts/search.py "elegant serif" --domain typography
+
+# Get industry-specific color palette
+python3 scripts/search.py "fintech banking" --domain color
+
+# Check UX guidelines
+python3 scripts/search.py "touch target accessibility" --domain ux
+```
+
+### Data Files
+
+| File | Records | Content |
+|------|---------|---------|
+| `data/ui-reasoning.csv` | 161 | Industry-specific rules: style, color mood, typography, effects, anti-patterns per product type |
+| `data/styles.csv` | 67 | UI styles with keywords, colors, effects, performance, accessibility, CSS variables |
+| `data/colors.csv` | 161 | Full color systems (primary, secondary, accent, background, muted, border, destructive, ring) |
+| `data/typography.csv` | 57 | Font pairings with Google Fonts URLs, CSS imports, Tailwind config |
+| `data/ux-guidelines.csv` | 99 | Do/Don't rules with code examples, severity, platform specificity |
+| `data/landing.csv` | 24 | Landing page patterns with section order, CTA placement, conversion strategy |
+| `data/products.csv` | 161 | Product type → style + color + layout recommendations |
+| `data/charts.csv` | 25 | Chart type selection by data type with accessibility notes |
+
 ## Design Philosophy
 
 ### Avoid Generic AI Aesthetics
 
 The biggest risk with AI-generated UI is looking like every other AI-generated UI. Before writing code:
 
-1. **Choose a bold aesthetic direction** -- don't default to "clean and modern"
-2. **Commit to it fully** -- half-measures look worse than generic
-3. **Make at least one unexpected choice** -- typography, layout, animation, color
+1. **Run the Design System Generator** -- `python3 scripts/search.py "<product description>" --design-system -p "Name"` to get industry-specific recommendations
+2. **Commit to the recommended style fully** -- half-measures look worse than generic
+3. **Follow anti-patterns** -- the database tells you what NOT to do for each industry
 
-### Aesthetic Directions
+### Aesthetic Directions (67 styles in database)
+
+The full style database has 67 entries. Here are the most common starting points:
 
 | Direction | Characteristics | Good For |
 |-----------|----------------|----------|
@@ -40,6 +88,11 @@ The biggest risk with AI-generated UI is looking like every other AI-generated U
 | **Dark Premium** | Rich blacks, luminous accents, elegant typography | Luxury, fintech, premium products |
 | **Playful** | Rounded shapes, bright colors, micro-interactions | Consumer apps, onboarding, kids |
 | **Cinematic** | Large hero images, minimal text, dramatic lighting | Product launches, storytelling |
+
+For the full 67 styles with CSS variables, implementation checklists, and AI prompt keywords, search the database:
+```bash
+python3 scripts/search.py "<your style>" --domain style
+```
 
 ## Workflow
 
@@ -57,7 +110,24 @@ Extract from the user's request:
 | **Responsive** | Mobile-first? Desktop-only? Both? | Both |
 | **Tech constraints** | Single HTML? React? Tailwind? | Single HTML + inline CSS/JS |
 
-### Step 2: Design Before Coding
+### Step 2: Generate Design System (NEW)
+
+**Before writing any code**, run the design system generator:
+
+```bash
+python3 scripts/search.py "<product description keywords>" --design-system -p "ProjectName" -f markdown
+```
+
+This outputs: **pattern** (page structure + CTA placement), **style** (with effects and CSS keywords), **colors** (full semantic palette with CSS variables), **typography** (heading + body fonts with Google Fonts URL), **key effects**, **anti-patterns to avoid**, and a **pre-delivery checklist**.
+
+Use the output to populate Step 2 decisions. If the user specifies a style preference, search that style directly:
+```bash
+python3 scripts/search.py "glassmorphism" --domain style
+```
+
+**If the design system generator is unavailable** (e.g., Python not accessible), fall back to the manual definitions below.
+
+### Step 2 (Fallback): Design Before Coding
 
 Before writing any code, define:
 

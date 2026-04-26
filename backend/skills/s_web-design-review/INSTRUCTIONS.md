@@ -22,6 +22,25 @@ https://raw.githubusercontent.com/vercel-labs/web-interface-guidelines/main/comm
 
 Use WebFetch to retrieve this. If unavailable, fall back to the built-in checklist below.
 
+### Step 2.5: Query UX Guidelines Database (99 rules)
+
+This skill includes a searchable UX guidelines database with 99 Do/Don't rules, severity levels, and code examples. **Run targeted searches before auditing** to get specific, evidence-based checks for the UI being reviewed.
+
+**Scripts are in the `scripts/` directory relative to this skill.**
+
+```bash
+# Search for guidelines relevant to the UI being reviewed
+python3 scripts/search.py "touch target accessibility" --domain ux
+python3 scripts/search.py "form validation error" --domain ux
+python3 scripts/search.py "animation motion" --domain ux
+python3 scripts/search.py "color contrast" --domain ux
+python3 scripts/search.py "keyboard navigation focus" --domain ux
+```
+
+Each result includes: **Category**, **Issue**, **Platform**, **Description**, **Do**, **Don't**, **Code Example Good**, **Code Example Bad**, **Severity**.
+
+Use these results to enrich your audit findings with specific Do/Don't guidance and code examples. If the script is unavailable, fall back to the built-in checklists below.
+
 ### Step 3: Run the Audit
 
 Review each file against all categories. For every finding, record:
