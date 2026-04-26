@@ -1623,7 +1623,11 @@ def build_session_briefing_data(
 
         # ── Pollinate content ────────────────────────────────────────
         content_items: list[dict] = []
-        studio_content = workspace / "Services" / "pollinate-studio" / "content"
+        # Primary: Knowledge/Pollinate/ (visible in Explorer, git-tracked)
+        # Fallback: Services/pollinate-studio/content/ (legacy, hidden)
+        studio_content = workspace / "Knowledge" / "Pollinate"
+        if not studio_content.is_dir():
+            studio_content = workspace / "Services" / "pollinate-studio" / "content"
         if studio_content.is_dir():
             try:
                 cutoff_30d = time.time() - 30 * 86400

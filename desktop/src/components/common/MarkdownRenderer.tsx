@@ -715,8 +715,9 @@ const baseMarkdownComponents: Record<string, React.ComponentType<any>> = {
   // Paragraphs
   p: ({ children }) => <p className="text-[var(--color-text)] mb-2 leading-normal">{children}</p>,
 
-  // Links — use plugin-opener instead of target="_blank" (Tauri webview ignores it)
-  // file:// URLs → openPath (system app), https:// → openUrl (browser)
+  // Links — workspace file paths open in FileEditor, external URLs open in browser.
+  // Detection reuses isWorkspaceFilePath() so `<a>` links and inline `<code>` paths
+  // share the same open-file behavior (dispatch OPEN_FILE_EVENT → ThreeColumnLayout).
   a: ({ href, children }) => (
     <a
       href={href}
@@ -724,9 +725,12 @@ const baseMarkdownComponents: Record<string, React.ComponentType<any>> = {
         if (href) {
           e.preventDefault();
           try {
-            if (href.startsWith('file://')) {
-              const { openPath } = await import('@tauri-apps/plugin-opener');
-              await openPath(href.replace('file://', ''));
+            const filePath = href.startsWith('file://') ? href.replace('file://', '') : href;
+            if (isWorkspaceFilePath(filePath)) {
+              const cleanPath = filePath.startsWith('./') ? filePath.slice(2) : filePath;
+              document.dispatchEvent(
+                new CustomEvent(OPEN_FILE_EVENT, { detail: { path: cleanPath } }),
+              );
             } else {
               await openExternal(href);
             }
