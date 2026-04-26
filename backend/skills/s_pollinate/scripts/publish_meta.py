@@ -14,6 +14,38 @@ import re
 import sys
 from datetime import datetime
 
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
+
+ACCOUNTS_PATH = os.path.expanduser("~/.swarm-ai/pollinate-accounts.yaml")
+
+
+def load_accounts() -> dict:
+    """Load channel account identities from private config."""
+    if not os.path.isfile(ACCOUNTS_PATH):
+        return {}
+    if yaml is None:
+        # Fallback: basic YAML parsing for simple key-value config
+        accounts = {}
+        with open(ACCOUNTS_PATH, "r", encoding="utf-8") as f:
+            current_platform = None
+            for line in f:
+                line = line.rstrip()
+                if not line or line.startswith("#"):
+                    continue
+                if not line.startswith(" ") and line.endswith(":"):
+                    current_platform = line[:-1].strip()
+                    accounts[current_platform] = {}
+                elif current_platform and ":" in line:
+                    key, val = line.strip().split(":", 1)
+                    accounts[current_platform][key.strip()] = val.strip().strip('"\'')
+        return accounts
+    with open(ACCOUNTS_PATH, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
 
 PLATFORM_CONFIGS = {
     "bilibili": {
@@ -110,6 +142,7 @@ def generate_publish_info(content_dir: str, platforms: list) -> str:
     """Generate publish_info.md content."""
     timing = load_timing(content_dir)
     total_duration = timing.get("total_duration", 0)
+    accounts = load_accounts()
 
     # Read content_package.md for title/thesis
     cp_path = os.path.join(content_dir, "content_package.md")
@@ -143,6 +176,21 @@ def generate_publish_info(content_dir: str, platforms: list) -> str:
         lines.append(f"---")
         lines.append(f"## {config['name']}")
         lines.append(f"")
+
+        # Account identity
+        acct = accounts.get(platform_key, {})
+        if acct.get("enabled", True) and acct.get("name"):
+            acct_name = acct["name"]
+            acct_url = acct.get("url", "")
+            acct_id = acct.get("uid") or acct.get("channel_id") or ""
+            lines.append(f"**Account:** {acct_name}" + (f" ({acct_id})" if acct_id else ""))
+            if acct_url:
+                lines.append(f"**URL:** {acct_url}")
+            lines.append(f"")
+        elif acct.get("enabled") is False:
+            lines.append(f"**Status:** DISABLED — skipping this platform")
+            lines.append(f"")
+            continue
 
         # Title placeholder (agent fills with platform-optimized version)
         lines.append(f"### Title (max {config['title_max']} chars)")
