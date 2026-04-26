@@ -415,13 +415,36 @@ automatically uses historical data (with 20% buffer) when available.
 
 ## Checkpoint Protocol
 
+### ⚠️ BLOCKING: Budget Check Required Before ANY Checkpoint
+
+**NEVER checkpoint based on "feeling" or "intuition" about context usage.**
+Before every checkpoint, you MUST run:
+```bash
+python backend/scripts/artifact_cli.py run-budget --project <PROJECT> --run-id <RUN_ID>
+```
+
+**Only checkpoint if `should_checkpoint: true` in the response** OR one of the
+non-budget triggers below fires. With 1M context (SESSION_BUDGET=800K), a full
+pipeline (evaluate+think+plan+build+review+test+deliver+reflect) fits comfortably
+in ONE session. Historical average is ~230K tokens for a full run.
+
+**Why this rule exists:** Every checkpoint costs a full session-start overhead
+(~15K tokens for context reload) and breaks agent momentum. Prior runs checkpointed
+at PLAN→BUILD "because BUILD is big" but budget was only 10% consumed. This wasted
+user time and split work unnecessarily.
+
 ### When to Checkpoint
 
 Checkpoint (pause the pipeline) when ANY of:
 - L2 BLOCK escalation (judgment decision)
 - Stage retry exhaustion (>= max_retries failures)
-- Budget insufficient for next stage (`run-budget` says `should_checkpoint: true`)
+- Budget insufficient for next stage (`run-budget` returns `should_checkpoint: true`)
 - Pipeline error (unexpected failure)
+
+**NOT valid reasons to checkpoint:**
+- "BUILD is a big stage" (it's ~60K tokens, you have 800K)
+- "I've read a lot of files" (file reads are cheap, ~2K per file)
+- "Context might be getting full" (run `run-budget` to check, don't guess)
 
 ### How to Checkpoint
 
