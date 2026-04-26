@@ -200,47 +200,47 @@ export function RadarSidebar({
 
       {/* Scrollable sections */}
       <div className="flex-1 overflow-y-auto">
-        {/* Todo */}
-        <CollapsibleSection name="todo" icon="checklist" label="ToDo" count={todoCount} defaultExpanded={true}>
+        {/* Todo — red (action urgency) */}
+        <CollapsibleSection name="todo" icon="checklist" label="ToDo" count={todoCount} defaultExpanded={true} accent="rgba(239,68,68,0.35)">
           <TodoSection workspaceId={workspaceId} onCountChange={setTodoCount} onItemClick={onItemClick} />
         </CollapsibleSection>
 
-        {/* Working */}
+        {/* Working — orange (attention) */}
         {workingCount > 0 && (
-          <CollapsibleSection name="working" icon="assignment" label="Working" count={workingCount} defaultExpanded={true}>
+          <CollapsibleSection name="working" icon="assignment" label="Working" count={workingCount} defaultExpanded={true} accent="rgba(249,115,22,0.4)">
             <WorkingSection items={briefing!.working} onItemClick={onItemClick} />
           </CollapsibleSection>
         )}
 
-        {/* Signals */}
+        {/* Signals — blue (information) */}
         {signalsCount > 0 && (
-          <CollapsibleSection name="signals" icon="cell_tower" label="Signals" count={signalsCount} defaultExpanded={true}>
+          <CollapsibleSection name="signals" icon="cell_tower" label="Signals" count={signalsCount} defaultExpanded={true} accent="rgba(59,130,246,0.35)">
             <SignalsSection items={briefing!.signals} onItemClick={onItemClick} compact />
           </CollapsibleSection>
         )}
 
-        {/* Hot News */}
+        {/* Hot News — warm red (trending) */}
         {hotCount > 0 && (
-          <CollapsibleSection name="hot" icon="whatshot" label="Hot" count={hotCount} defaultExpanded={true}>
+          <CollapsibleSection name="hot" icon="whatshot" label="Hot" count={hotCount} defaultExpanded={true} accent="rgba(245,158,11,0.4)">
             <HotNewsSection items={briefing!.hotNews} onItemClick={onItemClick} compact />
           </CollapsibleSection>
         )}
 
-        {/* Stocks */}
+        {/* Stocks — green (financial) */}
         {stocksCount > 0 && (
-          <CollapsibleSection name="stocks" icon="trending_up" label="Stocks" count={stocksCount} defaultExpanded={false}>
+          <CollapsibleSection name="stocks" icon="trending_up" label="Stocks" count={stocksCount} defaultExpanded={false} accent="rgba(34,197,94,0.35)">
             <StocksSection items={briefing!.stocks} compact />
           </CollapsibleSection>
         )}
 
-        {/* Swarm Output */}
+        {/* Swarm Output — purple (brand) */}
         {outputCount > 0 && (
-          <CollapsibleSection name="output" icon="hive" label="Output" count={outputCount} defaultExpanded={false}>
+          <CollapsibleSection name="output" icon="hive" label="Output" count={outputCount} defaultExpanded={false} accent="rgba(168,85,247,0.35)">
             <SwarmOutputSection output={briefing!.output} compact />
           </CollapsibleSection>
         )}
 
-        {/* Artifacts (existing — now under Output umbrella conceptually but kept separate for independent fetch) */}
+        {/* Artifacts — neutral (no accent) */}
         <CollapsibleSection name="artifacts" icon="folder_open" label="Artifacts" count={artifactCount} defaultExpanded={false}>
           <ArtifactsSection workspaceId={workspaceId} onCountChange={setArtifactCount} />
         </CollapsibleSection>
