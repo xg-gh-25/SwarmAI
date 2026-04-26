@@ -71,10 +71,7 @@ jobs:
           echo "$VIRTUAL_ENV/bin" >> $GITHUB_PATH
 
       - name: Update version
-        working-directory: ./desktop
-        run: |
-          VERSION="${{ needs.prepare.outputs.version }}"
-          jq --arg v "$VERSION" '.version = $v' src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
+        run: bash scripts/sync-version.sh "${{ needs.prepare.outputs.version }}"
 
       - name: Build Python backend
         working-directory: ./desktop
@@ -132,11 +129,8 @@ jobs:
           echo "$VIRTUAL_ENV/Scripts" >> $GITHUB_PATH
 
       - name: Update version
-        working-directory: ./desktop
         shell: bash
-        run: |
-          VERSION="${{ needs.prepare.outputs.version }}"
-          jq --arg v "$VERSION" '.version = $v' src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
+        run: bash scripts/sync-version.sh "${{ needs.prepare.outputs.version }}"
 
       - name: Build application
         working-directory: ./desktop
