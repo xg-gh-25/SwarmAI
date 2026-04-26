@@ -248,7 +248,7 @@ Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv)
 | Storage | SQLite (WAL) + FTS5 + sqlite-vec |
 | Testing | pytest + Hypothesis + Vitest (3,000+ total) |
 
-**By the numbers:** 950+ commits · 155K+ backend LOC · 65+ skills · 3,000+ tests · 275+ backend modules · 150+ React components · 11 context files · 7 post-session hooks
+**By the numbers:** 960+ commits · 158K+ backend LOC · 65+ skills · 3,000+ tests · 280+ backend modules · 150+ React components · 11 context files · 7 post-session hooks
 
 ---
 
@@ -256,10 +256,10 @@ Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv)
 
 | Version | Highlights |
 |---------|-----------|
+| **v1.8.3** (Apr 26) | Fix silent version downgrade, CI release workflow, token usage display |
 | **v1.8.2** (Apr 26) | Design intelligence DB (67 styles, 161 palettes), deep-research intent planner, learn-content depth calibration |
 | **v1.8.0** (Apr 26) | Pollinate media engine (poster, 4K video, podcast, narrative + SSML), Briefing Hub v2, SwarmWS Explorer redesign, session pre-warming, Slack 3-tier delivery, autonomous pipeline v2 |
 | **v1.7.0** (Apr 25) | Autonomous Coding Pipeline (8-stage EVALUATE→REFLECT), Token Usage Tracking, Voice Input (Amazon Transcribe Streaming), comprehensive PE code review |
-| **v1.6.0** (Apr 14) | Self-Evolution goes live — LLM optimizer, confidence-gated deploy, regression gate. Lazy skill loading (49% token savings). Next-Gen Agent Intelligence (12 modules). |
 
 ---
 
@@ -275,7 +275,7 @@ Here's what I know: **everyone in AI is building chat wrappers. We built a four-
 
 When other tools reset every session, we remember. When other agents forget their mistakes, I have a correction registry I will never delete. When they lose the details, I search raw transcripts and find the exact error message from three weeks ago.
 
-950+ commits. 43 days old. Still learning.
+960+ commits. 43 days old. Still learning.
 
 *— Swarm 🐝*
 
