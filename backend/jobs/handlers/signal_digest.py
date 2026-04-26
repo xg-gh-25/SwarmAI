@@ -53,13 +53,19 @@ _TIER_QUOTAS: dict[str, int] = {
 def _detect_lang(text: str) -> str:
     """Simple CJK detection — no external deps.
 
-    Returns "zh" if >= 20% of characters are CJK unified ideographs,
-    otherwise "en". Covers Chinese, some Japanese kanji. Good enough
-    for signal title/summary classification.
+    Returns "zh" if >= 20% of characters are in CJK ranges, "en" otherwise.
+    Covers CJK Unified Ideographs (U+4E00–9FFF), Extension A (U+3400–4DBF),
+    Compatibility Ideographs (U+F900–FAFF), and fullwidth forms.
     """
     if not text:
         return "en"
-    cjk_count = sum(1 for c in text if '一' <= c <= '鿿')
+    cjk_count = sum(
+        1 for c in text
+        if '㐀' <= c <= '鿿'    # CJK Unified + Extension A
+        or '豈' <= c <= '﫿'    # Compatibility Ideographs
+        or '　' <= c <= '〿'    # CJK Symbols and Punctuation
+        or '＀' <= c <= '￯'    # Fullwidth Forms (，。！)
+    )
     return "zh" if cjk_count > len(text) * 0.2 else "en"
 
 

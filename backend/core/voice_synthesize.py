@@ -367,7 +367,7 @@ def _prepare_neural(text: str, language: str) -> tuple[str, str]:
         _tag_n = [0]
 
         def _ph_tag(m: re.Match) -> str:
-            key = f"{_tag_n[0]}"
+            key = chr(0xE000 + _tag_n[0])  # PUA placeholder — collision-free with user text
             _tag_map[key] = m.group(0)
             _tag_n[0] += 1
             return key

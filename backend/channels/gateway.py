@@ -391,7 +391,7 @@ class ChannelGateway:
         except Exception as exc:
             logger.warning("channel_gateway.prewarm_failed: %s", exc)
 
-    def _try_adopt_prewarmed(self, session_id: str) -> bool:
+    async def _try_adopt_prewarmed(self, session_id: str) -> bool:
         """Adopt the pre-warmed unit for a real session. Returns True on success."""
         prewarm_id = self._prewarmed_session_id
         if not prewarm_id:
@@ -401,7 +401,7 @@ class ChannelGateway:
         if router is None:
             return False
 
-        adopted = router.adopt_prewarmed_unit(prewarm_id, session_id)
+        adopted = await router.adopt_prewarmed_unit(prewarm_id, session_id)
         # Always clear — if rejection means unit died/evicted, retrying is
         # noise. Let the next message take the normal cold-start path.
         self._prewarmed_session_id = None
@@ -943,7 +943,7 @@ class ChannelGateway:
         # and we have a pre-warmed IDLE subprocess, adopt it to skip
         # the ~4s CLI spawn latency.
         if is_new_session and is_owner and self._prewarmed_session_id:
-            self._try_adopt_prewarmed(session_id)
+            await self._try_adopt_prewarmed(session_id)
 
         # Log inbound message to channel_messages ---------------------------------
         inbound_record_id = str(uuid4())
