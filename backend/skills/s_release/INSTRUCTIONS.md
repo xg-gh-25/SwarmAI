@@ -11,6 +11,20 @@ Bump version, update CHANGELOG, tag, and publish GitHub Release. Zero files miss
 | 3 | `desktop/src-tauri/Cargo.toml` | `version = "X.Y.Z"` | TOML |
 | 4 | `desktop/src-tauri/tauri.conf.json` | `"version": "X.Y.Z"` | JSON |
 
+## README Files (MUST STAY IN SYNC)
+
+| # | File | What to check |
+|---|------|---------------|
+| 1 | `README.md` | "What's New" section, "Recent Releases" table, "By the numbers" stats, skills count, Story section |
+| 2 | `README.zh-CN.md` | Same sections — Chinese mirror of README.md |
+
+Both READMEs must reflect the new release. Check and update:
+- **"What's New"** — feature table matches this release's highlights
+- **"Recent Releases"** — new version at top, shift previous rows down (keep last 4)
+- **"By the numbers"** — commits count, skills count, LOC, modules, components
+- **Skills count** — grep for `55+` / `65+` etc. across all sections (Why SwarmAI cards, Architecture flywheel, vs Alternatives tables, vs OpenClaw table). Get actual count: `ls -d backend/skills/s_*/ | wc -l`
+- **Story section** — age in days (`python3 -c "from datetime import date; print((date.today() - date(2026,3,14)).days)"`), memory stats (check MEMORY.md index header)
+
 ## Versioning Convention
 
 - **Major** (X): Breaking changes, architecture redesign
@@ -62,7 +76,30 @@ Rules:
 - Order: most impactful first within each section
 - Keep format consistent with existing CHANGELOG entries
 
-### Step 4: Bump Version in All 4 Files
+### Step 4: Update READMEs (EN + CN)
+
+Read both `README.md` and `README.zh-CN.md`. Update in parallel:
+
+1. **"What's New" section** — replace the feature table with this release's highlights
+2. **"Recent Releases" table** — add new version row at top, drop oldest if > 4 rows
+3. **"By the numbers" line** — update commits, LOC, skills, modules, components:
+   ```bash
+   echo "commits: $(git rev-list --count HEAD)"
+   echo "skills: $(ls -d backend/skills/s_*/ | wc -l)"
+   echo "backend LOC: $(find backend -name '*.py' -not -path '*/.venv/*' -not -path '*/__pycache__/*' -not -path '*/.*' | xargs wc -l | tail -1)"
+   echo "backend modules: $(find backend -name '*.py' -not -path '*/.venv/*' -not -path '*/__pycache__/*' -not -path '*/tests/*' -not -path '*/.*' | wc -l)"
+   echo "React components: $(find desktop/src -name '*.tsx' | wc -l)"
+   ```
+4. **Skills count** — search both files for the old count (e.g. `65+`) in ALL locations: feature cards, flywheel table, vs Alternatives tables, vs OpenClaw table. Update all occurrences.
+5. **Story section** — update age in days and memory stats if stale
+
+Commit READMEs separately before version bump:
+```bash
+git add README.md README.zh-CN.md
+git commit -m "docs: refresh README (EN + CN) for vX.Y.Z release"
+```
+
+### Step 5: Bump Version in All 4 Files
 
 Edit each of the 4 files listed above. Use the Edit tool — do NOT do search-and-replace on the old version string globally (it might match dependency versions).
 
@@ -75,7 +112,7 @@ grep -n "version" desktop/src-tauri/tauri.conf.json | head -1
 ```
 All 4 must show the new version.
 
-### Step 5: Commit
+### Step 6: Commit
 
 ```bash
 git add CHANGELOG.md backend/pyproject.toml desktop/package.json \
@@ -83,20 +120,20 @@ git add CHANGELOG.md backend/pyproject.toml desktop/package.json \
 git commit -m "chore: bump version to X.Y.Z, update CHANGELOG"
 ```
 
-### Step 6: Push
+### Step 7: Push
 
 ```bash
 git push
 ```
 
-### Step 7: Tag and Push Tag
+### Step 8: Tag and Push Tag
 
 ```bash
 git tag vX.Y.Z -m "vX.Y.Z: <one-line summary of highlights>"
 git push origin vX.Y.Z
 ```
 
-### Step 8: Create GitHub Release
+### Step 9: Create GitHub Release
 
 ```bash
 gh release create vX.Y.Z \
@@ -130,11 +167,12 @@ EOF
 
 The release notes should be a condensed version of the CHANGELOG — highlights at top, then Added/Fixed/Changed sections.
 
-### Step 9: Report
+### Step 10: Report
 
 Output the release URL and a summary:
 - Version: X.Y.Z
 - Files bumped: 4/4
+- READMEs: updated (EN + CN)
 - CHANGELOG: updated
 - Tag: pushed
 - Release: URL
