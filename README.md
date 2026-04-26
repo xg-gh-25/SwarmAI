@@ -256,7 +256,7 @@ Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv)
 
 | Version | Highlights |
 |---------|-----------|
-| **v1.8.1** (Apr 26) | Release skill, WelcomeScreen responsive layout fix, Explorer font tuning |
+| **v1.8.2** (Apr 26) | Design intelligence DB (67 styles, 161 palettes), deep-research intent planner, learn-content depth calibration |
 | **v1.8.0** (Apr 26) | Pollinate media engine (poster, 4K video, podcast, narrative + SSML), Briefing Hub v2, SwarmWS Explorer redesign, session pre-warming, Slack 3-tier delivery, autonomous pipeline v2 |
 | **v1.7.0** (Apr 25) | Autonomous Coding Pipeline (8-stage EVALUATE→REFLECT), Token Usage Tracking, Voice Input (Amazon Transcribe Streaming), comprehensive PE code review |
 | **v1.6.0** (Apr 14) | Self-Evolution goes live — LLM optimizer, confidence-gated deploy, regression gate. Lazy skill loading (49% token savings). Next-Gen Agent Intelligence (12 modules). |
