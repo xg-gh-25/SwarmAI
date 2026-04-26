@@ -88,13 +88,15 @@ interface TodoSectionProps {
   workspaceId: string | null;
   /** Report item count to parent for badge display. */
   onCountChange?: (count: number) => void;
+  /** Click title → populate ChatInput with work packet context. */
+  onItemClick?: (message: string, context?: string) => void;
 }
 
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-export function TodoSection({ workspaceId, onCountChange }: TodoSectionProps) {
+export function TodoSection({ workspaceId, onCountChange, onItemClick }: TodoSectionProps) {
   const [todos, setTodos] = useState<RadarTodo[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -263,7 +265,13 @@ export function TodoSection({ workspaceId, onCountChange }: TodoSectionProps) {
               onDragEnd={(e) => {
                 e.currentTarget.style.opacity = '1';
               }}
-              className={`group flex items-center gap-2 px-1 py-1 rounded hover:bg-[var(--color-hover)] cursor-grab active:cursor-grabbing transition-colors ${isActing ? 'opacity-50' : ''}`}
+              onClick={() => {
+                if (onItemClick) {
+                  const ctx = payload.context || '';
+                  onItemClick(`[ToDo:${todo.id}] ${todo.title}`, ctx);
+                }
+              }}
+              className={`group flex items-center gap-2 px-1 py-1 rounded hover:bg-[var(--color-hover)] ${onItemClick ? 'cursor-pointer' : 'cursor-grab'} active:cursor-grabbing transition-colors ${isActing ? 'opacity-50' : ''}`}
             >
               {/* Priority dot */}
               <span
@@ -286,7 +294,7 @@ export function TodoSection({ workspaceId, onCountChange }: TodoSectionProps) {
                 <button
                   className="p-0.5 rounded hover:bg-[var(--color-success,#22c55e)]/20 text-[var(--color-success,#22c55e)] transition-colors"
                   title="Mark as done"
-                  onClick={() => handleMarkHandled(todo.id)}
+                  onClick={(e) => { e.stopPropagation(); handleMarkHandled(todo.id); }}
                   disabled={isActing}
                 >
                   <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -296,7 +304,7 @@ export function TodoSection({ workspaceId, onCountChange }: TodoSectionProps) {
                 <button
                   className="p-0.5 rounded hover:bg-[var(--color-error,#ef4444)]/20 text-[var(--color-text-muted)] hover:text-[var(--color-error,#ef4444)] transition-colors"
                   title="Dismiss"
-                  onClick={() => handleMarkCancelled(todo.id)}
+                  onClick={(e) => { e.stopPropagation(); handleMarkCancelled(todo.id); }}
                   disabled={isActing}
                 >
                   <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

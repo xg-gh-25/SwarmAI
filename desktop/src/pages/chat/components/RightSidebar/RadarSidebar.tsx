@@ -1,26 +1,36 @@
 /**
- * Top-level Radar sidebar shell component.
+ * Unified Radar sidebar — single scrollable view with all briefing sections.
  *
- * Persistent right-side panel, always visible when the chat page is mounted.
- * Manages two modes — Radar (default) and History — via local ``useState``.
- * Mode is NOT persisted to ``localStorage``; the sidebar always starts in
- * Radar mode on mount.
+ * D6: Mode toggle killed. History → search popover.
+ * D7: Jobs = bottom status bar with expand.
+ * D8: Section order = action priority gradient.
  *
- * Features:
- * - Header row with mode label, swap icon (Mode_Toggle), and 💡 Feature Tip
- * - Left-edge drag handle for horizontal resizing (mousedown/mousemove/mouseup)
- * - Width persisted to ``localStorage`` key ``radar-sidebar-width``
- * - Renders ``RadarView`` in radar mode, ``HistoryView`` in history mode
+ * Sections: Todo → Working → Signals → Hot → Stocks → Output → Jobs bar
+ * Each section uses CollapsibleSection wrapper.
+ * Empty sections auto-hide (D3).
  *
- * Key exports:
- * - ``RadarSidebar`` — The persistent sidebar shell component
+ * @exports RadarSidebar
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import type { RadarSidebarProps } from './types';
-import { RADAR_SIDEBAR_WIDTH_KEY, RADAR_TIP_DISMISSED_KEY } from './types';
-import { RadarView } from './RadarView';
-import { HistoryView } from './HistoryView';
+import { RADAR_SIDEBAR_WIDTH_KEY } from './types';
+import { CollapsibleSection } from './shared/CollapsibleSection';
+import { TodoSection } from './TodoSection';
+import { ArtifactsSection } from './ArtifactsSection';
+import {
+  systemService,
+  type SessionBriefing,
+} from '../../../../services/system';
+import {
+  WorkingSection,
+  SignalsSection,
+  HotNewsSection,
+  StocksSection,
+  SwarmOutputSection,
+  JobsBar,
+} from '../briefing';
+import { HistoryPopover } from './HistoryPopover';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -29,44 +39,30 @@ import { HistoryView } from './HistoryView';
 const DEFAULT_WIDTH = 320;
 const MIN_WIDTH = 240;
 const MAX_WIDTH = 600;
-
-const FEATURE_TIP_TEXT =
-  'SwarmRadar keeps you in the loop. ToDos show your pending tasks — ask your agent to create them or pull from Slack and email. Artifacts show recently changed files in your workspace. Jobs display background automations. Drag items from ToDo or Artifacts into chat to reference them.';
+const BRIEFING_POLL_MS = 60_000; // 60s — match backend cache TTL
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Read persisted width from localStorage, falling back to default. */
 function readPersistedWidth(): number {
   try {
     const raw = localStorage.getItem(RADAR_SIDEBAR_WIDTH_KEY);
     if (raw !== null) {
       const parsed = parseInt(raw, 10);
-      if (!Number.isNaN(parsed) && parsed >= MIN_WIDTH && parsed <= MAX_WIDTH) {
-        return parsed;
-      }
+      if (!Number.isNaN(parsed) && parsed >= MIN_WIDTH && parsed <= MAX_WIDTH) return parsed;
     }
-  } catch {
-    // localStorage unavailable — use default
-  }
+  } catch { /* noop */ }
   return DEFAULT_WIDTH;
 }
 
-/** Persist width to localStorage, silently ignoring errors. */
 function persistWidth(width: number): void {
-  try {
-    localStorage.setItem(RADAR_SIDEBAR_WIDTH_KEY, String(width));
-  } catch {
-    // best-effort
-  }
+  try { localStorage.setItem(RADAR_SIDEBAR_WIDTH_KEY, String(width)); } catch { /* noop */ }
 }
 
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
-
-type SidebarMode = 'radar' | 'history';
 
 export function RadarSidebar({
   groupedSessions,
@@ -74,102 +70,36 @@ export function RadarSidebar({
   onSelectSession,
   onDeleteSession,
   workspaceId,
+  onItemClick,
 }: RadarSidebarProps) {
-  // -------------------------------------------------------------------------
-  // Legacy localStorage key cleanup (Req 2.10) — runs once on first mount
-  // -------------------------------------------------------------------------
-
-  useEffect(() => {
-    const legacyKeys = [
-      'todoRadarSidebarWidth',
-      'chatSidebarWidth',
-      'rightSidebarWidth',
-      'chatSidebarCollapsed',
-      'rightSidebarCollapsed',
-      'todoRadarSidebarCollapsed',
-      'radar-section-sessions',  // Sessions section removed
-    ];
-    try {
-      for (const key of legacyKeys) {
-        localStorage.removeItem(key);
-      }
-    } catch {
-      // best-effort — localStorage may be unavailable
-    }
-  }, []);
-
-  // -------------------------------------------------------------------------
-  // Auto-hide when file editor panel is open (user focuses on doc, not radar)
-  // -------------------------------------------------------------------------
-
+  // Auto-hide when file editor panel is open
   const [hiddenByEditorPanel, setHiddenByEditorPanel] = useState(false);
-
   useEffect(() => {
-    const handleEditorPanelState = (e: Event) => {
+    const handler = (e: Event) => {
       const { open } = (e as CustomEvent<{ open: boolean }>).detail ?? {};
       setHiddenByEditorPanel(!!open);
     };
-    window.addEventListener('swarm:editor-panel-state', handleEditorPanelState);
-    return () => window.removeEventListener('swarm:editor-panel-state', handleEditorPanelState);
+    window.addEventListener('swarm:editor-panel-state', handler);
+    return () => window.removeEventListener('swarm:editor-panel-state', handler);
   }, []);
 
-  // -------------------------------------------------------------------------
-  // Mode state — NOT persisted, always starts as 'radar'
-  // -------------------------------------------------------------------------
-
-  const [mode, setMode] = useState<SidebarMode>('radar');
-
-  // -------------------------------------------------------------------------
-  // Feature Tip state
-  // -------------------------------------------------------------------------
-
-  const [tipDismissed, setTipDismissed] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem(RADAR_TIP_DISMISSED_KEY) === 'true';
-    } catch {
-      return false;
-    }
-  });
-  const [tipOpen, setTipOpen] = useState(false);
-  const tipButtonRef = useRef<HTMLButtonElement>(null);
-  const tipPopoverRef = useRef<HTMLDivElement>(null);
-
-  // -------------------------------------------------------------------------
-  // Width state — persisted to localStorage
-  // -------------------------------------------------------------------------
-
+  // Width state
   const [width, setWidth] = useState<number>(readPersistedWidth);
   const [isResizing, setIsResizing] = useState(false);
 
-  // Persist width whenever it changes
-  useEffect(() => {
-    persistWidth(width);
-  }, [width]);
-
-  // -------------------------------------------------------------------------
-  // Resize logic (left-edge drag handle)
-  // -------------------------------------------------------------------------
+  useEffect(() => { persistWidth(width); }, [width]);
 
   useEffect(() => {
     if (!isResizing) return;
-
     const handleMouseMove = (e: MouseEvent) => {
-      // Sidebar is on the right — width = viewport right edge minus cursor X
       const newWidth = window.innerWidth - e.clientX;
-      if (newWidth >= MIN_WIDTH && newWidth <= MAX_WIDTH) {
-        setWidth(newWidth);
-      }
+      if (newWidth >= MIN_WIDTH && newWidth <= MAX_WIDTH) setWidth(newWidth);
     };
-
-    const handleMouseUp = () => {
-      setIsResizing(false);
-    };
-
+    const handleMouseUp = () => setIsResizing(false);
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
     document.body.style.cursor = 'ew-resize';
     document.body.style.userSelect = 'none';
-
     return () => {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
@@ -178,223 +108,148 @@ export function RadarSidebar({
     };
   }, [isResizing]);
 
-  const handleResizeMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault();
-      setIsResizing(true);
-    },
-    [],
-  );
+  // History popover
+  const [historyOpen, setHistoryOpen] = useState(false);
 
-  // -------------------------------------------------------------------------
-  // Feature Tip handlers
-  // -------------------------------------------------------------------------
+  // Briefing data (polled every 60s)
+  const [briefing, setBriefing] = useState<SessionBriefing | null>(null);
 
-  const handleTipClick = useCallback(() => {
-    setTipOpen((prev) => !prev);
-  }, []);
-
-  const handleTipMouseEnter = useCallback(() => {
-    if (!tipDismissed) {
-      setTipOpen(true);
-    }
-  }, [tipDismissed]);
-
-  const handleTipMouseLeave = useCallback(() => {
-    if (!tipDismissed) {
-      setTipOpen(false);
-    }
-  }, [tipDismissed]);
-
-  const handleDismissTip = useCallback(() => {
+  const fetchBriefing = useCallback(async () => {
     try {
-      localStorage.setItem(RADAR_TIP_DISMISSED_KEY, 'true');
-    } catch {
-      // best-effort
-    }
-    setTipDismissed(true);
-    setTipOpen(false);
+      const data = await systemService.getBriefing();
+      setBriefing(data);
+    } catch { /* graceful */ }
   }, []);
 
-  // Close popover on click outside
+  useEffect(() => { fetchBriefing(); }, [fetchBriefing]);
   useEffect(() => {
-    if (!tipOpen) return;
+    const id = setInterval(fetchBriefing, BRIEFING_POLL_MS);
+    return () => clearInterval(id);
+  }, [fetchBriefing]);
 
-    const handleClickOutside = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (
-        tipPopoverRef.current &&
-        !tipPopoverRef.current.contains(target) &&
-        tipButtonRef.current &&
-        !tipButtonRef.current.contains(target)
-      ) {
-        setTipOpen(false);
-      }
-    };
+  // Section counts
+  const [todoCount, setTodoCount] = useState(0);
+  const [artifactCount, setArtifactCount] = useState(0);
 
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [tipOpen]);
+  const workingCount = briefing?.working.length ?? 0;
+  const signalsCount = briefing?.signals.length ?? 0;
+  const hotCount = briefing?.hotNews.length ?? 0;
+  const stocksCount = briefing?.stocks.length ?? 0;
+  const outputCount = useMemo(() => {
+    if (!briefing) return 0;
+    return briefing.output.builds.length + briefing.output.content.length + briefing.output.files.length;
+  }, [briefing]);
 
-  // -------------------------------------------------------------------------
-  // Mode toggle
-  // -------------------------------------------------------------------------
-
-  const toggleMode = useCallback(() => {
-    setMode((prev) => (prev === 'radar' ? 'history' : 'radar'));
-  }, []);
-
-  // -------------------------------------------------------------------------
-  // History → Radar on session select
-  // -------------------------------------------------------------------------
-
-  const handleHistorySelectSession = useCallback(
+  // History popover session select → switch tab
+  const handleHistorySelect = useCallback(
     (session: Parameters<typeof onSelectSession>[0]) => {
-      setMode('radar');
+      setHistoryOpen(false);
       onSelectSession(session);
     },
     [onSelectSession],
   );
 
-  // -------------------------------------------------------------------------
-  // Back from history to radar
-  // -------------------------------------------------------------------------
-
-  const handleBackToRadar = useCallback(() => {
-    setMode('radar');
-  }, []);
-
-  // -------------------------------------------------------------------------
-  // Render
-  // -------------------------------------------------------------------------
-
-  // When file editor panel is open, hide the radar sidebar entirely
-  if (hiddenByEditorPanel) {
-    return null;
-  }
+  if (hiddenByEditorPanel) return null;
 
   return (
     <div
-      className="relative flex flex-col h-full border-l border-[var(--color-border)]
-        bg-[var(--color-bg-secondary,var(--color-bg))]"
+      className="relative flex flex-col h-full border-l border-[var(--color-border)] bg-[var(--color-bg-secondary,var(--color-bg))]"
       style={{ width, minWidth: MIN_WIDTH, maxWidth: MAX_WIDTH }}
     >
-      {/* Left-edge resize handle */}
+      {/* Resize handle */}
       <div
-        className="absolute left-0 top-0 bottom-0 w-1 cursor-ew-resize
-          hover:bg-primary/30 transition-colors z-10"
-        onMouseDown={handleResizeMouseDown}
+        className="absolute left-0 top-0 bottom-0 w-1 cursor-ew-resize hover:bg-primary/30 transition-colors z-10"
+        onMouseDown={(e) => { e.preventDefault(); setIsResizing(true); }}
         role="separator"
         aria-orientation="vertical"
         aria-label="Resize sidebar"
-        aria-valuenow={width}
-        aria-valuemin={MIN_WIDTH}
-        aria-valuemax={MAX_WIDTH}
       />
 
-      {/* Header row: mode label, toggle, feature tip */}
+      {/* Header */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)]">
         <span className="flex items-center gap-1.5 flex-1">
-          <span className="material-symbols-outlined text-[13px] text-[var(--color-text-secondary)]">
-            {mode === 'radar' ? 'radar' : 'history'}
-          </span>
+          <span className="material-symbols-outlined text-[13px] text-[var(--color-text-secondary)]">radar</span>
           <span className="text-[11px] font-bold uppercase tracking-[0.6px] text-[var(--color-text-secondary)]">
-            {mode === 'radar' ? 'Radar' : 'History'}
+            SwarmRadar
           </span>
         </span>
-
-        {/* Mode toggle button */}
-        <button
-          onClick={toggleMode}
-          className="p-1 rounded hover:bg-[var(--color-hover)] transition-colors"
-          aria-label={
-            mode === 'radar' ? 'Switch to History mode' : 'Switch to Radar mode'
-          }
-          title={
-            mode === 'radar' ? 'Switch to History' : 'Switch to Radar'
-          }
-        >
-          <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">
-            swap_horiz
-          </span>
-        </button>
-
-        {/* Feature Tip icon with popover */}
-        <div
-          className="relative"
-          onMouseEnter={handleTipMouseEnter}
-          onMouseLeave={handleTipMouseLeave}
-        >
+        {/* History search button — uses onMouseDown to avoid race with popover's click-outside */}
+        <div className="relative">
           <button
-            ref={tipButtonRef}
-            onClick={handleTipClick}
+            onMouseDown={(e) => {
+              e.stopPropagation(); // prevent popover's click-outside from firing first
+              setHistoryOpen((prev) => !prev);
+            }}
             className="p-1 rounded hover:bg-[var(--color-hover)] transition-colors"
-            aria-label="Feature tips"
-            title="Feature tips"
-            aria-expanded={tipOpen}
-            aria-haspopup="true"
+            aria-label="Search chat history"
+            title="Search history"
           >
-            <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">
-              info
-            </span>
+            <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">search</span>
           </button>
-
-          {tipOpen && (
-            <div
-              ref={tipPopoverRef}
-              role="tooltip"
-              className="absolute right-0 top-full mt-2 w-72 rounded-lg shadow-lg border
-                border-[var(--color-border)] bg-[var(--color-bg)] p-3 z-50"
-            >
-              {/* Arrow pointing up */}
-              <div
-                className="absolute -top-2 right-3 w-0 h-0
-                  border-l-[8px] border-l-transparent
-                  border-r-[8px] border-r-transparent
-                  border-b-[8px] border-b-[var(--color-border)]"
-              />
-              <div
-                className="absolute -top-[7px] right-3 w-0 h-0
-                  border-l-[8px] border-l-transparent
-                  border-r-[8px] border-r-transparent
-                  border-b-[8px] border-b-[var(--color-bg)]"
-              />
-
-              <p className="text-xs text-[var(--color-text-muted)] leading-relaxed">
-                {FEATURE_TIP_TEXT}
-              </p>
-
-              {!tipDismissed && (
-                <button
-                  onClick={handleDismissTip}
-                  className="mt-2 text-xs text-[var(--color-primary,#2b6cee)] hover:underline"
-                >
-                  Don&apos;t show again
-                </button>
-              )}
-            </div>
+          {historyOpen && (
+            <HistoryPopover
+              groupedSessions={groupedSessions}
+              agents={agents}
+              onSelectSession={handleHistorySelect}
+              onDeleteSession={onDeleteSession}
+              onClose={() => setHistoryOpen(false)}
+            />
           )}
         </div>
       </div>
 
-      {/* Scrollable content area */}
+      {/* Scrollable sections */}
       <div className="flex-1 overflow-y-auto">
-        {mode === 'radar' ? (
-          <RadarView
-            workspaceId={workspaceId}
-          />
-        ) : (
-          <HistoryView
-            groupedSessions={groupedSessions}
-            agents={agents}
-            onSelectSession={handleHistorySelectSession}
-            onDeleteSession={onDeleteSession}
-            onBack={handleBackToRadar}
-          />
+        {/* Todo */}
+        <CollapsibleSection name="todo" icon="checklist" label="ToDo" count={todoCount} defaultExpanded={true}>
+          <TodoSection workspaceId={workspaceId} onCountChange={setTodoCount} onItemClick={onItemClick} />
+        </CollapsibleSection>
+
+        {/* Working */}
+        {workingCount > 0 && (
+          <CollapsibleSection name="working" icon="assignment" label="Working" count={workingCount} defaultExpanded={true}>
+            <WorkingSection items={briefing!.working} onItemClick={onItemClick} />
+          </CollapsibleSection>
         )}
+
+        {/* Signals */}
+        {signalsCount > 0 && (
+          <CollapsibleSection name="signals" icon="cell_tower" label="Signals" count={signalsCount} defaultExpanded={true}>
+            <SignalsSection items={briefing!.signals} onItemClick={onItemClick} compact />
+          </CollapsibleSection>
+        )}
+
+        {/* Hot News */}
+        {hotCount > 0 && (
+          <CollapsibleSection name="hot" icon="whatshot" label="Hot" count={hotCount} defaultExpanded={true}>
+            <HotNewsSection items={briefing!.hotNews} onItemClick={onItemClick} compact />
+          </CollapsibleSection>
+        )}
+
+        {/* Stocks */}
+        {stocksCount > 0 && (
+          <CollapsibleSection name="stocks" icon="trending_up" label="Stocks" count={stocksCount} defaultExpanded={false}>
+            <StocksSection items={briefing!.stocks} compact />
+          </CollapsibleSection>
+        )}
+
+        {/* Swarm Output */}
+        {outputCount > 0 && (
+          <CollapsibleSection name="output" icon="hive" label="Output" count={outputCount} defaultExpanded={false}>
+            <SwarmOutputSection output={briefing!.output} compact />
+          </CollapsibleSection>
+        )}
+
+        {/* Artifacts (existing — now under Output umbrella conceptually but kept separate for independent fetch) */}
+        <CollapsibleSection name="artifacts" icon="folder_open" label="Artifacts" count={artifactCount} defaultExpanded={false}>
+          <ArtifactsSection workspaceId={workspaceId} onCountChange={setArtifactCount} />
+        </CollapsibleSection>
       </div>
+
+      {/* Jobs status bar (bottom) */}
+      {briefing?.jobsSummary && briefing.jobsSummary.total > 0 && (
+        <JobsBar summary={briefing.jobsSummary} />
+      )}
     </div>
   );
 }

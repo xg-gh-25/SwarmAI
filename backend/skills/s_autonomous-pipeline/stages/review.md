@@ -98,7 +98,7 @@ discoverability hint, Escape propagation). Engineering-complete != user-complete
 
 ### 6. Runtime Pattern Checklist
 
-**BLOCKING: Read `backend/skills/s_autonomous-pipeline/REVIEW_PATTERNS.md` and apply RP1-RP19.**
+**BLOCKING: Read `backend/skills/s_autonomous-pipeline/REVIEW_PATTERNS.md` and apply RP1-RP23.**
 
 Scan the changeset for known bug patterns. For each pattern that applies, explicitly verify the fix is in place. Do NOT skip patterns -- a "no" answer is fine, but silence means unchecked.
 

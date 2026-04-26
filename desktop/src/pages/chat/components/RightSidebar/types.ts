@@ -43,6 +43,13 @@ export interface RadarArtifact {
 // Component prop interfaces
 // ---------------------------------------------------------------------------
 
+/**
+ * Unified callback for item clicks across WelcomeScreen and RadarSidebar.
+ * Populates ChatInput with a message and optional blockquote context.
+ * Does NOT auto-send — user reviews and hits ⌘Enter.
+ */
+export type ItemClickHandler = (message: string, context?: string) => void;
+
 /** Props for the top-level RadarSidebar shell component. */
 export interface RadarSidebarProps {
   groupedSessions: GroupedSessions[];
@@ -50,6 +57,8 @@ export interface RadarSidebarProps {
   onSelectSession: (session: ChatSession) => void;
   onDeleteSession: (session: ChatSession) => void;
   workspaceId: string | null;
+  /** Unified callback: populate ChatInput with message + context */
+  onItemClick?: ItemClickHandler;
 }
 
 /** Props for the shared collapsible section wrapper. */

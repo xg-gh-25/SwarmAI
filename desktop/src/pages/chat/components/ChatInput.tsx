@@ -539,6 +539,7 @@ export function ChatInput({
             <textarea
               ref={textareaRef}
               data-testid="chat-input"
+              data-chat-input
               value={inputValue}
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}

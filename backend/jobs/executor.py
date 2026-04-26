@@ -844,9 +844,11 @@ def _handle_notify(job: Job, state: SchedulerState) -> JobResult:
     except Exception:
         pass  # Non-blocking — CLI fallback doesn't need config
 
-    # Source: auto-format from signal_digest.json
+    # Source: auto-format from data
     source = job.config.get("source", "")
-    if source == "signal_digest" and not message:
+    if source == "briefing" and not message:
+        message = _format_briefing_slack_message()
+    elif source == "signal_digest" and not message:
         message = _format_signal_digest_message(
             max_items=job.config.get("max_items", 10),
         )
@@ -923,6 +925,134 @@ def _format_signal_digest_message(max_items: int = 10) -> str:
             lines.append(f"   {summary}")
 
     return "\n".join(lines)
+
+
+def _escape_slack_mrkdwn(text: str) -> str:
+    """Escape Slack mrkdwn special characters in user-generated text.
+
+    Prevents format injection from external content (RSS titles, HN posts).
+    Slack mrkdwn specials: * _ ~ ` < > that could break formatting or
+    inject links when embedded in bold/italic patterns.
+    """
+    # < and > are the only ones that create link injection; escape them first
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return text
+
+
+def _format_briefing_slack_message() -> str:
+    """Format the full Briefing Hub data as a grouped Slack DM message.
+
+    Uses build_session_briefing_data() to get the same data the Welcome
+    Screen shows, then renders it using the area-grouped Slack template
+    from the Briefing Hub v2 design (D9: keep source language).
+
+    Returns empty string if no meaningful content to send.
+    """
+    try:
+        from core.proactive_intelligence import build_session_briefing_data
+        data = build_session_briefing_data(str(SWARMWS))
+    except Exception:
+        return ""
+
+    esc = _escape_slack_mrkdwn  # alias for readability
+
+    sections: list[str] = []
+
+    # ── Working ──────────────────────────────────────────────────
+    working = data.get("working", [])
+    if working:
+        priority_emoji = {"high": "🔴", "medium": "🟡", "low": "🟢"}
+        lines = [f"📋 *Working* ({len(working)})"]
+        for item in working[:5]:
+            emoji = priority_emoji.get(item.get("priority", "low"), "🟢")
+            title = esc(item.get("title", ""))
+            source = item.get("source", "")
+            detail = item.get("sourceDetail", item.get("source_detail", ""))
+            suffix = f" — _{source}"
+            if detail:
+                suffix += f", {esc(detail)}"
+            suffix += "_"
+            lines.append(f"{emoji} {title}{suffix}")
+        sections.append("\n".join(lines))
+
+    # ── Signals ──────────────────────────────────────────────────
+    urgency_emoji = {"high": "🔴", "medium": "🟡", "low": "🟢"}
+    signals = data.get("signals", [])
+    if signals:
+        lines = [f"📡 *Signals* ({len(signals)})"]
+        for sig in signals[:5]:
+            emoji = urgency_emoji.get(sig.get("urgency", "medium"), "🟡")
+            title = esc(sig.get("title", ""))
+            url = sig.get("sourceUrl", sig.get("url", ""))
+            link = f" <{url}|→>" if url else ""
+            lines.append(f"{emoji} *{title}*{link}")
+        sections.append("\n".join(lines))
+
+    # ── Hot News ─────────────────────────────────────────────────
+    hot_news = data.get("hotNews", [])
+    if hot_news:
+        cn_items = [h for h in hot_news if h.get("region") == "cn"]
+        intl_items = [h for h in hot_news if h.get("region") != "cn"]
+        lines = ["🔥 *Hot News*"]
+        if cn_items:
+            cn_parts = []
+            for h in cn_items[:5]:
+                title = esc(h.get("title", ""))
+                platform = h.get("platform", "")
+                cn_parts.append(f"{title} ({platform})" if platform else title)
+            lines.append(f"🇨🇳 {' · '.join(cn_parts)}")
+        if intl_items:
+            for h in intl_items[:3]:
+                title = esc(h.get("title", ""))
+                platform = h.get("platform", "")
+                url = h.get("url", "")
+                link = f" <{url}|→>" if url else ""
+                platform_tag = f" ({platform})" if platform else ""
+                lines.append(f"🌐 {title}{platform_tag}{link}")
+        sections.append("\n".join(lines))
+
+    # ── Stocks ───────────────────────────────────────────────────
+    stocks = data.get("stocks", [])
+    if stocks:
+        status_emoji = {"success": "✅", "partial": "⚠️", "failed": "❌"}
+        ok_items = [s for s in stocks if s.get("status") == "success"]
+        warn_items = [s for s in stocks if s.get("status") != "success"]
+        lines = [f"📈 *Stocks* — {len(stocks)} reports"]
+        if ok_items:
+            names = " · ".join(f"{status_emoji.get(s['status'], '✅')} {esc(s.get('name', s.get('ticker', '')))}" for s in ok_items[:6])
+            lines.append(names)
+        for s in warn_items[:3]:
+            emoji = status_emoji.get(s.get("status", "failed"), "⚠️")
+            lines.append(f"{emoji} {esc(s.get('name', s.get('ticker', '')))} — data fetch {s.get('status', 'unknown')}")
+        sections.append("\n".join(lines))
+
+    # ── Swarm Output ─────────────────────────────────────────────
+    output = data.get("output", {})
+    builds = output.get("builds", [])
+    content = output.get("content", [])
+    if builds or content:
+        lines = ["🐝 *Swarm Output*"]
+        if builds:
+            build_parts = []
+            for b in builds[:3]:
+                title = esc(b.get("title", "Build"))
+                conf = b.get("confidence")
+                conf_tag = f" ({conf}/10)" if conf is not None else ""
+                build_parts.append(f"{title}{conf_tag}")
+            lines.append(f"🔧 {' · '.join(build_parts)}")
+        if content:
+            content_parts = []
+            type_emoji = {"video": "🎬", "poster": "🖼", "podcast": "🎙", "article": "📄"}
+            for c in content[:3]:
+                emoji = type_emoji.get(c.get("type", "article"), "📄")
+                content_parts.append(f"{emoji} {esc(c.get('title', 'Untitled'))}")
+            lines.append(" · ".join(content_parts))
+        sections.append("\n".join(lines))
+
+    if not sections:
+        return ""
+
+    return "\n\n".join(sections)
 
 
 def _get_slack_dm_channel() -> str | None:
