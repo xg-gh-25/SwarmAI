@@ -5,7 +5,7 @@
  * D7: Jobs = bottom status bar with expand.
  * D8: Section order = action priority gradient.
  *
- * Sections: Todo → Working → Signals → Hot → Stocks → Output → Jobs bar
+ * Sections: Todo → Working → Signals → Hot → Output → Artifacts → Stocks → Jobs bar
  * Each section uses CollapsibleSection wrapper.
  * Empty sections auto-hide (D3).
  *
@@ -226,13 +226,6 @@ export function RadarSidebar({
           </CollapsibleSection>
         )}
 
-        {/* Stocks — green (financial) */}
-        {stocksCount > 0 && (
-          <CollapsibleSection name="stocks" icon="trending_up" label="Stocks" count={stocksCount} defaultExpanded={false} accent="rgba(34,197,94,0.35)">
-            <StocksSection items={briefing!.stocks} compact />
-          </CollapsibleSection>
-        )}
-
         {/* Swarm Output — purple (brand) */}
         {outputCount > 0 && (
           <CollapsibleSection name="output" icon="hive" label="Output" count={outputCount} defaultExpanded={false} accent="rgba(168,85,247,0.35)">
@@ -244,6 +237,13 @@ export function RadarSidebar({
         <CollapsibleSection name="artifacts" icon="folder_open" label="Artifacts" count={artifactCount} defaultExpanded={false}>
           <ArtifactsSection workspaceId={workspaceId} onCountChange={setArtifactCount} />
         </CollapsibleSection>
+
+        {/* Stocks — green (personal, lower priority) */}
+        {stocksCount > 0 && (
+          <CollapsibleSection name="stocks" icon="trending_up" label="Stocks" count={stocksCount} defaultExpanded={false} accent="rgba(34,197,94,0.35)">
+            <StocksSection items={briefing!.stocks} compact />
+          </CollapsibleSection>
+        )}
       </div>
 
       {/* Jobs status bar (bottom) */}

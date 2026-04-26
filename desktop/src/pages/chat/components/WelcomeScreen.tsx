@@ -13,13 +13,20 @@
  * @exports WelcomeScreen, WelcomeScreenProps
  */
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   systemService,
   type SessionBriefing,
   type BriefingFocusItem,
 } from '../../../services/system';
 import type { ItemClickHandler } from './RightSidebar/types';
+import type { RadarTodo } from '../../../types';
+import { radarService } from '../../../services/radar';
+import {
+  filterActiveTodos,
+  sortByPriorityThenDate,
+  PRIORITY_COLORS,
+} from './RightSidebar/TodoSection';
 import {
   WorkingSection,
   SignalsSection,
@@ -118,15 +125,37 @@ function SectionCard({
 }
 
 // ---------------------------------------------------------------------------
-// Todo Item (for WelcomeScreen — simplified from original)
+// Container width hook — responsive to actual panel width, not viewport
 // ---------------------------------------------------------------------------
 
-const TODO_PRIORITY_DOT: Record<string, string> = {
-  high: 'bg-red-400',
-  medium: 'bg-yellow-400',
-  low: 'bg-blue-400',
-  none: 'bg-[var(--color-text-muted)]',
-};
+/** Minimum container width (px) to render 2-column layout. */
+const TWO_COL_MIN_WIDTH = 560;
+
+function useContainerWidth() {
+  const ref = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setWidth(entry.contentRect.width);
+      }
+    });
+    ro.observe(el);
+    // Set initial width
+    setWidth(el.getBoundingClientRect().width);
+    return () => ro.disconnect();
+  }, []);
+
+  return { ref, width };
+}
+
+// ---------------------------------------------------------------------------
+// Todo priorities reuse PRIORITY_COLORS from TodoSection (single source of truth)
+// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Main Component
@@ -141,12 +170,24 @@ export interface WelcomeScreenProps {
 
 export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onItemClick }) => {
   const [briefing, setBriefing] = useState<SessionBriefing | null>(null);
+  const [radarTodos, setRadarTodos] = useState<RadarTodo[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const { ref: containerRef, width: containerWidth } = useContainerWidth();
 
   useEffect(() => {
     let cancelled = false;
-    systemService.getBriefing()
-      .then((data) => { if (!cancelled) setBriefing(data); })
+    // Fetch briefing + radar todos in parallel.
+    // Todos come from the same API as Radar sidebar (single source of truth).
+    Promise.all([
+      systemService.getBriefing(),
+      radarService.fetchActiveTodos('default').catch(() => [] as RadarTodo[]),
+    ])
+      .then(([data, todos]) => {
+        if (!cancelled) {
+          setBriefing(data);
+          setRadarTodos(sortByPriorityThenDate(filterActiveTodos(todos)));
+        }
+      })
       .catch(() => {})
       .finally(() => { if (!cancelled) setLoaded(true); });
     return () => { cancelled = true; };
@@ -173,7 +214,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
   const hasSignals = briefing && briefing.signals.length > 0;
   const hasHotNews = briefing && briefing.hotNews.length > 0;
   const hasStocks = briefing && briefing.stocks.length > 0;
-  const hasTodos = briefing && briefing.todos && briefing.todos.length > 0;
+  const hasTodos = radarTodos.length > 0;
   const hasOutput = briefing && (
     briefing.output.builds.length > 0 ||
     briefing.output.content.length > 0 ||
@@ -183,7 +224,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
     hasStocks || hasTodos || hasOutput || briefing?.learning;
 
   return (
-    <div className="flex flex-col items-center h-full px-4 overflow-y-auto">
+    <div ref={containerRef} className="flex flex-col items-center h-full px-4 overflow-y-auto">
       {/* Top spacer */}
       <div className="flex-1 min-h-6" />
 
@@ -234,21 +275,31 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
               </SectionCard>
             );
             if (hasTodos) leftCards.push(
-              <SectionCard key="todo" icon="☑" title="Todo" count={briefing!.todos.length}>
+              <SectionCard key="todo" icon="☑" title="Todo" count={radarTodos.length}>
                 <div className="space-y-0.5">
-                  {briefing!.todos.map((todo) => {
-                    const dotCls = TODO_PRIORITY_DOT[todo.priority] ?? TODO_PRIORITY_DOT.none;
+                  {radarTodos.slice(0, 10).map((todo) => {
+                    const dotColor = PRIORITY_COLORS[todo.priority] ?? PRIORITY_COLORS.none;
                     return (
                       <button
                         key={todo.id}
                         type="button"
                         onClick={() => handleItemClick(
                           `[ToDo:${todo.id}] ${todo.title}`,
-                          buildTodoContext(todo),
+                          buildTodoContext({
+                            id: todo.id,
+                            title: todo.title,
+                            priority: todo.priority,
+                            status: todo.status,
+                            nextStep: undefined,
+                            description: todo.description ?? undefined,
+                          }),
                         )}
                         className="flex items-center gap-2 w-full text-left px-1 py-1 rounded hover:bg-[var(--color-bg-hover)] transition-colors cursor-pointer"
                       >
-                        <span className={`shrink-0 w-2 h-2 rounded-full ${dotCls}`} />
+                        <span
+                          className="shrink-0 w-2 h-2 rounded-full"
+                          style={{ backgroundColor: dotColor }}
+                        />
                         <span className="text-[13px] leading-5 text-[var(--color-text)] truncate flex-1">
                           {todo.title}
                         </span>
@@ -278,7 +329,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
 
             const hasLeft = leftCards.length > 0;
             const hasRight = rightCards.length > 0;
-            const useTwoCol = hasLeft && hasRight;
+            const useTwoCol = hasLeft && hasRight && containerWidth >= TWO_COL_MIN_WIDTH;
 
             return (
               <div className={useTwoCol ? 'grid grid-cols-2 gap-3' : 'space-y-3'}>
