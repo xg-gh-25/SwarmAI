@@ -1097,6 +1097,241 @@ def _tail_read_lines(path: Path, max_bytes: int = 4096) -> list[str]:
     return [ln for ln in lines if ln.strip()]
 
 
+# ── Briefing Hub v2 helpers ──────────────────────────────────────────
+
+
+def _extract_report_field(text: str, field: str, fallback: str = "") -> str:
+    """Extract a field value from a pipeline REPORT.md header section."""
+    import re
+    # Match "## N. Requirement\n<content>" or "**Run ID:** ... | **Confidence:** N/10"
+    pattern = rf"##\s*\d+\.\s*{field}\s*\n(.+?)(?:\n##|\Z)"
+    m = re.search(pattern, text, re.DOTALL)
+    if m:
+        return m.group(1).strip()[:120]
+    # Fallback: try the title line
+    title_match = re.search(r"^#\s+.*?Report:\s*(.+?)$", text, re.MULTILINE)
+    if title_match:
+        return title_match.group(1).strip()[:120]
+    return fallback
+
+
+def _extract_report_confidence(text: str) -> int | None:
+    """Extract confidence score (N/10) from REPORT.md header."""
+    import re
+    m = re.search(r"\*\*Confidence:\*\*\s*(\d+)/10", text)
+    return int(m.group(1)) if m else None
+
+
+def _extract_first_heading(file_path: Path) -> str:
+    """Extract the first markdown heading from a file."""
+    try:
+        text = file_path.read_text(encoding="utf-8")[:500]
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("#"):
+                return line.lstrip("#").strip()[:120]
+    except (OSError, UnicodeDecodeError):
+        pass
+    return file_path.stem
+
+
+def _detect_content_media_type(content_dir: Path) -> str:
+    """Detect media type from files in a Pollinate content directory."""
+    try:
+        all_files = set()
+        for p in content_dir.rglob("*"):
+            if p.is_file():
+                all_files.add(p.suffix.lower())
+        if ".mp4" in all_files:
+            return "video"
+        if ".wav" in all_files or ".mp3" in all_files:
+            # wav + srt = video production (TTS audio for video)
+            if ".srt" in all_files:
+                return "video"
+            return "podcast"
+        if ".html" in all_files or ".png" in all_files:
+            return "poster"
+    except OSError:
+        pass
+    return "article"
+
+
+def _extract_jobs_summary() -> dict[str, Any]:
+    """Build jobs summary from system + user job definitions and scheduler state."""
+    jobs_list: list[dict] = []
+    total = healthy = failed = disabled = 0
+    last_run: str | None = None
+
+    try:
+        from jobs.system_jobs import SYSTEM_JOBS
+        from jobs.models import SchedulerState
+        import yaml
+
+        # Load scheduler state
+        state_path = Path.home() / ".swarm-ai" / "SwarmWS" / "Services" / "swarm-jobs" / "state.json"
+        state_data: dict = {}
+        if state_path.exists():
+            try:
+                state_data = json.loads(state_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        job_states = state_data.get("jobs", {})
+
+        # Collect all job definitions (system + user)
+        all_jobs = list(SYSTEM_JOBS)
+        user_jobs_path = Path.home() / ".swarm-ai" / "SwarmWS" / "Services" / "swarm-jobs" / "user-jobs.yaml"
+        if user_jobs_path.exists():
+            try:
+                from jobs.models import Job
+                user_data = yaml.safe_load(user_jobs_path.read_text(encoding="utf-8"))
+                for jd in user_data.get("jobs", []):
+                    try:
+                        all_jobs.append(Job(**jd))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        for job in all_jobs:
+            total += 1
+            js = job_states.get(job.id, {})
+            job_last_run = js.get("last_run")
+            job_last_status = js.get("last_status")
+
+            if not job.enabled:
+                disabled += 1
+                status = "disabled"
+            elif job_last_status == "failed" or job_last_status == "error":
+                failed += 1
+                status = "failed"
+            else:
+                healthy += 1
+                status = "healthy"
+
+            # Track global last run
+            if job_last_run and (last_run is None or job_last_run > last_run):
+                last_run = job_last_run
+
+            # Human-readable schedule
+            schedule = job.schedule
+            if schedule.startswith("after:"):
+                schedule = f"after {schedule[6:]}"
+
+            jobs_list.append({
+                "id": job.id,
+                "name": job.name,
+                "status": status,
+                "lastRun": job_last_run,
+                "lastStatus": job_last_status,
+                "schedule": schedule,
+            })
+    except Exception as exc:
+        logger.debug("Jobs summary extraction failed (non-blocking): %s", exc)
+
+    return {
+        "total": total,
+        "healthy": healthy,
+        "failed": failed,
+        "disabled": disabled,
+        "lastRun": last_run,
+        "jobs": jobs_list,
+    }
+
+
+def _extract_working_items(workspace: Path) -> list[dict]:
+    """Extract actionable work items from morning-inbox, morning-reflect, channel-monitor.
+
+    Parses RADAR_TODOS JSON blocks from job result markdown files.
+    Falls back to extracting "Urgent" section items from morning-reflect.
+    """
+    items: list[dict] = []
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    results_dir = workspace / "Knowledge" / "JobResults"
+    if not results_dir.is_dir():
+        return items
+
+    # Try morning-inbox RADAR_TODOS first (structured JSON)
+    for job_id in ("morning-inbox", "morning-reflect", "channel-monitor"):
+        result_file = results_dir / f"{today_str}-{job_id}.md"
+        if not result_file.exists():
+            # Try yesterday
+            from datetime import timedelta
+            yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+            result_file = results_dir / f"{yesterday}-{job_id}.md"
+            if not result_file.exists():
+                continue
+
+        try:
+            text = result_file.read_text(encoding="utf-8")
+
+            # Extract RADAR_TODOS JSON block
+            import re
+            radar_match = re.search(
+                r"<!--\s*RADAR_TODOS\s*\n(.*?)\n\s*-->",
+                text, re.DOTALL,
+            )
+            if radar_match:
+                try:
+                    todos_data = json.loads(radar_match.group(1))
+                    for todo in todos_data:
+                        ctx = todo.get("context", {})
+                        source = "email"
+                        if job_id == "channel-monitor":
+                            source = "slack-channel"
+                        elif ctx.get("channel"):
+                            source = "slack-dm"
+
+                        items.append({
+                            "title": todo.get("title", ""),
+                            "priority": todo.get("priority", "medium"),
+                            "source": source,
+                            "sourceDetail": ctx.get("email_from", ctx.get("message_from", "")),
+                            "summary": todo.get("description", "")[:150],
+                            "action": ctx.get("suggested_action", "review"),
+                            "resultFile": str(result_file.relative_to(workspace)),
+                            "timestamp": ctx.get("email_date", ""),
+                        })
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            # Fallback: extract "## Urgent" section from morning-reflect
+            if job_id == "morning-reflect" and not items:
+                urgent_match = re.search(
+                    r"##\s*Urgent.*?\n(.*?)(?:\n##|\Z)",
+                    text, re.DOTALL | re.IGNORECASE,
+                )
+                if urgent_match:
+                    for line in urgent_match.group(1).splitlines():
+                        line = line.strip().lstrip("-*").strip()
+                        if line and len(line) > 10:
+                            items.append({
+                                "title": line[:120],
+                                "priority": "high",
+                                "source": "reflect",
+                                "sourceDetail": "",
+                                "summary": "",
+                                "action": "review",
+                                "resultFile": str(result_file.relative_to(workspace)),
+                                "timestamp": "",
+                            })
+        except (OSError, UnicodeDecodeError):
+            continue
+
+    # Deduplicate by title
+    seen_titles: set[str] = set()
+    unique: list[dict] = []
+    for item in items:
+        if item["title"] not in seen_titles:
+            seen_titles.add(item["title"])
+            unique.append(item)
+
+    # Sort by priority
+    priority_order = {"high": 0, "medium": 1, "low": 2}
+    unique.sort(key=lambda x: priority_order.get(x.get("priority", "low"), 3))
+    return unique[:10]
+
+
 def build_session_briefing_data(
     workspace_dir: str | Path,
 ) -> dict[str, Any]:
@@ -1112,10 +1347,15 @@ def build_session_briefing_data(
     empty: dict[str, Any] = {
         "focus": [],
         "signals": [],
-        "jobs": [],
+        "hotNews": [],
+        "working": [],
+        "stocks": [],
+        "output": {"builds": [], "content": [], "files": []},
+        "jobsSummary": {"total": 0, "healthy": 0, "failed": 0, "disabled": 0, "lastRun": None, "jobs": []},
         "todos": [],
         "learning": None,
         "generated_at": datetime.now().isoformat(),
+        "jobs": [],  # backward compat
     }
     try:
         workspace = Path(workspace_dir)
@@ -1161,10 +1401,15 @@ def build_session_briefing_data(
                 "momentum": item.from_continue_hint,
             })
 
-        # External signals from signal_digest.json
-        # Filter ALL items by freshness first, THEN take top 5.
-        # Items aren't sorted by recency — slicing before filter misses recent entries.
-        ext_signals = []
+        # ── Briefing Hub v2: Working items from job outputs ────────────
+        working_items = _extract_working_items(workspace)
+
+        # ── Briefing Hub v2: area-based signal extraction ──────────────
+        # Split signal_digest.json into signals (tech) vs hotNews (trending).
+        # Keep source language (D9), include lang/feed_id/platform fields.
+        _TRENDING_FEEDS = frozenset({"china-trending"})
+        signals_list: list[dict] = []
+        hot_news_list: list[dict] = []
         digest_path = workspace / "Services" / "signals" / "signal_digest.json"
         if digest_path.exists():
             try:
@@ -1174,25 +1419,41 @@ def build_session_briefing_data(
                     fetched = sig.get("fetched_at", "")
                     if isinstance(fetched, str) and fetched:
                         try:
-                            dt = datetime.fromisoformat(fetched.replace("Z", "+00:00"))
-                            if dt.timestamp() < cutoff:
+                            dt_val = datetime.fromisoformat(fetched.replace("Z", "+00:00"))
+                            if dt_val.timestamp() < cutoff:
                                 continue
                         except (ValueError, TypeError):
                             continue
                     else:
-                        continue  # no timestamp = skip (can't verify freshness)
-                    ext_signals.append({
-                        "title": sig.get("title", ""),
-                        "summary": sig.get("summary", ""),
-                        "source": sig.get("source", ""),
-                        "url": sig.get("url", ""),
-                        "urgency": sig.get("urgency", "medium"),
-                        "relevance": sig.get("relevance_score", 0),
-                    })
-                    if len(ext_signals) >= 5:
-                        break
+                        continue
+                    feed_id = sig.get("feed_id", "")
+                    is_trending = feed_id in _TRENDING_FEEDS
+
+                    if is_trending:
+                        if len(hot_news_list) < 10:
+                            hot_news_list.append({
+                                "title": sig.get("title", ""),
+                                "platform": sig.get("platform", sig.get("source", "")),
+                                "rank": sig.get("rank", 0),
+                                "url": sig.get("url", ""),
+                                "region": sig.get("region", "cn"),
+                                "lang": sig.get("lang", "zh"),
+                            })
+                    else:
+                        if len(signals_list) < 8:
+                            signals_list.append({
+                                "title": sig.get("title", ""),
+                                "summary": sig.get("summary", ""),
+                                "source": sig.get("source", ""),
+                                "sourceUrl": sig.get("url", ""),
+                                "urgency": sig.get("urgency", "medium"),
+                                "relevance": sig.get("relevance_score", 0),
+                                "lang": sig.get("lang", "en"),
+                            })
             except (json.JSONDecodeError, OSError):
                 pass
+        # Backward compat: ext_signals used by _get_signal_highlights for system prompt
+        ext_signals = signals_list[:5]
 
         # Job results — tail-read optimization: only read the last ~4KB
         # of the JSONL file instead of loading the entire file into memory.
@@ -1284,16 +1545,128 @@ def build_session_briefing_data(
         except Exception as exc:
             logger.debug("Todo briefing fetch failed (non-blocking): %s", exc)
 
+        # ── Stock reports ────────────────────────────────────────────
+        stocks: list[dict] = []
+        reports_dir = workspace / "Services" / "stock-analysis" / "reports"
+        if reports_dir.is_dir():
+            try:
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                for f in sorted(reports_dir.iterdir(), reverse=True):
+                    if not f.name.endswith(".md") or not f.name.startswith(today_str):
+                        continue
+                    # Parse filename: YYYY-MM-DD-TICKER-NAME.md
+                    parts = f.stem.split("-", 3)  # date is 3 parts
+                    if len(parts) >= 4:
+                        rest = parts[3]  # "515070-人工智能ETF"
+                        ticker_parts = rest.split("-", 1)
+                        ticker = ticker_parts[0]
+                        name = ticker_parts[1] if len(ticker_parts) > 1 else ticker
+                        # Check file size as proxy for success (> 500 bytes = has content)
+                        status = "success" if f.stat().st_size > 500 else "partial"
+                        stocks.append({
+                            "ticker": ticker,
+                            "name": name,
+                            "status": status,
+                            "reportFile": f"Services/stock-analysis/reports/{f.name}",
+                        })
+                    if len(stocks) >= 15:
+                        break
+            except OSError:
+                pass
+
+        # ── Pipeline builds ──────────────────────────────────────────
+        builds: list[dict] = []
+        projects_dir = workspace / "Projects"
+        if projects_dir.is_dir():
+            try:
+                cutoff_7d = time.time() - 7 * 86400
+                for proj_dir in projects_dir.iterdir():
+                    runs_dir = proj_dir / ".artifacts" / "runs"
+                    if not runs_dir.is_dir():
+                        continue
+                    for run_dir in runs_dir.iterdir():
+                        report = run_dir / "REPORT.md"
+                        if not report.exists():
+                            continue
+                        if report.stat().st_mtime < cutoff_7d:
+                            continue
+                        text = report.read_text(encoding="utf-8")[:600]
+                        title = _extract_report_field(text, "Requirement", "Pipeline Report")
+                        confidence = _extract_report_confidence(text)
+                        builds.append({
+                            "runId": run_dir.name,
+                            "project": proj_dir.name,
+                            "title": title,
+                            "confidence": confidence,
+                            "status": "complete",
+                            "date": datetime.fromtimestamp(report.stat().st_mtime).isoformat(),
+                            "reportFile": str(report.relative_to(workspace)),
+                        })
+                builds.sort(key=lambda x: x["date"], reverse=True)
+                builds = builds[:5]
+            except OSError:
+                pass
+
+        # ── Pollinate content ────────────────────────────────────────
+        content_items: list[dict] = []
+        studio_content = workspace / "Services" / "pollinate-studio" / "content"
+        if studio_content.is_dir():
+            try:
+                cutoff_30d = time.time() - 30 * 86400
+                for slug_dir in studio_content.iterdir():
+                    if not slug_dir.is_dir():
+                        continue
+                    pkg = slug_dir / "content_package.md"
+                    if not pkg.exists():
+                        continue
+                    if pkg.stat().st_mtime < cutoff_30d:
+                        continue
+                    title = _extract_first_heading(pkg)
+                    media_type = _detect_content_media_type(slug_dir)
+                    content_items.append({
+                        "slug": slug_dir.name,
+                        "title": title,
+                        "type": media_type,
+                        "contentPackage": str(pkg.relative_to(workspace)),
+                        "date": datetime.fromtimestamp(pkg.stat().st_mtime).isoformat(),
+                    })
+                content_items.sort(key=lambda x: x["date"], reverse=True)
+                content_items = content_items[:5]
+            except OSError:
+                pass
+
+        # ── Jobs summary ─────────────────────────────────────────────
+        jobs_summary = _extract_jobs_summary()
+
+        # ── Output (unified Swarm output: builds + content + files) ─
+        # files = existing artifacts (recently modified workspace files from git)
+        artifact_files: list[dict] = []
+        # Reuse existing logic from RadarView — lightweight git status scan
+        # For now, keep it empty; ArtifactsSection fetches independently via
+        # its own API. We'll wire this when the frontend consumes it.
+
+        output = {
+            "builds": builds,
+            "content": content_items,
+            "files": artifact_files,
+        }
+
         # Learning insight
         learning = learning_state.learning_summary()
 
         return {
             "focus": focus,
-            "signals": ext_signals,
-            "jobs": jobs,
+            "signals": signals_list,
+            "hotNews": hot_news_list,
+            "working": working_items,
+            "stocks": stocks,
+            "output": output,
+            "jobsSummary": jobs_summary,
             "todos": todos,
             "learning": learning,
             "generated_at": datetime.now().isoformat(),
+            # Backward compat (removed in next release)
+            "jobs": jobs,
         }
 
     except Exception as exc:

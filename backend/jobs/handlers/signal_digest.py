@@ -36,6 +36,76 @@ L4_DIGEST_PATH = SWARMWS / "Services" / "signals" / "signal_digest.json"
 MAX_INPUT_TOKENS = 4000
 MAX_OUTPUT_TOKENS = 2000
 
+# Trending feed IDs — signals from these feeds are tagged for hot-news routing
+TRENDING_FEED_IDS = frozenset({"china-trending"})
+
+# Per-tier quota for digest sampling — ensures diversity across feed types
+_TIER_QUOTAS: dict[str, int] = {
+    "frontier": 4,
+    "leaders": 3,
+    "research": 3,
+    "engineering": 10,
+    "aggregate": 10,
+    "trending": 10,  # virtual tier for TRENDING_FEED_IDS
+}
+
+
+def _detect_lang(text: str) -> str:
+    """Simple CJK detection — no external deps.
+
+    Returns "zh" if >= 20% of characters are CJK unified ideographs,
+    otherwise "en". Covers Chinese, some Japanese kanji. Good enough
+    for signal title/summary classification.
+    """
+    if not text:
+        return "en"
+    cjk_count = sum(1 for c in text if '一' <= c <= '鿿')
+    return "zh" if cjk_count > len(text) * 0.2 else "en"
+
+
+def _sample_signals_for_digest(
+    signals: list[RawSignal],
+    max_total: int = 40,
+) -> list[RawSignal]:
+    """Sample signals with per-tier quotas to ensure diversity.
+
+    Prevents the structural exclusion bug where feeds at config
+    position 8+ (cn-ai, china-trending) are cut by a naive [:30] cap.
+
+    Trending feeds get a virtual "trending" tier. Within each tier,
+    newest signals come first. Unused quota redistributed to engineering.
+    """
+    from collections import defaultdict
+
+    by_tier: dict[str, list[RawSignal]] = defaultdict(list)
+    for s in signals:
+        tier = "trending" if s.feed_id in TRENDING_FEED_IDS else s.tier
+        by_tier[tier].append(s)
+
+    # Sort each tier by published desc (newest first)
+    for tier_signals in by_tier.values():
+        tier_signals.sort(
+            key=lambda s: (s.published or datetime.min.replace(tzinfo=timezone.utc)).timestamp(),
+            reverse=True,
+        )
+
+    sampled: list[RawSignal] = []
+    unused = 0
+    for tier, quota in _TIER_QUOTAS.items():
+        take = by_tier.get(tier, [])[:quota]
+        sampled.extend(take)
+        unused += quota - len(take)
+
+    # Redistribute unused quota to engineering (highest actionability)
+    if unused > 0:
+        eng = by_tier.get("engineering", [])
+        already = sum(1 for s in sampled if s.tier == "engineering"
+                      and s.feed_id not in TRENDING_FEED_IDS)
+        extra = eng[already:already + unused]
+        sampled.extend(extra)
+
+    return sampled[:max_total]
+
 
 def handle_signal_digest(
     state: SchedulerState,
@@ -144,10 +214,11 @@ def _llm_digest(
         "aggregate": "📰 AGGREGATE (newsletter/aggregator — second-hand signal)",
     }
 
-    # Build signal summaries for the prompt (now with tier)
+    # Per-tier quota sampling replaces naive [:30] cap (structural exclusion bug fix)
+    sampled = _sample_signals_for_digest(signals, max_total=40)
     signal_text = "\n".join(
         f"- [idx={i}] [{tier_labels.get(s.tier, '⚙️ ENGINEERING')}] [{s.source}] {s.title} — {s.summary or 'No summary'} ({s.url})"
-        for i, s in enumerate(signals[:30])  # cap to control token usage
+        for i, s in enumerate(sampled)
     )
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -211,11 +282,11 @@ Output the markdown first, then ---JSON--- separator, then the JSON array. Nothi
             if json_text.endswith("```"):
                 json_text = json_text.rsplit("```", 1)[0]
             raw_scores = json.loads(json_text.strip())
-            # Map idx back to signal data, apply tier weighting
+            # Map idx back to sampled signal data, apply tier weighting
             for score_obj in raw_scores:
                 idx = score_obj.get("idx", -1)
-                if 0 <= idx < len(signals):
-                    s = signals[idx]
+                if 0 <= idx < len(sampled):
+                    s = sampled[idx]
                     raw_score = float(score_obj.get("relevance_score", 0.5))
                     tier_weight = TIER_WEIGHTS.get(s.tier, 1.0)
                     weighted_score = min(raw_score * tier_weight, 1.0)
@@ -230,6 +301,11 @@ Output the markdown first, then ---JSON--- separator, then the JSON array. Nothi
                         "tier_weight": tier_weight,
                         "urgency": score_obj.get("urgency", "low"),
                         "fetched_at": datetime.now(timezone.utc).isoformat(),
+                        "lang": _detect_lang(s.title),
+                        "feed_id": s.feed_id,
+                        "platform": s.source if s.feed_id in TRENDING_FEED_IDS else "",
+                        "rank": 0,
+                        "region": "cn" if s.feed_id in TRENDING_FEED_IDS else "",
                     })
         except (json.JSONDecodeError, ValueError, IndexError) as e:
             logger.warning(f"Failed to parse LLM JSON scores: {e}")
@@ -260,6 +336,11 @@ def _simple_scored_items(signals: list[RawSignal]) -> list[dict]:
             "tier_weight": tier_weight,
             "urgency": "medium" if weighted_score >= 0.7 else "low",
             "fetched_at": now,
+            "lang": _detect_lang(s.title),
+            "feed_id": s.feed_id,
+            "platform": s.source if s.feed_id in TRENDING_FEED_IDS else "",
+            "rank": 0,
+            "region": "cn" if s.feed_id in TRENDING_FEED_IDS else "",
         })
     return items
 
