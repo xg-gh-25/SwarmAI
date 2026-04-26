@@ -102,6 +102,7 @@ export interface SectionHeaderProps {
   accentBg?: string;
   accentBorder?: string;
   onToggle: () => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
   style: React.CSSProperties;
 }
 
@@ -113,12 +114,14 @@ export const SectionHeader: React.FC<SectionHeaderProps> = React.memo(function S
   accentBg,
   accentBorder,
   onToggle,
+  onContextMenu,
   style,
 }) {
   return (
     <button
       data-testid="section-header"
       onClick={onToggle}
+      onContextMenu={onContextMenu}
       style={{
         ...style,
         display: 'flex',

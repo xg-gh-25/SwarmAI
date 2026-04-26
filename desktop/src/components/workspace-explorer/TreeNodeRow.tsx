@@ -59,6 +59,8 @@ export interface TreeNodeRowProps {
   onDrop?: (e: React.DragEvent) => void;
   /** Positioning style injected by react-window (top, height, position). */
   style: React.CSSProperties;
+  /** Accent background from parent section (Knowledge=yellow, Projects=blue). */
+  sectionAccentBg?: string;
 }
 
 /* ------------------------------------------------------------------ */
@@ -196,6 +198,7 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
   onDragLeave,
   onDrop,
   style,
+  sectionAccentBg,
 }) {
   const isDirectory = node.type === 'directory';
 
@@ -297,13 +300,15 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
   const paddingLeft = depth * INDENT_PX + 8; // 8 px base padding
   const fontWeight = depth === 0 ? 500 : 400;
 
-  // Build the background colour — priority: selected > matched > default
+  // Build the background colour — priority: selected > matched > section accent > default
   let backgroundColor: string | undefined;
   if (isSelected) {
     // --color-sidebar-icon-active is the primary accent; 20 % opacity
     backgroundColor = 'color-mix(in srgb, var(--color-sidebar-icon-active) 20%, transparent)';
   } else if (isMatched) {
     backgroundColor = 'var(--color-explorer-search-highlight)';
+  } else if (sectionAccentBg) {
+    backgroundColor = sectionAccentBg;
   }
 
   // Git status drives text color; fall back to default
