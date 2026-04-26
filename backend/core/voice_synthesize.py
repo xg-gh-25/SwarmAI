@@ -39,6 +39,7 @@ VOICE_MAP: dict[str, tuple[str, str, str]] = {
     "en-US": ("Ruth", "generative", "en-US"),
     "en-GB": ("Amy", "generative", "en-GB"),
     "zh-CN": ("Zhiyu", "neural", "cmn-CN"),       # generative not available
+    "cmn-CN": ("Zhiyu", "neural", "cmn-CN"),      # alias — Polly uses cmn-CN internally
     "ja-JP": ("Kazuha", "neural", "ja-JP"),        # generative not available
     "ko-KR": ("Seoyeon", "generative", "ko-KR"),
     "de-DE": ("Vicki", "generative", "de-DE"),

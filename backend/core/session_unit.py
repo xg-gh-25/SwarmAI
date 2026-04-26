@@ -1062,11 +1062,14 @@ class SessionUnit:
 
                 # ── Fix 2: Global OOM cooldown ────────────────────
                 # Set a global cooldown so OTHER sessions also wait.
+                # Protected by _spawn_lock to prevent TOCTOU: two sessions
+                # both reading cooldown < now, both spawning, both dying.
                 cooldown_secs = min(
                     _OOM_COOLDOWN_BASE * (2 ** (self._consecutive_oom_kills - 1)),
                     _OOM_COOLDOWN_CAP,
                 )
-                _oom_cooldown_until = time.monotonic() + cooldown_secs
+                async with _spawn_lock:
+                    _oom_cooldown_until = time.monotonic() + cooldown_secs
                 logger.info(
                     "session_unit: global OOM cooldown set for %.0fs "
                     "(session=%s, consecutive_ooms=%d)",
@@ -1099,9 +1102,12 @@ class SessionUnit:
 
             # ── Fix 2: Respect global OOM cooldown ────────────────
             # If another session set a cooldown, wait at least that long.
-            now = time.monotonic()
-            if _oom_cooldown_until > now:
-                remaining_cooldown = _oom_cooldown_until - now
+            # Read under _spawn_lock to prevent TOCTOU with the write side.
+            async with _spawn_lock:
+                now = time.monotonic()
+                oom_deadline = _oom_cooldown_until
+            if oom_deadline > now:
+                remaining_cooldown = oom_deadline - now
                 if remaining_cooldown > backoff:
                     logger.info(
                         "session_unit: extending backoff %.0fs → %.0fs "

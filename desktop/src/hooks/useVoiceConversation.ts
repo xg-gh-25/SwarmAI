@@ -94,6 +94,13 @@ export function useVoiceConversation({
     stateRef.current = state;
   }, [state]);
 
+  // Ref mirror for sessionId — async TTS callbacks must read .current
+  // to avoid stale closure capture when user switches tabs mid-voice.
+  const sessionIdRef = useRef(sessionId);
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
+
   // ─── Internal tab switch → exit voice mode ──────────────────────
   // visibilitychange only fires when the browser tab/window loses focus.
   // SwarmAI's internal tab switching (chat tab 1 → tab 2) doesn't fire it.

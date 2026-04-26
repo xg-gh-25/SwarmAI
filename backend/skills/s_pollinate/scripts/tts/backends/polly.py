@@ -203,54 +203,32 @@ def _text_to_ssml(text: str, speech_rate: str = "+0%", language: str = "zh-CN") 
     """
     result = text
 
-    # --- Step 1: Phoneme disambiguation (Chinese only) ---
-    if language in ("zh-CN", "cmn-CN"):
-        result = _apply_phonemes(result)
+    # --- Phase 0: Simple pipeline (lang + break + prosody only) ---
+    # Advanced features (phoneme, say-as, sub) are deferred to Phase 2.
+    # They cause SSML nesting conflicts: <sub><lang>AI</lang></sub>
+    # which Polly neural engine rejects as InvalidSsml.
 
-    # --- Step 2: Number/date formatting ---
-    result = _format_numbers(result)
+    # Step 0: Escape XML special chars in user text BEFORE any tag insertion.
+    # Prevents SSML injection: user text like "<break time='999s'/>" would
+    # otherwise pass through as valid SSML tags.
+    result = result.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    # --- Step 3: Abbreviation expansion ---
-    result = _expand_abbreviations(result)
-
-    # --- Step 4: Wrap English terms for native pronunciation ---
-    # Protect SSML tags from steps 1-3 so regex doesn't match attribute
-    # names ("alphabet", "interpret") as English words.
-    _tag_re = re.compile(r'(<[^>]+>)')
-    _tag_map = {}
-    _n = [0]
-
-    def _ph(m):
-        key = chr(0xE000 + _n[0])
-        _tag_map[key] = m.group(0)
-        _n[0] += 1
-        return key
-
-    result = _tag_re.sub(_ph, result)
-
+    # Step 1: Wrap English terms for native pronunciation
     en_pattern = r'\b([A-Za-z][A-Za-z0-9\-\.]*[A-Za-z0-9])\b|\b([A-Za-z]{2,})\b'
     def wrap_en(m):
         term = m.group(1) or m.group(2)
         if not term or len(term) < 2:
             return m.group(0)
         return f'<lang xml:lang="en-US">{term}</lang>'
-
     result = re.sub(en_pattern, wrap_en, result, flags=re.ASCII)
 
-    for key, tag in _tag_map.items():
-        result = result.replace(key, tag)
+    # Step 2: (& escaping done in Step 0 above — no double-escape needed)
 
-    # --- Step 5: XML-escape non-tag portions ---
-    result = _escape_non_tags(result)
-
-    # --- Step 6: Breaks (podcast timing — slower than conversation) ---
+    # Step 3: Breaks (podcast timing)
     result = re.sub(r'([。！？])', r'\1<break time="500ms"/>', result)
     result = re.sub(r'([，；：])', r'\1<break time="250ms"/>', result)
     result = re.sub(r'\n\n+', '<break time="800ms"/>', result)
     result = result.replace('\n', '<break time="300ms"/>')
-
-    # --- Step 7: Language switch boundary pauses ---
-    result = _add_language_switch_breaks(result)
 
     # --- Step 8: Wrap in <speak> with prosody ---
     rate_attr = ""
