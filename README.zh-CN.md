@@ -253,7 +253,7 @@ npm install && cp backend.env.example ../backend/.env
 
 | 版本 | 亮点 |
 |------|------|
-| **v1.8.1** (4/26) | Release skill，WelcomeScreen 响应式布局修复，Explorer 字体优化 |
+| **v1.8.2** (4/26) | 设计智能库（67 风格、161 配色），deep-research 意图规划器，learn-content 深度校准 |
 | **v1.8.0** (4/26) | Pollinate 媒体引擎（海报、4K 视频、播客、叙事 + SSML），Briefing Hub v2，SwarmWS Explorer 重设计，会话预热，Slack 三级投递，自主流水线 v2 |
 | **v1.7.0** (4/25) | 自主编码流水线（8 阶段 EVALUATE→REFLECT），Token 用量追踪，语音输入（Amazon Transcribe 流式），全量 PE 代码审查 |
 | **v1.6.0** (4/14) | 自进化正式上线 — LLM 优化器、置信度门控部署、回归门。Lazy skill 加载（节省 49% token）。新一代 Agent 智能（12 模块）。 |
