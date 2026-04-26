@@ -1,0 +1,59 @@
+# YouTube Platform Configuration
+platform: youtube
+name: "YouTube"
+language: en-US
+
+video:
+  orientation: horizontal
+  width: 3840
+  height: 2160
+  codec: h264
+  bitrate: "16M"
+  fps: 30
+  audio_codec: aac
+  audio_bitrate: "192k"
+
+duration:
+  min_seconds: 180
+  max_seconds: 720
+  target: "5-8min"
+
+thumbnails:
+  - aspect: "16:9"
+    width: 1920
+    height: 1080
+    purpose: "playback + feed"
+  - aspect: "4:3"
+    width: 1200
+    height: 900
+    purpose: "suggested videos"
+
+title:
+  max_chars: 70
+  formula: "SEO-optimized"
+  examples:
+    - "Why AI Memory Matters More Than the Model"
+    - "AIDLC: The 3-Phase Evolution of AI Teams"
+
+description:
+  min_chars: 100
+  max_chars: 500
+  style: "keyword-rich, chapters included"
+
+tags:
+  count: 15
+  format: "plain+hashtags"  # both tags and #hashtags
+
+chapters:
+  enabled: true
+  format: "0:00"  # YouTube requires first chapter at 0:00
+  min_gap_seconds: 10
+
+cta:
+  type: "text"
+  text: "Like, Subscribe & Share"
+
+script:
+  intro: "welcome"
+  outro: "subscribe"
+  style: "clear, international, slightly formal"

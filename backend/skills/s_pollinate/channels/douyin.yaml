@@ -1,0 +1,53 @@
+# Douyin (抖音) Platform Configuration
+platform: douyin
+name: "Douyin (抖音)"
+language: zh-CN
+
+video:
+  orientation: vertical  # vertical ONLY, no horizontal
+  width: 2160
+  height: 3840
+  codec: h264
+  bitrate: "16M"
+  fps: 30
+  audio_codec: aac
+  audio_bitrate: "192k"
+
+duration:
+  min_seconds: 30
+  max_seconds: 120
+  target: "60-90s"
+
+thumbnails:
+  - aspect: "9:16"
+    width: 1080
+    height: 1920
+    purpose: "feed"
+
+title:
+  max_chars: 55
+  formula: "short + casual"
+
+description:
+  min_chars: 100
+  max_chars: 200
+  style: "casual, conversational, emoji"
+
+tags:
+  count: 6
+  format: "#tag"  # SINGLE hash
+  examples:
+    - "#AI"
+    - "#人工智能"
+    - "#技术"
+
+chapters:
+  enabled: false
+
+cta:
+  type: "text"  # NO animation on Douyin
+  text: "点赞关注"
+
+script:
+  style: "fast-paced, one video one point, 3s hook"
+  note: "Vertical shorts ONLY. No horizontal long-form."

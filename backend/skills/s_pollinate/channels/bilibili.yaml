@@ -1,0 +1,63 @@
+# Bilibili (B站) Platform Configuration
+platform: bilibili
+name: "Bilibili (B站)"
+language: zh-CN
+
+video:
+  orientation: horizontal
+  width: 3840
+  height: 2160
+  codec: h264
+  bitrate: "16M"
+  fps: 30
+  audio_codec: aac
+  audio_bitrate: "192k"
+
+duration:
+  min_seconds: 180    # 3 min
+  max_seconds: 720    # 12 min
+  target: "5-8min"
+
+thumbnails:
+  - aspect: "16:9"
+    width: 1920
+    height: 1080
+    purpose: "playback"
+  - aspect: "4:3"
+    width: 1200
+    height: 900
+    purpose: "recommendation feed"
+
+title:
+  max_chars: 80
+  formula: "number + topic + hook"
+  examples:
+    - "5分钟搞懂：为什么AI记忆比模型更重要"
+    - "AIDLC三阶段进化论：AI不是工具，是同事"
+    - "170亿参数的表演模型：LPM技术深度拆解"
+
+description:
+  min_chars: 100
+  max_chars: 200
+  style: "knowledge-sharing, professional"
+
+tags:
+  count: 10
+  format: "plain"  # just words, no special formatting
+
+chapters:
+  enabled: true
+  format: "MM:SS"
+  min_gap_seconds: 5
+
+cta:
+  type: "animation"  # pre-made MP4 outro
+  text: "一键三连 (点赞、投币、收藏)"
+  variants:
+    light: "outro-bilibili-light.mp4"
+    dark: "outro-bilibili-dark.mp4"
+
+script:
+  intro: "welcome"
+  outro: "一键三连"
+  style: "bold text, minimal whitespace, high information density"

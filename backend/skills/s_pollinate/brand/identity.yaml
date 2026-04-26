@@ -1,0 +1,90 @@
+# Swarm Brand Identity
+# Source of truth for all Pollinate visual + audio outputs
+
+brand:
+  name: "Swarm"
+  tagline: "AI 实践者，不是布道者"
+  tagline_en: "Building with AI, not just talking about it."
+  emoji: "🐝"
+  logo:
+    primary: "🐝 Swarm"
+    compact: "🐝"
+    full: "🐝 Swarm | AI 实践者"
+
+colors:
+  primary: "#FF6B35"        # Swarm Orange — energy, action
+  secondary: "#1B2838"      # Deep Navy — depth, professional
+  accent: "#4ECDC4"         # Teal — innovation, fresh
+  background_light: "#FAFAFA"  # Off-white
+  background_dark: "#1A1A2E"   # Charcoal
+  text: "#2D3436"           # Near-black
+  success: "#00B894"        # Green
+  warning: "#FDCB6E"        # Amber
+
+typography:
+  chinese: "PingFang SC"
+  chinese_fallback: "Noto Sans SC"
+  english: "Inter"
+  code: "SF Mono, JetBrains Mono, Menlo, Monaco"
+  data: "DIN Pro Bold"
+  sizes:
+    hero: 96          # Video hero title
+    section: 80       # Section title
+    card_title: 38    # Card heading
+    body: 32          # Body text
+    caption: 24       # Small text / caption
+    code: 28          # Code font size
+
+voice:
+  default_backend: "polly"   # Amazon Polly — same voice as Swarm voice conversation
+  default_voice_zh: "Zhiyu"  # neural, cmn-CN (generative not available for Chinese)
+  default_voice_en: "Ruth"   # generative, en-US — Swarm's brand voice
+  fallback_backend: "edge"   # Free fallback when AWS credentials unavailable
+  default_rate: "+0%"
+  style: "professional-casual, direct, opinionated"
+  note: "Voice must be consistent across voice conversation and video content"
+
+audio:
+  bgm_volume: 0.05
+  default_bgm: "calm-piano"
+
+# Domain-specific visual overrides
+domain_themes:
+  aidlc:
+    theme: "light"
+    primary_override: "#FF6B35"  # Standard Swarm Orange
+    visual_note: "Flow diagrams, clear structure, methodology feel"
+
+  ai_architecture:
+    theme: "dark"
+    primary_override: "#7C3AED"  # Purple
+    visual_note: "Architecture diagrams, code blocks, deep technical"
+
+  industry_insights:
+    theme: "light"
+    primary_override: "#E17055"  # Coral
+    visual_note: "Comparison charts, data visualization, trend analysis"
+
+  build_log:
+    theme: "light"
+    primary_override: "#00CEC9"  # Cyan
+    visual_note: "Screenshots, terminal output, real interface captures"
+
+# Content series naming
+series:
+  deep_dive:
+    name: "Swarm Deep Dive"
+    format: "long video"
+    platforms: ["bilibili", "youtube"]
+  quick_bite:
+    name: "Swarm Quick Bite"
+    format: "short video"
+    platforms: ["xiaohongshu", "douyin", "weixin_video"]
+  build_log:
+    name: "Swarm Build Log"
+    format: "mixed"
+    platforms: ["bilibili", "xiaohongshu"]
+  signal:
+    name: "Swarm Signal"
+    format: "mixed"
+    platforms: ["all"]
