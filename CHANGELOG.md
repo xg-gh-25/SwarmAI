@@ -5,6 +5,14 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.3] - 2026-04-26
+
+### Fixed
+
+- **Version Downgrade Bug**: VERSION file (source of truth) was missing from release workflow — `dev.sh`/`prod.sh` silently reverted all versions on every startup
+- **CI Release Workflow**: Replaced per-file `jq` hacks with `sync-version.sh` — single path for all version updates across local, prod, and CI
+- **Token Usage Display**: Consumption sum excluded cache metrics — display was inflated ~350x
+
 ## [1.8.2] - 2026-04-26
 
 ### Added
