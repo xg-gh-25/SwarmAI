@@ -33,9 +33,30 @@ Both READMEs must reflect the new release. Check and update:
 
 ## Execution Steps
 
+### Step 0: Pre-Flight Checks
+
+Run ALL of these before proceeding. Any failure = stop and fix first.
+
+```bash
+# 1. Working tree must be clean (no uncommitted changes)
+git status --short
+# If non-empty → commit or stash first
+
+# 2. All 4 version files must be in sync
+echo "pyproject: $(grep '^version' backend/pyproject.toml | head -1)"
+echo "package:   $(grep '"version"' desktop/package.json | head -1)"
+echo "cargo:     $(grep '^version' desktop/src-tauri/Cargo.toml | head -1)"
+echo "tauri:     $(grep '"version"' desktop/src-tauri/tauri.conf.json | head -1)"
+# If they differ → fix sync before release
+
+# 3. Target tag must not exist
+git tag -l "vX.Y.Z"
+# If tag exists → user probably wants a different version
+```
+
 ### Step 1: Determine Version
 
-Read the current version from any of the 4 files (they must be in sync).
+Read the current version from the pre-flight output (they must be in sync).
 If user specified a version, use it. Otherwise, determine from scope:
 - Features added since last release? → bump minor
 - Only fixes? → bump patch
@@ -43,11 +64,14 @@ If user specified a version, use it. Otherwise, determine from scope:
 ### Step 2: Gather Changes
 
 ```bash
-# Find the last version bump commit
+# Primary: find last version tag (most reliable)
+git describe --tags --abbrev=0
+
+# Fallback: find last version bump commit
 git log --oneline --grep="bump version" -1
 
-# List all commits since then
-git log <last-bump-hash>..HEAD --oneline
+# List all commits since last release
+git log <last-tag-or-hash>..HEAD --oneline
 ```
 
 Categorize each commit into Added / Fixed / Changed for CHANGELOG.
@@ -99,24 +123,33 @@ git add README.md README.zh-CN.md
 git commit -m "docs: refresh README (EN + CN) for vX.Y.Z release"
 ```
 
-### Step 5: Bump Version in All 4 Files
+### Step 5: Bump Version in All 4 Files + Lockfiles
 
 Edit each of the 4 files listed above. Use the Edit tool — do NOT do search-and-replace on the old version string globally (it might match dependency versions).
 
-**Verification**: After editing, run:
+**After editing, regenerate lockfiles:**
+```bash
+# Update Cargo.lock (Cargo.toml changed)
+cd desktop/src-tauri && cargo generate-lockfile 2>/dev/null || cargo check 2>/dev/null; cd ../..
+
+# Update package-lock.json (package.json changed)
+cd desktop && npm install --package-lock-only 2>/dev/null; cd ..
+```
+
+**Verification** — all 4 must show the new version:
 ```bash
 grep -n "version" backend/pyproject.toml | head -1
 grep -n "version" desktop/package.json | head -1
 grep -n "version" desktop/src-tauri/Cargo.toml | head -1
 grep -n "version" desktop/src-tauri/tauri.conf.json | head -1
 ```
-All 4 must show the new version.
 
 ### Step 6: Commit
 
 ```bash
 git add CHANGELOG.md backend/pyproject.toml desktop/package.json \
-  desktop/src-tauri/Cargo.toml desktop/src-tauri/tauri.conf.json
+  desktop/package-lock.json desktop/src-tauri/Cargo.toml \
+  desktop/src-tauri/Cargo.lock desktop/src-tauri/tauri.conf.json
 git commit -m "chore: bump version to X.Y.Z, update CHANGELOG"
 ```
 
@@ -160,12 +193,14 @@ gh release create vX.Y.Z \
 
 ---
 
+**By the numbers:** <N>+ commits · <N>K+ backend LOC · <N>+ skills · <N>+ tests · <N>+ backend modules · <N>+ React components
+
 **Full changelog:** [CHANGELOG.md](https://github.com/xg-gh-25/SwarmAI/blob/main/CHANGELOG.md)
 EOF
 )"
 ```
 
-The release notes should be a condensed version of the CHANGELOG — highlights at top, then Added/Fixed/Changed sections.
+The release notes should be a condensed version of the CHANGELOG — highlights at top, then Added/Fixed/Changed sections. Use the same stat-gathering commands from Step 4 for "By the numbers".
 
 ### Step 10: Report
 
@@ -181,16 +216,41 @@ Output the release URL and a summary:
 
 For patch releases (only fixes, no features):
 
-1. Steps 1-2: Determine version, gather fixes
-2. Steps 3-6: CHANGELOG + bump + commit + push
-3. Steps 7-8: Tag + release
-4. Release notes can be shorter — just list the fixes
+1. Steps 0-2: Pre-flight, determine version, gather fixes
+2. Step 3: CHANGELOG (can be shorter — just list fixes)
+3. Step 4: README — **still required**: add patch row to "Recent Releases" table, update "By the numbers" if stats changed. "What's New" section stays unchanged (patches don't change highlights)
+4. Steps 5-7: Bump + commit + push
+5. Steps 8-9: Tag + release (release notes = just the fixes)
+
+## Rollback
+
+If something goes wrong mid-release:
+
+```bash
+# Tag pushed but gh release failed → just retry Step 9
+gh release create vX.Y.Z ...
+
+# Tag is wrong (wrong commit, wrong version) → delete and redo
+git tag -d vX.Y.Z                    # delete local
+git push origin :refs/tags/vX.Y.Z   # delete remote
+# Then redo Steps 8-9
+
+# Release created but content is wrong → edit in place
+gh release edit vX.Y.Z --title "..." --notes "..."
+
+# Everything is wrong → delete release + tag, revert commit
+gh release delete vX.Y.Z --yes
+git tag -d vX.Y.Z
+git push origin :refs/tags/vX.Y.Z
+git revert HEAD   # revert the version bump commit
+git push
+```
 
 ## Pre-Release Checklist (informational — not enforced by this skill)
 
 These are recommended before cutting a release, but this skill does NOT block on them:
 - [ ] All tests pass (`cd backend && python -m pytest --timeout=60`)
 - [ ] Build succeeds (`./prod.sh build` — runs PyInstaller + 41 checks)
-- [ ] No uncommitted changes in working tree
+- [ ] No uncommitted changes in working tree (Step 0 checks this)
 
 If user wants to skip — their call. This skill only handles versioning.
