@@ -1131,7 +1131,7 @@ def _send_slack_dm_bot_api(message: str) -> bool:
         conn.row_factory = sqlite3.Row
         try:
             row = conn.execute(
-                "SELECT config FROM channels WHERE name LIKE '%Slack%' LIMIT 1"
+                "SELECT config FROM channels WHERE channel_type = 'slack' LIMIT 1"
             ).fetchone()
         finally:
             conn.close()

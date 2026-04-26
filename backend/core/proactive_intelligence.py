@@ -1245,8 +1245,12 @@ def _extract_working_items(workspace: Path) -> list[dict]:
     Parses RADAR_TODOS JSON blocks from job result markdown files.
     Falls back to extracting "Urgent" section items from morning-reflect.
     """
+    from datetime import timedelta, timezone as _tz
+
     items: list[dict] = []
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    # Use local time for filenames — JobResults files are named with local dates
+    _now = datetime.now(_tz.utc).astimezone()
+    today_str = _now.strftime("%Y-%m-%d")
     results_dir = workspace / "Knowledge" / "JobResults"
     if not results_dir.is_dir():
         return items
@@ -1256,8 +1260,7 @@ def _extract_working_items(workspace: Path) -> list[dict]:
         result_file = results_dir / f"{today_str}-{job_id}.md"
         if not result_file.exists():
             # Try yesterday
-            from datetime import timedelta
-            yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+            yesterday = (_now - timedelta(days=1)).strftime("%Y-%m-%d")
             result_file = results_dir / f"{yesterday}-{job_id}.md"
             if not result_file.exists():
                 continue
@@ -1464,11 +1467,22 @@ def build_session_briefing_data(
             try:
                 cutoff_24h = time.time() - 24 * 3600
                 tail_lines = _tail_read_lines(jsonl_path, max_bytes=4096)
-                for line in reversed(tail_lines):
+                # Sort by timestamp descending — concurrent job writes may
+                # violate JSONL append order within the tail window.
+                parsed_entries = []
+                for line in tail_lines:
+                    try:
+                        parsed_entries.append(json.loads(line))
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+                parsed_entries.sort(
+                    key=lambda e: e.get("run_at", e.get("completed_at", "")),
+                    reverse=True,
+                )
+                for entry in parsed_entries:
                     if len(jobs) >= 5:
                         break
                     try:
-                        entry = json.loads(line)
                         ts = entry.get("run_at", entry.get("completed_at", ""))
                         if isinstance(ts, str) and ts:
                             dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
