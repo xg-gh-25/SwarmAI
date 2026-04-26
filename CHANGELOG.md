@@ -5,6 +5,21 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.1] - 2026-04-26
+
+### Added
+
+- **Release Skill** (`s_release`): 10-step release workflow — version bump across 4 files, CHANGELOG, README sync (EN + CN), lockfile regen, git tag, GitHub Release. Patch shortcut and rollback procedures included
+
+### Fixed
+
+- **WelcomeScreen Responsive Layout**: Sections now reflow to 1-2 columns based on screen size, TODO data source corrected to use Radar API, Radar section order fixed
+- **Release Skill Gaps**: Pre-flight checks (clean tree, tag collision, 4-file sync), Cargo.lock + package-lock.json regeneration, README sync step, rollback instructions
+
+### Changed
+
+- **Explorer Tree Node Font**: Reduced font size for clearer visual hierarchy in SwarmWS file tree
+
 ## [1.8.0] - 2026-04-26
 
 ### Added
