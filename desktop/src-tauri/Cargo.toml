@@ -1,6 +1,6 @@
 [package]
 name = "swarmai"
-version = "1.7.0"
+version = "1.8.0"
 description = "SwarmAI - Your AI Team, 24/7"
 authors = ["Xiaogang Wang"]
 edition = "2021"

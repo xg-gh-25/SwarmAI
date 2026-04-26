@@ -5,6 +5,43 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-04-26
+
+### Added
+
+- **Pollinate Media Engine** (`s_pollinate`): 8-stage content pipeline (EVALUATE→REFLECT) transforms any message into poster (SVG/PNG), short video (4K MP4), podcast (TTS + BGM), or narrative. 77 files, template-driven layouts per format × audience, multi-platform publishing scripts (`publish_meta.py`, `publish_poster.py`)
+- **Engine-Aware SSML Optimization**: Polly TTS SSML strategy adapts per engine — neural voices get prosody/emphasis, generative voices get plain text (SSML degrades quality). English pronunciation for CJK voices ("API" sounds correct, not "ā-pī-ài")
+- **Briefing Hub v2**: 2-column Welcome screen with grouped signal sections (Hot News, Stocks, Working status) + unified RadarSidebar with section-based layout. Slack morning briefing template with channel-specific formatting
+- **SwarmWS Explorer 3-Tier Redesign**: Primary sections (Knowledge, Projects, Attachments) with accent backgrounds, Secondary directories, System section. Section headers with SVG navigation icons. Replaced flat zone layout
+- **Session Pre-Warming** (MeshClaw pattern): Daemon pre-spawns IDLE subprocess with full system prompt (including `channel_context`) at startup via `prewarm_channel_session()`. `adopt_prewarmed_unit()` re-keys on owner's first DM — eliminates ~4s cold-start latency
+- **Slack 3-Tier Delivery**: `webhook → bot API → CLI` fallback chain for all Slack messaging. Signal notifications, morning briefings, and DMs route through optimal path. Pre-flight config check validates webhook URL and bot token
+- **Autonomous Pipeline v2**: 57KB monolith split into 12 self-contained modules (`evaluate.py`, `think.py`, `plan.py`, `build.py`, `review.py`, `test_stage.py`, `deliver.py`, `reflect.py`, `confidence_score.py`, `shared_context.py`, `stage_runner.py`, `pipeline_orchestrator.py`). No cross-skill dependencies. Blocking budget check before every checkpoint
+- **Suggested Focus Auto-Close**: Focus items dismissed after action + dismiss button in Welcome Screen
+- **Signal-Notify-Slack**: Automatic Slack notification after daily signal digest completion
+
+### Fixed
+
+- **OOM Race Condition**: Comprehensive code review found and fixed race between `compute_max_tabs()` and concurrent session spawns — `_spawn_lock` now held through entire budget check + spawn sequence
+- **SSML Injection Prevention**: User-provided text sanitized before embedding in SSML tags — strips `<`, `>`, `&` to prevent tag injection into Polly requests
+- **Voice Map Safety**: TTS voice selection validates against known Polly voice IDs — unknown `voice_id` falls back to default instead of sending invalid parameter to Polly API
+- **Ref Safety**: React refs checked for `null` before access in audio playback, voice recorder, and Explorer scroll handlers
+- **State Machine Races**: Same-state transitions (`cold→cold`, `idle→idle`) now no-op — eliminates class of races where kill/spawn overlap produced invalid transitions
+- **Session Kill Race**: `cold→cold` transition during concurrent `kill()` calls no longer crashes — state check before transition prevents `InvalidTransitionError`
+- **Slack `msg_too_long`** (42 occurrences): Messages exceeding 40K chars now auto-truncated with `[truncated]` suffix instead of failing silently
+- **`skill_metrics_hook` zlib Crash** (7 occurrences): Graceful handling of corrupted/truncated transcript JSONL files — skip instead of crash
+- **Tauri `target="_blank"` Silent Failure**: Replaced with `plugin-opener` — WKWebView ignores `target="_blank"`, links now open in system browser
+- **`asyncio` Import Shadowing**: Removed local `import asyncio` in `session_unit.py` that shadowed module-level import
+- **Explorer User Issues**: 4 post-launch fixes for section spacing, icon alignment, scroll behavior, and hover states
+- **Female Generative TTS**: Fixed persona selection + `cmn-CN` language code (was `zh-CN`) + turn-2 silence bug from stale audio context
+- **Timezone-Aware JobResult**: Timestamps now use local timezone instead of UTC — morning briefing shows correct "today" boundary
+- **Pipeline Confidence Scorer**: Now accepts explicit artifact paths for production use outside pipeline context
+
+### Changed
+
+- **Autonomous Pipeline Architecture**: From single 57KB `INSTRUCTIONS.md` to 12 focused modules with shared context. Each stage is independently testable and maintainable
+- **RadarSidebar Visual**: 2px accent left-border per section for visual grouping
+- **Pipeline Budget Rule**: Blocking budget check added before every pipeline checkpoint — prevents starting stages that can't complete within remaining context budget
+
 ## [1.7.0] - 2026-04-25
 
 ### Added
