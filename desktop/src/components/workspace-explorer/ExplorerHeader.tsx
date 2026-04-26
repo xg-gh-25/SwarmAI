@@ -31,9 +31,24 @@ export default function ExplorerHeader({ onCollapseToggle }: ExplorerHeaderProps
       data-testid="explorer-header"
     >
       <div className="flex items-center justify-between px-3.5 pt-2 pb-1.5">
-        {/* Section title — distinct from Radar via folder icon + bolder style */}
+        {/* Section title — SVG Layers icon (AC6: no emoji icons) */}
         <span className="flex items-center gap-1.5">
-          <span className="material-symbols-outlined text-[13px] text-[var(--color-text-secondary)]">folder_open</span>
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="var(--color-text-secondary)"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+            data-testid="layers-icon"
+          >
+            <polygon points="12 2 2 7 12 12 22 7 12 2" />
+            <polyline points="2 17 12 22 22 17" />
+            <polyline points="2 12 12 17 22 12" />
+          </svg>
           <span className="text-[11px] font-bold uppercase tracking-[0.6px] text-[var(--color-text-secondary)]">
             SwarmWS
           </span>
