@@ -41,7 +41,9 @@ class TestTokenUsageDB:
             model="claude-opus-4-6",
         )
         summary = await db.get_token_usage_summary()
-        assert summary["total_tokens"] == 95000  # 50k+10k+30k+5k
+        # Summary counts only input + output (actual consumption).
+        # cache_read/cache_create are stored for observability but not summed.
+        assert summary["total_tokens"] == 60000  # 50k input + 10k output
 
     @pytest.mark.asyncio
     async def test_record_token_usage_background_job(self):

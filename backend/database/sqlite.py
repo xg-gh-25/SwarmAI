@@ -2528,9 +2528,13 @@ class SQLiteDatabase(BaseDatabase):
             today_str = datetime.now().strftime("%Y-%m-%d")
             async with aiosqlite.connect(str(self.db_path)) as conn:
                 # Total across all time
+                # Only sum input + output tokens (actual consumption).
+                # cache_read/cache_create are observability metrics, not consumption —
+                # cache_read is prompt cache reuse (10x cheaper), cache_create is
+                # cache warm-up (1.25x).  Including them inflated the number ~350x.
                 cursor = await conn.execute("""
                     SELECT
-                        COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens), 0),
+                        COALESCE(SUM(input_tokens + output_tokens), 0),
                         COALESCE(SUM(cost_usd), 0.0)
                     FROM token_usage
                 """)
@@ -2539,7 +2543,7 @@ class SQLiteDatabase(BaseDatabase):
                 # Today only (local date comparison)
                 cursor = await conn.execute("""
                     SELECT
-                        COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens), 0),
+                        COALESCE(SUM(input_tokens + output_tokens), 0),
                         COALESCE(SUM(cost_usd), 0.0)
                     FROM token_usage
                     WHERE date(timestamp) = ?
