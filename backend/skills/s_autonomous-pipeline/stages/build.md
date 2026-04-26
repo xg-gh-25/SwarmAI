@@ -1,0 +1,216 @@
+# BUILD Stage (TDD Red-Green Cycle)
+
+Pipeline-owned stage (no sibling skill). This is the core implementation stage.
+
+The BUILD stage follows TDD methodology: tests before code, code until tests pass.
+
+## Step 1: RED -- Generate tests from acceptance criteria
+
+1. Read acceptance criteria from the evaluation artifact (or design_doc if PLAN ran)
+2. Read TECH.md for test framework (pytest, vitest) and conventions
+3. Generate test stubs -- one test per acceptance criterion minimum:
+   ```
+   # For each criterion in acceptance_criteria:
+   #   -> Write a test that WILL FAIL (nothing implemented yet)
+   #   -> Name: test_<criterion_slug>
+   #   -> Assert the expected behavior from the criterion
+   ```
+4. Run the tests -- **all must FAIL** (this proves the tests are meaningful)
+5. If any test passes before implementation -- the test is trivial or wrong, rewrite it
+
+## Step 2: GREEN -- Implement until all tests pass
+
+6. Read TECH.md for code conventions, patterns, and style
+7. Implement changes guided by the design_doc artifact (if available)
+8. Run tests after each logical change -- watch failures decrease
+9. **Completeness bias:** when the complete implementation costs minutes more
+   than the shortcut, do the complete thing. Cover edge cases, handle errors.
+10. Use atomic commits: one commit per logical change
+
+## Step 3: VERIFY -- Targeted tests, zero regressions
+
+**VERIFY rules (BLOCKING):**
+- Run **changed test files + test files that import changed modules**. NOT the full suite.
+  ```
+  pytest tests/test_foo.py tests/test_bar.py --timeout=60
+  ```
+- If you're unsure which tests to run, use `pytest --lf --timeout=60` (last-failed).
+- **NEVER** run bare `pytest` without specifying files -- conftest blocks >300 tests.
+- **NEVER** use `--run-all` -- that's for humans running `make test-all`, not pipeline.
+- **NEVER** pipe pytest through `| tail` -- it hides pass/fail and xdist status.
+- If all tests pass -- proceed to Step 4. Done.
+- If tests fail -- fix code, re-run **only failing tests**.
+- **Max 2 VERIFY re-runs total.** After 2 runs, if still failing:
+  publish changeset with `"regressions": N` and advance to REVIEW anyway.
+- Track VERIFY attempt count explicitly: "VERIFY attempt 1/2", "VERIFY attempt 2/2".
+
+11. Run changed + related test files -- all must pass
+12. If existing tests break -- fix production code, NOT the existing tests
+13. Track all files changed and test results
+
+## Step 4: SMOKE -- exercise new code paths (catch runtime crashes)
+
+14. For each modified file that has new branches (if/else, try/except,
+    config-gated paths), write a minimal inline smoke test that forces
+    execution through the new path. The goal is to catch AttributeError,
+    NameError, and other runtime crashes that unit tests miss because
+    they mock the surrounding context.
+
+    ```python
+    # Example: new config-gated code in prompt_builder.py
+    from core.prompt_builder import PromptBuilder
+    pb = PromptBuilder(config={"memory_progressive_disclosure": True})
+    # Call the method that contains the new branch -- don't assert output,
+    # just verify it doesn't crash with AttributeError/TypeError.
+    ```
+
+    Rules:
+    - If the new code is behind a config flag -- test with flag=True
+    - If behind a conditional (channel_context, resume, etc.) -- construct
+      the triggering condition
+    - If new code is in a try/except -- temporarily remove the except to
+      verify the try body doesn't crash (the except silently swallows
+      bugs like `self.config_manager` -- `self._config`)
+    - **Multi-context callers:** If new code is called from both sync
+      AND async contexts (e.g., `record_token_usage()` called from
+      async `session_unit` AND sync `bedrock.invoke()`), smoke test
+      BOTH calling contexts. A function that works in async FastAPI
+      may silently fail from a sync background job. Don't assume one
+      passing smoke test covers all callers.
+    - Smoke tests are **inline verification only** -- don't commit them.
+      They're a build-time gate, not regression tests.
+    - If a smoke test crashes -- fix the bug before proceeding to REVIEW.
+
+    This step exists because of a real incident: `self.config_manager`
+    (wrong attribute name) passed 8 pipeline stages undetected because
+    it was inside try/except and no test exercised the actual runtime path.
+
+### Resource Lifecycle Verification
+
+Added after run_c2881d2f: 3 CRITICAL subprocess bugs survived 14 green unit tests + 4 smoke tests.
+
+For each new resource acquisition in the changeset, verify BOTH the success path AND the failure/timeout path release the resource:
+
+| Resource Type | Success Check | Failure Check |
+|---------------|--------------|---------------|
+| subprocess (`create_subprocess_exec`) | exits with returncode | `proc.kill()` + `await proc.wait()` in finally. `wait_for` timeout -- kill before re-raise. `FileNotFoundError` caught. |
+| temp files | deleted after use | deleted in finally (`unlink(missing_ok=True)`) |
+| MediaStream / hardware | tracks stopped | stopped in useEffect cleanup |
+| network / sockets | closed / consumed | timeout set + cleanup on error |
+| file handles | closed | context manager or finally |
+| SDK handler/client (SocketModeHandler, WebClient, etc.) | `.close()` after use | `.close()` before reassignment AND in error path. Old instance closed before `self._handler = new_handler`. |
+| upload form (multipart) | `await form.close()` | in finally block -- releases SpooledTemporaryFile |
+
+For each applicable row, write a smoke test that:
+1. Triggers the failure path (mock timeout, FileNotFoundError, etc.)
+2. Asserts the resource was released (mock.kill.assert_called, etc.)
+
+Don't skip this for "simple" subprocess calls. Voice Input had 14
+green tests yet 3 CRITICAL subprocess bugs because mocks replaced
+the entire subprocess lifecycle. The mock proved "if transcription
+returns X, endpoint returns X" -- but not "subprocess is killed on
+timeout." Test the resource, not the happy path around it.
+
+## Step 5: USER-PATH TRACE -- walk real scenarios through real code
+
+15. For each acceptance criterion, pick **one concrete user action** and
+    trace it through the actual production code path -- not tests, not
+    mocks, the real call chain.
+
+    For each trace:
+    a. **Start from the user action** -- "Titus sends a Slack DM", not
+       "\_poll\_channel\_messages is called"
+    b. **Follow every function call** -- read the real source, not from
+       memory. Note the actual input each function receives.
+    c. **Check external data shapes** -- when the code consumes data from
+       an external API (Slack, DB, filesystem), verify your test mocks
+       match the real response schema. `conversations.history` messages
+       lack `channel`; Socket Mode events have it. These differences
+       are invisible in unit tests that supply hand-crafted dicts.
+    d. **Check cross-component boundaries** -- when one component calls
+       another (adapter -- gateway, hook -- registry), trace what happens
+       on the OTHER side. Error callbacks, state resets, object
+       destruction -- these are where bugs hide.
+    e. **Check competing paths** -- if two mechanisms handle the same
+       event (e.g., `_on_error` callback AND health monitor both react
+       to thread death), which fires first? Does the first one prevent
+       the second from ever running?
+
+    **Action on findings:**
+    - Each finding -- **fix immediately** (these are always real bugs)
+    - Update tests to cover the discovered path
+
+    **Why this exists:** run_ec4a73ff shipped with 26 TDD tests, 10/10
+    confidence, and 8 pipeline stages passed. User-path trace found 2
+    CRITICAL bugs in 5 minutes: (1) `_on_error` fired before health
+    monitor -- gateway destroyed adapter -- `_ws_fail_count` reset --
+    polling never activated, (2) `conversations.history` messages lack
+    `channel` field -- `external_chat_id=""` -- routing broken. Both
+    invisible to unit tests because mocks didn't match real API data
+    and no test crossed the adapter/gateway boundary. This is LL04's
+    third recurrence: engineering-complete != user-complete.
+
+## Step 6: PROBE -- send a real request through the wire (catch format bugs)
+
+16. **Only when the changeset adds a new API endpoint consumed by frontend.**
+    Skip for backend-only or frontend-only changes.
+
+    Write ONE integration test per new endpoint that constructs the request
+    **the same way the real client would** -- not using TestClient shortcuts
+    that bypass serialization.
+
+    ```python
+    # BAD -- TestClient auto-serializes, hides Content-Type bugs:
+    client.post("/api/chat/transcribe", files={"audio": ...})
+
+    # GOOD -- Construct request the way Axios/fetch would:
+    import httpx
+    async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        # FormData without explicit Content-Type (browser auto-adds boundary)
+        files = {"audio": ("test.wav", wav_bytes, "audio/wav")}
+        resp = await client.post("/api/chat/transcribe", files=files)
+        assert resp.status_code == 200
+        data = resp.json()
+        # Verify response shape matches frontend expectations
+        assert "transcript" in data
+        assert "duration_ms" in data  # backend snake_case
+    ```
+
+    Rules:
+    - Use `httpx.AsyncClient(app=app)` -- it exercises the real ASGI stack
+      including Starlette's multipart parser, unlike TestClient which
+      uses `requests` (different HTTP library, different serialization).
+    - Do NOT set `Content-Type` manually -- let the HTTP library handle it.
+      This is the exact bug pattern (RP5) we're testing against.
+    - Verify the response JSON keys match what the frontend expects (after
+      any snake-to-camel conversion).
+    - If the endpoint requires auth or external services, mock only the
+      leaf (e.g., Amazon Transcribe API), NOT the HTTP layer.
+
+    **Why this exists:** Voice Input's Content-Type bug (explicit header
+    broke Axios boundary string) would have been caught by ANY real HTTP
+    request. 14 unit tests + 4 smoke tests + integration trace missed it
+    because none actually sent a multipart request through the ASGI stack.
+    The most fatal bug was the cheapest to catch.
+
+## TDD Constraint
+
+Fix code, not tests. Tests are derived from the accepted design. Changing a test = changing the spec = go back to PLAN.
+
+## Mock Discipline
+
+When mocking objects in tests, use `spec=RealClass` or only set attributes that exist on the real class. Bare `MagicMock()` silently accepts ANY attribute access -- this hides `AttributeError` bugs that crash in production. For integration-facing tests (anything that touches cross-module boundaries), prefer real objects over mocks. If you must mock, mock the leaf dependency (DB, network), not the intermediate object.
+
+## Adversarial Inputs in RED Phase
+
+For NLP/parsing code, the RED phase must include adversarial inputs: URLs, file paths, code snippets, empty/minimal strings, Unicode edge cases (CJK, Kana, Hangul, emoji), and multi-language mix. These are the inputs that break keyword extractors, parsers, and formatters.
+
+## Artifact Publish
+
+```bash
+python backend/scripts/artifact_cli.py publish --project <PROJECT> \
+  --type changeset --producer s_autonomous-pipeline \
+  --summary "<N> files changed, <M> commits, TDD: <red>/<green>/<verify>" \
+  --data '{"branch":"...","commits":[...],"files_changed":[...],"diff_summary":"...","tdd":{"acceptance_criteria_count":N,"tests_generated":M,"red_failures":K,"green_pass":true,"regressions":0,"smoke_tests":S,"smoke_crashes_caught":C,"user_path_traces":T,"user_path_bugs_found":B,"probes":P,"probe_bugs_found":Q}}'
+python backend/scripts/artifact_cli.py advance --project <PROJECT> --state review
+```

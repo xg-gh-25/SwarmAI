@@ -14,7 +14,7 @@ For every pipeline run, follow this loop:
 3. STAGE    -- for each stage in profile:
                a. Gate check (budget, escalations, retries)
                b. Load stage context (DDD docs + upstream artifacts)
-               c. Execute stage behavior
+               c. Execute stage behavior (read stage doc, then execute)
                d. Classify decisions (mechanical/taste/judgment)
                e. Verify output (artifact published + schema valid)
                f. Handle result (advance / retry / checkpoint)
@@ -173,648 +173,27 @@ python backend/scripts/artifact_cli.py discover --project <PROJECT> --types <com
 
 ### 3c. Execute Stage Behavior
 
-Run the stage's behavior inline. DO NOT invoke a separate skill with slash
-commands. Execute the behavior directly in this session.
-
-#### EVALUATE
-
-Follow the s_evaluate workflow:
-1. Parse the requirement (what/why/who/constraints)
-2. Score against DDD docs (strategic 1-5, feasibility 1-5, historical 1-5, priority 1-5)
-3. Calculate ROI = (strategic * 0.35) + (priority * 0.25) + (historical * 0.15) + (feasibility * 0.25)
-4. Classify scope: trivial / standard / complex / research-only / docs-only
-5. Recommend: GO (>= 3.2) / DEFER (2.0-3.1) / REJECT (< 2.0) / ESCALATE
-6. Define acceptance criteria (3-5 items)
-
-Publish artifact:
-```bash
-python backend/scripts/artifact_cli.py publish --project <PROJECT> \
-  --type evaluation --producer s_autonomous-pipeline \
-  --summary "<GO/DEFER/REJECT>: <one-line>" \
-  --data '{"requirement":"...","scores":{...},"recommendation":"GO","scope":"standard","acceptance_criteria":[...]}'
-python backend/scripts/artifact_cli.py advance --project <PROJECT> --state think
-```
-
-If DEFER or REJECT → pipeline ends. Log reason and exit.
-If ESCALATE → L2 BLOCK → checkpoint.
-
-#### THINK
-
-1. Research the requirement: search for existing solutions, patterns, prior art
-2. Summarize key findings (3-5 bullet points)
-3. Present 3 alternatives:
-   - **Approach 1: Minimal** (ships fastest) — effort, risk, tradeoff
-   - **Approach 2: Ideal** (best architecture) — effort, risk, tradeoff
-   - **Approach 3: Creative** (unexpected angle) — effort, risk, tradeoff
-4. Recommend one approach with reasoning
-5. If DDD available: align with PRODUCT.md priorities, avoid IMPROVEMENT.md failures
-
-Publish artifact:
-```bash
-python backend/scripts/artifact_cli.py publish --project <PROJECT> \
-  --type research --producer s_autonomous-pipeline \
-  --summary "3 alternatives for <topic>. Recommending: <approach>" \
-  --data '{"key_findings":[...],"alternatives":[...],"recommendation":"...","sources":[...]}'
-python backend/scripts/artifact_cli.py advance --project <PROJECT> --state plan
-```
-
-#### PLAN
-
-1. Take the recommended (or user-chosen) alternative
-2. Produce a design document:
-   - Architecture/approach description
-   - Data model or API contract (if applicable)
-   - Acceptance criteria (carry forward from evaluate + refine)
-   - Edge cases and error handling
-   - Estimated files to change
-3. If design requires uncommitted dependencies or API changes → taste/judgment decision
-
-Publish artifact:
-```bash
-python backend/scripts/artifact_cli.py publish --project <PROJECT> \
-  --type design_doc --producer s_autonomous-pipeline \
-  --summary "Design: <approach> for <requirement>" \
-  --data '{"approach":"...","acceptance_criteria":[...],"data_model":"...","api_contract":"...","files_to_change":[...]}'
-python backend/scripts/artifact_cli.py advance --project <PROJECT> --state build
-```
-
-#### BUILD (TDD Red-Green Cycle)
-
-The BUILD stage follows TDD methodology: tests before code, code until tests pass.
-
-**Step 1: RED — Generate tests from acceptance criteria**
-
-1. Read acceptance criteria from the evaluation artifact (or design_doc if PLAN ran)
-2. Read TECH.md for test framework (pytest, vitest) and conventions
-3. Generate test stubs — one test per acceptance criterion minimum:
-   ```
-   # For each criterion in acceptance_criteria:
-   #   -> Write a test that WILL FAIL (nothing implemented yet)
-   #   -> Name: test_<criterion_slug>
-   #   -> Assert the expected behavior from the criterion
-   ```
-4. Run the tests — **all must FAIL** (this proves the tests are meaningful)
-5. If any test passes before implementation → the test is trivial or wrong, rewrite it
-
-**Step 2: GREEN — Implement until all tests pass**
-
-6. Read TECH.md for code conventions, patterns, and style
-7. Implement changes guided by the design_doc artifact (if available)
-8. Run tests after each logical change — watch failures decrease
-9. **Completeness bias:** when the complete implementation costs minutes more
-   than the shortcut, do the complete thing. Cover edge cases, handle errors.
-10. Use atomic commits: one commit per logical change
-
-**Step 3: VERIFY — Targeted tests, zero regressions**
-
-⚠️ **VERIFY rules (BLOCKING):**
-- Run **changed test files + test files that import changed modules**. NOT the full suite.
-  ```
-  pytest tests/test_foo.py tests/test_bar.py --timeout=60
-  ```
-- If you're unsure which tests to run, use `pytest --lf --timeout=60` (last-failed).
-- **NEVER** run bare `pytest` without specifying files — conftest blocks >300 tests.
-- **NEVER** use `--run-all` — that's for humans running `make test-all`, not pipeline.
-- **NEVER** pipe pytest through `| tail` — it hides pass/fail and xdist status.
-- If all tests pass → proceed to Step 4. Done.
-- If tests fail → fix code, re-run **only failing tests**.
-- **Max 2 VERIFY re-runs total.** After 2 runs, if still failing:
-  publish changeset with `"regressions": N` and advance to REVIEW anyway.
-- Track VERIFY attempt count explicitly: "VERIFY attempt 1/2", "VERIFY attempt 2/2".
-
-11. Run changed + related test files — all must pass
-12. If existing tests break → fix production code, NOT the existing tests
-13. Track all files changed and test results
-
-**Step 4: SMOKE — exercise new code paths (catch runtime crashes)**
-
-14. For each modified file that has new branches (if/else, try/except,
-    config-gated paths), write a minimal inline smoke test that forces
-    execution through the new path. The goal is to catch AttributeError,
-    NameError, and other runtime crashes that unit tests miss because
-    they mock the surrounding context.
-
-    ```python
-    # Example: new config-gated code in prompt_builder.py
-    from core.prompt_builder import PromptBuilder
-    pb = PromptBuilder(config={"memory_progressive_disclosure": True})
-    # Call the method that contains the new branch — don't assert output,
-    # just verify it doesn't crash with AttributeError/TypeError.
-    ```
-
-    Rules:
-    - If the new code is behind a config flag → test with flag=True
-    - If behind a conditional (channel_context, resume, etc.) → construct
-      the triggering condition
-    - If new code is in a try/except → temporarily remove the except to
-      verify the try body doesn't crash (the except silently swallows
-      bugs like `self.config_manager` → `self._config`)
-    - **Multi-context callers:** If new code is called from both sync
-      AND async contexts (e.g., `record_token_usage()` called from
-      async `session_unit` AND sync `bedrock.invoke()`), smoke test
-      BOTH calling contexts. A function that works in async FastAPI
-      may silently fail from a sync background job. Don't assume one
-      passing smoke test covers all callers.
-    - Smoke tests are **inline verification only** — don't commit them.
-      They're a build-time gate, not regression tests.
-    - If a smoke test crashes → fix the bug before proceeding to REVIEW.
-
-    This step exists because of a real incident: `self.config_manager`
-    (wrong attribute name) passed 8 pipeline stages undetected because
-    it was inside try/except and no test exercised the actual runtime path.
-
-    **Resource lifecycle verification** (added after run_c2881d2f: 3
-    CRITICAL subprocess bugs survived 14 green unit tests + 4 smoke tests):
-
-    For each new resource acquisition in the changeset, verify BOTH the
-    success path AND the failure/timeout path release the resource:
-
-    | Resource Type | Success Check | Failure Check |
-    |---------------|--------------|---------------|
-    | subprocess (`create_subprocess_exec`) | exits with returncode | `proc.kill()` + `await proc.wait()` in finally. `wait_for` timeout → kill before re-raise. `FileNotFoundError` caught. |
-    | temp files | deleted after use | deleted in finally (`unlink(missing_ok=True)`) |
-    | MediaStream / hardware | tracks stopped | stopped in useEffect cleanup |
-    | network / sockets | closed / consumed | timeout set + cleanup on error |
-    | file handles | closed | context manager or finally |
-    | SDK handler/client (SocketModeHandler, WebClient, etc.) | `.close()` after use | `.close()` before reassignment AND in error path. Old instance closed before `self._handler = new_handler`. |
-    | upload form (multipart) | `await form.close()` | in finally block — releases SpooledTemporaryFile |
-
-    For each applicable row, write a smoke test that:
-    1. Triggers the failure path (mock timeout, FileNotFoundError, etc.)
-    2. Asserts the resource was released (mock.kill.assert_called, etc.)
-
-    Don't skip this for "simple" subprocess calls. Voice Input had 14
-    green tests yet 3 CRITICAL subprocess bugs because mocks replaced
-    the entire subprocess lifecycle. The mock proved "if transcription
-    returns X, endpoint returns X" — but not "subprocess is killed on
-    timeout." Test the resource, not the happy path around it.
-
-**Step 5: USER-PATH TRACE — walk real scenarios through real code**
-
-15. For each acceptance criterion, pick **one concrete user action** and
-    trace it through the actual production code path — not tests, not
-    mocks, the real call chain.
-
-    For each trace:
-    a. **Start from the user action** — "Titus sends a Slack DM", not
-       "\_poll\_channel\_messages is called"
-    b. **Follow every function call** — read the real source, not from
-       memory. Note the actual input each function receives.
-    c. **Check external data shapes** — when the code consumes data from
-       an external API (Slack, DB, filesystem), verify your test mocks
-       match the real response schema. `conversations.history` messages
-       lack `channel`; Socket Mode events have it. These differences
-       are invisible in unit tests that supply hand-crafted dicts.
-    d. **Check cross-component boundaries** — when one component calls
-       another (adapter → gateway, hook → registry), trace what happens
-       on the OTHER side. Error callbacks, state resets, object
-       destruction — these are where bugs hide.
-    e. **Check competing paths** — if two mechanisms handle the same
-       event (e.g., `_on_error` callback AND health monitor both react
-       to thread death), which fires first? Does the first one prevent
-       the second from ever running?
-
-    **Action on findings:**
-    - Each finding → **fix immediately** (these are always real bugs)
-    - Update tests to cover the discovered path
-
-    **Why this exists:** run\_ec4a73ff shipped with 26 TDD tests, 10/10
-    confidence, and 8 pipeline stages passed. User-path trace found 2
-    CRITICAL bugs in 5 minutes: (1) `_on_error` fired before health
-    monitor → gateway destroyed adapter → `_ws_fail_count` reset →
-    polling never activated, (2) `conversations.history` messages lack
-    `channel` field → `external_chat_id=""` → routing broken. Both
-    invisible to unit tests because mocks didn't match real API data
-    and no test crossed the adapter↔gateway boundary. This is LL04's
-    third recurrence: engineering-complete ≠ user-complete.
-
-**The TDD constraint:** Fix code, not tests. Tests are derived from the accepted
-design. Changing a test = changing the spec = go back to PLAN.
-
-**Mock discipline:** When mocking objects in tests, use `spec=RealClass` or only
-set attributes that exist on the real class. Bare `MagicMock()` silently accepts
-ANY attribute access — this hides `AttributeError` bugs that crash in production.
-For integration-facing tests (anything that touches cross-module boundaries),
-prefer real objects over mocks. If you must mock, mock the leaf dependency
-(DB, network), not the intermediate object.
-
-**Adversarial inputs in RED phase:** For NLP/parsing code, the RED phase must
-include adversarial inputs: URLs, file paths, code snippets, empty/minimal
-strings, Unicode edge cases (CJK, Kana, Hangul, emoji), and multi-language mix.
-These are the inputs that break keyword extractors, parsers, and formatters.
-
-**Step 6: PROBE — send a real request through the wire (catch format bugs)**
-
-16. **Only when the changeset adds a new API endpoint consumed by frontend.**
-    Skip for backend-only or frontend-only changes.
-
-    Write ONE integration test per new endpoint that constructs the request
-    **the same way the real client would** — not using TestClient shortcuts
-    that bypass serialization.
-
-    ```python
-    # BAD — TestClient auto-serializes, hides Content-Type bugs:
-    client.post("/api/chat/transcribe", files={"audio": ...})
-
-    # GOOD — Construct request the way Axios/fetch would:
-    import httpx
-    async with httpx.AsyncClient(app=app, base_url="http://test") as client:
-        # FormData without explicit Content-Type (browser auto-adds boundary)
-        files = {"audio": ("test.wav", wav_bytes, "audio/wav")}
-        resp = await client.post("/api/chat/transcribe", files=files)
-        assert resp.status_code == 200
-        data = resp.json()
-        # Verify response shape matches frontend expectations
-        assert "transcript" in data
-        assert "duration_ms" in data  # backend snake_case
-    ```
-
-    Rules:
-    - Use `httpx.AsyncClient(app=app)` — it exercises the real ASGI stack
-      including Starlette's multipart parser, unlike TestClient which
-      uses `requests` (different HTTP library, different serialization).
-    - Do NOT set `Content-Type` manually — let the HTTP library handle it.
-      This is the exact bug pattern (RP5) we're testing against.
-    - Verify the response JSON keys match what the frontend expects (after
-      any snake→camel conversion).
-    - If the endpoint requires auth or external services, mock only the
-      leaf (e.g., Amazon Transcribe API), NOT the HTTP layer.
-
-    **Why this exists:** Voice Input's Content-Type bug (explicit header
-    broke Axios boundary string) would have been caught by ANY real HTTP
-    request. 14 unit tests + 4 smoke tests + integration trace missed it
-    because none actually sent a multipart request through the ASGI stack.
-    The most fatal bug was the cheapest to catch.
-
-Publish artifact:
-```bash
-python backend/scripts/artifact_cli.py publish --project <PROJECT> \
-  --type changeset --producer s_autonomous-pipeline \
-  --summary "<N> files changed, <M> commits, TDD: <red>/<green>/<verify>" \
-  --data '{"branch":"...","commits":[...],"files_changed":[...],"diff_summary":"...","tdd":{"acceptance_criteria_count":N,"tests_generated":M,"red_failures":K,"green_pass":true,"regressions":0,"smoke_tests":S,"smoke_crashes_caught":C,"user_path_traces":T,"user_path_bugs_found":B,"probes":P,"probe_bugs_found":Q}}'
-python backend/scripts/artifact_cli.py advance --project <PROJECT> --state review
-```
-
-#### REVIEW
-
-1. Code review the changeset against TECH.md conventions
-2. Run confidence-gated security scan:
-   - Each finding needs confidence (1-10) + exploit scenario
-   - >= 8 + Critical/High: auto-fix (mechanical decision)
-   - 5-7: warning only (taste decision)
-   - < 5: suppress
-   - Apply 10 false-positive exclusions
-3. Check IMPROVEMENT.md for known issue patterns
-4. **Integration Trace** — verify every new public symbol is actually wired:
-
-   For every new function, parameter, config key, or `.get("key")` call in the
-   changeset, grep the codebase for production callers (exclude test files):
-
-   | New symbol type | Verification | Example |
-   |-----------------|-------------|---------|
-   | New public function | >= 1 non-test caller exists | `generate_memory_index()` called by `inject_index_into_memory()` ✅ |
-   | New parameter on existing function | >= 1 call site passes it | `memory_progressive=True` passed by `prompt_builder.py` ✅ |
-   | New config key in DEFAULT_CONFIG | Trace: `DEFAULT_CONFIG` → `config_manager.get()` → consumer | `memory_progressive_disclosure` read by prompt_builder ✅ |
-   | `agent_config.get("key")` or `config.get("key")` | Verify key has a setter | `_first_user_message` — no setter ❌ |
-   | New CLI flag / argument | >= 1 caller passes it | `--regenerate-index` — 0 callers ❌ |
-   | **Calling convention mismatch** | async callee called from sync caller → explicit bridge exists (`asyncio.run()`, `get_running_loop().create_task()` with loop guard) | sync `bedrock.invoke()` calls `async record_token_usage()` via bare `create_task` — no running loop in job context → task silently lost ❌ (run_6823b0d4 E2E review) |
-
-   **Action on findings:**
-   - 0 production callers → **WARN** (not BLOCK). Agent must either:
-     - Wire it now (add the caller), or
-     - Document as intentional: "deferred — caller planned for Phase X"
-   - Undocumented dead symbols are not acceptable — every WARN needs a resolution.
-
-   **Why WARN not BLOCK:** Some interfaces are designed ahead of their callers
-   (e.g., Phase 4 archival functions). Blocking would force premature wiring.
-   But the agent must make an explicit decision, not silently ship dead code.
-
-   Include integration trace results in the review artifact under `"integration_trace"`.
-
-5. **Replace/Move Parity Check** — when code is **moved or replaced** (not just added):
-
-   | Check | What to verify | Example |
-   |-------|---------------|---------|
-   | Feature parity | Every capability of old code exists in new code | Old `_recall_knowledge` had TranscriptStore; new `_recall_for_query` must too |
-   | Dead orphan detection | After removing a call site, grep old function — if 0 callers remain, flag as dead code | `_recall_knowledge` still defined after its only caller was removed |
-   | Argument validity | Mock attributes must exist on the real class | `unit.working_directory` doesn't exist on SessionUnit |
-
-   This check exists because PE review of the RecallEngine activation found 2 HIGH
-   bugs: (1) replaced function dropped a capability (TranscriptStore), (2) test mock
-   hid a missing attribute. Both would have been caught by feature parity diff.
-
-6. **UX Review** — **only when changeset includes frontend files** (`.tsx`, `.jsx`, `.css`,
-   `.html`, `.svelte`, `.vue`). Skip entirely for backend-only changesets.
-
-   Walk through every new/changed user-facing interaction and check:
-
-   | # | Check | What to verify | Example failure |
-   |---|-------|---------------|-----------------|
-   | UX1 | **Discoverability** | How does the user discover this feature? Is there a hint, tooltip, or visual affordance? | Diff lines became clickable but no visual cue existed |
-   | UX2 | **Feedback** | New interactive elements have hover, active, and disabled states? | Clickable rows missing hover highlight |
-   | UX3 | **Behavioral contracts** | Reused components — are reactive props actually reactive? (values that must update on scroll/resize/state change) | CommentPopover `topOffset` passed as DOM snapshot instead of React state |
-   | UX4 | **Escape / click-outside** | Escape and click-outside behave correctly in all contexts: modal, panel, portal? Does Escape propagate unexpectedly? | Escape in portal CommentPopover also closed the parent editor |
-   | UX5 | **Scroll tracking** | Positioned elements (popover, tooltip, dropdown) — do they follow when the container scrolls? | Popover stays in place while diff content scrolls away |
-
-   **Action on findings:**
-   - Each finding → **auto-fix** (these are always bugs, not taste decisions)
-   - Include UX review results in the review artifact under `"ux_review"`
-
-   **Why this exists:** Pipeline run_6455a707 shipped with 10/10 confidence and 44/44
-   tests, but E2E user walkthrough found 3 bugs in 5 minutes (scroll tracking, no
-   discoverability hint, Escape propagation). Engineering-complete ≠ user-complete.
-
-7. **Runtime Pattern Checklist** — scan the changeset for known bug patterns.
-
-   These are recurring production bugs that code review and unit tests
-   consistently miss. For each pattern that applies to the changeset,
-   explicitly verify the fix is in place. Do NOT skip patterns — a "no"
-   answer is fine, but silence means unchecked.
-
-   | # | Pattern | Trigger (when to check) | What to verify | Example bug |
-   |---|---------|------------------------|----------------|-------------|
-   | RP1 | **subprocess timeout orphan** | `create_subprocess_exec` or `subprocess.Popen` | `asyncio.wait_for` timeout path has `proc.kill()` + `await proc.wait()` BEFORE re-raise | ffmpeg runs forever after 30s timeout (run_c2881d2f) |
-   | RP2 | **subprocess missing binary** | `create_subprocess_exec("some_binary", ...)` | `FileNotFoundError` caught → user-friendly error message | ffmpeg not installed → raw 500 instead of "install ffmpeg" (run_c2881d2f) |
-   | RP3 | **React hook cleanup** | new `use*` hook with refs or subscriptions | `useEffect` return releases all resources (streams, timers, listeners) | Mic never released on tab close (run_c2881d2f) |
-   | RP4 | **stale closure** | callback passed to hook/async uses component state | use `useRef` to hold latest value, read `.current` in callback | transcribed text overwrites user's typing (run_c2881d2f) |
-   | RP5 | **FormData Content-Type** | `new FormData()` sent via axios/fetch | NO explicit `Content-Type` header — browser must add boundary | Multipart broken, backend gets 400 (run_c2881d2f) |
-   | RP6 | **setTimeout leak** | `setTimeout` in component/hook | timer ID stored in ref, cleared in cleanup effect | setState on unmounted component (run_c2881d2f) |
-   | RP7 | **error msg ↔ constant mismatch** | error messages containing numeric values | message matches the actual threshold/constant in code | "need 0.5s" but constant is 1.0s (run_c2881d2f) |
-   | RP8 | **hardcoded env assumption** | region, URL, port, path as string literal | configurable via env var or parameter with sensible default | us-east-1 hardcoded, user in us-west-2 (run_c2881d2f) |
-   | RP9 | **API boundary naming** | new endpoint returns JSON consumed by frontend | backend snake_case fields have camelCase frontend interface + conversion function | `duration_ms` passed raw to TS instead of `durationMs` (Kiro review) |
-   | RP10 | **barrel export** | new hook, component, or service file created | exported from the directory's `index.ts` | `useVoiceRecorder` missing from `hooks/index.ts` (Kiro review) |
-   | RP11 | **SDK handler reassignment** | `self._handler = new_handler` or similar | old handler `.close()` called BEFORE reassignment; reset to `None` before restart after crash | Old SocketModeHandler leaked on reconnect (Kiro review) |
-   | RP12 | **unstable callback refs** | inline arrow functions passed as props to hooks | wrap in `useCallback` with correct deps; use ref for values that change every render | `onTranscript`/`onError` recreated every render (Kiro review) |
-   | RP13 | **state machine completeness** | type/enum declares states + design doc shows transitions | every declared state has ≥1 code path that enters it AND exits it; every transition has a trigger | Voice `interrupted` state declared but no code ever sets it; VAD never calls `stopRecording()` → `listening→processing` transition unreachable (2026-04-25 E2E review) |
-   | RP14 | **cross-service parameter mismatch** | function A calls service B with parameters mapped from A's inputs | parameter names/semantics match B's API contract; override values don't conflict with defaults | `voice_id="Zhiyu"` + `language="en-US"` → Polly rejects because Zhiyu requires `zh-CN` (2026-04-25 E2E review) |
-   | RP15 | **setTimeout for state propagation** | `setTimeout(() => fn(), 0)` to sequence React state + side effects | verify the ref/state the deferred fn reads is set BEFORE the timeout, not by a concurrent React render | Voice send `setTimeout(0)` reads `inputValueRef` which could be overwritten by React re-render before timeout fires (2026-04-25 E2E review) |
-   | RP16 | **concurrent async without ordering** | N async calls fired in a loop with `.then()` enqueue | responses may resolve out of order; use sequential `await` or `Promise.all` + indexed insert | 3 concurrent Polly calls → sentence 2 (short) resolves before sentence 1 (long) → audio plays out of order (2026-04-25 E2E review) |
-   | RP17 | **unsanitized string in structured format** | user/dynamic text embedded in HTML, JSON template, SQL, or shell | escape for target format: `html.escape()`, `json.dumps()[1:-1]`, parameterized query, `shlex.quote()` | `<pre>{message}</pre>` with raw message → XSS in email; `payload_template.replace("{title}", title)` → JSON parse failure on quotes (2026-04-25 E2E review) |
-   | RP18 | **timezone-sensitive date boundary** | SQL uses `date('now')`, `datetime('now')`, or `strftime(...,'now')` for filtering (e.g. "today's records") | write and query use the same timezone; desktop apps should use local time (`datetime.now()`), not SQLite UTC `date('now')`. Tests always pass because test runner and DB share a timezone — the bug only appears when user is in a different TZ from UTC. | `WHERE date(timestamp) = date('now')` but timestamps written in UTC → "today" boundary is 8h off for UTC+8 user, tokens after midnight local show as yesterday (run_6823b0d4 E2E review) |
-   | RP19 | **deprecated stdlib API** | `asyncio.get_event_loop()`, `datetime.utcnow()`, `logging.warn()`, `imp.reload()` | use Python 3.12+ recommended replacements: `get_running_loop()` / `get_event_loop_policy().get_event_loop()`, `datetime.now(UTC)`, `logging.warning()`. Deprecated APIs emit warnings and may raise `RuntimeError` in future Python versions. | `asyncio.get_event_loop().create_task()` in async generator → DeprecationWarning in 3.12, potential RuntimeError in 3.13+ (run_6823b0d4 E2E review) |
-
-   **Output format:** For each applicable pattern, one line:
-   ```
-   RP1: ✅ proc.kill() in timeout handler + finally (voice_transcribe.py:92,112)
-   RP3: ✅ useEffect cleanup releases stream + recorder (useVoiceRecorder.ts:58-68)
-   RP5: N/A — no FormData in this changeset
-   ```
-
-   Include checklist results in the review artifact under `"runtime_patterns"`.
-
-   **Why this exists:** Voice Input (run_c2881d2f) passed 8 pipeline stages
-   with 10/10 confidence and 14 green tests. E2E review found 12 issues.
-   8 of 12 were instances of these 8 patterns. The patterns are NOT novel
-   — they're the same bugs every project hits. A 30-second checklist
-   catches what unit tests structurally cannot.
-
-8. **Cross-Boundary Wire Test** — **only when changeset includes BOTH
-   frontend API calls AND backend endpoints** (e.g., new `.ts` service
-   function + new `@router.post`). Skip for single-layer changes.
-
-   For each frontend→backend boundary in the changeset, explicitly answer:
-
-   | # | Question | How to verify | Example failure |
-   |---|----------|--------------|-----------------|
-   | WR1 | **Content-Type match?** | Frontend sends X → backend parser expects X | Axios sends `application/json` default, backend expects `multipart/form-data` |
-   | WR2 | **Field names match?** | Frontend `form.append('audio', ...)` → backend `form.get("audio")` | Frontend sends `audioFile`, backend reads `audio` → None |
-   | WR3 | **Response shape match?** | Backend returns `{"transcript": ...}` → frontend types `TranscribeResult` has `transcript` | Backend returns `text`, frontend reads `transcript` → undefined |
-   | WR4 | **Error shape match?** | Backend raises `HTTPException(400, detail=...)` → frontend error handler expects `response.data.detail` | Backend returns `{"message": ...}`, frontend reads `detail` |
-
-   **Output format:**
-   ```
-   Wire: POST /api/chat/transcribe
-     WR1: ✅ FormData (auto Content-Type) → request.form() (multipart parser)
-     WR2: ✅ "audio" field name matches both sides
-     WR3: ✅ {transcript, language, duration_ms} matches TranscribeResult
-     WR4: ✅ HTTPException detail → axios error.response.data.detail
-   ```
-
-   This is code-level trace only — no live requests needed. Read the
-   frontend service function and the backend endpoint side by side.
-
-   Include wire test results in the review artifact under `"wire_test"`.
-
-   **Why this exists:** Voice Input (run_c2881d2f) had an explicit
-   `Content-Type: multipart/form-data` header that broke the Axios
-   boundary string — voice input would have been completely non-functional.
-   Integration trace verified "symbols are connected" but not "the data
-   format crossing the wire is correct." This check fills that gap.
-
-9. **Anti-Rationalization Gate** — before concluding REVIEW, reject these shortcuts:
-
-   | Agent Shortcut | Required Response |
-   |---|---|
-   | "Changeset is small, skip integration trace" | Small changes with unwired symbols are the #1 silent failure. Trace every new symbol. |
-   | "Security scan isn't needed for internal code" | Internal code with injection paths gets exploited via MCP tools and API calls. Scan it. |
-   | "Runtime pattern checklist doesn't apply here" | Check every pattern. Write N/A explicitly. Silence = unchecked. |
-   | "Wire test is overkill — the types match" | Types matching ≠ serialization matching. Content-Type bugs are invisible to type checkers. |
-   | "UX review isn't needed — the UI change is trivial" | Trivial UI changes cause scroll breaks and accessibility regressions. If UI files changed, check UX. |
-   | "Review is clean, marking confidence 10/10" | Confidence without evidence is fiction. Score against the checklist, not gut feel. |
-
-   **REVIEW Exit Evidence** — confirm each before publishing:
-   - [ ] Integration trace output present (`N symbols checked, M connected, K warnings`)
-   - [ ] Runtime pattern checklist complete (every applicable RP has ✅ or N/A)
-   - [ ] Security scan ran with confidence scores (or "no security-relevant changes" stated)
-   - [ ] Wire test results shown (or "single-layer change, N/A" stated)
-   - [ ] UX review completed (or "no frontend files, N/A" stated)
-
-Publish artifact:
-```bash
-python backend/scripts/artifact_cli.py publish --project <PROJECT> \
-  --type review --producer s_autonomous-pipeline \
-  --summary "Review: <N findings>, <M auto-fixed>, <K integration warnings>, <J ux findings>, <P runtime patterns>, <W wire tests>" \
-  --data '{"findings":[...],"approved":true/false,"security_findings":[],"integration_trace":{"checked":N,"connected":M,"warnings":[...]},"ux_review":{"triggered":true/false,"checks":5,"findings":[...]},"runtime_patterns":{"checked":N,"passed":M,"findings":[...]},"wire_test":{"boundaries":N,"verified":M,"findings":[...]}}'
-python backend/scripts/artifact_cli.py advance --project <PROJECT> --state test
-```
-
-#### TEST
-
-**Anti-Rationalization Gate** — reject these shortcuts before starting:
-
-| Agent Shortcut | Required Response |
-|---|---|
-| "Tests pass, no need for scoped re-run" | Run changed + related test files. Pass in isolation ≠ pass together. |
-| "This fix is simple, skip the WTF score" | Score every fix. Simple fixes that touch 4 files are not simple. |
-| "I'll adjust the test expectation to match the new behavior" | Fix the CODE. Changing tests = changing the spec = go back to PLAN. |
-| "Pre-existing failure, not our problem" | Log it in IMPROVEMENT.md. Never silently pass over a red test. |
-| "19 fixes done, just one more to clean up" | 20 is the hard cap. Checkpoint. Report. Quality > completion. |
-
-**TEST Exit Evidence** — confirm each before publishing:
-- [ ] Test output pasted (actual framework output, not summary)
-- [ ] WTF score calculated and shown (even if 0)
-- [ ] Each fix has atomic commit listed
-- [ ] Remaining unfixed issues documented with diagnosis
-- [ ] No test modifications (only code fixes)
-
-1. Detect test framework (or read from TECH.md)
-2. Run tests scoped to changed files
-3. For each failure: attempt fix + atomic commit
-4. **WTF gate:**
-   ```
-   wtf_score = 0
-   +2 if fix touches > 3 files
-   +3 if fix modifies unrelated module
-   +2 if fix changes API contract
-   +1 if fix_count > 10
-   +3 if previous fix broke something
-   → halt if wtf_score >= 5 (judgment decision → L2 BLOCK)
-   ```
-5. Max 20 fixes per session
-6. Run changed + related test files after all fixes (NOT full suite)
-
-Publish artifact:
-```bash
-python backend/scripts/artifact_cli.py publish --project <PROJECT> \
-  --type test_report --producer s_autonomous-pipeline \
-  --summary "Tests: <passed>/<total> pass, <fixed> bugs fixed" \
-  --data '{"passed":N,"failed":M,"fixed":K,"skipped":J,"bugs":[...],"coverage":"..."}'
-python backend/scripts/artifact_cli.py advance --project <PROJECT> --state deliver
-```
-
-#### DELIVER
-
-**Run the Delivery Gate first** (see Step 4 below), then:
-
-1. **Confidence scoring** — assess how confident you are the delivery matches the requirement:
-   ```
-   confidence_score (1-10):
-     +3 if all acceptance criteria have passing tests
-     +2 if review found 0 critical issues
-     +2 if TDD red-green cycle completed cleanly
-     +1 if no taste decisions were overridden
-     +1 if zero regressions on existing tests
-     +1 if design_doc was available (not just evaluation)
-     -2 if any acceptance criterion lacks a test
-     -2 if WTF gate triggered (even if resolved)
-     -2 if smoke_tests == 0 and files_changed > 1 (runtime crashes likely hidden)
-     -2 if user_path_traces == 0 and files_changed > 1 (real data flow unverified)
-     -1 if integration_trace.checked == 0 (wiring unverified)
-     -1 if frontend files changed but ux_review.triggered == false (UX unverified)
-     -1 if runtime_patterns.checked == 0 and applicable patterns exist (known bugs unchecked)
-     -2 if frontend+backend changed but wire_test.boundaries == 0 (cross-layer contract unverified)
-     -2 if new endpoint + frontend consumer but probes == 0 (real HTTP path untested)
-     -1 per unresolved warning from validator
-   ```
-   If confidence < 7 → flag for human review even without judgment decisions.
-
-2. **Generate pipeline report** as markdown in the project's artifacts directory.
-   Save to: `Projects/<PROJECT>/.artifacts/runs/<RUN_ID>/REPORT.md`
-
-   The report follows this template (every run produces one):
-
-   ```markdown
-   # Autonomous Pipeline Report: <title>
-
-   **Run ID:** run_<id> | **Project:** <PROJECT> | **Profile:** <profile>
-   **Date:** <ISO date> | **Confidence:** <score>/10
-
-   ## 1. Requirement
-   <original requirement text>
-
-   ## 2. Evaluation
-   | Dimension | Score | Rationale |
-   |---|---|---|
-   | Strategic | X/5 | ... |
-   | Feasibility | X/5 | ... |
-   | ROI | X.X | GO/DEFER/REJECT |
-
-   **Scope:** <classification> | **Acceptance Criteria:** <list>
-
-   ## 3. Methodology: DDD + SDD + TDD
-   - **DDD docs loaded:** <which docs, what was learned>
-   - **Approach:** <chosen approach from THINK/PLAN or direct>
-   - **TDD cycle:** RED (<N> tests generated, all failed) → GREEN (code until pass) → VERIFY (full suite)
-
-   ## 4. Pipeline Execution
-   | Stage | Status | Artifact | Key Output |
-   |---|---|---|---|
-   | EVALUATE | done | art_xxx | GO, ROI X.X |
-   | THINK | done/skip | art_xxx | ... |
-   | ... | ... | ... | ... |
-
-   ## 5. TDD Results
-   | Metric | Value |
-   |---|---|
-   | Acceptance criteria | N |
-   | Tests generated | M |
-   | Tests per criterion | X.X |
-   | Bugs caught (RED phase) | K |
-   | Smoke tests (new paths) | S |
-   | Runtime crashes caught by smoke | C |
-   | User-path traces | T |
-   | Bugs found by user-path trace | B |
-   | Regressions | 0 |
-   | Total test suite | N tests, all passing |
-
-   ## 6. Decision Log
-   | Stage | Decision | Classification | Reasoning |
-   |---|---|---|---|
-   | BUILD | ... | mechanical | ... |
-
-   ## 7. Quality Gates
-   | Gate | Result |
-   |---|---|
-   | REVIEW (code quality) | N findings, M auto-fixed |
-   | REVIEW (security) | clean / N findings |
-   | REVIEW (integration) | N symbols checked, M connected, K warnings |
-   | BUILD (user-path) | T traces, B bugs found and fixed |
-   | TEST (TDD) | pass |
-   | VALIDATOR | 6/6 checks |
-   | Confidence | X/10 |
-
-   ## 8. Files Changed
-   - `path/to/file.py` (created, N lines)
-   - `path/to/other.py` (modified)
-
-   ## 9. Lessons (from REFLECT)
-   - Lesson 1
-   - Lesson 2
-
-   ## 10. Known Gaps & Attention Flags
-   <any warnings, low-confidence items, or deferred issues>
-
-   ---
-   Generated by SwarmAI Autonomous Pipeline | <date>
-   ```
-
-3. Generate PR description (if changeset exists)
-4. Update PROJECT.md with delivery entry
-5. Check for unresolved issues from upstream stages
-
-Publish artifact:
-```bash
-python backend/scripts/artifact_cli.py publish --project <PROJECT> \
-  --type delivery --producer s_autonomous-pipeline \
-  --summary "Delivery: <feature title> (confidence: <N>/10)" \
-  --data '{"title":"...","summary":"...","decisions":[...],"quality":{...},"attention_flags":[],"confidence_score":N,"confidence_breakdown":{...},"report_path":"runs/<RUN_ID>/REPORT.md"}'
-python backend/scripts/artifact_cli.py advance --project <PROJECT> --state reflect
-```
-
-#### REFLECT
-
-1. Extract lessons from this pipeline run
-2. Write to IMPROVEMENT.md: what worked, what failed, patterns discovered
-3. Update MEMORY.md if the lesson is cross-project
-4. **Checklist maintenance** — if any post-pipeline review (E2E, external,
-   or user feedback) found bugs that the pipeline missed:
-   a. Classify each missed bug: does it fit an existing RP pattern?
-   b. If yes → the checklist was applied but missed (investigate why)
-   c. If no → **add a new RP pattern** to the Runtime Pattern Checklist
-      in this INSTRUCTIONS.md (REVIEW check #7). Include: trigger
-      condition, what to verify, and the real bug as the example.
-   d. If the bug is a resource type missing from the lifecycle table →
-      **add the row** to the Resource Lifecycle table (BUILD Step 4).
-   This ensures the pipeline learns from every review cycle. Without
-   this step, lessons live in IMPROVEMENT.md but never reach the
-   checklist that would prevent recurrence.
-5. Record outcome for learning:
-```bash
-python backend/scripts/artifact_cli.py learn --project <PROJECT> \
-  --evaluation-id <eval_artifact_id> --outcome success \
-  --actual-effort "<T-shirt>" \
-  --lessons "lesson 1;lesson 2"
-```
+**BLOCKING: Before executing ANY stage, you MUST Read ALL files listed
+in the "Read" column below.** Skipping a file = skipping the stage's
+quality gate = pipeline invariant violation. This is not optional.
+
+All stage docs are in `backend/skills/s_autonomous-pipeline/stages/`.
+Read from `backend/skills/` (source of truth), NOT `.claude/skills/`
+(projected copy — may be stale within the same session).
+
+| Stage | Read (BLOCKING) | Scripts to Run |
+|-------|----------------|----------------|
+| evaluate | `stages/evaluate.md` | — |
+| think | `stages/think.md` | — |
+| plan | `stages/plan.md` | — |
+| build | `stages/build.md` | — |
+| review | `stages/review.md` AND `REVIEW_PATTERNS.md` | — |
+| test | `stages/test.md` | `scripts/wtf_gate.py` |
+| deliver | `stages/deliver.md` | `scripts/confidence_score.py` |
+| reflect | `stages/reflect.md` | — |
+
+After reading, execute the stage behavior inline in this session.
+DO NOT invoke sibling skills via slash commands — you ARE the pipeline.
 
 ### 3d. Classify Decisions
 
@@ -1078,7 +457,7 @@ Reason: <why>
 
 ## Progress Display
 
-Show progress after each stage completes. Use this format:
+Show progress after each stage completes:
 
 ```
 Pipeline: <requirement> (run_<id>)
@@ -1094,13 +473,7 @@ Project: <PROJECT> | Profile: <profile>
   [    ] REFLECT
 ```
 
-Stage status indicators:
-- `[done]` = completed successfully
-- `[>>>>]` = currently executing
-- `[skip]` = skipped (not in profile)
-- `[FAIL]` = failed, will retry or checkpoint
-- `[STOP]` = checkpointed (pipeline paused)
-- `[    ]` = pending
+Status: `[done]` `[>>>>]` `[skip]` `[FAIL]` `[STOP]` `[    ]`
 
 ---
 
@@ -1108,31 +481,26 @@ Stage status indicators:
 
 1. **Execute inline, never invoke skills.** You ARE the pipeline. Run each
    stage's behavior directly. Do not use `/evaluate` or `/qa` as slash commands.
-2. **TDD is mandatory in BUILD.** Generate tests from acceptance criteria FIRST.
-   Run them RED (all fail). Write code until GREEN (all pass). Verify FULL suite
-   (zero regressions). Fix code, not tests. Changing tests = changing the spec.
-3. **Classify every decision.** No unclassified decisions. If unsure, default
+2. **Read stage docs before executing.** The dispatch table in §3c is BLOCKING.
+3. **TDD is mandatory in BUILD.** RED → GREEN → VERIFY → SMOKE → TRACE → PROBE.
+   Fix code, not tests. Changing tests = changing the spec.
+4. **Classify every decision.** No unclassified decisions. If unsure, default
    to "taste" (surface at delivery gate rather than block or ignore).
-4. **Verify before advancing.** Run pipeline_validator.py after every stage.
-   Never skip verification. Garbage in one stage becomes garbage in all downstream.
-5. **Completeness bias.** When the complete implementation costs minutes more
-   than the shortcut, do the complete thing. (gstack "Boil the Lake" principle.)
-6. **Atomic commits.** One commit per logical change in BUILD and TEST stages.
-   This enables rollback if a fix breaks something.
-7. **Never loop forever.** Respect max_retries. Checkpoint on exhaustion.
-   Three attempts at the same stage is enough.
-8. **Taste decisions batch at delivery.** Don't interrupt the user mid-pipeline
-   for taste decisions. Accumulate them, present once at the delivery gate.
-9. **Judgment decisions block immediately.** Don't continue past a judgment
-   decision. The whole point is that the agent genuinely doesn't know.
-10. **Pipeline state is the artifact registry.** Use artifact_cli for ALL state
-    operations. No separate state store.
-11. **DEFER/REJECT at evaluate ends the pipeline.** Don't continue stages after
-    the evaluate stage says stop.
-12. **Always generate REPORT.md.** Every pipeline run produces a markdown report
-    at `.artifacts/runs/<RUN_ID>/REPORT.md`. This is the permanent record.
-13. **Confidence score at delivery.** Score 1-10 based on TDD coverage, review
-    results, and validator output. Below 7 → flag for human review.
+5. **Verify before advancing.** Run pipeline_validator.py after every stage.
+6. **Completeness bias.** When the complete implementation costs minutes more
+   than the shortcut, do the complete thing.
+7. **Atomic commits.** One commit per logical change in BUILD and TEST stages.
+8. **Never loop forever.** Respect max_retries. Checkpoint on exhaustion.
+9. **Taste decisions batch at delivery.** Don't interrupt mid-pipeline.
+10. **Judgment decisions block immediately.** CHECKPOINT at once.
+11. **DEFER/REJECT at evaluate ends the pipeline.**
+12. **Always generate REPORT.md.** at `.artifacts/runs/<RUN_ID>/REPORT.md`.
+13. **Confidence score at delivery.** Use `scripts/confidence_score.py`.
+    Below 7 → flag for human review.
+14. **Source-path reads.** Always read from `backend/skills/` (source of truth),
+    not `.claude/skills/` (projected copy).
+
+---
 
 ## Artifact Operations Reference
 
@@ -1217,9 +585,6 @@ python -m jobs.job_manager pipeline \
   --project ClientApp --requirement "Add payment retry logic" \
   --profile full --budget 3.00 --one-shot
 ```
-
-The job system spawns a headless Claude CLI session that runs the pipeline
-orchestrator. Checkpoints create Radar todos visible in the sidebar.
 
 ### Monitoring
 
