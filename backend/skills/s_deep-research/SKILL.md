@@ -23,11 +23,65 @@ Save research documents to:
 
 Once finalized, move to `Knowledge/Library/` for long-term reference.
 
-## Workflow: 4-Phase Research
+## Workflow: 5-Phase Research
+
+### Phase 0: Intent Classification & Strategy Planning
+
+**Goal:** Before any search, classify the research intent and plan the optimal strategy. Output a structured plan that drives all subsequent phases.
+
+**Step 1: Classify the research intent.** Pick the PRIMARY intent:
+
+| Intent | Signal Words | Example |
+|--------|-------------|---------|
+| `factual` | "what is", "how does", "explain" | "How does Raft consensus work?" |
+| `competitive` | "vs", "compare", "alternative", "竞品" | "SwarmAI vs OpenClaw" |
+| `landscape` | "overview", "landscape", "what's out there", "调研" | "AI agent frameworks 2026" |
+| `how_to` | "how to", "implement", "build", "tutorial" | "How to implement RAG with Bedrock" |
+| `breaking_news` | "latest", "just happened", "今天", "刚刚" | "What did Anthropic announce today?" |
+| `trend` | "trend", "direction", "future", "趋势" | "Where is agent memory heading?" |
+| `person_org` | person name, company name, "@handle" | "Research Peter Steinberger" |
+| `deep_technical` | "architecture", "internals", "source code" | "Claude Code SDK internal architecture" |
+
+**Step 2: Determine search parameters.** Based on intent, set these BEFORE Phase 1:
+
+| Parameter | `factual` | `competitive` | `landscape` | `how_to` | `breaking_news` | `trend` | `person_org` | `deep_technical` |
+|-----------|-----------|---------------|-------------|----------|-----------------|---------|--------------|-------------------|
+| **search_depth** | basic | advanced | advanced | basic | basic | advanced | advanced | advanced |
+| **time_range** | none | month | none | year | day/week | year | month | none |
+| **topic** | general | general | general | general | news | news | general | general |
+| **source_priority** | docs→papers→blogs | product pages→HN→blogs | industry reports→news→blogs | GitHub→SO→tutorials | news→social→blogs | reports→expert blogs→news | social→GitHub→blogs→news | source code→docs→talks |
+| **min_sources** | 3 | 5 (both sides) | 5 | 3 | 3 | 5 | 4 | 3 |
+| **search_rounds** | 2-3 | 3-5 | 3-5 | 2-3 | 2-3 | 3-5 | 3-4 | 2-4 |
+
+**Step 3: Output the plan.** Write this to chat before proceeding — it's your contract:
+
+```
+RESEARCH PLAN
+━━━━━━━━━━━━
+Intent:        <intent>
+Query:         <original query>
+Time range:    <time constraint>
+Source focus:   <top 3 source types>
+Search rounds: <N>
+Key angles:    <2-4 specific angles to investigate>
+Skip:          <what NOT to search — reduces noise>
+```
+
+This plan is reviewable — the user can correct it before you spend time searching. Proceed to Phase 1 only after outputting the plan.
+
+**Fast-path rule:** If intent is `factual` or `how_to` AND the query is specific enough to search directly (not ambiguous, not multi-faceted), compress Phase 0 to a single inline line and proceed immediately:
+
+```
+Intent: factual | Depth: basic | Sources: docs→papers→blogs | Rounds: 2-3
+```
+
+Don't build a full plan block for "How does Raft consensus work?" — just classify and go. Save the full plan for `landscape`, `competitive`, `trend`, `person_org`, and `deep_technical` where strategy actually matters.
+
+---
 
 ### Phase 1: Broad Exploration
 
-**Goal:** Map the topic landscape and identify key dimensions before going deep.
+**Goal:** Map the topic landscape and identify key dimensions before going deep. **Use the search parameters from Phase 0** — don't override them.
 
 1. Identify 3-5 major dimensions/subtopics of the research question
 2. Run 3-5 broad searches to understand the landscape:
@@ -147,6 +201,21 @@ Only after Phase 4 is complete:
 - Flag uncertainty explicitly ("Source X claims... but this is unverified")
 
 ---
+
+## Intent-Specific Search Strategies
+
+Use these as Phase 1 templates based on the Phase 0 intent:
+
+| Intent | Phase 1 Searches | Phase 2 Focus |
+|--------|-----------------|---------------|
+| `factual` | Definition + mechanism + edge cases | Official docs, verify claims across sources |
+| `competitive` | Each product separately + "X vs Y" + user reviews | Feature matrix, pricing, real user experiences |
+| `landscape` | Category overview + key players + recent entrants + market reports | Each player's differentiator, adoption signals |
+| `how_to` | Tutorial search + GitHub repos + SO questions | Implementation details, common pitfalls, working examples |
+| `breaking_news` | News search (topic=news, time=day) + social reactions + expert commentary | Primary source, timeline of events, impact analysis |
+| `trend` | Historical trajectory + current state + expert predictions | Data-backed claims, not opinion-only; adoption metrics |
+| `person_org` | Recent activity + projects + talks/writing + community mentions | Cross-platform presence, contribution patterns |
+| `deep_technical` | Source code + architecture docs + design decisions + conference talks | Implementation details, trade-offs, performance data |
 
 ## Search Technique Reference
 

@@ -152,6 +152,28 @@ Note in the card: "Created from video description. Full transcript available via
 
 **Real example (2026-04-25):** 罗福莉 3.5h interview — B站 API returned 3,500 chars of description containing 6 key technical judgments, compute allocation formula, org restructuring insights, and full timeline outline. Card created in 30s vs hours for full transcript.
 
+### Step 1b: Intent-Aware Depth Calibration
+
+Before extracting, classify the user's learning intent to calibrate extraction depth:
+
+| Intent Signal | User Says | Depth | Card Style |
+|---------------|-----------|-------|------------|
+| **Quick bookmark** | "learn this", "save this" (no elaboration) | Light | TL;DR + 3-5 key insights, skip frameworks section |
+| **Study material** | "learn this for...", "read and remember", "deep learn" | Full | All sections, cross-reference extensively |
+| **Competitive intel** | "learn this, see what we can use", "参考下" | Comparative | Focus on: what's novel, what's reusable, delta vs our approach |
+| **Current awareness** | "learn this" + news/announcement URL | News | Focus on: what happened, impact, what changed, timeline |
+
+**Default:** Full depth. Only go Light if user clearly just wants a bookmark.
+
+**Comparative intent** (like this session's "learn and see if we could refer") triggers extra work:
+1. Identify the source's key patterns/techniques
+2. Map each to SwarmAI's current equivalent (or gap)
+3. Write a "What to Adopt" section with ROI assessment
+
+This classification drives Step 2 extraction — don't extract everything at full depth when a quick bookmark suffices, and don't skip comparative analysis when the user explicitly wants to evaluate.
+
+---
+
 ### Step 2: Extract & Classify
 
 From the fetched content, extract:
