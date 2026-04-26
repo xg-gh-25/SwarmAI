@@ -165,9 +165,9 @@ Before extracting, classify the user's learning intent to calibrate extraction d
 
 **Default:** Full depth. Only go Light if user clearly just wants a bookmark.
 
-**Comparative intent** (like this session's "learn and see if we could refer") triggers extra work:
+**Comparative intent** (like "learn and see if we could refer") triggers extra work:
 1. Identify the source's key patterns/techniques
-2. Map each to SwarmAI's current equivalent (or gap)
+2. Map each to the user's current equivalent (or gap) — check active project DDD docs for context
 3. Write a "What to Adopt" section with ROI assessment
 
 This classification drives Step 2 extraction — don't extract everything at full depth when a quick bookmark suffices, and don't skip comparative analysis when the user explicitly wants to evaluate.
@@ -348,10 +348,48 @@ If user sends multiple URLs at once:
 | Video file (user drops .mp4/.mov) | ffmpeg extract audio → whisper-transcribe → full transcript card |
 | SPA / JS-rendered page | Tier 1+2 fail → browser-agent renders JS → extracts DOM text |
 | Tweet / short post | Inline the full text as a quote — too short for briefing bullets |
-| GitHub repo | Focus on: what it does, architecture, why it matters. Use README as source |
+| GitHub repo | Use **repo card template** (see below) — architecture, tech stack, patterns, stats |
 | PDF / long paper | Extract abstract + conclusions, skip methodology details |
 | Duplicate URL | Update existing card, note update date |
 | User provides only text, no URL | `source_type: text`, no `source_url`, store the text as a quote block |
+
+## Repo Card Template
+
+When `source_type: repo`, replace Key Insights / Frameworks / Quotes with this structure:
+
+```markdown
+## What It Does
+<1-3 sentences — the problem it solves and for whom>
+
+## Architecture & Tech Stack
+- **Language:** <primary language(s)>
+- **Framework:** <key frameworks/libs>
+- **LOC:** <approximate lines of code>
+- **Structure:** <key directories and their roles>
+
+## Key Patterns Worth Noting
+### <Pattern 1 — prescriptive title>
+<What the pattern is, why it's clever, how it works>
+
+### <Pattern 2>
+...
+
+## Stats
+| Metric | Value |
+|--------|-------|
+| Stars | |
+| Forks | |
+| Contributors | |
+| Last commit | |
+| License | |
+
+## What to Adopt (if comparative intent)
+| Pattern | Value for Us | Effort |
+|---------|-------------|--------|
+| ... | ... | ... |
+```
+
+Skip the Quotes section for repos — code speaks louder.
 
 ## Verification
 
