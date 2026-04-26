@@ -2,14 +2,17 @@
 
 Bump version, update CHANGELOG, tag, and publish GitHub Release. Zero files missed.
 
-## Version Files (ALL 4 MUST BE UPDATED)
+## Version Files (ALL 5 MUST BE UPDATED)
 
 | # | File | Field | Format |
 |---|------|-------|--------|
+| 0 | **`VERSION`** (root) | `X.Y.Z` (plain text) | **Source of truth** — `dev.sh` and `prod.sh` sync FROM this file on every startup |
 | 1 | `backend/pyproject.toml` | `version = "X.Y.Z"` | TOML |
 | 2 | `desktop/package.json` | `"version": "X.Y.Z"` | JSON |
 | 3 | `desktop/src-tauri/Cargo.toml` | `version = "X.Y.Z"` | TOML |
 | 4 | `desktop/src-tauri/tauri.conf.json` | `"version": "X.Y.Z"` | JSON |
+
+> ⚠️ **CRITICAL:** The `VERSION` file MUST be updated first. `dev.sh` and `prod.sh` both call `sync-version.sh` on startup, which reads `VERSION` and overwrites all 4 package files. If `VERSION` is stale, every dev/build run silently downgrades all versions.
 
 ## README Files (MUST STAY IN SYNC)
 
@@ -42,12 +45,13 @@ Run ALL of these before proceeding. Any failure = stop and fix first.
 git status --short
 # If non-empty → commit or stash first
 
-# 2. All 4 version files must be in sync
+# 2. All 5 version files must be in sync (VERSION is source of truth)
+echo "VERSION:   $(cat VERSION)"
 echo "pyproject: $(grep '^version' backend/pyproject.toml | head -1)"
 echo "package:   $(grep '"version"' desktop/package.json | head -1)"
 echo "cargo:     $(grep '^version' desktop/src-tauri/Cargo.toml | head -1)"
 echo "tauri:     $(grep '"version"' desktop/src-tauri/tauri.conf.json | head -1)"
-# If they differ → fix sync before release
+# If they differ → run ./scripts/sync-version.sh to fix
 
 # 3. Target tag must not exist
 git tag -l "vX.Y.Z"
@@ -123,9 +127,14 @@ git add README.md README.zh-CN.md
 git commit -m "docs: refresh README (EN + CN) for vX.Y.Z release"
 ```
 
-### Step 5: Bump Version in All 4 Files + Lockfiles
+### Step 5: Bump Version in All 5 Files + Lockfiles
 
-Edit each of the 4 files listed above. Use the Edit tool — do NOT do search-and-replace on the old version string globally (it might match dependency versions).
+**First, update the source of truth:**
+```bash
+echo "X.Y.Z" > VERSION
+```
+
+Then edit each of the 4 package files. Use the Edit tool — do NOT do search-and-replace on the old version string globally (it might match dependency versions).
 
 **After editing, regenerate lockfiles:**
 ```bash
@@ -147,7 +156,7 @@ grep -n "version" desktop/src-tauri/tauri.conf.json | head -1
 ### Step 6: Commit
 
 ```bash
-git add CHANGELOG.md backend/pyproject.toml desktop/package.json \
+git add VERSION CHANGELOG.md backend/pyproject.toml desktop/package.json \
   desktop/package-lock.json desktop/src-tauri/Cargo.toml \
   desktop/src-tauri/Cargo.lock desktop/src-tauri/tauri.conf.json
 git commit -m "chore: bump version to X.Y.Z, update CHANGELOG"
