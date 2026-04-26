@@ -33,10 +33,11 @@ Parse the user's message to extract:
 - **Formats:** default video; user may request article/poster (Phase 2)
 - **Platforms:** default all 5; user may specify subset
 
-Create the content directory:
+Create the content directory under `Knowledge/Pollinate/` (visible in Explorer,
+git-tracked, part of the knowledge system — NOT Services/ which is hidden):
 ```bash
 SKILL_DIR="$(cd "$(dirname "$0")" && pwd)"
-CONTENT_DIR="$HOME/.swarm-ai/SwarmWS/Services/pollinate-studio/content/{name}"
+CONTENT_DIR="$HOME/.swarm-ai/SwarmWS/Knowledge/Pollinate/{name}"
 mkdir -p "$CONTENT_DIR/tracks/video"
 mkdir -p "$CONTENT_DIR/tracks/narrative"
 mkdir -p "$CONTENT_DIR/tracks/poster"
@@ -1113,6 +1114,49 @@ Output: `content/{name}/deliver/publish_info.md` with per-platform:
 | 抖音 | Short, punchy | 100-200 chars, casual + emoji | 3-8 `#tag` | 点赞关注 |
 | 视频号 | Knowledge-sharing | 100-300 chars, forwarding-friendly | 3-8 `#tag` | 点赞关注转发 |
 
+#### Step 8.2.1: 小红书 Multi-Image Publish Kit
+
+小红书 content is image-first. Every 小红书 delivery produces a **3-part publish kit**:
+
+**Part 1 — Post Text** (copy-paste ready):
+- **Title:** <= 20 chars, punchy, emoji optional
+- **Briefing Summary:** 200-500 chars, conversational 种草 style, use 👉 for key points, end with CTA
+- **Tags:** 5-10 `#tag#` format, mix broad + specific
+
+**Part 2 — Posters** (N standalone images based on complexity):
+Posters are single-screen information-dense images that can stand alone in feeds.
+
+| Complexity | Poster Count | Content |
+|------------|-------------|---------|
+| Simple (1 product, 1 angle) | 1 | Cover: title + core visual + CTA |
+| Medium (comparison, 2-3 points) | 2 | Cover + data/comparison chart |
+| Complex (multi-product, multi-dimension) | 3 | Cover + detailed matrix + core insight highlight |
+
+Each poster: 1080×1440 (3:4), dark theme, `@2x` retina rendering via Chrome headless.
+
+**Part 3 — Deep Article Cards** (N images based on content length):
+Cards form a swipeable long-read experience. Each card = one logical section.
+
+| Content Length | Card Count | Typical Breakdown |
+|---------------|-----------|-------------------|
+| Short (< 500 words) | 4-5 | Cover + 2-3 body + CTA |
+| Medium (500-1500 words) | 6-8 | Cover + sections + data + quotes + CTA |
+| Long (> 1500 words) | 9-12 | Cover + chapters + data + quotes + examples + CTA |
+
+Each card: 1080×1440 (3:4), consistent design language across the set.
+Render: single HTML → full-page Chrome headless → ffmpeg crop into individual PNGs.
+
+**Publishing order in one 小红书 note:**
+Posters (P1, P2, ...) → Deep cards (C1, C2, ...) — total <= 18 images (platform limit).
+
+**Output:**
+- `content/{name}/deliver/xiaohongshu-publish-kit.md` — complete publish kit with:
+  1. Copy-paste post text (title + briefing + tags)
+  2. Poster file list with descriptions
+  3. Card file list with content summary per card
+  4. Recommended publishing order
+  5. Complete file manifest with sizes
+
 #### Step 8.3: Confidence Scoring
 
 Calculate the confidence score using this explicit formula. Each item must be
@@ -1159,7 +1203,7 @@ Save to `content/{name}/REPORT.md`:
 # Pollinate Report: {title}
 
 **Run ID:** run_p_{id} | **Date:** {date} | **Confidence:** {score}/10
-**Domain:** {domain} | **Formats:** Video
+**Domain:** {domain} | **Formats:** {formats — e.g. Video, Poster, Narrative, Shorts}
 **Platforms:** {list}
 
 ## 1. Topic Evaluation
@@ -1214,11 +1258,27 @@ Save to `content/{name}/REPORT.md`:
 | BUILD | ... | taste | ... |
 
 ## 6. Files Produced
+
+List ALL output files by track. Include only tracks that were produced:
+
+### Video Track (if produced)
 - `final_video.mp4` -- {resolution}, {duration}, {size}
-- `publish_info.md` -- {platforms}
 - `thumbnail_16x9.png` -- 1920x1080
 - `thumbnail_4x3.png` -- 1200x900
 - `thumbnail_3x4.png` -- 1080x1440 (if applicable)
+
+### Poster Track (if produced)
+- `poster-{variant}.png` -- {resolution}, {size}, {description}
+- (list each poster with its purpose: cover, matrix, insight, etc.)
+
+### Narrative Track (if produced)
+- `card-{N}.png` -- {resolution}, {size}, {section content}
+- `cards.html` -- source file for re-rendering
+- `xiaohongshu.md` -- plain text version
+
+### Publish Kits
+- `deliver/publish_info.md` -- per-platform metadata ({platforms})
+- `deliver/xiaohongshu-publish-kit.md` -- 小红书 complete kit (if 小红书 targeted)
 
 ## 7. Lessons (from REFLECT)
 - ...
@@ -1361,10 +1421,13 @@ Before marking pipeline COMPLETE, ALL must be true:
 
 ## Pipeline Completion
 
-After REFLECT stage, present the completion summary:
+After REFLECT stage, present the completion summary.
+
+**For multi-format runs (poster + narrative + video etc.), the summary must
+enumerate every produced asset by track with file sizes:**
 
 ```
-Pollinate COMPLETE (run_p_{id}) -- 9 stages, 0 skipped, 0 escalations
+Pollinate COMPLETE (run_p_{id}) -- {N} stages, {skipped} skipped, {escalations} escalations
 Confidence: {score}/10
 
   Artifacts:
@@ -1372,16 +1435,28 @@ Confidence: {score}/10
     research      -> research.md (thesis: "{one-liner}")
     strategy      -> PRFAQ.md + strategy.json (channel matrix)
     content_pkg   -> content_package.md ({N} key points)
-    tracks        -> video/, narrative/, poster/, shorts/
-    deliver       -> per-channel publish packages
-    report        -> REPORT.md
 
-  Quality: {N}/12 RP-V checks passed, all platform specs validated
+  Tracks Produced:
+    poster/       -> {N} posters (P1: cover {size}, P2: matrix {size}, ...)
+    narrative/    -> {N} cards (C1-CN, {total_size})
+    video/        -> final_video.mp4 ({resolution}, {duration}, {size}) [if produced]
+    shorts/       -> {N} clips [if produced]
+
+  Publish Kits:
+    小红书         -> xiaohongshu-publish-kit.md (title + briefing + {P} posters + {C} cards)
+    B站           -> publish_info.md [if video produced]
+    YouTube       -> publish_info.md [if video produced]
+
+  Quality: {N}/12 RP-V checks passed [or N/A if non-video run]
   Decisions: {X} mechanical, {Y} taste (all approved), {Z} judgment
   Lessons: {N} written to IMPROVEMENT.md
 
   Report: content/{name}/REPORT.md
 ```
+
+**小红书-only runs (poster + narrative, no video):** RP-V checks that only apply
+to video (RP-V1 audio sync, RP-V7 resolution/codec, RP-V8 duration) are N/A.
+The confidence formula adapts: video-specific items score +1 each as N/A (neutral).
 
 ---
 
