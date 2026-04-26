@@ -597,7 +597,7 @@ Create `content/{name}/tracks/video/podcast.txt` with `[SECTION:xxx]` markers.
 - Number formatting: digits OK with Chinese units; spell out dates, versions, long integers
 - Platform-specific outro (B站 一键三连, YouTube subscribe, etc.)
 
-#### Step 3c: Visual Composition Plan
+#### Step 4c: Visual Composition Plan
 
 For each section, select Remotion components:
 
@@ -619,7 +619,7 @@ For each section, select Remotion components:
 - Hero title >= 84px, section title >= 72px, body >= 32px
 - Apply domain theme from brand/identity.yaml `domain_themes`
 
-#### Step 4c: Duration Dry-Run (if "video" in production_tracks)
+#### Step 4d: Duration Dry-Run (if "video" in production_tracks)
 
 ```bash
 python "$SKILL_DIR/scripts/generate_tts.py" \
@@ -682,7 +682,7 @@ Before advancing to BUILD, ALL must be true:
 
 ### Procedure
 
-#### Step 4.1: Prerequisites Check
+#### Step 5.1: Prerequisites Check
 
 ```bash
 python "$SKILL_DIR/scripts/check_prereqs.py"
@@ -690,7 +690,7 @@ python "$SKILL_DIR/scripts/check_prereqs.py"
 
 This verifies: Node.js, npm, ffmpeg, ffprobe, Python dependencies.
 
-#### Step 4.2: Remotion Bootstrap (first run only)
+#### Step 5.2: Remotion Bootstrap (first run only)
 
 ```bash
 STUDIO_DIR="$HOME/.swarm-ai/SwarmWS/Services/pollinate-studio"
