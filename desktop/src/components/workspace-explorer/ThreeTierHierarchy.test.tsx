@@ -93,12 +93,12 @@ describe('AC1: Knowledge section-header', () => {
     );
     expect(headerIdx).toBeGreaterThanOrEqual(0);
 
-    // Next row should be a Knowledge child at depth 0
+    // Next row should be a Knowledge child at depth 1 (indented under header)
     const nextRow = rows[headerIdx + 1];
     expect(nextRow.kind).toBe('node');
     if (nextRow.kind === 'node') {
       expect(nextRow.node.path.startsWith('Knowledge/')).toBe(true);
-      expect(nextRow.depth).toBe(0);
+      expect(nextRow.depth).toBe(1);
     }
   });
 
@@ -151,7 +151,7 @@ describe('AC2: Projects section-header', () => {
     expect(nextRow.kind).toBe('node');
     if (nextRow.kind === 'node') {
       expect(nextRow.node.path.startsWith('Projects/')).toBe(true);
-      expect(nextRow.depth).toBe(0);
+      expect(nextRow.depth).toBe(1);
     }
   });
 
@@ -277,9 +277,9 @@ describe('AC8: Existing interactions preserved', () => {
     if (notesRow && notesRow.kind === 'node') {
       expect(notesRow.isExpanded).toBe(true);
       expect(notesRow.isMatched).toBe(true);
-      // Under the 3-tier hierarchy, Knowledge children are at depth 0
-      // (the section-header replaces the Knowledge folder row)
-      expect(notesRow.depth).toBe(0);
+      // Under the 3-tier hierarchy, Knowledge children are at depth 1
+      // (indented under the section-header)
+      expect(notesRow.depth).toBe(1);
     }
   });
 

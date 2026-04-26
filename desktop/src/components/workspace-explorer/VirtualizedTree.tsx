@@ -94,7 +94,7 @@ export type FlattenedRow =
   | { kind: 'zone-separator'; zoneLabel: string }
   | { kind: 'section-header'; label: string; childCount: number; isCollapsed: boolean; dimmed?: boolean; defaultCollapsed?: boolean; config: SectionConfig }
   | { kind: 'secondary-label'; label: string }
-  | { kind: 'node'; node: TreeNode; depth: number; isMatched: boolean; isExpanded: boolean }
+  | { kind: 'node'; node: TreeNode; depth: number; isMatched: boolean; isExpanded: boolean; sectionConfig?: SectionConfig }
   | { kind: 'creating'; parentPath: string; itemType: 'file' | 'directory'; depth: number };
 
 export interface VirtualizedTreeProps {
@@ -149,6 +149,7 @@ function flattenChildren(
   expandedPaths: Set<string>,
   matchedPaths: Set<string>,
   rows: FlattenedRow[],
+  sectionConfig?: SectionConfig,
 ): void {
   // Apply date-descending sort for Knowledge/Attachments subdirectories
   let sorted = children;
@@ -178,9 +179,10 @@ function flattenChildren(
       depth,
       isMatched: matchedPaths.has(child.path),
       isExpanded,
+      sectionConfig,
     });
     if (isExpanded && child.children) {
-      flattenChildren(child.children, depth + 1, expandedPaths, matchedPaths, rows);
+      flattenChildren(child.children, depth + 1, expandedPaths, matchedPaths, rows, sectionConfig);
     }
   }
 }
@@ -306,9 +308,11 @@ export function flattenTree(
       config: section,
     });
 
-    // If not collapsed and root node exists, emit its CHILDREN at depth 0
+    // If not collapsed and root node exists, emit its CHILDREN at depth 1
+    // (indented under the section header to show hierarchy)
+    // Pass sectionConfig so child rows can inherit accent background
     if (!isCollapsed && rootNode && rootNode.children) {
-      flattenChildren(rootNode.children, 0, expandedPaths, matchedPaths, rows);
+      flattenChildren(rootNode.children, 1, expandedPaths, matchedPaths, rows, section);
     }
   }
 
@@ -396,6 +400,8 @@ interface RowCustomProps {
   renamingPath: string | null;
   dragOverPath: string | null;
   toggleExpand: (path: string) => void;
+  onSectionToggle: (label: string) => void;
+  onSectionContextMenu: (e: React.MouseEvent, sectionLabel: string) => void;
   setSelectedPath: (path: string | null) => void;
   onFileDoubleClick?: (node: FileTreeItem) => void;
   onContextMenu: (e: React.MouseEvent, node: TreeNode) => void;
@@ -422,6 +428,7 @@ function RowRenderer(props: {
   const {
     index, style, rows, selectedPath, renamingPath, dragOverPath,
     toggleExpand, setSelectedPath, onFileDoubleClick, onContextMenu,
+    onSectionToggle, onSectionContextMenu,
     onRenameSubmit, onRenameCancel, onDragOverPath, onDropOnFolder,
     onCreateSubmit, onCreateCancel,
   } = props;
@@ -443,11 +450,8 @@ function RowRenderer(props: {
         dimmed={row.dimmed}
         accentBg={row.config.accentBg}
         accentBorder={row.config.accentBorder}
-        onToggle={() => {
-          // Section toggle is handled by the parent VirtualizedTree via sectionCollapsed state
-          const event = new CustomEvent('explorer-section-toggle', { detail: { label: row.label } });
-          window.dispatchEvent(event);
-        }}
+        onToggle={() => onSectionToggle(row.label)}
+        onContextMenu={(e) => onSectionContextMenu(e, row.label)}
         style={style}
       />
     );
@@ -569,6 +573,9 @@ function RowRenderer(props: {
     [onDragOverPath, onDropOnFolder, node.path],
   );
 
+  // Section accent background for child rows within primary sections
+  const sectionBg = row.sectionConfig?.accentBg;
+
   return (
     <TreeNodeRow
       node={node}
@@ -587,6 +594,7 @@ function RowRenderer(props: {
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
+      sectionAccentBg={sectionBg}
       style={style}
     />
   );
@@ -632,15 +640,31 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
     });
   }, []);
 
-  // Listen for section toggle events from RowRenderer
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const label = (e as CustomEvent<{ label: string }>).detail?.label;
-      if (label) toggleSectionCollapse(label);
-    };
-    window.addEventListener('explorer-section-toggle', handler);
-    return () => window.removeEventListener('explorer-section-toggle', handler);
-  }, [toggleSectionCollapse]);
+  /** Right-click on a section header → open context menu for the root directory. */
+  const handleSectionContextMenu = useCallback(
+    (e: React.MouseEvent, sectionLabel: string) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // Find the root dir path for this section
+      const section = EXPLORER_SECTIONS.find((s) => s.label === sectionLabel);
+      const rootDirName = section?.paths[0] ?? sectionLabel;
+      returnFocusRef.current = e.currentTarget as HTMLElement;
+      setContextMenu({
+        isOpen: true,
+        x: e.clientX,
+        y: e.clientY,
+        item: {
+          id: rootDirName,
+          name: rootDirName,
+          type: 'directory',
+          path: rootDirName,
+          workspaceId: 'swarmws',
+          workspaceName: 'SwarmWS',
+        },
+      });
+    },
+    [],
+  );
 
   // ── Context menu state ──────────────────────────────────────────────────
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
@@ -880,11 +904,12 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
     () => ({
       rows, selectedPath, renamingPath, dragOverPath, toggleExpand, setSelectedPath,
       onFileDoubleClick, onContextMenu: handleContextMenu, onAttachToChat: handleAttachToChat,
+      onSectionToggle: toggleSectionCollapse, onSectionContextMenu: handleSectionContextMenu,
       onRenameSubmit: handleRenameSubmit, onRenameCancel: handleRenameCancel,
       onDragOverPath: setDragOverPath, onDropOnFolder: handleDropOnFolder,
       onCreateSubmit: handleCreateSubmit, onCreateCancel: handleCreateCancel,
     }),
-    [rows, selectedPath, renamingPath, dragOverPath, toggleExpand, setSelectedPath, onFileDoubleClick, handleContextMenu, handleAttachToChat, handleRenameSubmit, handleRenameCancel, handleDropOnFolder, handleCreateSubmit, handleCreateCancel],
+    [rows, selectedPath, renamingPath, dragOverPath, toggleExpand, setSelectedPath, onFileDoubleClick, handleContextMenu, handleAttachToChat, toggleSectionCollapse, handleSectionContextMenu, handleRenameSubmit, handleRenameCancel, handleDropOnFolder, handleCreateSubmit, handleCreateCancel],
   );
 
   return (
