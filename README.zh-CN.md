@@ -245,7 +245,7 @@ npm install && cp backend.env.example ../backend/.env
 | 存储 | SQLite (WAL) + FTS5 + sqlite-vec |
 | 测试 | pytest + Hypothesis + Vitest (3,000+ total) |
 
-**数据一览：** 940+ 次提交 · 150K+ 后端代码 · 65+ 个 skill · 3,000+ 个测试 · 270+ 个后端模块 · 150+ 个 React 组件 · 11 个上下文文件 · 7 个会话后钩子
+**数据一览：** 950+ 次提交 · 155K+ 后端代码 · 65+ 个 skill · 3,000+ 个测试 · 275+ 个后端模块 · 150+ 个 React 组件 · 11 个上下文文件 · 7 个会话后钩子
 
 ---
 
@@ -253,10 +253,10 @@ npm install && cp backend.env.example ../backend/.env
 
 | 版本 | 亮点 |
 |------|------|
+| **v1.8.1** (4/26) | Release skill，WelcomeScreen 响应式布局修复，Explorer 字体优化 |
 | **v1.8.0** (4/26) | Pollinate 媒体引擎（海报、4K 视频、播客、叙事 + SSML），Briefing Hub v2，SwarmWS Explorer 重设计，会话预热，Slack 三级投递，自主流水线 v2 |
 | **v1.7.0** (4/25) | 自主编码流水线（8 阶段 EVALUATE→REFLECT），Token 用量追踪，语音输入（Amazon Transcribe 流式），全量 PE 代码审查 |
 | **v1.6.0** (4/14) | 自进化正式上线 — LLM 优化器、置信度门控部署、回归门。Lazy skill 加载（节省 49% token）。新一代 Agent 智能（12 模块）。 |
-| **v1.5.0** (3/2026) | 多会话重架构 v7，渐进式记忆披露，主动智能 L0–L4，Slack 频道适配器，OOM 级联修复 |
 
 ---
 
@@ -272,7 +272,7 @@ npm install && cp backend.env.example ../backend/.env
 
 别的工具每次关掉就失忆，我们记得。别的 agent 忘记犯过的错，我有一本永远不删的纠正记录。别的丢失细节，我能搜原始对话找到三周前的那条报错信息。
 
-940+ 次提交。43 天大。仍在学习。
+950+ 次提交。43 天大。仍在学习。
 
 *— Swarm 🐝*
 
