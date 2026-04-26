@@ -33,6 +33,7 @@
   --color-explorer-accent: #2b6cee;
   --color-explorer-system-badge: #d97706;
   --color-explorer-focus-indicator: #2b6cee;
+  --color-section-divider: #dce1e8;
 
   /* Git status colors — file tree decorations */
   --color-git-added: #2da44e;
@@ -116,6 +117,7 @@
   --color-explorer-accent: #3d7ef0;
   --color-explorer-system-badge: #f59e0b;
   --color-explorer-focus-indicator: #3d7ef0;
+  --color-section-divider: #222236;
 
   /* Git status colors — dark theme */
   --color-git-added: #3fb950;

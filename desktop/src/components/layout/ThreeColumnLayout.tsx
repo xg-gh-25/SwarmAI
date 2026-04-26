@@ -113,10 +113,10 @@ function LeftSidebar() {
     openModal('settings');
   };
 
-  // Legacy nav items kept for reference — now handled by handleNavClick
+  // Nav items with SVG icon identifiers (AC6: no emoji icons)
   const navItems: { icon: string; label: string; target: 'skills' | 'mcp' }[] = [
-    { icon: 'extension', label: 'Skills', target: 'skills' },
-    { icon: 'device_hub', label: 'MCP Servers', target: 'mcp' },
+    { icon: 'lightning', label: 'Skills', target: 'skills' },
+    { icon: 'server', label: 'MCP Servers', target: 'mcp' },
   ];
 
   return (
@@ -153,7 +153,7 @@ function LeftSidebar() {
       {/* Bottom section - Settings and GitHub */}
       <div className="pt-1.5 pb-2 border-t border-[var(--color-border)] space-y-1 flex flex-col items-center">
         <NavIconButton
-          icon="tune"
+          icon="gear"
           label="Settings"
           isActive={activeModal === 'settings' && !settingsTab}
           onClick={() => { setSettingsTab(undefined); openModal('settings'); }}
@@ -198,6 +198,49 @@ interface NavIconButtonProps {
   'data-testid'?: string;
 }
 
+/** SVG stroke icon lookup — AC6: replace Material Symbols with inline SVGs. */
+function NavSvgIcon({ name }: { name: string }) {
+  const svgProps = {
+    width: 18,
+    height: 18,
+    viewBox: '0 0 24 24',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: 2,
+    strokeLinecap: 'round' as const,
+    strokeLinejoin: 'round' as const,
+  };
+
+  switch (name) {
+    case 'lightning':
+      return (
+        <svg {...svgProps} aria-hidden="true">
+          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+        </svg>
+      );
+    case 'server':
+      return (
+        <svg {...svgProps} aria-hidden="true">
+          <rect x="2" y="2" width="20" height="8" rx="2" ry="2" />
+          <rect x="2" y="14" width="20" height="8" rx="2" ry="2" />
+          <line x1="6" y1="6" x2="6.01" y2="6" />
+          <line x1="6" y1="18" x2="6.01" y2="18" />
+        </svg>
+      );
+    case 'tune':
+    case 'gear':
+      return (
+        <svg {...svgProps} aria-hidden="true">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        </svg>
+      );
+    default:
+      // Fallback to material-symbols for unknown icons
+      return <span className="material-symbols-outlined text-[18px]">{name}</span>;
+  }
+}
+
 function NavIconButton({ icon, label, isActive, onClick, 'data-testid': testId }: NavIconButtonProps) {
   return (
     <button
@@ -211,7 +254,7 @@ function NavIconButton({ icon, label, isActive, onClick, 'data-testid': testId }
           : 'text-[var(--color-sidebar-icon)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
       }`}
     >
-      <span className="material-symbols-outlined text-[18px]">{icon}</span>
+      <NavSvgIcon name={icon} />
     </button>
   );
 }

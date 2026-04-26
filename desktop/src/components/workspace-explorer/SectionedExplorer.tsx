@@ -157,9 +157,12 @@ export default function SectionedExplorer({ onFileDoubleClick, onAttachToChat }:
 
   return (
     <div className="flex flex-col h-full">
-      {/* Working Files section — scrollable when list is large */}
-      {/* Working Files: show max 5 items (~100px), scroll for more */}
-      <div className="flex-shrink-0" style={{ display: 'flex', flexDirection: 'column' }}>
+      {/* Working Files section — styled as card (AC7: rounded bg + border) */}
+      <div
+        className="flex-shrink-0 mx-2 mt-1.5 mb-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-card,var(--color-bg-chrome))]"
+        data-testid="working-files-card"
+        style={{ display: 'flex', flexDirection: 'column' }}
+      >
         <SectionHeader
           title="Working Files"
           count={workingFiles.length}

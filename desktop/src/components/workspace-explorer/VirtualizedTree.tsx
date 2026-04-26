@@ -35,7 +35,7 @@ import { folderService } from '../../services/workspace';
 import { EXPLORER_ATTACH_FILE, EXPLORER_ASK_ABOUT_FILE } from '../../constants/explorerEvents';
 import { ToastContext } from '../../contexts/ToastContext';
 import TreeNodeRow, { InlineRenameInput } from './TreeNodeRow';
-import ZoneSeparator from './ZoneSeparator';
+import ZoneSeparator, { SectionHeader } from './ZoneSeparator';
 import FileContextMenu from './FileContextMenu';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -57,11 +57,43 @@ export const SYSTEM_NAMES = new Set(['.context', '.claude', 'config.json', 'proa
 const ROW_HEIGHT = 32;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 3-Tier Section Configuration
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Configuration for a primary or system section in the explorer. */
+export interface SectionConfig {
+  label: string;
+  paths: string[];
+  accentBg?: string;
+  accentBorder?: string;
+  dimmed?: boolean;
+  defaultCollapsed?: boolean;
+}
+
+/** Primary sections with accent colours — Knowledge and Projects. */
+export const EXPLORER_SECTIONS: SectionConfig[] = [
+  {
+    label: 'Knowledge',
+    paths: ['Knowledge'],
+    accentBg: 'rgba(234,179,8,0.04)',
+    accentBorder: 'rgba(234,179,8,0.15)',
+  },
+  {
+    label: 'Projects',
+    paths: ['Projects'],
+    accentBg: 'rgba(59,130,246,0.04)',
+    accentBorder: 'rgba(59,130,246,0.15)',
+  },
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type FlattenedRow =
   | { kind: 'zone-separator'; zoneLabel: string }
+  | { kind: 'section-header'; label: string; childCount: number; isCollapsed: boolean; dimmed?: boolean; defaultCollapsed?: boolean; config: SectionConfig }
+  | { kind: 'secondary-label'; label: string }
   | { kind: 'node'; node: TreeNode; depth: number; isMatched: boolean; isExpanded: boolean }
   | { kind: 'creating'; parentPath: string; itemType: 'file' | 'directory'; depth: number };
 
@@ -154,26 +186,32 @@ function flattenChildren(
 }
 
 /**
- * Flatten a workspace tree into a list of rows with semantic zone ordering.
+ * Flatten a workspace tree into a list of rows with 3-tier visual hierarchy.
  *
  * Ordering:
  * 1. Root-level files matching ROOT_FILES (in ROOT_FILES order)
- * 2. Any other root-level files not in ROOT_FILES and not zone folders
- * 3. For each SEMANTIC_ZONE:
- *    a. Zone separator row
- *    b. Top-level directories matching the zone's paths
- *    c. Recursively expanded children (if directory is in expandedPaths)
- * 4. Any remaining top-level directories not assigned to a zone
+ * 2. Any other root-level files not in ROOT_FILES and not section folders
+ * 3. Dot-directories (non-system) before primary sections
+ * 4. For each PRIMARY section (Knowledge, Projects):
+ *    a. section-header row (label, childCount, isCollapsed, config)
+ *    b. If not collapsed: root dir's CHILDREN at depth 0 (skip root dir row itself)
+ *    c. Expanded children recursively at depth+1
+ * 5. secondary-label "Other" (only if there are secondary dirs)
+ * 6. Remaining dirs as normal tree items (Attachments, Services, etc.)
+ * 7. section-header for System { dimmed: true, defaultCollapsed: true }
+ * 8. System items (.context, .claude, config.json, proactive_state.json)
  *
- * @param treeData       — Top-level nodes from the workspace tree API
- * @param expandedPaths  — Set of directory paths currently expanded
- * @param matchedPaths   — Set of paths matching the current search query
+ * @param treeData          — Top-level nodes from the workspace tree API
+ * @param expandedPaths     — Set of directory paths currently expanded
+ * @param matchedPaths      — Set of paths matching the current search query
+ * @param sectionCollapsed  — Map of section label → collapsed state
  * @returns Ordered array of FlattenedRow entries
  */
 export function flattenTree(
   treeData: TreeNode[],
   expandedPaths: Set<string>,
   matchedPaths: Set<string> = new Set(),
+  sectionCollapsed: Record<string, boolean> = {},
 ): FlattenedRow[] {
   const rows: FlattenedRow[] = [];
 
@@ -183,13 +221,15 @@ export function flattenTree(
     topLevelByName.set(node.name, node);
   }
 
-  // Collect zone folder names for exclusion checks
-  const zoneFolderNames = new Set<string>();
-  for (const zone of SEMANTIC_ZONES) {
-    for (const p of zone.paths) {
-      zoneFolderNames.add(p);
+  // Collect section folder names for exclusion checks
+  const sectionFolderNames = new Set<string>();
+  for (const section of EXPLORER_SECTIONS) {
+    for (const p of section.paths) {
+      sectionFolderNames.add(p);
     }
   }
+  // Also keep the old zone names set for backward compat
+  const zoneFolderNames = sectionFolderNames;
   const rootFileNames = new Set(ROOT_FILES);
 
   // 1. Root-level files in ROOT_FILES order
@@ -206,7 +246,7 @@ export function flattenTree(
     }
   }
 
-  // 2. Other root-level files not in ROOT_FILES, not zone folders, not system
+  // 2. Other root-level files not in ROOT_FILES, not section folders, not system
   for (const node of treeData) {
     if (
       node.type === 'file' &&
@@ -224,7 +264,7 @@ export function flattenTree(
     }
   }
 
-  // 2b. Dot-directories (non-system) — shown before zones
+  // 2b. Dot-directories (non-system) — shown before sections
   for (const node of treeData) {
     if (
       node.type === 'directory' &&
@@ -246,29 +286,34 @@ export function flattenTree(
     }
   }
 
-  // 3. Semantic zones
-  for (const zone of SEMANTIC_ZONES) {
-    rows.push({ kind: 'zone-separator', zoneLabel: zone.label });
+  // 3. Primary sections (Knowledge, Projects)
+  for (const section of EXPLORER_SECTIONS) {
+    // Find the root directory node for this section
+    const rootNode = section.paths.map((p) => topLevelByName.get(p)).find(
+      (n) => n && n.type === 'directory',
+    );
 
-    for (const folderName of zone.paths) {
-      const node = topLevelByName.get(folderName);
-      if (node && node.type === 'directory') {
-        const isExpanded = expandedPaths.has(node.path);
-        rows.push({
-          kind: 'node',
-          node,
-          depth: 0,
-          isMatched: matchedPaths.has(node.path),
-          isExpanded,
-        });
-        if (isExpanded && node.children) {
-          flattenChildren(node.children, 1, expandedPaths, matchedPaths, rows);
-        }
-      }
+    const childCount = rootNode?.children?.length ?? 0;
+    const isCollapsed = sectionCollapsed[section.label] ?? false;
+
+    rows.push({
+      kind: 'section-header',
+      label: section.label,
+      childCount,
+      isCollapsed,
+      dimmed: section.dimmed,
+      defaultCollapsed: section.defaultCollapsed,
+      config: section,
+    });
+
+    // If not collapsed and root node exists, emit its CHILDREN at depth 0
+    if (!isCollapsed && rootNode && rootNode.children) {
+      flattenChildren(rootNode.children, 0, expandedPaths, matchedPaths, rows);
     }
   }
 
-  // 4. Remaining top-level directories not assigned to a zone, dot-dirs, or system
+  // 4. Secondary dirs (Attachments, Services, any other non-zone, non-system, non-dot dirs)
+  const secondaryDirs: TreeNode[] = [];
   for (const node of treeData) {
     if (
       node.type === 'directory' &&
@@ -276,6 +321,14 @@ export function flattenTree(
       !node.name.startsWith('.') &&
       !SYSTEM_NAMES.has(node.name)
     ) {
+      secondaryDirs.push(node);
+    }
+  }
+
+  if (secondaryDirs.length > 0) {
+    rows.push({ kind: 'secondary-label', label: 'Other' });
+
+    for (const node of secondaryDirs) {
       const isExpanded = expandedPaths.has(node.path);
       rows.push({
         kind: 'node',
@@ -290,23 +343,41 @@ export function flattenTree(
     }
   }
 
-  // 5. System Settings zone — pinned at the bottom (dimmed but fully interactive)
+  // 5. System section — pinned at the bottom (dimmed, collapsed by default)
+  const systemConfig: SectionConfig = {
+    label: 'System',
+    paths: [],
+    dimmed: true,
+    defaultCollapsed: true,
+  };
   const hasSystemItems = treeData.some((n) => SYSTEM_NAMES.has(n.name));
   if (hasSystemItems) {
-    rows.push({ kind: 'zone-separator', zoneLabel: 'System Settings' });
-  }
-  for (const node of treeData) {
-    if (SYSTEM_NAMES.has(node.name)) {
-      const isExpanded = node.type === 'directory' && expandedPaths.has(node.path);
-      rows.push({
-        kind: 'node',
-        node,
-        depth: 0,
-        isMatched: matchedPaths.has(node.path),
-        isExpanded,
-      });
-      if (isExpanded && node.children) {
-        flattenChildren(node.children, 1, expandedPaths, matchedPaths, rows);
+    const systemNodes = treeData.filter((n) => SYSTEM_NAMES.has(n.name));
+    const isSystemCollapsed = sectionCollapsed['System'] ?? systemConfig.defaultCollapsed ?? true;
+
+    rows.push({
+      kind: 'section-header',
+      label: 'System',
+      childCount: systemNodes.length,
+      isCollapsed: isSystemCollapsed,
+      dimmed: true,
+      defaultCollapsed: true,
+      config: systemConfig,
+    });
+
+    if (!isSystemCollapsed) {
+      for (const node of systemNodes) {
+        const isExpanded = node.type === 'directory' && expandedPaths.has(node.path);
+        rows.push({
+          kind: 'node',
+          node,
+          depth: 0,
+          isMatched: matchedPaths.has(node.path),
+          isExpanded,
+        });
+        if (isExpanded && node.children) {
+          flattenChildren(node.children, 1, expandedPaths, matchedPaths, rows);
+        }
       }
     }
   }
@@ -360,6 +431,57 @@ function RowRenderer(props: {
 
   if (row.kind === 'zone-separator') {
     return <ZoneSeparator label={row.zoneLabel} style={style} />;
+  }
+
+  // ── Section header row (3-tier primary/system) ─────────────────────
+  if (row.kind === 'section-header') {
+    return (
+      <SectionHeader
+        label={row.label}
+        count={row.childCount}
+        isCollapsed={row.isCollapsed}
+        dimmed={row.dimmed}
+        accentBg={row.config.accentBg}
+        accentBorder={row.config.accentBorder}
+        onToggle={() => {
+          // Section toggle is handled by the parent VirtualizedTree via sectionCollapsed state
+          const event = new CustomEvent('explorer-section-toggle', { detail: { label: row.label } });
+          window.dispatchEvent(event);
+        }}
+        style={style}
+      />
+    );
+  }
+
+  // ── Secondary label row (Other) ────────────────────────────────────
+  if (row.kind === 'secondary-label') {
+    return (
+      <div
+        data-testid="secondary-label"
+        style={{
+          ...style,
+          display: 'flex',
+          alignItems: 'center',
+          padding: '0 12px',
+          height: '32px',
+          boxSizing: 'border-box',
+          userSelect: 'none',
+          borderTop: '2px solid var(--color-section-divider, #222236)',
+        }}
+      >
+        <span
+          style={{
+            fontSize: '10px',
+            fontWeight: 600,
+            letterSpacing: '0.05em',
+            textTransform: 'uppercase',
+            color: 'var(--color-text-dim, var(--color-explorer-zone-label))',
+          }}
+        >
+          {row.label}
+        </span>
+      </div>
+    );
   }
 
   // ── Creating phantom row ────────────────────────────────────────────
@@ -480,6 +602,45 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
     useSelection();
   // Safe: useContext returns undefined when ToastProvider is missing (no throw in tests)
   const toastCtx = useContext(ToastContext);
+
+  // ── Section collapse state (persisted in localStorage) ────────────────
+  const [sectionCollapsed, setSectionCollapsed] = useState<Record<string, boolean>>(() => {
+    const stored: Record<string, boolean> = {};
+    try {
+      // Primary sections default to expanded, System defaults to collapsed
+      for (const section of EXPLORER_SECTIONS) {
+        const key = `explorer-section-${section.label}`;
+        const val = localStorage.getItem(key);
+        stored[section.label] = val !== null ? val === 'true' : (section.defaultCollapsed ?? false);
+      }
+      // System section
+      const sysKey = 'explorer-section-System';
+      const sysVal = localStorage.getItem(sysKey);
+      stored['System'] = sysVal !== null ? sysVal === 'true' : true;
+    } catch {
+      // localStorage unavailable (test env) — use defaults
+    }
+    return stored;
+  });
+
+  /** Toggle section collapse and persist to localStorage. */
+  const toggleSectionCollapse = useCallback((label: string) => {
+    setSectionCollapsed((prev) => {
+      const next = { ...prev, [label]: !prev[label] };
+      try { localStorage.setItem(`explorer-section-${label}`, String(next[label])); } catch {}
+      return next;
+    });
+  }, []);
+
+  // Listen for section toggle events from RowRenderer
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const label = (e as CustomEvent<{ label: string }>).detail?.label;
+      if (label) toggleSectionCollapse(label);
+    };
+    window.addEventListener('explorer-section-toggle', handler);
+    return () => window.removeEventListener('explorer-section-toggle', handler);
+  }, [toggleSectionCollapse]);
 
   // ── Context menu state ──────────────────────────────────────────────────
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
@@ -687,10 +848,10 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
     setCreatingItem(null);
   }, []);
 
-  // Flatten tree into rows — recomputed when tree data or expand state changes.
+  // Flatten tree into rows — recomputed when tree data, expand, or section collapse state changes.
   // If we're creating a new item, inject a phantom row after the parent directory.
   const rows = useMemo(() => {
-    const base = flattenTree(treeData, expandedPaths, matchedPaths);
+    const base = flattenTree(treeData, expandedPaths, matchedPaths, sectionCollapsed);
     if (!creatingItem) return base;
 
     // Find the parent directory row and inject phantom after it
@@ -712,7 +873,7 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
     const result = [...base];
     result.splice(parentIdx + 1, 0, phantomRow);
     return result;
-  }, [treeData, expandedPaths, matchedPaths, creatingItem]);
+  }, [treeData, expandedPaths, matchedPaths, creatingItem, sectionCollapsed]);
 
   // Stable rowProps object for the row renderer
   const rowProps = useMemo<RowCustomProps>(

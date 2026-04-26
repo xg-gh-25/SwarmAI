@@ -127,14 +127,14 @@ const arbWorkspaceTree: fc.Arbitrary<TreeNode[]> = fc
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-/** Find indices of all zone separators in the flattened rows. */
+/** Find indices of all section headers in the flattened rows (replaces zone separators). */
 function findSeparatorIndices(rows: FlattenedRow[]): { index: number; label: string }[] {
   return rows
     .map((row, index) => ({ row, index }))
-    .filter(({ row }) => row.kind === 'zone-separator')
+    .filter(({ row }) => row.kind === 'section-header')
     .map(({ row, index }) => ({
       index,
-      label: (row as { kind: 'zone-separator'; zoneLabel: string }).zoneLabel,
+      label: (row as Extract<FlattenedRow, { kind: 'section-header' }>).label,
     }));
 }
 
@@ -185,91 +185,82 @@ describe('Property 1: Semantic Zone Grouping Correctness', () => {
     );
   });
 
-  it('(b) exactly two zone separators in order: "Shared Knowledge" then "Active Work"', () => {
+  it('(b) Knowledge and Projects section-headers in order', () => {
     // Feature: swarmws-explorer-ux, Property 1: Semantic Zone Grouping Correctness
+    // In 3-tier hierarchy, section-headers replace zone-separators.
+    // Knowledge + Projects are primary sections; System is at the bottom.
     fc.assert(
       fc.property(arbWorkspaceTree, (tree) => {
         const rows = flattenTree(tree, new Set());
         const separators = findSeparatorIndices(rows);
 
-        expect(separators.length).toBe(2);
-        expect(separators[0].label).toBe('Shared Knowledge');
-        expect(separators[1].label).toBe('Active Work');
+        // At least Knowledge and Projects section-headers
+        expect(separators.length).toBeGreaterThanOrEqual(2);
+        expect(separators[0].label).toBe('Knowledge');
+        expect(separators[1].label).toBe('Projects');
         expect(separators[0].index).toBeLessThan(separators[1].index);
       }),
       { numRuns: 100 },
     );
   });
 
-  it('(c) Knowledge/ appears in the Shared Knowledge zone (between first and second separator)', () => {
+  it('(c) Knowledge children appear after the Knowledge section-header (root dir is absorbed)', () => {
     // Feature: swarmws-explorer-ux, Property 1: Semantic Zone Grouping Correctness
+    // In 3-tier hierarchy, there is no "Knowledge" node row — the section-header IS the root dir.
     fc.assert(
       fc.property(arbWorkspaceTree, (tree) => {
-        const rows = flattenTree(tree, new Set());
+        const rows = flattenTree(tree, new Set(['Knowledge']));
         const separators = findSeparatorIndices(rows);
-        const knowledgeIndex = findNodeIndex(rows, 'Knowledge');
 
-        expect(knowledgeIndex).not.toBe(-1);
-        // Knowledge must be after "Shared Knowledge" separator
-        expect(knowledgeIndex).toBeGreaterThan(separators[0].index);
-        // Knowledge must be before "Active Work" separator
-        expect(knowledgeIndex).toBeLessThan(separators[1].index);
+        // No node row for 'Knowledge' itself
+        const knowledgeNodeIndex = findNodeIndex(rows, 'Knowledge');
+        expect(knowledgeNodeIndex).toBe(-1);
+
+        // Knowledge section header exists
+        const knowledgeSection = separators.find((s) => s.label === 'Knowledge');
+        expect(knowledgeSection).toBeDefined();
       }),
       { numRuns: 100 },
     );
   });
 
-  it('(d) Projects/ appears in the Active Work zone (after second separator)', () => {
+  it('(d) Projects children appear after the Projects section-header (root dir is absorbed)', () => {
     // Feature: swarmws-explorer-ux, Property 1: Semantic Zone Grouping Correctness
     fc.assert(
       fc.property(arbWorkspaceTree, (tree) => {
-        const rows = flattenTree(tree, new Set());
+        const rows = flattenTree(tree, new Set(['Projects']));
         const separators = findSeparatorIndices(rows);
-        const projectsIndex = findNodeIndex(rows, 'Projects');
 
-        expect(projectsIndex).not.toBe(-1);
-        // Projects must be after "Active Work" separator
-        expect(projectsIndex).toBeGreaterThan(separators[1].index);
+        // No node row for 'Projects' itself
+        const projectsNodeIndex = findNodeIndex(rows, 'Projects');
+        expect(projectsNodeIndex).toBe(-1);
+
+        // Projects section header exists
+        const projectsSection = separators.find((s) => s.label === 'Projects');
+        expect(projectsSection).toBeDefined();
       }),
       { numRuns: 100 },
     );
   });
 
-  it('(e) correct ordering within zones: root files → Shared Knowledge → Active Work', () => {
+  it('(e) correct ordering: root files -> Knowledge section -> Projects section', () => {
     // Feature: swarmws-explorer-ux, Property 1: Semantic Zone Grouping Correctness
     fc.assert(
       fc.property(arbWorkspaceTree, (tree) => {
-        const rows = flattenTree(tree, new Set());
+        const rows = flattenTree(tree, new Set(['Knowledge', 'Projects']));
         const separators = findSeparatorIndices(rows);
-        const knowledgeIndex = findNodeIndex(rows, 'Knowledge');
-        const projectsIndex = findNodeIndex(rows, 'Projects');
+        const knowledgeSection = separators.find((s) => s.label === 'Knowledge')!;
+        const projectsSection = separators.find((s) => s.label === 'Projects')!;
 
-        // Knowledge must come before Projects in the overall list
-        expect(knowledgeIndex).toBeLessThan(projectsIndex);
+        // Knowledge section header must come before Projects
+        expect(knowledgeSection.index).toBeLessThan(projectsSection.index);
 
-        // All node rows between separators[0] and separators[1] should be
-        // Knowledge zone items (Knowledge/ and its children if expanded)
-        for (let i = separators[0].index + 1; i < separators[1].index; i++) {
+        // All node rows between Knowledge and Projects section-headers should be
+        // descendants of Knowledge/
+        for (let i = knowledgeSection.index + 1; i < projectsSection.index; i++) {
           const row = rows[i];
           if (row.kind === 'node') {
-            // Must be Knowledge or a descendant of Knowledge
-            expect(
-              row.node.path === 'Knowledge' || row.node.path.startsWith('Knowledge/'),
-            ).toBe(true);
-          }
-        }
-
-        // All node rows after separators[1] should be Active Work zone items
-        // (Projects/ and its children, or other non-zone directories)
-        for (let i = separators[1].index + 1; i < rows.length; i++) {
-          const row = rows[i];
-          if (row.kind === 'node') {
-            // Must be Projects or a descendant, or a non-zone directory
-            const isProjectsZone =
-              row.node.path === 'Projects' || row.node.path.startsWith('Projects/');
-            const isNonZoneDir =
-              row.node.path !== 'Knowledge' && !row.node.path.startsWith('Knowledge/');
-            expect(isProjectsZone || isNonZoneDir).toBe(true);
+            expect(row.node.path.startsWith('Knowledge/')).toBe(true);
           }
         }
       }),
@@ -440,10 +431,12 @@ describe('Property 11: Virtualization Renders Fewer DOM Nodes', () => {
           <VirtualizedTree height={CONTAINER_HEIGHT} width={400} />,
         );
 
-        // Count rendered DOM rows: tree-row (TreeNodeRow) + zone-separator (ZoneSeparator)
+        // Count rendered DOM rows: tree-row (TreeNodeRow) + zone-separator (ZoneSeparator) + section-header + secondary-label
         const treeRows = container.querySelectorAll('[data-testid="tree-row"]');
         const separators = container.querySelectorAll('[data-testid="zone-separator"]');
-        const renderedCount = treeRows.length + separators.length;
+        const sectionHeaders = container.querySelectorAll('[data-testid="section-header"]');
+        const secondaryLabels = container.querySelectorAll('[data-testid="secondary-label"]');
+        const renderedCount = treeRows.length + separators.length + sectionHeaders.length + secondaryLabels.length;
 
         // Virtualization: rendered count must be less than total
         expect(renderedCount).toBeLessThan(totalFlatCount);
