@@ -69,6 +69,8 @@ export interface CollapsibleSectionProps {
   count: number;
   statusHint?: string;
   defaultExpanded?: boolean;
+  /** Left accent border color (CSS value). Omit for no accent. */
+  accent?: string;
   children: ReactNode;
 }
 

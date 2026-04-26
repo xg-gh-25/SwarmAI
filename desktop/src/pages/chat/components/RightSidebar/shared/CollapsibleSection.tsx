@@ -48,6 +48,7 @@ export function CollapsibleSection({
   count,
   statusHint,
   defaultExpanded = false,
+  accent,
   children,
 }: CollapsibleSectionProps) {
   const [expanded, setExpanded] = useState(() =>
@@ -65,7 +66,10 @@ export function CollapsibleSection({
   }, [name]);
 
   return (
-    <div className="border-b border-[var(--color-border)] last:border-b-0">
+    <div
+      className="border-b border-[var(--color-border)] last:border-b-0"
+      style={accent ? { borderLeft: `2px solid ${accent}` } : undefined}
+    >
       {/* Header row — clickable toggle */}
       <button
         className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left hover:bg-[var(--color-hover)] transition-colors"
