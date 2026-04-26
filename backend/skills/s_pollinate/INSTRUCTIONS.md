@@ -37,7 +37,11 @@ Create the content directory:
 ```bash
 SKILL_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONTENT_DIR="$HOME/.swarm-ai/SwarmWS/Services/pollinate-studio/content/{name}"
-mkdir -p "$CONTENT_DIR/video"
+mkdir -p "$CONTENT_DIR/tracks/video"
+mkdir -p "$CONTENT_DIR/tracks/narrative"
+mkdir -p "$CONTENT_DIR/tracks/poster"
+mkdir -p "$CONTENT_DIR/tracks/shorts"
+mkdir -p "$CONTENT_DIR/deliver"
 ```
 
 Create `content/{name}/run.json`:
@@ -166,9 +170,10 @@ Pollinate: "{topic}" (run_p_{id})
 Domain: {domain} | Formats: Video
 Platforms: B站, YouTube, 小红書
 
-  [done] EVALUATE  GO, ROI 4.2
-  [done] THINK     Differentiation: "两大框架创始人同时验证"
-  [>>>>] PLAN      Scripting 6 sections...
+  [done] EVALUATE   GO, ROI 4.2
+  [done] THINK      Differentiation: "两大框架创始人同时验证"
+  [>>>>] STRATEGIZE PR/FAQ + channel matrix...
+  [    ] PLAN
   [    ] BUILD
   [    ] REVIEW
   [    ] TEST
@@ -192,6 +197,7 @@ Stage status indicators:
 |-------|-------------|
 | EVALUATE | 2 |
 | THINK | 2 |
+| STRATEGIZE | 2 |
 | PLAN | 2 |
 | BUILD | 3 |
 | REVIEW | 2 |
@@ -352,7 +358,7 @@ Before advancing to THINK, ALL must be true:
 
 ### Verification Gate
 
-Before advancing to PLAN, ALL must be true:
+Before advancing to STRATEGIZE, ALL must be true:
 - [ ] `content/{name}/research.md` exists
 - [ ] Core thesis is a single sentence (not a paragraph)
 - [ ] Target audience profile is specific (not "everyone")
@@ -380,11 +386,152 @@ Before advancing to PLAN, ALL must be true:
 
 ---
 
-## Stage 3: PLAN -- Content Package + Script + Visual Design
+## Stage 3: STRATEGIZE -- PR/FAQ + Channel × Format Matrix
 
 ### Procedure
 
-#### Step 3a: Content Package (format-agnostic core)
+#### Step 3a: Draft PR/FAQ
+
+Every Pollinate run produces a PR/FAQ as the single source document — even for
+a poster. All downstream formats extract from this PR/FAQ.
+
+Create `content/{name}/PRFAQ.md`:
+
+```markdown
+# PRESS RELEASE
+
+**Headline:** [one sentence — the value delivered]
+
+**Problem:** [why this matters to the audience]
+
+**Solution:** [what we produce and why it's different]
+
+**Real Example:** [concrete, specific, verifiable proof]
+
+**Quote:** [the "aha" sentence that captures the insight]
+
+# FAQ
+
+**Q: How is this different from X?**
+A: ...
+
+**Q: Who is this for?**
+A: ...
+
+**Q: What can I do with this?**
+A: ...
+```
+
+The PR/FAQ must be concrete, not generic. "Real Example" requires actual data,
+code, benchmarks, or specific names. No placeholder text like "demonstrates the
+value" — show the actual value with numbers or quotes.
+
+#### Step 3b: Channel × Format Decision Matrix
+
+For each enabled channel (from `~/.swarm-ai/pollinate-accounts.yaml`), assess
+audience fit and select optimal format.
+
+**Decision rules (all mechanical unless controversial):**
+
+| Condition | Format Decision | Classification |
+|-----------|----------------|---------------|
+| Breaking news + high timeliness | Poster-first (ship fast), video later if traction | Mechanical |
+| Deep technical + high differentiation | Video + narrative (long-form depth) | Mechanical |
+| Product launch | Full mix: poster + video + narrative + README | Mechanical |
+| Audience fit < 3 for a channel | Skip channel | Mechanical |
+| Controversial topic (sensitive claim) | Escalate for judgment | Judgment |
+
+**Audience fit scoring (per channel):**
+- 5 = Core audience, perfect match
+- 4 = Strong fit, minor gaps
+- 3 = Moderate fit, some friction
+- 2 = Weak fit, low relevance
+- 1 = No fit, wrong audience
+
+Example assessment:
+```
+Channel Assessment:
+┌─────────────┬─────────────┬────────────────────┬──────────┐
+│ Channel     │ Audience Fit│ Best Format        │ Priority │
+├─────────────┼─────────────┼────────────────────┼──────────┤
+│ xiaohongshu │ 5           │ Poster + short text│ P0       │
+│ bilibili    │ 5           │ Video + poster     │ P0       │
+│ gongzhonghao│ 4           │ Narrative          │ P1       │
+│ douyin      │ 3           │ Shorts (vertical)  │ P2       │
+│ youtube     │ 2           │ Skip (EN audience) │ Skip     │
+└─────────────┴─────────────┴────────────────────┴──────────┘
+```
+
+#### Step 3c: Write strategy.json
+
+Save `content/{name}/strategy.json`:
+
+```json
+{
+  "message": "...",
+  "audience": "...",
+  "desired_outcome": "awareness -> trial",
+  "prfaq_path": "content/{name}/PRFAQ.md",
+  "channel_matrix": [
+    {"channel": "xiaohongshu", "format": ["poster", "short_text"], "priority": "P0", "audience_fit": 5},
+    {"channel": "bilibili", "format": ["video", "poster"], "priority": "P0", "audience_fit": 5},
+    {"channel": "gongzhonghao", "format": ["narrative"], "priority": "P1", "audience_fit": 4}
+  ],
+  "production_tracks": ["poster", "video", "narrative"]
+}
+```
+
+The `production_tracks` array drives Stage 4 (PLAN) — one spec per track.
+
+### Decisions
+
+| Decision | Classification | Default |
+|----------|---------------|---------|
+| PR/FAQ structure | Mechanical | Standard template |
+| Audience fit scoring | Mechanical | Formula per channel config |
+| Format selection per channel | Mechanical | From decision rules table |
+| Tone (professional/casual) | Taste | From domain in identity.yaml |
+| "Should we cover this angle?" | Judgment | Block if controversial |
+
+### Verification Gate
+
+Before advancing to PLAN, ALL must be true:
+- [ ] `content/{name}/PRFAQ.md` exists with all sections filled (no placeholders)
+- [ ] PR/FAQ "Real Example" has concrete data (not "demonstrates value")
+- [ ] `content/{name}/strategy.json` exists and is valid JSON
+- [ ] Every enabled channel has an audience_fit score
+- [ ] Channels with audience_fit < 3 are either skipped or have explicit override
+- [ ] `production_tracks` array is populated with at least 1 track
+- [ ] If controversial topic detected, escalation was handled
+
+### Anti-Rationalization
+
+| Shortcut | Required Response |
+|----------|-------------------|
+| "PR/FAQ feels redundant with research.md" | PR/FAQ is the source doc for all formats. Write it. |
+| "Poster doesn't need a PR/FAQ" | Every format derives from PR/FAQ. Write one sentence if minimal. |
+| "Channel selection is obvious" | Show the audience_fit scores. Obvious to you is not obvious to audit. |
+| "Skip low-fit channels manually" | Let the mechanical rule skip them. Log the reason. |
+
+### Max Retries
+
+2. After exhaustion -> checkpoint.
+
+### Output Files
+
+- `content/{name}/PRFAQ.md` -- source document for all formats
+- `content/{name}/strategy.json` -- channel matrix + production tracks
+
+---
+
+## Stage 4: PLAN -- Content Package + Per-Track Specs
+
+### Procedure
+
+Load `strategy.json` to determine which production tracks to plan. For each
+track in `production_tracks`, generate the corresponding spec.
+
+#### Step 4a: Content Package (format-agnostic core)
 
 Create `content/{name}/content_package.md`:
 
@@ -416,9 +563,9 @@ Create `content/{name}/content_package.md`:
 - ...
 ```
 
-#### Step 3b: Video Script
+#### Step 4b: Video Script (if "video" in production_tracks)
 
-Create `content/{name}/video/podcast.txt` with `[SECTION:xxx]` markers.
+Create `content/{name}/tracks/video/podcast.txt` with `[SECTION:xxx]` markers.
 
 **Script structure:**
 ```
@@ -472,12 +619,12 @@ For each section, select Remotion components:
 - Hero title >= 84px, section title >= 72px, body >= 32px
 - Apply domain theme from brand/identity.yaml `domain_themes`
 
-#### Step 3d: Duration Dry-Run
+#### Step 4c: Duration Dry-Run (if "video" in production_tracks)
 
 ```bash
 python "$SKILL_DIR/scripts/generate_tts.py" \
-  --input "content/{name}/video/podcast.txt" \
-  --output-dir "content/{name}/video/" \
+  --input "content/{name}/tracks/video/podcast.txt" \
+  --output-dir "content/{name}/tracks/video/" \
   --dry-run
 ```
 
@@ -531,7 +678,7 @@ Before advancing to BUILD, ALL must be true:
 
 ---
 
-## Stage 4: BUILD -- TTS + Remotion + Preview
+## Stage 5: BUILD -- TTS + Remotion + Preview
 
 ### Procedure
 
@@ -555,7 +702,7 @@ if [ ! -f "$STUDIO_DIR/package.json" ]; then
 fi
 ```
 
-#### Step 4.3: Pronunciation Pre-Flight (zh-CN only)
+#### Step 5.3: Pronunciation Pre-Flight (zh-CN only)
 
 Three-pass LLM analysis of podcast.txt:
 
@@ -571,16 +718,16 @@ Three-pass LLM analysis of podcast.txt:
 - Example: "Qwen" -> "qian wen", "Doubao" -> "dou bao"
 - Cross-reference with brand/identity.yaml voice section
 
-**Output:** `content/{name}/video/phonemes.json`
+**Output:** `content/{name}/tracks/video/phonemes.json`
 
 **Phoneme priority:** inline `word[pinyin]` > project phonemes.json > global phonemes.json
 
-#### Step 4.4: TTS Audio Generation
+#### Step 5.4: TTS Audio Generation
 
 ```bash
 python "$SKILL_DIR/scripts/generate_tts.py" \
-  --input "content/{name}/video/podcast.txt" \
-  --output-dir "content/{name}/video/" \
+  --input "content/{name}/tracks/video/podcast.txt" \
+  --output-dir "content/{name}/tracks/video/" \
   --backend polly \
   [--resume]
 ```
@@ -596,30 +743,30 @@ python "$SKILL_DIR/scripts/generate_tts.py" \
 fails or is interrupted, timing data is lost and must be regenerated from
 scratch. The script handles this, but verify the file exists after TTS completes.
 
-#### Step 4.5: Thumbnail Generation
+#### Step 5.5: Thumbnail Generation
 
 Always generate via Remotion still render:
 ```bash
 cd "$STUDIO_DIR"
 npx remotion still src/remotion/index.ts Thumbnail16x9 \
-  "content/{name}/video/thumbnail_16x9.png" \
-  --public-dir "content/{name}/video/" \
+  "content/{name}/tracks/video/thumbnail_16x9.png" \
+  --public-dir "content/{name}/tracks/video/" \
   --props '{"title": "{Title}", "theme": "{theme}"}'
 npx remotion still src/remotion/index.ts Thumbnail4x3 \
-  "content/{name}/video/thumbnail_4x3.png" \
-  --public-dir "content/{name}/video/" \
+  "content/{name}/tracks/video/thumbnail_4x3.png" \
+  --public-dir "content/{name}/tracks/video/" \
   --props '{"title": "{Title}", "theme": "{theme}"}'
 ```
 
 For 小红书, also generate 3:4:
 ```bash
 npx remotion still src/remotion/index.ts Thumbnail3x4 \
-  "content/{name}/video/thumbnail_3x4.png" \
-  --public-dir "content/{name}/video/" \
+  "content/{name}/tracks/video/thumbnail_3x4.png" \
+  --public-dir "content/{name}/tracks/video/" \
   --props '{"title": "{Title}", "theme": "{theme}"}'
 ```
 
-#### Step 4.6: Remotion Composition
+#### Step 5.6: Remotion Composition
 
 1. Copy component library to studio (if absent or updated):
    ```bash
@@ -633,12 +780,12 @@ npx remotion still src/remotion/index.ts Thumbnail3x4 \
 5. 4K output: design at 1080p, wrap in `<Scale4K>` component (`scale(2)` to 3840x2160)
 6. Subtitles + ChapterProgressBar render OUTSIDE `<Scale4K>` wrapper
 
-#### Step 4.7: Studio Preview (MANDATORY GATE)
+#### Step 5.7: Studio Preview (MANDATORY GATE)
 
 ```bash
 cd "$STUDIO_DIR"
 pkill -f "remotion studio" 2>/dev/null || true
-npx remotion studio src/remotion/index.ts --public-dir "content/{name}/video/"
+npx remotion studio src/remotion/index.ts --public-dir "content/{name}/tracks/video/"
 ```
 
 **THIS GATE CANNOT BE SKIPPED. NO AUTOMATION BYPASSES IT.**
@@ -694,18 +841,18 @@ Before advancing to REVIEW, ALL must be true:
 
 ### Output Files
 
-- `content/{name}/video/podcast_audio.wav` -- full narration audio
-- `content/{name}/video/podcast_audio.srt` -- subtitle file
-- `content/{name}/video/timing.json` -- per-section timestamps
-- `content/{name}/video/phonemes.json` -- pronunciation corrections (zh-CN)
-- `content/{name}/video/thumbnail_16x9.png` -- 1920x1080 playback thumbnail
-- `content/{name}/video/thumbnail_4x3.png` -- 1200x900 recommendation feed
-- `content/{name}/video/thumbnail_3x4.png` -- 1080x1440 小红書 feed (if applicable)
+- `content/{name}/tracks/video/podcast_audio.wav` -- full narration audio
+- `content/{name}/tracks/video/podcast_audio.srt` -- subtitle file
+- `content/{name}/tracks/video/timing.json` -- per-section timestamps
+- `content/{name}/tracks/video/phonemes.json` -- pronunciation corrections (zh-CN)
+- `content/{name}/tracks/video/thumbnail_16x9.png` -- 1920x1080 playback thumbnail
+- `content/{name}/tracks/video/thumbnail_4x3.png` -- 1200x900 recommendation feed
+- `content/{name}/tracks/video/thumbnail_3x4.png` -- 1080x1440 小红書 feed (if applicable)
 - `$STUDIO_DIR/src/remotion/{Name}Video.tsx` -- per-video Remotion composition
 
 ---
 
-## Stage 5: REVIEW -- Quality Audit
+## Stage 6: REVIEW -- Quality Audit
 
 ### Procedure
 
@@ -795,25 +942,25 @@ Before advancing to TEST, ALL must be true:
 
 ---
 
-## Stage 6: TEST -- Render + Platform Validation
+## Stage 7: TEST -- Render + Platform Validation
 
 ### Procedure
 
-#### Step 6.1: 4K Render
+#### Step 7.1: 4K Render
 
 ```bash
 cd "$STUDIO_DIR"
 npx remotion render src/remotion/index.ts {CompositionId} \
-  "content/{name}/video/output.mp4" \
+  "content/{name}/tracks/video/output.mp4" \
   --video-bitrate 16M \
-  --public-dir "content/{name}/video/"
+  --public-dir "content/{name}/tracks/video/"
 ```
 
-#### Step 6.2: Verify Render Output
+#### Step 7.2: Verify Render Output
 
 ```bash
 ffprobe -v quiet -show_entries stream=width,height,codec_name,bit_rate -of json \
-  "content/{name}/video/output.mp4"
+  "content/{name}/tracks/video/output.mp4"
 ```
 
 **Required results:**
@@ -824,44 +971,44 @@ ffprobe -v quiet -show_entries stream=width,height,codec_name,bit_rate -of json 
 
 If ffprobe fails any check -> fix and re-render.
 
-#### Step 6.3: BGM Mix
+#### Step 7.3: BGM Mix
 
 ```bash
 BGM_VOL=$(python "$SKILL_DIR/scripts/get_pref.py" global.bgm.volume 2>/dev/null || echo "0.05")
 ffmpeg -y \
-  -i "content/{name}/video/output.mp4" \
+  -i "content/{name}/tracks/video/output.mp4" \
   -i "$SKILL_DIR/brand/assets/bgm/calm-piano.mp3" \
   -filter_complex "[1:a]volume=${BGM_VOL}[bgm];[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=2[a]" \
   -map 0:v -map "[a]" \
   -c:v copy -c:a aac -b:a 192k \
-  "content/{name}/video/video_with_bgm.mp4"
+  "content/{name}/tracks/video/video_with_bgm.mp4"
 ```
 
-#### Step 6.4: Subtitles (optional)
+#### Step 7.4: Subtitles (optional)
 
 Prefer Remotion-native `<Subtitles>` component (no re-encode needed).
 Fallback if not using Remotion subtitles:
 ```bash
 ffmpeg -y \
-  -i "content/{name}/video/video_with_bgm.mp4" \
-  -vf "subtitles=content/{name}/video/podcast_audio.srt:force_style='FontName=PingFang SC,FontSize=24,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,Outline=2,Bold=1,Alignment=2,MarginV=30'" \
+  -i "content/{name}/tracks/video/video_with_bgm.mp4" \
+  -vf "subtitles=content/{name}/tracks/video/podcast_audio.srt:force_style='FontName=PingFang SC,FontSize=24,PrimaryColour=&HFFFFFF&,OutlineColour=&H000000&,Outline=2,Bold=1,Alignment=2,MarginV=30'" \
   -c:v libx264 -crf 18 -c:a copy \
-  "content/{name}/video/video_with_subs.mp4"
+  "content/{name}/tracks/video/video_with_subs.mp4"
 ```
 
-#### Step 6.5: Final Assembly
+#### Step 7.5: Final Assembly
 
 ```bash
-cp "content/{name}/video/video_with_bgm.mp4" "content/{name}/video/final_video.mp4"
+cp "content/{name}/tracks/video/video_with_bgm.mp4" "content/{name}/tracks/video/final_video.mp4"
 ```
 
 (If subtitle burn-in was used, copy `video_with_subs.mp4` instead.)
 
-#### Step 6.6: Platform Spec Validation
+#### Step 7.6: Platform Spec Validation
 
 ```bash
 python "$SKILL_DIR/scripts/check_specs.py" \
-  "content/{name}/video/final_video.mp4" \
+  "content/{name}/tracks/video/final_video.mp4" \
   --platforms bilibili,youtube,xiaohongshu,douyin,weixin_video
 ```
 
@@ -911,18 +1058,18 @@ Before advancing to DELIVER, ALL must be true:
 
 ### Output Files
 
-- `content/{name}/video/output.mp4` -- raw 4K render
-- `content/{name}/video/video_with_bgm.mp4` -- with background music
-- `content/{name}/video/final_video.mp4` -- final deliverable
+- `content/{name}/tracks/video/output.mp4` -- raw 4K render
+- `content/{name}/tracks/video/video_with_bgm.mp4` -- with background music
+- `content/{name}/tracks/video/final_video.mp4` -- final deliverable
 - Platform spec validation results (printed to console)
 
 ---
 
-## Stage 7: DELIVER -- Publish Package + Report
+## Stage 8: DELIVER -- Publish Package + Report
 
 ### Procedure
 
-#### Step 7.1: Run the Delivery Gate FIRST
+#### Step 8.1: Run the Delivery Gate FIRST
 
 Collect ALL taste decisions from ALL prior stages and present as a batch:
 
@@ -948,7 +1095,7 @@ may change BUILD). Re-run the minimum set of affected downstream stages.
 
 **If user wants to discuss:** enter conversational mode. Once resolved, resume.
 
-#### Step 7.2: Generate Platform Metadata
+#### Step 8.2: Generate Platform Metadata
 
 ```bash
 python "$SKILL_DIR/scripts/publish_meta.py" \
@@ -956,7 +1103,7 @@ python "$SKILL_DIR/scripts/publish_meta.py" \
   --platforms bilibili,youtube,xiaohongshu,douyin,weixin_video
 ```
 
-Output: `content/{name}/video/publish_info.md` with per-platform:
+Output: `content/{name}/deliver/publish_info.md` with per-platform:
 
 | Platform | Title Rules | Description | Tags | CTA |
 |----------|-------------|-------------|------|-----|
@@ -966,7 +1113,7 @@ Output: `content/{name}/video/publish_info.md` with per-platform:
 | 抖音 | Short, punchy | 100-200 chars, casual + emoji | 3-8 `#tag` | 点赞关注 |
 | 视频号 | Knowledge-sharing | 100-300 chars, forwarding-friendly | 3-8 `#tag` | 点赞关注转发 |
 
-#### Step 7.3: Confidence Scoring
+#### Step 8.3: Confidence Scoring
 
 Calculate the confidence score using this explicit formula. Each item must be
 evaluated and the contribution (+/-) shown:
@@ -1004,7 +1151,7 @@ Confidence: 9/10
 
 If confidence < 7 -> flag for human review before publishing.
 
-#### Step 7.4: Generate REPORT.md
+#### Step 8.4: Generate REPORT.md
 
 Save to `content/{name}/REPORT.md`:
 
@@ -1098,7 +1245,7 @@ Before advancing to REFLECT, ALL must be true:
 - [ ] Delivery Gate completed (taste decisions reviewed or none accumulated)
 - [ ] `content/{name}/REPORT.md` saved with all sections filled
 - [ ] Confidence breakdown shown (not just final number)
-- [ ] `content/{name}/video/publish_info.md` exists with per-platform metadata
+- [ ] `content/{name}/deliver/publish_info.md` exists with per-platform metadata
 - [ ] Confidence score >= 7 (or flagged for human review if < 7)
 - [ ] All files listed in "Files Produced" section of REPORT.md actually exist
 
@@ -1119,11 +1266,11 @@ Before advancing to REFLECT, ALL must be true:
 ### Output Files
 
 - `content/{name}/REPORT.md` -- full production report
-- `content/{name}/video/publish_info.md` -- per-platform titles, descriptions, tags, CTAs
+- `content/{name}/deliver/publish_info.md` -- per-platform titles, descriptions, tags, CTAs
 
 ---
 
-## Stage 8: REFLECT -- Learn + Improve
+## Stage 9: REFLECT -- Learn + Improve
 
 ### Procedure
 
@@ -1217,17 +1364,16 @@ Before marking pipeline COMPLETE, ALL must be true:
 After REFLECT stage, present the completion summary:
 
 ```
-Pollinate COMPLETE (run_p_{id}) -- 8 stages, 0 skipped, 0 escalations
+Pollinate COMPLETE (run_p_{id}) -- 9 stages, 0 skipped, 0 escalations
 Confidence: {score}/10
 
   Artifacts:
     evaluation    -> evaluation.json (GO, ROI {X.X})
     research      -> research.md (thesis: "{one-liner}")
+    strategy      -> PRFAQ.md + strategy.json (channel matrix)
     content_pkg   -> content_package.md ({N} key points)
-    script        -> podcast.txt ({M} sections, {est_duration})
-    video         -> final_video.mp4 ({resolution}, {duration})
-    thumbnails    -> 16:9, 4:3, 3:4
-    publish_meta  -> publish_info.md ({platforms})
+    tracks        -> video/, narrative/, poster/, shorts/
+    deliver       -> per-channel publish packages
     report        -> REPORT.md
 
   Quality: {N}/12 RP-V checks passed, all platform specs validated
