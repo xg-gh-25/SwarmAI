@@ -1,0 +1,53 @@
+# WeChat Channels (微信视频号) Platform Configuration
+platform: weixin_video
+name: "WeChat Channels (微信视频号)"
+language: zh-CN
+
+video:
+  orientation: vertical  # vertical ONLY
+  width: 2160
+  height: 3840
+  codec: h264
+  bitrate: "16M"
+  fps: 30
+  audio_codec: aac
+  audio_bitrate: "192k"
+
+duration:
+  min_seconds: 30
+  max_seconds: 120
+  target: "60-90s"
+
+thumbnails:
+  - aspect: "9:16"
+    width: 1080
+    height: 1920
+    purpose: "feed"
+
+title:
+  max_chars: 55
+  formula: "knowledge-sharing + forwarding-friendly"
+
+description:
+  min_chars: 100
+  max_chars: 300
+  style: "professional, knowledge-sharing, optimized for forwarding"
+
+tags:
+  count: 6
+  format: "#tag"  # SINGLE hash
+  examples:
+    - "#AI"
+    - "#技术管理"
+    - "#人工智能"
+
+chapters:
+  enabled: false
+
+cta:
+  type: "text"  # NO animation
+  text: "点赞关注，转发给朋友"
+
+script:
+  style: "professional, shareable, forwarding-friendly"
+  note: "Vertical shorts ONLY. Content should be valuable enough to forward."

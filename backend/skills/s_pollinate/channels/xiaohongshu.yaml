@@ -1,0 +1,61 @@
+# Xiaohongshu (小红书) Platform Configuration
+platform: xiaohongshu
+name: "Xiaohongshu (小红书)"
+language: zh-CN
+
+video:
+  orientation: vertical
+  width: 2160
+  height: 3840
+  codec: h264
+  bitrate: "16M"
+  fps: 30
+  audio_codec: aac
+  audio_bitrate: "192k"
+
+duration:
+  min_seconds: 30
+  max_seconds: 120
+  target: "60-90s"
+
+thumbnails:
+  - aspect: "16:9"
+    width: 1920
+    height: 1080
+    purpose: "playback"
+  - aspect: "3:4"
+    width: 1080
+    height: 1440
+    purpose: "feed optimization"
+
+title:
+  max_chars: 20
+  formula: "punchy + emoji"
+  examples:
+    - "AI记忆 > AI模型 🧠"
+    - "AI团队三阶段 🚀"
+    - "这个AI框架绝了 ✨"
+
+description:
+  min_chars: 200
+  max_chars: 500
+  style: "种草/knowledge-sharing, emoji-rich, line breaks for readability"
+
+tags:
+  count: 8
+  format: "#tag#"  # DOUBLE hash (小红书 specific)
+  examples:
+    - "#AI实践#"
+    - "#人工智能#"
+    - "#技术分享#"
+
+chapters:
+  enabled: false
+
+cta:
+  type: "text_animation"
+  text: "点赞收藏加关注"
+
+script:
+  style: "visual-first, punchy, high-value knowledge sharing"
+  note: "Primarily vertical video (9:16). Per-section shorts from horizontal master."
