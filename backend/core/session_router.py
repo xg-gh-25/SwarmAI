@@ -557,12 +557,13 @@ class SessionRouter:
             agent_id=agent_id,
             on_state_change=self._on_unit_state_change,
         )
-        self._units[temp_session_id] = unit
+        # NOTE: unit is NOT registered in _units yet — deferred until spawn
+        # succeeds.  This prevents the lifecycle reaper from seeing a
+        # half-initialized unit during the async spawn window.
 
         try:
             agent_config = await build_agent_config(agent_id)
             if not agent_config:
-                self._units.pop(temp_session_id, None)
                 return None
 
             options = await self._prompt_builder.build_options(
@@ -575,56 +576,61 @@ class SessionRouter:
             # Spawn subprocess → COLD → IDLE
             async for event in unit._ensure_spawned(options, self._config):
                 if event.get("_abort"):
-                    self._units.pop(temp_session_id, None)
                     return None
 
             if unit.state == SessionState.IDLE:
+                # Only register after spawn confirms IDLE — prevents reaper
+                # from seeing a COLD/DEAD unit during the spawn window
+                self._units[temp_session_id] = unit
                 logger.info(
                     "session_router.prewarm_complete session_id=%s",
                     temp_session_id,
                 )
                 return temp_session_id
 
-            # Unexpected state — cleanup
-            self._units.pop(temp_session_id, None)
+            # Unexpected state — don't register
             return None
         except Exception as exc:
             logger.warning("session_router.prewarm_failed: %s", exc)
-            self._units.pop(temp_session_id, None)
             return None
 
-    def adopt_prewarmed_unit(
+    async def adopt_prewarmed_unit(
         self, prewarm_session_id: str, real_session_id: str,
     ) -> bool:
         """Re-key a pre-warmed unit to serve a real session.
 
         Atomically moves the unit from the temporary pre-warm key to the
-        real session_id.  The unit must be IDLE (alive subprocess) for
-        adoption to succeed.
+        real session_id under _slot_lock.  The unit must be IDLE (alive
+        subprocess) for adoption to succeed.
+
+        Uses _slot_lock to prevent TOCTOU race when two coroutines
+        (e.g., two simultaneous Slack DMs at startup) both try to adopt
+        the same pre-warmed unit.
 
         Returns True on success, False if the unit doesn't exist, died,
         or was evicted.
         """
-        unit = self._units.pop(prewarm_session_id, None)
-        if unit is None:
-            return False
+        async with self._slot_lock:
+            unit = self._units.pop(prewarm_session_id, None)
+            if unit is None:
+                return False
 
-        if unit.state != SessionState.IDLE:
-            # Unit died or was evicted — put back and fail
-            self._units[prewarm_session_id] = unit
+            if unit.state != SessionState.IDLE:
+                # Unit died or was evicted — put back and fail
+                self._units[prewarm_session_id] = unit
+                logger.info(
+                    "session_router.adopt_prewarmed_skip state=%s (expected IDLE)",
+                    unit.state.value,
+                )
+                return False
+
+            unit.session_id = real_session_id
+            self._units[real_session_id] = unit
             logger.info(
-                "session_router.adopt_prewarmed_skip state=%s (expected IDLE)",
-                unit.state.value,
+                "session_router.adopt_prewarmed %s → %s",
+                prewarm_session_id, real_session_id,
             )
-            return False
-
-        unit.session_id = real_session_id
-        self._units[real_session_id] = unit
-        logger.info(
-            "session_router.adopt_prewarmed %s → %s",
-            prewarm_session_id, real_session_id,
-        )
-        return True
+            return True
 
     def list_units(self) -> list[SessionUnit]:
         """Return all registered SessionUnits."""

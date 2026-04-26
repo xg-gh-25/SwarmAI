@@ -1031,16 +1031,16 @@ class TestSessionPrewarming:
 
         assert gateway._prewarmed_session_id is None
 
-    def test_try_adopt_prewarmed_success(self, gateway):
+    async def test_try_adopt_prewarmed_success(self, gateway):
         """Adoption clears _prewarmed_session_id and delegates to router."""
         gateway._prewarmed_session_id = "prewarm-xyz"
 
         mock_router = MagicMock()
-        mock_router.adopt_prewarmed_unit = MagicMock(return_value=True)
+        mock_router.adopt_prewarmed_unit = AsyncMock(return_value=True)
 
         with patch("channels.gateway.session_registry") as mock_reg:
             mock_reg.session_router = mock_router
-            result = gateway._try_adopt_prewarmed("real-session-1")
+            result = await gateway._try_adopt_prewarmed("real-session-1")
 
         assert result is True
         assert gateway._prewarmed_session_id is None
@@ -1048,22 +1048,22 @@ class TestSessionPrewarming:
             "prewarm-xyz", "real-session-1",
         )
 
-    def test_try_adopt_prewarmed_no_prewarm(self, gateway):
+    async def test_try_adopt_prewarmed_no_prewarm(self, gateway):
         """Adoption returns False when no pre-warm exists."""
         assert gateway._prewarmed_session_id is None
-        result = gateway._try_adopt_prewarmed("real-session-1")
+        result = await gateway._try_adopt_prewarmed("real-session-1")
         assert result is False
 
-    def test_try_adopt_prewarmed_router_rejects(self, gateway):
+    async def test_try_adopt_prewarmed_router_rejects(self, gateway):
         """Adoption returns False and clears _prewarmed_session_id on rejection."""
         gateway._prewarmed_session_id = "prewarm-xyz"
 
         mock_router = MagicMock()
-        mock_router.adopt_prewarmed_unit = MagicMock(return_value=False)
+        mock_router.adopt_prewarmed_unit = AsyncMock(return_value=False)
 
         with patch("channels.gateway.session_registry") as mock_reg:
             mock_reg.session_router = mock_router
-            result = gateway._try_adopt_prewarmed("real-session-1")
+            result = await gateway._try_adopt_prewarmed("real-session-1")
 
         assert result is False
         # Always cleared — avoids repeated failed adoption attempts.
@@ -1111,7 +1111,7 @@ class TestSessionRouterPrewarm:
         assert result.startswith("prewarm-")
         assert result in router._units
 
-    def test_adopt_prewarmed_unit_rekeys(self):
+    async def test_adopt_prewarmed_unit_rekeys(self):
         """adopt_prewarmed_unit moves unit from temp key to real key."""
         from core.session_unit import SessionState
 
@@ -1124,7 +1124,7 @@ class TestSessionRouterPrewarm:
         mock_unit.state = SessionState.IDLE
         router._units["prewarm-abc"] = mock_unit
 
-        result = router.adopt_prewarmed_unit("prewarm-abc", "real-session-1")
+        result = await router.adopt_prewarmed_unit("prewarm-abc", "real-session-1")
 
         assert result is True
         assert "prewarm-abc" not in router._units
@@ -1132,7 +1132,7 @@ class TestSessionRouterPrewarm:
         assert router._units["real-session-1"] is mock_unit
         assert mock_unit.session_id == "real-session-1"
 
-    def test_adopt_prewarmed_unit_rejects_dead(self):
+    async def test_adopt_prewarmed_unit_rejects_dead(self):
         """adopt_prewarmed_unit rejects if unit is not IDLE."""
         from core.session_unit import SessionState
 
@@ -1144,18 +1144,18 @@ class TestSessionRouterPrewarm:
         mock_unit.state = SessionState.COLD  # Not IDLE
         router._units["prewarm-abc"] = mock_unit
 
-        result = router.adopt_prewarmed_unit("prewarm-abc", "real-session-1")
+        result = await router.adopt_prewarmed_unit("prewarm-abc", "real-session-1")
 
         assert result is False
         # Unit should be put back at original key
         assert "prewarm-abc" in router._units
         assert "real-session-1" not in router._units
 
-    def test_adopt_prewarmed_unit_missing(self):
+    async def test_adopt_prewarmed_unit_missing(self):
         """adopt_prewarmed_unit returns False for missing key."""
         mock_prompt_builder = MagicMock()
         from core.session_router import SessionRouter
         router = SessionRouter(prompt_builder=mock_prompt_builder)
 
-        result = router.adopt_prewarmed_unit("nonexistent", "real-session-1")
+        result = await router.adopt_prewarmed_unit("nonexistent", "real-session-1")
         assert result is False

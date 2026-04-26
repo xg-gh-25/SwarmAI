@@ -62,17 +62,22 @@ def _split_blocks_for_payload(
 ) -> list[list[dict]]:
     """Split blocks into chunks that fit Slack's payload limits.
 
-    Enforces both block count (50) and total text size (~38K) per chunk.
+    Enforces both block count (50) and total payload size (~38K) per chunk.
+    Counts full JSON-serialized block size (not just text fields) to handle
+    image blocks, context blocks, and other non-text block types correctly.
     Returns a list of block-lists, each safe for one API call.
     """
+    import json as _json
+
     if not blocks:
         return [[]]
     chunks: list[list[dict]] = []
     current: list[dict] = []
     current_bytes = 0
     for block in blocks:
-        block_text = block.get("text", {}).get("text", "") if isinstance(block.get("text"), dict) else ""
-        block_bytes = len(block_text.encode("utf-8", errors="replace"))
+        # Count full serialized size — covers image alt_text, context elements,
+        # action URLs, and any other non-text content that contributes to payload.
+        block_bytes = len(_json.dumps(block, ensure_ascii=False).encode("utf-8"))
         if current and (len(current) >= max_blocks or current_bytes + block_bytes > max_text_bytes):
             chunks.append(current)
             current = []
