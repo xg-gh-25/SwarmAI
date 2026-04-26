@@ -5,6 +5,19 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.2] - 2026-04-26
+
+### Added
+
+- **Design Intelligence Database** (`s_frontend-design`): 67 visual styles, 161 color palettes, 57 font pairings, 161 industry-specific rules integrated into frontend-design and web-design-review skills
+- **Deep Research Phase 0 Intent Planner**: Auto-classifies research depth (quick/standard/deep/exhaustive) from query complexity before executing rounds
+- **Learn Content Depth Calibration**: Auto-adjusts extraction depth based on content type (article vs reference vs tutorial)
+
+### Fixed
+
+- **Deep Research 5 Gaps**: Improved source deduplication, citation formatting, search query refinement, synthesis structure, and error recovery
+- **Learn Content Gaps**: Better URL validation, duplicate card detection, metadata extraction, KNOWLEDGE.md index updates, and cross-reference linking
+
 ## [1.8.1] - 2026-04-26
 
 ### Added
