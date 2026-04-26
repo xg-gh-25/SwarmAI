@@ -61,7 +61,6 @@ def check_studio_preview(content_dir: str) -> tuple[int, str]:
     the user approved the preview (render requires explicit approval).
     """
     video_dir = os.path.join(content_dir, "video")
-    out_dir = os.path.dirname(content_dir)
 
     # Check for rendered output or final_video
     for candidate in [
@@ -144,7 +143,9 @@ def check_platform_specs(content_dir: str, platforms: list[str] | None = None) -
             else:
                 return -failures, f"{failures}/{len(results)} platform specs failed"
         return 0, "check_specs.py returned empty"
-    except Exception as e:
+    except subprocess.TimeoutExpired:
+        return 0, "check_specs.py timed out (30s)"
+    except (json.JSONDecodeError, OSError) as e:
         return 0, f"check_specs.py error: {e}"
 
 

@@ -151,6 +151,9 @@ def decay_scores(backlog: List[Dict[str, Any]], decay_rate: float = 0.1) -> int:
         created_str = topic.get('created', '')
         try:
             created_date = datetime.fromisoformat(created_str.replace('Z', '+00:00'))
+            # Ensure timezone-aware for comparison with now (UTC)
+            if created_date.tzinfo is None:
+                created_date = created_date.replace(tzinfo=timezone.utc)
             days_old = (now - created_date).days
         except (ValueError, AttributeError):
             continue

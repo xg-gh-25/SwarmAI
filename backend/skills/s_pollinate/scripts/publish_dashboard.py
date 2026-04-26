@@ -12,8 +12,10 @@ Usage:
 import argparse
 import json
 import os
+import platform
 import subprocess
 import sys
+import webbrowser
 
 
 CHANNEL_LABELS = {
@@ -254,7 +256,7 @@ def main():
         with open(html_path, "w", encoding="utf-8") as f:
             f.write(html)
         print(f"Dashboard: {html_path}")
-        subprocess.run(["open", html_path])
+        webbrowser.open(f"file://{os.path.abspath(html_path)}")
     else:
         md = generate_markdown(content_dir, assets, strategy)
         if args.output:
@@ -267,7 +269,12 @@ def main():
     if args.open:
         deliver_dir = os.path.join(content_dir, "deliver")
         if os.path.isdir(deliver_dir):
-            subprocess.run(["open", deliver_dir])
+            if platform.system() == "Darwin":
+                subprocess.run(["open", deliver_dir])
+            elif platform.system() == "Windows":
+                subprocess.run(["explorer", deliver_dir])
+            else:
+                subprocess.run(["xdg-open", deliver_dir])
 
 
 if __name__ == "__main__":

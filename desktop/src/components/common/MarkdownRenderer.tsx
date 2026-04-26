@@ -723,11 +723,15 @@ const baseMarkdownComponents: Record<string, React.ComponentType<any>> = {
       onClick={async (e) => {
         if (href) {
           e.preventDefault();
-          if (href.startsWith('file://')) {
-            const { openPath } = await import('@tauri-apps/plugin-opener');
-            await openPath(href.replace('file://', ''));
-          } else {
-            await openExternal(href);
+          try {
+            if (href.startsWith('file://')) {
+              const { openPath } = await import('@tauri-apps/plugin-opener');
+              await openPath(href.replace('file://', ''));
+            } else {
+              await openExternal(href);
+            }
+          } catch (err) {
+            console.error('Failed to open link:', href, err);
           }
         }
       }}
