@@ -1,11 +1,23 @@
 #!/usr/bin/env python3
 """Deterministic confidence scoring for pipeline delivery gate.
 
-Reads run.json and stage artifacts from the run directory.
-Agent passes only the run directory path — no manual parameter extraction.
+Two modes:
+1. --run-dir: reads run.json + co-located artifact JSONs from a directory
+2. --evaluation/--changeset/--review/--test-report: explicit artifact file paths
+
+Mode 2 is the primary path — artifacts live in the global .artifacts/ registry,
+not co-located with run.json. The agent discovers them via artifact_cli.py.
 
 Usage:
-    python scripts/confidence_score.py --run-dir Projects/SwarmAI/.artifacts/runs/run_abc12345/
+    # Mode 1: all artifacts in one directory (tests, simple cases)
+    python scripts/confidence_score.py --run-dir /path/to/run_dir/
+
+    # Mode 2: explicit paths (production — agent discovers via artifact_cli)
+    python scripts/confidence_score.py --run-dir /path/to/run_dir/ \
+        --evaluation /path/to/evaluation.json \
+        --changeset /path/to/changeset.json \
+        --review /path/to/review.json \
+        --test-report /path/to/test_report.json
 
 Output (JSON):
     {
@@ -47,13 +59,23 @@ def _has_backend_files(files_changed: list[str]) -> bool:
     return any(os.path.splitext(f)[1] in backend_exts for f in files_changed)
 
 
-def calculate_score(run_dir: str) -> dict:
-    """Calculate confidence score from pipeline run artifacts."""
+def calculate_score(
+    run_dir: str,
+    evaluation_path: str | None = None,
+    changeset_path: str | None = None,
+    review_path: str | None = None,
+    test_report_path: str | None = None,
+) -> dict:
+    """Calculate confidence score from pipeline run artifacts.
+
+    Artifacts are loaded from explicit paths (if given) or from co-located
+    files in run_dir (fallback for tests and simple cases).
+    """
     run = _load_json(os.path.join(run_dir, "run.json")) or {}
-    evaluation = _load_json(os.path.join(run_dir, "evaluation.json"))
-    changeset = _load_json(os.path.join(run_dir, "changeset.json"))
-    review = _load_json(os.path.join(run_dir, "review.json"))
-    test_report = _load_json(os.path.join(run_dir, "test_report.json"))
+    evaluation = _load_json(evaluation_path) if evaluation_path else _load_json(os.path.join(run_dir, "evaluation.json"))
+    changeset = _load_json(changeset_path) if changeset_path else _load_json(os.path.join(run_dir, "changeset.json"))
+    review = _load_json(review_path) if review_path else _load_json(os.path.join(run_dir, "review.json"))
+    test_report = _load_json(test_report_path) if test_report_path else _load_json(os.path.join(run_dir, "test_report.json"))
 
     breakdown = []
     penalties = []
@@ -226,9 +248,19 @@ def calculate_score(run_dir: str) -> dict:
 def main():
     parser = argparse.ArgumentParser(description="Pipeline confidence scoring")
     parser.add_argument("--run-dir", required=True, help="Path to pipeline run directory")
+    parser.add_argument("--evaluation", help="Path to evaluation artifact JSON")
+    parser.add_argument("--changeset", help="Path to changeset artifact JSON")
+    parser.add_argument("--review", help="Path to review artifact JSON")
+    parser.add_argument("--test-report", help="Path to test_report artifact JSON")
     args = parser.parse_args()
 
-    result = calculate_score(args.run_dir)
+    result = calculate_score(
+        args.run_dir,
+        evaluation_path=args.evaluation,
+        changeset_path=args.changeset,
+        review_path=args.review,
+        test_report_path=args.test_report,
+    )
     print(json.dumps(result, indent=2))
 
 
