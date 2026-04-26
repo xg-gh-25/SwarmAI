@@ -29,7 +29,6 @@ Outputs per short (in content/{name}/shorts/{short_id}/):
 """
 import argparse
 import json
-import math
 import os
 import re
 import subprocess
@@ -296,7 +295,11 @@ def cut_audio(source_wav, start_s, duration_s, output_wav):
         "-c", "copy",
         output_wav,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        print(f"  ✗ Audio cut timed out (120s)", file=sys.stderr)
+        return False
     if result.returncode != 0:
         # Retry without -c copy (handles edge cases with WAV seeking)
         cmd = [
@@ -307,7 +310,11 @@ def cut_audio(source_wav, start_s, duration_s, output_wav):
             "-ar", "48000", "-ac", "1",
             output_wav,
         ]
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        except subprocess.TimeoutExpired:
+            print(f"  ✗ Audio cut retry timed out (120s)", file=sys.stderr)
+            return False
         if result.returncode != 0:
             print(f"  ✗ Audio cut failed: {result.stderr[:200]}", file=sys.stderr)
             return False
@@ -319,11 +326,14 @@ def mix_bgm(audio_wav, bgm_path, output_wav, volume=0.03, fade_in=2, fade_out=3)
     if not bgm_path or not os.path.isfile(bgm_path):
         return False
 
-    duration_result = subprocess.run(
-        ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-         "-of", "csv=p=0", audio_wav],
-        capture_output=True, text=True,
-    )
+    try:
+        duration_result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "csv=p=0", audio_wav],
+            capture_output=True, text=True, timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return False
     if not duration_result.stdout.strip():
         return False
     dur = float(duration_result.stdout.strip())
@@ -340,7 +350,10 @@ def mix_bgm(audio_wav, bgm_path, output_wav, volume=0.03, fade_in=2, fade_out=3)
         "-map", "[out]", "-ar", "48000", "-ac", "1",
         output_wav,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        return False
     return result.returncode == 0
 
 
