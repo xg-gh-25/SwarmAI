@@ -69,6 +69,25 @@ Skip:          <what NOT to search — reduces noise>
 
 This plan is reviewable — the user can correct it before you spend time searching. Proceed to Phase 1 only after outputting the plan.
 
+**Step 4: Check existing knowledge.** Before searching externally, scan what we already have:
+1. `Knowledge/Learned/` — glob for related tags/topics. If a card exists from last week, start from there, don't re-research.
+2. `Knowledge/Notes/` — prior research on the same or adjacent topic.
+3. `MEMORY.md` — Key Decisions or Lessons that provide baseline context.
+
+Note what you found in the plan: `Prior: <file or "none">`. This prevents duplicate research and gives Phase 1 a head start.
+
+**Step 5: Bilingual search planning.** The user is bilingual (EN/CN). Decide search language:
+
+| Condition | Action |
+|-----------|--------|
+| Topic is a Chinese company, person, or product | Search CN first, EN second |
+| Topic is global tech | Search EN first, add CN search if relevant China angle |
+| User asked in Chinese | Include CN searches |
+| `person_org` intent + Chinese name | Search both `张三` and `San Zhang` |
+| `competitive` with CN competitors | Both languages, compare coverage gaps |
+
+Add `Languages: EN` or `Languages: EN+CN` to the plan output.
+
 **Fast-path rule:** If intent is `factual` or `how_to` AND the query is specific enough to search directly (not ambiguous, not multi-faceted), compress Phase 0 to a single inline line and proceed immediately:
 
 ```
@@ -82,6 +101,11 @@ Don't build a full plan block for "How does Raft consensus work?" — just class
 ### Phase 1: Broad Exploration
 
 **Goal:** Map the topic landscape and identify key dimensions before going deep. **Use the search parameters from Phase 0** — don't override them.
+
+**Tavily parameter mapping:** When using Tavily search, pass Phase 0 parameters directly:
+- `search_depth` → Tavily `search_depth` ("basic" or "advanced")
+- `time_range` → Tavily `days` (day=1, week=7, month=30, year=365)
+- `topic` → Tavily `topic` ("general" or "news")
 
 1. Identify 3-5 major dimensions/subtopics of the research question
 2. Run 3-5 broad searches to understand the landscape:
