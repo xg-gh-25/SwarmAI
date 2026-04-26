@@ -136,6 +136,14 @@ timeout." Test the resource, not the happy path around it.
        to thread death), which fires first? Does the first one prevent
        the second from ever running?
 
+    f. **Check empty/partial data** -- when the code renders or processes
+       a collection (list, grid, table), trace what happens when the
+       collection is empty, has 1 item, or has only some optional fields
+       populated. For frontend: does the layout collapse gracefully
+       (no blank columns, no empty cards)? For backend: does an empty
+       list produce `[]` not `null`? Does a missing optional field use
+       the default, not crash on `.get()` → `None.something`?
+
     **Action on findings:**
     - Each finding -- **fix immediately** (these are always real bugs)
     - Update tests to cover the discovered path

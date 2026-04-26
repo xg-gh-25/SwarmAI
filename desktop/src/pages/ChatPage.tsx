@@ -1562,6 +1562,22 @@ export default function ChatPage() {
     handleSendMessage();
   }, [handleSendMessage]);
 
+  // Handle Briefing Hub v2 item click — populate ChatInput with message + context (no auto-send)
+  const handleItemClick = useCallback((message: string, context?: string) => {
+    const lines = [message];
+    if (context) {
+      lines.push('');
+      lines.push(...context.split('\n').map((l: string) => `> ${l}`));
+    }
+    const text = lines.join('\n');
+    // Sync ref AND state — handleSendMessage reads inputValueRef.current synchronously
+    inputValueRef.current = text;
+    setInputValue(text);
+    // Focus the ChatInput textarea
+    const textarea = document.querySelector<HTMLTextAreaElement>('[data-chat-input]');
+    textarea?.focus();
+  }, [setInputValue]);
+
   /**
    * Drain the queued message for a tab — builds content and starts a new stream.
    *
@@ -2086,7 +2102,7 @@ export default function ChatPage() {
                   </button>
                 )}
                 {messages.length === 0 ? (
-                  <WelcomeScreen onFocusClick={handleFocusClick} />
+                  <WelcomeScreen onFocusClick={handleFocusClick} onItemClick={handleItemClick} />
                 ) : (
                   messages.map((msg, idx) => {
                     // Evolution events get their own renderer
@@ -2251,6 +2267,7 @@ export default function ChatPage() {
           onSelectSession={handleSelectSession}
           onDeleteSession={(session) => setDeleteConfirmSession(session)}
           workspaceId="swarmws"
+          onItemClick={handleItemClick}
         />
       </div>
 
