@@ -33,7 +33,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import timedelta
+
 
 
 # ---------------------------------------------------------------------------
@@ -441,12 +441,15 @@ def generate_short_assets(short, content_dir, bgm_path=None, bgm_volume=0.03):
         json.dump(short_config, f, indent=2, ensure_ascii=False)
 
     # Verify audio duration
-    probe = subprocess.run(
-        ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-         "-of", "csv=p=0", short_audio],
-        capture_output=True, text=True,
-    )
-    actual_dur = float(probe.stdout.strip()) if probe.stdout.strip() else 0
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "csv=p=0", short_audio],
+            capture_output=True, text=True, timeout=30,
+        )
+        actual_dur = float(probe.stdout.strip()) if probe.stdout.strip() else 0
+    except subprocess.TimeoutExpired:
+        actual_dur = 0
 
     print(f"    Audio: {actual_dur:.1f}s, SRT: {len(short_srt)} entries, "
           f"Sections: {len(rebased_sections)}")

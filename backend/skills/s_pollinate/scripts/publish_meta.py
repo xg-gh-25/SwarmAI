@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Generate platform-specific publish metadata for content.
+"""Generate platform-specific publish metadata templates for content.
 
 Reads content_package.md + timing.json and produces publish_info.md
-with optimized title, description, tags, chapters, and CTA per platform.
+with per-platform sections containing title constraints, description ranges,
+tag formats, chapter timestamps, and CTAs. Title/description/tag fields are
+left as agent-fillable placeholders — the agent completes them with
+platform-optimized copy in a subsequent step.
 
 Usage:
     python publish_meta.py content/memory-is-the-moat/ --platforms bilibili,youtube,xiaohongshu
