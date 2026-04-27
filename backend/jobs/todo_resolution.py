@@ -275,8 +275,8 @@ def _cancel_stale_todos(
     - ``pending`` todos: cancelled after ``stale_days`` (default 21d).
       These are backlog items — longer grace period is appropriate.
     - ``in_discussion`` (WORKING section): cancelled after
-      ``working_stale_days`` (default 5d).  If nobody touched it in
-      5 days, it's not actually being worked on.
+      ``working_stale_days`` (default 14d).  If nobody touched it in
+      14 days, it's not actually being worked on.
     """
     now = datetime.now(timezone.utc).isoformat()
     total = 0
