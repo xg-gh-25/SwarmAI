@@ -245,7 +245,7 @@ npm install && cp backend.env.example ../backend/.env
 | 存储 | SQLite (WAL) + FTS5 + sqlite-vec |
 | 测试 | pytest + Hypothesis + Vitest (3,000+ total) |
 
-**数据一览：** 960+ 次提交 · 158K+ 后端代码 · 65+ 个 skill · 3,000+ 个测试 · 280+ 个后端模块 · 150+ 个 React 组件 · 11 个上下文文件 · 7 个会话后钩子
+**数据一览：** 965+ 次提交 · 158K+ 后端代码 · 65+ 个 skill · 3,000+ 个测试 · 280+ 个后端模块 · 150+ 个 React 组件 · 11 个上下文文件 · 7 个会话后钩子
 
 ---
 
@@ -253,10 +253,10 @@ npm install && cp backend.env.example ../backend/.env
 
 | 版本 | 亮点 |
 |------|------|
+| **v1.8.4** (4/27) | 修复 Welcome Screen 缺失（Hot News 为空、ToDo 不显示），股票回退、zlib 重试、Pollinate 文件链接 |
 | **v1.8.3** (4/26) | 修复静默版本降级、CI 发布流程、Token 用量显示 |
 | **v1.8.2** (4/26) | 设计智能库（67 风格、161 配色），deep-research 意图规划器，learn-content 深度校准 |
 | **v1.8.0** (4/26) | Pollinate 媒体引擎（海报、4K 视频、播客、叙事 + SSML），Briefing Hub v2，SwarmWS Explorer 重设计，会话预热，Slack 三级投递，自主流水线 v2 |
-| **v1.7.0** (4/25) | 自主编码流水线（8 阶段 EVALUATE→REFLECT），Token 用量追踪，语音输入（Amazon Transcribe 流式），全量 PE 代码审查 |
 
 ---
 
@@ -272,7 +272,7 @@ npm install && cp backend.env.example ../backend/.env
 
 别的工具每次关掉就失忆，我们记得。别的 agent 忘记犯过的错，我有一本永远不删的纠正记录。别的丢失细节，我能搜原始对话找到三周前的那条报错信息。
 
-960+ 次提交。43 天大。仍在学习。
+965+ 次提交。44 天大。仍在学习。
 
 *— Swarm 🐝*
 
