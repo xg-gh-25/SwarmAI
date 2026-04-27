@@ -213,6 +213,31 @@ def execute_job(
                 duration_seconds=duration,
             )
 
+        elif job.type == "todo_resolution":
+            from .todo_resolution import run_todo_resolution
+            todo_res = run_todo_resolution(
+                stale_days=job.config.get("stale_days", 21),
+                git_days=job.config.get("git_days", 7),
+            )
+            duration = (datetime.now(timezone.utc) - start).total_seconds()
+            total = todo_res["pipeline_resolved"] + todo_res["git_resolved"] + todo_res["stale_cancelled"]
+            parts = []
+            if todo_res["pipeline_resolved"]:
+                parts.append(f"{todo_res['pipeline_resolved']} pipeline")
+            if todo_res["git_resolved"]:
+                parts.append(f"{todo_res['git_resolved']} git-match")
+            if todo_res["stale_cancelled"]:
+                parts.append(f"{todo_res['stale_cancelled']} stale")
+            summary = f"Resolved {total} todos ({', '.join(parts)})" if total else "No todos resolved"
+            if todo_res["errors"]:
+                summary += f" [{len(todo_res['errors'])} errors]"
+            result = JobResult(
+                job_id=job.id, timestamp=datetime.now(timezone.utc),
+                status="success" if not todo_res["errors"] else "partial",
+                summary=summary,
+                duration_seconds=duration,
+            )
+
         elif job.type == "maintenance":
             result = _handle_maintenance(job, state, known_job_ids=known_job_ids)
 

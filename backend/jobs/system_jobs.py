@@ -130,6 +130,20 @@ SYSTEM_JOBS: list[Job] = [
         config={"window_days": 7},
     ),
 
+    # --- Todo Resolution (daily auto-resolve stale Radar Todos) ---
+    # 3-layer resolution: pipeline completion check, git keyword match,
+    # staleness cancellation.  Closes the "todos pile up" gap — creation
+    # paths outnumber resolution paths 5:2.5, this job balances it.
+    Job(
+        id="todo-resolution",
+        name="Todo Resolution",
+        type="todo_resolution",
+        schedule="0 4 * * *",             # Daily 04:00 UTC = 12:00 ICT
+        enabled=True,
+        category="system",
+        config={"stale_days": 21, "git_days": 7},
+    ),
+
     # --- Evolution Cycle (standalone fallback) ---
     # Primary trigger is session-close hook (evolution_maintenance_hook.py),
     # but if the user's laptop is closed for days, sessions don't end and
