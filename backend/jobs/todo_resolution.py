@@ -37,9 +37,6 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_DB = Path.home() / ".swarm-ai" / "data.db"
 
-_ACTIVE_STATUSES = ("pending", "in_discussion")
-_TERMINAL_STATUSES = ("handled", "cancelled", "deleted")
-
 # Words too short or too generic to be meaningful keywords
 _STOPWORDS = frozenset({
     # English stopwords
