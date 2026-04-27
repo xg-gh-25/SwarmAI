@@ -96,17 +96,22 @@ function SectionCard({
   icon,
   title,
   count,
+  accent,
   children,
   className = '',
 }: {
   icon: string;
   title: string;
   count?: number;
+  accent?: string;
   children: React.ReactNode;
   className?: string;
 }) {
   return (
-    <div className={`rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary,var(--color-bg))] ${className}`}>
+    <div
+      className={`rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary,var(--color-bg))] ${className}`}
+      style={accent ? { borderLeft: `3px solid ${accent}` } : undefined}
+    >
       <div className="flex items-center gap-1.5 px-3 pt-2.5 pb-1">
         <span className="text-[12px]">{icon}</span>
         <span className="text-[10.5px] font-semibold uppercase tracking-[0.8px] text-[var(--color-text-muted)]">
@@ -266,17 +271,17 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
           {(() => {
             const leftCards = [];
             if (hasWorking) leftCards.push(
-              <SectionCard key="working" icon="📋" title="Working" count={briefing!.working.length}>
+              <SectionCard key="working" icon="📋" title="Working" count={briefing!.working.length} accent="rgba(251,191,36,0.6)">
                 <WorkingSection items={briefing!.working} onItemClick={handleItemClick} />
               </SectionCard>
             );
             if (hasHotNews) leftCards.push(
-              <SectionCard key="hot" icon="🔥" title="Hot News" count={briefing!.hotNews.length}>
+              <SectionCard key="hot" icon="🔥" title="Hot News" count={briefing!.hotNews.length} accent="rgba(245,158,11,0.5)">
                 <HotNewsSection items={briefing!.hotNews} onItemClick={handleItemClick} />
               </SectionCard>
             );
             if (hasTodos) leftCards.push(
-              <SectionCard key="todo" icon="☑" title="Todo" count={radarTodos.length}>
+              <SectionCard key="todo" icon="☑" title="Todo" count={radarTodos.length} accent="rgba(239,68,68,0.5)">
                 <div className="space-y-0.5">
                   {radarTodos.slice(0, 10).map((todo) => {
                     const dotColor = PRIORITY_COLORS[todo.priority] ?? PRIORITY_COLORS.none;
@@ -318,7 +323,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
 
             const rightCards = [];
             if (hasSignals) rightCards.push(
-              <SectionCard key="signals" icon="📡" title="Signals" count={briefing!.signals.length}>
+              <SectionCard key="signals" icon="📡" title="Signals" count={briefing!.signals.length} accent="rgba(59,130,246,0.5)">
                 <SignalsSection items={briefing!.signals} onItemClick={handleItemClick} />
               </SectionCard>
             );
@@ -343,14 +348,14 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
 
           {/* Swarm Output (full width) */}
           {hasOutput && (
-            <SectionCard icon="🐝" title="Swarm Output">
+            <SectionCard icon="🐝" title="Swarm Output" accent="rgba(168,85,247,0.45)">
               <SwarmOutputSection output={briefing!.output} />
             </SectionCard>
           )}
 
           {/* Stocks (full width, collapsed — personal info, kept low-profile) */}
           {hasStocks && (
-            <SectionCard icon="📈" title="Stocks" count={briefing!.stocks.length}>
+            <SectionCard icon="📈" title="Stocks" count={briefing!.stocks.length} accent="rgba(34,197,94,0.45)">
               <StocksSection items={briefing!.stocks} defaultVisible={4} />
             </SectionCard>
           )}

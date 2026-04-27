@@ -205,9 +205,9 @@ export function RadarSidebar({
           <TodoSection workspaceId={workspaceId} onCountChange={setTodoCount} onItemClick={onItemClick} />
         </CollapsibleSection>
 
-        {/* Working — orange (attention) */}
+        {/* Working — amber/gold (attention — distinct from Todo red) */}
         {workingCount > 0 && (
-          <CollapsibleSection name="working" icon="assignment" label="Working" count={workingCount} defaultExpanded={true} accent="rgba(249,115,22,0.4)">
+          <CollapsibleSection name="working" icon="assignment" label="Working" count={workingCount} defaultExpanded={true} accent="rgba(251,191,36,0.6)">
             <WorkingSection items={briefing!.working} onItemClick={onItemClick} />
           </CollapsibleSection>
         )}

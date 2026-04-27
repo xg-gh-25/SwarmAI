@@ -76,14 +76,14 @@ export const EXPLORER_SECTIONS: SectionConfig[] = [
   {
     label: 'Knowledge',
     paths: ['Knowledge'],
-    accentBg: 'rgba(234,179,8,0.04)',
-    accentBorder: 'rgba(234,179,8,0.15)',
+    accentBg: 'rgba(234,179,8,0.06)',
+    accentBorder: 'rgba(234,179,8,0.45)',
   },
   {
     label: 'Projects',
     paths: ['Projects'],
-    accentBg: 'rgba(59,130,246,0.04)',
-    accentBorder: 'rgba(59,130,246,0.15)',
+    accentBg: 'rgba(59,130,246,0.06)',
+    accentBorder: 'rgba(59,130,246,0.45)',
   },
 ];
 
@@ -352,6 +352,7 @@ export function flattenTree(
   const systemConfig: SectionConfig = {
     label: 'System',
     paths: [],
+    accentBorder: 'rgba(148,163,184,0.25)',
     dimmed: true,
     defaultCollapsed: true,
   };
@@ -472,6 +473,7 @@ function RowRenderer(props: {
           boxSizing: 'border-box',
           userSelect: 'none',
           borderTop: '2px solid var(--color-section-divider, #222236)',
+          borderLeft: '3px solid rgba(148,163,184,0.35)',
         }}
       >
         <span
