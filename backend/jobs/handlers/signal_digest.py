@@ -354,8 +354,17 @@ def _simple_scored_items(signals: list[RawSignal]) -> list[dict]:
 def _write_l4_json(signals: list[RawSignal], scored_items: list[dict]) -> None:
     """Write Services/signals/signal_digest.json in the schema L4 expects.
 
-    L4 consumer (proactive_intelligence._get_signal_highlights) expects:
-      { "items": [{ "fetched_at", "relevance_score", "title", "summary", "source", "urgency" }] }
+    L4 consumer (proactive_intelligence.build_session_briefing_data) expects:
+      { "items": [{ "fetched_at", "relevance_score", "title", "summary",
+                     "source", "urgency", "feed_id", "lang", "platform",
+                     "region" }] }
+
+    The briefing builder routes items by feed_id: china-trending → hotNews
+    section, everything else → signals section. Items missing feed_id are
+    invisible to both sections.
+
+    Merge strategy: new scored_items replace old items by title, stale items
+    are evicted by age, and the result is capped at 50.
     """
     L4_DIGEST_PATH.parent.mkdir(parents=True, exist_ok=True)
 
@@ -367,6 +376,16 @@ def _write_l4_json(signals: list[RawSignal], scored_items: list[dict]) -> None:
             existing_items = existing.get("items", [])
         except (json.JSONDecodeError, OSError):
             pass
+
+    # Schema guard: evict items missing required fields added in Briefing
+    # Hub v2 (2026-04-26, commit 7bb365f). Without feed_id, the briefing
+    # builder cannot route items to signals vs hotNews sections — they
+    # become invisible. Stale pre-v2 items also dominate the relevance
+    # sort and push fresh items out of the 50-item cap.
+    existing_items = [
+        it for it in existing_items
+        if "feed_id" in it
+    ]
 
     # Two-tier eviction:
     # 1. Soft eviction (48h) — only when new items replace them. Prevents
