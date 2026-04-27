@@ -5,6 +5,17 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.4] - 2026-04-27
+
+### Fixed
+
+- **Hot News Section Empty**: Schema migration gap in `signal_digest` merge left `feed_id` field missing — Welcome Screen Hot News section rendered empty
+- **Welcome Screen ToDo Missing**: Workspace ID mismatch between backend and frontend constants caused ToDo section to show no items
+- **Stocks Briefing Date Fallback**: Stocks section crashed when no report existed for today — now falls back to most recent available date
+- **Stocks Section UX**: Collapsed by default to de-emphasize personal finance data; Pollinate output now organized in date-prefix directories
+- **Zlib Decompression Retry**: Classified zlib decompression errors as retriable — corrupted transcript segments trigger auto-retry instead of permanent failure
+- **Pollinate File Links**: File links now open in editor instead of broken paths; output routed to `Knowledge/Pollinate/`; 小红书 multi-image format support
+
 ## [1.8.3] - 2026-04-26
 
 ### Fixed
