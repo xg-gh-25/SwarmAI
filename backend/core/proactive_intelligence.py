@@ -1560,29 +1560,40 @@ def build_session_briefing_data(
             logger.debug("Todo briefing fetch failed (non-blocking): %s", exc)
 
         # ── Stock reports ────────────────────────────────────────────
+        # Show today's reports; if none (weekend/holiday), fall back to most recent date
         stocks: list[dict] = []
         reports_dir = workspace / "Services" / "stock-analysis" / "reports"
         if reports_dir.is_dir():
             try:
                 today_str = datetime.now().strftime("%Y-%m-%d")
-                for f in sorted(reports_dir.iterdir(), reverse=True):
-                    if not f.name.endswith(".md") or not f.name.startswith(today_str):
+                # Sorted reverse = newest first; detect target date from first .md file
+                all_reports = sorted(
+                    (f for f in reports_dir.iterdir() if f.name.endswith(".md")),
+                    reverse=True,
+                )
+                target_date: str | None = None
+                for f in all_reports:
+                    parts = f.stem.split("-", 3)  # YYYY-MM-DD-rest
+                    if len(parts) < 4:
                         continue
-                    # Parse filename: YYYY-MM-DD-TICKER-NAME.md
-                    parts = f.stem.split("-", 3)  # date is 3 parts
-                    if len(parts) >= 4:
-                        rest = parts[3]  # "515070-人工智能ETF"
-                        ticker_parts = rest.split("-", 1)
-                        ticker = ticker_parts[0]
-                        name = ticker_parts[1] if len(ticker_parts) > 1 else ticker
-                        # Check file size as proxy for success (> 500 bytes = has content)
-                        status = "success" if f.stat().st_size > 500 else "partial"
-                        stocks.append({
-                            "ticker": ticker,
-                            "name": name,
-                            "status": status,
-                            "reportFile": f"Services/stock-analysis/reports/{f.name}",
-                        })
+                    file_date = f"{parts[0]}-{parts[1]}-{parts[2]}"
+                    # Prefer today; otherwise lock to first (most recent) date seen
+                    if target_date is None:
+                        target_date = today_str if f.name.startswith(today_str) else file_date
+                    if not f.name.startswith(target_date):
+                        continue
+                    rest = parts[3]  # "515070-人工智能ETF"
+                    ticker_parts = rest.split("-", 1)
+                    ticker = ticker_parts[0]
+                    name = ticker_parts[1] if len(ticker_parts) > 1 else ticker
+                    # Check file size as proxy for success (> 500 bytes = has content)
+                    status = "success" if f.stat().st_size > 500 else "partial"
+                    stocks.append({
+                        "ticker": ticker,
+                        "name": name,
+                        "status": status,
+                        "reportFile": f"Services/stock-analysis/reports/{f.name}",
+                    })
                     if len(stocks) >= 15:
                         break
             except OSError:
