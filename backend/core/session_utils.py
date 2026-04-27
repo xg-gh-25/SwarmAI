@@ -287,6 +287,11 @@ def _is_retriable_error(raw_error: str) -> bool:
         # reads during context assembly or env pollution.  The null byte is
         # stripped on retry (defense-in-depth in session_unit._spawn).
         r"embedded null byte",
+        # zlib decompression errors — corrupted/truncated gzip HTTP response
+        # from Bedrock or Anthropic API.  Transient network issue; retry
+        # with --resume restores conversation and re-sends the query.
+        r"decompressing data",
+        r"incorrect header check",
     ]
     for pattern in retriable_patterns:
         if re.search(pattern, raw_error, re.IGNORECASE):
