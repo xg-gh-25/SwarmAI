@@ -5,7 +5,7 @@
  * a 2-column card grid. Each section auto-hides when data is empty (D3).
  *
  * Section order follows action priority gradient (D8):
- * Focus (full width) → Working | Signals → Hot News | Stocks → Swarm Output (full width)
+ * Focus (full width) → Working | Signals → Hot News → Swarm Output (full width) → Stocks (full width, collapsed)
  *
  * Click behavior (D12): all chat-bound clicks populate ChatInput with
  * rich blockquote context — no auto-send. Stock/Output clicks open files.
@@ -321,11 +321,6 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
                 <SignalsSection items={briefing!.signals} onItemClick={handleItemClick} />
               </SectionCard>
             );
-            if (hasStocks) rightCards.push(
-              <SectionCard key="stocks" icon="📈" title="Stocks" count={briefing!.stocks.length}>
-                <StocksSection items={briefing!.stocks} />
-              </SectionCard>
-            );
 
             const hasLeft = leftCards.length > 0;
             const hasRight = rightCards.length > 0;
@@ -349,6 +344,13 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
           {hasOutput && (
             <SectionCard icon="🐝" title="Swarm Output">
               <SwarmOutputSection output={briefing!.output} />
+            </SectionCard>
+          )}
+
+          {/* Stocks (full width, collapsed — personal info, kept low-profile) */}
+          {hasStocks && (
+            <SectionCard icon="📈" title="Stocks" count={briefing!.stocks.length}>
+              <StocksSection items={briefing!.stocks} defaultVisible={4} />
             </SectionCard>
           )}
 

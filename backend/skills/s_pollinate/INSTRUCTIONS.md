@@ -34,10 +34,12 @@ Parse the user's message to extract:
 - **Platforms:** default all 5; user may specify subset
 
 Create the content directory under `Knowledge/Pollinate/` (visible in Explorer,
-git-tracked, part of the knowledge system — NOT Services/ which is hidden):
+git-tracked, part of the knowledge system — NOT Services/ which is hidden).
+**CRITICAL: Always prefix with `YYYY-MM-DD-` for discoverability and maintenance:**
 ```bash
 SKILL_DIR="$(cd "$(dirname "$0")" && pwd)"
-CONTENT_DIR="$HOME/.swarm-ai/SwarmWS/Knowledge/Pollinate/{name}"
+TODAY=$(date +%Y-%m-%d)
+CONTENT_DIR="$HOME/.swarm-ai/SwarmWS/Knowledge/Pollinate/${TODAY}-{name}"
 mkdir -p "$CONTENT_DIR/tracks/video"
 mkdir -p "$CONTENT_DIR/tracks/narrative"
 mkdir -p "$CONTENT_DIR/tracks/poster"
