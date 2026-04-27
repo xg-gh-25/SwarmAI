@@ -269,13 +269,13 @@ def _cancel_stale_todos(
     conn: sqlite3.Connection,
     stale_days: int = 21,
 ) -> int:
-    """Cancel pending todos that haven't been touched in >stale_days."""
+    """Cancel pending/in_discussion todos that haven't been touched in >stale_days."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=stale_days)).isoformat()
     now = datetime.now(timezone.utc).isoformat()
 
     cursor = conn.execute(
         """UPDATE todos SET status = 'cancelled', updated_at = ?
-           WHERE status = 'pending' AND updated_at < ?""",
+           WHERE status IN ('pending', 'in_discussion') AND updated_at < ?""",
         (now, cutoff),
     )
     count = cursor.rowcount

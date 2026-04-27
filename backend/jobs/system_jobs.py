@@ -141,7 +141,7 @@ SYSTEM_JOBS: list[Job] = [
         schedule="0 4 * * *",             # Daily 04:00 UTC = 12:00 ICT
         enabled=True,
         category="system",
-        config={"stale_days": 21, "git_days": 7},
+        config={"stale_days": 5, "git_days": 7},
     ),
 
     # --- Evolution Cycle (standalone fallback) ---

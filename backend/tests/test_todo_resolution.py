@@ -328,22 +328,23 @@ class TestStalenessCancellation:
         run_todo_resolution(db_path=db_path, artifacts_root=tmp_path / "artifacts")
         assert _get_todo_status(db_path, "stale-2") == "pending"
 
-    def test_in_discussion_not_cancelled_by_staleness(self, tmp_path):
-        """in_discussion todos are NOT cancelled by staleness (only pending)."""
+    def test_stale_in_discussion_also_cancelled(self, tmp_path):
+        """in_discussion todos untouched >stale_days are also cancelled."""
         from jobs.todo_resolution import run_todo_resolution
 
         db_path = _create_test_db(tmp_path)
         _insert_todo(
             db_path,
             todo_id="stale-3",
-            title="Old discussion that's still valid",
+            title="Old discussion nobody resumed",
             status="in_discussion",
             created_days_ago=60,
             updated_days_ago=30,
         )
 
-        run_todo_resolution(db_path=db_path, artifacts_root=tmp_path / "artifacts")
-        assert _get_todo_status(db_path, "stale-3") == "in_discussion"
+        result = run_todo_resolution(db_path=db_path, artifacts_root=tmp_path / "artifacts")
+        assert _get_todo_status(db_path, "stale-3") == "cancelled"
+        assert result["stale_cancelled"] >= 1
 
     def test_terminal_todos_untouched(self, tmp_path):
         """Already handled/cancelled/deleted todos are never changed."""
