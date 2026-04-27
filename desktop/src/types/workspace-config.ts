@@ -1,3 +1,9 @@
+/**
+ * Default workspace ID — single-workspace model, all entities use this.
+ * Backend assigns 'swarmws' to all todos, sessions, and config.
+ */
+export const DEFAULT_WORKSPACE_ID = 'swarmws';
+
 export interface WorkspaceSkillConfig {
   id: string;
   workspaceId: string;

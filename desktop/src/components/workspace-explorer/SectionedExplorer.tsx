@@ -15,6 +15,7 @@ import { useTreeData } from '../../contexts/ExplorerContext';
 import VirtualizedTree from './VirtualizedTree';
 import type { FileTreeItem } from './FileTreeNode';
 import type { TreeNode } from '../../types';
+import { DEFAULT_WORKSPACE_ID } from '../../types/workspace-config';
 import { fileIcon, fileIconColor, gitStatusBadge } from '../../utils/fileUtils';
 
 /** Files/directories that are pinned at the bottom as system items. */
@@ -112,7 +113,7 @@ function WorkingFileItem({
         name: node.name,
         type: node.type,
         path: node.path,
-        workspaceId: 'swarmws',
+        workspaceId: DEFAULT_WORKSPACE_ID,
         workspaceName: 'SwarmWS',
         gitStatus: node.gitStatus as any,
       });

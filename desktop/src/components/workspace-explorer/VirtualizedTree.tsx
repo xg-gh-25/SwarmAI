@@ -28,6 +28,7 @@ import React, { useContext, useEffect, useMemo, useRef, useState, useCallback } 
 import { createPortal } from 'react-dom';
 import { List } from 'react-window';
 import type { TreeNode } from '../../types';
+import { DEFAULT_WORKSPACE_ID } from '../../types/workspace-config';
 import type { FileTreeItem } from './FileTreeNode';
 import { useTreeData, useSelection } from '../../contexts/ExplorerContext';
 import { toFileTreeItem } from './toFileTreeItem';
@@ -658,7 +659,7 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
           name: rootDirName,
           type: 'directory',
           path: rootDirName,
-          workspaceId: 'swarmws',
+          workspaceId: DEFAULT_WORKSPACE_ID,
           workspaceName: 'SwarmWS',
         },
       });

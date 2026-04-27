@@ -26,6 +26,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import type { Message, ContentBlock, Agent, AgentCreateRequest, ChatSession } from '../types';
 import { MAX_ATTACHMENTS } from '../types';
+import { DEFAULT_WORKSPACE_ID } from '../types/workspace-config';
 import { chatService } from '../services/chat';
 import { agentsService } from '../services/agents';
 import { skillsService } from '../services/skills';
@@ -2266,7 +2267,7 @@ export default function ChatPage() {
           agents={agents}
           onSelectSession={handleSelectSession}
           onDeleteSession={(session) => setDeleteConfirmSession(session)}
-          workspaceId="swarmws"
+          workspaceId={DEFAULT_WORKSPACE_ID}
           onItemClick={handleItemClick}
         />
       </div>
