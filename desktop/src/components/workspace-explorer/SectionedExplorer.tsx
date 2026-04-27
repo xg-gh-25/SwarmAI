@@ -162,7 +162,7 @@ export default function SectionedExplorer({ onFileDoubleClick, onAttachToChat }:
       <div
         className="flex-shrink-0 mx-2 mt-1.5 mb-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-card,var(--color-bg-chrome))]"
         data-testid="working-files-card"
-        style={{ display: 'flex', flexDirection: 'column' }}
+        style={{ display: 'flex', flexDirection: 'column', borderLeft: '3px solid rgba(63,185,80,0.5)' }}
       >
         <SectionHeader
           title="Working Files"
