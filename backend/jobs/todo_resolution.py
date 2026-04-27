@@ -268,7 +268,7 @@ def _resolve_by_git_keywords(
 def _cancel_stale_todos(
     conn: sqlite3.Connection,
     stale_days: int = 21,
-    working_stale_days: int = 5,
+    working_stale_days: int = 14,
 ) -> int:
     """Cancel stale todos based on status-specific thresholds.
 
@@ -326,7 +326,7 @@ def run_todo_resolution(
     artifacts_root: Path | None = None,
     codebase_path: Path | None = None,
     stale_days: int = 21,
-    working_stale_days: int = 5,
+    working_stale_days: int = 14,
     git_days: int = 7,
 ) -> dict:
     """Run all 3 todo-resolution layers.

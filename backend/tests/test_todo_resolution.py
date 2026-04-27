@@ -333,28 +333,28 @@ class TestStalenessCancellation:
         from jobs.todo_resolution import run_todo_resolution
 
         db_path = _create_test_db(tmp_path)
-        # 10 days old — past the 5d working threshold
+        # 20 days old — past the 14d working threshold
         _insert_todo(
             db_path,
             todo_id="stale-3a",
             title="Old working item nobody resumed",
             status="in_discussion",
-            created_days_ago=15,
-            updated_days_ago=10,
+            created_days_ago=30,
+            updated_days_ago=20,
         )
-        # 3 days old — within the 5d working threshold
+        # 7 days old — within the 14d working threshold
         _insert_todo(
             db_path,
             todo_id="stale-3b",
-            title="Recent working item still active",
+            title="Zorblax quantum entanglement refactor",
             status="in_discussion",
-            created_days_ago=15,
-            updated_days_ago=3,
+            created_days_ago=20,
+            updated_days_ago=7,
         )
 
         result = run_todo_resolution(
             db_path=db_path, artifacts_root=tmp_path / "artifacts",
-            working_stale_days=5,
+            working_stale_days=14,
         )
         assert _get_todo_status(db_path, "stale-3a") == "cancelled"
         assert _get_todo_status(db_path, "stale-3b") == "in_discussion"
