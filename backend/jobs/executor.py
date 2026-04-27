@@ -217,6 +217,7 @@ def execute_job(
             from .todo_resolution import run_todo_resolution
             todo_res = run_todo_resolution(
                 stale_days=job.config.get("stale_days", 21),
+                working_stale_days=job.config.get("working_stale_days", 5),
                 git_days=job.config.get("git_days", 7),
             )
             duration = (datetime.now(timezone.utc) - start).total_seconds()
