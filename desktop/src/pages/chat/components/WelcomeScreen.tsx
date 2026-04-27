@@ -21,6 +21,7 @@ import {
 } from '../../../services/system';
 import type { ItemClickHandler } from './RightSidebar/types';
 import type { RadarTodo } from '../../../types';
+import { DEFAULT_WORKSPACE_ID } from '../../../types/workspace-config';
 import { radarService } from '../../../services/radar';
 import {
   filterActiveTodos,
@@ -180,7 +181,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick, onIt
     // Todos come from the same API as Radar sidebar (single source of truth).
     Promise.all([
       systemService.getBriefing(),
-      radarService.fetchActiveTodos('default').catch(() => [] as RadarTodo[]),
+      radarService.fetchActiveTodos(DEFAULT_WORKSPACE_ID).catch(() => [] as RadarTodo[]),
     ])
       .then(([data, todos]) => {
         if (!cancelled) {
