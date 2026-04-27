@@ -328,22 +328,36 @@ class TestStalenessCancellation:
         run_todo_resolution(db_path=db_path, artifacts_root=tmp_path / "artifacts")
         assert _get_todo_status(db_path, "stale-2") == "pending"
 
-    def test_stale_in_discussion_also_cancelled(self, tmp_path):
-        """in_discussion todos untouched >stale_days are also cancelled."""
+    def test_stale_in_discussion_cancelled_at_working_threshold(self, tmp_path):
+        """in_discussion (WORKING) todos use shorter 5d threshold."""
         from jobs.todo_resolution import run_todo_resolution
 
         db_path = _create_test_db(tmp_path)
+        # 10 days old — past the 5d working threshold
         _insert_todo(
             db_path,
-            todo_id="stale-3",
-            title="Old discussion nobody resumed",
+            todo_id="stale-3a",
+            title="Old working item nobody resumed",
             status="in_discussion",
-            created_days_ago=60,
-            updated_days_ago=30,
+            created_days_ago=15,
+            updated_days_ago=10,
+        )
+        # 3 days old — within the 5d working threshold
+        _insert_todo(
+            db_path,
+            todo_id="stale-3b",
+            title="Recent working item still active",
+            status="in_discussion",
+            created_days_ago=15,
+            updated_days_ago=3,
         )
 
-        result = run_todo_resolution(db_path=db_path, artifacts_root=tmp_path / "artifacts")
-        assert _get_todo_status(db_path, "stale-3") == "cancelled"
+        result = run_todo_resolution(
+            db_path=db_path, artifacts_root=tmp_path / "artifacts",
+            working_stale_days=5,
+        )
+        assert _get_todo_status(db_path, "stale-3a") == "cancelled"
+        assert _get_todo_status(db_path, "stale-3b") == "in_discussion"
         assert result["stale_cancelled"] >= 1
 
     def test_terminal_todos_untouched(self, tmp_path):

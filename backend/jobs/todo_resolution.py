@@ -268,21 +268,53 @@ def _resolve_by_git_keywords(
 def _cancel_stale_todos(
     conn: sqlite3.Connection,
     stale_days: int = 21,
+    working_stale_days: int = 5,
 ) -> int:
-    """Cancel pending/in_discussion todos that haven't been touched in >stale_days."""
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=stale_days)).isoformat()
-    now = datetime.now(timezone.utc).isoformat()
+    """Cancel stale todos based on status-specific thresholds.
 
+    - ``pending`` todos: cancelled after ``stale_days`` (default 21d).
+      These are backlog items — longer grace period is appropriate.
+    - ``in_discussion`` (WORKING section): cancelled after
+      ``working_stale_days`` (default 5d).  If nobody touched it in
+      5 days, it's not actually being worked on.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    total = 0
+
+    # Pending: 21-day threshold
+    pending_cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=stale_days)
+    ).isoformat()
     cursor = conn.execute(
         """UPDATE todos SET status = 'cancelled', updated_at = ?
-           WHERE status IN ('pending', 'in_discussion') AND updated_at < ?""",
-        (now, cutoff),
+           WHERE status = 'pending' AND updated_at < ?""",
+        (now, pending_cutoff),
     )
-    count = cursor.rowcount
-    if count:
+    pending_count = cursor.rowcount
+    total += pending_count
+
+    # Working (in_discussion): 5-day threshold
+    working_cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=working_stale_days)
+    ).isoformat()
+    cursor = conn.execute(
+        """UPDATE todos SET status = 'cancelled', updated_at = ?
+           WHERE status = 'in_discussion' AND updated_at < ?""",
+        (now, working_cutoff),
+    )
+    working_count = cursor.rowcount
+    total += working_count
+
+    if total:
         conn.commit()
-        logger.info("todo-resolution: cancelled %d stale todos (>%dd)", count, stale_days)
-    return count
+        parts = []
+        if pending_count:
+            parts.append(f"{pending_count} pending (>{stale_days}d)")
+        if working_count:
+            parts.append(f"{working_count} working (>{working_stale_days}d)")
+        logger.info("todo-resolution: cancelled %d stale (%s)", total, ", ".join(parts))
+
+    return total
 
 
 # ── Entry Point ──────────────────────────────────────────────────────
@@ -294,6 +326,7 @@ def run_todo_resolution(
     artifacts_root: Path | None = None,
     codebase_path: Path | None = None,
     stale_days: int = 21,
+    working_stale_days: int = 5,
     git_days: int = 7,
 ) -> dict:
     """Run all 3 todo-resolution layers.
@@ -304,6 +337,7 @@ def run_todo_resolution(
             Defaults to Projects/SwarmAI/.artifacts/ in SwarmWS.
         codebase_path: Override codebase path (for testing).
         stale_days: Days of inactivity before pending todos are cancelled.
+        working_stale_days: Days before in_discussion (WORKING) todos are cancelled.
         git_days: Days of git history to search for keyword matches.
 
     Returns:
@@ -355,7 +389,9 @@ def run_todo_resolution(
 
         # Layer 3: Staleness
         try:
-            result["stale_cancelled"] = _cancel_stale_todos(conn, stale_days)
+            result["stale_cancelled"] = _cancel_stale_todos(
+                conn, stale_days, working_stale_days,
+            )
         except Exception as exc:
             logger.warning("todo-resolution: staleness layer failed: %s", exc)
             result["errors"].append(f"staleness: {exc}")
