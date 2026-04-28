@@ -100,6 +100,14 @@ For each remaining acceptance criterion, one at a time:
       BOTH calling contexts. A function that works in async FastAPI
       may silently fail from a sync background job. Don't assume one
       passing smoke test covers all callers.
+    - **Cross-language boundaries:** When a changeset spans multiple
+      languages (e.g., Python backend + Rust desktop + TypeScript frontend),
+      smoke test the **data format at each boundary**. Produce the actual
+      serialized output from the sender side and verify the receiver can
+      parse it. Example: `json.dumps({"version": "1.8.4"})` produces
+      `"version": "1.8.4"` (with space) — verify Rust parser handles this
+      exact string, not a hand-crafted compact version. Cross-language
+      format assumptions are invisible to single-language unit tests.
     - Smoke tests are **inline verification only** -- don't commit them.
       They're a build-time gate, not regression tests.
     - If a smoke test crashes -- fix the bug before proceeding to REVIEW.

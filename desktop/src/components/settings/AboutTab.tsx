@@ -150,6 +150,39 @@ export default function AboutTab() {
         </div>
       </section>
 
+      {/* Data location */}
+      <section className="bg-[var(--color-card)] rounded-lg p-6">
+        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">Data</h2>
+        <div className="space-y-2 text-sm font-mono">
+          <div className="flex items-start gap-2">
+            <span className="material-symbols-outlined text-base text-[var(--color-text-muted)] mt-0.5">folder</span>
+            <div>
+              <p className="text-[var(--color-text)]">~/.swarm-ai/</p>
+              <p className="text-xs text-[var(--color-text-muted)] font-sans">
+                Memory, knowledge, projects, sessions, settings
+              </p>
+            </div>
+          </div>
+          {isDesktop() && (
+            <div className="flex items-start gap-2">
+              <span className="material-symbols-outlined text-base text-[var(--color-text-muted)] mt-0.5">apps</span>
+              <div>
+                <p className="text-[var(--color-text)]">/Applications/SwarmAI.app/</p>
+                <p className="text-xs text-[var(--color-text-muted)] font-sans">
+                  App binary (replaced on update)
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="mt-4 flex items-start gap-2 px-3 py-2 rounded-lg bg-[var(--color-bg)] border border-[var(--color-border)]">
+          <span className="material-symbols-outlined text-status-success text-base mt-0.5">shield</span>
+          <p className="text-xs text-[var(--color-text-muted)]">
+            Updates replace the app. Your data is never touched.
+          </p>
+        </div>
+      </section>
+
       {/* Re-run setup */}
       <section className="bg-[var(--color-card)] rounded-lg p-6">
         <h2 className="text-lg font-semibold text-[var(--color-text)] mb-2">Setup</h2>

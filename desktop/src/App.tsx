@@ -10,7 +10,7 @@ import { useZoom } from './hooks/useZoom';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { ThemeProvider } from './contexts/ThemeContext';
-import { ToastProvider } from './contexts/ToastContext';
+import { ToastProvider, useToast } from './contexts/ToastContext';
 import { HealthProvider } from './contexts/HealthContext';
 import { BackendStartupOverlay, UpdateNotification, ShutdownOverlay, DaemonNudgeBanner } from './components/common';
 import { getApiBaseUrl, isDesktop } from './services/tauri';
@@ -103,6 +103,8 @@ export default function App() {
           {/* Update notification + daemon nudge — Desktop only (Tauri plugin imports) */}
           {!isDev && isDesktop() && <UpdateNotification />}
           {!isDev && isDesktop() && <DaemonNudgeBanner />}
+          {/* Post-update welcome toast (both Desktop and Hive) */}
+          {!isDev && <PostUpdateToast />}
           {/* Only render routes after backend is ready to prevent race conditions */}
           {isBackendReady && <AppRoutes />}
           </ErrorBoundary>
@@ -111,6 +113,49 @@ export default function App() {
       </QueryClientProvider>
     </ThemeProvider>
   );
+}
+
+/**
+ * Detects version change and shows a welcome-back toast.
+ * Uses localStorage to track the last-seen version.
+ * Must be inside ToastProvider.
+ */
+function PostUpdateToast() {
+  const { addToast } = useToast();
+
+  useEffect(() => {
+    const checkVersion = async () => {
+      try {
+        const apiBase = getApiBaseUrl();
+        const resp = await fetch(`${apiBase}/health`, {
+          signal: AbortSignal.timeout(3000),
+        });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const currentVersion = data.version;
+        if (!currentVersion) return;
+
+        const lastVersion = localStorage.getItem('swarmai_last_version');
+        if (lastVersion && lastVersion !== currentVersion) {
+          addToast({
+            severity: 'success',
+            message: `Updated to v${currentVersion}. All your data is exactly where you left it.`,
+            durationMs: 8000,
+            id: 'post-update-toast',
+          });
+        }
+        localStorage.setItem('swarmai_last_version', currentVersion);
+      } catch {
+        // Health endpoint not ready yet — skip silently
+      }
+    };
+
+    // Delay to let backend fully initialize
+    const timer = setTimeout(checkVersion, 5000);
+    return () => clearTimeout(timer);
+  }, [addToast]);
+
+  return null;
 }
 
 /**
