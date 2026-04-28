@@ -718,32 +718,47 @@ const baseMarkdownComponents: Record<string, React.ComponentType<any>> = {
   // Links — workspace file paths open in FileEditor, external URLs open in browser.
   // Detection reuses isWorkspaceFilePath() so `<a>` links and inline `<code>` paths
   // share the same open-file behavior (dispatch OPEN_FILE_EVENT → ThreeColumnLayout).
-  a: ({ href, children }) => (
-    <a
-      href={href}
-      onClick={async (e) => {
-        if (href) {
-          e.preventDefault();
-          try {
-            const filePath = href.startsWith('file://') ? href.replace('file://', '') : href;
-            if (isWorkspaceFilePath(filePath)) {
-              const cleanPath = filePath.startsWith('./') ? filePath.slice(2) : filePath;
-              document.dispatchEvent(
-                new CustomEvent(OPEN_FILE_EVENT, { detail: { path: cleanPath } }),
-              );
-            } else {
-              await openExternal(href);
+  //
+  // IMPORTANT: External links render WITHOUT href to prevent native webview navigation.
+  // Tauri webview can race React's e.preventDefault() and navigate away from the app,
+  // causing a fullscreen loading state with no way to return. Defense-in-depth:
+  // Layer 1 (Rust): on_navigation blocks external URLs at the webview level.
+  // Layer 2 (React): no href on external links = nothing for the webview to navigate to.
+  a: ({ href, children }) => {
+    const isExternal = href && !isWorkspaceFilePath(
+      href.startsWith('file://') ? href.replace('file://', '') : href,
+    );
+    return (
+      <a
+        // Only set href for workspace file paths — external URLs use onClick only
+        href={isExternal ? undefined : href}
+        // Show the URL on hover so users can see where the link goes
+        title={isExternal ? href : undefined}
+        role={isExternal ? 'link' : undefined}
+        onClick={async (e) => {
+          if (href) {
+            e.preventDefault();
+            try {
+              const filePath = href.startsWith('file://') ? href.replace('file://', '') : href;
+              if (isWorkspaceFilePath(filePath)) {
+                const cleanPath = filePath.startsWith('./') ? filePath.slice(2) : filePath;
+                document.dispatchEvent(
+                  new CustomEvent(OPEN_FILE_EVENT, { detail: { path: cleanPath } }),
+                );
+              } else {
+                await openExternal(href);
+              }
+            } catch (err) {
+              console.error('Failed to open link:', href, err);
             }
-          } catch (err) {
-            console.error('Failed to open link:', href, err);
           }
-        }
-      }}
-      className="text-primary hover:text-primary-hover underline decoration-primary/50 hover:decoration-primary transition-colors cursor-pointer"
-    >
-      {children}
-    </a>
-  ),
+        }}
+        className="text-primary hover:text-primary-hover underline decoration-primary/50 hover:decoration-primary transition-colors cursor-pointer"
+      >
+        {children}
+      </a>
+    );
+  },
 
   // Lists — use list-outside with pl-5 so wrapped text aligns under content, not the marker
   ul: ({ children }) => (

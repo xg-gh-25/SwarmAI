@@ -10,23 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [
-      {
-        "title": "SwarmAI",
-        "width": 1400,
-        "height": 900,
-        "minWidth": 1024,
-        "minHeight": 768,
-        "resizable": true,
-        "fullscreen": false,
-        "center": true,
-        "titleBarStyle": "Overlay",
-        "hiddenTitle": true,
-        "dragDropEnabled": false,
-        "devtools": true,
-        "zoomHotkeysEnabled": false
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }
