@@ -231,7 +231,7 @@ def _resolve_by_git_keywords(
             continue
 
         # Require at least 2 keyword matches to reduce false positives
-        match_count = sum(1 for kw in keywords if kw in git_log_lower)
+        match_count = sum(1 for kw in keywords if re.search(r'\b' + re.escape(kw) + r'\b', git_log_lower))
 
         if match_count < 2:
             continue
@@ -293,7 +293,7 @@ def _cancel_stale_todos(
     pending_count = cursor.rowcount
     total += pending_count
 
-    # Working (in_discussion): 5-day threshold
+    # Working (in_discussion): 14-day threshold (configurable via working_stale_days)
     working_cutoff = (
         datetime.now(timezone.utc) - timedelta(days=working_stale_days)
     ).isoformat()

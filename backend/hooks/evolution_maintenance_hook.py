@@ -268,104 +268,124 @@ class EvolutionMaintenanceHook:
 
         Called from execute() BEFORE deprecation checks.
 
-        1. Parse "Competence Learned" — remove entries where description
+        1. Acquire flock on EVOLUTION.md
+        2. Re-read file content (authoritative under lock)
+        3. Parse "Competence Learned" — remove entries where description
            is <20 chars OR starts with a commit hash pattern.
-        2. Parse "Corrections Captured" — detect duplicate IDs, renumber
+        4. Parse "Corrections Captured" — detect duplicate IDs, renumber
            the later occurrence to the next available C ID.
-        3. Log all removals/renumbers to EVOLUTION_CHANGELOG.jsonl.
+        5. Log all removals/renumbers to EVOLUTION_CHANGELOG.jsonl.
+        6. Write back and release lock.
 
         Returns the (possibly modified) content string.
         """
         from scripts.locked_write import _find_section_range, _find_entry_in_section
+        import fcntl as _fcntl
 
-        modified = False
+        lock_path = evo_path.with_suffix(evo_path.suffix + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = None
+        try:
+            fd = open(lock_path, "w")
+            _fcntl.flock(fd, _fcntl.LOCK_EX)
 
-        # ── Step 1: Clean garbage competence entries ──
-        competence_entries = _parse_entries(content, "Competence Learned")
-        garbage_ids: list[str] = []
-
-        for entry in competence_entries:
-            desc = _get_field(entry["block"], "Competence") or ""
-            # Garbage if description <20 chars
-            if len(desc) < 20:
-                garbage_ids.append(entry["id"])
-                continue
-            # Garbage if starts with commit hash pattern
-            if self._COMMIT_HASH_RE.match(desc):
-                garbage_ids.append(entry["id"])
-                continue
-
-        # Remove garbage entries (reverse order to preserve positions)
-        for entry_id in reversed(garbage_ids):
-            entry_range = _find_entry_in_section(content, "Competence Learned", entry_id)
-            if entry_range is not None:
-                start, end = entry_range
-                content = content[:start] + content[end:]
-                modified = True
-                _append_changelog(
-                    changelog_path, "quality_gate_remove", entry_id,
-                    f"Removed garbage competence entry (short or commit-hash)",
-                    source="quality_gate",
-                )
-                logger.debug("Quality gate: removed garbage competence %s", entry_id)
-
-        # ── Step 2: Fix duplicate correction IDs ──
-        corrections = _parse_entries(content, "Corrections Captured")
-        seen_ids: dict[str, bool] = {}
-        # Find max existing C-ID for renumbering
-        all_c_ids = re.findall(r"### C(\d+)", content)
-        next_c_num = max((int(x) for x in all_c_ids), default=0) + 1
-
-        for entry in corrections:
-            eid = entry["id"]
-            if eid in seen_ids:
-                # Duplicate — renumber to next available
-                new_id = f"C{next_c_num:03d}"
-                # Find this specific duplicate occurrence in the content.
-                # We need to find the second occurrence of ### {eid}
-                old_header_pattern = f"### {eid} |"
-                # Find second occurrence
-                first_pos = content.find(old_header_pattern)
-                if first_pos >= 0:
-                    second_pos = content.find(old_header_pattern, first_pos + 1)
-                    if second_pos >= 0:
-                        content = (
-                            content[:second_pos]
-                            + content[second_pos:].replace(
-                                f"### {eid} ", f"### {new_id} ", 1
-                            )
-                        )
-                        modified = True
-                        _append_changelog(
-                            changelog_path, "quality_gate_renumber", new_id,
-                            f"Renumbered duplicate {eid} -> {new_id}",
-                            source="quality_gate",
-                        )
-                        logger.debug(
-                            "Quality gate: renumbered duplicate %s -> %s",
-                            eid, new_id,
-                        )
-                        next_c_num += 1
-            else:
-                seen_ids[eid] = True
-
-        if modified:
-            # Write back with flock
-            import fcntl as _fcntl
-            lock_path = evo_path.with_suffix(evo_path.suffix + ".lock")
-            lock_path.parent.mkdir(parents=True, exist_ok=True)
-            fd = None
+            # Re-read under lock — authoritative content
             try:
-                fd = open(lock_path, "w")
-                _fcntl.flock(fd, _fcntl.LOCK_EX)
+                content = evo_path.read_text(encoding="utf-8")
+            except OSError as exc:
+                logger.warning("Cannot read EVOLUTION.md under lock: %s", exc)
+                return content
+
+            modified = False
+
+            # ── Step 1: Clean garbage competence entries ──
+            competence_entries = _parse_entries(content, "Competence Learned")
+            garbage_ids: list[str] = []
+
+            for entry in competence_entries:
+                desc = _get_field(entry["block"], "Competence") or ""
+                # Garbage if description <20 chars
+                if len(desc) < 20:
+                    garbage_ids.append(entry["id"])
+                    continue
+                # Garbage if starts with commit hash pattern
+                if self._COMMIT_HASH_RE.match(desc):
+                    garbage_ids.append(entry["id"])
+                    continue
+
+            # Remove garbage entries (reverse order to preserve positions)
+            for entry_id in reversed(garbage_ids):
+                entry_range = _find_entry_in_section(content, "Competence Learned", entry_id)
+                if entry_range is not None:
+                    start, end = entry_range
+                    content = content[:start] + content[end:]
+                    modified = True
+                    _append_changelog(
+                        changelog_path, "quality_gate_remove", entry_id,
+                        f"Removed garbage competence entry (short or commit-hash)",
+                        source="quality_gate",
+                    )
+                    logger.debug("Quality gate: removed garbage competence %s", entry_id)
+
+            # ── Step 2: Fix duplicate correction IDs ──
+            corrections = _parse_entries(content, "Corrections Captured")
+            seen_ids: dict[str, bool] = {}
+            # Find max existing C-ID for renumbering
+            all_c_ids = re.findall(r"### C(\d+)", content)
+            next_c_num = max((int(x) for x in all_c_ids), default=0) + 1
+
+            for entry in corrections:
+                eid = entry["id"]
+                if eid in seen_ids:
+                    # Duplicate — renumber to next available
+                    new_id = f"C{next_c_num:03d}"
+                    # Find this specific duplicate occurrence in the content.
+                    # Use _find_entry_in_section to locate the entry block precisely,
+                    # then replace the header within that block.  This handles 3+
+                    # duplicates correctly because each iteration re-parses content.
+                    entry_range = _find_entry_in_section(content, "Corrections Captured", eid)
+                    if entry_range is not None:
+                        start, end = entry_range
+                        block = content[start:end]
+                        # Only rename the LAST occurrence of this ID in the section
+                        # (first occurrence keeps the original ID)
+                        all_positions = [m.start() + start for m in re.finditer(
+                            re.escape(f"### {eid} "), content
+                        )]
+                        if len(all_positions) >= 2:
+                            # Replace at the last position (preserves first occurrence)
+                            last_pos = all_positions[-1]
+                            old_header = f"### {eid} "
+                            new_header = f"### {new_id} "
+                            content = (
+                                content[:last_pos]
+                                + new_header
+                                + content[last_pos + len(old_header):]
+                            )
+                            modified = True
+                            _append_changelog(
+                                changelog_path, "quality_gate_renumber", new_id,
+                                f"Renumbered duplicate {eid} -> {new_id}",
+                                source="quality_gate",
+                            )
+                            logger.debug(
+                                "Quality gate: renumbered duplicate %s -> %s",
+                                eid, new_id,
+                            )
+                            next_c_num += 1
+                else:
+                    seen_ids[eid] = True
+
+            if modified:
                 evo_path.write_text(content, encoding="utf-8")
-            finally:
-                if fd is not None:
-                    try:
-                        _fcntl.flock(fd, _fcntl.LOCK_UN)
-                    except OSError:
-                        pass
-                    fd.close()
+
+        finally:
+            if fd is not None:
+                try:
+                    _fcntl.flock(fd, _fcntl.LOCK_UN)
+                except OSError:
+                    pass
+                fd.close()
 
         return content
 

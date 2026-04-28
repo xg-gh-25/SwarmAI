@@ -233,12 +233,11 @@ class ContextHealthHook:
         lock_fd = None
         try:
             lock_fd = open(lock_path, "w")  # noqa: SIM115
-            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (BlockingIOError, OSError):
-            # Another writer holds the lock — skip this cycle, next hook run will catch it
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        except OSError:
             if lock_fd:
                 lock_fd.close()
-            logger.debug("context_health: MEMORY.md locked by another writer, skipping index regen")
+            logger.debug("context_health: MEMORY.md lock failed, skipping index regen")
             return
 
         try:
@@ -621,10 +620,16 @@ class ContextHealthHook:
                         proposal_path.rename(proposal_path.with_suffix(".md.applied"))
                         continue
 
-                    # Check for semantic section targets
-                    section_text = content.lower()
+                    # Check for semantic section targets by parsing _Targets:_ line,
+                    # NOT the whole proposal body (avoids false positives from
+                    # incidental mentions of "architecture" in descriptions).
+                    targets_line = ""
+                    for line in content.splitlines():
+                        if "_Targets:" in line or "Targets:" in line:
+                            targets_line = line.lower()
+                            break
                     targets_semantic = any(
-                        s.lower() in section_text
+                        s.lower() in targets_line
                         for s in self._SEMANTIC_SECTIONS
                     )
 
@@ -652,15 +657,25 @@ class ContextHealthHook:
                             continue  # Skip semantic changes
 
                         # Find and apply in target DDD doc
-                        import fcntl
+                        try:
+                            import fcntl
+                        except ImportError:
+                            # fcntl is Unix-only; skip file locking on Windows.
+                            # DDD auto-apply is a background hook — concurrent writes
+                            # are unlikely on Windows where the daemon doesn't run.
+                            fcntl = None  # type: ignore[assignment]
                         for ddd_name in ("TECH.md", "IMPROVEMENT.md", "PRODUCT.md"):
                             ddd_path = project_dir / ddd_name
                             if not ddd_path.exists():
                                 continue
                             applied_this = False
                             lock_path = ddd_path.with_suffix(ddd_path.suffix + ".lock")
-                            with open(lock_path, "w") as lock_file:
+                            if fcntl is not None:
+                                lock_file = open(lock_path, "w")
                                 fcntl.flock(lock_file, fcntl.LOCK_EX)
+                            else:
+                                lock_file = None
+                            try:
                                 ddd_content = ddd_path.read_text(encoding="utf-8")
                                 if current_block in ddd_content:
                                     new_content = ddd_content.replace(
@@ -669,7 +684,11 @@ class ContextHealthHook:
                                     ddd_path.write_text(new_content, encoding="utf-8")
                                     changes_applied = True
                                     applied_this = True
-                                fcntl.flock(lock_file, fcntl.LOCK_UN)
+                            finally:
+                                if lock_file is not None:
+                                    if fcntl is not None:
+                                        fcntl.flock(lock_file, fcntl.LOCK_UN)
+                                    lock_file.close()
                             if applied_this:
                                 applied_changes.append({
                                     "project": project_dir.name,
@@ -900,11 +919,15 @@ class ContextHealthHook:
                 try:
                     file_date = datetime.strptime(f.stem, "%Y-%m-%d")
                     if file_date < cutoff_90:
-                        # Protect undistilled files from archival (data loss prevention)
-                        content = f.read_text(encoding="utf-8")
-                        if "distilled: true" not in content[:500]:  # check frontmatter only
-                            logger.warning("Skipping undistilled file %s (>90d but not yet distilled)", f.name)
-                            continue
+                        # Protect undistilled files from archival — but only up to
+                        # 180 days.  Beyond that, archive regardless to prevent
+                        # unbounded DailyActivity growth from distillation failures.
+                        cutoff_180 = datetime.now() - timedelta(days=180)
+                        if file_date >= cutoff_180:
+                            content = f.read_text(encoding="utf-8")
+                            if "distilled: true" not in content[:500]:  # check frontmatter only
+                                logger.warning("Skipping undistilled file %s (>90d but not yet distilled)", f.name)
+                                continue
                         dest = archive_dir / f.name
                         f.rename(dest)
                         logger.info("Archived DailyActivity: %s", f.name)

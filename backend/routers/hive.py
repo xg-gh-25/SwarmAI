@@ -17,7 +17,7 @@ from typing import Optional
 import aiosqlite
 import httpx
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from database import db
 from hive.provisioner import HiveProvisioner
@@ -55,12 +55,17 @@ def _require_desktop():
 async def _conn():
     """Async context manager for DB access with Row factory.
 
+    Uses a separate connection (not the shared db singleton) because the
+    Hive router runs in background tasks (asyncio.create_task) that may
+    outlive the request lifecycle.  The shared connection's WAL mode and
+    busy_timeout still apply at the SQLite level.
+
     Matches the main WAL connection's pragmas: busy_timeout avoids
     SQLITE_BUSY under concurrent writes, foreign_keys enables CASCADE.
     """
     c = await aiosqlite.connect(str(db.db_path))
     c.row_factory = aiosqlite.Row
-    await c.execute("PRAGMA busy_timeout = 100")
+    await c.execute("PRAGMA busy_timeout = 500")
     await c.execute("PRAGMA foreign_keys = ON")
     try:
         yield c
@@ -92,6 +97,13 @@ class HiveAccountResponse(BaseModel):
     verified_at: Optional[str] = None
 
 
+ALLOWED_REGIONS = frozenset({
+    "us-east-1", "us-east-2", "us-west-1", "us-west-2",
+    "eu-west-1", "eu-west-2", "eu-central-1",
+    "ap-northeast-1", "ap-southeast-1", "ap-southeast-2", "ap-south-1",
+})
+
+
 class HiveInstanceCreate(BaseModel):
     name: str  # validated in create_instance: ^[a-z][a-z0-9-]{0,62}$
     account_ref: str
@@ -100,6 +112,15 @@ class HiveInstanceCreate(BaseModel):
     owner_name: Optional[str] = None
     hive_type: str = "shared"
     version: Optional[str] = None  # if None, uses latest from GitHub
+
+    @field_validator("region")
+    @classmethod
+    def validate_region(cls, v: str) -> str:
+        if v not in ALLOWED_REGIONS:
+            raise ValueError(
+                f"Region '{v}' is not allowed. Must be one of: {sorted(ALLOWED_REGIONS)}"
+            )
+        return v
 
 
 class HiveInstanceUpdate(BaseModel):
@@ -136,7 +157,14 @@ class HiveInstanceResponse(BaseModel):
 
 
 class HiveInstanceDetailResponse(HiveInstanceResponse):
-    """Detail response — includes credentials. Only returned by GET /instances/{id}."""
+    """Detail response — includes credentials. Only returned by GET /instances/{id}.
+
+    NOTE: auth_password is stored and returned in plaintext. This is acceptable
+    because the SQLite DB is local to the user's machine (~/.swarm-ai/data.db).
+    The password is generated per-deploy and only used for Caddy basic auth
+    (defense-in-depth behind CloudFront). If the DB file is ever shared or
+    backed up, credentials will be exposed — document this for users.
+    """
     auth_password: Optional[str] = None
 
 
@@ -185,8 +213,26 @@ async def create_account(body: HiveAccountCreate):
 
 @router.delete("/accounts/{account_id}")
 async def delete_account(account_id: str):
-    """Remove an AWS account and all its Hive instances."""
+    """Remove an AWS account and all its Hive instances.
+
+    Cleans up AWS resources for each instance before deleting DB rows.
+    """
     _require_desktop()
+    async with _conn() as c:
+        cursor = await c.execute("SELECT * FROM hive_instances WHERE account_ref = ?", (account_id,))
+        instances = [dict(r) for r in await cursor.fetchall()]
+
+    # Cleanup AWS resources for each instance that has an EC2 instance
+    provisioner = _get_provisioner()
+    for inst in instances:
+        if inst.get("ec2_instance_id"):
+            try:
+                await provisioner.cleanup(inst["id"])
+            except Exception as e:
+                logger.warning(
+                    "Cleanup failed for instance %s (continuing): %s", inst["id"], e
+                )
+
     async with _conn() as c:
         await c.execute("DELETE FROM hive_instances WHERE account_ref = ?", (account_id,))
         cursor = await c.execute("DELETE FROM hive_accounts WHERE id = ?", (account_id,))
@@ -452,12 +498,27 @@ async def delete_instance(instance_id: str):
     return {"deleted": True}
 
 
+@router.get("/instances/{instance_id}/credentials")
+async def get_instance_credentials(instance_id: str):
+    """Return only the auth credentials for a Hive instance."""
+    async with _conn() as c:
+        cursor = await c.execute(
+            "SELECT auth_user, auth_password FROM hive_instances WHERE id = ?",
+            (instance_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Instance not found")
+    row = dict(row)
+    return {"auth_user": row["auth_user"], "auth_password": row["auth_password"]}
+
+
 @router.get("/instances/{instance_id}/health")
 async def health_proxy(instance_id: str):
     """Proxy health check to remote Hive instance."""
     async with _conn() as c:
         cursor = await c.execute(
-            "SELECT ec2_public_ip, cloudfront_domain FROM hive_instances WHERE id = ?",
+            "SELECT ec2_public_ip, cloudfront_domain, auth_user, auth_password FROM hive_instances WHERE id = ?",
             (instance_id,),
         )
         row = await cursor.fetchone()
@@ -470,9 +531,23 @@ async def health_proxy(instance_id: str):
     if not ip:
         raise HTTPException(status_code=400, detail="No IP address for this instance")
 
+    # SSRF guard: only allow public IPv4 addresses (reject RFC 1918, loopback, link-local)
+    import ipaddress
+    try:
+        addr = ipaddress.ip_address(ip)
+        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+            raise HTTPException(status_code=400, detail="Instance IP is not a public address")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid IP address for this instance")
+
+    # Build basic auth from instance credentials
+    auth = None
+    if row.get("auth_user") and row.get("auth_password"):
+        auth = httpx.BasicAuth(row["auth_user"], row["auth_password"])
+
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"http://{ip}/health")
+            resp = await client.get(f"http://{ip}/health", auth=auth)
             return resp.json()
     except Exception as e:
         return {"status": "unreachable", "error": str(e)}

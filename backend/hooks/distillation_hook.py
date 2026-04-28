@@ -1679,8 +1679,8 @@ class DistillationTriggerHook:
                     keep_lines.append(line)
                     continue
 
-                # Check protected keywords
-                if any(kw in stripped for kw in self._RC_PROTECTED_KEYWORDS):
+                # Check protected keywords (word-boundary match)
+                if any(re.search(r'\b' + re.escape(kw) + r'\b', stripped) for kw in self._RC_PROTECTED_KEYWORDS):
                     keep_lines.append(line)
                     continue
 

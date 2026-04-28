@@ -329,7 +329,7 @@ class TestStalenessCancellation:
         assert _get_todo_status(db_path, "stale-2") == "pending"
 
     def test_stale_in_discussion_cancelled_at_working_threshold(self, tmp_path):
-        """in_discussion (WORKING) todos use shorter 5d threshold."""
+        """in_discussion (WORKING) todos use shorter 14d threshold."""
         from jobs.todo_resolution import run_todo_resolution
 
         db_path = _create_test_db(tmp_path)

@@ -245,6 +245,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
   useEffect(() => {
     mermaid.initialize({
       startOnLoad: false,
+      securityLevel: 'strict',
       theme: resolvedTheme === 'dark' ? 'dark' : 'default',
       themeVariables: resolvedTheme === 'dark' ? {
         primaryColor: '#2b6cee',
@@ -746,6 +747,8 @@ const baseMarkdownComponents: Record<string, React.ComponentType<any>> = {
                   new CustomEvent(OPEN_FILE_EVENT, { detail: { path: cleanPath } }),
                 );
               } else {
+                const url = new URL(href, window.location.href);
+                if (!['http:', 'https:'].includes(url.protocol)) return;
                 await openExternal(href);
               }
             } catch (err) {

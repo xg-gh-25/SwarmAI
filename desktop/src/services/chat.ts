@@ -351,6 +351,7 @@ function startSSEFetch(opts: {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(opts.body),
+    credentials: 'include',
     signal: controller.signal,
   })
     .then(async (response) => {

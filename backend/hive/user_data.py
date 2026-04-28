@@ -5,7 +5,6 @@ Downloads the hive package from S3, installs dependencies, configures
 Caddy with basic auth, starts services, and tags the instance ready.
 """
 
-import hashlib
 import secrets
 import string
 
@@ -177,29 +176,18 @@ def generate_password(length: int = 16) -> str:
 
 
 def caddy_hash_password(password: str) -> str:
-    """Generate a bcrypt-compatible hash for Caddy basicauth.
+    """Generate a bcrypt hash for Caddy basicauth.
 
-    Caddy accepts bcrypt hashes. We use a simple SHA-256 fallback
-    prefixed with the Caddy-recognized format. For production,
-    caddy hash-password should be used, but for user-data we need
-    a pure-Python solution.
+    Caddy's ``basicauth`` directive ONLY accepts bcrypt hashes — SHA-256,
+    MD5, and plaintext are all rejected.  bcrypt is therefore a hard
+    requirement; if it's missing the deploy must fail loudly rather than
+    produce an instance with broken authentication.
 
-    Actually, Caddy basicauth supports base64-encoded bcrypt.
-    We'll use the hashlib approach with a known salt for simplicity
-    in the user-data context — the real auth layer is CloudFront
-    anyway (MVP). For now, use bcrypt via the bcrypt package if
-    available, otherwise fall back to a placeholder that Caddy
-    supports.
+    The ``bcrypt`` package is listed in pyproject.toml [dependencies].
     """
-    try:
-        import bcrypt
-        hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=14))
-        return hashed.decode()
-    except ImportError:
-        # Fallback: Caddy also accepts plaintext passwords when prefixed
-        # This is acceptable for MVP where CloudFront is the primary barrier
-        # and basic auth is defense-in-depth
-        return hashlib.sha256(password.encode()).hexdigest()
+    import bcrypt
+    hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=14))
+    return hashed.decode()
 
 
 def render_user_data(
