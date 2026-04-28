@@ -1,27 +1,37 @@
 /**
  * Hive cloud instance management tab.
  *
- * Shows AWS accounts and deployed Hive instances.
- * Deploy/Stop/Start/Update/Delete actions.
+ * Live management panel: deploy progress, status polling,
+ * auth credentials display, share, split My/Shared Hives.
  */
-import { useState, useEffect, useCallback } from 'react';
-import { hiveService, HiveAccount, HiveInstance, VerifyResult } from '../../services/hive';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import {
+  hiveService,
+  HiveAccount,
+  HiveInstance,
+  VerifyResult,
+  TRANSITIONAL_STATUSES,
+  getDeploySteps,
+} from '../../services/hive';
 
 const STATUS_COLORS: Record<string, string> = {
   running: 'text-green-400',
   stopped: 'text-yellow-400',
   pending: 'text-blue-400',
-  deploying: 'text-blue-400',
+  provisioning: 'text-blue-400',
+  installing: 'text-blue-400',
   error: 'text-red-400',
   deleting: 'text-red-400',
 };
 
 const STATUS_ICONS: Record<string, string> = {
-  running: '🟢',
-  stopped: '🔴',
-  pending: '🔵',
-  deploying: '🔵',
+  running: '\u{1F7E2}',
+  stopped: '\u{1F534}',
+  pending: '\u{1F535}',
+  provisioning: '\u{1F535}',
+  installing: '\u{1F535}',
   error: '❌',
+  deleting: '\u{1F534}',
 };
 
 const INSTANCE_SIZES = [
@@ -36,6 +46,7 @@ export default function HiveTab() {
   const [loading, setLoading] = useState(true);
   const [showAddAccount, setShowAddAccount] = useState(false);
   const [showDeployHive, setShowDeployHive] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -54,6 +65,27 @@ export default function HiveTab() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  // AC2: Poll every 5s when any instance is in transitional state
+  useEffect(() => {
+    const hasTransitional = instances.some(i => TRANSITIONAL_STATUSES.includes(i.status));
+    if (hasTransitional && !pollRef.current) {
+      pollRef.current = setInterval(refresh, 5000);
+    } else if (!hasTransitional && pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, [instances, refresh]);
+
+  // AC5: Split My Hives vs Shared Hives
+  const myHives = instances.filter(i => i.hiveType === 'my');
+  const sharedHives = instances.filter(i => i.hiveType !== 'my');
+
   if (loading) {
     return <div className="text-[var(--color-text-muted)] text-sm p-6">Loading...</div>;
   }
@@ -63,44 +95,29 @@ export default function HiveTab() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-[var(--color-text)]">🐝 Hive — Your AI in the Cloud</h2>
+          <h2 className="text-lg font-semibold text-[var(--color-text)]">
+            {'\u{1F41D}'} Hive — Your AI in the Cloud
+          </h2>
           <p className="text-xs text-[var(--color-text-muted)] mt-1">
             Deploy SwarmAI to your AWS account. Each Hive has its own memory, skills, and workspace.
           </p>
         </div>
       </div>
 
-      {/* Instances */}
-      <section className="bg-[var(--color-card)] rounded-lg p-6">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-sm font-semibold text-[var(--color-text)]">Hive Instances</h3>
-          <button
-            onClick={() => setShowDeployHive(true)}
-            disabled={accounts.length === 0}
-            className="px-3 py-1.5 text-xs bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
-          >
-            <span className="material-symbols-outlined text-sm">add</span>
-            Deploy New Hive
-          </button>
-        </div>
+      {/* My Hives */}
+      {myHives.length > 0 && (
+        <HiveSection title="My Hives" instances={myHives} onAction={refresh} />
+      )}
 
-        {instances.length === 0 ? (
-          <div className="text-center py-8">
-            <span className="text-4xl">🐝</span>
-            <p className="text-sm text-[var(--color-text-muted)] mt-2">
-              {accounts.length === 0
-                ? 'Add an AWS account below to deploy your first Hive.'
-                : 'No Hives deployed yet. Click "Deploy New Hive" to get started.'}
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {instances.map((inst) => (
-              <InstanceCard key={inst.id} instance={inst} onAction={refresh} />
-            ))}
-          </div>
-        )}
-      </section>
+      {/* Shared Hives (or all instances if none are typed) */}
+      <HiveSection
+        title={myHives.length > 0 ? 'Shared Hives' : 'Hive Instances'}
+        instances={myHives.length > 0 ? sharedHives : instances}
+        onAction={refresh}
+        accounts={accounts}
+        onDeploy={() => setShowDeployHive(true)}
+        showEmpty
+      />
 
       {/* AWS Accounts */}
       <section className="bg-[var(--color-card)] rounded-lg p-6">
@@ -128,7 +145,6 @@ export default function HiveTab() {
         )}
       </section>
 
-      {/* Add Account Dialog */}
       {showAddAccount && (
         <AddAccountDialog
           onClose={() => setShowAddAccount(false)}
@@ -136,7 +152,6 @@ export default function HiveTab() {
         />
       )}
 
-      {/* Deploy Hive Dialog */}
       {showDeployHive && (
         <DeployHiveDialog
           accounts={accounts}
@@ -149,10 +164,60 @@ export default function HiveTab() {
 }
 
 
-// ── Instance Card ──────────────────────────────────────────────────
+// ── Hive Section ──────────────────────────────────────────────────
+
+function HiveSection({
+  title, instances, onAction, accounts, onDeploy, showEmpty,
+}: {
+  title: string;
+  instances: HiveInstance[];
+  onAction: () => void;
+  accounts?: HiveAccount[];
+  onDeploy?: () => void;
+  showEmpty?: boolean;
+}) {
+  return (
+    <section className="bg-[var(--color-card)] rounded-lg p-6">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-semibold text-[var(--color-text)]">{title}</h3>
+        {onDeploy && (
+          <button
+            onClick={onDeploy}
+            disabled={!accounts || accounts.length === 0}
+            className="px-3 py-1.5 text-xs bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+          >
+            <span className="material-symbols-outlined text-sm">add</span>
+            Deploy New Hive
+          </button>
+        )}
+      </div>
+
+      {instances.length === 0 && showEmpty ? (
+        <div className="text-center py-8">
+          <span className="text-4xl">{'\u{1F41D}'}</span>
+          <p className="text-sm text-[var(--color-text-muted)] mt-2">
+            {!accounts || accounts.length === 0
+              ? 'Add an AWS account below to deploy your first Hive.'
+              : 'No Hives deployed yet. Click "Deploy New Hive" to get started.'}
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {instances.map((inst) => (
+            <InstanceCard key={inst.id} instance={inst} onAction={onAction} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+
+// ── Instance Card (enhanced) ──────────────────────────────────────
 
 function InstanceCard({ instance: inst, onAction }: { instance: HiveInstance; onAction: () => void }) {
   const [acting, setActing] = useState(false);
+  const isTransitional = TRANSITIONAL_STATUSES.includes(inst.status);
 
   const doAction = async (action: () => Promise<void>) => {
     setActing(true);
@@ -167,11 +232,15 @@ function InstanceCard({ instance: inst, onAction }: { instance: HiveInstance; on
 
   return (
     <div className="p-4 bg-[var(--color-bg)] rounded-lg">
+      {/* Header row */}
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <span>{STATUS_ICONS[inst.status] || '⚪'}</span>
           <span className="text-sm font-medium text-[var(--color-text)]">{inst.name}</span>
           <span className={`text-xs ${STATUS_COLORS[inst.status] || ''}`}>{inst.status}</span>
+          {isTransitional && (
+            <span className="inline-block w-3 h-3 border-2 border-[var(--color-primary)] border-t-transparent rounded-full animate-spin" />
+          )}
         </div>
         <div className="flex items-center gap-1.5">
           {url && (
@@ -179,7 +248,7 @@ function InstanceCard({ instance: inst, onAction }: { instance: HiveInstance; on
               onClick={() => window.open(url, '_blank')}
               className="px-2 py-1 text-xs bg-[var(--color-primary)]/20 text-[var(--color-primary)] rounded hover:bg-[var(--color-primary)]/30"
             >
-              Open ↗
+              Open {'↗'}
             </button>
           )}
           {inst.status === 'running' && (
@@ -200,24 +269,141 @@ function InstanceCard({ instance: inst, onAction }: { instance: HiveInstance; on
               Start
             </button>
           )}
-          <button
-            onClick={() => { if (confirm(`Delete ${inst.name}?`)) doAction(() => hiveService.deleteInstance(inst.id)); }}
-            disabled={acting}
-            className="px-2 py-1 text-xs bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 disabled:opacity-50"
-          >
-            Delete
-          </button>
+          {!isTransitional && (
+            <button
+              onClick={() => { if (confirm(`Delete ${inst.name}?`)) doAction(() => hiveService.deleteInstance(inst.id)); }}
+              disabled={acting}
+              className="px-2 py-1 text-xs bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 disabled:opacity-50"
+            >
+              Delete
+            </button>
+          )}
         </div>
       </div>
-      <div className="flex items-center gap-4 text-xs text-[var(--color-text-muted)]">
-        {url && <code className="bg-[var(--color-card)] px-1.5 py-0.5 rounded select-all">{url}</code>}
+
+      {/* AC6: Owner name for shared Hives */}
+      {inst.ownerName && (
+        <div className="text-xs text-[var(--color-text-muted)] mb-2">
+          Owner: {inst.ownerName}
+        </div>
+      )}
+
+      {/* Meta row */}
+      <div className="flex items-center gap-4 text-xs text-[var(--color-text-muted)] mb-2">
+        {url && <code className="bg-[var(--color-card)] px-1.5 py-0.5 rounded select-all text-[10px]">{url}</code>}
         <span>{inst.instanceType}</span>
         <span>{inst.region}</span>
         {inst.version && <span>v{inst.version}</span>}
       </div>
+
+      {/* AC1: Deploy progress for transitional states */}
+      {isTransitional && <DeployProgress instance={inst} />}
+
+      {/* AC3+4: Auth display + share for running instances */}
+      {inst.status === 'running' && inst.authUser && <AuthDisplay instance={inst} />}
+
+      {/* Error message */}
       {inst.errorMessage && (
-        <p className="text-xs text-red-400 mt-1">{inst.errorMessage}</p>
+        <p className="text-xs text-red-400 mt-2 bg-red-500/10 px-2 py-1 rounded">{inst.errorMessage}</p>
       )}
+    </div>
+  );
+}
+
+
+// ── Deploy Progress ───────────────────────────────────────────────
+
+function DeployProgress({ instance }: { instance: HiveInstance }) {
+  const steps = getDeploySteps(instance);
+  const currentIdx = steps.findIndex(s => !s.done);
+
+  return (
+    <div className="mt-2 space-y-1">
+      {steps.map((step, i) => (
+        <div key={step.label} className="flex items-center gap-2 text-xs">
+          {step.done ? (
+            <span className="text-green-400 w-4 text-center">{'✓'}</span>
+          ) : i === currentIdx ? (
+            <span className="inline-block w-3 h-3 border-2 border-[var(--color-primary)] border-t-transparent rounded-full animate-spin ml-0.5" />
+          ) : (
+            <span className="w-4 text-center text-[var(--color-text-muted)]">{'○'}</span>
+          )}
+          <span className={step.done ? 'text-[var(--color-text-muted)]' : i === currentIdx ? 'text-[var(--color-text)]' : 'text-[var(--color-text-muted)]/50'}>
+            {step.label}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+
+// ── Auth Display + Share ──────────────────────────────────────────
+
+function AuthDisplay({ instance: inst }: { instance: HiveInstance }) {
+  const [showPass, setShowPass] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const url = inst.cloudfrontDomain
+    ? `https://${inst.cloudfrontDomain}`
+    : inst.ec2PublicIp ? `http://${inst.ec2PublicIp}` : '';
+
+  const togglePass = () => {
+    setShowPass(prev => {
+      if (!prev) {
+        // Auto-hide after 30s
+        if (hideTimer.current) clearTimeout(hideTimer.current);
+        hideTimer.current = setTimeout(() => setShowPass(false), 30000);
+      }
+      return !prev;
+    });
+  };
+
+  const copyToClipboard = async (text: string, label: string) => {
+    await navigator.clipboard.writeText(text);
+    setCopied(label);
+    setTimeout(() => setCopied(null), 2000);
+  };
+
+  // AC4: Share generates copyable text
+  const shareText = [
+    `Your SwarmAI Hive is ready:`,
+    `URL: ${url}`,
+    `User: ${inst.authUser}`,
+    `Password: ${inst.authPassword}`,
+    ``,
+    `Open the URL and sign in. It works exactly like the desktop app.`,
+  ].join('\n');
+
+  return (
+    <div className="mt-2 p-2 bg-[var(--color-card)] rounded text-xs space-y-1.5">
+      <div className="flex items-center gap-2">
+        <span className="text-[var(--color-text-muted)] w-12">Auth:</span>
+        <code className="text-[var(--color-text)]">{inst.authUser}</code>
+        <span className="text-[var(--color-text-muted)]">/</span>
+        <code className="text-[var(--color-text)]">
+          {showPass ? inst.authPassword : '••••••••'}
+        </code>
+        <button onClick={togglePass}
+          className="px-1.5 py-0.5 text-[10px] bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded hover:text-[var(--color-text)]">
+          {showPass ? 'Hide' : 'Show'}
+        </button>
+        <button onClick={() => copyToClipboard(inst.authPassword ?? '', 'password')}
+          className="px-1.5 py-0.5 text-[10px] bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded hover:text-[var(--color-text)]">
+          {copied === 'password' ? 'Copied!' : 'Copy'}
+        </button>
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => copyToClipboard(shareText, 'share')}
+          className="px-2 py-1 bg-[var(--color-primary)]/20 text-[var(--color-primary)] rounded hover:bg-[var(--color-primary)]/30 flex items-center gap-1"
+        >
+          <span className="material-symbols-outlined text-sm">share</span>
+          {copied === 'share' ? 'Copied!' : 'Share'}
+        </button>
+        <span className="text-[var(--color-text-muted)]">Copy URL + credentials for the Hive user</span>
+      </div>
     </div>
   );
 }
@@ -255,8 +441,8 @@ function AccountCard({ account: acc, onDelete }: { account: HiveAccount; onDelet
               )}
             </div>
             <div className="text-xs text-[var(--color-text-muted)]">
-              {acc.authMethod} · {acc.defaultRegion}
-              {acc.verifiedAt && <span className="text-green-400 ml-2">✓ verified</span>}
+              {acc.authMethod} {'·'} {acc.defaultRegion}
+              {acc.verifiedAt && <span className="text-green-400 ml-2">{'✓'} verified</span>}
             </div>
           </div>
         </div>
@@ -272,7 +458,7 @@ function AccountCard({ account: acc, onDelete }: { account: HiveAccount; onDelet
             onClick={() => { if (confirm('Delete account + all its Hives?')) hiveService.deleteAccount(acc.id).then(onDelete); }}
             className="px-2 py-1 text-xs text-red-400 hover:bg-red-500/20 rounded"
           >
-            ✕
+            {'✕'}
           </button>
         </div>
       </div>
@@ -382,10 +568,11 @@ function AddAccountDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
 }
 
 
-// ── Deploy Hive Dialog ─────────────────────────────────────────────
+// ── Deploy Hive Dialog (enhanced: owner_name) ─────────────────────
 
 function DeployHiveDialog({ accounts, onClose, onDeployed }: { accounts: HiveAccount[]; onClose: () => void; onDeployed: () => void }) {
   const [name, setName] = useState('');
+  const [ownerName, setOwnerName] = useState('');
   const [accountRef, setAccountRef] = useState(accounts[0]?.id ?? '');
   const [instanceType, setInstanceType] = useState('m7g.xlarge');
   const [deploying, setDeploying] = useState(false);
@@ -402,6 +589,8 @@ function DeployHiveDialog({ accounts, onClose, onDeployed }: { accounts: HiveAcc
         accountRef,
         region: selectedAccount?.defaultRegion ?? 'us-east-1',
         instanceType,
+        ownerName: ownerName || undefined,
+        hiveType: ownerName ? 'shared' : 'my',
       });
       onDeployed();
     } catch (e) {
@@ -420,6 +609,13 @@ function DeployHiveDialog({ accounts, onClose, onDeployed }: { accounts: HiveAcc
           <div>
             <label className="block text-xs text-[var(--color-text-muted)] mb-1">Hive Name</label>
             <input value={name} onChange={(e) => setName(e.target.value.toLowerCase())} placeholder="e.g. xg-hive, dev-01"
+              className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]" />
+          </div>
+
+          {/* AC7: Owner name field */}
+          <div>
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">Owner (optional — leave blank if this is for you)</label>
+            <input value={ownerName} onChange={(e) => setOwnerName(e.target.value)} placeholder="e.g. Bo Wang, Titus Tian"
               className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]" />
           </div>
 
@@ -447,11 +643,6 @@ function DeployHiveDialog({ accounts, onClose, onDeployed }: { accounts: HiveAcc
           </div>
 
           {error && <p className="text-xs text-red-400">{error}</p>}
-
-          <p className="text-xs text-[var(--color-text-muted)]">
-            Phase 2: Clicking Deploy will create EC2 + CloudFront in your AWS account.
-            Currently creates a database record only.
-          </p>
         </div>
 
         <div className="flex justify-end gap-2 mt-6">

@@ -20,17 +20,43 @@ export interface HiveAccount {
 export interface HiveInstance {
   id: string;
   name: string;
+  ownerName: string | null;
+  hiveType: string;
   accountRef: string;
   region: string;
   instanceType: string;
   ec2InstanceId: string | null;
   ec2PublicIp: string | null;
+  elasticIpAllocId: string | null;
+  securityGroupId: string | null;
+  iamRoleName: string | null;
+  cloudfrontDistId: string | null;
   cloudfrontDomain: string | null;
+  s3Bucket: string | null;
+  authUser: string | null;
+  authPassword: string | null;
   status: string;
   version: string | null;
   errorMessage: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Transitional statuses that require polling */
+export const TRANSITIONAL_STATUSES = ['pending', 'provisioning', 'installing', 'deleting'];
+
+/** Deploy progress steps derived from field presence */
+export function getDeploySteps(inst: HiveInstance): { label: string; done: boolean }[] {
+  return [
+    { label: 'S3 bucket ready', done: !!inst.s3Bucket },
+    { label: 'IAM Role created', done: !!inst.iamRoleName },
+    { label: 'Security Group configured', done: !!inst.securityGroupId },
+    { label: 'EC2 launched', done: !!inst.ec2InstanceId },
+    { label: 'Elastic IP assigned', done: !!inst.ec2PublicIp },
+    { label: 'Installing SwarmAI...', done: inst.status === 'running' || !!inst.cloudfrontDomain },
+    { label: 'Backend health check', done: inst.status === 'running' || !!inst.cloudfrontDomain },
+    { label: 'CloudFront HTTPS', done: !!inst.cloudfrontDomain },
+  ];
 }
 
 export interface VerifyResult {
@@ -97,14 +123,22 @@ export const hiveService = {
     accountRef: string;
     region?: string;
     instanceType?: string;
+    ownerName?: string;
+    hiveType?: string;
   }): Promise<HiveInstance> {
     const { data } = await api.post('/hive/instances', {
       name: body.name,
       account_ref: body.accountRef,
       region: body.region ?? 'us-east-1',
       instance_type: body.instanceType ?? 'm7g.xlarge',
+      owner_name: body.ownerName ?? null,
+      hive_type: body.hiveType ?? 'shared',
     });
     return toCamel(data) as unknown as HiveInstance;
+  },
+
+  async updateInstance(id: string, version: string): Promise<void> {
+    await api.post(`/hive/instances/${id}/update`, { version });
   },
 
   async stopInstance(id: string): Promise<void> {
