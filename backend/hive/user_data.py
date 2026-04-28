@@ -68,13 +68,19 @@ cat > /etc/caddy/Caddyfile << 'CADDY'
         ${auth_user} ${auth_hash}
     }
     handle /api/chat/stream {
-        reverse_proxy 127.0.0.1:18321 { flush_interval -1 }
+        reverse_proxy 127.0.0.1:18321 {
+            flush_interval -1
+        }
     }
     handle /api/chat/answer-question {
-        reverse_proxy 127.0.0.1:18321 { flush_interval -1 }
+        reverse_proxy 127.0.0.1:18321 {
+            flush_interval -1
+        }
     }
     handle /api/chat/cmd-permission-continue {
-        reverse_proxy 127.0.0.1:18321 { flush_interval -1 }
+        reverse_proxy 127.0.0.1:18321 {
+            flush_interval -1
+        }
     }
     handle /api/* {
         reverse_proxy 127.0.0.1:18321
