@@ -18,6 +18,7 @@ Key design decisions (from approved design doc):
 import asyncio
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -27,8 +28,8 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# GitHub repo for release downloads
-GITHUB_REPO = "xg-gh-25/SwarmAI"
+# GitHub repo for release downloads — configurable for forks
+GITHUB_REPO = os.environ.get("SWARMAI_GITHUB_REPO", "xg-gh-25/SwarmAI")
 
 # IAM policy for Hive instances
 HIVE_IAM_POLICY = {
@@ -156,24 +157,36 @@ class HiveProvisioner:
     # ── Version resolution ────────────────────────────────────────
 
     async def _resolve_version(self, version: str | None) -> str:
-        """Resolve version string. If None or 'latest', fetch from GitHub."""
+        """Resolve version string. If None or 'latest', fetch from GitHub.
+
+        Raises RuntimeError if no release found — never silently falls back.
+        """
         if version and version != "latest":
             return version
-        # Fetch latest version tag from GitHub API
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(
                 f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
             )
             if resp.status_code == 200:
                 tag = resp.json().get("tag_name", "")
-                return tag.lstrip("v") if tag else "1.0.0"
-        raise RuntimeError("Cannot determine latest version from GitHub")
+                if tag:
+                    return tag.lstrip("v")
+            raise RuntimeError(
+                f"Cannot determine latest version from GitHub ({GITHUB_REPO}). "
+                f"HTTP {resp.status_code}. Ensure the repo has at least one release "
+                f"with a hive tar.gz asset."
+            )
 
     # ── S3 ─────────────────────────────────────────────────────────
 
-    async def _ensure_s3_bucket(self, session, region: str) -> str:
-        """Create S3 bucket for hive releases if it doesn't exist."""
-        bucket_name = f"swarmai-hive-releases-{region}"
+    async def _ensure_s3_bucket(self, session, region: str, account_id: str = "") -> str:
+        """Create S3 bucket for hive releases if it doesn't exist.
+
+        Bucket name includes last 4 digits of account ID to prevent collision
+        when multiple users deploy in the same region.
+        """
+        suffix = account_id[-4:] if account_id else ""
+        bucket_name = f"swarmai-hive-{suffix}-{region}" if suffix else f"swarmai-hive-releases-{region}"
 
         def _create():
             s3 = session.client("s3", region_name=region)
@@ -642,10 +655,11 @@ class HiveProvisioner:
             await self._update_instance(instance_id, version=version)
 
             session = self._get_session(account, region)
+            aws_account_id = account.get("account_id", "")
 
             # Step 1: S3
             await self._update_instance(instance_id, status="provisioning", error_message=None)
-            bucket = await self._ensure_s3_bucket(session, region)
+            bucket = await self._ensure_s3_bucket(session, region, aws_account_id)
             await self._update_instance(instance_id, s3_bucket=bucket)
 
             # Step 2: Sync release to S3
