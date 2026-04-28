@@ -339,6 +339,8 @@ Route files based on user intent. When the user says "save this", match the clos
 | "save this report", "write up analysis" | `Knowledge/Reports/` | `YYYY-MM-DD-<topic>.md` |
 | "save meeting notes", "meeting summary" | `Knowledge/Meetings/` | `YYYY-MM-DD-<meeting-name>.md` |
 | "save to library", "reference material" | `Knowledge/Library/` | `YYYY-MM-DD-<topic>.md` |
+| "save this design", "tech design" | `Knowledge/Designs/` | `YYYY-MM-DD-<topic>.md` |
+| "learn this", "save this article" | `Knowledge/Learned/` | `YYYY-MM-DD-<topic>.md` |
 | "save context", "handoff" | `Knowledge/Handoffs/` | `YYYY-MM-DD-HHMM.md` |
 | "save activity", "log today" | `Knowledge/DailyActivity/` | `YYYY-MM-DD.md` (append) |
 | "remember this", "save to memory" | `.context/MEMORY.md` | (prepend via `locked_write.py`) |
@@ -352,6 +354,9 @@ Route files based on user intent. When the user says "save this", match the clos
 |---|---|---|
 | Daily session logs | `Knowledge/DailyActivity/YYYY-MM-DD.md` | DailyActivityExtractionHook |
 | Archived daily files | `Knowledge/Archives/` | 90-day auto-prune |
+| Signal digests | `Knowledge/Signals/` | Signal pipeline (daily cron) |
+| Job execution results | `Knowledge/JobResults/` | Job runner |
+| Media content output | `Knowledge/Pollinate/` | Pollinate skill |
 
 **Rules:**
 - Always use `YYYY-MM-DD-` prefix for filenames (sortable, discoverable)
