@@ -14,6 +14,7 @@ import {
   UpdateProgress,
 } from '../../services/updater';
 import { Update } from '@tauri-apps/plugin-updater';
+import { isDesktop } from '../../services/tauri';
 
 const isDev = import.meta.env.DEV;
 
@@ -30,10 +31,16 @@ export default function AboutTab() {
   const [updateError, setUpdateError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!isDev) {
+    if (isDev) {
+      setAppVersion('dev');
+    } else if (isDesktop()) {
       getVersion().then(setAppVersion).catch(() => setAppVersion('unknown'));
     } else {
-      setAppVersion('dev');
+      // Hive/browser mode — read version from backend health endpoint
+      fetch('/health', { signal: AbortSignal.timeout(2000) })
+        .then(r => r.json())
+        .then(d => setAppVersion(d.version || 'unknown'))
+        .catch(() => setAppVersion('unknown'));
     }
   }, []);
 
@@ -86,7 +93,7 @@ export default function AboutTab() {
             <span className="text-[var(--color-text)]">{getPlatform()}</span>
           </div>
 
-          {!isDev && (
+          {!isDev && isDesktop() && (
             <div className="pt-3 border-t border-[var(--color-border)]">
               {updateState === 'idle' && (
                 <button

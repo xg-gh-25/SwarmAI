@@ -5,7 +5,7 @@
  */
 import { useState, useEffect } from 'react';
 // getApiBaseUrl: health fetch URL; getBackendPort: status display (Desktop only)
-import { tauriService, BackendStatus, getApiBaseUrl, getBackendPort } from '../../services/tauri';
+import { tauriService, BackendStatus, getApiBaseUrl, getBackendPort, isDesktop } from '../../services/tauri';
 
 const isDev = import.meta.env.DEV;
 
@@ -36,14 +36,20 @@ export default function SystemTab() {
         const status = await tauriService.getBackendStatus();
         setBackendStatus(status);
       } catch {
-        // Fallback: health check only (dev mode or Tauri unavailable)
+        // Fallback: health check only (dev mode, Hive mode, or Tauri unavailable)
         const apiBase = getApiBaseUrl();
         const port = getBackendPort();
         try {
           const resp = await fetch(`${apiBase}/health`, {
             signal: AbortSignal.timeout(2000),
           });
-          setBackendStatus({ running: resp.ok, port, is_daemon_mode: false });
+          if (resp.ok) {
+            const data = await resp.json();
+            const mode = data.mode || 'sidecar';
+            setBackendStatus({ running: true, port, is_daemon_mode: mode === 'daemon' || mode === 'hive' });
+          } else {
+            setBackendStatus({ running: false, port, is_daemon_mode: false });
+          }
         } catch {
           setBackendStatus({ running: false, port, is_daemon_mode: false });
         }
@@ -54,7 +60,8 @@ export default function SystemTab() {
   }, []);
 
   const checkDeps = async () => {
-    if (isDev) return;
+    // Dep checks use Tauri invoke — only available in desktop mode
+    if (isDev || !isDesktop()) return;
     setChecking(true);
     try {
       setNodejsVersion(await tauriService.checkNodejsVersion());
@@ -94,8 +101,8 @@ export default function SystemTab() {
         )}
       </section>
 
-      {/* Dependencies */}
-      {!isDev && (
+      {/* Dependencies — Desktop only (uses Tauri invoke) */}
+      {!isDev && isDesktop() && (
         <section className="bg-[var(--color-card)] rounded-lg p-6">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold text-[var(--color-text)]">System Dependencies</h2>

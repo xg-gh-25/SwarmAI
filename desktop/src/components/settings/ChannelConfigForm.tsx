@@ -43,6 +43,9 @@ export default function ChannelConfigForm({
 
       if (existingConfig) {
         await channelsService.update(existingConfig.id, { config });
+        // Restart channel to pick up new tokens
+        await channelsService.stop(existingConfig.id).catch(() => {});
+        await channelsService.start(existingConfig.id);
       } else {
         const channel = await channelsService.create({
           name: 'Slack',
