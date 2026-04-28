@@ -336,7 +336,7 @@ class HiveProvisioner:
             try:
                 kwargs: dict[str, Any] = {
                     "GroupName": sg_name,
-                    "Description": f"SwarmAI Hive {name} — HTTP/HTTPS only",
+                    "Description": f"SwarmAI Hive {name} - HTTP and HTTPS only",
                 }
                 if vpc_id:
                     kwargs["VpcId"] = vpc_id
@@ -508,10 +508,28 @@ class HiveProvisioner:
 
     # ── CloudFront ─────────────────────────────────────────────────
 
+    async def _get_ec2_public_dns(
+        self, session, instance_id: str, region: str
+    ) -> str:
+        """Get EC2 instance's public DNS name (required for CloudFront origin)."""
+        def _lookup():
+            ec2 = session.client("ec2", region_name=region)
+            resp = ec2.describe_instances(InstanceIds=[instance_id])
+            return resp["Reservations"][0]["Instances"][0].get("PublicDnsName", "")
+
+        dns = await asyncio.to_thread(_lookup)
+        if not dns:
+            raise RuntimeError(f"EC2 {instance_id} has no public DNS name")
+        return dns
+
     async def _create_cloudfront(
-        self, session, origin_ip: str, name: str
+        self, session, origin_domain: str, name: str
     ) -> tuple[str, str]:
-        """Create CloudFront distribution. Returns (dist_id, domain_name)."""
+        """Create CloudFront distribution. Returns (dist_id, domain_name).
+
+        origin_domain must be a DNS name (not an IP) — CloudFront rejects IPs.
+        Use _get_ec2_public_dns() to resolve the EC2 public DNS name.
+        """
         import uuid as _uuid
 
         def _create():
@@ -530,7 +548,7 @@ class HiveProvisioner:
                     "Items": [
                         {
                             "Id": "hive-origin",
-                            "DomainName": origin_ip,
+                            "DomainName": origin_domain,
                             "CustomOriginConfig": {
                                 "HTTPPort": 80,
                                 "HTTPSPort": 443,
@@ -695,8 +713,9 @@ class HiveProvisioner:
 
             await self._update_instance(instance_id, status="running")
 
-            # Step 10: CloudFront
-            dist_id, cf_domain = await self._create_cloudfront(session, public_ip, name)
+            # Step 10: CloudFront (needs DNS name, not IP — CF rejects IPs)
+            origin_dns = await self._get_ec2_public_dns(session, ec2_id, region)
+            dist_id, cf_domain = await self._create_cloudfront(session, origin_dns, name)
             created_resources["cloudfront"] = dist_id
             await self._update_instance(
                 instance_id,
