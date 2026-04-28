@@ -203,6 +203,16 @@ class DistillationTriggerHook:
             )
             self._write_flag(da_dir, len(undistilled_files))
 
+        # Archive stale Recent Context entries from MEMORY.md (non-blocking)
+        try:
+            await asyncio.to_thread(
+                self._archive_stale_rc_entries,
+                Path(ws_path) / ".context" / "MEMORY.md",
+                Path(ws_path),
+            )
+        except Exception as exc:
+            logger.warning("Stale RC archival failed (non-blocking): %s", exc)
+
     @staticmethod
     def _update_effectiveness_scoring(
         da_files: list[Path], ws_path: Path,
