@@ -12,8 +12,9 @@ ExecStart=/opt/swarmai/hive/swarmai-hive.sh
 Restart=always
 RestartSec=10
 
-# Health check — restart if /health doesn't respond within 30s
-ExecStartPost=/bin/sh -c 'for i in $(seq 1 30); do curl -sf http://127.0.0.1:18321/health && exit 0; sleep 1; done; exit 1'
+# Health check — restart if /health doesn't respond within 60s.
+# First boot needs extra time (workspace init 10-20s + Python/uvicorn startup).
+ExecStartPost=/bin/sh -c 'for i in $(seq 1 60); do curl -sf http://127.0.0.1:18321/health && exit 0; sleep 1; done; exit 1'
 
 # Environment
 Environment=HOME=/home/swarm

@@ -1058,7 +1058,13 @@ async def shutdown():
 
     This endpoint is called by the Tauri app before killing the backend process
     to ensure all Claude CLI child processes are properly terminated.
+
+    Blocked in Hive mode — any authenticated user could kill the shared
+    backend. Desktop-only (Tauri close handler is the sole caller).
     """
+    if _detect_run_mode() == "hive":
+        logger.warning("Shutdown endpoint blocked in Hive mode")
+        return {"status": "ignored", "reason": "shutdown disabled in hive mode"}
     logger.info("Shutdown endpoint called - disconnecting all clients")
     t0 = time.monotonic()
     try:

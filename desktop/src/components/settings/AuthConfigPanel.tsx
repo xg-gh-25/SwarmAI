@@ -9,7 +9,7 @@ import { systemService, VerifyAuthResponse, AuthHintResponse } from '../../servi
 import { settingsService } from '../../services/settings';
 import { Dropdown } from '../common';
 
-type AuthMethod = 'access_keys' | 'sso' | 'ada' | 'apikey';
+type AuthMethod = 'sso' | 'ada' | 'apikey';
 
 interface AuthConfigPanelProps {
   mode: 'onboarding' | 'settings';
@@ -26,11 +26,9 @@ const AWS_REGION_OPTIONS = [
 ];
 
 export default function AuthConfigPanel({ mode, onVerifySuccess }: AuthConfigPanelProps) {
-  const [method, setMethod] = useState<AuthMethod>('access_keys');
+  const [method, setMethod] = useState<AuthMethod>('sso');
   const [region, setRegion] = useState('us-east-1');
   const [accountId, setAccountId] = useState('');
-  const [accessKeyId, setAccessKeyId] = useState('');
-  const [secretAccessKey, setSecretAccessKey] = useState('');
   const [adaAccount, setAdaAccount] = useState('');
   const [adaRole, setAdaRole] = useState('');
   const [verifyState, setVerifyState] = useState<'idle' | 'verifying' | 'success' | 'error'>('idle');
@@ -42,14 +40,11 @@ export default function AuthConfigPanel({ mode, onVerifySuccess }: AuthConfigPan
     systemService.getAuthHint()
       .then((hint) => {
         setAuthHint(hint);
-        // Map backend suggestion to UI method
+        // Map backend suggestion to UI method (iam_role → sso for Hive)
         const methodMap: Record<string, AuthMethod> = {
-          'ada': 'ada',
-          'sso': 'sso',
-          'apikey': 'apikey',
-          'iam_role': 'access_keys',  // Hive mode uses instance role, show as access_keys
+          'ada': 'ada', 'sso': 'sso', 'apikey': 'apikey', 'iam_role': 'sso',
         };
-        setMethod(methodMap[hint.suggestedMethod] || 'access_keys');
+        setMethod(methodMap[hint.suggestedMethod] || 'sso');
         // Pre-fill from probed credentials — IAM details take priority (Hive),
         // then Ada details (Amazon internal), so the user sees real values on load
         if (hint.iamDetails) {
@@ -63,7 +58,7 @@ export default function AuthConfigPanel({ mode, onVerifySuccess }: AuthConfigPan
           if (hint.adaDetails.roleName) setAdaRole(hint.adaDetails.roleName);
         }
       })
-      .catch(() => { /* default access_keys is fine */ });
+      .catch(() => { /* default sso is fine */ });
   }, []);
 
   // Load current config from settings (region)
@@ -111,9 +106,10 @@ export default function AuthConfigPanel({ mode, onVerifySuccess }: AuthConfigPan
   };
 
   // Build methods list — show Ada only when detected (Amazon internal)
+  // Note: Access Keys method removed — it collected credentials but never
+  // persisted them (PE review finding #2). Re-add when wired to ~/.aws/credentials.
   const hasAda = authHint?.hasAdaDir ?? false;
   const methods: { id: AuthMethod; label: string; desc: string }[] = [
-    { id: 'access_keys', label: 'Access Keys', desc: 'IAM credentials' },
     { id: 'sso', label: 'AWS SSO', desc: 'Identity Center' },
     ...(hasAda ? [{ id: 'ada' as AuthMethod, label: 'Ada', desc: 'Amazon Internal' }] : []),
     { id: 'apikey', label: 'API Key', desc: 'Anthropic Direct' },
@@ -277,32 +273,6 @@ export default function AuthConfigPanel({ mode, onVerifySuccess }: AuthConfigPan
             onChange={setRegion}
             placeholder="Select region..."
           />
-
-          {/* Access Keys fields */}
-          {method === 'access_keys' && (
-            <>
-              <div>
-                <label className="block text-xs text-[var(--color-text-muted)] mb-1">Access Key ID</label>
-                <input
-                  type="text"
-                  value={accessKeyId}
-                  onChange={(e) => setAccessKeyId(e.target.value)}
-                  placeholder="AKIA..."
-                  className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-[var(--color-text-muted)] mb-1">Secret Access Key</label>
-                <input
-                  type="password"
-                  value={secretAccessKey}
-                  onChange={(e) => setSecretAccessKey(e.target.value)}
-                  placeholder="Enter secret access key"
-                  className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]"
-                />
-              </div>
-            </>
-          )}
 
           {/* ADA-specific fields */}
           {method === 'ada' && (

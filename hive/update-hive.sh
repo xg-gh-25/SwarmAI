@@ -11,12 +11,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="${SCRIPT_DIR}/.."
-SSH_KEY="${HOME}/.ssh/swarmai-hive.pem"
-SSH_OPTS="-o StrictHostKeyChecking=no -o ConnectTimeout=10"
+SSH_KEY="${HIVE_SSH_KEY:-${HOME}/.ssh/swarmai-hive.pem}"
+SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
 
-# Known Hive instances
-HIVE_XG="100.50.177.246"
-HIVE_WB="34.193.172.137"
+# Known Hive instances (override via env: HIVE_XG=1.2.3.4 ./update-hive.sh)
+HIVE_XG="${HIVE_XG:-100.50.177.246}"
+HIVE_WB="${HIVE_WB:-34.193.172.137}"
 ALL_HIVES=("${HIVE_XG}" "${HIVE_WB}")
 
 # ---------------------------------------------------------------------------
@@ -65,6 +65,9 @@ sudo rsync -a --exclude='.venv' /tmp/hive-backend/ /opt/swarmai/backend/
 sudo cp /tmp/hive-config/swarmai-hive.sh /opt/swarmai/hive/swarmai-hive.sh
 sudo chmod +x /opt/swarmai/hive/swarmai-hive.sh
 sudo chown -R swarm:swarm /opt/swarmai/desktop/dist /opt/swarmai/backend /opt/swarmai/hive
+
+# Sync pip dependencies (catches new imports from pyproject.toml)
+sudo -u swarm /opt/swarmai/backend/.venv/bin/pip install -q -e '/opt/swarmai/backend[all]' 2>&1 | tail -1
 
 # Restart
 sudo systemctl restart swarmai-hive
