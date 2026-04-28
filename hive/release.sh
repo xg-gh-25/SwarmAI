@@ -99,8 +99,8 @@ rsync -a \
 echo "[release] Copying VERSION..."
 cp "${VERSION_FILE}" "${STAGING}/VERSION"
 
-echo "[release] Copying pyproject.toml (for pip install)..."
-cp "${PROJECT_ROOT}/pyproject.toml" "${STAGING}/pyproject.toml" 2>/dev/null || true
+# pyproject.toml lives inside backend/ — already copied by rsync above.
+# No root-level copy needed (setup.sh runs `pip install -e .` from backend/).
 
 # ---------------------------------------------------------------------------
 # Create tar.gz

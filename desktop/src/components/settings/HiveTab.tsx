@@ -243,39 +243,41 @@ function AccountCard({ account: acc, onDelete }: { account: HiveAccount; onDelet
   };
 
   return (
-    <div className="p-3 bg-[var(--color-bg)] rounded-lg flex items-center justify-between">
-      <div className="flex items-center gap-3">
-        <span className={`w-1.5 h-1.5 rounded-full ${acc.verifiedAt ? 'bg-green-400' : 'bg-[var(--color-text-muted)]'}`} />
-        <div>
-          <div className="text-sm text-[var(--color-text)]">
-            <code>{acc.accountId}</code>
-            {acc.label && acc.label !== acc.accountId && (
-              <span className="text-[var(--color-text-muted)] ml-2">({acc.label})</span>
-            )}
-          </div>
-          <div className="text-xs text-[var(--color-text-muted)]">
-            {acc.authMethod} · {acc.defaultRegion}
-            {acc.verifiedAt && <span className="text-green-400 ml-2">✓ verified</span>}
+    <div className="p-3 bg-[var(--color-bg)] rounded-lg">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <span className={`w-1.5 h-1.5 rounded-full ${acc.verifiedAt ? 'bg-green-400' : 'bg-[var(--color-text-muted)]'}`} />
+          <div>
+            <div className="text-sm text-[var(--color-text)]">
+              <code>{acc.accountId}</code>
+              {acc.label && acc.label !== acc.accountId && (
+                <span className="text-[var(--color-text-muted)] ml-2">({acc.label})</span>
+              )}
+            </div>
+            <div className="text-xs text-[var(--color-text-muted)]">
+              {acc.authMethod} · {acc.defaultRegion}
+              {acc.verifiedAt && <span className="text-green-400 ml-2">✓ verified</span>}
+            </div>
           </div>
         </div>
-      </div>
-      <div className="flex items-center gap-2">
-        <button
-          onClick={handleVerify}
-          disabled={verifying}
-          className="px-2 py-1 text-xs bg-[var(--color-card)] text-[var(--color-text-muted)] rounded hover:bg-[var(--color-primary)] hover:text-white disabled:opacity-50"
-        >
-          {verifying ? '...' : 'Verify'}
-        </button>
-        <button
-          onClick={() => { if (confirm('Delete account + all its Hives?')) hiveService.deleteAccount(acc.id).then(onDelete); }}
-          className="px-2 py-1 text-xs text-red-400 hover:bg-red-500/20 rounded"
-        >
-          ✕
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleVerify}
+            disabled={verifying}
+            className="px-2 py-1 text-xs bg-[var(--color-card)] text-[var(--color-text-muted)] rounded hover:bg-[var(--color-primary)] hover:text-white disabled:opacity-50"
+          >
+            {verifying ? '...' : 'Verify'}
+          </button>
+          <button
+            onClick={() => { if (confirm('Delete account + all its Hives?')) hiveService.deleteAccount(acc.id).then(onDelete); }}
+            className="px-2 py-1 text-xs text-red-400 hover:bg-red-500/20 rounded"
+          >
+            ✕
+          </button>
+        </div>
       </div>
       {verifyResult && (
-        <div className={`absolute mt-1 text-xs ${verifyResult.success ? 'text-green-400' : 'text-red-400'}`}>
+        <div className={`mt-2 text-xs ${verifyResult.success ? 'text-green-400' : 'text-red-400'}`}>
           {verifyResult.success ? '✓ All checks passed' : `✗ ${verifyResult.error || 'Failed'}`}
         </div>
       )}
