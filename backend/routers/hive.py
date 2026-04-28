@@ -6,6 +6,7 @@ Phase 2: Full provisioner (EC2, CloudFront, IAM).
 """
 import json
 import logging
+import os
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -20,6 +21,20 @@ from database import db
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _require_desktop():
+    """Block write operations when running as a Hive instance.
+
+    Hive management (deploy/stop/delete instances, manage AWS accounts)
+    is only allowed from the desktop app.  A Hive should not be able to
+    create/destroy other Hives or manage its own AWS accounts.
+    """
+    if os.environ.get("SWARMAI_MODE") == "hive":
+        raise HTTPException(
+            status_code=403,
+            detail="Hive management is only available from the desktop app.",
+        )
 
 
 @asynccontextmanager
@@ -101,6 +116,7 @@ async def list_accounts():
 @router.post("/accounts", response_model=HiveAccountResponse, status_code=201)
 async def create_account(body: HiveAccountCreate):
     """Add a new AWS account."""
+    _require_desktop()
     row = {
         "id": str(uuid.uuid4()),
         "account_id": body.account_id,
@@ -125,6 +141,7 @@ async def create_account(body: HiveAccountCreate):
 @router.delete("/accounts/{account_id}")
 async def delete_account(account_id: str):
     """Remove an AWS account and all its Hive instances."""
+    _require_desktop()
     async with _conn() as c:
         await c.execute("DELETE FROM hive_instances WHERE account_ref = ?", (account_id,))
         cursor = await c.execute("DELETE FROM hive_accounts WHERE id = ?", (account_id,))
@@ -137,6 +154,7 @@ async def delete_account(account_id: str):
 @router.post("/accounts/{account_id}/verify", response_model=VerifyResult)
 async def verify_account(account_id: str):
     """Verify AWS permissions for Hive deployment."""
+    _require_desktop()
     async with _conn() as c:
         cursor = await c.execute("SELECT * FROM hive_accounts WHERE id = ?", (account_id,))
         row = await cursor.fetchone()
@@ -207,6 +225,7 @@ async def list_instances():
 @router.post("/instances", response_model=HiveInstanceResponse, status_code=201)
 async def create_instance(body: HiveInstanceCreate):
     """Deploy a new Hive instance (Phase 1: DB record only)."""
+    _require_desktop()
     async with _conn() as c:
         cursor = await c.execute("SELECT id FROM hive_accounts WHERE id = ?", (body.account_ref,))
         if not await cursor.fetchone():
@@ -260,6 +279,7 @@ async def get_instance(instance_id: str):
 @router.post("/instances/{instance_id}/stop")
 async def stop_instance(instance_id: str):
     """Stop a running Hive (Phase 2: ec2.stop_instances)."""
+    _require_desktop()
     async with _conn() as c:
         r = await c.execute(
             "UPDATE hive_instances SET status='stopped', updated_at=? WHERE id=? AND status='running'",
@@ -273,6 +293,7 @@ async def stop_instance(instance_id: str):
 @router.post("/instances/{instance_id}/start")
 async def start_instance(instance_id: str):
     """Start a stopped Hive (Phase 2: ec2.start_instances)."""
+    _require_desktop()
     async with _conn() as c:
         r = await c.execute(
             "UPDATE hive_instances SET status='running', updated_at=? WHERE id=? AND status='stopped'",
@@ -286,6 +307,7 @@ async def start_instance(instance_id: str):
 @router.delete("/instances/{instance_id}")
 async def delete_instance(instance_id: str):
     """Delete a Hive (Phase 2: cleanup AWS resources first)."""
+    _require_desktop()
     async with _conn() as c:
         r = await c.execute("DELETE FROM hive_instances WHERE id = ?", (instance_id,))
         await c.commit()

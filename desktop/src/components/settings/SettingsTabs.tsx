@@ -4,7 +4,7 @@
  * 7 tabs: General, AI & Models, Channels, Skills, MCP Servers, System, About.
  * Supports initialTab prop so sidebar icons can deep-link to a specific tab.
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import GeneralTab from './GeneralTab';
 import AIModelsTab from './AIModelsTab';
 import ChannelsTab from './ChannelsTab';
@@ -14,28 +14,35 @@ import SystemTab from './SystemTab';
 import EngineMetricsTab from './EngineMetricsTab';
 import AboutTab from './AboutTab';
 import HiveTab from './HiveTab';
+import { isDesktop } from '../../services/tauri';
 
-const TABS = [
+const ALL_TABS = [
   { id: 'general', label: 'General', icon: 'settings' },
   { id: 'ai-models', label: 'AI & Models', icon: 'smart_toy' },
   { id: 'channels', label: 'Channels', icon: 'forum' },
   { id: 'skills', label: 'Skills', icon: 'extension' },
   { id: 'mcp-servers', label: 'MCP Servers', icon: 'device_hub' },
-  { id: 'hive', label: 'Hive', icon: 'cloud' },
+  { id: 'hive', label: 'Hive', icon: 'cloud', desktopOnly: true },
   { id: 'engine', label: 'Core Engine', icon: 'psychology' },
   { id: 'system', label: 'System', icon: 'dns' },
   { id: 'about', label: 'About', icon: 'info' },
 ] as const;
 
-type TabId = typeof TABS[number]['id'];
+type TabId = typeof ALL_TABS[number]['id'];
 
 interface SettingsTabsProps {
   initialTab?: string;
 }
 
 export default function SettingsTabs({ initialTab }: SettingsTabsProps) {
+  // Hive management (deploy/stop/delete) is desktop-only — a Hive instance
+  // should not be able to create/destroy other Hives or manage AWS accounts.
+  const TABS = useMemo(() => {
+    const desktop = isDesktop();
+    return ALL_TABS.filter(t => !('desktopOnly' in t && t.desktopOnly) || desktop);
+  }, []);
+
   const [activeTab, setActiveTab] = useState<TabId>(() => {
-    // Validate initialTab is a valid tab id
     const valid = TABS.find(t => t.id === initialTab);
     return valid ? valid.id : 'general';
   });
@@ -46,7 +53,7 @@ export default function SettingsTabs({ initialTab }: SettingsTabsProps) {
       const valid = TABS.find(t => t.id === initialTab);
       if (valid) setActiveTab(valid.id);
     }
-  }, [initialTab]);
+  }, [initialTab, TABS]);
 
   return (
     <div className="p-6 max-w-4xl mx-auto">
