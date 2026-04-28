@@ -1596,6 +1596,127 @@ class DistillationTriggerHook:
 
         return archived
 
+    # Protected keywords — entries containing these are never archived
+    _RC_PROTECTED_KEYWORDS = ("Birthday", "GitHub", "repo", "architecture", "re-architecture")
+    _RC_STALE_DAYS = 30
+
+    def _archive_stale_rc_entries(self, memory_path: Path, ws_path: Path) -> None:
+        """Archive stale RC entries from MEMORY.md Recent Context section.
+
+        For each entry starting with ``- YYYY-MM-DD:``:
+        - If age > 30 days AND key prefix is RC (not KD, LL, COE):
+          - Skip if "protected" (contains Birthday, GitHub, repo, architecture, re-architecture)
+          - Otherwise: append to Knowledge/Archives/MEMORY-archive-YYYY-MM.md,
+            remove from MEMORY.md body
+
+        Uses fcntl file locking when writing to MEMORY.md.
+        """
+        import fcntl as _fcntl
+        from scripts.locked_write import _find_section_range
+
+        if not memory_path.exists():
+            return
+
+        lock_path = memory_path.with_suffix(memory_path.suffix + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = None
+        try:
+            fd = open(lock_path, "w")
+            _fcntl.flock(fd, _fcntl.LOCK_EX)
+
+            content = memory_path.read_text(encoding="utf-8")
+            section_range = _find_section_range(content, "Recent Context")
+            if section_range is None:
+                return
+
+            header_end, next_header_pos = section_range
+            section_text = content[header_end:next_header_pos]
+            lines = section_text.split("\n")
+
+            today = date.today()
+            cutoff = today - timedelta(days=self._RC_STALE_DAYS)
+            keep_lines: list[str] = []
+            archived_lines: list[str] = []
+
+            for line in lines:
+                stripped = line.strip()
+                if not stripped.startswith("- "):
+                    keep_lines.append(line)
+                    continue
+
+                # Extract date
+                date_match = re.match(r"^- (\d{4}-\d{2}-\d{2}):", stripped)
+                if not date_match:
+                    keep_lines.append(line)
+                    continue
+
+                try:
+                    entry_date = date.fromisoformat(date_match.group(1))
+                except ValueError:
+                    keep_lines.append(line)
+                    continue
+
+                # Only archive RC entries (not KD, LL, COE)
+                has_rc_prefix = bool(re.search(r"\[RC\d", stripped))
+                is_non_rc = bool(re.search(r"\[(KD|LL|COE)\d", stripped))
+
+                if not has_rc_prefix or is_non_rc:
+                    keep_lines.append(line)
+                    continue
+
+                # Check age
+                if entry_date >= cutoff:
+                    keep_lines.append(line)
+                    continue
+
+                # Check protected keywords
+                if any(kw in stripped for kw in self._RC_PROTECTED_KEYWORDS):
+                    keep_lines.append(line)
+                    continue
+
+                # Archive this entry
+                archived_lines.append(stripped)
+
+            if not archived_lines:
+                return
+
+            # Rebuild content
+            new_section = "\n".join(keep_lines)
+            new_content = content[:header_end] + new_section + content[next_header_pos:]
+            memory_path.write_text(new_content, encoding="utf-8")
+
+            # Write to archive file
+            archive_dir = ws_path / "Knowledge" / "Archives"
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            archive_name = f"MEMORY-archive-{today.strftime('%Y-%m')}.md"
+            archive_path = archive_dir / archive_name
+
+            archive_block = f"\n### Archived Recent Context ({today.isoformat()})\n"
+            archive_block += "\n".join(archived_lines) + "\n"
+
+            if archive_path.exists():
+                existing = archive_path.read_text(encoding="utf-8")
+                archive_path.write_text(existing + archive_block, encoding="utf-8")
+            else:
+                archive_path.write_text(
+                    f"# Memory Archive -- {today.strftime('%Y-%m')}\n" + archive_block,
+                    encoding="utf-8",
+                )
+
+            logger.info(
+                "Archived %d stale RC entries from MEMORY.md",
+                len(archived_lines),
+            )
+        except Exception as exc:
+            logger.warning("RC archival failed: %s", exc)
+        finally:
+            if fd is not None:
+                try:
+                    _fcntl.flock(fd, _fcntl.LOCK_UN)
+                except OSError:
+                    pass
+                fd.close()
+
     @staticmethod
     def _enforce_section_caps(memory_path: Path, ws_path: Path | None = None) -> None:
         """Trim MEMORY.md sections to SECTION_CAPS max entries.
