@@ -1,0 +1,465 @@
+/**
+ * Hive cloud instance management tab.
+ *
+ * Shows AWS accounts and deployed Hive instances.
+ * Deploy/Stop/Start/Update/Delete actions.
+ */
+import { useState, useEffect, useCallback } from 'react';
+import { hiveService, HiveAccount, HiveInstance, VerifyResult } from '../../services/hive';
+
+const STATUS_COLORS: Record<string, string> = {
+  running: 'text-green-400',
+  stopped: 'text-yellow-400',
+  pending: 'text-blue-400',
+  deploying: 'text-blue-400',
+  error: 'text-red-400',
+  deleting: 'text-red-400',
+};
+
+const STATUS_ICONS: Record<string, string> = {
+  running: '🟢',
+  stopped: '🔴',
+  pending: '🔵',
+  deploying: '🔵',
+  error: '❌',
+};
+
+const INSTANCE_SIZES = [
+  { id: 'm7g.large', label: 'm7g.large — 8 GB', cost: '~$60/mo' },
+  { id: 'm7g.xlarge', label: 'm7g.xlarge — 16 GB (recommended)', cost: '~$119/mo' },
+  { id: 'm7g.2xlarge', label: 'm7g.2xlarge — 32 GB', cost: '~$238/mo' },
+];
+
+export default function HiveTab() {
+  const [accounts, setAccounts] = useState<HiveAccount[]>([]);
+  const [instances, setInstances] = useState<HiveInstance[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showAddAccount, setShowAddAccount] = useState(false);
+  const [showDeployHive, setShowDeployHive] = useState(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      const [accs, insts] = await Promise.all([
+        hiveService.listAccounts(),
+        hiveService.listInstances(),
+      ]);
+      setAccounts(accs);
+      setInstances(insts);
+    } catch (e) {
+      console.error('Failed to load Hive data:', e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  if (loading) {
+    return <div className="text-[var(--color-text-muted)] text-sm p-6">Loading...</div>;
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-[var(--color-text)]">🐝 Hive — Your AI in the Cloud</h2>
+          <p className="text-xs text-[var(--color-text-muted)] mt-1">
+            Deploy SwarmAI to your AWS account. Each Hive has its own memory, skills, and workspace.
+          </p>
+        </div>
+      </div>
+
+      {/* Instances */}
+      <section className="bg-[var(--color-card)] rounded-lg p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-semibold text-[var(--color-text)]">Hive Instances</h3>
+          <button
+            onClick={() => setShowDeployHive(true)}
+            disabled={accounts.length === 0}
+            className="px-3 py-1.5 text-xs bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+          >
+            <span className="material-symbols-outlined text-sm">add</span>
+            Deploy New Hive
+          </button>
+        </div>
+
+        {instances.length === 0 ? (
+          <div className="text-center py-8">
+            <span className="text-4xl">🐝</span>
+            <p className="text-sm text-[var(--color-text-muted)] mt-2">
+              {accounts.length === 0
+                ? 'Add an AWS account below to deploy your first Hive.'
+                : 'No Hives deployed yet. Click "Deploy New Hive" to get started.'}
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {instances.map((inst) => (
+              <InstanceCard key={inst.id} instance={inst} onAction={refresh} />
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* AWS Accounts */}
+      <section className="bg-[var(--color-card)] rounded-lg p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-semibold text-[var(--color-text)]">AWS Accounts</h3>
+          <button
+            onClick={() => setShowAddAccount(true)}
+            className="px-3 py-1.5 text-xs bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded-lg hover:bg-[var(--color-primary)] hover:text-white transition-colors flex items-center gap-1.5"
+          >
+            <span className="material-symbols-outlined text-sm">add</span>
+            Add Account
+          </button>
+        </div>
+
+        {accounts.length === 0 ? (
+          <p className="text-xs text-[var(--color-text-muted)] text-center py-4">
+            No AWS accounts configured. Add one to start deploying Hives.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {accounts.map((acc) => (
+              <AccountCard key={acc.id} account={acc} onDelete={refresh} />
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* Add Account Dialog */}
+      {showAddAccount && (
+        <AddAccountDialog
+          onClose={() => setShowAddAccount(false)}
+          onSaved={() => { setShowAddAccount(false); refresh(); }}
+        />
+      )}
+
+      {/* Deploy Hive Dialog */}
+      {showDeployHive && (
+        <DeployHiveDialog
+          accounts={accounts}
+          onClose={() => setShowDeployHive(false)}
+          onDeployed={() => { setShowDeployHive(false); refresh(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+
+// ── Instance Card ──────────────────────────────────────────────────
+
+function InstanceCard({ instance: inst, onAction }: { instance: HiveInstance; onAction: () => void }) {
+  const [acting, setActing] = useState(false);
+
+  const doAction = async (action: () => Promise<void>) => {
+    setActing(true);
+    try { await action(); onAction(); }
+    catch (e) { console.error(e); }
+    finally { setActing(false); }
+  };
+
+  const url = inst.cloudfrontDomain
+    ? `https://${inst.cloudfrontDomain}`
+    : inst.ec2PublicIp ? `http://${inst.ec2PublicIp}` : null;
+
+  return (
+    <div className="p-4 bg-[var(--color-bg)] rounded-lg">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <span>{STATUS_ICONS[inst.status] || '⚪'}</span>
+          <span className="text-sm font-medium text-[var(--color-text)]">{inst.name}</span>
+          <span className={`text-xs ${STATUS_COLORS[inst.status] || ''}`}>{inst.status}</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          {url && (
+            <button
+              onClick={() => window.open(url, '_blank')}
+              className="px-2 py-1 text-xs bg-[var(--color-primary)]/20 text-[var(--color-primary)] rounded hover:bg-[var(--color-primary)]/30"
+            >
+              Open ↗
+            </button>
+          )}
+          {inst.status === 'running' && (
+            <button
+              onClick={() => doAction(() => hiveService.stopInstance(inst.id))}
+              disabled={acting}
+              className="px-2 py-1 text-xs bg-yellow-500/20 text-yellow-400 rounded hover:bg-yellow-500/30 disabled:opacity-50"
+            >
+              Stop
+            </button>
+          )}
+          {inst.status === 'stopped' && (
+            <button
+              onClick={() => doAction(() => hiveService.startInstance(inst.id))}
+              disabled={acting}
+              className="px-2 py-1 text-xs bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 disabled:opacity-50"
+            >
+              Start
+            </button>
+          )}
+          <button
+            onClick={() => { if (confirm(`Delete ${inst.name}?`)) doAction(() => hiveService.deleteInstance(inst.id)); }}
+            disabled={acting}
+            className="px-2 py-1 text-xs bg-red-500/20 text-red-400 rounded hover:bg-red-500/30 disabled:opacity-50"
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+      <div className="flex items-center gap-4 text-xs text-[var(--color-text-muted)]">
+        {url && <code className="bg-[var(--color-card)] px-1.5 py-0.5 rounded select-all">{url}</code>}
+        <span>{inst.instanceType}</span>
+        <span>{inst.region}</span>
+        {inst.version && <span>v{inst.version}</span>}
+      </div>
+      {inst.errorMessage && (
+        <p className="text-xs text-red-400 mt-1">{inst.errorMessage}</p>
+      )}
+    </div>
+  );
+}
+
+
+// ── Account Card ───────────────────────────────────────────────────
+
+function AccountCard({ account: acc, onDelete }: { account: HiveAccount; onDelete: () => void }) {
+  const [verifying, setVerifying] = useState(false);
+  const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
+
+  const handleVerify = async () => {
+    setVerifying(true);
+    setVerifyResult(null);
+    try {
+      const result = await hiveService.verifyAccount(acc.id);
+      setVerifyResult(result);
+    } catch (e) {
+      setVerifyResult({ success: false, accountId: acc.accountId, checks: {}, error: String(e) });
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  return (
+    <div className="p-3 bg-[var(--color-bg)] rounded-lg flex items-center justify-between">
+      <div className="flex items-center gap-3">
+        <span className={`w-1.5 h-1.5 rounded-full ${acc.verifiedAt ? 'bg-green-400' : 'bg-[var(--color-text-muted)]'}`} />
+        <div>
+          <div className="text-sm text-[var(--color-text)]">
+            <code>{acc.accountId}</code>
+            {acc.label && acc.label !== acc.accountId && (
+              <span className="text-[var(--color-text-muted)] ml-2">({acc.label})</span>
+            )}
+          </div>
+          <div className="text-xs text-[var(--color-text-muted)]">
+            {acc.authMethod} · {acc.defaultRegion}
+            {acc.verifiedAt && <span className="text-green-400 ml-2">✓ verified</span>}
+          </div>
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={handleVerify}
+          disabled={verifying}
+          className="px-2 py-1 text-xs bg-[var(--color-card)] text-[var(--color-text-muted)] rounded hover:bg-[var(--color-primary)] hover:text-white disabled:opacity-50"
+        >
+          {verifying ? '...' : 'Verify'}
+        </button>
+        <button
+          onClick={() => { if (confirm('Delete account + all its Hives?')) hiveService.deleteAccount(acc.id).then(onDelete); }}
+          className="px-2 py-1 text-xs text-red-400 hover:bg-red-500/20 rounded"
+        >
+          ✕
+        </button>
+      </div>
+      {verifyResult && (
+        <div className={`absolute mt-1 text-xs ${verifyResult.success ? 'text-green-400' : 'text-red-400'}`}>
+          {verifyResult.success ? '✓ All checks passed' : `✗ ${verifyResult.error || 'Failed'}`}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ── Add Account Dialog ─────────────────────────────────────────────
+
+function AddAccountDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const [accountId, setAccountId] = useState('');
+  const [label, setLabel] = useState('');
+  const [region, setRegion] = useState('us-east-1');
+  const [authMethod, setAuthMethod] = useState<'access_keys' | 'sso'>('access_keys');
+  const [accessKeyId, setAccessKeyId] = useState('');
+  const [secretKey, setSecretKey] = useState('');
+  const [ssoProfile, setSsoProfile] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSave = async () => {
+    if (!accountId.match(/^\d{12}$/)) { setError('Account ID must be 12 digits'); return; }
+    setSaving(true);
+    setError('');
+    try {
+      const authConfig: Record<string, string> = authMethod === 'access_keys'
+        ? { access_key_id: accessKeyId, secret_access_key: secretKey }
+        : { profile: ssoProfile };
+      await hiveService.createAccount({ accountId, label, authMethod, authConfig, defaultRegion: region });
+      onSaved();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-[var(--color-card)] rounded-xl p-6 w-[440px] max-h-[80vh] overflow-y-auto">
+        <h3 className="text-lg font-semibold text-[var(--color-text)] mb-4">Add AWS Account</h3>
+
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">AWS Account ID</label>
+            <input value={accountId} onChange={(e) => setAccountId(e.target.value)} placeholder="Enter 12-digit account ID"
+              className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]" />
+          </div>
+          <div>
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">Label (optional)</label>
+            <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. personal, team-shared"
+              className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]" />
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            {(['access_keys', 'sso'] as const).map((m) => (
+              <button key={m} onClick={() => setAuthMethod(m)}
+                className={`p-2 rounded-lg text-left text-xs ${authMethod === m ? 'bg-[var(--color-primary)]/20 border-2 border-[var(--color-primary)]' : 'bg-[var(--color-bg)] border border-[var(--color-border)]'}`}>
+                <div className="font-medium text-[var(--color-text)]">{m === 'access_keys' ? 'Access Keys' : 'SSO Profile'}</div>
+              </button>
+            ))}
+          </div>
+
+          {authMethod === 'access_keys' && (
+            <>
+              <input value={accessKeyId} onChange={(e) => setAccessKeyId(e.target.value)} placeholder="Access Key ID (AKIA...)"
+                className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]" />
+              <input type="password" value={secretKey} onChange={(e) => setSecretKey(e.target.value)} placeholder="Secret Access Key"
+                className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]" />
+            </>
+          )}
+          {authMethod === 'sso' && (
+            <input value={ssoProfile} onChange={(e) => setSsoProfile(e.target.value)} placeholder="SSO profile name"
+              className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]" />
+          )}
+
+          <div>
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">Region</label>
+            <select value={region} onChange={(e) => setRegion(e.target.value)}
+              className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)]">
+              <option value="us-east-1">US East (Virginia)</option>
+              <option value="us-west-2">US West (Oregon)</option>
+              <option value="eu-west-1">EU (Ireland)</option>
+              <option value="ap-northeast-1">Asia Pacific (Tokyo)</option>
+            </select>
+          </div>
+
+          {error && <p className="text-xs text-red-400">{error}</p>}
+        </div>
+
+        <div className="flex justify-end gap-2 mt-6">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">Cancel</button>
+          <button onClick={handleSave} disabled={saving || !accountId}
+            className="px-4 py-2 text-sm bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 disabled:opacity-50">
+            {saving ? 'Saving...' : 'Add Account'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ── Deploy Hive Dialog ─────────────────────────────────────────────
+
+function DeployHiveDialog({ accounts, onClose, onDeployed }: { accounts: HiveAccount[]; onClose: () => void; onDeployed: () => void }) {
+  const [name, setName] = useState('');
+  const [accountRef, setAccountRef] = useState(accounts[0]?.id ?? '');
+  const [instanceType, setInstanceType] = useState('m7g.xlarge');
+  const [deploying, setDeploying] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleDeploy = async () => {
+    if (!name.match(/^[a-z][a-z0-9-]*$/)) { setError('Name: lowercase, letters/numbers/hyphens, start with letter'); return; }
+    setDeploying(true);
+    setError('');
+    try {
+      const selectedAccount = accounts.find(a => a.id === accountRef);
+      await hiveService.createInstance({
+        name,
+        accountRef,
+        region: selectedAccount?.defaultRegion ?? 'us-east-1',
+        instanceType,
+      });
+      onDeployed();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setDeploying(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+      <div className="bg-[var(--color-card)] rounded-xl p-6 w-[440px]">
+        <h3 className="text-lg font-semibold text-[var(--color-text)] mb-4">Deploy New Hive</h3>
+
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">Hive Name</label>
+            <input value={name} onChange={(e) => setName(e.target.value.toLowerCase())} placeholder="e.g. xg-hive, dev-01"
+              className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]" />
+          </div>
+
+          <div>
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">AWS Account</label>
+            <select value={accountRef} onChange={(e) => setAccountRef(e.target.value)}
+              className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)]">
+              {accounts.map((a) => (
+                <option key={a.id} value={a.id}>{a.accountId} {a.label ? `(${a.label})` : ''}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">Instance Size</label>
+            <div className="space-y-1.5">
+              {INSTANCE_SIZES.map((s) => (
+                <button key={s.id} onClick={() => setInstanceType(s.id)}
+                  className={`w-full p-2.5 rounded-lg text-left text-xs flex justify-between ${instanceType === s.id ? 'bg-[var(--color-primary)]/20 border-2 border-[var(--color-primary)]' : 'bg-[var(--color-bg)] border border-[var(--color-border)]'}`}>
+                  <span className="text-[var(--color-text)]">{s.label}</span>
+                  <span className="text-[var(--color-text-muted)]">{s.cost}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {error && <p className="text-xs text-red-400">{error}</p>}
+
+          <p className="text-xs text-[var(--color-text-muted)]">
+            Phase 2: Clicking Deploy will create EC2 + CloudFront in your AWS account.
+            Currently creates a database record only.
+          </p>
+        </div>
+
+        <div className="flex justify-end gap-2 mt-6">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">Cancel</button>
+          <button onClick={handleDeploy} disabled={deploying || !name || !accountRef}
+            className="px-4 py-2 text-sm bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 disabled:opacity-50">
+            {deploying ? 'Deploying...' : 'Deploy'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

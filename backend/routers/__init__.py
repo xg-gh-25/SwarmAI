@@ -20,6 +20,7 @@ from .tscc import tscc_router as tscc_router
 from .artifacts import router as artifacts_router
 from .escalations import router as escalations_router
 from .voice import router as voice_router
+from .hive import router as hive_router
 
 __all__ = [
     "agents_router",
@@ -43,4 +44,5 @@ __all__ = [
     "artifacts_router",
     "escalations_router",
     "voice_router",
+    "hive_router",
 ]
