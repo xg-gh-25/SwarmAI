@@ -8,6 +8,15 @@
 
 ## Pipeline-Specific Behavior
 
+### Pre-mortem Gate
+
+After scoring, if the initial recommendation is GO, the base methodology's
+Step 3.5 (Pre-mortem) is **mandatory** in the pipeline. The pre-mortem output
+(`pre_mortem` array) MUST be included in the evaluation artifact JSON.
+
+If the pre-mortem triggers a score adjustment or escalation, update the
+artifact accordingly before publishing.
+
 ### Artifact Publish
 
 ```bash

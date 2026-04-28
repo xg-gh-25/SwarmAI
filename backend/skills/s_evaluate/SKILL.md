@@ -90,6 +90,35 @@ ROI = (Strategic * 0.35) + (Current_Priority * 0.25) + (Historical * 0.15) + (Fe
 
 Range: [1.0, 5.0]. Higher feasibility = easier = higher ROI. All dimensions on 1-5 scale.
 
+### Step 3.5: Pre-mortem (Mandatory for GO candidates)
+
+**If the initial ROI >= 3.2 (GO candidate), run a pre-mortem before confirming:**
+
+> "It's 2 weeks later. This feature shipped but is considered a failure.
+> What are the 3 most likely reasons it failed?"
+
+**Rules:**
+- Each reason must be **specific** — not "it was too complex" (vague), but "the HTML structure changed and the regex parser returned 0 results for 3 days before anyone noticed" (specific)
+- At least 1 reason must reference IMPROVEMENT.md "What Failed" — check if a similar approach was tried before
+- At least 1 reason must challenge an **assumption** in the scoring — which dimension assumed something unverified?
+
+**Output:**
+
+| # | Failure Reason | Likelihood | Mitigation |
+|---|---------------|-----------|------------|
+| 1 | <specific scenario> | high/med/low | <how to prevent or detect> |
+| 2 | <specific scenario> | high/med/low | <how to prevent or detect> |
+| 3 | <specific scenario> | high/med/low | <how to prevent or detect> |
+
+**Decision impact:**
+- If any reason has **likelihood=HIGH and no mitigation exists** → downgrade to **ESCALATE**, surface the risk to user
+- If pre-mortem reveals a scoring assumption was unverified → **reduce that dimension by 1** and recalculate ROI. If new ROI < 3.2 → DEFER
+- If all reasons are med/low with clear mitigations → GO confirmed
+
+**Why this exists:** EVALUATE has happy-path bias (LL09, 3 recurrences). Pre-mortem (Gary Klein) generates 30% more specific failure reasons than "argue against" because "imagine it failed" is concrete, "argue why not" is abstract. Same agent, same pass, one extra section — zero architecture change.
+
+**Skip when:** ROI < 3.2 (already DEFER/REJECT — no need to argue against a NO).
+
 ### Step 3: At L0 (No DDD Docs)
 
 Skip scoring. Instead, structure the request:
@@ -144,6 +173,15 @@ Based on ROI score (L2) or structured analysis (L0):
 
 ### Recommendation: GO
 
+### Pre-mortem (GO candidates only)
+| # | Failure Reason | Likelihood | Mitigation |
+|---|---------------|-----------|------------|
+| 1 | <specific scenario> | med | <mitigation> |
+| 2 | <specific scenario> | low | <mitigation> |
+| 3 | <specific scenario> | low | <mitigation> |
+
+Score adjustment: none (no HIGH without mitigation)
+
 ### Scope
 <what's included and what's excluded>
 
@@ -171,6 +209,11 @@ Test: QA against acceptance criteria
     "roi": 3.4
   },
   "recommendation": "GO",
+  "pre_mortem": [
+    {"reason": "...", "likelihood": "med", "mitigation": "..."},
+    {"reason": "...", "likelihood": "low", "mitigation": "..."},
+    {"reason": "...", "likelihood": "low", "mitigation": "..."}
+  ],
   "scope": "...",
   "acceptance_criteria": ["...", "..."],
   "escalation_questions": [],
@@ -312,7 +355,8 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state think
 Before marking this task complete, show evidence for each:
 
 - [ ] **ROI score calculated** — numeric ROI shown (or T-shirt sizing at L0) with per-dimension scores and rationale
-- [ ] **Recommendation stated** — explicit GO / DEFER / REJECT / ESCALATE with reasoning tied to scores
+- [ ] **Pre-mortem completed** — 3 specific failure reasons with likelihood and mitigation (for GO candidates; skip for DEFER/REJECT)
+- [ ] **Recommendation stated** — explicit GO / DEFER / REJECT / ESCALATE with reasoning tied to scores (and pre-mortem if applicable)
 - [ ] **Acceptance criteria defined** — numbered, testable criteria for what "done" looks like (GO) or clear rationale for deferral/rejection
 - [ ] **Scope boundaries set** — what is included and what is explicitly excluded from the scope
 - [ ] **Evaluation artifact published** — JSON artifact saved via artifact_cli (L1+) or structured output shown in chat (L0)
