@@ -57,11 +57,15 @@ For each remaining acceptance criterion, one at a time:
   ```
   pytest tests/test_foo.py tests/test_bar.py --timeout=60
   ```
-- **Exception: core infrastructure files.** If the changeset touches any of these,
-  run the FULL suite (`SWARMAI_SUITE=1 pytest --timeout=120 -m "not pbt and not slow"`):
-  `sqlite.py`, `lib.rs`, `main.py`, `session_router.py`, `session_unit.py`,
-  `lifecycle_manager.py`, `conftest.py`, `prompt_builder.py`.
-  These files have 50+ dependents — targeted tests cannot cover the interaction surface.
+- **For widely-imported modules** (database/sqlite.py, core/prompt_builder.py,
+  session_router.py, etc.), find ALL dependent test files via grep:
+  ```
+  grep -rl "from database\|import database\|SQLiteDatabase" tests/ --include="*.py" | sort -u
+  ```
+  Then run exactly those files. This catches interaction bugs without running
+  the full 700+ test suite (which hangs with xdist --maxfail).
+  **NEVER run the full suite (`SWARMAI_SUITE=1`) as an agent** — it has known
+  xdist deadlock issues that cause infinite hangs. Full suite is human-only.
 - If you're unsure which tests to run, use `pytest --lf --timeout=60` (last-failed).
 - **NEVER** pipe pytest through `| tail` -- it hides pass/fail and xdist status.
 - **NEVER** pipe pytest through `| tail` -- it hides pass/fail and xdist status.

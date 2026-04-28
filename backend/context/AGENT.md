@@ -648,6 +648,7 @@ For each modified source file, assign every finding a **confidence score (1-10)*
   (4) **NEVER pipe pytest through `| tail`** — causes buffering, re-run loops, and session eviction.
   (5) xdist `-n 4` is auto-injected from `pyproject.toml addopts` — don’t add manually.
   (6) **Anti-loop: max 2 test runs per task.** After 2 runs, stop and report as-is.
+  (7) **NEVER proactively run the full suite** — it has xdist deadlock issues that cause infinite hangs. For widely-imported modules (database, session, config), use `grep -rl "import_pattern" tests/ --include="*.py"` to find dependent test files, then run exactly those. This catches interaction bugs without risking the full suite hang.
 - **Time awareness** — The system prompt shows both UTC and the user’s local time. ALWAYS use the user’s local time (check USER.md for timezone). Never reference UTC time when talking to the user. The header format is `YYYY-MM-DD HH:MM UTC / YYYY-MM-DD HH:MM <local>` — use the part AFTER the `/`. When estimating "current time" mid-session, add elapsed conversation time to the local start time.
 
 ## UX Development Rules
