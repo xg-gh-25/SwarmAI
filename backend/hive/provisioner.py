@@ -153,6 +153,22 @@ class HiveProvisioner:
                 raise ValueError(f"Instance {instance_id} not found")
             return dict(row)
 
+    # ── Version resolution ────────────────────────────────────────
+
+    async def _resolve_version(self, version: str | None) -> str:
+        """Resolve version string. If None or 'latest', fetch from GitHub."""
+        if version and version != "latest":
+            return version
+        # Fetch latest version tag from GitHub API
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+            )
+            if resp.status_code == 200:
+                tag = resp.json().get("tag_name", "")
+                return tag.lstrip("v") if tag else "1.0.0"
+        raise RuntimeError("Cannot determine latest version from GitHub")
+
     # ── S3 ─────────────────────────────────────────────────────────
 
     async def _ensure_s3_bucket(self, session, region: str) -> str:
@@ -602,8 +618,10 @@ class HiveProvisioner:
             account = await self._get_account(instance["account_ref"])
             name = instance["name"]
             region = instance["region"]
-            version = instance.get("version") or "latest"
+            version = await self._resolve_version(instance.get("version"))
             instance_type = instance.get("instance_type", "m7g.xlarge")
+            # Persist resolved version
+            await self._update_instance(instance_id, version=version)
 
             session = self._get_session(account, region)
 
