@@ -1750,9 +1750,13 @@ class SQLiteDatabase(BaseDatabase):
         import time
         t0 = time.monotonic()
 
-        # Fast path: if DB is already at current version, skip everything
+        # Fast path: if DB is already at current version, skip schema migrations
         cursor = await conn.execute("PRAGMA user_version")
         current_version = (await cursor.fetchone())[0]
+
+        # Data cleanups always run (idempotent check-then-act, ~1ms).
+        # These clean up legacy tables that may exist regardless of schema version.
+        await self._run_data_cleanups(conn)
 
         if current_version >= CURRENT_SCHEMA_VERSION:
             logger.debug(
@@ -1768,12 +1772,6 @@ class SQLiteDatabase(BaseDatabase):
         if current_version == 0:
             logger.info("DB at user_version=0 — running legacy detection-based migrations")
             await self._run_legacy_migrations(conn)
-
-        # Phase 1.5: One-time data cleanups (idempotent, check-then-act).
-        # These are NOT column migrations — they clean up legacy tables/data
-        # and must run regardless of user_version in case they were introduced
-        # between the user's last startup and the current version.
-        await self._run_data_cleanups(conn)
 
         # Phase 2: Version-gated migrations (incremental, each runs exactly once)
         await self._run_versioned_migrations(conn, current_version)
