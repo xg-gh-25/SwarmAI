@@ -20,7 +20,32 @@ Pipeline-owned stage (no sibling skill).
    This ensures the pipeline learns from every review cycle. Without
    this step, lessons live in IMPROVEMENT.md but never reach the
    checklist that would prevent recurrence.
-5. Record outcome for learning:
+5. **ADR gate** -- for each **judgment** or **taste** decision classified during
+   the pipeline, check whether it qualifies for an ADR. All three must be true:
+
+   a. **Hard to reverse** — the cost of changing your mind later is meaningful
+   b. **Surprising without context** — a future reader will wonder "why this way?"
+   c. **Real trade-off** — there were genuine alternatives and you picked one
+
+   If all three are true → write a 1-paragraph ADR to IMPROVEMENT.md under a new
+   "### Architecture Decision Records" section (or the project's `docs/adr/`
+   directory if it exists). Format:
+
+   ```markdown
+   **ADR: <short title>** (<date>)
+   <1-3 sentences: context, decision, and why. Include rejected alternative.>
+   ```
+
+   If any of the three is missing, skip. Most decisions don't qualify — easy to
+   reverse (skip), obvious choice (skip), no real alternative (skip). The value
+   is recording the surprising, costly, non-obvious decisions so future pipeline
+   runs don't re-litigate them.
+
+   **Pipeline integration:** When EVALUATE reads IMPROVEMENT.md, it checks ADRs
+   to avoid contradicting existing decisions. If a new requirement conflicts with
+   an ADR, EVALUATE surfaces it explicitly.
+
+6. Record outcome for learning:
 
 ```bash
 python backend/scripts/artifact_cli.py learn --project <PROJECT> \

@@ -4,28 +4,51 @@ Pipeline-owned stage (no sibling skill). This is the core implementation stage.
 
 The BUILD stage follows TDD methodology: tests before code, code until tests pass.
 
-## Step 1: RED -- Generate tests from acceptance criteria
+## Anti-Pattern: Horizontal Slices (BLOCKING)
+
+**DO NOT write all tests first, then all implementation.** This is "horizontal
+slicing" — treating RED as "write all tests" and GREEN as "write all code."
+
+This produces crap tests:
+- Tests written in bulk test _imagined_ behavior, not _actual_ behavior
+- You test the _shape_ of things (data structures, signatures) not user-facing behavior
+- Tests become insensitive to real changes — pass when behavior breaks
+- You outrun your headlights, committing to test structure before understanding impl
+
+**Correct approach: Vertical tracer bullets.** One test → one implementation → repeat.
+Each test responds to what you learned from the previous cycle.
+
+```
+WRONG (horizontal):
+  RED:   test1, test2, test3, test4, test5
+  GREEN: impl1, impl2, impl3, impl4, impl5
+
+RIGHT (vertical tracer bullet):
+  RED→GREEN: test1→impl1  (tracer bullet — prove the path end-to-end)
+  RED→GREEN: test2→impl2  (each test responds to what you learned)
+  RED→GREEN: test3→impl3
+```
+
+## Step 1: RED→GREEN Tracer Bullet
 
 1. Read acceptance criteria from the evaluation artifact (or design_doc if PLAN ran)
 2. Read TECH.md for test framework (pytest, vitest) and conventions
-3. Generate test stubs -- one test per acceptance criterion minimum:
-   ```
-   # For each criterion in acceptance_criteria:
-   #   -> Write a test that WILL FAIL (nothing implemented yet)
-   #   -> Name: test_<criterion_slug>
-   #   -> Assert the expected behavior from the criterion
-   ```
-4. Run the tests -- **all must FAIL** (this proves the tests are meaningful)
-5. If any test passes before implementation -- the test is trivial or wrong, rewrite it
+3. Pick the **single most important acceptance criterion** — the one that proves
+   the core path works end-to-end
+4. Write ONE test for it (it MUST fail — nothing implemented yet)
+5. Write minimal code to make that ONE test pass
+6. Commit: this is your tracer bullet — proof the path works
 
-## Step 2: GREEN -- Implement until all tests pass
+## Step 2: Incremental RED→GREEN Loop
 
-6. Read TECH.md for code conventions, patterns, and style
-7. Implement changes guided by the design_doc artifact (if available)
-8. Run tests after each logical change -- watch failures decrease
-9. **Completeness bias:** when the complete implementation costs minutes more
-   than the shortcut, do the complete thing. Cover edge cases, handle errors.
-10. Use atomic commits: one commit per logical change
+For each remaining acceptance criterion, one at a time:
+
+7. Write the next test → it fails (RED)
+8. Write minimal code to pass → it passes (GREEN)
+9. Commit after each green cycle
+10. **Don't anticipate future tests** — only enough code for the current test
+11. **Completeness bias:** when the complete implementation costs minutes more
+    than the shortcut, do the complete thing. Cover edge cases, handle errors.
 
 ## Step 3: VERIFY -- Targeted tests, zero regressions
 
@@ -207,7 +230,39 @@ Fix code, not tests. Tests are derived from the accepted design. Changing a test
 
 ## Mock Discipline
 
-When mocking objects in tests, use `spec=RealClass` or only set attributes that exist on the real class. Bare `MagicMock()` silently accepts ANY attribute access -- this hides `AttributeError` bugs that crash in production. For integration-facing tests (anything that touches cross-module boundaries), prefer real objects over mocks. If you must mock, mock the leaf dependency (DB, network), not the intermediate object.
+### Boundary-Only Rule
+
+**Mock at system boundaries ONLY.** Never mock your own code.
+
+| Dependency Category | Example | Test Strategy | Mock? |
+|-------------------|---------|---------------|-------|
+| **In-process** | Pure computation, in-memory state | Test directly, no mocking | ❌ Never |
+| **Local-substitutable** | SQLite, filesystem, Redis | Use test stand-in (tmp dir, in-memory DB) | ❌ Prefer stand-in |
+| **Remote-owned** | Your own microservice/API | Port interface + in-memory adapter for tests | ✅ Mock the adapter |
+| **True-external** | Stripe, AWS API, GitHub | Mock the leaf SDK call | ✅ Mock at boundary |
+
+**What to mock:** External APIs, databases (when no test DB), time/randomness, filesystem (sometimes).
+**What NOT to mock:** Your own classes, internal collaborators, anything you control.
+
+**The test for good mocking:** If you refactor internals and tests break despite behavior being unchanged — your mocks are too deep. Mock the system boundary, not the internal wiring.
+
+### Spec Enforcement
+
+When mocking, use `spec=RealClass` or only set attributes that exist on the real class. Bare `MagicMock()` silently accepts ANY attribute access — this hides `AttributeError` bugs that crash in production.
+
+### Interface-First Testing
+
+Tests verify behavior through **public interfaces**, not implementation details.
+A good test reads like a specification: "user can checkout with valid cart" tells
+you what capability exists. Tests survive refactors because they don't care about
+internal structure.
+
+Red flags for bad tests:
+- Mocking internal collaborators (not system boundaries)
+- Testing private methods
+- Asserting on call counts/order of internal calls
+- Test breaks on refactor when behavior hasn't changed
+- Verifying through external means (DB query) instead of the interface
 
 ## Adversarial Inputs in RED Phase
 
