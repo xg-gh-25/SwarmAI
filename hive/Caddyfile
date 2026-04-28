@@ -56,9 +56,9 @@
         reverse_proxy localhost:18321
     }
 
-    handle /shutdown {
-        reverse_proxy localhost:18321
-    }
+    # /shutdown intentionally NOT proxied — any auth'd user could kill
+    # the shared backend. Desktop Tauri handler is the only caller and
+    # it guards with isDesktop(). Backend also has a mode guard.
 
     # --- React SPA static files ---
     handle {

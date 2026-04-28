@@ -456,10 +456,12 @@ async def get_auth_hint():
     # Detect run mode so frontend can adjust auth UX
     run_mode = os.environ.get("SWARMAI_MODE", "sidecar")
 
-    # Hive (EC2) uses IAM instance role — no ADA or SSO needed
+    # Hive (EC2) uses IAM instance role — no ADA or SSO needed.
+    # Run in thread to avoid blocking the event loop (3 sync httpx calls, 1s timeout each).
     iam_details = None
     if run_mode == "hive":
-        iam_details = _probe_iam_instance_role()
+        import asyncio as _asyncio
+        iam_details = await _asyncio.to_thread(_probe_iam_instance_role)
         if iam_details:
             suggested = "iam_role"
 
