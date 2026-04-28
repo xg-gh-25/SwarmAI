@@ -47,7 +47,6 @@ REQUIRED_KNOWLEDGE_SUBDIRS = [
     "Knowledge/DailyActivity",
     "Knowledge/Handoffs",
     "Knowledge/Designs",
-    "Knowledge/AIDLC",
     "Knowledge/Signals",
     "Knowledge/JobResults",
 ]
