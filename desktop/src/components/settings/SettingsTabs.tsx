@@ -13,6 +13,7 @@ import MCPServersTab from './MCPServersTab';
 import SystemTab from './SystemTab';
 import EngineMetricsTab from './EngineMetricsTab';
 import AboutTab from './AboutTab';
+import HiveTab from './HiveTab';
 
 const TABS = [
   { id: 'general', label: 'General', icon: 'settings' },
@@ -20,6 +21,7 @@ const TABS = [
   { id: 'channels', label: 'Channels', icon: 'forum' },
   { id: 'skills', label: 'Skills', icon: 'extension' },
   { id: 'mcp-servers', label: 'MCP Servers', icon: 'device_hub' },
+  { id: 'hive', label: 'Hive', icon: 'cloud' },
   { id: 'engine', label: 'Core Engine', icon: 'psychology' },
   { id: 'system', label: 'System', icon: 'dns' },
   { id: 'about', label: 'About', icon: 'info' },
@@ -75,6 +77,7 @@ export default function SettingsTabs({ initialTab }: SettingsTabsProps) {
         {activeTab === 'channels' && <ChannelsTab />}
         {activeTab === 'skills' && <SkillsSettingsTab />}
         {activeTab === 'mcp-servers' && <MCPServersTab />}
+        {activeTab === 'hive' && <HiveTab />}
         {activeTab === 'engine' && <EngineMetricsTab />}
         {activeTab === 'system' && <SystemTab />}
         {activeTab === 'about' && <AboutTab />}

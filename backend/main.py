@@ -17,7 +17,7 @@ from pathlib import Path
 from config import settings, get_app_data_dir
 from core import session_registry
 from utils.bundle_paths import get_resource_file
-from routers import agents_router, skills_router, mcp_router, chat_router, chat_threads_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router, system_router, todos_router, search_router, workspace_config_router, workspace_api_router, projects_router, tscc_router, artifacts_router, escalations_router, voice_router
+from routers import agents_router, skills_router, mcp_router, chat_router, chat_threads_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router, system_router, todos_router, search_router, workspace_config_router, workspace_api_router, projects_router, tscc_router, artifacts_router, escalations_router, voice_router, hive_router
 from routers.autonomous_jobs import router as autonomous_jobs_router
 from routers.pipelines import router as pipelines_router
 from routers.jobs import router as jobs_router
@@ -866,6 +866,7 @@ app.include_router(jobs_router, tags=["jobs"])  # prefix already set in router
 app.include_router(artifacts_router, prefix="/api", tags=["artifacts"])
 app.include_router(escalations_router, tags=["escalations"])
 app.include_router(voice_router, prefix="/api/voice", tags=["voice"])
+app.include_router(hive_router, prefix="/api/hive", tags=["hive"])
 
 # Memory compliance router (no prefix — router defines /api internally)
 from routers.memory import router as memory_router

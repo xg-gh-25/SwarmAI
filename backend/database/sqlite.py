@@ -2173,6 +2173,49 @@ class SQLiteDatabase(BaseDatabase):
         await conn.commit()
 
         # ============================================================================
+        # Hive — Cloud Instance Management
+        # ============================================================================
+        # AWS accounts the user has configured for Hive deployment.
+        # Credentials stored as JSON (encrypted at rest via EBS in production).
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS hive_accounts (
+                id TEXT PRIMARY KEY,
+                account_id TEXT NOT NULL,
+                label TEXT NOT NULL DEFAULT '',
+                auth_method TEXT NOT NULL DEFAULT 'access_keys',
+                auth_config TEXT NOT NULL DEFAULT '{}',
+                default_region TEXT NOT NULL DEFAULT 'us-east-1',
+                created_at TEXT NOT NULL,
+                verified_at TEXT
+            )
+        """)
+        # Hive instances deployed to user's AWS accounts.
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS hive_instances (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                account_ref TEXT NOT NULL,
+                region TEXT NOT NULL DEFAULT 'us-east-1',
+                instance_type TEXT NOT NULL DEFAULT 'm7g.xlarge',
+                ec2_instance_id TEXT,
+                ec2_public_ip TEXT,
+                elastic_ip_alloc_id TEXT,
+                security_group_id TEXT,
+                iam_role_name TEXT,
+                cloudfront_dist_id TEXT,
+                cloudfront_domain TEXT,
+                ssh_key_name TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                version TEXT,
+                error_message TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (account_ref) REFERENCES hive_accounts(id) ON DELETE CASCADE
+            )
+        """)
+        await conn.commit()
+
+        # ============================================================================
         # FTS5 Full-Text Search on messages (Session Recall — Phase 2)
         # Creates a content-synced FTS5 virtual table for fast full-text search
         # across session messages. The messages table uses TEXT PRIMARY KEY (id)
