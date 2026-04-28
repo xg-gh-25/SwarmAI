@@ -7,6 +7,7 @@ Phase 2: Full provisioner (EC2, CloudFront, IAM).
 import json
 import logging
 import os
+import re
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -39,9 +40,15 @@ def _require_desktop():
 
 @asynccontextmanager
 async def _conn():
-    """Async context manager for DB access with Row factory."""
+    """Async context manager for DB access with Row factory.
+
+    Matches the main WAL connection's pragmas: busy_timeout avoids
+    SQLITE_BUSY under concurrent writes, foreign_keys enables CASCADE.
+    """
     c = await aiosqlite.connect(str(db.db_path))
     c.row_factory = aiosqlite.Row
+    await c.execute("PRAGMA busy_timeout = 100")
+    await c.execute("PRAGMA foreign_keys = ON")
     try:
         yield c
     finally:
@@ -73,10 +80,13 @@ class HiveAccountResponse(BaseModel):
 
 
 class HiveInstanceCreate(BaseModel):
-    name: str
+    name: str  # validated in create_instance: ^[a-z][a-z0-9-]{0,62}$
     account_ref: str
     region: str = "us-east-1"
     instance_type: str = "m7g.xlarge"
+
+
+_HIVE_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 
 
 class HiveInstanceResponse(BaseModel):
@@ -226,6 +236,11 @@ async def list_instances():
 async def create_instance(body: HiveInstanceCreate):
     """Deploy a new Hive instance (Phase 1: DB record only)."""
     _require_desktop()
+    if not _HIVE_NAME_RE.match(body.name):
+        raise HTTPException(
+            status_code=422,
+            detail="Name must start with a letter, contain only lowercase letters/numbers/hyphens, max 63 chars.",
+        )
     async with _conn() as c:
         cursor = await c.execute("SELECT id FROM hive_accounts WHERE id = ?", (body.account_ref,))
         if not await cursor.fetchone():

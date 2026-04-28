@@ -2176,7 +2176,9 @@ class SQLiteDatabase(BaseDatabase):
         # Hive — Cloud Instance Management
         # ============================================================================
         # AWS accounts the user has configured for Hive deployment.
-        # Credentials stored as JSON (encrypted at rest via EBS in production).
+        # WARNING: auth_config stores credentials as plaintext JSON.
+        # EBS encryption protects disk-level theft but NOT DB file access.
+        # Phase 2: encrypt auth_config with KMS data key or IAM-derived key.
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS hive_accounts (
                 id TEXT PRIMARY KEY,
