@@ -125,10 +125,12 @@ def _is_port_listening(host: str, port: int) -> bool:
 
 
 def _detect_run_mode() -> str:
-    """Detect whether this backend is running as a daemon or sidecar.
+    """Detect whether this backend is running as daemon, sidecar, or hive.
 
-    Resolution: ``SWARMAI_MODE`` env var.  Daemon wrapper sets this to
-    ``"daemon"``; Tauri sidecar leaves it unset (default ``"sidecar"``).
+    Resolution: ``SWARMAI_MODE`` env var.
+    - ``"daemon"`` — macOS launchd 24/7 service
+    - ``"hive"``   — EC2 cloud deployment (systemd)
+    - ``"sidecar"`` — Tauri desktop app (default)
     """
     return os.environ.get("SWARMAI_MODE", "sidecar")
 
@@ -802,6 +804,15 @@ if settings.debug:
         "http://localhost:3000",  # CRA default
         "http://127.0.0.1:5173",
         "http://127.0.0.1:3000",
+    ]))
+
+# Hive mode: Caddy serves frontend on the same origin, so CORS isn't strictly
+# needed. But add the domain explicitly for direct API access from other tools.
+# Only HTTPS — Caddy enforces TLS termination; HTTP should never reach the app.
+_hive_domain = os.environ.get("HIVE_DOMAIN", "")
+if _hive_domain:
+    cors_origins = list(set(cors_origins + [
+        f"https://{_hive_domain}",
     ]))
 
 app.add_middleware(

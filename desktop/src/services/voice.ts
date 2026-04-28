@@ -6,7 +6,7 @@
  * @module services/voice
  */
 
-import { getBackendPort } from './tauri';
+import { getApiBaseUrl } from './tauri';
 
 /** Available voice information per language */
 export interface VoiceInfo {
@@ -27,8 +27,8 @@ export async function synthesizeSpeech(
   language?: string,
   voiceId?: string,
 ): Promise<ArrayBuffer> {
-  const port = getBackendPort();
-  const response = await fetch(`http://localhost:${port}/api/voice/synthesize`, {
+  const apiBase = getApiBaseUrl();
+  const response = await fetch(`${apiBase}/api/voice/synthesize`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -52,8 +52,8 @@ export async function synthesizeSpeech(
  * @returns Voice map: { voices: { "en-US": ["Matthew", "neural"], ... } }
  */
 export async function getVoices(): Promise<VoiceInfo> {
-  const port = getBackendPort();
-  const response = await fetch(`http://localhost:${port}/api/voice/voices`);
+  const apiBase = getApiBaseUrl();
+  const response = await fetch(`${apiBase}/api/voice/voices`);
 
   if (!response.ok) {
     throw new Error(`Failed to fetch voices (${response.status})`);

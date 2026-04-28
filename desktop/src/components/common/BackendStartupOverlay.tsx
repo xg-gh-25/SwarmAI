@@ -15,7 +15,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import axios from 'axios';
-import { getBackendPort, initializeBackend } from '../../services/tauri';
+// getApiBaseUrl: health checks; getBackendPort/initializeBackend: Tauri sidecar port negotiation
+import { getApiBaseUrl, getBackendPort, initializeBackend } from '../../services/tauri';
 import { systemService, SystemStatus } from '../../services/system';
 import logo from '../../assets/swarm-avatar.svg';
 
@@ -259,9 +260,9 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
 
   const checkHealth = useCallback(async (): Promise<{ healthy: boolean; version?: string }> => {
     try {
-      const port = getBackendPort();
-      console.log(`[Health Check] Checking health on port ${port}...`);
-      const response = await axios.get(`http://127.0.0.1:${port}/health`, {
+      const apiBase = getApiBaseUrl();
+      console.log(`[Health Check] Checking health at ${apiBase || '(same-origin)'}/health...`);
+      const response = await axios.get(`${apiBase}/health`, {
         timeout: TIMING.healthCheckTimeout,
       });
       console.log(`[Health Check] Response:`, response.data);

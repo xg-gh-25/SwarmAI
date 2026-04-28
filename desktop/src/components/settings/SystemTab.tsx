@@ -4,7 +4,8 @@
  * Backend status, system dependencies, storage paths, MCP link.
  */
 import { useState, useEffect } from 'react';
-import { tauriService, BackendStatus, getBackendPort } from '../../services/tauri';
+// getApiBaseUrl: health fetch URL; getBackendPort: status display (Desktop only)
+import { tauriService, BackendStatus, getApiBaseUrl, getBackendPort } from '../../services/tauri';
 
 const isDev = import.meta.env.DEV;
 
@@ -36,9 +37,10 @@ export default function SystemTab() {
         setBackendStatus(status);
       } catch {
         // Fallback: health check only (dev mode or Tauri unavailable)
+        const apiBase = getApiBaseUrl();
         const port = getBackendPort();
         try {
-          const resp = await fetch(`http://localhost:${port}/health`, {
+          const resp = await fetch(`${apiBase}/health`, {
             signal: AbortSignal.timeout(2000),
           });
           setBackendStatus({ running: resp.ok, port, is_daemon_mode: false });

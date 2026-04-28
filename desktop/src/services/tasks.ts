@@ -2,7 +2,7 @@
  * Tasks service for background agent task management.
  */
 import api, { isApiError } from './api';
-import { getBackendPort } from './tauri';
+import { getApiBaseUrl } from './tauri';
 import type { Task, TaskCreateRequest, TaskMessageRequest, TaskStatus, PolicyViolationDetail } from '../types';
 import { ErrorCodes } from '../types';
 
@@ -145,7 +145,7 @@ export const tasksService = {
    * Get SSE stream URL for a task.
    */
   getStreamUrl(taskId: string): string {
-    const port = getBackendPort();
-    return `http://localhost:${port}/api/tasks/${taskId}/stream`;
+    const apiBase = getApiBaseUrl();
+    return `${apiBase}/api/tasks/${taskId}/stream`;
   },
 };

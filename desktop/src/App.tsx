@@ -13,7 +13,7 @@ import { ThemeProvider } from './contexts/ThemeContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { HealthProvider } from './contexts/HealthContext';
 import { BackendStartupOverlay, UpdateNotification, ShutdownOverlay, DaemonNudgeBanner } from './components/common';
-import { getBackendPort } from './services/tauri';
+import { getApiBaseUrl } from './services/tauri';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ToastStack } from './components/common/ToastStack';
 import { AudioKeepAlive } from './components/AudioKeepAlive';
@@ -59,8 +59,8 @@ export default function App() {
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
         unlisten = await listen('tauri://close-requested', async () => {
           try {
-            const port = getBackendPort();
-            await fetch(`http://localhost:${port}/shutdown`, { method: 'POST' });
+            const apiBase = getApiBaseUrl();
+            await fetch(`${apiBase}/shutdown`, { method: 'POST' });
           } catch {
             // Backend may already be down
           }
@@ -74,8 +74,8 @@ export default function App() {
 
     // Web/dev fallback
     const handleBeforeUnload = () => {
-      const port = getBackendPort();
-      navigator.sendBeacon(`http://localhost:${port}/shutdown`);
+      const apiBase = getApiBaseUrl();
+      navigator.sendBeacon(`${apiBase}/shutdown`);
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
 
