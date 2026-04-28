@@ -1,7 +1,7 @@
 """Knowledge Library Indexing — scan, chunk, and index Knowledge/ files.
 
 Provides searchable FTS5 + sqlite-vec index over the entire Knowledge/ directory
-(DailyActivity, Designs, Notes, AIDLC, Signals, Library, etc.). Delta-sync via
+(DailyActivity, Designs, Notes, Signals, Library, etc.). Delta-sync via
 content_hash ensures only changed chunks are re-embedded.
 
 This module is the Phase 1 foundation for the Recall Engine (Phase 2).

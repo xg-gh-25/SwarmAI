@@ -42,14 +42,14 @@ FOLDER_STRUCTURE = ["Knowledge", "Projects", "Attachments", "Services"]
 # Default Knowledge subdirectories (auto-created on startup)
 KNOWLEDGE_SUBDIRS = [
     "Notes", "Reports", "Meetings", "Library", "Archives",
-    "DailyActivity", "Handoffs", "Designs", "AIDLC", "Signals", "JobResults",
+    "DailyActivity", "Handoffs", "Designs", "Signals", "JobResults",
 ]
 
 SYSTEM_MANAGED_FOLDERS = {
     "Knowledge", "Projects", "Attachments", "Services",
     "Knowledge/Notes", "Knowledge/Reports", "Knowledge/Meetings",
     "Knowledge/Library", "Knowledge/Archives", "Knowledge/DailyActivity",
-    "Knowledge/Handoffs", "Knowledge/Designs", "Knowledge/AIDLC",
+    "Knowledge/Handoffs", "Knowledge/Designs",
     "Knowledge/Signals", "Knowledge/JobResults",
 }
 
@@ -1021,7 +1021,7 @@ class SwarmWorkspaceManager:
         """Regenerate the Knowledge Index section of ``.context/KNOWLEDGE.md``.
 
         Scans ``Knowledge/`` subdirectories (Designs, Notes, Reports,
-        Meetings, Library, Handoffs, AIDLC) for markdown files.  Extracts
+        Meetings, Library, Handoffs) for markdown files.  Extracts
         the ``title`` from YAML frontmatter or the first ``# heading``,
         and rebuilds the index tables.
 
@@ -1111,7 +1111,6 @@ class SwarmWorkspaceManager:
                 ("Meetings", knowledge_dir / "Meetings", "Knowledge/Meetings/"),
                 ("Library", knowledge_dir / "Library", "Knowledge/Library/"),
                 ("Handoffs", knowledge_dir / "Handoffs", "Knowledge/Handoffs/"),
-                ("AIDLC", knowledge_dir / "AIDLC", "Knowledge/AIDLC/"),
             ]
 
             lines = [INDEX_MARKER, ""]
