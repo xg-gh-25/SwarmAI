@@ -152,20 +152,11 @@ export default function ChannelsTab() {
   );
 }
 
-/** Mask a token for display — show prefix + last 4 chars only. */
-function maskToken(token: string | undefined): string {
-  if (!token) return '—';
-  if (token.length <= 12) return '••••';
-  const prefix = token.slice(0, token.indexOf('-', 4) + 1 || 5);
-  const suffix = token.slice(-4);
-  return `${prefix}••••${suffix}`;
-}
-
 function ConfigSummary({ channel }: { channel: Channel }) {
   const cfg = channel.config as Record<string, string>;
   const fields = [
-    { label: 'Bot Token', value: maskToken(cfg.bot_token) },
-    { label: 'App Token', value: maskToken(cfg.app_token) },
+    { label: 'Bot Token', value: cfg.bot_token },
+    { label: 'App Token', value: cfg.app_token },
   ];
 
   return (
@@ -174,8 +165,8 @@ function ConfigSummary({ channel }: { channel: Channel }) {
       {fields.map(({ label, value }) => (
         <div key={label} className="flex items-center gap-3 text-xs">
           <span className="text-[var(--color-text-muted)] shrink-0 w-20">{label}</span>
-          <code className="text-[var(--color-text)] font-mono bg-[var(--color-bg)] px-2 py-0.5 rounded truncate">
-            {value}
+          <code className="text-[var(--color-text)] font-mono bg-[var(--color-bg)] px-2 py-0.5 rounded truncate select-all">
+            {value || '—'}
           </code>
         </div>
       ))}
