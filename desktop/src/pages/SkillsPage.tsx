@@ -28,6 +28,13 @@ const modelIdToOption = (id: string) => ({
   description: id,
 });
 
+// Signature skills — SwarmAI's two flagship pipelines.
+// Shown first with a ⭐ badge + tagline. Key = folder name, value = tagline.
+const FEATURED_SKILLS = new Map<string, string>([
+  ['s_autonomous-pipeline', 'One sentence in → PR-ready code out. The AIDLC delivery engine.'],
+  ['s_pollinate',           'Your message, their attention, the right format. Media value delivery.'],
+]);
+
 // Table column configuration - will be translated via hook
 const getSkillColumns = (t: (key: string) => string) => [
   { key: 'name', header: t('skills.table.name'), initialWidth: 200, minWidth: 120 },
@@ -90,9 +97,18 @@ export default function SkillsPage() {
     fetchSkills();
   }, []);
 
-  const filteredSkills = skills.filter((skill) =>
-    skill.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredSkills = useMemo(() => {
+    const filtered = skills.filter((skill) =>
+      skill.name.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+    // Featured skills float to top, then alphabetical within each group
+    return filtered.sort((a, b) => {
+      const aFeatured = FEATURED_SKILLS.has(a.folderName);
+      const bFeatured = FEATURED_SKILLS.has(b.folderName);
+      if (aFeatured !== bFeatured) return aFeatured ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+  }, [skills, searchQuery]);
 
   const handleDeleteClick = (skill: Skill) => {
     setDeleteTarget(skill);
@@ -185,12 +201,28 @@ export default function SkillsPage() {
                 className="border-b border-[var(--color-border)] hover:bg-[var(--color-hover)] transition-colors"
               >
                 <ResizableTableCell>
-                  <span className="text-[var(--color-text)] font-medium">{skill.name}</span>
+                  <span className="text-[var(--color-text)] font-medium">
+                    {FEATURED_SKILLS.has(skill.folderName) && (
+                      <span className="text-amber-400 mr-1.5" title="Signature skill">⭐</span>
+                    )}
+                    {skill.name}
+                  </span>
                 </ResizableTableCell>
                 <ResizableTableCell>
-                  <span className="text-[var(--color-text-muted)]" title={skill.description}>
-                    {skill.description}
-                  </span>
+                  {FEATURED_SKILLS.has(skill.folderName) ? (
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-amber-300/90 text-xs font-medium italic">
+                        {FEATURED_SKILLS.get(skill.folderName)}
+                      </span>
+                      <span className="text-[var(--color-text-muted)] text-[11px] leading-tight">
+                        {skill.description}
+                      </span>
+                    </div>
+                  ) : (
+                    <span className="text-[var(--color-text-muted)]" title={skill.description}>
+                      {skill.description}
+                    </span>
+                  )}
                 </ResizableTableCell>
                 <ResizableTableCell>
                   {(() => {
