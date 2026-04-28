@@ -106,6 +106,14 @@ export default function UpdateNotification() {
           </div>
         )}
 
+        {/* Data safety assurance */}
+        <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-[var(--color-bg)] border border-[var(--color-border)]">
+          <span className="material-symbols-outlined text-status-success text-base mt-0.5">shield</span>
+          <p className="text-xs text-[var(--color-text-muted)]">
+            Your conversations, memory, and workspace are safe — only the app binary is updated.
+          </p>
+        </div>
+
         {/* Release notes */}
         {updateInfo?.body && (
           <div className="bg-[var(--color-bg)] rounded-lg p-4 max-h-48 overflow-y-auto">

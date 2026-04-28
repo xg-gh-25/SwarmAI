@@ -278,3 +278,190 @@ class TestSeedDatabaseMigrations:
         agent = await db.agents.get("default")
         assert agent is not None, "Agent data should be preserved after migration"
         assert agent["name"] == "SwarmAgent"
+
+
+class TestUserVersionMigrations:
+    """Tests for PRAGMA user_version based schema versioning."""
+
+    @pytest.fixture
+    def temp_db_path(self):
+        """Create a temporary database path for testing."""
+        fd, path = tempfile.mkstemp(suffix=".db", prefix="test_uv_")
+        os.close(fd)
+        yield Path(path)
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+    @pytest.mark.asyncio
+    async def test_user_version_set_after_fresh_init(self, temp_db_path):
+        """Fresh DB init sets user_version to CURRENT_SCHEMA_VERSION."""
+        from database.sqlite import CURRENT_SCHEMA_VERSION
+
+        db = SQLiteDatabase(db_path=temp_db_path)
+        await db.initialize()
+
+        async with aiosqlite.connect(str(temp_db_path)) as conn:
+            cursor = await conn.execute("PRAGMA user_version")
+            version = (await cursor.fetchone())[0]
+            assert version == CURRENT_SCHEMA_VERSION, \
+                f"Expected user_version={CURRENT_SCHEMA_VERSION}, got {version}"
+
+    @pytest.mark.asyncio
+    async def test_user_version_fast_path(self, temp_db_path):
+        """DB already at CURRENT_SCHEMA_VERSION skips all migrations (fast path).
+
+        AC2: Returning user with up-to-date DB → migration check <5ms.
+        """
+        from database.sqlite import CURRENT_SCHEMA_VERSION
+        import time
+
+        db = SQLiteDatabase(db_path=temp_db_path)
+        await db.initialize()
+
+        # Reset _initialized to allow re-running
+        db._initialized = False
+
+        t0 = time.monotonic()
+        await db.initialize()
+        elapsed_ms = (time.monotonic() - t0) * 1000
+
+        # Verify version is still correct
+        async with aiosqlite.connect(str(temp_db_path)) as conn:
+            cursor = await conn.execute("PRAGMA user_version")
+            version = (await cursor.fetchone())[0]
+            assert version == CURRENT_SCHEMA_VERSION
+
+        # Fast path should be very quick (generous bound for CI)
+        assert elapsed_ms < 500, \
+            f"Fast path took {elapsed_ms:.1f}ms — should be <500ms"
+
+    @pytest.mark.asyncio
+    async def test_user_version_zero_runs_legacy_and_versioned(self, temp_db_path):
+        """DB at user_version=0 runs legacy detection + versioned migrations.
+
+        AC3: Pre-user_version DBs get legacy migrations + version bump.
+        """
+        from database.sqlite import CURRENT_SCHEMA_VERSION
+        import sqlite3
+
+        # Create a minimal DB with user_version=0 (default)
+        conn = sqlite3.connect(str(temp_db_path))
+        conn.execute("PRAGMA user_version")  # confirms it's 0
+        now = datetime.now().isoformat()
+        # Create minimal tables to satisfy migration detection
+        conn.execute("""
+            CREATE TABLE agents (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL,
+                description TEXT, model TEXT,
+                permission_mode TEXT DEFAULT 'default',
+                max_turns INTEGER, system_prompt TEXT,
+                allowed_tools TEXT DEFAULT '[]',
+                mcp_ids TEXT DEFAULT '[]',
+                working_directory TEXT,
+                enable_bash_tool INTEGER DEFAULT 1,
+                enable_file_tools INTEGER DEFAULT 1,
+                enable_web_tools INTEGER DEFAULT 0,
+                enable_tool_logging INTEGER DEFAULT 1,
+                enable_safety_checks INTEGER DEFAULT 1,
+                enable_file_access_control INTEGER DEFAULT 1,
+                allowed_directories TEXT DEFAULT '[]',
+                global_user_mode INTEGER DEFAULT 0,
+                enable_human_approval INTEGER DEFAULT 1,
+                sandbox TEXT DEFAULT '{}',
+                status TEXT DEFAULT 'active',
+                user_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        conn.execute(
+            "INSERT INTO agents (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            ("default", "SwarmAgent", now, now),
+        )
+        conn.commit()
+        conn.close()
+
+        # Initialize — should run legacy + versioned
+        db = SQLiteDatabase(db_path=temp_db_path)
+        await db.initialize()
+
+        async with aiosqlite.connect(str(temp_db_path)) as conn:
+            # user_version should be bumped to current
+            cursor = await conn.execute("PRAGMA user_version")
+            version = (await cursor.fetchone())[0]
+            assert version == CURRENT_SCHEMA_VERSION, \
+                f"Expected user_version={CURRENT_SCHEMA_VERSION} after migration, got {version}"
+
+            # Legacy columns should be added (e.g., is_system_agent)
+            cursor = await conn.execute("PRAGMA table_info(agents)")
+            cols = [c[1] for c in await cursor.fetchall()]
+            assert "is_system_agent" in cols, "Legacy migration should add is_system_agent"
+
+            # Versioned tables should exist (e.g., skill_metrics, token_usage)
+            cursor = await conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='skill_metrics'"
+            )
+            assert await cursor.fetchone() is not None, "skill_metrics table should exist"
+
+            cursor = await conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='token_usage'"
+            )
+            assert await cursor.fetchone() is not None, "token_usage table should exist"
+
+    @pytest.mark.asyncio
+    async def test_user_version_incremental_upgrade(self, temp_db_path):
+        """DB at older user_version only runs missing versioned migrations."""
+        from database.sqlite import CURRENT_SCHEMA_VERSION
+        import sqlite3
+
+        # Create a DB and manually set user_version to 1 (simulating partial migration)
+        conn = sqlite3.connect(str(temp_db_path))
+        conn.execute("PRAGMA user_version = 1")
+        # Create skill_metrics (version 1 already applied) but NOT token_usage
+        conn.execute("""
+            CREATE TABLE skill_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                skill_name TEXT NOT NULL,
+                invocation_date TEXT NOT NULL,
+                session_id TEXT,
+                outcome TEXT NOT NULL,
+                duration_seconds REAL DEFAULT 0.0,
+                user_satisfaction TEXT DEFAULT 'unknown'
+            )
+        """)
+        conn.commit()
+        conn.close()
+
+        db = SQLiteDatabase(db_path=temp_db_path)
+        await db.initialize()
+
+        async with aiosqlite.connect(str(temp_db_path)) as conn:
+            # Should be at current version
+            cursor = await conn.execute("PRAGMA user_version")
+            version = (await cursor.fetchone())[0]
+            assert version == CURRENT_SCHEMA_VERSION
+
+            # token_usage (version 2) should now exist
+            cursor = await conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='token_usage'"
+            )
+            assert await cursor.fetchone() is not None
+
+    @pytest.mark.asyncio
+    async def test_idempotent_versioned_migrations(self, temp_db_path):
+        """Running migrations twice produces same result (idempotent)."""
+        from database.sqlite import CURRENT_SCHEMA_VERSION
+
+        db = SQLiteDatabase(db_path=temp_db_path)
+        await db.initialize()
+
+        # Force re-init
+        db._initialized = False
+        await db.initialize()
+
+        async with aiosqlite.connect(str(temp_db_path)) as conn:
+            cursor = await conn.execute("PRAGMA user_version")
+            version = (await cursor.fetchone())[0]
+            assert version == CURRENT_SCHEMA_VERSION

@@ -1228,6 +1228,15 @@ class SQLiteChatMessagesTable(SQLiteTable[T], Generic[T]):
             return cursor.rowcount
 
 
+# Schema version history (append-only, never reorder):
+# 0 — original (no user_version set, or pre-existing DB)
+# 1 — add skill_metrics table (2026-04-09)
+# 2 — add token_usage table (2026-04-25)
+# 3 — add hive_accounts + hive_instances tables (2026-04-28)
+# 4 — add messages_fts virtual table + triggers (2026-04-28)
+CURRENT_SCHEMA_VERSION = 4
+
+
 class SQLiteDatabase(BaseDatabase):
     """SQLite database client implementing BaseDatabase interface."""
 
@@ -1729,11 +1738,219 @@ class SQLiteDatabase(BaseDatabase):
         self._initialized = True
 
     async def _run_migrations(self, conn: aiosqlite.Connection) -> None:
-        """Run database migrations for existing databases.
+        """Run database migrations. Two phases:
 
-        These migrations are temporary compatibility fixes for databases created
-        before certain schema changes. New deployments don't need them since
-        the SCHEMA already includes all columns.
+        Phase 1 (legacy): Detection-based column migrations for pre-user_version
+        databases. Uses PRAGMA table_info to find missing columns. Idempotent.
+
+        Phase 2 (versioned): PRAGMA user_version gated migrations. Each version
+        runs exactly once. Fast path: if user_version >= CURRENT_SCHEMA_VERSION,
+        skip everything (~1ms).
+        """
+        import time
+        t0 = time.monotonic()
+
+        # Fast path: if DB is already at current version, skip everything
+        cursor = await conn.execute("PRAGMA user_version")
+        current_version = (await cursor.fetchone())[0]
+
+        if current_version >= CURRENT_SCHEMA_VERSION:
+            logger.debug(
+                "DB schema at version %d (current=%d) — skipping migrations (%.1fms)",
+                current_version, CURRENT_SCHEMA_VERSION,
+                (time.monotonic() - t0) * 1000,
+            )
+            return
+
+        # Phase 1: Legacy detection-based migrations (for pre-user_version DBs)
+        # These handle all column additions via PRAGMA table_info detection.
+        # After first run + Phase 2 sets user_version, subsequent startups skip here.
+        if current_version == 0:
+            logger.info("DB at user_version=0 — running legacy detection-based migrations")
+            await self._run_legacy_migrations(conn)
+
+        # Phase 2: Version-gated migrations (incremental, each runs exactly once)
+        await self._run_versioned_migrations(conn, current_version)
+
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        logger.info(
+            "Migrations complete: version %d → %d (%.1fms)",
+            current_version, CURRENT_SCHEMA_VERSION, elapsed_ms,
+        )
+
+    async def _run_versioned_migrations(
+        self, conn: aiosqlite.Connection, current_version: int
+    ) -> None:
+        """Run version-gated migrations using PRAGMA user_version.
+
+        Each migration block is idempotent (CREATE IF NOT EXISTS / ADD COLUMN
+        IF NOT EXISTS) so re-running is safe even if user_version was manually
+        altered.
+        """
+        if current_version < 1:
+            # Version 1: skill_metrics table (2026-04-09)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS skill_metrics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    skill_name TEXT NOT NULL,
+                    invocation_date TEXT NOT NULL,
+                    session_id TEXT,
+                    outcome TEXT NOT NULL CHECK(outcome IN ('success', 'partial', 'failure', 'abandoned')),
+                    duration_seconds REAL DEFAULT 0.0,
+                    user_satisfaction TEXT DEFAULT 'unknown' CHECK(user_satisfaction IN ('correction', 'accepted', 'unknown'))
+                )
+            """)
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_skill_metrics_name ON skill_metrics(skill_name)"
+            )
+            await conn.execute("PRAGMA user_version = 1")
+            await conn.commit()
+            logger.info("Migration v1: skill_metrics table created")
+
+        if current_version < 2:
+            # Version 2: token_usage table (2026-04-25)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS token_usage (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                    session_id TEXT,
+                    source TEXT NOT NULL DEFAULT 'cli',
+                    input_tokens INTEGER NOT NULL DEFAULT 0,
+                    output_tokens INTEGER NOT NULL DEFAULT 0,
+                    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                    cache_create_tokens INTEGER NOT NULL DEFAULT 0,
+                    cost_usd REAL,
+                    model TEXT
+                )
+            """)
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_token_usage_timestamp ON token_usage(timestamp)"
+            )
+            await conn.execute("PRAGMA user_version = 2")
+            await conn.commit()
+            logger.info("Migration v2: token_usage table created")
+
+        if current_version < 3:
+            # Version 3: hive_accounts + hive_instances tables (2026-04-28)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS hive_accounts (
+                    id TEXT PRIMARY KEY,
+                    account_id TEXT NOT NULL,
+                    label TEXT NOT NULL DEFAULT '',
+                    auth_method TEXT NOT NULL DEFAULT 'access_keys',
+                    auth_config TEXT NOT NULL DEFAULT '{}',
+                    default_region TEXT NOT NULL DEFAULT 'us-east-1',
+                    created_at TEXT NOT NULL,
+                    verified_at TEXT
+                )
+            """)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS hive_instances (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE,
+                    owner_name TEXT,
+                    hive_type TEXT DEFAULT 'shared',
+                    account_ref TEXT NOT NULL,
+                    region TEXT NOT NULL DEFAULT 'us-east-1',
+                    instance_type TEXT NOT NULL DEFAULT 'm7g.xlarge',
+                    ec2_instance_id TEXT,
+                    ec2_public_ip TEXT,
+                    elastic_ip_alloc_id TEXT,
+                    security_group_id TEXT,
+                    iam_role_name TEXT,
+                    iam_instance_profile_arn TEXT,
+                    cloudfront_dist_id TEXT,
+                    cloudfront_domain TEXT,
+                    s3_bucket TEXT,
+                    ssh_key_name TEXT,
+                    auth_user TEXT DEFAULT 'admin',
+                    auth_password TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    version TEXT,
+                    error_message TEXT,
+                    seed_data TEXT,
+                    shared_content TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (account_ref) REFERENCES hive_accounts(id) ON DELETE CASCADE
+                )
+            """)
+            # Migrate existing DBs: add new columns if missing
+            for col, default in [
+                ("owner_name", None), ("hive_type", "'shared'"),
+                ("iam_instance_profile_arn", None), ("s3_bucket", None),
+                ("auth_user", "'admin'"), ("auth_password", None),
+                ("seed_data", None), ("shared_content", None),
+            ]:
+                try:
+                    default_clause = f" DEFAULT {default}" if default else ""
+                    await conn.execute(
+                        f"ALTER TABLE hive_instances ADD COLUMN {col} TEXT{default_clause}"
+                    )
+                except Exception:
+                    pass  # Column already exists
+            await conn.execute("PRAGMA user_version = 3")
+            await conn.commit()
+            logger.info("Migration v3: hive_accounts + hive_instances tables created")
+
+        if current_version < 4:
+            # Version 4: FTS5 full-text search on messages (2026-04-28)
+            try:
+                await conn.execute("""
+                    CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                        content,
+                        content=messages,
+                        content_rowid=rowid
+                    )
+                """)
+                await conn.execute("""
+                    CREATE TRIGGER IF NOT EXISTS messages_fts_insert
+                    AFTER INSERT ON messages BEGIN
+                        INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+                    END
+                """)
+                await conn.execute("""
+                    CREATE TRIGGER IF NOT EXISTS messages_fts_delete
+                    AFTER DELETE ON messages BEGIN
+                        INSERT INTO messages_fts(messages_fts, rowid, content)
+                        VALUES('delete', old.rowid, old.content);
+                    END
+                """)
+                await conn.execute("""
+                    CREATE TRIGGER IF NOT EXISTS messages_fts_update
+                    AFTER UPDATE ON messages BEGIN
+                        INSERT INTO messages_fts(messages_fts, rowid, content)
+                        VALUES('delete', old.rowid, old.content);
+                        INSERT INTO messages_fts(rowid, content)
+                        VALUES (new.rowid, new.content);
+                    END
+                """)
+                await conn.commit()
+                # Rebuild index from existing data (only on first creation)
+                try:
+                    cursor = await conn.execute("SELECT COUNT(*) FROM messages_fts LIMIT 1")
+                    fts_count = (await cursor.fetchone())[0]
+                    if fts_count == 0:
+                        msg_cursor = await conn.execute("SELECT COUNT(*) FROM messages")
+                        msg_count = (await msg_cursor.fetchone())[0]
+                        if msg_count > 0:
+                            logger.info("FTS5: Rebuilding index for %d existing messages", msg_count)
+                            await conn.execute("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
+                            await conn.commit()
+                except Exception as e:
+                    logger.debug("FTS5 rebuild check skipped: %s", e)
+            except Exception as e:
+                logger.warning("FTS5 migration skipped (SQLite may lack fts5): %s", e)
+            await conn.execute("PRAGMA user_version = 4")
+            await conn.commit()
+            logger.info("Migration v4: messages_fts virtual table created")
+
+    async def _run_legacy_migrations(self, conn: aiosqlite.Connection) -> None:
+        """Legacy detection-based column migrations for pre-user_version databases.
+
+        Uses PRAGMA table_info to detect missing columns and adds them.
+        All migrations are idempotent. This method only runs when
+        user_version == 0 (first time encountering user_version system).
         """
         # Migration: Add plugin_ids column to agents table (added 2026-01-19)
         # Can be removed after all existing deployments are migrated
@@ -2131,175 +2348,9 @@ class SQLiteDatabase(BaseDatabase):
         # Assign SwarmWS.id to tasks with NULL workspace_id
         await self._migrate_existing_task_data(conn)
 
-        # Migration: Create skill_metrics table (added 2026-04-09)
-        # Tracks skill invocation outcomes for evolution candidate detection.
-        # Idempotent: IF NOT EXISTS.
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS skill_metrics (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                skill_name TEXT NOT NULL,
-                invocation_date TEXT NOT NULL,
-                session_id TEXT,
-                outcome TEXT NOT NULL CHECK(outcome IN ('success', 'partial', 'failure', 'abandoned')),
-                duration_seconds REAL DEFAULT 0.0,
-                user_satisfaction TEXT DEFAULT 'unknown' CHECK(user_satisfaction IN ('correction', 'accepted', 'unknown'))
-            )
-        """)
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_skill_metrics_name ON skill_metrics(skill_name)
-        """)
-        await conn.commit()
-
-        # Migration: Create token_usage table (added 2026-04-25)
-        # Tracks token consumption per CLI result event and background job invoke.
-        # Enables TopBar display of Today/Total token usage.
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS token_usage (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-                session_id TEXT,
-                source TEXT NOT NULL DEFAULT 'cli',
-                input_tokens INTEGER NOT NULL DEFAULT 0,
-                output_tokens INTEGER NOT NULL DEFAULT 0,
-                cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-                cache_create_tokens INTEGER NOT NULL DEFAULT 0,
-                cost_usd REAL,
-                model TEXT
-            )
-        """)
-        await conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_token_usage_timestamp ON token_usage(timestamp)
-        """)
-        await conn.commit()
-
-        # ============================================================================
-        # Hive — Cloud Instance Management
-        # ============================================================================
-        # AWS accounts the user has configured for Hive deployment.
-        # WARNING: auth_config stores credentials as plaintext JSON.
-        # EBS encryption protects disk-level theft but NOT DB file access.
-        # Phase 2: encrypt auth_config with KMS data key or IAM-derived key.
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS hive_accounts (
-                id TEXT PRIMARY KEY,
-                account_id TEXT NOT NULL,
-                label TEXT NOT NULL DEFAULT '',
-                auth_method TEXT NOT NULL DEFAULT 'access_keys',
-                auth_config TEXT NOT NULL DEFAULT '{}',
-                default_region TEXT NOT NULL DEFAULT 'us-east-1',
-                created_at TEXT NOT NULL,
-                verified_at TEXT
-            )
-        """)
-        # Hive instances deployed to user's AWS accounts.
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS hive_instances (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL UNIQUE,
-                owner_name TEXT,
-                hive_type TEXT DEFAULT 'shared',
-                account_ref TEXT NOT NULL,
-                region TEXT NOT NULL DEFAULT 'us-east-1',
-                instance_type TEXT NOT NULL DEFAULT 'm7g.xlarge',
-                ec2_instance_id TEXT,
-                ec2_public_ip TEXT,
-                elastic_ip_alloc_id TEXT,
-                security_group_id TEXT,
-                iam_role_name TEXT,
-                iam_instance_profile_arn TEXT,
-                cloudfront_dist_id TEXT,
-                cloudfront_domain TEXT,
-                s3_bucket TEXT,
-                ssh_key_name TEXT,
-                auth_user TEXT DEFAULT 'admin',
-                auth_password TEXT,
-                status TEXT NOT NULL DEFAULT 'pending',
-                version TEXT,
-                error_message TEXT,
-                seed_data TEXT,
-                shared_content TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY (account_ref) REFERENCES hive_accounts(id) ON DELETE CASCADE
-            )
-        """)
-        # Migrate existing DBs: add new columns if missing
-        for col, default in [
-            ("owner_name", None), ("hive_type", "'shared'"),
-            ("iam_instance_profile_arn", None), ("s3_bucket", None),
-            ("auth_user", "'admin'"), ("auth_password", None),
-            ("seed_data", None), ("shared_content", None),
-        ]:
-            try:
-                default_clause = f" DEFAULT {default}" if default else ""
-                await conn.execute(
-                    f"ALTER TABLE hive_instances ADD COLUMN {col} TEXT{default_clause}"
-                )
-            except Exception:
-                pass  # Column already exists
-        await conn.commit()
-
-        # ============================================================================
-        # FTS5 Full-Text Search on messages (Session Recall — Phase 2)
-        # Creates a content-synced FTS5 virtual table for fast full-text search
-        # across session messages. The messages table uses TEXT PRIMARY KEY (id)
-        # but SQLite maintains an implicit rowid which FTS5 uses.
-        # ============================================================================
-        try:
-            await conn.execute("""
-                CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-                    content,
-                    content=messages,
-                    content_rowid=rowid
-                )
-            """)
-            await conn.execute("""
-                CREATE TRIGGER IF NOT EXISTS messages_fts_insert
-                AFTER INSERT ON messages BEGIN
-                    INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
-                END
-            """)
-            await conn.execute("""
-                CREATE TRIGGER IF NOT EXISTS messages_fts_delete
-                AFTER DELETE ON messages BEGIN
-                    INSERT INTO messages_fts(messages_fts, rowid, content)
-                    VALUES('delete', old.rowid, old.content);
-                END
-            """)
-            await conn.execute("""
-                CREATE TRIGGER IF NOT EXISTS messages_fts_update
-                AFTER UPDATE ON messages BEGIN
-                    INSERT INTO messages_fts(messages_fts, rowid, content)
-                    VALUES('delete', old.rowid, old.content);
-                    INSERT INTO messages_fts(rowid, content)
-                    VALUES (new.rowid, new.content);
-                END
-            """)
-            await conn.commit()
-            # Rebuild index from existing data — only needed on first creation.
-            # Check if the FTS5 table has any rows; if it does, the index is
-            # already populated (triggers keep it in sync). Rebuilding a large
-            # messages table takes 30-50s and was blocking every daemon restart.
-            try:
-                cursor = await conn.execute("SELECT COUNT(*) FROM messages_fts LIMIT 1")
-                fts_count = (await cursor.fetchone())[0]
-                if fts_count == 0:
-                    msg_cursor = await conn.execute("SELECT COUNT(*) FROM messages")
-                    msg_count = (await msg_cursor.fetchone())[0]
-                    if msg_count > 0:
-                        logger.info("FTS5 index empty but %d messages exist — rebuilding (one-time)...", msg_count)
-                        await conn.execute("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
-                        await conn.commit()
-                        logger.info("FTS5 rebuild complete")
-                    else:
-                        logger.info("FTS5 index and messages table both empty — no rebuild needed")
-                else:
-                    logger.debug("FTS5 index already populated (%d rows) — skipping rebuild", fts_count)
-            except Exception as exc:
-                logger.debug("FTS5 rebuild check skipped: %s", exc)
-            logger.info("Migration complete: messages_fts FTS5 table and triggers created")
-        except Exception as exc:
-            logger.warning("FTS5 migration skipped (may already exist): %s", exc)
+        # NOTE: skill_metrics, token_usage, hive tables, and FTS5 are now
+        # managed by _run_versioned_migrations() (PRAGMA user_version gated).
+        # They were moved there on 2026-04-28 to enable explicit schema versioning.
 
     async def _migrate_existing_task_data(self, conn: aiosqlite.Connection) -> None:
         """Migrate existing task data for workspace refactor.

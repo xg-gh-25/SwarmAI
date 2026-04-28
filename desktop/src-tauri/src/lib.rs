@@ -660,6 +660,139 @@ async fn probe_daemon_health(max_attempts: u32, interval_secs: u64) -> Option<u1
     None
 }
 
+/// Extract the daemon version from the /health JSON response.
+/// Returns None if the version field is missing or unparseable.
+async fn get_daemon_version() -> Option<String> {
+    let probe_url = format!("http://127.0.0.1:{}/health", DAEMON_PORT);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .ok()?;
+
+    let resp = client.get(&probe_url).send().await.ok()?;
+    let body = resp.text().await.ok()?;
+
+    // Parse version from JSON: {"version": "1.8.4", ...}
+    // FastAPI uses `", ": "` separators (space after colon), so we must
+    // handle both compact (`"version":"`) and pretty (`"version": "`) forms.
+    // Strategy: find `"version"`, skip any whitespace/colon, find the quoted value.
+    let key = "\"version\"";
+    let key_pos = body.find(key)?;
+    let after_key = &body[key_pos + key.len()..];
+    // Skip optional whitespace, colon, optional whitespace
+    let after_colon = after_key.trim_start().strip_prefix(':')?;
+    let after_ws = after_colon.trim_start();
+    // Expect opening quote
+    let value_start = after_ws.strip_prefix('"')?;
+    let end = value_start.find('"')?;
+    Some(value_start[..end].to_string())
+}
+
+/// Sync daemon binary to match app version when a mismatch is detected.
+///
+/// Flow: graceful shutdown → atomic binary deploy → restart launchd → verify.
+/// Returns Ok(()) on success, Err on failure (caller should fall back to sidecar).
+async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Result<(), String> {
+    let daemon_version = get_daemon_version().await
+        .unwrap_or_else(|| "unknown".to_string());
+
+    if daemon_version == app_version {
+        return Ok(());  // Versions match — nothing to do
+    }
+
+    println!(
+        "[Tauri] Daemon version mismatch: daemon={}, app={} — upgrading",
+        daemon_version, app_version
+    );
+    let _ = app.emit("backend-upgrading", format!("{} → {}", daemon_version, app_version));
+
+    // Step 1: Graceful shutdown
+    send_shutdown_request(DAEMON_PORT);
+    tokio::time::sleep(tokio::time::Duration::from_secs(SHUTDOWN_GRACE_SECONDS)).await;
+
+    // Step 2: Atomic binary deploy from app bundle
+    let home = std::env::var("HOME").unwrap_or_default();
+    let daemon_dir = format!("{}/.swarm-ai/daemon", home);
+
+    // Find the bundled binary — check app bundle Contents/MacOS first
+    let exe_path = std::env::current_exe().unwrap_or_default();
+    let bundle_dir = exe_path.parent().unwrap_or(std::path::Path::new("/"));
+    let bundled_binary = bundle_dir.join("python-backend");
+
+    if !bundled_binary.exists() {
+        return Err(format!(
+            "Bundled daemon binary not found at: {}",
+            bundled_binary.display()
+        ));
+    }
+
+    let target_binary = format!("{}/python-backend", daemon_dir);
+    let tmp_binary = format!("{}/python-backend.tmp", daemon_dir);
+
+    // Ensure daemon dir exists
+    std::fs::create_dir_all(&daemon_dir)
+        .map_err(|e| format!("Failed to create daemon dir: {}", e))?;
+
+    // Atomic deploy: copy to .tmp, then rename
+    std::fs::copy(&bundled_binary, &tmp_binary)
+        .map_err(|e| format!("Failed to copy binary: {}", e))?;
+    std::fs::rename(&tmp_binary, &target_binary)
+        .map_err(|e| format!("Failed to rename binary: {}", e))?;
+
+    // Set executable permissions
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(
+            &target_binary,
+            std::fs::Permissions::from_mode(0o755),
+        );
+    }
+
+    // Write version file (use date command for timestamp — avoids chrono dep)
+    let timestamp = std::process::Command::new("date")
+        .arg("+%Y-%m-%d %H:%M:%S")
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+    let version_content = format!("{} {}", app_version, timestamp);
+    let _ = std::fs::write(format!("{}/.version", daemon_dir), version_content);
+
+    println!("[Tauri] Daemon binary deployed: {}", target_binary);
+
+    // Step 3: Restart daemon via launchd
+    let uid_output = std::process::Command::new("id").arg("-u").output()
+        .map_err(|e| format!("Failed to get UID: {}", e))?;
+    let uid = String::from_utf8_lossy(&uid_output.stdout).trim().to_string();
+    let gui_target = format!("gui/{}", uid);
+    let plist_path = format!("{}/{}", home, DAEMON_PLIST_RELPATH);
+
+    // bootout (stop) + bootstrap (start)
+    let _ = std::process::Command::new("launchctl")
+        .args(["bootout", &gui_target, &plist_path])
+        .output();
+    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    let _ = std::process::Command::new("launchctl")
+        .args(["bootstrap", &gui_target, &plist_path])
+        .output();
+
+    // Step 4: Verify new version
+    if let Some(_port) = probe_daemon_health(10, 2).await {
+        let new_version = get_daemon_version().await.unwrap_or_default();
+        if new_version == app_version {
+            println!("[Tauri] Daemon upgraded successfully: {}", app_version);
+            let _ = app.emit("backend-upgraded", app_version);
+            return Ok(());
+        }
+        println!(
+            "[Tauri] Daemon running but version still {}, expected {}",
+            new_version, app_version
+        );
+    }
+
+    Err("Daemon upgrade failed — daemon not responding after restart".to_string())
+}
+
 /// Ensure the daemon plist is installed and bootstrapped into launchd.
 /// Idempotent: safe to call when already bootstrapped (exit 37 is OK).
 async fn ensure_daemon_bootstrapped() -> Result<(), String> {
@@ -890,6 +1023,22 @@ async fn start_backend(
         // Phase 1: probe with retry (daemon might be mid-restart via ThrottleInterval)
         if let Some(_port) = probe_daemon_health(5, 2).await {
             println!("[Tauri] Found existing daemon on port {} — connecting", DAEMON_PORT);
+
+            // Version sync: upgrade daemon binary if it doesn't match app version
+            let app_version = app.config().version.clone().unwrap_or_default();
+            if !app_version.is_empty() {
+                match sync_daemon_version(&app, &app_version).await {
+                    Ok(()) => {
+                        // Either versions matched or upgrade succeeded
+                    }
+                    Err(e) => {
+                        // Upgrade failed — connect to existing daemon anyway
+                        // (stale daemon is better than no daemon)
+                        println!("[Tauri] Daemon version sync failed: {} — using existing daemon", e);
+                    }
+                }
+            }
+
             let port = connect_daemon(&state, &app).await;
             return Ok(port);
         }
