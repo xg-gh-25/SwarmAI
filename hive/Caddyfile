@@ -3,6 +3,10 @@
 # Caddy auto-provisions HTTPS via Let's Encrypt.
 # Set HIVE_DOMAIN env var or replace the domain below.
 #
+# IMPORTANT: Caddy handle blocks are first-match. SSE-specific routes
+# MUST come before the generic /api/* catch-all, otherwise they never
+# execute and streaming silently buffers until response completes.
+#
 # Usage: caddy run --config /opt/swarmai/hive/Caddyfile
 
 {$HIVE_DOMAIN:hive.example.com} {
@@ -14,12 +18,7 @@
         {$HIVE_USER:admin} {$HIVE_PASS_HASH:$2a$14$PLACEHOLDER_CHANGE_ME}
     }
 
-    # --- API reverse proxy ---
-    handle /api/* {
-        reverse_proxy localhost:18321
-    }
-
-    # --- SSE streaming — disable buffering for real-time chat ---
+    # --- SSE streaming — MUST be before generic /api/* (first-match) ---
     handle /api/chat/stream {
         reverse_proxy localhost:18321 {
             flush_interval -1
@@ -29,7 +28,6 @@
         }
     }
 
-    # SSE streaming for other streaming endpoints
     handle /api/chat/answer-question {
         reverse_proxy localhost:18321 {
             flush_interval -1
@@ -46,6 +44,20 @@
                 read_timeout 120s
             }
         }
+    }
+
+    # --- Generic API reverse proxy (catch-all for non-SSE) ---
+    handle /api/* {
+        reverse_proxy localhost:18321
+    }
+
+    # --- Root-level backend endpoints (not under /api/) ---
+    handle /health {
+        reverse_proxy localhost:18321
+    }
+
+    handle /shutdown {
+        reverse_proxy localhost:18321
     }
 
     # --- React SPA static files ---

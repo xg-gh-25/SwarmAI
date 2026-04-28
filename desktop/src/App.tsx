@@ -96,14 +96,13 @@ export default function App() {
           <ErrorBoundary variant="app">
           <ToastStack />
           <AudioKeepAlive />
-          <ShutdownOverlay />
-          {/* Backend startup overlay - only shown in production mode */}
-          {/* onReady callback sets isBackendReady to true, allowing routes to mount */}
+          {/* Desktop-only overlays — Tauri imports crash in browser (Hive mode) */}
+          {isDesktop() && <ShutdownOverlay />}
+          {/* Backend startup overlay - production mode only */}
           {!isDev && <BackendStartupOverlay onReady={() => setIsBackendReady(true)} />}
-          {/* Update notification - only shown in production mode */}
-          {!isDev && <UpdateNotification />}
-          {/* Daemon mode nudge - only shown in production sidecar mode */}
-          {!isDev && <DaemonNudgeBanner />}
+          {/* Update notification + daemon nudge — Desktop only (Tauri plugin imports) */}
+          {!isDev && isDesktop() && <UpdateNotification />}
+          {!isDev && isDesktop() && <DaemonNudgeBanner />}
           {/* Only render routes after backend is ready to prevent race conditions */}
           {isBackendReady && <AppRoutes />}
           </ErrorBoundary>
