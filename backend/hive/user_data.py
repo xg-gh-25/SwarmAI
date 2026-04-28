@@ -213,8 +213,31 @@ def render_user_data(
 
     Uses string.Template-style substitution. All variables are
     injected into the script — no hardcoded values.
+
+    Defense-in-depth: all values are validated/sanitized before substitution.
+    The Caddyfile heredoc uses single-quotes ('CADDY') so shell doesn't
+    expand variables — only Python Template substitution runs.
     """
+    import re
     from string import Template
+
+    # Validate inputs structurally to prevent injection
+    # s3_bucket: AWS bucket naming rules (lowercase, digits, hyphens, dots)
+    if not re.match(r'^[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]$', s3_bucket):
+        raise ValueError(f"Invalid S3 bucket name: {s3_bucket}")
+    # version: semver-ish (digits, dots, hyphens, letters)
+    if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9.\-]{0,30}$', version):
+        raise ValueError(f"Invalid version: {version}")
+    # auth_user: alphanumeric + underscore/hyphen only
+    if not re.match(r'^[a-zA-Z0-9_\-]{1,64}$', auth_user):
+        raise ValueError(f"Invalid auth_user: {auth_user}")
+    # auth_hash: bcrypt ($2b$...) or hex string — no whitespace, no quotes
+    if not re.match(r'^[a-zA-Z0-9$./]{8,128}$', auth_hash):
+        raise ValueError(f"Invalid auth_hash format")
+    # region: AWS region format
+    if not re.match(r'^[a-z]{2}(-[a-z]+-\d+){1,2}$', region):
+        raise ValueError(f"Invalid region: {region}")
+
     tmpl = Template(_USER_DATA_TEMPLATE)
     return tmpl.safe_substitute(
         s3_bucket=s3_bucket,
