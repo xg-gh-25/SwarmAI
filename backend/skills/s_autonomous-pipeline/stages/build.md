@@ -53,13 +53,17 @@ For each remaining acceptance criterion, one at a time:
 ## Step 3: VERIFY -- Targeted tests, zero regressions
 
 **VERIFY rules (BLOCKING):**
-- Run **changed test files + test files that import changed modules**. NOT the full suite.
+- Run **changed test files + test files that import changed modules**.
   ```
   pytest tests/test_foo.py tests/test_bar.py --timeout=60
   ```
+- **Exception: core infrastructure files.** If the changeset touches any of these,
+  run the FULL suite (`SWARMAI_SUITE=1 pytest --timeout=120 -m "not pbt and not slow"`):
+  `sqlite.py`, `lib.rs`, `main.py`, `session_router.py`, `session_unit.py`,
+  `lifecycle_manager.py`, `conftest.py`, `prompt_builder.py`.
+  These files have 50+ dependents — targeted tests cannot cover the interaction surface.
 - If you're unsure which tests to run, use `pytest --lf --timeout=60` (last-failed).
-- **NEVER** run bare `pytest` without specifying files -- conftest blocks >300 tests.
-- **NEVER** use `--run-all` -- that's for humans running `make test-all`, not pipeline.
+- **NEVER** pipe pytest through `| tail` -- it hides pass/fail and xdist status.
 - **NEVER** pipe pytest through `| tail` -- it hides pass/fail and xdist status.
 - If all tests pass -- proceed to Step 4. Done.
 - If tests fail -- fix code, re-run **only failing tests**.
@@ -108,6 +112,12 @@ For each remaining acceptance criterion, one at a time:
       `"version": "1.8.4"` (with space) — verify Rust parser handles this
       exact string, not a hand-crafted compact version. Cross-language
       format assumptions are invisible to single-language unit tests.
+    - **Pattern grep after any bug fix:** After fixing a bug in SMOKE or
+      USER-PATH TRACE, immediately grep the **entire codebase** for the
+      same pattern: `grep -rn "the_broken_pattern" . --include="*.py" --include="*.rs" --include="*.ts"`.
+      The bug you just found likely exists in 2-5 other places.
+      This session: fixed `"version":"` JSON parsing in one function,
+      missed 3 identical `contains("\"healthy\"")` patterns 200 lines away.
     - Smoke tests are **inline verification only** -- don't commit them.
       They're a build-time gate, not regression tests.
     - If a smoke test crashes -- fix the bug before proceeding to REVIEW.
@@ -231,6 +241,26 @@ timeout." Test the resource, not the happy path around it.
     request. 14 unit tests + 4 smoke tests + integration trace missed it
     because none actually sent a multipart request through the ASGI stack.
     The most fatal bug was the cheapest to catch.
+
+## Pre-Change Checks
+
+### Before adding validation/constraints to existing functions
+
+**BLOCKING: grep all callers before adding input validation.**
+```
+grep -rn "function_name(" . --include="*.py" --include="*.ts"
+```
+Every existing call site (including tests) becomes a potential breakage.
+Read the actual arguments they pass. Adjust your validation to accept
+existing valid inputs. This session: added regex to `render_user_data()`,
+broke 3 tests that used `s3_bucket="b"` and `auth_hash="$2a$..."`.
+
+### Before editing a file modified by parallel sessions
+
+**Check recent changes:** `git log -5 --oneline -- <file>`.
+If the file was modified by another session since your last read, re-read
+the entire file. This session: parallel commit added a stub method,
+our commit added the real method — duplicate definition in the same class.
 
 ## TDD Constraint
 
