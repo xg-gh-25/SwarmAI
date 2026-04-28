@@ -6,7 +6,7 @@
 #   - No caffeinate (Linux doesn't sleep daemons)
 #   - No dscl (no macOS Directory Service)
 #   - ss instead of lsof for port check
-#   - --host 0.0.0.0 (allow Caddy reverse proxy)
+#   - --host 127.0.0.1 (Caddy proxies locally; never bind 0.0.0.0)
 #   - stat -c instead of stat -f (Linux stat format)
 #
 # Usage: systemd runs this via swarmai-hive.service
