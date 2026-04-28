@@ -72,7 +72,7 @@ export default function AIModelsTab() {
 
       {/* Authentication */}
       <section className="bg-[var(--color-card)] rounded-lg p-6">
-        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">Authentication</h2>
+        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">AWS Account</h2>
         <AuthConfigPanel mode="settings" />
       </section>
 
