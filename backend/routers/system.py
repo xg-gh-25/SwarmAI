@@ -451,7 +451,7 @@ async def get_auth_hint():
 
     # Probe real credential details for display
     ada_details = _probe_ada_details() if has_ada else None
-    aws_profiles = _probe_aws_profiles() if has_sso_cache else None
+    aws_profiles = _probe_aws_profiles()  # checks config for real SSO profiles
 
     return {
         "has_ada_dir": has_ada,
@@ -514,19 +514,34 @@ def _probe_ada_details() -> dict | None:
 
 
 def _probe_aws_profiles() -> list[str] | None:
-    """List AWS CLI profile names from ~/.aws/config."""
+    """List **real AWS SSO** profile names from ~/.aws/config.
+
+    Only returns profiles that use ``sso_start_url`` or ``sso_session``
+    — the markers of genuine IAM Identity Center configuration.  Profiles
+    that use ``credential_process`` (e.g. Ada) are NOT SSO profiles and
+    were previously reported as such, misleading the Settings UI.
+    """
     config_path = Path.home() / ".aws" / "config"
     if not config_path.exists():
         return None
     try:
-        profiles = []
+        profiles: list[str] = []
+        current_profile: str | None = None
+        is_sso = False
         for line in config_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
-            if line.startswith("[profile "):
-                profiles.append(line[9:-1])
-            elif line.startswith("[default]"):
-                profiles.append("default")
-        return profiles[:10]
+            if line.startswith("[profile ") or line.startswith("[default]"):
+                # Flush previous profile
+                if current_profile and is_sso:
+                    profiles.append(current_profile)
+                current_profile = line[9:-1] if line.startswith("[profile ") else "default"
+                is_sso = False
+            elif current_profile and ("sso_start_url" in line or "sso_session" in line):
+                is_sso = True
+        # Flush last profile
+        if current_profile and is_sso:
+            profiles.append(current_profile)
+        return profiles[:10] if profiles else None
     except (OSError, UnicodeDecodeError):
         return None
 
