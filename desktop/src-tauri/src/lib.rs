@@ -1491,7 +1491,7 @@ pub fn run() {
                                     false
                                 }
                             }
-                            _ => true,
+                            _ => false, // Block unknown schemes (javascript:, data:, blob:)
                         }
                     })
                     .build()?;
