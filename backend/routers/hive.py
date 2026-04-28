@@ -110,6 +110,7 @@ _HIVE_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 
 
 class HiveInstanceResponse(BaseModel):
+    """Instance response for list endpoint — no secrets."""
     id: str
     name: str
     owner_name: Optional[str] = None
@@ -126,12 +127,17 @@ class HiveInstanceResponse(BaseModel):
     cloudfront_domain: Optional[str] = None
     s3_bucket: Optional[str] = None
     auth_user: Optional[str] = None
-    auth_password: Optional[str] = None
+    # auth_password intentionally excluded from list response
     status: str
     version: Optional[str] = None
     error_message: Optional[str] = None
     created_at: str
     updated_at: str
+
+
+class HiveInstanceDetailResponse(HiveInstanceResponse):
+    """Detail response — includes credentials. Only returned by GET /instances/{id}."""
+    auth_password: Optional[str] = None
 
 
 class VerifyResult(BaseModel):
@@ -221,20 +227,54 @@ async def verify_account(account_id: str):
         identity = sts.get_caller_identity()
         checks["sts"] = {"status": "pass", "account": identity["Account"]}
 
-        # EC2
+        # EC2 (launch permission)
         try:
-            session.client("ec2").describe_instances(MaxResults=5)
-            checks["ec2"] = {"status": "pass"}
+            ec2 = session.client("ec2")
+            ec2.describe_instances(MaxResults=5)
+            # Also check we can describe VPCs (needed for SG creation)
+            vpcs = ec2.describe_vpcs(Filters=[{"Name": "isDefault", "Values": ["true"]}])
+            has_vpc = len(vpcs.get("Vpcs", [])) > 0
+            checks["ec2"] = {"status": "pass", "default_vpc": has_vpc}
+            if not has_vpc:
+                checks["ec2"]["warning"] = "No default VPC — Hive deploy may need VPC selection"
         except Exception as e:
             checks["ec2"] = {"status": "fail", "error": str(e)[:100]}
 
-        # Bedrock
+        # Bedrock (Claude model access)
         try:
             models = session.client("bedrock").list_foundation_models(byProvider="Anthropic")
-            n = len([m for m in models.get("modelSummaries", []) if "claude" in m["modelId"]])
+            claude_models = [m for m in models.get("modelSummaries", []) if "claude" in m["modelId"]]
+            n = len(claude_models)
             checks["bedrock"] = {"status": "pass" if n > 0 else "fail", "claude_models": n}
+            if n == 0:
+                checks["bedrock"]["error"] = "No Claude models available. Enable model access in Bedrock console."
         except Exception as e:
             checks["bedrock"] = {"status": "fail", "error": str(e)[:100]}
+
+        # IAM (can create roles — needed for Hive instance profiles)
+        try:
+            iam = session.client("iam")
+            iam.list_roles(MaxItems=1)
+            checks["iam"] = {"status": "pass"}
+        except Exception as e:
+            checks["iam"] = {"status": "fail", "error": str(e)[:100]}
+
+        # S3 (can create buckets — needed for hive release storage)
+        try:
+            s3 = session.client("s3")
+            s3.list_buckets()
+            checks["s3"] = {"status": "pass"}
+        except Exception as e:
+            checks["s3"] = {"status": "fail", "error": str(e)[:100]}
+
+        # CloudFront (can create distributions)
+        try:
+            cf = session.client("cloudfront")
+            dists = cf.list_distributions(MaxItems="1")
+            count = dists.get("DistributionList", {}).get("Quantity", 0)
+            checks["cloudfront"] = {"status": "pass", "existing_distributions": count}
+        except Exception as e:
+            checks["cloudfront"] = {"status": "fail", "error": str(e)[:100]}
 
         # Update verified_at
         async with _conn() as c:
@@ -319,15 +359,15 @@ async def create_instance(body: HiveInstanceCreate):
     return HiveInstanceResponse(**row)
 
 
-@router.get("/instances/{instance_id}", response_model=HiveInstanceResponse)
+@router.get("/instances/{instance_id}", response_model=HiveInstanceDetailResponse)
 async def get_instance(instance_id: str):
-    """Get Hive instance details."""
+    """Get Hive instance details including credentials."""
     async with _conn() as c:
         cursor = await c.execute("SELECT * FROM hive_instances WHERE id = ?", (instance_id,))
         row = await cursor.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Instance not found")
-    return HiveInstanceResponse(**dict(row))
+    return HiveInstanceDetailResponse(**dict(row))
 
 
 @router.post("/instances/{instance_id}/stop")
@@ -436,3 +476,41 @@ async def health_proxy(instance_id: str):
             return resp.json()
     except Exception as e:
         return {"status": "unreachable", "error": str(e)}
+
+
+@router.post("/instances/{instance_id}/retry")
+async def retry_instance(instance_id: str):
+    """Retry a failed deploy — cleanup partial resources and redeploy."""
+    _require_desktop()
+    async with _conn() as c:
+        cursor = await c.execute("SELECT status FROM hive_instances WHERE id = ?", (instance_id,))
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Instance not found")
+        if dict(row)["status"] != "error":
+            raise HTTPException(status_code=400, detail="Only errored instances can be retried")
+
+    provisioner = _get_provisioner()
+    # Cleanup any partial resources first
+    try:
+        await provisioner.cleanup(instance_id)
+    except Exception:
+        pass  # Best-effort cleanup
+
+    # Reset instance state
+    async with _conn() as c:
+        await c.execute(
+            """UPDATE hive_instances SET
+                status='pending', error_message=NULL,
+                ec2_instance_id=NULL, ec2_public_ip=NULL, elastic_ip_alloc_id=NULL,
+                security_group_id=NULL, iam_role_name=NULL, iam_instance_profile_arn=NULL,
+                cloudfront_dist_id=NULL, cloudfront_domain=NULL, s3_bucket=NULL,
+                auth_user=NULL, auth_password=NULL, updated_at=?
+                WHERE id=?""",
+            (_now(), instance_id),
+        )
+        await c.commit()
+
+    # Redeploy
+    asyncio.create_task(provisioner.deploy(instance_id))
+    return {"status": "retrying"}

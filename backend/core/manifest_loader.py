@@ -13,6 +13,7 @@ Key public symbols:
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -170,6 +171,13 @@ class ManifestLoader:
         """
         npm_deps = manifest.dependencies.get("npm", [])
         if not npm_deps:
+            return []
+
+        # Skip npm install in Hive mode — Hive packages must be self-contained.
+        # npm install on EC2 during startup blocks the health check and causes
+        # systemd ExecStartPost timeout (discovered with WB2 manual deploy).
+        if os.environ.get("SWARMAI_MODE") == "hive":
+            logger.info("Skipping npm deps for %s in hive mode", manifest.name)
             return []
 
         # Validate all package names before touching npm (H2 security gate).
