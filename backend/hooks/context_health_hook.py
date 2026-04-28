@@ -450,6 +450,12 @@ class ContextHealthHook:
         # 3. DDD staleness (per project)
         findings += self._check_ddd_staleness(root, ws_path)
 
+        # 3b. Auto-apply mechanical DDD refresh proposals (non-blocking)
+        try:
+            self._auto_apply_ddd_proposals(root)
+        except Exception as exc:
+            logger.warning("context_health: DDD auto-apply failed (non-blocking): %s", exc)
+
         # 4. DailyActivity — today's file should exist if we're running
         da_dir = root / "Knowledge" / "DailyActivity"
         today_file = da_dir / f"{date.today().isoformat()}.md"
@@ -646,17 +652,25 @@ class ContextHealthHook:
                             continue  # Skip semantic changes
 
                         # Find and apply in target DDD doc
+                        import fcntl
                         for ddd_name in ("TECH.md", "IMPROVEMENT.md", "PRODUCT.md"):
                             ddd_path = project_dir / ddd_name
                             if not ddd_path.exists():
                                 continue
-                            ddd_content = ddd_path.read_text(encoding="utf-8")
-                            if current_block in ddd_content:
-                                new_content = ddd_content.replace(
-                                    current_block, proposed_block, 1
-                                )
-                                ddd_path.write_text(new_content, encoding="utf-8")
-                                changes_applied = True
+                            applied_this = False
+                            lock_path = ddd_path.with_suffix(ddd_path.suffix + ".lock")
+                            with open(lock_path, "w") as lock_file:
+                                fcntl.flock(lock_file, fcntl.LOCK_EX)
+                                ddd_content = ddd_path.read_text(encoding="utf-8")
+                                if current_block in ddd_content:
+                                    new_content = ddd_content.replace(
+                                        current_block, proposed_block, 1
+                                    )
+                                    ddd_path.write_text(new_content, encoding="utf-8")
+                                    changes_applied = True
+                                    applied_this = True
+                                fcntl.flock(lock_file, fcntl.LOCK_UN)
+                            if applied_this:
                                 applied_changes.append({
                                     "project": project_dir.name,
                                     "doc": ddd_name,
@@ -886,6 +900,11 @@ class ContextHealthHook:
                 try:
                     file_date = datetime.strptime(f.stem, "%Y-%m-%d")
                     if file_date < cutoff_90:
+                        # Protect undistilled files from archival (data loss prevention)
+                        content = f.read_text(encoding="utf-8")
+                        if "distilled: true" not in content[:500]:  # check frontmatter only
+                            logger.warning("Skipping undistilled file %s (>90d but not yet distilled)", f.name)
+                            continue
                         dest = archive_dir / f.name
                         f.rename(dest)
                         logger.info("Archived DailyActivity: %s", f.name)
