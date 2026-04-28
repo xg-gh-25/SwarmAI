@@ -6,9 +6,27 @@
 >
 > Follow the base code review methodology defined there for structured review findings.
 
+## Durable Findings Format (P3)
+
+**All review findings MUST be written in durable format — no file paths, no line
+numbers.** Findings are permanent records in the artifact; they must survive
+refactors.
+
+| BAD (stale after refactor) | GOOD (survives refactor) |
+|----------------------------|-------------------------|
+| "Line 42 in `signal_fetch.py` has a race condition" | "The signal fetch handler has a race condition when two feeds write to the state buffer concurrently" |
+| "`github_trending.py:87` missing error handling" | "The GitHub Trending adapter doesn't handle HTTP 429 (rate limit) responses" |
+| "Fix `session_unit.py` method `_spawn`" | "The session spawn module doesn't release the slot lock on timeout" |
+
+**Rules:**
+- Describe **behaviors and contracts**, not code locations
+- Use **module names** (from TECH.md or domain language), not file paths
+- Reference **acceptance criteria** by number, not test function names
+- A finding should still make sense after a major refactor
+
 ## Pipeline-Specific Checks
 
-The REVIEW stage extends the base code review with 9 pipeline-specific checks:
+The REVIEW stage extends the base code review with 11 pipeline-specific checks:
 
 ---
 
@@ -136,19 +154,25 @@ Include wire test results in the review artifact under `"wire_test"`.
 
 ---
 
-### 8. Depth Analysis (T3)
+### 8. Depth & Seam Analysis (T3 + P4)
 
-**For each new file in the changeset**, assess architectural depth using
-Ousterhout's framework (*A Philosophy of Software Design*):
+**For each new file in the changeset**, assess architectural depth and seam
+discipline using Ousterhout's framework (*A Philosophy of Software Design*)
+and Feathers' seam concept.
 
 **Vocabulary (use exactly, no synonyms):**
-- **Module** — anything with an interface and an implementation
-- **Interface** — everything a caller must know (types, invariants, error modes, config)
-- **Deep** — small interface, rich implementation. High leverage.
-- **Shallow** — interface nearly as complex as implementation. Low leverage.
-- **Deletion test** — imagine deleting this module. Complexity vanishes (pass-through) or reappears across N callers (earning its keep)?
 
-**Process:**
+| Term | Definition |
+|------|-----------|
+| **Module** | Anything with an interface and an implementation (function, class, file, package) |
+| **Interface** | Everything a caller must know: types, invariants, error modes, ordering, config. Not just the type signature. |
+| **Deep** | Small interface hiding significant implementation. High **leverage** (callers get a lot) and **locality** (changes concentrate in one place). |
+| **Shallow** | Interface nearly as complex as implementation. Low leverage. |
+| **Seam** | Where a module's interface lives — a place behavior can be altered without editing in place. Use this, NOT "boundary." |
+| **Adapter** | A concrete thing satisfying an interface at a seam. |
+| **Deletion test** | Imagine deleting this module. Complexity vanishes → pass-through. Reappears across N callers → earning its keep. |
+
+**Part A — Depth Analysis:**
 
 For each **new file**:
 
@@ -158,11 +182,26 @@ For each **new file**:
    - `> 5:1` → **DEEP** (good) — note and move on
    - `2:1 to 5:1` → **MODERATE** — acceptable
    - `< 2:1` → **SHALLOW** — run deletion test:
-     - Complexity vanishes → pass-through, suggest inlining
+     - Complexity vanishes → pass-through, suggest inlining or merging
      - Complexity reappears across callers → has value but needs deepening
 
-For **modified files**: only assess if the changeset changed the public interface
-(added methods, params, config keys). Internal-only changes skip depth analysis.
+For **modified files**: only assess if the changeset changed the public interface.
+
+**Part B — Seam Discipline:**
+
+For each **new interface/abstract class/protocol** introduced in the changeset:
+
+1. Count how many adapters (concrete implementations) exist:
+   - **0 adapters** → dead interface. WARN: "interface without implementation"
+   - **1 adapter** → hypothetical seam. Ask: is the second adapter planned
+     (test fake counts)? If not, it's just indirection — suggest removing
+     the interface and using the concrete type directly.
+   - **2+ adapters** → real seam. ✅ Legitimate abstraction.
+
+2. Check seam exposure:
+   - Is the seam **internal** (used by module's own tests) or **external**
+     (part of the public interface)?
+   - Internal seams exposed externally = leaking implementation detail.
 
 **Output (added to review artifact):**
 
@@ -173,15 +212,20 @@ For **modified files**: only assess if the changeset changed the public interfac
     "deep": 2,
     "shallow": 1,
     "findings": [
-      {"file": "github_trending.py", "verdict": "deep", "interface": "1 fn, 2 params", "implementation": "120 lines", "ratio": "60:1"}
+      {"module": "GitHub Trending adapter", "verdict": "deep", "interface": "1 fn, 2 params", "implementation": "120 lines"}
     ]
+  },
+  "seam_audit": {
+    "new_interfaces": 1,
+    "real_seams": 1,
+    "hypothetical_seams": 0,
+    "findings": []
   }
 }
 ```
 
-**This is informational, not a gate.** Shallow modules are a warning, not a
-blocker. Some are intentionally shallow (thin wrappers, adapters). The value is
-making depth a visible metric in every review.
+**This is informational, not a gate.** Shallow modules and hypothetical seams
+are warnings, not blockers. The value is making depth and seam quality visible.
 
 ---
 
@@ -207,7 +251,7 @@ Confirm each before publishing:
 - [ ] Runtime pattern checklist complete (every applicable RP has pass or N/A)
 - [ ] Security scan ran with confidence scores (or "no security-relevant changes" stated)
 - [ ] Wire test results shown (or "single-layer change, N/A" stated)
-- [ ] Depth analysis completed for new files (or "no new files, N/A" stated)
+- [ ] Depth & seam analysis completed for new files (or "no new files, N/A" stated)
 - [ ] UX review completed (or "no frontend files, N/A" stated)
 
 ---
@@ -218,6 +262,6 @@ Confirm each before publishing:
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
   --type review --producer s_autonomous-pipeline \
   --summary "Review: <N findings>, <M auto-fixed>, <K integration warnings>, <J ux findings>, <P runtime patterns>, <W wire tests>" \
-  --data '{"findings":[...],"approved":true/false,"security_findings":[],"integration_trace":{"checked":N,"connected":M,"warnings":[...]},"depth_analysis":{"modules_checked":N,"deep":M,"shallow":K,"findings":[...]},"ux_review":{"triggered":true/false,"checks":5,"findings":[...]},"runtime_patterns":{"checked":N,"passed":M,"findings":[...]},"wire_test":{"boundaries":N,"verified":M,"findings":[...]}}'
+  --data '{"findings":[...],"approved":true/false,"security_findings":[],"integration_trace":{"checked":N,"connected":M,"warnings":[...]},"depth_analysis":{"modules_checked":N,"deep":M,"shallow":K,"findings":[...]},"seam_audit":{"new_interfaces":N,"real_seams":M,"hypothetical_seams":K,"findings":[...]},"ux_review":{"triggered":true/false,"checks":5,"findings":[...]},"runtime_patterns":{"checked":N,"passed":M,"findings":[...]},"wire_test":{"boundaries":N,"verified":M,"findings":[...]}}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state test
 ```
