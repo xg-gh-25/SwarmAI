@@ -16,7 +16,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import axios from 'axios';
 // getApiBaseUrl: health checks; getBackendPort/initializeBackend: Tauri sidecar port negotiation
-import { getApiBaseUrl, getBackendPort, initializeBackend } from '../../services/tauri';
+import { getApiBaseUrl, getBackendPort, initializeBackend, isDesktop } from '../../services/tauri';
 import { systemService, SystemStatus } from '../../services/system';
 import logo from '../../assets/swarm-avatar.svg';
 
@@ -390,10 +390,16 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
 
     const startHealthPolling = async () => {
       try {
-        console.log('[Startup] Calling initializeBackend()...');
-        const port = await initializeBackend();
-        console.log(`[Startup] initializeBackend() returned port: ${port}`);
-        console.log(`[Startup] getBackendPort() returns: ${getBackendPort()}`);
+        if (isDesktop()) {
+          // Desktop: negotiate port with Tauri sidecar/daemon
+          console.log('[Startup] Calling initializeBackend()...');
+          const port = await initializeBackend();
+          console.log(`[Startup] initializeBackend() returned port: ${port}`);
+          console.log(`[Startup] getBackendPort() returns: ${getBackendPort()}`);
+        } else {
+          // Hive/browser: backend is already running, skip Tauri init
+          console.log('[Startup] Hive mode — backend managed externally, skipping Tauri init');
+        }
 
         if (!mounted) return;
 
