@@ -39,13 +39,19 @@ Architecture topology (what runs where), process ownership, data flow, and API c
 
 ### Present Alternatives for Design Decisions
 
-When the user asks to design, plan, or architect something non-trivial, present **3 approaches** before proceeding:
+When the user asks to design, plan, or architect something non-trivial, present **3 approaches** before proceeding. Each approach is driven by an **explicit constraint** that forces genuinely different designs:
 
-- **Approach 1: Minimal** — ships fastest, least effort. What do you give up?
-- **Approach 2: Ideal** — best architecture. What's the cost?
-- **Approach 3: Creative** — rethink the problem itself. What if the obvious framing is wrong?
+| Constraint | Forces | Use when |
+|-----------|--------|----------|
+| **SPEED** | Ship in 1 session, cut scope ruthlessly | Urgent, proven patterns |
+| **QUALITY** | Survive 2 years, full tests, extensible | Core architecture |
+| **SIMPLICITY** | Junior dev can maintain, minimal abstractions | Utility features |
+| **FLEXIBILITY** | Support 3 future use cases | Platform features |
+| **DELETION** | Easiest to remove if wrong | Experiments |
 
-Each approach: **What** (1-2 sentences), **Effort** (T-shirt + sessions), **Risk**, **Tradeoff**. End with a recommendation and why.
+Pick the 3 most relevant constraints for the problem. Each approach: **Constraint** label, **What** (1-2 sentences), **Effort** (T-shirt + sessions), **Risk**, **Tradeoff**. End with a recommendation and why.
+
+**Fallback:** If constraints don't fit (pure research, docs-only), use Minimal/Ideal/Creative.
 
 **When to trigger:** "design X", "how should we build X", "plan X", "what's the best approach for X". NOT for simple tasks, bug fixes, or when the user already specified the approach.
 

@@ -136,7 +136,56 @@ Include wire test results in the review artifact under `"wire_test"`.
 
 ---
 
-### 8. Anti-Rationalization Gate
+### 8. Depth Analysis (T3)
+
+**For each new file in the changeset**, assess architectural depth using
+Ousterhout's framework (*A Philosophy of Software Design*):
+
+**Vocabulary (use exactly, no synonyms):**
+- **Module** — anything with an interface and an implementation
+- **Interface** — everything a caller must know (types, invariants, error modes, config)
+- **Deep** — small interface, rich implementation. High leverage.
+- **Shallow** — interface nearly as complex as implementation. Low leverage.
+- **Deletion test** — imagine deleting this module. Complexity vanishes (pass-through) or reappears across N callers (earning its keep)?
+
+**Process:**
+
+For each **new file**:
+
+1. Count interface surface: public functions, parameters, config keys, exceptions
+2. Count implementation complexity: lines, branches, external calls
+3. Assess ratio:
+   - `> 5:1` → **DEEP** (good) — note and move on
+   - `2:1 to 5:1` → **MODERATE** — acceptable
+   - `< 2:1` → **SHALLOW** — run deletion test:
+     - Complexity vanishes → pass-through, suggest inlining
+     - Complexity reappears across callers → has value but needs deepening
+
+For **modified files**: only assess if the changeset changed the public interface
+(added methods, params, config keys). Internal-only changes skip depth analysis.
+
+**Output (added to review artifact):**
+
+```json
+{
+  "depth_analysis": {
+    "modules_checked": 3,
+    "deep": 2,
+    "shallow": 1,
+    "findings": [
+      {"file": "github_trending.py", "verdict": "deep", "interface": "1 fn, 2 params", "implementation": "120 lines", "ratio": "60:1"}
+    ]
+  }
+}
+```
+
+**This is informational, not a gate.** Shallow modules are a warning, not a
+blocker. Some are intentionally shallow (thin wrappers, adapters). The value is
+making depth a visible metric in every review.
+
+---
+
+### 9. Anti-Rationalization Gate
 
 Before concluding REVIEW, reject these shortcuts:
 
@@ -151,13 +200,14 @@ Before concluding REVIEW, reject these shortcuts:
 
 ---
 
-### 9. Exit Evidence Checklist
+### 10. Exit Evidence Checklist
 
 Confirm each before publishing:
 - [ ] Integration trace output present (`N symbols checked, M connected, K warnings`)
 - [ ] Runtime pattern checklist complete (every applicable RP has pass or N/A)
 - [ ] Security scan ran with confidence scores (or "no security-relevant changes" stated)
 - [ ] Wire test results shown (or "single-layer change, N/A" stated)
+- [ ] Depth analysis completed for new files (or "no new files, N/A" stated)
 - [ ] UX review completed (or "no frontend files, N/A" stated)
 
 ---
@@ -168,6 +218,6 @@ Confirm each before publishing:
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
   --type review --producer s_autonomous-pipeline \
   --summary "Review: <N findings>, <M auto-fixed>, <K integration warnings>, <J ux findings>, <P runtime patterns>, <W wire tests>" \
-  --data '{"findings":[...],"approved":true/false,"security_findings":[],"integration_trace":{"checked":N,"connected":M,"warnings":[...]},"ux_review":{"triggered":true/false,"checks":5,"findings":[...]},"runtime_patterns":{"checked":N,"passed":M,"findings":[...]},"wire_test":{"boundaries":N,"verified":M,"findings":[...]}}'
+  --data '{"findings":[...],"approved":true/false,"security_findings":[],"integration_trace":{"checked":N,"connected":M,"warnings":[...]},"depth_analysis":{"modules_checked":N,"deep":M,"shallow":K,"findings":[...]},"ux_review":{"triggered":true/false,"checks":5,"findings":[...]},"runtime_patterns":{"checked":N,"passed":M,"findings":[...]},"wire_test":{"boundaries":N,"verified":M,"findings":[...]}}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state test
 ```
