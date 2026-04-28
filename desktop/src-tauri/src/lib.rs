@@ -633,6 +633,27 @@ fn graceful_shutdown_and_kill(state: SharedBackendState, context: &str) {
 }
 
 
+/// Parse a /health JSON response body. Returns (is_healthy, version, boot_id).
+/// Uses serde_json for correct parsing regardless of JSON formatting.
+fn parse_health_response(body: &str) -> (bool, Option<String>, Option<String>) {
+    match serde_json::from_str::<serde_json::Value>(body) {
+        Ok(json) => {
+            let is_healthy = json.get("status")
+                .and_then(|v| v.as_str())
+                .map(|s| s == "healthy")
+                .unwrap_or(false);
+            let version = json.get("version")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            let boot_id = json.get("boot_id")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            (is_healthy, version, boot_id)
+        }
+        Err(_) => (false, None, None),
+    }
+}
+
 /// Probe daemon health endpoint with retries.
 /// Returns Some(port) if daemon is healthy, None otherwise.
 async fn probe_daemon_health(max_attempts: u32, interval_secs: u64) -> Option<u16> {
@@ -648,7 +669,8 @@ async fn probe_daemon_health(max_attempts: u32, interval_secs: u64) -> Option<u1
     for attempt in 1..=max_attempts {
         if let Ok(resp) = client.get(&probe_url).send().await {
             if let Ok(body) = resp.text().await {
-                if body.contains("\"healthy\"") {
+                let (healthy, _, _) = parse_health_response(&body);
+                if healthy {
                     return Some(DAEMON_PORT);
                 }
             }
@@ -671,21 +693,8 @@ async fn get_daemon_version() -> Option<String> {
 
     let resp = client.get(&probe_url).send().await.ok()?;
     let body = resp.text().await.ok()?;
-
-    // Parse version from JSON: {"version": "1.8.4", ...}
-    // FastAPI uses `", ": "` separators (space after colon), so we must
-    // handle both compact (`"version":"`) and pretty (`"version": "`) forms.
-    // Strategy: find `"version"`, skip any whitespace/colon, find the quoted value.
-    let key = "\"version\"";
-    let key_pos = body.find(key)?;
-    let after_key = &body[key_pos + key.len()..];
-    // Skip optional whitespace, colon, optional whitespace
-    let after_colon = after_key.trim_start().strip_prefix(':')?;
-    let after_ws = after_colon.trim_start();
-    // Expect opening quote
-    let value_start = after_ws.strip_prefix('"')?;
-    let end = value_start.find('"')?;
-    Some(value_start[..end].to_string())
+    let (_, version, _) = parse_health_response(&body);
+    version
 }
 
 /// Sync daemon binary to match app version when a mismatch is detected.
@@ -912,11 +921,7 @@ fn spawn_daemon_health_watchdog(
             let (healthy, current_boot_id) = match client.get(&health_url).send().await {
                 Ok(resp) => {
                     if let Ok(body) = resp.text().await {
-                        let is_healthy = body.contains("\"healthy\"");
-                        // Extract boot_id from JSON response
-                        let bid = serde_json::from_str::<serde_json::Value>(&body)
-                            .ok()
-                            .and_then(|v| v.get("boot_id")?.as_str().map(String::from));
+                        let (is_healthy, _, bid) = parse_health_response(&body);
                         (is_healthy, bid)
                     } else {
                         (false, None)
@@ -1129,7 +1134,8 @@ async fn start_backend(
         match client.get(&health_url).send().await {
             Ok(resp) => {
                 if let Ok(body) = resp.text().await {
-                    if body.contains("\"healthy\"") {
+                    let (is_healthy, _, _) = parse_health_response(&body);
+                    if is_healthy {
                         println!("[Tauri] Backend healthy after {} attempts", attempt);
                         // Notify frontend: running in sidecar mode (no 24/7 daemon)
                         let _ = app.emit("backend-mode", "sidecar");
