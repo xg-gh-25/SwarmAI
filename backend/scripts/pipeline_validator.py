@@ -29,6 +29,11 @@ The 8 invariant checks:
                               (BLOCK — catches AttributeError hidden by mocks)
                           8b. REVIEW: integration_trace.checked > 0
                               (BLOCK — ensures wiring verification was done)
+                          8c. REVIEW: ux_review when frontend files in changeset
+                              (WARN — ensures UX checklist on UI changes)
+                          8d. REVIEW: findings_count required for large changesets
+                              (BLOCK — prevents skipped/empty reviews on >3 code
+                              files or >10 tests. Review must report findings.)
 
 Public symbols:
 - ``main``              — CLI entry point
@@ -93,6 +98,9 @@ NO_ARTIFACT_STAGES = {"reflect"}
 
 # Stages where decisions are optional (informational stages)
 DECISION_OPTIONAL_STAGES = {"reflect", "deliver"}
+
+# Code file extensions for changeset analysis
+_CODE_EXTS = {".py", ".ts", ".tsx", ".js", ".jsx", ".rs", ".go", ".java", ".sh"}
 
 
 # ---------------------------------------------------------------------------
@@ -582,8 +590,6 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
             if artifact_data:
                 tdd = artifact_data.get("tdd", {})
                 files_changed = artifact_data.get("files_changed", [])
-                # Only count actual code files — docs/config don't need smoke tests
-                _CODE_EXTS = {".py", ".ts", ".tsx", ".js", ".jsx", ".rs", ".go", ".java", ".sh"}
                 code_files = [f for f in files_changed
                               if any(f.endswith(ext) for ext in _CODE_EXTS)]
                 smoke_count = tdd.get("smoke_tests", 0) if isinstance(tdd, dict) else 0
@@ -642,6 +648,46 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
                     "UX checklist (discoverability, feedback, behavioral contracts, "
                     "escape/click-outside, scroll tracking)."
                 )
+        # Check 8d: Review completeness — large changesets with zero findings are suspicious
+        # A 100+ line diff with 0 review findings means the review was likely skipped.
+        # This is a BLOCK: the orchestrator must produce at least a review artifact
+        # with findings_count (even if 0) AND explain why 0 is correct.
+        if build_stage and build_stage.get("artifact_id"):
+            build_art = _load_artifact_data(project, run_id, build_stage["artifact_id"])
+            if build_art:
+                tdd = build_art.get("tdd", {})
+                # Estimate diff size from test count + file count as proxy
+                tests_gen = tdd.get("tests_generated", 0) if isinstance(tdd, dict) else 0
+                code_files = [
+                    f for f in build_art.get("files_changed", [])
+                    if any(f.endswith(ext) for ext in _CODE_EXTS)
+                ]
+                is_large_changeset = len(code_files) > 3 or tests_gen > 10
+
+                if is_large_changeset and artifact_id:
+                    review_art = _load_artifact_data(project, run_id, artifact_id)
+                    if review_art:
+                        findings_count = review_art.get("findings_count", -1)
+                        if findings_count == -1:
+                            # No findings_count field at all — review artifact is incomplete
+                            errors.append(
+                                f"Review completeness: build touched {len(code_files)} code files "
+                                f"with {tests_gen} tests, but review artifact has no "
+                                f"'findings_count' field. A real review must report findings "
+                                f"(even if 0) with justification."
+                            )
+                        elif findings_count == 0:
+                            # 0 findings on a large changeset — suspicious but not blocking
+                            warnings.append(
+                                f"Review reported 0 findings on {len(code_files)} code files / "
+                                f"{tests_gen} tests. Verify this is genuine — large changesets "
+                                f"with zero findings often indicate a skipped review."
+                            )
+                elif is_large_changeset and not artifact_id:
+                    errors.append(
+                        f"Review completeness: build touched {len(code_files)} code files "
+                        f"but REVIEW stage has no artifact_id. The review was skipped entirely."
+                    )
     else:
         checks_passed += 1  # Auto-pass for other stages
 
