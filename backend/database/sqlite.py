@@ -1769,6 +1769,12 @@ class SQLiteDatabase(BaseDatabase):
             logger.info("DB at user_version=0 — running legacy detection-based migrations")
             await self._run_legacy_migrations(conn)
 
+        # Phase 1.5: One-time data cleanups (idempotent, check-then-act).
+        # These are NOT column migrations — they clean up legacy tables/data
+        # and must run regardless of user_version in case they were introduced
+        # between the user's last startup and the current version.
+        await self._run_data_cleanups(conn)
+
         # Phase 2: Version-gated migrations (incremental, each runs exactly once)
         await self._run_versioned_migrations(conn, current_version)
 
@@ -1777,6 +1783,14 @@ class SQLiteDatabase(BaseDatabase):
             "Migrations complete: version %d → %d (%.1fms)",
             current_version, CURRENT_SCHEMA_VERSION, elapsed_ms,
         )
+
+    async def _run_data_cleanups(self, conn: aiosqlite.Connection) -> None:
+        """One-time data cleanups that run regardless of user_version.
+
+        These are idempotent check-then-act operations that clean up
+        legacy tables/data. Safe to re-run on every startup.
+        """
+        pass  # Placeholder for future data cleanup migrations
 
     async def _run_versioned_migrations(
         self, conn: aiosqlite.Connection, current_version: int
@@ -2167,108 +2181,8 @@ class SQLiteDatabase(BaseDatabase):
             await conn.commit()
             logger.info("Migration complete: source_type column added to mcp_servers")
 
-        # ============================================================================
-        # Workspace Refactor Data Migration (Task 1.9)
-        # Validates: Requirements 5.4, 13.7, 13.8
-        # ============================================================================
-
-        # ============================================================================
-        # Legacy Data Cleanup: Clean-slate approach (Task 18.1)
-        # Detects the legacy swarm_workspaces table, reads workspace paths for
-        # filesystem cleanup, drops the table, removes legacy workspace dirs,
-        # and clears workspace_id in chat_threads so threads become global.
-        # Validates: SwarmWS Foundation Requirements 24.1, 24.2, 24.3
-        # ============================================================================
-
-        cursor = await conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='swarm_workspaces'"
-        )
-        legacy_table_exists = await cursor.fetchone()
-
-        if legacy_table_exists:
-            logger.info("Legacy cleanup: Detected swarm_workspaces table, starting clean-slate removal")
-
-            # Step 1: Read legacy workspace file_path values before dropping
-            # so we can remove their filesystem directories.
-            legacy_paths: list[str] = []
-            try:
-                cursor = await conn.execute("SELECT file_path FROM swarm_workspaces")
-                rows = await cursor.fetchall()
-                legacy_paths = [row[0] for row in rows if row[0]]
-                logger.info("Legacy cleanup: Found %d workspace path(s) to evaluate for removal", len(legacy_paths))
-            except Exception as e:
-                logger.warning("Legacy cleanup: Could not read legacy workspace paths: %s", e)
-
-            # Step 2: DROP the swarm_workspaces table entirely
-            try:
-                await conn.execute("DROP TABLE IF EXISTS swarm_workspaces")
-                await conn.commit()
-                logger.info("Legacy cleanup: Dropped swarm_workspaces table")
-            except Exception as e:
-                logger.warning("Legacy cleanup: Failed to drop swarm_workspaces table: %s", e)
-
-            # Step 3: Remove legacy workspace directories from filesystem.
-            # Only remove dirs that are NOT the current SwarmWS directory.
-            # Paths stored in DB use {app_data_dir} placeholder or ~ prefix.
-            app_data_dir = str(get_app_data_dir())
-            swarmws_dir = str(Path(app_data_dir) / "SwarmWS")
-
-            for raw_path in legacy_paths:
-                # Expand {app_data_dir} placeholder and ~ home dir
-                expanded = raw_path
-                if "{app_data_dir}" in expanded:
-                    expanded = expanded.replace("{app_data_dir}", app_data_dir)
-                expanded = str(Path(expanded).expanduser())
-
-                # Skip the current SwarmWS directory — it's the active workspace
-                if Path(expanded).resolve() == Path(swarmws_dir).resolve():
-                    logger.info("Legacy cleanup: Skipping active SwarmWS directory: %s", expanded)
-                    continue
-
-                # Safety: only remove directories under the app data directory
-                # to prevent a tampered DB from deleting arbitrary paths
-                try:
-                    resolved = Path(expanded).resolve()
-                    if not str(resolved).startswith(str(Path(app_data_dir).resolve())):
-                        logger.warning(
-                            "Legacy cleanup: Skipping directory outside app data dir: %s",
-                            expanded,
-                        )
-                        continue
-                except (OSError, ValueError):
-                    logger.warning(
-                        "Legacy cleanup: Could not resolve path, skipping: %s",
-                        expanded,
-                    )
-                    continue
-
-                if Path(expanded).exists() and Path(expanded).is_dir():
-                    try:
-                        shutil.rmtree(expanded)
-                        logger.info("Legacy cleanup: Removed legacy workspace directory: %s", expanded)
-                    except Exception as e:
-                        logger.warning("Legacy cleanup: Failed to remove directory %s: %s", expanded, e)
-                else:
-                    logger.debug("Legacy cleanup: Legacy directory does not exist, skipping: %s", expanded)
-
-            # Step 4: Clear workspace_id in chat_threads so threads become global SwarmWS chats
-            try:
-                cursor = await conn.execute(
-                    "SELECT COUNT(*) FROM chat_threads WHERE workspace_id IS NOT NULL"
-                )
-                row = await cursor.fetchone()
-                thread_count = row[0] if row else 0
-
-                if thread_count > 0:
-                    await conn.execute("UPDATE chat_threads SET workspace_id = NULL")
-                    await conn.commit()
-                    logger.info("Legacy cleanup: Cleared workspace_id on %d chat thread(s)", thread_count)
-                else:
-                    logger.debug("Legacy cleanup: No chat threads with workspace_id to clear")
-            except Exception as e:
-                logger.warning("Legacy cleanup: Failed to clear chat_threads workspace_id: %s", e)
-
-            logger.info("Legacy cleanup: Clean-slate removal complete")
+        # NOTE: swarm_workspaces cleanup and task data migration moved to
+        # _run_data_cleanups() — they run regardless of user_version.
 
         # ============================================================================
         # ToDo Schema Extensions (Swarm Radar ToDos — Sub-Spec 2)
@@ -2343,14 +2257,90 @@ class SQLiteDatabase(BaseDatabase):
                 logger.error("Migration failed: source_type CHECK update in todos: %s", e)
                 raise
 
-        # Migration: Map existing task statuses and assign workspace_id to existing tasks
-        # Status mapping: pending→draft, running→wip, failed→blocked
-        # Assign SwarmWS.id to tasks with NULL workspace_id
-        await self._migrate_existing_task_data(conn)
-
-        # NOTE: skill_metrics, token_usage, hive tables, and FTS5 are now
+        # NOTE: task data migration moved to _run_data_cleanups().
+        # skill_metrics, token_usage, hive tables, and FTS5 are now
         # managed by _run_versioned_migrations() (PRAGMA user_version gated).
         # They were moved there on 2026-04-28 to enable explicit schema versioning.
+
+    async def _run_data_cleanups(self, conn: aiosqlite.Connection) -> None:
+        """One-time data cleanups that run regardless of user_version.
+
+        These are idempotent check-then-act operations that clean up legacy
+        data structures. They must NOT be gated on user_version because
+        the triggering condition (e.g., swarm_workspaces table exists) can
+        arise independently of schema version.
+        """
+        # ── Legacy swarm_workspaces cleanup ──
+        cursor = await conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='swarm_workspaces'"
+        )
+        legacy_table_exists = await cursor.fetchone()
+
+        if legacy_table_exists:
+            logger.info("Legacy cleanup: Detected swarm_workspaces table, starting clean-slate removal")
+
+            legacy_paths: list[str] = []
+            try:
+                cursor = await conn.execute("SELECT file_path FROM swarm_workspaces")
+                rows = await cursor.fetchall()
+                legacy_paths = [row[0] for row in rows if row[0]]
+                logger.info("Legacy cleanup: Found %d workspace path(s) to evaluate for removal", len(legacy_paths))
+            except Exception as e:
+                logger.warning("Legacy cleanup: Could not read legacy workspace paths: %s", e)
+
+            try:
+                await conn.execute("DROP TABLE IF EXISTS swarm_workspaces")
+                await conn.commit()
+                logger.info("Legacy cleanup: Dropped swarm_workspaces table")
+            except Exception as e:
+                logger.warning("Legacy cleanup: Failed to drop swarm_workspaces table: %s", e)
+
+            app_data_dir = str(get_app_data_dir())
+            swarmws_dir = str(Path(app_data_dir) / "SwarmWS")
+
+            for raw_path in legacy_paths:
+                expanded = raw_path
+                if "{app_data_dir}" in expanded:
+                    expanded = expanded.replace("{app_data_dir}", app_data_dir)
+                expanded = str(Path(expanded).expanduser())
+
+                if Path(expanded).resolve() == Path(swarmws_dir).resolve():
+                    logger.info("Legacy cleanup: Skipping active SwarmWS directory: %s", expanded)
+                    continue
+
+                try:
+                    resolved = Path(expanded).resolve()
+                    if not str(resolved).startswith(str(Path(app_data_dir).resolve())):
+                        logger.warning("Legacy cleanup: Skipping directory outside app data dir: %s", expanded)
+                        continue
+                except (OSError, ValueError):
+                    logger.warning("Legacy cleanup: Could not resolve path, skipping: %s", expanded)
+                    continue
+
+                if Path(expanded).exists() and Path(expanded).is_dir():
+                    try:
+                        shutil.rmtree(expanded)
+                        logger.info("Legacy cleanup: Removed legacy workspace directory: %s", expanded)
+                    except Exception as e:
+                        logger.warning("Legacy cleanup: Failed to remove directory %s: %s", expanded, e)
+
+            try:
+                cursor = await conn.execute(
+                    "SELECT COUNT(*) FROM chat_threads WHERE workspace_id IS NOT NULL"
+                )
+                row = await cursor.fetchone()
+                thread_count = row[0] if row else 0
+                if thread_count > 0:
+                    await conn.execute("UPDATE chat_threads SET workspace_id = NULL")
+                    await conn.commit()
+                    logger.info("Legacy cleanup: Cleared workspace_id on %d chat thread(s)", thread_count)
+            except Exception as e:
+                logger.warning("Legacy cleanup: Failed to clear chat_threads workspace_id: %s", e)
+
+            logger.info("Legacy cleanup: Clean-slate removal complete")
+
+        # ── Task data migration (idempotent) ──
+        await self._migrate_existing_task_data(conn)
 
     async def _migrate_existing_task_data(self, conn: aiosqlite.Connection) -> None:
         """Migrate existing task data for workspace refactor.
