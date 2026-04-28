@@ -99,8 +99,8 @@ Range: [1.0, 5.0]. Higher feasibility = easier = higher ROI. All dimensions on 1
 
 **Rules:**
 - Each reason must be **specific** — not "it was too complex" (vague), but "the HTML structure changed and the regex parser returned 0 results for 3 days before anyone noticed" (specific)
-- At least 1 reason must reference IMPROVEMENT.md "What Failed" — check if a similar approach was tried before
-- At least 1 reason must challenge an **assumption** in the scoring — which dimension assumed something unverified?
+- Check IMPROVEMENT.md "What Failed" for relevant prior failures. If one exists, at least 1 reason must reference it. If none exists, note "no prior art in IMPROVEMENT.md" and move on.
+- At least 1 reason must challenge a **specific scoring assumption** — name which dimension relied on an unverified assumption, and what the assumption was
 
 **Output:**
 
@@ -112,7 +112,7 @@ Range: [1.0, 5.0]. Higher feasibility = easier = higher ROI. All dimensions on 1
 
 **Decision impact:**
 - If any reason has **likelihood=HIGH and no mitigation exists** → downgrade to **ESCALATE**, surface the risk to user
-- If pre-mortem reveals a scoring assumption was unverified → **reduce that dimension by 1** and recalculate ROI. If new ROI < 3.2 → DEFER
+- If pre-mortem reveals a scoring assumption was unverified → **reduce the specific dimension whose score relied on that assumption by 1** and recalculate ROI. (E.g., if Feasibility=4 assumed "existing pattern works" but pre-mortem shows it might not → Feasibility becomes 3.) If new ROI < 3.2 → DEFER
 - If all reasons are med/low with clear mitigations → GO confirmed
 
 **Why this exists:** EVALUATE has happy-path bias (LL09, 3 recurrences). Pre-mortem (Gary Klein) generates 30% more specific failure reasons than "argue against" because "imagine it failed" is concrete, "argue why not" is abstract. Same agent, same pass, one extra section — zero architecture change.

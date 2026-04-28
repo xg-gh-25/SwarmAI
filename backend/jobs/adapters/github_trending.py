@@ -21,11 +21,8 @@ logger = logging.getLogger(__name__)
 
 GITHUB_TRENDING_URL = "https://github.com/trending"
 
-# Browser-like headers to avoid 403
 GITHUB_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                  "AppleWebKit/537.36 (KHTML, like Gecko) "
-                  "Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent": "SwarmAI/1.x (+https://github.com/xg-gh-25/SwarmAI)",
     "Accept": "text/html,application/xhtml+xml",
     "Accept-Language": "en-US,en;q=0.9",
 }
@@ -88,7 +85,11 @@ def fetch_github_trending(feed: Feed, max_age_hours: int = 48) -> list[RawSignal
     articles = articles[1:]
 
     if not articles:
-        logger.warning("GitHub Trending: no Box-row articles found in HTML")
+        logger.warning(
+            "GitHub Trending: no Box-row articles found in HTML — "
+            "GitHub may have changed their markup. Verify regex patterns "
+            "against current https://github.com/trending HTML structure."
+        )
         return []
 
     for article_html in articles[:top_n]:
@@ -131,7 +132,10 @@ def fetch_github_trending(feed: Feed, max_age_hours: int = 48) -> list[RawSignal
                 published=datetime.now(timezone.utc),
                 source=language,  # language as source for display
                 tags=feed.tags + ([language.lower()] if language else []),
-                score=float(stars_today),  # raw stars today for ranking
+                # score = raw stars_today (NOT normalized). Downstream consumers
+                # rank by this value within the github-trending feed only.
+                # Cross-feed comparison requires normalization at the digest layer.
+                score=float(stars_today),
             ))
 
         except Exception as e:

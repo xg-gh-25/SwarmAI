@@ -84,52 +84,44 @@ def _make_github_trending_feed(**overrides) -> Feed:
     return Feed(**defaults)
 
 
+@pytest.fixture
+def mock_trending_response():
+    """Patch safe_client to return MOCK_TRENDING_HTML. Yields the mock client."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.text = MOCK_TRENDING_HTML
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("jobs.adapters.github_trending.safe_client") as mock_client_ctx:
+        mock_client = MagicMock()
+        mock_client.get.return_value = mock_resp
+        mock_client_ctx.return_value.__enter__ = MagicMock(return_value=mock_client)
+        mock_client_ctx.return_value.__exit__ = MagicMock(return_value=False)
+        yield mock_client
+
+
 # ── AC1: Adapter returns valid RawSignal list ────────────────────────
 
 class TestGitHubTrendingAdapterBasic:
     """AC1: fetch_github_trending returns >=5 RawSignals with correct fields."""
 
-    def test_fetch_returns_raw_signals(self):
+    def test_fetch_returns_raw_signals(self, mock_trending_response):
         """Adapter returns list of RawSignal from GitHub Trending page."""
         from jobs.adapters.github_trending import fetch_github_trending
 
         feed = _make_github_trending_feed()
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.text = MOCK_TRENDING_HTML
-        mock_resp.raise_for_status = MagicMock()
-
-        with patch("jobs.adapters.github_trending.safe_client") as mock_client_ctx:
-            mock_client = MagicMock()
-            mock_client.get.return_value = mock_resp
-            mock_client_ctx.return_value.__enter__ = MagicMock(return_value=mock_client)
-            mock_client_ctx.return_value.__exit__ = MagicMock(return_value=False)
-
-            signals = fetch_github_trending(feed)
+        signals = fetch_github_trending(feed)
 
         assert isinstance(signals, list)
         assert len(signals) == 3  # 3 repos in mock HTML
         assert all(isinstance(s, RawSignal) for s in signals)
 
-    def test_signal_fields_correct(self):
+    def test_signal_fields_correct(self, mock_trending_response):
         """Each signal has owner/name title, description, language, url, stars_today."""
         from jobs.adapters.github_trending import fetch_github_trending
 
         feed = _make_github_trending_feed()
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.text = MOCK_TRENDING_HTML
-        mock_resp.raise_for_status = MagicMock()
-
-        with patch("jobs.adapters.github_trending.safe_client") as mock_client_ctx:
-            mock_client = MagicMock()
-            mock_client.get.return_value = mock_resp
-            mock_client_ctx.return_value.__enter__ = MagicMock(return_value=mock_client)
-            mock_client_ctx.return_value.__exit__ = MagicMock(return_value=False)
-
-            signals = fetch_github_trending(feed)
+        signals = fetch_github_trending(feed)
 
         sig = signals[0]
         assert sig.feed_id == "github-trending-test"
@@ -139,24 +131,12 @@ class TestGitHubTrendingAdapterBasic:
         assert sig.source == "Shell"  # language as source
         assert "github" in sig.tags
 
-    def test_stars_today_in_score(self):
+    def test_stars_today_in_score(self, mock_trending_response):
         """stars_today stored as score for downstream ranking."""
         from jobs.adapters.github_trending import fetch_github_trending
 
         feed = _make_github_trending_feed()
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.text = MOCK_TRENDING_HTML
-        mock_resp.raise_for_status = MagicMock()
-
-        with patch("jobs.adapters.github_trending.safe_client") as mock_client_ctx:
-            mock_client = MagicMock()
-            mock_client.get.return_value = mock_resp
-            mock_client_ctx.return_value.__enter__ = MagicMock(return_value=mock_client)
-            mock_client_ctx.return_value.__exit__ = MagicMock(return_value=False)
-
-            signals = fetch_github_trending(feed)
+        signals = fetch_github_trending(feed)
 
         assert signals[0].score == 5645.0
         assert signals[1].score == 498.0
@@ -186,24 +166,12 @@ class TestGitHubTrendingAdapterBasic:
 
         assert len(signals) == 2
 
-    def test_empty_description_handled(self):
+    def test_empty_description_handled(self, mock_trending_response):
         """Repo with no description doesn't crash."""
         from jobs.adapters.github_trending import fetch_github_trending
 
         feed = _make_github_trending_feed()
-
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.text = MOCK_TRENDING_HTML
-        mock_resp.raise_for_status = MagicMock()
-
-        with patch("jobs.adapters.github_trending.safe_client") as mock_client_ctx:
-            mock_client = MagicMock()
-            mock_client.get.return_value = mock_resp
-            mock_client_ctx.return_value.__enter__ = MagicMock(return_value=mock_client)
-            mock_client_ctx.return_value.__exit__ = MagicMock(return_value=False)
-
-            signals = fetch_github_trending(feed)
+        signals = fetch_github_trending(feed)
 
         # DeepSeek-V3 has empty description in mock
         deepseek = signals[2]

@@ -479,21 +479,27 @@ def _probe_ada_details() -> dict | None:
 
     details: dict = {}
 
-    # 1. Read account/role from ada profile config (source of truth)
-    try:
-        result = _sp.run(
-            [str(Path.home() / ".toolbox" / "bin" / "ada"), "profile", "print", "--profile=bedrock"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if result.returncode == 0:
-            for line in result.stdout.splitlines():
-                line = line.strip()
-                if line.startswith("Account:"):
-                    details["account_id"] = line.split(":", 1)[1].strip()
-                elif line.startswith("Role:"):
-                    details["role_name"] = line.split(":", 1)[1].strip()
-    except (OSError, _sp.TimeoutExpired):
-        pass
+    # 1. Read account/role from ada profile config (source of truth).
+    #    Try "bedrock" profile first (standard for Bedrock API users),
+    #    fall back to default profile if it doesn't exist.
+    ada_bin = str(Path.home() / ".toolbox" / "bin" / "ada")
+    for profile_args in (["--profile=bedrock"], []):
+        try:
+            result = _sp.run(
+                [ada_bin, "profile", "print"] + profile_args,
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    line = line.strip()
+                    if line.startswith("Account:"):
+                        details["account_id"] = line.split(":", 1)[1].strip()
+                    elif line.startswith("Role:"):
+                        details["role_name"] = line.split(":", 1)[1].strip()
+                if details.get("account_id"):
+                    break  # got what we need, skip fallback
+        except (OSError, _sp.TimeoutExpired):
+            pass
 
     # 2. Read key prefix from ~/.ada/credentials (temporary tokens)
     creds_path = Path.home() / ".ada" / "credentials"
