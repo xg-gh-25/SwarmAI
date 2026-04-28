@@ -7,6 +7,16 @@
  *
  * @see .kiro/specs/app-restart-chat-layout-collapse/design.md
  */
+// Polyfill crypto.randomUUID for non-secure contexts (HTTP, e.g. Hive without HTTPS).
+// crypto.randomUUID() requires a secure context (HTTPS or localhost). On plain HTTP
+// the function is undefined, crashing any component that generates IDs.
+if (typeof crypto !== 'undefined' && typeof crypto.randomUUID !== 'function') {
+  crypto.randomUUID = () =>
+    '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (c) =>
+      (+c ^ (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (+c / 4)))).toString(16),
+    ) as `${string}-${string}-${string}-${string}-${string}`;
+}
+
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import '@fontsource-variable/inter';
