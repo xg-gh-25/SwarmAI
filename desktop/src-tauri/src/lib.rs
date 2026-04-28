@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::env;
 use tauri::{Emitter, Manager};
+use tauri::webview::WebviewWindowBuilder;
+use tauri::utils::config::WebviewUrl;
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::CommandChild;
 use tokio::sync::Mutex;
@@ -1449,6 +1451,51 @@ pub fn run() {
         .setup(|app| {
             // Backend will be started by frontend via initializeBackend()
             // This allows proper error handling in the UI
+
+            // Create main window programmatically (removed from tauri.conf.json) so we
+            // can attach on_navigation to block external URL navigation.
+            // Without this, clicking http(s) links in chat navigates the webview away
+            // from the React app, causing a fullscreen loading state with no way to
+            // return (no back button, no close — app is bricked until restart).
+            {
+                use tauri_plugin_opener::OpenerExt;
+                let handle = app.handle().clone();
+
+                let url = {
+                    #[cfg(debug_assertions)]
+                    { WebviewUrl::External("http://localhost:1420".parse().unwrap()) }
+                    #[cfg(not(debug_assertions))]
+                    { WebviewUrl::default() }
+                };
+
+                let _window = WebviewWindowBuilder::new(app, "main", url)
+                    .title("SwarmAI")
+                    .inner_size(1400.0, 900.0)
+                    .min_inner_size(1024.0, 768.0)
+                    .resizable(true)
+                    .fullscreen(false)
+                    .center()
+                    .title_bar_style(tauri::TitleBarStyle::Overlay)
+                    .hidden_title(true)
+                    .zoom_hotkeys_enabled(false)
+                    .on_navigation(move |url: &tauri::Url| {
+                        match url.scheme() {
+                            "tauri" | "asset" => true,
+                            "http" | "https" => {
+                                let host = url.host_str().unwrap_or("");
+                                if host == "localhost" || host == "tauri.localhost" {
+                                    true
+                                } else {
+                                    // External URL — open in system browser, block webview nav
+                                    let _ = handle.opener().open_url(url.as_str(), None::<&str>);
+                                    false
+                                }
+                            }
+                            _ => true,
+                        }
+                    })
+                    .build()?;
+            }
 
             // Open DevTools automatically in debug builds or when SWARMAI_DEBUG is set
             #[cfg(debug_assertions)]
