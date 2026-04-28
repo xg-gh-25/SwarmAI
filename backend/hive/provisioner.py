@@ -585,24 +585,12 @@ class HiveProvisioner:
                     "Compress": True,
                     "FunctionAssociations": {"Quantity": 0},
                 },
-                "CacheBehaviors": {
-                    "Quantity": 1,
-                    "Items": [
-                        {
-                            "PathPattern": "/assets/*",
-                            "TargetOriginId": "hive-origin",
-                            "ViewerProtocolPolicy": "redirect-to-https",
-                            "AllowedMethods": {
-                                "Quantity": 2,
-                                "Items": ["GET", "HEAD"],
-                                "CachedMethods": {"Quantity": 2, "Items": ["GET", "HEAD"]},
-                            },
-                            "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",  # CachingOptimized
-                            "Compress": True,
-                            "FunctionAssociations": {"Quantity": 0},
-                        },
-                    ],
-                },
+                # No separate /assets/* behavior — all traffic uses default
+                # (CachingDisabled + AllViewer which forwards Authorization).
+                # Caddy enforces basic auth on ALL paths including assets,
+                # so a CachingOptimized behavior without auth forwarding = 401.
+                # Browser-side caching via hashed filenames is sufficient.
+                "CacheBehaviors": {"Quantity": 0, "Items": []},
             }
 
             resp = cf.create_distribution(DistributionConfig=dist_config)
