@@ -266,7 +266,7 @@ export interface AuthHintResponse {
   hasAdaDir: boolean;
   hasSsoCache: boolean;
   hasApiKey: boolean;
-  suggestedMethod: 'ada' | 'sso' | 'apikey';
+  suggestedMethod: 'ada' | 'sso' | 'apikey' | 'iam_role';
   adaDetails?: {
     accountId?: string;
     roleName?: string;
@@ -274,7 +274,14 @@ export interface AuthHintResponse {
     configured?: boolean;
     keyPrefix?: string;
   };
+  iamDetails?: {
+    accountId?: string;
+    region?: string;
+    roleName?: string;
+    instanceId?: string;
+  };
   awsProfiles?: string[];
+  runMode?: 'sidecar' | 'daemon' | 'hive';
 }
 
 export const systemService = {

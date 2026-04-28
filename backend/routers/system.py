@@ -453,6 +453,16 @@ async def get_auth_hint():
     ada_details = _probe_ada_details() if has_ada else None
     aws_profiles = _probe_aws_profiles()  # checks config for real SSO profiles
 
+    # Detect run mode so frontend can adjust auth UX
+    run_mode = os.environ.get("SWARMAI_MODE", "sidecar")
+
+    # Hive (EC2) uses IAM instance role — no ADA or SSO needed
+    iam_details = None
+    if run_mode == "hive":
+        iam_details = _probe_iam_instance_role()
+        if iam_details:
+            suggested = "iam_role"
+
     return {
         "has_ada_dir": has_ada,
         "has_sso_cache": has_sso_cache,
@@ -460,6 +470,8 @@ async def get_auth_hint():
         "suggested_method": suggested,
         "ada_details": ada_details,
         "aws_profiles": aws_profiles,
+        "run_mode": run_mode,
+        "iam_details": iam_details,
     }
 
 
@@ -549,6 +561,60 @@ def _probe_aws_profiles() -> list[str] | None:
             profiles.append(current_profile)
         return profiles[:10] if profiles else None
     except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _probe_iam_instance_role() -> dict | None:
+    """Probe EC2 instance metadata (IMDSv2) for IAM role and identity details.
+
+    Returns a dict with account_id, region, instance_id, role_name when
+    running on EC2 with an IAM instance role.  Returns None off-EC2.
+
+    Timeout is aggressive (1s) since IMDS responds in <10ms on EC2 and
+    is unreachable off-EC2.
+    """
+    try:
+        import httpx as _httpx
+
+        # IMDSv2: get session token
+        token_resp = _httpx.put(
+            "http://169.254.169.254/latest/api/token",
+            headers={"X-aws-ec2-metadata-token-ttl-seconds": "60"},
+            timeout=1.0,
+        )
+        if token_resp.status_code != 200:
+            return None
+        headers = {"X-aws-ec2-metadata-token": token_resp.text}
+
+        details: dict = {}
+
+        # Role name from security-credentials
+        role_resp = _httpx.get(
+            "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+            headers=headers, timeout=1.0,
+        )
+        if role_resp.status_code == 200 and role_resp.text.strip():
+            details["role_name"] = role_resp.text.strip().splitlines()[0]
+        else:
+            return None  # No role = no IAM instance role
+
+        # Instance identity document (account_id, region, instance_id)
+        try:
+            identity_resp = _httpx.get(
+                "http://169.254.169.254/latest/dynamic/instance-identity/document",
+                headers=headers, timeout=1.0,
+            )
+            if identity_resp.status_code == 200:
+                import json as _json
+                doc = _json.loads(identity_resp.text)
+                details["account_id"] = doc.get("accountId")
+                details["region"] = doc.get("region")
+                details["instance_id"] = doc.get("instanceId")
+        except Exception:
+            pass  # identity doc is bonus info, role presence is sufficient
+
+        return details
+    except Exception:
         return None
 
 

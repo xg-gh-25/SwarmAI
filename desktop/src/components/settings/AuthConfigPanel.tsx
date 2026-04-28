@@ -119,9 +119,118 @@ export default function AuthConfigPanel({ mode, onVerifySuccess }: AuthConfigPan
     { id: 'apikey', label: 'API Key', desc: 'Anthropic Direct' },
   ];
 
+  // Hive mode: single fixed auth method, no choices
+  const isHiveIam = authHint?.runMode === 'hive' && authHint?.suggestedMethod === 'iam_role';
+  const iam = authHint?.iamDetails;
+
+  // Shared verify button + result — used by both Hive and desktop layouts
+  const renderVerifySection = () => (
+    <>
+      <button
+        onClick={handleVerify}
+        disabled={verifyState === 'verifying'}
+        className="w-full px-4 py-2.5 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 disabled:opacity-50 flex items-center justify-center gap-2 font-medium"
+      >
+        {verifyState === 'verifying' ? (
+          <>
+            <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
+            Verifying...
+          </>
+        ) : (
+          <>
+            <span className="material-symbols-outlined text-sm">play_arrow</span>
+            Verify Connection
+          </>
+        )}
+      </button>
+
+      {verifyState === 'success' && verifyResult && (
+        <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg flex items-center gap-2">
+          <span className="material-symbols-outlined text-green-400">check_circle</span>
+          <span className="text-green-400 text-sm">
+            {verifyResult.model} responded in {verifyResult.latencyMs}ms
+          </span>
+        </div>
+      )}
+
+      {verifyState === 'error' && verifyResult && (
+        <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="material-symbols-outlined text-red-400 text-sm">error</span>
+            <span className="text-red-400 text-sm font-medium">
+              {verifyResult.errorType === 'expired_credentials' ? 'Credentials Expired' :
+               verifyResult.errorType === 'missing_key' ? 'API Key Not Found' :
+               verifyResult.errorType === 'invalid_key' ? 'Invalid API Key' :
+               verifyResult.errorType === 'access_denied' ? 'Access Denied' :
+               'Connection Failed'}
+            </span>
+          </div>
+          {verifyResult.fixHint && (
+            <p className="text-xs text-[var(--color-text-muted)]">{verifyResult.fixHint}</p>
+          )}
+        </div>
+      )}
+
+      {mode === 'onboarding' && verifyState !== 'success' && (
+        <p className="text-xs text-[var(--color-text-muted)] text-center">
+          Must verify before proceeding.
+        </p>
+      )}
+    </>
+  );
+
+  // ── Hive layout: read-only summary + verify ──
+  if (isHiveIam) {
+    return (
+      <div className="space-y-4">
+        <div className="p-4 bg-[var(--color-card)] rounded-lg space-y-3">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="w-2 h-2 bg-green-400 rounded-full" />
+            <span className="text-sm font-medium text-green-400">EC2 IAM Instance Role</span>
+          </div>
+
+          <div className="space-y-2 text-xs">
+            {iam?.accountId && (
+              <div className="flex justify-between">
+                <span className="text-[var(--color-text-muted)]">Account</span>
+                <code className="text-[var(--color-text)]">{iam.accountId}</code>
+              </div>
+            )}
+            {iam?.region && (
+              <div className="flex justify-between">
+                <span className="text-[var(--color-text-muted)]">Region</span>
+                <code className="text-[var(--color-text)]">{iam.region}</code>
+              </div>
+            )}
+            {iam?.roleName && (
+              <div className="flex justify-between">
+                <span className="text-[var(--color-text-muted)]">Role</span>
+                <code className="text-[var(--color-text)]">{iam.roleName}</code>
+              </div>
+            )}
+            {iam?.instanceId && (
+              <div className="flex justify-between">
+                <span className="text-[var(--color-text-muted)]">Instance</span>
+                <code className="text-[var(--color-text)]">{iam.instanceId}</code>
+              </div>
+            )}
+          </div>
+
+          <p className="text-xs text-[var(--color-text-muted)] pt-1">
+            Credentials are managed by the EC2 instance role — no configuration needed.
+          </p>
+        </div>
+
+        {/* Verify + result (shared with desktop layout below) */}
+        {renderVerifySection()}
+      </div>
+    );
+  }
+
+  // ── Desktop layout: method selector + config fields ──
   return (
     <div className="space-y-4">
-      {/* Section title — "AWS Account" not "Bedrock" */}
+      {/* Section title */}
       {mode === 'onboarding' && (
         <p className="text-xs text-[var(--color-text-muted)]">
           SwarmAI uses your AWS account for Claude AI, cloud deployment, and other services.
@@ -169,8 +278,8 @@ export default function AuthConfigPanel({ mode, onVerifySuccess }: AuthConfigPan
             placeholder="Select region..."
           />
 
-          {/* Access Keys fields — hidden when IAM instance role provides credentials */}
-          {method === 'access_keys' && !(authHint?.runMode === 'hive' && authHint?.suggestedMethod === 'iam_role') && (
+          {/* Access Keys fields */}
+          {method === 'access_keys' && (
             <>
               <div>
                 <label className="block text-xs text-[var(--color-text-muted)] mb-1">Access Key ID</label>
@@ -211,35 +320,7 @@ export default function AuthConfigPanel({ mode, onVerifySuccess }: AuthConfigPan
 
           {/* Credential status / setup hint */}
           <div className="p-3 bg-[var(--color-card)] rounded-lg text-xs">
-            {/* Priority: Hive IAM > ADA > SSO profiles > Access Keys/SSO fallback */}
-            {authHint?.runMode === 'hive' && authHint?.suggestedMethod === 'iam_role' && method === 'access_keys' ? (
-              <>
-                <div className="flex items-center gap-1.5 mb-2">
-                  <span className="w-1.5 h-1.5 bg-green-400 rounded-full" />
-                  <span className="text-green-400 font-medium">EC2 IAM Instance Role detected</span>
-                </div>
-                {authHint.iamDetails && (
-                  <div className="space-y-1 text-[var(--color-text-muted)] mb-2">
-                    {authHint.iamDetails.roleName && (
-                      <div className="flex justify-between">
-                        <span>Role</span>
-                        <code className="text-[var(--color-text)]">{authHint.iamDetails.roleName}</code>
-                      </div>
-                    )}
-                    {authHint.iamDetails.instanceId && (
-                      <div className="flex justify-between">
-                        <span>Instance</span>
-                        <code className="text-[var(--color-text)]">{authHint.iamDetails.instanceId}</code>
-                      </div>
-                    )}
-                  </div>
-                )}
-                <p className="text-[var(--color-text-muted)]">
-                  Credentials are provided by the EC2 instance role — no manual keys needed. Just verify.
-                </p>
-              </>
-            ) : method === 'ada' ? (() => {
-              // Resolve display values: input field > probe > placeholder
+            {method === 'ada' ? (() => {
               const displayAccount = adaAccount || authHint?.adaDetails?.accountId || '<ACCOUNT>';
               const displayRole = adaRole || authHint?.adaDetails?.roleName || '<ROLE>';
               const hasRealValues = !!(adaAccount || authHint?.adaDetails?.accountId);
@@ -329,58 +410,7 @@ export default function AuthConfigPanel({ mode, onVerifySuccess }: AuthConfigPan
         </div>
       )}
 
-      {/* Verify button */}
-      <button
-        onClick={handleVerify}
-        disabled={verifyState === 'verifying'}
-        className="w-full px-4 py-2.5 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 disabled:opacity-50 flex items-center justify-center gap-2 font-medium"
-      >
-        {verifyState === 'verifying' ? (
-          <>
-            <span className="material-symbols-outlined animate-spin text-sm">progress_activity</span>
-            Verifying...
-          </>
-        ) : (
-          <>
-            <span className="material-symbols-outlined text-sm">play_arrow</span>
-            Verify Connection
-          </>
-        )}
-      </button>
-
-      {/* Result */}
-      {verifyState === 'success' && verifyResult && (
-        <div className="p-3 bg-green-500/10 border border-green-500/20 rounded-lg flex items-center gap-2">
-          <span className="material-symbols-outlined text-green-400">check_circle</span>
-          <span className="text-green-400 text-sm">
-            {verifyResult.model} responded in {verifyResult.latencyMs}ms
-          </span>
-        </div>
-      )}
-
-      {verifyState === 'error' && verifyResult && (
-        <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
-          <div className="flex items-center gap-2 mb-1">
-            <span className="material-symbols-outlined text-red-400 text-sm">error</span>
-            <span className="text-red-400 text-sm font-medium">
-              {verifyResult.errorType === 'expired_credentials' ? 'Credentials Expired' :
-               verifyResult.errorType === 'missing_key' ? 'API Key Not Found' :
-               verifyResult.errorType === 'invalid_key' ? 'Invalid API Key' :
-               verifyResult.errorType === 'access_denied' ? 'Access Denied' :
-               'Connection Failed'}
-            </span>
-          </div>
-          {verifyResult.fixHint && (
-            <p className="text-xs text-[var(--color-text-muted)]">{verifyResult.fixHint}</p>
-          )}
-        </div>
-      )}
-
-      {mode === 'onboarding' && verifyState !== 'success' && (
-        <p className="text-xs text-[var(--color-text-muted)] text-center">
-          Must verify before proceeding.
-        </p>
-      )}
+      {renderVerifySection()}
     </div>
   );
 }
