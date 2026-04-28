@@ -1104,7 +1104,8 @@ class SwarmWorkspaceManager:
 
             # Define sections to scan: (display name, directory, path prefix)
             # Excludes: DailyActivity (ephemeral), Archives (auto-pruned),
-            #           Signals/JobResults (machine-generated, not human-readable)
+            #           Signals/JobResults (machine-generated, high-volume),
+            #           Pollinate (nested media packages, not flat .md files)
             sections = [
                 ("Designs", knowledge_dir / "Designs", "Knowledge/Designs/"),
                 ("Notes", knowledge_dir / "Notes", "Knowledge/Notes/"),
@@ -1113,7 +1114,6 @@ class SwarmWorkspaceManager:
                 ("Library", knowledge_dir / "Library", "Knowledge/Library/"),
                 ("Handoffs", knowledge_dir / "Handoffs", "Knowledge/Handoffs/"),
                 ("Learned", knowledge_dir / "Learned", "Knowledge/Learned/"),
-                ("Pollinate", knowledge_dir / "Pollinate", "Knowledge/Pollinate/"),
             ]
 
             lines = [INDEX_MARKER, ""]
