@@ -8,7 +8,7 @@
  */
 import { useState, useEffect, useCallback } from 'react';
 import { tauriService } from '../../services/tauri';
-import { getBackendPort } from '../../services/tauri';
+import { getApiBaseUrl } from '../../services/tauri';
 
 const STORAGE_KEYS = {
   dismissed: 'daemon-nudge-dismissed',
@@ -75,8 +75,8 @@ export default function DaemonNudgeBanner() {
     setInstalling(true);
     setError('');
     try {
-      const port = getBackendPort();
-      const resp = await fetch(`http://localhost:${port}/api/system/install-daemon`, {
+      const apiBase = getApiBaseUrl();
+      const resp = await fetch(`${apiBase}/api/system/install-daemon`, {
         method: 'POST',
         signal: AbortSignal.timeout(30000),
       });

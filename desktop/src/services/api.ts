@@ -2,7 +2,7 @@ import axios from 'axios';
 import type { AxiosError, AxiosResponse } from 'axios';
 import type { ErrorResponse, RateLimitErrorResponse } from '../types';
 import { ErrorCodes } from '../types';
-import { getBackendPort } from './tauri';
+import { getApiBaseUrl } from './tauri';
 
 // ---------------------------------------------------------------------------
 // Global rate-limit registration callback
@@ -18,19 +18,19 @@ export function setRateLimitCallback(cb: RateLimitCallback | null): void {
   _rateLimitCallback = cb;
 }
 
-// Create axios instance with base configuration
-// For desktop app, we connect directly to the local backend
-// NOTE: Do NOT set a default Content-Type header here. Axios auto-detects
-// the correct Content-Type per request: 'application/json' for objects,
-// 'multipart/form-data' with boundary for FormData. Setting a global default
-// overrides the auto-detection and breaks multipart uploads (e.g. voice
-// transcription sends FormData but the server receives 'application/json').
+// Create axios instance — no default Content-Type.
+// Axios auto-detects 'application/json' for objects and 'multipart/form-data'
+// with boundary for FormData. A global default would break multipart uploads
+// (e.g. voice transcription sends FormData but the server receives
+// 'application/json').
 const api = axios.create();
 
-// Dynamic base URL based on backend port
+// Dynamic base URL — resolves via getApiBaseUrl():
+//   Desktop (Tauri):  http://localhost:{port}/api
+//   Hive (browser):   /api  (same-origin, Caddy reverse-proxies)
+//   Dev (Vite):       http://localhost:8000/api
 api.interceptors.request.use((config) => {
-  const port = getBackendPort();
-  config.baseURL = `http://localhost:${port}/api`;
+  config.baseURL = `${getApiBaseUrl()}/api`;
   return config;
 });
 

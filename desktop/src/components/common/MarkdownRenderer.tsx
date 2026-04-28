@@ -8,7 +8,7 @@ import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import mermaid from 'mermaid';
 import hljs from 'highlight.js';
-import { getBackendPort } from '../../services/tauri';
+import { getApiBaseUrl } from '../../services/tauri';
 import { useTheme } from '../../contexts/ThemeContext';
 import { copyToClipboard } from '../../utils/clipboard';
 import { openExternal } from '../../utils/openExternal';
@@ -682,8 +682,8 @@ function resolveImageSrc(src: string | undefined, basePath?: string): string | u
   }
 
   // Serve via backend raw file endpoint
-  const port = getBackendPort();
-  return `http://localhost:${port}/api/workspace/file/raw?path=${encodeURIComponent(relativePath)}`;
+  const apiBase = getApiBaseUrl();
+  return `${apiBase}/api/workspace/file/raw?path=${encodeURIComponent(relativePath)}`;
 }
 
 // Memoized markdown components to prevent unnecessary re-renders

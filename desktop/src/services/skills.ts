@@ -11,7 +11,7 @@
  * - ``toCamelCase``                  — Snake-to-camel field mapper (exported for testing)
  */
 import api from './api';
-import { getBackendPort } from './tauri';
+import { getApiBaseUrl } from './tauri';
 import type { Skill, SkillCreateRequest, StreamEvent } from '../types';
 
 // Request type for skill generation with agent
@@ -85,9 +85,9 @@ export const skillsService = {
     onComplete: () => void
   ): () => void {
     const controller = new AbortController();
-    const port = getBackendPort();
+    const apiBase = getApiBaseUrl();
 
-    fetch(`http://localhost:${port}/api/skills/generate-with-agent`, {
+    fetch(`${apiBase}/api/skills/generate-with-agent`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

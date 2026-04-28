@@ -1,0 +1,32 @@
+[Unit]
+Description=SwarmAI Hive Backend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=swarm
+Group=swarm
+WorkingDirectory=/opt/swarmai/backend
+ExecStart=/opt/swarmai/hive/swarmai-hive.sh
+Restart=always
+RestartSec=10
+
+# Environment
+Environment=HOME=/home/swarm
+Environment=SWARMAI_MODE=hive
+Environment=SWARMAI_PORT=18321
+Environment=CLAUDE_CODE_USE_BEDROCK=1
+Environment=CLAUDE_CODE_DISABLE_AUTO_MEMORY=1
+
+# Resource limits — m7g.xlarge has 16GB, budget 6GB for backend
+LimitNOFILE=65535
+MemoryMax=6G
+
+# Logging to journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=swarmai-hive
+
+[Install]
+WantedBy=multi-user.target

@@ -7,6 +7,15 @@ export interface BackendStatus {
   is_daemon_mode: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Platform detection
+// ---------------------------------------------------------------------------
+
+/** True when running inside Tauri desktop shell, false in browser (Hive mode). */
+export function isDesktop(): boolean {
+  return !!(window as unknown as Record<string, unknown>).__TAURI__;
+}
+
 // Store the backend port globally
 // In development mode, always use 8000 (manual python main.py)
 // In production, Tauri sidecar will set this dynamically
@@ -21,6 +30,29 @@ export function getBackendPort(): number {
     return 8000;
   }
   return _backendPort;
+}
+
+/**
+ * Get the base URL for API requests.
+ *
+ * - Desktop (Tauri): http://localhost:{port}
+ * - Hive (browser):  same origin (Caddy proxies /api/*)
+ * - Dev (Vite):      http://localhost:8000
+ *
+ * Used by SSE/fetch calls that construct URLs directly (chat, voice, tasks).
+ */
+export function getApiBaseUrl(): string {
+  // Explicit env override (set at build time for Hive)
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL;
+  }
+  // Desktop mode: localhost with dynamic port
+  if (isDesktop()) {
+    const port = getBackendPort();
+    return `http://localhost:${port}`;
+  }
+  // Hive/web mode: same origin (Caddy reverse-proxies /api/*)
+  return '';
 }
 
 export function setBackendPort(port: number): void {

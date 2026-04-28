@@ -1,0 +1,73 @@
+# SwarmAI Hive — Caddy reverse proxy configuration
+#
+# Caddy auto-provisions HTTPS via Let's Encrypt.
+# Set HIVE_DOMAIN env var or replace the domain below.
+#
+# Usage: caddy run --config /opt/swarmai/hive/Caddyfile
+
+{$HIVE_DOMAIN:hive.example.com} {
+
+    # --- Authentication (MVP: basic auth) ---
+    # Generate hash: caddy hash-password --plaintext 'your-password'
+    # Replace with Cognito/SSO in Phase 2
+    basicauth * {
+        {$HIVE_USER:admin} {$HIVE_PASS_HASH:$2a$14$PLACEHOLDER_CHANGE_ME}
+    }
+
+    # --- API reverse proxy ---
+    handle /api/* {
+        reverse_proxy localhost:18321
+    }
+
+    # --- SSE streaming — disable buffering for real-time chat ---
+    handle /api/chat/stream {
+        reverse_proxy localhost:18321 {
+            flush_interval -1
+            transport http {
+                read_timeout 300s
+            }
+        }
+    }
+
+    # SSE streaming for other streaming endpoints
+    handle /api/chat/answer-question {
+        reverse_proxy localhost:18321 {
+            flush_interval -1
+            transport http {
+                read_timeout 120s
+            }
+        }
+    }
+
+    handle /api/chat/cmd-permission-continue {
+        reverse_proxy localhost:18321 {
+            flush_interval -1
+            transport http {
+                read_timeout 120s
+            }
+        }
+    }
+
+    # --- React SPA static files ---
+    handle {
+        root * /opt/swarmai/desktop/dist
+        try_files {path} /index.html
+        file_server
+    }
+
+    # --- Security headers ---
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+        -Server
+    }
+
+    # --- Logging ---
+    log {
+        output file /var/log/caddy/hive-access.log {
+            roll_size 100mb
+            roll_keep 5
+        }
+    }
+}

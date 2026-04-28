@@ -1,6 +1,6 @@
 import type { ChatRequest, StreamEvent, ChatSession, ChatMessage, PermissionResponse } from '../types';
 import api from './api';
-import { getBackendPort } from './tauri';
+import { getApiBaseUrl } from './tauri';
 
 // ---------------------------------------------------------------------------
 // Stall detection constant
@@ -322,6 +322,58 @@ function createStallDetection(
   return { stall, clearStallTimer, startStallTimer };
 }
 
+// ---------------------------------------------------------------------------
+// Shared SSE fetch helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Fire a POST to an SSE endpoint, wire up stall detection, and pipe events
+ * through ``consumeSSEStream``.  Returns an abort function.
+ *
+ * All three streaming methods (streamChat, streamAnswerQuestion,
+ * streamCmdPermissionContinue) share this exact fetch → error-check →
+ * getReader → consumeSSEStream → catch pattern.
+ */
+function startSSEFetch(opts: {
+  path: string;
+  body: Record<string, unknown>;
+  label: string;
+  onMessage: (event: StreamEvent) => void;
+  onError: (error: Error) => void;
+  onComplete: () => void;
+  onDisconnect?: () => void;
+}): () => void {
+  const controller = new AbortController();
+  const apiBase = getApiBaseUrl();
+  const { clearStallTimer, startStallTimer } = createStallDetection(opts.onError, opts.label);
+
+  fetch(`${apiBase}${opts.path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(opts.body),
+    signal: controller.signal,
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        let errorMessage = `HTTP error! status: ${response.status}`;
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.detail || errorData.message || errorMessage;
+        } catch { /* JSON parse failed */ }
+        throw new Error(errorMessage);
+      }
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('No response body');
+      await consumeSSEStream(reader, startStallTimer, clearStallTimer, opts.onMessage, opts.onComplete, opts.onDisconnect);
+    })
+    .catch((error) => {
+      clearStallTimer();
+      if (error.name !== 'AbortError') opts.onError(error);
+    });
+
+  return () => { clearStallTimer(); controller.abort(); };
+}
+
 export const chatService = {
   // Stream chat messages using SSE
   streamChat(
@@ -331,10 +383,6 @@ export const chatService = {
     onComplete: () => void,
     onDisconnect?: () => void,
   ): () => void {
-    const controller = new AbortController();
-    const port = getBackendPort();
-    const { clearStallTimer, startStallTimer } = createStallDetection(onError, 'streamChat');
-
     // Build request body - support both message and content
     const requestBody: Record<string, unknown> = {
       agent_id: request.agentId,
@@ -361,31 +409,12 @@ export const chatService = {
       this.invalidateMessageCache(request.sessionId);
     }
 
-    fetch(`http://localhost:${port}/api/chat/stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    })
-      .then(async (response) => {
-        if (!response.ok) {
-          let errorMessage = `HTTP error! status: ${response.status}`;
-          try {
-            const errorData = await response.json();
-            errorMessage = errorData.detail || errorData.message || errorMessage;
-          } catch { /* JSON parse failed */ }
-          throw new Error(errorMessage);
-        }
-        const reader = response.body?.getReader();
-        if (!reader) throw new Error('No response body');
-        await consumeSSEStream(reader, startStallTimer, clearStallTimer, onMessage, onComplete, onDisconnect);
-      })
-      .catch((error) => {
-        clearStallTimer();
-        if (error.name !== 'AbortError') onError(error);
-      });
-
-    return () => { clearStallTimer(); controller.abort(); };
+    return startSSEFetch({
+      path: '/api/chat/stream',
+      body: requestBody,
+      label: 'streamChat',
+      onMessage, onError, onComplete, onDisconnect,
+    });
   },
 
   // List chat sessions
@@ -512,47 +541,24 @@ export const chatService = {
     onComplete: () => void,
     onDisconnect?: () => void,
   ): () => void {
-    const controller = new AbortController();
-    const port = getBackendPort();
-    const { clearStallTimer, startStallTimer } = createStallDetection(onError, 'answer-question');
-
     // Invalidate ETag — answer continuation produces new assistant messages.
     if (request.sessionId) {
       this.invalidateMessageCache(request.sessionId);
     }
 
-    fetch(`http://localhost:${port}/api/chat/answer-question`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    return startSSEFetch({
+      path: '/api/chat/answer-question',
+      body: {
         agent_id: request.agentId,
         session_id: request.sessionId,
         tool_use_id: request.toolUseId,
         answers: request.answers,
         enable_skills: request.enableSkills,
         enable_mcp: request.enableMCP,
-      }),
-      signal: controller.signal,
-    })
-      .then(async (response) => {
-        if (!response.ok) {
-          let errorMessage = `HTTP error! status: ${response.status}`;
-          try {
-            const errorData = await response.json();
-            errorMessage = errorData.detail || errorData.message || errorMessage;
-          } catch { /* JSON parse failed */ }
-          throw new Error(errorMessage);
-        }
-        const reader = response.body?.getReader();
-        if (!reader) throw new Error('No response body');
-        await consumeSSEStream(reader, startStallTimer, clearStallTimer, onMessage, onComplete, onDisconnect);
-      })
-      .catch((error) => {
-        clearStallTimer();
-        if (error.name !== 'AbortError') onError(error);
-      });
-
-    return () => { clearStallTimer(); controller.abort(); };
+      },
+      label: 'answer-question',
+      onMessage, onError, onComplete, onDisconnect,
+    });
   },
 
   // Submit command permission decision for dangerous command approval (non-streaming)
@@ -585,46 +591,23 @@ export const chatService = {
     onComplete: () => void,
     onDisconnect?: () => void,
   ): () => void {
-    const controller = new AbortController();
-    const port = getBackendPort();
-    const { clearStallTimer, startStallTimer } = createStallDetection(onError, 'cmd-permission-continue');
-
     // Invalidate ETag — permission continuation produces new assistant messages.
     if (request.sessionId) {
       this.invalidateMessageCache(request.sessionId);
     }
 
-    fetch(`http://localhost:${port}/api/chat/cmd-permission-continue`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    return startSSEFetch({
+      path: '/api/chat/cmd-permission-continue',
+      body: {
         session_id: request.sessionId,
         request_id: request.requestId,
         decision: request.decision,
         feedback: request.feedback,
         enable_skills: request.enableSkills,
         enable_mcp: request.enableMCP,
-      }),
-      signal: controller.signal,
-    })
-      .then(async (response) => {
-        if (!response.ok) {
-          let errorMessage = `HTTP error! status: ${response.status}`;
-          try {
-            const errorData = await response.json();
-            errorMessage = errorData.detail || errorData.message || errorMessage;
-          } catch { /* JSON parse failed */ }
-          throw new Error(errorMessage);
-        }
-        const reader = response.body?.getReader();
-        if (!reader) throw new Error('No response body');
-        await consumeSSEStream(reader, startStallTimer, clearStallTimer, onMessage, onComplete, onDisconnect);
-      })
-      .catch((error) => {
-        clearStallTimer();
-        if (error.name !== 'AbortError') onError(error);
-      });
-
-    return () => { clearStallTimer(); controller.abort(); };
+      },
+      label: 'cmd-permission-continue',
+      onMessage, onError, onComplete, onDisconnect,
+    });
   },
 };

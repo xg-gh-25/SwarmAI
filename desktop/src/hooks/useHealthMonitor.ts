@@ -20,7 +20,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { HealthState, BackendStatus } from '../types';
-import { getBackendPort, setBackendPort, tauriService } from '../services/tauri';
+import { getApiBaseUrl, setBackendPort, tauriService } from '../services/tauri';
 import { useToast } from '../contexts/ToastContext';
 
 /** Default polling interval in milliseconds. */
@@ -155,8 +155,8 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
   // ------------------------------------------------------------------
 
   const performHealthCheck = useCallback(async () => {
-    const port = getBackendPort();
-    const url = `http://localhost:${port}/health`;
+    const apiBase = getApiBaseUrl();
+    const url = `${apiBase}/health`;
     const now = Date.now();
 
     try {
