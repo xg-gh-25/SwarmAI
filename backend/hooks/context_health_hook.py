@@ -569,6 +569,135 @@ class ContextHealthHook:
 
         return findings
 
+    # Sections that are never auto-applied (require human judgment)
+    _SEMANTIC_SECTIONS = ("Non-Goals", "Vision", "Architecture")
+
+    def _auto_apply_ddd_proposals(self, root: Path) -> None:
+        """Auto-apply mechanical DDD refresh proposals.
+
+        Scans Projects/*/.artifacts/ddd-refresh-*.md for proposals.
+        For each proposal with confidence >= 8:
+        - Parse Current/Proposed code blocks
+        - Classify: mechanical (only adds lines) vs semantic (modifies/deletes)
+        - Skip changes targeting Non-Goals, Vision, or Architecture sections
+        - Apply mechanical changes to the target DDD doc
+        - Rename proposal to .applied after processing
+        - Log applied changes to health_findings.json
+        """
+        projects_dir = root / "Projects"
+        if not projects_dir.is_dir():
+            return
+
+        applied_changes: list[dict] = []
+
+        for project_dir in sorted(projects_dir.iterdir()):
+            if not project_dir.is_dir():
+                continue
+            artifacts_dir = project_dir / ".artifacts"
+            if not artifacts_dir.is_dir():
+                continue
+
+            proposals = sorted(artifacts_dir.glob("ddd-refresh-*.md"))
+            # Skip already-applied proposals
+            proposals = [p for p in proposals if not p.name.endswith(".applied")]
+
+            for proposal_path in proposals:
+                try:
+                    content = proposal_path.read_text(encoding="utf-8")
+
+                    # Extract confidence score
+                    conf_match = re.search(r"\*\*Confidence:\*\*\s*(\d+)/10", content)
+                    if not conf_match:
+                        continue
+                    confidence = int(conf_match.group(1))
+                    if confidence < 8:
+                        # Rename to .applied anyway to prevent re-processing
+                        proposal_path.rename(proposal_path.with_suffix(".md.applied"))
+                        continue
+
+                    # Check for semantic section targets
+                    section_text = content.lower()
+                    targets_semantic = any(
+                        s.lower() in section_text
+                        for s in self._SEMANTIC_SECTIONS
+                    )
+
+                    # Parse Current/Proposed blocks
+                    changes_applied = False
+                    block_pattern = re.compile(
+                        r"\*\*Current:\*\*\s*\n```\n(.*?)\n```\s*\n+"
+                        r"\*\*Proposed:\*\*\s*\n```\n(.*?)\n```",
+                        re.DOTALL,
+                    )
+                    for match in block_pattern.finditer(content):
+                        current_block = match.group(1)
+                        proposed_block = match.group(2)
+
+                        # Classify: mechanical if proposed only ADDS lines
+                        current_lines = current_block.strip().splitlines()
+                        proposed_lines = proposed_block.strip().splitlines()
+
+                        is_mechanical = (
+                            len(proposed_lines) > len(current_lines)
+                            and proposed_lines[:len(current_lines)] == current_lines
+                        )
+
+                        if not is_mechanical or targets_semantic:
+                            continue  # Skip semantic changes
+
+                        # Find and apply in target DDD doc
+                        for ddd_name in ("TECH.md", "IMPROVEMENT.md", "PRODUCT.md"):
+                            ddd_path = project_dir / ddd_name
+                            if not ddd_path.exists():
+                                continue
+                            ddd_content = ddd_path.read_text(encoding="utf-8")
+                            if current_block in ddd_content:
+                                new_content = ddd_content.replace(
+                                    current_block, proposed_block, 1
+                                )
+                                ddd_path.write_text(new_content, encoding="utf-8")
+                                changes_applied = True
+                                applied_changes.append({
+                                    "project": project_dir.name,
+                                    "doc": ddd_name,
+                                    "proposal": proposal_path.name,
+                                    "type": "mechanical_append",
+                                })
+                                logger.info(
+                                    "DDD auto-apply: applied mechanical change to %s/%s from %s",
+                                    project_dir.name, ddd_name, proposal_path.name,
+                                )
+                                break
+
+                    # Rename proposal to .applied
+                    proposal_path.rename(proposal_path.with_suffix(".md.applied"))
+
+                except Exception as exc:
+                    logger.warning("DDD auto-apply failed for %s: %s", proposal_path.name, exc)
+
+        # Log to health_findings.json
+        if applied_changes:
+            findings_dir = root / "Services" / "swarm-jobs"
+            findings_file = findings_dir / "health_findings.json"
+            if findings_file.exists():
+                try:
+                    data = json.loads(findings_file.read_text(encoding="utf-8"))
+                    for change in applied_changes:
+                        data["findings"].append({
+                            "level": "info",
+                            "message": (
+                                f"DDD-AUTO-APPLY: {change['type']} in "
+                                f"{change['project']}/{change['doc']} "
+                                f"from {change['proposal']}"
+                            ),
+                        })
+                    findings_file.write_text(
+                        json.dumps(data, indent=2, default=str),
+                        encoding="utf-8",
+                    )
+                except (json.JSONDecodeError, OSError) as exc:
+                    logger.warning("Failed to log DDD auto-apply: %s", exc)
+
     @staticmethod
     def _detect_stale_memory_claims(memory_path: Path) -> list[str]:
         """Detect stale or inconsistent claims in MEMORY.md body.
