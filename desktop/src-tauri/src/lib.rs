@@ -715,12 +715,25 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
     );
     let _ = app.emit("backend-upgrading", format!("{} → {}", daemon_version, app_version));
 
-    // Step 1: Graceful shutdown
+    // Step 1: Graceful shutdown request
     send_shutdown_request(DAEMON_PORT);
-    tokio::time::sleep(tokio::time::Duration::from_secs(SHUTDOWN_GRACE_SECONDS)).await;
 
-    // Step 2: Atomic binary deploy from app bundle
+    // Step 2: Bootout from launchd BEFORE binary copy — prevents KeepAlive restart
     let home = std::env::var("HOME").unwrap_or_default();
+    let uid_output = std::process::Command::new("id").arg("-u").output()
+        .map_err(|e| format!("Failed to get UID: {}", e))?;
+    let uid = String::from_utf8_lossy(&uid_output.stdout).trim().to_string();
+    let gui_target = format!("gui/{}", uid);
+    let plist_path = format!("{}/{}", home, DAEMON_PLIST_RELPATH);
+
+    let _ = std::process::Command::new("launchctl")
+        .args(["bootout", &gui_target, &plist_path])
+        .output();
+
+    // Brief sleep for process to exit after bootout
+    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+
+    // Step 3: Atomic binary deploy from app bundle
     let daemon_dir = format!("{}/.swarm-ai/daemon", home);
 
     // Find the bundled binary — check app bundle Contents/MacOS first
@@ -771,23 +784,12 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
 
     println!("[Tauri] Daemon binary deployed: {}", target_binary);
 
-    // Step 3: Restart daemon via launchd
-    let uid_output = std::process::Command::new("id").arg("-u").output()
-        .map_err(|e| format!("Failed to get UID: {}", e))?;
-    let uid = String::from_utf8_lossy(&uid_output.stdout).trim().to_string();
-    let gui_target = format!("gui/{}", uid);
-    let plist_path = format!("{}/{}", home, DAEMON_PLIST_RELPATH);
-
-    // bootout (stop) + bootstrap (start)
-    let _ = std::process::Command::new("launchctl")
-        .args(["bootout", &gui_target, &plist_path])
-        .output();
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    // Step 4: Bootstrap (reload into launchd with new binary)
     let _ = std::process::Command::new("launchctl")
         .args(["bootstrap", &gui_target, &plist_path])
         .output();
 
-    // Step 4: Verify new version
+    // Step 5: Verify new version
     if let Some(_port) = probe_daemon_health(10, 2).await {
         let new_version = get_daemon_version().await.unwrap_or_default();
         if new_version == app_version {

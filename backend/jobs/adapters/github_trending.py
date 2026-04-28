@@ -10,8 +10,10 @@ language, total stars, and stars today.
 
 from __future__ import annotations
 
+import html
 import logging
 import re
+import time
 from datetime import datetime, timezone
 
 from .http_client import safe_client
@@ -73,14 +75,20 @@ def fetch_github_trending(feed: Feed, max_age_hours: int = 48) -> list[RawSignal
     try:
         with safe_client(timeout=15, headers=GITHUB_HEADERS) as client:
             resp = client.get(url, params=params)
+            if resp.status_code == 429:
+                retry_after = int(resp.headers.get("Retry-After", "60"))
+                logger.warning("GitHub rate limited, retry after %ds", retry_after)
+                time.sleep(min(retry_after, 120))
+                # Retry once
+                resp = client.get(url, params=params, headers=GITHUB_HEADERS)
             resp.raise_for_status()
-            html = resp.text
+            html_text = resp.text
     except Exception as e:
         logger.error(f"GitHub Trending fetch failed: {e}")
         return []
 
     # Split by Box-row articles
-    articles = re.split(r'<article\s+class="Box-row">', html)
+    articles = re.split(r'<article\s+class="Box-row">', html_text)
     # First element is everything before the first article — skip it
     articles = articles[1:]
 
@@ -111,6 +119,7 @@ def fetch_github_trending(feed: Feed, max_age_hours: int = 48) -> list[RawSignal
                 description = desc_match.group(1).strip()
                 # Clean HTML entities
                 description = re.sub(r'<[^>]+>', '', description).strip()
+                description = html.unescape(description)
 
             # Extract language
             lang_match = _RE_LANGUAGE.search(article_html)

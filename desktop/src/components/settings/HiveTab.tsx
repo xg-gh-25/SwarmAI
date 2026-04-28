@@ -47,8 +47,11 @@ export default function HiveTab() {
   const [showAddAccount, setShowAddAccount] = useState(false);
   const [showDeployHive, setShowDeployHive] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const refreshInFlight = useRef(false);
 
   const refresh = useCallback(async () => {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
     try {
       const [accs, insts] = await Promise.all([
         hiveService.listAccounts(),
@@ -59,6 +62,7 @@ export default function HiveTab() {
     } catch (e) {
       console.error('Failed to load Hive data:', e);
     } finally {
+      refreshInFlight.current = false;
       setLoading(false);
     }
   }, []);
@@ -345,6 +349,12 @@ function AuthDisplay({ instance: inst }: { instance: HiveInstance }) {
   const [copied, setCopied] = useState<string | null>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  useEffect(() => {
+    return () => {
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+    };
+  }, []);
+
   const url = inst.cloudfrontDomain
     ? `https://${inst.cloudfrontDomain}`
     : inst.ec2PublicIp ? `http://${inst.ec2PublicIp}` : '';
@@ -361,7 +371,13 @@ function AuthDisplay({ instance: inst }: { instance: HiveInstance }) {
   };
 
   const copyToClipboard = async (text: string, label: string) => {
-    await navigator.clipboard.writeText(text);
+    try {
+      await navigator.clipboard.writeText(text);
+      setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), 60000);
+    } catch {
+      // Non-secure context fallback: silently fail
+      return;
+    }
     setCopied(label);
     setTimeout(() => setCopied(null), 2000);
   };
@@ -498,6 +514,8 @@ function AddAccountDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
     } catch (e) {
       setError(String(e));
     } finally {
+      setSecretKey('');
+      setAccessKeyId('');
       setSaving(false);
     }
   };

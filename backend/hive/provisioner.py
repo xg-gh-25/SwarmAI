@@ -31,6 +31,13 @@ logger = logging.getLogger(__name__)
 # GitHub repo for release downloads — configurable for forks
 GITHUB_REPO = os.environ.get("SWARMAI_GITHUB_REPO", "xg-gh-25/SwarmAI")
 
+# Allowed instance types — ARM64 Graviton only
+ALLOWED_INSTANCE_TYPES = frozenset({
+    "m7g.medium", "m7g.large", "m7g.xlarge", "m7g.2xlarge",
+    "c7g.medium", "c7g.large", "c7g.xlarge", "c7g.2xlarge",
+    "t4g.medium", "t4g.large", "t4g.xlarge", "t4g.2xlarge",
+})
+
 # IAM policy for Hive instances
 HIVE_IAM_POLICY = {
     "Version": "2012-10-17",
@@ -357,6 +364,12 @@ class HiveProvisioner:
                 sg_id = resp["GroupId"]
 
                 # Inbound rules: 80 + 443 only (NO SSH)
+                # Port 80 is open to 0.0.0.0/0 because CloudFront connects
+                # to the origin over HTTP (OriginProtocolPolicy: http-only).
+                # Defense-in-depth: Caddy enforces bcrypt basic auth on ALL
+                # paths, so direct IP access without credentials returns 401.
+                # Future improvement: restrict to CloudFront IP ranges via
+                # AWS-published prefix list (com.amazonaws.global.cloudfront.origin-facing).
                 ec2.authorize_security_group_ingress(
                     GroupId=sg_id,
                     IpPermissions=[
@@ -421,6 +434,12 @@ class HiveProvisioner:
         version: str,
     ) -> str:
         """Launch EC2 instance. Returns instance ID."""
+        if instance_type not in ALLOWED_INSTANCE_TYPES:
+            raise ValueError(
+                f"Instance type '{instance_type}' not allowed. "
+                f"Permitted: {', '.join(sorted(ALLOWED_INSTANCE_TYPES))}"
+            )
+
         ami_id = await self._get_latest_ami(session, region)
 
         def _launch():
@@ -634,6 +653,12 @@ class HiveProvisioner:
 
         try:
             instance = await self._get_instance(instance_id)
+            # Status gate: prevent concurrent deploys
+            if instance.get("status") not in ("pending", "error"):
+                logger.warning("Deploy skipped — instance %s already in status '%s'", instance_id, instance.get("status"))
+                return
+            await self._update_instance(instance_id, status="provisioning")
+
             account = await self._get_account(instance["account_ref"])
             name = instance["name"]
             region = instance["region"]
@@ -646,7 +671,6 @@ class HiveProvisioner:
             aws_account_id = account.get("account_id", "")
 
             # Step 1: S3
-            await self._update_instance(instance_id, status="provisioning", error_message=None)
             bucket = await self._ensure_s3_bucket(session, region, aws_account_id)
             await self._update_instance(instance_id, s3_bucket=bucket)
 
@@ -711,6 +735,13 @@ class HiveProvisioner:
                     status="error",
                     error_message="EC2 setup timeout — check /var/log/hive-setup.log",
                 )
+                # Cleanup partial resources on health timeout
+                try:
+                    await self._cleanup_resources(
+                        session, region, created_resources,
+                    )
+                except Exception as cleanup_err:
+                    logger.error("Cleanup on health timeout also failed: %s", cleanup_err)
                 return
 
             await self._update_instance(instance_id, status="running")
@@ -815,6 +846,10 @@ class HiveProvisioner:
 
         if not ec2_id:
             raise ValueError("No EC2 instance ID")
+
+        import re
+        if not re.match(r'^[a-zA-Z0-9._\-]+$', version):
+            raise ValueError(f"Invalid version string: {version!r}")
 
         # Ensure new version is in S3
         await self._sync_release_to_s3(session, bucket, version, region)
@@ -926,10 +961,17 @@ echo "=== Update complete ==="
                         cf.update_distribution(
                             Id=cf_id, DistributionConfig=config, IfMatch=etag
                         )
-                        logger.info("Disabled CloudFront %s, waiting for deploy...", cf_id)
-                        # CF disable takes time — we'll attempt delete, may fail
+                        logger.info("Disabled CloudFront %s, waiting to settle...", cf_id)
                         import time as _time
-                        _time.sleep(30)
+                        # Poll until disabled (up to 10 min), then delete
+                        for _poll in range(20):
+                            _time.sleep(30)
+                            try:
+                                _d = cf.get_distribution(Id=cf_id)
+                                if _d["Distribution"]["Status"] == "Deployed":
+                                    break
+                            except Exception:
+                                break
                     # Attempt delete
                     dist = cf.get_distribution(Id=cf_id)
                     cf.delete_distribution(Id=cf_id, IfMatch=dist["ETag"])

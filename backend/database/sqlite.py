@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import aiosqlite
+import fcntl
 import json
 import logging
 import shutil
@@ -1701,11 +1702,18 @@ class SQLiteDatabase(BaseDatabase):
             # Even seed-sourced / returning-user databases need migrations:
             # new tables (skill_metrics, messages_fts) added after the seed was
             # built must be created.  Migrations are all idempotent (IF NOT EXISTS).
-            async with aiosqlite.connect(str(self.db_path)) as conn:
-                await conn.execute("PRAGMA journal_mode=WAL")
-                await conn.execute("PRAGMA busy_timeout=100")
-                _WALConnection._wal_initialized.add(str(self.db_path))
-                await self._run_migrations(conn)
+            lock_path = Path(str(self.db_path) + ".migration-lock")
+            lock_fd = open(lock_path, "w")
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                async with aiosqlite.connect(str(self.db_path)) as conn:
+                    await conn.execute("PRAGMA journal_mode=WAL")
+                    await conn.execute("PRAGMA busy_timeout=100")
+                    _WALConnection._wal_initialized.add(str(self.db_path))
+                    await self._run_migrations(conn)
+            finally:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                lock_fd.close()
             self._initialized = True
             return
 
@@ -1713,27 +1721,34 @@ class SQLiteDatabase(BaseDatabase):
         t0 = time.monotonic()
         logger.info("DB init: opening connection to %s", self.db_path)
 
-        async with aiosqlite.connect(str(self.db_path)) as conn:
-            t1 = time.monotonic()
-            logger.info("DB init: connection opened in %.2fs, executing schema...", t1 - t0)
+        lock_path = Path(str(self.db_path) + ".migration-lock")
+        lock_fd = open(lock_path, "w")
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            async with aiosqlite.connect(str(self.db_path)) as conn:
+                t1 = time.monotonic()
+                logger.info("DB init: connection opened in %.2fs, executing schema...", t1 - t0)
 
-            # Enable WAL mode for concurrent read/write from parallel chat sessions.
-            # WAL persists in the DB file, so this is idempotent across restarts.
-            # busy_timeout: short (100ms) — app-level retry handles longer waits.
-            await conn.execute("PRAGMA journal_mode=WAL")
-            await conn.execute("PRAGMA busy_timeout=100")
-            _WALConnection._wal_initialized.add(str(self.db_path))
-            logger.info("DB init: WAL mode enabled")
+                # Enable WAL mode for concurrent read/write from parallel chat sessions.
+                # WAL persists in the DB file, so this is idempotent across restarts.
+                # busy_timeout: short (100ms) — app-level retry handles longer waits.
+                await conn.execute("PRAGMA journal_mode=WAL")
+                await conn.execute("PRAGMA busy_timeout=100")
+                _WALConnection._wal_initialized.add(str(self.db_path))
+                logger.info("DB init: WAL mode enabled")
 
-            await conn.executescript(self.SCHEMA)
-            await conn.commit()
-            t2 = time.monotonic()
-            logger.info("DB init: schema executed in %.2fs, running migrations...", t2 - t1)
+                await conn.executescript(self.SCHEMA)
+                await conn.commit()
+                t2 = time.monotonic()
+                logger.info("DB init: schema executed in %.2fs, running migrations...", t2 - t1)
 
-            # Run migrations for existing databases
-            await self._run_migrations(conn)
-            t3 = time.monotonic()
-            logger.info("DB init: migrations completed in %.2fs (total: %.2fs)", t3 - t2, t3 - t0)
+                # Run migrations for existing databases
+                await self._run_migrations(conn)
+                t3 = time.monotonic()
+                logger.info("DB init: migrations completed in %.2fs (total: %.2fs)", t3 - t2, t3 - t0)
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            lock_fd.close()
 
         self._initialized = True
 
@@ -1943,11 +1958,11 @@ class SQLiteDatabase(BaseDatabase):
                             await conn.commit()
                 except Exception as e:
                     logger.debug("FTS5 rebuild check skipped: %s", e)
+                await conn.execute("PRAGMA user_version = 4")
+                await conn.commit()
+                logger.info("DB migration v4 (FTS5) complete")
             except Exception as e:
                 logger.warning("FTS5 migration skipped (SQLite may lack fts5): %s", e)
-            await conn.execute("PRAGMA user_version = 4")
-            await conn.commit()
-            logger.info("Migration v4: messages_fts virtual table created")
 
     async def _run_legacy_migrations(self, conn: aiosqlite.Connection) -> None:
         """Legacy detection-based column migrations for pre-user_version databases.
