@@ -22,6 +22,8 @@ SWARM_USER="swarm"
 INSTALL_DIR="/opt/swarmai"
 REPO_URL="${SWARMAI_REPO_URL:-https://github.com/xg-gh-25/SwarmAI.git}"
 REPO_BRANCH="${SWARMAI_REPO_BRANCH:-main}"
+# Pin to a known-good commit for integrity (update on each release)
+REPO_COMMIT="${SWARMAI_REPO_COMMIT:-}"  # e.g. "fa492d1" — if set, checkout after clone
 
 echo "============================================="
 echo "  SwarmAI Hive Setup"
@@ -75,6 +77,12 @@ else
     git clone --branch "${REPO_BRANCH}" "${REPO_URL}" "${INSTALL_DIR}"
     chown -R "${SWARM_USER}:${SWARM_USER}" "${INSTALL_DIR}"
 fi
+# Pin to specific commit if SWARMAI_REPO_COMMIT is set (integrity verification)
+if [ -n "${REPO_COMMIT}" ]; then
+    echo "[hive] Checking out pinned commit: ${REPO_COMMIT}"
+    cd "${INSTALL_DIR}"
+    sudo -u "${SWARM_USER}" git checkout "${REPO_COMMIT}"
+fi
 
 # ---------------------------------------------------------------------------
 # 4. Python venv + dependencies
@@ -110,10 +118,18 @@ if ! command -v caddy &>/dev/null; then
     dnf install -y 'dnf-command(copr)' 2>/dev/null || true
     dnf copr enable @caddy/caddy -y 2>/dev/null || true
     dnf install -y caddy 2>/dev/null || {
-        # Fallback: direct binary install
+        # Fallback: direct binary install with verification
         echo "[hive] dnf install failed, installing Caddy binary directly..."
-        curl -sL "https://caddyserver.com/api/download?os=linux&arch=arm64" -o /usr/bin/caddy
-        chmod +x /usr/bin/caddy
+        curl -sL "https://caddyserver.com/api/download?os=linux&arch=arm64" -o /tmp/caddy
+        # Verify it's a real binary (ELF header check)
+        if file /tmp/caddy | grep -q "ELF.*executable"; then
+            mv /tmp/caddy /usr/bin/caddy
+            chmod +x /usr/bin/caddy
+        else
+            echo "[hive] ERROR: Downloaded Caddy binary failed integrity check" >&2
+            rm -f /tmp/caddy
+            exit 1
+        fi
     }
 fi
 caddy version
@@ -153,6 +169,23 @@ cp "${INSTALL_DIR}/hive/swarmai-hive.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable swarmai-hive
 systemctl enable caddy
+
+# ---------------------------------------------------------------------------
+# 9b. Configure log rotation for backend.log
+# ---------------------------------------------------------------------------
+
+echo "[9b/10] Configuring log rotation..."
+sudo tee /etc/logrotate.d/swarmai > /dev/null << 'LOGROTATE'
+/home/swarm/.swarm-ai/logs/backend.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
+LOGROTATE
 
 # ---------------------------------------------------------------------------
 # 10. Initialize SwarmWS workspace

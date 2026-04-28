@@ -13,7 +13,7 @@ import { ThemeProvider } from './contexts/ThemeContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { HealthProvider } from './contexts/HealthContext';
 import { BackendStartupOverlay, UpdateNotification, ShutdownOverlay, DaemonNudgeBanner } from './components/common';
-import { getApiBaseUrl } from './services/tauri';
+import { getApiBaseUrl, isDesktop } from './services/tauri';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ToastStack } from './components/common/ToastStack';
 import { AudioKeepAlive } from './components/AudioKeepAlive';
@@ -72,8 +72,11 @@ export default function App() {
     };
     setupTauriCloseHandler();
 
-    // Web/dev fallback
+    // Desktop-only: shutdown backend when browser tab closes.
+    // In Hive mode, closing a tab must NOT shut down the shared backend
+    // (other tabs or Slack may still be using it).
     const handleBeforeUnload = () => {
+      if (!isDesktop()) return;
       const apiBase = getApiBaseUrl();
       navigator.sendBeacon(`${apiBase}/shutdown`);
     };

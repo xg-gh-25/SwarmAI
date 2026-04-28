@@ -66,8 +66,10 @@ if [ -x "${VENV_PYTHON}" ]; then
     echo "[hive] PATH: ${PATH}"
 
     cd "${BACKEND_DIR}"
+    # Bind to 127.0.0.1 — Caddy reverse-proxies locally.
+    # Never bind 0.0.0.0: if Caddy crashes, backend would be directly exposed.
     exec "${VENV_PYTHON}" -m uvicorn main:app \
-        --host 0.0.0.0 \
+        --host 127.0.0.1 \
         --port "${HIVE_PORT}" \
         --log-level info
 else
