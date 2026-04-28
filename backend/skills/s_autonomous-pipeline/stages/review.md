@@ -176,12 +176,12 @@ and Feathers' seam concept.
 
 For each **new file**:
 
-1. Count interface surface: public functions, parameters, config keys, exceptions
-2. Count implementation complexity: lines, branches, external calls
-3. Assess ratio:
-   - `> 5:1` → **DEEP** (good) — note and move on
-   - `2:1 to 5:1` → **MODERATE** — acceptable
-   - `< 2:1` → **SHALLOW** — run deletion test:
+1. Identify the interface surface: public functions, parameters, config keys, exceptions, invariants, error modes
+2. Identify what the implementation hides: internal state, algorithms, I/O, retry logic, caching, format translation
+3. Ask: **does the interface hide significant complexity from callers?**
+   - **DEEP** (good) — callers get a lot for knowing a little. A caller passes 2 params and gets back a result; the module internally handles retries, parsing, caching, error recovery. Note and move on.
+   - **MODERATE** — the interface simplifies, but leaks some implementation concern (callers must know about ordering, config keys, or error modes). Acceptable.
+   - **SHALLOW** — the interface is nearly as complex as the implementation. Callers must understand almost everything the module does. Run deletion test:
      - Complexity vanishes → pass-through, suggest inlining or merging
      - Complexity reappears across callers → has value but needs deepening
 
