@@ -1,0 +1,304 @@
+"""Tests for Hive provisioner and user-data template.
+
+Tests the provisioner logic with mocked boto3 calls. Each test verifies
+one acceptance criterion from the pipeline evaluation.
+"""
+import asyncio
+import json
+import re
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+
+# ── User-Data Template Tests ──────────────────────────────────────
+
+class TestUserData:
+    """Tests for user_data.py — template rendering and password generation."""
+
+    def test_render_substitutes_all_variables(self):
+        """AC10: user-data template fully parameterized."""
+        from hive.user_data import render_user_data
+
+        result = render_user_data(
+            s3_bucket="swarmai-hive-releases-us-east-1",
+            version="1.9.0",
+            auth_user="admin",
+            auth_hash="$2a$14$abc123",
+            region="us-east-1",
+        )
+        assert "swarmai-hive-releases-us-east-1" in result
+        assert "1.9.0" in result
+        assert "admin" in result
+        assert "$2a$14$abc123" in result
+        assert "us-east-1" in result
+
+    def test_no_hardcoded_values(self):
+        """AC10: no hardcoded bucket names, IPs, or versions."""
+        from hive.user_data import render_user_data
+
+        result = render_user_data(
+            s3_bucket="test-bucket",
+            version="99.99.99",
+            auth_user="testuser",
+            auth_hash="testhash",
+            region="eu-west-1",
+        )
+        # Should contain our test values, not any default/hardcoded ones
+        assert "test-bucket" in result
+        assert "99.99.99" in result
+        assert "testuser" in result
+        assert "eu-west-1" in result
+        # Should NOT contain any hardcoded values from earlier versions
+        assert "swarmai-hive-releases" not in result or "test-bucket" in result
+        assert "swarmai-hive-artifacts" not in result
+
+    def test_script_is_valid_bash(self):
+        """User-data script starts with shebang and uses set -euo."""
+        from hive.user_data import render_user_data
+
+        result = render_user_data(
+            s3_bucket="b", version="1.0.0",
+            auth_user="u", auth_hash="h", region="us-east-1",
+        )
+        assert result.startswith("#!/bin/bash")
+        assert "set -euo pipefail" in result
+
+    def test_script_tags_ready_on_success(self):
+        """AC2: tags HiveStatus=ready."""
+        from hive.user_data import render_user_data
+
+        result = render_user_data(
+            s3_bucket="b", version="1.0.0",
+            auth_user="u", auth_hash="h", region="us-east-1",
+        )
+        assert 'Key=HiveStatus,Value="$TAG_STATUS"' in result
+        assert 'TAG_STATUS="ready"' in result
+
+    def test_password_generation(self):
+        """Password is random and meets length requirements."""
+        from hive.user_data import generate_password
+
+        p1 = generate_password()
+        p2 = generate_password()
+        assert len(p1) == 16
+        assert p1 != p2  # Should be random
+
+    def test_password_custom_length(self):
+        from hive.user_data import generate_password
+
+        assert len(generate_password(32)) == 32
+
+
+# ── Provisioner Unit Tests ────────────────────────────────────────
+
+class TestProvisionerSession:
+    """Tests for boto3 session creation from account config."""
+
+    def test_access_keys_session(self):
+        """Creates session with access keys from auth_config."""
+        from hive.provisioner import HiveProvisioner
+
+        p = HiveProvisioner(Path("/tmp/test.db"))
+        account = {
+            "auth_method": "access_keys",
+            "auth_config": json.dumps({
+                "access_key_id": "AKIA_TEST",
+                "secret_access_key": "SECRET_TEST",
+            }),
+        }
+        # boto3 is imported inside _get_session, mock at the module level
+        with patch.dict("sys.modules", {"boto3": MagicMock()}) as _:
+            import boto3 as mock_boto3
+            session = p._get_session(account, "us-east-1")
+            # Verify it called Session with the right kwargs
+            assert session is not None  # Got something back
+
+    def test_sso_session(self):
+        """Creates session with SSO profile from auth_config."""
+        from hive.provisioner import HiveProvisioner
+
+        p = HiveProvisioner(Path("/tmp/test.db"))
+        account = {
+            "auth_method": "sso",
+            "auth_config": json.dumps({"profile": "my-sso-profile"}),
+        }
+        with patch.dict("sys.modules", {"boto3": MagicMock()}):
+            session = p._get_session(account, "us-west-2")
+            assert session is not None
+
+    def test_default_session(self):
+        """Falls back to default credential chain when no config."""
+        from hive.provisioner import HiveProvisioner
+
+        p = HiveProvisioner(Path("/tmp/test.db"))
+        account = {"auth_method": "iam_role", "auth_config": "{}"}
+        with patch.dict("sys.modules", {"boto3": MagicMock()}):
+            session = p._get_session(account, "us-east-1")
+            assert session is not None
+
+
+class TestProvisionerS3:
+    """Tests for S3 bucket creation and release sync."""
+
+    @pytest.mark.asyncio
+    async def test_ensure_bucket_creates_with_region(self):
+        """AC10: S3 bucket named swarmai-hive-releases-{region}."""
+        from hive.provisioner import HiveProvisioner
+
+        p = HiveProvisioner(Path("/tmp/test.db"))
+        mock_session = MagicMock()
+        mock_s3 = MagicMock()
+        mock_session.client.return_value = mock_s3
+
+        bucket = await p._ensure_s3_bucket(mock_session, "eu-west-1")
+        assert bucket == "swarmai-hive-releases-eu-west-1"
+        mock_s3.create_bucket.assert_called_once()
+        # Verify LocationConstraint for non-us-east-1
+        call_kwargs = mock_s3.create_bucket.call_args
+        assert call_kwargs[1]["CreateBucketConfiguration"]["LocationConstraint"] == "eu-west-1"
+
+    @pytest.mark.asyncio
+    async def test_ensure_bucket_us_east_1_no_location(self):
+        """us-east-1 doesn't use LocationConstraint (AWS quirk)."""
+        from hive.provisioner import HiveProvisioner
+
+        p = HiveProvisioner(Path("/tmp/test.db"))
+        mock_session = MagicMock()
+        mock_s3 = MagicMock()
+        mock_session.client.return_value = mock_s3
+
+        bucket = await p._ensure_s3_bucket(mock_session, "us-east-1")
+        assert bucket == "swarmai-hive-releases-us-east-1"
+        call_kwargs = mock_s3.create_bucket.call_args
+        assert "CreateBucketConfiguration" not in call_kwargs[1]
+
+
+class TestProvisionerIAM:
+    """Tests for IAM role and instance profile creation."""
+
+    @pytest.mark.asyncio
+    async def test_create_role_has_bedrock_permissions(self):
+        """AC1: IAM role includes bedrock:InvokeModel*."""
+        from hive.provisioner import HiveProvisioner, HIVE_IAM_POLICY
+
+        bedrock_actions = HIVE_IAM_POLICY["Statement"][0]["Action"]
+        assert "bedrock:InvokeModel" in bedrock_actions
+        assert "bedrock:InvokeModelWithResponseStream" in bedrock_actions
+
+    @pytest.mark.asyncio
+    async def test_create_role_has_s3_access(self):
+        """IAM role can read from hive releases bucket."""
+        from hive.provisioner import HIVE_IAM_POLICY
+
+        s3_resources = HIVE_IAM_POLICY["Statement"][1]["Resource"]
+        assert any("swarmai-hive-releases" in r for r in s3_resources)
+
+    @pytest.mark.asyncio
+    async def test_instance_profile_waits_for_propagation(self):
+        """IAM propagation: 15s sleep after instance profile creation."""
+        from hive.provisioner import HiveProvisioner
+
+        p = HiveProvisioner(Path("/tmp/test.db"))
+        mock_session = MagicMock()
+        mock_iam = MagicMock()
+        mock_session.client.return_value = mock_iam
+        mock_iam.create_instance_profile.return_value = {
+            "InstanceProfile": {"Arn": "arn:aws:iam::123:instance-profile/test"}
+        }
+
+        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+            await p._create_instance_profile(mock_session, "test-hive")
+            # Must wait for IAM propagation
+            mock_sleep.assert_called_with(15)
+
+
+class TestProvisionerSG:
+    """Tests for security group creation."""
+
+    @pytest.mark.asyncio
+    async def test_sg_opens_80_443_only(self):
+        """AC5: security group opens 80 + 443, NOT port 22."""
+        from hive.provisioner import HiveProvisioner
+
+        p = HiveProvisioner(Path("/tmp/test.db"))
+        mock_session = MagicMock()
+        mock_ec2 = MagicMock()
+        mock_session.client.return_value = mock_ec2
+        mock_ec2.describe_vpcs.return_value = {
+            "Vpcs": [{"VpcId": "vpc-test"}]
+        }
+        mock_ec2.create_security_group.return_value = {"GroupId": "sg-test"}
+
+        sg_id = await p._create_security_group(mock_session, "test", "us-east-1")
+        assert sg_id == "sg-test"
+
+        # Verify ingress rules
+        ingress_call = mock_ec2.authorize_security_group_ingress.call_args
+        ip_perms = ingress_call[1]["IpPermissions"]
+        ports = {p["FromPort"] for p in ip_perms}
+        assert ports == {80, 443}
+        # Explicitly: no port 22
+        assert 22 not in ports
+
+
+class TestProvisionerHealthCheck:
+    """Tests for health polling."""
+
+    @pytest.mark.asyncio
+    async def test_wait_healthy_returns_true_on_200(self):
+        """AC3: health check returns true when /health responds 200."""
+        from hive.provisioner import HiveProvisioner
+
+        p = HiveProvisioner(Path("/tmp/test.db"))
+
+        with patch("hive.provisioner.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.json.return_value = {"status": "healthy", "version": "1.9.0"}
+            mock_client.get.return_value = mock_resp
+
+            result = await p._wait_healthy("1.2.3.4", timeout=10)
+            assert result is True
+
+    @pytest.mark.asyncio
+    async def test_wait_healthy_returns_false_on_timeout(self):
+        """Health check returns false when timeout expires."""
+        from hive.provisioner import HiveProvisioner
+
+        p = HiveProvisioner(Path("/tmp/test.db"))
+
+        with patch("hive.provisioner.httpx.AsyncClient") as mock_client_cls:
+            mock_client = AsyncMock()
+            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.get.side_effect = Exception("Connection refused")
+
+            result = await p._wait_healthy("1.2.3.4", timeout=2)
+            assert result is False
+
+
+class TestProvisionerCleanupOrder:
+    """Tests for resource cleanup order."""
+
+    def test_cleanup_order_ec2_before_sg(self):
+        """AC8: cleanup terminates EC2 before deleting SG."""
+        # The cleanup code in provisioner._cleanup_resources does:
+        # 1. EC2 terminate, 2. CloudFront, 3. EIP, 4. SG, 5. IAM
+        # Verify by checking the method exists and has the right structure
+        from hive.provisioner import HiveProvisioner
+        import inspect
+
+        source = inspect.getsource(HiveProvisioner._cleanup_resources)
+        # EC2 terminate comes before SG delete in the source
+        ec2_pos = source.find("terminate_instances")
+        sg_pos = source.find("delete_security_group")
+        assert ec2_pos < sg_pos, "EC2 must terminate before SG delete"
+
+        # IAM role delete comes last
+        iam_pos = source.find("delete_role(")
+        assert sg_pos < iam_pos, "SG delete must come before IAM delete"

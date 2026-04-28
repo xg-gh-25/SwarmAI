@@ -2196,6 +2196,8 @@ class SQLiteDatabase(BaseDatabase):
             CREATE TABLE IF NOT EXISTS hive_instances (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE,
+                owner_name TEXT,
+                hive_type TEXT DEFAULT 'shared',
                 account_ref TEXT NOT NULL,
                 region TEXT NOT NULL DEFAULT 'us-east-1',
                 instance_type TEXT NOT NULL DEFAULT 'm7g.xlarge',
@@ -2204,17 +2206,37 @@ class SQLiteDatabase(BaseDatabase):
                 elastic_ip_alloc_id TEXT,
                 security_group_id TEXT,
                 iam_role_name TEXT,
+                iam_instance_profile_arn TEXT,
                 cloudfront_dist_id TEXT,
                 cloudfront_domain TEXT,
+                s3_bucket TEXT,
                 ssh_key_name TEXT,
+                auth_user TEXT DEFAULT 'admin',
+                auth_password TEXT,
                 status TEXT NOT NULL DEFAULT 'pending',
                 version TEXT,
                 error_message TEXT,
+                seed_data TEXT,
+                shared_content TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY (account_ref) REFERENCES hive_accounts(id) ON DELETE CASCADE
             )
         """)
+        # Migrate existing DBs: add new columns if missing
+        for col, default in [
+            ("owner_name", None), ("hive_type", "'shared'"),
+            ("iam_instance_profile_arn", None), ("s3_bucket", None),
+            ("auth_user", "'admin'"), ("auth_password", None),
+            ("seed_data", None), ("shared_content", None),
+        ]:
+            try:
+                default_clause = f" DEFAULT {default}" if default else ""
+                await conn.execute(
+                    f"ALTER TABLE hive_instances ADD COLUMN {col} TEXT{default_clause}"
+                )
+            except Exception:
+                pass  # Column already exists
         await conn.commit()
 
         # ============================================================================

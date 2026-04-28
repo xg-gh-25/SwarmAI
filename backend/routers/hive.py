@@ -1,9 +1,10 @@
 """Hive cloud instance management API.
 
 Manage AWS accounts and Hive (cloud SwarmAI) instances.
-Phase 1: CRUD + account verification via boto3 STS.
-Phase 2: Full provisioner (EC2, CloudFront, IAM).
+Accounts: CRUD + boto3 STS/EC2/Bedrock verification.
+Instances: full lifecycle via HiveProvisioner (EC2, CloudFront, IAM, S3).
 """
+import asyncio
 import json
 import logging
 import os
@@ -14,14 +15,26 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import aiosqlite
+import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from database import db
+from hive.provisioner import HiveProvisioner
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Lazy-init provisioner (needs db_path which is set at import time)
+_provisioner: Optional[HiveProvisioner] = None
+
+
+def _get_provisioner() -> HiveProvisioner:
+    global _provisioner
+    if _provisioner is None:
+        _provisioner = HiveProvisioner(db.db_path)
+    return _provisioner
 
 
 def _require_desktop():
@@ -84,6 +97,13 @@ class HiveInstanceCreate(BaseModel):
     account_ref: str
     region: str = "us-east-1"
     instance_type: str = "m7g.xlarge"
+    owner_name: Optional[str] = None
+    hive_type: str = "shared"
+    version: Optional[str] = None  # if None, uses latest from GitHub
+
+
+class HiveInstanceUpdate(BaseModel):
+    version: str
 
 
 _HIVE_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
@@ -92,12 +112,21 @@ _HIVE_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 class HiveInstanceResponse(BaseModel):
     id: str
     name: str
+    owner_name: Optional[str] = None
+    hive_type: str = "shared"
     account_ref: str
     region: str
     instance_type: str
     ec2_instance_id: Optional[str] = None
     ec2_public_ip: Optional[str] = None
+    elastic_ip_alloc_id: Optional[str] = None
+    security_group_id: Optional[str] = None
+    iam_role_name: Optional[str] = None
+    cloudfront_dist_id: Optional[str] = None
     cloudfront_domain: Optional[str] = None
+    s3_bucket: Optional[str] = None
+    auth_user: Optional[str] = None
+    auth_password: Optional[str] = None
     status: str
     version: Optional[str] = None
     error_message: Optional[str] = None
@@ -234,7 +263,12 @@ async def list_instances():
 
 @router.post("/instances", response_model=HiveInstanceResponse, status_code=201)
 async def create_instance(body: HiveInstanceCreate):
-    """Deploy a new Hive instance (Phase 1: DB record only)."""
+    """Deploy a new Hive instance.
+
+    Creates a DB record and launches a background task that provisions
+    all AWS resources (IAM, SG, EC2, EIP, CloudFront). The API returns
+    immediately with status='pending'. Poll GET /instances/{id} for progress.
+    """
     _require_desktop()
     if not _HIVE_NAME_RE.match(body.name):
         raise HTTPException(
@@ -245,38 +279,43 @@ async def create_instance(body: HiveInstanceCreate):
         cursor = await c.execute("SELECT id FROM hive_accounts WHERE id = ?", (body.account_ref,))
         if not await cursor.fetchone():
             raise HTTPException(status_code=404, detail="Account not found")
+        # Check name uniqueness
+        cursor = await c.execute("SELECT id FROM hive_instances WHERE name = ?", (body.name,))
+        if await cursor.fetchone():
+            raise HTTPException(status_code=409, detail=f"Hive '{body.name}' already exists")
 
     now = _now()
     row = {
         "id": str(uuid.uuid4()),
         "name": body.name,
+        "owner_name": body.owner_name,
+        "hive_type": body.hive_type,
         "account_ref": body.account_ref,
         "region": body.region,
         "instance_type": body.instance_type,
         "ec2_instance_id": None, "ec2_public_ip": None,
         "elastic_ip_alloc_id": None, "security_group_id": None,
-        "iam_role_name": None, "cloudfront_dist_id": None,
-        "cloudfront_domain": None, "ssh_key_name": None,
+        "iam_role_name": None, "iam_instance_profile_arn": None,
+        "cloudfront_dist_id": None, "cloudfront_domain": None,
+        "s3_bucket": None, "ssh_key_name": None,
+        "auth_user": None, "auth_password": None,
         "status": "pending",
-        "version": None, "error_message": None,
+        "version": body.version, "error_message": None,
+        "seed_data": None, "shared_content": None,
         "created_at": now, "updated_at": now,
     }
     async with _conn() as c:
+        cols = ", ".join(row.keys())
+        placeholders = ", ".join(f":{k}" for k in row.keys())
         await c.execute(
-            """INSERT INTO hive_instances
-               (id, name, account_ref, region, instance_type,
-                ec2_instance_id, ec2_public_ip, elastic_ip_alloc_id,
-                security_group_id, iam_role_name, cloudfront_dist_id,
-                cloudfront_domain, ssh_key_name, status, version,
-                error_message, created_at, updated_at)
-               VALUES (:id, :name, :account_ref, :region, :instance_type,
-                :ec2_instance_id, :ec2_public_ip, :elastic_ip_alloc_id,
-                :security_group_id, :iam_role_name, :cloudfront_dist_id,
-                :cloudfront_domain, :ssh_key_name, :status, :version,
-                :error_message, :created_at, :updated_at)""",
-            row,
+            f"INSERT INTO hive_instances ({cols}) VALUES ({placeholders})", row,
         )
         await c.commit()
+
+    # Launch provisioner in background
+    provisioner = _get_provisioner()
+    asyncio.create_task(provisioner.deploy(row["id"]))
+
     return HiveInstanceResponse(**row)
 
 
@@ -293,39 +332,107 @@ async def get_instance(instance_id: str):
 
 @router.post("/instances/{instance_id}/stop")
 async def stop_instance(instance_id: str):
-    """Stop a running Hive (Phase 2: ec2.stop_instances)."""
+    """Stop a running Hive (EC2 stop_instances)."""
     _require_desktop()
     async with _conn() as c:
-        r = await c.execute(
-            "UPDATE hive_instances SET status='stopped', updated_at=? WHERE id=? AND status='running'",
-            (_now(), instance_id))
-        await c.commit()
-        if r.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Not found or not running")
+        cursor = await c.execute("SELECT status FROM hive_instances WHERE id = ?", (instance_id,))
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Instance not found")
+        if dict(row)["status"] != "running":
+            raise HTTPException(status_code=400, detail="Instance is not running")
+
+    provisioner = _get_provisioner()
+    try:
+        await provisioner.stop(instance_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
     return {"status": "stopped"}
 
 
 @router.post("/instances/{instance_id}/start")
 async def start_instance(instance_id: str):
-    """Start a stopped Hive (Phase 2: ec2.start_instances)."""
+    """Start a stopped Hive (EC2 start_instances + wait healthy)."""
     _require_desktop()
     async with _conn() as c:
-        r = await c.execute(
-            "UPDATE hive_instances SET status='running', updated_at=? WHERE id=? AND status='stopped'",
-            (_now(), instance_id))
-        await c.commit()
-        if r.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Not found or not stopped")
+        cursor = await c.execute("SELECT status FROM hive_instances WHERE id = ?", (instance_id,))
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Instance not found")
+        if dict(row)["status"] != "stopped":
+            raise HTTPException(status_code=400, detail="Instance is not stopped")
+
+    provisioner = _get_provisioner()
+    try:
+        await provisioner.start(instance_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
     return {"status": "running"}
+
+
+@router.post("/instances/{instance_id}/update")
+async def update_instance(instance_id: str, body: HiveInstanceUpdate):
+    """Update a Hive to a new version via SSM Run Command."""
+    _require_desktop()
+    async with _conn() as c:
+        cursor = await c.execute("SELECT status FROM hive_instances WHERE id = ?", (instance_id,))
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Instance not found")
+        if dict(row)["status"] != "running":
+            raise HTTPException(status_code=400, detail="Instance must be running to update")
+
+    provisioner = _get_provisioner()
+    try:
+        await provisioner.update(instance_id, body.version)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"status": "updated", "version": body.version}
 
 
 @router.delete("/instances/{instance_id}")
 async def delete_instance(instance_id: str):
-    """Delete a Hive (Phase 2: cleanup AWS resources first)."""
+    """Delete a Hive and clean up all AWS resources."""
     _require_desktop()
     async with _conn() as c:
-        r = await c.execute("DELETE FROM hive_instances WHERE id = ?", (instance_id,))
-        await c.commit()
-        if r.rowcount == 0:
+        cursor = await c.execute("SELECT id FROM hive_instances WHERE id = ?", (instance_id,))
+        if not await cursor.fetchone():
             raise HTTPException(status_code=404, detail="Instance not found")
+
+    provisioner = _get_provisioner()
+    try:
+        await provisioner.cleanup(instance_id)
+    except Exception as e:
+        logger.warning("Cleanup had errors (continuing with DB delete): %s", e)
+
+    # Always delete DB record even if AWS cleanup had partial failures
+    async with _conn() as c:
+        await c.execute("DELETE FROM hive_instances WHERE id = ?", (instance_id,))
+        await c.commit()
     return {"deleted": True}
+
+
+@router.get("/instances/{instance_id}/health")
+async def health_proxy(instance_id: str):
+    """Proxy health check to remote Hive instance."""
+    async with _conn() as c:
+        cursor = await c.execute(
+            "SELECT ec2_public_ip, cloudfront_domain FROM hive_instances WHERE id = ?",
+            (instance_id,),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Instance not found")
+        row = dict(row)
+
+    # Prefer direct IP (faster, no CF cache)
+    ip = row.get("ec2_public_ip")
+    if not ip:
+        raise HTTPException(status_code=400, detail="No IP address for this instance")
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(f"http://{ip}/health")
+            return resp.json()
+    except Exception as e:
+        return {"status": "unreachable", "error": str(e)}
