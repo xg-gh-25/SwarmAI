@@ -464,30 +464,53 @@ async def get_auth_hint():
 
 
 def _probe_ada_details() -> dict | None:
-    """Read ADA credential status from ~/.ada/credentials (INI-style)."""
-    creds_path = Path.home() / ".ada" / "credentials"
-    if not creds_path.exists():
+    """Read ADA credential status from ada profile + credentials.
+
+    Account/role come from ``ada profile print`` (the profile config).
+    Key prefix + configured status come from ``~/.ada/credentials`` (the
+    temporary STS tokens).  Previous implementation only read credentials,
+    which never contains account_id or role_name — so the UI always showed
+    empty placeholders.
+    """
+    import subprocess as _sp
+
+    if not Path.home().joinpath(".ada").is_dir():
         return None
+
+    details: dict = {}
+
+    # 1. Read account/role from ada profile config (source of truth)
     try:
-        content = creds_path.read_text(encoding="utf-8")
-        details: dict = {}
-        for line in content.splitlines():
-            line = line.strip()
-            if "=" in line and not line.startswith("["):
-                k, v = line.split("=", 1)
-                k, v = k.strip(), v.strip()
-                if k == "aws_account_id":
-                    details["account_id"] = v
-                elif k == "aws_role_name":
-                    details["role_name"] = v
-                elif k == "region":
-                    details["region"] = v
-                elif k == "aws_access_key_id":
-                    details["configured"] = True
-                    details["key_prefix"] = v[:8] + "••••" if len(v) > 8 else "••••"
-        return details
-    except (OSError, UnicodeDecodeError):
-        return None
+        result = _sp.run(
+            [str(Path.home() / ".toolbox" / "bin" / "ada"), "profile", "print", "--profile=bedrock"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if line.startswith("Account:"):
+                    details["account_id"] = line.split(":", 1)[1].strip()
+                elif line.startswith("Role:"):
+                    details["role_name"] = line.split(":", 1)[1].strip()
+    except (OSError, _sp.TimeoutExpired):
+        pass
+
+    # 2. Read key prefix from ~/.ada/credentials (temporary tokens)
+    creds_path = Path.home() / ".ada" / "credentials"
+    if creds_path.exists():
+        try:
+            for line in creds_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if "=" in line and not line.startswith("["):
+                    k, v = line.split("=", 1)
+                    k, v = k.strip(), v.strip()
+                    if k == "aws_access_key_id":
+                        details["configured"] = True
+                        details["key_prefix"] = v[:8] + "••••" if len(v) > 8 else "••••"
+        except (OSError, UnicodeDecodeError):
+            pass
+
+    return details if details else None
 
 
 def _probe_aws_profiles() -> list[str] | None:
