@@ -9,7 +9,7 @@ import { systemService, VerifyAuthResponse, AuthHintResponse } from '../../servi
 import { settingsService } from '../../services/settings';
 import { Dropdown } from '../common';
 
-type AuthMethod = 'sso' | 'ada' | 'apikey';
+type AuthMethod = 'access_keys' | 'sso' | 'ada' | 'apikey';
 
 interface AuthConfigPanelProps {
   mode: 'onboarding' | 'settings';
@@ -26,8 +26,11 @@ const AWS_REGION_OPTIONS = [
 ];
 
 export default function AuthConfigPanel({ mode, onVerifySuccess }: AuthConfigPanelProps) {
-  const [method, setMethod] = useState<AuthMethod>('sso');
+  const [method, setMethod] = useState<AuthMethod>('access_keys');
   const [region, setRegion] = useState('us-east-1');
+  const [accountId, setAccountId] = useState('');
+  const [accessKeyId, setAccessKeyId] = useState('');
+  const [secretAccessKey, setSecretAccessKey] = useState('');
   const [adaAccount, setAdaAccount] = useState('');
   const [adaRole, setAdaRole] = useState('');
   const [verifyState, setVerifyState] = useState<'idle' | 'verifying' | 'success' | 'error'>('idle');
@@ -39,14 +42,28 @@ export default function AuthConfigPanel({ mode, onVerifySuccess }: AuthConfigPan
     systemService.getAuthHint()
       .then((hint) => {
         setAuthHint(hint);
-        setMethod(hint.suggestedMethod);
-        // Pre-fill ada fields from real credentials
-        if (hint.adaDetails) {
-          if (hint.adaDetails.accountId) setAdaAccount(hint.adaDetails.accountId);
+        // Map backend suggestion to UI method
+        const methodMap: Record<string, AuthMethod> = {
+          'ada': 'ada',
+          'sso': 'sso',
+          'apikey': 'apikey',
+          'iam_role': 'access_keys',  // Hive mode uses instance role, show as access_keys
+        };
+        setMethod(methodMap[hint.suggestedMethod] || 'access_keys');
+        // Pre-fill from probed credentials — IAM details take priority (Hive),
+        // then Ada details (Amazon internal), so the user sees real values on load
+        if (hint.iamDetails) {
+          if (hint.iamDetails.accountId) setAccountId(hint.iamDetails.accountId);
+          if (hint.iamDetails.region) setRegion(hint.iamDetails.region);
+        } else if (hint.adaDetails) {
+          if (hint.adaDetails.accountId) {
+            setAccountId(hint.adaDetails.accountId);
+            setAdaAccount(hint.adaDetails.accountId);
+          }
           if (hint.adaDetails.roleName) setAdaRole(hint.adaDetails.roleName);
         }
       })
-      .catch(() => { /* default sso is fine */ });
+      .catch(() => { /* default access_keys is fine */ });
   }, []);
 
   // Load current config from settings (region)
@@ -93,16 +110,26 @@ export default function AuthConfigPanel({ mode, onVerifySuccess }: AuthConfigPan
     }
   };
 
+  // Build methods list — show Ada only when detected (Amazon internal)
+  const hasAda = authHint?.hasAdaDir ?? false;
   const methods: { id: AuthMethod; label: string; desc: string }[] = [
-    { id: 'sso', label: 'Bedrock (SSO)', desc: 'AWS SSO / IdC' },
-    { id: 'ada', label: 'Bedrock (ADA)', desc: 'Amazon Internal' },
+    { id: 'access_keys', label: 'Access Keys', desc: 'IAM credentials' },
+    { id: 'sso', label: 'AWS SSO', desc: 'Identity Center' },
+    ...(hasAda ? [{ id: 'ada' as AuthMethod, label: 'Ada', desc: 'Amazon Internal' }] : []),
     { id: 'apikey', label: 'API Key', desc: 'Anthropic Direct' },
   ];
 
   return (
     <div className="space-y-4">
+      {/* Section title — "AWS Account" not "Bedrock" */}
+      {mode === 'onboarding' && (
+        <p className="text-xs text-[var(--color-text-muted)]">
+          SwarmAI uses your AWS account for Claude AI, cloud deployment, and other services.
+        </p>
+      )}
+
       {/* Auth method cards */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className={`grid gap-3 ${methods.length <= 3 ? 'grid-cols-3' : 'grid-cols-4'}`}>
         {methods.map((m) => (
           <button
             key={m.id}
@@ -122,6 +149,18 @@ export default function AuthConfigPanel({ mode, onVerifySuccess }: AuthConfigPan
       {/* Config fields based on method */}
       {method !== 'apikey' && (
         <div className="space-y-3">
+          {/* AWS Account ID — shown for all AWS methods */}
+          <div>
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">AWS Account ID</label>
+            <input
+              type="text"
+              value={accountId}
+              onChange={(e) => { setAccountId(e.target.value); if (method === 'ada') setAdaAccount(e.target.value); }}
+              placeholder="Enter your 12-digit AWS account ID"
+              className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]"
+            />
+          </div>
+
           <Dropdown
             label="AWS Region"
             options={AWS_REGION_OPTIONS}
@@ -130,55 +169,101 @@ export default function AuthConfigPanel({ mode, onVerifySuccess }: AuthConfigPan
             placeholder="Select region..."
           />
 
-          {/* ADA-specific fields */}
-          {method === 'ada' && (
+          {/* Access Keys fields — hidden when IAM instance role provides credentials */}
+          {method === 'access_keys' && !(authHint?.runMode === 'hive' && authHint?.suggestedMethod === 'iam_role') && (
             <>
               <div>
-                <label className="block text-xs text-[var(--color-text-muted)] mb-1">ADA Account ID</label>
+                <label className="block text-xs text-[var(--color-text-muted)] mb-1">Access Key ID</label>
                 <input
                   type="text"
-                  value={adaAccount}
-                  onChange={(e) => setAdaAccount(e.target.value)}
-                  placeholder="123456789012"
-                  className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
+                  value={accessKeyId}
+                  onChange={(e) => setAccessKeyId(e.target.value)}
+                  placeholder="AKIA..."
+                  className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]"
                 />
               </div>
               <div>
-                <label className="block text-xs text-[var(--color-text-muted)] mb-1">ADA Role</label>
+                <label className="block text-xs text-[var(--color-text-muted)] mb-1">Secret Access Key</label>
                 <input
-                  type="text"
-                  value={adaRole}
-                  onChange={(e) => setAdaRole(e.target.value)}
-                  placeholder="Admin"
-                  className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
+                  type="password"
+                  value={secretAccessKey}
+                  onChange={(e) => setSecretAccessKey(e.target.value)}
+                  placeholder="Enter secret access key"
+                  className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]"
                 />
               </div>
             </>
           )}
 
+          {/* ADA-specific fields */}
+          {method === 'ada' && (
+            <div>
+              <label className="block text-xs text-[var(--color-text-muted)] mb-1">ADA Role</label>
+              <input
+                type="text"
+                value={adaRole}
+                onChange={(e) => setAdaRole(e.target.value)}
+                placeholder="e.g. Admin"
+                className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)]/40 focus:outline-none focus:border-[var(--color-primary)]"
+              />
+            </div>
+          )}
+
           {/* Credential status / setup hint */}
           <div className="p-3 bg-[var(--color-card)] rounded-lg text-xs">
-            {method === 'ada' ? (
-              authHint?.adaDetails?.configured ? (
+            {/* Priority: Hive IAM > ADA > SSO profiles > Access Keys/SSO fallback */}
+            {authHint?.runMode === 'hive' && authHint?.suggestedMethod === 'iam_role' && method === 'access_keys' ? (
+              <>
+                <div className="flex items-center gap-1.5 mb-2">
+                  <span className="w-1.5 h-1.5 bg-green-400 rounded-full" />
+                  <span className="text-green-400 font-medium">EC2 IAM Instance Role detected</span>
+                </div>
+                {authHint.iamDetails && (
+                  <div className="space-y-1 text-[var(--color-text-muted)] mb-2">
+                    {authHint.iamDetails.roleName && (
+                      <div className="flex justify-between">
+                        <span>Role</span>
+                        <code className="text-[var(--color-text)]">{authHint.iamDetails.roleName}</code>
+                      </div>
+                    )}
+                    {authHint.iamDetails.instanceId && (
+                      <div className="flex justify-between">
+                        <span>Instance</span>
+                        <code className="text-[var(--color-text)]">{authHint.iamDetails.instanceId}</code>
+                      </div>
+                    )}
+                  </div>
+                )}
+                <p className="text-[var(--color-text-muted)]">
+                  Credentials are provided by the EC2 instance role — no manual keys needed. Just verify.
+                </p>
+              </>
+            ) : method === 'ada' ? (() => {
+              // Resolve display values: input field > probe > placeholder
+              const displayAccount = adaAccount || authHint?.adaDetails?.accountId || '<ACCOUNT>';
+              const displayRole = adaRole || authHint?.adaDetails?.roleName || '<ROLE>';
+              const hasRealValues = !!(adaAccount || authHint?.adaDetails?.accountId);
+
+              return authHint?.adaDetails?.configured ? (
                 <>
                   <div className="flex items-center gap-1.5 mb-2">
                     <span className="w-1.5 h-1.5 bg-green-400 rounded-full" />
                     <span className="text-green-400 font-medium">ADA credentials active</span>
                   </div>
                   <div className="space-y-1 text-[var(--color-text-muted)]">
-                    {authHint.adaDetails.accountId && (
+                    {authHint.adaDetails?.accountId && (
                       <div className="flex justify-between">
                         <span>Account</span>
                         <code className="text-[var(--color-text)]">{authHint.adaDetails.accountId}</code>
                       </div>
                     )}
-                    {authHint.adaDetails.roleName && (
+                    {authHint.adaDetails?.roleName && (
                       <div className="flex justify-between">
                         <span>Role</span>
                         <code className="text-[var(--color-text)]">{authHint.adaDetails.roleName}</code>
                       </div>
                     )}
-                    {authHint.adaDetails.keyPrefix && (
+                    {authHint.adaDetails?.keyPrefix && (
                       <div className="flex justify-between">
                         <span>Access Key</span>
                         <code className="text-[var(--color-text)]">{authHint.adaDetails.keyPrefix}</code>
@@ -187,18 +272,23 @@ export default function AuthConfigPanel({ mode, onVerifySuccess }: AuthConfigPan
                   </div>
                   <p className="text-[var(--color-text-muted)] mt-2 opacity-60">To refresh credentials:</p>
                   <code className="block font-mono text-[var(--color-text)] bg-[var(--color-bg)] p-2 rounded select-all mt-1">
-                    ada credentials update --account={adaAccount || 'ACCOUNT'} --role={adaRole || 'ROLE'} --provider=isengard
+                    ada credentials update --account={displayAccount} --role={displayRole} --provider=isengard
                   </code>
                 </>
               ) : (
                 <>
                   <p className="text-[var(--color-text-muted)] mb-1">Make sure VPN is connected, then run:</p>
                   <code className="block font-mono text-[var(--color-text)] bg-[var(--color-bg)] p-2 rounded select-all">
-                    ada credentials update --account={adaAccount || 'ACCOUNT'} --role={adaRole || 'ROLE'} --provider=isengard
+                    ada credentials update --account={displayAccount} --role={displayRole} --provider=isengard
                   </code>
+                  {!hasRealValues && (
+                    <p className="text-[var(--color-text-muted)] mt-1.5 opacity-50 text-[10px]">
+                      Fill in Account ID and Role above — the command will update automatically.
+                    </p>
+                  )}
                 </>
-              )
-            ) : (
+              );
+            })() : (
               authHint?.awsProfiles && authHint.awsProfiles.length > 0 ? (
                 <>
                   <div className="flex items-center gap-1.5 mb-2">
