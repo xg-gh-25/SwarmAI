@@ -742,11 +742,13 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
     std::fs::create_dir_all(&daemon_dir)
         .map_err(|e| format!("Failed to create daemon dir: {}", e))?;
 
-    // Atomic deploy: copy to .tmp, then rename
+    // Atomic deploy: copy to .tmp, then rename (cleanup .tmp on failure)
     std::fs::copy(&bundled_binary, &tmp_binary)
         .map_err(|e| format!("Failed to copy binary: {}", e))?;
-    std::fs::rename(&tmp_binary, &target_binary)
-        .map_err(|e| format!("Failed to rename binary: {}", e))?;
+    if let Err(e) = std::fs::rename(&tmp_binary, &target_binary) {
+        let _ = std::fs::remove_file(&tmp_binary);  // cleanup partial deploy
+        return Err(format!("Failed to rename binary: {}", e));
+    }
 
     // Set executable permissions
     #[cfg(unix)]

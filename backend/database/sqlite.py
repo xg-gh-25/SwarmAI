@@ -1782,14 +1782,6 @@ class SQLiteDatabase(BaseDatabase):
             current_version, CURRENT_SCHEMA_VERSION, elapsed_ms,
         )
 
-    async def _run_data_cleanups(self, conn: aiosqlite.Connection) -> None:
-        """One-time data cleanups that run regardless of user_version.
-
-        These are idempotent check-then-act operations that clean up
-        legacy tables/data. Safe to re-run on every startup.
-        """
-        pass  # Placeholder for future data cleanup migrations
-
     async def _run_versioned_migrations(
         self, conn: aiosqlite.Connection, current_version: int
     ) -> None:
