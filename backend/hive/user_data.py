@@ -221,22 +221,26 @@ def render_user_data(
     import re
     from string import Template
 
-    # Validate inputs structurally to prevent injection
-    # s3_bucket: AWS bucket naming rules (lowercase, digits, hyphens, dots)
-    if not re.match(r'^[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]$', s3_bucket):
-        raise ValueError(f"Invalid S3 bucket name: {s3_bucket}")
-    # version: semver-ish (digits, dots, hyphens, letters)
-    if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9.\-]{0,30}$', version):
-        raise ValueError(f"Invalid version: {version}")
-    # auth_user: alphanumeric + underscore/hyphen only
-    if not re.match(r'^[a-zA-Z0-9_\-]{1,64}$', auth_user):
-        raise ValueError(f"Invalid auth_user: {auth_user}")
-    # auth_hash: bcrypt ($2b$...) or hex string — no whitespace, no quotes
-    if not re.match(r'^[a-zA-Z0-9$./]{8,128}$', auth_hash):
-        raise ValueError(f"Invalid auth_hash format")
-    # region: AWS region format
-    if not re.match(r'^[a-z]{2}(-[a-z]+-\d+){1,2}$', region):
-        raise ValueError(f"Invalid region: {region}")
+    # Validate inputs structurally to prevent shell/config injection.
+    # Block characters that are dangerous in bash or Caddyfile contexts:
+    # spaces, quotes, backticks, semicolons, pipes, newlines, etc.
+    _SAFE = re.compile(r'^[a-zA-Z0-9._\-/]+$')
+    # bcrypt hashes contain $ (e.g. $2b$14$...) — safe because Caddyfile
+    # heredoc uses single-quote delimiter which prevents shell expansion
+    _SAFE_HASH = re.compile(r'^[a-zA-Z0-9._\-/$]+$')
+    for name, value, max_len, pattern in [
+        ("s3_bucket", s3_bucket, 63, _SAFE),
+        ("version", version, 32, _SAFE),
+        ("auth_user", auth_user, 64, _SAFE),
+        ("auth_hash", auth_hash, 256, _SAFE_HASH),
+        ("region", region, 25, _SAFE),
+    ]:
+        if not value or len(value) > max_len:
+            raise ValueError(f"Invalid {name}: length must be 1-{max_len}")
+        if not pattern.match(value):
+            raise ValueError(
+                f"Invalid {name}: contains unsafe characters"
+            )
 
     tmpl = Template(_USER_DATA_TEMPLATE)
     return tmpl.safe_substitute(
