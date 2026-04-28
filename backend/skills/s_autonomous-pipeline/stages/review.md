@@ -85,8 +85,10 @@ When code is **moved or replaced** (not just added):
 | Feature parity | Every capability of old code exists in new code | Old `_recall_knowledge` had TranscriptStore; new `_recall_for_query` must too |
 | Dead orphan detection | After removing a call site, grep old function -- if 0 callers remain, flag as dead code | `_recall_knowledge` still defined after its only caller was removed |
 | Argument validity | Mock attributes must exist on the real class | `unit.working_directory` doesn't exist on SessionUnit |
+| **Control-flow preservation** | **Moved code executes at the same point in the caller's flow** — check early returns, guards, conditional branches ABOVE the new call site. If the caller has `if X: return` before line N, code placed after line N never runs when X is true. | Extracted `_run_data_cleanups()` from `_run_migrations()` but placed it AFTER a fast-path `return` — cleanup never ran for up-to-date DBs (run_91a6fb7e) |
+| **Duplicate detection** | After adding a new method, `grep -n "def method_name"` in the same file — parallel sessions may have added a stub | Added `_run_data_cleanups()` at line 2263, parallel session had already added stub at line 1785 — two definitions, Python uses last one silently (run_91a6fb7e) |
 
-This check exists because PE review of the RecallEngine activation found 2 HIGH bugs: (1) replaced function dropped a capability (TranscriptStore), (2) test mock hid a missing attribute. Both would have been caught by feature parity diff.
+This check exists because PE review of the RecallEngine activation found 2 HIGH bugs: (1) replaced function dropped a capability (TranscriptStore), (2) test mock hid a missing attribute. Both would have been caught by feature parity diff. Desktop Update Gaps (run_91a6fb7e) added 2 more: control-flow bypass on code extraction, and duplicate method from parallel session.
 
 ---
 
