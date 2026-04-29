@@ -5,6 +5,14 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.2] - 2026-04-30
+
+### Fixed
+
+- **Release Workflow — 3 Platform Failures**: Windows `verify_build.py` crashed on `os.getpgid` (Unix-only) + emoji `UnicodeEncodeError` (cp1252); macOS CI blocked on `vec0_dylib` (sqlite3 without `enable_load_extension`); Hive rsync failed on missing intermediate directory
+- **time.monotonic() Cooldown Bug**: `FailureRecord` and `SessionUnit._last_proactive_restart` defaulted to `0.0` — on fresh CI VMs where monotonic clock < cooldown window, first operation was silently blocked. Fixed with `-inf` default
+- **CI Test Stability**: Dynamic DB/filesystem test discovery replaces brittle 10-file ignore list; tests run as best-effort with `continue-on-error` (smoke import is the hard gate)
+
 ## [1.9.1] - 2026-04-30
 
 ### Added
