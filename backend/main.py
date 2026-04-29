@@ -135,6 +135,11 @@ def _detect_run_mode() -> str:
     return os.environ.get("SWARMAI_MODE", "sidecar")
 
 
+def _backend_json_lock(path: str) -> str:
+    """Return the advisory lock file path for backend.json operations."""
+    return path + ".lock"
+
+
 def write_backend_json(
     port: int,
     mode: str,
@@ -142,57 +147,75 @@ def write_backend_json(
 ) -> None:
     """Write ``backend.json`` so other processes can discover this backend.
 
-    **Conflict check:** If an existing ``backend.json`` records a PID that is
-    alive AND the recorded port is accepting connections, we skip the write to
-    prevent a competing backend from stealing the discovery file.  This avoids
-    the daemon/sidecar race where a sidecar overwrites the daemon's entry.
+    Uses an exclusive file lock (``flock_exclusive`` from ``core.file_lock``,
+    which wraps ``fcntl.flock`` on Unix and ``msvcrt.locking`` on Windows) to
+    eliminate the TOCTOU race between conflict-check and file-write.  Without
+    the lock, two backends starting simultaneously can both pass the conflict
+    check and the last writer wins — corrupting discovery for the loser.
+
+    **Conflict check (inside lock):** If an existing ``backend.json``
+    records a PID that is alive AND the recorded port is accepting
+    connections, we skip the write to prevent a competing backend from
+    stealing the discovery file.
+
+    **PID ownership guard:** After writing, only *this* process's PID is
+    in the file — ``remove_backend_json`` checks PID before deleting to
+    prevent a late-exiting process from removing a newer owner's file.
     """
     import json as _json
     from datetime import datetime, timezone
 
+    from core.file_lock import flock_exclusive, flock_unlock
+
     p = Path(path)
-
-    # Conflict check: don't overwrite if an active backend already owns this file
-    if p.exists():
-        try:
-            existing = _json.loads(p.read_text())
-            existing_pid = existing.get("pid")
-            existing_port = existing.get("port")
-            if (
-                existing_pid is not None
-                and existing_pid != os.getpid()
-                and existing_port is not None
-            ):
-                # Check PID alive
-                try:
-                    os.kill(existing_pid, 0)
-                except PermissionError:
-                    pid_alive = True  # alive but owned by another user
-                except (OSError, ProcessLookupError):
-                    pid_alive = False  # dead PID — safe to overwrite
-                else:
-                    pid_alive = True
-                if pid_alive:
-                    # PID alive — check if port is also listening
-                    if _is_port_listening("127.0.0.1", existing_port):
-                        logger.warning(
-                            "backend.json conflict: PID %d alive and port %d listening "
-                            "— skipping write (our PID=%d, port=%d)",
-                            existing_pid, existing_port, os.getpid(), port,
-                        )
-                        return
-        except (ValueError, OSError):
-            pass  # corrupt file — safe to overwrite
-
-    data = {
-        "pid": os.getpid(),
-        "port": port,
-        "mode": mode,
-        "boot_id": _boot_id,
-        "started_at": datetime.now(timezone.utc).isoformat(),
-    }
+    lock_path = Path(_backend_json_lock(path))
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(_json.dumps(data, indent=2))
+
+    with open(lock_path, "w") as lock_fd:
+        flock_exclusive(lock_fd)  # blocking exclusive lock
+        try:
+            # Conflict check: don't overwrite if an active backend already owns this file
+            if p.exists():
+                try:
+                    existing = _json.loads(p.read_text())
+                    existing_pid = existing.get("pid")
+                    existing_port = existing.get("port")
+                    if (
+                        existing_pid is not None
+                        and existing_pid != os.getpid()
+                        and existing_port is not None
+                    ):
+                        # Check PID alive
+                        try:
+                            os.kill(existing_pid, 0)
+                        except PermissionError:
+                            pid_alive = True  # alive but owned by another user
+                        except (OSError, ProcessLookupError):
+                            pid_alive = False  # dead PID — safe to overwrite
+                        else:
+                            pid_alive = True
+                        if pid_alive:
+                            # PID alive — check if port is also listening
+                            if _is_port_listening("127.0.0.1", existing_port):
+                                logger.warning(
+                                    "backend.json conflict: PID %d alive and port %d listening "
+                                    "— skipping write (our PID=%d, port=%d)",
+                                    existing_pid, existing_port, os.getpid(), port,
+                                )
+                                return
+                except (ValueError, OSError):
+                    pass  # corrupt file — safe to overwrite
+
+            data = {
+                "pid": os.getpid(),
+                "port": port,
+                "mode": mode,
+                "boot_id": _boot_id,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            }
+            p.write_text(_json.dumps(data, indent=2))
+        finally:
+            flock_unlock(lock_fd)
 
 
 def remove_backend_json(
@@ -201,34 +224,72 @@ def remove_backend_json(
 ) -> None:
     """Delete ``backend.json`` on clean shutdown.
 
+    Uses an exclusive file lock to prevent races with concurrent writers.
+
     **Mode guard:** If ``startup_mode`` is provided, only delete when the
     mode recorded in the file matches.  This prevents a sidecar that briefly
     co-existed with a daemon from deleting the daemon's discovery file on exit.
+
+    **PID ownership guard:** Only delete if the file's PID matches our PID.
+    This prevents a late-exiting old process from deleting a newer process's
+    discovery file (e.g. during version sync restart).
     """
+    from core.file_lock import flock_exclusive, flock_unlock
+
     p = Path(path)
     if not p.exists():
         return
-    if startup_mode is not None:
-        try:
-            import json as _json
-            data = _json.loads(p.read_text())
-            file_mode = data.get("mode")
-            if file_mode is not None and file_mode != startup_mode:
-                logger.info(
-                    "Skipping backend.json removal: file mode=%s != startup mode=%s",
-                    file_mode, startup_mode,
-                )
-                return
-        except (ValueError, OSError):
-            pass  # corrupt file — safe to remove
+
+    lock_path = Path(_backend_json_lock(path))
     try:
-        p.unlink(missing_ok=True)
+        with open(lock_path, "w") as lock_fd:
+            flock_exclusive(lock_fd)
+            try:
+                if not p.exists():
+                    return  # deleted between our check and lock acquisition
+
+                try:
+                    import json as _json
+                    data = _json.loads(p.read_text())
+                except (ValueError, OSError):
+                    # Corrupt file — safe to remove
+                    p.unlink(missing_ok=True)
+                    return
+
+                # PID ownership: only delete if WE wrote this file
+                file_pid = data.get("pid")
+                if file_pid is not None and file_pid != os.getpid():
+                    logger.info(
+                        "Skipping backend.json removal: file PID=%d != our PID=%d",
+                        file_pid, os.getpid(),
+                    )
+                    return
+
+                # Mode guard
+                if startup_mode is not None:
+                    file_mode = data.get("mode")
+                    if file_mode is not None and file_mode != startup_mode:
+                        logger.info(
+                            "Skipping backend.json removal: file mode=%s != startup mode=%s",
+                            file_mode, startup_mode,
+                        )
+                        return
+
+                p.unlink(missing_ok=True)
+            finally:
+                flock_unlock(lock_fd)
     except Exception:
-        pass  # best-effort
+        # Best-effort — don't crash on shutdown for a discovery file
+        try:
+            p.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 def read_backend_json(path: str = _BACKEND_JSON_DEFAULT) -> dict | None:
     """Read and validate ``backend.json``.
+
+    Uses a shared file lock to prevent reading a half-written file.
 
     Returns the parsed dict if the file exists, is valid JSON, and the
     PID recorded in it is still alive.  Returns ``None`` otherwise
@@ -236,24 +297,47 @@ def read_backend_json(path: str = _BACKEND_JSON_DEFAULT) -> dict | None:
     """
     import json as _json
 
+    from core.file_lock import flock_shared, flock_unlock
+
     p = Path(path)
     if not p.exists():
         return None
-    try:
-        data = _json.loads(p.read_text())
-    except (ValueError, OSError):
-        return None
 
-    # Stale PID check: is the recorded process still alive?
-    pid = data.get("pid")
-    if pid is None:
-        return None
+    lock_path = Path(_backend_json_lock(path))
     try:
-        os.kill(pid, 0)  # signal 0 = existence check
-    except (OSError, ProcessLookupError):
-        return None  # process is dead → stale file
+        with open(lock_path, "w") as lock_fd:
+            flock_shared(lock_fd)  # shared lock — multiple readers OK on Unix
+            try:
+                if not p.exists():
+                    return None
+                try:
+                    data = _json.loads(p.read_text())
+                except (ValueError, OSError):
+                    return None
 
-    return data
+                # Stale PID check: is the recorded process still alive?
+                pid = data.get("pid")
+                if pid is None:
+                    return None
+                try:
+                    os.kill(pid, 0)  # signal 0 = existence check
+                except (OSError, ProcessLookupError):
+                    return None  # process is dead → stale file
+
+                return data
+            finally:
+                flock_unlock(lock_fd)
+    except (OSError, IOError):
+        # Lock file inaccessible — fall back to lockless read
+        try:
+            data = _json.loads(p.read_text())
+            pid = data.get("pid")
+            if pid is None:
+                return None
+            os.kill(pid, 0)
+            return data
+        except Exception:
+            return None
 
 
 def _detect_backend_port() -> int:

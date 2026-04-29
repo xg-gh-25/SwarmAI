@@ -701,7 +701,12 @@ async fn get_daemon_version() -> Option<String> {
 ///
 /// Flow: graceful shutdown → atomic binary deploy → restart launchd → verify.
 /// Returns Ok(()) on success, Err on failure (caller should fall back to sidecar).
-async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Result<(), String> {
+///
+/// NOTE: the `app` parameter is retained for API compatibility with the
+/// background wrapper (`sync_daemon_version_background`).  Event emission
+/// has been moved to the wrapper, so this function no longer emits
+/// `backend-upgrading` or `backend-upgraded` directly.
+async fn sync_daemon_version(_app: &tauri::AppHandle, app_version: &str) -> Result<(), String> {
     let daemon_version = get_daemon_version().await
         .unwrap_or_else(|| "unknown".to_string());
 
@@ -713,12 +718,15 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
         "[Tauri] Daemon version mismatch: daemon={}, app={} — upgrading",
         daemon_version, app_version
     );
-    let _ = app.emit("backend-upgrading", format!("{} → {}", daemon_version, app_version));
+    // NOTE: the `backend-upgrading` event is emitted by
+    // `sync_daemon_version_background` — the single source of truth for
+    // upgrade lifecycle events.  Keeping the println! for debuggability.
 
-    // Step 1: Graceful shutdown request
-    send_shutdown_request(DAEMON_PORT);
-
-    // Step 2: Bootout from launchd BEFORE binary copy — prevents KeepAlive restart
+    // Step 1: Bootout from launchd FIRST — prevents KeepAlive restart race.
+    // bootout both removes the service from management AND sends SIGTERM,
+    // so the old order (shutdown → bootout) had a race window where
+    // KeepAlive restarted the daemon between shutdown and bootout, causing
+    // multiple processes to fight over backend.json and SQLite.
     let home = std::env::var("HOME").unwrap_or_default();
     let uid_output = std::process::Command::new("id").arg("-u").output()
         .map_err(|e| format!("Failed to get UID: {}", e))?;
@@ -730,7 +738,14 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
         .args(["bootout", &gui_target, &plist_path])
         .output();
 
-    // Brief sleep for process to exit after bootout
+    // Step 2: Also send graceful shutdown as belt-and-suspenders.
+    // bootout's SIGTERM should trigger FastAPI lifespan shutdown, but an
+    // explicit HTTP request ensures the backend runs its full cleanup path
+    // (backend.json removal, session disconnect) even if SIGTERM races
+    // with the event loop.
+    send_shutdown_request(DAEMON_PORT);
+
+    // Brief sleep for process to exit after bootout + shutdown
     tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
 
     // Step 3: Atomic binary deploy from app bundle
@@ -794,7 +809,9 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
         let new_version = get_daemon_version().await.unwrap_or_default();
         if new_version == app_version {
             println!("[Tauri] Daemon upgraded successfully: {}", app_version);
-            let _ = app.emit("backend-upgraded", app_version);
+            // NOTE: the `backend-upgraded` event is emitted by
+            // `sync_daemon_version_background` — the single source of
+            // truth for upgrade lifecycle events.
             return Ok(());
         }
         println!(
@@ -804,6 +821,80 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
     }
 
     Err("Daemon upgrade failed — daemon not responding after restart".to_string())
+}
+
+/// Background wrapper around `sync_daemon_version`.
+///
+/// This function is designed to be spawned via `tauri::async_runtime::spawn`
+/// and NEVER awaited on the `start_backend` critical path. It:
+///
+/// 1. Pre-checks the daemon's current version to avoid emitting spurious
+///    `backend-upgrading` events when versions already match (required for
+///    Property 2 — Preservation).
+/// 2. Emits `backend-upgrading` with `{from, to}` payload at start.
+/// 3. Invokes `sync_daemon_version`, catching any panic via
+///    `FutureExt::catch_unwind`.
+/// 4. Emits exactly one terminal event: `backend-upgraded` on `Ok(())`,
+///    `backend-upgrade-failed` on `Err(_)` or panic.
+///
+/// Safety: this function never returns an error. All failure modes are
+/// converted into events so that the Tauri runtime cannot surface an
+/// uncaught background error.
+async fn sync_daemon_version_background(
+    app: tauri::AppHandle,
+    app_version: String,
+) {
+    use futures::FutureExt;
+
+    // Pre-check: if the daemon version already matches, do nothing and
+    // do not emit any events. This preserves the happy-path invariant
+    // that a matching version produces zero observable upgrade activity.
+    let daemon_version = get_daemon_version().await
+        .unwrap_or_else(|| "unknown".to_string());
+    if daemon_version == app_version {
+        return;
+    }
+
+    // Announce start.
+    let _ = app.emit(
+        "backend-upgrading",
+        serde_json::json!({
+            "from": daemon_version,
+            "to": app_version,
+        }),
+    );
+
+    // Run the existing sync routine, catching panics.
+    let result = std::panic::AssertUnwindSafe(
+        sync_daemon_version(&app, &app_version)
+    )
+    .catch_unwind()
+    .await;
+
+    match result {
+        Ok(Ok(())) => {
+            println!("[Tauri] Background daemon upgrade succeeded");
+            let _ = app.emit(
+                "backend-upgraded",
+                serde_json::json!({ "version": app_version }),
+            );
+        }
+        Ok(Err(e)) => {
+            println!("[Tauri] Background daemon upgrade failed: {}", e);
+            let _ = app.emit("backend-upgrade-failed", e);
+        }
+        Err(panic_info) => {
+            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                format!("panic in sync_daemon_version: {}", s)
+            } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                format!("panic in sync_daemon_version: {}", s)
+            } else {
+                "panic in sync_daemon_version (unknown payload)".to_string()
+            };
+            eprintln!("[Tauri] {}", msg);
+            let _ = app.emit("backend-upgrade-failed", msg);
+        }
+    }
 }
 
 /// Ensure the daemon plist is installed and bootstrapped into launchd.
@@ -1033,19 +1124,17 @@ async fn start_backend(
         if let Some(_port) = probe_daemon_health(5, 2).await {
             println!("[Tauri] Found existing daemon on port {} — connecting", DAEMON_PORT);
 
-            // Version sync: upgrade daemon binary if it doesn't match app version
+            // Version reconciliation is a best-effort maintenance task. It must
+            // NOT block the Tauri command return — doing so caused the v1.9.0
+            // "Backend service failed to start within 60 seconds" regression on
+            // any version drift. Dispatch onto the Tauri async runtime and
+            // return the port immediately.
             let app_version = app.config().version.clone().unwrap_or_default();
             if !app_version.is_empty() {
-                match sync_daemon_version(&app, &app_version).await {
-                    Ok(()) => {
-                        // Either versions matched or upgrade succeeded
-                    }
-                    Err(e) => {
-                        // Upgrade failed — connect to existing daemon anyway
-                        // (stale daemon is better than no daemon)
-                        println!("[Tauri] Daemon version sync failed: {} — using existing daemon", e);
-                    }
-                }
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    sync_daemon_version_background(app_handle, app_version).await;
+                });
             }
 
             let port = connect_daemon(&state, &app).await;
