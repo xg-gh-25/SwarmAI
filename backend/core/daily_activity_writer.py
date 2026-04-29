@@ -24,11 +24,12 @@ Key public symbols:
 from __future__ import annotations
 
 import asyncio
-import fcntl
 import json
 import logging
 from datetime import date, datetime
 from pathlib import Path
+
+from utils.file_lock import flock_exclusive, flock_unlock
 from typing import Any
 
 from .session_hooks import HookContext
@@ -253,7 +254,7 @@ def _atomic_read_modify_write(file_path: Path, summary: StructuredSummary, conte
 
     # Open or create the file
     with open(file_path, "a+") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
+        flock_exclusive(fh)
         try:
             fh.seek(0)
             content = fh.read()
@@ -280,7 +281,7 @@ def _atomic_read_modify_write(file_path: Path, summary: StructuredSummary, conte
             fh.write(new_content)
             fh.flush()
         finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
+            flock_unlock(fh)
 
 
 def _summary_to_jsonl_record(summary: StructuredSummary, context: HookContext) -> dict[str, Any]:
@@ -330,12 +331,12 @@ def _write_jsonl_sidecar(jsonl_path: Path, record: dict[str, Any]) -> None:
     line = json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
 
     with open(jsonl_path, "a") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
+        flock_exclusive(fh)
         try:
             fh.write(line)
             fh.flush()
         finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
+            flock_unlock(fh)
 
 
 def read_jsonl_sidecar(jsonl_path: Path) -> list[dict[str, Any]]:

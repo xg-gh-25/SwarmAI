@@ -167,11 +167,24 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.11'
 
       - name: Install frontend dependencies
         working-directory: ./desktop
         run: npm ci
+
+      - name: Create backend .env
+        working-directory: ./backend
+        run: cp .env.example .env
+
+      - name: Install backend Python dependencies
+        working-directory: ./backend
+        run: |
+          pip install uv
+          uv venv .venv
+          source .venv/bin/activate
+          uv pip install -e ".[dev]"
+          echo "$VIRTUAL_ENV/bin" >> $GITHUB_PATH
 
       - name: Build frontend (shared with Desktop)
         working-directory: ./desktop

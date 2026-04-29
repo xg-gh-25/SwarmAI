@@ -15,7 +15,6 @@ library) rather than shelling out, for atomicity and testability.
 from __future__ import annotations
 
 import asyncio
-import fcntl
 import json
 import logging
 import re
@@ -145,15 +144,16 @@ def _append_changelog(
         "summary": summary,
         "source": source,
     })
+    from utils.file_lock import flock_exclusive, flock_unlock
     lock_path = changelog_path.with_suffix(".jsonl.lock")
     try:
         with open(lock_path, "w") as lock_fd:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            flock_exclusive(lock_fd)
             try:
                 with open(changelog_path, "a", encoding="utf-8") as f:
                     f.write(line + "\n")
             finally:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                flock_unlock(lock_fd)
     except OSError as exc:
         logger.warning("Failed to append changelog: %s", exc)
 
@@ -280,14 +280,14 @@ class EvolutionMaintenanceHook:
         Returns the (possibly modified) content string.
         """
         from scripts.locked_write import _find_section_range, _find_entry_in_section
-        import fcntl as _fcntl
+        from utils.file_lock import flock_exclusive, flock_unlock
 
         lock_path = evo_path.with_suffix(evo_path.suffix + ".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         fd = None
         try:
             fd = open(lock_path, "w")
-            _fcntl.flock(fd, _fcntl.LOCK_EX)
+            flock_exclusive(fd)
 
             # Re-read under lock — authoritative content
             try:
@@ -384,7 +384,7 @@ class EvolutionMaintenanceHook:
         finally:
             if fd is not None:
                 try:
-                    _fcntl.flock(fd, _fcntl.LOCK_UN)
+                    flock_unlock(fd)
                 except OSError:
                     pass
                 fd.close()
@@ -492,7 +492,7 @@ class EvolutionMaintenanceHook:
     ) -> None:
         """Remove a deprecated entry from EVOLUTION.md with file locking."""
         from scripts.locked_write import _find_entry_in_section, LOCK_TIMEOUT
-        import fcntl
+        from utils.file_lock import flock_exclusive_nb, flock_unlock
 
         lock_path = evo_path.with_suffix(evo_path.suffix + ".lock")
         fd = None
@@ -501,7 +501,7 @@ class EvolutionMaintenanceHook:
             deadline = time.monotonic() + LOCK_TIMEOUT
             while True:
                 try:
-                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    flock_exclusive_nb(fd)
                     break
                 except (BlockingIOError, OSError):
                     if time.monotonic() >= deadline:
@@ -528,7 +528,7 @@ class EvolutionMaintenanceHook:
         finally:
             if fd is not None:
                 try:
-                    fcntl.flock(fd, fcntl.LOCK_UN)
+                    flock_unlock(fd)
                 except OSError:
                     pass
                 fd.close()

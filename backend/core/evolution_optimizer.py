@@ -27,7 +27,6 @@ Key public symbols:
 """
 from __future__ import annotations
 
-import fcntl
 import json
 import logging
 import os
@@ -37,6 +36,8 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+
+from utils.file_lock import flock_exclusive, flock_exclusive_nb, flock_unlock
 
 logger = logging.getLogger(__name__)
 
@@ -909,7 +910,7 @@ def run_evolution_cycle(skills_dir: Path, transcripts_dir: Path, evals_dir: Path
     lock_fd = None
     try:
         lock_fd = open(lock_path, "w")
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        flock_exclusive_nb(lock_fd)
     except (OSError, BlockingIOError):
         logger.info("Evolution cycle already running -- skipping")
         if lock_fd is not None:
@@ -925,7 +926,7 @@ def run_evolution_cycle(skills_dir: Path, transcripts_dir: Path, evals_dir: Path
         return _run_evolution_cycle_locked(skills_dir, transcripts_dir, evals_dir, cycle_id)
     finally:
         try:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            flock_unlock(lock_fd)
         except OSError:
             pass
         lock_fd.close()
@@ -1396,12 +1397,12 @@ def _write_cycle_changelog(
         lock_path = changelog_path.with_suffix(".jsonl.lock")
         try:
             with open(lock_path, "w") as lock_fd:
-                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                flock_exclusive(lock_fd)
                 try:
                     with open(changelog_path, "a", encoding="utf-8") as f:
                         f.write(json.dumps(entry) + "\n")
                 finally:
-                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    flock_unlock(lock_fd)
         except OSError:
             with open(changelog_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry) + "\n")

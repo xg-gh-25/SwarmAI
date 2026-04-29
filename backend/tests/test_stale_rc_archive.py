@@ -9,7 +9,6 @@ TDD tests for _archive_stale_rc_entries():
 6. MEMORY.md body shrinks after archival
 """
 
-import fcntl
 from datetime import date, timedelta
 from pathlib import Path
 

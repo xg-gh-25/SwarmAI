@@ -147,7 +147,7 @@ def write_backend_json(
 ) -> None:
     """Write ``backend.json`` so other processes can discover this backend.
 
-    Uses an exclusive file lock (``flock_exclusive`` from ``core.file_lock``,
+    Uses an exclusive file lock (``flock_exclusive`` from ``utils.file_lock``,
     which wraps ``fcntl.flock`` on Unix and ``msvcrt.locking`` on Windows) to
     eliminate the TOCTOU race between conflict-check and file-write.  Without
     the lock, two backends starting simultaneously can both pass the conflict
@@ -165,7 +165,7 @@ def write_backend_json(
     import json as _json
     from datetime import datetime, timezone
 
-    from core.file_lock import flock_exclusive, flock_unlock
+    from utils.file_lock import flock_exclusive, flock_unlock
 
     p = Path(path)
     lock_path = Path(_backend_json_lock(path))
@@ -234,7 +234,7 @@ def remove_backend_json(
     This prevents a late-exiting old process from deleting a newer process's
     discovery file (e.g. during version sync restart).
     """
-    from core.file_lock import flock_exclusive, flock_unlock
+    from utils.file_lock import flock_exclusive, flock_unlock
 
     p = Path(path)
     if not p.exists():
@@ -297,7 +297,7 @@ def read_backend_json(path: str = _BACKEND_JSON_DEFAULT) -> dict | None:
     """
     import json as _json
 
-    from core.file_lock import flock_shared, flock_unlock
+    from utils.file_lock import flock_shared, flock_unlock
 
     p = Path(path)
     if not p.exists():

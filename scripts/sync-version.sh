@@ -90,8 +90,14 @@ _set_version() {
     local basename=$(basename "$file")
     case "$basename" in
         config.py)
-            # Pattern: _read_version("X.Y.Z")
-            sed -i '' "s/_read_version(\"[^\"]*\")/_read_version(\"${ver}\")/" "$file"
+            # Pattern: _read_version("X.Y.Z") — use Python for cross-platform compat
+            # (BSD sed -i '' is macOS-only; GNU sed and Windows Git Bash reject it)
+            python3 -c "
+import re, pathlib, sys
+p = pathlib.Path(sys.argv[1])
+txt = p.read_text()
+p.write_text(re.sub(r'_read_version\(\"[^\"]*\"\)', '_read_version(\"' + sys.argv[2] + '\")', txt, count=1))
+" "$file" "$ver"
             ;;
         pyproject.toml|Cargo.toml)
             # BSD sed (macOS) doesn't support 0,/pat/ — use python for reliable first-match replace

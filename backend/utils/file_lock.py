@@ -8,7 +8,7 @@ Also provides ``_IS_WINDOWS`` for callers that need platform checks.
 
 Usage (replacing ``fcntl.flock`` calls)::
 
-    from core.file_lock import flock_exclusive, flock_unlock
+    from utils.file_lock import flock_exclusive, flock_unlock
 
     fd = open(lock_path, "w")
     try:
@@ -20,12 +20,12 @@ Usage (replacing ``fcntl.flock`` calls)::
 
 For shared (reader) locks that allow concurrent readers on Unix::
 
-    from core.file_lock import flock_shared, flock_unlock
+    from utils.file_lock import flock_shared, flock_unlock
     # Falls back to exclusive on Windows (msvcrt has no shared mode).
 
 For non-blocking (try-lock) semantics::
 
-    from core.file_lock import flock_exclusive_nb, flock_unlock
+    from utils.file_lock import flock_exclusive_nb, flock_unlock
 
     fd = open(lock_path, "w")
     try:
