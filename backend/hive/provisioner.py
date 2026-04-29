@@ -577,10 +577,11 @@ class HiveProvisioner:
         EC2 DescribeTags uses the AWS API, not the instance network.
         """
         start = time.monotonic()
+        # Create client once — reused across all poll iterations (PE-H1)
+        ec2_client = session.client("ec2", region_name=region)
 
         def _check():
-            ec2 = session.client("ec2", region_name=region)
-            resp = ec2.describe_tags(
+            resp = ec2_client.describe_tags(
                 Filters=[
                     {"Name": "resource-id", "Values": [ec2_id]},
                     {"Name": "key", "Values": ["HiveStatus"]},
@@ -612,10 +613,12 @@ class HiveProvisioner:
         Used for start() where the instance is already running but we can't
         reach it via network (SG only allows CloudFront).
         """
+        # Create client once — reused across all poll iterations (PE-H1)
+        ssm_client = session.client("ssm", region_name=region)
+
         def _check():
-            ssm = session.client("ssm", region_name=region)
             try:
-                resp = ssm.send_command(
+                resp = ssm_client.send_command(
                     InstanceIds=[ec2_id],
                     DocumentName="AWS-RunShellScript",
                     Parameters={"commands": [
@@ -625,8 +628,10 @@ class HiveProvisioner:
                     Comment="SwarmAI Hive health check",
                 )
                 command_id = resp["Command"]["CommandId"]
-                for _ in range(12):
-                    result = ssm.get_command_invocation(
+                # PE-H2: max 6 iterations (30s) instead of 12 (60s) to avoid
+                # blocking thread pool worker too long. Outer loop retries.
+                for _ in range(6):
+                    result = ssm_client.get_command_invocation(
                         CommandId=command_id, InstanceId=ec2_id
                     )
                     if result["Status"] in ("Success", "Failed", "Cancelled", "TimedOut"):

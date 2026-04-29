@@ -569,6 +569,9 @@ async def health_proxy(instance_id: str):
     # Prefer CloudFront (SG blocks direct IP from non-CF sources)
     cf_domain = row.get("cloudfront_domain")
     if cf_domain:
+        # PE-M2: SSRF guard — only allow *.cloudfront.net domains
+        if not cf_domain.endswith(".cloudfront.net"):
+            raise HTTPException(status_code=400, detail="Invalid CloudFront domain")
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(f"https://{cf_domain}/health", auth=auth)
