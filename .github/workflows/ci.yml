@@ -39,11 +39,8 @@ jobs:
         working-directory: ./backend
         # -n 0: disable xdist in CI — parallel workers cause "database is locked"
         # on shared temp DBs. Serial is slower (~5min vs ~3min) but reliable.
-        # -n 0: serial (no xdist) — avoids "database is locked" race on shared temp DBs
-        # --ignore e2e: chat_scenarios_e2e.py has DB lock contention in fixture setup
-        # on CI (100ms busy_timeout too short for cold Ubuntu runners). These tests
-        # pass locally and cover SSE pipeline — skip in CI until busy_timeout is fixed.
-        run: SWARMAI_SUITE=1 python -m pytest -n 0 --timeout=120 -q --tb=short --ignore=tests/test_chat_scenarios_e2e.py
+        # -n 0: serial (no xdist) — avoids parallel worker contention on shared temp DBs
+        run: SWARMAI_SUITE=1 python -m pytest -n 0 --timeout=120 -q --tb=short
         timeout-minutes: 10
 
   # ── Frontend: typecheck + build (fast, ~1min) ───────────────
