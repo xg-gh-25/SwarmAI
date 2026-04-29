@@ -64,9 +64,17 @@ _phase_timings: dict[str, float] | None = None
 
 
 def get_log_file_path() -> Path:
-    """Get the log file path based on platform."""
+    """Get the log file path based on run mode.
+
+    Daemon and sidecar write separate log files to avoid RotatingFileHandler
+    multi-process race (rename collisions during rotation).  dev.sh already
+    redirects to backend-dev.log, so three processes never share a file.
+    """
     log_dir = get_app_data_dir() / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
+    mode = os.environ.get("SWARMAI_MODE", "sidecar")
+    if mode == "daemon":
+        return log_dir / "backend-daemon.log"
     return log_dir / "backend.log"
 
 

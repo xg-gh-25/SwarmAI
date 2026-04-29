@@ -183,8 +183,10 @@ _daemon_wait_healthy() {
         fi
         _check_daemon_version 2>/dev/null
         echo ""
-        _log "Last 10 lines of stderr:"
-        tail -10 "$LOG_DIR/backend-stderr.log" 2>/dev/null
+        _log "Last 10 lines of daemon log:"
+        tail -10 "$LOG_DIR/backend-daemon.log" 2>/dev/null
+        _log "Last 5 lines of stderr:"
+        tail -5 "$LOG_DIR/backend-stderr.log" 2>/dev/null
     else
         _log "Check logs: ./${_DAEMON_CMD} daemon logs"
     fi
@@ -255,7 +257,7 @@ cmd_daemon() {
             ;;
         logs)
             _log "Tailing daemon logs (Ctrl-C to stop)..."
-            tail -f "$LOG_DIR/backend-stderr.log"
+            tail -f "$LOG_DIR/backend-daemon.log" "$LOG_DIR/backend-stderr.log"
             ;;
         *)
             echo "Usage: ./${_DAEMON_CMD} daemon [restart|stop|start|status|logs]"
