@@ -917,6 +917,14 @@ rsync -a --delete /tmp/hive-new/backend/ /opt/swarmai/backend/ --exclude='.venv'
 rsync -a --delete /tmp/hive-new/desktop/dist/ /opt/swarmai/desktop/dist/
 rsync -a /tmp/hive-new/hive/ /opt/swarmai/hive/
 cd /opt/swarmai/backend && sudo -u swarm .venv/bin/pip install -q -e .
+# Reload Caddy if Caddyfile changed, restart backend
+if diff -q /tmp/hive-new/hive/Caddyfile /etc/caddy/Caddyfile >/dev/null 2>&1; then
+  echo "Caddyfile unchanged"
+else
+  echo "Caddyfile changed — updating and reloading Caddy"
+  cp /tmp/hive-new/hive/Caddyfile /etc/caddy/Caddyfile
+  caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 || true
+fi
 systemctl restart swarmai-hive
 rm -rf /tmp/hive-new /tmp/hive-update.tar.gz
 echo "=== Update complete ==="
@@ -983,9 +991,17 @@ echo "=== Update complete ==="
         #   basicauth * {
         #       admin $2b$14$...
         #   }
-        # Use sed to replace the hash line. The | delimiter avoids
-        # conflicts with $ and / in bcrypt hashes.
-        # We also write a backup so we can rollback if reload fails.
+        #
+        # PE-review N1: bcrypt hashes contain $ signs (e.g. $2b$14$...).
+        # If interpolated into a bash script via f-string, bash expands
+        # $2b, $14, etc. as variable references → corrupted hash → auth
+        # permanently broken.
+        #
+        # Fix: base64-encode the hash, decode on the instance. base64
+        # output is [A-Za-z0-9+/=] — no shell-special characters.
+        import base64
+        hash_b64 = base64.b64encode(new_hash.encode()).decode()
+
         reset_script = f"""#!/bin/bash
 set -euo pipefail
 CADDYFILE="/etc/caddy/Caddyfile"
@@ -993,10 +1009,14 @@ if [ ! -f "$CADDYFILE" ]; then
   echo "ERROR: $CADDYFILE not found" >&2
   exit 1
 fi
+# Decode the bcrypt hash from base64 (avoids $ expansion in bash)
+NEW_HASH=$(echo '{hash_b64}' | base64 -d)
 # Backup current Caddyfile
 cp "$CADDYFILE" "$CADDYFILE.bak"
 # Replace the bcrypt hash line (matches: "    admin $2b$..." or "    admin $2a$...")
-sed -i 's|        admin \\$2[ab]\\$.*|        admin {new_hash}|' "$CADDYFILE"
+# Use | as sed delimiter (bcrypt never contains |). The hash is in a
+# variable, not inline, so $ signs are not expanded during sed parsing.
+sed -i "s|        admin \\$2[ab]\\$.*|        admin $NEW_HASH|" "$CADDYFILE"
 # Validate and reload Caddy
 # Note: systemctl reload is not supported for Caddy — use caddy reload
 # which hot-swaps the config via Caddy's admin API (zero downtime).

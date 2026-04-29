@@ -520,14 +520,17 @@ cmd_release_all() {
     local hive_tar="$PROJECT_ROOT/dist/swarmai-hive-v${version}-linux-arm64.tar.gz"
     local checksums="$PROJECT_ROOT/dist/checksums.txt"
 
-    # Regenerate checksums for both artifacts
+    # Copy DMG to dist/ first, then generate checksums for both
+    _log "Collecting artifacts into dist/..."
+    if [ -n "$dmg" ]; then
+        cp "$dmg" "$PROJECT_ROOT/dist/"
+    fi
+
     _log "Generating unified checksums..."
     cd "$PROJECT_ROOT/dist"
     : > checksums.txt
     if [ -n "$dmg" ]; then
-        shasum -a 256 "$(basename "$dmg")" >> checksums.txt 2>/dev/null || true
-        # Copy DMG to dist/ for unified upload
-        cp "$dmg" "$PROJECT_ROOT/dist/"
+        shasum -a 256 "$(basename "$dmg")" >> checksums.txt
     fi
     shasum -a 256 "swarmai-hive-v${version}-linux-arm64.tar.gz" >> checksums.txt
     cd "$PROJECT_ROOT"

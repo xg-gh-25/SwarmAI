@@ -87,6 +87,9 @@ rsync -a \
     --exclude='.pytest_cache' \
     --exclude='tests/' \
     --exclude='.mypy_cache' \
+    --exclude='.DS_Store' \
+    --exclude='.hypothesis' \
+    --exclude='conftest.py' \
     "${PROJECT_ROOT}/backend/" "${STAGING}/backend/"
 
 echo "[release] Copying pre-built frontend..."
