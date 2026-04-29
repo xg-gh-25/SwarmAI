@@ -41,40 +41,7 @@ jobs:
 
       - name: Smoke import — all Python modules (Linux)
         working-directory: ./backend
-        run: |
-          python -c "
-          import importlib, pkgutil, sys
-
-          skip_prefixes = ('tests.', 'skills.', 'jobs.handlers.', 'channels.')
-          failures = []
-          ok = 0
-
-          for finder, mod_name, is_pkg in pkgutil.walk_packages(
-              path=['.'], onerror=lambda name: None
-          ):
-              if any(mod_name.startswith(p) for p in skip_prefixes):
-                  continue
-              if mod_name.startswith('_') or '.test_' in mod_name:
-                  continue
-              try:
-                  importlib.import_module(mod_name)
-                  ok += 1
-              except (ImportError, ModuleNotFoundError) as e:
-                  print(f'  FAIL {mod_name}: {e}')
-                  failures.append(mod_name)
-              except SyntaxError as e:
-                  print(f'  FAIL {mod_name}: SyntaxError: {e}')
-                  failures.append(mod_name)
-              except Exception:
-                  # Runtime errors (missing env, DB, FastAPI app context) are
-                  # expected in CI — the module loaded, just can't fully init.
-                  ok += 1
-
-          if failures:
-              print(f'\n{len(failures)} module(s) failed to import on Linux')
-              sys.exit(1)
-          print(f'\nAll {ok} discovered modules imported successfully on Linux')
-          "
+        run: python ../scripts/smoke_import.py
 
       - name: Run non-DB tests
         working-directory: ./backend
@@ -161,47 +128,10 @@ jobs:
           echo "$VIRTUAL_ENV/Scripts" >> $GITHUB_PATH
           cp .env.example .env
 
-      - name: Smoke import — auto-discover all Python modules
+      - name: Smoke import — all Python modules (Windows)
         working-directory: ./backend
         shell: bash
-        run: |
-          python -c "
-          import importlib, pkgutil, sys, os
-
-          # Auto-discover all packages under backend/ — no hardcoded list.
-          # If a new module adds 'import fcntl' at top level, this catches it.
-          skip_prefixes = ('tests.', 'skills.', 'jobs.handlers.', 'channels.')
-          failures = []
-          ok = 0
-
-          for finder, mod_name, is_pkg in pkgutil.walk_packages(
-              path=['.'], onerror=lambda name: None
-          ):
-              if any(mod_name.startswith(p) for p in skip_prefixes):
-                  continue
-              if mod_name.startswith('_') or '.test_' in mod_name:
-                  continue
-              try:
-                  importlib.import_module(mod_name)
-                  ok += 1
-              except (ImportError, ModuleNotFoundError) as e:
-                  print(f'  FAIL {mod_name}: {e}')
-                  failures.append(mod_name)
-              except SyntaxError as e:
-                  print(f'  FAIL {mod_name}: SyntaxError: {e}')
-                  failures.append(mod_name)
-              except Exception:
-                  # Runtime errors (missing env, DB, FastAPI app context) are
-                  # expected in CI — the module loaded, just can't fully init.
-                  ok += 1
-
-          if failures:
-              print(f'\n{len(failures)} module(s) failed to import on Windows:')
-              for f in failures:
-                  print(f'  - {f}')
-              sys.exit(1)
-          print(f'\nAll {ok} discovered modules imported successfully on Windows')
-          "
+        run: python ../scripts/smoke_import.py
 
   # ── Version consistency check ───────────────────────────────
   version-check:
