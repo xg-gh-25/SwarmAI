@@ -53,12 +53,8 @@ jobs:
 
       - name: Create backend .env file
         working-directory: ./backend
-        run: |
-          cp .env.example .env
-          if [ -n "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
-            sed -i.bak 's/ANTHROPIC_API_KEY=.*/ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}/' .env
-            rm -f .env.bak
-          fi
+        run: cp .env.example .env
+        # NOTE: Do NOT inject real API keys — PyInstaller may bundle .env
 
       - name: Install backend Python dependencies
         working-directory: ./backend
@@ -148,7 +144,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: ./desktop
-        run: npm install
+        run: npm ci
 
       - name: Create backend .env file
         working-directory: ./backend
@@ -184,8 +180,6 @@ jobs:
 
       - name: Build application
         working-directory: ./desktop
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: npm run build:all
         shell: bash
 
