@@ -25,6 +25,7 @@ Lifecycle:
 """
 
 import logging
+import os
 import shutil
 from pathlib import Path
 
@@ -91,11 +92,21 @@ class ProjectionLayer:
 
         cache = await self._skill_manager.get_cache()
 
+        # Platform filter: Hive (EC2 Linux) excludes macOS/desktop skills
+        is_hive = os.environ.get("SWARMAI_MODE") == "hive"
+        _hive_excluded = {"macos", "desktop"} if is_hive else set()
+
         # Determine which skills to project
         allowed_set = set(allowed_skills) if allowed_skills else set()
         target_skills: dict[str, Path] = {}
+        skipped_platform: list[str] = []
 
         for folder_name, info in cache.items():
+            # Filter by platform before tier check
+            if info.platform in _hive_excluded:
+                skipped_platform.append(folder_name)
+                continue
+
             if info.source_tier == "built-in":
                 # Built-in skills are ALWAYS projected
                 target_skills[folder_name] = info.path
@@ -103,6 +114,13 @@ class ProjectionLayer:
                 target_skills[folder_name] = info.path
             elif folder_name in allowed_set:
                 target_skills[folder_name] = info.path
+
+        if skipped_platform:
+            logger.info(
+                "Hive mode: skipped %d platform-incompatible skills: %s",
+                len(skipped_platform),
+                ", ".join(sorted(skipped_platform)),
+            )
 
         # Create or update copies for each target skill
         for folder_name, skill_path in target_skills.items():

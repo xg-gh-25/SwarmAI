@@ -58,6 +58,7 @@ class SkillManifest(BaseModel):
     name: str
     version: str = "1.0.0"
     tier: str = "lazy"
+    platform: str = "all"  # "all" | "macos" | "desktop"
     scripts: list[ScriptEntry] = []
     resources: list[ResourceEntry] = []
     dependencies: dict[str, list[str]] = {}

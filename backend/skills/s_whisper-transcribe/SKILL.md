@@ -5,6 +5,7 @@ description: >
   TRIGGER: "transcribe", "transcription", "speech to text", "convert audio to text", "meeting recording", "voice note".
   DO NOT USE: for text-to-speech (use podcast-gen), music recognition, or real-time transcription.
 tier: lazy
+platform: desktop
 ---
 # Whisper Transcribe
 

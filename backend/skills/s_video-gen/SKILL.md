@@ -6,6 +6,7 @@ description: >
   DO NOT USE: for video editing of existing footage (use ffmpeg directly) or for static images (use image-gen).
 version: "1.0.0"
 tier: lazy
+platform: desktop
 ---
 # Video Generation
 

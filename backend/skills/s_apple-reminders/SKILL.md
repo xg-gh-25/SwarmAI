@@ -5,6 +5,7 @@ description: >
   TRIGGER: "remind me", "add reminder", "create reminder", "my reminders", "to-do", "todo list", "what's due", "reminders".
   DO NOT USE: for calendar events (use Outlook Assistant), project management, or non-Apple reminder systems.
 tier: lazy
+platform: macos
 ---
 # Apple Reminders
 

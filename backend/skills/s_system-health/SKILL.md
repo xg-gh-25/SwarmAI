@@ -9,6 +9,7 @@ description: >
   DO NOT USE: for AWS resource monitoring or CloudWatch logs (use cloudwatch-log-analysis),
   SwarmAI app health (use health-check skill), or security scanning (use bsc-security-scanner).
 tier: lazy
+platform: macos
 ---
 # system-health
 
