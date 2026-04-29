@@ -6,121 +6,143 @@ go through `curl` to the local backend — no direct AWS SDK calls needed.
 ## API Base
 
 ```bash
-# Discover backend port (random each launch)
-PORT=$(python -c "
-import psutil
-for p in psutil.process_iter(['name']):
-    if 'python-backend' in (p.info['name'] or ''):
-        for c in p.net_connections():
-            if c.status == 'LISTEN':
-                print(c.laddr.port); break
-        break
-" 2>/dev/null || echo 8000)
+# Port is in ~/.swarm-ai/backend.json (always available, sandbox-safe)
+PORT=$(python3 -c "import json; print(json.load(open('$HOME/.swarm-ai/backend.json'))['port'])")
 BASE="http://127.0.0.1:$PORT/api/hive"
 ```
 
-In practice, use the Bash tool with `curl` directly. The backend is always on localhost.
+**Run this at the start of every Hive operation.** Port changes on each backend restart.
 
 ## Operations
 
 ### 1. List Hive Instances
 
 ```bash
-curl -s "$BASE/instances" | python -m json.tool
+curl -s "$BASE/instances" | python3 -m json.tool
 ```
 
-Shows all Hives with status, URL, region, version. No credentials in list response.
+Returns all Hives with status, URL, region, version. Credentials excluded from list.
+
+Key fields: `id` (UUID — use this for all API calls), `name`, `status`, `cloudfront_domain`, `ec2_public_ip`, `version`, `owner_name`, `hive_type`.
 
 ### 2. Deploy a New Hive
 
 **Prerequisites:**
-- At least one AWS account configured (see §7 below)
+- At least one AWS account configured (see §7)
 - Account must be verified (see §8)
 
 **Steps:**
 
 ```bash
-# 1. List accounts to get the account_ref
-curl -s "$BASE/accounts"
+# 1. List accounts to get the account ref (use the 'id' field, NOT 'account_id')
+curl -s "$BASE/accounts" | python3 -c "
+import sys, json
+for a in json.load(sys.stdin):
+    print(f\"  id={a['id']}  aws={a['account_id']}  label={a['label']}  region={a['default_region']}\")
+"
 
 # 2. Deploy
 curl -s -X POST "$BASE/instances" \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "<lowercase-hyphenated-name>",
-    "account_ref": "<account-id-from-step-1>",
+    "name": "titus-hive",
+    "account_ref": "<id-from-step-1>",
     "region": "us-east-1",
     "instance_type": "m7g.xlarge",
-    "owner_name": "<optional: for shared hives>",
-    "hive_type": "<my|shared>"
+    "owner_name": "Titus Tian",
+    "hive_type": "shared"
   }'
 ```
 
-**Name rules:** 2-63 chars, lowercase letters/numbers/hyphens, must start with a letter.
+**Field reference:**
+
+| Field | Required | Rules |
+|-------|----------|-------|
+| `name` | Yes | 1-63 chars, lowercase `[a-z][a-z0-9-]*`, start with letter |
+| `account_ref` | Yes | UUID `id` from `/accounts` (NOT the 12-digit AWS account number) |
+| `region` | No | Default `us-east-1`. Allowed: us-east-1, us-east-2, us-west-1, us-west-2, eu-west-1, eu-west-2, eu-central-1, ap-northeast-1, ap-southeast-1, ap-southeast-2, ap-south-1 |
+| `instance_type` | No | Default `m7g.xlarge` |
+| `owner_name` | No | Set for shared Hives (e.g., "Titus Tian"). Omit for personal Hives. |
+| `hive_type` | No | `"my"` (personal) or `"shared"` (for others). Default `"shared"`. |
 
 **Instance sizes:**
-| Size | RAM | Cost |
-|------|-----|------|
-| m7g.large | 8 GB | ~$60/mo |
-| m7g.xlarge | 16 GB (recommended) | ~$119/mo |
-| m7g.2xlarge | 32 GB | ~$238/mo |
 
-**After deploy:** Status goes through `pending → provisioning → installing → running`.
-Poll status every 5-10s until `running`:
+| Size | RAM | Cost | Use when |
+|------|-----|------|----------|
+| m7g.large | 8 GB | ~$60/mo | Light usage, single user |
+| m7g.xlarge | 16 GB | ~$119/mo | Recommended default |
+| m7g.2xlarge | 32 GB | ~$238/mo | Heavy usage, many skills — **ask user first** |
+
+**Error responses:**
+- `422`: Invalid name format or region
+- `409`: Hive name already exists
+- `404`: Account not found
+
+**After deploy:** Status transitions `pending → provisioning → installing → running`.
+Poll every 10s until `running`:
 
 ```bash
-curl -s "$BASE/instances/<id>" | python -c "import sys,json; d=json.load(sys.stdin); print(f'Status: {d[\"status\"]}  URL: {d.get(\"cloudfront_domain\",\"pending\")}')"
+curl -s "$BASE/instances/<id>" | python3 -c "
+import sys, json; d = json.load(sys.stdin)
+print(f\"Status: {d['status']}  URL: https://{d.get('cloudfront_domain', 'pending...')}\")"
 ```
 
-Provisioning takes 5-10 minutes. CloudFront HTTPS takes an additional 5-15 minutes.
+Provisioning: 5-10 min. CloudFront HTTPS: additional 5-15 min.
 
 ### 3. Update a Hive to New Version
 
 ```bash
-# Get current version
-curl -s "$BASE/instances" | python -c "
-import sys,json
+# Check current versions
+curl -s "$BASE/instances" | python3 -c "
+import sys, json
 for h in json.load(sys.stdin):
-    print(f'{h[\"name\"]:20s} v{h.get(\"version\",\"?\")} ({h[\"status\"]})')
+    print(f\"{h['name']:20s} v{h.get('version','?'):10s} {h['status']}\")
 "
 
-# Update to specific version (must be running)
+# Update one instance (must be running)
 curl -s -X POST "$BASE/instances/<id>/update" \
   -H "Content-Type: application/json" \
   -d '{"version": "1.9.0"}'
 ```
 
-**Update uses SSM Run Command** — runs on the EC2 instance without SSH. The
-instance must be `running`. Update takes 2-5 minutes.
+Update uses SSM Run Command (no SSH). Instance must be `running`. Takes 2-5 min.
 
-To update ALL running Hives to the latest version:
+**Batch update ALL running Hives:**
 
 ```bash
-# Get latest release tag from GitHub
-LATEST=$(curl -s https://api.github.com/repos/xg-gh-25/SwarmAI/releases/latest | python -c "import sys,json; print(json.load(sys.stdin)['tag_name'].lstrip('v'))")
-echo "Latest: $LATEST"
+# Step 1: Get latest release tag
+LATEST=$(curl -s https://api.github.com/repos/xg-gh-25/SwarmAI/releases/latest \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'].lstrip('v'))")
+echo "Latest version: $LATEST"
 
-# Update all running instances
-curl -s "$BASE/instances" | python -c "
-import sys,json,subprocess
+# Step 2: Update each running instance
+PORT=$(python3 -c "import json; print(json.load(open('$HOME/.swarm-ai/backend.json'))['port'])")
+curl -s "http://127.0.0.1:$PORT/api/hive/instances" | python3 -c "
+import sys, json, subprocess
 for h in json.load(sys.stdin):
     if h['status'] == 'running':
-        print(f'Updating {h[\"name\"]} from v{h.get(\"version\",\"?\")} to v$LATEST...')
-        subprocess.run(['curl', '-s', '-X', 'POST',
-            f'$BASE/instances/{h[\"id\"]}/update',
+        ver = h.get('version', '?')
+        if ver == '$LATEST':
+            print(f\"  {h['name']:20s} already on v$LATEST — skip\")
+            continue
+        print(f\"  {h['name']:20s} v{ver} → v$LATEST ...\", end=' ', flush=True)
+        r = subprocess.run(['curl', '-s', '-X', 'POST',
+            f\"http://127.0.0.1:$PORT/api/hive/instances/{h['id']}/update\",
             '-H', 'Content-Type: application/json',
-            '-d', json.dumps({'version': '$LATEST'})], check=True)
-        print('  ✓ Update initiated')
+            '-d', '{\"version\": \"$LATEST\"}'], capture_output=True, text=True)
+        print('✓' if '\"status\"' in r.stdout else f'✗ {r.stdout}')
+    else:
+        print(f\"  {h['name']:20s} {h['status']} — skip (not running)\")
 "
 ```
 
-### 4. Start / Stop an Instance
+### 4. Start / Stop
 
 ```bash
-# Stop (saves cost — EC2 stops, EIP retained)
+# Stop (EC2 stops, EIP retained, no compute cost)
 curl -s -X POST "$BASE/instances/<id>/stop"
 
-# Start (resumes from stopped state)
+# Start (resumes from stopped)
 curl -s -X POST "$BASE/instances/<id>/start"
 ```
 
@@ -128,20 +150,21 @@ curl -s -X POST "$BASE/instances/<id>/start"
 
 ```bash
 curl -s "$BASE/instances/<id>/credentials"
-# Returns: {"auth_user": "admin", "auth_password": "..."}
+# → {"auth_user": "admin", "auth_password": "xxxxxx"}
 ```
 
 ### 6. Reset Password
 
 ```bash
+# ⚠️ Confirm with user — invalidates previous password
 curl -s -X POST "$BASE/instances/<id>/reset-password"
-# Returns: {"auth_user": "admin", "auth_password": "<new-password>"}
+# → {"auth_user": "admin", "auth_password": "<new>"}
 ```
 
 ### 7. Add AWS Account
 
 ```bash
-# With access keys
+# Access keys method
 curl -s -X POST "$BASE/accounts" \
   -H "Content-Type: application/json" \
   -d '{
@@ -155,104 +178,104 @@ curl -s -X POST "$BASE/accounts" \
     "default_region": "us-east-1"
   }'
 
-# With SSO profile
+# SSO profile method
 curl -s -X POST "$BASE/accounts" \
   -H "Content-Type: application/json" \
   -d '{
     "account_id": "123456789012",
-    "label": "work",
+    "label": "work-sso",
     "auth_method": "sso",
     "auth_config": {"profile": "my-sso-profile"},
     "default_region": "us-east-1"
   }'
 ```
 
-### 8. Verify AWS Account
+### 8. Verify Account
 
 ```bash
 curl -s -X POST "$BASE/accounts/<id>/verify"
-# Returns: {"success": true/false, "checks": {...}}
+# → {"success": true/false, "account_id": "...", "checks": {...}}
 ```
+
+**Always verify before first deploy.** A failed verify saves 10 min of failed provisioning.
 
 ### 9. Health Check (Remote Hive)
 
 ```bash
 curl -s "$BASE/instances/<id>/health"
-# Proxies health check to remote Hive instance
+# Proxies to the remote Hive's /health endpoint
 ```
 
-### 10. Delete a Hive
+### 10. Delete
 
 ```bash
-# ⚠️ DESTRUCTIVE — always confirm with user first
+# ⚠️ DESTRUCTIVE — confirm with user. Cleans up: EC2, EIP, SG, IAM, S3, CloudFront.
 curl -s -X DELETE "$BASE/instances/<id>"
-# Cleans up: EC2, EIP, SG, IAM Role, S3, CloudFront
 ```
 
 ### 11. Retry Failed Deploy
 
 ```bash
+# Only works on instances with status "error"
 curl -s -X POST "$BASE/instances/<id>/retry"
 ```
 
 ## Common Workflows
 
-### "Deploy a Hive for Titus"
+### "Deploy a Hive for [person]"
 
-```
-1. List accounts → pick the right one
-2. Deploy: name="titus-hive", owner_name="Titus Tian", hive_type="shared"
-3. Poll until running (~5-10 min)
-4. Get credentials
-5. Share: URL + user + password
-```
+1. `curl $BASE/accounts` → pick account
+2. POST `/instances` with `name`, `owner_name`, `hive_type: "shared"`
+3. Poll status every 10s until `running` (~5-10 min)
+4. GET `/instances/<id>/credentials` → get password
+5. Report to user: URL + user + password
+6. Suggest: "share these credentials with [person]"
 
 ### "Update all Hives to latest"
 
-```
-1. Get latest release from GitHub
-2. List instances → filter running
-3. POST /update for each with the version
-4. Poll until all versions match
-```
+1. GET GitHub latest release tag
+2. GET `/instances` → filter `status == "running"` + `version != latest`
+3. POST `/instances/<id>/update` for each
+4. Poll versions until all match
 
-### "Shut down unused Hives to save cost"
+### "Check Hive costs / shut down idle ones"
 
-```
-1. List instances
-2. For each running instance: check last activity (health proxy)
-3. Stop idle ones
-```
+1. GET `/instances` → list all with status
+2. For each running: GET `/instances/<id>/health` → check if actively used
+3. Suggest stopping idle ones, show estimated savings
 
 ## Boundaries
 
 ### Always
 - Confirm with user before destructive operations (delete, reset-password)
-- Show the cost implication when deploying (instance size → monthly cost)
-- After deploy, wait and report until status is `running` with URL
+- Show cost when deploying (instance size → monthly cost)
+- After deploy, poll and report until `running` with URL + credentials
+- Verify AWS account before first deploy attempt
 
 ### Ask First
-- Deleting a Hive (irreversible — AWS resources destroyed)
-- Resetting a password (previous password invalidated)
-- Deploying m7g.2xlarge or larger (expensive)
+- Deleting a Hive (irreversible — all AWS resources destroyed)
+- Resetting a password (previous password invalidated immediately)
+- Deploying m7g.2xlarge or larger (~$238/mo)
+- Stopping a Hive (services go offline until restarted)
 
 ### Never
-- Deploy without an AWS account configured and verified
-- Stop a Hive without confirming the user wants to (data on EBS persists, but services stop)
-- Expose credentials in chat history beyond the immediate response (suggest copying)
+- Deploy without a verified AWS account
+- Expose credentials longer than necessary (show once, suggest copying)
+- Send credentials to Slack or external channels without explicit approval
 
 ## Anti-Rationalization
 
 | Agent Shortcut | Required Response |
 |---|---|
-| "Deploy is started, user can check later" | Poll until running. Report URL + credentials. Don't leave the user guessing. |
-| "Update takes a while, I'll move on" | Poll until version matches. Confirm the update landed. |
-| "I'll skip verification, the account probably works" | Always verify before first deploy. A failed deploy wastes 10 min. |
+| "Deploy started, user can check later" | Poll until running. Report URL + credentials. The user asked you to deploy, not to start a deploy. |
+| "Update takes a while, I'll move on" | Poll until version matches. An unconfirmed update might have failed. |
+| "I'll skip verification, the account probably works" | Always verify before first deploy. A bad account = 10 min wasted on failed provisioning. |
+| "I'll just show the instance ID" | Show the name, URL, status, and version. Instance IDs are opaque UUIDs — useless to humans. |
 
 ## Verification
 
 After any operation, confirm:
-- [ ] Instance status is as expected (running/stopped/pending)
-- [ ] URL is accessible (for running instances)
-- [ ] Credentials are provided (for new deploys or password resets)
+- [ ] Instance status is as expected (`running` / `stopped` / `pending`)
+- [ ] URL is accessible (for running instances — show the actual URL)
+- [ ] Credentials provided (for new deploys or password resets)
 - [ ] Version matches expected (for updates)
