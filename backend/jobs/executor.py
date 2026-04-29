@@ -1820,7 +1820,7 @@ duration: {duration:.1f}s
     # Script jobs (tokens_used=0) are just logs, not worth distilling.
     if tokens > 0:
         try:
-            import fcntl
+            from utils.file_lock import flock_exclusive, flock_unlock
             sidecar_path = JOB_RESULTS_DIR / f"{date_str}-{slug}.jsonl"
             sidecar_record = {
                 "job_id": job.id,
@@ -1832,12 +1832,12 @@ duration: {duration:.1f}s
             }
             line = json.dumps(sidecar_record, ensure_ascii=False, separators=(",", ":")) + "\n"
             with open(sidecar_path, "a") as sf:
-                fcntl.flock(sf, fcntl.LOCK_EX)
+                flock_exclusive(sf)
                 try:
                     sf.write(line)
                     sf.flush()
                 finally:
-                    fcntl.flock(sf, fcntl.LOCK_UN)
+                    flock_unlock(sf)
         except Exception as exc:
             logger.warning("Job JSONL sidecar write failed (non-blocking): %s", exc)
 

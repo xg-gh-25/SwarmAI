@@ -275,21 +275,18 @@ class ImprovementWritebackHook:
     ) -> None:
         """Append extracted lessons to IMPROVEMENT.md under the right sections.
 
-        Uses fcntl.flock for cross-process safety (same pattern as
-        locked_write.py).  The asyncio.Lock in execute() handles
-        in-process concurrency; this handles hook-vs-skill races.
-
-        Note: fcntl is Unix-only (macOS/Linux). This is acceptable
-        because SwarmAI targets macOS/Linux desktops exclusively.
+        Uses flock_exclusive/flock_unlock for cross-process safety (same
+        pattern as locked_write.py).  The asyncio.Lock in execute()
+        handles in-process concurrency; this handles hook-vs-skill races.
         """
-        import fcntl  # Unix-only — SwarmAI targets macOS/Linux
+        from utils.file_lock import flock_exclusive, flock_unlock
 
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         fd = None
         try:
             fd = open(improvement_path, "r+", encoding="utf-8")
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            flock_exclusive(fd)
 
             content = fd.read()
             modified = False
@@ -314,7 +311,7 @@ class ImprovementWritebackHook:
                 fd.truncate()
         finally:
             if fd is not None:
-                fcntl.flock(fd, fcntl.LOCK_UN)
+                flock_unlock(fd)
                 fd.close()
 
     @staticmethod

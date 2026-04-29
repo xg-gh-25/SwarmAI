@@ -1150,7 +1150,7 @@ class DistillationTriggerHook:
         of ``locked_read_modify_write`` to avoid a nested-lock deadlock
         (flock is per-open-file-description on POSIX).
         """
-        import fcntl as _fcntl
+        from utils.file_lock import flock_exclusive, flock_unlock
         from scripts.locked_write import _modify_content
 
         # MemoryGuard: sanitize content before any file I/O
@@ -1169,7 +1169,7 @@ class DistillationTriggerHook:
         fd = None
         try:
             fd = open(lock_path, "w")  # noqa: SIM115
-            _fcntl.flock(fd, _fcntl.LOCK_EX)
+            flock_exclusive(fd)
 
             # Read current content under lock
             if memory_path.exists():
@@ -1208,7 +1208,7 @@ class DistillationTriggerHook:
         finally:
             if fd is not None:
                 try:
-                    _fcntl.flock(fd, _fcntl.LOCK_UN)
+                    flock_unlock(fd)
                 except OSError:
                     pass
                 fd.close()
@@ -1292,14 +1292,14 @@ class DistillationTriggerHook:
 
         Uses locked read-modify-write for the entire Open Threads section.
         """
-        import fcntl
+        from utils.file_lock import flock_exclusive, flock_unlock
 
         lock_path = memory_path.with_suffix(memory_path.suffix + ".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         fd = None
         try:
             fd = open(lock_path, "w")  # noqa: SIM115  — matches locked_write.py
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            flock_exclusive(fd)
             try:
                 content = memory_path.read_text(encoding="utf-8")
                 updated = self._apply_open_thread_updates(content, coe_entries)
@@ -1307,7 +1307,7 @@ class DistillationTriggerHook:
                     memory_path.write_text(updated, encoding="utf-8")
                     logger.info("Updated Open Threads with %d COE entries", len(coe_entries))
             finally:
-                fcntl.flock(fd, fcntl.LOCK_UN)
+                flock_unlock(fd)
         except Exception as exc:
             logger.warning("Failed to update Open Threads: %s", exc)
         finally:
@@ -1445,14 +1445,14 @@ class DistillationTriggerHook:
         if not deliverables:
             return
 
-        import fcntl
+        from utils.file_lock import flock_exclusive, flock_unlock
 
         lock_path = memory_path.with_suffix(memory_path.suffix + ".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         fd = None
         try:
             fd = open(lock_path, "w")  # noqa: SIM115
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            flock_exclusive(fd)
             try:
                 content = memory_path.read_text(encoding="utf-8")
                 updated = self._apply_deliverable_reconciliation(content, deliverables)
@@ -1460,7 +1460,7 @@ class DistillationTriggerHook:
                     memory_path.write_text(updated, encoding="utf-8")
                     logger.info("Reconciled Open Threads against %d deliverables", len(deliverables))
             finally:
-                fcntl.flock(fd, fcntl.LOCK_UN)
+                flock_unlock(fd)
         except Exception as exc:
             logger.warning("Failed to reconcile Open Threads from deliverables: %s", exc)
         finally:
@@ -1619,9 +1619,9 @@ class DistillationTriggerHook:
           - Otherwise: append to Knowledge/Archives/MEMORY-archive-YYYY-MM.md,
             remove from MEMORY.md body
 
-        Uses fcntl file locking when writing to MEMORY.md.
+        Uses cross-platform file locking when writing to MEMORY.md.
         """
-        import fcntl as _fcntl
+        from utils.file_lock import flock_exclusive, flock_unlock
         from scripts.locked_write import _find_section_range
 
         if not memory_path.exists():
@@ -1632,7 +1632,7 @@ class DistillationTriggerHook:
         fd = None
         try:
             fd = open(lock_path, "w")
-            _fcntl.flock(fd, _fcntl.LOCK_EX)
+            flock_exclusive(fd)
 
             content = memory_path.read_text(encoding="utf-8")
             section_range = _find_section_range(content, "Recent Context")
@@ -1722,7 +1722,7 @@ class DistillationTriggerHook:
         finally:
             if fd is not None:
                 try:
-                    _fcntl.flock(fd, _fcntl.LOCK_UN)
+                    flock_unlock(fd)
                 except OSError:
                     pass
                 fd.close()
@@ -1743,7 +1743,7 @@ class DistillationTriggerHook:
             ws_path: Workspace root (for archive directory). If None,
                      overflow entries are discarded instead of archived.
         """
-        import fcntl as _fcntl
+        from utils.file_lock import flock_exclusive, flock_unlock
         from scripts.locked_write import _find_section_range
 
         if not memory_path.exists():
@@ -1766,7 +1766,7 @@ class DistillationTriggerHook:
         fd = None
         try:
             fd = open(lock_path, "w")  # noqa: SIM115  — matches locked_write.py
-            _fcntl.flock(fd, _fcntl.LOCK_EX)
+            flock_exclusive(fd)
             try:
                 content = memory_path.read_text(encoding="utf-8")
                 modified = False
@@ -1870,7 +1870,7 @@ class DistillationTriggerHook:
                     )
 
             finally:
-                _fcntl.flock(fd, _fcntl.LOCK_UN)
+                flock_unlock(fd)
         except Exception as exc:
             logger.warning("Section cap enforcement failed: %s", exc)
         finally:

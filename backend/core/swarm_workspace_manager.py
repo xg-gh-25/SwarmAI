@@ -572,6 +572,9 @@ class SwarmWorkspaceManager:
         # Auto-generate Knowledge Index section of KNOWLEDGE.md
         await self.refresh_knowledge_index(expanded_path)
 
+        # Symlink AGENTS.md from codebase to SwarmWS root (shared AI context)
+        await anyio.to_thread.run_sync(lambda: self._sync_agents_md(root))
+
         logger.info("Created folder structure at %s", expanded_path)
 
     # ── Default project provisioning ─────────────────────────────────────
@@ -1510,8 +1513,8 @@ class SwarmWorkspaceManager:
         # Provision job system default config
         await anyio.to_thread.run_sync(lambda: self._provision_job_system(root))
 
-        # Symlink CLAUDE.md from codebase to SwarmWS root (shared AI context)
-        await anyio.to_thread.run_sync(lambda: self._sync_claude_md(root))
+        # Symlink AGENTS.md from codebase to SwarmWS root (shared AI context)
+        await anyio.to_thread.run_sync(lambda: self._sync_agents_md(root))
 
         # Auto-prune old archived DailyActivity files (Req 7.6, 15.11)
         expanded = str(root)
@@ -1520,23 +1523,34 @@ class SwarmWorkspaceManager:
         return recreated
 
     @staticmethod
-    def _sync_claude_md(root: Path) -> None:
-        """Symlink CLAUDE.md from the codebase into SwarmWS root.
+    def _sync_agents_md(root: Path) -> None:
+        """Symlink AGENTS.md from the codebase into SwarmWS root.
 
-        CLAUDE.md is the shared AI context file — read by Claude Code, Kiro,
-        Cursor, and any AI assistant working on this repo.  The canonical copy
-        lives in the swarmai repo root; the SwarmWS symlink ensures the agent
-        (running inside SwarmWS) can also read it.  Refreshes automatically on
-        every startup via verify_integrity().
+        AGENTS.md is the single source of truth for AI coding assistant
+        context — read by Claude Code, Kiro, Cursor, and others.  The
+        canonical copy lives in the swarmai repo root; the SwarmWS symlink
+        ensures the agent (running inside SwarmWS) can also read it.
+        Refreshes automatically on every startup via verify_integrity().
+
+        CLAUDE.md in the repo root is a pointer file that redirects to
+        AGENTS.md — no separate symlink needed.
         """
         try:
-            # Locate codebase CLAUDE.md (relative to this file's location)
-            codebase_root = Path(__file__).resolve().parent.parent.parent
-            src = codebase_root / "CLAUDE.md"
-            dst = root / "CLAUDE.md"
+            # Locate codebase root by walking up until we find VERSION + .git
+            # (more robust than hardcoded parent depth).
+            candidate = Path(__file__).resolve().parent
+            src = None
+            for _ in range(5):  # max 5 levels up
+                candidate = candidate.parent
+                if (candidate / "VERSION").exists() and (candidate / ".git").exists():
+                    src = candidate / "AGENTS.md"
+                    break
 
-            if not src.exists():
+            if src is None or not src.exists():
+                logger.debug("AGENTS.md not found in codebase ancestry — skipping symlink")
                 return
+
+            dst = root / "AGENTS.md"
 
             # Recreate symlink if target changed or is stale
             if dst.is_symlink():
@@ -1544,12 +1558,23 @@ class SwarmWorkspaceManager:
                     return  # already correct
                 dst.unlink()
             elif dst.exists():
-                dst.unlink()  # replace regular file with symlink
+                # User-edited regular file — check if content differs
+                try:
+                    if dst.read_text(encoding="utf-8") != src.read_text(encoding="utf-8"):
+                        logger.info(
+                            "AGENTS.md in SwarmWS has user edits — preserving "
+                            "(not replacing with symlink)"
+                        )
+                        return
+                except OSError:
+                    pass
+                # Content is identical to source — safe to replace with symlink
+                dst.unlink()
 
             dst.symlink_to(src)
-            logger.debug("CLAUDE.md symlinked: %s -> %s", dst, src)
+            logger.debug("AGENTS.md symlinked: %s -> %s", dst, src)
         except OSError as exc:
-            logger.warning("Failed to sync CLAUDE.md: %s", exc)
+            logger.warning("Failed to sync AGENTS.md: %s", exc)
 
     def _provision_job_system(self, root: Path) -> None:
         """Ensure Services/swarm-jobs/ has required config files.

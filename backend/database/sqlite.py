@@ -1731,7 +1731,8 @@ class SQLiteDatabase(BaseDatabase):
 
                 # Enable WAL mode for concurrent read/write from parallel chat sessions.
                 # WAL persists in the DB file, so this is idempotent across restarts.
-                # busy_timeout: short (100ms) — app-level retry handles longer waits.
+                # busy_timeout: 5s — long enough to ride out WAL checkpoint
+                # contention from parallel sessions without app-level retry.
                 await conn.execute("PRAGMA journal_mode=WAL")
                 await conn.execute("PRAGMA busy_timeout=5000")
                 _WALConnection._wal_initialized.add(str(self.db_path))

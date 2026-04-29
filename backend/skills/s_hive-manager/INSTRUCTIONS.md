@@ -110,9 +110,16 @@ Update uses SSM Run Command (no SSH). Instance must be `running`. Takes 2-5 min.
 **Batch update ALL running Hives:**
 
 ```bash
-# Step 1: Get latest release tag
-LATEST=$(curl -s https://api.github.com/repos/xg-gh-25/SwarmAI/releases/latest \
-  | python3 -c "import sys,json; print(json.load(sys.stdin)['tag_name'].lstrip('v'))")
+# Step 1: Get latest release tag (uses GITHUB_TOKEN if set for rate limits)
+AUTH_HEADER=""
+if [ -n "$GITHUB_TOKEN" ]; then AUTH_HEADER="-H \"Authorization: token $GITHUB_TOKEN\""; fi
+LATEST=$(eval curl -s $AUTH_HEADER https://api.github.com/repos/xg-gh-25/SwarmAI/releases/latest \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tag_name','').lstrip('v') or 'UNKNOWN')")
+if [ "$LATEST" = "UNKNOWN" ]; then
+  echo "⚠️  Could not fetch latest version from GitHub (rate limit or private repo)."
+  echo "   Set GITHUB_TOKEN env var, or specify version manually."
+  exit 1
+fi
 echo "Latest version: $LATEST"
 
 # Step 2: Update each running instance
