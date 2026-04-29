@@ -77,18 +77,21 @@ class TestUserData:
         assert 'TAG_STATUS="ready"' in result
 
     def test_password_generation(self):
-        """Password is random and meets length requirements."""
+        """Passphrase is dash-separated words, random each time."""
         from hive.user_data import generate_password
 
         p1 = generate_password()
         p2 = generate_password()
-        assert len(p1) == 16
+        words = p1.split("-")
+        assert len(words) == 4  # Default 4 words
+        assert all(w.isalpha() for w in words)  # Only letters
         assert p1 != p2  # Should be random
 
-    def test_password_custom_length(self):
+    def test_password_custom_word_count(self):
         from hive.user_data import generate_password
 
-        assert len(generate_password(32)) == 32
+        p = generate_password(6)
+        assert len(p.split("-")) == 6
 
 
 # ── Provisioner Unit Tests ────────────────────────────────────────
@@ -219,7 +222,7 @@ class TestProvisionerSG:
 
     @pytest.mark.asyncio
     async def test_sg_opens_80_443_only(self):
-        """AC5: security group opens 80 + 443, NOT port 22."""
+        """AC5: security group opens port 80 from CloudFront only, no 443, no 22."""
         from hive.provisioner import HiveProvisioner
 
         p = HiveProvisioner(Path("/tmp/test.db"))
@@ -230,6 +233,9 @@ class TestProvisionerSG:
             "Vpcs": [{"VpcId": "vpc-test"}]
         }
         mock_ec2.create_security_group.return_value = {"GroupId": "sg-test"}
+        mock_ec2.describe_managed_prefix_lists.return_value = {
+            "PrefixLists": [{"PrefixListId": "pl-test123"}]
+        }
 
         sg_id = await p._create_security_group(mock_session, "test", "us-east-1")
         assert sg_id == "sg-test"
@@ -238,9 +244,12 @@ class TestProvisionerSG:
         ingress_call = mock_ec2.authorize_security_group_ingress.call_args
         ip_perms = ingress_call[1]["IpPermissions"]
         ports = {p["FromPort"] for p in ip_perms}
-        assert ports == {80, 443}
+        assert ports == {80}  # Only port 80, no 443
         # Explicitly: no port 22
         assert 22 not in ports
+        # Verify CloudFront prefix list is used (not 0.0.0.0/0)
+        assert ip_perms[0]["PrefixListIds"][0]["PrefixListId"] == "pl-test123"
+        assert "IpRanges" not in ip_perms[0] or ip_perms[0].get("IpRanges") == []
 
 
 class TestProvisionerHealthCheck:
