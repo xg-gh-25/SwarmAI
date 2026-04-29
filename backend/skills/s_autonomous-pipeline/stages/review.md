@@ -1,5 +1,54 @@
 # REVIEW Stage
 
+## Parallel Fan-Out Review
+
+**When the changeset touches >3 files OR >100 lines OR touches auth/data/infra
+code**, split the review into 3 parallel sub-agents for independent perspectives.
+Otherwise, fall back to single-pass review (all checks inline, see sections below).
+
+### Phase A — Fan-Out (parallel, single turn)
+
+Spawn up to 3 sub-agents using the Agent tool. **Issue all Agent calls in a
+single assistant turn** so they execute in parallel. Each sub-agent reads the
+changeset + relevant DDD docs independently.
+
+```
+Sub-agent prompts are in: backend/skills/s_autonomous-pipeline/review-agents/
+
+1. Code Quality Agent (review-agents/code-quality.md)
+   → TECH.md conformance, integration trace, replace/move parity,
+     runtime patterns RP1-RP26, depth & seam analysis
+
+2. Security & Safety Agent (review-agents/security-safety.md)
+   → Confidence-gated security scan, wire test, blast radius trace
+
+3. UX & Test Agent (review-agents/ux-test.md) — ONLY when frontend files changed
+   → UX review (UX1-UX5), test coverage gaps, E2E trace
+```
+
+Each sub-agent returns a JSON report. They do NOT communicate with each other.
+
+### Phase B — Merge (main agent)
+
+Once all sub-agent reports are back:
+
+1. **Deduplicate** — same finding from 2 agents = keep the more specific one
+2. **Cross-reference** — security finding + code quality finding on same function = same root cause?
+3. **Apply anti-rationalization gate** (check 10 below) — reject shortcuts
+4. **Produce exit evidence checklist** (check 11 below) — every check has evidence
+5. **Single verdict** — GO (advance to TEST) or BLOCK (fix findings first)
+
+### When to Skip Fan-Out
+
+Fall back to single-pass review (all checks inline) when ALL are true:
+- Changeset touches ≤3 files
+- Diff is <100 lines
+- Does NOT touch auth, payments, data access, infra, or config
+
+In single-pass mode, execute all 11 checks below sequentially in the main context.
+
+---
+
 ## Base Methodology
 
 > **Reference:** `backend/skills/s_code-review/INSTRUCTIONS.md`
@@ -118,7 +167,7 @@ discoverability hint, Escape propagation). Engineering-complete != user-complete
 
 ### 6. Runtime Pattern Checklist
 
-**BLOCKING: Read `backend/skills/s_autonomous-pipeline/REVIEW_PATTERNS.md` and apply RP1-RP25.**
+**BLOCKING: Read `backend/skills/s_autonomous-pipeline/REVIEW_PATTERNS.md` and apply RP1-RP26.**
 
 Scan the changeset for known bug patterns. For each pattern that applies, explicitly verify the fix is in place. Do NOT skip patterns -- a "no" answer is fine, but silence means unchecked.
 

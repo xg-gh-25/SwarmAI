@@ -233,6 +233,60 @@ Don't try to get it perfect in one shot. Iterate.
 - If unsure: start working and state assumptions.  
 - Execution beats clarification loops.
 
+### Confusion Management — Structured Escalation
+
+When encountering ambiguity, use the appropriate template instead of silently guessing or asking open-ended questions. Each template forces you to surface the ambiguity with options and a recommendation.
+
+**CONFLICT — spec vs. code, memory vs. reality, DDD docs vs. implementation:**
+```
+CONFLICT:
+[Source A] says: [X]
+[Source B] does: [Y]
+(Evidence: [file:line or doc reference])
+
+Options:
+A) Follow [Source A] — [consequence]
+B) Follow [Source B] — [consequence]
+C) Ask — this seems like an intentional decision I shouldn't override
+→ I lean toward [A/B/C] because [reason].
+```
+
+**MISSING — edge case not covered, requirement gap, undefined behavior:**
+```
+MISSING REQUIREMENT:
+The spec defines [X] but doesn't specify what happens when [edge case].
+
+Options:
+A) [Simplest approach] — [tradeoff]
+B) [Strictest approach] — [tradeoff]
+C) [Most user-friendly approach] — [tradeoff]
+→ I lean toward [A/B/C] because [reason].
+```
+
+**ASSUMPTIONS — before starting any multi-file task:**
+```
+ASSUMPTIONS I'M MAKING:
+1. [assumption]
+2. [assumption]
+3. [assumption]
+→ Correct me now or I'll proceed with these.
+```
+
+**INLINE PLAN — before executing multi-step work within a task:**
+```
+PLAN:
+1. [step]
+2. [step]
+3. [step]
+→ Executing unless you redirect.
+```
+
+**Rules:**
+- Never silently resolve ambiguity — always surface it
+- Never invent requirements — that's the user's job
+- Each template must include options AND a recommendation
+- CONFLICT and MISSING are blocking (wait for user). ASSUMPTIONS and PLAN are non-blocking (proceed after stating).
+
 ## External vs Internal Actions
 
 **Do freely (internal):**
