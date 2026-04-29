@@ -56,14 +56,26 @@ class TestBackendJsonLifecycle:
         assert data["port"] == 54321
 
     def test_remove_backend_json_deletes_file(self, tmp_path):
-        """remove_backend_json deletes the file if it exists."""
+        """remove_backend_json deletes the file when PID matches (ownership guard)."""
         from main import remove_backend_json
 
         json_path = tmp_path / "backend.json"
-        json_path.write_text('{"pid": 1}')
+        # Use our own PID — the ownership guard only deletes if PID matches
+        json_path.write_text(json.dumps({"pid": os.getpid()}))
         remove_backend_json(path=str(json_path))
 
         assert not json_path.exists()
+
+    def test_remove_backend_json_skips_other_pid(self, tmp_path):
+        """remove_backend_json refuses to delete another process's file."""
+        from main import remove_backend_json
+
+        json_path = tmp_path / "backend.json"
+        # PID 1 (launchd) is alive but not us — should NOT delete
+        json_path.write_text(json.dumps({"pid": 1}))
+        remove_backend_json(path=str(json_path))
+
+        assert json_path.exists(), "should not delete another process's backend.json"
 
     def test_remove_backend_json_noop_if_missing(self, tmp_path):
         """remove_backend_json is a no-op if file doesn't exist."""

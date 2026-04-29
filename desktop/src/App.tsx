@@ -12,7 +12,7 @@ import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-quer
 import { ThemeProvider } from './contexts/ThemeContext';
 import { ToastProvider, useToast } from './contexts/ToastContext';
 import { HealthProvider } from './contexts/HealthContext';
-import { BackendStartupOverlay, UpdateNotification, ShutdownOverlay, DaemonNudgeBanner } from './components/common';
+import { BackendStartupOverlay, BackendUpgradeBanner, UpdateNotification, ShutdownOverlay, DaemonNudgeBanner } from './components/common';
 import { getApiBaseUrl, isDesktop } from './services/tauri';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ToastStack } from './components/common/ToastStack';
@@ -100,6 +100,10 @@ export default function App() {
           {isDesktop() && <ShutdownOverlay />}
           {/* Backend startup overlay - production mode only */}
           {!isDev && <BackendStartupOverlay onReady={() => setIsBackendReady(true)} />}
+          {/* Non-blocking banner for background daemon version-sync status.
+              Sibling to the overlay — overlay dismissal is independent of
+              upgrade lifetime (see daemon-startup-timeout-regression fix). */}
+          {!isDev && isDesktop() && <BackendUpgradeBanner />}
           {/* Update notification + daemon nudge — Desktop only (Tauri plugin imports) */}
           {!isDev && isDesktop() && <UpdateNotification />}
           {!isDev && isDesktop() && <DaemonNudgeBanner />}
