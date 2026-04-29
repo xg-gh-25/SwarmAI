@@ -8,8 +8,8 @@
 
 import { useState, useCallback, useRef, useEffect, memo } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
-import 'react-pdf/dist/esm/Page/AnnotationLayer.css';
-import 'react-pdf/dist/esm/Page/TextLayer.css';
+import 'react-pdf/dist/Page/AnnotationLayer.css';
+import 'react-pdf/dist/Page/TextLayer.css';
 
 // Configure pdf.js worker for react-pdf v10
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
