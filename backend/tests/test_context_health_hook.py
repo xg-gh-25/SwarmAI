@@ -53,8 +53,10 @@ def workspace(tmp_path):
     (proj / "TECH.md").write_text("# Tech\n\nArchitecture.\n")
     (proj / "PRODUCT.md").write_text("# Product\n\nVision.\n")
 
-    # Init git repo
+    # Init git repo (configure user for CI where global git config may be absent)
     subprocess.run(["git", "init"], cwd=ws, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=ws, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=ws, capture_output=True)
     subprocess.run(["git", "add", "-A"], cwd=ws, capture_output=True)
     subprocess.run(["git", "commit", "-m", "init"], cwd=ws, capture_output=True)
 
