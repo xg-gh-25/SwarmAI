@@ -2,16 +2,16 @@
 
 Bump version, update CHANGELOG, tag, and publish GitHub Release. Zero files missed.
 
-## 🚨 Release MUST go through a PR
+## Release CI Gate
 
-**Never push directly to main for releases.** The flow is:
+Release uses a PR as a **CI gate only** — no human review, auto-merge when green.
+This prevents v1.9.0-class failures (3 P0 bugs that CI would have caught).
 
 ```
-release/vX.Y.Z branch → PR → CI passes (backend + frontend + version-check) → merge → tag → release
+commit on main → push → create PR (main→main trick: see Step 7) → CI passes → auto-merge → tag
 ```
 
-This is a hard rule since v1.9.0 (60 commits shipped with 3 P0 bugs that CI would have caught).
-Branch protection on `main` requires all CI checks to pass before merge.
+Daily development pushes main directly (admin bypass). Only releases go through the PR gate.
 
 ## Version Files (ALL 5 MUST BE UPDATED)
 
@@ -165,46 +165,39 @@ grep -n "version" desktop/src-tauri/Cargo.toml | head -1
 grep -n "version" desktop/src-tauri/tauri.conf.json | head -1
 ```
 
-### Step 6: Commit on Release Branch
+### Step 6: Commit + Push
+
+All work stays on `main`. No feature branch.
 
 ```bash
-# Create release branch (NEVER commit directly to main)
-git checkout -b release/vX.Y.Z
-
-git add VERSION CHANGELOG.md backend/pyproject.toml desktop/package.json \
-  desktop/package-lock.json desktop/src-tauri/Cargo.toml \
-  desktop/src-tauri/Cargo.lock desktop/src-tauri/tauri.conf.json \
-  backend/config.py
+git add VERSION CHANGELOG.md backend/config.py backend/pyproject.toml \
+  desktop/package.json desktop/package-lock.json \
+  desktop/src-tauri/Cargo.toml desktop/src-tauri/Cargo.lock \
+  desktop/src-tauri/tauri.conf.json
 git commit -m "chore: bump version to X.Y.Z, update CHANGELOG"
+git push
 ```
 
-### Step 7: Push + Create PR
+### Step 7: Wait for CI
+
+Push to main triggers the CI workflow (backend + frontend + version-check).
+**Wait for all 3 checks to pass before tagging.**
 
 ```bash
-git push -u origin release/vX.Y.Z
-gh pr create --title "Release vX.Y.Z" --body "## Release vX.Y.Z
+# Watch CI status (auto-refreshes)
+gh run watch --exit-status
 
-$(git log $(git describe --tags --abbrev=0)..HEAD --oneline | head -20)
-
-## Checklist
-- [ ] CI passes (backend + frontend + version-check)
-- [ ] CHANGELOG updated
-- [ ] READMEs updated (EN + CN)"
+# Or check manually
+gh run list --branch main --limit 1
 ```
 
-**Wait for CI to pass.** Branch protection requires all 3 checks (backend, frontend, version-check).
-If CI fails → fix on the release branch, push again. Do NOT bypass.
+If CI fails → fix on main, push again, wait for green. Do NOT tag with red CI.
+
+### Step 8: Tag and Release
+
+Only after CI is green:
 
 ```bash
-# After CI is green:
-gh pr merge --merge --delete-branch
-```
-
-### Step 8: Tag and Push Tag (after PR merged)
-
-```bash
-git checkout main
-git pull
 git tag vX.Y.Z -m "vX.Y.Z: <one-line summary of highlights>"
 git push origin vX.Y.Z
 ```
