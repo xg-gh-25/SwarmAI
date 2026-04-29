@@ -152,4 +152,13 @@ export const hiveService = {
   async deleteInstance(id: string): Promise<void> {
     await api.delete(`/hive/instances/${id}`);
   },
+
+  async getCredentials(id: string): Promise<{ authUser: string | null; authPassword: string | null }> {
+    const { data } = await api.get(`/hive/instances/${id}/credentials`);
+    return toCamel(data) as { authUser: string | null; authPassword: string | null };
+  },
+
+  async retryInstance(id: string): Promise<void> {
+    await api.post(`/hive/instances/${id}/retry`);
+  },
 };

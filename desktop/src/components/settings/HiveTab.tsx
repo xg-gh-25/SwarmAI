@@ -13,6 +13,8 @@ import {
   TRANSITIONAL_STATUSES,
   getDeploySteps,
 } from '../../services/hive';
+import { openExternal } from '../../utils/openExternal';
+import { copyToClipboard } from '../../utils/clipboard';
 
 const STATUS_COLORS: Record<string, string> = {
   running: 'text-green-400',
@@ -221,12 +223,14 @@ function HiveSection({
 
 function InstanceCard({ instance: inst, onAction }: { instance: HiveInstance; onAction: () => void }) {
   const [acting, setActing] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const isTransitional = TRANSITIONAL_STATUSES.includes(inst.status);
 
   const doAction = async (action: () => Promise<void>) => {
     setActing(true);
+    setActionError(null);
     try { await action(); onAction(); }
-    catch (e) { console.error(e); }
+    catch (e) { setActionError(e instanceof Error ? e.message : String(e)); }
     finally { setActing(false); }
   };
 
@@ -249,7 +253,7 @@ function InstanceCard({ instance: inst, onAction }: { instance: HiveInstance; on
         <div className="flex items-center gap-1.5">
           {url && (
             <button
-              onClick={() => window.open(url, '_blank')}
+              onClick={() => openExternal(url)}
               className="px-2 py-1 text-xs bg-[var(--color-primary)]/20 text-[var(--color-primary)] rounded hover:bg-[var(--color-primary)]/30"
             >
               Open {'↗'}
@@ -271,6 +275,15 @@ function InstanceCard({ instance: inst, onAction }: { instance: HiveInstance; on
               className="px-2 py-1 text-xs bg-green-500/20 text-green-400 rounded hover:bg-green-500/30 disabled:opacity-50"
             >
               Start
+            </button>
+          )}
+          {inst.status === 'error' && (
+            <button
+              onClick={() => doAction(() => hiveService.retryInstance(inst.id))}
+              disabled={acting}
+              className="px-2 py-1 text-xs bg-blue-500/20 text-blue-400 rounded hover:bg-blue-500/30 disabled:opacity-50"
+            >
+              Retry
             </button>
           )}
           {!isTransitional && (
@@ -306,7 +319,15 @@ function InstanceCard({ instance: inst, onAction }: { instance: HiveInstance; on
       {/* AC3+4: Auth display + share for running instances */}
       {inst.status === 'running' && inst.authUser && <AuthDisplay instance={inst} />}
 
-      {/* Error message */}
+      {/* Action error */}
+      {actionError && (
+        <p className="text-xs text-red-400 mt-2 bg-red-500/10 px-2 py-1 rounded flex items-center justify-between">
+          <span>{actionError}</span>
+          <button onClick={() => setActionError(null)} className="text-red-400/60 hover:text-red-400 ml-2">✕</button>
+        </p>
+      )}
+
+      {/* Deploy error message */}
       {inst.errorMessage && (
         <p className="text-xs text-red-400 mt-2 bg-red-500/10 px-2 py-1 rounded">{inst.errorMessage}</p>
       )}
@@ -346,6 +367,8 @@ function DeployProgress({ instance }: { instance: HiveInstance }) {
 
 function AuthDisplay({ instance: inst }: { instance: HiveInstance }) {
   const [showPass, setShowPass] = useState(false);
+  const [password, setPassword] = useState<string | null>(inst.authPassword);
+  const [loadingPass, setLoadingPass] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -359,38 +382,72 @@ function AuthDisplay({ instance: inst }: { instance: HiveInstance }) {
     ? `https://${inst.cloudfrontDomain}`
     : inst.ec2PublicIp ? `http://${inst.ec2PublicIp}` : '';
 
-  const togglePass = () => {
-    setShowPass(prev => {
-      if (!prev) {
-        // Auto-hide after 30s
-        if (hideTimer.current) clearTimeout(hideTimer.current);
-        hideTimer.current = setTimeout(() => setShowPass(false), 30000);
+  // Fetch password from credentials endpoint when Show is clicked
+  const togglePass = async () => {
+    if (!showPass) {
+      // Showing — fetch real password if not already loaded
+      if (!password) {
+        setLoadingPass(true);
+        try {
+          const creds = await hiveService.getCredentials(inst.id);
+          setPassword(creds.authPassword);
+        } catch (e) {
+          console.error('Failed to fetch credentials:', e);
+          setLoadingPass(false);
+          return;
+        }
+        setLoadingPass(false);
       }
-      return !prev;
-    });
-  };
-
-  const copyToClipboard = async (text: string, label: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), 60000);
-    } catch {
-      // Non-secure context fallback: silently fail
-      return;
+      setShowPass(true);
+      // Auto-hide after 30s
+      if (hideTimer.current) clearTimeout(hideTimer.current);
+      hideTimer.current = setTimeout(() => setShowPass(false), 30000);
+    } else {
+      setShowPass(false);
     }
-    setCopied(label);
-    setTimeout(() => setCopied(null), 2000);
   };
 
-  // AC4: Share generates copyable text
-  const shareText = [
-    `Your SwarmAI Hive is ready:`,
-    `URL: ${url}`,
-    `User: ${inst.authUser}`,
-    `Password: ${inst.authPassword}`,
-    ``,
-    `Open the URL and sign in. It works exactly like the desktop app.`,
-  ].join('\n');
+  const doCopy = async (text: string, label: string) => {
+    const ok = await copyToClipboard(text);
+    if (ok) {
+      setCopied(label);
+      setTimeout(() => setCopied(null), 2000);
+    }
+  };
+
+  const handleCopyPassword = async () => {
+    // Fetch password if not loaded yet
+    let pass = password;
+    if (!pass) {
+      try {
+        const creds = await hiveService.getCredentials(inst.id);
+        pass = creds.authPassword;
+        setPassword(pass);
+      } catch { return; }
+    }
+    if (pass) await doCopy(pass, 'password');
+  };
+
+  // AC4: Share generates copyable text (fetches password if needed)
+  const handleShare = async () => {
+    let pass = password;
+    if (!pass) {
+      try {
+        const creds = await hiveService.getCredentials(inst.id);
+        pass = creds.authPassword;
+        setPassword(pass);
+      } catch { return; }
+    }
+    const shareText = [
+      `Your SwarmAI Hive is ready:`,
+      `URL: ${url}`,
+      `User: ${inst.authUser}`,
+      `Password: ${pass}`,
+      ``,
+      `Open the URL and sign in. It works exactly like the desktop app.`,
+    ].join('\n');
+    await doCopy(shareText, 'share');
+  };
 
   return (
     <div className="mt-2 p-2 bg-[var(--color-card)] rounded text-xs space-y-1.5">
@@ -399,20 +456,20 @@ function AuthDisplay({ instance: inst }: { instance: HiveInstance }) {
         <code className="text-[var(--color-text)]">{inst.authUser}</code>
         <span className="text-[var(--color-text-muted)]">/</span>
         <code className="text-[var(--color-text)]">
-          {showPass ? inst.authPassword : '••••••••'}
+          {loadingPass ? '...' : showPass && password ? password : '••••••••'}
         </code>
-        <button onClick={togglePass}
-          className="px-1.5 py-0.5 text-[10px] bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded hover:text-[var(--color-text)]">
-          {showPass ? 'Hide' : 'Show'}
+        <button onClick={togglePass} disabled={loadingPass}
+          className="px-1.5 py-0.5 text-[10px] bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded hover:text-[var(--color-text)] disabled:opacity-50">
+          {loadingPass ? '...' : showPass ? 'Hide' : 'Show'}
         </button>
-        <button onClick={() => copyToClipboard(inst.authPassword ?? '', 'password')}
+        <button onClick={handleCopyPassword}
           className="px-1.5 py-0.5 text-[10px] bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded hover:text-[var(--color-text)]">
           {copied === 'password' ? 'Copied!' : 'Copy'}
         </button>
       </div>
       <div className="flex items-center gap-2">
         <button
-          onClick={() => copyToClipboard(shareText, 'share')}
+          onClick={handleShare}
           className="px-2 py-1 bg-[var(--color-primary)]/20 text-[var(--color-primary)] rounded hover:bg-[var(--color-primary)]/30 flex items-center gap-1"
         >
           <span className="material-symbols-outlined text-sm">share</span>
@@ -430,6 +487,8 @@ function AuthDisplay({ instance: inst }: { instance: HiveInstance }) {
 function AccountCard({ account: acc, onDelete }: { account: HiveAccount; onDelete: () => void }) {
   const [verifying, setVerifying] = useState(false);
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleVerify = async () => {
     setVerifying(true);
@@ -441,6 +500,20 @@ function AccountCard({ account: acc, onDelete }: { account: HiveAccount; onDelet
       setVerifyResult({ success: false, accountId: acc.accountId, checks: {}, error: String(e) });
     } finally {
       setVerifying(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!confirm('Delete account + all its Hives?')) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await hiveService.deleteAccount(acc.id);
+      onDelete();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -471,10 +544,11 @@ function AccountCard({ account: acc, onDelete }: { account: HiveAccount; onDelet
             {verifying ? '...' : 'Verify'}
           </button>
           <button
-            onClick={() => { if (confirm('Delete account + all its Hives?')) hiveService.deleteAccount(acc.id).then(onDelete); }}
-            className="px-2 py-1 text-xs text-red-400 hover:bg-red-500/20 rounded"
+            onClick={handleDelete}
+            disabled={deleting}
+            className="px-2 py-1 text-xs text-red-400 hover:bg-red-500/20 rounded disabled:opacity-50"
           >
-            {'✕'}
+            {deleting ? '...' : '✕'}
           </button>
         </div>
       </div>
@@ -482,6 +556,12 @@ function AccountCard({ account: acc, onDelete }: { account: HiveAccount; onDelet
         <div className={`mt-2 text-xs ${verifyResult.success ? 'text-green-400' : 'text-red-400'}`}>
           {verifyResult.success ? '✓ All checks passed' : `✗ ${verifyResult.error || 'Failed'}`}
         </div>
+      )}
+      {error && (
+        <p className="text-xs text-red-400 mt-2 bg-red-500/10 px-2 py-1 rounded flex items-center justify-between">
+          <span>{error}</span>
+          <button onClick={() => setError(null)} className="text-red-400/60 hover:text-red-400 ml-2">✕</button>
+        </p>
       )}
     </div>
   );
@@ -500,6 +580,12 @@ function AddAccountDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
   const [ssoProfile, setSsoProfile] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [onClose]);
 
   const handleSave = async () => {
     if (!accountId.match(/^\d{12}$/)) { setError('Account ID must be 12 digits'); return; }
@@ -521,8 +607,8 @@ function AddAccountDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-[var(--color-card)] rounded-xl p-6 w-[440px] max-h-[80vh] overflow-y-auto">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-[var(--color-card)] rounded-xl p-6 w-[440px] max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <h3 className="text-lg font-semibold text-[var(--color-text)] mb-4">Add AWS Account</h3>
 
         <div className="space-y-3">
@@ -596,6 +682,12 @@ function DeployHiveDialog({ accounts, onClose, onDeployed }: { accounts: HiveAcc
   const [deploying, setDeploying] = useState(false);
   const [error, setError] = useState('');
 
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [onClose]);
+
   const handleDeploy = async () => {
     if (!name.match(/^[a-z][a-z0-9-]*$/)) { setError('Name: lowercase, letters/numbers/hyphens, start with letter'); return; }
     setDeploying(true);
@@ -619,8 +711,8 @@ function DeployHiveDialog({ accounts, onClose, onDeployed }: { accounts: HiveAcc
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-[var(--color-card)] rounded-xl p-6 w-[440px]">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-[var(--color-card)] rounded-xl p-6 w-[440px]" onClick={e => e.stopPropagation()}>
         <h3 className="text-lg font-semibold text-[var(--color-text)] mb-4">Deploy New Hive</h3>
 
         <div className="space-y-3">
