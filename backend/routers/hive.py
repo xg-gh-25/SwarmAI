@@ -37,6 +37,15 @@ def _get_provisioner() -> HiveProvisioner:
     return _provisioner
 
 
+def _log_task_failure(task: asyncio.Task) -> None:
+    """Callback for background deploy tasks — log exceptions instead of silently dropping them."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc:
+        logger.error("Background task %s failed: %s", task.get_name(), exc, exc_info=exc)
+
+
 def _require_desktop():
     """Block write operations when running as a Hive instance.
 
@@ -400,7 +409,8 @@ async def create_instance(body: HiveInstanceCreate):
 
     # Launch provisioner in background
     provisioner = _get_provisioner()
-    asyncio.create_task(provisioner.deploy(row["id"]))
+    task = asyncio.create_task(provisioner.deploy(row["id"]), name=f"hive-deploy-{row['id'][:8]}")
+    task.add_done_callback(_log_task_failure)
 
     return HiveInstanceResponse(**row)
 
@@ -498,6 +508,26 @@ async def delete_instance(instance_id: str):
     return {"deleted": True}
 
 
+@router.post("/instances/{instance_id}/reset-password")
+async def reset_password(instance_id: str):
+    """Reset Hive auth password via SSM. Returns new credentials."""
+    _require_desktop()
+    async with _conn() as c:
+        cursor = await c.execute("SELECT status FROM hive_instances WHERE id = ?", (instance_id,))
+        row = await cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Instance not found")
+        if dict(row)["status"] != "running":
+            raise HTTPException(status_code=400, detail="Instance must be running to reset password")
+
+    provisioner = _get_provisioner()
+    try:
+        new_password = await provisioner.reset_password(instance_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"auth_user": "admin", "auth_password": new_password}
+
+
 @router.get("/instances/{instance_id}/credentials")
 async def get_instance_credentials(instance_id: str):
     """Return only the auth credentials for a Hive instance."""
@@ -587,5 +617,6 @@ async def retry_instance(instance_id: str):
         await c.commit()
 
     # Redeploy
-    asyncio.create_task(provisioner.deploy(instance_id))
+    task = asyncio.create_task(provisioner.deploy(instance_id), name=f"hive-retry-{instance_id[:8]}")
+    task.add_done_callback(_log_task_failure)
     return {"status": "retrying"}

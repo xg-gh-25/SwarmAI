@@ -6,7 +6,6 @@ Caddy with basic auth, starts services, and tags the instance ready.
 """
 
 import secrets
-import string
 
 _USER_DATA_TEMPLATE = r"""#!/bin/bash
 # SwarmAI Hive — EC2 user-data (runs once on first boot)
@@ -169,10 +168,51 @@ echo "=== Hive Setup Complete — status=$TAG_STATUS — $(date) ==="
 """
 
 
-def generate_password(length: int = 16) -> str:
-    """Generate a random password for Caddy basic auth."""
-    alphabet = string.ascii_letters + string.digits + "!@#$%"
-    return "".join(secrets.choice(alphabet) for _ in range(length))
+def generate_password(word_count: int = 4) -> str:
+    """Generate a memorable passphrase for Caddy basic auth.
+
+    Produces a dash-separated passphrase like 'tiger-cloud-seven-lamp'.
+    4 words from a 256-word list = ~32 bits of entropy, sufficient for
+    bcrypt-hashed credentials behind CloudFront + SG restrictions.
+    Much easier to type than random chars like 'hdsgEcX2#SyXyOHs'.
+    """
+    # Compact word list: common, short, unambiguous English words.
+    # 256 words = 8 bits per word, 4 words = 32 bits.
+    _WORDS = [
+        "ace", "air", "ant", "ape", "arc", "arm", "art", "ash",
+        "axe", "bag", "ban", "bar", "bat", "bay", "bed", "bee",
+        "big", "bit", "bow", "box", "bud", "bug", "bus", "cab",
+        "cam", "cap", "car", "cat", "cob", "cod", "cog", "cop",
+        "cow", "cry", "cub", "cup", "cut", "dam", "day", "den",
+        "dew", "dig", "dim", "dip", "dog", "dot", "dry", "dug",
+        "dye", "ear", "eel", "egg", "elk", "elm", "emu", "end",
+        "era", "eve", "eye", "fan", "far", "fat", "fax", "fed",
+        "few", "fig", "fin", "fir", "fit", "fix", "fly", "fog",
+        "fox", "fun", "fur", "gag", "gap", "gas", "gem", "gin",
+        "got", "gum", "gun", "gut", "gym", "ham", "hat", "hay",
+        "hen", "hex", "hid", "him", "hip", "hit", "hog", "hop",
+        "hot", "how", "hub", "hue", "hug", "hum", "hut", "ice",
+        "imp", "ink", "inn", "ion", "ire", "ivy", "jab", "jam",
+        "jar", "jaw", "jay", "jet", "jig", "job", "jog", "joy",
+        "jug", "key", "kid", "kin", "kit", "lab", "lag", "lap",
+        "law", "lay", "leg", "let", "lid", "lip", "lit", "log",
+        "lot", "low", "lug", "map", "mat", "may", "men", "met",
+        "mid", "mix", "mob", "mod", "mop", "mud", "mug", "nap",
+        "net", "new", "nib", "nil", "nip", "nod", "nor", "not",
+        "now", "nut", "oak", "oar", "oat", "odd", "oil", "old",
+        "one", "opt", "orb", "ore", "our", "out", "oven", "owl",
+        "own", "pad", "pan", "paw", "pay", "pea", "peg", "pen",
+        "pet", "pie", "pig", "pin", "pit", "pod", "pop", "pot",
+        "pry", "pub", "pug", "pun", "pup", "put", "rag", "ram",
+        "ran", "rat", "raw", "ray", "red", "rib", "rid", "rig",
+        "rim", "rip", "rod", "rot", "row", "rub", "rug", "rum",
+        "run", "rut", "rye", "sad", "sag", "sap", "sat", "saw",
+        "say", "sea", "set", "shy", "sin", "sip", "sit", "six",
+        "ski", "sky", "sly", "sob", "sod", "son", "soy", "spy",
+        "sum", "sun", "tab", "tag", "tan", "tap", "tar", "tax",
+        "tea", "ten", "the", "tie", "tin", "tip", "toe", "top",
+    ]
+    return "-".join(secrets.choice(_WORDS) for _ in range(word_count))
 
 
 def caddy_hash_password(password: str) -> str:

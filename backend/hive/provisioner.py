@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -37,6 +38,18 @@ ALLOWED_INSTANCE_TYPES = frozenset({
     "c7g.medium", "c7g.large", "c7g.xlarge", "c7g.2xlarge",
     "t4g.medium", "t4g.large", "t4g.xlarge", "t4g.2xlarge",
 })
+
+# Allowlist of valid column names for _update_instance (PE-review P0-2: prevent SQL injection)
+_VALID_INSTANCE_COLUMNS = frozenset({
+    "status", "version", "error_message",
+    "ec2_instance_id", "ec2_public_ip", "elastic_ip_alloc_id",
+    "security_group_id", "iam_role_name", "iam_instance_profile_arn",
+    "cloudfront_dist_id", "cloudfront_domain", "s3_bucket",
+    "auth_user", "auth_password",
+})
+
+# Hive name regex — must match router's _HIVE_NAME_RE
+_HIVE_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 
 # IAM policy for Hive instances
 HIVE_IAM_POLICY = {
@@ -125,10 +138,15 @@ class HiveProvisioner:
         """Update hive_instances fields in SQLite."""
         if not fields:
             return
+        # PE-review P0-2: validate column names against allowlist
+        bad_cols = set(fields) - _VALID_INSTANCE_COLUMNS
+        if bad_cols:
+            raise ValueError(f"Invalid column names: {bad_cols}")
         sets = ", ".join(f"{k} = ?" for k in fields)
         vals = list(fields.values()) + [instance_id]
         async with aiosqlite.connect(str(self.db_path)) as conn:
             await conn.execute("PRAGMA busy_timeout = 500")
+            await conn.execute("PRAGMA foreign_keys = ON")
             await conn.execute(
                 f"UPDATE hive_instances SET {sets}, updated_at = datetime('now') WHERE id = ?",
                 vals,
@@ -140,6 +158,7 @@ class HiveProvisioner:
         async with aiosqlite.connect(str(self.db_path)) as conn:
             conn.row_factory = aiosqlite.Row
             await conn.execute("PRAGMA busy_timeout = 500")
+            await conn.execute("PRAGMA foreign_keys = ON")
             cursor = await conn.execute(
                 "SELECT * FROM hive_accounts WHERE id = ?", (account_ref,)
             )
@@ -153,6 +172,7 @@ class HiveProvisioner:
         async with aiosqlite.connect(str(self.db_path)) as conn:
             conn.row_factory = aiosqlite.Row
             await conn.execute("PRAGMA busy_timeout = 500")
+            await conn.execute("PRAGMA foreign_keys = ON")
             cursor = await conn.execute(
                 "SELECT * FROM hive_instances WHERE id = ?", (instance_id,)
             )
@@ -401,26 +421,12 @@ class HiveProvisioner:
                         ],
                     )
                 else:
-                    # Fallback: prefix list not found (shouldn't happen in
-                    # standard AWS regions).  Use 0.0.0.0/0 with a warning.
-                    logger.warning(
-                        "CloudFront prefix list not found in %s — "
-                        "falling back to 0.0.0.0/0 for port 80",
-                        region,
-                    )
-                    ec2.authorize_security_group_ingress(
-                        GroupId=sg_id,
-                        IpPermissions=[
-                            {
-                                "IpProtocol": "tcp",
-                                "FromPort": 80,
-                                "ToPort": 80,
-                                "IpRanges": [{
-                                    "CidrIp": "0.0.0.0/0",
-                                    "Description": "HTTP (CF prefix list unavailable)",
-                                }],
-                            },
-                        ],
+                    # PE-review P1-7: fail instead of falling back to 0.0.0.0/0.
+                    # If the prefix list isn't found, the region likely has other
+                    # issues. Failing here is safer than opening port 80 to the internet.
+                    raise RuntimeError(
+                        f"CloudFront origin-facing prefix list not found in {region}. "
+                        f"Cannot create secure security group — aborting deploy."
                     )
                 ec2.create_tags(
                     Resources=[sg_id],
@@ -687,15 +693,26 @@ class HiveProvisioner:
         created_resources: dict[str, str] = {}  # track for cleanup on failure
 
         try:
+            # PE-review P0-4: atomic status gate prevents TOCTOU race.
+            # UPDATE WHERE returns rowcount=0 if another task already claimed it.
+            async with aiosqlite.connect(str(self.db_path)) as conn:
+                await conn.execute("PRAGMA busy_timeout = 500")
+                cursor = await conn.execute(
+                    "UPDATE hive_instances SET status = 'provisioning', updated_at = datetime('now') "
+                    "WHERE id = ? AND status IN ('pending', 'error')",
+                    (instance_id,),
+                )
+                await conn.commit()
+                if cursor.rowcount == 0:
+                    logger.warning("Deploy skipped — instance %s not in pending/error (concurrent deploy?)", instance_id)
+                    return
             instance = await self._get_instance(instance_id)
-            # Status gate: prevent concurrent deploys
-            if instance.get("status") not in ("pending", "error"):
-                logger.warning("Deploy skipped — instance %s already in status '%s'", instance_id, instance.get("status"))
-                return
-            await self._update_instance(instance_id, status="provisioning")
 
             account = await self._get_account(instance["account_ref"])
             name = instance["name"]
+            # PE-review P1-8: defensive name validation (not just router-level)
+            if not _HIVE_NAME_RE.match(name):
+                raise ValueError(f"Invalid hive name: {name!r}")
             region = instance["region"]
             version = await self._resolve_version(instance.get("version"))
             instance_type = instance.get("instance_type", "m7g.xlarge")
@@ -938,6 +955,79 @@ echo "=== Update complete ==="
                 error_message=f"Update failed: {status}. {output[:200]}",
             )
             raise RuntimeError(f"SSM update failed: {status}")
+
+    async def reset_password(self, instance_id: str) -> str:
+        """Reset Hive auth password via SSM.  Returns the new passphrase.
+
+        Steps:
+        1. Generate new passphrase + bcrypt hash locally
+        2. SSM Run Command: overwrite HIVE_PASS_HASH in /etc/caddy/.env
+        3. Reload Caddy (zero-downtime — graceful config reload)
+        4. Update local DB with new plaintext password
+        """
+        from hive.user_data import generate_password, caddy_hash_password
+
+        instance = await self._get_instance(instance_id)
+        account = await self._get_account(instance["account_ref"])
+        session = self._get_session(account, instance["region"])
+        ec2_id = instance.get("ec2_instance_id")
+        region = instance["region"]
+
+        if not ec2_id:
+            raise ValueError("No EC2 instance ID")
+
+        new_password = generate_password()
+        new_hash = caddy_hash_password(new_password)
+
+        # Escape $ signs in bcrypt hash for sed (bcrypt hashes are full of $)
+        escaped_hash = new_hash.replace("$", "\\$")
+
+        reset_script = f"""#!/bin/bash
+set -euo pipefail
+# Update Caddy .env with new password hash
+ENV_FILE="/etc/caddy/.env"
+if [ ! -f "$ENV_FILE" ]; then
+  echo "ERROR: $ENV_FILE not found" >&2
+  exit 1
+fi
+# Replace the HIVE_PASS_HASH line
+sed -i 's|^HIVE_PASS_HASH=.*|HIVE_PASS_HASH={escaped_hash}|' "$ENV_FILE"
+# Reload Caddy (zero-downtime graceful reload)
+systemctl reload caddy
+echo "Password reset complete"
+"""
+
+        def _run_command():
+            ssm = session.client("ssm", region_name=region)
+            resp = ssm.send_command(
+                InstanceIds=[ec2_id],
+                DocumentName="AWS-RunShellScript",
+                Parameters={"commands": [reset_script]},
+                TimeoutSeconds=30,
+                Comment=f"SwarmAI Hive password reset for {instance['name']}",
+            )
+            command_id = resp["Command"]["CommandId"]
+
+            import time as _time
+            for _ in range(12):  # 12 × 5s = 60s max
+                result = ssm.get_command_invocation(
+                    CommandId=command_id, InstanceId=ec2_id
+                )
+                status = result["Status"]
+                if status in ("Success", "Failed", "Cancelled", "TimedOut"):
+                    return status, result.get("StandardOutputContent", "")
+                _time.sleep(5)
+            return "TimedOut", ""
+
+        status, output = await asyncio.to_thread(_run_command)
+        if status == "Success":
+            await self._update_instance(
+                instance_id, auth_password=new_password
+            )
+            logger.info("Hive %s password reset", instance["name"])
+            return new_password
+        else:
+            raise RuntimeError(f"Password reset failed: {status}. {output[:200]}")
 
     # ── Cleanup ────────────────────────────────────────────────────
 
