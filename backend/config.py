@@ -70,7 +70,7 @@ class Settings(BaseSettings):
 
     # Application
     app_name: str = "SwarmAI"
-    app_version: str = _read_version("1.8.4")  # fallback synced by scripts/sync-version.sh
+    app_version: str = _read_version("1.9.0")  # fallback synced by scripts/sync-version.sh
     debug: bool = False
 
     # Server
