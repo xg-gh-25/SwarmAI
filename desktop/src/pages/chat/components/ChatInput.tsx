@@ -245,15 +245,19 @@ export function ChatInput({
 
   // Build merged command list: system commands + skills
   const allCommands: SlashCommand[] = useMemo(() => {
-    const skillCommands: SlashCommand[] = skills.map((s) => ({
-      name: `/${s.folderName}`,
-      description: s.description || s.name,
-      category: 'skill' as const,
-    }));
+    const skillCommands: SlashCommand[] = skills.map((s) => {
+      // Strip s_ prefix from folder names for cleaner slash commands
+      const cleanName = s.folderName.replace(/^s_/, '');
+      return {
+        name: `/${cleanName}`,
+        description: s.description || s.name,
+        category: 'skill' as const,
+      };
+    });
     return [...SYSTEM_COMMANDS, ...skillCommands];
   }, [skills]);
 
-  // Filter commands based on input — match anywhere in name, not just prefix
+  // Filter commands based on input
   const filteredCommands = useMemo(() => {
     if (!inputValue.startsWith('/')) return [];
     const query = inputValue.toLowerCase();
@@ -262,9 +266,48 @@ export function ChatInput({
     );
   }, [inputValue, allCommands]);
 
+  // F4 fix: clamp selectedCommandIndex when filtered list shrinks
+  useEffect(() => {
+    if (selectedCommandIndex >= filteredCommands.length && filteredCommands.length > 0) {
+      setSelectedCommandIndex(filteredCommands.length - 1);
+    }
+  }, [filteredCommands.length, selectedCommandIndex]);
+
   // Group filtered commands by category for section headers
-  const systemCommands = filteredCommands.filter((c) => c.category === 'system');
-  const skillCommands = filteredCommands.filter((c) => c.category === 'skill');
+  const systemCmds = filteredCommands.filter((c) => c.category === 'system');
+  const skillCmds = filteredCommands.filter((c) => c.category === 'skill');
+
+  // F1+F2 fix: click-outside and global Escape to dismiss dropdown
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!showCommandSuggestions) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node) &&
+          textareaRef.current && !textareaRef.current.contains(e.target as Node)) {
+        setShowCommandSuggestions(false);
+      }
+    };
+    // F2: Global Escape works even when focus is on dropdown buttons
+    const handleGlobalEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowCommandSuggestions(false);
+        textareaRef.current?.focus();
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleGlobalEscape);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleGlobalEscape);
+    };
+  }, [showCommandSuggestions]);
+
+  // F5 fix: auto-scroll to selected item
+  const itemRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
+  useEffect(() => {
+    const el = itemRefs.current.get(selectedCommandIndex);
+    if (el) el.scrollIntoView({ block: 'nearest' });
+  }, [selectedCommandIndex]);
 
   // Handle input change with slash command detection
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -272,13 +315,13 @@ export function ChatInput({
     onInputChange(value);
 
     // Show suggestions when input starts with / — allow spaces for multi-word
-    // commands like "/plugin install". Only hide when the input exactly matches
-    // a complete command + has trailing content (user is typing args).
+    // commands like "/plugin install". Hide when user is typing args after a
+    // complete command (e.g., "/plugin install my-plugin@market").
     if (value.startsWith('/')) {
-      const isCompleteCommand = allCommands.some(
+      const isTypingArgs = allCommands.some(
         (cmd) => value.toLowerCase().startsWith(cmd.name.toLowerCase() + ' ') && value.length > cmd.name.length + 1
       );
-      if (isCompleteCommand) {
+      if (isTypingArgs) {
         setShowCommandSuggestions(false);
       } else {
         setShowCommandSuggestions(true);
@@ -293,6 +336,8 @@ export function ChatInput({
   const handleSelectCommand = (command: string) => {
     onInputChange(command + ' ');
     setShowCommandSuggestions(false);
+    // Refocus textarea after selecting a command
+    requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
   // Handle paste event for files (images, PDFs, Office docs, audio, etc.)
@@ -524,91 +569,105 @@ export function ChatInput({
 
             {/* Slash Command Suggestions — system commands + skills */}
             {showCommandSuggestions && filteredCommands.length > 0 && (
-              <div className="absolute bottom-full left-0 mb-2 w-80 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg shadow-xl overflow-hidden z-10 max-h-80 overflow-y-auto">
-                {/* System Commands Section */}
-                {systemCommands.length > 0 && (
-                  <>
-                    <div className="px-3 py-1.5 border-b border-[var(--color-border)] sticky top-0 bg-[var(--color-card)] z-10">
-                      <span className="text-xs text-[var(--color-text-muted)] font-medium uppercase tracking-wider">
-                        Commands
-                      </span>
-                    </div>
-                    {systemCommands.map((cmd) => {
-                      const globalIndex = filteredCommands.indexOf(cmd);
-                      return (
-                        <button
-                          key={cmd.name}
-                          onClick={() => handleSelectCommand(cmd.name)}
-                          className={clsx(
-                            'w-full px-3 py-2 flex items-start gap-3 text-left transition-colors',
-                            globalIndex === selectedCommandIndex
-                              ? 'bg-primary text-white'
-                              : 'text-[var(--color-text)] hover:bg-[var(--color-hover)]'
-                          )}
-                        >
-                          <span className="material-symbols-outlined text-base mt-0.5 opacity-60">terminal</span>
-                          <div className="min-w-0 flex-1">
-                            <p className="font-medium text-sm">{cmd.name}</p>
-                            <p
-                              className={clsx(
-                                'text-xs truncate',
-                                globalIndex === selectedCommandIndex ? 'text-white/70' : 'text-[var(--color-text-muted)]'
-                              )}
-                            >
-                              {cmd.description}
-                            </p>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </>
-                )}
-                {/* Skills Section */}
-                {skillCommands.length > 0 && (
-                  <>
-                    <div className="px-3 py-1.5 border-b border-[var(--color-border)] sticky top-0 bg-[var(--color-card)] z-10">
-                      <span className="text-xs text-[var(--color-text-muted)] font-medium uppercase tracking-wider">
-                        Skills
-                      </span>
-                    </div>
-                    {skillCommands.map((cmd) => {
-                      const globalIndex = filteredCommands.indexOf(cmd);
-                      return (
-                        <button
-                          key={cmd.name}
-                          onClick={() => handleSelectCommand(cmd.name)}
-                          className={clsx(
-                            'w-full px-3 py-2 flex items-start gap-3 text-left transition-colors',
-                            globalIndex === selectedCommandIndex
-                              ? 'bg-primary text-white'
-                              : 'text-[var(--color-text)] hover:bg-[var(--color-hover)]'
-                          )}
-                        >
-                          <span className="material-symbols-outlined text-base mt-0.5 opacity-60">magic_button</span>
-                          <div className="min-w-0 flex-1">
-                            <p className="font-medium text-sm">{cmd.name}</p>
-                            <p
-                              className={clsx(
-                                'text-xs truncate',
-                                globalIndex === selectedCommandIndex ? 'text-white/70' : 'text-[var(--color-text-muted)]'
-                              )}
-                            >
-                              {cmd.description}
-                            </p>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </>
-                )}
-                <div className="px-3 py-1.5 border-t border-[var(--color-border)] bg-[var(--color-hover)]/50 sticky bottom-0">
+              <div
+                ref={dropdownRef}
+                className="absolute bottom-full left-0 mb-2 w-80 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg shadow-xl overflow-hidden z-10 flex flex-col max-h-80"
+              >
+                {/* Scrollable content area */}
+                <div className="overflow-y-auto flex-1">
+                  {/* System Commands Section */}
+                  {systemCmds.length > 0 && (
+                    <>
+                      <div className="px-3 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-card)] sticky top-0 z-10">
+                        <span className="text-xs text-[var(--color-text-muted)] font-medium uppercase tracking-wider">
+                          Commands
+                        </span>
+                      </div>
+                      {systemCmds.map((cmd) => {
+                        const globalIndex = filteredCommands.indexOf(cmd);
+                        return (
+                          <button
+                            key={cmd.name}
+                            ref={(el) => { if (el) itemRefs.current.set(globalIndex, el); }}
+                            onClick={() => handleSelectCommand(cmd.name)}
+                            className={clsx(
+                              'w-full px-3 py-2 flex items-start gap-3 text-left transition-colors',
+                              globalIndex === selectedCommandIndex
+                                ? 'bg-primary text-white'
+                                : 'text-[var(--color-text)] hover:bg-[var(--color-hover)]'
+                            )}
+                          >
+                            <span className="material-symbols-outlined text-base mt-0.5 opacity-60">terminal</span>
+                            <div className="min-w-0 flex-1">
+                              <p className="font-medium text-sm">{cmd.name}</p>
+                              <p
+                                className={clsx(
+                                  'text-xs truncate',
+                                  globalIndex === selectedCommandIndex ? 'text-white/70' : 'text-[var(--color-text-muted)]'
+                                )}
+                              >
+                                {cmd.description}
+                              </p>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </>
+                  )}
+                  {/* Skills Section */}
+                  {skillCmds.length > 0 && (
+                    <>
+                      <div className="px-3 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-card)] sticky top-0 z-10">
+                        <span className="text-xs text-[var(--color-text-muted)] font-medium uppercase tracking-wider">
+                          Skills ({skillCmds.length})
+                        </span>
+                      </div>
+                      {skillCmds.map((cmd) => {
+                        const globalIndex = filteredCommands.indexOf(cmd);
+                        return (
+                          <button
+                            key={cmd.name}
+                            ref={(el) => { if (el) itemRefs.current.set(globalIndex, el); }}
+                            onClick={() => handleSelectCommand(cmd.name)}
+                            className={clsx(
+                              'w-full px-3 py-2 flex items-start gap-3 text-left transition-colors',
+                              globalIndex === selectedCommandIndex
+                                ? 'bg-primary text-white'
+                                : 'text-[var(--color-text)] hover:bg-[var(--color-hover)]'
+                            )}
+                          >
+                            <span className="material-symbols-outlined text-base mt-0.5 opacity-60">magic_button</span>
+                            <div className="min-w-0 flex-1">
+                              <p className="font-medium text-sm">{cmd.name}</p>
+                              <p
+                                className={clsx(
+                                  'text-xs truncate',
+                                  globalIndex === selectedCommandIndex ? 'text-white/70' : 'text-[var(--color-text-muted)]'
+                                )}
+                              >
+                                {cmd.description}
+                              </p>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </>
+                  )}
+                </div>
+                {/* F3 fix: Footer with keyboard hints + close button — always visible */}
+                <div className="px-3 py-1.5 border-t border-[var(--color-border)] bg-[var(--color-hover)]/50 flex items-center justify-between shrink-0">
                   <span className="text-xs text-[var(--color-text-muted)]">
                     <kbd className="px-1 py-0.5 bg-[var(--color-border)] rounded text-xs">↑↓</kbd> navigate
                     <span className="mx-2">·</span>
                     <kbd className="px-1 py-0.5 bg-[var(--color-border)] rounded text-xs">Tab</kbd> select
-                    <span className="mx-2">·</span>
-                    <kbd className="px-1 py-0.5 bg-[var(--color-border)] rounded text-xs">Esc</kbd> close
                   </span>
+                  <button
+                    onClick={() => { setShowCommandSuggestions(false); textareaRef.current?.focus(); }}
+                    className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors p-0.5 rounded hover:bg-[var(--color-hover)]"
+                    title="Close (Esc)"
+                  >
+                    <span className="material-symbols-outlined text-sm">close</span>
+                  </button>
                 </div>
               </div>
             )}
