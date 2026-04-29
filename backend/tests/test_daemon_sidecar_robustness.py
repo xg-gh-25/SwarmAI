@@ -87,14 +87,18 @@ class TestInstallDaemonEndpoint:
 
     def test_endpoint_exists(self, client):
         """Endpoint must exist and accept POST."""
-        with patch("routers.system._run_install_daemon") as mock_install:
+        with patch("routers.system.sys") as mock_sys, \
+             patch("routers.system._run_install_daemon") as mock_install:
+            mock_sys.platform = "darwin"
             mock_install.return_value = {"status": "installed", "port": 18321}
             resp = client.post("/api/system/install-daemon")
             assert resp.status_code == 200
 
     def test_returns_installed_status(self, client):
         """Successful install returns status and port."""
-        with patch("routers.system._run_install_daemon") as mock_install:
+        with patch("routers.system.sys") as mock_sys, \
+             patch("routers.system._run_install_daemon") as mock_install:
+            mock_sys.platform = "darwin"
             mock_install.return_value = {"status": "installed", "port": 18321}
             resp = client.post("/api/system/install-daemon")
             data = resp.json()
@@ -103,7 +107,9 @@ class TestInstallDaemonEndpoint:
 
     def test_returns_error_on_failure(self, client):
         """Failed install returns error status."""
-        with patch("routers.system._run_install_daemon") as mock_install:
+        with patch("routers.system.sys") as mock_sys, \
+             patch("routers.system._run_install_daemon") as mock_install:
+            mock_sys.platform = "darwin"
             mock_install.side_effect = RuntimeError("Plist template not found")
             resp = client.post("/api/system/install-daemon")
             assert resp.status_code == 500
@@ -113,8 +119,7 @@ class TestInstallDaemonEndpoint:
         with patch("routers.system.sys") as mock_sys:
             mock_sys.platform = "linux"
             resp = client.post("/api/system/install-daemon")
-            # Should return 400 on non-macOS
-            assert resp.status_code in (200, 400)  # 200 if macOS, 400 if not
+            assert resp.status_code == 400
 
 
 # ---------------------------------------------------------------------------
