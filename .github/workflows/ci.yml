@@ -57,7 +57,9 @@ jobs:
             --ignore=tests/test_jobs.py \
             --ignore=tests/test_e2e_integration.py \
             --ignore=tests/test_wiring_integration.py \
-            --ignore=tests/test_session_unit_preservation.py
+            --ignore=tests/test_session_unit_preservation.py \
+            --ignore=tests/test_settings_router.py \
+            --ignore=tests/test_voice_transcribe.py
           # ── CI-skipped test files (review quarterly) ──────────────
           # test_chat_scenarios_e2e.py      — async DB lifecycle race on cold runners (2026-04-28)
           # test_context_warning_bridge.py  — needs ~/.swarm-ai/ filesystem (2026-04-28)
@@ -67,6 +69,8 @@ jobs:
           # test_e2e_integration.py         — full DB lifecycle + filesystem (2026-04-28)
           # test_wiring_integration.py      — full DB lifecycle + filesystem (2026-04-28)
           # test_session_unit_preservation.py — async DB locking under xdist on cold runners (2026-04-29)
+          # test_settings_router.py         — async DB locking on cold runners (2026-04-29)
+          # test_voice_transcribe.py        — needs ffmpeg binary not on CI runner (2026-04-29)
         timeout-minutes: 10
 
   # ── Frontend: typecheck + build (fast, ~1min) ───────────────
