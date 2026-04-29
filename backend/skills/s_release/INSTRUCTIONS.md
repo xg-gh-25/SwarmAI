@@ -2,15 +2,27 @@
 
 Bump version, update CHANGELOG, tag, and publish GitHub Release. Zero files missed.
 
+## 🚨 Release MUST go through a PR
+
+**Never push directly to main for releases.** The flow is:
+
+```
+release/vX.Y.Z branch → PR → CI passes (backend + frontend + version-check) → merge → tag → release
+```
+
+This is a hard rule since v1.9.0 (60 commits shipped with 3 P0 bugs that CI would have caught).
+Branch protection on `main` requires all CI checks to pass before merge.
+
 ## Version Files (ALL 5 MUST BE UPDATED)
 
 | # | File | Field | Format |
 |---|------|-------|--------|
-| 0 | **`VERSION`** (root) | `X.Y.Z` (plain text) | **Source of truth** — `dev.sh` and `prod.sh` sync FROM this file on every startup |
-| 1 | `backend/pyproject.toml` | `version = "X.Y.Z"` | TOML |
-| 2 | `desktop/package.json` | `"version": "X.Y.Z"` | JSON |
-| 3 | `desktop/src-tauri/Cargo.toml` | `version = "X.Y.Z"` | TOML |
-| 4 | `desktop/src-tauri/tauri.conf.json` | `"version": "X.Y.Z"` | JSON |
+| 0 | **`VERSION`** (root) | `X.Y.Z` (plain text) | **Source of truth** — `sync-version.sh` reads this and overwrites all others |
+| 1 | `backend/config.py` | `_read_version("X.Y.Z")` | Python |
+| 2 | `backend/pyproject.toml` | `version = "X.Y.Z"` | TOML |
+| 3 | `desktop/package.json` | `"version": "X.Y.Z"` | JSON |
+| 4 | `desktop/src-tauri/Cargo.toml` | `version = "X.Y.Z"` | TOML |
+| 5 | `desktop/src-tauri/tauri.conf.json` | `"version": "X.Y.Z"` | JSON |
 
 > ⚠️ **CRITICAL:** The `VERSION` file MUST be updated first. `dev.sh` and `prod.sh` both call `sync-version.sh` on startup, which reads `VERSION` and overwrites all 4 package files. If `VERSION` is stale, every dev/build run silently downgrades all versions.
 
@@ -153,31 +165,53 @@ grep -n "version" desktop/src-tauri/Cargo.toml | head -1
 grep -n "version" desktop/src-tauri/tauri.conf.json | head -1
 ```
 
-### Step 6: Commit
+### Step 6: Commit on Release Branch
 
 ```bash
+# Create release branch (NEVER commit directly to main)
+git checkout -b release/vX.Y.Z
+
 git add VERSION CHANGELOG.md backend/pyproject.toml desktop/package.json \
   desktop/package-lock.json desktop/src-tauri/Cargo.toml \
-  desktop/src-tauri/Cargo.lock desktop/src-tauri/tauri.conf.json
+  desktop/src-tauri/Cargo.lock desktop/src-tauri/tauri.conf.json \
+  backend/config.py
 git commit -m "chore: bump version to X.Y.Z, update CHANGELOG"
 ```
 
-### Step 7: Push
+### Step 7: Push + Create PR
 
 ```bash
-git push
+git push -u origin release/vX.Y.Z
+gh pr create --title "Release vX.Y.Z" --body "## Release vX.Y.Z
+
+$(git log $(git describe --tags --abbrev=0)..HEAD --oneline | head -20)
+
+## Checklist
+- [ ] CI passes (backend + frontend + version-check)
+- [ ] CHANGELOG updated
+- [ ] READMEs updated (EN + CN)"
 ```
 
-### Step 8: Tag and Push Tag
+**Wait for CI to pass.** Branch protection requires all 3 checks (backend, frontend, version-check).
+If CI fails → fix on the release branch, push again. Do NOT bypass.
 
 ```bash
+# After CI is green:
+gh pr merge --merge --delete-branch
+```
+
+### Step 8: Tag and Push Tag (after PR merged)
+
+```bash
+git checkout main
+git pull
 git tag vX.Y.Z -m "vX.Y.Z: <one-line summary of highlights>"
 git push origin vX.Y.Z
 ```
 
 ### Step 9: Create GitHub Release
 
-> **Note:** Tag push triggers GitHub Actions which builds DMG + Hive tar.gz + checksums automatically (`build-macos`, `build-windows`, `build-hive` jobs). The CI creates a **draft** release with all artifacts. You can either:
+> **Note:** Tag push triggers the unified Release workflow (`release.yml`) which builds DMG + Windows + Hive tar.gz + checksums automatically. The CI creates a **draft** release with all artifacts. You can either:
 > - **Wait for CI** (~15 min) — then edit the draft release to add notes
 > - **Create manually** — if you need to ship before CI finishes (artifacts uploaded later)
 

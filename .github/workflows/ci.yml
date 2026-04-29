@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Cancel in-progress runs for the same branch/PR
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Backend: lint + test (fast, ~2min) ──────────────────────
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        working-directory: ./backend
+        run: |
+          pip install uv
+          uv venv .venv
+          source .venv/bin/activate
+          uv pip install -e ".[dev]"
+          echo "$VIRTUAL_ENV/bin" >> $GITHUB_PATH
+
+      - name: Create .env
+        working-directory: ./backend
+        run: cp .env.example .env
+
+      - name: Run tests
+        working-directory: ./backend
+        run: SWARMAI_SUITE=1 python -m pytest --timeout=120 -x -q --tb=short
+        timeout-minutes: 10
+
+  # ── Frontend: typecheck + build (fast, ~1min) ───────────────
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: desktop/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install frontend dependencies
+        working-directory: ./desktop
+        run: npm ci
+
+      - name: Install backend (for seed DB generation)
+        working-directory: ./backend
+        run: |
+          pip install uv
+          uv venv .venv
+          source .venv/bin/activate
+          uv pip install -e ".[dev]"
+          echo "$VIRTUAL_ENV/bin" >> $GITHUB_PATH
+          cp .env.example .env
+
+      - name: TypeScript typecheck
+        working-directory: ./desktop
+        run: npx tsc --noEmit
+
+      - name: Build frontend
+        working-directory: ./desktop
+        run: npm run build
+
+  # ── Version consistency check ───────────────────────────────
+  version-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check all version files match
+        run: bash scripts/sync-version.sh check
