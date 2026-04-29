@@ -79,9 +79,13 @@ console_handler = logging.StreamHandler()
 console_handler.setLevel(log_level)
 console_handler.setFormatter(logging.Formatter(log_format))
 
-# File handler - write logs to file
+# File handler - write logs to file with rotation (10MB × 3 backups)
+# Plain FileHandler grows unbounded; RotatingFileHandler caps at ~40MB total.
 log_file = get_log_file_path()
-file_handler = logging.FileHandler(log_file, encoding='utf-8')
+from logging.handlers import RotatingFileHandler
+file_handler = RotatingFileHandler(
+    log_file, maxBytes=10 * 1024 * 1024, backupCount=3, encoding='utf-8'
+)
 file_handler.setLevel(log_level)
 file_handler.setFormatter(logging.Formatter(log_format))
 

@@ -265,6 +265,13 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
       const response = await axios.get(`${apiBase}/health`, {
         timeout: TIMING.healthCheckTimeout,
       });
+      // Detect SPA fallback: if response is a string containing HTML, the
+      // request hit the Tauri asset protocol instead of the real backend.
+      // This is the v1.9.0 bug class (isDesktop()=false → same-origin → HTML).
+      if (typeof response.data === 'string' && response.data.includes('<!')) {
+        console.error(`[Health Check] FATAL: got HTML instead of JSON — API base URL is wrong. isDesktop()=${isDesktop()}, url=${apiBase || '(same-origin)'}/health`);
+        return { healthy: false };
+      }
       console.log(`[Health Check] Response:`, response.data);
       return {
         healthy: response.data?.status === 'healthy',
@@ -380,8 +387,10 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
       } else {
         healthAttempts++;
         if (healthAttempts >= TIMING.maxHealthAttempts) {
+          const apiBase = getApiBaseUrl();
+          console.error(`[Health Check] Exhausted ${healthAttempts} attempts. apiBase=${apiBase || '(same-origin)'}, isDesktop=${isDesktop()}, port=${getBackendPort()}`);
           setStatus('error');
-          setErrorMessage('Backend service failed to start within 60 seconds');
+          setErrorMessage(`Backend service failed to start within 60 seconds (${apiBase || 'same-origin'}, ${healthAttempts} attempts)`);
         } else {
           timeoutId = setTimeout(pollHealth, TIMING.pollInterval);
         }

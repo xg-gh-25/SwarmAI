@@ -18,8 +18,16 @@ export function isDesktop(): boolean {
   // set in tauri.conf.json.  Check both so the detection works across
   // versions and any future bundle-internal naming changes.
   const w = window as unknown as Record<string, unknown>;
-  return !!(w.__TAURI_INTERNALS__ || w.__TAURI__);
+  const result = !!(w.__TAURI_INTERNALS__ || w.__TAURI__);
+  // Log once on first call — critical for diagnosing v1.9.0-class bugs
+  // where isDesktop()=false causes all API calls to hit SPA fallback.
+  if (!_isDesktopLogged) {
+    _isDesktopLogged = true;
+    console.log(`[Platform] isDesktop=${result} (__TAURI_INTERNALS__=${!!w.__TAURI_INTERNALS__}, __TAURI__=${!!w.__TAURI__}, protocol=${location.protocol})`);
+  }
+  return result;
 }
+let _isDesktopLogged = false;
 
 // Store the backend port globally
 // In development mode, always use 8000 (manual python main.py)
@@ -49,16 +57,21 @@ export function getBackendPort(): number {
 export function getApiBaseUrl(): string {
   // Explicit env override (set at build time for Hive)
   if (import.meta.env.VITE_API_URL) {
+    if (!_apiBaseLogged) { _apiBaseLogged = true; console.log(`[Platform] API base from VITE_API_URL: ${import.meta.env.VITE_API_URL}`); }
     return import.meta.env.VITE_API_URL;
   }
   // Desktop mode: localhost with dynamic port
   if (isDesktop()) {
     const port = getBackendPort();
-    return `http://localhost:${port}`;
+    const url = `http://localhost:${port}`;
+    if (!_apiBaseLogged) { _apiBaseLogged = true; console.log(`[Platform] API base (desktop): ${url}`); }
+    return url;
   }
   // Hive/web mode: same origin (Caddy reverse-proxies /api/*)
+  if (!_apiBaseLogged) { _apiBaseLogged = true; console.log(`[Platform] API base (hive/browser): same-origin`); }
   return '';
 }
+let _apiBaseLogged = false;
 
 export function setBackendPort(port: number): void {
   _backendPort = port;
@@ -131,8 +144,10 @@ export const tauriService = {
 
 // Initialize backend connection
 export async function initializeBackend(): Promise<number> {
+  console.log('[Backend Init] Checking if backend is already running...');
   // First check if backend is already running
   const status = await tauriService.getBackendStatus();
+  console.log(`[Backend Init] Status: running=${status.running}, port=${status.port}, daemon=${status.is_daemon_mode}`);
   if (status.running) {
     setBackendPort(status.port);
     return status.port;
@@ -140,8 +155,8 @@ export async function initializeBackend(): Promise<number> {
 
   // Start the backend — let errors propagate to BackendStartupOverlay
   // which already has error handling UI (L402-408).
-  // Previously this caught and returned 8000, which is never correct
-  // in production (random port or daemon port 18321).
+  console.log('[Backend Init] Starting backend via Tauri...');
   const port = await tauriService.startBackend();
+  console.log(`[Backend Init] Backend started on port ${port}`);
   return port;
 }
