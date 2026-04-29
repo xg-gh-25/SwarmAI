@@ -55,6 +55,10 @@ The report follows this template (every run produces one):
 **Run ID:** run_<id> | **Project:** <PROJECT> | **Profile:** <profile>
 **Date:** <ISO date> | **Confidence:** <score>/10
 
+## TL;DR
+<2-3 sentences: what was built, what problem it solves, what value it delivers.
+Written for someone who won't read the rest of the report. Skip jargon.>
+
 ## 1. Requirement
 <original requirement text>
 

@@ -328,6 +328,9 @@ After reflect stage:
 Pipeline COMPLETE (run_<id>) -- <N> stages, <M> skipped, <K> escalations
 Confidence: <score>/10
 
+  TL;DR: <2-3 sentences: what was built, what problem it solves, what value
+         it delivers. Written for someone who won't read the rest.>
+
   Artifacts:
     evaluation  -> art_xxxx (GO, ROI 4.2)
     research    -> art_xxxx (3 alternatives, chose: <approach>)
