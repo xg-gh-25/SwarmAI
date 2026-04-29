@@ -6,12 +6,9 @@ import { ExplorerProvider, useTreeData } from '../../contexts/ExplorerContext';
 import { WorkspaceExplorer } from '../workspace-explorer';
 import { BottomBar } from './BottomBar';
 import FileEditorModal from '../common/FileEditorModal';
-import FileEditorPanel from '../common/FileEditorPanel';
-import BinaryPreviewModal from '../common/BinaryPreviewModal';
+import FileViewerPanel from '../file-viewer/FileViewerPanel';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
-import { classifyFileForPreview } from '../../utils/fileUtils';
 import { openExternal } from '../../utils/openExternal';
-import type { FilePreviewType } from '../../utils/fileUtils';
 import SettingsModal from '../modals/SettingsModal';
 import WorkspaceSettingsModal from '../modals/WorkspaceSettingsModal';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
@@ -306,9 +303,17 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   /** Ref to hold the ExplorerContext refreshTree function (set by bridge component inside provider). */
   const refreshTreeRef = useRef<(() => void) | null>(null);
 
-  // File editor state - Requirement 9.1
-  // editorMode: 'panel' = side panel (default), 'modal' = fullscreen overlay
+  // File viewer state — unified for all file types (Requirement 9.1)
+  // editorMode: 'panel' = side panel (default), 'modal' = fullscreen overlay (text files only)
   const [editorMode, setEditorMode] = useState<'panel' | 'modal'>('panel');
+  const [fileViewerFile, setFileViewerFile] = useState<{
+    filePath: string;
+    fileName: string;
+    gitStatus?: GitStatus;
+    workspaceId?: string;
+  } | null>(null);
+
+  // Legacy file editor state — kept for modal mode (fullscreen text editing only)
   const [fileEditorState, setFileEditorState] = useState<{
     isOpen: boolean;
     filePath: string;
@@ -321,72 +326,18 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     committedContent?: string;
   } | null>(null);
 
-  // Binary preview state for images, PDFs, and unsupported files
-  const [binaryPreviewState, setBinaryPreviewState] = useState<{
-    isOpen: boolean;
-    fileName: string;
-    filePath: string;
-    mode: 'image' | 'unsupported';
-  } | null>(null);
-
   // Swarm workspace warning state - Requirement 4.3
   const [swarmWarning, setSwarmWarning] = useState<{
     isOpen: boolean;
     pendingFile: FileTreeItem | null;
   }>({ isOpen: false, pendingFile: null });
 
-  // Open file editor with content -- reads via backend API (no Tauri fs scope issues)
-  const openFileEditor = useCallback(async (file: FileTreeItem, gitStatus?: GitStatus) => {
-    try {
-      const response = await api.get<{ content: string; path: string; name: string; readonly?: boolean }>(
-        '/workspace/file',
-        { params: { path: file.path } },
-      );
-
-      // Always fetch committed (HEAD) version for Show Changes diff.
-      // Previously gated on gitStatus, but files opened via swarm:open-file
-      // events (chat links) don't carry gitStatus, so committedContent was
-      // never fetched for them.  The try/catch handles untracked/new files.
-      let committedContent: string | undefined;
-      try {
-        const committedResponse = await api.get<{ content: string }>(
-          '/workspace/file/committed',
-          { params: { path: file.path } },
-        );
-        committedContent = committedResponse.data.content;
-      } catch {
-        // Untracked, new, or binary file — no committed version available.
-        // Leave undefined so originalContent falls back to initialContent.
-      }
-
-      liveContentRef.current = null; // Reset live content tracking for new file
-      setFileEditorState({
-        isOpen: true,
-        filePath: file.path,
-        fileName: file.name,
-        workspaceId: file.workspaceId,
-        content: response.data.content,
-        isSwarmWorkspace: file.isSwarmWorkspace || false,
-        gitStatus,
-        readonly: response.data.readonly ?? false,
-        committedContent,
-      });
-    } catch (error) {
-      console.error('Failed to read file:', error);
-      addToast({
-        severity: 'warning',
-        message: `File not found: ${file.path}`,
-        autoDismiss: true,
-      });
-    }
-  }, [addToast]);
-
   // Listen for swarm:open-file custom events dispatched by clickable file paths
   // in chat messages (MarkdownRenderer). Uses a ref to avoid stale closure on
-  // openFileEditor which depends on external state.
+  // handleFileDoubleClick which depends on external state.
 
-  // Notify RadarSidebar when file editor panel is open/closed so it can auto-hide
-  const isEditorPanelOpen = !!(fileEditorState && editorMode === 'panel');
+  // Notify RadarSidebar when file viewer panel is open/closed so it can auto-hide
+  const isEditorPanelOpen = !!(fileViewerFile && editorMode === 'panel');
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('swarm:editor-panel-state', {
       detail: { open: isEditorPanelOpen },
@@ -396,10 +347,10 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   // Notify ChatPage which file is currently open so it can include in chat requests.
   // Memoize the detail to avoid dispatching redundant null→null events.
   const editorFileDetail = useMemo(
-    () => fileEditorState
-      ? { filePath: fileEditorState.filePath, fileName: fileEditorState.fileName }
+    () => fileViewerFile
+      ? { filePath: fileViewerFile.filePath, fileName: fileViewerFile.fileName }
       : null,
-    [fileEditorState?.filePath, fileEditorState?.fileName],
+    [fileViewerFile?.filePath, fileViewerFile?.fileName],
   );
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('swarm:editor-file-changed', {
@@ -411,28 +362,24 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   const handleFileDoubleClickRef = useRef<(file: FileTreeItem) => Promise<void>>(null!);
 
 
-  // Handle file double-click - Requirement 9.1, 1.1-1.5, 7.1-7.2
+  // Handle file double-click — unified routing through FileViewer (Requirement 9.1)
   const handleFileDoubleClick = useCallback(async (file: FileTreeItem) => {
     if (file.isSwarmWorkspace) {
       setSwarmWarning({ isOpen: true, pendingFile: file });
       return;
     }
 
-    const previewType: FilePreviewType = classifyFileForPreview(file.name);
-
-    if (previewType === 'text') {
-      await openFileEditor(file, file.gitStatus);
-    } else {
-      // 'image' or 'unsupported' — show in BinaryPreviewModal
-      // (images render inline; unsupported shows file info + Open/Copy Path)
-      setBinaryPreviewState({
-        isOpen: true,
-        fileName: file.name,
-        filePath: file.path,
-        mode: previewType,
-      });
-    }
-  }, [openFileEditor]);
+    // All file types route through the unified FileViewer panel.
+    // FileViewer internally classifies and picks the right renderer.
+    setFileViewerFile({
+      filePath: file.path,
+      fileName: file.name,
+      gitStatus: file.gitStatus,
+      workspaceId: file.workspaceId,
+    });
+    // Reset modal mode — FileViewer always starts in panel
+    setEditorMode('panel');
+  }, []);
 
   // Assign ref now that handleFileDoubleClick is defined
   handleFileDoubleClickRef.current = handleFileDoubleClick;
@@ -505,10 +452,15 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   // Handle Swarm workspace warning confirmation
   const handleSwarmWarningConfirm = useCallback(async () => {
     if (swarmWarning.pendingFile) {
-      await openFileEditor(swarmWarning.pendingFile, swarmWarning.pendingFile.gitStatus);
+      setFileViewerFile({
+        filePath: swarmWarning.pendingFile.path,
+        fileName: swarmWarning.pendingFile.name,
+        gitStatus: swarmWarning.pendingFile.gitStatus,
+        workspaceId: swarmWarning.pendingFile.workspaceId,
+      });
     }
     setSwarmWarning({ isOpen: false, pendingFile: null });
-  }, [swarmWarning.pendingFile, openFileEditor]);
+  }, [swarmWarning.pendingFile]);
 
   const handleSwarmWarningCancel = useCallback(() => {
     setSwarmWarning({ isOpen: false, pendingFile: null });
@@ -529,9 +481,10 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     }
   }, [fileEditorState]);
 
-  // Handle file editor close - Requirement 9.7
-  const handleFileEditorClose = useCallback(() => {
-    setFileEditorState(null);
+  // Handle file viewer close - Requirement 9.7
+  const handleFileViewerClose = useCallback(() => {
+    setFileViewerFile(null);
+    setFileEditorState(null); // Clear legacy state too
     setEditorMode('panel'); // Reset to panel for next open
     liveContentRef.current = null;
     refreshTreeRef.current?.();
@@ -546,16 +499,51 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   }, []);
 
   // Toggle between panel and modal mode (preserves file state).
-  // Snapshot the live content into fileEditorState so the remounted
-  // editor picks it up as initialContent.
-  const handleToggleEditorMode = useCallback(() => {
-    if (liveContentRef.current != null) {
-      setFileEditorState((prev) =>
-        prev ? { ...prev, content: liveContentRef.current! } : prev,
-      );
+  // Panel→modal: populate fileEditorState from fileViewerFile for FileEditorModal.
+  // Modal→panel: clear fileEditorState, let FileViewer take over.
+  const handleToggleEditorMode = useCallback(async () => {
+    if (editorMode === 'panel' && fileViewerFile) {
+      // Panel → Modal: need to populate legacy fileEditorState for FileEditorModal
+      try {
+        const response = await api.get<{ content: string; path: string; name: string; readonly?: boolean }>(
+          '/workspace/file',
+          { params: { path: fileViewerFile.filePath } },
+        );
+        let committedContent: string | undefined;
+        try {
+          const cResp = await api.get<{ content: string }>(
+            '/workspace/file/committed',
+            { params: { path: fileViewerFile.filePath } },
+          );
+          committedContent = cResp.data.content;
+        } catch { /* untracked file */ }
+
+        const content = liveContentRef.current ?? response.data.content;
+        setFileEditorState({
+          isOpen: true,
+          filePath: fileViewerFile.filePath,
+          fileName: fileViewerFile.fileName,
+          workspaceId: fileViewerFile.workspaceId ?? '',
+          content,
+          isSwarmWorkspace: false,
+          gitStatus: fileViewerFile.gitStatus,
+          readonly: response.data.readonly,
+          committedContent,
+        });
+      } catch (err) {
+        console.error('Failed to switch to modal mode:', err);
+        return;
+      }
+    } else if (editorMode === 'modal' && fileEditorState) {
+      // Modal → Panel: snapshot live content, clear legacy state
+      if (liveContentRef.current != null) {
+        // Content preserved via liveContentRef — FileViewer will re-fetch
+      }
+      setFileEditorState(null);
     }
+    liveContentRef.current = null;
     setEditorMode((prev) => (prev === 'panel' ? 'modal' : 'panel'));
-  }, []);
+  }, [editorMode, fileViewerFile, fileEditorState]);
 
   // L2: Auto-diff feedback — inject edit summary into chat input.
   // Accepts fileName as a parameter to avoid stale-closure reads of
@@ -582,21 +570,13 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
           <LeftSidebar />
           <WorkspaceExplorer onFileDoubleClick={handleFileDoubleClick} />
           <MainChatPanel>{children}</MainChatPanel>
-          {/* File Editor Panel — side-by-side with chat */}
-          {fileEditorState && editorMode === 'panel' && (
-            <FileEditorPanel
-              filePath={fileEditorState.filePath}
-              fileName={fileEditorState.fileName}
-              workspaceId={fileEditorState.workspaceId}
-              initialContent={fileEditorState.content}
-              onSave={handleFileSave}
-              onClose={handleFileEditorClose}
-              gitStatus={fileEditorState.gitStatus}
-              readonly={fileEditorState.readonly}
-              committedContent={fileEditorState.committedContent}
-              onToggleMode={handleToggleEditorMode}
+          {/* Unified File Viewer — resizable side panel for all file types */}
+          {fileViewerFile && editorMode === 'panel' && (
+            <FileViewerPanel
+              initialFile={fileViewerFile}
+              onClose={handleFileViewerClose}
               onSaveWithDiff={handleSaveWithDiff}
-              onContentChange={handleContentChange}
+              onToggleMode={handleToggleEditorMode}
             />
           )}
         </div>
@@ -605,18 +585,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
         <BottomBar />
       </ExplorerProvider>
 
-      {/* Binary Preview Modal */}
-      {binaryPreviewState && (
-        <BinaryPreviewModal
-          isOpen={binaryPreviewState.isOpen}
-          fileName={binaryPreviewState.fileName}
-          filePath={binaryPreviewState.filePath}
-          mode={binaryPreviewState.mode}
-          onClose={() => setBinaryPreviewState(null)}
-        />
-      )}
-
-      {/* File Editor Modal — fullscreen overlay mode */}
+      {/* File Editor Modal — fullscreen overlay mode (text files only, via toggle) */}
       {fileEditorState && editorMode === 'modal' && (
         <FileEditorModal
           isOpen={fileEditorState.isOpen}
@@ -625,7 +594,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
           workspaceId={fileEditorState.workspaceId}
           initialContent={fileEditorState.content}
           onSave={handleFileSave}
-          onClose={handleFileEditorClose}
+          onClose={handleFileViewerClose}
           gitStatus={fileEditorState.gitStatus}
           readonly={fileEditorState.readonly}
           committedContent={fileEditorState.committedContent}

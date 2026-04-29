@@ -200,7 +200,7 @@ def generate_password(word_count: int = 4) -> str:
         "mid", "mix", "mob", "mod", "mop", "mud", "mug", "nap",
         "net", "new", "nib", "nil", "nip", "nod", "nor", "not",
         "now", "nut", "oak", "oar", "oat", "odd", "oil", "old",
-        "one", "opt", "orb", "ore", "our", "out", "oven", "owl",
+        "one", "opt", "orb", "ore", "our", "out", "owe", "owl",
         "own", "pad", "pan", "paw", "pay", "pea", "peg", "pen",
         "pet", "pie", "pig", "pin", "pit", "pod", "pop", "pot",
         "pry", "pub", "pug", "pun", "pup", "put", "rag", "ram",

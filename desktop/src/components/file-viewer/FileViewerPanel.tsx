@@ -1,24 +1,24 @@
 /**
- * FileEditorPanel — Resizable right-side panel that hosts FileEditorCore.
+ * FileViewerPanel — Resizable right-side panel wrapper for FileViewer.
  *
- * Mounted as a flex sibling to MainChatPanel inside ThreeColumnLayout.
- * Provides drag-to-resize via a vertical handle, width persistence to
- * localStorage, and a mode-toggle to pop out into FileEditorModal.
+ * Ported from FileEditorPanel: drag-to-resize via vertical handle,
+ * width persistence to localStorage. FileViewer handles all content
+ * rendering, tabs, and status bar internally.
  *
  * Key exports:
- * - `FileEditorPanel` (default) — Panel wrapper component
- * - `PANEL_CONSTANTS`           — Min/max/default width values
+ * - `FileViewerPanel`   — Panel wrapper (default export)
+ * - `PANEL_CONSTANTS`   — Min/max/default width values
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import FileEditorCore from './FileEditorCore';
-import type { FileEditorCoreProps } from './FileEditorCore';
+import FileViewer from './FileViewer';
+import type { FileViewerProps } from './FileViewer';
 
 export const PANEL_CONSTANTS = {
   DEFAULT_WIDTH: 500,
   MIN_WIDTH: 320,
   MAX_WIDTH: 1200,
-  STORAGE_KEY: 'fileEditorPanelWidth',
+  STORAGE_KEY: 'fileViewerPanelWidth',
 } as const;
 
 function getStoredWidth(): number {
@@ -30,12 +30,9 @@ function getStoredWidth(): number {
   return Math.max(PANEL_CONSTANTS.MIN_WIDTH, Math.min(PANEL_CONSTANTS.MAX_WIDTH, parsed));
 }
 
-interface FileEditorPanelProps extends Omit<FileEditorCoreProps, 'variant'> {
-  /** Callback to switch to modal mode (pop out). */
-  onToggleMode?: () => void;
-}
+type FileViewerPanelProps = Omit<FileViewerProps, 'variant'>;
 
-export default function FileEditorPanel(props: FileEditorPanelProps) {
+export default function FileViewerPanel(props: FileViewerPanelProps) {
   const [width, setWidth] = useState(getStoredWidth);
   const [isDragging, setIsDragging] = useState(false);
   const startXRef = useRef(0);
@@ -60,7 +57,7 @@ export default function FileEditorPanel(props: FileEditorPanelProps) {
     if (!isDragging) return;
 
     const handleMouseMove = (e: MouseEvent) => {
-      // Dragging the left edge of the panel: moving left = wider, right = narrower
+      // Dragging the left edge: moving left = wider, right = narrower
       const delta = startXRef.current - e.clientX;
       updateWidth(startWidthRef.current + delta);
     };
@@ -86,7 +83,7 @@ export default function FileEditorPanel(props: FileEditorPanelProps) {
     <div
       className="relative flex-shrink-0 flex"
       style={{ width }}
-      data-testid="file-editor-panel"
+      data-testid="file-viewer-panel"
     >
       {/* Resize handle — left edge */}
       <div
@@ -101,16 +98,16 @@ export default function FileEditorPanel(props: FileEditorPanelProps) {
         aria-valuenow={width}
         aria-valuemin={PANEL_CONSTANTS.MIN_WIDTH}
         aria-valuemax={PANEL_CONSTANTS.MAX_WIDTH}
-        aria-label="Resize file editor panel"
+        aria-label="Resize file viewer panel"
         data-testid="panel-resize-handle"
       >
-        {/* Wider hit area */}
+        {/* Wider hit area for easier drag start */}
         <div className="absolute top-0 -left-1 w-3 h-full" aria-hidden="true" />
       </div>
 
-      {/* Editor surface */}
+      {/* FileViewer surface */}
       <div className="flex-1 min-w-0 overflow-hidden">
-        <FileEditorCore
+        <FileViewer
           {...props}
           variant="panel"
         />
