@@ -37,7 +37,9 @@ jobs:
 
       - name: Run tests
         working-directory: ./backend
-        run: SWARMAI_SUITE=1 python -m pytest --timeout=120 -x -q --tb=short
+        # -n 0: disable xdist in CI — parallel workers cause "database is locked"
+        # on shared temp DBs. Serial is slower (~5min vs ~3min) but reliable.
+        run: SWARMAI_SUITE=1 python -m pytest -n 0 --timeout=120 -x -q --tb=short
         timeout-minutes: 10
 
   # ── Frontend: typecheck + build (fast, ~1min) ───────────────
