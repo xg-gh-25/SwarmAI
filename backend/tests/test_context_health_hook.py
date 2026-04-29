@@ -135,13 +135,25 @@ class TestDeepCheck:
         today_file = workspace / "Knowledge" / "DailyActivity" / f"{date.today().isoformat()}.md"
         today_file.write_text("# Today\n\nActivity.\n")
 
+        # Ensure all 4 DDD docs exist for every project (prevents DDD staleness findings)
+        for proj_dir in (workspace / "Projects").iterdir():
+            if proj_dir.is_dir():
+                for doc in ["PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"]:
+                    p = proj_dir / doc
+                    if not p.exists():
+                        p.write_text(f"# {doc.replace('.md', '')}\n\nContent.\n")
+
         # Commit everything so git health check finds no uncommitted files
         subprocess.run(["git", "add", "-A"], cwd=workspace, capture_output=True)
         subprocess.run(["git", "commit", "-m", "add today"], cwd=workspace, capture_output=True)
 
         with caplog.at_level(logging.INFO, logger="hooks.context_health_hook"):
             hook._deep_check(workspace, str(workspace))
-        assert any("deep check passed" in r.message for r in caplog.records)
+
+        # If findings were reported, show them for debugging
+        warnings = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("deep check passed" in r.message for r in caplog.records), \
+            f"Expected 'deep check passed' but got warnings: {warnings}"
 
     def test_detects_missing_daily_activity(self, hook, workspace, caplog):
         """Deep check flags missing today's DailyActivity file."""
