@@ -356,37 +356,72 @@ class HiveProvisioner:
             try:
                 kwargs: dict[str, Any] = {
                     "GroupName": sg_name,
-                    "Description": f"SwarmAI Hive {name} - HTTP and HTTPS only",
+                    "Description": f"SwarmAI Hive {name} - HTTP from CloudFront only",
                 }
                 if vpc_id:
                     kwargs["VpcId"] = vpc_id
                 resp = ec2.create_security_group(**kwargs)
                 sg_id = resp["GroupId"]
 
-                # Inbound rules: 80 + 443 only (NO SSH)
-                # Port 80 is open to 0.0.0.0/0 because CloudFront connects
-                # to the origin over HTTP (OriginProtocolPolicy: http-only).
-                # Defense-in-depth: Caddy enforces bcrypt basic auth on ALL
-                # paths, so direct IP access without credentials returns 401.
-                # Future improvement: restrict to CloudFront IP ranges via
-                # AWS-published prefix list (com.amazonaws.global.cloudfront.origin-facing).
-                ec2.authorize_security_group_ingress(
-                    GroupId=sg_id,
-                    IpPermissions=[
-                        {
-                            "IpProtocol": "tcp",
-                            "FromPort": 80,
-                            "ToPort": 80,
-                            "IpRanges": [{"CidrIp": "0.0.0.0/0", "Description": "HTTP"}],
-                        },
-                        {
-                            "IpProtocol": "tcp",
-                            "FromPort": 443,
-                            "ToPort": 443,
-                            "IpRanges": [{"CidrIp": "0.0.0.0/0", "Description": "HTTPS"}],
-                        },
-                    ],
+                # Inbound rules: port 80 from CloudFront ONLY (NO SSH, no 443)
+                #
+                # CloudFront connects to origin via HTTP (OriginProtocolPolicy:
+                # http-only), so only port 80 is needed.  Port 443 is NOT opened
+                # because all HTTPS terminates at CloudFront.
+                #
+                # We use the AWS-managed prefix list for CloudFront origin-facing
+                # IPs instead of 0.0.0.0/0.  This prevents DyePack alerts
+                # (palisade_dyepack_ec2_ip_authentication) by making the EC2
+                # unreachable from the public internet — only CloudFront can
+                # connect.  Defense-in-depth: Caddy still enforces bcrypt basic
+                # auth on ALL paths.
+                #
+                # Prefix list lookup: com.amazonaws.global.cloudfront.origin-facing
+                # This is a global AWS-managed prefix list containing all CF IPs.
+                cf_prefix_lists = ec2.describe_managed_prefix_lists(
+                    Filters=[{
+                        "Name": "prefix-list-name",
+                        "Values": ["com.amazonaws.global.cloudfront.origin-facing"],
+                    }]
                 )
+                if cf_prefix_lists["PrefixLists"]:
+                    cf_pl_id = cf_prefix_lists["PrefixLists"][0]["PrefixListId"]
+                    ec2.authorize_security_group_ingress(
+                        GroupId=sg_id,
+                        IpPermissions=[
+                            {
+                                "IpProtocol": "tcp",
+                                "FromPort": 80,
+                                "ToPort": 80,
+                                "PrefixListIds": [{
+                                    "PrefixListId": cf_pl_id,
+                                    "Description": "HTTP from CloudFront only",
+                                }],
+                            },
+                        ],
+                    )
+                else:
+                    # Fallback: prefix list not found (shouldn't happen in
+                    # standard AWS regions).  Use 0.0.0.0/0 with a warning.
+                    logger.warning(
+                        "CloudFront prefix list not found in %s — "
+                        "falling back to 0.0.0.0/0 for port 80",
+                        region,
+                    )
+                    ec2.authorize_security_group_ingress(
+                        GroupId=sg_id,
+                        IpPermissions=[
+                            {
+                                "IpProtocol": "tcp",
+                                "FromPort": 80,
+                                "ToPort": 80,
+                                "IpRanges": [{
+                                    "CidrIp": "0.0.0.0/0",
+                                    "Description": "HTTP (CF prefix list unavailable)",
+                                }],
+                            },
+                        ],
+                    )
                 ec2.create_tags(
                     Resources=[sg_id],
                     Tags=[
