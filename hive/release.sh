@@ -93,6 +93,7 @@ rsync -a \
     "${PROJECT_ROOT}/backend/" "${STAGING}/backend/"
 
 echo "[release] Copying pre-built frontend..."
+mkdir -p "${STAGING}/desktop/dist"
 rsync -a "${PROJECT_ROOT}/desktop/dist/" "${STAGING}/desktop/dist/"
 
 echo "[release] Copying hive config..."

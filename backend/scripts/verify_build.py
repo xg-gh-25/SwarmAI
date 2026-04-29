@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import signal
 import socket
 import subprocess
@@ -33,6 +34,12 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+# Force UTF-8 stdout/stderr on Windows (cp1252 can't encode emoji)
+if sys.stdout.encoding and sys.stdout.encoding.lower() not in ("utf-8", "utf8"):
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 # ── Capability Manifest ──────────────────────────────────────────────
 # Every capability that can silently degrade MUST be listed here.
@@ -90,8 +97,40 @@ CAPABILITY_MANIFEST = [
     ("cli_tools",           "__data__:required-cli-tools.json", "critical"),
 
     # ── Native extensions ──
-    ("vec0_dylib",          "__native__:sqlite_vec/vec0",    "critical"),
+    # vec0_dylib: CI runners often bundle sqlite3 without enable_load_extension.
+    # App gracefully degrades (VEC_AVAILABLE guards), so "important" not "critical".
+    ("vec0_dylib",          "__native__:sqlite_vec/vec0",    "important"),
 ]
+
+
+def _kill_process_tree(proc: subprocess.Popen) -> None:
+    """Kill process and children. Works on macOS, Linux, and Windows."""
+    if platform.system() != "Windows":
+        # Unix: kill entire process group (catches MCP child processes)
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except (OSError, ProcessLookupError, AttributeError):
+            proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (OSError, ProcessLookupError, AttributeError):
+                proc.kill()
+    else:
+        # Windows: taskkill /T kills the process tree
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                capture_output=True, timeout=10,
+            )
+        except Exception:
+            proc.kill()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
 
 def find_free_port() -> int:
@@ -123,12 +162,13 @@ def verify_binary(binary_path: str) -> tuple[list[str], list[str], list[str]]:
     print(f"{'='*60}\n")
 
     # Start the binary
+    # start_new_session=True → own process group (Unix killpg); harmless on Windows
     proc = subprocess.Popen(
         [binary_path, "--host", "127.0.0.1", "--port", str(port)],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        start_new_session=True,  # Own process group for clean killpg
+        start_new_session=True,
     )
 
     try:
@@ -143,19 +183,8 @@ def verify_binary(binary_path: str) -> tuple[list[str], list[str], list[str]]:
         return passed, failed_critical, failed_important
 
     finally:
-        # Kill the entire process group (catches MCP child processes)
-        try:
-            pgid = os.getpgid(proc.pid)
-            os.killpg(pgid, signal.SIGTERM)
-        except (OSError, ProcessLookupError):
-            proc.send_signal(signal.SIGTERM)
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except (OSError, ProcessLookupError):
-                proc.kill()
+        # Cross-platform process cleanup
+        _kill_process_tree(proc)
 
 
 def _wait_for_health(port: int, timeout: int = 30) -> bool:
