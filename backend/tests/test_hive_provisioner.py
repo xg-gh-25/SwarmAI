@@ -313,6 +313,106 @@ class TestProvisionerHealthCheck:
             assert result is False
 
 
+class TestResetPassword:
+    """Tests for password reset via SSM."""
+
+    @pytest.mark.asyncio
+    async def test_reset_password_generates_new_passphrase(self):
+        """reset_password returns a dash-separated passphrase."""
+        from hive.provisioner import HiveProvisioner
+
+        p = HiveProvisioner(Path("/tmp/test.db"))
+
+        # Mock DB lookups
+        mock_instance = {
+            "id": "inst-1", "name": "test-hive", "account_ref": "acc-1",
+            "region": "us-east-1", "ec2_instance_id": "i-abc123",
+        }
+        mock_account = {
+            "auth_method": "access_keys",
+            "auth_config": '{"access_key_id": "AK", "secret_access_key": "SK"}',
+        }
+
+        with patch.object(p, "_get_instance", new_callable=AsyncMock, return_value=mock_instance), \
+             patch.object(p, "_get_account", new_callable=AsyncMock, return_value=mock_account), \
+             patch.object(p, "_update_instance", new_callable=AsyncMock), \
+             patch.object(p, "_get_session") as mock_session_fn:
+
+            # Mock SSM send_command + get_command_invocation
+            mock_ssm = MagicMock()
+            mock_ssm.send_command.return_value = {"Command": {"CommandId": "cmd-1"}}
+            mock_ssm.get_command_invocation.return_value = {
+                "Status": "Success", "StandardOutputContent": "Password reset complete",
+            }
+            mock_session = MagicMock()
+            mock_session.client.return_value = mock_ssm
+            mock_session_fn.return_value = mock_session
+
+            result = await p.reset_password("inst-1")
+
+            # Result is a passphrase
+            words = result.split("-")
+            assert len(words) == 4
+            assert all(w.isalpha() for w in words)
+
+            # DB was updated with new password
+            p._update_instance.assert_called_once()
+            call_kwargs = p._update_instance.call_args
+            assert call_kwargs[0][0] == "inst-1"
+            assert call_kwargs[1]["auth_password"] == result
+
+    @pytest.mark.asyncio
+    async def test_reset_password_bcrypt_hash_survives_base64(self):
+        """The bcrypt hash ($2b$14$...) round-trips through base64 encoding."""
+        from hive.user_data import generate_password, caddy_hash_password
+        import base64
+
+        pw = generate_password()
+        h = caddy_hash_password(pw)
+        # Hash must contain $ signs
+        assert "$" in h
+        # base64 round-trip must be lossless
+        encoded = base64.b64encode(h.encode()).decode()
+        decoded = base64.b64decode(encoded).decode()
+        assert decoded == h
+
+    @pytest.mark.asyncio
+    async def test_reset_password_ssm_failure_raises(self):
+        """SSM failure raises RuntimeError, does NOT update DB."""
+        from hive.provisioner import HiveProvisioner
+
+        p = HiveProvisioner(Path("/tmp/test.db"))
+
+        mock_instance = {
+            "id": "inst-1", "name": "test-hive", "account_ref": "acc-1",
+            "region": "us-east-1", "ec2_instance_id": "i-abc123",
+        }
+        mock_account = {
+            "auth_method": "access_keys",
+            "auth_config": '{"access_key_id": "AK", "secret_access_key": "SK"}',
+        }
+
+        with patch.object(p, "_get_instance", new_callable=AsyncMock, return_value=mock_instance), \
+             patch.object(p, "_get_account", new_callable=AsyncMock, return_value=mock_account), \
+             patch.object(p, "_update_instance", new_callable=AsyncMock) as mock_update, \
+             patch.object(p, "_get_session") as mock_session_fn:
+
+            mock_ssm = MagicMock()
+            mock_ssm.send_command.return_value = {"Command": {"CommandId": "cmd-1"}}
+            mock_ssm.get_command_invocation.return_value = {
+                "Status": "Failed", "StandardOutputContent": "Caddy validation failed",
+            }
+            mock_session = MagicMock()
+            mock_session.client.return_value = mock_ssm
+            mock_session_fn.return_value = mock_session
+
+            with pytest.raises(RuntimeError, match="Password reset failed"):
+                await p.reset_password("inst-1")
+
+            # DB must NOT be updated on failure
+            mock_update.assert_not_called()
+
+
 class TestProvisionerCleanupOrder:
     """Tests for resource cleanup order."""
 
