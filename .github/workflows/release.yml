@@ -153,8 +153,50 @@ jobs:
           path: desktop/src-tauri/target/release/bundle/msi/*.msi
           if-no-files-found: warn
 
+  build-hive:
+    needs: [prepare, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: ./desktop
+        run: npm ci
+
+      - name: Build frontend (shared with Desktop)
+        working-directory: ./desktop
+        run: npm run build
+
+      - name: Update version
+        run: bash scripts/sync-version.sh "${{ needs.prepare.outputs.version }}"
+
+      - name: Package Hive tar.gz
+        run: bash hive/release.sh "${{ needs.prepare.outputs.version }}"
+
+      - name: Verify Hive package
+        run: bash hive/verify_package.sh "dist/swarmai-hive-v${{ needs.prepare.outputs.version }}-linux-arm64.tar.gz"
+
+      - name: Upload Hive package
+        uses: actions/upload-artifact@v4
+        with:
+          name: hive-linux-arm64
+          path: dist/swarmai-hive-*.tar.gz
+          if-no-files-found: error
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: hive-checksums
+          path: dist/checksums.txt
+
   publish:
-    needs: [prepare, build-macos, build-windows]
+    needs: [prepare, build-macos, build-windows, build-hive]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -168,6 +210,8 @@ jobs:
           find artifacts -name "*.dmg" -exec cp {} release/ \;
           find artifacts -name "*-setup.exe" -exec cp {} release/ \;
           find artifacts -name "*.msi" -exec cp {} release/ \;
+          find artifacts -name "*.tar.gz" -exec cp {} release/ \;
+          find artifacts -name "checksums.txt" -exec cp {} release/ \;
           ls -la release/
 
       - name: Create GitHub Release

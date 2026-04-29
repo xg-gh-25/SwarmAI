@@ -48,14 +48,16 @@ echo "============================================="
 # Validate prerequisites
 # ---------------------------------------------------------------------------
 
-if [ ! -d "${PROJECT_ROOT}/desktop/dist" ]; then
-    echo "[release] ERROR: Frontend not built. Run: cd desktop && npm run build" >&2
-    exit 1
-fi
-
 if [ ! -f "${PROJECT_ROOT}/desktop/dist/index.html" ]; then
-    echo "[release] ERROR: desktop/dist/index.html missing — build may have failed" >&2
-    exit 1
+    echo "[release] Frontend not built — building now..."
+    cd "${PROJECT_ROOT}/desktop"
+    npm run build
+    cd "${PROJECT_ROOT}"
+    if [ ! -f "${PROJECT_ROOT}/desktop/dist/index.html" ]; then
+        echo "[release] ERROR: Frontend build failed — desktop/dist/index.html still missing" >&2
+        exit 1
+    fi
+    echo "[release] Frontend built successfully"
 fi
 
 if [ ! -f "${PROJECT_ROOT}/backend/main.py" ]; then

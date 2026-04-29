@@ -457,16 +457,146 @@ with open('$DESKTOP_DIR/src-tauri/tauri.conf.json') as f:
     echo ""
 }
 
+# ── Hive Release ──────────────────────────────────────────
+
+cmd_release_hive() {
+    local start=$(date +%s)
+    echo ""
+    echo -e "${BOLD}SwarmAI Hive Package Build${NC}"
+    echo "══════════════════════════"
+    echo ""
+
+    local version
+    version=$(tr -d '[:space:]' < "$PROJECT_ROOT/VERSION")
+
+    # Step 1: Package
+    _log "Step 1/2: Building Hive tar.gz (v${version})..."
+    bash "$PROJECT_ROOT/hive/release.sh" "$version"
+
+    # Step 2: Verify
+    local archive="$PROJECT_ROOT/dist/swarmai-hive-v${version}-linux-arm64.tar.gz"
+    _log "Step 2/2: Verifying Hive package..."
+    if bash "$PROJECT_ROOT/hive/verify_package.sh" "$archive"; then
+        _ok "Hive package verified"
+    else
+        _err "Hive package verification FAILED"
+        return 1
+    fi
+
+    echo ""
+    _ok "Hive package ready in $(_build_time $start)"
+    _ok "Archive: $archive ($(du -h "$archive" | cut -f1))"
+}
+
+cmd_release_all() {
+    local start=$(date +%s)
+    echo ""
+    echo -e "${BOLD}╔══════════════════════════════════════╗${NC}"
+    echo -e "${BOLD}║  SwarmAI Unified Release Pipeline    ║${NC}"
+    echo -e "${BOLD}║  Desktop (DMG) + Hive (tar.gz)       ║${NC}"
+    echo -e "${BOLD}╚══════════════════════════════════════╝${NC}"
+    echo ""
+
+    local version
+    version=$(tr -d '[:space:]' < "$PROJECT_ROOT/VERSION")
+
+    # ── Part 1: Desktop Release ──────────────────────────────
+    echo -e "${BOLD}Part 1/3: Desktop Release${NC}"
+    echo "─────────────────────────"
+    cmd_release
+    echo ""
+
+    # ── Part 2: Hive Release ─────────────────────────────────
+    echo -e "${BOLD}Part 2/3: Hive Package${NC}"
+    echo "──────────────────────"
+    cmd_release_hive
+    echo ""
+
+    # ── Part 3: GitHub Release ───────────────────────────────
+    echo -e "${BOLD}Part 3/3: GitHub Release${NC}"
+    echo "────────────────────────"
+
+    local dmg=$(ls "$DESKTOP_DIR/src-tauri/target/release/bundle/dmg/"*.dmg 2>/dev/null | head -1)
+    local hive_tar="$PROJECT_ROOT/dist/swarmai-hive-v${version}-linux-arm64.tar.gz"
+    local checksums="$PROJECT_ROOT/dist/checksums.txt"
+
+    # Regenerate checksums for both artifacts
+    _log "Generating unified checksums..."
+    cd "$PROJECT_ROOT/dist"
+    : > checksums.txt
+    if [ -n "$dmg" ]; then
+        shasum -a 256 "$(basename "$dmg")" >> checksums.txt 2>/dev/null || true
+        # Copy DMG to dist/ for unified upload
+        cp "$dmg" "$PROJECT_ROOT/dist/"
+    fi
+    shasum -a 256 "swarmai-hive-v${version}-linux-arm64.tar.gz" >> checksums.txt
+    cd "$PROJECT_ROOT"
+
+    echo ""
+    echo -e "  ${CYAN}Artifacts ready for upload:${NC}"
+    if [ -n "$dmg" ]; then
+        echo "    📦 $(basename "$dmg") ($(du -h "$dmg" | cut -f1))"
+    fi
+    echo "    📦 swarmai-hive-v${version}-linux-arm64.tar.gz ($(du -h "$hive_tar" | cut -f1))"
+    echo "    📋 checksums.txt"
+    echo ""
+
+    # Offer to create GitHub release
+    echo -e "  ${CYAN}Create GitHub Release:${NC}"
+    echo ""
+    local release_files=""
+    if [ -n "$dmg" ]; then
+        release_files="$PROJECT_ROOT/dist/$(basename "$dmg") "
+    fi
+    release_files="${release_files}${hive_tar} ${checksums}"
+    echo "    gh release create v${version} \\"
+    echo "      --title \"SwarmAI v${version}\" \\"
+    echo "      --generate-notes \\"
+    echo "      $release_files"
+    echo ""
+
+    echo -n "  Create release now? [y/N] "
+    read -r answer
+    if [[ "$answer" =~ ^[Yy] ]]; then
+        _log "Creating GitHub release v${version}..."
+        if gh release create "v${version}" \
+            --title "SwarmAI v${version}" \
+            --generate-notes \
+            $release_files; then
+            _ok "GitHub Release v${version} created"
+        else
+            _warn "GitHub release creation failed — upload manually"
+        fi
+    else
+        _log "Skipped. Run the command above to create the release."
+    fi
+
+    echo ""
+    echo -e "${BOLD}════════════════════════════════════════${NC}"
+    echo -e "${BOLD}  Unified Release Summary${NC}"
+    echo -e "${BOLD}════════════════════════════════════════${NC}"
+    echo ""
+    echo "  Version:  ${version}"
+    echo "  Desktop:  $([ -n "$dmg" ] && echo "✅ DMG ready" || echo "⚠️ DMG not found")"
+    echo "  Hive:     ✅ tar.gz ready"
+    echo "  Time:     $(_build_time $start)"
+    echo ""
+    _ok "Unified release pipeline complete."
+    echo ""
+}
+
 # ── Main ────────────────────────────────────────────────────
 
 case "${1:-help}" in
-    build)      cmd_build ;;
-    release)    cmd_release ;;
-    deploy)     cmd_deploy ;;
-    verify)     shift; cmd_verify "$@" ;;
-    preflight)  cmd_preflight ;;
-    status)     cmd_status ;;
-    daemon)     shift; cmd_daemon "$@" ;;
+    build)          cmd_build ;;
+    release)        cmd_release ;;
+    release-all)    cmd_release_all ;;
+    release-hive)   cmd_release_hive ;;
+    deploy)         cmd_deploy ;;
+    verify)         shift; cmd_verify "$@" ;;
+    preflight)      cmd_preflight ;;
+    status)         cmd_status ;;
+    daemon)         shift; cmd_daemon "$@" ;;
     *)
         echo "SwarmAI Production Operations"
         echo ""
@@ -474,7 +604,9 @@ case "${1:-help}" in
         echo ""
         echo "Build & Deploy:"
         echo "  build            Build backend binary + verify + deploy to daemon"
-        echo "  release          Full release: preflight → build → verify → DMG → smoke test"
+        echo "  release          Desktop release: preflight → build → verify → DMG → smoke test"
+        echo "  release-hive     Hive release: package tar.gz + verify"
+        echo "  release-all      Unified: Desktop DMG + Hive tar.gz + GitHub Release"
         echo "  deploy           Deploy existing binary to daemon + restart"
         echo "  verify           Run post-build capability verification"
         echo "  preflight        Check readiness (tests, dirty tree, version) without building"
@@ -488,10 +620,10 @@ case "${1:-help}" in
         echo "  daemon logs      Tail daemon logs"
         echo ""
         echo "Typical workflows:"
-        echo "  ./prod.sh preflight          # Check if ready to release"
-        echo "  ./prod.sh release            # Full pipeline: check → build → DMG → smoke test"
-        echo "  ./prod.sh build              # Backend change → build + deploy + restart"
-        echo "  ./prod.sh deploy             # Re-deploy existing binary to daemon"
-        echo "  ./prod.sh status             # Check what's running"
+        echo "  ./prod.sh release-all          # Ship everything: Desktop + Hive + GitHub"
+        echo "  ./prod.sh release              # Desktop only: check → build → DMG"
+        echo "  ./prod.sh release-hive         # Hive only: tar.gz + verify"
+        echo "  ./prod.sh build                # Backend change → build + deploy + restart"
+        echo "  ./prod.sh status               # Check what's running"
         ;;
 esac
