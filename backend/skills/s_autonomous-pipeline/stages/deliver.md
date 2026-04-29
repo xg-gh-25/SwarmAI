@@ -131,13 +131,14 @@ is only "delivered" when CI confirms it doesn't break backend, frontend, or
 version consistency.
 
 ```bash
-# Check the latest CI run on HEAD
-gh run list --branch main --limit 3 --json name,conclusion,headSha \
+# Check the CI run for the exact HEAD commit (full SHA, no prefix collision)
+HEAD_SHA=$(git rev-parse HEAD)
+gh run list --branch main --limit 5 --json name,conclusion,headSha \
   | python3 -c "
-import json, sys, subprocess
+import json, sys
 runs = json.load(sys.stdin)
-head = subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode().strip()
-ci = [r for r in runs if r['name'] == 'CI' and r['headSha'].startswith(head[:7])]
+head = '$HEAD_SHA'
+ci = [r for r in runs if r['name'] == 'CI' and r['headSha'] == head]
 if not ci:
     print('⏳ CI not started yet for HEAD — push first, then wait')
     sys.exit(0)

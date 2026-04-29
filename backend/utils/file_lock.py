@@ -47,8 +47,15 @@ else:
 
 
 def flock_exclusive(fd) -> None:
-    """Acquire an exclusive (blocking) file lock."""
+    """Acquire an exclusive (blocking) file lock.
+
+    On Windows, ``msvcrt.locking`` locks a byte range (not the whole file).
+    We seek to 0 first so all callers lock the same byte — achieving mutual
+    exclusion equivalent to Unix ``flock``.  Only use with dedicated ``.lock``
+    sidecar files, not with files you're actively reading/writing.
+    """
     if _IS_WINDOWS:
+        fd.seek(0)
         msvcrt.locking(fd.fileno(), msvcrt.LK_LOCK, 1)
     else:
         fcntl.flock(fd, fcntl.LOCK_EX)
@@ -64,6 +71,7 @@ def flock_shared(fd) -> None:
     at a time" on Windows, which is safe but slower under read contention.
     """
     if _IS_WINDOWS:
+        fd.seek(0)
         msvcrt.locking(fd.fileno(), msvcrt.LK_LOCK, 1)
     else:
         fcntl.flock(fd, fcntl.LOCK_SH)
@@ -75,6 +83,7 @@ def flock_exclusive_nb(fd) -> None:
     Raises ``BlockingIOError`` or ``OSError`` if the lock is already held.
     """
     if _IS_WINDOWS:
+        fd.seek(0)
         msvcrt.locking(fd.fileno(), msvcrt.LK_NBLCK, 1)
     else:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

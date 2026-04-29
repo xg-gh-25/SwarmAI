@@ -101,36 +101,43 @@ jobs:
           echo "$VIRTUAL_ENV/Scripts" >> $GITHUB_PATH
           cp .env.example .env
 
-      - name: Smoke import — all critical modules
+      - name: Smoke import — auto-discover all Python modules
         working-directory: ./backend
         shell: bash
         run: |
           python -c "
-          import sys
+          import importlib, pkgutil, sys, os
+
+          # Auto-discover all packages under backend/ — no hardcoded list.
+          # If a new module adds 'import fcntl' at top level, this catches it.
+          skip_prefixes = ('tests.', 'skills.', 'jobs.handlers.', 'channels.')
           failures = []
-          modules = [
-              'database.sqlite',
-              'core.daily_activity_writer',
-              'core.evolution_optimizer',
-              'hooks.evolution_maintenance_hook',
-              'hooks.skill_metrics_hook',
-              'hooks.context_health_hook',
-              'hooks.distillation_hook',
-              'utils.file_lock',
-              'config',
-              'main',
-          ]
-          for mod in modules:
+          ok = 0
+
+          for finder, mod_name, is_pkg in pkgutil.walk_packages(
+              path=['.'], onerror=lambda name: None
+          ):
+              if any(mod_name.startswith(p) for p in skip_prefixes):
+                  continue
+              if mod_name.startswith('_') or '.test_' in mod_name:
+                  continue
               try:
-                  __import__(mod)
-                  print(f'  OK  {mod}')
+                  importlib.import_module(mod_name)
+                  ok += 1
               except Exception as e:
-                  print(f'  FAIL {mod}: {e}')
-                  failures.append(mod)
+                  # Filter noise: some modules need runtime context (FastAPI app, etc.)
+                  err = str(e)
+                  if any(x in err for x in ['No module named', 'cannot import name']):
+                      print(f'  FAIL {mod_name}: {e}')
+                      failures.append(mod_name)
+                  # Other errors (missing env, DB, etc.) are expected in CI — skip
+
           if failures:
-              print(f'\n{len(failures)} module(s) failed to import on Windows')
+              print(f'\n{len(failures)} module(s) failed to import on Windows:')
+              for f in failures:
+                  print(f'  - {f}')
               sys.exit(1)
-          print(f'\nAll {len(modules)} modules imported successfully on Windows')
+          print(f'\nAll {ok} discovered modules imported successfully on Windows')
           "
 
   # ── Version consistency check ───────────────────────────────

@@ -4,14 +4,14 @@ Bump version, update CHANGELOG, tag, and publish GitHub Release. Zero files miss
 
 ## Release CI Gate
 
-Release uses a PR as a **CI gate only** — no human review, auto-merge when green.
+All work stays on `main`. Push triggers CI automatically. **Wait for CI green before tagging.**
+
+```
+commit on main → push → CI runs (backend + backend-windows + frontend + version-check) → all green → tag → release
+```
+
 This prevents v1.9.0-class failures (3 P0 bugs that CI would have caught).
-
-```
-commit on main → push → create PR (main→main trick: see Step 7) → CI passes → auto-merge → tag
-```
-
-Daily development pushes main directly (admin bypass). Only releases go through the PR gate.
+No branches, no PRs, no human review. CI is the only gate.
 
 ## Version Files (ALL 5 MUST BE UPDATED)
 
