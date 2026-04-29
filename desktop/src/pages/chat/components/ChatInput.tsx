@@ -267,11 +267,14 @@ export function ChatInput({
   }, [inputValue, allCommands]);
 
   // F4 fix: clamp selectedCommandIndex when filtered list shrinks
+  // F7 fix: auto-close dropdown when filter produces 0 results
   useEffect(() => {
-    if (selectedCommandIndex >= filteredCommands.length && filteredCommands.length > 0) {
+    if (filteredCommands.length === 0 && showCommandSuggestions) {
+      setShowCommandSuggestions(false);
+    } else if (selectedCommandIndex >= filteredCommands.length && filteredCommands.length > 0) {
       setSelectedCommandIndex(filteredCommands.length - 1);
     }
-  }, [filteredCommands.length, selectedCommandIndex]);
+  }, [filteredCommands.length, selectedCommandIndex, showCommandSuggestions]);
 
   // Group filtered commands by category for section headers
   const systemCmds = filteredCommands.filter((c) => c.category === 'system');
@@ -287,9 +290,11 @@ export function ChatInput({
         setShowCommandSuggestions(false);
       }
     };
-    // F2: Global Escape works even when focus is on dropdown buttons
+    // F2: Global Escape works even when focus is on dropdown buttons.
+    // Only fires when focus is NOT on the textarea (textarea has its own
+    // Escape handler in handleKeyDown to avoid double-fire — F9 fix).
     const handleGlobalEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
+      if (e.key === 'Escape' && document.activeElement !== textareaRef.current) {
         setShowCommandSuggestions(false);
         textareaRef.current?.focus();
       }
@@ -302,8 +307,9 @@ export function ChatInput({
     };
   }, [showCommandSuggestions]);
 
-  // F5 fix: auto-scroll to selected item
+  // F5 fix: auto-scroll to selected item. F11 fix: clear stale refs on list change.
   const itemRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
+  useEffect(() => { itemRefs.current.clear(); }, [filteredCommands.length]);
   useEffect(() => {
     const el = itemRefs.current.get(selectedCommandIndex);
     if (el) el.scrollIntoView({ block: 'nearest' });
