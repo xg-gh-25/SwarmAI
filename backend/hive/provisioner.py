@@ -979,22 +979,37 @@ echo "=== Update complete ==="
         new_password = generate_password()
         new_hash = caddy_hash_password(new_password)
 
-        # Escape $ signs in bcrypt hash for sed (bcrypt hashes are full of $)
-        escaped_hash = new_hash.replace("$", "\\$")
-
+        # Caddy basicauth hash is inline in Caddyfile:
+        #   basicauth * {
+        #       admin $2b$14$...
+        #   }
+        # Use sed to replace the hash line. The | delimiter avoids
+        # conflicts with $ and / in bcrypt hashes.
+        # We also write a backup so we can rollback if reload fails.
         reset_script = f"""#!/bin/bash
 set -euo pipefail
-# Update Caddy .env with new password hash
-ENV_FILE="/etc/caddy/.env"
-if [ ! -f "$ENV_FILE" ]; then
-  echo "ERROR: $ENV_FILE not found" >&2
+CADDYFILE="/etc/caddy/Caddyfile"
+if [ ! -f "$CADDYFILE" ]; then
+  echo "ERROR: $CADDYFILE not found" >&2
   exit 1
 fi
-# Replace the HIVE_PASS_HASH line
-sed -i 's|^HIVE_PASS_HASH=.*|HIVE_PASS_HASH={escaped_hash}|' "$ENV_FILE"
-# Reload Caddy (zero-downtime graceful reload)
-systemctl reload caddy
-echo "Password reset complete"
+# Backup current Caddyfile
+cp "$CADDYFILE" "$CADDYFILE.bak"
+# Replace the bcrypt hash line (matches: "    admin $2b$..." or "    admin $2a$...")
+sed -i 's|        admin \\$2[ab]\\$.*|        admin {new_hash}|' "$CADDYFILE"
+# Validate and reload Caddy
+# Note: systemctl reload is not supported for Caddy — use caddy reload
+# which hot-swaps the config via Caddy's admin API (zero downtime).
+if caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1; then
+  caddy reload --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1
+  rm -f "$CADDYFILE.bak"
+  echo "Password reset complete"
+else
+  # Rollback on validation failure
+  mv "$CADDYFILE.bak" "$CADDYFILE"
+  echo "ERROR: Caddy validation failed, rolled back" >&2
+  exit 1
+fi
 """
 
         def _run_command():
