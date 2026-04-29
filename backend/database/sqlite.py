@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import aiosqlite
-import fcntl
 import json
 import logging
 import shutil
@@ -14,6 +13,7 @@ from typing import Optional, TypeVar, Generic, ClassVar
 from uuid import uuid4
 
 from config import get_app_data_dir
+from utils.file_lock import flock_exclusive, flock_unlock
 from database.base import BaseTable, BaseDatabase
 
 logger = logging.getLogger(__name__)
@@ -1705,14 +1705,14 @@ class SQLiteDatabase(BaseDatabase):
             lock_path = Path(str(self.db_path) + ".migration-lock")
             lock_fd = open(lock_path, "w")
             try:
-                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                flock_exclusive(lock_fd)
                 async with aiosqlite.connect(str(self.db_path)) as conn:
                     await conn.execute("PRAGMA journal_mode=WAL")
                     await conn.execute("PRAGMA busy_timeout=100")
                     _WALConnection._wal_initialized.add(str(self.db_path))
                     await self._run_migrations(conn)
             finally:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                flock_unlock(lock_fd)
                 lock_fd.close()
             self._initialized = True
             return
@@ -1724,7 +1724,7 @@ class SQLiteDatabase(BaseDatabase):
         lock_path = Path(str(self.db_path) + ".migration-lock")
         lock_fd = open(lock_path, "w")
         try:
-            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            flock_exclusive(lock_fd)
             async with aiosqlite.connect(str(self.db_path)) as conn:
                 t1 = time.monotonic()
                 logger.info("DB init: connection opened in %.2fs, executing schema...", t1 - t0)
@@ -1747,7 +1747,7 @@ class SQLiteDatabase(BaseDatabase):
                 t3 = time.monotonic()
                 logger.info("DB init: migrations completed in %.2fs (total: %.2fs)", t3 - t2, t3 - t0)
         finally:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            flock_unlock(lock_fd)
             lock_fd.close()
 
         self._initialized = True

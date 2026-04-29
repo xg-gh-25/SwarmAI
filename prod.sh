@@ -227,13 +227,51 @@ cmd_release() {
 
     echo ""
 
-    # ── Phase 4: Smoke Test Checklist ─────────────────────────
+    # ── Phase 4: Automated + Manual Smoke Tests ────────────────
     local dmg=$(ls "$DESKTOP_DIR/src-tauri/target/release/bundle/dmg/"*.dmg 2>/dev/null | head -1)
 
-    echo -e "${BOLD}Phase 4/4: Smoke Test Checklist${NC}"
-    echo "───────────────────────────────"
+    echo -e "${BOLD}Phase 4/4: Smoke Tests${NC}"
+    echo "──────────────────────"
+
+    # 4a. Automated: verify daemon serves JSON (not HTML) on health endpoint
+    #     This catches the v1.9.0 class of bug: isDesktop()=false → API hits asset
+    #     protocol → HTML instead of JSON → 60s timeout.
     echo ""
-    echo -e "  ${CYAN}Install the DMG and verify these manually:${NC}"
+    _log "Automated smoke: daemon health returns JSON..."
+    local smoke_ok=true
+    if _daemon_is_running; then
+        local health_body
+        health_body=$(curl -sf --max-time 5 "${DAEMON_API}/health" 2>/dev/null || true)
+        if [ -z "$health_body" ]; then
+            _err "Smoke FAIL: daemon /health returned empty response"
+            smoke_ok=false
+        elif echo "$health_body" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('status')=='healthy'" 2>/dev/null; then
+            _ok "Smoke: /health returns valid JSON with status=healthy"
+        else
+            _err "Smoke FAIL: /health response is not valid JSON or status!=healthy"
+            _err "Response: $(echo "$health_body" | head -c 200)"
+            smoke_ok=false
+        fi
+
+        # Check a frontend-equivalent API call returns JSON (not HTML from SPA fallback)
+        local api_body
+        api_body=$(curl -sf --max-time 5 "${DAEMON_API}/api/system/tokens/usage" 2>/dev/null || true)
+        if [ -n "$api_body" ] && echo "$api_body" | python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null; then
+            _ok "Smoke: /api/system/tokens/usage returns valid JSON"
+        elif [ -n "$api_body" ] && echo "$api_body" | head -c 20 | grep -qi "doctype\|<html"; then
+            _err "Smoke FAIL: API returned HTML instead of JSON (isDesktop() bug class)"
+            smoke_ok=false
+        else
+            _warn "Smoke: /api/system/tokens/usage not reachable (may need auth — non-blocking)"
+        fi
+    else
+        _warn "Smoke: daemon not running — skipping automated checks"
+        smoke_ok=false
+    fi
+
+    # 4b. Manual checklist (unchanged)
+    echo ""
+    echo -e "  ${CYAN}Manual verification (install DMG and check):${NC}"
     echo ""
     echo "  ┌─────────────────────────────────────────────────────┐"
     echo "  │  □  1. Install DMG → open app → no crash            │"
@@ -273,8 +311,13 @@ cmd_release() {
     else
         echo -e "  Tests:      ${YELLOW}passed with warnings${NC}"
     fi
+    if [ "$smoke_ok" = true ]; then
+        echo -e "  Smoke:      ${GREEN}passed${NC}"
+    else
+        echo -e "  Smoke:      ${YELLOW}needs manual verification${NC}"
+    fi
     echo ""
-    _ok "Build pipeline complete. Run smoke tests above before shipping."
+    _ok "Build pipeline complete. Run manual smoke tests above before shipping."
     echo ""
 }
 

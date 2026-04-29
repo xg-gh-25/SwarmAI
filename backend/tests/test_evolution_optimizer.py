@@ -1,7 +1,6 @@
 """Tests for evolution_optimizer module."""
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 from unittest.mock import patch
@@ -571,15 +570,16 @@ class TestFileLockPrevents:
 
         lock_path = evals_dir.parent / ".evolution_cycle.lock"
         lock_path.parent.mkdir(parents=True, exist_ok=True)
+        from utils.file_lock import flock_exclusive_nb, flock_unlock
         lock_fd = open(lock_path, "w")
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        flock_exclusive_nb(lock_fd)
 
         try:
             result = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
             assert isinstance(result, CycleReport)
             assert len(result.errors) > 0
         finally:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            flock_unlock(lock_fd)
             lock_fd.close()
 
 

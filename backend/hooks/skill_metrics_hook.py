@@ -10,7 +10,6 @@ Key public symbols:
 """
 from __future__ import annotations
 
-import fcntl
 import json
 import logging
 import re
@@ -274,12 +273,13 @@ def _write_corrections_to_eval_jsonl(
                 "source": "skill_metrics_hook",  # Distinguish from SessionMiner
             }
 
+            from utils.file_lock import flock_exclusive, flock_unlock
             with open(jsonl_path, "a", encoding="utf-8") as f:
-                fcntl.flock(f, fcntl.LOCK_EX)
+                flock_exclusive(f)
                 try:
                     f.write(json.dumps(entry, ensure_ascii=False) + "\n")
                 finally:
-                    fcntl.flock(f, fcntl.LOCK_UN)
+                    flock_unlock(f)
 
             logger.debug(
                 "SkillMetricsHook: wrote correction eval for %s to %s",
