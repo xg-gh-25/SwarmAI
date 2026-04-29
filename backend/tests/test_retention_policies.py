@@ -35,14 +35,38 @@ def _create_dated_file(directory: Path, date: datetime, prefix: str = "") -> Pat
 
 class TestArchiveOldDailyActivity:
     def test_archive_old_daily_activity(self, hook, ws):
+        """Files >180 days are archived unconditionally (even without distilled frontmatter)."""
         da_dir = ws / "Knowledge" / "DailyActivity"
-        old_date = datetime.now() - timedelta(days=100)
+        old_date = datetime.now() - timedelta(days=200)
         old_file = _create_dated_file(da_dir, old_date)
 
         hook._enforce_retention_policies(str(ws))
 
         assert not old_file.exists()
         assert (ws / "Knowledge" / "Archives" / old_file.name).exists()
+
+    def test_archive_distilled_file_after_90_days(self, hook, ws):
+        """Distilled files >90 days are archived normally."""
+        da_dir = ws / "Knowledge" / "DailyActivity"
+        old_date = datetime.now() - timedelta(days=100)
+        old_file = da_dir / f"{old_date.strftime('%Y-%m-%d')}.md"
+        old_file.write_text("---\ndistilled: true\n---\n# Activity\n")
+
+        hook._enforce_retention_policies(str(ws))
+
+        assert not old_file.exists()
+        assert (ws / "Knowledge" / "Archives" / old_file.name).exists()
+
+    def test_protect_undistilled_file_between_90_and_180_days(self, hook, ws):
+        """Undistilled files between 90-180 days are protected from archival."""
+        da_dir = ws / "Knowledge" / "DailyActivity"
+        old_date = datetime.now() - timedelta(days=100)
+        old_file = _create_dated_file(da_dir, old_date)
+
+        hook._enforce_retention_policies(str(ws))
+
+        # File should NOT be archived — it's undistilled and within the protection window
+        assert old_file.exists()
 
 
 class TestKeepRecentDailyActivity:
