@@ -281,6 +281,9 @@ cmd_release() {
     echo "  │  □  5. Slack: send a DM → reply arrives             │"
     echo "  │  □  6. SwarmWS explorer → files load                │"
     echo "  │  □  7. Settings page → no errors                    │"
+    echo "  │  □  8. DevTools (⌘⌥I) → Console: no red errors,    │"
+    echo "  │        [Health Check] shows JSON (not HTML),        │"
+    echo "  │        [Startup] shows port 18321                   │"
     echo "  └─────────────────────────────────────────────────────┘"
     echo ""
 
