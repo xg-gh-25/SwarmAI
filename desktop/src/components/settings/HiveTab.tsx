@@ -261,14 +261,14 @@ function InstanceCard({ instance: inst, onAction }: { instance: HiveInstance; on
           )}
         </div>
         <div className="flex items-center gap-1.5">
-          {url && (
-            <button
-              onClick={() => openExternal(url)}
-              className="px-2 py-1 text-xs bg-[var(--color-primary)]/20 text-[var(--color-primary)] rounded hover:bg-[var(--color-primary)]/30"
-            >
-              Open {'↗'}
-            </button>
-          )}
+          <button
+            onClick={() => url && openExternal(url)}
+            disabled={!url}
+            title={url || 'URL not available yet — CloudFront still provisioning'}
+            className="px-2 py-1 text-xs bg-[var(--color-primary)]/20 text-[var(--color-primary)] rounded hover:bg-[var(--color-primary)]/30 disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            Open {'↗'}
+          </button>
           {inst.status === 'running' && (
             <button
               onClick={() => doAction(() => hiveService.stopInstance(inst.id))}
@@ -379,6 +379,7 @@ function AuthDisplay({ instance: inst }: { instance: HiveInstance }) {
   const [showPass, setShowPass] = useState(false);
   const [password, setPassword] = useState<string | null>(inst.authPassword);
   const [loadingPass, setLoadingPass] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -394,27 +395,30 @@ function AuthDisplay({ instance: inst }: { instance: HiveInstance }) {
 
   // Fetch password from credentials endpoint when Show is clicked
   const togglePass = async () => {
-    if (!showPass) {
-      // Showing — fetch real password if not already loaded
-      if (!password) {
-        setLoadingPass(true);
-        try {
-          const creds = await hiveService.getCredentials(inst.id);
-          setPassword(creds.authPassword);
-        } catch (e) {
-          console.error('Failed to fetch credentials:', e);
-          setLoadingPass(false);
-          return;
-        }
-        setLoadingPass(false);
-      }
-      setShowPass(true);
-      // Auto-hide after 30s
-      if (hideTimer.current) clearTimeout(hideTimer.current);
-      hideTimer.current = setTimeout(() => setShowPass(false), 30000);
-    } else {
+    if (showPass) {
+      // Hiding
       setShowPass(false);
+      return;
     }
+    // Showing — fetch real password if not already loaded
+    setFetchError(null);
+    if (!password) {
+      setLoadingPass(true);
+      try {
+        const creds = await hiveService.getCredentials(inst.id);
+        setPassword(creds.authPassword);
+      } catch (e) {
+        console.error('Failed to fetch credentials:', e);
+        setFetchError('Failed to load password');
+        setLoadingPass(false);
+        return;
+      }
+      setLoadingPass(false);
+    }
+    setShowPass(true);
+    // Auto-hide after 30s
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    hideTimer.current = setTimeout(() => setShowPass(false), 30000);
   };
 
   const doCopy = async (text: string, label: string) => {
@@ -459,15 +463,16 @@ function AuthDisplay({ instance: inst }: { instance: HiveInstance }) {
     await doCopy(shareText, 'share');
   };
 
+  // Compute display value — separated from JSX for clarity
+  const passDisplay = loadingPass ? '...' : (showPass && password) ? password : '••••••••';
+
   return (
     <div className="mt-2 p-2 bg-[var(--color-card)] rounded text-xs space-y-1.5">
       <div className="flex items-center gap-2">
         <span className="text-[var(--color-text-muted)] w-12">Auth:</span>
         <code className="text-[var(--color-text)]">{inst.authUser}</code>
         <span className="text-[var(--color-text-muted)]">/</span>
-        <code className="text-[var(--color-text)]">
-          {loadingPass ? '...' : showPass && password ? password : '••••••••'}
-        </code>
+        <code className="text-[var(--color-text)] select-all">{passDisplay}</code>
         <button onClick={togglePass} disabled={loadingPass}
           className="px-1.5 py-0.5 text-[10px] bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded hover:text-[var(--color-text)] disabled:opacity-50">
           {loadingPass ? '...' : showPass ? 'Hide' : 'Show'}
@@ -477,6 +482,9 @@ function AuthDisplay({ instance: inst }: { instance: HiveInstance }) {
           {copied === 'password' ? 'Copied!' : 'Copy'}
         </button>
       </div>
+      {fetchError && (
+        <div className="text-red-400 text-[10px]">{fetchError}</div>
+      )}
       <div className="flex items-center gap-2">
         <button
           onClick={handleShare}
