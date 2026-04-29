@@ -13,7 +13,12 @@ export interface BackendStatus {
 
 /** True when running inside Tauri desktop shell, false in browser (Hive mode). */
 export function isDesktop(): boolean {
-  return !!(window as unknown as Record<string, unknown>).__TAURI__;
+  // Tauri 2.x injects `__TAURI_INTERNALS__`.  Older code used `__TAURI__`
+  // (Tauri 1.x), which no longer exists unless `withGlobalTauri: true` is
+  // set in tauri.conf.json.  Check both so the detection works across
+  // versions and any future bundle-internal naming changes.
+  const w = window as unknown as Record<string, unknown>;
+  return !!(w.__TAURI_INTERNALS__ || w.__TAURI__);
 }
 
 // Store the backend port globally
