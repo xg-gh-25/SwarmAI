@@ -54,12 +54,15 @@ jobs:
           # All test files that import database/sqlite — skip these
           DB_FILES=$(grep -rl 'from.*database\|import.*sqlite\|SQLiteDatabase\|aiosqlite' tests/ --include='test_*.py' | sort)
 
-          # Additional skips: macOS-only, native deps
+          # Also catch tests that reference ~/.swarm-ai/ paths (filesystem-dependent)
+          FS_FILES=$(grep -rl '\.swarm-ai\|swarm_data_dir\|SWARM_DATA' tests/ --include='test_*.py' | sort)
+
+          # Additional skips: macOS-only (launchd), native deps (ffmpeg)
           EXTRA_SKIP="tests/test_daemon_sidecar_robustness.py tests/test_daemon_sidecar_fixes.py tests/test_voice_transcribe.py"
 
           # Build --ignore flags
           IGNORES=""
-          for f in $DB_FILES $EXTRA_SKIP; do
+          for f in $DB_FILES $FS_FILES $EXTRA_SKIP; do
             [ -f "$f" ] && IGNORES="$IGNORES --ignore=$f"
           done
           echo "ignores=$IGNORES" >> $GITHUB_OUTPUT
