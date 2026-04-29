@@ -2252,6 +2252,7 @@ export default function ChatPage() {
                   inputValueMapRef.current.set(tabId, value);
                 }}
                 isLikelyStalled={isLikelyStalled}
+                skills={skills}
                 voiceConversationState={voiceConversation.state}
                 onVoiceConversationToggle={voiceConversation.toggle}
                 onVoiceConversationInterrupt={voiceConversation.interrupt}

@@ -28,15 +28,27 @@ export const MAX_TODO_RADAR_WIDTH = 1000;
 
 
 
-// Slash commands configuration
-export const SLASH_COMMANDS = [
-  { name: '/clear', description: 'Clear conversation context' },
-  { name: '/compact', description: 'Compact conversation history' },
-  { name: '/plugin list', description: 'List installed plugins' },
-  { name: '/plugin install', description: 'Install a plugin: /plugin install {name}@{marketplace}' },
-  { name: '/plugin uninstall', description: 'Uninstall a plugin: /plugin uninstall {id}' },
-  { name: '/plugin marketplace list', description: 'List available marketplaces' },
-] as const;
+// Slash command types
+export type SlashCommandCategory = 'system' | 'skill';
+
+export interface SlashCommand {
+  name: string;
+  description: string;
+  category: SlashCommandCategory;
+}
+
+// Built-in system commands (hardcoded)
+export const SYSTEM_COMMANDS: SlashCommand[] = [
+  { name: '/clear', description: 'Clear conversation context', category: 'system' },
+  { name: '/compact', description: 'Compact conversation history', category: 'system' },
+  { name: '/plugin list', description: 'List installed plugins', category: 'system' },
+  { name: '/plugin install', description: 'Install a plugin: /plugin install {name}@{marketplace}', category: 'system' },
+  { name: '/plugin uninstall', description: 'Uninstall a plugin: /plugin uninstall {id}', category: 'system' },
+  { name: '/plugin marketplace list', description: 'List available marketplaces', category: 'system' },
+];
+
+/** @deprecated Use SYSTEM_COMMANDS + skill-derived commands instead */
+export const SLASH_COMMANDS = SYSTEM_COMMANDS;
 
 // Time group types for session grouping
 export type TimeGroup = 'today' | 'yesterday' | 'thisWeek' | 'thisMonth' | 'older';

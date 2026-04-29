@@ -1,11 +1,13 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import type { UnifiedAttachment, SystemPromptMetadata } from '../../../types';
 import { FileAttachmentButton, FileAttachmentPreview } from '../../../components/chat';
 import { TSCCPopoverButton } from './TSCCPopoverButton';
 import { ContextUsageRing } from './ContextUsageRing';
-import { SLASH_COMMANDS } from '../constants';
+import { SYSTEM_COMMANDS } from '../constants';
+import type { SlashCommand } from '../constants';
+import type { Skill } from '../../../types';
 import type { DropPayload } from './RightSidebar/types';
 import { todosService } from '../../../services/todos';
 import { useVoiceRecorder } from '../../../hooks/useVoiceRecorder';
@@ -45,6 +47,8 @@ interface ChatInputProps {
   onInputValueChange?: (tabId: string, value: string) => void;
   /** True when streaming but no real SDK events received for >60s (session likely stalled). */
   isLikelyStalled?: boolean;
+  /** Available skills for slash command picker */
+  skills?: Skill[];
   /** Voice conversation mode state (off = normal text mode) */
   voiceConversationState?: VoiceConversationState;
   /** Toggle voice conversation mode on/off */
@@ -81,6 +85,7 @@ export function ChatInput({
   inputValueMapRef,
   onInputValueChange,
   isLikelyStalled = false,
+  skills = [],
   voiceConversationState = 'off',
   onVoiceConversationToggle,
   onVoiceConversationInterrupt,
@@ -238,19 +243,47 @@ export function ChatInput({
     });
   }, [isExpanded, onExpandedChange, applyTransition]);
 
-  // Filter commands based on input
-  const filteredCommands = SLASH_COMMANDS.filter((cmd) =>
-    cmd.name.toLowerCase().startsWith(inputValue.toLowerCase())
-  );
+  // Build merged command list: system commands + skills
+  const allCommands: SlashCommand[] = useMemo(() => {
+    const skillCommands: SlashCommand[] = skills.map((s) => ({
+      name: `/${s.folderName}`,
+      description: s.description || s.name,
+      category: 'skill' as const,
+    }));
+    return [...SYSTEM_COMMANDS, ...skillCommands];
+  }, [skills]);
+
+  // Filter commands based on input — match anywhere in name, not just prefix
+  const filteredCommands = useMemo(() => {
+    if (!inputValue.startsWith('/')) return [];
+    const query = inputValue.toLowerCase();
+    return allCommands.filter((cmd) =>
+      cmd.name.toLowerCase().startsWith(query)
+    );
+  }, [inputValue, allCommands]);
+
+  // Group filtered commands by category for section headers
+  const systemCommands = filteredCommands.filter((c) => c.category === 'system');
+  const skillCommands = filteredCommands.filter((c) => c.category === 'skill');
 
   // Handle input change with slash command detection
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
     onInputChange(value);
 
-    if (value.startsWith('/') && !value.includes(' ')) {
-      setShowCommandSuggestions(true);
-      setSelectedCommandIndex(0);
+    // Show suggestions when input starts with / — allow spaces for multi-word
+    // commands like "/plugin install". Only hide when the input exactly matches
+    // a complete command + has trailing content (user is typing args).
+    if (value.startsWith('/')) {
+      const isCompleteCommand = allCommands.some(
+        (cmd) => value.toLowerCase().startsWith(cmd.name.toLowerCase() + ' ') && value.length > cmd.name.length + 1
+      );
+      if (isCompleteCommand) {
+        setShowCommandSuggestions(false);
+      } else {
+        setShowCommandSuggestions(true);
+        setSelectedCommandIndex(0);
+      }
     } else {
       setShowCommandSuggestions(false);
     }
@@ -489,40 +522,86 @@ export function ChatInput({
           {/* Input Row */}
           <div className="relative flex items-center gap-3">
 
-            {/* Slash Command Suggestions */}
+            {/* Slash Command Suggestions — system commands + skills */}
             {showCommandSuggestions && filteredCommands.length > 0 && (
-              <div className="absolute bottom-full left-0 mb-2 w-64 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg shadow-xl overflow-hidden z-10">
-                <div className="px-3 py-2 border-b border-[var(--color-border)]">
-                  <span className="text-xs text-[var(--color-text-muted)] font-medium uppercase tracking-wider">
-                    Commands
-                  </span>
-                </div>
-                {filteredCommands.map((cmd, index) => (
-                  <button
-                    key={cmd.name}
-                    onClick={() => handleSelectCommand(cmd.name)}
-                    className={clsx(
-                      'w-full px-3 py-2.5 flex items-start gap-3 text-left transition-colors',
-                      index === selectedCommandIndex
-                        ? 'bg-primary text-white'
-                        : 'text-[var(--color-text)] hover:bg-[var(--color-hover)]'
-                    )}
-                  >
-                    <span className="material-symbols-outlined text-lg mt-0.5">terminal</span>
-                    <div>
-                      <p className="font-medium">{cmd.name}</p>
-                      <p
-                        className={clsx(
-                          'text-xs',
-                          index === selectedCommandIndex ? 'text-white/70' : 'text-[var(--color-text-muted)]'
-                        )}
-                      >
-                        {cmd.description}
-                      </p>
+              <div className="absolute bottom-full left-0 mb-2 w-80 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg shadow-xl overflow-hidden z-10 max-h-80 overflow-y-auto">
+                {/* System Commands Section */}
+                {systemCommands.length > 0 && (
+                  <>
+                    <div className="px-3 py-1.5 border-b border-[var(--color-border)] sticky top-0 bg-[var(--color-card)] z-10">
+                      <span className="text-xs text-[var(--color-text-muted)] font-medium uppercase tracking-wider">
+                        Commands
+                      </span>
                     </div>
-                  </button>
-                ))}
-                <div className="px-3 py-1.5 border-t border-[var(--color-border)] bg-[var(--color-hover)]/50">
+                    {systemCommands.map((cmd) => {
+                      const globalIndex = filteredCommands.indexOf(cmd);
+                      return (
+                        <button
+                          key={cmd.name}
+                          onClick={() => handleSelectCommand(cmd.name)}
+                          className={clsx(
+                            'w-full px-3 py-2 flex items-start gap-3 text-left transition-colors',
+                            globalIndex === selectedCommandIndex
+                              ? 'bg-primary text-white'
+                              : 'text-[var(--color-text)] hover:bg-[var(--color-hover)]'
+                          )}
+                        >
+                          <span className="material-symbols-outlined text-base mt-0.5 opacity-60">terminal</span>
+                          <div className="min-w-0 flex-1">
+                            <p className="font-medium text-sm">{cmd.name}</p>
+                            <p
+                              className={clsx(
+                                'text-xs truncate',
+                                globalIndex === selectedCommandIndex ? 'text-white/70' : 'text-[var(--color-text-muted)]'
+                              )}
+                            >
+                              {cmd.description}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </>
+                )}
+                {/* Skills Section */}
+                {skillCommands.length > 0 && (
+                  <>
+                    <div className="px-3 py-1.5 border-b border-[var(--color-border)] sticky top-0 bg-[var(--color-card)] z-10">
+                      <span className="text-xs text-[var(--color-text-muted)] font-medium uppercase tracking-wider">
+                        Skills
+                      </span>
+                    </div>
+                    {skillCommands.map((cmd) => {
+                      const globalIndex = filteredCommands.indexOf(cmd);
+                      return (
+                        <button
+                          key={cmd.name}
+                          onClick={() => handleSelectCommand(cmd.name)}
+                          className={clsx(
+                            'w-full px-3 py-2 flex items-start gap-3 text-left transition-colors',
+                            globalIndex === selectedCommandIndex
+                              ? 'bg-primary text-white'
+                              : 'text-[var(--color-text)] hover:bg-[var(--color-hover)]'
+                          )}
+                        >
+                          <span className="material-symbols-outlined text-base mt-0.5 opacity-60">magic_button</span>
+                          <div className="min-w-0 flex-1">
+                            <p className="font-medium text-sm">{cmd.name}</p>
+                            <p
+                              className={clsx(
+                                'text-xs truncate',
+                                globalIndex === selectedCommandIndex ? 'text-white/70' : 'text-[var(--color-text-muted)]'
+                              )}
+                            >
+                              {cmd.description}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </>
+                )}
+                <div className="px-3 py-1.5 border-t border-[var(--color-border)] bg-[var(--color-hover)]/50 sticky bottom-0">
                   <span className="text-xs text-[var(--color-text-muted)]">
                     <kbd className="px-1 py-0.5 bg-[var(--color-border)] rounded text-xs">↑↓</kbd> navigate
                     <span className="mx-2">·</span>
