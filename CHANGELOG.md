@@ -5,6 +5,33 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.1] - 2026-04-30
+
+### Added
+
+- **CI Pipeline (4-gate)**: New `ci.yml` workflow — backend (Linux smoke import + tests), backend-windows (auto-discover module import), frontend (tsc + build), version-check (6 files). Branch protection on main with required status checks
+- **Shared AI Context (AGENTS.md)**: Rewritten as "AI emergency manual" — 7 known landmines, process topology, debug flowchart, DDD pointers. Auto-synced to SwarmWS via symlink
+- **Hive Manager Skill**: `s_hive-manager` for deploying, updating, and managing Hive instances via chat
+- **CONTEXT.md Glossary**: DDD-inspired ubiquitous language — 19 canonical terms across 5 domains (session, task, skill, memory, project)
+
+### Fixed
+
+- **v1.9.0 P0 — App Won't Start**: `isDesktop()` checked Tauri 1.x `__TAURI__` instead of 2.x `__TAURI_INTERNALS__` — all API calls hit SPA fallback returning HTML. Frontend startup chain now has diagnostic logging (`[Platform]`, `[Health Check]`)
+- **v1.9.0 P0 — GitHub Release Failed**: 4 independent CI bugs — `import fcntl` (Unix-only) in sqlite.py, BSD `sed -i ''` on Windows, build-hive missing pip install, triple workflow race on tag push
+- **Cross-Platform File Locking**: Moved `file_lock.py` from `core/` to `utils/` (eliminates circular import), migrated all 13 bare `import fcntl` sites to `utils.file_lock`, added `fd.seek(0)` for correct Windows mutex
+- **Backend Log Rotation**: `FileHandler` → `RotatingFileHandler` (10MB × 3 backups), daemon/sidecar write separate log files (no multi-process rotation race)
+- **SQLite busy_timeout**: 100ms → 5000ms — eliminates "database is locked" under async test teardown
+- **Release Pipeline**: 9 gaps fixed — removed triple tag trigger, `npm install` → `npm ci`, `build-backend.sh` exits non-zero on verify failure, version sync before frontend build, `package-lock.json` in sync-version.sh
+- **Slash Command Picker**: 9 functional bugs fixed across 3 commits
+- **Hive E2E**: 3 P0 bugs (deploy + start), 8 settings bugs, error handling improvements
+- **SkillsPage SSE**: Error stuck streaming + OnboardingPage retry
+
+### Changed
+
+- **Release Flow**: Stay on main → push → CI green → tag. No branches, no PRs. STEERING.md scope gate (≤20 commits without sign-off)
+- **Pipeline DELIVER**: CI health check as blocking gate before declaring delivery complete
+- **dev.sh**: Logs to `backend-dev.log` (not shared `backend.log`), added `verify_build.py` to build command
+
 ## [1.9.0] - 2026-04-29
 
 ### Added
