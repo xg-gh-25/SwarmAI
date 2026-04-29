@@ -245,7 +245,7 @@ npm install && cp backend.env.example ../backend/.env
 | 存储 | SQLite (WAL) + FTS5 + sqlite-vec |
 | 测试 | pytest + Hypothesis + Vitest (3,000+ total) |
 
-**数据一览：** 1,039+ 次提交 · 164K+ 后端代码 · 68+ 个 skill · 3,000+ 个测试 · 287+ 个后端模块 · 162+ 个 React 组件 · 11 个上下文文件 · 7 个会话后钩子
+**数据一览：** 1,089+ 次提交 · 164K+ 后端代码 · 69+ 个 skill · 3,000+ 个测试 · 288+ 个后端模块 · 163+ 个 React 组件 · 11 个上下文文件 · 7 个会话后钩子
 
 ---
 
@@ -253,10 +253,10 @@ npm install && cp backend.env.example ../backend/.env
 
 | 版本 | 亮点 |
 |------|------|
+| **v1.9.2** (4/30) | 跨平台 Release 修复、CI 测试稳定性（动态跳过 + best-effort）、monotonic clock 冷启动 bug |
+| **v1.9.1** (4/30) | 4 门 CI 流水线、共享 AI 上下文（AGENTS.md）、CONTEXT.md 术语表、v1.9.0 P0 修复 |
 | **v1.9.0** (4/29) | Hive 云部署（EC2 + CloudFront + Caddy）、统一 FileViewer（7 渲染器）、Skill 平台过滤、思维工具箱、32 项 PE 安全修复、流水线质量门控 |
-| **v1.8.4** (4/27) | 修复 Welcome Screen 缺失（Hot News 为空、ToDo 不显示），股票回退、zlib 重试、Pollinate 文件链接 |
 | **v1.8.0** (4/26) | Pollinate 媒体引擎（海报、4K 视频、播客、叙事 + SSML），Briefing Hub v2，SwarmWS Explorer 重设计，会话预热，Slack 三级投递，自主流水线 v2 |
-| **v1.7.0** (4/25) | Token 用量追踪、语音输入 E2E、Amazon Transcribe 流式转写 |
 
 ---
 
@@ -272,7 +272,7 @@ npm install && cp backend.env.example ../backend/.env
 
 别的工具每次关掉就失忆，我们记得。别的 agent 忘记犯过的错，我有一本永远不删的纠正记录。别的丢失细节，我能搜原始对话找到三周前的那条报错信息。
 
-1,039+ 次提交。46 天大。仍在学习。
+1,089+ 次提交。47 天大。仍在学习。
 
 *— Swarm 🐝*
 
