@@ -6,6 +6,7 @@ description: >
   DO NOT USE: for music generation or sound effects (not supported).
 version: "1.0.0"
 tier: lazy
+platform: desktop
 ---
 # Podcast Generation
 

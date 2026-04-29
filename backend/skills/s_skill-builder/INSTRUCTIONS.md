@@ -201,10 +201,12 @@ Use templates from TEMPLATES.md. Ensure:
      DO NOT USE: when condition (use alternative-skill instead).
      VERIFY_WITH: skill-name (optional — which skill independently validates this skill's output).
    tier: lazy
+   platform: all
    ```
    - `name`: lowercase, hyphens, numbers only. Max 64 chars. Must match folder name.
    - `description`: max 1024 characters. First line = purpose. Then TRIGGER, DO NOT USE, VERIFY_WITH.
    - `tier`: `lazy` (default — stub + INSTRUCTIONS.md) or `always` (full SKILL.md in every session)
+   - `platform`: `all` (default — works everywhere), `macos` (requires macOS APIs/hardware), or `desktop` (requires local display/audio/hardware). Skills tagged `macos` or `desktop` are automatically excluded on Hive (EC2 Linux). **Always ask: would this skill work on a headless Linux server?** If no → set `macos` or `desktop`.
    - `TRIGGER:` — quoted phrases the user would say to invoke this skill
    - `DO NOT USE:` — when a similar skill should be used instead, with explicit boundary
    - `VERIFY_WITH:` — (optional) names a skill that can independently validate output quality
@@ -221,6 +223,7 @@ description: >
   TRIGGER: "phrase1", "phrase2".
   DO NOT USE: when X (use Y instead).
 tier: lazy
+platform: all
 ---
 # My Skill
 
@@ -282,6 +285,7 @@ Add a `## Guardrails` section with 3-5 "DO NOT" rules specific to this skill's f
 name: skill-name                        # Must match folder name and SKILL.md name
 version: "1.0.0"                        # Semantic version
 tier: lazy                              # "always" or "lazy"
+platform: all                           # "all", "macos", or "desktop"
 
 scripts:
   - path: scripts/generate.py           # Relative to skill directory
@@ -396,6 +400,7 @@ Before declaring complete:
 - [ ] `name` in frontmatter matches folder name (lowercase, hyphens, numbers, max 64 chars)
 - [ ] `description` has: purpose sentence + `TRIGGER:` phrases + `DO NOT USE:` boundary (max 1024 chars)
 - [ ] `tier` is set: `lazy` (default) or `always` (only for proven high-frequency skills)
+- [ ] `platform` is set: `all` (default), `macos`, or `desktop` — ask "would this work on headless Linux?"
 - [ ] **"Why?" line** present after title
 - [ ] **Guardrails section** present with 3-5 "DO NOT" rules
 - [ ] `VERIFY_WITH:` considered (required for generator/code/document skills)

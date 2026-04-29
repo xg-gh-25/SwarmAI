@@ -65,6 +65,11 @@ class SkillInfo:
     ``content`` is ``None`` when loaded in cache/list mode and populated
     on demand for detail requests.
 
+    ``platform`` declares which environments the skill supports:
+    ``"all"`` (default), ``"macos"`` (macOS-only, e.g. AppleScript,
+    Accessibility APIs), or ``"desktop"`` (needs a display/GUI).
+    Used by ``ProjectionLayer`` to filter skills in Hive (EC2 Linux).
+
     ``consumes_artifacts`` and ``produces_artifact`` are optional metadata
     from the SKILL.md YAML frontmatter.  When present, the artifact
     registry auto-discovers upstream artifacts for skills that declare
@@ -78,6 +83,7 @@ class SkillInfo:
     version: str
     source_tier: Literal["built-in", "user", "plugin"]
     path: Path
+    platform: str = "all"  # "all" | "macos" | "desktop"
     content: str | None = None
     consumes_artifacts: tuple[str, ...] = ()
     produces_artifact: str | None = None
@@ -222,6 +228,16 @@ def parse_skill_md(
         )
         description = f"Skill: {folder_name}"
 
+    # --- Platform metadata (optional, defaults to "all") ---
+    platform_raw = meta.get("platform", "all") if meta else "all"
+    platform = str(platform_raw).strip().lower()
+    if platform not in ("all", "macos", "desktop"):
+        logger.warning(
+            "SKILL.md at %s has unknown platform '%s'; defaulting to 'all'",
+            path, platform,
+        )
+        platform = "all"
+
     # --- Artifact metadata (optional) ---
     consumes_raw = meta.get("consumes_artifacts", []) if meta else []
     if isinstance(consumes_raw, str):
@@ -238,6 +254,7 @@ def parse_skill_md(
         version=version,
         source_tier=source_tier,
         path=path.parent,
+        platform=platform,
         content=body if load_content else None,
         consumes_artifacts=consumes,
         produces_artifact=produces,
