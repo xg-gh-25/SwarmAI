@@ -20,20 +20,23 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
   const [systemOk, setSystemOk] = useState(false);
   const [authVerified, setAuthVerified] = useState(false);
 
-  // Step 1: Auto-check system
+  // Step 1: Auto-check system with retry every 3s until backend is ready
   useEffect(() => {
+    let cancelled = false;
     const check = async () => {
       try {
         const status = await systemService.getStatus();
-        if (status.database.healthy && status.swarmWorkspace.ready) {
+        if (!cancelled && status.database.healthy && status.swarmWorkspace.ready) {
           setSystemOk(true);
           setStep(2); // Auto-advance
         }
       } catch {
-        // Backend not ready yet
+        // Backend not ready yet — retry will fire via interval
       }
     };
     check();
+    const interval = setInterval(check, 3000);
+    return () => { cancelled = true; clearInterval(interval); };
   }, []);
 
   // Step 4: Complete

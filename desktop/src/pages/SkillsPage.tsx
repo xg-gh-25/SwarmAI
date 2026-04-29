@@ -490,6 +490,7 @@ function GenerateSkillForm({
         } else if (event.type === 'error') {
           const errorMsg = event.message || event.error || event.detail || 'An unknown error occurred';
           setError(errorMsg);
+          setIsStreaming(false);
           setMessages((prev) =>
             prev.map((msg) =>
               msg.id === assistantMessageId
@@ -599,6 +600,14 @@ function GenerateSkillForm({
         } else if (event.type === 'error') {
           const errorMsg = event.message || event.error || event.detail || 'An unknown error occurred';
           setError(errorMsg);
+          setIsStreaming(false);
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === assistantMessageId
+                ? { ...msg, content: [{ type: 'text', text: `Error: ${errorMsg}` }] }
+                : msg
+            )
+          );
         }
       },
       (err) => {
