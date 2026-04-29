@@ -1510,11 +1510,46 @@ class SwarmWorkspaceManager:
         # Provision job system default config
         await anyio.to_thread.run_sync(lambda: self._provision_job_system(root))
 
+        # Symlink CLAUDE.md from codebase to SwarmWS root (shared AI context)
+        await anyio.to_thread.run_sync(lambda: self._sync_claude_md(root))
+
         # Auto-prune old archived DailyActivity files (Req 7.6, 15.11)
         expanded = str(root)
         await anyio.to_thread.run_sync(lambda: self.prune_archives(expanded))
 
         return recreated
+
+    @staticmethod
+    def _sync_claude_md(root: Path) -> None:
+        """Symlink CLAUDE.md from the codebase into SwarmWS root.
+
+        CLAUDE.md is the shared AI context file — read by Claude Code, Kiro,
+        Cursor, and any AI assistant working on this repo.  The canonical copy
+        lives in the swarmai repo root; the SwarmWS symlink ensures the agent
+        (running inside SwarmWS) can also read it.  Refreshes automatically on
+        every startup via verify_integrity().
+        """
+        try:
+            # Locate codebase CLAUDE.md (relative to this file's location)
+            codebase_root = Path(__file__).resolve().parent.parent.parent
+            src = codebase_root / "CLAUDE.md"
+            dst = root / "CLAUDE.md"
+
+            if not src.exists():
+                return
+
+            # Recreate symlink if target changed or is stale
+            if dst.is_symlink():
+                if dst.resolve() == src.resolve():
+                    return  # already correct
+                dst.unlink()
+            elif dst.exists():
+                dst.unlink()  # replace regular file with symlink
+
+            dst.symlink_to(src)
+            logger.debug("CLAUDE.md symlinked: %s -> %s", dst, src)
+        except OSError as exc:
+            logger.warning("Failed to sync CLAUDE.md: %s", exc)
 
     def _provision_job_system(self, root: Path) -> None:
         """Ensure Services/swarm-jobs/ has required config files.
