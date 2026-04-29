@@ -1,9 +1,8 @@
 name: Build Windows Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  # NOTE: tag-push triggers are handled by release.yml (unified pipeline).
+  # This workflow is for manual builds only — prevents 3-way draft release race.
   workflow_dispatch:
 
 permissions:
@@ -30,7 +29,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: ./desktop
-        run: npm install
+        run: npm ci
 
       - name: Create backend .env file
         working-directory: ./backend
@@ -45,6 +44,10 @@ jobs:
           source .venv/Scripts/activate
           uv pip install -e ".[dev]"
           echo "$VIRTUAL_ENV/Scripts" >> $GITHUB_PATH
+
+      - name: Sync version
+        shell: bash
+        run: bash scripts/sync-version.sh
 
       - name: Build application
         working-directory: ./desktop

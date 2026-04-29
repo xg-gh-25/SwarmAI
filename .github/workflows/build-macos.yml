@@ -1,9 +1,8 @@
 name: Build macOS Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  # NOTE: tag-push triggers are handled by release.yml (unified pipeline).
+  # This workflow is for manual builds only — prevents 3-way draft release race.
   workflow_dispatch:
     inputs:
       build_intel:
@@ -66,12 +65,8 @@ jobs:
 
       - name: Create backend .env file
         working-directory: ./backend
-        run: |
-          cp .env.example .env
-          if [ -n "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
-            sed -i.bak 's/ANTHROPIC_API_KEY=.*/ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}/' .env
-            rm -f .env.bak
-          fi
+        run: cp .env.example .env
+        # NOTE: Do NOT inject real API keys — PyInstaller may bundle .env
 
       - name: Install backend Python dependencies
         working-directory: ./backend
@@ -185,12 +180,8 @@ jobs:
 
       - name: Create backend .env file
         working-directory: ./backend
-        run: |
-          cp .env.example .env
-          if [ -n "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
-            sed -i.bak 's/ANTHROPIC_API_KEY=.*/ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}/' .env
-            rm -f .env.bak
-          fi
+        run: cp .env.example .env
+        # NOTE: Do NOT inject real API keys — PyInstaller may bundle .env
 
       - name: Install backend Python dependencies
         working-directory: ./backend
