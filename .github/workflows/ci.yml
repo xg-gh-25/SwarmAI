@@ -59,11 +59,16 @@ jobs:
               try:
                   importlib.import_module(mod_name)
                   ok += 1
-              except Exception as e:
-                  err = str(e)
-                  if any(x in err for x in ['No module named', 'cannot import name']):
-                      print(f'  FAIL {mod_name}: {e}')
-                      failures.append(mod_name)
+              except (ImportError, ModuleNotFoundError) as e:
+                  print(f'  FAIL {mod_name}: {e}')
+                  failures.append(mod_name)
+              except SyntaxError as e:
+                  print(f'  FAIL {mod_name}: SyntaxError: {e}')
+                  failures.append(mod_name)
+              except Exception:
+                  # Runtime errors (missing env, DB, FastAPI app context) are
+                  # expected in CI — the module loaded, just can't fully init.
+                  ok += 1
 
           if failures:
               print(f'\n{len(failures)} module(s) failed to import on Linux')
@@ -73,9 +78,8 @@ jobs:
 
       - name: Run non-DB tests
         working-directory: ./backend
-        # Only tests that don't need async SQLite, ~/.swarm-ai/, or macOS launchd.
-        # If a test file fails on CI due to DB/filesystem issues, add it to
-        # the conftest CI_SKIP_FILES list instead of debugging CI-specific fixtures.
+        # Tests that don't need async SQLite, ~/.swarm-ai/, or macOS launchd.
+        # Each ignore has a reason and date — review quarterly to graduate back.
         run: |
           SWARMAI_SUITE=1 python -m pytest -n 0 --timeout=120 -q --tb=short \
             -m "not slow and not pbt" \
@@ -85,8 +89,15 @@ jobs:
             --ignore=tests/test_daemon_sidecar_fixes.py \
             --ignore=tests/test_jobs.py \
             --ignore=tests/test_e2e_integration.py \
-            --ignore=tests/test_wiring_integration.py \
-            || echo "::warning::Some backend tests failed — check logs above"
+            --ignore=tests/test_wiring_integration.py
+          # ── CI-skipped test files (review quarterly) ──────────────
+          # test_chat_scenarios_e2e.py      — async DB lifecycle race on cold runners (2026-04-28)
+          # test_context_warning_bridge.py  — needs ~/.swarm-ai/ filesystem (2026-04-28)
+          # test_daemon_sidecar_robustness.py — needs macOS launchd (2026-04-28)
+          # test_daemon_sidecar_fixes.py    — needs macOS launchd (2026-04-28)
+          # test_jobs.py                    — async DB + background scheduler (2026-04-28)
+          # test_e2e_integration.py         — full DB lifecycle + filesystem (2026-04-28)
+          # test_wiring_integration.py      — full DB lifecycle + filesystem (2026-04-28)
         timeout-minutes: 10
 
   # ── Frontend: typecheck + build (fast, ~1min) ───────────────
@@ -173,13 +184,16 @@ jobs:
               try:
                   importlib.import_module(mod_name)
                   ok += 1
-              except Exception as e:
-                  # Filter noise: some modules need runtime context (FastAPI app, etc.)
-                  err = str(e)
-                  if any(x in err for x in ['No module named', 'cannot import name']):
-                      print(f'  FAIL {mod_name}: {e}')
-                      failures.append(mod_name)
-                  # Other errors (missing env, DB, etc.) are expected in CI — skip
+              except (ImportError, ModuleNotFoundError) as e:
+                  print(f'  FAIL {mod_name}: {e}')
+                  failures.append(mod_name)
+              except SyntaxError as e:
+                  print(f'  FAIL {mod_name}: SyntaxError: {e}')
+                  failures.append(mod_name)
+              except Exception:
+                  # Runtime errors (missing env, DB, FastAPI app context) are
+                  # expected in CI — the module loaded, just can't fully init.
+                  ok += 1
 
           if failures:
               print(f'\n{len(failures)} module(s) failed to import on Windows:')

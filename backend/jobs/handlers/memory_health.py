@@ -409,9 +409,9 @@ def _remove_memory_entry(entry_prefix: str) -> bool:
     lock_path = memory_path.with_suffix(".md.lock")
     fd = None
     try:
-        import fcntl
+        from utils.file_lock import flock_exclusive
         fd = open(lock_path, "w")  # noqa: SIM115
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        flock_exclusive(fd)
 
         content = memory_path.read_text(encoding="utf-8")
         lines = content.split("\n")
@@ -447,9 +447,9 @@ def _resolve_open_thread(title: str) -> None:
     lock_path = memory_path.with_suffix(".md.lock")
     fd = None
     try:
-        import fcntl
+        from utils.file_lock import flock_exclusive
         fd = open(lock_path, "w")  # noqa: SIM115
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        flock_exclusive(fd)
 
         content = memory_path.read_text(encoding="utf-8")
 
@@ -509,9 +509,9 @@ def _remove_evolution_entry(entry_id: str) -> bool:
     lock_path = evo_path.with_suffix(".md.lock")
     fd = None
     try:
-        import fcntl
+        from utils.file_lock import flock_exclusive
         fd = open(lock_path, "w")  # noqa: SIM115
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        flock_exclusive(fd)
 
         content = evo_path.read_text(encoding="utf-8")
         lines = content.split("\n")

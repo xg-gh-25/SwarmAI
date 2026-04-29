@@ -145,7 +145,105 @@ desktop/src/
 
 ### API Naming Convention
 
-Backend: `snake_case` (Python). Frontend: `camelCase` (TypeScript). Each service file in `desktop/src/services/*.ts` has `toCamelCase()` functions. **When adding fields: update the Pydantic model + TypeScript interface + the conversion function.**
+Backend: `snake_case` (Python). Frontend: `camelCase` (TypeScript).
+
+Transformation functions in `desktop/src/services/*.ts` handle conversion:
+
+| Service | File | Functions |
+|---------|------|-----------|
+| Agents | `agents.ts` | `toSnakeCase()`, `toCamelCase()` |
+| Skills | `skills.ts` | `toCamelCase()` |
+| MCP | `mcp.ts` | `toCamelCase()` |
+| Chat | `chat.ts` | `toSessionCamelCase()`, `toMessageCamelCase()` |
+| Workspace | `workspace.ts` | `projectToCamelCase()`, `projectUpdateToSnakeCase()` |
+
+**When adding fields:** update the Pydantic model (snake_case) + TypeScript interface (camelCase) + the `toCamelCase()` function.
+
+## SSE Streaming Events
+
+```json
+{"type": "session_start", "sessionId": "..."}
+{"type": "assistant", "content": [...], "model": "..."}
+{"type": "tool_use", "content": [...]}
+{"type": "tool_result", "content": [...]}
+{"type": "ask_user_question", "toolUseId": "...", "questions": [...]}
+{"type": "cmd_permission_request", "requestId": "...", "toolName": "...", "reason": "..."}
+{"type": "result", "sessionId": "...", "durationMs": ..., "totalCostUsd": ...}
+{"type": "error", "error": "..."}
+```
+
+## Context and Memory System
+
+All agent context lives in `~/.swarm-ai/SwarmWS/.context/` — filesystem-only, no DB for context content.
+
+11 source files (P0-P10) assembled into the system prompt on every session start:
+- P0–P2 (SWARMAI, IDENTITY, SOUL): system defaults, never truncated, readonly (0o444)
+- P3 (AGENT): system default, truncatable
+- P4–P6 (USER, STEERING, TOOLS): user-customized, copy-only-if-missing (0o644)
+- P7–P8 (MEMORY, EVOLUTION): agent-owned, copy-only-if-missing (0o644)
+- P9–P10 (KNOWLEDGE, PROJECTS): user-customized, copy-only-if-missing (0o644)
+
+Key behaviors:
+- `ContextDirectoryLoader.ensure_directory()` runs at session start — two-mode copy (system overwrite vs user preserve)
+- Dynamic token budget: 40K for ≥200K models, 25K for 64K–200K, L0 compact for <64K
+- L1 cache with budget-tier validation (`<!-- budget:NNNNN -->` header) and git-first freshness check
+- MEMORY.md truncates from head (keeps newest), all others truncate from tail
+- DailyActivity: today + yesterday loaded ephemerally (2K token cap per file, disk never modified)
+- `locked_write.py`: fcntl.flock for safe MEMORY.md modification by skills
+- Auto-commit: git add -A + commit after every conversation turn (non-blocking background thread)
+
+## Tab State Architecture
+
+Tab state uses a single `useUnifiedTabState` hook with `useRef<Map<string, UnifiedTab>>` + render counter pattern:
+
+- `tabMapRef`: Authoritative store (mutations don't re-render)
+- `renderCounter`: Bumped to trigger `useMemo` re-derivation of `openTabs`, `tabStatuses`, `activeTab`
+- `restoreFromFile()`: Loads tabs from `~/.swarm-ai/open_tabs.json` on startup
+- Debounced save effect persists tab state to file every 500ms
+
+Messages are loaded lazily from the backend API when a tab becomes active (not pre-loaded for all tabs).
+
+## Session ID Model
+
+One chat tab has exactly one stable App Session ID. The backend may create multiple Claude SDK clients (e.g. after restarts), each with its own SDK Session ID. The app layer maps all SDK session IDs back to the single app session ID for persistence and frontend communication.
+
+Key fields in `session_context`: `app_session_id` (stable, from frontend) and `sdk_session_id` (internal, from SDK init).
+
+## Security Architecture
+
+Four-layer PreToolUse defense chain:
+
+1. **pre_tool_logger**: All tools — logs tool name + input keys (observability, never blocks)
+2. **dangerous_command_blocker**: Bash only — 13 regex patterns (rm -rf /, fork bombs, etc.)
+3. **human_approval_hook**: Bash only — CmdPermissionManager glob detection → SSE permission dialog → persistent approval
+4. **skill_access_checker**: Skill only — validates skill in agent's allowed_skills set
+
+Additional layers:
+- **Workspace Isolation**: Per-agent directories
+- **File Access Control**: `can_use_tool` handler validates paths (when `global_user_mode=False`)
+- **Bash Sandboxing**: macOS/Linux sandbox with excluded commands
+- **Error sanitization**: Strips tracebacks in production mode
+- **CmdPermissionManager**: Filesystem-backed (`~/.swarm-ai/cmd_permissions/`), glob matching, shared across sessions
+
+## Environment Variables
+
+```env
+# Config source of truth is ~/.swarm-ai/config.json, but these env vars work too:
+ANTHROPIC_API_KEY=sk-ant-xxx
+CLAUDE_CODE_USE_BEDROCK=true
+DEFAULT_MODEL=claude-opus-4-6
+DEBUG=true
+HOST=127.0.0.1
+PORT=8000
+```
+
+## Design System
+
+- **Font**: Inter (UI), JetBrains Mono (code)
+- **Icons**: Material Symbols Outlined
+- **Themes**: light, dark, system (CSS custom properties in index.css)
+- **Colors**: Always use `bg-[var(--color-*)]`, never hardcoded dark theme colors
+- **i18n**: `i18next` with locales in `desktop/src/i18n/locales/{en,zh}.json`
 
 ## Debugging Startup Failures
 
@@ -177,12 +275,14 @@ tail -f ~/.swarm-ai/logs/backend-dev.log
 
 `.github/workflows/ci.yml` runs on every push to `main`:
 
-| Job | Platform | What | Time |
-|-----|----------|------|------|
-| `backend` | Ubuntu | Full pytest suite | ~3min |
-| `backend-windows` | Windows | Smoke import all modules (pkgutil auto-discover) | ~1min |
-| `frontend` | Ubuntu | `tsc --noEmit` + `npm run build` | ~2min |
-| `version-check` | Ubuntu | `sync-version.sh check` (6 files) | ~10s |
+| Job | Platform | What | Gate? | Time |
+|-----|----------|------|-------|------|
+| `backend` | Ubuntu | Smoke import (all modules) + non-DB tests | Yes | ~3min |
+| `backend-windows` | Windows | Smoke import all modules (pkgutil auto-discover) | Yes | ~1min |
+| `frontend` | Ubuntu | `tsc --noEmit` + `npm run build` | Yes | ~2min |
+| `version-check` | Ubuntu | `sync-version.sh check` (6 files) | Yes | ~10s |
+
+7 test files are skipped in CI (need macOS launchd, async DB lifecycle, or `~/.swarm-ai/` filesystem). See `ci.yml` comments for per-file reasons and dates. Review quarterly.
 
 Tag push (`v*`) triggers `release.yml`: builds macOS DMG + Windows installer + Hive tar.gz.
 

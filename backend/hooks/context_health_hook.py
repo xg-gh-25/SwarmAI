@@ -228,12 +228,12 @@ class ContextHealthHook:
             return  # Module not yet available (first startup)
 
         # Use flock to avoid racing with locked_write.py (skills, distillation)
-        import fcntl
+        from utils.file_lock import flock_exclusive, flock_unlock
         lock_path = memory_file.with_suffix(".md.lock")
         lock_fd = None
         try:
             lock_fd = open(lock_path, "w")  # noqa: SIM115
-            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            flock_exclusive(lock_fd)
         except OSError:
             if lock_fd:
                 lock_fd.close()
@@ -250,7 +250,7 @@ class ContextHealthHook:
             # Sync memory embeddings for hybrid retrieval (delta — only changed entries)
             self._sync_memory_embeddings(content)
         finally:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            flock_unlock(lock_fd)
             lock_fd.close()
 
     def _sync_memory_embeddings(self, memory_content: str) -> None:
@@ -657,24 +657,15 @@ class ContextHealthHook:
                             continue  # Skip semantic changes
 
                         # Find and apply in target DDD doc
-                        try:
-                            import fcntl
-                        except ImportError:
-                            # fcntl is Unix-only; skip file locking on Windows.
-                            # DDD auto-apply is a background hook — concurrent writes
-                            # are unlikely on Windows where the daemon doesn't run.
-                            fcntl = None  # type: ignore[assignment]
+                        from utils.file_lock import flock_exclusive, flock_unlock
                         for ddd_name in ("TECH.md", "IMPROVEMENT.md", "PRODUCT.md"):
                             ddd_path = project_dir / ddd_name
                             if not ddd_path.exists():
                                 continue
                             applied_this = False
                             lock_path = ddd_path.with_suffix(ddd_path.suffix + ".lock")
-                            if fcntl is not None:
-                                lock_file = open(lock_path, "w")
-                                fcntl.flock(lock_file, fcntl.LOCK_EX)
-                            else:
-                                lock_file = None
+                            lock_file = open(lock_path, "w")
+                            flock_exclusive(lock_file)
                             try:
                                 ddd_content = ddd_path.read_text(encoding="utf-8")
                                 if current_block in ddd_content:
@@ -685,10 +676,8 @@ class ContextHealthHook:
                                     changes_applied = True
                                     applied_this = True
                             finally:
-                                if lock_file is not None:
-                                    if fcntl is not None:
-                                        fcntl.flock(lock_file, fcntl.LOCK_UN)
-                                    lock_file.close()
+                                flock_unlock(lock_file)
+                                lock_file.close()
                             if applied_this:
                                 applied_changes.append({
                                     "project": project_dir.name,
@@ -995,18 +984,18 @@ class ContextHealthHook:
     ) -> None:
         """Remove resolved OT entries >cutoff from MEMORY.md, append to archive.
 
-        Uses fcntl.flock on the MEMORY.md.lock sidecar file, matching the
+        Uses flock on the MEMORY.md.lock sidecar file, matching the
         locking pattern in distillation_hook._enforce_section_caps and
         scripts/locked_write.py.
         """
-        import fcntl
+        from utils.file_lock import flock_exclusive, flock_unlock
 
         lock_path = memory_path.with_suffix(memory_path.suffix + ".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         fd = None
         try:
             fd = open(lock_path, "w")  # noqa: SIM115
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            flock_exclusive(fd)
             try:
                 content = memory_path.read_text(encoding="utf-8")
                 ot_match = re.search(
@@ -1076,7 +1065,7 @@ class ContextHealthHook:
                     len(archived_lines), archive_name,
                 )
             finally:
-                fcntl.flock(fd, fcntl.LOCK_UN)
+                flock_unlock(fd)
         except Exception as exc:
             logger.warning("context_health: OT archival failed: %s", exc)
         finally:
