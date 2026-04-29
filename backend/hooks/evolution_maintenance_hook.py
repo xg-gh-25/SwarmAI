@@ -304,9 +304,10 @@ class EvolutionMaintenanceHook:
 
             for entry in competence_entries:
                 desc = _get_field(entry["block"], "Competence") or ""
-                # Garbage if description <10 chars (PE-review: 20 was too aggressive,
-                # legitimate entries like "Use uv over pip" are 17 chars)
-                if len(desc) < 10:
+                # Garbage if description has <3 words (PE-review: char count
+                # was fragile — "Use uv" is 6 chars but 2 words and legitimate.
+                # Word count better separates garbage from terse-but-real entries.)
+                if len(desc.split()) < 3:
                     garbage_ids.append(entry["id"])
                     continue
                 # Garbage if starts with commit hash pattern
