@@ -395,7 +395,9 @@ class SessionUnit:
         # Monotonic timestamp of last proactive compact→kill cycle.
         # Prevents repeated restarts within the PROACTIVE_COOLDOWN window.
         # Uses monotonic clock — immune to NTP sync / sleep-wake clock jumps.
-        self._last_proactive_restart: float = 0.0  # monotonic
+        # -inf ensures first restart is never cooldown-blocked (monotonic()
+        # can be < PROACTIVE_COOLDOWN on freshly booted CI runners).
+        self._last_proactive_restart: float = float("-inf")
 
         # ── Resource observability ─────────────────────────────────
         self._last_error_type: Optional[str] = None  # FailureType.value: "oom" | "rate_limit" | "api_error" | "timeout" | "unknown"
