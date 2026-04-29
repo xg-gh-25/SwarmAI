@@ -103,10 +103,12 @@ export default function App() {
           {/* Update notification + daemon nudge — Desktop only (Tauri plugin imports) */}
           {!isDev && isDesktop() && <UpdateNotification />}
           {!isDev && isDesktop() && <DaemonNudgeBanner />}
-          {/* Post-update welcome toast (both Desktop and Hive) */}
-          {!isDev && <PostUpdateToast />}
+          {/* Post-update welcome toast (both Desktop and Hive) — inside backend gate */}
           {/* Only render routes after backend is ready to prevent race conditions */}
-          {isBackendReady && <AppRoutes />}
+          {isBackendReady && <>
+            {!isDev && <PostUpdateToast />}
+            <AppRoutes />
+          </>}
           </ErrorBoundary>
           </HealthProvider>
         </ToastProvider>
@@ -150,8 +152,9 @@ function PostUpdateToast() {
       }
     };
 
-    // Delay to let backend fully initialize
-    const timer = setTimeout(checkVersion, 5000);
+    // Small delay to let the health endpoint stabilize after backend ready signal.
+    // This component is only mounted after isBackendReady=true, so no long wait needed.
+    const timer = setTimeout(checkVersion, 500);
     return () => clearTimeout(timer);
   }, [addToast]);
 

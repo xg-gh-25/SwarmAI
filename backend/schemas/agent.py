@@ -193,6 +193,20 @@ class AgentResponse(BaseModel):
     permission_mode: str = "default"
     max_turns: int | None = None
     system_prompt: str | None = None
+
+    @field_validator('system_prompt', mode='before')
+    @classmethod
+    def coerce_system_prompt(cls, v):
+        """Coerce non-string values to str to handle SQLite JSON-parse artifacts.
+
+        SQLiteTable._row_to_dict auto-parses strings starting with '[' or '{'
+        as JSON.  A system_prompt like '[]' or '{}' gets deserialized into a
+        Python list/dict, which then fails Pydantic string validation.
+        """
+        if v is not None and not isinstance(v, str):
+            return json.dumps(v) if isinstance(v, (dict, list)) else str(v)
+        return v
+
     allowed_tools: list[str] = Field(default_factory=list)
     plugin_ids: list[str] = Field(default_factory=list)
     allowed_skills: list[str] = Field(default_factory=list, description="List of skill folder names this agent can access")
