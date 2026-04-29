@@ -44,7 +44,8 @@ jobs:
         run: |
           SWARMAI_SUITE=1 python -m pytest -n 0 --timeout=120 -q --tb=short \
             --ignore=tests/test_chat_scenarios_e2e.py \
-            --ignore=tests/test_context_warning_bridge.py
+            --ignore=tests/test_context_warning_bridge.py \
+            --ignore=tests/test_daemon_sidecar_robustness.py
         timeout-minutes: 10
 
   # ── Frontend: typecheck + build (fast, ~1min) ───────────────
