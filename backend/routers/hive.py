@@ -599,8 +599,8 @@ async def retry_instance(instance_id: str):
     # Cleanup any partial resources first
     try:
         await provisioner.cleanup(instance_id)
-    except Exception:
-        pass  # Best-effort cleanup
+    except Exception as e:
+        logger.warning("Retry cleanup had errors (continuing): %s", e)
 
     # Reset instance state
     async with _conn() as c:

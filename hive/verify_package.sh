@@ -99,7 +99,7 @@ check_absent() {
 
 check_absent "__pycache__/"            "No __pycache__"
 check_absent "\.venv/"                 "No .venv"
-check_absent "^tests/"                 "No tests/"
+check_absent "/tests/"                 "No tests/ (any depth)"
 check_absent "\.pytest_cache/"         "No .pytest_cache"
 check_absent "\.DS_Store"              "No .DS_Store"
 check_absent "\.hypothesis"            "No .hypothesis"

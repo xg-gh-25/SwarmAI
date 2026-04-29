@@ -93,6 +93,28 @@ class TestUserData:
         p = generate_password(6)
         assert len(p.split("-")) == 6
 
+    def test_word_list_exactly_256(self):
+        """256 words = 8 bits per word. More or fewer = comment lies."""
+        import re, inspect
+        from hive.user_data import generate_password
+        src = inspect.getsource(generate_password)
+        words = re.findall(r'"(\w+)"', src)
+        assert len(words) == 256, f"Expected 256 words, got {len(words)}"
+        assert len(set(words)) == 256, "Duplicate words in list"
+
+    def test_bcrypt_hash_survives_base64_roundtrip(self):
+        """PE P0-1: bcrypt hash contains $ — must survive base64 encoding for SSM script."""
+        import base64
+        from hive.user_data import caddy_hash_password
+        pw = "test-pass-phrase"
+        h = caddy_hash_password(pw)
+        assert "$2b$14$" in h  # bcrypt format
+        # Simulate what reset_password does: base64 encode → decode on instance
+        b64 = base64.b64encode(h.encode()).decode()
+        assert "$" not in b64  # No shell-special chars in base64
+        roundtrip = base64.b64decode(b64).decode()
+        assert roundtrip == h  # Exact match after roundtrip
+
 
 # ── Provisioner Unit Tests ────────────────────────────────────────
 

@@ -547,15 +547,15 @@ cmd_release_all() {
     # Offer to create GitHub release
     echo -e "  ${CYAN}Create GitHub Release:${NC}"
     echo ""
-    local release_files=""
+    local -a release_files=()
     if [ -n "$dmg" ]; then
-        release_files="$PROJECT_ROOT/dist/$(basename "$dmg") "
+        release_files+=("$PROJECT_ROOT/dist/$(basename "$dmg")")
     fi
-    release_files="${release_files}${hive_tar} ${checksums}"
+    release_files+=("$hive_tar" "$checksums")
     echo "    gh release create v${version} \\"
     echo "      --title \"SwarmAI v${version}\" \\"
     echo "      --generate-notes \\"
-    echo "      $release_files"
+    echo "      ${release_files[*]}"
     echo ""
 
     echo -n "  Create release now? [y/N] "
@@ -565,7 +565,7 @@ cmd_release_all() {
         if gh release create "v${version}" \
             --title "SwarmAI v${version}" \
             --generate-notes \
-            $release_files; then
+            "${release_files[@]}"; then
             _ok "GitHub Release v${version} created"
         else
             _warn "GitHub release creation failed — upload manually"

@@ -165,6 +165,10 @@ jobs:
           cache: 'npm'
           cache-dependency-path: desktop/package-lock.json
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Install frontend dependencies
         working-directory: ./desktop
         run: npm ci
