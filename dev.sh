@@ -93,9 +93,9 @@ _start_backend() {
     source .venv/bin/activate
     uv sync --group dev
 
-    # Start in background, log to file
+    # Start in background, log to separate dev file (don't clobber daemon's backend.log)
     DATABASE_TYPE=sqlite python main.py --port $BACKEND_PORT \
-        > "$LOG_DIR/backend.log" 2>&1 &
+        > "$LOG_DIR/backend-dev.log" 2>&1 &
     local pid=$!
     echo "$pid" > "$BACKEND_PID_FILE"
 
@@ -108,13 +108,13 @@ _start_backend() {
         fi
         # Check if process died
         if ! kill -0 "$pid" 2>/dev/null; then
-            _err "Backend process died. Check $LOG_DIR/backend.log"
-            tail -20 "$LOG_DIR/backend.log"
+            _err "Backend process died. Check $LOG_DIR/backend-dev.log"
+            tail -20 "$LOG_DIR/backend-dev.log"
             return 1
         fi
         sleep 1
     done
-    _err "Backend didn't respond in 30s. Check $LOG_DIR/backend.log"
+    _err "Backend didn't respond in 30s. Check $LOG_DIR/backend-dev.log"
     return 1
 }
 
@@ -160,7 +160,7 @@ cmd_backend() {
     local start=$(date +%s)
     _start_backend
     _ok "Backend restarted in $(_build_time $start)"
-    _log "Tail logs: tail -f $LOG_DIR/backend.log"
+    _log "Tail logs: tail -f $LOG_DIR/backend-dev.log"
 
     # NOTE: Daemon is NOT restarted here. The daemon runs the built binary,
     # not dev source code. Use './dev.sh build' to update the daemon.
@@ -188,13 +188,24 @@ cmd_build() {
 
     cd "$DESKTOP_DIR"
 
-    _log "Step 1/3: PyInstaller backend build..."
+    _log "Step 1/4: PyInstaller backend build..."
     npm run build:backend
 
-    _log "Step 2/3: Frontend build..."
+    _log "Step 2/4: Post-build verification..."
+    cd "$BACKEND_DIR"
+    if python scripts/verify_build.py "$SIDECAR_BINARY"; then
+        _ok "Verification passed"
+    else
+        _err "Verification FAILED — binary has missing capabilities"
+        _warn "Fix issues above, then re-run: ./dev.sh build"
+        return 1
+    fi
+
+    cd "$DESKTOP_DIR"
+    _log "Step 3/4: Frontend build..."
     npm run build
 
-    _log "Step 3/3: Tauri build..."
+    _log "Step 4/4: Tauri build..."
     npm run tauri build
 
     _ok "Full build complete in $(_build_time $start)"

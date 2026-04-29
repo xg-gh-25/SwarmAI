@@ -157,11 +157,18 @@ if [ "$MODE" = "check" ]; then
         exit 1
     fi
 else
-    # Update Cargo.lock if Cargo.toml was synced
+    # Update lockfiles to match bumped versions
+    # Cargo.lock
     cargo_dir="$PROJECT_ROOT/desktop/src-tauri"
     if [ -f "$cargo_dir/Cargo.lock" ]; then
         (cd "$cargo_dir" && cargo generate-lockfile 2>/dev/null) && \
             echo -e "${GREEN}✅${NC} Cargo.lock updated" || true
+    fi
+    # package-lock.json (npm install --package-lock-only doesn't touch node_modules)
+    pkg_dir="$PROJECT_ROOT/desktop"
+    if [ -f "$pkg_dir/package-lock.json" ]; then
+        (cd "$pkg_dir" && npm install --package-lock-only --ignore-scripts 2>/dev/null) && \
+            echo -e "${GREEN}✅${NC} package-lock.json updated" || true
     fi
     echo -e "${GREEN}All versions synced to $VERSION${NC}"
 fi

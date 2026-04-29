@@ -69,7 +69,10 @@ HIVE_IAM_POLICY = {
             "Sid": "S3HivePackage",
             "Effect": "Allow",
             "Action": ["s3:GetObject", "s3:ListBucket"],
-            "Resource": ["arn:aws:s3:::swarmai-hive-releases-*"],
+            "Resource": [
+                "arn:aws:s3:::swarmai-hive-*",
+                "arn:aws:s3:::swarmai-hive-*/*",
+            ],
         },
         {
             "Sid": "SelfTagging",
@@ -561,22 +564,86 @@ class HiveProvisioner:
 
     # ── Health check ───────────────────────────────────────────────
 
-    async def _wait_healthy(self, ip: str, timeout: int = 300) -> bool:
-        """Poll http://<ip>/health until 200 or timeout."""
-        url = f"http://{ip}/health"
+    async def _wait_healthy_via_tag(
+        self, session, ec2_id: str, region: str, timeout: int = 300
+    ) -> bool:
+        """Poll EC2 HiveStatus tag until 'ready' or timeout.
+
+        User-data script tags the instance with HiveStatus=ready when setup
+        completes (step 9).  This avoids network-level issues:
+        - SG only allows CloudFront IPs (deployer IP blocked)
+        - Caddy requires basic auth on all paths including /health
+
+        EC2 DescribeTags uses the AWS API, not the instance network.
+        """
         start = time.monotonic()
-        async with httpx.AsyncClient(timeout=5) as client:
-            while time.monotonic() - start < timeout:
-                try:
-                    resp = await client.get(url)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        logger.info("Hive healthy: %s", data.get("version", "unknown"))
-                        return True
-                except Exception:
-                    pass
-                await asyncio.sleep(5)
-        logger.warning("Hive at %s did not become healthy within %ds", ip, timeout)
+
+        def _check():
+            ec2 = session.client("ec2", region_name=region)
+            resp = ec2.describe_tags(
+                Filters=[
+                    {"Name": "resource-id", "Values": [ec2_id]},
+                    {"Name": "key", "Values": ["HiveStatus"]},
+                ]
+            )
+            for tag in resp.get("Tags", []):
+                if tag["Key"] == "HiveStatus":
+                    return tag["Value"]
+            return None
+
+        while time.monotonic() - start < timeout:
+            status = await asyncio.to_thread(_check)
+            if status == "ready":
+                logger.info("Hive %s healthy (tag HiveStatus=ready)", ec2_id)
+                return True
+            if status == "error":
+                logger.warning("Hive %s user-data failed (tag HiveStatus=error)", ec2_id)
+                return False
+            await asyncio.sleep(10)
+
+        logger.warning("Hive %s tag not ready within %ds", ec2_id, timeout)
+        return False
+
+    async def _wait_healthy_via_ssm(
+        self, session, ec2_id: str, region: str, timeout: int = 180
+    ) -> bool:
+        """Check health via SSM Run Command (curl localhost).
+
+        Used for start() where the instance is already running but we can't
+        reach it via network (SG only allows CloudFront).
+        """
+        def _check():
+            ssm = session.client("ssm", region_name=region)
+            try:
+                resp = ssm.send_command(
+                    InstanceIds=[ec2_id],
+                    DocumentName="AWS-RunShellScript",
+                    Parameters={"commands": [
+                        "curl -sf http://127.0.0.1:18321/health && echo HEALTHY || echo UNHEALTHY"
+                    ]},
+                    TimeoutSeconds=30,
+                    Comment="SwarmAI Hive health check",
+                )
+                command_id = resp["Command"]["CommandId"]
+                for _ in range(12):
+                    result = ssm.get_command_invocation(
+                        CommandId=command_id, InstanceId=ec2_id
+                    )
+                    if result["Status"] in ("Success", "Failed", "Cancelled", "TimedOut"):
+                        return "HEALTHY" in result.get("StandardOutputContent", "")
+                    time.sleep(5)
+            except Exception as e:
+                logger.debug("SSM health check failed (retrying): %s", e)
+            return False
+
+        start = time.monotonic()
+        while time.monotonic() - start < timeout:
+            if await asyncio.to_thread(_check):
+                logger.info("Hive %s healthy (SSM)", ec2_id)
+                return True
+            await asyncio.sleep(10)
+
+        logger.warning("Hive %s SSM health check timeout after %ds", ec2_id, timeout)
         return False
 
     # ── CloudFront ─────────────────────────────────────────────────
@@ -779,8 +846,8 @@ class HiveProvisioner:
                 ec2_public_ip=public_ip,
             )
 
-            # Step 9: Wait for healthy
-            healthy = await self._wait_healthy(public_ip, timeout=300)
+            # Step 9: Wait for healthy (via EC2 tag, not HTTP — SG blocks non-CF traffic)
+            healthy = await self._wait_healthy_via_tag(session, ec2_id, region, timeout=300)
             if not healthy:
                 await self._update_instance(
                     instance_id,
@@ -861,22 +928,23 @@ class HiveProvisioner:
         """Start a stopped Hive (EC2 start + wait healthy)."""
         instance = await self._get_instance(instance_id)
         account = await self._get_account(instance["account_ref"])
-        session = self._get_session(account, instance["region"])
+        region = instance["region"]
+        session = self._get_session(account, region)
         ec2_id = instance.get("ec2_instance_id")
-        ip = instance.get("ec2_public_ip")
         if not ec2_id:
             raise ValueError("No EC2 instance ID")
 
         def _start():
-            ec2 = session.client("ec2", region_name=instance["region"])
+            ec2 = session.client("ec2", region_name=region)
             ec2.start_instances(InstanceIds=[ec2_id])
             ec2.get_waiter("instance_running").wait(InstanceIds=[ec2_id])
 
         await asyncio.to_thread(_start)
         await self._update_instance(instance_id, status="installing")
 
-        if ip:
-            healthy = await self._wait_healthy(ip, timeout=180)
+        # Health check via SSM (SG blocks non-CloudFront HTTP traffic)
+        if ec2_id:
+            healthy = await self._wait_healthy_via_ssm(session, ec2_id, region, timeout=180)
             if healthy:
                 await self._update_instance(instance_id, status="running")
             else:

@@ -545,7 +545,12 @@ async def get_instance_credentials(instance_id: str):
 
 @router.get("/instances/{instance_id}/health")
 async def health_proxy(instance_id: str):
-    """Proxy health check to remote Hive instance."""
+    """Proxy health check to remote Hive instance.
+
+    Prefers CloudFront domain (HTTPS) because the SG only allows port 80
+    from CloudFront IPs — direct IP access is blocked by design.
+    Falls back to direct IP only if no CloudFront domain is available yet.
+    """
     async with _conn() as c:
         cursor = await c.execute(
             "SELECT ec2_public_ip, cloudfront_domain, auth_user, auth_password FROM hive_instances WHERE id = ?",
@@ -556,12 +561,27 @@ async def health_proxy(instance_id: str):
             raise HTTPException(status_code=404, detail="Instance not found")
         row = dict(row)
 
-    # Prefer direct IP (faster, no CF cache)
+    # Build basic auth from instance credentials
+    auth = None
+    if row.get("auth_user") and row.get("auth_password"):
+        auth = httpx.BasicAuth(row["auth_user"], row["auth_password"])
+
+    # Prefer CloudFront (SG blocks direct IP from non-CF sources)
+    cf_domain = row.get("cloudfront_domain")
+    if cf_domain:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(f"https://{cf_domain}/health", auth=auth)
+                return resp.json()
+        except Exception as e:
+            return {"status": "unreachable", "error": str(e)}
+
+    # Fallback to direct IP (only during initial deploy before CF is ready)
     ip = row.get("ec2_public_ip")
     if not ip:
-        raise HTTPException(status_code=400, detail="No IP address for this instance")
+        raise HTTPException(status_code=400, detail="No IP or domain for this instance")
 
-    # SSRF guard: only allow public IPv4 addresses (reject RFC 1918, loopback, link-local)
+    # SSRF guard: only allow public IPv4 addresses
     import ipaddress
     try:
         addr = ipaddress.ip_address(ip)
@@ -569,11 +589,6 @@ async def health_proxy(instance_id: str):
             raise HTTPException(status_code=400, detail="Instance IP is not a public address")
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid IP address for this instance")
-
-    # Build basic auth from instance credentials
-    auth = None
-    if row.get("auth_user") and row.get("auth_password"):
-        auth = httpx.BasicAuth(row["auth_user"], row["auth_password"])
 
     try:
         async with httpx.AsyncClient(timeout=10) as client:

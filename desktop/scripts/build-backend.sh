@@ -411,6 +411,7 @@ if python scripts/verify_build.py "$OUTPUT_BINARY"; then
     echo "✅ Build verification passed"
 else
     echo ""
-    echo "⚠️  Build verification found issues (see above)"
-    echo "  Fix before releasing to users."
+    echo "❌ Build verification FAILED (see above)"
+    echo "  Fix missing modules before releasing."
+    exit 1
 fi

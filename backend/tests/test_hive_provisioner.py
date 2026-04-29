@@ -218,7 +218,7 @@ class TestProvisionerIAM:
         from hive.provisioner import HIVE_IAM_POLICY
 
         s3_resources = HIVE_IAM_POLICY["Statement"][1]["Resource"]
-        assert any("swarmai-hive-releases" in r for r in s3_resources)
+        assert any("swarmai-hive-" in r for r in s3_resources)
 
     @pytest.mark.asyncio
     async def test_instance_profile_waits_for_propagation(self):
@@ -275,42 +275,54 @@ class TestProvisionerSG:
 
 
 class TestProvisionerHealthCheck:
-    """Tests for health polling."""
+    """Tests for health polling via EC2 tags."""
 
     @pytest.mark.asyncio
-    async def test_wait_healthy_returns_true_on_200(self):
-        """AC3: health check returns true when /health responds 200."""
+    async def test_wait_healthy_via_tag_returns_true_on_ready(self):
+        """AC3: health check returns true when HiveStatus tag = 'ready'."""
         from hive.provisioner import HiveProvisioner
 
         p = HiveProvisioner(Path("/tmp/test.db"))
+        mock_session = MagicMock()
+        mock_ec2 = MagicMock()
+        mock_session.client.return_value = mock_ec2
+        mock_ec2.describe_tags.return_value = {
+            "Tags": [{"Key": "HiveStatus", "Value": "ready"}]
+        }
 
-        with patch("hive.provisioner.httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-            mock_resp = MagicMock()
-            mock_resp.status_code = 200
-            mock_resp.json.return_value = {"status": "healthy", "version": "1.9.0"}
-            mock_client.get.return_value = mock_resp
-
-            result = await p._wait_healthy("1.2.3.4", timeout=10)
-            assert result is True
+        result = await p._wait_healthy_via_tag(mock_session, "i-abc123", "us-east-1", timeout=10)
+        assert result is True
 
     @pytest.mark.asyncio
-    async def test_wait_healthy_returns_false_on_timeout(self):
-        """Health check returns false when timeout expires."""
+    async def test_wait_healthy_via_tag_returns_false_on_error(self):
+        """Health check returns false when HiveStatus tag = 'error'."""
         from hive.provisioner import HiveProvisioner
 
         p = HiveProvisioner(Path("/tmp/test.db"))
+        mock_session = MagicMock()
+        mock_ec2 = MagicMock()
+        mock_session.client.return_value = mock_ec2
+        mock_ec2.describe_tags.return_value = {
+            "Tags": [{"Key": "HiveStatus", "Value": "error"}]
+        }
 
-        with patch("hive.provisioner.httpx.AsyncClient") as mock_client_cls:
-            mock_client = AsyncMock()
-            mock_client_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_client_cls.return_value.__aexit__ = AsyncMock(return_value=False)
-            mock_client.get.side_effect = Exception("Connection refused")
+        result = await p._wait_healthy_via_tag(mock_session, "i-abc123", "us-east-1", timeout=10)
+        assert result is False
 
-            result = await p._wait_healthy("1.2.3.4", timeout=2)
-            assert result is False
+    @pytest.mark.asyncio
+    async def test_wait_healthy_via_tag_returns_false_on_timeout(self):
+        """Health check returns false when tag never appears."""
+        from hive.provisioner import HiveProvisioner
+
+        p = HiveProvisioner(Path("/tmp/test.db"))
+        mock_session = MagicMock()
+        mock_ec2 = MagicMock()
+        mock_session.client.return_value = mock_ec2
+        mock_ec2.describe_tags.return_value = {"Tags": []}
+
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await p._wait_healthy_via_tag(mock_session, "i-abc123", "us-east-1", timeout=2)
+        assert result is False
 
 
 class TestResetPassword:
