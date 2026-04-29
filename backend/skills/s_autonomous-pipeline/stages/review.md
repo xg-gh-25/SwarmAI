@@ -26,7 +26,7 @@ refactors.
 
 ## Pipeline-Specific Checks
 
-The REVIEW stage extends the base code review with 11 pipeline-specific checks:
+The REVIEW stage extends the base code review with 12 pipeline-specific checks:
 
 ---
 
@@ -118,7 +118,7 @@ discoverability hint, Escape propagation). Engineering-complete != user-complete
 
 ### 6. Runtime Pattern Checklist
 
-**BLOCKING: Read `backend/skills/s_autonomous-pipeline/REVIEW_PATTERNS.md` and apply RP1-RP23.**
+**BLOCKING: Read `backend/skills/s_autonomous-pipeline/REVIEW_PATTERNS.md` and apply RP1-RP25.**
 
 Scan the changeset for known bug patterns. For each pattern that applies, explicitly verify the fix is in place. Do NOT skip patterns -- a "no" answer is fine, but silence means unchecked.
 
@@ -231,7 +231,40 @@ are warnings, not blockers. The value is making depth and seam quality visible.
 
 ---
 
-### 9. Anti-Rationalization Gate
+### 9. Blast Radius — System Lifecycle Trace (RP25)
+
+**Only when changeset touches infra, release, deploy, CI, or cross-service config.** Skip for pure feature code.
+
+After completing the diff review, step OUTSIDE the diff and trace the full system lifecycle:
+
+1. **List all system-level flows** this changeset participates in (e.g., build→package→deploy→update→run, or config→startup→runtime→shutdown)
+2. **For each flow**, trace the complete chain of steps. At each step ask:
+   - Does existing code at this step **consume** what the changeset produces? Is it compatible?
+   - Does the changeset change a **format** (config file, tar.gz structure, API shape) that downstream steps depend on?
+   - If config changed, does the **runtime reload** it without restart? (Caddy, systemd, nginx, etc.)
+3. **Check adjacent code** — files in the same directory or module that the changeset DIDN'T touch but that participate in the same flow.
+
+**Output format:**
+```
+Blast radius trace:
+  Flow 1: build → package → S3 → SSM update → EC2
+    build: ✅ tar.gz structure unchanged
+    S3 sync: ✅ same key pattern
+    SSM update: ❌ doesn't reload Caddy when Caddyfile changes
+    EC2 runtime: ✅ systemd restart handles backend
+
+  Flow 2: tag → GitHub Actions → publish
+    build-hive: ❌ unnecessary dependency on build-macos (blocks 15 min)
+    publish: ✅ includes tar.gz
+```
+
+**Action:** Fix every ❌ before advancing to TEST. These are always real bugs — they're invisible in the diff but break the system.
+
+**Why this exists:** run_19129544 (unified release pipeline) passed 8 stages with 9/10 confidence. DevOps E2E audit found 2 HIGH + 3 MED in 5 minutes — all outside the diff, all inside the system lifecycle. Pipeline REVIEW reads the diff; it doesn't trace the system. For infra/release code, the system lifecycle IS the feature. (2026-04-29)
+
+---
+
+### 10. Anti-Rationalization Gate
 
 Before concluding REVIEW, reject these shortcuts:
 
@@ -243,10 +276,11 @@ Before concluding REVIEW, reject these shortcuts:
 | "Wire test is overkill -- the types match" | Types matching != serialization matching. Content-Type bugs are invisible to type checkers. |
 | "UX review isn't needed -- the UI change is trivial" | Trivial UI changes cause scroll breaks and accessibility regressions. If UI files changed, check UX. |
 | "Review is clean, marking confidence 10/10" | Confidence without evidence is fiction. Score against the checklist, not gut feel. |
+| "Blast radius trace not needed -- I only changed scripts" | Infra/release bugs are invisible in the diff and break the system. If it touches build/deploy/CI, trace the lifecycle. |
 
 ---
 
-### 10. Exit Evidence Checklist
+### 11. Exit Evidence Checklist
 
 Confirm each before publishing:
 - [ ] Integration trace output present (`N symbols checked, M connected, K warnings`)
@@ -255,6 +289,7 @@ Confirm each before publishing:
 - [ ] Wire test results shown (or "single-layer change, N/A" stated)
 - [ ] Depth & seam analysis completed for new files (or "no new files, N/A" stated)
 - [ ] UX review completed (or "no frontend files, N/A" stated)
+- [ ] Blast radius trace completed (or "no infra/release/deploy files, N/A" stated)
 
 ---
 
