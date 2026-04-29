@@ -237,7 +237,21 @@ DO NOT USE: for X (use Y instead)
 > The `TRIGGER:` and `DO NOT USE:` lines are critical for skill discovery and disambiguation.
 > Without them, the agent guesses — and guesses wrong on similar skills.
 
-### Step 4.5: Write Guardrails Section
+### Step 4.5: Terminology Check
+
+> [!IMPORTANT]
+> **Before finalizing, verify terminology against the ubiquitous language glossary.**
+> Read `.context/CONTEXT.md` — it defines canonical terms, banned synonyms, and
+> relationships across all 69 skills. Using "task" when you mean "todo", or
+> "backend" when you mean "daemon", causes cross-skill confusion.
+
+Quick check:
+1. Read `.context/CONTEXT.md`
+2. Grep your SKILL.md for banned synonyms (the "Avoid" entries)
+3. Replace any matches with the canonical term
+4. If your skill introduces a NEW concept not in the glossary, add it to CONTEXT.md
+
+### Step 4.6: Write Guardrails Section
 
 > [!CRITICAL]
 > **Every skill MUST have a Guardrails section.** This is the single most effective pattern for preventing agent execution failures. Without explicit prohibitions, LLMs take the shortest path and skip validation.

@@ -11,7 +11,7 @@ Complete 64-point checklist for validating skills before deployment.
 3. Fix any unchecked items
 4. Re-validate until all items pass
 
-**Passing threshold:** All 64 items must be checked for 100/100 score.
+**Passing threshold:** All 65 items must be checked for 100/100 score.
 
 ---
 
@@ -196,7 +196,7 @@ DATA_DIR = "/Users/specific/path/data"
 
 ---
 
-## Section 9: Consistency (5 items)
+## Section 9: Consistency (6 items)
 
 ### Terminology & Style
 
@@ -205,6 +205,17 @@ DATA_DIR = "/Users/specific/path/data"
 - [ ] **9.3** Consistent code block language tags
 - [ ] **9.4** Consistent callout formatting
 - [ ] **9.5** No conflicting instructions
+- [ ] **9.6** Terms match `.context/CONTEXT.md` ubiquitous language (no banned synonyms)
+
+### Ubiquitous Language Check
+
+Read `.context/CONTEXT.md` and verify:
+- "task" means job-system execution, not todo or ticket
+- "session" means chat conversation, not SDK subprocess
+- "daemon" not "server" or "backend" for the always-on process
+- "skill" not "tool" or "plugin" for markdown capabilities
+- "todo" not "task" or "ticket" for Radar items
+- "memory" not "context" or "history" for MEMORY.md content
 
 ### Common Inconsistencies to Check
 
@@ -291,7 +302,7 @@ DATA_DIR = "/Users/specific/path/data"
 
 After completing all sections:
 
-- [ ] **FINAL** All 64 items are checked
+- [ ] **FINAL** All 65 items are checked
 
 ---
 
@@ -361,10 +372,10 @@ echo "Basic validation complete"
 | Examples | 5 | Teaching |
 | Scripts | 8 | Code quality |
 | Paths | 4 | Compatibility |
-| Consistency | 5 | Polish |
+| Consistency | 6 | Polish + ubiquitous language |
 | Testing | 5 | Validation |
 | Quality Rules | 3 | Guidance |
 | **Guardrails** | **5** | **Anti-skip enforcement** |
 | Maintainability | 4 | Future-proofing |
 | Safety & Security | 4 | Risk mitigation |
-| **Total** | **64** | |
+| **Total** | **65** | |
