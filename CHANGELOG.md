@@ -5,6 +5,39 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-04-29
+
+### Added
+
+- **Hive Cloud Deployment**: Full EC2 deployment lifecycle — boto3 provisioner (deploy/stop/start/update/delete), CloudFront CDN, Caddy reverse proxy with basic auth, passphrase password generation, reset-password API, Manager UI with deploy progress + live polling
+- **Unified FileViewer**: Modular renderer architecture replacing monolithic BinaryPreviewModal — 7 format-specific renderers (Image, PDF, CSV, HTML, Audio, Video, Unsupported), tabbed navigation, status bar, proper type system
+- **Unified Release Pipeline**: `prod.sh release-all` builds Desktop + Hive package + verification + GitHub Release in one command, with CI/CD workflow (build-macos, build-windows, build-hive jobs)
+- **Skill Platform Filtering**: SKILL.md `platform: all | macos | desktop` field — Hive mode auto-excludes platform-specific skills (7 tagged: apple-reminders, peekaboo, sonos, system-health, whisper-transcribe, podcast-gen, video-gen)
+- **Thinking Toolkit**: 4 pipeline upgrades — T1 grill protocol (stress-test plans), T2 constraint surfacing, T3 depth calibration, T4 caveman mode (70% token reduction)
+- **Desktop Update System**: DB migration runner + daemon sync + update toast UX with safety checks
+- **GitHub Trending Skill**: Daily trending repos adapter + skill with star/language/relevance analysis
+- **Daily Todo Resolution**: Auto-resolve stale Radar Todos via scheduled job
+- **Pipeline Quality Gates**: Review completeness validator (8d), pre-mortem gate in EVALUATE, DDD auto-apply for mechanical proposals, MEMORY.md stale RC auto-archival, EVOLUTION.md quality gate (garbage competence removal)
+- **Signature Skill Highlights**: ⭐ badge + tagline for flagship pipeline skills
+- **Colored Accent Borders**: Visual section differentiation across Explorer, Radar, and Welcome Screen
+
+### Fixed
+
+- **PE Review — 32 Security Fixes**: Data integrity, correctness, and security hardening across 15+ files over 4 review rounds
+- **Hive Security Hardening**: Restrict SG to CloudFront prefix list (eliminates DyePack alerts), block unknown URL schemes in webview, Caddy multiline reverse_proxy blocks, CloudFront DNS origin fix, external URLs open in system browser
+- **3 P0 Fixes**: system_prompt coercion crash, retention policy test failures, PostUpdateToast race condition
+- **DevOps E2E Audit**: 5 issues across release pipeline + pipeline lessons I1-I4 (RP25, blast radius trace, verify hardening)
+- **Pipeline Structural Gaps**: Post-mortem fixes from run_91a6fb7e — dependency-scoped testing replaces full suite
+- **react-pdf v10 CSS**: Import path `dist/esm/` → `dist/` for AnnotationLayer/TextLayer CSS
+- **Hive Product Readiness**: 7 P0 gaps — setup wizard auth, settings panel, IMDS auto-fill, version resolution from GitHub API
+- **Hook Lifecycle Wiring**: Dead methods wired into hook lifecycle, flock DDD writes, protect undistilled files
+
+### Changed
+
+- **Hive Manager Desktop-Only**: Management UI hidden in Hive mode (managed instances don't manage themselves)
+- **Staleness Thresholds**: Working stale days 5d → 14d, pending 21d, split by status
+- **Evolution Threshold**: Word count instead of char count for competence garbage detection
+
 ## [1.8.4] - 2026-04-27
 
 ### Fixed
