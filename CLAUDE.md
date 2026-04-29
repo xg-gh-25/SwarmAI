@@ -1,229 +1,208 @@
 # CLAUDE.md
 
-Guidance for Claude Code (claude.ai/code) when working with this repository.
+Guidance for AI coding assistants (Claude Code, Kiro, Cursor, Copilot) working with this repository.
+
+**Last refreshed:** 2026-04-29 | **Auto-refresh:** context_health_hook syncs this to SwarmWS on startup
 
 ## Project Overview
 
-SwarmAI is a persistent agentic operating system for knowledge work — a desktop application (Tauri 2.0 + React 19 + Python FastAPI sidecar) where supervised AI agents plan, execute, and follow through on real work inside a persistent workspace.
+SwarmAI is a desktop AI command center — Tauri 2.0 + React 19 + Python FastAPI backend. 69 skills, 164K backend LOC, 3000+ tests, 163 React components.
 
-- **Frontend**: React 19 + TypeScript 5.x + Tailwind CSS 4.x
-- **Backend**: FastAPI + Claude Agent SDK + SQLite
-- **Desktop**: Tauri 2.0 (Rust sidecar management)
-- **AI Providers**: AWS Bedrock (default) or Anthropic API
-- **Data**: `~/.swarm-ai/` (config.json, data.db, open_tabs.json, workspaces, skills, logs)
+## ⚠️ CRITICAL: Known Landmines
 
-## Development Commands
+**Read these first. Every one has caused a P0.**
+
+### 1. Two Backend Processes — Never Confuse Them
+
+| Process | Env Var | Lifetime | Port | Log File |
+|---------|---------|----------|------|----------|
+| **launchd daemon** | `SWARMAI_MODE=daemon` | 24/7 via launchd | 18321 (fixed) | `backend-daemon.log` |
+| **Tauri sidecar** | `SWARMAI_MODE=sidecar` | Desktop app lifecycle | random | `backend.log` |
+
+- Slack/channels run on **daemon**, NOT sidecar
+- Closing the desktop app does NOT stop Slack
+- `curl http://127.0.0.1:18321/health` tests the daemon, NOT what the frontend hits
+- They write separate log files — never share a log file (RotatingFileHandler race)
+
+### 2. `isDesktop()` Detection (v1.9.0 P0)
+
+```typescript
+// desktop/src/services/tauri.ts
+// Tauri 2.x: window.__TAURI_INTERNALS__  (NOT __TAURI__)
+// Must check BOTH for cross-version compat
+```
+
+If `isDesktop()` returns wrong value → `getApiBaseUrl()` returns `''` → all API calls hit SPA fallback → HTML instead of JSON → app shows "failed to start" even though backend is healthy.
+
+**Debug:** Open DevTools Console → look for `[Platform] isDesktop=...` log line.
+
+### 3. No `import fcntl` at Module Top Level
+
+`fcntl` is Unix-only. Windows CI will crash. Use:
+```python
+from utils.file_lock import flock_exclusive, flock_unlock  # cross-platform
+```
+Exception: `utils/file_lock.py` itself (it handles the platform check internally).
+
+### 4. Test Execution Rules
 
 ```bash
-# Desktop dev (frontend + Tauri shell)
-cd desktop && npm run tauri:dev
+# ✅ Targeted tests (always OK)
+cd backend && python -m pytest tests/test_<module>.py -v --timeout=60
 
-# Backend dev (standalone, port 8000)
-cd backend && uv sync && source .venv/bin/activate && python main.py
+# ✅ Last-failed only
+cd backend && python -m pytest --lf --timeout=60
 
-# Frontend tests
-cd desktop && npm test -- --run
+# ❌ NEVER run full suite proactively — xdist deadlock risk
+# Only with explicit user request:
+SWARMAI_SUITE=1 python -m pytest --timeout=120
 
-# Backend tests (MUST use venv — system python is missing test deps)
-cd backend && .venv/bin/python -m pytest
-
-# Full production build
-cd desktop && npm run build:all
+# Before modifying a function, check who tests it:
+grep -rn "function_name(" tests/ --include="*.py"
 ```
+
+### 5. Release Flow
+
+```
+commit on main → push → CI runs (4 jobs) → all green → tag → release.yml builds DMG + Windows + Hive
+```
+
+No branches. No PRs. CI is the only gate. Never tag with red CI.
+
+CI jobs: `backend` (Linux tests) | `backend-windows` (smoke import) | `frontend` (tsc + build) | `version-check` (6 files match)
+
+### 6. Version Files — 6 Must Stay in Sync
+
+```bash
+# Source of truth: VERSION (root)
+# Synced to: config.py, pyproject.toml, package.json, Cargo.toml, tauri.conf.json
+# One command: ./scripts/sync-version.sh
+# Verify: ./scripts/sync-version.sh check
+```
+
+### 7. Build Scripts
+
+```bash
+./dev.sh              # Start dev (backend + frontend)
+./dev.sh build        # Full build: PyInstaller + verify + Tauri → DMG
+./prod.sh build       # Backend only: PyInstaller + verify + deploy to daemon
+./prod.sh release     # Full release: preflight → build → DMG → smoke test
+./prod.sh status      # Show daemon health, binary versions
+```
+
+`build-backend.sh` exits non-zero if `verify_build.py` fails. Don't bypass.
 
 ## Architecture
 
 ### Data Flow
 ```
-User Input → React Frontend → FastAPI Backend → SessionRouter → SessionUnit → ClaudeSDKClient → SSE Streaming → UI
+User → React Frontend → FastAPI Backend → SessionRouter → SessionUnit → ClaudeSDKClient → SSE → UI
 ```
 
-### Desktop Architecture
+### Process Topology
 ```
-Tauri App
-├── React Frontend (Vite bundle)
-├── Rust Core (lib.rs) — sidecar lifecycle, dynamic port, IPC bridge
-└── Python Backend (PyInstaller sidecar)
-    ├── FastAPI server (main.py)
-    ├── SQLite database (pre-seeded for fast startup)
-    └── SessionRouter → SessionUnit → ClaudeSDKClient
+┌─────────────────────────────────┐     ┌──────────────────────────────┐
+│ Tauri Desktop App               │     │ launchd Daemon (24/7)        │
+│  ├─ React Frontend (webview)    │     │  ├─ FastAPI (port 18321)     │
+│  ├─ Rust Core (lib.rs)          │     │  ├─ Slack Socket Mode        │
+│  └─ Python Sidecar (random port)│     │  ├─ Channel Gateway          │
+│     └─ FastAPI + Claude SDK     │     │  └─ Background Jobs          │
+└─────────────────────────────────┘     └──────────────────────────────┘
+         ↕ backend.json (port discovery)          ↕ launchctl
 ```
-
-### Key Concepts
-- Python backend runs as a **sidecar process** managed by Tauri
-- Port is dynamically assigned via `portpicker` in Rust
-- Frontend uses `getBackendPort()` from `services/tauri.ts` to discover the port
-- Config source of truth: `~/.swarm-ai/config.json` (no DB for settings)
-- Credential delegation: AWS credential chain only — app never stores credentials
-- Pre-seeded database: `desktop/resources/seed.db` copied on first launch for fast startup
 
 ### Backend Structure
 ```
 backend/
-├── main.py                        # FastAPI entry (fast startup + full init paths)
-├── config.py                      # Settings from config.json
-├── core/
-│   ├── session_router.py          # Multi-session routing, concurrency cap, slot management
-│   ├── session_unit.py            # 5-state machine per tab (COLD/IDLE/STREAMING/WAITING_INPUT/DEAD)
-│   ├── session_registry.py        # Global singletons, startup/shutdown, kill_all_claude_processes
-│   ├── prompt_builder.py          # System prompt assembly, SDK options, MCP config
-│   ├── lifecycle_manager.py       # 12hr TTL, orphan reaper, hook serialization
-│   ├── session_utils.py           # Shared error helpers, retriable error detection
-│   ├── skill_creator.py           # AI skill generation agent config
-│   ├── session_manager.py         # Conversation session storage (DB + in-memory cache)
-│   ├── initialization_manager.py  # Startup orchestration, workspace caching
-│   ├── swarm_workspace_manager.py # SwarmWS filesystem (verify_integrity, projects)
-│   ├── context_directory_loader.py# Centralized .context/ loader (11 files P0-P10, L0/L1 cache)
-│   ├── system_prompt.py           # Non-file prompt sections (safety, datetime, runtime)
-│   ├── claude_environment.py      # SDK env config, credential validation
-│   ├── app_config_manager.py      # In-memory config cache (config.json, zero-IO reads)
-│   ├── skill_manager.py           # Filesystem skill discovery (3-tier: built-in > user > plugin)
-│   ├── projection_layer.py        # Skill symlink projection into .claude/skills/
-│   ├── plugin_manager.py          # Plugin marketplace, install/uninstall
-│   ├── security_hooks.py          # 4-layer PreToolUse defense chain
-│   ├── permission_manager.py      # In-memory asyncio permission signaling
-│   ├── chat_thread_manager.py     # ChatThread CRUD, project binding, summaries
-│   ├── content_accumulator.py     # O(1) content block deduplication
-│   ├── tool_summarizer.py         # Tool call summarization for UI
-│   ├── tscc_state_manager.py      # Thread-scoped cognitive context (LRU)
-│   └── credential_validator.py    # Pre-flight STS validation
-├── routers/                       # API endpoints (agents, chat, skills, mcp, settings, etc.)
-├── context/                       # Default context file templates (12 files)
-├── skills/                        # Built-in skill definitions
+├── main.py                    # FastAPI entry, startup lifespan, health endpoint
+├── config.py                  # Settings from ~/.swarm-ai/config.json
+├── core/                      # Session management, prompt building, lifecycle
+│   ├── session_router.py      # Multi-session routing, slot management
+│   ├── session_unit.py        # 5-state machine: COLD→IDLE→STREAMING→WAITING_INPUT→DEAD
+│   ├── prompt_builder.py      # System prompt assembly from 11 context files
+│   └── lifecycle_manager.py   # TTL kill, health check, dead cleanup
 ├── database/
-│   └── sqlite.py                  # SQLite with migrations, WAL mode
-└── schemas/                       # Pydantic models
+│   └── sqlite.py              # SQLite + WAL + migrations (uses utils.file_lock)
+├── utils/
+│   └── file_lock.py           # Cross-platform flock (fcntl/msvcrt) — USE THIS
+├── hooks/                     # Post-session hooks (context health, evolution, distillation)
+├── routers/                   # API endpoints
+├── channels/                  # Slack adapter, channel gateway
+├── skills/                    # 69 built-in skills (SKILL.md + INSTRUCTIONS.md)
+├── jobs/                      # Background job scheduler + handlers
+└── scripts/                   # CLI tools (locked_write.py, verify_build.py, etc.)
 ```
 
 ### Frontend Structure
 ```
 desktop/src/
-├── pages/
-│   ├── ChatPage.tsx               # Main chat interface (multi-tab, streaming, TSCC)
-│   ├── SettingsPage.tsx           # API & app configuration
-│   └── SkillsPage.tsx             # Skill browser (opened as modal from nav)
-├── hooks/
-│   ├── useUnifiedTabState.ts      # Single source of truth for all tab state
-│   ├── useChatStreamingLifecycle.ts # SSE streaming, messages, session management
-│   ├── useUnifiedAttachments.ts   # File attachment state management
-│   ├── useTSCCState.ts            # Thread-scoped cognitive context
-│   └── useRunningTaskCount.ts     # Background task tracking
-├── services/                      # API layer with snake_case ↔ camelCase conversion
-├── components/                    # UI components (chat, workspace, modals, common)
-└── contexts/                      # React contexts (Layout, Explorer, Theme, Health)
+├── services/tauri.ts          # isDesktop(), getApiBaseUrl(), backend init — START HERE for startup bugs
+├── components/common/BackendStartupOverlay.tsx  # Startup health polling + error display
+├── pages/ChatPage.tsx         # Main chat UI
+├── hooks/useChatStreamingLifecycle.ts  # SSE streaming
+└── services/                  # API layer (snake_case ↔ camelCase conversion)
 ```
 
-## API Naming Convention (CRITICAL)
+### API Naming Convention
 
-Backend uses `snake_case` (Python/Pydantic). Frontend uses `camelCase` (TypeScript).
+Backend: `snake_case` (Python). Frontend: `camelCase` (TypeScript). Each service file in `desktop/src/services/*.ts` has `toCamelCase()` functions. **When adding fields: update the Pydantic model + TypeScript interface + the conversion function.**
 
-Transformation functions in `desktop/src/services/*.ts` handle conversion:
+## Debugging Startup Failures
 
-| Service | File | Functions |
-|---------|------|-----------|
-| Agents | `agents.ts` | `toSnakeCase()`, `toCamelCase()` |
-| Skills | `skills.ts` | `toCamelCase()` |
-| MCP | `mcp.ts` | `toCamelCase()` |
-| Chat | `chat.ts` | `toSessionCamelCase()`, `toMessageCamelCase()` |
-| Workspace | `workspace.ts` | `projectToCamelCase()`, `projectUpdateToSnakeCase()` |
+If the app shows "Backend service failed to start":
 
-When adding new fields: add to backend Pydantic model (snake_case), frontend TypeScript interface (camelCase), AND update the corresponding `toCamelCase()` function.
+1. **Open DevTools Console** (Cmd+Option+I) — look for `[Platform]` and `[Health Check]` logs
+2. `[Platform] isDesktop=false` → Tauri detection broken (check `__TAURI_INTERNALS__`)
+3. `[Health Check] FATAL: got HTML instead of JSON` → API URL is wrong
+4. `[Health Check] Response: {status: "healthy"}` → Backend OK, problem is elsewhere
+5. Backend logs: `~/.swarm-ai/logs/backend-daemon.log` (daemon) or `backend.log` (sidecar)
 
-## Tab State Architecture
-
-Tab state uses a single `useUnifiedTabState` hook with `useRef<Map<string, UnifiedTab>>` + render counter pattern:
-
-- `tabMapRef`: Authoritative store (mutations don't re-render)
-- `renderCounter`: Bumped to trigger `useMemo` re-derivation of `openTabs`, `tabStatuses`, `activeTab`
-- `restoreFromFile()`: Loads tabs from `~/.swarm-ai/open_tabs.json` on startup
-- Debounced save effect persists tab state to file every 500ms
-
-Messages are loaded lazily from the backend API when a tab becomes active (not pre-loaded for all tabs).
-
-## Session ID Model
-
-One chat tab has exactly one stable App Session ID. The backend may create multiple Claude SDK clients (e.g. after restarts), each with its own SDK Session ID. The app layer maps all SDK session IDs back to the single app session ID for persistence and frontend communication.
-
-Key fields in `session_context`: `app_session_id` (stable, from frontend) and `sdk_session_id` (internal, from SDK init).
-
-## SSE Streaming Events
-
-```json
-{"type": "session_start", "sessionId": "..."}
-{"type": "assistant", "content": [...], "model": "..."}
-{"type": "tool_use", "content": [...]}
-{"type": "tool_result", "content": [...]}
-{"type": "ask_user_question", "toolUseId": "...", "questions": [...]}
-{"type": "cmd_permission_request", "requestId": "...", "toolName": "...", "reason": "..."}
-{"type": "result", "sessionId": "...", "durationMs": ..., "totalCostUsd": ...}
-{"type": "error", "error": "..."}
-```
-
-## Context and Memory System
-
-All agent context lives in `~/.swarm-ai/SwarmWS/.context/` — filesystem-only, no DB for context content.
-
-11 source files (P0-P10) assembled into the system prompt on every session start:
-- P0–P2 (SWARMAI, IDENTITY, SOUL): system defaults, never truncated, readonly (0o444)
-- P3 (AGENT): system default, truncatable
-- P4–P6 (USER, STEERING, TOOLS): user-customized, copy-only-if-missing (0o644)
-- P7–P8 (MEMORY, EVOLUTION): agent-owned, copy-only-if-missing (0o644)
-- P9–P10 (KNOWLEDGE, PROJECTS): user-customized, copy-only-if-missing (0o644)
-
-Key behaviors:
-- `ContextDirectoryLoader.ensure_directory()` runs at session start — two-mode copy (system overwrite vs user preserve)
-- Dynamic token budget: 40K for ≥200K models, 25K for 64K–200K, L0 compact for <64K
-- L1 cache with budget-tier validation (`<!-- budget:NNNNN -->` header) and git-first freshness check
-- MEMORY.md truncates from head (keeps newest), all others truncate from tail
-- DailyActivity: today + yesterday loaded ephemerally (2K token cap per file, disk never modified)
-- BOOTSTRAP.md: ephemeral first-run onboarding (not in CONTEXT_FILES, detected separately)
-- `locked_write.py`: fcntl.flock for safe MEMORY.md modification by skills
-
-## Security Architecture
-
-Four-layer PreToolUse defense chain:
-
-1. **pre_tool_logger**: All tools — logs tool name + input keys (observability, never blocks)
-2. **dangerous_command_blocker**: Bash only — 13 regex patterns (rm -rf /, fork bombs, etc.)
-3. **human_approval_hook**: Bash only — CmdPermissionManager glob detection → SSE permission dialog → persistent approval
-4. **skill_access_checker**: Skill only — validates skill in agent's allowed_skills set
-
-Additional layers:
-- **Workspace Isolation**: Per-agent directories in `<app_data_dir>/workspaces/{agent_id}/`
-- **File Access Control**: `can_use_tool` handler validates paths (when `global_user_mode=False`)
-- **Bash Sandboxing**: macOS/Linux sandbox with excluded commands
-- **Error sanitization**: `_build_error_event()` strips tracebacks in production mode
-- **CmdPermissionManager**: Filesystem-backed (`~/.swarm-ai/cmd_permissions/`), glob matching, shared across sessions
-- **PermissionManager**: In-memory asyncio signaling (events + queue) for HITL flow
-
-## Environment Variables
-
-```env
-# Config source of truth is ~/.swarm-ai/config.json, but these env vars work too:
-ANTHROPIC_API_KEY=sk-ant-xxx
-CLAUDE_CODE_USE_BEDROCK=true
-DEFAULT_MODEL=claude-opus-4-6
-DEBUG=true
-HOST=127.0.0.1
-PORT=8000
-```
-
-## Design System
-
-- **Font**: Inter (UI), JetBrains Mono (code)
-- **Icons**: Material Symbols Outlined
-- **Themes**: light, dark, system (CSS custom properties in index.css)
-- **Colors**: Always use `bg-[var(--color-*)]`, never hardcoded dark theme colors
-- **i18n**: `i18next` with locales in `desktop/src/i18n/locales/{en,zh}.json`
-
-## Debugging
+## Debugging Backend
 
 ```bash
-# Debug mode (macOS)
-open -n /Applications/SwarmAI.app --env SWARMAI_DEBUG=1
+# Daemon health
+curl -s http://127.0.0.1:18321/health | python3 -m json.tool
 
-# Backend logs
-tail -f ~/.swarm-ai/logs/backend.log
+# Daemon status
+./prod.sh daemon status
 
-# Frontend: Browser DevTools → Network → Filter: stream (for SSE)
+# Tail daemon logs
+./prod.sh daemon logs
+
+# Dev backend logs
+tail -f ~/.swarm-ai/logs/backend-dev.log
 ```
+
+## CI Configuration
+
+`.github/workflows/ci.yml` runs on every push to `main`:
+
+| Job | Platform | What | Time |
+|-----|----------|------|------|
+| `backend` | Ubuntu | Full pytest suite | ~3min |
+| `backend-windows` | Windows | Smoke import all modules (pkgutil auto-discover) | ~1min |
+| `frontend` | Ubuntu | `tsc --noEmit` + `npm run build` | ~2min |
+| `version-check` | Ubuntu | `sync-version.sh check` (6 files) | ~10s |
+
+Tag push (`v*`) triggers `release.yml`: builds macOS DMG + Windows installer + Hive tar.gz.
+
+## Key Design Decisions
+
+1. **Single agent with role-switching** > multi-agent orchestration (zero context transfer cost)
+2. **Memory sovereignty** — all memory self-owned (.context/MEMORY.md), never use platform memory
+3. **Daemon-first** — daemon is the primary process, sidecar is fallback
+4. **Filesystem-first** for skills and context — no DB, git-tracked, human-readable
+5. **Prevention over recovery** — timeouts, state guards > error handling
+
+## DDD Documents (Deep Context)
+
+For architectural decisions and lessons, read these in `~/.swarm-ai/SwarmWS/Projects/SwarmAI/`:
+
+| File | Contains |
+|------|----------|
+| `PRODUCT.md` | Vision, priorities, non-goals, competitive positioning |
+| `TECH.md` | Architecture details, patterns, conventions |
+| `IMPROVEMENT.md` | What worked, what failed, watch-for patterns |
+| `PROJECT.md` | Current status, recent decisions, open threads |
+
+For cross-session memory and corrections: `~/.swarm-ai/SwarmWS/.context/MEMORY.md`
