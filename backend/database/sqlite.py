@@ -53,7 +53,7 @@ class _WALConnection:
         # Enable WAL mode if not already done for this db_path in this process.
         if self._db_path not in _WALConnection._wal_initialized:
             await self._conn.execute("PRAGMA journal_mode=WAL")
-            await self._conn.execute("PRAGMA busy_timeout=100")
+            await self._conn.execute("PRAGMA busy_timeout=5000")
             # Checkpoint every 1000 pages (~4MB) to prevent WAL bloat.
             # Without this, WAL grows unbounded until a reader closes.
             await self._conn.execute("PRAGMA wal_autocheckpoint=1000")
@@ -61,7 +61,7 @@ class _WALConnection:
             logger.info("SQLite WAL mode enabled for %s", self._db_path)
         else:
             # Still set busy_timeout per connection (not persisted in DB file)
-            await self._conn.execute("PRAGMA busy_timeout=100")
+            await self._conn.execute("PRAGMA busy_timeout=5000")
         return self._conn
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -1708,7 +1708,7 @@ class SQLiteDatabase(BaseDatabase):
                 flock_exclusive(lock_fd)
                 async with aiosqlite.connect(str(self.db_path)) as conn:
                     await conn.execute("PRAGMA journal_mode=WAL")
-                    await conn.execute("PRAGMA busy_timeout=100")
+                    await conn.execute("PRAGMA busy_timeout=5000")
                     _WALConnection._wal_initialized.add(str(self.db_path))
                     await self._run_migrations(conn)
             finally:
@@ -1733,7 +1733,7 @@ class SQLiteDatabase(BaseDatabase):
                 # WAL persists in the DB file, so this is idempotent across restarts.
                 # busy_timeout: short (100ms) — app-level retry handles longer waits.
                 await conn.execute("PRAGMA journal_mode=WAL")
-                await conn.execute("PRAGMA busy_timeout=100")
+                await conn.execute("PRAGMA busy_timeout=5000")
                 _WALConnection._wal_initialized.add(str(self.db_path))
                 logger.info("DB init: WAL mode enabled")
 
