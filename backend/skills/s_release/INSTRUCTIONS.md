@@ -177,6 +177,20 @@ git push origin vX.Y.Z
 
 ### Step 9: Create GitHub Release
 
+> **Note:** Tag push triggers GitHub Actions which builds DMG + Hive tar.gz + checksums automatically (`build-macos`, `build-windows`, `build-hive` jobs). The CI creates a **draft** release with all artifacts. You can either:
+> - **Wait for CI** (~15 min) — then edit the draft release to add notes
+> - **Create manually** — if you need to ship before CI finishes (artifacts uploaded later)
+
+**Option A: Edit the CI-created draft** (preferred)
+```bash
+# Wait for CI to finish, then add release notes to the draft
+gh release edit vX.Y.Z --draft=false --notes "$(cat <<'EOF'
+...release notes...
+EOF
+)"
+```
+
+**Option B: Create manually** (if CI hasn't run yet)
 ```bash
 gh release create vX.Y.Z \
   --title "vX.Y.Z — <short highlight summary>" \
@@ -259,7 +273,10 @@ git push
 
 These are recommended before cutting a release, but this skill does NOT block on them:
 - [ ] All tests pass (`cd backend && python -m pytest --timeout=60`)
-- [ ] Build succeeds (`./prod.sh build` — runs PyInstaller + 41 checks)
+- [ ] Desktop build succeeds (`./prod.sh build` — PyInstaller + 38 capability checks)
+- [ ] Hive package verified (`./prod.sh release-hive` — tar.gz + 25-point verify)
 - [ ] No uncommitted changes in working tree (Step 0 checks this)
 
 If user wants to skip — their call. This skill only handles versioning.
+
+> **Unified release shortcut:** `./prod.sh release-all` runs Desktop build + Hive package + verification + offers to create GitHub Release — all in one command. Use this instead of manual Steps 8-9 when you want both artifacts.
