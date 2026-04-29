@@ -39,7 +39,9 @@ jobs:
         working-directory: ./backend
         # -n 0: disable xdist in CI — parallel workers cause "database is locked"
         # on shared temp DBs. Serial is slower (~5min vs ~3min) but reliable.
-        run: SWARMAI_SUITE=1 python -m pytest -n 0 --timeout=120 -x -q --tb=short
+        # -n 0: serial (no xdist) — avoids "database is locked" race on shared temp DBs
+        # No -x: don't stop on first failure — CI should report ALL failures, not cascade from one
+        run: SWARMAI_SUITE=1 python -m pytest -n 0 --timeout=120 -q --tb=short
         timeout-minutes: 10
 
   # ── Frontend: typecheck + build (fast, ~1min) ───────────────
