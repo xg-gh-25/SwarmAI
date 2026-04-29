@@ -310,6 +310,42 @@ Red flags for bad tests:
 
 For NLP/parsing code, the RED phase must include adversarial inputs: URLs, file paths, code snippets, empty/minimal strings, Unicode edge cases (CJK, Kana, Hangul, emoji), and multi-language mix. These are the inputs that break keyword extractors, parsers, and formatters.
 
+## Step 7: SOURCE VERIFICATION — verify framework decisions against docs
+
+**Only when the changeset uses framework-specific patterns** (React hooks, FastAPI
+decorators, boto3 calls, Pydantic models, SQLAlchemy queries, etc.). Skip for pure
+logic that works the same across all versions (loops, conditionals, data structures).
+
+For each non-trivial framework-specific decision in the changeset:
+
+1. **Detect** the framework + exact version from `pyproject.toml` / `package.json`
+2. **Fetch** the specific official documentation page for the pattern used
+   - Source hierarchy: Official docs > Official blog/changelog > MDN/web.dev > caniuse
+   - **NOT authoritative:** Stack Overflow, tutorials, blog posts, training data
+   - Fetch the **specific page**, not the homepage
+3. **Verify** the implementation matches current documented patterns
+   - Flag any deprecated APIs (this feeds RP26 in REVIEW)
+   - Flag any patterns that differ from the documented approach
+4. **Cite** the doc URL in a code comment for non-obvious patterns
+
+```
+SDD CHECK:
+  Framework: FastAPI 0.115.0 (from pyproject.toml)
+  Pattern: BackgroundTasks for async work
+  Doc: https://fastapi.tiangolo.com/tutorial/background-tasks/
+  Verified: ✅ matches current docs
+  Note: docs confirm BackgroundTasks runs after response, not fire-and-forget
+```
+
+**When to skip:**
+- Basic syntax (imports, function definitions, loops)
+- Patterns the agent has already verified in this session
+- User explicitly says "just do it" or "skip verification"
+
+**Why this exists:** LL08 found `asyncio.get_event_loop()` (deprecated in 3.12+)
+and `date('now')` UTC mismatch — both passed pipeline because no check verified
+against current docs. Training data goes stale; official docs don't.
+
 ## Artifact Publish
 
 ```bash

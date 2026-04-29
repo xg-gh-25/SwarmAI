@@ -71,7 +71,7 @@ STAGE_SCHEMAS: dict[str, dict[str, list[str]]] = {
     },
     "plan": {
         "required": ["acceptance_criteria"],
-        "recommended": ["approach", "data_model"],
+        "recommended": ["approach", "data_model", "boundaries", "success_criteria"],
     },
     "build": {
         "required": ["files_changed"],
