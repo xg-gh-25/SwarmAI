@@ -78,6 +78,61 @@ jobs:
         working-directory: ./desktop
         run: npm run build
 
+  # ── Backend Windows: smoke import (~1min) ────────────────────
+  # Catches Unix-only imports (fcntl, resource, grp) that crash on Windows.
+  # Full test suite is Linux-only; this just verifies all modules load.
+  backend-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        working-directory: ./backend
+        shell: bash
+        run: |
+          pip install uv
+          uv venv .venv
+          source .venv/Scripts/activate
+          uv pip install -e ".[dev]"
+          echo "$VIRTUAL_ENV/Scripts" >> $GITHUB_PATH
+          cp .env.example .env
+
+      - name: Smoke import — all critical modules
+        working-directory: ./backend
+        shell: bash
+        run: |
+          python -c "
+          import sys
+          failures = []
+          modules = [
+              'database.sqlite',
+              'core.daily_activity_writer',
+              'core.evolution_optimizer',
+              'hooks.evolution_maintenance_hook',
+              'hooks.skill_metrics_hook',
+              'hooks.context_health_hook',
+              'hooks.distillation_hook',
+              'utils.file_lock',
+              'config',
+              'main',
+          ]
+          for mod in modules:
+              try:
+                  __import__(mod)
+                  print(f'  OK  {mod}')
+              except Exception as e:
+                  print(f'  FAIL {mod}: {e}')
+                  failures.append(mod)
+          if failures:
+              print(f'\n{len(failures)} module(s) failed to import on Windows')
+              sys.exit(1)
+          print(f'\nAll {len(modules)} modules imported successfully on Windows')
+          "
+
   # ── Version consistency check ───────────────────────────────
   version-check:
     runs-on: ubuntu-latest
