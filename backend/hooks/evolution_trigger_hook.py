@@ -39,7 +39,9 @@ class FailureRecord:
     signature: str
     count: int = 0
     last_seen: float = 0.0
-    last_nudged: float = 0.0
+    # -inf ensures first nudge is never cooldown-blocked.
+    # time.monotonic() can be < NUDGE_COOLDOWN_SECONDS on fresh VMs.
+    last_nudged: float = float("-inf")
 
 
 class ToolFailureTracker:
