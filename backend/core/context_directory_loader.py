@@ -338,6 +338,26 @@ class ContextDirectoryLoader:
             except OSError as exc:
                 logger.warning("Failed to copy %s → %s: %s", src, dest, exc)
 
+        # Provision system-owned reference files that live in .context/ but
+        # are NOT part of CONTEXT_FILES (not injected into system prompt).
+        # Always-overwrite from template, like system-owned context files.
+        _SYSTEM_REFERENCE_FILES = ["CONTEXT.md"]
+        for filename in _SYSTEM_REFERENCE_FILES:
+            if self.templates_dir is None:
+                break
+            src = self.templates_dir / filename
+            if not src.is_file():
+                continue
+            dest = self.context_dir / filename
+            try:
+                src_bytes = src.read_bytes()
+                if dest.exists() and dest.read_bytes() == src_bytes:
+                    continue  # Already current
+                dest.write_bytes(src_bytes)
+                refreshed.append(filename)
+            except OSError as exc:
+                logger.warning("Failed to copy %s → %s: %s", src, dest, exc)
+
         # Provision agent-managed files that live in .context/ but are NOT
         # part of the CONTEXT_FILES list.  Copy-only-if-missing (0o644).
         # EVOLUTION.md was moved into CONTEXT_FILES (P8) so it loads into
