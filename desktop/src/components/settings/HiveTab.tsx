@@ -15,6 +15,16 @@ import {
 } from '../../services/hive';
 import { openExternal } from '../../utils/openExternal';
 import { copyToClipboard } from '../../utils/clipboard';
+import { isApiError } from '../../services/api';
+
+/** Extract the most useful message from an API error. */
+function friendlyError(e: unknown): string {
+  if (isApiError(e)) {
+    // Prefer .detail (backend's actual message), fall back to .message
+    return e.detail || e.message;
+  }
+  return e instanceof Error ? e.message : String(e);
+}
 
 const STATUS_COLORS: Record<string, string> = {
   running: 'text-green-400',
@@ -230,7 +240,7 @@ function InstanceCard({ instance: inst, onAction }: { instance: HiveInstance; on
     setActing(true);
     setActionError(null);
     try { await action(); onAction(); }
-    catch (e) { setActionError(e instanceof Error ? e.message : String(e)); }
+    catch (e) { setActionError(friendlyError(e)); }
     finally { setActing(false); }
   };
 
@@ -511,7 +521,7 @@ function AccountCard({ account: acc, onDelete }: { account: HiveAccount; onDelet
       await hiveService.deleteAccount(acc.id);
       onDelete();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(friendlyError(e));
     } finally {
       setDeleting(false);
     }
@@ -582,10 +592,10 @@ function AddAccountDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
   const [error, setError] = useState('');
 
   useEffect(() => {
-    const handleEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const handleEsc = (e: KeyboardEvent) => { if (e.key === 'Escape' && !saving) onClose(); };
     window.addEventListener('keydown', handleEsc);
     return () => window.removeEventListener('keydown', handleEsc);
-  }, [onClose]);
+  }, [onClose, saving]);
 
   const handleSave = async () => {
     if (!accountId.match(/^\d{12}$/)) { setError('Account ID must be 12 digits'); return; }
@@ -598,7 +608,7 @@ function AddAccountDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
       await hiveService.createAccount({ accountId, label, authMethod, authConfig, defaultRegion: region });
       onSaved();
     } catch (e) {
-      setError(String(e));
+      setError(friendlyError(e));
     } finally {
       setSecretKey('');
       setAccessKeyId('');
@@ -607,7 +617,7 @@ function AddAccountDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={saving ? undefined : onClose}>
       <div className="bg-[var(--color-card)] rounded-xl p-6 w-[440px] max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <h3 className="text-lg font-semibold text-[var(--color-text)] mb-4">Add AWS Account</h3>
 
@@ -660,7 +670,7 @@ function AddAccountDialog({ onClose, onSaved }: { onClose: () => void; onSaved: 
         </div>
 
         <div className="flex justify-end gap-2 mt-6">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">Cancel</button>
+          <button onClick={onClose} disabled={saving} className="px-4 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50">Cancel</button>
           <button onClick={handleSave} disabled={saving || !accountId}
             className="px-4 py-2 text-sm bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 disabled:opacity-50">
             {saving ? 'Saving...' : 'Add Account'}
@@ -683,13 +693,16 @@ function DeployHiveDialog({ accounts, onClose, onDeployed }: { accounts: HiveAcc
   const [error, setError] = useState('');
 
   useEffect(() => {
-    const handleEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const handleEsc = (e: KeyboardEvent) => { if (e.key === 'Escape' && !deploying) onClose(); };
     window.addEventListener('keydown', handleEsc);
     return () => window.removeEventListener('keydown', handleEsc);
-  }, [onClose]);
+  }, [onClose, deploying]);
 
   const handleDeploy = async () => {
-    if (!name.match(/^[a-z][a-z0-9-]*$/)) { setError('Name: lowercase, letters/numbers/hyphens, start with letter'); return; }
+    if (!name.match(/^[a-z][a-z0-9]([a-z0-9-]{0,60}[a-z0-9])?$/)) {
+      setError('Name: 2-63 chars, lowercase letters/numbers/hyphens, must start and end with a letter or number');
+      return;
+    }
     setDeploying(true);
     setError('');
     try {
@@ -704,14 +717,14 @@ function DeployHiveDialog({ accounts, onClose, onDeployed }: { accounts: HiveAcc
       });
       onDeployed();
     } catch (e) {
-      setError(String(e));
+      setError(friendlyError(e));
     } finally {
       setDeploying(false);
     }
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={deploying ? undefined : onClose}>
       <div className="bg-[var(--color-card)] rounded-xl p-6 w-[440px]" onClick={e => e.stopPropagation()}>
         <h3 className="text-lg font-semibold text-[var(--color-text)] mb-4">Deploy New Hive</h3>
 
@@ -756,7 +769,7 @@ function DeployHiveDialog({ accounts, onClose, onDeployed }: { accounts: HiveAcc
         </div>
 
         <div className="flex justify-end gap-2 mt-6">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">Cancel</button>
+          <button onClick={onClose} disabled={deploying} className="px-4 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50">Cancel</button>
           <button onClick={handleDeploy} disabled={deploying || !name || !accountRef}
             className="px-4 py-2 text-sm bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 disabled:opacity-50">
             {deploying ? 'Deploying...' : 'Deploy'}
