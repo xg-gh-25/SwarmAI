@@ -173,8 +173,16 @@ def verify_binary(binary_path: str) -> tuple[list[str], list[str], list[str]]:
 
     try:
         # Wait for health endpoint
-        if not _wait_for_health(port, timeout=30):
-            print("❌ Binary failed to start within 30s")
+        # 90s: PyInstaller one-file mode extracts 140MB+ to temp on first run.
+        # On CI runners with slow I/O, 30s isn't enough.
+        if not _wait_for_health(port, timeout=90):
+            print("❌ Binary failed to start within 90s")
+            # Dump captured stdout for diagnosis
+            if proc.poll() is not None:
+                print(f"  Process exited with code {proc.returncode}")
+            out = proc.stdout.read(4096) if proc.stdout else b""
+            if out:
+                print(f"  Last output:\n{out.decode('utf-8', errors='replace')[-2000:]}")
             return [], ["binary_startup"], []
 
         # Verify capabilities via the binary's Python environment
