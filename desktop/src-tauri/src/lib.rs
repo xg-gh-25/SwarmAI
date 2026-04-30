@@ -1716,16 +1716,24 @@ pub fn run() {
                     { WebviewUrl::default() }
                 };
 
-                let _window = WebviewWindowBuilder::new(app, "main", url)
+                let mut builder = WebviewWindowBuilder::new(app, "main", url)
                     .title("SwarmAI")
                     .inner_size(1400.0, 900.0)
                     .min_inner_size(1024.0, 768.0)
                     .resizable(true)
                     .fullscreen(false)
                     .center()
-                    .title_bar_style(tauri::TitleBarStyle::Overlay)
-                    .hidden_title(true)
-                    .zoom_hotkeys_enabled(false)
+                    .zoom_hotkeys_enabled(false);
+
+                // title_bar_style and hidden_title are macOS-only APIs
+                #[cfg(target_os = "macos")]
+                {
+                    builder = builder
+                        .title_bar_style(tauri::TitleBarStyle::Overlay)
+                        .hidden_title(true);
+                }
+
+                let _window = builder
                     .on_navigation(move |url: &tauri::Url| {
                         match url.scheme() {
                             "tauri" | "asset" => true,
