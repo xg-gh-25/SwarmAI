@@ -515,6 +515,8 @@ class DistillationTriggerHook:
         # Write corrections and competence to EVOLUTION.md
         if all_corrections:
             self._write_corrections(evolution_path, all_corrections)
+            # Auto-trigger steeringify proposals when new corrections are written
+            self._check_steeringify_proposals(evolution_path, ws_path)
         if all_competence:
             self._write_competence(evolution_path, all_competence)
 
@@ -1132,6 +1134,70 @@ class DistillationTriggerHook:
         logger.info(
             "Wrote %d correction entries to EVOLUTION.md", len(corrections)
         )
+
+    @staticmethod
+    def _check_steeringify_proposals(
+        evolution_path: Path,
+        ws_path: Path,
+    ) -> None:
+        """Check if recurring corrections should become STEERING.md rules.
+
+        Writes proposals to a JSON file for session briefing pickup.
+        Does NOT auto-write to STEERING.md — user approval required.
+        """
+        try:
+            from skills.s_steeringify.steeringify import (
+                extract_rule_candidates,
+                cluster_and_filter,
+            )
+
+            evolution_text = evolution_path.read_text(encoding="utf-8")
+            candidates = extract_rule_candidates(evolution_text)
+            if not candidates:
+                return
+
+            # Load existing STEERING.md for dedup
+            steering_path = ws_path / ".context" / "STEERING.md"
+            steering_text = ""
+            if steering_path.exists():
+                steering_text = steering_path.read_text(encoding="utf-8")
+
+            proposals = cluster_and_filter(
+                candidates,
+                min_recurrence=2,
+                steering_text=steering_text,
+            )
+
+            # Only surface proposals that aren't already in STEERING.md
+            new_proposals = [p for p in proposals if not p.already_in_steering]
+            if not new_proposals:
+                return
+
+            # Write proposals JSON for briefing pickup
+            import json
+            proposals_path = ws_path / ".context" / "steeringify_proposals.json"
+            data = [
+                {
+                    "title": p.title,
+                    "rule_text": p.rule_text,
+                    "source_ids": p.source_ids,
+                    "confidence": p.confidence,
+                    "already_in_agent": p.already_in_agent,
+                }
+                for p in new_proposals
+            ]
+            proposals_path.write_text(
+                json.dumps(data, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            logger.info(
+                "Steeringify: %d rule proposals written to %s",
+                len(new_proposals),
+                proposals_path,
+            )
+        except Exception as exc:
+            # Steeringify is best-effort — never block distillation
+            logger.debug("Steeringify check failed: %s", exc)
 
     @staticmethod
     def _run_locked_write(
