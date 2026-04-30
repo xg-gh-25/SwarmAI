@@ -213,6 +213,10 @@ jobs:
           path: dist/checksums.txt
 
   publish:
+    # Run even if Windows fails — macOS + Hive artifacts still ship.
+    # 'always()' runs on any outcome; the 'if' filters to skip only
+    # when ALL builds fail (prepare always succeeds so we need to check builds).
+    if: ${{ always() && (needs.build-macos.result == 'success' || needs.build-hive.result == 'success') }}
     needs: [prepare, build-macos, build-windows, build-hive]
     runs-on: ubuntu-latest
     steps:
