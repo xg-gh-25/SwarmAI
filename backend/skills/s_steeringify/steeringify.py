@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 
 # ── Data models ──
@@ -317,7 +318,6 @@ def write_approved_rules(
     new_rules = []
     for r in rules_to_write:
         sources = ", ".join(r.source_ids)
-        from datetime import date
         today = date.today().isoformat()
         block = (
             f"\n### {r.title}\n"
