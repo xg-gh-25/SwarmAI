@@ -1,5 +1,5 @@
 ---
-name: Deliver
+name: deliver
 description: >
   Package pipeline outputs into structured deliverables: artifact bundles,
   PR descriptions, decision logs, attention flags, and delivery reports.

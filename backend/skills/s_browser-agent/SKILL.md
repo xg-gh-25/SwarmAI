@@ -1,5 +1,5 @@
 ---
-name: Browser Agent
+name: browser-agent
 description: >
   DOM-based browser automation: navigate websites, read compressed page content, click elements,
   fill forms, extract data, and take screenshots using Playwright.

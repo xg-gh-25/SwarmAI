@@ -1,5 +1,5 @@
 ---
-name: PPTX Editor
+name: pptx
 description: >
   Presentation creation, editing, and analysis (.pptx files).
   TRIGGER: any request involving PowerPoint, presentations, slides, or speaker notes.

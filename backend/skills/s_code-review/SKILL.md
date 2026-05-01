@@ -1,5 +1,5 @@
 ---
-name: Code Review
+name: code-review
 description: >
   Structured code review for PRs, files, or diffs with actionable findings.
   TRIGGER: "review code", "code review", "review PR", "review this file", "check code quality", "review my changes", "PR review".

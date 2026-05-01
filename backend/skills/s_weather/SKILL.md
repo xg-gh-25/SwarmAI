@@ -1,5 +1,5 @@
 ---
-name: Weather
+name: weather
 description: >
   Current weather conditions and forecasts for any location worldwide. No API key required.
   TRIGGER: "weather", "temperature", "forecast", "is it raining", "what's the weather".

@@ -1,5 +1,5 @@
 ---
-name: GitHub Research
+name: github-research
 description: >
   Multi-round deep research on GitHub repositories, orgs, and open-source projects.
   TRIGGER: "research this repo", "evaluate this project", "github deep dive", "repo analysis", "what's the state of [project]".

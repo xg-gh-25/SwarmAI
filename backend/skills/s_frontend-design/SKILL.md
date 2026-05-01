@@ -1,5 +1,5 @@
 ---
-name: Frontend Design
+name: frontend-design
 description: >
   Create production-grade frontend interfaces with design intelligence database (67 styles, 161 palettes, 57 fonts, 161 industry rules).
   TRIGGER: "build a landing page", "create a website", "design a UI", "frontend prototype", "interactive page", "HTML page", "web app mockup".

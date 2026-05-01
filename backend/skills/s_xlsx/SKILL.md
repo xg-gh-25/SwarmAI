@@ -1,5 +1,5 @@
 ---
-name: XLSX Editor
+name: xlsx
 description: >
   Spreadsheet creation, editing, and analysis (.xlsx, .xlsm, .csv, .tsv).
   TRIGGER: any request involving spreadsheets, Excel files, CSV data, formulas, or data visualization.

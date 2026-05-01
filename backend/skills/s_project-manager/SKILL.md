@@ -1,5 +1,5 @@
 ---
-name: Project Manager
+name: project-manager
 description: >
   Create, list, edit, and delete projects with DDD (Domain-Driven Design)
   structure. Each project gets 4 knowledge documents (PRODUCT.md, TECH.md,

@@ -1,5 +1,5 @@
 ---
-name: Token Estimator
+name: estimate-tokens
 description: >
   Estimate token count for files using the bundled script.
   TRIGGER: "estimate tokens", "count tokens", "token usage", "context window size".

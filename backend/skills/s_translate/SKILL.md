@@ -1,5 +1,5 @@
 ---
-name: Translate
+name: translate
 description: >
   Translate text, documents, and code between languages. Supports files, inline text, and batch operations.
   TRIGGER: "translate", "translation", "convert to Spanish", "in Japanese", "localize", "i18n", "multilingual".

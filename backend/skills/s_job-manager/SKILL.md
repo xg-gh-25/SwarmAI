@@ -1,5 +1,5 @@
 ---
-name: Job Manager
+name: job-manager
 description: >
   Create, list, edit, pause, resume, and delete scheduled jobs in the Swarm Job System.
   Jobs run in the background via launchd — independently of chat sessions.

@@ -1,5 +1,5 @@
 ---
-name: Self-Evolution Engine
+name: self-evolution
 description: >
   Detects capability gaps, optimization opportunities, and stuck states.
   Orchestrates evolution loops with up to 3 attempts per trigger.

@@ -1,5 +1,5 @@
 ---
-name: Image Generation
+name: image-gen
 description: >
   Generate images using structured prompts with AI image generation APIs and tools.
   TRIGGER: "generate image", "create image", "make a picture", "image for social", "thumbnail", "banner", "illustration", "visual content".

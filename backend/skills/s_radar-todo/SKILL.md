@@ -1,5 +1,5 @@
 ---
-name: Radar ToDo
+name: radar-todo
 description: >
   Manage SwarmAI Radar ToDos — add, list, edit, complete, and delete items that
   appear in the Radar sidebar. Each todo is a self-contained work packet: when

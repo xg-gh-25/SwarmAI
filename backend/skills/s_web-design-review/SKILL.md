@@ -1,5 +1,5 @@
 ---
-name: Web Design Review
+name: web-design-review
 description: >
   Review UI code for design quality, accessibility, and web interface best practices.
   TRIGGER: "review my UI", "check accessibility", "design review", "UI audit", "review this page", "check my frontend".

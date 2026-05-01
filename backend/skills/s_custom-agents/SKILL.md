@@ -1,5 +1,5 @@
 ---
-name: Custom Agents
+name: custom-agents
 description: >
   Create and configure SwarmAI custom agents with tools, permissions, resources, and hooks.
   TRIGGER: "create agent", "custom agent", "agent configuration", "configure agent".

@@ -1,5 +1,5 @@
 ---
-name: PDF Toolkit
+name: pdf
 description: >
   PDF manipulation: extract text/tables, create, merge/split, fill forms.
   TRIGGER: any request involving PDF files, PDF forms, or PDF generation.

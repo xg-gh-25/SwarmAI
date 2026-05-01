@@ -1,5 +1,5 @@
 ---
-name: Save Activity
+name: save-activity
 description: >
   Extract key points from the current conversation into today's DailyActivity log.
   TRIGGER: "save activity", "save daily activity", "log today's activity".

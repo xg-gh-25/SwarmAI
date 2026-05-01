@@ -1,5 +1,5 @@
 ---
-name: Scheduler
+name: scheduler
 description: >
   Create, manage, and list scheduled tasks using crontab and launchd (macOS). No external dependencies.
   TRIGGER: "schedule", "cron", "crontab", "run every", "recurring task", "automate daily", "launchd", "scheduled job", "run at".

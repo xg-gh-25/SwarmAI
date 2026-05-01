@@ -1,5 +1,5 @@
 ---
-name: Google Workspace
+name: google-workspace
 description: >
   Manage Gmail, Google Calendar, Drive, Sheets, Docs, Contacts, and Tasks via the gogcli CLI.
   TRIGGER: "gmail", "google calendar", "google drive", "google sheets", "google docs", "google contacts", "google tasks", "gog".

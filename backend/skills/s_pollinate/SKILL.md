@@ -1,5 +1,5 @@
 ---
-name: Pollinate
+name: pollinate
 description: >
   Swarm's media value delivery engine. Transforms messages into optimized
   media packages (poster, video, narrative, shorts, README) via an 8-stage

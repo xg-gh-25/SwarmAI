@@ -1,5 +1,5 @@
 ---
-name: Workspace Organizer
+name: workspace-organizer
 description: >
   Batch file operations for SwarmWS: organize, archive, clean up, and restructure workspace contents.
   Always previews before executing. Uses mv (not rm) for safety.

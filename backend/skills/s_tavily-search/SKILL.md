@@ -1,5 +1,5 @@
 ---
-name: Tavily Search
+name: tavily-search
 description: >
   AI-powered web search and content extraction via Tavily API. Search the web, get AI answers, extract content from URLs.
   TRIGGER: "search the web", "web search", "tavily", "find online", "search for", "latest news about", "what's happening with".

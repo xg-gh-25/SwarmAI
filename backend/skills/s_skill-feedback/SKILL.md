@@ -1,5 +1,5 @@
 ---
-name: Skill Feedback
+name: skill-feedback
 description: >
   Generate improvement reports for skills or CLI packages based on session learnings.
   TRIGGER: "skill-feedback", "capture improvements", "session learnings".

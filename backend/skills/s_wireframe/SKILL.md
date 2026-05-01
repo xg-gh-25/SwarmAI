@@ -1,5 +1,5 @@
 ---
-name: Wireframe
+name: wireframe
 description: >
   Generate interactive wireframes as Excalidraw scenes from natural language descriptions.
   Outputs a self-contained HTML file that opens in Excalidraw with the wireframe pre-loaded.

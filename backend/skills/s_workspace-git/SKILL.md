@@ -1,5 +1,5 @@
 ---
-name: Workspace Git
+name: workspace-git
 description: >
   Git operations scoped to SwarmWS: status, diff, commit, log, search, stash, and branch management.
   Provides structured output for the agent to reason about workspace changes.

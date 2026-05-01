@@ -1,5 +1,5 @@
 ---
-name: Finance
+name: finance
 description: >
   Invoice generation, expense tracking, financial calculations, and basic bookkeeping. Zero external dependencies.
   TRIGGER: "invoice", "expense", "budget", "profit", "revenue", "financial", "accounting", "receipt", "tax calculation", "ROI", "cashflow", "P&L".

@@ -1,5 +1,5 @@
 ---
-name: s_meddpicc-scorecard
+name: meddpicc-scorecard
 description: >
   Score Salesforce opportunities using the AWS MEDDPICC framework (8 dimensions, 100 points).
   Pulls data from AWSentral MCP, scores each dimension against evidence, checks stage gates,
