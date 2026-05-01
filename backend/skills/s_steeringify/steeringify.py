@@ -72,13 +72,17 @@ _DESCRIPTIVE = re.compile(
     re.IGNORECASE,
 )
 
-# Cross-reference patterns: "same as C007", "Related: C008", "C007's Nth", etc.
+# Cross-reference patterns: explicit phrases first, bare C\d+ catch-all last.
+# Explicit phrasings ("same as C007", "Related: C008") get full confidence.
+# Bare C-refs within Pattern fields ("see C007", "cf. C007") are still caught.
 _CROSS_REF = re.compile(
     r"(?:"
     r"same (?:as |rule as |pattern as |root cause as )(C\d+)"
     r"|Related:\s*(C\d+)"
     r"|(C\d+)(?:'s|s)\s+\d+(?:st|nd|rd|th)"
     r"|(C\d+) was a specific"
+    r"|(?:see |cf\.? |per |from )(C\d+)"
+    r"|\b(C\d{3,})\b"
     r")",
     re.IGNORECASE,
 )
@@ -226,7 +230,7 @@ def group_and_propose(
     def union(a: str, b: str) -> None:
         ra, rb = find(a), find(b)
         if ra != rb:
-            parent[ra] = rb
+            parent[ra] = rb  # No rank — O(n) worst case, fine for <100 entries
 
     # Connect entries via cross-references
     for entry in entries:
@@ -312,13 +316,20 @@ def group_and_propose(
 
 
 def _text_contains_rule(haystack: str, rule_lower: str) -> bool:
-    """Check if a rule's key phrases already appear in a text body."""
+    """Check if a rule's key phrases already appear in a text body.
+
+    Uses a sliding window of min(5, len(words)) to catch short rules
+    that would otherwise slip through a fixed 5-word window.
+    """
     if not haystack:
         return False
     haystack_lower = haystack.lower()
     words = rule_lower.split()
-    for i in range(len(words) - 4):
-        phrase = " ".join(words[i : i + 5])
+    window = min(5, len(words))
+    if window < 2:
+        return rule_lower in haystack_lower
+    for i in range(len(words) - window + 1):
+        phrase = " ".join(words[i : i + window])
         if phrase in haystack_lower:
             return True
     return False
@@ -343,10 +354,12 @@ def _detect_violation(
     for entry in group:
         for rule in entry.bold_rules:
             words = rule.lower().split()
-            # Check 4-word windows for overlap
-            for i in range(len(words) - 3):
-                phrase = " ".join(words[i : i + 4])
-                if len(phrase) >= 15 and phrase in steering_lower:
+            window = min(4, len(words))
+            if window < 2:
+                continue
+            for i in range(len(words) - window + 1):
+                phrase = " ".join(words[i : i + window])
+                if phrase in steering_lower:
                     return f"Rule about '{phrase}' already in STEERING.md but {entry.id} re-raised the issue"
 
     return None
@@ -361,6 +374,7 @@ MAX_ACTIVE_RULES = 10
 def write_approved_rules(
     rules: list[ProposedRule],
     steering_path: Path,
+    max_rules: int = MAX_ACTIVE_RULES,
 ) -> int:
     """Append approved rules to STEERING.md Standing Rules section.
 
@@ -385,7 +399,7 @@ def write_approved_rules(
 
     # Count existing steeringify rules
     existing_count = content.lower().count("> source: c")
-    remaining_slots = MAX_ACTIVE_RULES - existing_count
+    remaining_slots = max_rules - existing_count
 
     if remaining_slots <= 0:
         return 0

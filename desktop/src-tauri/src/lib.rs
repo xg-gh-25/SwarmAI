@@ -755,26 +755,31 @@ async fn sync_daemon_version(_app: &tauri::AppHandle, app_version: &str) -> Resu
     //
     // bootout sends SIGTERM but the process may take seconds to drain hooks
     // and disconnect sessions.  Poll until the process is actually gone.
-    let daemon_binary_path = format!("{}/.swarm-ai/daemon/python-backend", home);
+    //
+    // Use `launchctl print` to get the daemon PID — this is authoritative
+    // and avoids pgrep -f false positives (monitoring scripts, tail -f, etc.).
+    // Fallback to checking if the service label exists at all.
+    let service_label = "com.swarmai.backend";
+    let service_target = format!("{}/{}", gui_target, service_label);
     let mut waited = 0u32;
     loop {
-        // Check if any process is still running the daemon binary
-        let pgrep = std::process::Command::new("pgrep")
-            .args(["-f", &daemon_binary_path])
+        // Check via launchctl: if the service is gone, daemon is dead
+        let lc = std::process::Command::new("launchctl")
+            .args(["print", &service_target])
             .output();
-        let still_running = pgrep
-            .map(|o| o.status.success())
+        let still_running = lc
+            .map(|o| o.status.success())  // exits 0 only if service exists
             .unwrap_or(false);
 
         if !still_running {
-            println!("[Tauri] Daemon process exited after {}s", waited);
+            println!("[Tauri] Daemon service exited after {}s", waited);
             break;
         }
         if waited >= 15 {
-            // Force kill after 15s — can't wait forever
-            println!("[Tauri] Daemon still running after {}s — sending SIGKILL", waited);
-            let _ = std::process::Command::new("pkill")
-                .args(["-9", "-f", &daemon_binary_path])
+            // Force kill via launchctl kill — cleaner than pkill -9 -f
+            println!("[Tauri] Daemon still running after {}s — sending SIGKILL via launchctl", waited);
+            let _ = std::process::Command::new("launchctl")
+                .args(["kill", "SIGKILL", &service_target])
                 .output();
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             break;

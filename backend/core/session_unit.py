@@ -1788,6 +1788,12 @@ class SessionUnit:
                         or getattr(message, "error", "")
                     )
 
+                    from .session_utils import (
+                        _is_retriable_error,
+                        _sanitize_sdk_error,
+                        _build_error_event,
+                    )
+
                     if self._interrupted:
                         self._interrupted = False
                         self._transition(SessionState.IDLE)
@@ -1798,10 +1804,6 @@ class SessionUnit:
                         # commands).  Only suppress if error_text is
                         # genuinely empty (pure cancellation).
                         if error_text.strip():
-                            from .session_utils import (
-                                _sanitize_sdk_error,
-                                _build_error_event,
-                            )
                             friendly, suggested = _sanitize_sdk_error(
                                 error_text
                             )
@@ -1812,12 +1814,10 @@ class SessionUnit:
                             )
                         return
 
-                    from .session_utils import _is_retriable_error
                     if _is_retriable_error(error_text):
                         raise RuntimeError(f"Retriable SDK error: {error_text}")
 
                     # Non-retriable error — yield error event
-                    from .session_utils import _sanitize_sdk_error, _build_error_event
                     friendly, suggested = _sanitize_sdk_error(error_text)
                     yield _build_error_event(
                         code="SDK_ERROR", message=friendly, suggested_action=suggested,
