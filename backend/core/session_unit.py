@@ -745,7 +745,7 @@ class SessionUnit:
                 # Fall through to retry/error handling below.
 
             # ── Retry loop for retriable errors ──────────────────
-            if _is_retriable_error(error_str) and self._retry_count < self.MAX_RETRY_ATTEMPTS:
+            if _is_retriable_error(error_str, tb_str) and self._retry_count < self.MAX_RETRY_ATTEMPTS:
                 async for event in self._retry_with_resume(
                     query_content, options, config, error_str, tb_str,
                 ):
@@ -806,8 +806,9 @@ class SessionUnit:
             return  # success — state is IDLE
         except Exception as exc:
             error_str = str(exc)
+            spawn_tb_str = traceback.format_exc()
 
-        if _is_retriable_error(error_str):
+        if _is_retriable_error(error_str, spawn_tb_str):
             logger.warning(
                 "Retriable error during spawn for session %s, "
                 "will retry (attempt %d/%d): %s",
@@ -818,7 +819,7 @@ class SessionUnit:
             )
             await self._crash_to_cold_async()
             while (
-                _is_retriable_error(error_str)
+                _is_retriable_error(error_str, spawn_tb_str)
                 and self._retry_count < self.MAX_RETRY_ATTEMPTS
             ):
                 self._retry_count += 1
@@ -1008,8 +1009,9 @@ class SessionUnit:
         resume_session_id = self._sdk_session_id
         _consecutive_timeouts = 0
 
+        _tb_str = initial_tb_str or ""
         while (
-            _is_retriable_error(error_str)
+            _is_retriable_error(error_str, _tb_str)
             and self._retry_count < self.MAX_RETRY_ATTEMPTS
         ):
             self._retry_count += 1
@@ -1210,7 +1212,8 @@ class SessionUnit:
             except Exception as spawn_exc:
                 spawn_tb = traceback.format_exc()
                 error_str = str(spawn_exc)
-                if _is_retriable_error(error_str):
+                _tb_str = spawn_tb
+                if _is_retriable_error(error_str, spawn_tb):
                     logger.warning(
                         "Retry %d spawn failed (retriable): %s",
                         self._retry_count, error_str[:120],
@@ -1789,6 +1792,24 @@ class SessionUnit:
                         self._interrupted = False
                         self._transition(SessionState.IDLE)
                         self.last_used = time.time()
+                        # Still yield the error so the user sees what
+                        # went wrong — silently swallowing SDK errors
+                        # causes blank responses (e.g. unknown slash
+                        # commands).  Only suppress if error_text is
+                        # genuinely empty (pure cancellation).
+                        if error_text.strip():
+                            from .session_utils import (
+                                _sanitize_sdk_error,
+                                _build_error_event,
+                            )
+                            friendly, suggested = _sanitize_sdk_error(
+                                error_text
+                            )
+                            yield _build_error_event(
+                                code="SDK_ERROR",
+                                message=friendly,
+                                suggested_action=suggested,
+                            )
                         return
 
                     from .session_utils import _is_retriable_error

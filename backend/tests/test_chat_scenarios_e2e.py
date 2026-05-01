@@ -724,3 +724,101 @@ class TestRetriableErrors:
     def test_random_error_not_retriable(self):
         from core.session_utils import _is_retriable_error
         assert not _is_retriable_error("Some random error")
+
+    def test_zlib_from_network_is_retriable(self):
+        """zlib errors from Bedrock/network ARE retriable (no traceback)."""
+        from core.session_utils import _is_retriable_error
+        assert _is_retriable_error(
+            "Error -3 while decompressing data: incorrect header check"
+        )
+
+    def test_zlib_from_network_with_boto_traceback_is_retriable(self):
+        """zlib errors from boto3/urllib3 responses ARE retriable."""
+        from core.session_utils import _is_retriable_error
+        tb = (
+            "File \"botocore/httpsession.py\", line 123, in send\n"
+            "File \"urllib3/response.py\", line 456, in read\n"
+            "zlib.error: Error -3 while decompressing data"
+        )
+        assert _is_retriable_error(
+            "Error -3 while decompressing data: incorrect header check",
+            tb_str=tb,
+        )
+
+    def test_zlib_from_pyinstaller_archive_NOT_retriable(self):
+        """zlib errors from pyimod01_archive.extract() are NOT retriable.
+
+        PyInstaller archive corruption means the frozen binary is damaged.
+        Retrying reads the same corrupt data — only daemon restart helps.
+        """
+        from core.session_utils import _is_retriable_error
+        tb = (
+            "File \"routers/system.py\", line 742, in get_session_briefing\n"
+            "File \"<frozen importlib._bootstrap>\", line 1360, in _find_and_load\n"
+            "File \"pyimod02_importers.py\", line 503, in get_code\n"
+            "File \"pyimod01_archive.py\", line 134, in extract\n"
+            "zlib.error: Error -3 while decompressing data: incorrect header check"
+        )
+        assert not _is_retriable_error(
+            "Error -3 while decompressing data: incorrect header check",
+            tb_str=tb,
+        )
+
+    def test_zlib_from_pyimod02_importers_NOT_retriable(self):
+        """zlib via pyimod02_importers is also archive corruption."""
+        from core.session_utils import _is_retriable_error
+        tb = (
+            "File \"pyimod02_importers.py\", line 446, in exec_module\n"
+            "zlib.error: Error -3 while decompressing data"
+        )
+        assert not _is_retriable_error(
+            "Error -3 while decompressing data: incorrect header check",
+            tb_str=tb,
+        )
+
+
+class TestHookConsecutiveFailureAlert:
+    """Verify BackgroundHookExecutor consecutive failure detection."""
+
+    def test_consecutive_failures_trigger_critical_log(self, caplog):
+        """3 consecutive failures should emit a CRITICAL log."""
+        import logging
+        from core.session_hooks import (
+            BackgroundHookExecutor,
+            SessionLifecycleHookManager,
+        )
+
+        mgr = SessionLifecycleHookManager()
+        executor = BackgroundHookExecutor(mgr)
+
+        with caplog.at_level(logging.CRITICAL, logger="core.session_hooks"):
+            # First 2 failures — no CRITICAL yet
+            executor._record_hook_result("test_hook", False, "zlib error")
+            executor._record_hook_result("test_hook", False, "zlib error")
+            assert "CRITICAL" not in caplog.text
+
+            # 3rd failure — CRITICAL triggers
+            executor._record_hook_result("test_hook", False, "zlib error")
+            assert "test_hook" in caplog.text
+            assert "3 consecutive times" in caplog.text
+
+    def test_success_resets_consecutive_counter(self):
+        """A success between failures resets the counter."""
+        from core.session_hooks import (
+            BackgroundHookExecutor,
+            SessionLifecycleHookManager,
+        )
+
+        mgr = SessionLifecycleHookManager()
+        executor = BackgroundHookExecutor(mgr)
+
+        executor._record_hook_result("test_hook", False, "err1")
+        executor._record_hook_result("test_hook", False, "err2")
+        # Success resets counter
+        executor._record_hook_result("test_hook", True)
+        assert executor._hook_stats["test_hook"]["consecutive_failures"] == 0
+
+        # Needs 3 more failures to trigger again
+        executor._record_hook_result("test_hook", False, "err3")
+        executor._record_hook_result("test_hook", False, "err4")
+        assert executor._hook_stats["test_hook"]["consecutive_failures"] == 2

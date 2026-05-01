@@ -246,7 +246,7 @@ def _sanitize_sdk_error(raw_error: str) -> tuple[str, Optional[str]]:
     return raw_error, "Your conversation is saved. Send your message again to continue."
 
 
-def _is_retriable_error(raw_error: str) -> bool:
+def _is_retriable_error(raw_error: str, tb_str: str = "") -> bool:
     """Check if this SDK error is transient and should be auto-retried.
 
     When True, the error event should NOT be yielded to the frontend —
@@ -259,7 +259,29 @@ def _is_retriable_error(raw_error: str) -> bool:
     2. Bedrock API transient errors (throttling, overload, 5xx) — the
        API returned a retriable status code but the CLI didn't retry
        internally
+
+    Args:
+        raw_error: The error message string.
+        tb_str: Optional traceback string.  When provided, used to
+            detect fatal (non-retriable) conditions that share error
+            messages with transient ones (e.g. zlib errors from
+            PyInstaller archive corruption vs. network corruption).
     """
+    # ── Fatal: PyInstaller archive corruption ──────────────────────
+    # zlib errors from pyimod01_archive.extract() mean the frozen
+    # binary's bytecode archive is damaged.  Retrying reads the same
+    # corrupted data — only a daemon restart (fresh _MEI extraction)
+    # fixes this.  Must check BEFORE the retriable zlib patterns below.
+    if tb_str and (
+        "pyimod01_archive" in tb_str or "pyimod02_importers" in tb_str
+    ):
+        logger.error(
+            "PyInstaller archive corruption detected — NOT retriable. "
+            "Daemon restart required. Error: %s",
+            raw_error[:200],
+        )
+        return False
+
     retriable_patterns = [
         # Process-level failures
         r"exit code: -9",
