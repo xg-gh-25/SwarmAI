@@ -130,6 +130,75 @@ def validate_folder_name(name: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# SKILL.md frontmatter parsing (shared by parse_skill_md + lint_skills.py)
+# ---------------------------------------------------------------------------
+
+
+def parse_frontmatter(path: Path) -> tuple[dict, str]:
+    """Extract YAML frontmatter and body from a SKILL.md file.
+
+    This is the **single source of truth** for SKILL.md parsing.  Both
+    the runtime ``parse_skill_md()`` and the CI linter
+    (``scripts/lint_skills.py``) call this function, so format changes
+    are always consistent.
+
+    Args:
+        path: Absolute path to the SKILL.md file.
+
+    Returns:
+        ``(meta, body)`` — *meta* is the parsed YAML dict (may be empty
+        ``{}`` if no frontmatter found), *body* is the markdown content
+        after the closing ``---``.
+
+    Raises:
+        SkillParseError: If the frontmatter is malformed.
+        FileNotFoundError: If *path* does not exist.
+    """
+    raw = path.read_text(encoding="utf-8")
+    meta: dict = {}
+    body = raw
+
+    stripped = raw.lstrip()
+    if not stripped.startswith(_FRONTMATTER_DELIM):
+        return meta, body
+
+    after_open = stripped[len(_FRONTMATTER_DELIM):]
+    if not after_open.startswith("\n"):
+        raise SkillParseError(
+            f"Malformed frontmatter in {path}: "
+            "opening delimiter must be followed by a newline"
+        )
+    after_open = after_open[1:]
+
+    close_idx = after_open.find(f"\n{_FRONTMATTER_DELIM}")
+    if close_idx == -1:
+        raise SkillParseError(
+            f"Malformed frontmatter in {path}: "
+            "missing closing '---' delimiter"
+        )
+
+    yaml_block = after_open[:close_idx]
+    rest = after_open[close_idx + len(f"\n{_FRONTMATTER_DELIM}"):]
+    body = rest.lstrip("\n") if rest else ""
+
+    try:
+        meta = yaml.safe_load(yaml_block)
+    except yaml.YAMLError as exc:
+        raise SkillParseError(
+            f"Malformed frontmatter in {path}: {exc}"
+        ) from exc
+
+    if not isinstance(meta, dict):
+        raise SkillParseError(
+            f"Malformed frontmatter in {path}: "
+            "expected a YAML mapping, got "
+            f"{type(meta).__name__}"
+        )
+
+    return meta, body
+
+
+# ---------------------------------------------------------------------------
 # SKILL.md parsing
 # ---------------------------------------------------------------------------
 
@@ -162,56 +231,11 @@ def parse_skill_md(
             path and malformation description in the message).
         FileNotFoundError: If *path* does not exist.
     """
-    raw = path.read_text(encoding="utf-8")
+    meta, body = parse_frontmatter(path)
 
-    name: str | None = None
-    description: str | None = None
-    version: str = "1.0.0"
-    meta: dict | None = None
-    body = raw  # default: entire file is content if no frontmatter
-
-    # --- Frontmatter extraction ---
-    stripped = raw.lstrip()
-    if stripped.startswith(_FRONTMATTER_DELIM):
-        # Find the closing delimiter
-        after_open = stripped[len(_FRONTMATTER_DELIM) :]
-        # Must start with newline after opening ---
-        if not after_open.startswith("\n"):
-            raise SkillParseError(
-                f"Malformed frontmatter in {path}: "
-                "opening delimiter must be followed by a newline"
-            )
-        after_open = after_open[1:]  # skip the newline
-
-        close_idx = after_open.find(f"\n{_FRONTMATTER_DELIM}")
-        if close_idx == -1:
-            raise SkillParseError(
-                f"Malformed frontmatter in {path}: "
-                "missing closing '---' delimiter"
-            )
-
-        yaml_block = after_open[:close_idx]
-        # Content starts after the closing --- and its trailing newline
-        rest = after_open[close_idx + len(f"\n{_FRONTMATTER_DELIM}") :]
-        body = rest.lstrip("\n") if rest else ""
-
-        try:
-            meta = yaml.safe_load(yaml_block)
-        except yaml.YAMLError as exc:
-            raise SkillParseError(
-                f"Malformed frontmatter in {path}: {exc}"
-            ) from exc
-
-        if not isinstance(meta, dict):
-            raise SkillParseError(
-                f"Malformed frontmatter in {path}: "
-                "expected a YAML mapping, got "
-                f"{type(meta).__name__}"
-            )
-
-        name = meta.get("name")
-        description = meta.get("description")
-        version = str(meta.get("version", "1.0.0"))
+    name = meta.get("name")
+    description = meta.get("description")
+    version = str(meta.get("version", "1.0.0"))
 
     # --- Fallbacks and normalization for required fields ---
     if not name:

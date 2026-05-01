@@ -1,25 +1,33 @@
 #!/usr/bin/env python3
 """Lint all SKILL.md files for metadata consistency.
 
+Uses ``parse_frontmatter()`` from ``core.skill_manager`` — the same
+parser the runtime uses — so format changes never cause linter/runtime
+disagreement.
+
 Catches:
   - name: field doesn't match folder name (case-insensitive)
   - name: field is not lowercase (SDK matches case-sensitively)
   - missing required fields (name, description)
+  - malformed YAML frontmatter
 
-Run from repo root:
+Run from repo root (CI runs after backend deps are installed):
     python scripts/lint_skills.py
 
 Exit code 0 = all skills valid, 1 = at least one error.
 """
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
 
+# Add backend/ to sys.path so we can import core.skill_manager
+_BACKEND_DIR = Path(__file__).resolve().parent.parent / "backend"
+sys.path.insert(0, str(_BACKEND_DIR))
+
+from core.skill_manager import SkillParseError, parse_frontmatter  # noqa: E402
+
 SKILL_DIRS = [Path("backend/skills")]
-NAME_RE = re.compile(r"^name:\s*(.+)$", re.MULTILINE)
-DESC_RE = re.compile(r"^description:", re.MULTILINE)
 
 
 def lint_skill(skill_md: Path) -> list[str]:
@@ -28,17 +36,18 @@ def lint_skill(skill_md: Path) -> list[str]:
     folder = skill_md.parent.name  # e.g. "s_weather"
 
     try:
-        text = skill_md.read_text(encoding="utf-8")
+        meta, _body = parse_frontmatter(skill_md)
+    except SkillParseError as e:
+        return [f"{skill_md}: {e}"]
     except Exception as e:
         return [f"{skill_md}: cannot read: {e}"]
 
-    # Check name field exists
-    match = NAME_RE.search(text)
-    if not match:
-        errors.append(f"{skill_md}: missing 'name:' field")
+    name = meta.get("name")
+    if not name:
+        errors.append(f"{skill_md}: missing 'name:' field in frontmatter")
         return errors
 
-    name = match.group(1).strip().strip("'\"")
+    name = str(name)
 
     # Check lowercase
     if name != name.lower():
@@ -55,8 +64,8 @@ def lint_skill(skill_md: Path) -> list[str]:
         )
 
     # Check description exists
-    if not DESC_RE.search(text):
-        errors.append(f"{skill_md}: missing 'description:' field")
+    if not meta.get("description"):
+        errors.append(f"{skill_md}: missing 'description:' field in frontmatter")
 
     return errors
 
