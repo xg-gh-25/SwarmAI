@@ -251,6 +251,7 @@ class BackgroundHookExecutor:
                 "last_status": stats.get("last_status", "never"),
                 "total_runs": stats.get("total_runs", 0),
                 "total_errors": stats.get("total_errors", 0),
+                "consecutive_failures": stats.get("consecutive_failures", 0),
             })
         return {
             "worker_running": self._started and self._worker_task is not None
@@ -259,17 +260,50 @@ class BackgroundHookExecutor:
             "hooks": hook_statuses,
         }
 
-    def _record_hook_result(self, hook_name: str, success: bool) -> None:
-        """Record a hook execution result for status reporting."""
+    # Consecutive failures above this threshold trigger a CRITICAL log.
+    # This catches scenarios like PyInstaller archive corruption where
+    # a hook fails deterministically on every invocation for hours
+    # without anyone noticing (e.g. evolution_maintenance_hook zlib
+    # errors 2026-04-30 through 2026-05-01).
+    CONSECUTIVE_FAILURE_ALERT_THRESHOLD: int = 3
+
+    def _record_hook_result(
+        self, hook_name: str, success: bool, error_msg: str = "",
+    ) -> None:
+        """Record a hook execution result for status reporting.
+
+        When a hook fails ``CONSECUTIVE_FAILURE_ALERT_THRESHOLD`` times
+        in a row, emits a CRITICAL log so the issue surfaces immediately
+        instead of silently accumulating for days.
+        """
         stats = self._hook_stats.setdefault(hook_name, {
             "last_run": None, "last_status": "never",
             "total_runs": 0, "total_errors": 0,
+            "consecutive_failures": 0, "last_error": "",
         })
         stats["last_run"] = datetime.now(timezone.utc).isoformat()
-        stats["last_status"] = "success" if success else "error"
         stats["total_runs"] += 1
-        if not success:
+
+        if success:
+            stats["last_status"] = "success"
+            stats["consecutive_failures"] = 0
+            stats["last_error"] = ""
+        else:
+            stats["last_status"] = "error"
             stats["total_errors"] += 1
+            stats["consecutive_failures"] += 1
+            stats["last_error"] = error_msg[:200] if error_msg else ""
+
+            if stats["consecutive_failures"] >= self.CONSECUTIVE_FAILURE_ALERT_THRESHOLD:
+                logger.critical(
+                    "Hook '%s' has failed %d consecutive times. "
+                    "Last error: %s. This is NOT transient — "
+                    "investigate immediately (archive corruption? "
+                    "missing dependency? config error?).",
+                    hook_name,
+                    stats["consecutive_failures"],
+                    stats["last_error"] or "(no message)",
+                )
 
     def fire(self, context: HookContext, skip_hooks: list[str] | None = None) -> None:
         """Enqueue all hooks for serialized background execution.
@@ -471,7 +505,7 @@ class BackgroundHookExecutor:
                         context.session_id,
                     )
                 except asyncio.TimeoutError:
-                    self._record_hook_result(hook.name, False)
+                    self._record_hook_result(hook.name, False, "timeout")
                     logger.error(
                         "Background hook '%s' timed out for session %s",
                         hook.name,
@@ -485,7 +519,7 @@ class BackgroundHookExecutor:
                     )
                     raise  # Re-raise to let task cancellation propagate
                 except Exception as exc:
-                    self._record_hook_result(hook.name, False)
+                    self._record_hook_result(hook.name, False, str(exc))
                     logger.error(
                         "Background hook '%s' failed for session %s: %s",
                         hook.name,
@@ -526,7 +560,7 @@ class BackgroundHookExecutor:
                 context.session_id,
             )
         except asyncio.TimeoutError:
-            self._record_hook_result(hook.name, False)
+            self._record_hook_result(hook.name, False, "timeout")
             logger.error(
                 "Background hook '%s' timed out for session %s",
                 hook.name,
@@ -540,7 +574,7 @@ class BackgroundHookExecutor:
             )
             raise  # Re-raise to let task cancellation propagate
         except Exception as exc:
-            self._record_hook_result(hook.name, False)
+            self._record_hook_result(hook.name, False, str(exc))
             logger.error(
                 "Background hook '%s' failed for session %s: %s",
                 hook.name,
@@ -579,6 +613,8 @@ class BackgroundHookExecutor:
                         "last_status": s.get("last_status", "never"),
                         "total_runs": s.get("total_runs", 0),
                         "total_errors": s.get("total_errors", 0),
+                        "consecutive_failures": s.get("consecutive_failures", 0),
+                        "last_error": s.get("last_error", ""),
                     }
                     for name, s in self._hook_stats.items()
                 },

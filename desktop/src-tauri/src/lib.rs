@@ -745,10 +745,45 @@ async fn sync_daemon_version(_app: &tauri::AppHandle, app_version: &str) -> Resu
     // with the event loop.
     send_shutdown_request(DAEMON_PORT);
 
-    // Brief sleep for process to exit after bootout + shutdown
-    tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+    // Step 3: Wait for daemon process to FULLY EXIT before deploying.
+    //
+    // CRITICAL: PyInstaller --onefile keeps PYZ bytecode inside the binary
+    // and re-opens it BY PATH on every lazy import (pyimod01_archive.py:119).
+    // If we replace the binary while the daemon is still running, the next
+    // lazy import opens the NEW binary with OLD PYZ offsets → zlib corruption
+    // → ALL_RETRIES_EXHAUSTED for every session (COE: 2026-05-01 21:04).
+    //
+    // bootout sends SIGTERM but the process may take seconds to drain hooks
+    // and disconnect sessions.  Poll until the process is actually gone.
+    let daemon_binary_path = format!("{}/.swarm-ai/daemon/python-backend", home);
+    let mut waited = 0u32;
+    loop {
+        // Check if any process is still running the daemon binary
+        let pgrep = std::process::Command::new("pgrep")
+            .args(["-f", &daemon_binary_path])
+            .output();
+        let still_running = pgrep
+            .map(|o| o.status.success())
+            .unwrap_or(false);
 
-    // Step 3: Atomic binary deploy from app bundle
+        if !still_running {
+            println!("[Tauri] Daemon process exited after {}s", waited);
+            break;
+        }
+        if waited >= 15 {
+            // Force kill after 15s — can't wait forever
+            println!("[Tauri] Daemon still running after {}s — sending SIGKILL", waited);
+            let _ = std::process::Command::new("pkill")
+                .args(["-9", "-f", &daemon_binary_path])
+                .output();
+            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        waited += 1;
+    }
+
+    // Step 4: Atomic binary deploy from app bundle
     let daemon_dir = format!("{}/.swarm-ai/daemon", home);
 
     // Find the bundled binary — check app bundle Contents/MacOS first
@@ -799,12 +834,12 @@ async fn sync_daemon_version(_app: &tauri::AppHandle, app_version: &str) -> Resu
 
     println!("[Tauri] Daemon binary deployed: {}", target_binary);
 
-    // Step 4: Bootstrap (reload into launchd with new binary)
+    // Step 5: Bootstrap (reload into launchd with new binary)
     let _ = std::process::Command::new("launchctl")
         .args(["bootstrap", &gui_target, &plist_path])
         .output();
 
-    // Step 5: Verify new version
+    // Step 6: Verify new version
     if let Some(_port) = probe_daemon_health(10, 2).await {
         let new_version = get_daemon_version().await.unwrap_or_default();
         if new_version == app_version {
