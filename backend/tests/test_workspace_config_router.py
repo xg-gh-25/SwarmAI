@@ -18,6 +18,7 @@ Requirements: 19.6-19.9
 """
 import json
 import tempfile
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -64,40 +65,59 @@ async def _ensure_default_workspace() -> str:
     return "swarmws"
 
 
+_SEEDED_SKILL_PATHS: list[Path] = []
+"""Track skill dirs created by _seed_skill so the fixture can clean up."""
+
+
 async def _seed_skill(name: str = "TestSkill", is_privileged: bool = False) -> str:
-    """Create a filesystem-based skill and return its folder name."""
+    """Create a filesystem-based skill and return its folder name.
+
+    Tracks created paths for cleanup by ``_cleanup_seeded_skills``.
+    Name is lowercased to match SDK command-matching convention.
+    """
     from pathlib import Path
-    
-    # Create folder name from skill name (kebab-case)
+
+    # Create folder name from skill name (kebab-case, lowercase)
     folder_name = name.lower().replace(" ", "-")
-    
+
     # Determine skill directory based on privilege level
     if is_privileged:
-        # Privileged skills go in built-in directory
         skills_dir = Path.home() / ".swarm-ai" / "built-in-skills"
     else:
-        # Regular skills go in user skills directory
         skills_dir = Path.home() / ".swarm-ai" / "skills"
-    
+
     skill_path = skills_dir / folder_name
     skill_path.mkdir(parents=True, exist_ok=True)
-    
-    # Create SKILL.md with frontmatter
+
+    # SKILL.md — name must be lowercase for SDK matching
     skill_md_content = f"""---
-name: {name}
-description: Test skill: {name}
+name: {folder_name}
+description: Test skill: {folder_name}
 version: 1.0.0
 ---
 
-# {name}
+# {folder_name}
 
 A test skill for workspace config tests.
 """
-    
+
     skill_md = skill_path / "SKILL.md"
     skill_md.write_text(skill_md_content)
-    
+    _SEEDED_SKILL_PATHS.append(skill_path)
+
     return folder_name
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_seeded_skills():
+    """Remove filesystem skills created during test — prevent leaking into runtime."""
+    _SEEDED_SKILL_PATHS.clear()
+    yield
+    import shutil
+    for p in _SEEDED_SKILL_PATHS:
+        if p.exists():
+            shutil.rmtree(p, ignore_errors=True)
+    _SEEDED_SKILL_PATHS.clear()
 
 
 async def _seed_mcp(name: str = "TestMCP", is_privileged: bool = False) -> str:
