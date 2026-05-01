@@ -213,13 +213,24 @@ def parse_skill_md(
         description = meta.get("description")
         version = str(meta.get("version", "1.0.0"))
 
-    # --- Fallbacks for missing fields ---
+    # --- Fallbacks and normalization for required fields ---
     if not name:
         logger.warning(
             "SKILL.md at %s missing 'name'; falling back to folder name",
             path,
         )
         name = folder_name
+    else:
+        # SDK matches slash commands case-sensitively against user input.
+        # Users type lowercase (/weather), so name must be lowercase.
+        normalized = str(name).lower()
+        if normalized != str(name):
+            logger.warning(
+                "SKILL.md at %s has non-lowercase name '%s'; "
+                "normalizing to '%s' for SDK command matching",
+                path, name, normalized,
+            )
+            name = normalized
 
     if not description:
         logger.warning(
@@ -286,6 +297,8 @@ def format_skill_md(
     Returns:
         A complete SKILL.md string ready to be written to disk.
     """
+    # Enforce lowercase — SDK matches slash commands case-sensitively
+    name = name.lower()
     meta = {
         "name": name,
         "description": description,

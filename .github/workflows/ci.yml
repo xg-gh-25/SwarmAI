@@ -43,6 +43,9 @@ jobs:
         working-directory: ./backend
         run: python ../scripts/smoke_import.py
 
+      - name: Lint SKILL.md metadata
+        run: python scripts/lint_skills.py
+
       - name: Build non-DB test list
         id: test-list
         working-directory: ./backend
