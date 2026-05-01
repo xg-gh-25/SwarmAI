@@ -734,6 +734,26 @@ async fn sync_daemon_version(_app: &tauri::AppHandle, app_version: &str) -> Resu
     let gui_target = format!("gui/{}", uid);
     let plist_path = format!("{}/{}", home, DAEMON_PLIST_RELPATH);
 
+    // Capture daemon PID BEFORE bootout deregisters the service.
+    // After bootout, `launchctl print` returns non-zero immediately even
+    // if the process is still draining, so we need the PID in advance.
+    let service_label = "com.swarmai.backend";
+    let service_target = format!("{}/{}", gui_target, service_label);
+    let daemon_pid: Option<u32> = std::process::Command::new("launchctl")
+        .args(["print", &service_target])
+        .output()
+        .ok()
+        .and_then(|o| {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            stdout.lines()
+                .find(|l| l.trim_start().starts_with("pid = "))
+                .and_then(|l| l.trim().strip_prefix("pid = "))
+                .and_then(|s| s.trim().parse::<u32>().ok())
+        });
+    if let Some(pid) = daemon_pid {
+        println!("[Tauri] Captured daemon PID {} before bootout", pid);
+    }
+
     let _ = std::process::Command::new("launchctl")
         .args(["bootout", &gui_target, &plist_path])
         .output();
@@ -756,36 +776,40 @@ async fn sync_daemon_version(_app: &tauri::AppHandle, app_version: &str) -> Resu
     // bootout sends SIGTERM but the process may take seconds to drain hooks
     // and disconnect sessions.  Poll until the process is actually gone.
     //
-    // Use `launchctl print` to get the daemon PID — this is authoritative
-    // and avoids pgrep -f false positives (monitoring scripts, tail -f, etc.).
-    // Fallback to checking if the service label exists at all.
-    let service_label = "com.swarmai.backend";
-    let service_target = format!("{}/{}", gui_target, service_label);
-    let mut waited = 0u32;
-    loop {
-        // Check via launchctl: if the service is gone, daemon is dead
-        let lc = std::process::Command::new("launchctl")
-            .args(["print", &service_target])
-            .output();
-        let still_running = lc
-            .map(|o| o.status.success())  // exits 0 only if service exists
-            .unwrap_or(false);
+    // Poll `kill -0 <pid>` using the PID captured before bootout.
+    // kill -0 checks process existence without sending a signal — no
+    // false positives from cmdline matching (unlike pgrep -f).
+    if let Some(pid) = daemon_pid {
+        println!("[Tauri] Waiting for daemon process (PID {}) to exit", pid);
+        let mut waited = 0u32;
+        loop {
+            // kill -0 checks if process exists without sending a signal
+            let alive = std::process::Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false);
 
-        if !still_running {
-            println!("[Tauri] Daemon service exited after {}s", waited);
-            break;
-        }
-        if waited >= 15 {
-            // Force kill via launchctl kill — cleaner than pkill -9 -f
-            println!("[Tauri] Daemon still running after {}s — sending SIGKILL via launchctl", waited);
-            let _ = std::process::Command::new("launchctl")
-                .args(["kill", "SIGKILL", &service_target])
-                .output();
+            if !alive {
+                println!("[Tauri] Daemon process exited after {}s", waited);
+                break;
+            }
+            if waited >= 15 {
+                println!("[Tauri] Daemon PID {} still alive after {}s — sending SIGKILL", pid, waited);
+                let _ = std::process::Command::new("kill")
+                    .args(["-9", &pid.to_string()])
+                    .output();
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                break;
+            }
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-            break;
+            waited += 1;
         }
-        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        waited += 1;
+    } else {
+        // No PID found — daemon wasn't running or already exited.
+        // Brief sleep as fallback (same as original pre-fix behavior).
+        println!("[Tauri] No daemon PID found — waiting 3s as fallback");
+        tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
     }
 
     // Step 4: Atomic binary deploy from app bundle
