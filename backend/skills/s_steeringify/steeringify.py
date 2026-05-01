@@ -1,13 +1,16 @@
-"""Steeringify — Extract recurring corrections into STEERING.md standing rules.
+"""Steeringify v2 — Extract recurring corrections into STEERING.md standing rules.
+
+Structured Pattern-field extraction with C-entry cross-reference graph.
+Replaces keyword clustering with explicit reference detection.
 
 3-stage pipeline:
-  1. extract_rule_candidates() — parse EVOLUTION.md C-entries, extract bold rules
-  2. cluster_and_filter() — group by keyword overlap, filter by recurrence + quality
+  1. extract_corrections() — parse EVOLUTION.md C-entries, detect cross-refs
+  2. group_and_propose() — group by cross-ref graph, filter, format for STEERING.md
   3. write_approved_rules() — append approved rules to STEERING.md
 
 Public API:
-  extract_rule_candidates(evolution_text: str) -> list[RuleCandidate]
-  cluster_and_filter(candidates, min_recurrence=2) -> list[ProposedRule]
+  extract_corrections(evolution_text: str) -> list[CorrectionEntry]
+  group_and_propose(entries, ...) -> list[ProposedRule]
   write_approved_rules(rules, steering_path) -> int
 """
 from __future__ import annotations
@@ -17,64 +20,82 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
+
 # ── Data models ──
 
+
 @dataclass
-class RuleCandidate:
-    """A bold rule extracted from one C-entry's Pattern field."""
-    rule_text: str
-    source_ids: list[str] = field(default_factory=list)
-    recurrence: int = 1
-    first_seen: str = ""
-    last_seen: str = ""
+class CorrectionEntry:
+    """Parsed C-entry from EVOLUTION.md."""
+
+    id: str                                    # "C012"
+    date: str = ""                             # "2026-04-25"
+    correction: str = ""                       # The Correction field text
+    pattern: str = ""                          # The Pattern field text (full)
+    bold_rules: list[str] = field(default_factory=list)  # Bold prescriptive rules
+    cross_refs: list[str] = field(default_factory=list)  # Referenced C-IDs
+    status: str = "active"
 
 
 @dataclass
 class ProposedRule:
-    """A clustered, quality-gated rule ready for user review."""
+    """A rule ready for user review, formatted for STEERING.md."""
+
     title: str
-    rule_text: str
+    body: str                                  # Full rule text for STEERING.md
     source_ids: list[str] = field(default_factory=list)
     confidence: float = 0.0
     already_in_steering: bool = False
     already_in_agent: bool = False
+    violates_existing: str | None = None       # Existing STEERING rule violated
 
 
 # ── Regex patterns ──
 
-# Matches C-entry headers: ### C012 | 2026-04-25
+# C-entry header: ### C012 | 2026-04-25
 _CENTRY_HEADER = re.compile(r"^### (C\d+)\s*\|?\s*(\d{4}-\d{2}-\d{2})?")
 
-# Matches bold text in Pattern fields: **some rule text**
+# Bold text: **some rule text** (min 10 chars)
 _BOLD_RULE = re.compile(r"\*\*([^*]{10,})\*\*")
 
-# Quality gate: rule must contain prescriptive language
+# Prescriptive language (rule must contain)
 _PRESCRIPTIVE = re.compile(
-    r"\b(must|should|always|never|don\'t|every|verify|check|run|exhaust|"
-    r"ask|wait|before|after|triggers?|block(?:ing)?|require|ensure)\b",
+    r"\b(must|should|always|never|don't|every|verify|check|run|exhaust|"
+    r"ask|wait|before|after|triggers?|block(?:ing)?|require|ensure|start)\b",
     re.IGNORECASE,
 )
 
-# Descriptive (non-prescriptive) patterns to reject
+# Descriptive patterns to reject
 _DESCRIPTIVE = re.compile(
     r"^(structural fix:|this is the same|same (?:as|root cause)|"
     r"three compounding|pattern:|root cause:)",
     re.IGNORECASE,
 )
 
+# Cross-reference patterns: "same as C007", "Related: C008", "C007's Nth", etc.
+_CROSS_REF = re.compile(
+    r"(?:"
+    r"same (?:as |rule as |pattern as |root cause as )(C\d+)"
+    r"|Related:\s*(C\d+)"
+    r"|(C\d+)(?:'s|s)\s+\d+(?:st|nd|rd|th)"
+    r"|(C\d+) was a specific"
+    r")",
+    re.IGNORECASE,
+)
+
 
 # ── Stage 1: Extract ──
 
-def extract_rule_candidates(evolution_text: str) -> list[RuleCandidate]:
-    """Parse EVOLUTION.md text, extract bold rules from active C-entry Pattern fields.
 
-    Skips resolved entries. Returns one RuleCandidate per bold rule found.
+def extract_corrections(evolution_text: str) -> list[CorrectionEntry]:
+    """Parse EVOLUTION.md, extract C-entries with bold rules and cross-refs.
+
+    Only returns entries that are active AND have at least one bold
+    prescriptive rule in their Pattern field.
     """
-    candidates: list[RuleCandidate] = []
-    current_id: str | None = None
-    current_date: str = ""
-    in_pattern: bool = False
-    is_resolved: bool = False
+    entries: list[CorrectionEntry] = []
+    current: CorrectionEntry | None = None
+    in_field: str = ""  # "correction", "pattern", or ""
 
     for line in evolution_text.splitlines():
         stripped = line.strip()
@@ -82,190 +103,210 @@ def extract_rule_candidates(evolution_text: str) -> list[RuleCandidate]:
         # New C-entry header
         m = _CENTRY_HEADER.match(stripped)
         if m:
-            current_id = m.group(1)
-            current_date = m.group(2) or ""
-            in_pattern = False
-            is_resolved = False
+            _finalize_entry(current, entries)
+            current = CorrectionEntry(id=m.group(1), date=m.group(2) or "")
+            in_field = ""
             continue
 
-        # Check for resolved status
-        if current_id and stripped.startswith("- **Status**:"):
-            if "resolved" in stripped.lower():
-                is_resolved = True
+        if current is None:
             continue
 
-        # Enter Pattern field
-        if current_id and stripped.startswith("- **Pattern**:"):
-            in_pattern = True
-            # Pattern text may be on this same line
-            pattern_text = stripped[len("- **Pattern**:"):].strip()
-            if pattern_text and not is_resolved:
-                _extract_bold_rules(pattern_text, current_id, current_date,
-                                    candidates)
+        # Status field
+        if stripped.startswith("- **Status**:"):
+            status_text = stripped.split(":", 1)[1].strip().lower()
+            if "resolved" in status_text:
+                current.status = "resolved"
+            in_field = ""
             continue
 
-        # Continuation of Pattern field (indented lines)
-        if in_pattern and current_id and not is_resolved:
-            if stripped.startswith("- **") and not stripped.startswith("- **Pattern"):
-                in_pattern = False
-                continue
-            _extract_bold_rules(stripped, current_id, current_date, candidates)
+        # Correction field
+        if stripped.startswith("- **Correction**:"):
+            in_field = "correction"
+            current.correction = stripped[len("- **Correction**:"):].strip()
+            continue
 
-    return candidates
+        # Pattern field
+        if stripped.startswith("- **Pattern**:"):
+            in_field = "pattern"
+            text = stripped[len("- **Pattern**:"):].strip()
+            if text:
+                current.pattern = text
+                _extract_from_pattern_line(text, current)
+            continue
+
+        # Continuation of current field (indented or non-field-start lines)
+        if stripped.startswith("- **") and not stripped.startswith("- **Pattern"):
+            in_field = ""
+            continue
+
+        if in_field == "pattern" and stripped:
+            current.pattern += " " + stripped
+            _extract_from_pattern_line(stripped, current)
+        elif in_field == "correction" and stripped:
+            current.correction += " " + stripped
+
+    # Finalize last entry
+    _finalize_entry(current, entries)
+
+    return entries
 
 
-def _extract_bold_rules(
-    text: str,
-    source_id: str,
-    date: str,
-    candidates: list[RuleCandidate],
-) -> None:
-    """Extract bold rules from a line of text and append to candidates."""
+def _extract_from_pattern_line(text: str, entry: CorrectionEntry) -> None:
+    """Extract bold rules and cross-references from a pattern line."""
+    # Bold prescriptive rules
     for m in _BOLD_RULE.finditer(text):
         rule_text = m.group(1).strip()
-        # Quality gate: must be prescriptive, not just descriptive
         if not _PRESCRIPTIVE.search(rule_text):
             continue
         if _DESCRIPTIVE.match(rule_text):
             continue
-        candidates.append(RuleCandidate(
-            rule_text=rule_text,
-            source_ids=[source_id],
-            recurrence=1,
-            first_seen=date,
-            last_seen=date,
-        ))
+        if rule_text not in entry.bold_rules:
+            entry.bold_rules.append(rule_text)
+
+    # Cross-references
+    for m in _CROSS_REF.finditer(text):
+        ref_id = next(g for g in m.groups() if g is not None)
+        if ref_id != entry.id and ref_id not in entry.cross_refs:
+            entry.cross_refs.append(ref_id)
 
 
-# ── Stage 2: Cluster and filter ──
+def _finalize_entry(
+    entry: CorrectionEntry | None,
+    entries: list[CorrectionEntry],
+) -> None:
+    """Add entry to list if active and has a Pattern field.
 
-def _tokenize(text: str) -> set[str]:
-    """Extract content words (length >= 4) for Jaccard similarity.
-
-    Applies basic stemming (strip trailing 's', 'ing', 'ed') to improve
-    matching across singular/plural and verb forms.
+    Entries without bold rules are still included — they can join groups
+    via cross-references. Only groups need at least one bold rule.
     """
-    words = re.findall(r"[a-zA-Z]{4,}", text.lower())
-    # Remove common stop words
-    stops = {"this", "that", "with", "from", "have", "been", "must", "should",
-             "when", "before", "after", "same", "also", "just", "instead",
-             "because", "about", "every", "never", "always", "more", "than",
-             "does", "doing", "only", "into", "each", "other", "very"}
-    stemmed = set()
-    for w in words:
-        if w in stops:
-            continue
-        # Basic suffix stripping: alternatives→alternative, reporting→report
-        if w.endswith("ing") and len(w) > 6:
-            w = w[:-3]
-        elif w.endswith("tion") and len(w) > 7:
-            w = w[:-4]
-        elif w.endswith("ed") and len(w) > 5:
-            w = w[:-2]
-        elif w.endswith("ves") and len(w) > 6:
-            w = w[:-3]  # alternatives→alternati... fix below
-        elif w.endswith("es") and len(w) > 5:
-            w = w[:-2]
-        elif w.endswith("s") and len(w) > 5:
-            w = w[:-1]
-        stemmed.add(w)
-    return stemmed
+    if entry is None:
+        return
+    if entry.status == "resolved":
+        return
+    if not entry.pattern:
+        return
+    entries.append(entry)
 
 
-def _jaccard(a: set[str], b: set[str]) -> float:
-    """Jaccard similarity between two word sets."""
-    if not a or not b:
-        return 0.0
-    return len(a & b) / len(a | b)
+# ── Stage 2: Group and propose ──
 
 
-def cluster_and_filter(
-    candidates: list[RuleCandidate],
-    min_recurrence: int = 2,
+def group_and_propose(
+    entries: list[CorrectionEntry],
+    min_group_size: int = 2,
     steering_text: str = "",
     agent_text: str = "",
 ) -> list[ProposedRule]:
-    """Cluster candidates by keyword overlap, filter by recurrence and quality.
+    """Group entries by cross-reference graph, produce STEERING.md proposals.
+
+    Uses explicit cross-references (not keyword similarity) to form groups.
+    Connected components in the reference graph become one proposal each.
 
     Args:
-        candidates: Raw candidates from extract_rule_candidates()
-        min_recurrence: Minimum C-entry sources to qualify (default 2)
-        steering_text: Current STEERING.md content for dedup
+        entries: Parsed C-entries from extract_corrections()
+        min_group_size: Minimum entries in a group to qualify (default 2)
+        steering_text: Current STEERING.md content for dedup + violation detection
         agent_text: Current AGENT.md content for dedup
-
-    Returns:
-        List of ProposedRule objects ready for user review.
     """
-    if not candidates:
+    if not entries:
         return []
 
-    # Cluster by Jaccard similarity > 0.15
-    # Threshold is intentionally low because bold rules are short text
-    # (8-15 tokens) — even topically identical rules may share only 2-3 stems.
-    # Quality gate + min_recurrence filter handle false positives.
-    clusters: list[list[RuleCandidate]] = []
-    assigned = [False] * len(candidates)
+    # Build adjacency graph from cross-references
+    all_ids = {e.id for e in entries}
 
-    for i, c in enumerate(candidates):
-        if assigned[i]:
-            continue
-        cluster = [c]
-        assigned[i] = True
-        tokens_i = _tokenize(c.rule_text)
+    # Union-Find for connected components
+    parent: dict[str, str] = {e.id: e.id for e in entries}
 
-        for j in range(i + 1, len(candidates)):
-            if assigned[j]:
-                continue
-            tokens_j = _tokenize(candidates[j].rule_text)
-            if _jaccard(tokens_i, tokens_j) > 0.15:
-                cluster.append(candidates[j])
-                assigned[j] = True
+    def find(x: str) -> str:
+        while parent.get(x, x) != x:
+            parent[x] = parent.get(parent[x], parent[x])
+            x = parent[x]
+        return x
 
-        clusters.append(cluster)
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
 
-    # Build ProposedRules from clusters
+    # Connect entries via cross-references
+    for entry in entries:
+        for ref in entry.cross_refs:
+            if ref in all_ids:
+                union(entry.id, ref)
+
+    # Build groups from connected components
+    groups: dict[str, list[CorrectionEntry]] = {}
+    for entry in entries:
+        root = find(entry.id)
+        groups.setdefault(root, []).append(entry)
+
+    # Build proposals
     proposals: list[ProposedRule] = []
-    for cluster in clusters:
-        # Merge source IDs, pick the longest rule text as representative
-        all_sources = []
-        for c in cluster:
-            for sid in c.source_ids:
-                if sid not in all_sources:
-                    all_sources.append(sid)
+    for group in groups.values():
+        source_ids = sorted({e.id for e in group}, key=lambda x: int(x[1:]))
 
-        if len(all_sources) < min_recurrence:
+        if len(source_ids) < min_group_size:
             continue
 
-        # Pick the most descriptive (longest) rule as representative
-        representative = max(cluster, key=lambda c: len(c.rule_text))
-        dates = [c.first_seen for c in cluster if c.first_seen] + \
-                [c.last_seen for c in cluster if c.last_seen]
-        dates = sorted(set(d for d in dates if d))
+        # Pick the best rule text: longest bold rule from any entry in group
+        # Groups without any bold rules are skipped — we need a prescriptive rule
+        group_sorted = sorted(group, key=lambda e: e.date, reverse=True)
+        best_rule = ""
+        for entry in group_sorted:
+            for rule in entry.bold_rules:
+                if len(rule) > len(best_rule):
+                    best_rule = rule
 
-        # Generate title from first ~50 chars
-        title = representative.rule_text[:60]
-        if len(representative.rule_text) > 60:
+        if not best_rule:
+            # No bold prescriptive rules in this group — skip
+            continue
+
+        # Title: first 60 chars
+        title = best_rule[:60]
+        if len(best_rule) > 60:
             title = title.rsplit(" ", 1)[0] + "…"
 
-        # Confidence: more sources + more specific = higher
-        confidence = min(1.0, 0.4 + 0.15 * len(all_sources))
+        # Confidence: multi-signal scoring
+        # - Base: 0.3
+        # - Source count: +0.1 per source (more C-entries = more recurrence)
+        # - Rule specificity: +0.1 if rule text > 60 chars (specific > vague)
+        # - Recency: +0.1 if any source is from last 30 days
+        # - Cross-ref density: +0.1 if group has explicit cross-references
+        confidence = 0.3
+        confidence += 0.1 * len(source_ids)
+        if len(best_rule) > 60:
+            confidence += 0.1
+        if group_sorted and group_sorted[0].date:
+            try:
+                newest = date.fromisoformat(group_sorted[0].date)
+                if (date.today() - newest).days <= 30:
+                    confidence += 0.1
+            except (ValueError, TypeError):
+                pass
+        if any(e.cross_refs for e in group):
+            confidence += 0.1
+        confidence = min(1.0, confidence)
+
+        # Build body: bold principle + context from entries
+        body = f"**{best_rule}**"
 
         # Dedup against STEERING.md and AGENT.md
-        rule_lower = representative.rule_text.lower()
-        # Check if a substantial substring (30+ chars) appears in existing rules
-        in_steering = _text_contains_rule(steering_text, rule_lower)
-        in_agent = _text_contains_rule(agent_text, rule_lower)
+        in_steering = _text_contains_rule(steering_text, best_rule.lower())
+        in_agent = _text_contains_rule(agent_text, best_rule.lower())
+
+        # Effectiveness: check if this group's rules overlap with existing STEERING
+        violation = _detect_violation(source_ids, group, steering_text)
 
         proposals.append(ProposedRule(
             title=title,
-            rule_text=representative.rule_text,
-            source_ids=all_sources,
+            body=body,
+            source_ids=source_ids,
             confidence=confidence,
             already_in_steering=in_steering,
             already_in_agent=in_agent,
+            violates_existing=violation,
         ))
 
-    # Sort by confidence descending
     proposals.sort(key=lambda p: p.confidence, reverse=True)
     return proposals
 
@@ -275,18 +316,47 @@ def _text_contains_rule(haystack: str, rule_lower: str) -> bool:
     if not haystack:
         return False
     haystack_lower = haystack.lower()
-    # Extract key phrases (5+ word sequences) from the rule
     words = rule_lower.split()
     for i in range(len(words) - 4):
-        phrase = " ".join(words[i:i + 5])
+        phrase = " ".join(words[i : i + 5])
         if phrase in haystack_lower:
             return True
     return False
 
 
+def _detect_violation(
+    source_ids: list[str],
+    group: list[CorrectionEntry],
+    steering_text: str,
+) -> str | None:
+    """Detect if a correction group re-raises an issue already in STEERING.md.
+
+    If the STEERING text already contains rules about the same topic (matched
+    by key phrases from the group's bold rules), the newest correction in the
+    group is evidence that the existing rule isn't strong enough.
+    """
+    if not steering_text:
+        return None
+
+    steering_lower = steering_text.lower()
+    # Check if any bold rule's key phrases appear in existing STEERING
+    for entry in group:
+        for rule in entry.bold_rules:
+            words = rule.lower().split()
+            # Check 4-word windows for overlap
+            for i in range(len(words) - 3):
+                phrase = " ".join(words[i : i + 4])
+                if len(phrase) >= 15 and phrase in steering_lower:
+                    return f"Rule about '{phrase}' already in STEERING.md but {entry.id} re-raised the issue"
+
+    return None
+
+
 # ── Stage 3: Write ──
 
+
 MAX_ACTIVE_RULES = 10
+
 
 def write_approved_rules(
     rules: list[ProposedRule],
@@ -294,18 +364,26 @@ def write_approved_rules(
 ) -> int:
     """Append approved rules to STEERING.md Standing Rules section.
 
+    Matches existing STEERING.md format:
+      ### Title
+      > Source: C-IDs | Added: date | Confidence: score
+
+      **Bold principle.**
+
+      Explanation text.
+
     Returns count of rules written.
     """
     if not rules:
         return 0
 
-    # Read existing content
+    content = ""
     if steering_path.exists():
         content = steering_path.read_text(encoding="utf-8")
     else:
         content = "## Standing Rules\n\n"
 
-    # Count existing steeringify rules (have Source: C prefix)
+    # Count existing steeringify rules
     existing_count = content.lower().count("> source: c")
     remaining_slots = MAX_ACTIVE_RULES - existing_count
 
@@ -314,7 +392,6 @@ def write_approved_rules(
 
     rules_to_write = rules[:remaining_slots]
 
-    # Build new rules text
     new_rules = []
     for r in rules_to_write:
         sources = ", ".join(r.source_ids)
@@ -323,26 +400,32 @@ def write_approved_rules(
             f"\n### {r.title}\n"
             f"> Source: {sources} | Added: {today} | "
             f"Confidence: {r.confidence:.2f}\n\n"
-            f"{r.rule_text}\n"
+            f"{r.body}\n"
         )
         new_rules.append(block)
 
-    # Find insertion point: end of Standing Rules section
-    insertion = _find_standing_rules_end(content)
+    insertion = _find_insertion_point(content)
     if insertion >= 0:
-        new_content = content[:insertion] + "\n".join(new_rules) + "\n" + content[insertion:]
+        new_content = (
+            content[:insertion] + "\n".join(new_rules) + "\n" + content[insertion:]
+        )
     else:
-        # No Standing Rules section — append at end
-        new_content = content.rstrip() + "\n\n## Standing Rules\n" + "\n".join(new_rules) + "\n"
+        new_content = (
+            content.rstrip()
+            + "\n\n## Standing Rules\n"
+            + "\n".join(new_rules)
+            + "\n"
+        )
 
     steering_path.write_text(new_content, encoding="utf-8")
     return len(rules_to_write)
 
 
-def _find_standing_rules_end(content: str) -> int:
-    """Find the end of the Standing Rules section in STEERING.md.
+def _find_insertion_point(content: str) -> int:
+    """Find where to insert new rules in Standing Rules section.
 
-    Returns character index of insertion point, or -1 if section not found.
+    Inserts before the `---` separator or before the next `## ` section,
+    whichever comes first after Standing Rules header.
     """
     lines = content.split("\n")
     in_standing = False
@@ -350,11 +433,14 @@ def _find_standing_rules_end(content: str) -> int:
         if line.strip().lower().startswith("## standing rules"):
             in_standing = True
             continue
-        if in_standing and line.strip().startswith("## ") and "standing" not in line.lower():
-            # Start of next section — insert before it
-            return sum(len(l) + 1 for l in lines[:i])
+        if in_standing:
+            stripped = line.strip()
+            # Stop at separator or next top-level section
+            if stripped == "---":
+                return sum(len(ln) + 1 for ln in lines[:i])
+            if stripped.startswith("## ") and "standing" not in stripped.lower():
+                return sum(len(ln) + 1 for ln in lines[:i])
 
     if in_standing:
-        # Standing Rules is the last section — append at end
         return len(content)
     return -1

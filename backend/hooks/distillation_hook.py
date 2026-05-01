@@ -1142,29 +1142,32 @@ class DistillationTriggerHook:
     ) -> None:
         """Check if recurring corrections should become STEERING.md rules.
 
+        Uses steeringify v2: structured Pattern-field extraction with
+        cross-reference graph (no keyword clustering).
+
         Writes proposals to a JSON file for session briefing pickup.
         Does NOT auto-write to STEERING.md — user approval required.
         """
         try:
             from skills.s_steeringify.steeringify import (
-                extract_rule_candidates,
-                cluster_and_filter,
+                extract_corrections,
+                group_and_propose,
             )
 
             evolution_text = evolution_path.read_text(encoding="utf-8")
-            candidates = extract_rule_candidates(evolution_text)
-            if not candidates:
+            entries = extract_corrections(evolution_text)
+            if not entries:
                 return
 
-            # Load existing STEERING.md for dedup
+            # Load existing STEERING.md for dedup + violation detection
             steering_path = ws_path / ".context" / "STEERING.md"
             steering_text = ""
             if steering_path.exists():
                 steering_text = steering_path.read_text(encoding="utf-8")
 
-            proposals = cluster_and_filter(
-                candidates,
-                min_recurrence=2,
+            proposals = group_and_propose(
+                entries,
+                min_group_size=2,
                 steering_text=steering_text,
             )
 
@@ -1174,15 +1177,15 @@ class DistillationTriggerHook:
                 return
 
             # Write proposals JSON for briefing pickup
-            import json
             proposals_path = ws_path / ".context" / "steeringify_proposals.json"
             data = [
                 {
                     "title": p.title,
-                    "rule_text": p.rule_text,
+                    "body": p.body,
                     "source_ids": p.source_ids,
                     "confidence": p.confidence,
                     "already_in_agent": p.already_in_agent,
+                    "violates_existing": p.violates_existing,
                 }
                 for p in new_proposals
             ]
@@ -1279,29 +1282,32 @@ class DistillationTriggerHook:
                     pass
                 fd.close()
 
+    # Regex for COE lines: **COE:** `signal` — topic
+    # Uses regex instead of str.index() to avoid ValueError on malformed lines.
+    _COE_LINE_RE = re.compile(
+        r"\*\*COE:\*\*\s*`(candidate|resolution)`\s*[—\-]+\s*(.+)",
+    )
+
     @staticmethod
     def _extract_coe_entries(body: str) -> list[tuple[str, str]]:
         """Extract COE signal and topic from DailyActivity body.
 
         Looks for lines like: ``**COE:** `resolution` — streaming not working``
         Returns list of (signal, topic) tuples.
+
+        Uses regex instead of ``str.index()`` to gracefully handle
+        malformed lines (missing backticks, wrong delimiters) without
+        raising ``ValueError`` and losing the entire file's COE entries.
         """
         entries = []
         for line in body.splitlines():
             stripped = line.strip()
-            if stripped.startswith("**COE:**"):
-                # Parse: **COE:** `signal` — topic
-                rest = stripped[len("**COE:**"):].strip()
-                # Extract signal from backticks
-                if "`" in rest:
-                    signal_start = rest.index("`") + 1
-                    signal_end = rest.index("`", signal_start)
-                    signal = rest[signal_start:signal_end]
-                    # Extract topic after " — " or " - "
-                    topic_part = rest[signal_end + 1:].strip()
-                    topic_part = topic_part.lstrip("—-").strip()
-                    if signal in ("candidate", "resolution") and topic_part:
-                        entries.append((signal, topic_part))
+            m = DistillationTriggerHook._COE_LINE_RE.search(stripped)
+            if m:
+                signal = m.group(1)
+                topic = m.group(2).strip()
+                if topic:
+                    entries.append((signal, topic))
         return entries
 
     def _write_coe_registry(
