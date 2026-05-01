@@ -1,5 +1,5 @@
 ---
-name: tmux Session Control
+name: tmux
 description: >
   Control tmux sessions: monitor processes, send keystrokes, capture output, and orchestrate parallel agents.
   TRIGGER: "tmux", "background session", "monitor process", "parallel agents", "send keys", "check session".

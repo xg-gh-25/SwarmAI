@@ -1,5 +1,5 @@
 ---
-name: Workspace Finder
+name: workspace-finder
 description: >
   Natural language file and content search within SwarmWS workspace. Find files by name, content, modification time,
   size, type, or git status. Returns structured results the agent can reference or act on.

@@ -1,5 +1,5 @@
 ---
-name: Consulting Report
+name: consulting-report
 description: >
   Two-phase consulting-grade research reports with professional analysis frameworks.
   TRIGGER: "consulting report", "market analysis", "competitive analysis", "industry report", "SWOT", "Porter's", "TAM SAM SOM", "strategic analysis".

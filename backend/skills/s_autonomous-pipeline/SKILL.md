@@ -1,5 +1,5 @@
 ---
-name: Autonomous Pipeline
+name: autonomous-pipeline
 description: >
   Orchestrate the full AIDLC Autonomous Pipeline from a one-sentence requirement
   to a PR-ready delivery with TDD methodology. DDD drives judgment (should we?),

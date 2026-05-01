@@ -1,5 +1,5 @@
 ---
-name: Summarize
+name: summarize
 description: >
   Quickly summarize articles, documents, URLs, long text, or multi-source content into concise key points.
   TRIGGER: "summarize", "summary", "tl;dr", "key points", "what's this about", "give me the gist", "condense".

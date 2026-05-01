@@ -1,5 +1,5 @@
 ---
-name: Peekaboo
+name: peekaboo
 description: >
   macOS UI automation: capture screenshots, inspect UI elements, click, type, and drive any app visually.
   TRIGGER: "screenshot", "click on", "UI automation", "automate app", "screen capture", "what's on screen", "peekaboo".

@@ -1,5 +1,5 @@
 ---
-name: Save Context
+name: save-context
 description: >
   Create a structured handoff document for the next agent session.
   TRIGGER: "save context", "handoff", "wrap up", "switching agents", "ending work".

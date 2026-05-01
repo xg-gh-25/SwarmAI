@@ -1,5 +1,5 @@
 ---
-name: Narrative Writing
+name: narrative-writing
 description: >
   Structured writing for clear, data-driven documents that drive decisions.
   TRIGGER: "six-pager", "PR/FAQ", "working backwards", "write a narrative", "technical doc".

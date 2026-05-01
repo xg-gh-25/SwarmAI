@@ -1,5 +1,5 @@
 ---
-name: GitHub Trending
+name: github-trending
 description: >
   Fetch and analyze GitHub Trending repositories. Shows today's hottest repos
   with stars, language, and relevance to your interests. Also runs daily as a

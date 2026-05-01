@@ -1,5 +1,5 @@
 ---
-name: weekly-revenue-report
+name: cmhk-weekly-report
 description: >
   Generate weekly Revenue & Usage reports for CMHK leadership.
   Supports two scopes: GCR overall (CEO level) and per-BU (GM level, any sh_l3).

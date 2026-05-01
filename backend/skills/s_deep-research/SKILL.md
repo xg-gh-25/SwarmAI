@@ -1,5 +1,5 @@
 ---
-name: Deep Research
+name: deep-research
 description: >
   Thorough multi-source research with citations, analysis, and synthesis.
   TRIGGER: "research", "deep dive", "investigate", "find out about", "comprehensive analysis".

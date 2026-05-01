@@ -1,5 +1,5 @@
 ---
-name: Skill Builder
+name: skill-builder
 description: >
   Create, evaluate, and improve Agent skills to production quality.
   TRIGGER: "create a skill", "build a skill", "review skill", "score skill", "improve skill".

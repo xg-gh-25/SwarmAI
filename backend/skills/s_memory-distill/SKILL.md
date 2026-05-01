@@ -1,5 +1,5 @@
 ---
-name: Memory Distill
+name: memory-distill
 description: >
   Distill unprocessed DailyActivity files into curated MEMORY.md entries.
   TRIGGER: auto-triggers when >3 unprocessed DailyActivity files detected at session start.

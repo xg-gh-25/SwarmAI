@@ -1,5 +1,5 @@
 ---
-name: Podcast Generation
+name: podcast-gen
 description: >
   Convert text content into podcast scripts and audio using TTS tools.
   TRIGGER: "create podcast", "generate podcast", "make a podcast", "turn this into a podcast", "audio content", "podcast script".

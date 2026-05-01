@@ -1,5 +1,5 @@
 ---
-name: Slack
+name: slack
 description: >
   Send, read, search, and manage Slack messages, channels, and reactions via Slack MCP server or API.
   TRIGGER: "slack", "send slack message", "check slack", "slack channel", "slack DM", "post to slack".

@@ -1,5 +1,5 @@
 ---
-name: DOCX Editor
+name: docx
 description: >
   Word document creation, editing, and analysis (.docx files).
   TRIGGER: any request involving Word documents, tracked changes, or .docx files.

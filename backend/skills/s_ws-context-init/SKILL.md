@@ -1,5 +1,5 @@
 ---
-name: Workspace Init
+name: ws-context-init
 description: >
   Analyze a workspace and create or improve a workspace context file for SwarmAI.
   TRIGGER: "init workspace", "init ws", "run init skill", "initialize my workspace context".

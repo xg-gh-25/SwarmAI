@@ -1,5 +1,5 @@
 ---
-name: Save Memory
+name: save-memory
 description: >
   Write specific content to MEMORY.md for long-term persistence.
   TRIGGER: "remember this", "save to memory", "save the lessons", "persist this".

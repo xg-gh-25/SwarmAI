@@ -1,5 +1,5 @@
 ---
-name: QA
+name: qa
 description: >
   Diff-aware structured QA: scope from git changes, run unit tests, visual test
   UI changes, fix bugs with atomic commits, halt when fixes get risky.

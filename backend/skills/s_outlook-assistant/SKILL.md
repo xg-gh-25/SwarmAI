@@ -1,5 +1,5 @@
 ---
-name: Outlook Assistant
+name: outlook-assistant
 description: >
   Manage Outlook inbox: triage, cleanup, send, and organization via aws-outlook-mcp server.
   TRIGGER: "check email", "email triage", "clean inbox", "email summary", "outlook", "calendar",

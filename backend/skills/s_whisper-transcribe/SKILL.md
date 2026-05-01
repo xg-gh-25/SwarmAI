@@ -1,5 +1,5 @@
 ---
-name: Whisper Transcribe
+name: whisper-transcribe
 description: >
   Transcribe audio and video files to text using OpenAI Whisper API or local Whisper CLI.
   TRIGGER: "transcribe", "transcription", "speech to text", "convert audio to text", "meeting recording", "voice note".

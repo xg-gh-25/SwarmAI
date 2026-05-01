@@ -1,5 +1,5 @@
 ---
-name: Release
+name: release
 description: >
   Bump version across all package files, update CHANGELOG, create git tag, and
   publish GitHub Release. Ensures no file is missed during version bumps.

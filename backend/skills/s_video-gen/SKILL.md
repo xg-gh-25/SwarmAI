@@ -1,5 +1,5 @@
 ---
-name: Video Generation
+name: video-gen
 description: >
   Create videos using structured prompts, storyboards, and AI generation tools.
   TRIGGER: "generate video", "create video", "make a video", "video content", "short video", "video clip", "social video", "Reels", "TikTok video".

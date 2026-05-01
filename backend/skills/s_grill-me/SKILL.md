@@ -1,5 +1,5 @@
 ---
-name: Grill Me
+name: grill-me
 description: >
   Relentless structured interview about a plan or design. Walks every branch
   of the decision tree, resolving dependencies one by one. Each question comes

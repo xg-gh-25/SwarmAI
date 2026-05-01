@@ -1,5 +1,5 @@
 ---
-name: Learn Content
+name: learn-content
 description: >
   Ingest URLs, articles, or text from any source into structured knowledge cards.
   Stores source URL + metadata + briefing (NOT full text). On-demand retrieval from source.

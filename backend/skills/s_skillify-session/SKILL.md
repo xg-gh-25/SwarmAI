@@ -1,5 +1,5 @@
 ---
-name: Skillify Session
+name: skillify-session
 description: >
   Convert the current conversation into a reusable skill.
   TRIGGER: "skillify", "turn this into a skill", "make this repeatable", "save this workflow".

@@ -1,5 +1,5 @@
 ---
-name: Apple Reminders
+name: apple-reminders
 description: >
   Create, manage, and query Apple Reminders from the terminal. Syncs to iPhone/iPad/Mac.
   TRIGGER: "remind me", "add reminder", "create reminder", "my reminders", "to-do", "todo list", "what's due", "reminders".

@@ -1,5 +1,5 @@
 ---
-name: Multi-Channel Notify
+name: notify
 description: >
   Send messages to 9 notification channels: Feishu, DingTalk, WeCom, Telegram,
   Email, ntfy, Bark, Slack, and generic webhooks. Config-driven via

@@ -1,5 +1,5 @@
 ---
-name: Evaluate
+name: evaluate
 description: >
   Evaluate requirements, feature requests, and task intake against project DDD
   context. Produces a GO/DEFER/REJECT/ESCALATE recommendation with ROI scoring,

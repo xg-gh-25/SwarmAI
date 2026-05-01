@@ -1,5 +1,5 @@
 ---
-name: Caveman Mode
+name: caveman
 description: >
   Ultra-compressed communication. Cuts tokens ~70% by dropping articles,
   filler, pleasantries, hedging. All technical substance stays exact.
