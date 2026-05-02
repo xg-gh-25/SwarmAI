@@ -377,9 +377,17 @@ def locked_field_modify(
                     )
                 time.sleep(0.1)
 
-        # Read current content
+        # Read current content (with UTF-8 corruption resilience)
         if file_path.exists():
-            content = file_path.read_text(encoding="utf-8")
+            try:
+                content = file_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    "UTF-8 decode error in %s — reading with replacement chars",
+                    file_path,
+                )
+                content = file_path.read_text(encoding="utf-8", errors="replace")
         else:
             raise LockedWriteError(f"File not found: {file_path}")
 
@@ -465,9 +473,20 @@ def locked_read_modify_write(
                     )
                 time.sleep(0.1)
 
-        # Read current content (or empty if file doesn't exist)
+        # Read current content (or empty if file doesn't exist).
+        # Use errors="replace" so a corrupted file doesn't crash all
+        # future writes — the replacement chars are visible in the output
+        # and the file remains writable.
         if file_path.exists():
-            content = file_path.read_text(encoding="utf-8")
+            try:
+                content = file_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    "UTF-8 decode error in %s — reading with replacement chars",
+                    file_path,
+                )
+                content = file_path.read_text(encoding="utf-8", errors="replace")
         else:
             content = ""
 

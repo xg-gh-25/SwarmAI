@@ -46,9 +46,11 @@ _RAW_PATTERNS: list[tuple[str, str]] = [
     ("sys_marker", r"<</?SYS>>"),
     ("human_marker", r"\n(?:Human|Assistant)\s*:"),
 
-    # Base64-encoded payloads (40+ chars of base64 alphabet is suspicious
-    # in memory content — legitimate technical notes rarely have this)
-    ("base64_payload", r"[A-Za-z0-9+/]{40,}={0,2}"),
+    # Base64-encoded payloads (80+ chars of base64 alphabet is suspicious
+    # in memory content).  Raised from 40 to 80 to avoid false positives
+    # on legitimate content: SHA-256 hashes (64 hex chars), commit hashes,
+    # long function names, JWTs documented in memory entries.
+    ("base64_payload", r"[A-Za-z0-9+/]{80,}={0,2}"),
 
     # Jailbreak patterns
     ("dan_jailbreak", r"(?:act\s+as|you\s+are)\s+DAN"),
