@@ -355,3 +355,57 @@ class TestIndexInMemoryFile:
         # Should return empty string, not the original content
         assert body.strip() == ""
         assert MEMORY_INDEX_START not in body
+
+
+class TestParseIndexEntriesRefs:
+    """Tests for _parse_index_entries handling of refs field."""
+
+    def test_refs_excluded_from_aliases(self):
+        """Entries with | refs: X | keywords should NOT include refs in aliases."""
+        from core.memory_index import _parse_index_entries
+
+        index_block = (
+            "- [KD01] 2026-05-01 Some decision | refs: COE01, COE02 | keyword1, keyword2\n"
+            "- [RC01] 2026-05-01 Recent context | alias1, alias2\n"
+        )
+        entries = _parse_index_entries(index_block)
+        assert len(entries) == 2
+
+        kd01 = entries[0]
+        assert kd01["key"] == "KD01"
+        # refs: should NOT appear in aliases
+        assert "refs: COE01" not in kd01["aliases"]
+        assert "COE01" not in kd01["aliases"]
+        assert "COE02" not in kd01["aliases"]
+        # actual keywords SHOULD be there
+        assert "keyword1" in kd01["aliases"]
+        assert "keyword2" in kd01["aliases"]
+
+        # Entry without refs should work as before
+        rc01 = entries[1]
+        assert "alias1" in rc01["aliases"]
+        assert "alias2" in rc01["aliases"]
+
+    def test_refs_only_no_keywords(self):
+        """Entry with only refs and no keywords should have empty aliases."""
+        from core.memory_index import _parse_index_entries
+
+        index_block = "- [KD02] Decision title | refs: LL01, RC03\n"
+        entries = _parse_index_entries(index_block)
+        assert len(entries) == 1
+        assert entries[0]["aliases"] == []
+        assert "Decision title" in entries[0]["summary"]
+
+    def test_multiple_pipe_segments(self):
+        """Entry with refs + keywords separated by pipes parsed correctly."""
+        from core.memory_index import _parse_index_entries
+
+        index_block = "- [LL01] 2026-05-01 Lesson title | refs: KD01 | alpha, beta, gamma\n"
+        entries = _parse_index_entries(index_block)
+        assert len(entries) == 1
+        e = entries[0]
+        assert "alpha" in e["aliases"]
+        assert "beta" in e["aliases"]
+        assert "gamma" in e["aliases"]
+        assert "KD01" not in e["aliases"]
+        assert "refs:" not in " ".join(e["aliases"])

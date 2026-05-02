@@ -694,6 +694,65 @@ def read_correction_stats(
 # Registration helper
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# PostToolUse: memory edit guard — validates Edit calls on MEMORY.md/EVOLUTION.md
+# ---------------------------------------------------------------------------
+
+_MEMORY_FILE_SUFFIXES = ("MEMORY.md", "EVOLUTION.md")
+
+
+def create_memory_edit_guard():
+    """Factory: creates a PostToolUse hook that validates Edit calls on memory files.
+
+    Runs MemoryGuard on ``new_string`` when Edit targets a file ending in
+    MEMORY.md or EVOLUTION.md.  Observe-only — the edit has already happened,
+    but the hook injects a warning into additionalContext so the agent knows
+    to self-correct.
+    """
+    async def _hook(tool_use: dict, tool_use_id: str, session: Any) -> dict:
+        tool_name = tool_use.get("tool_name", "")
+        if tool_name != "Edit":
+            return {}
+
+        tool_input = tool_use.get("tool_input", {})
+        file_path = tool_input.get("file_path", "")
+
+        # Only check files that end with MEMORY.md or EVOLUTION.md
+        if not any(file_path.endswith(suffix) for suffix in _MEMORY_FILE_SUFFIXES):
+            return {}
+
+        new_string = tool_input.get("new_string", "")
+        if not new_string:
+            return {}
+
+        # Run MemoryGuard on the new content
+        try:
+            from core.memory_guard import MemoryGuard
+            guard = MemoryGuard()
+            result = guard.scan(new_string)
+            if result.rejected:
+                categories = {f.category for f in result.findings if f.action == "reject"}
+                warning = (
+                    f"⚠️ MemoryGuard WARNING: Edit to {file_path.split('/')[-1]} "
+                    f"contains dangerous patterns: {', '.join(categories)}. "
+                    f"This content is now in the system prompt. "
+                    f"Consider reverting the edit immediately."
+                )
+                logger.warning(
+                    "MemoryGuard: Edit to %s rejected — %s",
+                    file_path, categories,
+                )
+                return {"additionalContext": warning}
+        except ImportError:
+            pass  # memory_guard not available
+        except Exception as exc:
+            logger.debug("MemoryGuard Edit check failed: %s", exc)
+
+        return {}
+
+    return _hook
+
+
 def register_runtime_hooks(
     registry: "HookRegistry",
     session_context: dict,
@@ -738,6 +797,13 @@ def register_runtime_hooks(
         "session_checkpoint",
     )
 
+    # Phase 2: PostToolUse memory edit guard (validates Edit on MEMORY.md/EVOLUTION.md)
+    registry.register(
+        "PostToolUse",
+        create_memory_edit_guard(),
+        "memory_edit_guard",
+    )
+
     # Phase 2: SubagentStop transcript capture
     registry.register(
         "SubagentStop",
@@ -768,7 +834,7 @@ def register_runtime_hooks(
 
     logger.info(
         "Runtime hooks registered: correction_capture, error_pattern_detector, "
-        "failure_tracker_reset, file_tracker, session_checkpoint, "
+        "failure_tracker_reset, file_tracker, session_checkpoint, memory_edit_guard, "
         "subagent_capture, user_correction_detector, post_compact_injection, "
         "high_signal_capture"
     )

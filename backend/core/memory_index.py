@@ -474,10 +474,18 @@ def _parse_index_entries(index_block: str) -> list[dict]:
         key = m.group(1)
         rest = m.group(2)
 
-        # Split on | for aliases
+        # Split on all | segments, filtering out refs: annotations
         if "|" in rest:
-            summary, alias_str = rest.split("|", 1)
-            aliases = [a.strip() for a in alias_str.split(",") if a.strip()]
+            parts = rest.split("|")
+            summary = parts[0].strip()
+            aliases = []
+            for part in parts[1:]:
+                p = part.strip()
+                if p.startswith("refs:"):
+                    continue  # Cross-reference annotations, not keywords
+                aliases.extend(
+                    a.strip() for a in p.split(",") if a.strip()
+                )
         else:
             summary = rest
             aliases = []
