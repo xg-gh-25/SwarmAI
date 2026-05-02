@@ -87,20 +87,37 @@ def parse_corrections(evolution_text: str) -> list[dict]:
         status = status_match.group(1).strip() if status_match else "unknown"
 
         # Extract skill names mentioned (s_xxx pattern)
-        skill_refs = re.findall(r"\bs_[\w-]+\b", block)
+        skill_refs = re.findall(r"\bs_([\w-]+)\b", block)
+        # Also detect tool names from correction text (Bash, Read, Edit, etc.)
+        tool_refs = re.findall(
+            r"\b(Bash|Read|Edit|Write|WebFetch|Agent|Grep|Glob)\b",
+            correction_text + " " + pattern_text,
+        )
 
-        # Build the corrections.jsonl entry
-        entry = {
-            "id": cid,
-            "timestamp": f"{date_str}T00:00:00Z",
-            "source": "evolution_md_seed",
-            "correction_text": correction_text[:500],  # Cap for readability
-            "pattern": pattern_text[:500],
-            "status": status,
-            "skills_affected": list(set(skill_refs)) if skill_refs else [],
-            "seeded_at": datetime.now(timezone.utc).isoformat(),
-        }
-        corrections.append(entry)
+        # Build entries in the format read_correction_stats() expects:
+        # {"ts": float, "type": "user_correction", "tool": "skill_or_tool_name", ...}
+        # One entry per affected skill/tool to distribute signal correctly.
+        ts = datetime.fromisoformat(f"{date_str}T00:00:00+00:00").timestamp()
+
+        targets = list(set(
+            [f"s_{s}" for s in skill_refs]
+            + tool_refs
+        ))
+        if not targets:
+            targets = ["_user_correction"]  # fallback bucket
+
+        for target in targets:
+            entry = {
+                "ts": ts,
+                "session_id": f"seed_{cid}",
+                "type": "user_correction",
+                "tool": target,
+                "input_summary": correction_text[:200],
+                "error": pattern_text[:200],
+                "source": "evolution_md_seed",
+                "correction_id": cid,
+            }
+            corrections.append(entry)
 
     return corrections
 
@@ -110,21 +127,24 @@ def write_corrections(corrections: list[dict], output_path: Path) -> int:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Append to existing file (don't overwrite organic corrections)
-    existing_ids = set()
+    # Dedup by session_id prefix "seed_C###" to avoid double-seeding
+    existing_seeds = set()
     if output_path.exists():
         for line in output_path.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line:
                 try:
                     entry = json.loads(line)
-                    existing_ids.add(entry.get("id", ""))
+                    sid = entry.get("session_id", "")
+                    if sid.startswith("seed_"):
+                        existing_seeds.add(sid)
                 except json.JSONDecodeError:
                     pass
 
     written = 0
     with open(output_path, "a", encoding="utf-8") as f:
         for entry in corrections:
-            if entry["id"] in existing_ids:
+            if entry["session_id"] in existing_seeds:
                 continue  # Skip duplicates
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
             written += 1
@@ -144,7 +164,7 @@ def main() -> int:
         "--output-path",
         type=Path,
         default=None,
-        help="Path to corrections.jsonl (default: ~/.swarm-ai/SwarmWS/.context/corrections.jsonl)",
+        help="Path to corrections.jsonl (default: ~/.swarm-ai/.context/corrections.jsonl)",
     )
     parser.add_argument(
         "--dry-run",
@@ -154,7 +174,8 @@ def main() -> int:
     args = parser.parse_args()
 
     if args.output_path is None:
-        args.output_path = args.evolution_path.parent / "corrections.jsonl"
+        # Write to the runtime corrections path that read_correction_stats() reads
+        args.output_path = Path.home() / ".swarm-ai" / ".context" / "corrections.jsonl"
 
     if not args.evolution_path.exists():
         print(f"ERROR: {args.evolution_path} not found", file=sys.stderr)
@@ -167,9 +188,9 @@ def main() -> int:
         print("No corrections found in EVOLUTION.md", file=sys.stderr)
         return 1
 
-    print(f"Parsed {len(corrections)} corrections from EVOLUTION.md:")
+    print(f"Parsed {len(corrections)} correction entries from EVOLUTION.md:")
     for c in corrections:
-        print(f"  {c['id']} ({c['timestamp'][:10]}): {c['correction_text'][:80]}...")
+        print(f"  {c['correction_id']} → {c['tool']:20s} ({c['input_summary'][:60]}...)")
 
     if args.dry_run:
         print("\n[DRY RUN] Would write to:", args.output_path)
