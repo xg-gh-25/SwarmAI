@@ -129,7 +129,8 @@ def create_correction_capture_hook(
         session_context: Session context dict for session_id extraction
     """
     path = corrections_path or _DEFAULT_CORRECTIONS_PATH
-    sid = (session_context or {}).get("sdk_session_id", "unknown")
+    ctx = session_context if session_context is not None else {}
+    sid = ctx.get("sdk_session_id", "unknown")
 
     async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
         tool = _extract_field(input_data, "tool_name", "unknown")
@@ -145,6 +146,7 @@ def create_correction_capture_hook(
             "error": str(error)[:1000],
         }
         _append_correction(path, entry)
+        ctx["_corrections_count"] = ctx.get("_corrections_count", 0) + 1
         return {}
 
     return _hook
@@ -230,7 +232,8 @@ def create_user_correction_detector(
     to corrections.jsonl.  Observe-only — does not inject additionalContext.
     """
     path = corrections_path or _DEFAULT_CORRECTIONS_PATH
-    sid = (session_context or {}).get("sdk_session_id", "unknown")
+    ctx = session_context if session_context is not None else {}
+    sid = ctx.get("sdk_session_id", "unknown")
 
     async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
         prompt = _extract_field(input_data, "prompt", "")
@@ -245,6 +248,7 @@ def create_user_correction_detector(
                 "prompt": prompt[:1000],
             }
             _append_correction(path, entry)
+            ctx["_corrections_count"] = ctx.get("_corrections_count", 0) + 1
 
         return {}
 
@@ -373,7 +377,8 @@ def create_subagent_capture_hook(
     and writes findings to corrections.jsonl.  Observe-only.
     """
     path = corrections_path or _DEFAULT_CORRECTIONS_PATH
-    sid = (session_context or {}).get("sdk_session_id", "unknown")
+    ctx = session_context if session_context is not None else {}
+    sid = ctx.get("sdk_session_id", "unknown")
 
     async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
         transcript_path = _extract_field(input_data, "agent_transcript_path", "")
@@ -409,6 +414,7 @@ def create_subagent_capture_hook(
                 "summary": summary,
             }
             _append_correction(path, entry)
+            ctx["_corrections_count"] = ctx.get("_corrections_count", 0) + 1
 
         except Exception:
             logger.exception("Failed to capture subagent transcript from %s", transcript_path)

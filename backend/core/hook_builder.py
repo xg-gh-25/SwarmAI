@@ -235,7 +235,6 @@ async def build_hooks(
                 f"session={session_context.get('sdk_session_id')}"
             )
             session_context["_compacted"] = True
-            session_context["_compact_trigger"] = trigger
             return {}
 
         registry.register("PreCompact", _pre_compact_hook, "pre_compact_flag")

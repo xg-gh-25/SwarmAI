@@ -173,6 +173,12 @@ class DailyActivityExtractionHook:
 
     async def _execute_locked(self, context: HookContext) -> None:
         """Core extraction logic, called while holding ``_lock``."""
+        # 0. Clean up session checkpoint — normal session end means no crash.
+        # If the file is not deleted, recover_crash_checkpoint() would
+        # incorrectly treat it as a crash on next startup.
+        _checkpoint_path = Path.home() / ".swarm-ai" / ".context" / "session_checkpoint.json"
+        _checkpoint_path.unlink(missing_ok=True)
+
         # 1. Retrieve conversation log (capped for memory safety)
         messages = await db.messages.list_by_session_paginated(
             context.session_id, limit=500

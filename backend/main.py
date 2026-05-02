@@ -719,6 +719,15 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("Failed to generate permissions.json (non-critical): %s", exc)
 
+    # ── Recover crash checkpoint (if any) before session infra starts ─
+    try:
+        from hooks.daily_activity_hook import recover_crash_checkpoint as _recover_checkpoint
+        _recovered = _recover_checkpoint()
+        if _recovered:
+            logger.info("Crash checkpoint recovered into DailyActivity")
+    except Exception:
+        logger.debug("Crash checkpoint recovery skipped (non-fatal)", exc_info=True)
+
     # ── Session lifecycle hooks ──────────────────────────────────────
     from core.session_hooks import SessionLifecycleHookManager, BackgroundHookExecutor
     from core.summarization import SummarizationPipeline
