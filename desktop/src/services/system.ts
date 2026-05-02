@@ -540,7 +540,45 @@ export const systemService = {
       };
     }
   },
+  // ── Workspace Backup & Sync ──
+
+  /** Get backup status: last_backup, repo_url, schedule, enabled. */
+  async getBackupStatus(): Promise<BackupStatus> {
+    const response = await api.get<Record<string, unknown>>('/system/backup/status');
+    return deepSnakeToCamel(response.data) as BackupStatus;
+  },
+
+  /** Trigger immediate backup. Returns tables_exported, commit SHA, push status. */
+  async runBackup(): Promise<BackupResult> {
+    const response = await api.post<Record<string, unknown>>('/system/backup');
+    return deepSnakeToCamel(response.data) as BackupResult;
+  },
+
+  /** Update backup config: repo_url, token, schedule. */
+  async updateBackupConfig(config: { repoUrl?: string; token?: string; schedule?: string }): Promise<void> {
+    await api.put('/system/backup/config', {
+      repo_url: config.repoUrl,
+      token: config.token,
+      schedule: config.schedule,
+    });
+  },
 };
+
+// ============== Backup Types ==============
+
+export interface BackupStatus {
+  lastBackup: string | null;
+  repoUrl: string | null;
+  schedule: string;
+  enabled: boolean;
+}
+
+export interface BackupResult {
+  status: string;
+  tablesExported: number;
+  commit: string | null;
+  pushStatus: string;
+}
 
 // ============== Engine Metrics Types ==============
 

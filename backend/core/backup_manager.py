@@ -84,17 +84,45 @@ def _keychain_set_token(token: str) -> bool:
         return False
 
 
+def _file_get_token() -> str | None:
+    """Read token from ~/.swarm-ai/.backup-token (Linux/Hive fallback)."""
+    path = Path(os.path.expanduser("~/.swarm-ai/.backup-token"))
+    if path.exists():
+        try:
+            return path.read_text().strip()
+        except Exception:
+            pass
+    return None
+
+
+def _file_set_token(token: str) -> bool:
+    """Write token to ~/.swarm-ai/.backup-token with chmod 600."""
+    path = Path(os.path.expanduser("~/.swarm-ai/.backup-token"))
+    try:
+        path.write_text(token + "\n")
+        path.chmod(0o600)
+        return True
+    except Exception:
+        return False
+
+
 def get_backup_token() -> str | None:
-    """Get backup token. Priority: env var > Keychain."""
+    """Get backup token. Priority: env var > Keychain (macOS) > file (Linux)."""
     env_token = os.environ.get("SWARM_BACKUP_TOKEN")
     if env_token:
         return env_token
-    return _keychain_get_token()
+    token = _keychain_get_token()
+    if token:
+        return token
+    return _file_get_token()
 
 
 def set_backup_token(token: str) -> bool:
-    """Store backup token in Keychain (macOS) or env fallback."""
-    return _keychain_set_token(token)
+    """Store backup token. macOS: Keychain. Linux/Hive: ~/.swarm-ai/.backup-token."""
+    import sys
+    if sys.platform == "darwin":
+        return _keychain_set_token(token)
+    return _file_set_token(token)
 
 
 # ---------------------------------------------------------------------------
