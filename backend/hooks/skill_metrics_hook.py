@@ -280,6 +280,10 @@ def _write_corrections_to_eval_jsonl(
                     f.write(json.dumps(entry, ensure_ascii=False) + "\n")
                 finally:
                     flock_unlock(f)
+            # Rotate after lock release — per-skill files are small but
+            # unbounded append without cap is a structural gap.
+            from utils.jsonl_rotation import rotate_jsonl_if_oversized
+            rotate_jsonl_if_oversized(jsonl_path)
 
             logger.debug(
                 "SkillMetricsHook: wrote correction eval for %s to %s",

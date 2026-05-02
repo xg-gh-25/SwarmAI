@@ -1432,6 +1432,9 @@ def _write_cycle_changelog(
                 try:
                     with open(changelog_path, "a", encoding="utf-8") as f:
                         f.write(json.dumps(entry) + "\n")
+                    # Rotate inside lock to prevent concurrent rotation
+                    from utils.jsonl_rotation import rotate_jsonl_if_oversized
+                    rotate_jsonl_if_oversized(changelog_path)
                 finally:
                     flock_unlock(lock_fd)
         except OSError:

@@ -204,27 +204,22 @@ class TestUserCorrectionDetector:
             rh._MAX_CORRECTIONS_SIZE_BYTES, rh._MAX_CORRECTIONS_ENTRIES = orig_size, orig_entries
 
     def test_rotate_keeps_newest_entries(self, corrections_file):
-        """_rotate_corrections preserves newest N entries, drops oldest."""
-        from core.runtime_hooks import _rotate_corrections
-        import core.runtime_hooks as rh
+        """rotate_jsonl_if_oversized preserves newest N entries, drops oldest."""
+        from utils.jsonl_rotation import rotate_jsonl_if_oversized
 
-        orig_entries = rh._MAX_CORRECTIONS_ENTRIES
-        rh._MAX_CORRECTIONS_ENTRIES = 5
-        try:
-            # Write 20 lines directly
-            with open(corrections_file, "w") as f:
-                for i in range(20):
-                    f.write(json.dumps({"idx": i}) + "\n")
+        # Write 20 lines directly
+        with open(corrections_file, "w") as f:
+            for i in range(20):
+                f.write(json.dumps({"idx": i}) + "\n")
 
-            _rotate_corrections(corrections_file)
+        # Force rotation: max_size_bytes=0 triggers on any file, keep 5
+        rotate_jsonl_if_oversized(corrections_file, max_size_bytes=0, max_entries=5)
 
-            lines = corrections_file.read_text().strip().split("\n")
-            assert len(lines) == 5
-            # Kept entries are idx 15-19 (the newest 5)
-            assert json.loads(lines[0])["idx"] == 15
-            assert json.loads(lines[-1])["idx"] == 19
-        finally:
-            rh._MAX_CORRECTIONS_ENTRIES = orig_entries
+        lines = corrections_file.read_text().strip().split("\n")
+        assert len(lines) == 5
+        # Kept entries are idx 15-19 (the newest 5)
+        assert json.loads(lines[0])["idx"] == 15
+        assert json.loads(lines[-1])["idx"] == 19
 
     @pytest.mark.asyncio
     async def test_no_false_positive_on_contains(self, corrections_file, session_context):

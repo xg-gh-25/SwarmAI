@@ -63,10 +63,9 @@ _CORRECTION_PATTERNS_EN = re.compile(
 def _append_correction(path: str, entry: dict) -> None:
     """Append a correction entry to JSONL file, rotating when oversized.
 
-    Rotation strategy: when file exceeds ``_MAX_CORRECTIONS_SIZE_BYTES``,
-    read all lines, keep the newest ``_MAX_CORRECTIONS_ENTRIES``, rewrite.
-    One stat() per write; rotation is rare (~monthly at normal usage).
-    Best-effort — never raises.
+    Rotation: delegates to ``utils.jsonl_rotation.rotate_jsonl_if_oversized``
+    (512 KB trigger, keeps newest 500 entries).  One stat() per write;
+    rotation is rare (~monthly at normal usage).  Best-effort — never raises.
     """
     try:
         p = Path(path)
@@ -77,34 +76,16 @@ def _append_correction(path: str, entry: dict) -> None:
         with open(p, "a", encoding="utf-8") as f:
             f.write(line)
 
-        # Check size — one stat(), cheap
-        if p.stat().st_size > _MAX_CORRECTIONS_SIZE_BYTES:
-            _rotate_corrections(p)
+        # Rotate if oversized
+        from utils.jsonl_rotation import rotate_jsonl_if_oversized
+        rotate_jsonl_if_oversized(
+            p,
+            max_size_bytes=_MAX_CORRECTIONS_SIZE_BYTES,
+            max_entries=_MAX_CORRECTIONS_ENTRIES,
+        )
 
     except Exception:
         logger.exception("Failed to write correction to %s", path)
-
-
-def _rotate_corrections(p: Path) -> None:
-    """Keep newest ``_MAX_CORRECTIONS_ENTRIES`` lines in the file.
-
-    Atomic: write to .tmp, then rename (same filesystem = atomic on POSIX).
-    """
-    try:
-        lines = p.read_text(encoding="utf-8").strip().split("\n")
-        if len(lines) <= _MAX_CORRECTIONS_ENTRIES:
-            return  # size exceeded but entry count is fine — skip
-
-        kept = lines[-_MAX_CORRECTIONS_ENTRIES:]
-        tmp = p.with_suffix(".jsonl.tmp")
-        tmp.write_text("\n".join(kept) + "\n", encoding="utf-8")
-        tmp.rename(p)
-        logger.info(
-            "Rotated corrections.jsonl: %d → %d entries",
-            len(lines), len(kept),
-        )
-    except Exception:
-        logger.exception("Failed to rotate %s", p)
 
 
 def _extract_field(data: Any, field: str, default: Any = "") -> Any:
