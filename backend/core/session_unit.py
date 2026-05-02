@@ -322,6 +322,10 @@ class SessionUnit:
         # True when this unit serves channel conversations (Slack, etc.)
         # Channel units use a dedicated slot pool, separate from chat tabs.
         self.is_channel_session: bool = False
+        # True after the first message with history injection has been
+        # processed.  Prevents re-injecting on every subsequent message
+        # within the same daemon lifecycle (channel resume fix).
+        self._channel_history_injected: bool = False
 
         # ── Internal — not part of public interface ──────────────
         self._client: Optional[ClaudeSDKClient] = None
