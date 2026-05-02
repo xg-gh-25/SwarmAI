@@ -1905,8 +1905,16 @@ def _extract_signals_from_output(job: Job, result_text: str) -> list[RawSignal]:
     )]
 
 
+_FAILURE_ALERT_THRESHOLD = 3  # alert after N consecutive failures
+
+
 def _update_job_state(state: SchedulerState, job_id: str, result: JobResult) -> None:
-    """Update persistent job state after execution."""
+    """Update persistent job state after execution.
+
+    Tracks consecutive failures and writes a high-visibility alert to
+    .job-results.jsonl when the streak hits _FAILURE_ALERT_THRESHOLD.
+    This surfaces in the session briefing so the user notices.
+    """
     if job_id not in state.jobs:
         state.jobs[job_id] = JobState()
 
@@ -1918,7 +1926,44 @@ def _update_job_state(state: SchedulerState, job_id: str, result: JobResult) -> 
 
     if result.status == "failed":
         js.consecutive_failures += 1
+        # Alert on streak threshold — writes to JSONL so briefing picks it up.
+        # Only fires once per streak (exactly at threshold, not every failure after).
+        if js.consecutive_failures == _FAILURE_ALERT_THRESHOLD:
+            _write_failure_streak_alert(job_id, js.consecutive_failures, result)
     elif result.status != "auth_failed":
         # auth_failed is transient — don't reset streak (would hide real
         # failures) but don't increment either (not a job bug).
         js.consecutive_failures = 0
+
+
+def _write_failure_streak_alert(job_id: str, streak: int, last_result: JobResult) -> None:
+    """Write a high-visibility alert entry to .job-results.jsonl.
+
+    This entry appears in the session briefing alongside normal job results,
+    making consecutive failures impossible to miss. Fires once per streak
+    (at exactly _FAILURE_ALERT_THRESHOLD), not on every subsequent failure.
+    """
+    alert_entry = {
+        "job_id": job_id,
+        "job_name": f"⚠️ ALERT: {job_id} failed {streak}x in a row",
+        "run_at": datetime.now(timezone.utc).isoformat(),
+        "status": "failed",
+        "tokens_used": 0,
+        "duration_seconds": 0,
+        "summary": (
+            f"Job '{job_id}' has failed {streak} consecutive times. "
+            f"Last error: {(last_result.error or last_result.summary or 'unknown')[:150]}. "
+            f"Job is now in 24h cooldown — will auto-retry after cooldown expires."
+        ),
+    }
+
+    try:
+        JOB_RESULTS_JSONL.parent.mkdir(parents=True, exist_ok=True)
+        with open(JOB_RESULTS_JSONL, "a", encoding="utf-8") as f:
+            f.write(json.dumps(alert_entry, ensure_ascii=False) + "\n")
+        logger.warning(
+            f"Job '{job_id}' consecutive failure streak: {streak}. "
+            f"Alert written to job results."
+        )
+    except Exception as e:
+        logger.error(f"Failed to write failure streak alert: {e}")
