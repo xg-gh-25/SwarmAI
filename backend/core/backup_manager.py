@@ -18,9 +18,22 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
+import re
+
 from core.git_sync_engine import GitSyncEngine
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_repo_url(url: str | None) -> str | None:
+    """Strip embedded credentials from a git URL before storing/returning.
+
+    Converts https://ghp_xxx@github.com/user/repo.git
+         to  https://github.com/user/repo.git
+    """
+    if not url:
+        return url
+    return re.sub(r"https?://[^@]+@", lambda m: m.group(0).split("//")[0] + "//", url)
 
 # L2 tables to export (irreplaceable data only)
 L2_TABLES = [
@@ -108,15 +121,15 @@ class BackupManager:
         if self.state_path.exists():
             try:
                 return json.loads(self.state_path.read_text())
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Failed to load backup state: %s", e)
         return {"last_backup": None, "repo_url": None, "schedule": "daily_3am", "enabled": True}
 
     def _save_state(self, state: dict) -> None:
         """Persist backup state to JSON file."""
         self.state_path.write_text(json.dumps(state, indent=2))
 
-    async def backup(self, force: bool = False) -> dict:
+    async def backup(self) -> dict:
         """Run a full backup: config snapshot + DB export + git push.
 
         Returns dict with status, tables_exported, commit, push_status.
@@ -161,7 +174,7 @@ class BackupManager:
 
         # 5. Update state
         state["last_backup"] = datetime.now().isoformat()
-        state["repo_url"] = self.engine.get_remote_url()
+        state["repo_url"] = _sanitize_repo_url(self.engine.get_remote_url())
         self._save_state(state)
 
         logger.info(

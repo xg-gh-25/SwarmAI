@@ -66,7 +66,7 @@ def backup_env(tmp_path):
             )
             await conn.commit()
 
-    asyncio.get_event_loop().run_until_complete(_setup_db())
+    asyncio.run(_setup_db())
 
     # Init git repo in workspace
     subprocess.run(["git", "init", str(ws)], capture_output=True, check=True)
@@ -163,11 +163,12 @@ class TestDBExportImport:
         )
         assert exported == 3
 
-        # Import into a fresh DB
+        # Import into a fresh DB (pass same allowed_tables as export)
         fresh_db = backup_env["swarm_dir"] / "fresh.db"
         imported = await engine.import_db_tables(
             db_path=fresh_db,
             export_dir=export_dir,
+            allowed_tables=tables,
         )
         assert imported == 3
 
