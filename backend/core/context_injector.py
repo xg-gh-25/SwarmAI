@@ -1,23 +1,28 @@
 """Conversation context injection for resumed sessions.
 
-Two-layer resume: structured checkpoint (~1-3K tokens) + recent turns
-(~2-5K tokens).  The checkpoint gives the new agent an instant picture
-of what was happening; the recent turns provide enough conversational
-context to continue naturally.
+Five-layer enriched resume: structured checkpoint (~5-10K tokens),
+uncommitted git state (~500), assistant conclusions (~5-8K),
+key tool results (~5-15K), and recent conversation (~20-60K).
 
-**Stability contract**: if checkpoint extraction fails for any reason,
-the module falls back to the legacy raw-history injection.  Every
-extraction helper is wrapped in its own try/except — one failure never
-cascades to another.
+The checkpoint gives the new agent a full picture of what was happening;
+the enrichment layers provide enough substance to continue naturally.
+Budget is model-aware and generous (150K for 1M models).
+
+**Stability contract**: if any extraction fails, the module falls back
+to the legacy raw-history injection.  Every extraction helper is
+wrapped in its own try/except — one failure never cascades to another.
 
 Public API (unchanged):
 - ``build_resume_context(app_session_id, ...)`` → str
 """
 
+import asyncio
 import json
 import logging
 import re
+import subprocess as _subprocess
 from datetime import datetime
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -485,10 +490,6 @@ def _extract_user_directives(
         return []
 
 
-import asyncio
-import subprocess as _subprocess
-
-
 def _run_git_command(args: list[str], cwd: str, timeout: float = 3.0) -> str:
     """Run a git command synchronously with timeout.  Thread-safe.
 
@@ -548,8 +549,6 @@ def _merge_crash_checkpoint(checkpoint_path=None) -> str | None:
 
     Returns formatted string or None if no checkpoint exists.
     """
-    from pathlib import Path
-
     if checkpoint_path is None:
         checkpoint_path = Path.home() / ".swarm-ai" / ".context" / "session_checkpoint.json"
     else:
@@ -984,8 +983,7 @@ async def build_resume_context(
             tool_results_text = _extract_key_tool_results(raw_messages, max_results=15)
 
             # Enrichment layer: uncommitted git state (async, with timeout)
-            from pathlib import Path as _Path
-            ws_dir = str(_Path.home() / ".swarm-ai" / "SwarmWS")
+            ws_dir = str(Path.home() / ".swarm-ai" / "SwarmWS")
             uncommitted = await _extract_uncommitted_state(ws_dir)
         except Exception:
             logger.warning("Structured checkpoint extraction failed",
