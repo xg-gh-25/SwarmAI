@@ -336,6 +336,24 @@ def locked_field_modify(
         LockedWriteError: On lock timeout or file-not-found.
         ValueError: On field modification error or invalid mode/args.
     """
+    # ── MemoryGuard: sanitize value before any file I/O ─────────────
+    if value is not None:
+        try:
+            from core.memory_guard import MemoryGuard, MemoryGuardError
+            _guard = MemoryGuard()
+            try:
+                value = _guard.sanitize(value)
+            except MemoryGuardError as e:
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    "MemoryGuard rejected field modify on %s: %s", file_path, e,
+                )
+                raise LockedWriteError(
+                    f"Memory injection blocked — {e}"
+                ) from e
+        except ImportError:
+            pass  # memory_guard not available — proceed without guard
+
     lock_path = file_path.with_suffix(file_path.suffix + ".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
 
