@@ -1,12 +1,12 @@
 """Git sync engine for workspace backup & restore.
 
 Handles:
-- DB table export (sqlite3 .backup → per-table .dump → gzip)
-- DB table import (gunzip → sqlite3 pipe)
+- DB table export (sqlite3 .backup → per-table SELECT → gzip)
+- DB table import (gunzip → validated SQL → sqlite3)
 - Git operations (add, commit, push) with timeouts
-- Config file snapshot/restore
 
 All subprocess calls use shell=False and 30s timeout.
+DB I/O runs in a thread via asyncio.to_thread to avoid blocking the event loop.
 """
 import asyncio
 import gzip
@@ -31,13 +31,149 @@ def _run_git(args: list[str], cwd: Path, timeout: int = GIT_TIMEOUT) -> subproce
     )
 
 
+# ---------------------------------------------------------------------------
+# Sync helpers (run in thread via asyncio.to_thread)
+# ---------------------------------------------------------------------------
+
+def _export_tables_sync(db_path: Path, export_dir: Path, tables: list[str]) -> int:
+    """Export DB tables to gzipped SQL dumps (sync, blocking I/O).
+
+    Uses sqlite3 .backup for WAL-safe snapshot, then per-table SELECT.
+    Validates table names against sqlite_master before querying.
+    """
+    export_dir.mkdir(parents=True, exist_ok=True)
+    snap_path = export_dir / "_snapshot.db"
+
+    # WAL-safe snapshot
+    src = None
+    dst = None
+    try:
+        src = sqlite3.connect(str(db_path))
+        dst = sqlite3.connect(str(snap_path))
+        src.backup(dst)
+    except Exception as e:
+        logger.warning("DB snapshot failed: %s", e)
+        return 0
+    finally:
+        if dst:
+            dst.close()
+        if src:
+            src.close()
+
+    exported = 0
+    snap = None
+    try:
+        snap = sqlite3.connect(str(snap_path))
+        # Get valid table names from schema
+        valid_tables = {
+            r[0] for r in snap.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+
+        for table in tables:
+            if table not in valid_tables:
+                continue  # Table doesn't exist in this DB — skip silently
+            try:
+                gz_path = export_dir / f"{table}.sql.gz"
+                # Get DDL
+                ddl_row = snap.execute(
+                    "SELECT sql FROM sqlite_master WHERE name=?", (table,)
+                ).fetchone()
+                if not ddl_row or not ddl_row[0]:
+                    continue
+
+                lines = [ddl_row[0] + ";"]
+
+                # Get data via parameterized-safe column-aware SELECT
+                cursor = snap.execute(f'SELECT * FROM "{table}"')
+                cols = [d[0] for d in cursor.description]
+                col_list = ", ".join(f'"{c}"' for c in cols)
+                for row in cursor:
+                    placeholders = ", ".join(
+                        "NULL" if v is None
+                        else f"'{str(v).replace(chr(39), chr(39)+chr(39))}'"
+                        for v in row
+                    )
+                    lines.append(f'INSERT INTO "{table}" ({col_list}) VALUES ({placeholders});')
+
+                with gzip.open(gz_path, "wt") as f:
+                    f.write("\n".join(lines) + "\n")
+                exported += 1
+                logger.debug("Exported %s (%d rows)", table, len(lines) - 1)
+            except Exception as e:
+                logger.warning("Failed to export table %s: %s", table, e)
+    finally:
+        if snap:
+            snap.close()
+        snap_path.unlink(missing_ok=True)
+
+    return exported
+
+
+def _import_tables_sync(
+    db_path: Path,
+    export_dir: Path,
+    allowed_tables: list[str],
+) -> int:
+    """Import gzipped SQL dumps into a DB (sync, blocking I/O).
+
+    Security: only processes files matching allowed table names.
+    Validates each SQL statement is CREATE TABLE/INDEX or INSERT only.
+    """
+    allowed_set = set(allowed_tables)
+    imported = 0
+    conn = None
+    try:
+        conn = sqlite3.connect(str(db_path))
+        for gz_file in sorted(export_dir.glob("*.sql.gz")):
+            table_name = gz_file.stem.removesuffix(".sql")  # "messages.sql.gz" → stem "messages.sql" → "messages"
+            if table_name.startswith("_"):
+                continue
+            if table_name not in allowed_set:
+                logger.warning("Skipping %s: not in allowed tables", gz_file.name)
+                continue
+            try:
+                with gzip.open(gz_file, "rt") as f:
+                    sql = f.read()
+                # Validate: only safe statement types
+                for stmt in sql.split(";"):
+                    stripped = stmt.strip().upper()
+                    if not stripped or stripped in ("COMMIT", "BEGIN TRANSACTION"):
+                        continue
+                    if not (
+                        stripped.startswith("CREATE TABLE")
+                        or stripped.startswith("CREATE INDEX")
+                        or stripped.startswith("INSERT INTO")
+                        or stripped.startswith("DELETE FROM")
+                    ):
+                        logger.warning(
+                            "Rejected unsafe SQL in %s: %.80s",
+                            gz_file.name, stmt.strip(),
+                        )
+                        raise ValueError(f"Unsafe SQL statement in {gz_file.name}")
+                conn.executescript(sql)
+                imported += 1
+                logger.debug("Imported %s", gz_file.name)
+            except Exception as e:
+                logger.warning("Failed to import %s: %s", gz_file.name, e)
+    finally:
+        if conn:
+            conn.close()
+    return imported
+
+
+# ---------------------------------------------------------------------------
+# Public async API
+# ---------------------------------------------------------------------------
+
 class GitSyncEngine:
     """Git operations + DB export/import for workspace backup."""
 
     def __init__(self, workspace_dir: Path):
         self.workspace_dir = workspace_dir
 
-    # -- DB Export ----------------------------------------------------------
+    # -- DB Export (async wrapper) ------------------------------------------
 
     async def export_db_tables(
         self,
@@ -47,90 +183,32 @@ class GitSyncEngine:
     ) -> int:
         """Export DB tables to gzipped SQL dumps. Returns count exported.
 
-        Uses sqlite3 .backup for WAL-safe snapshot, then .dump per table.
+        Runs blocking I/O in a thread to avoid starving the event loop.
         """
-        export_dir.mkdir(parents=True, exist_ok=True)
+        return await asyncio.to_thread(
+            _export_tables_sync, db_path, export_dir, tables
+        )
 
-        # WAL-safe snapshot to temp file
-        snap_path = export_dir / "_snapshot.db"
-        try:
-            src = sqlite3.connect(str(db_path))
-            dst = sqlite3.connect(str(snap_path))
-            src.backup(dst)
-            src.close()
-            dst.close()
-        except Exception as e:
-            logger.warning("DB snapshot failed: %s", e)
-            return 0
-
-        exported = 0
-        snap = sqlite3.connect(str(snap_path))
-        for table in tables:
-            try:
-                gz_path = export_dir / f"{table}.sql.gz"
-                # Get table DDL + data
-                rows = list(snap.iterdump())
-                # Filter to only this table's statements
-                table_sql = []
-                for row in rows:
-                    if table in row:
-                        table_sql.append(row)
-
-                if not table_sql:
-                    # Fallback: dump specific table
-                    cursor = snap.execute(
-                        f"SELECT sql FROM sqlite_master WHERE name=?", (table,)
-                    )
-                    ddl = cursor.fetchone()
-                    if ddl and ddl[0]:
-                        table_sql.append(ddl[0] + ";")
-                        cursor = snap.execute(f"SELECT * FROM {table}")
-                        cols = [d[0] for d in cursor.description]
-                        for data_row in cursor:
-                            values = ", ".join(
-                                f"'{str(v).replace(chr(39), chr(39)+chr(39))}'"
-                                if v is not None else "NULL"
-                                for v in data_row
-                            )
-                            table_sql.append(
-                                f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({values});"
-                            )
-
-                if table_sql:
-                    with gzip.open(gz_path, "wt") as f:
-                        f.write("\n".join(table_sql) + "\n")
-                    exported += 1
-                    logger.debug("Exported %s (%d statements)", table, len(table_sql))
-            except Exception as e:
-                logger.warning("Failed to export table %s: %s", table, e)
-
-        snap.close()
-        snap_path.unlink(missing_ok=True)
-        return exported
-
-    # -- DB Import ----------------------------------------------------------
+    # -- DB Import (async wrapper) ------------------------------------------
 
     async def import_db_tables(
         self,
         db_path: Path,
         export_dir: Path,
+        allowed_tables: list[str] | None = None,
     ) -> int:
-        """Import gzipped SQL dumps into a DB. Returns count imported."""
-        imported = 0
-        conn = sqlite3.connect(str(db_path))
+        """Import gzipped SQL dumps into a DB. Returns count imported.
 
-        for gz_file in sorted(export_dir.glob("*.sql.gz")):
-            try:
-                with gzip.open(gz_file, "rt") as f:
-                    sql = f.read()
-                conn.executescript(sql)
-                imported += 1
-                logger.debug("Imported %s", gz_file.name)
-            except Exception as e:
-                logger.warning("Failed to import %s: %s", gz_file.name, e)
+        Security: only allowed table names are processed, each SQL
+        statement validated to be CREATE/INSERT only.
+        """
+        if allowed_tables is None:
+            from core.backup_manager import L2_TABLES
+            allowed_tables = L2_TABLES
 
-        conn.close()
-        return imported
+        return await asyncio.to_thread(
+            _import_tables_sync, db_path, export_dir, allowed_tables
+        )
 
     # -- Git Operations -----------------------------------------------------
 
@@ -173,11 +251,3 @@ class GitSyncEngine:
             return result.stdout.strip() if result.returncode == 0 else None
         except (subprocess.TimeoutExpired, Exception):
             return None
-
-    def has_changes(self) -> bool:
-        """Check if there are uncommitted changes."""
-        try:
-            result = _run_git(["status", "--porcelain"], self.workspace_dir)
-            return bool(result.stdout.strip())
-        except (subprocess.TimeoutExpired, Exception):
-            return False

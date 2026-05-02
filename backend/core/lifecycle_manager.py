@@ -242,6 +242,9 @@ class LifecycleManager:
                         await self._purge_stale_cold()
                         await self._cleanup_stale_channel_sessions()
                         await self._cleanup_expired_messages()
+                    # Workspace backup check every 60th cycle (~60 min)
+                    if cycle % 60 == 0 and cycle > 0:
+                        await self._run_daily_backup()
                 except Exception as exc:
                     logger.error("Maintenance loop error: %s", exc, exc_info=True)
         except asyncio.CancelledError:
@@ -613,14 +616,32 @@ class LifecycleManager:
     async def _run_daily_backup(self) -> None:
         """Run workspace backup if >24h since last backup.
 
-        Non-fatal — failures are logged and skipped. Runs once per day
-        via the maintenance loop (cycle % 1440 ≈ daily at 60s intervals).
+        Non-fatal — failures are logged and skipped. Called from the
+        maintenance loop every 60th cycle (~60 min). Checks last_backup
+        timestamp and skips if <24h ago.
         """
         try:
             from core.backup_manager import BackupManager
+            import json as _json
+            from datetime import datetime, timedelta
 
             if not hasattr(self, "_backup_manager"):
                 self._backup_manager = BackupManager()
+
+            # Skip if <24h since last backup
+            status = self._backup_manager.get_status()
+            last = status.get("last_backup")
+            if last:
+                try:
+                    last_dt = datetime.fromisoformat(last)
+                    if datetime.now() - last_dt < timedelta(hours=24):
+                        return  # Too recent, skip
+                except (ValueError, TypeError):
+                    pass  # Malformed timestamp — run backup
+
+            if not status.get("enabled", True):
+                return  # Backup disabled
+
             result = await self._backup_manager.backup()
             logger.info(
                 "lifecycle_manager.daily_backup: %s (tables=%d, push=%s)",
