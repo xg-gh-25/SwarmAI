@@ -509,7 +509,7 @@ class TestCrashCheckpointRecovery:
         content = da_file.read_text()
         assert "Recovered from crash checkpoint" in content
         assert "crash-se" in content
-        assert "/a.py" in content
+        assert "`a.py`" in content
 
     def test_no_checkpoint_returns_false(self, tmp_path):
         """No checkpoint file → returns False, no crash."""
@@ -533,6 +533,133 @@ class TestCrashCheckpointRecovery:
 
         assert result is False
         assert not checkpoint.exists()
+
+    def test_recovery_renders_git_commits(self, tmp_path):
+        """Enriched checkpoint with git_commits renders in recovery."""
+        from hooks.daily_activity_hook import recover_crash_checkpoint
+        import unittest.mock as mock
+
+        ctx_dir = tmp_path / ".swarm-ai" / ".context"
+        ctx_dir.mkdir(parents=True)
+        checkpoint = ctx_dir / "session_checkpoint.json"
+        checkpoint.write_text(json.dumps({
+            "session_id": "git-session-12345",
+            "ts": 180.0,
+            "tool_count": 20,
+            "files_touched": ["/src/main.py"],
+            "corrections_count": 2,
+            "git_commits": ["abc1234 feat: add new feature", "def5678 fix: bug fix"],
+        }))
+
+        ws = tmp_path / ".swarm-ai" / "SwarmWS"
+        with mock.patch.object(Path, "home", return_value=tmp_path):
+            result = recover_crash_checkpoint(workspace_dir=ws)
+
+        assert result is True
+        from datetime import datetime
+        da_file = ws / "Knowledge" / "DailyActivity" / f"{datetime.now().strftime('%Y-%m-%d')}.md"
+        content = da_file.read_text()
+        assert "abc1234" in content
+        assert "Corrections" in content
+        assert "2" in content
+
+
+class TestMidSessionContentCheckpoint:
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_writes_to_daily_activity(self, tmp_path, session_context):
+        """After 10 tool calls with files, DailyActivity gets a content entry."""
+        from core.runtime_hooks import create_session_checkpoint
+
+        ws = tmp_path / "SwarmWS"
+        checkpoint_path = str(tmp_path / "checkpoint.json")
+        session_context["_files_touched"] = {"/src/foo.py", "/src/bar.py"}
+        session_context["sdk_session_id"] = "content-test-1234"
+
+        hook = create_session_checkpoint(
+            session_context, checkpoint_path=checkpoint_path,
+            interval=10, workspace_dir=str(ws),
+        )
+
+        # Fire 10 tool calls
+        for _ in range(10):
+            await hook({}, None, MagicMock())
+
+        # Check DailyActivity
+        from datetime import datetime
+        da_file = ws / "Knowledge" / "DailyActivity" / f"{datetime.now().strftime('%Y-%m-%d')}.md"
+        assert da_file.exists()
+        content = da_file.read_text()
+        assert "Mid-session checkpoint" in content
+        assert "content-" in content  # session_id[:8]
+        assert "foo.py" in content or "bar.py" in content
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_json_includes_git_commits(self, tmp_path, session_context):
+        """Checkpoint JSON includes git_commits field."""
+        from core.runtime_hooks import create_session_checkpoint
+
+        checkpoint_path = str(tmp_path / "checkpoint.json")
+        session_context["_files_touched"] = {"/x.py"}
+
+        hook = create_session_checkpoint(
+            session_context, checkpoint_path=checkpoint_path,
+            interval=10, workspace_dir=str(tmp_path),
+        )
+
+        for _ in range(10):
+            await hook({}, None, MagicMock())
+
+        data = json.loads(Path(checkpoint_path).read_text())
+        assert "git_commits" in data
+        assert isinstance(data["git_commits"], list)
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_content_capped(self, tmp_path, session_context):
+        """DailyActivity entry never exceeds 1KB."""
+        from core.runtime_hooks import create_session_checkpoint
+
+        ws = tmp_path / "SwarmWS"
+        checkpoint_path = str(tmp_path / "checkpoint.json")
+        # Create lots of files to test truncation
+        session_context["_files_touched"] = {f"/src/file_{i:03d}.py" for i in range(50)}
+        session_context["sdk_session_id"] = "cap-test-1234"
+
+        hook = create_session_checkpoint(
+            session_context, checkpoint_path=checkpoint_path,
+            interval=5, workspace_dir=str(ws),
+        )
+
+        for _ in range(5):
+            await hook({}, None, MagicMock())
+
+        from datetime import datetime
+        da_file = ws / "Knowledge" / "DailyActivity" / f"{datetime.now().strftime('%Y-%m-%d')}.md"
+        content = da_file.read_text()
+        assert len(content.encode("utf-8")) <= 1200  # 1KB target + some slack for header
+
+    @pytest.mark.asyncio
+    async def test_no_write_when_no_new_content(self, tmp_path, session_context):
+        """No DailyActivity write when nothing changed (no files, no commits)."""
+        from core.runtime_hooks import create_session_checkpoint
+
+        ws = tmp_path / "SwarmWS"
+        checkpoint_path = str(tmp_path / "checkpoint.json")
+        # Empty session — no files touched
+        session_context["sdk_session_id"] = "empty-test-1234"
+
+        hook = create_session_checkpoint(
+            session_context, checkpoint_path=checkpoint_path,
+            interval=10, workspace_dir=str(ws),
+        )
+
+        for _ in range(10):
+            await hook({}, None, MagicMock())
+
+        from datetime import datetime
+        da_file = ws / "Knowledge" / "DailyActivity" / f"{datetime.now().strftime('%Y-%m-%d')}.md"
+        # Should NOT exist — nothing to checkpoint
+        assert not da_file.exists()
 
 
 class TestHighSignalCapture:

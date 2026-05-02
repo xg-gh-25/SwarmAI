@@ -101,15 +101,26 @@ def recover_crash_checkpoint(workspace_dir: Path | None = None) -> bool:
             checkpoint_path.unlink(missing_ok=True)
             return False
 
-        # Build recovery entry
+        # Build recovery entry with enriched content (git_commits if available)
         from datetime import datetime
         crash_time = datetime.fromtimestamp(ts).strftime("%H:%M")
+        git_commits = data.get("git_commits", [])
+        corrections_count = data.get("corrections_count", 0)
+
         entry = (
             f"\n## {crash_time} | {session_id[:8]} | ⚠️ Recovered from crash checkpoint\n"
             f"**What happened:** Session crashed or was evicted after {tool_count} tool calls.\n"
         )
         if files_touched:
-            entry += f"**Files:** {', '.join(f'`{f}`' for f in files_touched[:10])}\n"
+            from pathlib import PurePosixPath
+            file_names = [PurePosixPath(f).name for f in files_touched[:10]]
+            entry += f"**Files:** {', '.join(f'`{f}`' for f in file_names)}\n"
+        if git_commits:
+            entry += "**Git activity:**\n"
+            for c in git_commits[:3]:
+                entry += f"- `{c[:72]}`\n"
+        if corrections_count:
+            entry += f"**Corrections:** {corrections_count}\n"
 
         # Append to today's DailyActivity
         ws = workspace_dir or (Path.home() / ".swarm-ai" / "SwarmWS")
