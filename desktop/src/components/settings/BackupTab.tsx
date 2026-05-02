@@ -5,7 +5,7 @@
  * manual trigger + configuration. Uses the same patterns as SystemTab.
  */
 import { useState, useEffect, useCallback } from 'react';
-import { systemService, BackupStatus } from '../../services/system';
+import { systemService, BackupStatus, RestoreEvent } from '../../services/system';
 import { useToast } from '../../contexts/ToastContext';
 
 export default function BackupTab() {
@@ -16,6 +16,8 @@ export default function BackupTab() {
   const [configOpen, setConfigOpen] = useState(false);
   const [repoUrl, setRepoUrl] = useState('');
   const [token, setToken] = useState('');
+  const [restoring, setRestoring] = useState(false);
+  const [restoreEvents, setRestoreEvents] = useState<RestoreEvent[]>([]);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -161,6 +163,65 @@ export default function BackupTab() {
           </button>
         </div>
       )}
+
+      {/* Restore section */}
+      <div className="p-4 rounded-lg border border-[var(--color-border)] space-y-3">
+        <h4 className="text-sm font-semibold text-[var(--color-text)]">Restore from Backup</h4>
+        <p className="text-xs text-[var(--color-text-muted)]">
+          Clone a backup repository and restore your workspace, config, and database.
+          Only works on a fresh install (no existing data).
+        </p>
+
+        {!restoring && restoreEvents.length === 0 && (
+          <button
+            onClick={async () => {
+              if (!repoUrl) {
+                addToast({ severity: 'warning', message: 'Enter a repo URL first (in Configure above).' });
+                return;
+              }
+              setRestoring(true);
+              setRestoreEvents([]);
+              try {
+                for await (const event of systemService.restoreBackup(repoUrl, token || undefined)) {
+                  setRestoreEvents(prev => [...prev, event]);
+                  if (event.error) {
+                    addToast({ severity: 'error', message: event.error });
+                    break;
+                  }
+                }
+              } catch (e) {
+                addToast({ severity: 'error', message: `Restore failed: ${e instanceof Error ? e.message : 'Unknown'}` });
+              } finally {
+                setRestoring(false);
+                await fetchStatus();
+              }
+            }}
+            className="px-3 py-1.5 text-sm font-medium rounded-md border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+          >
+            Restore from Backup
+          </button>
+        )}
+
+        {(restoring || restoreEvents.length > 0) && (
+          <div className="space-y-2">
+            {restoreEvents.map((e, i) => (
+              <div key={i} className="flex items-center gap-2 text-xs">
+                <span className={`w-2 h-2 rounded-full ${e.error ? 'bg-red-500' : e.progress === 100 ? 'bg-green-500' : 'bg-blue-500 animate-pulse'}`} />
+                <span className="text-[var(--color-text-muted)]">{e.stage}</span>
+                <span className="text-[var(--color-text)]">{e.detail || e.error || ''}</span>
+              </div>
+            ))}
+            {restoring && (
+              <div className="w-full bg-[var(--color-bg)] rounded-full h-1.5">
+                <div
+                  className="bg-[var(--color-primary)] h-1.5 rounded-full transition-all duration-300"
+                  style={{ width: `${restoreEvents[restoreEvents.length - 1]?.progress ?? 0}%` }}
+                />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Info */}
       <p className="text-xs text-[var(--color-text-muted)]">

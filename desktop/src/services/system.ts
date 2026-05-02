@@ -562,6 +562,40 @@ export const systemService = {
       schedule: config.schedule,
     });
   },
+
+  /** Restore from backup repo. Returns async iterator of SSE progress events. */
+  async *restoreBackup(repoUrl: string, token?: string): AsyncGenerator<RestoreEvent> {
+    const baseUrl = api.defaults.baseURL || '';
+    const response = await fetch(`${baseUrl}/system/backup/restore`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo_url: repoUrl, token }),
+    });
+
+    if (!response.ok || !response.body) {
+      yield { stage: 'error', progress: 0, detail: `HTTP ${response.status}` };
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            yield JSON.parse(line.slice(6)) as RestoreEvent;
+          } catch { /* skip malformed */ }
+        }
+      }
+    }
+  },
 };
 
 // ============== Backup Types ==============
@@ -578,6 +612,17 @@ export interface BackupResult {
   tablesExported: number;
   commit: string | null;
   pushStatus: string;
+}
+
+export interface RestoreEvent {
+  stage: string;
+  progress: number;
+  detail?: string;
+  error?: string;
+  tablesImported?: number;
+  messagesCount?: number;
+  sessionsCount?: number;
+  todosCount?: number;
 }
 
 // ============== Engine Metrics Types ==============
