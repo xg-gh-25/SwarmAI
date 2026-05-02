@@ -100,15 +100,6 @@ class ToolFailureTracker:
         )
         return nudge
 
-    def reset_signature(self, tool_name: str, error_text: str) -> None:
-        """Reset a failure signature after successful tool use.
-
-        Called when a tool succeeds to clear the consecutive failure count,
-        preventing stale failures from triggering nudges later.
-        """
-        sig = _failure_signature(tool_name, error_text)
-        self._failures.pop(sig, None)
-
     def reset_tool(self, tool_name: str) -> None:
         """Reset all failure signatures for a tool after any success."""
         prefix = f"{tool_name.lower()}:"
