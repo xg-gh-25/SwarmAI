@@ -696,9 +696,13 @@ def _trim_to_budget(
                 result[key] = ""
                 total_chars -= val_chars
             else:
-                # Truncate to fit
+                # Truncate at last newline boundary to avoid garbled content
                 keep = val_chars - excess
-                result[key] = val[:keep] + "\n[trimmed to fit budget]"
+                cut_point = val.rfind('\n', 0, keep)
+                if cut_point > 0:
+                    result[key] = val[:cut_point] + "\n[trimmed to fit budget]"
+                else:
+                    result[key] = val[:keep] + "\n[trimmed to fit budget]"
                 total_chars = budget_chars
 
         return result
@@ -895,7 +899,7 @@ def _build_legacy_context(raw_messages: list[dict], max_messages: int,
 # LRU eviction: cap at 50 entries to prevent unbounded growth in
 # long-running daemon.  OrderedDict for O(1) eviction.
 
-_RESUME_CACHE_MAX = 50
+_RESUME_CACHE_MAX = 10  # 10 sessions × ~600KB ≈ 6MB max (was 50 = 30MB)
 _resume_cache: OrderedDict[str, tuple[int, str]] = OrderedDict()
 
 

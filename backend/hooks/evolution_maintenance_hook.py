@@ -475,9 +475,11 @@ class EvolutionMaintenanceHook:
             # inside this async hook blocks the event loop for minutes,
             # freezing FastAPI, SSE streams, and health checks — causing
             # "Backend crash" on the frontend. Offload to thread pool.
+            from functools import partial
             loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(
-                None, run_evolution_cycle, skills_dir, transcripts_dir, evals_dir
+                None,
+                partial(run_evolution_cycle, skills_dir, transcripts_dir, evals_dir, dry_run=True),
             )
             logger.info("Evolution cycle complete: %s", result.to_dict())
 
