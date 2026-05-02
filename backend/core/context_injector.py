@@ -196,8 +196,9 @@ def _find_last_user_text(messages: list[dict]) -> str:
             if msg.get("role") == "user":
                 text = _extract_text_from_content(msg.get("content"))
                 if text:
-                    # Cap at 500 chars — enough to identify the task
-                    return text[:500]
+                    # Cap at 4000 chars — preserves full task descriptions
+                    # including structured data like tables and checklists.
+                    return text[:4000]
         return ""
     except Exception:
         return ""
@@ -412,6 +413,293 @@ def _count_user_turns(messages: list[dict]) -> int:
         return 0
 
 
+# ─── NEW: Enrichment helpers (v2 — from shape to substance) ──────────
+
+
+def _extract_assistant_conclusions(
+    messages: list[dict], max_blocks: int = 5
+) -> list[str]:
+    """Extract the text of the last N assistant messages (non-tool).
+
+    These contain the agent's analysis, conclusions, and recommendations —
+    the substance that the resumed agent needs to continue.
+    Each block capped at 1500 chars.
+    """
+    try:
+        conclusions: list[str] = []
+        for msg in reversed(messages):
+            if msg.get("role") != "assistant":
+                continue
+            text = _extract_text_from_content(msg.get("content"))
+            if not text:
+                continue
+            conclusions.append(text[:1500])
+            if len(conclusions) >= max_blocks:
+                break
+        conclusions.reverse()  # chronological order
+        return conclusions
+    except Exception:
+        logger.debug("Assistant conclusions extraction failed", exc_info=True)
+        return []
+
+
+# Directive detection heuristic: short user messages that look like decisions
+_DIRECTIVE_WORDS = re.compile(
+    r"\b(?:approve|approved|go|yes|do it|ship|commit|use|skip|defer|"
+    r"ok|agreed|proceed|accept|confirm|implement|run|push|merge|"
+    r"approach|option|方案|批准|同意|跑|提交|用)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_user_directives(
+    messages: list[dict], max_directives: int = 10
+) -> list[str]:
+    """Extract short user messages that look like decisions or directives.
+
+    Heuristic: user messages ≤300 chars, not questions, containing action
+    words.  Captures steering decisions ("approach B+A", "commit these").
+    """
+    try:
+        directives: list[str] = []
+        for msg in messages:
+            if msg.get("role") != "user":
+                continue
+            text = _extract_text_from_content(msg.get("content"))
+            if not text or len(text) > 300:
+                continue
+            # Skip questions (end with ? or start with interrogative words)
+            stripped = text.strip()
+            if stripped.endswith("?"):
+                continue
+            if re.match(r"^(?:what|how|why|where|when|which|is|are|do|does|can|could)\b",
+                        stripped, re.IGNORECASE):
+                continue
+            if _DIRECTIVE_WORDS.search(text):
+                directives.append(text[:300])
+            if len(directives) >= max_directives:
+                break
+        return directives
+    except Exception:
+        logger.debug("User directives extraction failed", exc_info=True)
+        return []
+
+
+import asyncio
+import subprocess as _subprocess
+
+
+def _run_git_command(args: list[str], cwd: str, timeout: float = 3.0) -> str:
+    """Run a git command synchronously with timeout.  Thread-safe.
+
+    Returns stdout as string, or empty string on any failure.
+    Called via ``asyncio.to_thread()`` to avoid blocking the event loop.
+    """
+    try:
+        result = _subprocess.run(
+            args, cwd=cwd, capture_output=True, text=True,
+            timeout=timeout,
+        )
+        return result.stdout.strip() if result.returncode == 0 else ""
+    except (_subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return ""
+    except Exception:
+        return ""
+
+
+async def _extract_uncommitted_state(working_dir: str | None) -> str:
+    """Run ``git status --short`` and ``git diff --stat`` to capture WIP.
+
+    Uses ``asyncio.to_thread()`` to avoid blocking the event loop.
+    Returns empty string on any failure (timeout, not a git repo, etc.).
+    """
+    if not working_dir:
+        return ""
+    try:
+        status = await asyncio.to_thread(
+            _run_git_command,
+            ["git", "status", "--short"], working_dir, 3.0,
+        )
+        if not status:
+            return ""
+
+        diff_stat = await asyncio.to_thread(
+            _run_git_command,
+            ["git", "diff", "--stat"], working_dir, 3.0,
+        )
+
+        parts: list[str] = []
+        if status:
+            parts.append(f"```\n{status}\n```")
+        if diff_stat:
+            parts.append(f"Diff stat:\n```\n{diff_stat}\n```")
+        return "\n".join(parts)
+    except Exception:
+        logger.debug("Uncommitted state extraction failed", exc_info=True)
+        return ""
+
+
+def _merge_crash_checkpoint(checkpoint_path=None) -> str | None:
+    """Read session_checkpoint.json and format for resume injection.
+
+    Unlike ``recover_crash_checkpoint()`` which writes to DailyActivity,
+    this reads the checkpoint data and includes it in the resume context.
+    Does NOT delete the file — that's ``recover_crash_checkpoint()``'s job.
+
+    Returns formatted string or None if no checkpoint exists.
+    """
+    from pathlib import Path
+
+    if checkpoint_path is None:
+        checkpoint_path = Path.home() / ".swarm-ai" / ".context" / "session_checkpoint.json"
+    else:
+        checkpoint_path = Path(checkpoint_path)
+
+    if not checkpoint_path.exists():
+        return None
+
+    try:
+        data = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        tool_count = data.get("tool_count", 0)
+        files = data.get("files_touched", [])
+        corrections = data.get("corrections_count", 0)
+
+        if not tool_count:
+            return None
+
+        parts = [f"⚠️ Prior session crashed after {tool_count} tool calls."]
+        if files:
+            parts.append(f"Files in progress: {', '.join(files[:15])}")
+        if corrections:
+            parts.append(f"{corrections} correction(s) were captured.")
+        return " ".join(parts)
+    except (json.JSONDecodeError, OSError, KeyError):
+        return None
+    except Exception:
+        logger.debug("Crash checkpoint merge failed", exc_info=True)
+        return None
+
+
+def _extract_key_tool_results(
+    messages: list[dict], max_results: int = 15
+) -> str:
+    """Extract truncated output from high-value tool_result blocks.
+
+    Scans for Read, Grep, Bash results with substantial output.
+    Each result capped at 1500 chars.  Skips trivial results ("ok", empty).
+    """
+    HIGH_VALUE_TOOLS = {"Read", "Grep", "Bash", "Agent"}
+    MIN_RESULT_LEN = 20  # skip trivially short results
+
+    try:
+        # Build tool_use_id → tool_name map
+        tool_names: dict[str, str] = {}
+        for msg in messages:
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    tid = block.get("id", "")
+                    name = block.get("name", "")
+                    if tid and name in HIGH_VALUE_TOOLS:
+                        tool_names[tid] = name
+
+        # Extract results for mapped tool_use_ids
+        results: list[str] = []
+        for msg in reversed(messages):
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_result":
+                    continue
+                tid = block.get("tool_use_id", "")
+                tool_name = tool_names.get(tid, "")
+                if not tool_name:
+                    continue
+
+                # Extract result text
+                result_content = block.get("content", "")
+                if isinstance(result_content, list):
+                    # Content can be a list of blocks
+                    text_parts = []
+                    for rb in result_content:
+                        if isinstance(rb, dict) and rb.get("type") == "text":
+                            text_parts.append(rb.get("text", ""))
+                    result_content = "\n".join(text_parts)
+                if not isinstance(result_content, str):
+                    result_content = str(result_content)
+
+                if len(result_content) < MIN_RESULT_LEN:
+                    continue
+
+                truncated = result_content[:1500]
+                if len(result_content) > 1500:
+                    truncated += "..."
+                results.append(f"  → {tool_name}: {truncated}")
+
+                if len(results) >= max_results:
+                    break
+            if len(results) >= max_results:
+                break
+
+        if not results:
+            return ""
+
+        results.reverse()  # chronological order
+        return "### Key Tool Results\n" + "\n\n".join(results)
+    except Exception:
+        logger.debug("Key tool results extraction failed", exc_info=True)
+        return ""
+
+
+def _trim_to_budget(
+    sections: dict[str, str], token_budget: int
+) -> dict[str, str]:
+    """Trim assembled sections to fit within token budget.
+
+    Trim priority (first to go → last to go):
+    1. tool_results
+    2. recent_turns
+    3. conclusions
+    NEVER trim: checkpoint (files, git, directives, last request)
+
+    Estimates tokens at 4 chars/token.
+    """
+    try:
+        result = dict(sections)
+        total_chars = sum(len(v) for v in result.values())
+        budget_chars = token_budget * 4  # ~4 chars per token
+
+        if total_chars <= budget_chars:
+            return result
+
+        # Trim in priority order
+        trim_order = ["tool_results", "recent_turns", "conclusions"]
+        for key in trim_order:
+            if total_chars <= budget_chars:
+                break
+            val = result.get(key, "")
+            if not val:
+                continue
+            excess = total_chars - budget_chars
+            val_chars = len(val)
+            if val_chars <= excess:
+                # Remove entirely
+                result[key] = ""
+                total_chars -= val_chars
+            else:
+                # Truncate to fit
+                keep = val_chars - excess
+                result[key] = val[:keep] + "\n[trimmed to fit budget]"
+                total_chars = budget_chars
+
+        return result
+    except Exception:
+        return sections  # on error, return untrimmed
+
+
 # ─── Checkpoint assembly ─────────────────────────────────────────────
 
 def _build_checkpoint(messages: list[dict]) -> str:
@@ -472,6 +760,17 @@ def _build_checkpoint(messages: list[dict]) -> str:
         tool_str = ", ".join(f"{name}×{count}" for name, count in top_tools)
         sections.append(f"**Tool activity:** {tool_str}")
 
+    # 9. User directives (short steering decisions)
+    directives = _extract_user_directives(messages)
+    if directives:
+        dir_lines = "\n".join(f"  - \"{d}\"" for d in directives)
+        sections.append(f"**User directives:**\n{dir_lines}")
+
+    # 10. Crash checkpoint (if prior session crashed)
+    crash_info = _merge_crash_checkpoint()
+    if crash_info:
+        sections.append(f"**Crash recovery:** {crash_info}")
+
     if not sections:
         return ""
 
@@ -480,11 +779,13 @@ def _build_checkpoint(messages: list[dict]) -> str:
 
 # ─── Recent turns formatting ─────────────────────────────────────────
 
-def _format_recent_turns(messages: list[dict], max_turns: int = 5) -> str:
+def _format_recent_turns(messages: list[dict], max_turns: int = 30) -> str:
     """Format the last N user-assistant turn pairs.
 
-    Returns a compact section with just enough conversational context
-    for the new agent to understand what was being discussed.
+    30 turns covers most productive sessions.  4K per message preserves
+    detailed assistant reasoning, code snippets, and multi-paragraph
+    analyses.  First principle: the resumed agent should feel like it
+    was there.
     """
     try:
         filtered = _filter_tool_only_messages(messages)
@@ -499,9 +800,9 @@ def _format_recent_turns(messages: list[dict], max_turns: int = 5) -> str:
         for msg in recent:
             text = _format_message(msg)
             if text is not None:
-                # Cap each message at 800 chars for recent turns
-                if len(text) > 800:
-                    text = text[:797] + "..."
+                # Cap each message at 4000 chars — preserves reasoning
+                if len(text) > 4000:
+                    text = text[:3997] + "..."
                 formatted.append(text)
 
         if not formatted:
@@ -520,6 +821,11 @@ def _compute_resume_budget(
 ) -> tuple[int, int, int]:
     """Compute resume context limits scaled to model context window.
 
+    Generous budgets — first principle: the resumed agent should feel like
+    it was there.  On a 1M model, 150K of resume context leaves 850K for
+    everything else.  Being stingy with 2% was solving a problem we don't
+    have.  (KD24: "Token saving is NEVER the primary concern.")
+
     Returns:
         Tuple of ``(token_budget, max_messages, db_fetch_limit)``.
     """
@@ -527,11 +833,11 @@ def _compute_resume_budget(
         return (32_000, 50, 120)
 
     if model_context_window >= 500_000:
-        return (200_000, 500, 1000)
+        return (150_000, 500, 1000)
     elif model_context_window >= 200_000:
-        return (40_000, 100, 250)
+        return (60_000, 200, 500)
     else:
-        return (12_000, 40, 100)
+        return (20_000, 80, 200)
 
 
 # ─── Legacy assembly (kept for backward compat + fallback) ───────────
@@ -598,13 +904,19 @@ async def build_resume_context(
     token_budget: int | None = None,
     is_channel: bool = False,
 ) -> str:
-    """Load recent messages and build resume context for system prompt.
+    """Load recent messages and build enriched resume context for system prompt.
 
-    Two-layer approach:
-    1. **Structured checkpoint** (~1-3K tokens) — mechanical extraction
-       of task state, files touched, git activity, sub-tasks.
-    2. **Recent turns** (~2-5K tokens) — last 5 conversation turn pairs
-       for conversational continuity.
+    Five-layer approach (from shape to substance):
+    1. **Structured checkpoint** (~5-10K) — task state, files, git activity,
+       user directives, crash checkpoint merge.
+    2. **Uncommitted state** (~500) — ``git status --short`` + diff stat.
+    3. **Assistant conclusions** (~5-8K) — last 5 assistant text blocks.
+    4. **Key tool results** (~5-15K) — truncated output from Read/Grep/Bash.
+    5. **Recent conversation** (~20-60K) — last 30 turn pairs × 4K chars.
+
+    Budget is model-aware and generous (150K for 1M models).
+    Trimming priority: tool_results → recent_turns → conclusions.
+    Checkpoint + uncommitted state are never trimmed.
 
     Falls back to legacy raw-history injection if the structured path
     produces nothing.
@@ -650,32 +962,77 @@ async def build_resume_context(
                         app_session_id)
             return ""
 
-        # ── Try structured checkpoint + recent turns ──────────────
+        # ── Try enriched structured checkpoint + layers ──────────
         checkpoint = ""
+        conclusions_text = ""
+        tool_results_text = ""
         recent = ""
+        uncommitted = ""
         try:
             checkpoint = _build_checkpoint(raw_messages)
-            recent = _format_recent_turns(raw_messages, max_turns=5)
+            recent = _format_recent_turns(raw_messages, max_turns=30)
+
+            # Enrichment layer: assistant conclusions
+            conclusions = _extract_assistant_conclusions(raw_messages, max_blocks=5)
+            if conclusions:
+                conclusion_lines = "\n\n".join(
+                    f"**[{i+1}]** {c}" for i, c in enumerate(conclusions)
+                )
+                conclusions_text = f"### Assistant Conclusions\n{conclusion_lines}"
+
+            # Enrichment layer: key tool results
+            tool_results_text = _extract_key_tool_results(raw_messages, max_results=15)
+
+            # Enrichment layer: uncommitted git state (async, with timeout)
+            from pathlib import Path as _Path
+            ws_dir = str(_Path.home() / ".swarm-ai" / "SwarmWS")
+            uncommitted = await _extract_uncommitted_state(ws_dir)
         except Exception:
             logger.warning("Structured checkpoint extraction failed",
                            exc_info=True)
 
-        if checkpoint or recent:
+        has_content = any([checkpoint, recent, conclusions_text,
+                           tool_results_text, uncommitted])
+        if has_content:
+            # Assemble sections
+            raw_sections = {
+                "checkpoint": checkpoint,
+                "conclusions": conclusions_text,
+                "tool_results": tool_results_text,
+                "recent_turns": recent,
+            }
+
+            # Apply budget trimming
+            trimmed = _trim_to_budget(raw_sections, token_budget)
+
             parts = [_SECTION_HEADER, "", _CHECKPOINT_PREAMBLE]
-            if checkpoint:
+            if trimmed.get("checkpoint"):
                 parts.append("")
-                parts.append(checkpoint)
-            if recent:
+                parts.append(trimmed["checkpoint"])
+            if uncommitted:
                 parts.append("")
-                parts.append(recent)
+                parts.append(f"### Uncommitted Changes\n{uncommitted}")
+            if trimmed.get("conclusions"):
+                parts.append("")
+                parts.append(trimmed["conclusions"])
+            if trimmed.get("tool_results"):
+                parts.append("")
+                parts.append(trimmed["tool_results"])
+            if trimmed.get("recent_turns"):
+                parts.append("")
+                parts.append(trimmed["recent_turns"])
+
             result = "\n".join(parts)
             _resume_cache[app_session_id] = (msg_count, result)
             if len(_resume_cache) > _RESUME_CACHE_MAX:
                 _resume_cache.popitem(last=False)  # evict oldest
             logger.info(
-                "Resume context built (structured): checkpoint=%d chars, "
-                "recent=%d chars, total=~%d tokens",
-                len(checkpoint), len(recent), len(result) // 4,
+                "Resume context built (enriched): checkpoint=%d "
+                "conclusions=%d tool_results=%d recent=%d "
+                "uncommitted=%d total=~%d tokens",
+                len(checkpoint), len(conclusions_text),
+                len(tool_results_text), len(recent),
+                len(uncommitted), len(result) // 4,
             )
             return result
 
