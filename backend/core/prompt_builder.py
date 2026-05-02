@@ -583,10 +583,12 @@ class PromptBuilder:
             context_dir = Path(working_directory) / ".context"
             # Reserve headroom for ephemeral injections (DailyActivity, Bootstrap,
             # resume context) that are appended after the token-budgeted assembly.
-            # For 1M models, headroom is negligible vs budget — keep it small.
-            # The resume context budget (up to 200K for 1M models) is separate
-            # from context files and doesn't need to be subtracted here.
-            RESUME_CONTEXT_HEADROOM = 2000  # small headroom, actual budget enforced in build_resume_context
+            # Resume context can now be up to 150K tokens on 1M models, but
+            # it's appended to system_prompt which the 1M model accommodates
+            # directly.  The headroom here only ensures context files don't
+            # over-allocate within their own budget tier.  Keep it moderate —
+            # aggressive headroom starves context files unnecessarily.
+            RESUME_CONTEXT_HEADROOM = 5000  # moderate headroom, resume budget enforced in build_resume_context
             EPHEMERAL_HEADROOM = 2 * TOKEN_CAP_PER_DAILY_FILE + RESUME_CONTEXT_HEADROOM
             base_budget = agent_config.get("context_token_budget", DEFAULT_TOKEN_BUDGET)
             loader = ContextDirectoryLoader(
