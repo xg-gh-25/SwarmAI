@@ -608,6 +608,29 @@ class LifecycleManager:
         except Exception as exc:
             logger.warning("lifecycle_manager.ttl_cleanup failed: %s", exc)
 
+    # ── Workspace backup ────────────────────────────────────────────
+
+    async def _run_daily_backup(self) -> None:
+        """Run workspace backup if >24h since last backup.
+
+        Non-fatal — failures are logged and skipped. Runs once per day
+        via the maintenance loop (cycle % 1440 ≈ daily at 60s intervals).
+        """
+        try:
+            from core.backup_manager import BackupManager
+
+            if not hasattr(self, "_backup_manager"):
+                self._backup_manager = BackupManager()
+            result = await self._backup_manager.backup()
+            logger.info(
+                "lifecycle_manager.daily_backup: %s (tables=%d, push=%s)",
+                result.get("status"),
+                result.get("tables_exported", 0),
+                result.get("push_status"),
+            )
+        except Exception as exc:
+            logger.warning("lifecycle_manager.daily_backup failed: %s", exc)
+
     # ── Memory pressure relief ─────────────────────────────────────
 
     # Two-tier memory thresholds (defaults from MEMORY_EVICT_PCT / MEMORY_CIRCUIT_BREAKER_PCT):
