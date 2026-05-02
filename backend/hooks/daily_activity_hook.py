@@ -76,6 +76,65 @@ def _get_session_git_commits(
         return []
 
 
+def recover_crash_checkpoint(workspace_dir: Path | None = None) -> bool:
+    """Recover session data from an orphaned checkpoint file.
+
+    Called at startup (before any session hook runs).  If a checkpoint
+    file exists from a prior crashed session, appends its data to today's
+    DailyActivity and deletes the checkpoint.
+
+    Returns True if a checkpoint was recovered, False otherwise.
+    """
+    checkpoint_path = Path.home() / ".swarm-ai" / ".context" / "session_checkpoint.json"
+    if not checkpoint_path.exists():
+        return False
+
+    try:
+        import json
+        data = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        session_id = data.get("session_id", "unknown")
+        ts = data.get("ts", 0)
+        tool_count = data.get("tool_count", 0)
+        files_touched = data.get("files_touched", [])
+
+        if not ts or not session_id:
+            checkpoint_path.unlink(missing_ok=True)
+            return False
+
+        # Build recovery entry
+        from datetime import datetime
+        crash_time = datetime.fromtimestamp(ts).strftime("%H:%M")
+        entry = (
+            f"\n## {crash_time} | {session_id[:8]} | ⚠️ Recovered from crash checkpoint\n"
+            f"**What happened:** Session crashed or was evicted after {tool_count} tool calls.\n"
+        )
+        if files_touched:
+            entry += f"**Files:** {', '.join(f'`{f}`' for f in files_touched[:10])}\n"
+
+        # Append to today's DailyActivity
+        ws = workspace_dir or (Path.home() / ".swarm-ai" / "SwarmWS")
+        today = datetime.now().strftime("%Y-%m-%d")
+        da_dir = ws / "Knowledge" / "DailyActivity"
+        da_dir.mkdir(parents=True, exist_ok=True)
+        da_file = da_dir / f"{today}.md"
+
+        with open(da_file, "a", encoding="utf-8") as f:
+            f.write(entry)
+
+        checkpoint_path.unlink(missing_ok=True)
+        logger.info(
+            "Recovered crash checkpoint for session %s (%d tool calls)",
+            session_id[:8], tool_count,
+        )
+        return True
+
+    except Exception:
+        logger.exception("Failed to recover crash checkpoint")
+        # Delete corrupt checkpoint to prevent repeated failures
+        checkpoint_path.unlink(missing_ok=True)
+        return False
+
+
 class DailyActivityExtractionHook:
     """Extracts conversation summaries into DailyActivity files.
 

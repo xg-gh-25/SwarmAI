@@ -383,8 +383,8 @@ class TestFailureTrackerReset:
 
 class TestRegisterRuntimeHooks:
 
-    def test_registers_all_four_hooks(self, session_context):
-        """register_runtime_hooks wires 4 hooks into the registry."""
+    def test_registers_all_eight_hooks(self, session_context):
+        """register_runtime_hooks wires 8 hooks into the registry."""
         from core.runtime_hooks import register_runtime_hooks
         from core.hook_builder import HookRegistry
 
@@ -395,10 +395,12 @@ class TestRegisterRuntimeHooks:
 
         # PostToolUseFailure: correction_capture + error_pattern_detector (chained)
         assert "PostToolUseFailure" in sdk_hooks
-        # PostToolUse: failure_tracker_reset
+        # PostToolUse: failure_tracker_reset + file_tracker + session_checkpoint (chained)
         assert "PostToolUse" in sdk_hooks
-        # UserPromptSubmit: user_correction_detector
+        # UserPromptSubmit: user_correction_detector + post_compact_injection (chained)
         assert "UserPromptSubmit" in sdk_hooks
+        # SubagentStop: subagent_capture
+        assert "SubagentStop" in sdk_hooks
 
 
 # ---------------------------------------------------------------------------
@@ -476,6 +478,68 @@ class TestReadCorrectionStats:
         assert stats["_user_correction"]["total"] == 2
 
 
+class TestCrashCheckpointRecovery:
+
+    def test_recovery_appends_to_daily_activity(self, tmp_path):
+        """Orphaned checkpoint is recovered into today's DailyActivity."""
+        from hooks.daily_activity_hook import recover_crash_checkpoint
+        import unittest.mock as mock
+
+        # Create fake home structure: tmp_path/.swarm-ai/.context/session_checkpoint.json
+        ctx_dir = tmp_path / ".swarm-ai" / ".context"
+        ctx_dir.mkdir(parents=True)
+        checkpoint = ctx_dir / "session_checkpoint.json"
+        checkpoint.write_text(json.dumps({
+            "session_id": "crash-session-42",
+            "ts": time.time() - 300,
+            "tool_count": 15,
+            "files_touched": ["/a.py", "/b.py"],
+        }))
+
+        # Create workspace dir
+        ws = tmp_path / ".swarm-ai" / "SwarmWS"
+        ws.mkdir(parents=True)
+
+        with mock.patch.object(Path, "home", return_value=tmp_path):
+            result = recover_crash_checkpoint(workspace_dir=ws)
+
+        assert result is True
+        assert not checkpoint.exists()  # deleted after recovery
+
+        # Check DailyActivity has the recovery entry
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        da_file = ws / "Knowledge" / "DailyActivity" / f"{today}.md"
+        assert da_file.exists()
+        content = da_file.read_text()
+        assert "Recovered from crash checkpoint" in content
+        assert "crash-se" in content
+        assert "/a.py" in content
+
+    def test_no_checkpoint_returns_false(self, tmp_path):
+        """No checkpoint file → returns False, no crash."""
+        from hooks.daily_activity_hook import recover_crash_checkpoint
+        import unittest.mock as mock
+        with mock.patch.object(Path, "home", return_value=tmp_path):
+            assert recover_crash_checkpoint() is False
+
+    def test_corrupt_checkpoint_deleted(self, tmp_path):
+        """Corrupt checkpoint is deleted, returns False."""
+        from hooks.daily_activity_hook import recover_crash_checkpoint
+        import unittest.mock as mock
+
+        ctx_dir = tmp_path / ".swarm-ai" / ".context"
+        ctx_dir.mkdir(parents=True)
+        checkpoint = ctx_dir / "session_checkpoint.json"
+        checkpoint.write_text("not valid json at all")
+
+        with mock.patch.object(Path, "home", return_value=tmp_path):
+            result = recover_crash_checkpoint()
+
+        assert result is False
+        assert not checkpoint.exists()
+
+
 class TestHookRegistryChain:
 
     @pytest.mark.asyncio
@@ -525,3 +589,276 @@ class TestHookRegistryChain:
 
         assert result.get("keep") == "yes"
         assert "drop" not in result
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: File tracker (PostToolUse)
+# ---------------------------------------------------------------------------
+
+class TestFileTracker:
+
+    @pytest.mark.asyncio
+    async def test_read_tool_tracked(self, session_context):
+        """Read tool file_path is added to _files_touched."""
+        from core.runtime_hooks import create_file_tracker
+
+        hook = create_file_tracker(session_context)
+        await hook(
+            {"tool_name": "Read", "tool_input": {"file_path": "/foo/bar.py"}, "tool_response": "..."},
+            "tu_1", MagicMock(),
+        )
+        assert "/foo/bar.py" in session_context["_files_touched"]
+
+    @pytest.mark.asyncio
+    async def test_edit_tool_tracked(self, session_context):
+        """Edit tool file_path is tracked."""
+        from core.runtime_hooks import create_file_tracker
+
+        hook = create_file_tracker(session_context)
+        await hook(
+            {"tool_name": "Edit", "tool_input": {"file_path": "/src/main.py"}, "tool_response": "ok"},
+            "tu_1", MagicMock(),
+        )
+        assert "/src/main.py" in session_context["_files_touched"]
+
+    @pytest.mark.asyncio
+    async def test_bash_tool_not_tracked(self, session_context):
+        """Bash tool does NOT populate _files_touched."""
+        from core.runtime_hooks import create_file_tracker
+
+        hook = create_file_tracker(session_context)
+        await hook(
+            {"tool_name": "Bash", "tool_input": {"command": "ls"}, "tool_response": "..."},
+            "tu_1", MagicMock(),
+        )
+        assert len(session_context.get("_files_touched", set())) == 0
+
+    @pytest.mark.asyncio
+    async def test_deduplication(self, session_context):
+        """Same file read twice only appears once."""
+        from core.runtime_hooks import create_file_tracker
+
+        hook = create_file_tracker(session_context)
+        for _ in range(3):
+            await hook(
+                {"tool_name": "Read", "tool_input": {"file_path": "/same.py"}, "tool_response": "..."},
+                "tu_1", MagicMock(),
+            )
+        assert len(session_context["_files_touched"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Session checkpoint (PostToolUse)
+# ---------------------------------------------------------------------------
+
+class TestSessionCheckpoint:
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_written_at_interval(self, tmp_path, session_context):
+        """Checkpoint file written after N tool calls."""
+        from core.runtime_hooks import create_session_checkpoint
+
+        cp_path = str(tmp_path / "session_checkpoint.json")
+        hook = create_session_checkpoint(session_context, checkpoint_path=cp_path, interval=5)
+
+        for i in range(5):
+            await hook(
+                {"tool_name": "Bash", "tool_input": {}, "tool_response": "ok"},
+                f"tu_{i}", MagicMock(),
+            )
+
+        assert Path(cp_path).exists()
+        data = json.loads(Path(cp_path).read_text())
+        assert data["session_id"] == "test-session-123"
+        assert data["tool_count"] == 5
+
+    @pytest.mark.asyncio
+    async def test_no_checkpoint_before_interval(self, tmp_path, session_context):
+        """No checkpoint written before reaching interval."""
+        from core.runtime_hooks import create_session_checkpoint
+
+        cp_path = str(tmp_path / "session_checkpoint.json")
+        hook = create_session_checkpoint(session_context, checkpoint_path=cp_path, interval=10)
+
+        for i in range(3):
+            await hook(
+                {"tool_name": "Bash", "tool_input": {}, "tool_response": "ok"},
+                f"tu_{i}", MagicMock(),
+            )
+
+        assert not Path(cp_path).exists()
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_includes_files_touched(self, tmp_path, session_context):
+        """Checkpoint captures _files_touched from session_context."""
+        from core.runtime_hooks import create_session_checkpoint
+
+        session_context["_files_touched"] = {"/a.py", "/b.py"}
+        cp_path = str(tmp_path / "session_checkpoint.json")
+        hook = create_session_checkpoint(session_context, checkpoint_path=cp_path, interval=1)
+
+        await hook({"tool_name": "Bash", "tool_input": {}, "tool_response": "ok"}, "tu_1", MagicMock())
+
+        data = json.loads(Path(cp_path).read_text())
+        assert set(data["files_touched"]) == {"/a.py", "/b.py"}
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_overwrites_not_appends(self, tmp_path, session_context):
+        """Checkpoint file is overwritten, not appended."""
+        from core.runtime_hooks import create_session_checkpoint
+
+        cp_path = str(tmp_path / "session_checkpoint.json")
+        hook = create_session_checkpoint(session_context, checkpoint_path=cp_path, interval=1)
+
+        await hook({"tool_name": "Bash", "tool_input": {}, "tool_response": "ok"}, "tu_1", MagicMock())
+        await hook({"tool_name": "Bash", "tool_input": {}, "tool_response": "ok"}, "tu_2", MagicMock())
+
+        # Should be 1 JSON object, not 2 lines
+        content = Path(cp_path).read_text().strip()
+        data = json.loads(content)  # would fail if multiple JSON objects
+        assert data["tool_count"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Subagent transcript capture (SubagentStop)
+# ---------------------------------------------------------------------------
+
+class TestSubagentCapture:
+
+    @pytest.mark.asyncio
+    async def test_subagent_errors_captured(self, corrections_file, session_context):
+        """SubagentStop reads transcript and captures errors to corrections.jsonl."""
+        from core.runtime_hooks import create_subagent_capture_hook
+
+        # Create a fake transcript file
+        transcript = corrections_file.parent / "transcript.jsonl"
+        lines = [
+            '{"type": "text", "content": "Working on task..."}',
+            '{"type": "text", "content": "Error: FileNotFoundError: /missing.py"}',
+            '{"type": "text", "content": "Done."}',
+        ]
+        transcript.write_text("\n".join(lines))
+
+        hook = create_subagent_capture_hook(str(corrections_file), session_context)
+        await hook(
+            {"agent_id": "agent-1", "agent_transcript_path": str(transcript), "agent_type": "general"},
+            None, MagicMock(),
+        )
+
+        assert corrections_file.exists()
+        entry = json.loads(corrections_file.read_text().strip())
+        assert entry["type"] == "subagent_finding"
+        assert "FileNotFoundError" in entry["summary"]
+
+    @pytest.mark.asyncio
+    async def test_subagent_no_errors_no_write(self, corrections_file, session_context):
+        """SubagentStop with clean transcript writes nothing."""
+        from core.runtime_hooks import create_subagent_capture_hook
+
+        transcript = corrections_file.parent / "transcript.jsonl"
+        lines = [
+            '{"type": "text", "content": "Task complete. All tests pass."}',
+        ]
+        transcript.write_text("\n".join(lines))
+
+        hook = create_subagent_capture_hook(str(corrections_file), session_context)
+        await hook(
+            {"agent_id": "agent-2", "agent_transcript_path": str(transcript), "agent_type": "general"},
+            None, MagicMock(),
+        )
+
+        assert not corrections_file.exists()
+
+    @pytest.mark.asyncio
+    async def test_subagent_missing_transcript_graceful(self, corrections_file, session_context):
+        """Missing transcript file doesn't crash."""
+        from core.runtime_hooks import create_subagent_capture_hook
+
+        hook = create_subagent_capture_hook(str(corrections_file), session_context)
+        result = await hook(
+            {"agent_id": "agent-3", "agent_transcript_path": "/nonexistent/path.jsonl", "agent_type": "general"},
+            None, MagicMock(),
+        )
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_subagent_large_transcript_tail_only(self, corrections_file, session_context):
+        """Only reads last 5KB of large transcripts."""
+        from core.runtime_hooks import create_subagent_capture_hook
+
+        transcript = corrections_file.parent / "big_transcript.jsonl"
+        # Write 50KB of padding + error at the end
+        padding = '{"type": "text", "content": "' + "x" * 1000 + '"}\n' * 50
+        error_line = '{"type": "text", "content": "Error: ImportError: no module named foo"}\n'
+        transcript.write_text(padding + error_line)
+
+        hook = create_subagent_capture_hook(str(corrections_file), session_context)
+        await hook(
+            {"agent_id": "agent-4", "agent_transcript_path": str(transcript), "agent_type": "general"},
+            None, MagicMock(),
+        )
+
+        assert corrections_file.exists()
+        entry = json.loads(corrections_file.read_text().strip())
+        assert "ImportError" in entry["summary"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: Post-compact injection (UserPromptSubmit)
+# ---------------------------------------------------------------------------
+
+class TestPostCompactInjection:
+
+    @pytest.mark.asyncio
+    async def test_injects_after_compaction(self, session_context):
+        """After _compacted=True, next UserPromptSubmit injects additionalContext."""
+        from core.runtime_hooks import create_post_compact_injection
+
+        session_context["_compacted"] = True
+        session_context["_files_touched"] = {"/a.py", "/b.py"}
+
+        hook = create_post_compact_injection(session_context)
+        result = await hook(
+            {"prompt": "continue working"},
+            None, MagicMock(),
+        )
+
+        assert "additionalContext" in result
+        assert "/a.py" in result["additionalContext"]
+        assert "/b.py" in result["additionalContext"]
+
+    @pytest.mark.asyncio
+    async def test_no_injection_without_compaction(self, session_context):
+        """Without _compacted flag, no injection."""
+        from core.runtime_hooks import create_post_compact_injection
+
+        hook = create_post_compact_injection(session_context)
+        result = await hook({"prompt": "hello"}, None, MagicMock())
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_flag_cleared_after_injection(self, session_context):
+        """_compacted flag is reset after injection — fire-once."""
+        from core.runtime_hooks import create_post_compact_injection
+
+        session_context["_compacted"] = True
+        session_context["_files_touched"] = {"/a.py"}
+
+        hook = create_post_compact_injection(session_context)
+        await hook({"prompt": "first"}, None, MagicMock())
+
+        # Second call — no injection
+        result = await hook({"prompt": "second"}, None, MagicMock())
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_empty_files_still_injects(self, session_context):
+        """Even with no files touched, compaction injection fires with basic instructions."""
+        from core.runtime_hooks import create_post_compact_injection
+
+        session_context["_compacted"] = True
+
+        hook = create_post_compact_injection(session_context)
+        result = await hook({"prompt": "go"}, None, MagicMock())
+
+        assert "additionalContext" in result

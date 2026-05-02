@@ -252,6 +252,212 @@ def create_user_correction_detector(
 
 
 # ---------------------------------------------------------------------------
+# PostToolUse: file tracker — records Read/Edit/Write file paths
+# ---------------------------------------------------------------------------
+
+_TRACKED_TOOLS = {"Read", "Edit", "Write"}
+
+
+def create_file_tracker(
+    session_context: Optional[dict] = None,
+):
+    """Factory: creates a PostToolUse hook that tracks files touched during the session.
+
+    Populates ``session_context["_files_touched"]`` (a set) with file paths
+    from Read, Edit, and Write tool calls.  Used by PreCompact injection and
+    session checkpoint.
+    """
+    ctx = session_context or {}
+
+    async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
+        tool = _extract_field(input_data, "tool_name", "")
+        if tool not in _TRACKED_TOOLS:
+            return {}
+
+        tool_input = _extract_field(input_data, "tool_input", {})
+        file_path = tool_input.get("file_path", "") if isinstance(tool_input, dict) else ""
+        if file_path:
+            if "_files_touched" not in ctx:
+                ctx["_files_touched"] = set()
+            ctx["_files_touched"].add(file_path)
+
+        return {}
+
+    return _hook
+
+
+# ---------------------------------------------------------------------------
+# PostToolUse: session checkpoint — crash survival
+# ---------------------------------------------------------------------------
+
+_DEFAULT_CHECKPOINT_PATH = str(
+    Path.home() / ".swarm-ai" / ".context" / "session_checkpoint.json"
+)
+_DEFAULT_CHECKPOINT_INTERVAL = 10
+
+
+def create_session_checkpoint(
+    session_context: Optional[dict] = None,
+    checkpoint_path: Optional[str] = None,
+    interval: int = _DEFAULT_CHECKPOINT_INTERVAL,
+):
+    """Factory: creates a PostToolUse hook that writes a session checkpoint.
+
+    Every ``interval`` tool calls, overwrites a checkpoint file with current
+    session state.  On crash, ``DailyActivityExtractionHook`` recovers the
+    checkpoint on next startup.
+    """
+    path = checkpoint_path or _DEFAULT_CHECKPOINT_PATH
+    ctx = session_context or {}
+    counter_key = "_tool_count"
+    if counter_key not in ctx:
+        ctx[counter_key] = 0
+
+    async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
+        ctx[counter_key] = ctx.get(counter_key, 0) + 1
+        count = ctx[counter_key]
+
+        if count % interval != 0:
+            return {}
+
+        checkpoint = {
+            "session_id": ctx.get("sdk_session_id", "unknown"),
+            "ts": time.time(),
+            "tool_count": count,
+            "files_touched": sorted(ctx.get("_files_touched", set())),
+            "corrections_count": ctx.get("_corrections_count", 0),
+        }
+
+        try:
+            p = Path(path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(checkpoint, ensure_ascii=False), encoding="utf-8")
+        except Exception:
+            logger.exception("Failed to write session checkpoint to %s", path)
+
+        return {}
+
+    return _hook
+
+
+# ---------------------------------------------------------------------------
+# SubagentStop: transcript capture
+# ---------------------------------------------------------------------------
+
+_SUBAGENT_TAIL_BYTES = 5 * 1024  # Read last 5KB of transcript
+
+_ERROR_PATTERNS = re.compile(
+    r"""(?i)(?:
+        Error:\s+\S+
+      | Exception:\s+\S+
+      | FAILED\s+tests/
+      | AssertionError
+      | ImportError
+      | FileNotFoundError
+      | KeyError
+      | TypeError
+      | ValueError
+      | RuntimeError
+    )""",
+    re.VERBOSE,
+)
+
+
+def create_subagent_capture_hook(
+    corrections_path: Optional[str] = None,
+    session_context: Optional[dict] = None,
+):
+    """Factory: creates a SubagentStop hook that reads the agent transcript.
+
+    Reads the last 5KB of the transcript, extracts error patterns via regex,
+    and writes findings to corrections.jsonl.  Observe-only.
+    """
+    path = corrections_path or _DEFAULT_CORRECTIONS_PATH
+    sid = (session_context or {}).get("sdk_session_id", "unknown")
+
+    async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
+        transcript_path = _extract_field(input_data, "agent_transcript_path", "")
+        agent_id = _extract_field(input_data, "agent_id", "unknown")
+
+        if not transcript_path:
+            return {}
+
+        try:
+            p = Path(transcript_path)
+            if not p.exists():
+                return {}
+
+            # Read tail of transcript
+            size = p.stat().st_size
+            with open(p, "r", encoding="utf-8", errors="replace") as f:
+                if size > _SUBAGENT_TAIL_BYTES:
+                    f.seek(size - _SUBAGENT_TAIL_BYTES)
+                    f.readline()  # skip partial first line
+                tail = f.read()
+
+            # Extract error patterns
+            errors = _ERROR_PATTERNS.findall(tail)
+            if not errors:
+                return {}
+
+            summary = "; ".join(dict.fromkeys(errors))[:500]  # dedup, cap at 500 chars
+            entry = {
+                "ts": time.time(),
+                "session_id": sid,
+                "type": "subagent_finding",
+                "agent_id": agent_id,
+                "summary": summary,
+            }
+            _append_correction(path, entry)
+
+        except Exception:
+            logger.exception("Failed to capture subagent transcript from %s", transcript_path)
+
+        return {}
+
+    return _hook
+
+
+# ---------------------------------------------------------------------------
+# UserPromptSubmit: post-compact context injection
+# ---------------------------------------------------------------------------
+
+def create_post_compact_injection(
+    session_context: Optional[dict] = None,
+):
+    """Factory: creates a UserPromptSubmit hook that injects context after compaction.
+
+    When ``session_context["_compacted"]`` is True (set by PreCompact hook),
+    the next UserPromptSubmit injects ``additionalContext`` with:
+    - Files touched during this session (for re-reading)
+    - Basic session continuity instructions
+
+    Fire-once: resets ``_compacted`` flag after injection.
+    """
+    ctx = session_context or {}
+
+    async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
+        if not ctx.get("_compacted"):
+            return {}
+
+        # Build compact survival instructions
+        files = sorted(ctx.get("_files_touched", set()))
+        parts = [
+            "[System: Context was just compacted. Key session state below.]",
+        ]
+        if files:
+            file_list = ", ".join(files[:20])  # cap at 20 files
+            parts.append(f"Files touched this session (re-read if needed): {file_list}")
+
+        # Reset flag — fire once
+        ctx["_compacted"] = False
+
+        return {"additionalContext": " ".join(parts)}
+
+    return _hook
+
+
+# ---------------------------------------------------------------------------
 # Reader: aggregate corrections.jsonl data for evolution optimizer
 # ---------------------------------------------------------------------------
 
@@ -349,6 +555,27 @@ def register_runtime_hooks(
         "failure_tracker_reset",
     )
 
+    # Phase 2: PostToolUse file tracker
+    registry.register(
+        "PostToolUse",
+        create_file_tracker(session_context),
+        "file_tracker",
+    )
+
+    # Phase 2: PostToolUse session checkpoint
+    registry.register(
+        "PostToolUse",
+        create_session_checkpoint(session_context),
+        "session_checkpoint",
+    )
+
+    # Phase 2: SubagentStop transcript capture
+    registry.register(
+        "SubagentStop",
+        create_subagent_capture_hook(path, session_context),
+        "subagent_capture",
+    )
+
     # UserPromptSubmit hooks
     registry.register(
         "UserPromptSubmit",
@@ -356,7 +583,15 @@ def register_runtime_hooks(
         "user_correction_detector",
     )
 
+    # Phase 2: UserPromptSubmit post-compact injection
+    registry.register(
+        "UserPromptSubmit",
+        create_post_compact_injection(session_context),
+        "post_compact_injection",
+    )
+
     logger.info(
         "Runtime hooks registered: correction_capture, error_pattern_detector, "
-        "failure_tracker_reset, user_correction_detector"
+        "failure_tracker_reset, file_tracker, session_checkpoint, "
+        "subagent_capture, user_correction_detector, post_compact_injection"
     )
