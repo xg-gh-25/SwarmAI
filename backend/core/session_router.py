@@ -1490,24 +1490,14 @@ def _run_dual_recall(db_path: str, query: str) -> tuple[dict, dict]:
     return fts5_result, embed_result
 
 
-_JSONL_MAX_LINES = 1000
-
-
 def _append_jsonl(path: Path, entry: dict) -> None:
-    """Append a JSON line, rotating to keep at most _JSONL_MAX_LINES entries."""
+    """Append a JSON line, rotating via shared utility (512KB / 500 entries)."""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a", encoding="utf-8") as f:
             f.write(_json.dumps(entry, ensure_ascii=False) + "\n")
             f.flush()
-        # Rotate: if file exceeds max lines, keep the newest half.
-        # Check only every ~100 writes (stat is cheap, rewrite is not).
-        try:
-            lines = path.read_text(encoding="utf-8").strip().split("\n")
-            if len(lines) > _JSONL_MAX_LINES:
-                keep = lines[-(_JSONL_MAX_LINES // 2):]
-                path.write_text("\n".join(keep) + "\n", encoding="utf-8")
-        except Exception:
-            pass  # Rotation failure is non-critical
+        from utils.jsonl_rotation import rotate_jsonl_if_oversized
+        rotate_jsonl_if_oversized(path)
     except Exception:
         pass  # Shadow mode — never crash
