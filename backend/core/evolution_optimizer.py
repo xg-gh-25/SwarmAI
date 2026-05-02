@@ -143,6 +143,7 @@ class CycleReport:
     deployed: int = 0
     verified: int = 0
     rolled_back: int = 0
+    dry_run: bool = True
     errors: list[str] = field(default_factory=list)
     health_report_path: Path = field(default_factory=lambda: Path("."))
 
@@ -159,6 +160,7 @@ class CycleReport:
             "deployed": self.deployed,
             "verified": self.verified,
             "rolled_back": self.rolled_back,
+            "dry_run": self.dry_run,
             "errors": self.errors,
         }
 
@@ -619,7 +621,7 @@ class EvolutionOptimizer:
             finally:
                 tmp_path.unlink(missing_ok=True)
         except ImportError:
-            pass  # SkillGuard not available, skip check
+            logger.debug("SkillGuard not available — skipping injection check for %s", skill_name)
 
         return True, "All constraints passed"
 
@@ -666,20 +668,9 @@ class EvolutionOptimizer:
                 reason="No correction patterns found",
             )
 
-        # Determine optimizer mode from config
-        optimizer_mode = "auto"
-        try:
-            from core.app_config_manager import app_config_manager
-            if app_config_manager is not None:
-                evo = app_config_manager.get("evolution", {})
-                if isinstance(evo, dict):
-                    optimizer_mode = evo.get("optimizer", "auto")
-        except (ImportError, Exception):
-            pass
-
-        # Budget cap: caller can force heuristic when LLM budget exhausted
-        if force_heuristic:
-            optimizer_mode = "heuristic"
+        # Optimizer strategy: LLM first, heuristic fallback.
+        # force_heuristic skips LLM entirely (used when LLM budget exhausted).
+        use_heuristic_only = force_heuristic
 
         changes: list[TextChange] = []
         llm_tokens_used = 0
@@ -688,24 +679,24 @@ class EvolutionOptimizer:
         # rejected by _validate_constraints. Skip the LLM call entirely
         # to avoid wasting tokens (~$0.05) on changes that can't land.
         skill_size = len(original_text.encode("utf-8"))
-        if skill_size > 15 * 1024 and optimizer_mode in ("auto", "llm"):
+        if skill_size > 15 * 1024 and not use_heuristic_only:
             logger.info(
                 "Skipping LLM for %s: skill text already %dKB > 15KB limit",
                 skill_name, skill_size // 1024,
             )
-            optimizer_mode = "heuristic"
+            use_heuristic_only = True
 
-        # Try LLM optimizer if mode allows
-        if optimizer_mode in ("auto", "llm"):
+        # Try LLM optimizer first (unless forced to heuristic)
+        if not use_heuristic_only:
             changes, llm_tokens_used = self._try_llm_optimization(
                 skill_name, original_text, corrections,
             )
 
         self.last_llm_tokens = llm_tokens_used
 
-        # Fallback to heuristic if LLM produced nothing and mode allows
+        # Fallback to heuristic if LLM produced nothing (or was skipped)
         heuristic_text = None
-        if not changes and optimizer_mode in ("auto", "heuristic"):
+        if not changes:
             heuristic_text, changes = self._apply_heuristic_changes(original_text, corrections)
 
         if not changes:
@@ -770,84 +761,9 @@ class EvolutionOptimizer:
             logger.warning("LLM optimizer unavailable for %s: %s", skill_name, exc)
             return [], 0
 
-    def deploy_optimization(self, result: OptimizationResult) -> bool:
-        """Write accepted optimization to SKILL.md and log to EVOLUTION.md + CHANGELOG.
-
-        .. deprecated:: v2
-            Production path uses ``atomic_deploy()`` (module-level function) which
-            provides atomic writes, post-deploy verification, and rollback.
-            This method is retained for backward compat and unit test coverage
-            of the text manipulation logic.
-        """
-        if not result.accepted or not result.changes:
-            return False
-
-        skill_path = self._skills_dir / f"s_{result.skill_name}" / "SKILL.md"
-        if not skill_path.exists():
-            logger.warning("Cannot deploy: %s not found", skill_path)
-            return False
-
-        try:
-            content = skill_path.read_text(encoding="utf-8")
-        except OSError as exc:
-            logger.warning("Cannot read %s: %s", skill_path, exc)
-            return False
-
-        # Backup original before applying changes — enables manual rollback.
-        # Cleaned up after successful write (no stale .bak files left behind).
-        backup_path = skill_path.with_suffix(".md.bak")
-        try:
-            backup_path.write_text(content, encoding="utf-8")
-        except OSError as exc:
-            logger.warning("Cannot create backup %s: %s", backup_path, exc)
-            # Continue anyway — backup is best-effort, not blocking
-
-        # Split into frontmatter and body
-        parts = content.split("---", 2)
-        if len(parts) >= 3:
-            frontmatter = parts[0] + "---" + parts[1] + "---"
-            body = parts[2]
-        else:
-            frontmatter = ""
-            body = content
-
-        # Apply each change to the body
-        new_body = body
-        for change in result.changes:
-            if change.original and change.replacement:
-                # Replace
-                new_body = new_body.replace(change.original, change.replacement, 1)
-            elif change.original and not change.replacement:
-                # Remove
-                new_body = new_body.replace(change.original, "", 1)
-            elif not change.original and change.replacement:
-                # Add (append)
-                new_body = new_body.rstrip() + "\n" + change.replacement + "\n"
-
-        # Write back
-        new_content = frontmatter + new_body if frontmatter else new_body
-        try:
-            skill_path.write_text(new_content, encoding="utf-8")
-            logger.info(
-                "Deployed %d changes to %s (score %.2f -> %.2f)",
-                len(result.changes),
-                skill_path.name,
-                result.original_score,
-                result.optimized_score,
-            )
-            # Clean up backup after successful write — no stale .bak files
-            backup_path.unlink(missing_ok=True)
-        except OSError as exc:
-            logger.warning("Cannot write %s: %s", skill_path, exc)
-            return False
-
-        # Log to EVOLUTION.md if it exists
-        self._log_to_evolution(result)
-
-        # NOTE: v2 pipeline uses _write_cycle_changelog (module-level, fcntl-locked).
-        # This deprecated method does NOT write to changelog to avoid unlocked writes.
-
-        return True
+    # deploy_optimization() DELETED — deprecated v2 method.
+    # Production path: atomic_deploy() (module-level function) with
+    # atomic writes, post-deploy verification, and rollback.
 
     def _log_to_evolution(self, result: OptimizationResult) -> None:
         """Append an optimization entry to EVOLUTION.md (best-effort).
@@ -907,10 +823,24 @@ class EvolutionOptimizer:
     # _write_cycle_changelog() which has proper fcntl locking.
 
 
-def run_evolution_cycle(skills_dir: Path, transcripts_dir: Path, evals_dir: Path) -> CycleReport:
+def run_evolution_cycle(
+    skills_dir: Path,
+    transcripts_dir: Path,
+    evals_dir: Path,
+    *,
+    dry_run: bool = True,
+) -> CycleReport:
     """Run a full evolution cycle with exclusive file lock.
 
     Evolution Pipeline v2: MINE -> ASSESS -> ACT -> AUDIT.
+
+    Args:
+        skills_dir: Path to skills directory.
+        transcripts_dir: Path to transcripts directory.
+        evals_dir: Path to evals directory.
+        dry_run: If True (default), log proposed changes without writing
+            to SKILL.md files. Set to False for live deployment after
+            manual validation of dry-run output quality.
 
     Returns CycleReport (use .to_dict() for backward-compatible dict).
 
@@ -938,7 +868,7 @@ def run_evolution_cycle(skills_dir: Path, transcripts_dir: Path, evals_dir: Path
         )
 
     try:
-        return _run_evolution_cycle_locked(skills_dir, transcripts_dir, evals_dir, cycle_id)
+        return _run_evolution_cycle_locked(skills_dir, transcripts_dir, evals_dir, cycle_id, dry_run=dry_run)
     finally:
         try:
             flock_unlock(lock_fd)
@@ -952,6 +882,8 @@ def _run_evolution_cycle_locked(
     transcripts_dir: Path,
     evals_dir: Path,
     cycle_id: str,
+    *,
+    dry_run: bool = True,
 ) -> CycleReport:
     """Run evolution cycle phases under the lock."""
     from core.session_miner import SessionMiner
@@ -1213,10 +1145,36 @@ def _run_evolution_cycle_locked(
                 except OSError as exc:
                     errors.append(f"Failed to revert {skill_name}: {exc}")
 
-    # 3b. Deploy new optimizations
+    # 3b. Deploy new optimizations (or log proposed changes in dry-run mode)
     for skill_name, confidence, avg_score, examples, opt_result in skill_assessments:
         if confidence >= high_threshold and opt_result and opt_result.accepted and opt_result.changes:
-            # HIGH: atomic deploy
+            if dry_run:
+                # DRY RUN: log what would be deployed without writing SKILL.md
+                logger.info(
+                    "Evolution DRY RUN: would deploy %s (confidence=%.2f, "
+                    "score %.2f→%.2f, %d changes)",
+                    skill_name, confidence,
+                    opt_result.original_score, opt_result.optimized_score,
+                    len(opt_result.changes),
+                )
+                for change in opt_result.changes:
+                    logger.info(
+                        "  DRY RUN change: %s", change.reason[:100],
+                    )
+                deploy_results.append(DeployResult(
+                    skill_name=f"s_{skill_name}",
+                    success=False,
+                    changes_applied=0,
+                    changes_skipped=len(opt_result.changes),
+                    verified=False,
+                    rolled_back=False,
+                    error="dry_run=True — proposed changes logged, not applied",
+                ))
+                # Still save evals for audit trail
+                miner.save_evals(skill_name, examples)
+                continue
+
+            # LIVE: atomic deploy
             skill_path = skills_dir / f"s_{skill_name}" / "SKILL.md"
             if skill_path.exists():
                 deploy_result = atomic_deploy(skill_path, opt_result.changes)
@@ -1299,6 +1257,7 @@ def _run_evolution_cycle_locked(
         deployed=deployed_count,
         verified=verified_count,
         rolled_back=rolled_back_count,
+        dry_run=dry_run,
         errors=errors,
         health_report_path=health_report_path,
     )

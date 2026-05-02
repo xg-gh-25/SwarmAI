@@ -23,7 +23,6 @@ import json as _json
 import logging
 import os
 import time
-from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 import re
@@ -1132,22 +1131,9 @@ class SessionRouter:
                 unit=unit,
             )
 
-        # ── G3: Shadow recall — fire-and-forget quality validation ──
-        # Runs recall against the user's actual message, logs results
-        # to .context/recall_shadow.jsonl. Never blocks, never injects.
-        if _user_text:
-            from core.initialization_manager import initialization_manager
-            _ws = initialization_manager.get_cached_workspace_path()
-            if _ws:
-                _task = asyncio.create_task(
-                    _shadow_recall(
-                        session_id=session_id,
-                        user_message=_user_text,
-                        working_directory=_ws,
-                        is_channel=unit.is_channel_session,
-                    ),
-                )
-                _task.add_done_callback(_shadow_task_done)
+        # G3 shadow recall REMOVED — recall is already live (wired into
+        # prompt assembly via runtime_hooks). Shadow validation data is no
+        # longer needed. See: 2026-05-02-evolution-activation-design.md.
 
         # Stream response — persist each assistant message IMMEDIATELY.
         #
@@ -1331,173 +1317,6 @@ class SessionRouter:
                 )
 
 
-# ── G3: Shadow Recall — quality validation (no prompt injection) ─────
-#
-# Runs recall against the user's actual first message and logs
-# results + timing to .context/recall_shadow.jsonl.  Fire-and-forget:
-# never blocks the response stream, never injects into the prompt.
-# Data collected here drives the decision to wire recall into production.
 
-# Bounded dedup: track which sessions have been shadowed.
-# OrderedDict[session_id → timestamp] with max 500 entries; FIFO eviction.
-# O(1) insertion and eviction (vs O(n) min-scan with plain dict).
-_shadowed_sessions: OrderedDict[str, float] = OrderedDict()
-_SHADOW_MAX_ENTRIES = 500
-
-
-def _shadow_task_done(task: asyncio.Task) -> None:
-    """Log unhandled exceptions from fire-and-forget shadow tasks."""
-    if task.cancelled():
-        return
-    exc = task.exception()
-    if exc:
-        logger.debug("Shadow recall task failed (non-blocking): %s", exc)
-
-
-async def _shadow_recall(
-    session_id: str,
-    user_message: str,
-    working_directory: str,
-    is_channel: bool,
-) -> None:
-    """Run recall in shadow mode — log results, never inject.
-
-    Called as a fire-and-forget task from run_conversation().
-    Tries FTS5-only first, then FTS5+embedding, logs both timings.
-    """
-    # AC5: Skip channel sessions (Slack = quick exchanges, no recall value)
-    if is_channel:
-        return None
-
-    # Once per session — bounded dedup with FIFO eviction (O(1))
-    if session_id in _shadowed_sessions:
-        return None
-    if len(_shadowed_sessions) >= _SHADOW_MAX_ENTRIES:
-        _shadowed_sessions.popitem(last=False)  # O(1) FIFO eviction
-    _shadowed_sessions[session_id] = time.monotonic()
-
-    # Skip very short messages (greetings, "hi", etc.)
-    # CJK characters are semantically dense — "评估下" (3 chars) is a valid query.
-    # Use threshold 2 if CJK detected, 5 otherwise.
-    text = user_message.strip() if user_message else ""
-    _has_cjk = any("\u4e00" <= c <= "\u9fff" for c in text[:10])
-    _min_len = 2 if _has_cjk else 5
-    if len(text) < _min_len:
-        return None
-
-    wd = Path(working_directory)
-    ctx_dir = wd / ".context"
-    # Shadow log — temporary validation data. Delete or rotate after analysis
-    # (expected lifecycle: 2-4 weeks, ~500 bytes/entry, ~50 entries/day).
-    log_path = ctx_dir / "recall_shadow.jsonl"
-
-    entry: dict[str, Any] = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "session_id": session_id,
-        "query": text[:200],  # Cap for log readability
-        "injected": False,  # Shadow mode — always False
-    }
-
-    try:
-        # Resolve DB path — check workspace-local first, then global
-        db_path = Path(working_directory) / "data.db"
-        if not db_path.exists():
-            db_path = Path.home() / ".swarm-ai" / "data.db"
-        if not db_path.exists():
-            entry["fts5"] = {"ms": 0, "hits": 0, "error": "no_db"}
-            entry["embedding"] = {"ms": 0, "hits": 0, "error": "no_db"}
-            _append_jsonl(log_path, entry)
-            return None
-
-        # Run in thread pool — sqlite3 is not async-safe
-        fts5_result, embed_result = await asyncio.to_thread(
-            _run_dual_recall, str(db_path), text,
-        )
-        entry["fts5"] = fts5_result
-        entry["embedding"] = embed_result
-
-    except Exception as exc:
-        entry["error"] = str(exc)[:200]
-        entry.setdefault("fts5", {"ms": 0, "hits": 0, "error": str(exc)[:100]})
-        entry.setdefault("embedding", {"ms": 0, "hits": 0, "error": str(exc)[:100]})
-
-    _append_jsonl(log_path, entry)
-    return None
-
-
-def _run_dual_recall(db_path: str, query: str) -> tuple[dict, dict]:
-    """Run FTS5-only and FTS5+embedding recall, return timing dicts.
-
-    Runs synchronously on a thread-pool worker (called from asyncio.to_thread).
-
-    Both paths create their own connections — the singleton ``get_vec_conn()``
-    is designed for main-thread use and is NOT safe to call from arbitrary
-    thread-pool workers.  ``open_vec_db()`` context manager creates and closes
-    a fresh vec-enabled connection per call, which is thread-safe.
-    """
-    import sqlite3
-    import time
-
-    from .recall_engine import RecallEngine
-    from .knowledge_store import KnowledgeStore
-    from .vec_db import open_vec_db
-
-    # ── Path 1: FTS5-only (plain connection, no vec extension needed) ──
-    fts5_result: dict[str, Any] = {"ms": 0, "hits": 0}
-    conn = sqlite3.connect(db_path, timeout=5)
-    try:
-        store = KnowledgeStore(conn)
-        engine = RecallEngine(store)
-
-        try:
-            t0 = time.perf_counter()
-            fts5_text = engine.recall_knowledge(query, embed_fn=None, max_tokens=4000)
-            t1 = time.perf_counter()
-
-            fts5_result["ms"] = round((t1 - t0) * 1000, 1)
-            fts5_result["hits"] = fts5_text.count("**[") if fts5_text else 0
-            fts5_result["chars"] = len(fts5_text) if fts5_text else 0
-        except Exception as exc:
-            fts5_result["error"] = str(exc)[:100]
-    finally:
-        conn.close()
-
-    # ── Path 2: FTS5 + Embedding (fresh vec-enabled connection per call) ──
-    embed_result: dict[str, Any] = {"ms": 0, "hits": 0}
-    with open_vec_db(Path(db_path)) as vec_conn:
-        if vec_conn is None:
-            embed_result["error"] = "no_sqlite_vec"
-            return fts5_result, embed_result
-
-        store = KnowledgeStore(vec_conn)
-        engine = RecallEngine(store)
-
-        try:
-            embed_fn = _get_cached_embed_fn()
-            if embed_fn is None:
-                embed_result["error"] = "no_bedrock"
-            else:
-                t0 = time.perf_counter()
-                embed_text = engine.recall_knowledge(query, embed_fn=embed_fn, max_tokens=4000)
-                t1 = time.perf_counter()
-
-                embed_result["ms"] = round((t1 - t0) * 1000, 1)
-                embed_result["hits"] = embed_text.count("**[") if embed_text else 0
-                embed_result["chars"] = len(embed_text) if embed_text else 0
-        except Exception as exc:
-            embed_result["error"] = str(exc)[:100]
-
-    return fts5_result, embed_result
-
-
-def _append_jsonl(path: Path, entry: dict) -> None:
-    """Append a JSON line, rotating via shared utility (512KB / 500 entries)."""
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(_json.dumps(entry, ensure_ascii=False) + "\n")
-            f.flush()
-        from utils.jsonl_rotation import rotate_jsonl_if_oversized
-        rotate_jsonl_if_oversized(path)
-    except Exception:
-        pass  # Shadow mode — never crash
+# G3 Shadow Recall REMOVED — recall is live, shadow validation no longer needed.
+# See: Knowledge/Designs/2026-05-02-evolution-activation-design.md
