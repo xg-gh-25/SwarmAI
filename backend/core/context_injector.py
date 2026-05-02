@@ -22,6 +22,7 @@ import logging
 import re
 import subprocess as _subprocess
 from datetime import datetime
+from collections import OrderedDict
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,8 @@ _SECTION_HEADER = "## Session Resume"
 _CHECKPOINT_PREAMBLE = (
     "The previous session ended (app restart, timeout, or eviction). "
     "Below is a structured checkpoint extracted from that session's "
-    "message history, followed by the last few conversation turns.\n"
+    "message history, followed by assistant conclusions, key tool "
+    "results, and recent conversation turns.\n"
     "\n"
     "RULES:\n"
     "- Do NOT re-execute any actions, tool calls, or code changes.\n"
@@ -268,27 +270,42 @@ def _extract_tool_summary(messages: list[dict]) -> dict[str, set[str]]:
 def _extract_files_touched(tool_summary: dict[str, set[str]]) -> list[str]:
     """From tool summary, extract unique file paths that were read/edited.
 
+    Returns relative paths (e.g. ``backend/core/context_injector.py``)
+    instead of basenames, so the resumed agent knows exactly which files
+    were being worked on.
+
     Works with both live (input.file_path) and DB (summary string) data.
     Summary strings look like 'Reading /path/to/file.py' or
     'Editing /path/to/file.py'.
     """
+    # SwarmWS root for making paths relative
+    _ws_root = str(Path.home() / ".swarm-ai" / "SwarmWS") + "/"
+    _swarmai_root = str(Path.home() / "Desktop" / "SwarmAI-Workspace" / "swarmai") + "/"
+
     try:
         files: set[str] = set()
         for tool_name in ("Read", "Write", "Edit"):
             for arg in tool_summary.get(tool_name, set()):
                 if not arg:
                     continue
-                # Try to find a path in the string
-                # Match patterns like /path/to/file.ext or file_path=path
+                # Try to find a path-like token
                 for token in arg.split():
-                    if "/" in token and "." in token.rsplit("/", 1)[-1]:
-                        basename = token.rsplit("/", 1)[-1]
-                        # Clean trailing punctuation
-                        basename = basename.rstrip(".,;:\"')")
-                        if basename and len(basename) < 60:
-                            files.add(basename)
+                    cleaned = token.rstrip(".,;:\"')")
+                    if "/" in cleaned and "." in cleaned.rsplit("/", 1)[-1]:
+                        # Make relative by stripping known roots
+                        rel = cleaned
+                        if rel.startswith(_swarmai_root):
+                            rel = rel[len(_swarmai_root):]
+                        elif rel.startswith(_ws_root):
+                            rel = rel[len(_ws_root):]
+                        elif rel.startswith("/"):
+                            # Unknown absolute path — use last 3 segments
+                            parts = rel.rsplit("/", 3)
+                            rel = "/".join(parts[-3:]) if len(parts) > 3 else rel
+                        if rel and len(rel) < 120:
+                            files.add(rel)
                             break
-        return sorted(files)[:20]
+        return sorted(files)[:30]
     except Exception:
         return []
 
@@ -501,7 +518,11 @@ def _run_git_command(args: list[str], cwd: str, timeout: float = 3.0) -> str:
             args, cwd=cwd, capture_output=True, text=True,
             timeout=timeout,
         )
-        return result.stdout.strip() if result.returncode == 0 else ""
+        if result.returncode != 0:
+            return ""
+        # Cap output to prevent memory issues on huge dirty repos
+        out = result.stdout.strip()
+        return out[:4000] if len(out) > 4000 else out
     except (_subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return ""
     except Exception:
@@ -587,7 +608,7 @@ def _extract_key_tool_results(
     Scans for Read, Grep, Bash results with substantial output.
     Each result capped at 1500 chars.  Skips trivial results ("ok", empty).
     """
-    HIGH_VALUE_TOOLS = {"Read", "Grep", "Bash", "Agent"}
+    HIGH_VALUE_TOOLS = {"Read", "Grep", "Bash", "Agent", "Edit"}
     MIN_RESULT_LEN = 20  # skip trivially short results
 
     try:
@@ -885,9 +906,8 @@ def _build_legacy_context(raw_messages: list[dict], max_messages: int,
 # ─── Per-session checkpoint cache ────────────────────────────────────
 # Key: session_id, Value: (msg_count_at_build_time, result_string).
 # Messages are append-only → count change = cache invalid.
-# LRU eviction: cap at 50 entries (~100-250KB) to prevent unbounded
-# growth in long-running daemon.  OrderedDict for O(1) eviction.
-from collections import OrderedDict
+# LRU eviction: cap at 50 entries to prevent unbounded growth in
+# long-running daemon.  OrderedDict for O(1) eviction.
 
 _RESUME_CACHE_MAX = 50
 _resume_cache: OrderedDict[str, tuple[int, str]] = OrderedDict()
