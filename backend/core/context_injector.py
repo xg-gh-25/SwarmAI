@@ -603,61 +603,47 @@ def _merge_crash_checkpoint(checkpoint_path=None) -> str | None:
 def _extract_key_tool_results(
     messages: list[dict], max_results: int = 15
 ) -> str:
-    """Extract truncated output from high-value tool_result blocks.
+    """Extract detailed tool action summaries from ``tool_use.summary``.
 
-    Scans for Read, Grep, Bash results with substantial output.
-    Each result capped at 1500 chars.  Skips trivial results ("ok", empty).
+    The Claude Agent SDK persists ``tool_use`` blocks with a ``summary``
+    field (e.g. "Reading /path/to/file.py", "Running: git status") but
+    does NOT persist ``tool_result`` blocks — those are consumed by the
+    SDK internally and never reach the DB.  So we extract from summary.
+
+    This gives the resumed agent a detailed action log: what was read,
+    what commands were run, what was edited — richer than the checkpoint's
+    compact "Tool activity: Read×9, Bash×4" stat line.
     """
-    HIGH_VALUE_TOOLS = {"Read", "Grep", "Bash", "Agent", "Edit"}
-    MIN_RESULT_LEN = 20  # skip trivially short results
+    HIGH_VALUE_TOOLS = {"Read", "Grep", "Bash", "Agent", "Edit", "Write"}
+    MIN_SUMMARY_LEN = 15  # skip trivially short summaries
 
     try:
-        # Build tool_use_id → tool_name map
-        tool_names: dict[str, str] = {}
-        for msg in messages:
-            content = msg.get("content")
-            if not isinstance(content, list):
-                continue
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "tool_use":
-                    tid = block.get("id", "")
-                    name = block.get("name", "")
-                    if tid and name in HIGH_VALUE_TOOLS:
-                        tool_names[tid] = name
-
-        # Extract results for mapped tool_use_ids
         results: list[str] = []
         for msg in reversed(messages):
             content = msg.get("content")
             if not isinstance(content, list):
                 continue
             for block in content:
-                if not isinstance(block, dict) or block.get("type") != "tool_result":
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
                     continue
-                tid = block.get("tool_use_id", "")
-                tool_name = tool_names.get(tid, "")
-                if not tool_name:
-                    continue
-
-                # Extract result text
-                result_content = block.get("content", "")
-                if isinstance(result_content, list):
-                    # Content can be a list of blocks
-                    text_parts = []
-                    for rb in result_content:
-                        if isinstance(rb, dict) and rb.get("type") == "text":
-                            text_parts.append(rb.get("text", ""))
-                    result_content = "\n".join(text_parts)
-                if not isinstance(result_content, str):
-                    result_content = str(result_content)
-
-                if len(result_content) < MIN_RESULT_LEN:
+                name = block.get("name", "")
+                if name not in HIGH_VALUE_TOOLS:
                     continue
 
-                truncated = result_content[:1500]
-                if len(result_content) > 1500:
+                # DB path: summary field has the human-readable description
+                summary = block.get("summary", "")
+                if not summary or len(summary) < MIN_SUMMARY_LEN:
+                    # Live path fallback: try to build from input dict
+                    inp = block.get("input")
+                    if isinstance(inp, dict) and inp:
+                        summary = _compact_tool_args(inp)
+                    if not summary or len(summary) < MIN_SUMMARY_LEN:
+                        continue
+
+                truncated = summary[:300]
+                if len(summary) > 300:
                     truncated += "..."
-                results.append(f"  → {tool_name}: {truncated}")
+                results.append(f"  → {name}: {truncated}")
 
                 if len(results) >= max_results:
                     break
@@ -668,9 +654,9 @@ def _extract_key_tool_results(
             return ""
 
         results.reverse()  # chronological order
-        return "### Key Tool Results\n" + "\n\n".join(results)
+        return "### Key Tool Actions\n" + "\n\n".join(results)
     except Exception:
-        logger.debug("Key tool results extraction failed", exc_info=True)
+        logger.debug("Key tool actions extraction failed", exc_info=True)
         return ""
 
 
