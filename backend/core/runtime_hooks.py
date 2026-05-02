@@ -281,22 +281,55 @@ _DEFAULT_CHECKPOINT_PATH = str(
 _DEFAULT_CHECKPOINT_INTERVAL = 10
 
 
+def _get_recent_git_commits(workspace_dir: str, since_ts: float) -> list[str]:
+    """Get recent git commits since a timestamp. Returns list of oneline strings.
+
+    Subprocess with 2s timeout — never blocks the agent. Returns empty on any error.
+    """
+    import subprocess
+    from datetime import datetime, timezone
+
+    try:
+        since_str = datetime.fromtimestamp(since_ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        result = subprocess.run(
+            ["git", "log", "--oneline", "-5", f"--since={since_str}"],
+            capture_output=True, text=True, timeout=2,
+            cwd=workspace_dir,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip().split("\n")[:5]
+    except Exception:
+        pass
+    return []
+
+
 def create_session_checkpoint(
     session_context: Optional[dict] = None,
     checkpoint_path: Optional[str] = None,
     interval: int = _DEFAULT_CHECKPOINT_INTERVAL,
+    workspace_dir: Optional[str] = None,
 ):
     """Factory: creates a PostToolUse hook that writes a session checkpoint.
 
-    Every ``interval`` tool calls, overwrites a checkpoint file with current
-    session state.  On crash, ``DailyActivityExtractionHook`` recovers the
-    checkpoint on next startup.
+    Every ``interval`` tool calls:
+    1. Overwrites checkpoint JSON with current session state (crash recovery).
+    2. Appends a content snapshot to today's DailyActivity (mid-session memory).
+
+    On crash, ``recover_crash_checkpoint()`` reads the JSON and writes to
+    DailyActivity on next startup.  For normal sessions, the DailyActivity
+    append ensures content is captured even if post-session hooks don't fire.
     """
     path = checkpoint_path or _DEFAULT_CHECKPOINT_PATH
     ctx = session_context or {}
+    ws = workspace_dir or str(Path.home() / ".swarm-ai" / "SwarmWS")
     counter_key = "_tool_count"
+    start_ts_key = "_session_start_ts"
+    last_da_count_key = "_last_da_checkpoint_count"
+
     if counter_key not in ctx:
         ctx[counter_key] = 0
+    if start_ts_key not in ctx:
+        ctx[start_ts_key] = time.time()
 
     async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
         ctx[counter_key] = ctx.get(counter_key, 0) + 1
@@ -305,12 +338,22 @@ def create_session_checkpoint(
         if count % interval != 0:
             return {}
 
+        session_id = ctx.get("sdk_session_id", "unknown")
+        files = sorted(ctx.get("_files_touched", set()))
+        corrections = ctx.get("_corrections_count", 0)
+        start_ts = ctx.get(start_ts_key, time.time())
+
+        # Fetch recent git commits (2s timeout, never blocks)
+        git_commits = _get_recent_git_commits(ws, start_ts)
+
+        # 1. Write checkpoint JSON (crash recovery)
         checkpoint = {
-            "session_id": ctx.get("sdk_session_id", "unknown"),
+            "session_id": session_id,
             "ts": time.time(),
             "tool_count": count,
-            "files_touched": sorted(ctx.get("_files_touched", set())),
-            "corrections_count": ctx.get("_corrections_count", 0),
+            "files_touched": files[:20],  # Cap for JSON size
+            "corrections_count": corrections,
+            "git_commits": git_commits,
         }
 
         try:
@@ -319,6 +362,53 @@ def create_session_checkpoint(
             p.write_text(json.dumps(checkpoint, ensure_ascii=False), encoding="utf-8")
         except Exception:
             logger.exception("Failed to write session checkpoint to %s", path)
+
+        # 2. Append content snapshot to DailyActivity (mid-session memory)
+        # Only write if new files or commits since last checkpoint
+        last_count = ctx.get(last_da_count_key, 0)
+        has_new_content = len(files) > last_count or git_commits
+        if not has_new_content and count <= interval:
+            # Skip first checkpoint if nothing meaningful happened yet
+            return {}
+
+        try:
+            from datetime import datetime as dt
+            now = dt.now()
+            da_dir = Path(ws) / "Knowledge" / "DailyActivity"
+            da_dir.mkdir(parents=True, exist_ok=True)
+            da_file = da_dir / f"{now.strftime('%Y-%m-%d')}.md"
+
+            # Build content-capped entry (target < 1KB)
+            lines = [
+                f"\n## {now.strftime('%H:%M')} | {session_id[:8]} | 📸 Mid-session checkpoint\n",
+            ]
+            if files:
+                file_summary = ", ".join(f"`{Path(f).name}`" for f in files[:10])
+                if len(files) > 10:
+                    file_summary += f" (+{len(files) - 10} more)"
+                lines.append(f"**Files:** {file_summary}\n")
+            if git_commits:
+                lines.append("**Git activity:**\n")
+                for c in git_commits[:3]:
+                    lines.append(f"- `{c[:72]}`\n")
+            if corrections:
+                lines.append(f"**Corrections:** {corrections}\n")
+
+            entry = "".join(lines)
+            # Hard cap at 1KB
+            if len(entry.encode("utf-8")) > 1024:
+                entry = entry[:1000] + "\n...(truncated)\n"
+
+            with open(da_file, "a", encoding="utf-8") as f:
+                f.write(entry)
+
+            ctx[last_da_count_key] = len(files)
+            logger.debug(
+                "Mid-session checkpoint written to DailyActivity: %d files, %d commits",
+                len(files), len(git_commits),
+            )
+        except Exception:
+            logger.debug("Failed to write mid-session checkpoint to DailyActivity", exc_info=True)
 
         return {}
 
