@@ -864,6 +864,7 @@ def run_evolution_cycle(
             cycle_id=cycle_id,
             skills_checked=0,
             eligible=0,
+            dry_run=dry_run,
             errors=["Concurrent cycle in progress -- lock held"],
         )
 
