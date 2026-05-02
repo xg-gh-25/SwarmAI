@@ -157,28 +157,46 @@ def _export_tables_sync(db_path: Path, export_dir: Path, tables: list[str]) -> i
 _SAFE_PREFIXES = ("CREATE TABLE", "CREATE INDEX", "INSERT INTO")
 
 
-def _validate_sql_statements(sql: str, filename: str) -> bool:
-    """Validate SQL dump contains only safe statements.
+def _split_statements(sql: str) -> list[str]:
+    """Split SQL text into individual complete statements.
 
-    Uses sqlite3.complete_statement() for proper boundary detection
-    instead of naive split on semicolons (A1 fix).
+    Uses sqlite3.complete_statement() for proper boundary detection,
+    yielding each statement separately for individual validation.
     """
+    stmts: list[str] = []
     buf = ""
     for line in sql.split("\n"):
         buf += line + "\n"
         if sqlite3.complete_statement(buf):
             stmt = buf.strip().rstrip(";").strip()
-            upper = stmt.upper()
-            if not upper:
-                buf = ""
-                continue
-            # Allow only CREATE TABLE/INDEX and INSERT
-            if not any(upper.startswith(prefix) for prefix in _SAFE_PREFIXES):
-                logger.warning(
-                    "Rejected unsafe SQL in %s: %.80s", filename, stmt
-                )
-                return False
+            if stmt:
+                stmts.append(stmt)
             buf = ""
+    # Reject trailing incomplete SQL (sign of tampering)
+    if buf.strip():
+        raise ValueError(f"Incomplete SQL at end of buffer: {buf[:80]!r}")
+    return stmts
+
+
+def _validate_statement(stmt: str, filename: str) -> bool:
+    """Validate a single SQL statement is safe for import.
+
+    Returns True if the statement is a simple CREATE TABLE/INDEX or
+    INSERT INTO. Rejects subqueries (CREATE TABLE AS SELECT),
+    compound statements, and anything not matching safe prefixes.
+    """
+    upper = stmt.upper()
+
+    # Must start with a known safe prefix
+    if not any(upper.startswith(prefix) for prefix in _SAFE_PREFIXES):
+        logger.warning("Rejected unsafe SQL in %s: %.80s", filename, stmt)
+        return False
+
+    # Block CREATE TABLE AS SELECT (data exfiltration via subquery)
+    if upper.startswith("CREATE TABLE") and " AS " in upper:
+        logger.warning("Rejected CREATE TABLE AS in %s: %.80s", filename, stmt)
+        return False
+
     return True
 
 
@@ -189,8 +207,11 @@ def _import_tables_sync(
 ) -> int:
     """Import gzipped SQL dumps into a DB (sync, blocking I/O).
 
-    Security: only processes files matching allowed table names.
-    Validates each SQL statement via sqlite3.complete_statement() (A1 fix).
+    Security model:
+    - Only processes files matching allowed table names
+    - Splits SQL into individual statements (no executescript)
+    - Validates each statement independently
+    - Executes statements one at a time via conn.execute()
     """
     allowed_set = set(allowed_tables)
     imported = 0
@@ -207,12 +228,21 @@ def _import_tables_sync(
             try:
                 with gzip.open(gz_file, "rt") as f:
                     sql = f.read()
-                # Validate before executing (B1 fix)
-                if not _validate_sql_statements(sql, gz_file.name):
+                # Split into individual statements for per-statement validation
+                try:
+                    stmts = _split_statements(sql)
+                except ValueError as e:
+                    logger.warning("Rejected %s: %s", gz_file.name, e)
                     continue
-                conn.executescript(sql)
+                # Validate EVERY statement individually — reject entire file on any failure
+                if not all(_validate_statement(s, gz_file.name) for s in stmts):
+                    continue
+                # Execute one at a time — never executescript with untrusted SQL
+                for stmt in stmts:
+                    conn.execute(stmt)
+                conn.commit()
                 imported += 1
-                logger.debug("Imported %s", gz_file.name)
+                logger.debug("Imported %s (%d statements)", gz_file.name, len(stmts))
             except Exception as e:
                 logger.warning("Failed to import %s: %s", gz_file.name, e)
     finally:
