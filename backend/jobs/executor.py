@@ -690,22 +690,27 @@ def _handle_script(job: Job, state: SchedulerState) -> JobResult:
             status="failed", summary="No command configured",
             duration_seconds=0,
         )
-    # Guarantee HOME in current process — launchd daemons don't set it,
-    # which makes os.path.expandvars('${HOME}') return the literal string.
+    # Expand env vars in command and cwd. launchd daemons don't inherit HOME,
+    # so os.path.expandvars('${HOME}') returns the literal string. We resolve
+    # HOME via Path.home() (pwd.getpwuid — always works) and do a targeted
+    # replacement instead of mutating os.environ process-wide.
+    home = str(Path.home())
     if "HOME" not in os.environ:
-        os.environ["HOME"] = str(Path.home())
-
-    # Expand env vars in both command and cwd — shell=True only expands in command,
-    # not in cwd parameter, causing FileNotFoundError for paths like ${HOME}/...
-    command = os.path.expandvars(command)
+        # Targeted expansion: only replace HOME, don't pollute process env.
+        # Other env vars (if any) are expanded by shell=True in subprocess.
+        command = command.replace("${HOME}", home).replace("$HOME", home)
+    else:
+        command = os.path.expandvars(command)
 
     timeout = job.safety.timeout_seconds or 120
 
     # Script jobs run from the swarm-jobs directory (where venv and scripts live),
     # not from SwarmWS root. Use config.cwd to override if needed.
-    script_cwd = os.path.expandvars(
-        job.config.get("cwd", str(Path(__file__).parent))
-    )
+    raw_cwd = job.config.get("cwd", str(Path(__file__).parent))
+    if "HOME" not in os.environ:
+        script_cwd = raw_cwd.replace("${HOME}", home).replace("$HOME", home)
+    else:
+        script_cwd = os.path.expandvars(raw_cwd)
 
     try:
         result = subprocess.run(
