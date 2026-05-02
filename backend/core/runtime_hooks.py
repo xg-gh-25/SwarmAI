@@ -15,6 +15,7 @@ Key public symbols:
 import json
 import logging
 import re
+import subprocess
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -286,7 +287,6 @@ def _get_recent_git_commits(workspace_dir: str, since_ts: float) -> list[str]:
 
     Subprocess with 2s timeout — never blocks the agent. Returns empty on any error.
     """
-    import subprocess
     from datetime import datetime, timezone
 
     try:
