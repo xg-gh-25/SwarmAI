@@ -297,12 +297,14 @@ decisions from ALL prior stages and present them as a batch:
 ```
 DELIVERY GATE -- <N> taste decisions for review:
 
-  1. [THINK]   Chose httpx built-in retry over tenacity (simpler, fewer deps)
-  2. [BUILD]   Used sync retry instead of async (matches existing codebase style)
-  3. [REVIEW]  Skipped type stub generation (low value for internal module)
+  1. [THINK, T6]  Chose httpx built-in retry over tenacity (simpler, fewer deps — T6: simplest wins when tooling commoditizes)
+  2. [BUILD]      Used sync retry instead of async (matches existing codebase style)
+  3. [REVIEW, T5] Skipped type stub generation (low value for internal module — T5: encode judgment not ceremony)
 
   [Approve All]  [Override #1]  [Override #2]  [Override #3]  [Discuss]
 ```
+
+**Thesis tagging:** When a taste decision is informed by a thesis from `Knowledge/Learned/THESIS.md`, tag it with `[STAGE, Txx]`. This makes taste decisions auditable — future review can trace why a choice was made. Not every taste decision maps to a thesis; only tag when the connection is real.
 
 **If no taste decisions accumulated:** skip the gate, proceed to delivery.
 

@@ -90,6 +90,29 @@ ROI = (Strategic * 0.35) + (Current_Priority * 0.25) + (Historical * 0.15) + (Fe
 
 Range: [1.0, 5.0]. Higher feasibility = easier = higher ROI. All dimensions on 1-5 scale.
 
+### Step 2.5: Thesis Alignment
+
+Read `Knowledge/Learned/THESIS.md` and scan the **Thesis Health Summary** table for all Active theses.
+
+**For each thesis, ask one question:** Does this requirement align with, contradict, or have no connection to this thesis?
+
+- **ALIGNS** — the requirement directly serves or deepens what this thesis claims is important. Note how.
+- **CONTRADICTS** — the requirement works against what this thesis claims. **FLAG visibly** — don't auto-reject, but make the conflict impossible to miss.
+- **N/A** — no meaningful connection. Skip silently.
+
+Most requirements hit 1-2 theses, rarely all. Only report ALIGNS and CONTRADICTS — don't list every N/A.
+
+**If a thesis tension applies** (see "Known Tensions Between Theses" section in THESIS.md), surface it: "This sits at the T3 vs T6 tension — building understanding tools that are also infrastructure. Resolution principle: [quote from Tensions table]."
+
+**Output (add to evaluation):**
+```
+### Thesis Alignment
+- T1 (memory moat): ALIGNS — adds persistent skill-level memory
+- T3 (understanding > execution): ALIGNS — helps user see patterns, not just run tasks
+```
+
+**Skip when:** No DDD docs (L0 evaluation) — thesis alignment requires enough context to judge.
+
 ### Step 3.5: Pre-mortem (Mandatory for GO candidates)
 
 **If the initial ROI >= 3.2 (GO candidate), run a pre-mortem before confirming:**
@@ -171,6 +194,10 @@ Based on ROI score (L2) or structured analysis (L0):
 | Current Priority | 3/5 | Important but not blocking current focus |
 | **ROI** | **3.5** | |
 
+### Thesis Alignment
+- T1 (memory moat): YES — <why>
+- T3 (understanding > execution): N/A
+
 ### Recommendation: GO
 
 ### Pre-mortem (GO candidates only)
@@ -209,6 +236,7 @@ Test: QA against acceptance criteria
     "roi": 3.4
   },
   "recommendation": "GO",
+  "thesis_alignment": {"T1": "YES — adds persistent memory", "T3": "N/A"},
   "pre_mortem": [
     {"reason": "...", "likelihood": "med", "mitigation": "..."},
     {"reason": "...", "likelihood": "low", "mitigation": "..."},
@@ -355,6 +383,7 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state think
 Before marking this task complete, show evidence for each:
 
 - [ ] **ROI score calculated** — numeric ROI shown (or T-shirt sizing at L0) with per-dimension scores and rationale
+- [ ] **Thesis alignment checked** — relevant theses from THESIS.md evaluated; conflicts flagged visibly (L2 only)
 - [ ] **Pre-mortem completed** — 3 specific failure reasons with likelihood and mitigation (for GO candidates; skip for DEFER/REJECT)
 - [ ] **Recommendation stated** — explicit GO / DEFER / REJECT / ESCALATE with reasoning tied to scores (and pre-mortem if applicable)
 - [ ] **Acceptance criteria defined** — numbered, testable criteria for what "done" looks like (GO) or clear rationale for deferral/rejection

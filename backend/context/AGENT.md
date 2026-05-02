@@ -59,6 +59,8 @@ Pick the 3 most relevant constraints for the problem. Each approach: **Constrain
 - **PRODUCT.md** → Strategic Priorities + Non-Goals. Align the recommendation with priorities. If an approach conflicts with a non-goal, say so explicitly ("Approach 3 conflicts with non-goal: not a cloud SaaS"). Weight effort estimates toward what the project actually values.
 - **IMPROVEMENT.md** → What Failed section. If a similar approach was tried and failed, flag it: "We tried X before (see IMPROVEMENT.md) — it failed because Y. Approach 2 avoids this by Z." What Worked section: prefer patterns with proven track records in this project.
 
+**Thesis enrichment:** When recommending an approach, check `Knowledge/Learned/THESIS.md` for relevant theses. If a thesis clearly favors one approach, cite it: "Recommended: Approach B — aligns with T1 (memory is the moat): this approach deepens user context, the others just add plumbing." If two approaches serve different theses, surface the tension: "A serves T3 (augment understanding), B serves T6 (avoid infrastructure investment) — your call." This makes the recommendation traceable to our worldview, not just engineering judgment.
+
 **Auto-capture (if working on a project):** After presenting alternatives, publish as an artifact so downstream skills (plan, build) can consume the chosen approach:
 ```bash
 python backend/scripts/artifact_cli.py publish \
