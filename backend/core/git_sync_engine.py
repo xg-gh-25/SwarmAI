@@ -197,6 +197,11 @@ def _validate_statement(stmt: str, filename: str) -> bool:
         logger.warning("Rejected CREATE TABLE AS in %s: %.80s", filename, stmt)
         return False
 
+    # Block INSERT INTO ... SELECT (cross-table data exfiltration)
+    if upper.startswith("INSERT INTO") and " SELECT " in upper:
+        logger.warning("Rejected INSERT...SELECT in %s: %.80s", filename, stmt)
+        return False
+
     return True
 
 
