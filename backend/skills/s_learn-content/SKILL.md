@@ -204,6 +204,23 @@ Write connections in the Relevance section: `Validates KD06 (memory sovereignty)
 
 **Why this matters:** Isolated cards = information hoarding. Connected cards = compounding knowledge. The cross-reference is what makes "learn" different from "bookmark."
 
+### Step 2c: Thesis Check
+
+After cross-referencing, read `Knowledge/Learned/THESIS.md` and check the new content against existing theses:
+
+| Relationship | Action |
+|-------------|--------|
+| **Strengthens** a thesis (new evidence for existing claim) | Add to that thesis's Evidence list with date and one-line summary |
+| **Challenges** a thesis (contradicts or complicates existing claim) | Add to that thesis's Challenges section. 3+ challenges = thesis under review |
+| **Spawns** a new thesis (novel claim with no existing thesis) | Don't create yet — note "Potential thesis: ..." in the card's Relevance section. A thesis needs 2+ independent sources to be worth creating |
+| **No connection** | Fine — not every article maps to a thesis. Skip silently |
+
+**Update THESIS.md inline** when strengthening or challenging. Add to the thesis's Evidence or Challenges list only — do NOT manually update the Health Summary table (evidence count is derived, not maintained). This is the mechanism that turns isolated articles into a compounding worldview. The card is evidence; the thesis is understanding.
+
+**Example:**
+- New article says "AI memory systems that learn from corrections outperform static ones" → Strengthens T1 (Memory is the moat), add to evidence list.
+- New article says "Models with 10M+ context windows make external memory unnecessary" → Challenges T1, add to challenges section with reasoning.
+
 ### Step 3: Determine Domain
 
 Classify into one of these domains based on content:
@@ -400,3 +417,4 @@ Before marking this task complete, show evidence for each:
 - [ ] **Briefing is insights, not summary** — each bullet is a takeaway, not a description
 - [ ] **Tags are searchable** — 3-7 specific, useful tags
 - [ ] **Learning value** — reader gets ~80% of article value from the card alone, without reading the original
+- [ ] **Thesis checked** — THESIS.md reviewed. If new content strengthens/challenges a thesis, THESIS.md updated. If no connection, silently skip.
