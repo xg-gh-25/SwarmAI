@@ -136,6 +136,7 @@ def _append_changelog(
 
     Uses ``fcntl.flock`` on a ``.jsonl.lock`` sidecar file to prevent
     concurrent writes from corrupting the changelog (P0 fix, Req 5.1).
+    Rotates when file exceeds 512 KB (keeps newest 500 entries).
     """
     line = json.dumps({
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -152,6 +153,9 @@ def _append_changelog(
             try:
                 with open(changelog_path, "a", encoding="utf-8") as f:
                     f.write(line + "\n")
+                # Rotate inside the lock to prevent concurrent rotation
+                from utils.jsonl_rotation import rotate_jsonl_if_oversized
+                rotate_jsonl_if_oversized(changelog_path)
             finally:
                 flock_unlock(lock_fd)
     except OSError as exc:
