@@ -5,7 +5,7 @@
  * Shown when onboardingComplete is false in system status.
  */
 import { useState, useEffect, useCallback } from 'react';
-import { systemService } from '../services/system';
+import { systemService, RestoreEvent } from '../services/system';
 import { channelsService } from '../services/channels';
 import type { Channel } from '../types';
 import AuthConfigPanel from '../components/settings/AuthConfigPanel';
@@ -19,6 +19,8 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
   const [step, setStep] = useState(1);
   const [systemOk, setSystemOk] = useState(false);
   const [authVerified, setAuthVerified] = useState(false);
+  const [hasBackup, setHasBackup] = useState(false);
+  const [restoreSkipped, setRestoreSkipped] = useState(false);
 
   // Step 1: Auto-check system with retry every 3s until backend is ready
   useEffect(() => {
@@ -28,7 +30,14 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
         const status = await systemService.getStatus();
         if (!cancelled && status.database.healthy && status.swarmWorkspace.ready) {
           setSystemOk(true);
-          setStep(2); // Auto-advance
+          // Check if backup exists (fresh install might have a backup to restore)
+          try {
+            const backup = await systemService.getBackupStatus();
+            if (backup.repoUrl && backup.lastBackup) {
+              setHasBackup(true);
+            }
+          } catch { /* no backup configured — skip */ }
+          setStep(2); // Auto-advance to Auth (or Restore if detected)
         }
       } catch {
         // Backend not ready yet — retry will fire via interval
@@ -49,7 +58,15 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
     }
   }, [onComplete]);
 
-  const steps = [
+  // Show restore step only if backup was detected and not skipped
+  const showRestore = hasBackup && !restoreSkipped;
+  const steps = showRestore ? [
+    { num: 1, title: 'System Check', done: systemOk },
+    { num: 2, title: 'Authentication', done: authVerified },
+    { num: 3, title: 'Restore', done: step > 3 },
+    { num: 4, title: 'Channels', done: step > 4 },
+    { num: 5, title: 'Ready', done: false },
+  ] : [
     { num: 1, title: 'System Check', done: systemOk },
     { num: 2, title: 'Authentication', done: authVerified },
     { num: 3, title: 'Channels', done: step > 3 },
@@ -92,13 +109,19 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
             onVerified={() => { setAuthVerified(true); setStep(3); }}
           />
         )}
-        {step === 3 && (
-          <Step3Channels
-            onContinue={() => setStep(4)}
-            onSkip={() => setStep(4)}
+        {step === 3 && showRestore && (
+          <StepRestore
+            onRestored={() => setStep(4)}
+            onSkip={() => { setRestoreSkipped(true); setStep(4); }}
           />
         )}
-        {step === 4 && <Step4Ready onStart={handleComplete} />}
+        {step === (showRestore ? 4 : 3) && (
+          <Step3Channels
+            onContinue={() => setStep(showRestore ? 5 : 4)}
+            onSkip={() => setStep(showRestore ? 5 : 4)}
+          />
+        )}
+        {step === (showRestore ? 5 : 4) && <Step4Ready onStart={handleComplete} />}
       </div>
     </div>
   );
@@ -218,6 +241,111 @@ function Step3Channels({ onContinue, onSkip }: { onContinue: () => void; onSkip:
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+// ── Step: Restore from Backup ──
+
+function StepRestore({ onRestored, onSkip }: { onRestored: () => void; onSkip: () => void }) {
+  const [repoUrl, setRepoUrl] = useState('');
+  const [token, setToken] = useState('');
+  const [restoring, setRestoring] = useState(false);
+  const [events, setEvents] = useState<RestoreEvent[]>([]);
+  const [done, setDone] = useState(false);
+
+  // Pre-fill from backup status
+  useEffect(() => {
+    systemService.getBackupStatus().then(s => {
+      if (s.repoUrl) setRepoUrl(s.repoUrl);
+    }).catch(() => {});
+  }, []);
+
+  const handleRestore = async () => {
+    if (!repoUrl) return;
+    setRestoring(true);
+    setEvents([]);
+    try {
+      for await (const event of systemService.restoreBackup(repoUrl, token || undefined)) {
+        setEvents(prev => [...prev, event]);
+        if (event.error) break;
+        if (event.progress === 100) setDone(true);
+      }
+    } catch { /* handled via events */ }
+    setRestoring(false);
+  };
+
+  if (done) {
+    const last = events[events.length - 1];
+    return (
+      <div>
+        <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">Restore Complete</h2>
+        <div className="p-4 bg-green-500/10 border border-green-500/20 rounded-lg mb-6">
+          <span className="material-symbols-outlined text-green-400 align-middle mr-2">check_circle</span>
+          <span className="text-green-400">
+            {last?.messagesCount ?? 0} conversations, {last?.sessionsCount ?? 0} sessions,
+            {last?.todosCount ?? 0} todos restored.
+          </span>
+        </div>
+        <button onClick={onRestored}
+          className="px-6 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:opacity-90">
+          Continue
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">Restore from Backup</h2>
+      <p className="text-[var(--color-text-muted)] mb-6">
+        A backup was detected. Restore your memory, knowledge, and conversation history from your private GitHub repository.
+      </p>
+
+      {!restoring && events.length === 0 && (
+        <div className="space-y-4 mb-6">
+          <div>
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">Repository URL</label>
+            <input type="text" value={repoUrl} onChange={e => setRepoUrl(e.target.value)}
+              placeholder="https://github.com/user/swarm-brain.git"
+              className="w-full px-3 py-2 text-sm rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text)]" />
+          </div>
+          <div>
+            <label className="block text-xs text-[var(--color-text-muted)] mb-1">GitHub Token (optional if gh auth configured)</label>
+            <input type="password" value={token} onChange={e => setToken(e.target.value)}
+              placeholder="ghp_..."
+              className="w-full px-3 py-2 text-sm rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text)]" />
+          </div>
+          <div className="flex gap-3">
+            <button onClick={handleRestore} disabled={!repoUrl}
+              className="px-6 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:opacity-90 disabled:opacity-50">
+              Restore
+            </button>
+            <button onClick={onSkip}
+              className="px-6 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
+              Skip — start fresh
+            </button>
+          </div>
+        </div>
+      )}
+
+      {(restoring || events.length > 0) && (
+        <div className="space-y-3">
+          {events.map((e, i) => (
+            <div key={i} className="flex items-center gap-2 text-sm">
+              <span className={`w-2 h-2 rounded-full ${e.error ? 'bg-red-500' : e.progress === 100 ? 'bg-green-500' : 'bg-blue-500 animate-pulse'}`} />
+              <span className="text-[var(--color-text-muted)]">{e.stage}</span>
+              <span className="text-[var(--color-text)]">{e.detail || e.error || ''}</span>
+            </div>
+          ))}
+          {restoring && (
+            <div className="w-full bg-[var(--color-bg-secondary)] rounded-full h-2">
+              <div className="bg-[var(--color-primary)] h-2 rounded-full transition-all duration-300"
+                style={{ width: `${events[events.length - 1]?.progress ?? 0}%` }} />
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
