@@ -844,6 +844,7 @@ class PromptBuilder:
                     agent_config["resume_app_session_id"],
                     model_context_window=model_context_window,
                     is_channel=is_channel,
+                    working_directory=working_directory,
                 )
                 if resume_ctx:
                     # Inject into system_prompt directly — context_text may

@@ -619,6 +619,7 @@ def _extract_key_tool_results(
 
     try:
         results: list[str] = []
+        seen_paths: set[str] = set()  # Deduplicate Read results by file path
         for msg in reversed(messages):
             content = msg.get("content")
             if not isinstance(content, list):
@@ -630,11 +631,21 @@ def _extract_key_tool_results(
                 if name not in HIGH_VALUE_TOOLS:
                     continue
 
+                # Deduplicate Read tool results by file path — if the same
+                # file was Read multiple times, only keep the most recent
+                # (we iterate in reverse, so first seen = most recent).
+                inp = block.get("input")
+                if name == "Read" and isinstance(inp, dict):
+                    fpath = inp.get("file_path", "")
+                    if fpath:
+                        if fpath in seen_paths:
+                            continue
+                        seen_paths.add(fpath)
+
                 # DB path: summary field has the human-readable description
                 summary = block.get("summary", "")
                 if not summary or len(summary) < MIN_SUMMARY_LEN:
                     # Live path fallback: try to build from input dict
-                    inp = block.get("input")
                     if isinstance(inp, dict) and inp:
                         summary = _compact_tool_args(inp)
                     if not summary or len(summary) < MIN_SUMMARY_LEN:
@@ -789,13 +800,19 @@ def _build_checkpoint(messages: list[dict]) -> str:
 
 # ─── Recent turns formatting ─────────────────────────────────────────
 
-def _format_recent_turns(messages: list[dict], max_turns: int = 30) -> str:
+def _format_recent_turns(
+    messages: list[dict], max_turns: int = 30, budget_chars: int = 0,
+) -> str:
     """Format the last N user-assistant turn pairs.
 
     30 turns covers most productive sessions.  4K per message preserves
     detailed assistant reasoning, code snippets, and multi-paragraph
     analyses.  First principle: the resumed agent should feel like it
     was there.
+
+    Early-exit: if ``budget_chars`` is provided, stop collecting turns
+    once accumulated size exceeds 60% of the budget.  This avoids
+    formatting 240K chars (30 turns x 4K) that will be trimmed anyway.
     """
     try:
         filtered = _filter_tool_only_messages(messages)
@@ -806,7 +823,11 @@ def _format_recent_turns(messages: list[dict], max_turns: int = 30) -> str:
         # Take last max_turns * 2 messages (pairs of user + assistant)
         recent = filtered[-(max_turns * 2):]
 
+        # Early-exit threshold: 60% of budget allocated to recent_turns
+        size_limit = int(budget_chars * 0.6) if budget_chars > 0 else 0
+
         formatted: list[str] = []
+        accumulated = 0
         for msg in recent:
             text = _format_message(msg)
             if text is not None:
@@ -814,6 +835,10 @@ def _format_recent_turns(messages: list[dict], max_turns: int = 30) -> str:
                 if len(text) > 4000:
                     text = text[:3997] + "..."
                 formatted.append(text)
+                accumulated += len(text)
+                # Stop collecting once we have enough for the budget
+                if size_limit and accumulated >= size_limit:
+                    break
 
         if not formatted:
             return ""
@@ -912,6 +937,7 @@ async def build_resume_context(
     db_fetch_limit: int | None = None,
     token_budget: int | None = None,
     is_channel: bool = False,
+    working_directory: str | None = None,
 ) -> str:
     """Load recent messages and build enriched resume context for system prompt.
 
@@ -979,7 +1005,10 @@ async def build_resume_context(
         uncommitted = ""
         try:
             checkpoint = _build_checkpoint(raw_messages)
-            recent = _format_recent_turns(raw_messages, max_turns=30)
+            budget_chars = token_budget * 4  # ~4 chars per token
+            recent = _format_recent_turns(
+                raw_messages, max_turns=30, budget_chars=budget_chars,
+            )
 
             # Enrichment layer: assistant conclusions
             conclusions = _extract_assistant_conclusions(raw_messages, max_blocks=5)
@@ -993,7 +1022,8 @@ async def build_resume_context(
             tool_results_text = _extract_key_tool_results(raw_messages, max_results=15)
 
             # Enrichment layer: uncommitted git state (async, with timeout)
-            ws_dir = str(Path.home() / ".swarm-ai" / "SwarmWS")
+            # Use caller-provided working_directory; fall back to SwarmWS default
+            ws_dir = working_directory or str(Path.home() / ".swarm-ai" / "SwarmWS")
             uncommitted = await _extract_uncommitted_state(ws_dir)
         except Exception:
             logger.warning("Structured checkpoint extraction failed",

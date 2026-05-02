@@ -399,6 +399,12 @@ def create_session_checkpoint(
             if len(entry.encode("utf-8")) > 1024:
                 entry = entry[:1000] + "\n...(truncated)\n"
 
+            # Concurrency note: we use plain open("a") instead of locked_write.py.
+            # Our entries are <1KB (hard-capped above), and on macOS/APFS small
+            # appends (<4KB) to a single file are effectively atomic at the
+            # filesystem level.  These hooks are observe-only and crash-safe by
+            # design — a torn write loses one checkpoint entry, which is
+            # acceptable for mid-session snapshots.
             with open(da_file, "a", encoding="utf-8") as f:
                 f.write(entry)
 
@@ -604,6 +610,10 @@ def create_high_signal_capture(
                 f"\n**🔔 High-signal capture** ({now.strftime('%H:%M')}): "
                 f"{prompt[:500]}\n"
             )
+            # Concurrency note: plain open("a") is safe here — entries are
+            # well under 4KB (macOS/APFS atomic append threshold).  These are
+            # observe-only hooks; a torn write loses one signal entry, which is
+            # acceptable.  locked_write.py is not needed for this use case.
             with open(da_file, "a", encoding="utf-8") as f:
                 f.write(entry)
 
