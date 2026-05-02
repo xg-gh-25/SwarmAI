@@ -14,6 +14,7 @@ import SystemTab from './SystemTab';
 import EngineMetricsTab from './EngineMetricsTab';
 import AboutTab from './AboutTab';
 import HiveTab from './HiveTab';
+import BackupTab from './BackupTab';
 import { isDesktop } from '../../services/tauri';
 
 const ALL_TABS = [
@@ -23,6 +24,7 @@ const ALL_TABS = [
   { id: 'skills', label: 'Skills', icon: 'extension' },
   { id: 'mcp-servers', label: 'MCP Servers', icon: 'device_hub' },
   { id: 'hive', label: 'Hive', icon: 'cloud', desktopOnly: true },
+  { id: 'backup', label: 'Backup', icon: 'cloud_upload' },
   { id: 'engine', label: 'Core Engine', icon: 'psychology' },
   { id: 'system', label: 'System', icon: 'dns' },
   { id: 'about', label: 'About', icon: 'info' },
@@ -85,6 +87,7 @@ export default function SettingsTabs({ initialTab }: SettingsTabsProps) {
         {activeTab === 'skills' && <SkillsSettingsTab />}
         {activeTab === 'mcp-servers' && <MCPServersTab />}
         {activeTab === 'hive' && <HiveTab />}
+        {activeTab === 'backup' && <BackupTab />}
         {activeTab === 'engine' && <EngineMetricsTab />}
         {activeTab === 'system' && <SystemTab />}
         {activeTab === 'about' && <AboutTab />}
