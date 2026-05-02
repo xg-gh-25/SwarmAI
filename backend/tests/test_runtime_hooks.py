@@ -951,3 +951,84 @@ class TestPostCompactInjection:
         result = await hook({"prompt": "go"}, None, MagicMock())
 
         assert "additionalContext" in result
+
+
+# ---------------------------------------------------------------------------
+# _corrections_count: incremented by all correction-writing hooks
+# ---------------------------------------------------------------------------
+
+class TestCorrectionsCount:
+
+    @pytest.mark.asyncio
+    async def test_tool_failure_increments_count(self, corrections_file, session_context):
+        """PostToolUseFailure hook increments _corrections_count in session_context."""
+        from core.runtime_hooks import create_correction_capture_hook
+
+        assert session_context.get("_corrections_count", 0) == 0
+
+        hook = create_correction_capture_hook(str(corrections_file), session_context)
+        await hook(
+            {"tool_name": "Bash", "tool_input": {}, "error": "fail", "tool_use_id": "tu_1"},
+            "tu_1", MagicMock(),
+        )
+        assert session_context["_corrections_count"] == 1
+
+        await hook(
+            {"tool_name": "Edit", "tool_input": {}, "error": "conflict", "tool_use_id": "tu_2"},
+            "tu_2", MagicMock(),
+        )
+        assert session_context["_corrections_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_user_correction_increments_count(self, corrections_file, session_context):
+        """UserPromptSubmit correction detection increments _corrections_count."""
+        from core.runtime_hooks import create_user_correction_detector
+
+        hook = create_user_correction_detector(str(corrections_file), session_context)
+        await hook({"prompt": "that's wrong, it should be X"}, None, MagicMock())
+        assert session_context["_corrections_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_subagent_finding_increments_count(self, corrections_file, session_context, tmp_path):
+        """SubagentStop hook increments _corrections_count when errors found."""
+        from core.runtime_hooks import create_subagent_capture_hook
+
+        transcript = tmp_path / "transcript.jsonl"
+        transcript.write_text('{"type": "text", "content": "Error: ImportError: oops"}\n')
+
+        hook = create_subagent_capture_hook(str(corrections_file), session_context)
+        await hook(
+            {"agent_id": "a-1", "agent_transcript_path": str(transcript), "agent_type": "general"},
+            None, MagicMock(),
+        )
+        assert session_context["_corrections_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_reflects_corrections_count(self, tmp_path, session_context):
+        """Session checkpoint includes the actual corrections_count, not always 0."""
+        from core.runtime_hooks import create_correction_capture_hook, create_session_checkpoint
+
+        corrections_file = tmp_path / "corrections.jsonl"
+        checkpoint_path = tmp_path / "checkpoint.json"
+
+        # Generate some corrections first
+        cap_hook = create_correction_capture_hook(str(corrections_file), session_context)
+        await cap_hook(
+            {"tool_name": "Bash", "tool_input": {}, "error": "e1", "tool_use_id": "t1"},
+            "t1", MagicMock(),
+        )
+        await cap_hook(
+            {"tool_name": "Bash", "tool_input": {}, "error": "e2", "tool_use_id": "t2"},
+            "t2", MagicMock(),
+        )
+        assert session_context["_corrections_count"] == 2
+
+        # Create checkpoint with interval=1 so it writes on every call
+        cp_hook = create_session_checkpoint(session_context, str(checkpoint_path), interval=1)
+        await cp_hook(
+            {"tool_name": "Read", "tool_input": {"file_path": "/a.py"}},
+            "t3", MagicMock(),
+        )
+
+        data = json.loads(checkpoint_path.read_text())
+        assert data["corrections_count"] == 2
