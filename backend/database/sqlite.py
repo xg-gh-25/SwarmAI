@@ -250,18 +250,18 @@ class SQLiteTable(BaseTable[T], Generic[T]):
 class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
     """Specialized SQLite table for messages with session_id querying support and TTL."""
 
-    # TTL duration in seconds (7 days)
-    TTL_SECONDS = 7 * 24 * 60 * 60  # 604800 seconds
+    # TTL duration in seconds (90 days — aligned with DailyActivity retention)
+    TTL_SECONDS = 90 * 24 * 60 * 60  # 7_776_000 seconds
 
     async def put(self, item: T) -> T:
-        """Insert or update a message with TTL expiration (7 days)."""
+        """Insert or update a message with TTL expiration (90 days)."""
         if "id" not in item:
             item["id"] = str(uuid4())
         if "created_at" not in item:
             item["created_at"] = datetime.now().isoformat()
         item["updated_at"] = datetime.now().isoformat()
 
-        # Set TTL: expires 7 days from now (Unix epoch timestamp in seconds)
+        # Set TTL: expires 90 days from now (Unix epoch timestamp in seconds)
         item["expires_at"] = int(time.time()) + self.TTL_SECONDS
 
         return await super().put(item)
@@ -1235,7 +1235,8 @@ class SQLiteChatMessagesTable(SQLiteTable[T], Generic[T]):
 # 2 — add token_usage table (2026-04-25)
 # 3 — add hive_accounts + hive_instances tables (2026-04-28)
 # 4 — add messages_fts virtual table + triggers (2026-04-28)
-CURRENT_SCHEMA_VERSION = 4
+# 5 — extend messages TTL from 7 days to 90 days (2026-05-02)
+CURRENT_SCHEMA_VERSION = 5
 
 
 class SQLiteDatabase(BaseDatabase):
@@ -1964,6 +1965,29 @@ class SQLiteDatabase(BaseDatabase):
                 logger.info("DB migration v4 (FTS5) complete")
             except Exception as e:
                 logger.warning("FTS5 migration skipped (SQLite may lack fts5): %s", e)
+
+        if current_version < 5:
+            # Version 5: Extend messages TTL from 7 days to 90 days (2026-05-02)
+            # Existing messages have expires_at = created_at + 7 days.
+            # Add 83 days (7_171_200 seconds) so they expire at created_at + 90 days.
+            # Messages already past their old 7-day TTL but not yet cleaned up
+            # also get extended — no data loss.
+            updated = 0
+            try:
+                cursor = await conn.execute(
+                    "UPDATE messages SET expires_at = expires_at + 7171200 "
+                    "WHERE expires_at IS NOT NULL"
+                )
+                updated = cursor.rowcount
+                await conn.commit()
+            except Exception as e:
+                logger.warning("v5 TTL extension failed (non-fatal): %s", e)
+            await conn.execute("PRAGMA user_version = 5")
+            await conn.commit()
+            logger.info(
+                "DB migration v5 (TTL 7d→90d) complete: %d messages extended",
+                updated,
+            )
 
     async def _run_legacy_migrations(self, conn: aiosqlite.Connection) -> None:
         """Legacy detection-based column migrations for pre-user_version databases.
