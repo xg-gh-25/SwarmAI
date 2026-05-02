@@ -906,3 +906,48 @@ async def uninstall_cleanup():
 
     logger.info("Uninstall cleanup completed: %s", results)
     return {"status": "cleaned", "details": results}
+
+
+# ── Workspace Backup & Restore ────────────────────────────────────
+
+class BackupConfigBody(BaseModel):
+    """Request body for backup configuration."""
+    repo_url: Optional[str] = None
+    token: Optional[str] = None
+    schedule: Optional[str] = None
+
+
+def _get_backup_manager():
+    """Lazy-init BackupManager singleton."""
+    if not hasattr(_get_backup_manager, "_instance"):
+        from core.backup_manager import BackupManager
+        _get_backup_manager._instance = BackupManager()
+    return _get_backup_manager._instance
+
+
+@router.post("/backup")
+async def run_backup() -> dict:
+    """Run an immediate workspace backup.
+
+    Exports DB L2 tables, copies config, commits and pushes to GitHub.
+    """
+    mgr = _get_backup_manager()
+    return await mgr.backup()
+
+
+@router.get("/backup/status")
+async def backup_status() -> dict:
+    """Return current backup status: last_backup, repo_url, schedule, enabled."""
+    mgr = _get_backup_manager()
+    return mgr.get_status()
+
+
+@router.put("/backup/config")
+async def backup_config(body: BackupConfigBody) -> dict:
+    """Update backup configuration: repo_url, token, schedule."""
+    mgr = _get_backup_manager()
+    return mgr.configure(
+        repo_url=body.repo_url,
+        token=body.token,
+        schedule=body.schedule,
+    )
