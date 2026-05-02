@@ -690,12 +690,22 @@ def _handle_script(job: Job, state: SchedulerState) -> JobResult:
             status="failed", summary="No command configured",
             duration_seconds=0,
         )
+    # Guarantee HOME in current process — launchd daemons don't set it,
+    # which makes os.path.expandvars('${HOME}') return the literal string.
+    if "HOME" not in os.environ:
+        os.environ["HOME"] = str(Path.home())
+
+    # Expand env vars in both command and cwd — shell=True only expands in command,
+    # not in cwd parameter, causing FileNotFoundError for paths like ${HOME}/...
+    command = os.path.expandvars(command)
 
     timeout = job.safety.timeout_seconds or 120
 
     # Script jobs run from the swarm-jobs directory (where venv and scripts live),
     # not from SwarmWS root. Use config.cwd to override if needed.
-    script_cwd = job.config.get("cwd", str(Path(__file__).parent))
+    script_cwd = os.path.expandvars(
+        job.config.get("cwd", str(Path(__file__).parent))
+    )
 
     try:
         result = subprocess.run(
@@ -1386,8 +1396,15 @@ def _build_cli_env(aws_creds: dict[str, str] | None = None) -> dict:
 
 
 def _build_script_env() -> dict:
-    """Minimal env for script jobs. Inherits PATH, strips sensitive vars."""
+    """Minimal env for script jobs. Inherits PATH, strips sensitive vars.
+
+    Ensures HOME is always set — launchd daemons don't inherit it,
+    which breaks os.path.expandvars('${HOME}') in job configs.
+    """
     env = os.environ.copy()
+    # Guarantee HOME — launchd daemon doesn't set it
+    if "HOME" not in env:
+        env["HOME"] = str(Path.home())
     # Strip AWS creds — scripts that need them should use credential_process
     for key in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"):
         env.pop(key, None)

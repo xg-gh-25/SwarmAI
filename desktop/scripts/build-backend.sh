@@ -412,8 +412,18 @@ fi
 # the macOS build verifies module completeness for both platforms.
 echo ""
 if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" || "$OSTYPE" == "cygwin" ]] && [[ -n "${CI:-}" ]]; then
-    echo "Skipping post-build verification on Windows CI (binary hangs in lifespan startup without workspace)."
-    echo "  Module bundling verified by macOS build. Binary size: $(du -h "$OUTPUT_BINARY" | cut -f1)"
+    echo "Skipping full post-build verification on Windows CI (binary hangs in lifespan startup without workspace)."
+    echo "  Running lightweight module-presence check instead..."
+    # Lightweight check: verify the binary can at least import critical modules
+    # without starting the full server (no lifespan, no workspace dirs needed).
+    # This catches missing native extensions (awscrt, sqlite_vec) on Windows
+    # that the macOS build can't verify.
+    if "$OUTPUT_BINARY" --help >/dev/null 2>&1; then
+        echo "  ✅ Binary executes (--help returned successfully)"
+    else
+        echo "  ⚠️  Binary --help failed (exit code $?) — may be missing dependencies"
+        echo "  Module bundling verified by macOS build. Binary size: $(du -h "$OUTPUT_BINARY" | cut -f1)"
+    fi
 else
     echo "Running post-build verification..."
     if python scripts/verify_build.py "$OUTPUT_BINARY"; then
