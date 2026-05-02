@@ -481,56 +481,78 @@ class TestMergeCrashCheckpoint:
 
 
 class TestExtractKeyToolResults:
-    def test_extracts_read_results(self):
+    """Tests for _extract_key_tool_results — now reads tool_use.summary (DB path).
+
+    The Claude Agent SDK does NOT persist tool_result blocks to DB.
+    Only tool_use blocks with a 'summary' field survive. E2E audit
+    confirmed: 0 tool_result rows, 15693 tool_use rows in production DB.
+    """
+
+    def test_extracts_from_summary_field(self):
+        """DB path: summary contains human-readable action description."""
         msgs = [
             {"role": "assistant", "content": [
-                {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "x.py"}},
-            ]},
-            {"role": "user", "content": [
-                {"type": "tool_result", "tool_use_id": "t1", "content": "def hello():\n    return 42"},
+                {"type": "tool_use", "id": "t1", "name": "Read", "input": {},
+                 "summary": "Reading /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/core/context_injector.py"},
             ]},
         ]
         result = _extract_key_tool_results(msgs)
-        assert "hello" in result
-        assert "42" in result
+        assert "Read" in result
+        assert "context_injector.py" in result
 
-    def test_skips_trivial_results(self):
+    def test_falls_back_to_input_when_no_summary(self):
+        """Live path: input dict has data but no summary."""
         msgs = [
             {"role": "assistant", "content": [
-                {"type": "tool_use", "id": "t1", "name": "Edit", "input": {}},
+                {"type": "tool_use", "id": "t1", "name": "Bash",
+                 "input": {"command": "git status --short"}},
             ]},
-            {"role": "user", "content": [
-                {"type": "tool_result", "tool_use_id": "t1", "content": "ok"},
+        ]
+        result = _extract_key_tool_results(msgs)
+        assert "Bash" in result
+        assert "git status" in result
+
+    def test_skips_trivial_summaries(self):
+        msgs = [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Edit", "input": {},
+                 "summary": "ok"},
             ]},
         ]
         result = _extract_key_tool_results(msgs)
         assert result == ""
 
-    def test_caps_each_result(self):
-        long_output = "line\n" * 1000
+    def test_skips_non_high_value_tools(self):
         msgs = [
             {"role": "assistant", "content": [
-                {"type": "tool_use", "id": "t1", "name": "Bash", "input": {"command": "pytest"}},
-            ]},
-            {"role": "user", "content": [
-                {"type": "tool_result", "tool_use_id": "t1", "content": long_output},
+                {"type": "tool_use", "id": "t1", "name": "Skill", "input": {},
+                 "summary": "Running skill s_autonomous-pipeline with long description"},
             ]},
         ]
-        result = _extract_key_tool_results(msgs, max_results=1)
-        assert len(result) <= 2000  # 1500 chars + header overhead
+        result = _extract_key_tool_results(msgs)
+        assert result == ""
 
     def test_respects_max_results(self):
         msgs = []
         for i in range(20):
             msgs.append({"role": "assistant", "content": [
-                {"type": "tool_use", "id": f"t{i}", "name": "Grep", "input": {"pattern": f"pat{i}"}},
-            ]})
-            msgs.append({"role": "user", "content": [
-                {"type": "tool_result", "tool_use_id": f"t{i}", "content": f"result line {i}\nmore data"},
+                {"type": "tool_use", "id": f"t{i}", "name": "Grep", "input": {},
+                 "summary": f"Searching for pattern_{i} in backend/core/"},
             ]})
         result = _extract_key_tool_results(msgs, max_results=5)
-        # Should have at most 5 result blocks
         assert result.count("→") <= 5
+
+    def test_caps_long_summaries(self):
+        long_summary = "Reading " + "x" * 500
+        msgs = [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Read", "input": {},
+                 "summary": long_summary},
+            ]},
+        ]
+        result = _extract_key_tool_results(msgs, max_results=1)
+        assert "..." in result
+        assert len(result) < 500  # 300 char cap + header
 
 
 # ── _format_recent_turns (expanded) ──────────────────────────────────
