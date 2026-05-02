@@ -5,20 +5,22 @@ repo, and full restore from that repo on a new machine.
 
 Key design:
 - backup() and restore() share the same GitSyncEngine
-- DB export uses sqlite3 .backup (WAL-safe) → per-table .dump → gzip
+- DB export uses sqlite3 .backup (WAL-safe) → per-table streaming gzip
 - Token stored in macOS Keychain via `security` CLI, never plaintext
 - Env var SWARM_BACKUP_TOKEN overrides Keychain (for CI/testing)
 - backup_state.json tracks last_backup, repo_url, schedule
+- asyncio.Lock prevents concurrent backup/restore (A4 fix)
 """
+import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
+import tempfile
 from datetime import datetime
 from pathlib import Path
-
-import re
 
 from core.git_sync_engine import GitSyncEngine
 
@@ -30,10 +32,13 @@ def _sanitize_repo_url(url: str | None) -> str | None:
 
     Converts https://ghp_xxx@github.com/user/repo.git
          to  https://github.com/user/repo.git
+    Handles URLs with @ in username (C2 fix): strips everything up to LAST @.
     """
     if not url:
         return url
-    return re.sub(r"https?://[^@]+@", lambda m: m.group(0).split("//")[0] + "//", url)
+    # Greedy match: strip everything between :// and last @ (C2 fix)
+    return re.sub(r"(https?://).*@", r"\1", url)
+
 
 # L2 tables to export (irreplaceable data only)
 L2_TABLES = [
@@ -143,6 +148,7 @@ class BackupManager:
         self.db_path = Path(db_path or self.swarm_dir / "data.db")
         self.state_path = self.swarm_dir / "backup_state.json"
         self.engine = GitSyncEngine(self.workspace_dir)
+        self._lock = asyncio.Lock()  # A4 fix: prevent concurrent backup/restore
 
     def _load_state(self) -> dict:
         """Load backup state from JSON file."""
@@ -154,14 +160,32 @@ class BackupManager:
         return {"last_backup": None, "repo_url": None, "schedule": "daily_3am", "enabled": True}
 
     def _save_state(self, state: dict) -> None:
-        """Persist backup state to JSON file."""
-        self.state_path.write_text(json.dumps(state, indent=2))
+        """Persist backup state atomically (A6 fix: write-then-rename)."""
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=str(self.swarm_dir), suffix=".json.tmp"
+        )
+        try:
+            with os.fdopen(tmp_fd, "w") as f:
+                json.dump(state, f, indent=2)
+            os.replace(tmp_path, str(self.state_path))
+        except Exception:
+            # Clean up temp file on failure
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     async def backup(self) -> dict:
         """Run a full backup: config snapshot + DB export + git push.
 
         Returns dict with status, tables_exported, commit, push_status.
         """
+        async with self._lock:
+            return await self._backup_impl()
+
+    async def _backup_impl(self) -> dict:
+        """Internal backup implementation (called under lock)."""
         state = self._load_state()
         result = {
             "status": "ok",
@@ -178,7 +202,7 @@ class BackupManager:
             if src.exists():
                 shutil.copy2(str(src), str(config_dir / fname))
 
-        # 2. DB export
+        # 2. DB export (runs in thread, non-blocking)
         export_dir = self.workspace_dir / "db-export"
         tables_exported = await self.engine.export_db_tables(
             db_path=self.db_path,
@@ -187,20 +211,22 @@ class BackupManager:
         )
         result["tables_exported"] = tables_exported
 
-        # 3. Git add + commit
-        self.engine.git_add_all()
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        commit_sha = self.engine.git_commit(f"backup: {now_str}")
-        result["commit"] = commit_sha
+        # 3. Git add + commit + push (A5 fix: run in thread)
+        def _git_ops():
+            self.engine.git_add_all()
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+            sha = self.engine.git_commit(f"backup: {now_str}")
+            pushed = self.engine.git_push() if sha else False
+            return sha, pushed
 
-        # 4. Git push (non-fatal)
+        commit_sha, pushed = await asyncio.to_thread(_git_ops)
+        result["commit"] = commit_sha
         if commit_sha:
-            pushed = self.engine.git_push()
             result["push_status"] = "ok" if pushed else "failed"
         else:
             result["push_status"] = "no_changes"
 
-        # 5. Update state
+        # 4. Update state
         state["last_backup"] = datetime.now().isoformat()
         state["repo_url"] = _sanitize_repo_url(self.engine.get_remote_url())
         self._save_state(state)
@@ -217,6 +243,12 @@ class BackupManager:
         Stages: clone → config → db_import → schema_migrate → verify.
         Refuses to run if workspace already contains data (safety).
         """
+        async with self._lock:
+            async for event in self._restore_impl(repo_url, token):
+                yield event
+
+    async def _restore_impl(self, repo_url: str, token: str | None = None):
+        """Internal restore implementation (called under lock)."""
         # Safety: refuse non-empty workspace
         memory_file = self.workspace_dir / ".context" / "MEMORY.md"
         if memory_file.exists():
@@ -229,11 +261,12 @@ class BackupManager:
 
         # Stage 1: CLONE
         yield {"stage": "clone", "progress": 10, "detail": "Cloning backup repository..."}
-        cloned = self.engine.git_clone(repo_url, self.workspace_dir)
+        cloned = await asyncio.to_thread(
+            self.engine.git_clone, _sanitize_repo_url(repo_url) or repo_url, self.workspace_dir
+        )
         if not cloned:
-            yield {"stage": "clone", "progress": 10, "error": "git clone failed. Check repo URL and token."}
+            yield {"stage": "clone", "progress": 10, "error": "git clone failed. Check repo URL and credentials."}
             return
-        # Re-init engine with cloned dir
         self.engine = GitSyncEngine(self.workspace_dir)
 
         # Stage 2: CONFIG
@@ -256,8 +289,6 @@ class BackupManager:
 
         # Stage 4: SCHEMA_MIGRATE
         yield {"stage": "schema_migrate", "progress": 70, "detail": "Running database migrations..."}
-        # Migrations run automatically on next DB access via SQLiteDatabase.initialize()
-        # Just verify DB is accessible
         import sqlite3
         try:
             conn = sqlite3.connect(str(self.db_path))
@@ -300,7 +331,7 @@ class BackupManager:
         state = self._load_state()
         return {
             "last_backup": state.get("last_backup"),
-            "repo_url": state.get("repo_url") or self.engine.get_remote_url(),
+            "repo_url": state.get("repo_url") or _sanitize_repo_url(self.engine.get_remote_url()),
             "schedule": state.get("schedule", "daily_3am"),
             "enabled": state.get("enabled", True),
         }
@@ -310,7 +341,7 @@ class BackupManager:
         """Update backup configuration."""
         state = self._load_state()
         if repo_url is not None:
-            state["repo_url"] = repo_url
+            state["repo_url"] = _sanitize_repo_url(repo_url)  # C1 fix: sanitize here too
         if schedule is not None:
             state["schedule"] = schedule
         if token is not None:

@@ -189,6 +189,93 @@ class TestDBExportImport:
             assert (await cur.fetchone())[0] == 1
 
 
+class TestSpecialCharacterRoundTrip:
+    """P0 regression test: semicolons, quotes, newlines, unicode in data."""
+
+    @pytest.mark.asyncio
+    async def test_special_chars_survive_export_import(self, backup_env):
+        """Data with semicolons, quotes, newlines, unicode must round-trip correctly."""
+        import aiosqlite
+        from core.git_sync_engine import GitSyncEngine
+
+        # Insert adversarial data
+        adversarial = [
+            ("adv-1", "print('hello'); print('world')", "sess-1", "user"),
+            ("adv-2", "line1\nline2\nline3", "sess-1", "user"),
+            ("adv-3", "it's a 'quoted' string", "sess-1", "user"),
+            ("adv-4", "emoji: \U0001f41d and chinese: 你好", "sess-1", "user"),
+            ("adv-5", "NULL literal; DROP TABLE messages; --", "sess-1", "user"),
+        ]
+        async with aiosqlite.connect(str(backup_env["db_path"])) as conn:
+            for row in adversarial:
+                await conn.execute(
+                    "INSERT INTO messages (id, content, session_id, role, created_at, updated_at, expires_at) "
+                    "VALUES (?, ?, ?, ?, '2026-05-02', '2026-05-02', 0)",
+                    row,
+                )
+            await conn.commit()
+
+        # Export + import
+        engine = GitSyncEngine(workspace_dir=backup_env["ws"])
+        export_dir = backup_env["ws"] / "db-export"
+        exported = await engine.export_db_tables(
+            db_path=backup_env["db_path"], export_dir=export_dir, tables=["messages"]
+        )
+        assert exported == 1
+
+        fresh_db = backup_env["swarm_dir"] / "special-chars.db"
+        imported = await engine.import_db_tables(
+            db_path=fresh_db, export_dir=export_dir, allowed_tables=["messages"]
+        )
+        assert imported == 1
+
+        # Verify ALL rows including adversarial ones
+        async with aiosqlite.connect(str(fresh_db)) as conn:
+            cur = await conn.execute("SELECT COUNT(*) FROM messages")
+            count = (await cur.fetchone())[0]
+            assert count == 10  # 5 original + 5 adversarial
+
+            # Verify specific adversarial content survived
+            cur = await conn.execute("SELECT content FROM messages WHERE id='adv-1'")
+            assert (await cur.fetchone())[0] == "print('hello'); print('world')"
+
+            cur = await conn.execute("SELECT content FROM messages WHERE id='adv-2'")
+            assert (await cur.fetchone())[0] == "line1\nline2\nline3"
+
+            cur = await conn.execute("SELECT content FROM messages WHERE id='adv-3'")
+            assert (await cur.fetchone())[0] == "it's a 'quoted' string"
+
+            cur = await conn.execute("SELECT content FROM messages WHERE id='adv-5'")
+            content = (await cur.fetchone())[0]
+            assert "DROP TABLE" in content  # The string survived, not executed as SQL
+
+
+class TestMaliciousSqlRejection:
+    """E3: Verify import rejects tampered SQL files."""
+
+    @pytest.mark.asyncio
+    async def test_drop_table_rejected(self, backup_env):
+        """Import must reject .sql.gz files containing DROP TABLE."""
+        import gzip
+        from core.git_sync_engine import GitSyncEngine
+
+        export_dir = backup_env["ws"] / "db-export"
+        export_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create a malicious messages.sql.gz
+        malicious_sql = 'CREATE TABLE "messages" (id TEXT);\nDROP TABLE sessions;\n'
+        with gzip.open(export_dir / "messages.sql.gz", "wt") as f:
+            f.write(malicious_sql)
+
+        engine = GitSyncEngine(workspace_dir=backup_env["ws"])
+        fresh_db = backup_env["swarm_dir"] / "malicious.db"
+        imported = await engine.import_db_tables(
+            db_path=fresh_db, export_dir=export_dir, allowed_tables=["messages"]
+        )
+        # Should reject the file and import 0
+        assert imported == 0
+
+
 class TestKeychainToken:
     """Keychain read/write round-trip (mocked on non-macOS)."""
 
