@@ -1601,7 +1601,7 @@ wheels = [
 
 [[package]]
 name = "swarmai-backend"
-version = "1.6.2"
+version = "1.9.2"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
@@ -1640,6 +1640,7 @@ dev = [
     { name = "hypothesis" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "pytest-timeout" },
     { name = "pytest-xdist" },
 ]
 
@@ -1678,6 +1679,7 @@ requires-dist = [
     { name = "pyjwt", specifier = ">=2.8.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24.0,<1.0.0" },
+    { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.3.0" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.5.0" },
     { name = "python-multipart", specifier = ">=0.0.12" },
     { name = "python-pptx", specifier = ">=1.0.0" },
