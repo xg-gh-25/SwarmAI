@@ -32,6 +32,7 @@ import asyncio
 import logging
 import os
 import platform
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, TYPE_CHECKING
@@ -579,6 +580,7 @@ class PromptBuilder:
         # use them even if ContextDirectoryLoader fails early.
         model_context_window = 200_000
         is_channel = channel_context is not None
+        _t_total_start = time.perf_counter()
         try:
             context_dir = Path(working_directory) / ".context"
             # Reserve headroom for ephemeral injections (DailyActivity, Bootstrap,
@@ -596,7 +598,9 @@ class PromptBuilder:
                 token_budget=max(base_budget - EPHEMERAL_HEADROOM, base_budget // 2),
                 templates_dir=Path(__file__).resolve().parent.parent / "context",
             )
+            _t0 = time.perf_counter()
             loader.ensure_directory()
+            _t_ensure = time.perf_counter() - _t0
 
             model = self.resolve_model(agent_config)
             model_context_window = self.get_model_context_window(model)
@@ -627,6 +631,7 @@ class PromptBuilder:
                 except Exception:
                     pass  # Proactive module unavailable — rule-based only
 
+            _t1 = time.perf_counter()
             context_text = loader.load_all(
                 model_context_window=model_context_window,
                 exclude_filenames=exclude_files,
@@ -644,6 +649,7 @@ class PromptBuilder:
                 # non-zero when prompt is rebuilt mid-session (e.g. --resume).
                 context_percent_used=context_percent_used,
             )
+            _t_load = time.perf_counter() - _t1
 
             # ── BOOTSTRAP.md detection (ephemeral, not in L1 cache) ──
             bootstrap_path = context_dir / "BOOTSTRAP.md"
@@ -697,6 +703,7 @@ class PromptBuilder:
             # ── Proactive Intelligence briefing (ephemeral) ──
             # Skipped for channel sessions: briefing is for session planning,
             # not quick chat exchanges (~2K tokens saved).
+            _t_briefing_start = time.perf_counter()
             if not is_channel:
                 try:
                     from .proactive_intelligence import build_session_briefing
@@ -705,6 +712,7 @@ class PromptBuilder:
                         context_text += f"\n\n{briefing}"
                 except Exception as exc:
                     logger.warning("Proactive intelligence injection failed: %s", exc)
+            _t_briefing = time.perf_counter() - _t_briefing_start
 
             # ── UserObserver Suggestions ──
             # Inject pending USER.md update suggestions if the file exists
@@ -771,10 +779,13 @@ class PromptBuilder:
                 agent_config["system_prompt"] = (
                     existing + "\n\n" + context_text if existing else context_text
                 )
+                _t_total = time.perf_counter() - _t_total_start
+                _est_tokens = ContextDirectoryLoader.estimate_tokens(context_text)
                 logger.info(
-                    "Injected centralized context: %d chars, ~%d tokens",
-                    len(context_text),
-                    ContextDirectoryLoader.estimate_tokens(context_text),
+                    "Injected centralized context: %d chars, ~%d tokens, "
+                    "timing: total=%.2fs (ensure=%.3fs, load=%.3fs, briefing=%.3fs)",
+                    len(context_text), _est_tokens,
+                    _t_total, _t_ensure, _t_load, _t_briefing,
                 )
 
             # ── Collect per-file metadata for TSCC system prompt viewer ──
