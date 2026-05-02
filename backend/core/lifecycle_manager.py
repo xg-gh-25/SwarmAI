@@ -591,7 +591,7 @@ class LifecycleManager:
             logger.debug("Channel session cleanup skipped: %s", exc)
 
     async def _cleanup_expired_messages(self) -> None:
-        """Delete messages past their 7-day TTL.
+        """Delete messages past their 90-day TTL.
 
         Runs every ~10 minutes (cycle % 10 block).  Non-fatal — failures
         are logged and skipped so they never block the maintenance loop.
