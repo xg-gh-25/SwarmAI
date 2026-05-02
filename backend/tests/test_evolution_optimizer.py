@@ -439,6 +439,63 @@ class TestComputeConfidence:
         )
 
 
+class TestConfidenceBoosts:
+    """Tests for recency_boost and repeat_boost in compute_confidence."""
+
+    def test_recency_boost_crosses_threshold(self):
+        """2 recent corrections on same skill → confidence >= 0.40 (crosses 0.35)."""
+        # Base case without boosts: 2 corrections, 30 examples, fitness 0.4
+        # evidence=0.5, need=0.7 (fitness 0.4 → <0.5 band), density=0.2 (rate 6.7%)
+        # base = 0.5 * max(0.2, 0.7) = 0.35 — right at threshold
+        # With recency_boost=0.10 (2 recent × 0.05) + repeat_boost=0.05 (2 repeats)
+        # total = 0.35 + 0.10 + 0.05 = 0.50
+        result = compute_confidence(
+            n_corrections=2, n_examples=30, avg_fitness=0.4,
+            recent_corrections=2, repeat_count=2,
+        )
+        assert result >= 0.40, f"Expected >= 0.40, got {result}"
+
+    def test_no_boosts_backward_compatible(self):
+        """Without boost params, behavior is identical to v2.1."""
+        # Old call signature still works
+        result = compute_confidence(2, 22, 0.5)
+        assert 0.30 <= result <= 0.40  # unchanged from v2.1 band
+
+    def test_recency_boost_capped_at_015(self):
+        """Recency boost is capped at +0.15 regardless of count."""
+        # 10 recent corrections: boost should be min(0.15, 10*0.05) = 0.15
+        result_capped = compute_confidence(
+            n_corrections=10, n_examples=100, avg_fitness=0.2,
+            recent_corrections=10, repeat_count=1,
+        )
+        result_extreme = compute_confidence(
+            n_corrections=10, n_examples=100, avg_fitness=0.2,
+            recent_corrections=100, repeat_count=1,
+        )
+        # Both should be same (cap at 0.15)
+        assert result_capped == result_extreme
+
+    def test_repeat_boost_capped_at_010(self):
+        """Repeat boost is capped at +0.10 regardless of count."""
+        result_3 = compute_confidence(
+            n_corrections=3, n_examples=30, avg_fitness=0.4,
+            recent_corrections=0, repeat_count=3,
+        )
+        result_100 = compute_confidence(
+            n_corrections=3, n_examples=30, avg_fitness=0.4,
+            recent_corrections=0, repeat_count=100,
+        )
+        assert result_3 == result_100
+
+    def test_combined_boosts_dont_exceed_1(self):
+        """Confidence is capped at 1.0 even with max boosts."""
+        result = compute_confidence(
+            n_corrections=10, n_examples=20, avg_fitness=0.1,
+            recent_corrections=10, repeat_count=10,
+        )
+        assert result <= 1.0
+
+
 class TestAtomicDeploy:
     """Tests for the atomic_deploy function."""
 

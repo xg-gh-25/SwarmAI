@@ -167,10 +167,12 @@ def compute_confidence(
     n_corrections: int,
     n_examples: int,
     avg_fitness: float,
+    recent_corrections: int = 0,
+    repeat_count: int = 0,
 ) -> float:
     """Compute confidence score for skill optimization.
 
-    Three signals:
+    Three base signals:
       evidence_strength: raw correction count — step function with bands at
         1 (0.3), 2 (0.5), 3 (0.6), 5 (0.8), 10 (1.0).
       correction_density: correction_rate = n_corrections / n_examples.
@@ -178,9 +180,15 @@ def compute_confidence(
       need_signal: how low is the fitness score?
         <0.3 → 1.0, <0.5 → 0.7, <0.7 → 0.4, else 0.1.
 
-    Final confidence = evidence × max(density_boost, need_signal).
-    Both factors must be present — pure count without need, or pure need
-    without evidence, cannot produce high confidence alone.
+    Two additive boosts (v2.2):
+      recency_boost: +0.05 per correction within 7 days, capped at +0.15.
+      repeat_boost: +0.05 per repeat on same skill (repeat_count - 1),
+        capped at +0.10.
+
+    Final confidence = evidence × max(density_boost, need_signal)
+                     + recency_boost + repeat_boost.
+    Capped at 1.0.  Both factors must be present — pure count without need,
+    or pure need without evidence, cannot produce high confidence alone.
     """
     if n_corrections == 0:
         return 0.0
@@ -224,10 +232,17 @@ def compute_confidence(
     else:
         need = 1.0
 
-    # Combine: evidence × max(density, need)
+    # Base: evidence × max(density, need)
     # density_boost lets high correction rates push confidence up
     # even when fitness score is moderate
-    return round(evidence * max(density_boost, need), 2)
+    base = evidence * max(density_boost, need)
+
+    # v2.2: Additive boosts for recent and repeated corrections.
+    # These make the threshold reachable for skills with ongoing issues.
+    recency_boost = min(0.15, recent_corrections * 0.05)
+    repeat_boost = min(0.10, max(0, repeat_count - 1) * 0.05)
+
+    return round(min(1.0, base + recency_boost + repeat_boost), 2)
 
 
 def _extract_body(content: str) -> tuple[str, str]:
@@ -1025,6 +1040,15 @@ def _run_evolution_cycle_locked(
 
     # Pre-compute confidence for all eligible skills so we can rank-order
     # for LLM budget allocation (highest confidence gets LLM first).
+    #
+    # Read runtime correction stats (corrections.jsonl) for recency/repeat
+    # boosts.  Graceful degradation: empty dict if file doesn't exist yet.
+    try:
+        from core.runtime_hooks import read_correction_stats
+        correction_stats = read_correction_stats()
+    except Exception:
+        correction_stats = {}
+
     skill_pre_assess: list[tuple[str, int, float, float]] = []
     for skill_name in eligible_skills:
         examples = all_examples[skill_name]
@@ -1034,7 +1058,14 @@ def _run_evolution_cycle_locked(
             if ex.user_correction and len(ex.agent_actions.strip()) > 20:
                 score_pairs.append((ex.user_correction, ex.agent_actions))
         avg_score = evaluator.score_batch(score_pairs) if score_pairs else 1.0
-        confidence = compute_confidence(correction_count, len(examples), avg_score)
+
+        # Fetch runtime stats for this skill (if any corrections were captured)
+        skill_stats = correction_stats.get(skill_name, {})
+        confidence = compute_confidence(
+            correction_count, len(examples), avg_score,
+            recent_corrections=skill_stats.get("recent_corrections", 0),
+            repeat_count=skill_stats.get("repeat_count", 0),
+        )
         skill_pre_assess.append((skill_name, correction_count, avg_score, confidence))
 
     # Sort by confidence descending — highest-value skills get LLM budget first
