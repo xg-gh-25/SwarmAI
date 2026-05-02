@@ -127,6 +127,7 @@ export interface BriefingSignal {
   urgency: string;   // "high", "medium", "low"
   relevance: number;
   lang: string;      // "en", "zh"
+  feedId: string;    // "github-trending", "ai-engineering", "reference-commits", etc.
 }
 
 export interface BriefingJob {
@@ -347,6 +348,7 @@ export const systemService = {
         urgency: (s.urgency as string) ?? 'medium',
         relevance: (s.relevance as number) ?? (s.relevance_score as number) ?? 0,
         lang: (s.lang as string) ?? 'en',
+        feedId: (s.feedId as string) ?? (s.feed_id as string) ?? '',
       }));
 
       // Parse jobs (backward compat)

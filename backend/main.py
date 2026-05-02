@@ -624,56 +624,71 @@ async def lifespan(app: FastAPI):
 
     # Start channel gateway (deferred to background if channels exist)
     # Validates: Requirements 1.1, 1.2, 1.3, 1.4
+    #
+    # MODE GUARD: Only daemon and hive run the channel gateway.
+    # Sidecar/dev must NOT start it — Socket Mode allows only ONE
+    # connection per app token.  Two processes competing causes
+    # rapid reconnect churn (770+ "connection closed" events observed).
     phase_timings["gateway_ms"] = 0  # Updated by background task on completion
+    _run_mode = _detect_run_mode()
+    _gateway_allowed = _run_mode in ("daemon", "hive")
 
-    _channels_count: int | None = None  # None = query failed, fall back to sync
-    try:
-        from database import db as _startup_db
-        _channels_list = await _startup_db.channels.list()
-        _channels_count = len(_channels_list)
-    except Exception:
-        logger.warning(
-            "Failed to query channels count — falling back to synchronous gateway startup"
-        )
-
-    if _channels_count == 0:
-        # No channels configured — skip gateway startup entirely.
+    if not _gateway_allowed:
         channel_gateway._startup_state = "not_started"
-        logger.info("No channels configured — skipping channel gateway startup")
-    elif _channels_count is not None and _channels_count > 0:
-        # Channels exist — defer startup to a background task so it
-        # doesn't block _startup_complete.
-        async def _deferred_gateway_startup() -> None:
-            _t_start = time.monotonic()
-            try:
-                channel_gateway._startup_state = "starting"
-                await channel_gateway.startup()
-                channel_gateway._startup_state = "started"
-                logger.info(
-                    "Channel gateway started (deferred, %d channels)",
-                    _channels_count,
-                )
-            except Exception:
-                channel_gateway._startup_state = "failed"
-                logger.exception("Deferred channel gateway startup failed")
-            finally:
-                elapsed = round((time.monotonic() - _t_start) * 1000)
-                _phase_timings_ref = _phase_timings
-                if _phase_timings_ref is not None:
-                    _phase_timings_ref["gateway_ms"] = elapsed
-                logger.info("Phase: channel gateway (deferred) — %dms", elapsed)
-
-        asyncio.create_task(_deferred_gateway_startup())
         logger.info(
-            "Channel gateway startup deferred to background (%d channels)",
-            _channels_count,
+            "Channel gateway skipped — mode=%s (only daemon/hive run channels)",
+            _run_mode,
         )
     else:
-        # Fallback: channels count query failed (None) — run synchronously
-        # (preserves current behavior).
-        await channel_gateway.startup()
-        channel_gateway._startup_state = "started"
-        logger.info("Channel gateway started (synchronous fallback)")
+
+        _channels_count: int | None = None  # None = query failed, fall back to sync
+        try:
+            from database import db as _startup_db
+            _channels_list = await _startup_db.channels.list()
+            _channels_count = len(_channels_list)
+        except Exception:
+            logger.warning(
+                "Failed to query channels count — falling back to synchronous gateway startup"
+            )
+
+        if _channels_count == 0:
+            # No channels configured — skip gateway startup entirely.
+            channel_gateway._startup_state = "not_started"
+            logger.info("No channels configured — skipping channel gateway startup")
+        elif _channels_count is not None and _channels_count > 0:
+            # Channels exist — defer startup to a background task so it
+            # doesn't block _startup_complete.
+            async def _deferred_gateway_startup() -> None:
+                _t_start = time.monotonic()
+                try:
+                    channel_gateway._startup_state = "starting"
+                    await channel_gateway.startup()
+                    channel_gateway._startup_state = "started"
+                    logger.info(
+                        "Channel gateway started (deferred, %d channels)",
+                        _channels_count,
+                    )
+                except Exception:
+                    channel_gateway._startup_state = "failed"
+                    logger.exception("Deferred channel gateway startup failed")
+                finally:
+                    elapsed = round((time.monotonic() - _t_start) * 1000)
+                    _phase_timings_ref = _phase_timings
+                    if _phase_timings_ref is not None:
+                        _phase_timings_ref["gateway_ms"] = elapsed
+                    logger.info("Phase: channel gateway (deferred) — %dms", elapsed)
+
+            asyncio.create_task(_deferred_gateway_startup())
+            logger.info(
+                "Channel gateway startup deferred to background (%d channels)",
+                _channels_count,
+            )
+        else:
+            # Fallback: channels count query failed (None) — run synchronously
+            # (preserves current behavior).
+            await channel_gateway.startup()
+            channel_gateway._startup_state = "started"
+            logger.info("Channel gateway started (synchronous fallback)")
 
     # --- Initialize file-based config and permission components ---
     # Requirements: 1.2, 4.7, 4.8, 9.3

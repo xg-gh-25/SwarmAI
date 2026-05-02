@@ -17,6 +17,7 @@ Handlers:
 
 from __future__ import annotations
 
+import html as _html_mod
 import json
 import logging
 import os
@@ -926,10 +927,10 @@ def _handle_notify(job: Job, state: SchedulerState) -> JobResult:
 
 
 def _format_signal_digest_message(max_items: int = 10) -> str:
-    """Format signal_digest.json into a readable Slack message.
+    """Format signal_digest.json into a grouped, linked Slack message.
 
-    Reads the L4 digest JSON, groups by urgency, formats as compact markdown.
-    Returns empty string if no digest or no items.
+    Groups signals by feed, makes titles clickable, shows source context
+    appropriately per feed type, and applies mrkdwn escaping.
     """
     digest_path = SWARMWS / "Services" / "signals" / "signal_digest.json"
     if not digest_path.exists():
@@ -948,24 +949,89 @@ def _format_signal_digest_message(max_items: int = 10) -> str:
     items = sorted(items, key=lambda x: x.get("relevance_score", 0), reverse=True)
     items = items[:max_items]
 
-    # Group by urgency
+    esc = _escape_slack_mrkdwn
+
+    # Feed display names — ordered for presentation priority
+    _FEED_LABELS: dict[str, str] = {
+        "frontier-labs": "🔬 Frontier Labs",
+        "ai-leaders": "👤 AI Leaders",
+        "ai-engineering": "⚙️ AI Engineering",
+        "ai-newsletters": "📰 Newsletters",
+        "tool-releases": "🔧 Tool Releases",
+        "github-trending": "🐙 GitHub Trending",
+        "reference-commits": "📦 Reference Commits",
+    }
+    # Feeds where `source` is a programming language, not a meaningful source name
+    _LANG_SOURCE_FEEDS = frozenset({"github-trending", "reference-commits"})
+
     urgency_emoji = {"high": "🔴", "medium": "🟡", "low": "🟢"}
-    lines = [f"📡 *Signal Digest* — {data.get('signals_count', len(items))} signals\n"]
 
+    # Group by feed_id, preserving relevance order within each group
+    groups: dict[str, list[dict]] = {}
     for item in items:
-        emoji = urgency_emoji.get(item.get("urgency", "low"), "🔵")
-        title = item.get("title", "Untitled")
-        source = item.get("source", "")
-        summary = item.get("summary", "")[:80]
-        url = item.get("url", "")
+        fid = item.get("feed_id", "other")
+        groups.setdefault(fid, []).append(item)
 
-        source_tag = f" ({source})" if source else ""
-        link = f"<{url}|→>" if url else ""
-        lines.append(f"{emoji} *{title}*{source_tag} {link}")
-        if summary:
-            lines.append(f"   {summary}")
+    # Sort groups by _FEED_LABELS key order (known feeds first, unknown last)
+    label_order = list(_FEED_LABELS.keys())
+    sorted_groups = sorted(
+        groups.items(),
+        key=lambda kv: label_order.index(kv[0]) if kv[0] in label_order else 999,
+    )
 
-    return "\n".join(lines)
+    total = data.get("signals_count", len(items))
+    sections: list[str] = [f"📡 *Signal Digest* — {total} signals"]
+
+    for feed_id, feed_items in sorted_groups:
+        label = _FEED_LABELS.get(feed_id, f"📋 {esc(feed_id)}")
+        is_lang_source = feed_id in _LANG_SOURCE_FEEDS
+
+        # If all items in this group share the same source, show it once
+        # on the header line instead of repeating per item.
+        sources = {it.get("source", "") for it in feed_items} - {""}
+        shared_source = sources.pop() if len(sources) == 1 and not is_lang_source else None
+        header_suffix = f" — _{esc(shared_source)}_" if shared_source else ""
+        lines: list[str] = [f"\n*{label}*{header_suffix}"]
+
+        for item in feed_items:
+            emoji = urgency_emoji.get(item.get("urgency", "low"), "🟢")
+            raw_title = item.get("title", "Untitled")
+            title = esc(raw_title)
+            url = item.get("url", "")
+            source = item.get("source", "")
+            summary = item.get("summary", "")
+
+            # Title is the clickable link
+            title_part = f"<{url}|{title}>" if url else title
+
+            # Source suffix: skip if already shown on group header
+            if shared_source:
+                suffix = ""
+            elif is_lang_source and source:
+                suffix = f" · {esc(source)}"
+            elif source:
+                suffix = f" — _{esc(source)}_"
+            else:
+                suffix = ""
+
+            lines.append(f"{emoji} {title_part}{suffix}")
+
+            # Summary: strip leading title echo, skip if empty/redundant
+            if summary:
+                summary = _html_mod.unescape(summary)
+                # RSS feeds often echo the title at the start of the summary
+                if summary.startswith(raw_title):
+                    summary = summary[len(raw_title):].lstrip(" :—-–")
+                summary = summary.strip()
+                if summary:
+                    summary = esc(summary)
+                    if len(summary) > 100:
+                        summary = summary[:97] + "…"
+                    lines.append(f"   {summary}")
+
+        sections.append("\n".join(lines))
+
+    return "\n".join(sections)
 
 
 def _escape_slack_mrkdwn(text: str) -> str:
@@ -974,7 +1040,11 @@ def _escape_slack_mrkdwn(text: str) -> str:
     Prevents format injection from external content (RSS titles, HN posts).
     Slack mrkdwn specials: * _ ~ ` < > that could break formatting or
     inject links when embedded in bold/italic patterns.
+
+    Unescapes HTML entities first (RSS feeds store &#x27; etc.) to avoid
+    double-escaping like &amp;#x27;.
     """
+    text = _html_mod.unescape(text)
     # < and > are the only ones that create link injection; escape them first
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     return text
@@ -1025,8 +1095,11 @@ def _format_briefing_slack_message() -> str:
             emoji = urgency_emoji.get(sig.get("urgency", "medium"), "🟡")
             title = esc(sig.get("title", ""))
             url = sig.get("sourceUrl", sig.get("url", ""))
-            link = f" <{url}|→>" if url else ""
-            lines.append(f"{emoji} *{title}*{link}")
+            source = sig.get("source", "")
+            # Title is the clickable link; source as context suffix
+            title_part = f"<{url}|{title}>" if url else title
+            suffix = f" — _{esc(source)}_" if source else ""
+            lines.append(f"{emoji} {title_part}{suffix}")
         sections.append("\n".join(lines))
 
     # ── Hot News ─────────────────────────────────────────────────
@@ -1047,9 +1120,9 @@ def _format_briefing_slack_message() -> str:
                 title = esc(h.get("title", ""))
                 platform = h.get("platform", "")
                 url = h.get("url", "")
-                link = f" <{url}|→>" if url else ""
+                title_part = f"<{url}|{title}>" if url else title
                 platform_tag = f" ({platform})" if platform else ""
-                lines.append(f"🌐 {title}{platform_tag}{link}")
+                lines.append(f"🌐 {title_part}{platform_tag}")
         sections.append("\n".join(lines))
 
     # ── Stocks ───────────────────────────────────────────────────
@@ -1136,6 +1209,8 @@ def _send_slack_dm_webhook(message: str) -> bool:
                     "text": {"type": "mrkdwn", "text": message.replace("**", "*")},
                 },
             ],
+            "unfurl_links": False,
+            "unfurl_media": False,
         }
         with httpx.Client(timeout=10, trust_env=False) as client:
             resp = client.post(webhook_url, json=payload)
@@ -1191,7 +1266,12 @@ def _send_slack_dm_bot_api(message: str) -> bool:
             resp = client.post(
                 "https://slack.com/api/chat.postMessage",
                 headers={"Authorization": f"Bearer {bot_token}"},
-                json={"channel": dm_channel, "text": mrkdwn_msg},
+                json={
+                    "channel": dm_channel,
+                    "text": mrkdwn_msg,
+                    "unfurl_links": False,
+                    "unfurl_media": False,
+                },
             )
             data = resp.json()
             if data.get("ok"):
