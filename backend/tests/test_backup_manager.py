@@ -91,8 +91,13 @@ def backup_env(tmp_path):
         ["git", "-C", str(ws), "remote", "add", "origin", str(remote)],
         capture_output=True,
     )
+    # Push to whatever branch git init created (main or master)
+    branch = subprocess.run(
+        ["git", "-C", str(ws), "branch", "--show-current"],
+        capture_output=True, text=True,
+    ).stdout.strip() or "main"
     subprocess.run(
-        ["git", "-C", str(ws), "push", "-u", "origin", "master"],
+        ["git", "-C", str(ws), "push", "-u", "origin", branch],
         capture_output=True,
     )
 
@@ -267,6 +272,73 @@ class TestGitOperationsTimeout:
         # Should still export and commit, just fail on push
         assert result["tables_exported"] > 0
         assert result["push_status"] == "failed"
+
+
+class TestRestoreRoundTrip:
+    """Full backup → restore round-trip on a fresh DB."""
+
+    @pytest.mark.asyncio
+    async def test_backup_then_restore_preserves_data(self, backup_env):
+        """backup() then restore() into a fresh dir reproduces all data."""
+        from core.backup_manager import BackupManager
+
+        # 1. Backup
+        mgr = BackupManager(
+            workspace_dir=backup_env["ws"],
+            swarm_dir=backup_env["swarm_dir"],
+            db_path=backup_env["db_path"],
+        )
+        backup_result = await mgr.backup()
+        assert backup_result["status"] == "ok"
+
+        # 2. Simulate fresh machine: new swarm_dir with empty DB
+        fresh_dir = backup_env["ws"].parent / "fresh-machine"
+        fresh_dir.mkdir()
+        fresh_swarm = fresh_dir / ".swarm-ai"
+        fresh_swarm.mkdir()
+
+        # 3. Restore from the backup repo (local bare remote)
+        fresh_mgr = BackupManager(
+            workspace_dir=fresh_dir / "SwarmWS",
+            swarm_dir=fresh_swarm,
+            db_path=fresh_swarm / "data.db",
+        )
+
+        events = []
+        async for event in fresh_mgr.restore(repo_url=str(backup_env["remote"])):
+            events.append(event)
+
+        # 4. Verify stages completed
+        stages = [e["stage"] for e in events]
+        assert "clone" in stages
+        assert "db_import" in stages
+        assert "verify" in stages
+
+        # 5. Verify data round-trip
+        final = events[-1]
+        assert final["stage"] == "verify"
+        assert final.get("messages_count", 0) == 5
+        assert final.get("sessions_count", 0) == 1
+
+        # 6. Verify config was restored
+        assert (fresh_swarm / "notify-channels.yaml").exists()
+
+    @pytest.mark.asyncio
+    async def test_restore_rejects_non_empty_workspace(self, backup_env):
+        """restore() should refuse if workspace already has data."""
+        from core.backup_manager import BackupManager
+
+        mgr = BackupManager(
+            workspace_dir=backup_env["ws"],
+            swarm_dir=backup_env["swarm_dir"],
+            db_path=backup_env["db_path"],
+        )
+
+        events = []
+        async for event in mgr.restore(repo_url=str(backup_env["remote"])):
+            events.append(event)
+
+        assert any(e.get("error") for e in events)
 
 
 class TestLifecycleManagerTrigger:

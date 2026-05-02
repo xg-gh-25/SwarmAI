@@ -951,3 +951,27 @@ async def backup_config(body: BackupConfigBody) -> dict:
         token=body.token,
         schedule=body.schedule,
     )
+
+
+class RestoreBody(BaseModel):
+    """Request body for restore."""
+    repo_url: str
+    token: Optional[str] = None
+
+
+@router.post("/backup/restore")
+async def restore_backup(body: RestoreBody):
+    """Restore workspace from a backup repo. Returns SSE event stream.
+
+    Each event: {"stage": "clone|config|db_import|schema_migrate|verify",
+                 "progress": 0-100, "detail": "..."}
+    """
+    from starlette.responses import StreamingResponse
+
+    mgr = _get_backup_manager()
+
+    async def event_stream():
+        async for event in mgr.restore(repo_url=body.repo_url, token=body.token):
+            yield f"data: {_json.dumps(event)}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

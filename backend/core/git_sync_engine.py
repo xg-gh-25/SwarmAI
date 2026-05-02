@@ -212,6 +212,23 @@ class GitSyncEngine:
 
     # -- Git Operations -----------------------------------------------------
 
+    # -- Git Clone ----------------------------------------------------------
+
+    def git_clone(self, repo_url: str, target_dir: Path | None = None) -> bool:
+        """Clone a repo into target_dir (defaults to workspace_dir). Returns True on success."""
+        target = str(target_dir or self.workspace_dir)
+        try:
+            result = subprocess.run(
+                ["git", "clone", repo_url, target],
+                capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode == 0:
+                self.workspace_dir = Path(target)
+            return result.returncode == 0
+        except subprocess.TimeoutExpired:
+            logger.warning("git clone timed out after 120s")
+            return False
+
     def git_add_all(self) -> bool:
         """Stage all changes. Returns True on success."""
         try:

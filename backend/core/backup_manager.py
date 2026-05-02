@@ -211,6 +211,90 @@ class BackupManager:
         )
         return result
 
+    async def restore(self, repo_url: str, token: str | None = None):
+        """Restore workspace from a backup repo. Yields SSE-style progress dicts.
+
+        Stages: clone → config → db_import → schema_migrate → verify.
+        Refuses to run if workspace already contains data (safety).
+        """
+        # Safety: refuse non-empty workspace
+        memory_file = self.workspace_dir / ".context" / "MEMORY.md"
+        if memory_file.exists():
+            yield {"stage": "error", "error": "Workspace already has data. Restore requires a fresh install."}
+            return
+
+        # Store token if provided
+        if token:
+            set_backup_token(token)
+
+        # Stage 1: CLONE
+        yield {"stage": "clone", "progress": 10, "detail": "Cloning backup repository..."}
+        cloned = self.engine.git_clone(repo_url, self.workspace_dir)
+        if not cloned:
+            yield {"stage": "clone", "progress": 10, "error": "git clone failed. Check repo URL and token."}
+            return
+        # Re-init engine with cloned dir
+        self.engine = GitSyncEngine(self.workspace_dir)
+
+        # Stage 2: CONFIG
+        yield {"stage": "config", "progress": 20, "detail": "Restoring configuration files..."}
+        config_dir = self.workspace_dir / "config-backup"
+        if config_dir.exists():
+            for f in config_dir.iterdir():
+                if f.is_file():
+                    shutil.copy2(str(f), str(self.swarm_dir / f.name))
+
+        # Stage 3: DB_IMPORT
+        yield {"stage": "db_import", "progress": 50, "detail": "Importing database tables..."}
+        export_dir = self.workspace_dir / "db-export"
+        tables_imported = 0
+        if export_dir.exists():
+            tables_imported = await self.engine.import_db_tables(
+                db_path=self.db_path,
+                export_dir=export_dir,
+            )
+
+        # Stage 4: SCHEMA_MIGRATE
+        yield {"stage": "schema_migrate", "progress": 70, "detail": "Running database migrations..."}
+        # Migrations run automatically on next DB access via SQLiteDatabase.initialize()
+        # Just verify DB is accessible
+        import sqlite3
+        try:
+            conn = sqlite3.connect(str(self.db_path))
+            conn.execute("SELECT 1")
+            conn.close()
+        except Exception as e:
+            yield {"stage": "schema_migrate", "progress": 70, "error": f"DB verification failed: {e}"}
+            return
+
+        # Stage 5: VERIFY
+        yield {"stage": "verify", "progress": 90, "detail": "Verifying restored data..."}
+        counts = {}
+        try:
+            conn = sqlite3.connect(str(self.db_path))
+            for table in ["messages", "sessions", "todos"]:
+                try:
+                    cur = conn.execute(f'SELECT COUNT(*) FROM "{table}"')
+                    counts[f"{table}_count"] = cur.fetchone()[0]
+                except Exception:
+                    counts[f"{table}_count"] = 0
+            conn.close()
+        except Exception:
+            pass
+
+        # Update state
+        state = self._load_state()
+        state["repo_url"] = _sanitize_repo_url(repo_url)
+        self._save_state(state)
+
+        yield {
+            "stage": "verify",
+            "progress": 100,
+            "detail": "Restore complete",
+            "tables_imported": tables_imported,
+            **counts,
+        }
+
     def get_status(self) -> dict:
         """Return current backup status."""
         state = self._load_state()
