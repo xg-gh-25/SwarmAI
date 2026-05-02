@@ -458,6 +458,88 @@ def create_post_compact_injection(
 
 
 # ---------------------------------------------------------------------------
+# UserPromptSubmit: high-signal observation capture → DailyActivity
+# ---------------------------------------------------------------------------
+
+_HIGH_SIGNAL_PATTERNS = re.compile(
+    r"""(?ix)(?:^|\b)(?:
+        I\s+decid(?:ed|e)
+      | we\s+decid(?:ed|e)
+      | decision:\s
+      | important:\s
+      | rule:\s
+      | lesson:\s
+      | never\s+again
+      | from\s+now\s+on
+      | 我(?:们)?决定
+      | 决定了
+      | 以后(?:都|要|不)
+      | 重要(?:：|:)
+      | 教训(?:：|:)
+      | 规则(?:：|:)
+    )"""
+)
+
+
+def create_high_signal_capture(
+    session_context: Optional[dict] = None,
+    workspace_dir: Optional[str] = None,
+):
+    """Factory: creates a UserPromptSubmit hook that captures high-signal observations.
+
+    Detects decision/lesson/rule signals in user prompts and appends them
+    to today's DailyActivity file.  Does NOT write to MEMORY.md — distillation
+    pipeline decides what gets promoted.  This is "faster capture without
+    skipping the quality gate."
+
+    Deduplication: tracks captured prompts in session_context to avoid
+    writing the same signal twice if the user repeats.
+    """
+    ctx = session_context or {}
+    ws = workspace_dir or str(Path.home() / ".swarm-ai" / "SwarmWS")
+    captured_key = "_high_signal_captured"
+
+    async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
+        prompt = _extract_field(input_data, "prompt", "")
+        if not prompt or len(prompt) < 10:
+            return {}
+
+        if not _HIGH_SIGNAL_PATTERNS.search(prompt):
+            return {}
+
+        # Dedup within session
+        if captured_key not in ctx:
+            ctx[captured_key] = set()
+        sig = prompt[:100]  # signature for dedup
+        if sig in ctx[captured_key]:
+            return {}
+        ctx[captured_key].add(sig)
+
+        # Append to today's DailyActivity
+        try:
+            from datetime import datetime
+            now = datetime.now()
+            da_dir = Path(ws) / "Knowledge" / "DailyActivity"
+            da_dir.mkdir(parents=True, exist_ok=True)
+            da_file = da_dir / f"{now.strftime('%Y-%m-%d')}.md"
+
+            entry = (
+                f"\n**🔔 High-signal capture** ({now.strftime('%H:%M')}): "
+                f"{prompt[:500]}\n"
+            )
+            with open(da_file, "a", encoding="utf-8") as f:
+                f.write(entry)
+
+            logger.debug("High-signal captured to DailyActivity: %.80s", prompt)
+        except Exception:
+            logger.exception("Failed to write high-signal to DailyActivity")
+
+        return {}
+
+    return _hook
+
+
+# ---------------------------------------------------------------------------
 # Reader: aggregate corrections.jsonl data for evolution optimizer
 # ---------------------------------------------------------------------------
 
@@ -590,8 +672,16 @@ def register_runtime_hooks(
         "post_compact_injection",
     )
 
+    # Phase 2: UserPromptSubmit high-signal observation capture
+    registry.register(
+        "UserPromptSubmit",
+        create_high_signal_capture(session_context),
+        "high_signal_capture",
+    )
+
     logger.info(
         "Runtime hooks registered: correction_capture, error_pattern_detector, "
         "failure_tracker_reset, file_tracker, session_checkpoint, "
-        "subagent_capture, user_correction_detector, post_compact_injection"
+        "subagent_capture, user_correction_detector, post_compact_injection, "
+        "high_signal_capture"
     )
