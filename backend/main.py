@@ -1007,6 +1007,10 @@ async def health_check():
 
     status = "healthy" if db_healthy else "degraded"
 
+    # P3: Expose channel gateway state so monitoring can detect
+    # "healthy but Slack is down" (silent failure of deferred startup)
+    gw_state = channel_gateway.startup_state
+
     return {
         "status": status,
         "version": settings.app_version,
@@ -1014,6 +1018,7 @@ async def health_check():
         "pending_hook_tasks": pending_hooks,
         "boot_id": _boot_id,
         "db_healthy": db_healthy,
+        "channel_gateway": gw_state,
     }
 
 

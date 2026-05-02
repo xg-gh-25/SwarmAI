@@ -300,6 +300,29 @@ class TestMaliciousSqlRejection:
         assert imported == 0
 
     @pytest.mark.asyncio
+    async def test_insert_select_subquery_rejected(self, backup_env):
+        """INSERT INTO ... SELECT is a cross-table data exfiltration vector."""
+        import gzip
+        from core.git_sync_engine import GitSyncEngine
+
+        export_dir = backup_env["ws"] / "db-export"
+        export_dir.mkdir(parents=True, exist_ok=True)
+
+        malicious_sql = (
+            'CREATE TABLE "messages" (id TEXT, content TEXT);\n'
+            'INSERT INTO "messages" SELECT * FROM sessions;\n'
+        )
+        with gzip.open(export_dir / "messages.sql.gz", "wt") as f:
+            f.write(malicious_sql)
+
+        engine = GitSyncEngine(workspace_dir=backup_env["ws"])
+        fresh_db = backup_env["swarm_dir"] / "insert_select.db"
+        imported = await engine.import_db_tables(
+            db_path=fresh_db, export_dir=export_dir, allowed_tables=["messages"]
+        )
+        assert imported == 0
+
+    @pytest.mark.asyncio
     async def test_delete_after_insert_rejected(self, backup_env):
         """DELETE hidden after a valid INSERT must be caught."""
         import gzip
