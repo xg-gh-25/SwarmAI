@@ -31,6 +31,7 @@ class DatabaseStatus(BaseModel):
     """Database health status."""
     healthy: bool
     error: Optional[str] = None
+    size_mb: Optional[float] = None  # DB file size on disk
 
 
 class AgentStatus(BaseModel):
@@ -158,13 +159,18 @@ async def get_system_status() -> SystemStatusResponse:
     # Check database health
     db_healthy = False
     db_error: Optional[str] = None
+    db_size_mb: Optional[float] = None
     try:
         db_healthy = await db.health_check()
+        # Report DB file size for storage monitoring
+        db_path = Path(db.db_path) if hasattr(db, "db_path") else None
+        if db_path and db_path.exists():
+            db_size_mb = round(db_path.stat().st_size / (1024 * 1024), 2)
     except Exception as e:
         logger.error(f"Database health check failed: {e}")
         db_error = str(e)
-    
-    database_status = DatabaseStatus(healthy=db_healthy, error=db_error)
+
+    database_status = DatabaseStatus(healthy=db_healthy, error=db_error, size_mb=db_size_mb)
     
     # Check SwarmAgent status
     agent_ready = False
@@ -925,14 +931,27 @@ def _get_backup_manager():
     return _get_backup_manager._instance
 
 
+_BACKUP_COOLDOWN_SECONDS = 300  # 5 minutes between backups
+_last_backup_time: float = 0.0
+
+
 @router.post("/backup")
 async def run_backup() -> dict:
     """Run an immediate workspace backup.
 
     Exports DB L2 tables, copies config, commits and pushes to GitHub.
+    Rate-limited to once per 5 minutes to prevent abuse.
     """
+    global _last_backup_time
+    now = time.monotonic()
+    elapsed = now - _last_backup_time
+    if _last_backup_time > 0 and elapsed < _BACKUP_COOLDOWN_SECONDS:
+        remaining = int(_BACKUP_COOLDOWN_SECONDS - elapsed)
+        return {"status": "rate_limited", "retry_after_seconds": remaining}
     mgr = _get_backup_manager()
-    return await mgr.backup()
+    result = await mgr.backup()
+    _last_backup_time = time.monotonic()
+    return result
 
 
 @router.get("/backup/status")

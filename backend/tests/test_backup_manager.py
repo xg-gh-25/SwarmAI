@@ -251,7 +251,11 @@ class TestSpecialCharacterRoundTrip:
 
 
 class TestMaliciousSqlRejection:
-    """E3: Verify import rejects tampered SQL files."""
+    """E3: Verify import rejects tampered SQL files.
+
+    Covers the class of SQL injection via executescript():
+    multi-statement payloads, subquery exfiltration, trailing junk.
+    """
 
     @pytest.mark.asyncio
     async def test_drop_table_rejected(self, backup_env):
@@ -274,6 +278,128 @@ class TestMaliciousSqlRejection:
         )
         # Should reject the file and import 0
         assert imported == 0
+
+    @pytest.mark.asyncio
+    async def test_create_table_as_select_rejected(self, backup_env):
+        """CREATE TABLE AS SELECT is a data exfiltration vector."""
+        import gzip
+        from core.git_sync_engine import GitSyncEngine
+
+        export_dir = backup_env["ws"] / "db-export"
+        export_dir.mkdir(parents=True, exist_ok=True)
+
+        malicious_sql = 'CREATE TABLE "messages" AS SELECT * FROM sessions;\n'
+        with gzip.open(export_dir / "messages.sql.gz", "wt") as f:
+            f.write(malicious_sql)
+
+        engine = GitSyncEngine(workspace_dir=backup_env["ws"])
+        fresh_db = backup_env["swarm_dir"] / "exfil.db"
+        imported = await engine.import_db_tables(
+            db_path=fresh_db, export_dir=export_dir, allowed_tables=["messages"]
+        )
+        assert imported == 0
+
+    @pytest.mark.asyncio
+    async def test_delete_after_insert_rejected(self, backup_env):
+        """DELETE hidden after a valid INSERT must be caught."""
+        import gzip
+        from core.git_sync_engine import GitSyncEngine
+
+        export_dir = backup_env["ws"] / "db-export"
+        export_dir.mkdir(parents=True, exist_ok=True)
+
+        malicious_sql = (
+            'CREATE TABLE "messages" (id TEXT, content TEXT);\n'
+            'INSERT INTO "messages" VALUES (\'1\', \'hi\');\n'
+            'DELETE FROM messages;\n'
+        )
+        with gzip.open(export_dir / "messages.sql.gz", "wt") as f:
+            f.write(malicious_sql)
+
+        engine = GitSyncEngine(workspace_dir=backup_env["ws"])
+        fresh_db = backup_env["swarm_dir"] / "delete.db"
+        imported = await engine.import_db_tables(
+            db_path=fresh_db, export_dir=export_dir, allowed_tables=["messages"]
+        )
+        assert imported == 0
+
+    @pytest.mark.asyncio
+    async def test_update_statement_rejected(self, backup_env):
+        """UPDATE statements must be rejected."""
+        import gzip
+        from core.git_sync_engine import GitSyncEngine
+
+        export_dir = backup_env["ws"] / "db-export"
+        export_dir.mkdir(parents=True, exist_ok=True)
+
+        malicious_sql = (
+            'CREATE TABLE "messages" (id TEXT, content TEXT);\n'
+            'UPDATE messages SET content = \'pwned\' WHERE 1=1;\n'
+        )
+        with gzip.open(export_dir / "messages.sql.gz", "wt") as f:
+            f.write(malicious_sql)
+
+        engine = GitSyncEngine(workspace_dir=backup_env["ws"])
+        fresh_db = backup_env["swarm_dir"] / "update.db"
+        imported = await engine.import_db_tables(
+            db_path=fresh_db, export_dir=export_dir, allowed_tables=["messages"]
+        )
+        assert imported == 0
+
+    @pytest.mark.asyncio
+    async def test_incomplete_trailing_sql_rejected(self, backup_env):
+        """Trailing incomplete SQL (no closing semicolon) must be rejected."""
+        import gzip
+        from core.git_sync_engine import GitSyncEngine
+
+        export_dir = backup_env["ws"] / "db-export"
+        export_dir.mkdir(parents=True, exist_ok=True)
+
+        # Valid CREATE TABLE followed by incomplete junk
+        malicious_sql = (
+            'CREATE TABLE "messages" (id TEXT);\n'
+            'INSERT INTO messages VALUES (\'1\'\n'  # no closing paren/semicolon
+        )
+        with gzip.open(export_dir / "messages.sql.gz", "wt") as f:
+            f.write(malicious_sql)
+
+        engine = GitSyncEngine(workspace_dir=backup_env["ws"])
+        fresh_db = backup_env["swarm_dir"] / "trailing.db"
+        imported = await engine.import_db_tables(
+            db_path=fresh_db, export_dir=export_dir, allowed_tables=["messages"]
+        )
+        assert imported == 0
+
+    @pytest.mark.asyncio
+    async def test_valid_export_still_imports(self, backup_env):
+        """Legitimate export files must still import successfully."""
+        import gzip
+        from core.git_sync_engine import GitSyncEngine
+
+        export_dir = backup_env["ws"] / "db-export"
+        export_dir.mkdir(parents=True, exist_ok=True)
+
+        valid_sql = (
+            'CREATE TABLE "messages" (id TEXT, content TEXT);\n'
+            'INSERT INTO "messages" ("id", "content") VALUES (\'1\', \'hello world\');\n'
+            'INSERT INTO "messages" ("id", "content") VALUES (\'2\', \'it''s fine\');\n'
+        )
+        with gzip.open(export_dir / "messages.sql.gz", "wt") as f:
+            f.write(valid_sql)
+
+        engine = GitSyncEngine(workspace_dir=backup_env["ws"])
+        fresh_db = backup_env["swarm_dir"] / "valid.db"
+        imported = await engine.import_db_tables(
+            db_path=fresh_db, export_dir=export_dir, allowed_tables=["messages"]
+        )
+        assert imported == 1
+
+        # Verify data actually landed
+        import sqlite3 as _sqlite3
+        conn = _sqlite3.connect(str(fresh_db))
+        rows = conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0]
+        conn.close()
+        assert rows == 2
 
 
 class TestKeychainToken:
