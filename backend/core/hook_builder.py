@@ -1,16 +1,20 @@
 """Hook configuration builder for Claude Agent SDK sessions.
 
 Composes security hooks, permission hooks, skill access checkers, and
-pre-compact hooks into the ``hooks`` dict for ``ClaudeAgentOptions``.
+lifecycle hooks into the ``hooks`` dict for ``ClaudeAgentOptions``.
 
 Key public symbols:
 
-- ``build_hooks``  — Async entry point, returns (hooks_dict,
-                     effective_allowed_skills, allow_all_skills)
+- ``HookRegistry``   — Register hooks by event, chain execution with
+                       5s timeout per hook, first 'block' wins.
+- ``build_hooks``    — Async entry point, returns (hooks_dict,
+                       effective_allowed_skills, allow_all_skills)
 """
 
+import asyncio
 import logging
-from typing import Optional, TYPE_CHECKING
+from collections import defaultdict
+from typing import Any, Callable, Awaitable, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .permission_manager import PermissionManager
@@ -26,6 +30,114 @@ from .agent_defaults import expand_allowed_skills_with_plugins
 
 logger = logging.getLogger(__name__)
 
+# Per-hook timeout — hooks that exceed this are killed silently.
+HOOK_TIMEOUT_SECONDS = 5.0
+
+# Type alias for SDK hook callback
+HookCallback = Callable[..., Awaitable[dict[str, Any]]]
+
+
+class HookRegistry:
+    """Register SDK hooks by event type with chained execution.
+
+    Multiple hooks for the same event execute sequentially in registration
+    order.  If any hook returns ``{"decision": "block"}``, the chain
+    short-circuits.  Each hook has a 5-second timeout — hanging hooks are
+    killed silently.
+
+    Hooks with a ``matcher`` parameter (e.g., ``matcher="Bash"``) are
+    registered as separate HookMatcher entries, not chained with
+    unmatched hooks for the same event.
+    """
+
+    def __init__(self) -> None:
+        # Key: (event, matcher|None) -> list of (name, hook_fn)
+        self._hooks: dict[tuple[str, Optional[str]], list[tuple[str, HookCallback]]] = defaultdict(list)
+
+    def register(
+        self,
+        event: str,
+        hook: HookCallback,
+        name: str,
+        matcher: Optional[str] = None,
+    ) -> None:
+        """Register a hook for an SDK event.
+
+        Args:
+            event: SDK hook event name (e.g., "PreToolUse", "PostToolUse")
+            hook: Async callable with signature (input_data, tool_use_id, context) -> dict
+            name: Human-readable name for logging
+            matcher: Optional tool matcher (e.g., "Bash", "Skill")
+        """
+        self._hooks[(event, matcher)].append((name, hook))
+
+    def build_sdk_hooks(self) -> dict[str, list]:
+        """Build the hooks dict for ClaudeAgentOptions.
+
+        Returns:
+            Dict mapping event names to lists of HookMatcher objects.
+        """
+        result: dict[str, list] = defaultdict(list)
+
+        for (event, matcher), hooks in self._hooks.items():
+            if len(hooks) == 1:
+                name, fn = hooks[0]
+                hm = HookMatcher(hooks=[fn])
+                if matcher:
+                    hm = HookMatcher(matcher=matcher, hooks=[fn])
+                result[event].append(hm)
+            else:
+                # Chain multiple hooks into a single callable
+                chained = self._build_chain(hooks)
+                hm = HookMatcher(hooks=[chained])
+                if matcher:
+                    hm = HookMatcher(matcher=matcher, hooks=[chained])
+                result[event].append(hm)
+
+        return dict(result)
+
+    def _build_chain(
+        self, hooks: list[tuple[str, HookCallback]]
+    ) -> HookCallback:
+        """Build a chained hook from multiple hooks.
+
+        Execution: sequential, first 'block' wins, 5s timeout per hook.
+        Results are merged: last non-empty additionalContext wins.
+        """
+
+        async def chained(input_data: Any, tool_use_id: Any, context: Any) -> dict:
+            combined: dict[str, Any] = {}
+
+            for name, hook in hooks:
+                try:
+                    result = await asyncio.wait_for(
+                        hook(input_data, tool_use_id, context),
+                        timeout=HOOK_TIMEOUT_SECONDS,
+                    )
+                    if not result:
+                        continue
+
+                    # Short-circuit on block decision
+                    if result.get("decision") == "block":
+                        return result
+
+                    # Merge results — later hooks override earlier ones
+                    for key, value in result.items():
+                        if value is not None:
+                            combined[key] = value
+
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "Hook '%s' timed out after %.1fs — skipping",
+                        name, HOOK_TIMEOUT_SECONDS,
+                    )
+                except Exception:
+                    logger.exception("Hook '%s' raised an error — skipping", name)
+
+            return combined
+
+        return chained
+
 
 async def build_hooks(
     agent_config: dict,
@@ -37,8 +149,8 @@ async def build_hooks(
 ) -> tuple[dict, list[str], bool]:
     """Build hook matchers for ClaudeAgentOptions.
 
-    Composes security hooks with the PermissionManager singleton to
-    produce the hooks configuration.
+    Uses HookRegistry to compose all hooks, then returns the SDK-compatible
+    hooks dict along with skill access info.
 
     Args:
         agent_config: Agent configuration dictionary.
@@ -51,22 +163,17 @@ async def build_hooks(
     Returns:
         Tuple of (hooks_dict, effective_allowed_skills, allow_all_skills).
     """
-    hooks: dict = {}
+    registry = HookRegistry()
 
+    # ── PreToolUse: tool logger ──────────────────────────────
     if agent_config.get("enable_tool_logging", True):
-        hooks["PreToolUse"] = [
-            HookMatcher(hooks=[pre_tool_logger])
-        ]
+        registry.register("PreToolUse", pre_tool_logger, "pre_tool_logger")
 
-    # Dangerous command gate — always attached, no sandbox conditional skip.
-    # The gate prompts inline when enable_human_approval=True (default),
-    # auto-denies when False.
+    # ── PreToolUse: dangerous command gate (Bash-scoped) ─────
     agent_id = agent_config.get("id", "default")
     session_key = resume_session_id or agent_id or "unknown"
     enable_human_approval = agent_config.get("enable_human_approval", True)
 
-    if "PreToolUse" not in hooks:
-        hooks["PreToolUse"] = []
     hook_session_context = (
         session_context if session_context is not None
         else {"sdk_session_id": resume_session_id or agent_id}
@@ -75,12 +182,10 @@ async def build_hooks(
         hook_session_context, session_key, permission_manager,
         enable_human_approval=enable_human_approval,
     )
-    hooks["PreToolUse"].append(
-        HookMatcher(matcher="Bash", hooks=[gate])
-    )
+    registry.register("PreToolUse", gate, "dangerous_command_gate", matcher="Bash")
     logger.info(f"Dangerous command gate attached for session_key: {session_key}")
 
-    # Skill access control
+    # ── Skill access control ─────────────────────────────────
     allowed_skills = agent_config.get("allowed_skills", [])
     allow_all_skills = agent_config.get("allow_all_skills", False)
     plugin_ids = agent_config.get("plugin_ids", [])
@@ -104,9 +209,6 @@ async def build_hooks(
     )
 
     if enable_skills and not allow_all_skills:
-        if "PreToolUse" not in hooks:
-            hooks["PreToolUse"] = []
-
         from core.skill_manager import skill_manager
         cache = await skill_manager.get_cache()
         builtin_names = [
@@ -118,16 +220,13 @@ async def build_hooks(
             allowed_skill_names,
             builtin_skill_names=builtin_names,
         )
-        hooks["PreToolUse"].append(
-            HookMatcher(matcher="Skill", hooks=[skill_checker])
-        )
+        registry.register("PreToolUse", skill_checker, "skill_access_checker", matcher="Skill")
         logger.info(
             f"Skill access checker hook added for skills: "
             f"{allowed_skill_names} (built-in: {builtin_names})"
         )
 
-    # PreCompact hook — sets flags on session_context so
-    # SessionUnit._stream_response can emit an SSE event after compaction.
+    # ── PreCompact: flag session_context ─────────────────────
     if session_context is not None:
         async def _pre_compact_hook(hook_input, tool_name, hook_context):
             trigger = getattr(hook_input, "trigger", "auto")
@@ -139,22 +238,11 @@ async def build_hooks(
             session_context["_compact_trigger"] = trigger
             return {}
 
-        hooks.setdefault("PreCompact", [])
-        hooks["PreCompact"].append(HookMatcher(hooks=[_pre_compact_hook]))
+        registry.register("PreCompact", _pre_compact_hook, "pre_compact_flag")
 
-    # ── Failure-aware hooks ───────────────────────────────────
-    # Capture structured failure context into session_context so
-    # the retry logic in SessionUnit can make smarter backoff
-    # decisions (rate limit → wait for reset, API error →
-    # standard backoff, OOM → 30s flat).
-    #
-    # These hooks fire WITHIN the running CLI process — they
-    # capture info BEFORE the process dies.  For OOM/SIGKILL,
-    # no hook fires and the existing string-based heuristic
-    # remains the fallback.
+    # ── Notification: capture rate limits and errors ──────────
     if session_context is not None:
         async def _notification_hook(hook_input, tool_name, hook_context):
-            """Capture rate limit and error notifications."""
             message = hook_input.get("message", "") if isinstance(hook_input, dict) else getattr(hook_input, "message", "")
             notif_type = hook_input.get("notification_type", "") if isinstance(hook_input, dict) else getattr(hook_input, "notification_type", "")
             logger.info(
@@ -168,11 +256,11 @@ async def build_hooks(
             }
             return {}
 
-        hooks.setdefault("Notification", [])
-        hooks["Notification"].append(HookMatcher(hooks=[_notification_hook]))
+        registry.register("Notification", _notification_hook, "notification_capture")
 
+    # ── Stop: capture session stop reason ────────────────────
+    if session_context is not None:
         async def _stop_hook(hook_input, tool_name, hook_context):
-            """Capture session stop reason for retry classification."""
             stop_active = hook_input.get("stop_hook_active", False) if isinstance(hook_input, dict) else getattr(hook_input, "stop_hook_active", False)
             logger.info(
                 "stop_hook: stop_hook_active=%s session=%s",
@@ -184,7 +272,16 @@ async def build_hooks(
             }
             return {}
 
-        hooks.setdefault("Stop", [])
-        hooks["Stop"].append(HookMatcher(hooks=[_stop_hook]))
+        registry.register("Stop", _stop_hook, "stop_capture")
 
-    return hooks, effective_allowed_skills, allow_all_skills
+    # ── Runtime hooks (correction capture, error detection) ──
+    if session_context is not None:
+        try:
+            from core.runtime_hooks import register_runtime_hooks
+            register_runtime_hooks(registry, session_context)
+        except ImportError:
+            logger.debug("runtime_hooks not available — skipping")
+        except Exception:
+            logger.exception("Failed to register runtime hooks — skipping")
+
+    return registry.build_sdk_hooks(), effective_allowed_skills, allow_all_skills
