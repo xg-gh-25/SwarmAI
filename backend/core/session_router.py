@@ -1020,15 +1020,39 @@ class SessionRouter:
             and unit._sdk_session_id is None
             and session_id is not None
         )
+        # Channel sessions (Slack DM): prewarm spawns a fresh subprocess
+        # with _sdk_session_id set but ZERO conversation history.  After
+        # daemon restart the subprocess is new — it doesn't know about
+        # prior turns.  Detect this by checking if the DB session has
+        # prior messages that the current subprocess hasn't seen.
+        needs_channel_resume = False
+        if (
+            channel_context
+            and not is_cold_resume
+            and session_id
+            and not unit._channel_history_injected
+        ):
+            msg_count_db = await db.messages.count_by_session(session_id)
+            # >1 because current message was already persisted above.
+            # If DB has more messages than just this one, the subprocess
+            # is missing context (prewarm or daemon restart).
+            if msg_count_db > 1:
+                needs_channel_resume = True
+                logger.info(
+                    "channel_resume_detected session_id=%s db_msgs=%d "
+                    "— subprocess has no history, injecting",
+                    session_id, msg_count_db,
+                )
         # Log cold resume detection inputs for diagnostics (COE: 2026-04-02
         # resume context silently skipped — no visibility into why).
         logger.info(
             "cold_resume_check session_id=%s state=%s sdk_session=%s "
-            "→ is_cold_resume=%s",
+            "→ is_cold_resume=%s channel_resume=%s",
             session_id,
             unit.state.value if unit.state else "None",
             "set" if unit._sdk_session_id else "None",
             is_cold_resume,
+            needs_channel_resume,
         )
         # Channel TTL rotation: the gateway created a fresh session_id but
         # the prior session's messages should carry forward for continuity.
@@ -1036,7 +1060,7 @@ class SessionRouter:
         prior_session_id = (
             channel_context.get("prior_session_id") if channel_context else None
         )
-        if is_cold_resume:
+        if is_cold_resume or needs_channel_resume:
             # Check current session first (normal cold resume: app restart)
             resume_from = session_id
             msg_count = await db.messages.count_by_session(session_id)
@@ -1053,12 +1077,14 @@ class SessionRouter:
             # requires at least 2 (prior conversation + current message).
             logger.info(
                 "cold_resume_decision session_id=%s msg_count=%d "
-                "→ injecting=%s",
+                "→ injecting=%s (cold=%s channel=%s)",
                 session_id, msg_count, msg_count > 1,
+                is_cold_resume, needs_channel_resume,
             )
             if msg_count > 1:
                 agent_config["needs_context_injection"] = True
                 agent_config["resume_app_session_id"] = resume_from
+                unit._channel_history_injected = True
                 yield {"type": "session_resuming", "sessionId": session_id}
 
         # resume_session_id is the SDK's own session ID for Mechanism A (live
