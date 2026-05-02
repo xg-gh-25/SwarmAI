@@ -1444,14 +1444,33 @@ def build_session_briefing_data(
                             })
                     else:
                         if len(signals_list) < 8:
+                            raw_source = sig.get("source", "")
+                            # For GitHub/commits, source is a programming language —
+                            # use feed label as the readable source instead.
+                            _FEED_SOURCE_LABELS = {
+                                "frontier-labs": "Frontier Labs",
+                                "ai-leaders": "AI Leaders",
+                                "ai-engineering": "AI Engineering",
+                                "ai-newsletters": "Newsletter",
+                                "tool-releases": "Tool Release",
+                                "github-trending": "GitHub Trending",
+                                "reference-commits": "Repo Update",
+                            }
+                            _LANG_SOURCE_FEEDS = {"github-trending", "reference-commits"}
+                            source_label = (
+                                _FEED_SOURCE_LABELS.get(feed_id, raw_source)
+                                if feed_id in _LANG_SOURCE_FEEDS
+                                else raw_source
+                            )
                             signals_list.append({
                                 "title": sig.get("title", ""),
                                 "summary": sig.get("summary", ""),
-                                "source": sig.get("source", ""),
+                                "source": source_label,
                                 "sourceUrl": sig.get("url", ""),
                                 "urgency": sig.get("urgency", "medium"),
                                 "relevance": sig.get("relevance_score", 0),
                                 "lang": sig.get("lang", "en"),
+                                "feedId": feed_id,
                             })
             except (json.JSONDecodeError, OSError):
                 pass
