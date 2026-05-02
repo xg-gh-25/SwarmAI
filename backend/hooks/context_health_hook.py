@@ -1038,8 +1038,13 @@ class ContextHealthHook:
                 try:
                     from core.memory_guard import MemoryGuard
                     new_content = MemoryGuard().sanitize(new_content)
-                except (ImportError, Exception):
-                    pass  # graceful degradation
+                except ImportError:
+                    pass  # memory_guard module not available yet
+                except Exception as guard_exc:
+                    logger.warning(
+                        "context_health: MemoryGuard failed during OT archival: %s",
+                        guard_exc,
+                    )
                 memory_path.write_text(new_content, encoding="utf-8")
 
                 # Append archived entries to MEMORY-archive-YYYY-MM.md

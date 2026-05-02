@@ -93,9 +93,13 @@ _STOP_WORDS = frozenset({
 
 
 def _tokenize_lower(text: str) -> list[str]:
-    """Split text into lowercase tokens, filtering short/stop words."""
-    # Split on whitespace and punctuation, keep alphanumeric + hyphens
-    tokens = re.findall(r"[a-zA-Z0-9_\-]+", text.lower())
+    """Split text into lowercase tokens, filtering short/stop words.
+
+    Unicode-aware: captures CJK characters as word constituents so
+    Chinese/Japanese/Korean memory entries participate in keyword matching.
+    """
+    # \w with re.UNICODE includes CJK; add hyphen for compound terms
+    tokens = re.findall(r"[\w\-]+", text.lower(), re.UNICODE)
     return [t for t in tokens if len(t) > 2 and t not in _STOP_WORDS]
 
 
@@ -155,9 +159,10 @@ def _extract_keywords(entry_text: str) -> list[str]:
     """Extract 3-6 keyword aliases from an entry's full text.
 
     Focuses on technical terms, proper nouns, and distinctive tokens
-    that would help with recall.
+    that would help with recall.  Unicode-aware so CJK entries produce
+    meaningful keywords.
     """
-    tokens = re.findall(r"[a-zA-Z0-9_\-]+", entry_text)
+    tokens = re.findall(r"[\w\-]+", entry_text, re.UNICODE)
 
     # Score tokens by distinctiveness
     scored: dict[str, float] = {}
@@ -523,6 +528,7 @@ def _adaptive_max_tokens(context_percent_used: float) -> int:
 # ── SessionRecall singleton cache ────────────────────────────────────
 
 _session_recall_cache: dict[str, object] = {}  # db_path_str → SessionRecall
+_embedding_client_cache: object | None = None  # cached EmbeddingClient instance
 
 
 def _get_session_recall(db_path: Path) -> object:
@@ -641,9 +647,11 @@ def _hybrid_section_scores(user_message: str) -> dict[str, float]:
             if count == 0:
                 return {}
 
-            # Get vector scores
-            client = EmbeddingClient()
-            query_embedding = client.embed_text(user_message)
+            # Get vector scores (cached client avoids re-init on every call)
+            global _embedding_client_cache
+            if _embedding_client_cache is None:
+                _embedding_client_cache = EmbeddingClient()
+            query_embedding = _embedding_client_cache.embed_text(user_message)
 
             vector_scores: dict[str, float] = {}
             if query_embedding is not None:

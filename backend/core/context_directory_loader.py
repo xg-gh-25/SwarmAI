@@ -1048,4 +1048,11 @@ class ContextDirectoryLoader:
             return assembled
         except Exception as exc:
             logger.error("ContextDirectoryLoader.load_all failed: %s", exc)
-            return ""
+            # Return a minimal warning instead of empty string — so the agent
+            # knows its memory/context is unavailable and can self-report.
+            return (
+                "[WARNING: Context loading failed. MEMORY.md, EVOLUTION.md, "
+                "and other context files could not be loaded. The agent is "
+                "operating without persistent memory this session. "
+                f"Error: {type(exc).__name__}: {exc}]"
+            )

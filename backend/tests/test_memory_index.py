@@ -409,3 +409,39 @@ class TestParseIndexEntriesRefs:
         assert "gamma" in e["aliases"]
         assert "KD01" not in e["aliases"]
         assert "refs:" not in " ".join(e["aliases"])
+
+
+class TestCJKKeywordExtraction:
+    """CJK characters should be extracted as keywords, not silently dropped."""
+
+    def test_chinese_entry_produces_keywords(self):
+        """Chinese text should produce keyword aliases."""
+        from core.memory_index import _extract_keywords
+
+        entry = "2026-05-01: **Memory sovereignty 是第一原则** — 所有记忆必须自主管理"
+        keywords = _extract_keywords(entry)
+        # Should contain at least some CJK tokens
+        assert len(keywords) > 0
+        # "Memory" and "sovereignty" should be there
+        assert any("memory" in k.lower() for k in keywords)
+
+    def test_mixed_cn_en_entry(self):
+        """Mixed Chinese+English entries should capture both."""
+        from core.memory_index import _extract_keywords
+
+        entry = "竞品分析陷阱：admiration ≠ need — 看到 OpenClaw 5 层 memory 架构"
+        keywords = _extract_keywords(entry)
+        assert len(keywords) > 0
+        # Should capture English terms
+        assert any("admiration" in k.lower() or "openclaw" in k.lower() for k in keywords)
+
+    def test_tokenize_lower_preserves_cjk(self):
+        """_tokenize_lower should include CJK tokens, not filter them."""
+        from core.memory_index import _tokenize_lower
+
+        tokens = _tokenize_lower("Memory 是护城河 OpenClaw 对比")
+        assert len(tokens) > 0
+        # Should have "memory" (English)
+        assert "memory" in tokens
+        # Should have CJK tokens (not empty due to ASCII-only regex)
+        assert any(ord(c) > 127 for t in tokens for c in t)
