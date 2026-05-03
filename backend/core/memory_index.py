@@ -660,11 +660,11 @@ def _keyword_section_scores(
         score = keyword_relevance(
             user_message, entry["summary"], entry["aliases"]
         )
-        # Apply temporal weight: superseded entries get 0.1x
+        # Apply temporal weight: superseded entries get 0.1x.
+        # Entry is already known-superseded via key set — apply the
+        # weight directly instead of parsing a fake metadata comment.
         if entry["key"] in _superseded:
-            score *= _entry_temporal_weight(
-                "<!-- valid_from: x | superseded_by: Y | confidence: high -->"
-            )
+            score *= SUPERSEDED_WEIGHT
         if score >= KEYWORD_THRESHOLD:
             sec_name = _key_to_section(entry["key"])
             if sec_name and (sec_name not in matched or score > matched[sec_name]):
