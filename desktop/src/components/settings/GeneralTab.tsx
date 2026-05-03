@@ -4,11 +4,11 @@
  * Extracted from SettingsPage.tsx — same UI, scoped to its own tab.
  */
 import { useTranslation } from 'react-i18next';
-import { useTheme } from '../../contexts/ThemeContext';
+import { useTheme, ACCENT_PRESETS } from '../../contexts/ThemeContext';
 
 export default function GeneralTab() {
   const { t, i18n } = useTranslation();
-  const { theme, setTheme } = useTheme();
+  const { theme, setTheme, accentColor, setAccentColor } = useTheme();
 
   const handleLanguageChange = (lang: 'zh' | 'en') => {
     i18n.changeLanguage(lang);
@@ -61,6 +61,39 @@ export default function GeneralTab() {
               {theme === opt.id && <span className="material-symbols-outlined text-sm">check</span>}
               <span className="material-symbols-outlined text-sm">{opt.icon}</span>
               {t(`settings.theme.${opt.id}`)}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* Accent Color */}
+      <section className="bg-[var(--color-card)] rounded-lg p-6">
+        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-2">Accent Color</h2>
+        <p className="text-sm text-[var(--color-text-muted)] mb-4">Personalize the primary color used across buttons, links, and highlights.</p>
+        <div className="flex gap-3">
+          {ACCENT_PRESETS.map((preset) => (
+            <button
+              key={preset.id}
+              onClick={() => setAccentColor(preset.id)}
+              className="flex flex-col items-center gap-1.5 group"
+              title={preset.label}
+            >
+              <span
+                className={`w-8 h-8 rounded-full transition-all ${
+                  accentColor === preset.id
+                    ? 'ring-2 ring-offset-2 ring-offset-[var(--color-card)] scale-110'
+                    : 'hover:scale-110'
+                }`}
+                style={{
+                  backgroundColor: preset.color,
+                  ...(accentColor === preset.id ? { ['--tw-ring-color' as string]: preset.color } : {}),
+                }}
+              />
+              <span className={`text-xs ${
+                accentColor === preset.id ? 'text-[var(--color-text)]' : 'text-[var(--color-text-muted)]'
+              }`}>
+                {preset.label}
+              </span>
             </button>
           ))}
         </div>

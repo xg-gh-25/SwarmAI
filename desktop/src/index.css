@@ -87,12 +87,15 @@
   --color-hidden-icon: #b0b7c3;
 }
 
-/* Dark theme */
+/* Dark theme — warmer tones for long-session comfort
+ * Shifted from pure blue-black (#0d1117) toward warmer neutrals.
+ * Reference: VS Code Dark+ #1e1e1e, Linear #191919, GitHub #0d1117 (cold).
+ */
 :root.dark {
-  --color-bg: #0d1117;
-  --color-card: #1c2333;
-  --color-hover: #2a3a52;
-  --color-border: #2a3040;
+  --color-bg: #111318;
+  --color-card: #1a1f2b;
+  --color-hover: #252d3a;
+  --color-border: #272d38;
   --color-text: #e6edf3;
   --color-text-secondary: #b0bac5;
   --color-text-muted: #7d8590;
@@ -101,23 +104,23 @@
   --color-status-success: #22c55e;
   --color-status-error: #ef4444;
   --color-status-warning: #f59e0b;
-  --color-input-bg: #1a1f2e;
-  --color-input-border: #2d3548;
+  --color-input-bg: #191e28;
+  --color-input-border: #2a3040;
   --color-sidebar-icon: #545d68;
   --color-sidebar-icon-active: #e6edf3;
-  --color-code-bg: #0d1117;
+  --color-code-bg: #111318;
   --color-status-online: #22c55e;
   --color-status-offline: #6b7280;
 
   /* Explorer theme variables */
   --color-explorer-zone-label: #6b7280;
-  --color-explorer-zone-separator: #2d3548;
-  --color-explorer-indent-guide: #2d3548;
+  --color-explorer-zone-separator: #2a3040;
+  --color-explorer-indent-guide: #2a3040;
   --color-explorer-search-highlight: rgba(43, 108, 238, 0.2);
   --color-explorer-accent: #3d7ef0;
   --color-explorer-system-badge: #f59e0b;
   --color-explorer-focus-indicator: #3d7ef0;
-  --color-section-divider: #222236;
+  --color-section-divider: #1f2430;
 
   /* Git status colors — dark theme */
   --color-git-added: #3fb950;
@@ -160,11 +163,11 @@
   --color-context-ring: #8b949e;
 
   /* User message bubble */
-  --color-user-bubble-bg: #1e3a5f;
+  --color-user-bubble-bg: #1c3352;
   --color-user-bubble-border: rgba(88, 166, 255, 0.12);
 
   /* Chrome surfaces — dark theme */
-  --color-bg-chrome: #151b23;
+  --color-bg-chrome: #161a21;
 
   /* Hidden / dotfile / generated file dimming — dark theme */
   --color-hidden-text: #555d6e;
@@ -204,12 +207,33 @@
   --color-status-warning: var(--color-status-warning);
   --color-status-success: var(--color-status-success);
 
+  /* Accent color presets — override --color-primary via [data-accent] on :root.
+   * Default (blue) is defined above. Additional accents below. */
+
   /* Legacy aliases for backward compatibility */
   --color-dark-bg: var(--color-bg);
   --color-dark-card: var(--color-card);
   --color-dark-hover: var(--color-hover);
   --color-dark-border: var(--color-border);
   --color-muted: var(--color-text-muted);
+}
+
+/* Accent color overrides — applied via data-accent attribute on <html>.
+ * Each preset overrides --color-primary, --color-primary-hover, --color-primary-light
+ * which flow through @theme into Tailwind utilities (bg-primary, text-primary, etc.)
+ * AND into var(--color-primary) references in component styles. */
+:root[data-accent="purple"] { --color-primary: #8b5cf6; --color-primary-hover: #7c3aed; --color-primary-light: #a78bfa; }
+:root[data-accent="green"]  { --color-primary: #10b981; --color-primary-hover: #059669; --color-primary-light: #34d399; }
+:root[data-accent="orange"] { --color-primary: #f59e0b; --color-primary-hover: #d97706; --color-primary-light: #fbbf24; }
+:root[data-accent="rose"]   { --color-primary: #f43f5e; --color-primary-hover: #e11d48; --color-primary-light: #fb7185; }
+/* blue = default, no override needed */
+
+/* Theme transition — smooth toggle, no flash on startup.
+ * .no-transitions is set by FOUC script in index.html and removed
+ * by ThemeContext after first React paint.
+ * Only body + major layout surfaces transition — NOT * (causes jank). */
+:root:not(.no-transitions) body {
+  transition: background-color 200ms ease, color 150ms ease;
 }
 
 /* Base styles */
