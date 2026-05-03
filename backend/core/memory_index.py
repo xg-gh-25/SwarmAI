@@ -103,7 +103,12 @@ def _tokenize_lower(text: str) -> list[str]:
     """
     # \w with re.UNICODE includes CJK; add hyphen for compound terms
     tokens = re.findall(r"[\w\-]+", text.lower(), re.UNICODE)
-    # CJK words can be 2 chars (竞品, 测试) — only drop short ASCII tokens
+    # CJK 2-char words (竞品, 周报) are meaningful → min 2.
+    # ASCII 2-char tokens (is, at, to, pe) are usually noise → min 3.
+    # Exception: ALL-CAPS 2-3 letter abbreviations in the ORIGINAL text
+    # (PE, DB, SSE) would be useful, but we've already lowercased.
+    # Those abbreviations appear as 3+ char tokens in aliases (e.g. "oom"),
+    # so they still match via exact lookup. Acceptable tradeoff.
     return [t for t in tokens if t not in _STOP_WORDS and (
         len(t) > 2 or _CJK_RE.search(t)
     )]
@@ -462,17 +467,37 @@ def keyword_relevance(
         return 0.0
 
     # For English (space-separated) exact set intersection works.
-    # For CJK (no word boundaries) we need substring matching:
-    # "单进程" should match "单进程架构保持不动".
+    # For CJK (no word boundaries) we need flexible matching because
+    # regex \w+ captures entire runs as single tokens:
+    #   query: "竞品分析的结论是什么"  →  token: "竞品分析的结论是什么"
+    #   entry: "竞品分析陷阱"          →  token: "竞品分析陷阱"
+    # Neither is a substring of the other, but they share "竞品分析".
+    #
+    # Strategy for CJK tokens (bidirectional substring + shared prefix):
+    # 1. qt ⊂ tt  →  "单进程" in "单进程架构保持不动"
+    # 2. tt ⊂ qt  →  "竞品" in "竞品分析的结论是什么"
+    # 3. shared prefix ≥ 2 CJK chars  →  "竞品分析陷阱" ~ "竞品分析的结论是什么"
+    def _cjk_match(a: str, b: str) -> bool:
+        """Check if two CJK tokens are related (substring or shared prefix)."""
+        if a in b or b in a:
+            return True
+        # Shared prefix: count common leading characters
+        common = 0
+        for ca, cb in zip(a, b):
+            if ca == cb:
+                common += 1
+            else:
+                break
+        return common >= 2
+
     def _match_count(query_toks: set[str], target_toks: set[str]) -> int:
-        """Count query tokens that match target tokens (exact or CJK substring)."""
+        """Count query tokens that match target tokens (exact or CJK flexible)."""
         count = 0
         for qt in query_toks:
             if qt in target_toks:
                 count += 1
             elif _CJK_RE.search(qt):
-                # CJK substring: 单进程 ⊂ 单进程架构保持不动
-                if any(qt in tt for tt in target_toks):
+                if any(_cjk_match(qt, tt) for tt in target_toks if _CJK_RE.search(tt)):
                     count += 1
         return count
 
