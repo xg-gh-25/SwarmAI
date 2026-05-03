@@ -187,7 +187,7 @@ Read from `backend/skills/` (source of truth), NOT `.claude/skills/`
 | think | `stages/think.md` | — |
 | plan | `stages/plan.md` | — |
 | build | `stages/build.md` | — |
-| review | `stages/review.md` AND `REVIEW_PATTERNS.md` | — |
+| review | `stages/review.md` AND `REVIEW_PATTERNS.md` AND `OPERATIONAL_PATTERNS.md` | — |
 | test | `stages/test.md` | `scripts/wtf_gate.py` |
 | deliver | `stages/deliver.md` | `scripts/confidence_score.py` |
 | reflect | `stages/reflect.md` | — |

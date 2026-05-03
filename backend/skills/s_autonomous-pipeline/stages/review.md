@@ -45,7 +45,7 @@ Fall back to single-pass review (all checks inline) when ALL are true:
 - Diff is <100 lines
 - Does NOT touch auth, payments, data access, infra, or config
 
-In single-pass mode, execute all 11 checks below sequentially in the main context.
+In single-pass mode, execute Tier 1 checks + applicable Tier 2 checks sequentially in the main context.
 
 ---
 
@@ -75,7 +75,28 @@ refactors.
 
 ## Pipeline-Specific Checks
 
-The REVIEW stage extends the base code review with 16 pipeline-specific checks:
+The REVIEW stage extends the base code review with 16 pipeline-specific checks,
+organized into tiers:
+
+**Tier 1 — Always (run for every changeset):**
+- 0: Code Intelligence Context (if DB exists)
+- 1: Code Review vs TECH.md
+- 2: Security Scan
+- 3: Integration Trace
+- 6: Runtime Pattern Checklist (RP1-RP29)
+- 14: Anti-Rationalization Gate
+- 15: Exit Evidence Checklist
+
+**Tier 2 — Conditional (triggered by changeset characteristics):**
+- 4: Replace/Move Parity (only when code moved/replaced)
+- 5: UX Review (only when frontend files changed)
+- 7: Cross-Boundary Wire Test (only when frontend + backend changed)
+- 8: Depth & Seam Analysis (only when new files added)
+- 9: Blast Radius (only when infra/release/deploy/CI touched)
+- 10: Operational Patterns OP1-OP8 (only when lifecycle ops on infra/cloud subsystems changed)
+- 11: Inverse Operation Check (only when new state transitions added)
+- 12: Cross-File Consistency (only when modified file has known siblings)
+- 13: Neighborhood Review (only when modifying functions in files with >5 functions)
 
 ---
 
@@ -355,20 +376,16 @@ Blast radius trace:
 
 ### 10. Operational Pattern Checklist (P2)
 
-**When changeset adds/modifies lifecycle operations** (CRUD, deploy, update,
-stop, start, delete, reset, config changes):
+**Trigger:** Changeset adds/modifies lifecycle operations on **infra, cloud,
+or deploy subsystems** (Hive, daemon, CI, release, backup, cron jobs).
 
-**BLOCKING: Read `backend/skills/s_autonomous-pipeline/OPERATIONAL_PATTERNS.md`
-and apply OP1-OP8.**
+Does NOT trigger for: regular API endpoints (GET/POST on chat, settings,
+workspace), UI changes, test-only changes, or in-memory state changes.
 
-These are architectural invariants (concurrency, rollback, backup, access
-control, health auth, placeholders, single path, config consistency). Unlike
-RP1-RP29 (code patterns), these check "does the system operate correctly" not
-"is the code written correctly."
+Read `backend/skills/s_autonomous-pipeline/OPERATIONAL_PATTERNS.md` and
+apply OP1-OP8 for the affected subsystem.
 
 Include checklist results in the review artifact under `"operational_patterns"`.
-
-**When to skip:** Pure logic changes, UI-only, test-only.
 
 ---
 
