@@ -527,6 +527,37 @@ Status: `[done]` `[>>>>]` `[skip]` `[FAIL]` `[STOP]` `[    ]`
     Below 7 → flag for human review.
 14. **Source-path reads.** Always read from `backend/skills/` (source of truth),
     not `.claude/skills/` (projected copy).
+15. **Value over completion.** The pipeline's purpose is to deliver qualified
+    value, not to finish stages. A pipeline that reaches DELIVER with a
+    working feature is worth more than one that reaches REFLECT with a
+    broken feature. If BUILD produces something that technically passes
+    tests but doesn't solve the user's actual problem — that's a failure,
+    not a success. When in doubt: does this change make the user's life
+    better? If the answer isn't clearly yes — stop and reassess, don't
+    push through to mark done.
+16. **Evidence over assertion.** Do not rely on intent, partial progress,
+    elapsed effort, or memory of earlier work as proof of completion
+    (adapted from Codex /goal). The ONLY valid proof is external evidence:
+    a test that passes, a file that exists, a command that returns the
+    expected output. "I implemented X" is not evidence — `test_x passes`
+    is evidence. "I reviewed the code" is not evidence — `3 findings,
+    all fixed` is evidence. Every claim in Completion Audit must cite
+    a verifiable artifact.
+17. **No premature completion.** Do not advance to REFLECT or mark
+    status=completed unless DELIVER's Completion Audit verdict is ALL
+    GREEN or all gaps are explicitly flagged as unfixable with
+    justification. Budget pressure is not a valid reason to skip
+    verification — if budget is low, CHECKPOINT with clear remaining
+    work, don't compress the audit. A half-delivered feature with a
+    checkpoint resume plan is better than a "completed" pipeline with
+    hidden gaps.
+18. **Adversarial findings must be specific.** Each adversarial review
+    finding must include: (a) file path and line number or function name,
+    (b) what's wrong, (c) concrete fix. Findings like "looks good",
+    "could be improved", or "consider adding" are not findings — they
+    are noise. If the sub-agent returns vague findings, reject them
+    and re-prompt with "be specific: file, line, what's wrong, how to
+    fix."
 
 ---
 

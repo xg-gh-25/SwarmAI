@@ -41,6 +41,11 @@ from scripts.pipeline_validator import (
     check_ddd_staleness,
     validate,
 )
+from scripts.artifact_cli import (
+    _extract_run_metrics,
+    _record_validation_event,
+    _load_artifact_for_metrics,
+)
 from core.pipeline_profiles import get_profile_stages, PIPELINE_PROFILES
 
 
@@ -1174,3 +1179,408 @@ class TestL3ConfidenceGate:
         # Should have WARNING instead
         gate_warns = [w for w in result["warnings"] if "confidence" in w.lower() and "override" in w.lower()]
         assert len(gate_warns) >= 1, f"Expected override warning, got: {result['warnings']}"
+
+
+# ---------------------------------------------------------------------------
+# Pipeline Metrics Tests
+# ---------------------------------------------------------------------------
+
+class TestValueDeliveryRules:
+    """Test Rules 15-18: value over completion, evidence over assertion,
+    no premature completion, specific adversarial findings."""
+
+    def test_vague_adversarial_findings_blocked(self, workspace):
+        """Rule 18: >=50% vague findings → BLOCK."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_artifact(artifacts_dir, "run_test1", "art_del", "delivery", {
+            "title": "X", "status": "done",
+            "confidence_score": {"score": 8, "breakdown": [], "penalties": []},
+            "completion_audit": {"all_green": True, "gaps": 0},
+            "adversarial_review": {
+                "profile_tier": "full",
+                "findings": [
+                    {"severity": "HIGH", "finding": "looks good", "resolved": True},
+                    {"severity": "MED", "finding": "could improve", "resolved": True},
+                ],
+            },
+        })
+        _make_run(runs_dir, profile="full", stages=[
+            _stage_record("evaluate", artifact_id="art_e"),
+            _stage_record("think", artifact_id="art_th"),
+            _stage_record("plan", artifact_id="art_p"),
+            _stage_record("build", artifact_id="art_b"),
+            _stage_record("review", artifact_id="art_r"),
+            _stage_record("test", artifact_id="art_t"),
+            _stage_record("deliver", artifact_id="art_del"),
+        ])
+        for aid, atype, data in [
+            ("art_e", "evaluation", {"recommendation": "GO", "scope": "test"}),
+            ("art_th", "research", {"key_findings": "x"}),
+            ("art_p", "plan", {"acceptance_criteria": ["x"]}),
+            ("art_b", "build", {"files_changed": ["a.py"], "tdd": {"green_pass": True}}),
+            ("art_r", "review", {"approved": True, "integration_trace": {"checked": 1},
+                                 "runtime_patterns": {"checked": 1, "patterns": [{"id": "RP1", "result": "N/A"}]},
+                                 "findings_count": 0}),
+            ("art_t", "test", {"passed": 10}),
+        ]:
+            _make_artifact(artifacts_dir, "run_test1", aid, atype, data)
+
+        result = validate("TestProject", "run_test1", "deliver")
+        vague_errors = [e for e in result["errors"] if "vague" in e.lower()]
+        assert len(vague_errors) >= 1, f"Expected vague findings block, got: {result['errors']}"
+
+    def test_specific_adversarial_findings_pass(self, workspace):
+        """Rule 18: specific findings (with file refs) pass depth check."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_artifact(artifacts_dir, "run_test1", "art_del", "delivery", {
+            "title": "X", "status": "done",
+            "confidence_score": {"score": 8, "breakdown": [], "penalties": []},
+            "completion_audit": {"all_green": True, "gaps": 0},
+            "adversarial_review": {
+                "profile_tier": "pe_only",
+                "findings": [
+                    {"severity": "HIGH", "resolved": True,
+                     "finding": "backend/core/session_unit.py line 42: race condition in _spawn() when concurrent tabs call simultaneously"},
+                    {"severity": "MED", "resolved": True,
+                     "finding": "pipeline_validator.py _check_depth() doesn't handle non-dict types for runtime_patterns"},
+                ],
+            },
+        })
+        _make_run(runs_dir, profile="bugfix", stages=[
+            _stage_record("evaluate", artifact_id="art_e"),
+            _stage_record("plan", artifact_id="art_p"),
+            _stage_record("build", artifact_id="art_b"),
+            _stage_record("review", artifact_id="art_r"),
+            _stage_record("test", artifact_id="art_t"),
+            _stage_record("deliver", artifact_id="art_del"),
+        ])
+        for aid, atype, data in [
+            ("art_e", "evaluation", {"recommendation": "GO", "scope": "bugfix"}),
+            ("art_p", "plan", {"acceptance_criteria": ["x"]}),
+            ("art_b", "build", {"files_changed": ["a.py"], "tdd": {"green_pass": True}}),
+            ("art_r", "review", {"approved": True, "integration_trace": {"checked": 1},
+                                 "runtime_patterns": {"checked": 1, "patterns": [{"id": "RP1", "result": "N/A"}]},
+                                 "findings_count": 0}),
+            ("art_t", "test", {"passed": 10}),
+        ]:
+            _make_artifact(artifacts_dir, "run_test1", aid, atype, data)
+
+        result = validate("TestProject", "run_test1", "deliver")
+        vague_errors = [e for e in result["errors"] if "vague" in e.lower()]
+        assert len(vague_errors) == 0, f"Specific findings should pass, got: {result['errors']}"
+
+    def test_unfixable_gaps_without_justification_blocked(self, workspace):
+        """Rule 17: unfixable_gaps > 0 without justification → BLOCK."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_artifact(artifacts_dir, "run_test1", "art_del", "delivery", {
+            "title": "X", "status": "done",
+            "confidence_score": {"score": 7, "breakdown": [], "penalties": []},
+            "completion_audit": {
+                "all_green": False,
+                "gaps": 1,
+                "unfixable_gaps": 1,
+                # No unfixable_justification — should be blocked
+            },
+            "adversarial_review": {"profile_tier": "pe_only", "findings": []},
+        })
+        _make_run(runs_dir, profile="bugfix", stages=[
+            _stage_record("evaluate", artifact_id="art_e"),
+            _stage_record("plan", artifact_id="art_p"),
+            _stage_record("build", artifact_id="art_b"),
+            _stage_record("review", artifact_id="art_r"),
+            _stage_record("test", artifact_id="art_t"),
+            _stage_record("deliver", artifact_id="art_del"),
+        ])
+        for aid, atype, data in [
+            ("art_e", "evaluation", {"recommendation": "GO", "scope": "bugfix"}),
+            ("art_p", "plan", {"acceptance_criteria": ["x"]}),
+            ("art_b", "build", {"files_changed": ["a.py"], "tdd": {"green_pass": True}}),
+            ("art_r", "review", {"approved": True, "integration_trace": {"checked": 1},
+                                 "runtime_patterns": {"checked": 1, "patterns": [{"id": "RP1", "result": "N/A"}]},
+                                 "findings_count": 0}),
+            ("art_t", "test", {"passed": 10}),
+        ]:
+            _make_artifact(artifacts_dir, "run_test1", aid, atype, data)
+
+        result = validate("TestProject", "run_test1", "deliver")
+        justification_errors = [e for e in result["errors"] if "unfixable_justification" in e]
+        assert len(justification_errors) >= 1, f"Expected justification requirement, got: {result['errors']}"
+
+    def test_unfixable_gaps_with_justification_passes(self, workspace):
+        """Rule 17: unfixable_gaps with justification → allowed (just -1 confidence)."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_artifact(artifacts_dir, "run_test1", "art_del", "delivery", {
+            "title": "X", "status": "done",
+            "confidence_score": {"score": 7, "breakdown": [], "penalties": []},
+            "completion_audit": {
+                "all_green": False,
+                "gaps": 1,
+                "unfixable_gaps": 1,
+                "unfixable_justification": "Windows-only feature, macOS CI can't test",
+            },
+            "adversarial_review": {"profile_tier": "pe_only", "findings": []},
+        })
+        _make_run(runs_dir, profile="bugfix", stages=[
+            _stage_record("evaluate", artifact_id="art_e"),
+            _stage_record("plan", artifact_id="art_p"),
+            _stage_record("build", artifact_id="art_b"),
+            _stage_record("review", artifact_id="art_r"),
+            _stage_record("test", artifact_id="art_t"),
+            _stage_record("deliver", artifact_id="art_del"),
+        ])
+        for aid, atype, data in [
+            ("art_e", "evaluation", {"recommendation": "GO", "scope": "bugfix"}),
+            ("art_p", "plan", {"acceptance_criteria": ["x"]}),
+            ("art_b", "build", {"files_changed": ["a.py"], "tdd": {"green_pass": True}}),
+            ("art_r", "review", {"approved": True, "integration_trace": {"checked": 1},
+                                 "runtime_patterns": {"checked": 1, "patterns": [{"id": "RP1", "result": "N/A"}]},
+                                 "findings_count": 0}),
+            ("art_t", "test", {"passed": 10}),
+        ]:
+            _make_artifact(artifacts_dir, "run_test1", aid, atype, data)
+
+        result = validate("TestProject", "run_test1", "deliver")
+        justification_errors = [e for e in result["errors"] if "unfixable_justification" in e]
+        assert len(justification_errors) == 0, f"Justified unfixable should pass, got: {result['errors']}"
+
+
+class TestExtractRunMetrics:
+    """Test _extract_run_metrics extracts data correctly from run.json + artifacts."""
+
+    def test_basic_metrics_extraction(self, workspace):
+        """Full metrics extraction from a completed bugfix run with all artifacts."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+
+        # Create artifacts first
+        _make_artifact(artifacts_dir, "run_test1", "art_rev", "review", {
+            "approved": True,
+            "integration_trace": {"checked": 5},
+            "runtime_patterns": {"checked": 8, "patterns": [{"id": "RP1", "result": "PASS"}]},
+            "findings_count": 3,
+            "findings": [{"desc": "a"}, {"desc": "b"}, {"desc": "c"}],
+        })
+        _make_artifact(artifacts_dir, "run_test1", "art_del", "delivery", {
+            "title": "Test", "status": "done",
+            "confidence_score": {"score": 8, "breakdown": [], "penalties": []},
+            "completion_audit": {"all_green": True, "gaps": 0},
+            "adversarial_review": {
+                "profile_tier": "pe_only",
+                "findings": [
+                    {"severity": "HIGH", "resolved": True, "desc": "a"},
+                    {"severity": "MEDIUM", "resolved": False, "desc": "b"},
+                ],
+            },
+        })
+        _make_artifact(artifacts_dir, "run_test1", "art_test", "test_report", {
+            "passed": 50, "failed": 2,
+        })
+        _make_artifact(artifacts_dir, "run_test1", "art_build", "changeset", {
+            "files_changed": ["a.py", "b.py", "c.py"],
+            "tdd": {"green_pass": True, "tests_generated": 12},
+        })
+
+        run = _make_run(runs_dir, status="completed", profile="bugfix", stages=[
+            _stage_record("evaluate", artifact_id="art_e", decisions=[
+                {"description": "GO", "classification": "mechanical", "reasoning": ""},
+            ]),
+            _stage_record("plan", artifact_id="art_p"),
+            _stage_record("build", artifact_id="art_build", token_cost=30000),
+            _stage_record("review", artifact_id="art_rev", token_cost=8000),
+            _stage_record("test", artifact_id="art_test", token_cost=6000),
+            _stage_record("deliver", artifact_id="art_del", token_cost=10000),
+            _stage_record("reflect", token_cost=3000),
+        ])
+        run["completed_at"] = "2026-03-24T01:30:00Z"
+        (runs_dir / "run.json").write_text(json.dumps(run))
+
+        metrics = _extract_run_metrics("TestProject", "run_test1", run)
+
+        # Structure
+        assert metrics["run_id"] == "run_test1"
+        assert metrics["profile"] == "bugfix"
+        assert metrics["stages_completed"] == 7
+
+        # Token metrics
+        assert metrics["total_tokens"] > 0
+        assert "build" in metrics["stage_tokens"]
+
+        # Decision metrics (7 stages × 1 default mechanical each)
+        assert metrics["decisions"]["mechanical"] == 7
+        assert metrics["decisions"]["total"] == 7
+
+        # Catch metrics — core value
+        assert metrics["catches"]["review_findings"] == 3
+        assert metrics["catches"]["review_rp_checked"] == 8
+        assert metrics["catches"]["adversarial_findings"] == 2
+        assert metrics["catches"]["adversarial_high"] == 1
+        assert metrics["catches"]["adversarial_resolved"] == 1
+        assert metrics["catches"]["test_regressions"] == 2
+
+        # Quality
+        assert metrics["quality"]["confidence_score"] == 8
+        assert metrics["quality"]["completion_all_green"] is True
+        assert metrics["quality"]["test_passed"] == 50
+        assert metrics["quality"]["test_failed"] == 2
+
+        # Build
+        assert metrics["build"]["files_changed"] == 3
+        assert metrics["build"]["tests_generated"] == 12
+
+        # Duration
+        assert metrics["duration_minutes"] == 90.0
+
+    def test_metrics_with_missing_artifacts(self, workspace):
+        """Metrics extraction when artifacts are missing — should not crash."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+
+        run = _make_run(runs_dir, status="completed", profile="bugfix", stages=[
+            _stage_record("evaluate", artifact_id="art_nonexistent"),
+            _stage_record("plan", artifact_id="art_also_missing"),
+        ])
+
+        metrics = _extract_run_metrics("TestProject", "run_test1", run)
+
+        # Should still produce valid metrics with zeros
+        assert metrics["catches"]["review_findings"] == 0
+        assert metrics["catches"]["adversarial_findings"] == 0
+        assert metrics["quality"]["confidence_score"] == 0
+
+    def test_metrics_with_old_format_artifacts(self, workspace):
+        """Old artifacts might have findings as int, not list."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+
+        _make_artifact(artifacts_dir, "run_test1", "art_rev", "review", {
+            "approved": True,
+            "integration_trace": {"checked": 2},
+            "findings_count": 5,
+            "findings": 5,  # Old format: int instead of list
+        })
+
+        run = _make_run(runs_dir, status="completed", profile="bugfix", stages=[
+            _stage_record("review", artifact_id="art_rev"),
+        ])
+
+        metrics = _extract_run_metrics("TestProject", "run_test1", run)
+        # Should handle int gracefully
+        assert metrics["catches"]["review_findings"] == 5
+
+
+class TestRecordValidationEvent:
+    """Test validation event recording in run.json."""
+
+    def test_records_block_event(self, workspace):
+        """Validation block is appended to run.json.validation_events[]."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_run(runs_dir, status="running")
+
+        _record_validation_event(
+            "TestProject", "run_test1", "build",
+            passed=False,
+            errors=["Schema violation: missing tdd"],
+            warnings=["Budget low"],
+        )
+
+        run = json.loads((runs_dir / "run.json").read_text())
+        events = run.get("validation_events", [])
+        assert len(events) == 1
+        assert events[0]["stage"] == "build"
+        assert events[0]["passed"] is False
+        assert events[0]["error_count"] == 1
+        assert "timestamp" in events[0]
+
+    def test_multiple_events_append(self, workspace):
+        """Multiple validation events accumulate."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_run(runs_dir, status="running")
+
+        for stage in ["build", "review", "build"]:
+            _record_validation_event(
+                "TestProject", "run_test1", stage,
+                passed=False, errors=["err"], warnings=[],
+            )
+
+        run = json.loads((runs_dir / "run.json").read_text())
+        assert len(run["validation_events"]) == 3
+
+    def test_missing_run_does_not_crash(self, workspace):
+        """Recording to a non-existent run silently succeeds (best-effort)."""
+        _record_validation_event(
+            "TestProject", "run_nonexistent", "build",
+            passed=False, errors=["err"], warnings=[],
+        )
+        # No exception = pass
+
+
+class TestMetricsCLI:
+    """Test run-metrics and run-analytics CLI commands via subprocess."""
+
+    def test_run_metrics_cli(self, workspace):
+        """run-metrics generates METRICS.json and outputs JSON."""
+        import subprocess
+
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+
+        _make_artifact(artifacts_dir, "run_test1", "art_t", "test_report",
+                       {"passed": 20, "failed": 0})
+        _make_run(runs_dir, status="completed", stages=[
+            _stage_record("evaluate", artifact_id="art_e"),
+            _stage_record("test", artifact_id="art_t", token_cost=5000),
+        ])
+
+        result = subprocess.run(
+            [sys.executable, "-m", "scripts.artifact_cli",
+             "run-metrics", "--project", "TestProject", "--run-id", "run_test1"],
+            capture_output=True, text=True,
+            cwd=str(Path(__file__).parent.parent),
+            env={**os.environ, "SWARM_WORKSPACE": str(workspace)},
+        )
+
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        metrics = json.loads(result.stdout)
+        assert metrics["run_id"] == "run_test1"
+        assert metrics["quality"]["test_passed"] == 20
+
+        # METRICS.json should be written
+        metrics_file = runs_dir / "METRICS.json"
+        assert metrics_file.exists()
+
+    def test_run_analytics_cli(self, workspace):
+        """run-analytics aggregates across multiple completed runs."""
+        import subprocess
+
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+
+        # Create 3 completed runs
+        for i in range(3):
+            rid = f"run_test{i}"
+            runs_dir = artifacts_dir / "runs" / rid
+            _make_run(runs_dir, run_id=rid, status="completed", profile="bugfix", stages=[
+                _stage_record("evaluate", token_cost=5000 + i * 1000),
+                _stage_record("build", token_cost=20000 + i * 5000),
+            ])
+
+        result = subprocess.run(
+            [sys.executable, "-m", "scripts.artifact_cli",
+             "run-analytics", "--project", "TestProject", "--limit", "10"],
+            capture_output=True, text=True,
+            cwd=str(Path(__file__).parent.parent),
+            env={**os.environ, "SWARM_WORKSPACE": str(workspace)},
+        )
+
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        analytics = json.loads(result.stdout)
+        assert analytics["runs_analyzed"] == 3
+        assert analytics["tokens"]["avg_per_run"] > 0
+        assert "catches" in analytics
+        assert "quality" in analytics
+        assert "decisions" in analytics
