@@ -566,36 +566,6 @@ class ChannelGateway:
             await db.channels.update(channel_id, {"status": "error", "error_message": error_msg})
             raise ValueError(error_msg)
 
-        # P0: Auto-populate allowed_senders if empty.
-        # When a new channel is created via the UI, the form only collects
-        # tokens — allowed_senders defaults to []. With an empty allowlist,
-        # _check_access denies ALL DMs (secure default). This auto-detects
-        # the bot installer's user_id via auth_test and adds them as owner.
-        allowed = _parse_json_list(channel.get("allowed_senders"))
-        if not allowed and hasattr(adapter, '_bot_token') and adapter._bot_token:
-            try:
-                from slack_sdk import WebClient
-                _client = WebClient(token=adapter._bot_token)
-                loop = asyncio.get_running_loop()
-                auth_result = await loop.run_in_executor(None, _client.auth_test)
-                installer_id = auth_result.get("user_id", "")
-                if installer_id:
-                    await db.channels.update(channel_id, {
-                        "allowed_senders": [installer_id],
-                    })
-                    # Refresh the channel record with the updated allowed_senders
-                    channel = await db.channels.get(channel_id)
-                    logger.info(
-                        "Channel %s: auto-populated allowed_senders with "
-                        "bot installer %s (empty allowlist = locked out)",
-                        channel_id, installer_id,
-                    )
-            except Exception as exc:
-                logger.warning(
-                    "Channel %s: failed to auto-populate allowed_senders: %s",
-                    channel_id, exc,
-                )
-
         # Cache the channel record
         self._channel_cache[channel_id] = channel
 
@@ -956,8 +926,31 @@ class ChannelGateway:
         # 2. Access control -------------------------------------------------------
         # Channels/groups: open to everyone (Swarm is a team participant).
         # DMs: allowlist only. Non-allowlisted DMs get a polite decline.
+        #
+        # P0 BOOTSTRAP: If allowed_senders is empty, the first DM sender is
+        # auto-promoted to owner. This handles new channel setup where the
+        # UI only collects tokens and doesn't set allowed_senders. Without
+        # this, the owner who just set up Slack gets locked out by their own
+        # "secure default" empty allowlist.
         chat_type = msg.metadata.get("chat_type", "im")
         is_dm = chat_type == "im"
+
+        if is_dm:
+            allowed = _parse_json_list(channel.get("allowed_senders"))
+            if not allowed:
+                # Bootstrap: first DM sender becomes owner
+                new_allowed = [msg.external_sender_id]
+                await db.channels.update(channel_id, {
+                    "allowed_senders": new_allowed,
+                })
+                # Refresh cache
+                channel = await db.channels.get(channel_id)
+                self._channel_cache[channel_id] = channel
+                logger.info(
+                    "Channel %s: bootstrap — first sender %s auto-added as "
+                    "owner (allowed_senders was empty)",
+                    channel_id, msg.external_sender_id,
+                )
 
         if is_dm and not self._check_access(channel, msg.external_sender_id):
             logger.info(
