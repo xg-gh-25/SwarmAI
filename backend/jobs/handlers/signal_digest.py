@@ -413,9 +413,20 @@ def _write_l4_json(signals: list[RawSignal], scored_items: list[dict]) -> None:
     merged = [it for it in existing_items if it.get("title") not in new_titles]
     merged.extend(scored_items)
 
-    # Cap to 50 items, sorted by relevance_score desc
+    # Cap to 50 items with language diversity guarantee.
+    # Without this, stale English items at 0.50 (fallback floor) crowd out
+    # freshly-scored Chinese items that the LLM rated <0.50 for relevance.
+    # Reserve up to 5 slots for non-English items so Chinese AI signals
+    # always surface in the digest and Slack notifications.
     merged.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
-    merged = merged[:50]
+    zh_items = [it for it in merged if it.get("lang") == "zh"
+                or any(ord(c) > 0x4e00 for c in it.get("title", ""))]
+    en_items = [it for it in merged if it not in zh_items]
+    _ZH_RESERVE = 5
+    zh_take = zh_items[:_ZH_RESERVE]
+    en_take = en_items[:50 - len(zh_take)]
+    merged = sorted(en_take + zh_take,
+                    key=lambda x: x.get("relevance_score", 0), reverse=True)
 
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
