@@ -83,14 +83,17 @@ def _run_integrity_checks(memory_content: str) -> list[dict]:
     try:
         from core.memory_index import (
             generate_memory_index, _parse_index_entries,
-            extract_body_without_index,
+            extract_body_without_index, MEMORY_INDEX_START, MEMORY_INDEX_END,
         )
 
         current_entries = _parse_index_entries(memory_content)
-        # generate_memory_index output INCLUDES markers — use it directly
         body = extract_body_without_index(memory_content)
         new_index = generate_memory_index(body)
-        replaced = new_index + "\n\n" + body
+        # Wrap with markers so _parse_index_entries can scope correctly
+        replaced = (
+            MEMORY_INDEX_START + "\n" + new_index + "\n" + MEMORY_INDEX_END
+            + "\n\n" + body
+        )
         regen_entries = _parse_index_entries(replaced)
 
         if len(current_entries) == len(regen_entries):

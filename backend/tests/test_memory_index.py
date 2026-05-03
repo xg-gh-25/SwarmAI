@@ -71,12 +71,14 @@ SAMPLE_MEMORY = textwrap.dedent("""\
 class TestGenerateMemoryIndex:
     """L0 compact index generation with value-based tiers."""
 
-    def test_generates_index_with_markers(self):
+    def test_generates_index_without_markers(self):
+        """generate_memory_index returns content only — no markers."""
         from core.memory_index import generate_memory_index
 
         index = generate_memory_index(SAMPLE_MEMORY)
-        assert "<!-- MEMORY_INDEX_START -->" in index
-        assert "<!-- MEMORY_INDEX_END -->" in index
+        assert "<!-- MEMORY_INDEX_START -->" not in index
+        assert "<!-- MEMORY_INDEX_END -->" not in index
+        assert "## Memory Index" in index
 
     def test_permanent_tier_contains_coes(self):
         from core.memory_index import generate_memory_index
@@ -145,8 +147,8 @@ class TestGenerateMemoryIndex:
         from core.memory_index import generate_memory_index
 
         index = generate_memory_index("# Memory\n\n## Recent Context\n\n## Key Decisions\n")
-        assert "<!-- MEMORY_INDEX_START -->" in index
-        assert "<!-- MEMORY_INDEX_END -->" in index
+        assert "## Memory Index" in index
+        assert "<!-- MEMORY_INDEX_START -->" not in index
 
     def test_idempotent_regeneration(self):
         """Running generate twice on content that already has an index should produce same result."""
