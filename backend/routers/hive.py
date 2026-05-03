@@ -144,6 +144,15 @@ class HiveInstanceCreate(BaseModel):
 class HiveInstanceUpdate(BaseModel):
     version: str
 
+    @field_validator("version")
+    @classmethod
+    def validate_version(cls, v: str) -> str:
+        if not re.match(r'^[a-zA-Z0-9._\-]+$', v):
+            raise ValueError(f"Invalid version string: {v!r}")
+        if len(v) > 32:
+            raise ValueError("Version string too long (max 32 chars)")
+        return v
+
 
 class HiveInstanceResponse(BaseModel):
     """Instance response for list endpoint — no secrets."""

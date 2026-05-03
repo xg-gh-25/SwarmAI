@@ -105,7 +105,8 @@ class TestErrorPatternDetection:
             {"tool_name": "Bash", "tool_input": {}, "error": "err-2", "tool_use_id": "tu_2"},
             "tu_2", MagicMock(),
         )
-        ctx = result.get("additionalContext", "")
+        hso = result.get("hookSpecificOutput", {})
+        ctx = hso.get("additionalContext", "")
         assert "failed" in ctx.lower() or "2" in ctx
 
     @pytest.mark.asyncio
@@ -330,7 +331,8 @@ class TestFailureTrackerReset:
             {"tool_name": "Edit", "tool_input": {}, "error": "err"},
             "tu_3", MagicMock(),
         )
-        assert "additionalContext" in result
+        assert "hookSpecificOutput" in result
+        assert "additionalContext" in result["hookSpecificOutput"]
 
     @pytest.mark.asyncio
     async def test_reset_no_crash_on_missing_tracker(self):
@@ -358,18 +360,20 @@ class TestFailureTrackerReset:
         # fail-fail → hint
         await fail_hook({"tool_name": "Bash", "tool_input": {}, "error": "e1"}, "t1", MagicMock())
         r = await fail_hook({"tool_name": "Bash", "tool_input": {}, "error": "e2"}, "t2", MagicMock())
-        assert "additionalContext" in r
+        assert "hookSpecificOutput" in r
+        assert "additionalContext" in r["hookSpecificOutput"]
 
         # success → reset
         await reset_hook({"tool_name": "Bash"}, "t3", MagicMock())
 
         # fail → no hint (count=1)
         r = await fail_hook({"tool_name": "Bash", "tool_input": {}, "error": "e3"}, "t4", MagicMock())
-        assert r.get("additionalContext", "") == ""
+        assert r.get("hookSpecificOutput", {}).get("additionalContext", "") == ""
 
         # fail → hint (count=2 again)
         r = await fail_hook({"tool_name": "Bash", "tool_input": {}, "error": "e4"}, "t5", MagicMock())
-        assert "additionalContext" in r
+        assert "hookSpecificOutput" in r
+        assert "additionalContext" in r["hookSpecificOutput"]
 
 
 # ---------------------------------------------------------------------------
@@ -421,9 +425,10 @@ class TestMemoryEditGuard:
         }
 
         result = await hook(tool_use, "tu_1", MagicMock())
-        # Should return additionalContext warning
-        assert "additionalContext" in result
-        assert "MemoryGuard" in result["additionalContext"] or "injection" in result["additionalContext"].lower()
+        # Should return hookSpecificOutput with additionalContext warning
+        hso = result.get("hookSpecificOutput", {})
+        assert "additionalContext" in hso
+        assert "MemoryGuard" in hso["additionalContext"] or "injection" in hso["additionalContext"].lower()
 
     @pytest.mark.asyncio
     async def test_ignores_edit_to_other_files(self):
@@ -491,7 +496,8 @@ class TestMemoryEditGuard:
         }
 
         result = await hook(tool_use, "tu_1", MagicMock())
-        assert "additionalContext" in result
+        hso = result.get("hookSpecificOutput", {})
+        assert "additionalContext" in hso
 
 
 # ---------------------------------------------------------------------------
@@ -857,10 +863,10 @@ class TestHookRegistryChain:
         registry = HookRegistry()
 
         async def hook_a(input_data, tool_use_id, context):
-            return {"count": 0, "flag": False}
+            return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "from_a"}}
 
         async def hook_b(input_data, tool_use_id, context):
-            return {"extra": "data"}
+            return {"reason": "extra_reason"}
 
         registry.register("TestEvent", hook_a, "hook_a")
         registry.register("TestEvent", hook_b, "hook_b")
@@ -870,9 +876,10 @@ class TestHookRegistryChain:
         chained_fn = sdk_hooks["TestEvent"][0].hooks[0]
         result = await chained_fn({}, None, None)
 
-        assert result["count"] == 0  # was incorrectly skipped before M1 fix
-        assert result["flag"] is False
-        assert result["extra"] == "data"
+        # hookSpecificOutput from hook_a merged
+        assert result["hookSpecificOutput"]["additionalContext"] == "from_a"
+        # top-level reason from hook_b merged
+        assert result["reason"] == "extra_reason"
 
     @pytest.mark.asyncio
     async def test_chain_skips_none_values(self):
@@ -882,7 +889,7 @@ class TestHookRegistryChain:
         registry = HookRegistry()
 
         async def hook_a(input_data, tool_use_id, context):
-            return {"keep": "yes", "drop": None}
+            return {"reason": "keep_this", "systemMessage": None}
 
         registry.register("TestEvent", hook_a, "hook_a")
         # Need 2+ hooks to trigger chaining
@@ -894,8 +901,9 @@ class TestHookRegistryChain:
         chained_fn = sdk_hooks["TestEvent"][0].hooks[0]
         result = await chained_fn({}, None, None)
 
-        assert result.get("keep") == "yes"
-        assert "drop" not in result
+        assert result.get("reason") == "keep_this"
+        # None values are skipped — systemMessage should not be in result
+        assert "systemMessage" not in result
 
 
 # ---------------------------------------------------------------------------
@@ -1130,9 +1138,10 @@ class TestPostCompactInjection:
             None, MagicMock(),
         )
 
-        assert "additionalContext" in result
-        assert "/a.py" in result["additionalContext"]
-        assert "/b.py" in result["additionalContext"]
+        hso = result.get("hookSpecificOutput", {})
+        assert "additionalContext" in hso
+        assert "/a.py" in hso["additionalContext"]
+        assert "/b.py" in hso["additionalContext"]
 
     @pytest.mark.asyncio
     async def test_no_injection_without_compaction(self, session_context):
@@ -1168,7 +1177,8 @@ class TestPostCompactInjection:
         hook = create_post_compact_injection(session_context)
         result = await hook({"prompt": "go"}, None, MagicMock())
 
-        assert "additionalContext" in result
+        hso = result.get("hookSpecificOutput", {})
+        assert "additionalContext" in hso
 
 
 # ---------------------------------------------------------------------------

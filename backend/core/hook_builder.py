@@ -121,10 +121,14 @@ class HookRegistry:
                     if result.get("decision") == "block":
                         return result
 
-                    # Merge results — later hooks override earlier ones
-                    for key, value in result.items():
-                        if value is not None:
-                            combined[key] = value
+                    # Merge hookSpecificOutput — later hooks override earlier
+                    if "hookSpecificOutput" in result:
+                        combined.setdefault("hookSpecificOutput", {})
+                        combined["hookSpecificOutput"].update(result["hookSpecificOutput"])
+                    # Merge other valid top-level keys
+                    for key in ("decision", "reason", "systemMessage"):
+                        if key in result and result[key] is not None:
+                            combined[key] = result[key]
 
                 except asyncio.TimeoutError:
                     logger.warning(

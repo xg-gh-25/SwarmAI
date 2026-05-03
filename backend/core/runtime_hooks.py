@@ -168,7 +168,12 @@ def create_error_pattern_detector(
                 f"[System: {tool} has failed {count} consecutive times. "
                 f"Last error: {str(error)[:200]}. Consider a different approach.]"
             )
-            return {"additionalContext": hint}
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PostToolUseFailure",
+                    "additionalContext": hint,
+                }
+            }
 
         return {}
 
@@ -535,7 +540,12 @@ def create_post_compact_injection(
         # Reset flag — fire once
         ctx["_compacted"] = False
 
-        return {"additionalContext": " ".join(parts)}
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": " ".join(parts),
+            }
+        }
 
     return _hook
 
@@ -742,7 +752,12 @@ def create_memory_edit_guard():
                     "MemoryGuard: Edit to %s rejected — %s",
                     file_path, categories,
                 )
-                return {"additionalContext": warning}
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PostToolUse",
+                        "additionalContext": warning,
+                    }
+                }
         except ImportError:
             pass  # memory_guard not available
         except Exception as exc:
