@@ -218,7 +218,7 @@ export default function SkillsPage({ embedded = false }: SkillsPageProps) {
                 <ResizableTableCell>
                   {FEATURED_SKILLS.has(skill.folderName) ? (
                     <div className="flex flex-col gap-0.5">
-                      <span className="text-amber-300/90 text-xs font-medium italic">
+                      <span className="text-amber-600 dark:text-amber-300/90 text-xs font-medium italic">
                         {FEATURED_SKILLS.get(skill.folderName)}
                       </span>
                       <span className="text-[var(--color-text-muted)] text-[11px] leading-tight">

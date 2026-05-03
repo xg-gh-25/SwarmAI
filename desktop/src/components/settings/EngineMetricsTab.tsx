@@ -116,7 +116,7 @@ export default function EngineMetricsTab() {
             return (
               <div key={key} className="flex items-center gap-2 text-sm">
                 <StatusDot color={isDone ? 'green' : isActive ? 'yellow' : 'gray'} />
-                <span className={`flex-1 ${isDone ? 'text-[var(--color-text)]' : isActive ? 'text-yellow-300' : 'text-[var(--color-text-muted)]'}`}>
+                <span className={`flex-1 ${isDone ? 'text-[var(--color-text)]' : isActive ? 'text-yellow-600 dark:text-yellow-300' : 'text-[var(--color-text-muted)]'}`}>
                   {label}
                 </span>
                 <span className="text-xs text-[var(--color-text-muted)]">

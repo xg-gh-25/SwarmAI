@@ -82,7 +82,6 @@ export default function AboutTab() {
     <div className="space-y-6">
       {/* Version info */}
       <section className="bg-[var(--color-card)] rounded-lg p-6">
-        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">About</h2>
         <div className="space-y-3 text-sm">
           <div className="flex items-center justify-between">
             <span className="text-[var(--color-text-muted)]">Version</span>

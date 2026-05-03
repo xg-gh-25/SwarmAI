@@ -156,6 +156,15 @@ export default function ChannelsTab() {
   );
 }
 
+/** Mask a token to show only prefix + last 4 chars */
+function maskToken(token: string | undefined): string {
+  if (!token) return '—';
+  if (token.length <= 10) return '••••••••';
+  const prefix = token.slice(0, token.indexOf('-', 4) + 1) || token.slice(0, 5);
+  const suffix = token.slice(-4);
+  return `${prefix}••••${suffix}`;
+}
+
 function ConfigSummary({ channel }: { channel: Channel }) {
   const cfg = channel.config as Record<string, string>;
   const fields = [
@@ -169,8 +178,8 @@ function ConfigSummary({ channel }: { channel: Channel }) {
       {fields.map(({ label, value }) => (
         <div key={label} className="flex items-center gap-3 text-xs">
           <span className="text-[var(--color-text-muted)] shrink-0 w-20">{label}</span>
-          <code className="text-[var(--color-text)] font-mono bg-[var(--color-bg)] px-2 py-0.5 rounded truncate select-all">
-            {value || '—'}
+          <code className="text-[var(--color-text)] font-mono bg-[var(--color-bg)] px-2 py-0.5 rounded truncate">
+            {maskToken(value)}
           </code>
         </div>
       ))}
