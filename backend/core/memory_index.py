@@ -323,15 +323,13 @@ def generate_memory_index(content: str) -> str:
 
     Each entry includes keyword aliases for enhanced recall.
 
-    **Output INCLUDES ``<!-- MEMORY_INDEX_START/END -->`` markers.**
-    Do NOT wrap in additional markers — use ``inject_index_into_memory()``
-    for safe insert/replace into a MEMORY.md file.
-
     Args:
         content: Full MEMORY.md content (may already contain an index block).
 
     Returns:
-        Complete index block including start/end markers.
+        Index content WITHOUT markers.  Callers that need a complete block
+        should use ``inject_index_into_memory()`` or wrap with
+        ``MEMORY_INDEX_START`` / ``MEMORY_INDEX_END`` themselves.
     """
     sections = parse_memory_sections(content)
     today = date.today()
@@ -409,7 +407,6 @@ def generate_memory_index(content: str) -> str:
     header = " | ".join(count_parts) if count_parts else "empty"
 
     lines = [
-        MEMORY_INDEX_START,
         "## Memory Index",
         header,
     ]
@@ -425,8 +422,6 @@ def generate_memory_index(content: str) -> str:
         lines.extend(active_lines)
         if ot_lines:
             lines.extend(ot_lines)
-
-    lines.append(MEMORY_INDEX_END)
 
     return "\n".join(lines)
 
@@ -775,7 +770,8 @@ def _full_injection(memory_content: str) -> str:
     """
     index_block = extract_index_from_memory(memory_content)
     if not index_block:
-        index_block = generate_memory_index(memory_content)
+        raw = generate_memory_index(memory_content)
+        index_block = MEMORY_INDEX_START + "\n" + raw + "\n" + MEMORY_INDEX_END
 
     body = extract_body_without_index(memory_content)
     if not body.strip():
@@ -788,7 +784,8 @@ def _channel_minimal(memory_content: str) -> str:
     """Channel sessions: index + Open Threads only (no personal sections)."""
     index_block = extract_index_from_memory(memory_content)
     if not index_block:
-        index_block = generate_memory_index(memory_content)
+        raw = generate_memory_index(memory_content)
+        index_block = MEMORY_INDEX_START + "\n" + raw + "\n" + MEMORY_INDEX_END
 
     sections = parse_memory_sections(memory_content)
     parts = [index_block]
@@ -868,7 +865,8 @@ def select_memory_sections(
     # ── L0: Always include index ──
     index_block = extract_index_from_memory(memory_content)
     if not index_block:
-        index_block = generate_memory_index(memory_content)
+        raw = generate_memory_index(memory_content)
+        index_block = MEMORY_INDEX_START + "\n" + raw + "\n" + MEMORY_INDEX_END
 
     parts: list[str] = [index_block]
     used_tokens = ContextDirectoryLoader.estimate_tokens(index_block)
@@ -1022,9 +1020,14 @@ def inject_index_into_memory(content: str) -> str:
     body = extract_body_without_index(content)
 
     # Generate fresh index from the body content
-    index_block = generate_memory_index(body)
+    index_content = generate_memory_index(body)
 
-    return index_block + "\n\n" + body
+    return (
+        MEMORY_INDEX_START + "\n"
+        + index_content + "\n"
+        + MEMORY_INDEX_END + "\n\n"
+        + body
+    )
 
 
 def extract_index_from_memory(content: str) -> Optional[str]:
