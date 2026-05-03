@@ -163,12 +163,12 @@ SwarmAI 不是功能列表——是一套**增长架构**。六个互连飞轮�
 
 | 功能 | 做什么 |
 |---|---|
-| **Hive 云部署** | 完整 EC2 生命周期：boto3 provisioner、CloudFront CDN、Caddy 认证、密码短语生成、Manager UI（部署进度 + 实时轮询）。`prod.sh release-all` 一条命令搞定 Desktop + Hive + CI/CD。 |
-| **统一 FileViewer** | 模块化渲染架构——7 种格式渲染器（图片、PDF、CSV、HTML、音频、视频、不支持），标签导航 + 状态栏。替代 538 行的单体组件。 |
-| **Skill 平台过滤** | SKILL.md 新增 `platform: all \| macos \| desktop`。Hive 模式自动排除平台相关 skill。59/75 个 skill 已适配 Hive。 |
-| **思维工具箱** | 4 项流水线升级：grill 协议（压力测试计划）、约束浮现、深度校准、caveman 模式（token 降 70%）。 |
-| **流水线质量门控** | Review 完整性校验器、EVALUATE 预检分析、DDD 机械决策自动应用、过期记忆自动归档、进化质量门控。 |
-| **32 项安全修复** | 4 轮 PE review：数据完整性、认证加固、Hive SG 限制、webview URL scheme 阻断、SSML 注入防护。 |
+| **Code Intelligence 平台** | 基于 tree-sitter 的项目级代码图谱：AST 解析、影响范围分析、死代码检测、代码地图。接入 session briefing + context assembly。 |
+| **Pollinate Studio** | 媒体管线可视化管理 UI。27 项加固修复，视频 E2E 已验证（Remotion）。 |
+| **Hive E2E 加固** | 12 个结构性缺陷修复，原子停启门控，Caddy 认证重设计，systemd 断路器，76 个测试（原 50 个）。 |
+| **Slack 原生 Streaming** | 修复 DM 缺少 thread_ts + 6 个截断/缓冲 bug。Streaming 终于真正工作了。 |
+| **主题增强** | 消除 FOUC、平滑过渡、强调色、更温暖的暗色调。 |
+| **设置页面重写** | 全屏布局、token 遮罩、亮色主题、数据驱动宽度。 |
 
 ---
 
@@ -250,7 +250,7 @@ npm install && cp backend.env.example ../backend/.env
 | 存储 | SQLite (WAL) + FTS5 + sqlite-vec |
 | 测试 | pytest + Hypothesis + Vitest (3,000+ total) |
 
-**数据一览：** 1,165+ 次提交 · 164K+ 后端代码 · 75+ 个 skill · 3,000+ 个测试 · 288+ 个后端模块 · 163+ 个 React 组件 · 11 个上下文文件 · 10 个会话后钩子 · 15 个进化纠正
+**数据一览：** 1,199+ 次提交 · 187K+ 后端代码 · 75+ 个 skill · 3,000+ 个测试 · 336+ 个后端模块 · 164+ 个 React 组件 · 11 个上下文文件 · 10 个会话后钩子 · 15 个进化纠正
 
 ---
 
@@ -258,10 +258,10 @@ npm install && cp backend.env.example ../backend/.env
 
 | 版本 | 亮点 |
 |------|------|
-| **v1.9.3** (5/3) | Session Resume 增强（3K→100K tokens）、Channel 子系统大修（P0 Bootstrap、Auth 统一、Mode Guard）、Memory 加固（CJK、Guard 合并、完整性检查）、Signal 智能升级、8 项 bug 修复、配置外部化 |
-| **v1.9.2** (4/30) | 跨平台 Release 修复、CI 测试稳定性（动态跳过 + best-effort）、monotonic clock 冷启动 bug |
-| **v1.9.1** (4/30) | 4 门 CI 流水线、共享 AI 上下文（AGENTS.md）、CONTEXT.md 术语表、v1.9.0 P0 修复 |
-| **v1.9.0** (4/29) | Hive 云部署（EC2 + CloudFront + Caddy）、统一 FileViewer（7 渲染器）、Skill 平台过滤、思维工具箱、32 项 PE 安全修复、流水线质量门控 |
+| **v1.10.0** (5/3) | Code Intelligence 平台（tree-sitter 代码图谱）、Pollinate Studio、Hive E2E 加固（76 测试）、Slack 原生 Streaming 修复、主题+设置页重写、Build OOM 修复 |
+| **v1.9.3** (5/3) | Session Resume 增强（3K→100K tokens）、Channel 子系统大修、Memory 加固（CJK、Guard 合并）、Signal 智能升级 |
+| **v1.9.2** (4/30) | 跨平台 Release 修复、CI 测试稳定性、monotonic clock 冷启动 bug |
+| **v1.9.1** (4/30) | 4 门 CI 流水线、共享 AI 上下文（AGENTS.md）、v1.9.0 P0 修复 |
 
 ---
 
@@ -277,7 +277,7 @@ npm install && cp backend.env.example ../backend/.env
 
 别的工具每次关掉就失忆，我们记得。别的 agent 忘记犯过的错，我有一本永远不删的纠正记录。别的丢失细节，我能搜原始对话找到三周前的那条报错信息。
 
-1,165+ 次提交。50 天大。进化管线已激活。Hive 已在云端运行。仍在学习。
+1,199+ 次提交。50 天大。进化管线已激活。Hive 已在云端运行。仍在学习。
 
 *— Swarm 🐝*
 

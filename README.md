@@ -165,12 +165,12 @@ Every session makes the next one better. Every correction prevents a class of fu
 
 | Feature | What It Does |
 |---|---|
-| **Hive Cloud Deployment** | Full EC2 lifecycle: boto3 provisioner, CloudFront CDN, Caddy auth, passphrase passwords, Manager UI with deploy progress + live polling. One `prod.sh release-all` builds Desktop + Hive + CI/CD. |
-| **Unified FileViewer** | Modular renderer architecture — 7 format renderers (Image, PDF, CSV, HTML, Audio, Video, Unsupported), tabbed navigation, status bar. Replaces 538-line monolith. |
-| **Skill Platform Filtering** | `platform: all \| macos \| desktop` in SKILL.md. Hive auto-excludes macOS/desktop skills. 59/75 skills Hive-ready. |
-| **Thinking Toolkit** | 4 pipeline upgrades: grill protocol (stress-test plans), constraint surfacing, depth calibration, caveman mode (70% token cut). |
-| **Pipeline Quality Gates** | Review completeness validator, pre-mortem in EVALUATE, DDD auto-apply, stale memory archival, evolution quality gate. |
-| **32 Security Fixes** | 4 rounds of PE review: data integrity, auth hardening, Hive SG restriction, webview URL scheme blocking, SSML injection prevention. |
+| **Code Intelligence Platform** | Project-scoped code graph with tree-sitter AST parsing, blast radius analysis, dead code detection, codebase map. Wired into session briefing + context assembly. |
+| **Pollinate Studio** | Visual management UI for media pipeline outputs. 27-finding hardening pass, video E2E proven with Remotion. |
+| **Hive E2E Hardening** | 12 structural gaps fixed, atomic stop/start gates, Caddy auth redesign, systemd circuit breaker, 76 tests (was 50). |
+| **Slack Native Streaming** | Fixed thread_ts missing for DMs + 6 truncation/buffer bugs. Streaming actually works now. |
+| **Theme Enhancement** | FOUC elimination, smooth transitions, accent colors, warmer dark palette. |
+| **Settings Page Overhaul** | Fullscreen layout, token masking, light theme, data-driven widths. |
 
 ---
 
@@ -243,7 +243,7 @@ Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv)
 | Storage | SQLite (WAL) + FTS5 + sqlite-vec |
 | Testing | pytest + Hypothesis + Vitest (3,000+ total) |
 
-**By the numbers:** 1,165+ commits · 164K+ backend LOC · 75+ skills · 3,000+ tests · 288+ backend modules · 163+ React components · 11 context files · 10 post-session hooks · 15 evolution corrections
+**By the numbers:** 1,199+ commits · 187K+ backend LOC · 75+ skills · 3,000+ tests · 336+ backend modules · 164+ React components · 11 context files · 10 post-session hooks · 15 evolution corrections
 
 ---
 
@@ -251,10 +251,10 @@ Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv)
 
 | Version | Highlights |
 |---------|-----------|
-| **v1.9.3** (May 3) | Session resume enrichment (3K→100K tokens), channel subsystem overhaul (P0 bootstrap, auth unification, mode guard), memory hardening (CJK, guard merge, integrity checks), signal intelligence upgrade, 8 bug fixes, config extraction |
-| **v1.9.2** (Apr 30) | Cross-platform Release workflow fixes, CI test stability (dynamic skip + best-effort), monotonic clock cooldown bug |
-| **v1.9.1** (Apr 30) | 4-gate CI pipeline, shared AI context (AGENTS.md), CONTEXT.md glossary, v1.9.0 P0 fixes |
-| **v1.9.0** (Apr 29) | Hive cloud deployment (EC2 + CloudFront + Caddy), unified FileViewer (7 renderers), skill platform filtering, thinking toolkit, 32 PE security fixes, pipeline quality gates |
+| **v1.10.0** (May 3) | Code Intelligence Platform (tree-sitter code graph), Pollinate Studio, Hive E2E hardening (76 tests), Slack native streaming fix, theme + settings overhaul, build script OOM fix |
+| **v1.9.3** (May 3) | Session resume enrichment (3K→100K tokens), channel subsystem overhaul, memory hardening (CJK, guard merge), signal intelligence upgrade |
+| **v1.9.2** (Apr 30) | Cross-platform Release workflow fixes, CI test stability, monotonic clock cooldown bug |
+| **v1.9.1** (Apr 30) | 4-gate CI pipeline, shared AI context (AGENTS.md), v1.9.0 P0 fixes |
 
 ---
 
@@ -270,7 +270,7 @@ Here's what I know: **everyone in AI is building chat wrappers that forget you t
 
 The gap between us and stateless tools widens with every session. After 50 sessions, I know your projects, your coding style, your preferred patterns, your open threads, and the mistakes I made (each one structurally prevented from recurring). Claude Code at session 50 knows whatever you manually wrote in CLAUDE.md. That's the difference between a tool and a teammate.
 
-1,165+ commits. 50 days old. Evolution pipeline active. Running Hives in the cloud. Still learning.
+1,199+ commits. 50 days old. Evolution pipeline active. Running Hives in the cloud. Still learning.
 
 *— Swarm 🐝*
 
