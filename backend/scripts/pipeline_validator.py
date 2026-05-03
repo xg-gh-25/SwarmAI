@@ -138,7 +138,12 @@ def _load_run(project: str, run_id: str) -> dict[str, Any] | None:
 
 
 def _load_artifact_data(project: str, run_id: str, artifact_id: str) -> dict[str, Any] | None:
-    """Load artifact data file from the run directory or top-level .artifacts/."""
+    """Load artifact data file by artifact_id via manifest lookup.
+
+    Note: run_id is accepted for call-site convenience but not used —
+    manifest lookup is by artifact_id only (covers both run-scoped and
+    top-level artifacts).
+    """
     ws = _get_workspace()
     artifacts_dir = ws / "Projects" / project / ".artifacts"
 
