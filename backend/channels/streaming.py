@@ -103,6 +103,9 @@ class StreamContext:
 
     thinking_set: bool = False
 
+    # Thinking streaming — shows thinking tokens in italic before the reply
+    in_thinking: bool = False
+
 
 # ---------------------------------------------------------------------------
 # Reaction helpers
@@ -253,12 +256,48 @@ def schedule_native_flush(ctx: StreamContext) -> None:
     )
 
 
+async def end_thinking_phase(ctx: StreamContext) -> None:
+    """Transition from thinking to text phase.
+
+    Flushes any pending thinking tokens, appends a closing italic marker
+    and separator, then resets the thinking state.  Called when the first
+    ``text_start`` event arrives after a thinking block.
+    """
+    if not ctx.in_thinking:
+        return
+    ctx.in_thinking = False
+
+    if not ctx.streaming_msg_id or not ctx.adapter:
+        return
+
+    # Cancel any pending native flush so we can do a clean transition
+    if ctx.native_flush_handle:
+        ctx.native_flush_handle.cancel()
+        ctx.native_flush_handle = None
+
+    # Flush remaining thinking tokens + close italic + separator
+    pending = ""
+    if ctx.native_pending_buf:
+        pending = "".join(ctx.native_pending_buf)
+        ctx.native_pending_buf.clear()
+
+    # Close the italic block and add a visual separator before the reply
+    separator = "_\n\n---\n\n"
+    try:
+        await ctx.adapter.append_stream(
+            ctx.external_chat_id,
+            ctx.streaming_msg_id,
+            pending + separator,
+        )
+    except Exception:
+        logger.debug("end_thinking_phase: append_stream failed")
+
+
 async def cleanup_stream(ctx: StreamContext) -> None:
     """Clean up streaming resources (timers, tasks, buffer drain)."""
     ctx.stream_done.set()
 
-    # Cancel native throttle timer and do a final append_stream so the
-    # user sees the last tokens before stop_stream replaces with Block Kit.
+    # Cancel native throttle timer
     if ctx.native_flush_handle:
         ctx.native_flush_handle.cancel()
         ctx.native_flush_handle = None
@@ -268,7 +307,18 @@ async def cleanup_stream(ctx: StreamContext) -> None:
             await ctx.native_flush_task
         except Exception:
             pass
-    # Final native flush — send any remaining buffered tokens
+
+    # IMPORTANT: Discard thinking tokens BEFORE the final native flush.
+    # If we're still in thinking phase (error/timeout during thinking),
+    # native_pending_buf contains thinking tokens that must NOT reach
+    # stream_flushed.  Discard them now — they were already streamed
+    # visually (ephemeral, stop_stream replaces everything).
+    if ctx.in_thinking:
+        ctx.native_pending_buf.clear()
+        ctx.in_thinking = False
+
+    # Final native flush — send any remaining text tokens so the user
+    # sees them before stop_stream replaces with Block Kit.
     if ctx.native_pending_buf and ctx.streaming_msg_id and ctx.adapter:
         chunk = "".join(ctx.native_pending_buf)
         ctx.native_pending_buf.clear()
@@ -286,7 +336,7 @@ async def cleanup_stream(ctx: StreamContext) -> None:
         except asyncio.CancelledError:
             pass
 
-    # Final drain — merge both native and legacy buffers into stream_flushed
+    # Final drain — merge remaining buffers into stream_flushed
     # so the final reply_text captures everything.
     if ctx.native_pending_buf:
         ctx.stream_buf.extend(ctx.native_pending_buf)

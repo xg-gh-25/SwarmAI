@@ -74,21 +74,33 @@ STAGE_SCHEMAS: dict[str, dict[str, list[str]]] = {
         "recommended": ["approach", "data_model", "boundaries", "success_criteria"],
     },
     "build": {
-        "required": ["files_changed"],
-        "recommended": ["commits", "diff_summary", "tdd"],
+        "required": ["files_changed", "tdd"],  # V1.10.0: tdd metadata required
+        "recommended": ["commits", "diff_summary"],
         # tdd.smoke_tests must be > 0 when files_changed > 1 (Check 8)
     },
     "review": {
-        "required": ["approved", "integration_trace"],
-        "recommended": ["findings", "security_findings", "ux_review"],
+        "required": [
+            "approved",
+            "integration_trace",
+            "runtime_patterns",   # V1.10.0: RP1-RP29 checklist evidence
+            "findings_count",     # V1.10.0: explicit count (even if 0)
+        ],
+        "recommended": ["findings", "security_findings", "ux_review",
+                         "operational_patterns", "wire_test"],
     },
     "test": {
         "required": ["passed"],
         "recommended": ["failed", "fixed", "coverage"],
     },
     "deliver": {
-        "required": ["title", "status"],
-        "recommended": ["confidence_score", "decisions", "attention_flags", "report_path"],
+        "required": [
+            "title",
+            "status",
+            "confidence_score",    # V1.10.0: must be from confidence_score.py
+            "completion_audit",    # V1.10.0: AC → evidence verification
+            "adversarial_review",  # V1.10.0: independent sub-agent review
+        ],
+        "recommended": ["decisions", "attention_flags", "report_path"],
     },
     # reflect has no artifact — skip schema check
 }
@@ -426,6 +438,115 @@ def _extract_section(text: str, heading: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Depth validation (L2) — field values indicate real work
+# ---------------------------------------------------------------------------
+
+def _check_depth(stage: str, artifact_data: dict, profile: str) -> list[str]:
+    """Layer 2: validate field values, not just existence.
+
+    Catches hollow artifacts where fields exist but content indicates
+    the quality gate was not actually executed.
+    """
+    errors: list[str] = []
+
+    if stage == "review":
+        # runtime_patterns: must be dict with checked > 0 and patterns list
+        rp = artifact_data.get("runtime_patterns")
+        if rp is not None and not isinstance(rp, dict):
+            errors.append(
+                f"Depth: runtime_patterns must be a dict, got {type(rp).__name__}"
+            )
+        elif isinstance(rp, dict):
+            checked = rp.get("checked", 0)
+            if checked == 0:
+                errors.append(
+                    "Depth: runtime_patterns.checked == 0 — "
+                    "RP1-RP29 checklist was not executed"
+                )
+            elif not rp.get("patterns"):
+                errors.append(
+                    f"Depth: runtime_patterns.checked={checked} but patterns list is empty — "
+                    f"include per-pattern results (even 'N/A' is valid)"
+                )
+
+    if stage == "deliver":
+        # adversarial_review: must be dict with profile_tier
+        ar = artifact_data.get("adversarial_review")
+        if ar is not None and not isinstance(ar, dict):
+            errors.append(
+                f"Depth: adversarial_review must be a dict, got {type(ar).__name__}"
+            )
+        elif isinstance(ar, dict):
+            tier = ar.get("profile_tier")
+            if not tier:
+                errors.append(
+                    "Depth: adversarial_review.profile_tier missing — "
+                    "was the sub-agent actually spawned?"
+                )
+            elif tier == "skipped" and profile not in ("trivial", "research", "docs"):
+                errors.append(
+                    f"Depth: adversarial_review.profile_tier='skipped' but profile='{profile}' "
+                    f"requires at minimum a PE review pass"
+                )
+            elif tier != "skipped" and "findings" not in ar:
+                errors.append(
+                    "Depth: adversarial_review ran but has no 'findings' field"
+                )
+            elif tier != "skipped":
+                # HIGH findings must be resolved
+                high_unresolved = [
+                    f for f in ar.get("findings", [])
+                    if isinstance(f, dict) and f.get("severity") == "HIGH" and not f.get("resolved")
+                ]
+                if high_unresolved:
+                    errors.append(
+                        f"Depth: adversarial_review has {len(high_unresolved)} "
+                        f"unresolved HIGH finding(s) — fix before delivery"
+                    )
+
+        # completion_audit: must have explicit all_green
+        ca = artifact_data.get("completion_audit")
+        if isinstance(ca, dict):
+            if "all_green" not in ca:
+                errors.append(
+                    "Depth: completion_audit.all_green missing — "
+                    "was the audit actually run?"
+                )
+            elif not ca["all_green"]:
+                fixable = ca.get("gaps", 0) - ca.get("unfixable_gaps", 0)
+                if fixable > 0:
+                    errors.append(
+                        f"Depth: completion_audit has {fixable} fixable gap(s) — "
+                        f"fix them or mark as unfixable_gaps before delivery"
+                    )
+
+        # confidence_score: must be dict from script, not hand-written number
+        cs = artifact_data.get("confidence_score")
+        if isinstance(cs, (int, float)):
+            errors.append(
+                "Depth: confidence_score is a bare number — "
+                "must run confidence_score.py which returns "
+                "{score, breakdown, penalties}. Hand-written scores are not accepted."
+            )
+        elif isinstance(cs, dict):
+            if "breakdown" not in cs or "penalties" not in cs:
+                errors.append(
+                    "Depth: confidence_score missing 'breakdown' or 'penalties' — "
+                    "run confidence_score.py to generate a real score"
+                )
+
+    if stage == "build":
+        # tdd: must include green_pass
+        tdd = artifact_data.get("tdd")
+        if isinstance(tdd, dict) and "green_pass" not in tdd:
+            errors.append(
+                "Depth: tdd.green_pass missing — was the RED→GREEN cycle completed?"
+            )
+
+    return errors
+
+
+# ---------------------------------------------------------------------------
 # Core validation
 # ---------------------------------------------------------------------------
 
@@ -475,6 +596,12 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
             "checks_passed": 0,
             "checks_total": checks_total,
         }
+
+    # Pre-load artifact data for depth/gate checks (L2/L3)
+    _art_id = stage_record.get("artifact_id")
+    artifact_data: dict[str, Any] | None = None
+    if _art_id and stage not in NO_ARTIFACT_STAGES:
+        artifact_data = _load_artifact_data(project, run_id, _art_id)
 
     # --- Check 1: Stage order ---
     if _check_stage_order(stage, profile, stages_list):
@@ -546,19 +673,16 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
     # On other stages, auto-pass (DDD was already validated at evaluate).
     if stage == "evaluate":
         # Build context text from the evaluation artifact for cross-check
-        artifact_id = stage_record.get("artifact_id")
+        # Use pre-loaded artifact_data (don't re-load — F1/F2 fix)
         context_text = None
-        if artifact_id:
-            artifact_data = _load_artifact_data(project, run_id, artifact_id)
-            if artifact_data:
-                # Combine key fields for non-goal cross-reference
-                parts = [
-                    str(artifact_data.get("recommendation", "")),
-                    str(artifact_data.get("scope", "")),
-                    str(artifact_data.get("summary", "")),
-                    str(artifact_data.get("approach", "")),
-                ]
-                context_text = " ".join(parts)
+        if artifact_data:
+            parts = [
+                str(artifact_data.get("recommendation", "")),
+                str(artifact_data.get("scope", "")),
+                str(artifact_data.get("summary", "")),
+                str(artifact_data.get("approach", "")),
+            ]
+            context_text = " ".join(parts)
 
         ddd_result = check_ddd_consistency(project, context_text)
         warnings.extend(ddd_result["warnings"])
@@ -584,42 +708,38 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
     # where MagicMock masked a missing attribute on SessionUnit.
     if stage == "build":
         smoke_ok = True
-        artifact_id = stage_record.get("artifact_id")
-        if artifact_id:
-            artifact_data = _load_artifact_data(project, run_id, artifact_id)
-            if artifact_data:
-                tdd = artifact_data.get("tdd", {})
-                files_changed = artifact_data.get("files_changed", [])
-                code_files = [f for f in files_changed
-                              if any(f.endswith(ext) for ext in _CODE_EXTS)]
-                smoke_count = tdd.get("smoke_tests", 0) if isinstance(tdd, dict) else 0
-                if len(code_files) > 1 and smoke_count == 0:
-                    smoke_ok = False
-                    errors.append(
-                        f"SMOKE step skipped: build touched {len(code_files)} code files "
-                        f"but smoke_tests=0 — runtime crashes (AttributeError, NameError) "
-                        f"may be hidden by mocks. Run smoke tests with real objects "
-                        f"before advancing to REVIEW."
-                    )
+        # Use pre-loaded artifact_data (F1/F2 fix — don't re-load)
+        if artifact_data:
+            tdd = artifact_data.get("tdd", {})
+            files_changed = artifact_data.get("files_changed", [])
+            code_files = [f for f in files_changed
+                          if any(f.endswith(ext) for ext in _CODE_EXTS)]
+            smoke_count = tdd.get("smoke_tests", 0) if isinstance(tdd, dict) else 0
+            if len(code_files) > 1 and smoke_count == 0:
+                smoke_ok = False
+                errors.append(
+                    f"SMOKE step skipped: build touched {len(code_files)} code files "
+                    f"but smoke_tests=0 — runtime crashes (AttributeError, NameError) "
+                    f"may be hidden by mocks. Run smoke tests with real objects "
+                    f"before advancing to REVIEW."
+                )
         if smoke_ok:
             checks_passed += 1
     elif stage == "review":
         # Check 8b: Integration trace must be present in review artifact
+        # Use pre-loaded artifact_data (F1/F2 fix)
         trace_ok = True
-        artifact_id = stage_record.get("artifact_id")
-        if artifact_id:
-            artifact_data = _load_artifact_data(project, run_id, artifact_id)
-            if artifact_data:
-                trace = artifact_data.get("integration_trace", {})
-                checked = trace.get("checked", 0) if isinstance(trace, dict) else 0
-                if checked == 0:
-                    trace_ok = False
-                    errors.append(
-                        "Integration trace missing: review must include "
-                        "'integration_trace' with checked > 0. Verify every new "
-                        "public symbol has a production caller, and every removed "
-                        "call site doesn't orphan old code."
-                    )
+        if artifact_data:
+            trace = artifact_data.get("integration_trace", {})
+            checked = trace.get("checked", 0) if isinstance(trace, dict) else 0
+            if checked == 0:
+                trace_ok = False
+                errors.append(
+                    "Integration trace missing: review must include "
+                    "'integration_trace' with checked > 0. Verify every new "
+                    "public symbol has a production caller, and every removed "
+                    "call site doesn't orphan old code."
+                )
         if trace_ok:
             checks_passed += 1
 
@@ -638,7 +758,7 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
                     any(f.endswith(ext) for ext in _FRONTEND_EXTS)
                     for f in build_data.get("files_changed", [])
                 )
-        if has_frontend and artifact_id and artifact_data:
+        if has_frontend and artifact_data:
             ux = artifact_data.get("ux_review", {})
             triggered = ux.get("triggered", False) if isinstance(ux, dict) else False
             if not triggered:
@@ -649,25 +769,18 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
                     "escape/click-outside, scroll tracking)."
                 )
         # Check 8d: Review completeness — large changesets with zero findings are suspicious
-        # A 100+ line diff with 0 review findings means the review was likely skipped.
-        # This is a BLOCK: the orchestrator must produce at least a review artifact
-        # with findings_count (even if 0) AND explain why 0 is correct.
-        if build_stage and build_stage.get("artifact_id"):
-            build_art = _load_artifact_data(project, run_id, build_stage["artifact_id"])
-            if build_art:
-                tdd = build_art.get("tdd", {})
-                # Estimate diff size from test count + file count as proxy
+        # Reuse build_data from 8c (F2 fix — don't re-load)
+        if build_data:
+                tdd = build_data.get("tdd", {})
                 tests_gen = tdd.get("tests_generated", 0) if isinstance(tdd, dict) else 0
                 code_files = [
-                    f for f in build_art.get("files_changed", [])
+                    f for f in build_data.get("files_changed", [])
                     if any(f.endswith(ext) for ext in _CODE_EXTS)
                 ]
                 is_large_changeset = len(code_files) > 3 or tests_gen > 10
 
-                if is_large_changeset and artifact_id:
-                    review_art = _load_artifact_data(project, run_id, artifact_id)
-                    if review_art:
-                        findings_count = review_art.get("findings_count", -1)
+                if is_large_changeset and artifact_data:
+                        findings_count = artifact_data.get("findings_count", -1)
                         if findings_count == -1:
                             # No findings_count field at all — review artifact is incomplete
                             errors.append(
@@ -690,6 +803,35 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
                     )
     else:
         checks_passed += 1  # Auto-pass for other stages
+
+    # --- Check 9: Depth validation (L2) — field values indicate real work ---
+    # Only runs when artifact data is available (L0/L1 catch missing data)
+    if artifact_data and stage in ("review", "deliver", "build"):
+        depth_errors = _check_depth(stage, artifact_data, profile)
+        errors.extend(depth_errors)
+        if not depth_errors:
+            checks_passed += 1
+        checks_total += 1
+
+    # --- Check 10: Confidence gate (L3) — score < 7 blocks delivery ---
+    if stage == "deliver" and artifact_data:
+        conf = artifact_data.get("confidence_score", {})
+        if isinstance(conf, dict):
+            score = conf.get("score", 0)
+            has_override = run.get("human_override", False)
+            if score < 7 and not has_override:
+                errors.append(
+                    f"Confidence gate: score={score}/12 (< 7). "
+                    f"Fix penalties or add human_override to run.json."
+                )
+            elif score < 7 and has_override:
+                warnings.append(
+                    f"Confidence gate: score={score}/12 (< 7) — "
+                    f"OVERRIDDEN by human_override flag."
+                )
+        checks_total += 1
+        if not any("confidence gate" in e.lower() for e in errors):
+            checks_passed += 1
 
     return {
         "valid": len(errors) == 0,

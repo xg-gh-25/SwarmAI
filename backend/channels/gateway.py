@@ -38,8 +38,10 @@ from channels.streaming import (
     EMOJI_THINKING,
     StreamContext,
     cleanup_stream,
+    end_thinking_phase,
     legacy_flush,
     legacy_periodic,
+    reset_stall_timers,
     resolve_tool_emoji,
     schedule_native_flush,
     set_reaction,
@@ -1172,6 +1174,44 @@ class ChannelGateway:
             ):
                 event_type = event.get("type", "")
 
+                # ── Thinking streaming (native path only) ─────
+                # Stream thinking tokens in italic so the user sees
+                # activity immediately instead of a blank wait.
+                # Thinking content is ephemeral — stop_stream replaces
+                # the entire message with the final Block Kit reply.
+                # NOTE: Legacy streaming (chat.update) skips thinking
+                # — only native (append_stream) supports it. Future
+                # adapters should check ctx.native_streaming.
+                if event_type == "thinking_start":
+                    if ctx.streaming and ctx.streaming_msg_id and ctx.native_streaming:
+                        ctx.in_thinking = True
+                        if not ctx.thinking_set:
+                            ctx.thinking_set = True
+                            set_reaction(ctx, EMOJI_THINKING)
+                        try:
+                            await adapter.append_stream(
+                                ctx.external_chat_id,
+                                ctx.streaming_msg_id,
+                                "💭 _",
+                            )
+                        except Exception:
+                            pass
+                    continue
+
+                if event_type == "thinking_delta":
+                    thinking_text = event.get("thinking", "")
+                    if thinking_text and ctx.in_thinking and ctx.native_streaming and ctx.streaming_msg_id:
+                        ctx.native_pending_buf.append(thinking_text)
+                        schedule_native_flush(ctx)
+                        reset_stall_timers(ctx)
+                    continue
+
+                if event_type == "text_start":
+                    if ctx.in_thinking:
+                        await end_thinking_phase(ctx)
+                    continue
+
+                # ── Text streaming ────────────────────────────
                 if event_type == "text_delta":
                     delta_text = event.get("text", "")
                     if delta_text:
@@ -1188,6 +1228,10 @@ class ChannelGateway:
                     continue
 
                 if event_type == "tool_use" and ctx.streaming:
+                    # Close thinking phase before tool status — defensive
+                    # guard in case tool_use arrives during thinking block.
+                    if ctx.in_thinking:
+                        await end_thinking_phase(ctx)
                     tool_name = event.get("name", "")
                     set_reaction(ctx, resolve_tool_emoji(tool_name))
 
@@ -1258,6 +1302,30 @@ class ChannelGateway:
                             )
                         ):
                             fe_type = follow_event.get("type", "")
+                            # Thinking streaming in follow-up (mirrors main loop)
+                            if fe_type == "thinking_start":
+                                if ctx.streaming and ctx.streaming_msg_id and ctx.native_streaming:
+                                    ctx.in_thinking = True
+                                    try:
+                                        await adapter.append_stream(
+                                            ctx.external_chat_id,
+                                            ctx.streaming_msg_id,
+                                            "💭 _",
+                                        )
+                                    except Exception:
+                                        pass
+                                continue
+                            if fe_type == "thinking_delta":
+                                thinking_text = follow_event.get("thinking", "")
+                                if thinking_text and ctx.in_thinking and ctx.native_streaming and ctx.streaming_msg_id:
+                                    ctx.native_pending_buf.append(thinking_text)
+                                    schedule_native_flush(ctx)
+                                    reset_stall_timers(ctx)
+                                continue
+                            if fe_type == "text_start":
+                                if ctx.in_thinking:
+                                    await end_thinking_phase(ctx)
+                                continue
                             if fe_type == "text_delta" and ctx.streaming:
                                 delta = follow_event.get("text", "")
                                 if delta:

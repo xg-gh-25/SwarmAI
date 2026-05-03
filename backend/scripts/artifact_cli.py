@@ -135,13 +135,20 @@ def cmd_advance(args, reg: ArtifactRegistry) -> None:
     Warnings are printed but don't block advancement.
     """
     # Auto-validate before advancing (structural enforcement)
+    # FAIL-CLOSED: if validator crashes, block advancement.
+    # Prior behavior (fail-open) allowed advancement when validator errored,
+    # which is the most dangerous failure mode — gate opens on crash.
     try:
         _auto_validate_before_advance(args.project, args.state)
     except SystemExit:
         raise  # Re-raise if validation blocks
     except Exception as e:
-        # Non-blocking: if validator itself fails, still advance
-        print(json.dumps({"validation_warning": f"Validator error: {e}"}), file=sys.stderr)
+        # FAIL-CLOSED: validator crash → block advancement
+        print(json.dumps({
+            "validation_blocked": True,
+            "error": f"Validator crashed: {e}. Fix the validator before advancing.",
+        }, indent=2), file=sys.stderr)
+        sys.exit(1)
 
     try:
         reg.advance_pipeline(args.project, args.state)
@@ -159,7 +166,7 @@ def _auto_validate_before_advance(project: str, next_state: str) -> None:
     import subprocess
 
     # Find active run
-    artifacts_dir = Path.home() / ".swarm-ai" / "SwarmWS" / "Projects" / project / ".artifacts" / "runs"
+    artifacts_dir = _get_workspace() / "Projects" / project / ".artifacts" / "runs"
     if not artifacts_dir.exists():
         return
 
@@ -211,9 +218,11 @@ def _auto_validate_before_advance(project: str, next_state: str) -> None:
             if warnings:
                 print(json.dumps({"validation_warnings": warnings}), file=sys.stderr)
     except subprocess.TimeoutExpired:
-        pass  # Don't block on validator timeout
-    except (json.JSONDecodeError, OSError):
-        pass  # Don't block on validator parse errors
+        # FAIL-CLOSED: validator timeout → block advancement (F3 fix)
+        raise RuntimeError("Pipeline validator timed out (>10s) — cannot verify stage")
+    except (json.JSONDecodeError, OSError) as exc:
+        # FAIL-CLOSED: validator parse error → block advancement (F3 fix)
+        raise RuntimeError(f"Pipeline validator produced invalid output: {exc}")
 
 
 def cmd_learn(args, reg: ArtifactRegistry) -> None:
