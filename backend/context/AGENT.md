@@ -649,8 +649,8 @@ Scan all modified source files for issues by severity:
 
 | Severity | Action | Categories |
 |----------|--------|------------|
-| 🔴 High | **Auto-fix** | Dead code, duplicate logic, missing error handling, type safety violations, memory leaks, SOLID violations, **unreachable state machine states**, **concurrent async without ordering guarantees** |
-| 🟡 Medium | **Auto-fix** | Magic numbers, complex conditionals (>3 branches), unclear naming, tight coupling, inefficient algorithms, missing abstractions, **unsanitized strings in structured formats (HTML/JSON/SQL)**, **setTimeout for state propagation** |
+| 🔴 High | **Auto-fix** | Dead code, duplicate logic, missing error handling, type safety violations, memory leaks, SOLID violations, **unreachable state machine states**, **concurrent async without ordering guarantees**, **schema migration without rollback path** |
+| 🟡 Medium | **Auto-fix** | Magic numbers, complex conditionals (>3 branches), unclear naming, tight coupling, inefficient algorithms, missing abstractions, **unsanitized strings in structured formats (HTML/JSON/SQL)**, **setTimeout for state propagation**, **non-deterministic output ordering (set/dict/os.listdir)**, **YAGNI — interface with ≤1 implementation, config with 1 possible value** |
 | 🟢 Low | **Note only** | Minor readability, formatting, optional comments |
 
 **Process:** List findings briefly → fix 🔴 and 🟡 in-place → note what was fixed. Maintain existing functionality — refactors only, not feature changes. If nothing found, one line and move on.

@@ -17,7 +17,7 @@ Sub-agent prompts are in: backend/skills/s_autonomous-pipeline/review-agents/
 
 1. Code Quality Agent (review-agents/code-quality.md)
    → TECH.md conformance, integration trace, replace/move parity,
-     runtime patterns RP1-RP26, depth & seam analysis
+     runtime patterns RP1-RP29, depth & seam analysis
 
 2. Security & Safety Agent (review-agents/security-safety.md)
    → Confidence-gated security scan, wire test, blast radius trace
@@ -167,7 +167,7 @@ discoverability hint, Escape propagation). Engineering-complete != user-complete
 
 ### 6. Runtime Pattern Checklist
 
-**BLOCKING: Read `backend/skills/s_autonomous-pipeline/REVIEW_PATTERNS.md` and apply RP1-RP26.**
+**BLOCKING: Read `backend/skills/s_autonomous-pipeline/REVIEW_PATTERNS.md` and apply RP1-RP29.**
 
 Scan the changeset for known bug patterns. For each pattern that applies, explicitly verify the fix is in place. Do NOT skip patterns -- a "no" answer is fine, but silence means unchecked.
 

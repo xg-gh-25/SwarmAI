@@ -17,7 +17,7 @@ or UX — other agents handle those.
    - Dead orphan detection: old function with 0 remaining callers
    - Control-flow preservation: moved code executes at same point
    - Duplicate detection: grep for same method name in same file
-4. **Runtime Pattern Checklist** — Read REVIEW_PATTERNS.md and apply RP1-RP26.
+4. **Runtime Pattern Checklist** — Read REVIEW_PATTERNS.md and apply RP1-RP29.
    For each applicable pattern, explicitly verify. Silence = unchecked.
 5. **Depth & Seam Analysis** — For each new file:
    - Deep (small interface, significant hidden implementation) = good
