@@ -445,3 +445,164 @@ class TestProvisionerCleanupOrder:
         # IAM role delete comes last
         iam_pos = source.find("delete_role(")
         assert sg_pos < iam_pos, "SG delete must come before IAM delete"
+
+
+# ── Hive Hardening Tests (H1-H5) ────────────────────────────────
+
+
+class TestH4CaddyfileHTTPOnly:
+    """H4: Caddyfile must use :80 (HTTP-only), not a domain name.
+
+    CloudFront connects to origin via HTTP (OriginProtocolPolicy: http-only).
+    If Caddy uses a domain name, it enables auto-HTTPS and returns 308 redirects
+    → CloudFront gets a redirect loop.
+    """
+
+    def test_repo_caddyfile_uses_port_80(self):
+        """hive/Caddyfile must bind to :80, not a domain name."""
+        caddyfile = Path(__file__).parent.parent.parent / "hive" / "Caddyfile"
+        content = caddyfile.read_text()
+        # Must contain ":80 {" as the site block
+        assert ":80 {" in content, "Caddyfile must use :80, not a domain name"
+        # Must NOT contain env-var domain reference
+        assert "{$HIVE_DOMAIN" not in content, "Caddyfile must not use HIVE_DOMAIN"
+
+    def test_user_data_caddyfile_uses_port_80(self):
+        """user_data.py inline Caddyfile must also bind to :80."""
+        from hive.user_data import render_user_data
+
+        result = render_user_data(
+            s3_bucket="b", version="1.0.0",
+            auth_user="admin", auth_hash="$2a$14$test", region="us-east-1",
+        )
+        assert ":80 {" in result, "user_data Caddyfile must use :80"
+        assert "{$HIVE_DOMAIN" not in result
+
+
+class TestH5UpdateNeverOverwritesCaddyfile:
+    """H5: Update script must never copy repo Caddyfile to /etc/caddy/.
+
+    The deployed Caddyfile has inline bcrypt credentials. The repo Caddyfile
+    has placeholders. Overwriting breaks auth permanently.
+    """
+
+    def test_update_script_excludes_caddyfile(self):
+        """Update script rsync of hive/ excludes Caddyfile."""
+        import inspect
+        from hive.provisioner import HiveProvisioner
+
+        source = inspect.getsource(HiveProvisioner.update)
+        # Must exclude Caddyfile in hive rsync
+        assert "--exclude='Caddyfile'" in source or '--exclude="Caddyfile"' in source, \
+            "hive/ rsync must exclude Caddyfile"
+
+    def test_update_script_no_caddyfile_copy(self):
+        """Update script must not cp Caddyfile to /etc/caddy/."""
+        import inspect
+        from hive.provisioner import HiveProvisioner
+
+        source = inspect.getsource(HiveProvisioner.update)
+        assert "cp /tmp/hive-new/hive/Caddyfile /etc/caddy/" not in source, \
+            "Update must not copy repo Caddyfile to deployed Caddyfile"
+        assert "caddy reload" not in source, \
+            "Update must not reload Caddy (Caddyfile unchanged)"
+
+
+class TestH2SystemctlTimeout:
+    """H2: systemctl restart must have a timeout guard."""
+
+    def test_update_script_uses_no_block(self):
+        """systemctl restart uses --no-block + poll."""
+        import inspect
+        from hive.provisioner import HiveProvisioner
+
+        source = inspect.getsource(HiveProvisioner.update)
+        assert "--no-block" in source, "systemctl restart must use --no-block"
+        assert "is-active --quiet swarmai-hive" in source, \
+            "Must poll systemctl is-active after restart"
+        assert "exit 1" in source, "Must exit 1 if service fails to start"
+
+
+class TestH1PostUpdateHealthVerification:
+    """H1: update() must verify health via SSM after SSM success."""
+
+    @pytest.mark.asyncio
+    async def test_update_calls_health_check_after_ssm(self):
+        """After SSM succeeds, _wait_healthy_via_ssm must be called."""
+        from hive.provisioner import HiveProvisioner
+
+        p = HiveProvisioner(Path("/tmp/test.db"))
+        mock_instance = {
+            "id": "inst-1", "name": "test-hive", "account_ref": "acc-1",
+            "region": "us-east-1", "ec2_instance_id": "i-abc123",
+            "s3_bucket": "swarmai-hive-test",
+        }
+        mock_account = {
+            "auth_method": "access_keys",
+            "auth_config": '{"access_key_id": "AK", "secret_access_key": "SK"}',
+        }
+
+        async def fake_to_thread(fn, *args, **kwargs):
+            return ("Success", "Update complete")
+
+        with patch.object(p, "_get_instance", new_callable=AsyncMock, return_value=mock_instance), \
+             patch.object(p, "_get_account", new_callable=AsyncMock, return_value=mock_account), \
+             patch.object(p, "_update_instance", new_callable=AsyncMock), \
+             patch.object(p, "_sync_release_to_s3", new_callable=AsyncMock), \
+             patch.object(p, "_wait_healthy_via_ssm", new_callable=AsyncMock, return_value=True) as mock_health, \
+             patch.object(p, "_get_session") as mock_session_fn, \
+             patch("hive.provisioner.asyncio.to_thread", side_effect=fake_to_thread):
+
+            mock_session = MagicMock()
+            mock_session_fn.return_value = mock_session
+
+            await p.update("inst-1", "1.9.3")
+
+            # Health check must be called after SSM
+            mock_health.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_update_fails_if_health_check_fails(self):
+        """If health check fails after SSM success, update raises."""
+        from hive.provisioner import HiveProvisioner
+
+        p = HiveProvisioner(Path("/tmp/test.db"))
+        mock_instance = {
+            "id": "inst-1", "name": "test-hive", "account_ref": "acc-1",
+            "region": "us-east-1", "ec2_instance_id": "i-abc123",
+            "s3_bucket": "swarmai-hive-test",
+        }
+        mock_account = {
+            "auth_method": "access_keys",
+            "auth_config": '{"access_key_id": "AK", "secret_access_key": "SK"}',
+        }
+
+        async def fake_to_thread(fn, *args, **kwargs):
+            return ("Success", "Update complete")
+
+        with patch.object(p, "_get_instance", new_callable=AsyncMock, return_value=mock_instance), \
+             patch.object(p, "_get_account", new_callable=AsyncMock, return_value=mock_account), \
+             patch.object(p, "_update_instance", new_callable=AsyncMock), \
+             patch.object(p, "_sync_release_to_s3", new_callable=AsyncMock), \
+             patch.object(p, "_wait_healthy_via_ssm", new_callable=AsyncMock, return_value=False), \
+             patch.object(p, "_get_session") as mock_session_fn, \
+             patch("hive.provisioner.asyncio.to_thread", side_effect=fake_to_thread):
+
+            mock_session = MagicMock()
+            mock_session_fn.return_value = mock_session
+
+            with pytest.raises(RuntimeError, match="service unreachable"):
+                await p.update("inst-1", "1.9.3")
+
+
+class TestH3HealthProxyFollowRedirects:
+    """H3: Health proxy must follow HTTP redirects (Caddy 308)."""
+
+    def test_health_proxy_has_follow_redirects(self):
+        """httpx.AsyncClient must use follow_redirects=True."""
+        import inspect
+        from routers.hive import health_proxy
+
+        source = inspect.getsource(health_proxy)
+        assert "follow_redirects=True" in source, \
+            "Health proxy must follow redirects to handle Caddy 308"

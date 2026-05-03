@@ -988,17 +988,26 @@ mkdir -p /tmp/hive-new
 tar xzf /tmp/hive-update.tar.gz --strip-components=1 -C /tmp/hive-new/
 rsync -a --delete /tmp/hive-new/backend/ /opt/swarmai/backend/ --exclude='.venv'
 rsync -a --delete /tmp/hive-new/desktop/dist/ /opt/swarmai/desktop/dist/
-rsync -a /tmp/hive-new/hive/ /opt/swarmai/hive/
+rsync -a /tmp/hive-new/hive/ /opt/swarmai/hive/ --exclude='Caddyfile'
 cd /opt/swarmai/backend && sudo -u swarm .venv/bin/pip install -q -e .
-# Reload Caddy if Caddyfile changed, restart backend
-if diff -q /tmp/hive-new/hive/Caddyfile /etc/caddy/Caddyfile >/dev/null 2>&1; then
-  echo "Caddyfile unchanged"
-else
-  echo "Caddyfile changed — updating and reloading Caddy"
-  cp /tmp/hive-new/hive/Caddyfile /etc/caddy/Caddyfile
-  caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 || true
+# NOTE: /etc/caddy/Caddyfile is NEVER updated from the repo copy.
+# The deployed Caddyfile has inline bcrypt auth written by user_data.py.
+# The repo copy has env-var placeholders. Overwriting would break auth.
+# Caddy config changes require a dedicated SSM command.
+systemctl restart swarmai-hive --no-block
+echo "Waiting for swarmai-hive to start..."
+for i in $(seq 1 30); do
+  if systemctl is-active --quiet swarmai-hive; then
+    echo "swarmai-hive active after ${{i}}s"
+    break
+  fi
+  sleep 1
+done
+if ! systemctl is-active --quiet swarmai-hive; then
+  echo "ERROR: swarmai-hive failed to start within 30s"
+  systemctl status swarmai-hive --no-pager || true
+  exit 1
 fi
-systemctl restart swarmai-hive
 rm -rf /tmp/hive-new /tmp/hive-update.tar.gz
 echo "=== Update complete ==="
 """
@@ -1028,8 +1037,21 @@ echo "=== Update complete ==="
 
         status, output = await asyncio.to_thread(_run_command)
         if status == "Success":
-            await self._update_instance(instance_id, version=version)
-            logger.info("Hive %s updated to v%s", instance["name"], version)
+            # H1: Verify service is actually reachable before marking version
+            healthy = await self._wait_healthy_via_ssm(
+                session, ec2_id, region, timeout=60
+            )
+            if healthy:
+                await self._update_instance(instance_id, version=version)
+                logger.info("Hive %s updated to v%s (health verified)", instance["name"], version)
+            else:
+                await self._update_instance(
+                    instance_id,
+                    error_message=f"Update deployed but health check failed after 60s",
+                )
+                raise RuntimeError(
+                    f"Hive {instance['name']} update to v{version}: SSM succeeded but service unreachable"
+                )
         else:
             await self._update_instance(
                 instance_id,
