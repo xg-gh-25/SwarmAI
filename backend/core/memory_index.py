@@ -164,14 +164,25 @@ def _extract_keywords(entry_text: str) -> list[str]:
     """
     tokens = re.findall(r"[\w\-]+", entry_text, re.UNICODE)
 
+    # Detect if token contains CJK characters (U+4E00–U+9FFF)
+    _cjk_re = re.compile(r"[一-鿿]")
+
     # Score tokens by distinctiveness
     scored: dict[str, float] = {}
     for token in tokens:
         t_lower = token.lower()
-        if len(t_lower) <= 2 or t_lower in _STOP_WORDS:
+        is_cjk = bool(_cjk_re.search(token))
+
+        # Length filter: 2-char CJK words (竞品, 测试) are meaningful;
+        # 2-char English tokens (is, at, to) are noise.
+        min_len = 2 if is_cjk else 3
+        if len(t_lower) < min_len or t_lower in _STOP_WORDS:
             continue
 
         score = 0.0
+        # CJK tokens are inherently distinctive — boost them
+        if is_cjk:
+            score += 2.0
         # Technical terms (contains underscore, hyphen, or ALL_CAPS)
         if "_" in token or "-" in token:
             score += 2.0
