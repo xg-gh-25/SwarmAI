@@ -1093,10 +1093,10 @@ class HiveProvisioner:
 set -euo pipefail
 echo "=== Updating to v{version} ==="
 
-# G7: Full backup for rollback — single snapshot of entire install dir.
-# Denylist approach: backup everything, restore everything. No allowlist drift.
+# G7: Backup for rollback — exclude .venv (~300MB, never overwritten by rsync).
+# Same denylist as deploy: backup what deploy touches, skip what it skips.
 echo "Backing up current installation..."
-cp -a /opt/swarmai /opt/swarmai.bak
+rsync -a --exclude='backend/.venv' /opt/swarmai/ /opt/swarmai.bak/
 
 # Download and extract new version
 aws s3 cp s3://{bucket}/v{version}/swarmai-hive-v{version}-linux-arm64.tar.gz /tmp/hive-update.tar.gz --region {region}
@@ -1131,10 +1131,12 @@ done
 if ! systemctl is-active --quiet swarmai-hive; then
   echo "ERROR: swarmai-hive failed to start within 30s"
   systemctl status swarmai-hive --no-pager || true
-  # G7: Rollback — restore entire backup (same scope as deploy)
+  # G7: Atomic rollback — mv swap avoids gap where install dir doesn't exist.
+  # If mv fails (disk error), /opt/swarmai still exists with new (broken) code
+  # rather than being deleted entirely.
   echo "Rolling back to previous version..."
-  rm -rf /opt/swarmai
-  mv /opt/swarmai.bak /opt/swarmai
+  mv /opt/swarmai /opt/swarmai.failed && mv /opt/swarmai.bak /opt/swarmai
+  rm -rf /opt/swarmai.failed
   systemctl restart swarmai-hive --no-block || true
   exit 1
 fi
@@ -1143,8 +1145,8 @@ fi
 ACTUAL_V=$(curl -sf http://127.0.0.1:18321/health 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || echo "")
 if [ -n "$ACTUAL_V" ] && [ "$ACTUAL_V" != "{version}" ]; then
   echo "ERROR: Expected v{version} but health reports v$ACTUAL_V — rolling back"
-  rm -rf /opt/swarmai
-  mv /opt/swarmai.bak /opt/swarmai
+  mv /opt/swarmai /opt/swarmai.failed && mv /opt/swarmai.bak /opt/swarmai
+  rm -rf /opt/swarmai.failed
   systemctl restart swarmai-hive --no-block || true
   exit 1
 fi

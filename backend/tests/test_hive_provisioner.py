@@ -539,23 +539,30 @@ class TestUpdateDenylistDesign:
 class TestRollbackSymmetry:
     """Rollback scope must equal deploy scope — backup/restore the same directory."""
 
-    def test_backup_is_full_install_dir(self):
-        """Backup must copy entire /opt/swarmai, not individual subdirectories."""
+    def test_backup_excludes_venv(self):
+        """Backup must exclude .venv to save disk (~300MB)."""
         import inspect
         from hive.provisioner import HiveProvisioner
 
         source = inspect.getsource(HiveProvisioner.update)
-        assert "cp -a /opt/swarmai /opt/swarmai.bak" in source, \
-            "Backup must be entire install dir (denylist = no drift)"
+        assert "/opt/swarmai/ /opt/swarmai.bak/" in source, \
+            "Backup must use rsync from install dir to backup dir"
+        assert "backend/.venv" in source, \
+            "Backup must exclude .venv (same denylist as deploy)"
 
-    def test_rollback_restores_full_install_dir(self):
-        """Rollback must restore entire backup, not individual pieces."""
+    def test_rollback_is_atomic_mv_swap(self):
+        """Rollback must use mv swap (not rm + mv) to avoid install dir gap."""
         import inspect
         from hive.provisioner import HiveProvisioner
 
         source = inspect.getsource(HiveProvisioner.update)
+        assert "mv /opt/swarmai /opt/swarmai.failed" in source, \
+            "Rollback must mv current to .failed first (atomic swap)"
         assert "mv /opt/swarmai.bak /opt/swarmai" in source, \
-            "Rollback must restore entire backup atomically"
+            "Rollback must mv backup to install dir"
+        # Must NOT have rm -rf /opt/swarmai as rollback step
+        assert "rm -rf /opt/swarmai\n" not in source, \
+            "Rollback must not rm -rf install dir (non-atomic)"
 
 
 class TestVersionValidation:
@@ -870,7 +877,7 @@ class TestG7PreUpdateBackup:
 
     @pytest.mark.asyncio
     async def test_update_script_has_backup(self):
-        """SSM update script must create full backup before changes."""
+        """SSM update script must create backup before changes."""
         import inspect
         from hive.provisioner import HiveProvisioner
 
