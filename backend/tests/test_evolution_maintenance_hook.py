@@ -314,7 +314,7 @@ class TestEvolutionWeeklyTrigger:
         state_file.write_text(_days_ago(10), encoding="utf-8")
 
         called_with = []
-        def _mock_cycle(skills_dir, transcripts_dir, evals_dir):
+        def _mock_cycle(skills_dir, transcripts_dir, evals_dir, *, dry_run=True):
             called_with.append((skills_dir, transcripts_dir, evals_dir))
             return CycleReport(
                 cycle_id="test",
