@@ -487,7 +487,7 @@ def _write_l4_json(signals: list[RawSignal], scored_items: list[dict]) -> None:
     # always surface in the digest and Slack notifications.
     merged.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
     zh_items = [it for it in merged if it.get("lang") == "zh"
-                or any(ord(c) > 0x4e00 for c in it.get("title", ""))]
+                or any(ord(c) >= 0x4e00 for c in it.get("title", ""))]
     en_items = [it for it in merged if it not in zh_items]
     _ZH_RESERVE = 5
     zh_take = zh_items[:_ZH_RESERVE]

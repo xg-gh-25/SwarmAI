@@ -465,11 +465,14 @@ def _extract_assistant_conclusions(
         return []
 
 
-# Directive detection heuristic: short user messages that look like decisions
+# Directive detection heuristic: short user messages that look like decisions.
+# CJK words are matched separately — \b doesn't fire between CJK characters
+# because they are all \w in Python regex (LL01/LL02).
 _DIRECTIVE_WORDS = re.compile(
     r"\b(?:approve|approved|go|yes|do it|ship|commit|use|skip|defer|"
     r"ok|agreed|proceed|accept|confirm|implement|run|push|merge|"
-    r"approach|option|方案|批准|同意|跑|提交|用)\b",
+    r"approach|option)\b"
+    r"|(?:方案|批准|同意|跑|提交|用)",
     re.IGNORECASE,
 )
 
