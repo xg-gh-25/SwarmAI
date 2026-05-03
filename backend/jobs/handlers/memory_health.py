@@ -42,16 +42,19 @@ MAX_OUTPUT_TOKENS = 2048
 # Covers: English technical, CJK, conceptual, COE, architectural.
 # Updated when major MEMORY.md restructuring happens.
 _RECALL_QUERIES: list[tuple[str, list[str]]] = [
+    # English technical
     ("pipeline confidence", ["LL24", "LL25", "KD06"]),
-    ("单进程", ["KD26"]),
     ("OOM SIGKILL", ["COE05", "RC08"]),
     ("sovereignty", ["KD12"]),
-    ("Slack channel", ["LL10", "COE02"]),
-    ("测试", ["KD23"]),
-    ("resume context", ["RC01", "RC10"]),
     ("release scope", ["KD04", "LL15"]),
     ("DDD project", ["RC14", "KD28"]),
+    # CJK precise
+    ("单进程", ["KD26"]),
+    ("测试", ["KD23"]),
     ("越用越聪明", ["KD07"]),
+    # CJK natural language (bidirectional substring)
+    ("竞品分析的结论是什么", ["LL24"]),
+    ("CMHK 周报怎么做的", ["RC02", "RC09"]),
 ]
 _RECALL_PASS_THRESHOLD = 7  # at least 7/10 must hit
 
