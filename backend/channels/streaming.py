@@ -299,6 +299,64 @@ async def end_thinking_phase(ctx: StreamContext) -> None:
         logger.debug("end_thinking_phase: append_stream failed")
 
 
+async def handle_tool_use(ctx: StreamContext, tool_name: str) -> None:
+    """Handle a tool_use event during streaming.
+
+    Closes any open thinking phase, sets the tool emoji reaction, and
+    appends a ``_Using tool: {name}..._`` status line to the stream
+    (native or legacy path).  Shared by the main event loop and the
+    follow-up (continue_with_answer) loop so behaviour stays identical.
+    """
+    if ctx.in_thinking:
+        await end_thinking_phase(ctx)
+
+    set_reaction(ctx, resolve_tool_emoji(tool_name))
+
+    if not ctx.streaming_msg_id:
+        return
+
+    tool_status = f"\n\n_Using tool: {tool_name}..._"
+
+    if ctx.native_streaming:
+        # Cancel pending throttle timer to prevent out-of-order delivery,
+        # flush buffered tokens first, then append tool status.
+        if ctx.native_flush_handle:
+            ctx.native_flush_handle.cancel()
+            ctx.native_flush_handle = None
+        pending = ""
+        if ctx.native_pending_buf:
+            pending = "".join(ctx.native_pending_buf)
+            ctx.native_pending_buf.clear()
+        # Drain stream_buf for bookkeeping
+        if ctx.stream_buf:
+            ctx.stream_flushed += "".join(ctx.stream_buf)
+            ctx.stream_buf.clear()
+        try:
+            await ctx.adapter.append_stream(
+                ctx.external_chat_id,
+                ctx.streaming_msg_id,
+                pending + tool_status,
+            )
+        except Exception:
+            pass
+    else:
+        # Legacy: flush buffer then update_message
+        await legacy_flush(ctx)
+        status = (
+            ctx.stream_flushed + tool_status
+            if ctx.stream_flushed
+            else tool_status.lstrip("\n")
+        )
+        try:
+            await ctx.adapter.update_message(
+                external_chat_id=ctx.external_chat_id,
+                message_id=ctx.streaming_msg_id,
+                text=status,
+            )
+        except Exception:
+            pass
+
+
 async def cleanup_stream(ctx: StreamContext) -> None:
     """Clean up streaming resources (timers, tasks, buffer drain)."""
     ctx.stream_done.set()
