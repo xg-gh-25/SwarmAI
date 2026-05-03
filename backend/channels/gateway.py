@@ -1347,9 +1347,50 @@ class ChannelGateway:
                                         if t:
                                             reply_text = t
                             elif fe_type == "tool_use" and ctx.streaming:
-                                set_reaction(ctx, resolve_tool_emoji(
-                                    follow_event.get("name", ""),
-                                ))
+                                # Close thinking phase before tool — mirrors
+                                # the main-loop guard at L1235-1236.
+                                if ctx.in_thinking:
+                                    await end_thinking_phase(ctx)
+                                tool_name = follow_event.get("name", "")
+                                set_reaction(ctx, resolve_tool_emoji(tool_name))
+                                # Append tool status to stream (mirrors main loop)
+                                if ctx.streaming_msg_id:
+                                    tool_status = f"\n\n_Using tool: {tool_name}..._"
+                                    if ctx.native_streaming:
+                                        if ctx.native_flush_handle:
+                                            ctx.native_flush_handle.cancel()
+                                            ctx.native_flush_handle = None
+                                        pending = ""
+                                        if ctx.native_pending_buf:
+                                            pending = "".join(ctx.native_pending_buf)
+                                            ctx.native_pending_buf.clear()
+                                        if ctx.stream_buf:
+                                            ctx.stream_flushed += "".join(ctx.stream_buf)
+                                            ctx.stream_buf.clear()
+                                        try:
+                                            await adapter.append_stream(
+                                                ctx.external_chat_id,
+                                                ctx.streaming_msg_id,
+                                                pending + tool_status,
+                                            )
+                                        except Exception:
+                                            pass
+                                    else:
+                                        # Legacy: flush buffer then update_message
+                                        await legacy_flush(ctx)
+                                        status = (
+                                            ctx.stream_flushed + tool_status
+                                            if ctx.stream_flushed
+                                            else tool_status.lstrip("\n")
+                                        )
+                                        try:
+                                            await adapter.update_message(
+                                                external_chat_id=ctx.external_chat_id,
+                                                message_id=ctx.streaming_msg_id,
+                                                text=status,
+                                            )
+                                        except Exception:
+                                            pass
                             elif fe_type == "result":
                                 sub = follow_event.get("subtype", "")
                                 if sub and "error" in sub:

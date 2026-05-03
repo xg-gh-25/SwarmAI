@@ -1165,9 +1165,9 @@ def _extract_run_metrics(project: str, run_id: str, run_state: dict) -> dict:
         stage_name = s.get("stage", "?")
 
         if stage_name == "review":
-            fc = data.get("findings_count", 0)
+            fc = data.get("findings_count")
             findings_list = data.get("findings", [])
-            review_findings = fc if fc else (len(findings_list) if isinstance(findings_list, list) else 0)
+            review_findings = fc if fc is not None else (len(findings_list) if isinstance(findings_list, list) else 0)
             rp = data.get("runtime_patterns", {})
             review_rp_checked = rp.get("checked", 0) if isinstance(rp, dict) else 0
 
@@ -1198,7 +1198,7 @@ def _extract_run_metrics(project: str, run_id: str, run_state: dict) -> dict:
 
         elif stage_name == "build":
             fc = data.get("files_changed", [])
-            build_files_changed = len(fc) if isinstance(fc, list) else fc
+            build_files_changed = len(fc) if isinstance(fc, list) else (fc if isinstance(fc, int) else 0)
             tdd = data.get("tdd", {})
             build_tests_generated = tdd.get("tests_generated", tdd.get("smoke_tests", 0)) if isinstance(tdd, dict) else 0
 
