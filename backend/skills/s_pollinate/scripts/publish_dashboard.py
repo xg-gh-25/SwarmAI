@@ -192,41 +192,229 @@ def generate_markdown(content_dir: str, assets: list, strategy: dict) -> str:
 
 
 def generate_html(content_dir: str, assets: list, strategy: dict) -> str:
-    """Generate HTML publish dashboard for browser viewing."""
+    """Generate Pollinate Studio HTML — interactive review + publish page."""
+    import base64
+
     topic = strategy.get("message", os.path.basename(content_dir))
+    abs_dir = os.path.abspath(content_dir)
 
-    channels = {}
-    for a in assets:
-        ch = a["channel"]
-        if ch not in channels:
-            channels[ch] = []
-        channels[ch].append(a)
+    # Load publish kit if exists
+    publish_kit = {"title": "", "body": "", "tags": ""}
+    for kit_file in [
+        "deliver/xiaohongshu/publish-kit.md",
+        "deliver/xiaohongshu-publish-kit.md",
+        "xiaohongshu-publish-kit.md",
+    ]:
+        kit_path = os.path.join(content_dir, kit_file)
+        if os.path.isfile(kit_path):
+            with open(kit_path, "r", encoding="utf-8") as f:
+                kit_text = f.read()
+            # Parse sections — handle multiple publish-kit formats
+            import re
+            # Format A: "## 标题\n...", "## 正文\n...", "## 标签\n..."
+            # Format B: "### Title\n...", "### 正文\n...", "### 标签\n..."
+            # Format C: "### 标题\n...", "### 正文\n...", "## Tags\n..."
+            title_m = (re.search(r"##+ (?:标题|Title)[^\n]*\n(.+?)(?=\n##|\Z)", kit_text, re.DOTALL)
+                       or re.search(r"(?:标题|Title)\n(.+?)(?=\n##|\n###|\Z)", kit_text, re.DOTALL))
+            body_m = (re.search(r"##+ 正文\n(.+?)(?=\n##+ (?:标签|Tags)|\Z)", kit_text, re.DOTALL)
+                      or re.search(r"正文\n(.+?)(?=\n##+ (?:标签|Tags|发布)|\Z)", kit_text, re.DOTALL))
+            tags_m = (re.search(r"##+ (?:标签|Tags)\n(.+?)(?=\n##|\Z)", kit_text, re.DOTALL)
+                      or re.search(r"(#\w+(?:\s+#\w+)+)", kit_text))
+            if title_m:
+                publish_kit["title"] = title_m.group(1).strip()
+            if body_m:
+                publish_kit["body"] = body_m.group(1).strip()
+            if tags_m:
+                publish_kit["tags"] = tags_m.group(1).strip()
+            break
 
-    rows = ""
-    for ch in channels:
-        for i, a in enumerate(channels[ch]):
-            ch_label = a["channel_label"] if i == 0 else ""
-            rowspan = f' rowspan="{len(channels[ch])}"' if i == 0 else ""
-            ch_cell = f'<td{rowspan} style="font-size:16px;font-weight:600;vertical-align:top;">{ch_label}</td>' if i == 0 else ""
-            rows += f'<tr>{ch_cell}<td>{a["description"]}</td><td>{a["format"]}</td><td>{a["size"]}</td><td><code>{a["file"]}</code></td></tr>\n'
+    # Find poster image — search broadly across common paths and names
+    poster_html = '<div class="placeholder">无封面图</div>'
+    poster_path = ""
+    # Also search deliver/{channel}/ for copied posters
+    poster_candidates = [
+        "tracks/poster/cover_3x4.png", "tracks/poster/poster_3x4.png",
+        "tracks/poster/cover.png", "poster_3x4.png",
+        "tracks/poster/poster-xiaohongshu-3x4.png",
+        "tracks/poster/poster-cover.png", "tracks/poster/poster-matrix.png",
+        "deliver/xiaohongshu/cover_3x4.png", "deliver/xiaohongshu/poster-cover.png",
+        "deliver/xiaohongshu/poster-matrix.png",
+    ]
+    # Also glob for any PNG in poster/ and deliver/xiaohongshu/
+    import glob
+    for pattern in ["tracks/poster/*.png", "deliver/xiaohongshu/*.png"]:
+        for p in glob.glob(os.path.join(content_dir, pattern)):
+            rel = os.path.relpath(p, content_dir)
+            if rel not in poster_candidates:
+                poster_candidates.append(rel)
+    for candidate in poster_candidates:
+        p = os.path.join(content_dir, candidate)
+        if os.path.isfile(p):
+            poster_path = p
+            try:
+                with open(p, "rb") as f:
+                    b64 = base64.b64encode(f.read()).decode()
+                poster_html = f'<img src="data:image/png;base64,{b64}" class="poster-img" alt="Cover">'
+            except Exception:
+                poster_html = f'<img src="file://{os.path.abspath(p)}" class="poster-img" alt="Cover">'
+            break
+
+    # Find video
+    video_html = ""
+    video_path = ""
+    for candidate in [
+        "tracks/video/final_video.mp4", "video/final_video.mp4",
+    ]:
+        p = os.path.join(content_dir, candidate)
+        if os.path.isfile(p):
+            video_path = os.path.abspath(p)
+            video_html = f'''
+            <div class="section">
+              <h2>🎬 视频预览</h2>
+              <video controls width="320" style="border-radius:12px; max-height:568px;">
+                <source src="file://{video_path}" type="video/mp4">
+              </video>
+              <div style="margin-top:8px;">
+                <button class="btn" onclick="openInFinder('{video_path}')">📂 Open in Finder</button>
+              </div>
+            </div>'''
+            break
+
+    # Escape for JS strings
+    def js_escape(s):
+        return s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "")
+
+    title_js = js_escape(publish_kit["title"])
+    body_js = js_escape(publish_kit["body"])
+    tags_js = js_escape(publish_kit["tags"])
+    # Plain text body (strip markdown bold)
+    body_plain = publish_kit["body"].replace("**", "")
 
     return f"""<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>Publish Dashboard</title>
+<html lang="zh-CN"><head><meta charset="UTF-8">
+<title>🐝 Pollinate Studio — {topic}</title>
 <style>
-body {{ font-family: -apple-system, 'PingFang SC', sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; background: #fafafa; }}
-h1 {{ font-size: 24px; }}
-table {{ width: 100%; border-collapse: collapse; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
-th {{ background: #1a1a2e; color: #fff; padding: 12px 16px; text-align: left; font-size: 13px; }}
-td {{ padding: 10px 16px; border-bottom: 1px solid #eee; font-size: 14px; }}
-code {{ background: #f0f0f0; padding: 2px 6px; border-radius: 4px; font-size: 12px; }}
-.meta {{ color: #666; font-size: 14px; margin-bottom: 20px; }}
+* {{ margin:0; padding:0; box-sizing:border-box; }}
+body {{ font-family: -apple-system, 'PingFang SC', 'Noto Sans SC', sans-serif; background: #0f0f1a; color: #e0e0e0; min-height: 100vh; }}
+.header {{ background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); padding: 24px 32px; border-bottom: 2px solid #FF6B35; }}
+.header h1 {{ font-size: 22px; color: #FF6B35; }} .header .meta {{ color: #888; font-size: 13px; margin-top: 4px; }}
+.container {{ max-width: 1100px; margin: 0 auto; padding: 24px; display: grid; grid-template-columns: 320px 1fr; gap: 24px; }}
+.section {{ background: #1a1a2e; border-radius: 16px; padding: 24px; margin-bottom: 16px; }}
+.section h2 {{ font-size: 16px; color: #FF6B35; margin-bottom: 12px; }}
+.poster-img {{ width: 100%; border-radius: 12px; }}
+.placeholder {{ width: 100%; height: 400px; background: #252540; border-radius: 12px; display: flex; align-items: center; justify-content: center; color: #555; }}
+textarea {{ width: 100%; background: #12122a; color: #e0e0e0; border: 1px solid #333; border-radius: 8px; padding: 12px; font-size: 14px; font-family: inherit; resize: vertical; }}
+.btn {{ background: #FF6B35; color: #fff; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600; margin-right: 8px; margin-top: 8px; }}
+.btn:hover {{ background: #e55a2b; }}
+.btn-outline {{ background: transparent; border: 1px solid #FF6B35; color: #FF6B35; }}
+.btn-outline:hover {{ background: rgba(255,107,53,0.15); }}
+.btn-green {{ background: #00B894; }} .btn-green:hover {{ background: #00a383; }}
+.copy-ok {{ color: #00B894; font-size: 12px; margin-left: 8px; opacity: 0; transition: opacity 0.3s; }}
+.copy-ok.show {{ opacity: 1; }}
+.tags {{ display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }}
+.tag {{ background: #252540; color: #FF6B35; padding: 4px 10px; border-radius: 12px; font-size: 12px; }}
+.publish-actions {{ margin-top: 16px; padding-top: 16px; border-top: 1px solid #333; }}
+.status {{ display: inline-block; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; }}
+.status-draft {{ background: #333; color: #888; }}
+.status-ready {{ background: rgba(255,107,53,0.2); color: #FF6B35; }}
+@media (max-width: 768px) {{ .container {{ grid-template-columns: 1fr; }} }}
 </style></head><body>
-<h1>📋 Publish Dashboard</h1>
-<div class="meta"><strong>Topic:</strong> {topic}<br><strong>Outcome:</strong> {strategy.get('desired_outcome', 'N/A')}</div>
-<table>
-<tr><th>渠道</th><th>内容</th><th>格式</th><th>大小</th><th>文件</th></tr>
-{rows}
-</table>
+
+<div class="header">
+  <h1>🐝 Pollinate Studio</h1>
+  <div class="meta">{topic} · {strategy.get('desired_outcome', '')}</div>
+</div>
+
+<div class="container">
+  <!-- Left: Poster Preview -->
+  <div>
+    <div class="section">
+      <h2>🖼️ 封面</h2>
+      {poster_html}
+      <div style="margin-top:8px;">
+        <button class="btn btn-outline" onclick="openInFinder('{os.path.abspath(poster_path) if poster_path else ''}')">📂 Open File</button>
+      </div>
+    </div>
+    {video_html}
+  </div>
+
+  <!-- Right: Text + Publish -->
+  <div>
+    <div class="section">
+      <h2>📝 标题</h2>
+      <textarea id="title" rows="2">{publish_kit['title']}</textarea>
+      <button class="btn" onclick="copyField('title')">📋 Copy Title</button>
+      <span class="copy-ok" id="title-ok">✅ Copied</span>
+    </div>
+
+    <div class="section">
+      <h2>📝 正文</h2>
+      <textarea id="body" rows="12">{body_plain}</textarea>
+      <button class="btn" onclick="copyField('body')">📋 Copy Body</button>
+      <span class="copy-ok" id="body-ok">✅ Copied</span>
+    </div>
+
+    <div class="section">
+      <h2>🏷️ 标签</h2>
+      <div class="tags" id="tag-display"></div>
+      <button class="btn" onclick="copyTags()" style="margin-top:12px;">📋 Copy All Tags</button>
+      <span class="copy-ok" id="tags-ok">✅ Copied</span>
+    </div>
+
+    <div class="section">
+      <h2>🚀 发布到小红书</h2>
+      <div>
+        <span class="status status-ready">Ready to Publish</span>
+      </div>
+      <div class="publish-actions">
+        <button class="btn" onclick="copyAll()">📋 Copy All (Title + Body + Tags)</button>
+        <span class="copy-ok" id="all-ok">✅ Copied</span>
+        <br>
+        <button class="btn btn-green" onclick="window.open('https://creator.xiaohongshu.com/publish/publish','_blank')">
+          🔗 Open XHS Creator
+        </button>
+        <button class="btn btn-outline" onclick="openInFinder('{abs_dir}/deliver')">📂 Open Deliver Folder</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const TAGS = '{tags_js}'.split(/\\s+/).filter(t => t.startsWith('#'));
+const tagDisplay = document.getElementById('tag-display');
+TAGS.forEach(t => {{
+  const el = document.createElement('span');
+  el.className = 'tag';
+  el.textContent = t;
+  tagDisplay.appendChild(el);
+}});
+
+function copyField(id) {{
+  const el = document.getElementById(id);
+  navigator.clipboard.writeText(el.value);
+  flash(id + '-ok');
+}}
+function copyTags() {{
+  navigator.clipboard.writeText(TAGS.join(' '));
+  flash('tags-ok');
+}}
+function copyAll() {{
+  const title = document.getElementById('title').value;
+  const body = document.getElementById('body').value;
+  const tags = TAGS.join(' ');
+  navigator.clipboard.writeText(title + '\\n\\n' + body + '\\n\\n' + tags);
+  flash('all-ok');
+}}
+function flash(id) {{
+  const el = document.getElementById(id);
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2000);
+}}
+function openInFinder(path) {{
+  // file:// URL for local files — works when opened from file://
+  if (path) window.open('file://' + path);
+}}
+</script>
 </body></html>"""
 
 

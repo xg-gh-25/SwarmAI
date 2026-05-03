@@ -39,12 +39,13 @@ from .base import check_resume
 
 # Voice mapping: matches core/voice_synthesize.py VOICE_MAP
 # (voice_id, engine, polly_language_code)
+# I4: Only languages with channel configs + publish kits.
+# ja-JP and ko-KR removed — no channel YAMLs, templates, or publish kits exist.
+# Re-add when those channels are built out.
 VOICE_MAP = {
     "en-US": ("Ruth", "generative", "en-US"),
     "en-GB": ("Amy", "generative", "en-GB"),
     "zh-CN": ("Zhiyu", "neural", "cmn-CN"),       # generative not available
-    "ja-JP": ("Kazuha", "neural", "ja-JP"),        # generative not available
-    "ko-KR": ("Seoyeon", "generative", "ko-KR"),
 }
 
 # Polly neural/generative max text length

@@ -22,6 +22,7 @@ PLATFORM_SPECS = {
         "width": 3840, "height": 2160,
         "codec": "h264",
         "min_bitrate_kbps": 8000,
+        "target_bitrate_kbps": 16000,  # B5: two-tier — WARN if below target, FAIL if below min
         "min_duration_s": 180, "max_duration_s": 720,  # 3-12 min
         "audio_codec": "aac",
         "min_audio_bitrate_kbps": 192,
@@ -32,6 +33,7 @@ PLATFORM_SPECS = {
         "width": 3840, "height": 2160,
         "codec": "h264",
         "min_bitrate_kbps": 8000,
+        "target_bitrate_kbps": 16000,
         "min_duration_s": 180, "max_duration_s": 720,
         "audio_codec": "aac",
         "min_audio_bitrate_kbps": 192,
@@ -42,6 +44,7 @@ PLATFORM_SPECS = {
         "width": 2160, "height": 3840,
         "codec": "h264",
         "min_bitrate_kbps": 6000,
+        "target_bitrate_kbps": 16000,
         "min_duration_s": 30, "max_duration_s": 120,
         "audio_codec": "aac",
         "min_audio_bitrate_kbps": 192,
@@ -52,6 +55,7 @@ PLATFORM_SPECS = {
         "width": 2160, "height": 3840,
         "codec": "h264",
         "min_bitrate_kbps": 6000,
+        "target_bitrate_kbps": 16000,
         "min_duration_s": 30, "max_duration_s": 120,
         "audio_codec": "aac",
         "min_audio_bitrate_kbps": 192,
@@ -62,7 +66,8 @@ PLATFORM_SPECS = {
         "width": 2160, "height": 3840,
         "codec": "h264",
         "min_bitrate_kbps": 6000,
-        "min_duration_s": 30, "max_duration_s": 120,
+        "target_bitrate_kbps": 16000,
+        "min_duration_s": 30, "max_duration_s": 3600,  # C1: verified accounts support up to 60 min
         "audio_codec": "aac",
         "min_audio_bitrate_kbps": 192,
     },
@@ -166,19 +171,27 @@ def check_platform(info: dict, platform: str) -> dict:
             })
             results["passed"] = False
 
-        # Bitrate check
-        if v["bitrate_kbps"] >= spec["min_bitrate_kbps"]:
+        # Bitrate check — B5: two-tier (FAIL < min, WARN < target, PASS >= target)
+        target_kbps = spec.get("target_bitrate_kbps", spec["min_bitrate_kbps"])
+        if v["bitrate_kbps"] >= target_kbps:
             results["checks"].append({
                 "name": "video_bitrate",
                 "status": "PASS",
-                "detail": f"{v['bitrate_kbps']}kbps (>= {spec['min_bitrate_kbps']})"
+                "detail": f"{v['bitrate_kbps']}kbps (>= {target_kbps} target)"
+            })
+        elif v["bitrate_kbps"] >= spec["min_bitrate_kbps"]:
+            results["checks"].append({
+                "name": "video_bitrate",
+                "status": "WARN",
+                "detail": f"{v['bitrate_kbps']}kbps (>= {spec['min_bitrate_kbps']} min, < {target_kbps} target)"
             })
         else:
             results["checks"].append({
                 "name": "video_bitrate",
-                "status": "WARN",
-                "detail": f"{v['bitrate_kbps']}kbps (< {spec['min_bitrate_kbps']})"
+                "status": "FAIL",
+                "detail": f"{v['bitrate_kbps']}kbps (< {spec['min_bitrate_kbps']} minimum)"
             })
+            results["passed"] = False
     else:
         results["checks"].append({"name": "video_stream", "status": "FAIL", "detail": "No video stream"})
         results["passed"] = False

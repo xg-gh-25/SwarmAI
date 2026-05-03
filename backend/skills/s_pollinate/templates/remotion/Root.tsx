@@ -8,10 +8,11 @@
  * 4. 运行 npx remotion studio --public-dir videos/{name}/ 即可在右侧面板编辑样式
  */
 
-import { Composition, Still } from "remotion";
+import { Composition, Still, staticFile } from "remotion";
 import type { CalculateMetadataFunction } from "remotion";
 import { z } from "zod";
 import { Video } from "./Video";
+import { ShortVideo } from "./ShortVideo";
 import { Thumbnail } from "./Thumbnail";
 import { fetchTimingData } from "./components";
 
@@ -139,6 +140,27 @@ export const RemotionRoot = () => {
           subtitleSize: 48,
           bodySize: 36,
         }}
+      />
+
+      {/* V4 fix: ShortVideo composition — uses short_config.json for frame data.
+          Render with: npx remotion render index.tsx ShortVideoComp --public-dir <shorts-dir>
+          generate_shorts.py produces short_config.json with contentFrames, introFrames, etc. */}
+      <Composition
+        id="ShortVideoComp"
+        component={ShortVideo}
+        durationInFrames={300}
+        calculateMetadata={async () => {
+          try {
+            const res = await fetch(staticFile("short_config.json"));
+            const config = await res.json();
+            return { durationInFrames: config.totalFrames || 300 };
+          } catch {
+            return { durationInFrames: 300 };
+          }
+        }}
+        fps={30}
+        width={2160}
+        height={3840}
       />
 
       {/* 16:9 缩略图 - B站/YouTube 封面 */}

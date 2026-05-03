@@ -112,7 +112,10 @@ export const ShortVideo = () => {
           />
 
           {/* 2. Section content */}
-          <TransitionSeries.Sequence durationInFrames={contentFrames + transitionFrames}>
+          {/* B1 fix: Don't add transitionFrames — TransitionSeries already
+              "steals" those frames from adjacent sequences. Adding them here
+              inflated total duration and caused audio desync with shorts. */}
+          <TransitionSeries.Sequence durationInFrames={contentFrames}>
             <SectionContent props={props} />
           </TransitionSeries.Sequence>
 

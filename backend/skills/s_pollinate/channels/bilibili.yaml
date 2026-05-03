@@ -12,6 +12,7 @@ video:
   fps: 30
   audio_codec: aac
   audio_bitrate: "192k"
+  color_space: "bt709"  # C4: explicit color space — Rec.709 for web delivery
 
 duration:
   min_seconds: 180    # 3 min

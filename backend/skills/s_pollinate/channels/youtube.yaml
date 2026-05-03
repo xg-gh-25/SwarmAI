@@ -12,6 +12,7 @@ video:
   fps: 30
   audio_codec: aac
   audio_bitrate: "192k"
+  color_space: "bt709"  # C4: explicit color space — Rec.709 for web delivery
 
 duration:
   min_seconds: 180
@@ -29,7 +30,7 @@ thumbnails:
     purpose: "suggested videos"
 
 title:
-  max_chars: 70
+  max_chars: 100  # C3: platform allows 100; 70 still recommended for mobile display
   formula: "SEO-optimized"
   examples:
     - "Why AI Memory Matters More Than the Model"
