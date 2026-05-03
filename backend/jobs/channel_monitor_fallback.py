@@ -18,12 +18,28 @@ import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-# Channel IDs to monitor (same as in user-jobs.yaml)
-_CHANNELS_TO_MONITOR = {
+# Channel IDs to monitor — loaded from config file or defaults.
+_DEFAULT_CHANNELS = {
     "C09QMPNSCTS": "#all-things-ai",
     "C08T2E4KQPJ": "#amazon-builder-genai-power-users-digest",
     "C068NQ56JMN": "#sergey-ai-notes",
 }
+
+
+def _load_channels_to_monitor() -> dict[str, str]:
+    """Load channels from config file, fall back to defaults."""
+    config_path = Path.home() / ".swarm-ai" / "channel-monitor-channels.json"
+    if config_path.exists():
+        try:
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data:
+                return data
+        except Exception:
+            pass  # fall through to defaults
+    return dict(_DEFAULT_CHANNELS)
+
+
+_CHANNELS_TO_MONITOR = _load_channels_to_monitor()
 
 
 def _get_bot_token() -> str:

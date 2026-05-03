@@ -54,11 +54,13 @@ _BLOCK_SECTION_LIMIT = 3_000   # single section block text limit
 _MAX_BLOCKS_PER_MSG = 50       # max blocks array length per message
 _MAX_BLOCKS_TEXT_BYTES = 38_000  # total text across all blocks in one API call (~40K payload limit)
 
-# Static mapping of known Slack user IDs → display names.
+# Known Slack user IDs → display names.
 # AWS internal Slack doesn't allow users:read or users.profile:read scopes
 # (COE02), so API resolution always fails. Pre-populate the cache to avoid
 # per-message warning noise and provide human-readable sender names.
-_KNOWN_USERS: dict[str, str] = {
+# Loaded from ~/.swarm-ai/slack-known-users.json if it exists,
+# otherwise falls back to the hardcoded defaults below.
+_DEFAULT_KNOWN_USERS: dict[str, str] = {
     "REDACTED_ID1": "XG",              # REDACTED_NAME (owner)
     "REDACTED_ID2": "Titus",           # REDACTED_NAME
     "REDACTED_ID3": "REDACTED",          # REDACTED_NAME
@@ -68,6 +70,23 @@ _KNOWN_USERS: dict[str, str] = {
     "REDACTED_ID7": "REDACTED",           # REDACTED_NAME
     "REDACTED_ID8": "REDACTED",      # REDACTED_NAME
 }
+
+
+def _load_known_users() -> dict[str, str]:
+    """Load known users from config file, fall back to defaults."""
+    config_path = Path.home() / ".swarm-ai" / "slack-known-users.json"
+    if config_path.exists():
+        try:
+            import json as _json
+            data = _json.loads(config_path.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data:
+                return data
+        except Exception:
+            pass  # fall through to defaults
+    return dict(_DEFAULT_KNOWN_USERS)
+
+
+_KNOWN_USERS: dict[str, str] = _load_known_users()
 
 
 def _split_blocks_for_payload(
