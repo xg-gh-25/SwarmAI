@@ -77,10 +77,22 @@ def _module_of(file_path: str, depth: int = 2) -> str:
     return "/".join(parts[:depth]) if len(parts) > depth else "/".join(parts[:-1]) or "root"
 
 
+_QSEP = "::"  # must match parser.QUALIFIED_SEPARATOR
+
+
+def _extract_file_path(node_id: str) -> str:
+    """Extract file_path from a qualified node_id ('path.py::Name' → 'path.py')."""
+    if _QSEP in node_id:
+        return node_id.split(_QSEP, 1)[0]
+    if ":" in node_id:
+        return node_id.rsplit(":", 1)[0].rstrip(":")
+    return ""
+
+
 def _resolve_node_name(node_id: str, graph_store: GraphStore) -> str:
     """Best-effort name extraction.  Falls back to the id itself."""
-    if ":" in node_id:
-        file_path = node_id.rsplit(":", 1)[0].rstrip(":")
+    file_path = _extract_file_path(node_id)
+    if file_path:
         try:
             for n in graph_store.get_nodes_by_file(file_path):
                 if n["id"] == node_id:
@@ -92,8 +104,8 @@ def _resolve_node_name(node_id: str, graph_store: GraphStore) -> str:
 
 def _resolve_node_file(node_id: str, graph_store: GraphStore) -> str:
     """Best-effort file path extraction."""
-    if ":" in node_id:
-        file_path = node_id.rsplit(":", 1)[0].rstrip(":")
+    file_path = _extract_file_path(node_id)
+    if file_path:
         try:
             for n in graph_store.get_nodes_by_file(file_path):
                 if n["id"] == node_id:

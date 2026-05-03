@@ -173,6 +173,9 @@ class ContextHealthHook:
                         graph.store_file_nodes_edges(
                             rel_path, result.nodes, result.edges, file_hash
                         )
+                else:
+                    # File was deleted — remove stale nodes/edges
+                    graph._remove_file(rel_path)
 
             graph.rebuild_fts()
             if freshness.current_head:

@@ -466,9 +466,10 @@ def _regex_fallback(path: Path, repo_root: Path) -> ParseResult:
         body = content[start_pos:end_pos]
         for call_match in _REGEX_CALL_PATTERN.finditer(body):
             call_name = call_match.group(1)
-            if call_name in ("if", "for", "while", "return", "print", "raise",
-                             "yield", "with", "assert", "except", "import", "from",
-                             "class", "def", "func", "function", "var", "let", "const"):
+            if (call_name in _BUILTIN_NAMES
+                    or call_name in ("if", "for", "while", "return", "raise",
+                                     "yield", "with", "assert", "except", "import", "from",
+                                     "class", "def", "func", "function", "var", "let", "const")):
                 continue
             target = _resolve_call_target(call_name, rel_path, import_map, defined_names)
             line = content[:start_pos + call_match.start()].count("\n") + 1

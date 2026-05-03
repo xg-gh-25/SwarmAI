@@ -113,6 +113,19 @@ class GraphStore:
             self._conn.close()
             self._conn = None  # type: ignore[assignment]
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+    def __del__(self):
+        """Safety net — close connection if not explicitly closed."""
+        try:
+            self.close()
+        except Exception:
+            pass
+
     # ── meta helpers ─────────────────────────────────────────────────────
 
     def get_meta(self, key: str) -> str | None:
@@ -660,6 +673,24 @@ class GraphStore:
                 logger.info("Cross-file resolution: %d bare targets resolved", resolved)
         except Exception as e:
             logger.debug("Cross-file resolution skipped: %s", e)
+
+        # Cleanup: remove orphan edges whose target doesn't exist as a node.
+        # These are calls to builtins/stdlib that regex captured but which are
+        # not in the graph. Without this, blast_radius CTE traverses phantoms.
+        try:
+            orphan_count = self._conn.execute(
+                "SELECT COUNT(*) FROM code_edges "
+                "WHERE target_id NOT IN (SELECT id FROM code_nodes)"
+            ).fetchone()[0]
+            if orphan_count:
+                self._conn.execute(
+                    "DELETE FROM code_edges "
+                    "WHERE target_id NOT IN (SELECT id FROM code_nodes)"
+                )
+                self._conn.commit()
+                logger.info("Removed %d orphan edges (target not in nodes)", orphan_count)
+        except Exception as e:
+            logger.debug("Orphan edge cleanup skipped: %s", e)
 
     def incremental_update(
         self,
