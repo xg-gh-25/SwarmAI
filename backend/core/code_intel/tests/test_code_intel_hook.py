@@ -1,0 +1,142 @@
+"""Tests for code_intel_hook.py — PreToolUse context injection."""
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from core.code_intel.code_intel_hook import (
+    _build_context,
+    create_code_intel_hook,
+)
+
+
+@pytest.fixture
+def mock_graph():
+    """Mock GraphStore for hook tests."""
+    graph = MagicMock()
+    graph.get_meta.return_value = "/tmp/test_repo"
+    graph.get_nodes_by_file.return_value = [
+        {"id": "path.py::func_a", "file_path": "path.py", "name": "func_a",
+         "node_type": "function", "line_start": 1, "line_end": 10, "language": "python"},
+        {"id": "path.py::ClassB", "file_path": "path.py", "name": "ClassB",
+         "node_type": "class", "line_start": 12, "line_end": 50, "language": "python"},
+    ]
+    # count_callers_by_file returns {node_id: caller_count}
+    graph.count_callers_by_file.return_value = {"path.py::func_a": 3, "path.py::ClassB": 2}
+    return graph
+
+
+class TestCreateCodeIntelHook:
+    """Test the hook factory function."""
+
+    @patch("core.code_intel.code_intel_hook.detect_project_from_path")
+    def test_non_read_tool_passthrough(self, mock_detect):
+        hook = create_code_intel_hook()
+        result = hook("Bash", {"command": "ls"})
+        assert result["decision"] == "allow"
+        assert "message" not in result
+        mock_detect.assert_not_called()
+
+    @patch("core.code_intel.code_intel_hook.detect_project_from_path")
+    def test_no_project_detected(self, mock_detect):
+        mock_detect.return_value = None
+        hook = create_code_intel_hook()
+        result = hook("Read", {"file_path": "/tmp/unknown/file.py"})
+        assert result["decision"] == "allow"
+        assert "message" not in result
+
+    @patch("core.code_intel.code_intel_hook.load_project_graph")
+    @patch("core.code_intel.code_intel_hook.detect_project_from_path")
+    def test_no_graph_available(self, mock_detect, mock_load):
+        mock_detect.return_value = "TestProject"
+        mock_load.return_value = None
+        hook = create_code_intel_hook()
+        result = hook("Read", {"file_path": "/tmp/repo/file.py"})
+        assert result["decision"] == "allow"
+
+    @patch("core.code_intel.code_intel_hook.load_project_graph")
+    @patch("core.code_intel.code_intel_hook.detect_project_from_path")
+    def test_injects_context(self, mock_detect, mock_load, mock_graph):
+        mock_detect.return_value = "TestProject"
+        mock_load.return_value = mock_graph
+        mock_graph.get_meta.return_value = "/tmp/test_repo"
+        mock_graph.get_nodes_by_file.return_value = [
+            {"id": "core/foo.py::bar", "file_path": "core/foo.py", "name": "bar",
+             "node_type": "function", "line_start": 1, "line_end": 10, "language": "python"},
+        ]
+        # count_callers_by_file returns {node_id: caller_count}
+        mock_graph.count_callers_by_file.return_value = {"core/foo.py::bar": 3}
+
+        hook = create_code_intel_hook()
+        result = hook("Read", {"file_path": "/tmp/test_repo/core/foo.py"})
+        assert result["decision"] == "allow"
+        assert "message" in result
+        assert "Code Intel" in result["message"]
+        assert "3 callers on 1/1 symbols" in result["message"]
+
+    @patch("core.code_intel.code_intel_hook.load_project_graph")
+    @patch("core.code_intel.code_intel_hook.detect_project_from_path")
+    def test_grep_tool_supported(self, mock_detect, mock_load, mock_graph):
+        mock_detect.return_value = "TestProject"
+        mock_load.return_value = mock_graph
+        mock_graph.get_nodes_by_file.return_value = []
+
+        hook = create_code_intel_hook()
+        result = hook("Grep", {"path": "/tmp/test_repo/core/foo.py"})
+        assert result["decision"] == "allow"
+
+    @patch("core.code_intel.code_intel_hook.load_project_graph")
+    @patch("core.code_intel.code_intel_hook.detect_project_from_path")
+    def test_empty_file_path(self, mock_detect, mock_load):
+        hook = create_code_intel_hook()
+        result = hook("Read", {"file_path": ""})
+        assert result["decision"] == "allow"
+        mock_detect.assert_not_called()
+
+    @patch("core.code_intel.code_intel_hook.load_project_graph")
+    @patch("core.code_intel.code_intel_hook.detect_project_from_path")
+    def test_graph_cached_between_calls(self, mock_detect, mock_load, mock_graph):
+        mock_detect.return_value = "TestProject"
+        mock_load.return_value = mock_graph
+        mock_graph.get_nodes_by_file.return_value = []
+
+        hook = create_code_intel_hook()
+        hook("Read", {"file_path": "/tmp/test_repo/a.py"})
+        hook("Read", {"file_path": "/tmp/test_repo/b.py"})
+
+        # load_project_graph called once (cached on second call)
+        assert mock_load.call_count == 1
+
+    @patch("core.code_intel.code_intel_hook.load_project_graph")
+    @patch("core.code_intel.code_intel_hook.detect_project_from_path")
+    def test_error_returns_allow(self, mock_detect, mock_load):
+        mock_detect.return_value = "TestProject"
+        mock_load.side_effect = Exception("db corrupt")
+
+        hook = create_code_intel_hook()
+        result = hook("Read", {"file_path": "/tmp/test_repo/a.py"})
+        assert result["decision"] == "allow"
+
+
+class TestBuildContext:
+    """Test the context string builder."""
+
+    def test_no_repo_root(self):
+        graph = MagicMock()
+        graph.get_meta.return_value = None
+        result = _build_context(graph, "/tmp/file.py", "test")
+        assert result is None
+
+    def test_no_nodes_in_file(self):
+        graph = MagicMock()
+        graph.get_meta.return_value = "/tmp/repo"
+        graph.get_nodes_by_file.return_value = []
+        result = _build_context(graph, "/tmp/repo/empty.py", "test")
+        assert result is None
+
+    def test_builds_context_string(self, mock_graph):
+        result = _build_context(mock_graph, "/tmp/test_repo/path.py", "test")
+        assert result is not None
+        assert "📊 Code Intel" in result
+        assert "5 callers" in result
+        assert "2/2 symbols" in result

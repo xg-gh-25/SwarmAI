@@ -1,6 +1,9 @@
 # Python
 __pycache__/
 *.py[cod]
+
+# Code Intelligence — machine-local graph databases (rebuilt in <10s)
+Projects/*/code_intel.db
 *$py.class
 *.so
 .Python
