@@ -115,21 +115,38 @@ def _is_entry_point(node: dict) -> bool:
 # Commit timestamp helper
 # ---------------------------------------------------------------------------
 
-def _last_commit_timestamp(file_path: str, repo_root: Path) -> int:
-    """Get the unix timestamp of the last commit touching *file_path*."""
+def _batch_last_commit_timestamps(file_paths: list[str], repo_root: Path) -> dict[str, int]:
+    """Get the unix timestamp of the last commit for each file — single git call.
+
+    P1-8: Batched to avoid O(n) subprocess spawns for dead symbol analysis.
+    Uses `git log --format=%ct --name-only` to get all timestamps in one call.
+    """
+    if not file_paths:
+        return {}
+    result: dict[str, int] = {fp: 0 for fp in file_paths}
+    unique_files = sorted(set(file_paths))
     try:
         proc = subprocess.run(
-            ["git", "log", "-1", "--format=%ct", "--", file_path],
+            ["git", "log", "--format=%ct", "--name-only", "--diff-filter=AMRC", "--"]
+            + unique_files,
             cwd=str(repo_root),
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=30,
         )
-        if proc.returncode == 0 and proc.stdout.strip():
-            return int(proc.stdout.strip())
+        if proc.returncode == 0:
+            current_ts = 0
+            for line in proc.stdout.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if line.isdigit():
+                    current_ts = int(line)
+                elif current_ts and line in result and result[line] == 0:
+                    result[line] = current_ts  # first occurrence = most recent
     except Exception:
         pass
-    return 0
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -173,6 +190,10 @@ def find_dead_code(
     dead: list[DeadSymbol] = []
     total = len(raw_dead)
 
+    # P1-8: Batch git timestamps for all candidate files (single subprocess call)
+    all_file_paths = list({c.get("file_path", "") for c in raw_dead if c.get("file_path")})
+    ts_map = _batch_last_commit_timestamps(all_file_paths, repo_root)
+
     # Cache file lookups to avoid repeated queries
     file_cache: dict[str, list[dict]] = {}
 
@@ -204,7 +225,7 @@ def find_dead_code(
         if _is_entry_point({"name": candidate.get("name", ""), "file_path": fp, "language": lang}):
             continue
 
-        ts = _last_commit_timestamp(fp, repo_root)
+        ts = ts_map.get(fp, 0)
         dead.append(DeadSymbol(
             id=node_id,
             name=candidate.get("name", node_id),

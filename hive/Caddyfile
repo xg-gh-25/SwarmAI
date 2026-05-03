@@ -56,6 +56,7 @@
     }
 
     # --- Generic API reverse proxy (catch-all for non-SSE) ---
+    # CUSTOM_ROUTES_ABOVE — do not remove this marker
     handle /api/* {
         reverse_proxy 127.0.0.1:18321
     }

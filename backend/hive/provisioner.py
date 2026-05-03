@@ -1068,27 +1068,29 @@ class HiveProvisioner:
                     f"Instance {instance_id} is not in 'running' state (concurrent update?)"
                 )
 
-        instance = await self._get_instance(instance_id)
-        account = await self._get_account(instance["account_ref"])
-        session = self._get_session(account, instance["region"])
-        ec2_id = instance.get("ec2_instance_id")
-        bucket = instance.get("s3_bucket", f"swarmai-hive-releases-{instance['region']}")
-        region = instance["region"]
+        # P0-4: Wrap entire body in try/finally to prevent zombie 'updating' state.
+        # Same pattern as stop()/start() error rollback (U1/PE-3).
+        _update_succeeded = False
+        try:
+            instance = await self._get_instance(instance_id)
+            account = await self._get_account(instance["account_ref"])
+            session = self._get_session(account, instance["region"])
+            ec2_id = instance.get("ec2_instance_id")
+            bucket = instance.get("s3_bucket", f"swarmai-hive-releases-{instance['region']}")
+            region = instance["region"]
 
-        if not ec2_id:
-            await self._update_instance(instance_id, status="running")
-            raise ValueError("No EC2 instance ID")
+            if not ec2_id:
+                raise ValueError("No EC2 instance ID")
 
-        import re
-        if not re.match(r'^[a-zA-Z0-9._\-]+$', version):
-            await self._update_instance(instance_id, status="running")
-            raise ValueError(f"Invalid version string: {version!r}")
+            import re
+            if not re.match(r'^[a-zA-Z0-9._\-]+$', version):
+                raise ValueError(f"Invalid version string: {version!r}")
 
-        # Ensure new version is in S3
-        await self._sync_release_to_s3(session, bucket, version, region)
+            # Ensure new version is in S3
+            await self._sync_release_to_s3(session, bucket, version, region)
 
-        # SSM Run Command
-        update_script = f"""#!/bin/bash
+            # SSM Run Command
+            update_script = f"""#!/bin/bash
 set -euo pipefail
 echo "=== Updating to v{version} ==="
 # G7: Pre-update backup for rollback
@@ -1131,54 +1133,63 @@ rm -rf /opt/swarmai/backend.bak /tmp/hive-new /tmp/hive-update.tar.gz
 echo "=== Update complete ==="
 """
 
-        def _run_command():
-            ssm = session.client("ssm", region_name=region)
-            resp = ssm.send_command(
-                InstanceIds=[ec2_id],
-                DocumentName="AWS-RunShellScript",
-                Parameters={"commands": [update_script]},
-                TimeoutSeconds=300,
-                Comment=f"SwarmAI Hive update to v{version}",
-            )
-            command_id = resp["Command"]["CommandId"]
-
-            # Wait for completion
-            import time as _time
-            for _ in range(60):
-                result = ssm.get_command_invocation(
-                    CommandId=command_id, InstanceId=ec2_id
+            def _run_command():
+                ssm = session.client("ssm", region_name=region)
+                resp = ssm.send_command(
+                    InstanceIds=[ec2_id],
+                    DocumentName="AWS-RunShellScript",
+                    Parameters={"commands": [update_script]},
+                    TimeoutSeconds=300,
+                    Comment=f"SwarmAI Hive update to v{version}",
                 )
-                status = result["Status"]
-                if status in ("Success", "Failed", "Cancelled", "TimedOut"):
-                    return status, result.get("StandardOutputContent", "")
-                _time.sleep(5)
-            return "TimedOut", ""
+                command_id = resp["Command"]["CommandId"]
 
-        status, output = await asyncio.to_thread(_run_command)
-        if status == "Success":
-            # H1: Verify service is actually reachable before marking version
-            healthy = await self._wait_healthy_via_ssm(
-                session, ec2_id, region, timeout=60
-            )
-            if healthy:
-                await self._update_instance(instance_id, version=version, status="running")
-                logger.info("Hive %s updated to v%s (health verified)", instance["name"], version)
+                import time as _time
+                for _ in range(60):
+                    result = ssm.get_command_invocation(
+                        CommandId=command_id, InstanceId=ec2_id
+                    )
+                    status = result["Status"]
+                    if status in ("Success", "Failed", "Cancelled", "TimedOut"):
+                        return status, result.get("StandardOutputContent", "")
+                    _time.sleep(5)
+                return "TimedOut", ""
+
+            status, output = await asyncio.to_thread(_run_command)
+            if status == "Success":
+                healthy = await self._wait_healthy_via_ssm(
+                    session, ec2_id, region, timeout=60
+                )
+                if healthy:
+                    await self._update_instance(instance_id, version=version, status="running")
+                    _update_succeeded = True
+                    logger.info("Hive %s updated to v%s (health verified)", instance["name"], version)
+                else:
+                    await self._update_instance(
+                        instance_id, status="running",
+                        error_message=f"Update deployed but health check failed after 60s",
+                    )
+                    _update_succeeded = True
+                    raise RuntimeError(
+                        f"Hive {instance['name']} update to v{version}: SSM succeeded but service unreachable"
+                    )
             else:
                 await self._update_instance(
-                    instance_id,
-                    status="running",
-                    error_message=f"Update deployed but health check failed after 60s",
+                    instance_id, status="running",
+                    error_message=f"Update failed: {status}. {output[:200]}",
                 )
-                raise RuntimeError(
-                    f"Hive {instance['name']} update to v{version}: SSM succeeded but service unreachable"
-                )
-        else:
-            await self._update_instance(
-                instance_id,
-                status="running",
-                error_message=f"Update failed: {status}. {output[:200]}",
-            )
-            raise RuntimeError(f"SSM update failed: {status}")
+                _update_succeeded = True
+                raise RuntimeError(f"SSM update failed: {status}")
+        finally:
+            # P0-4: If update body threw without resetting status, reset to 'error'
+            if not _update_succeeded:
+                try:
+                    await self._update_instance(
+                        instance_id, status="error",
+                        error_message="Update failed with unexpected error",
+                    )
+                except Exception:
+                    logger.error("Failed to reset status after update error for %s", instance_id)
 
     async def reset_password(self, instance_id: str) -> str:
         """Reset Hive auth password via SSM.  Returns the new passphrase.
@@ -1361,9 +1372,12 @@ routes = sys.argv[1]
 with open('/etc/caddy/Caddyfile') as f:
     content = f.read()
 # Insert new routes before the generic /api/* catch-all
-marker = '    handle /api/* {{'
-if marker in content:
-    content = content.replace(marker, routes + '\\n' + marker, 1)
+marker = '    # CUSTOM_ROUTES_ABOVE — do not remove this marker'
+generic_api = '    handle /api/* {{'
+# P1-12: Use dedicated marker if present, fall back to handle /api/* catch-all
+target = marker if marker in content else generic_api
+if target in content:
+    content = content.replace(target, routes + '\\n' + target, 1)
     with open('/etc/caddy/Caddyfile', 'w') as f:
         f.write(content)
     print('Routes inserted')

@@ -187,8 +187,9 @@ def analyze_diff(
     base_ref : str
         Starting point for diff (e.g. "HEAD~1" or a commit SHA).
     end_ref : str | None
-        Ending point. ``None`` means HEAD (current working tree).
-        Pass an explicit SHA when analyzing a specific commit range.
+        Ending point. ``None`` diffs against the **working tree** (not HEAD).
+        This includes uncommitted changes, which is the intended behavior
+        for pre-commit review. Pass "HEAD" explicitly to diff committed-only.
 
     Steps:
     1. ``git diff base_ref [end_ref] --unified=0`` to get changed lines per file.

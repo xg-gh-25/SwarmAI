@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -108,6 +109,7 @@ class ParseResult:
 
 _ts_available = False
 _parser_cache: dict[str, object] = {}
+_parser_cache_lock = threading.Lock()
 
 try:
     import tree_sitter_language_pack as tslp
@@ -120,12 +122,16 @@ def _get_cached_parser(language: str):
     """Get or create a tree-sitter parser for a language."""
     if not _ts_available:
         return None
-    if language in _parser_cache:
-        return _parser_cache[language]
+    with _parser_cache_lock:
+        if language in _parser_cache:
+            return _parser_cache[language]
     try:
         parser = tslp.get_parser(language)
-        _parser_cache[language] = parser
-        return parser
+        with _parser_cache_lock:
+            # Double-check: another thread may have populated the cache.
+            if language not in _parser_cache:
+                _parser_cache[language] = parser
+            return _parser_cache[language]
     except Exception as e:
         logger.debug(f"No tree-sitter parser for {language}: {e}")
         return None
@@ -460,10 +466,10 @@ def _regex_fallback(path: Path, repo_root: Path) -> ParseResult:
     for func_match in func_bodies:
         func_name = func_match.group(1)
         func_qn = _qualify(func_name, rel_path)
-        # Scan next ~50 lines for calls
+        # Scan next ~50 lines for calls (P1-5: use actual line count, not char offset)
         start_pos = func_match.end()
-        end_pos = min(start_pos + 3000, len(content))
-        body = content[start_pos:end_pos]
+        lines_after = content[start_pos:].split('\n', 51)  # 50 lines + remainder
+        body = '\n'.join(lines_after[:50])
         for call_match in _REGEX_CALL_PATTERN.finditer(body):
             call_name = call_match.group(1)
             if (call_name in _BUILTIN_NAMES
@@ -575,66 +581,14 @@ def parse_repo(repo_root: Path, languages: list[str] | None = None) -> list[Pars
 
 def resolve_bare_targets(graph_store: GraphStore) -> int:
     """
+    Delegate to GraphStore.resolve_bare_targets() — all SQL stays in the store.
+
     Find all CALLS edges where target has no "::".
     Build global lookup: bare_name -> [qualified_name_1, ...].
     Disambiguate:
-      - 1 candidate → resolve directly
-      - N candidates → prefer the one whose file is imported by caller's file
-      - 0 or ambiguous → leave bare, set confidence=0.5
+      - 1 candidate -> resolve directly
+      - N candidates -> prefer the one whose file is imported by caller's file
+      - 0 or ambiguous -> leave bare, set confidence=0.5
     Returns count of resolved edges.
     """
-    # Get all bare targets
-    bare_edges = graph_store._conn.execute(
-        "SELECT rowid, source_id, target_id FROM code_edges "
-        "WHERE edge_type = 'calls' AND target_id NOT LIKE ?",
-        (f"%{QUALIFIED_SEPARATOR}%",)
-    ).fetchall()
-
-    if not bare_edges:
-        return 0
-
-    # Build global name→qualified lookup
-    all_nodes = graph_store._conn.execute(
-        "SELECT id, name FROM code_nodes"
-    ).fetchall()
-    name_to_ids: dict[str, list[str]] = {}
-    for node_id, name in all_nodes:
-        name_to_ids.setdefault(name, []).append(node_id)
-
-    # Build file→imports mapping for disambiguation
-    file_imports: dict[str, set[str]] = {}
-    import_edges = graph_store._conn.execute(
-        "SELECT source_id, target_id FROM code_edges WHERE edge_type = 'imports'"
-    ).fetchall()
-    for src, tgt in import_edges:
-        src_file = src.split(QUALIFIED_SEPARATOR)[0] if QUALIFIED_SEPARATOR in src else src
-        tgt_file = tgt.split(QUALIFIED_SEPARATOR)[0] if QUALIFIED_SEPARATOR in tgt else tgt
-        file_imports.setdefault(src_file, set()).add(tgt_file)
-
-    resolved_count = 0
-    for rowid, source_id, target_name in bare_edges:
-        candidates = name_to_ids.get(target_name, [])
-
-        if len(candidates) == 1:
-            # Unique match
-            graph_store._conn.execute(
-                "UPDATE code_edges SET target_id = ?, confidence = 0.8 WHERE rowid = ?",
-                (candidates[0], rowid)
-            )
-            resolved_count += 1
-        elif len(candidates) > 1:
-            # Disambiguate: prefer candidate whose file is imported by caller
-            caller_file = source_id.split(QUALIFIED_SEPARATOR)[0]
-            imported_files = file_imports.get(caller_file, set())
-            matching = [c for c in candidates
-                       if c.split(QUALIFIED_SEPARATOR)[0] in imported_files]
-            if len(matching) == 1:
-                graph_store._conn.execute(
-                    "UPDATE code_edges SET target_id = ?, confidence = 0.8 WHERE rowid = ?",
-                    (matching[0], rowid)
-                )
-                resolved_count += 1
-            # else: leave bare with confidence=0.5
-
-    graph_store._conn.commit()
-    return resolved_count
+    return graph_store.resolve_bare_targets(QUALIFIED_SEPARATOR)

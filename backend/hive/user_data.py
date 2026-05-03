@@ -100,6 +100,7 @@ cat > /etc/caddy/Caddyfile << 'CADDY'
             }
         }
     }
+    # CUSTOM_ROUTES_ABOVE — do not remove this marker
     handle /api/* {
         reverse_proxy 127.0.0.1:18321
     }
@@ -197,7 +198,7 @@ tar czf "$BACKUP_FILE" -C /home/swarm .swarm-ai/ 2>/dev/null
 BUCKET=$(cat /opt/swarmai/.hive-bucket 2>/dev/null)
 REGION=$(curl -sf -H "X-aws-ec2-metadata-token: $(curl -sf -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')" http://169.254.169.254/latest/meta-data/placement/region)
 if [ -n "$BUCKET" ] && [ -n "$REGION" ]; then
-    aws s3 cp "$BACKUP_FILE" "s3://$BUCKET/backups/$(hostname)/$(basename $BACKUP_FILE)" --region "$REGION" 2>/dev/null
+    aws s3 cp "$BACKUP_FILE" "s3://$BUCKET/backups/$(hostname)/$(basename "$BACKUP_FILE")" --region "$REGION" --sse 2>/dev/null
 fi
 rm -f "$BACKUP_FILE"
 # Prune backups older than 7 days
