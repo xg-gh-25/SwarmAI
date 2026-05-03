@@ -259,3 +259,95 @@ class TestBriefingTailRead:
         # All returned jobs should be within 24h
         for job in result["jobs"]:
             assert job["status"] == "success"
+
+
+# ── Auth-failure fallback mechanism ───────────────────────────────────
+
+class TestAuthFailureFallback:
+    """Verify fallback_script runs when agent_task fails with auth_failed."""
+
+    def test_fallback_runs_on_auth_failure(self):
+        """When agent_task returns auth_failed and fallback_script is set,
+        the fallback script is executed and its result replaces the original."""
+        from jobs.models import Job, JobResult, JobSafety, SchedulerState, JobState
+
+        state = SchedulerState(jobs={})
+
+        job = Job(
+            id="test-monitor",
+            name="Test Monitor",
+            type="agent_task",
+            schedule="0 * * * *",
+            enabled=True,
+            category="user",
+            config={
+                "prompt": "Test prompt",
+                "fallback_script": "echo 'fallback executed'",
+            },
+            safety=JobSafety(max_budget_usd=1.0, timeout_seconds=30),
+        )
+
+        # Mock _handle_agent_task to return auth_failed
+        with patch("jobs.executor._handle_agent_task") as mock_agent, \
+             patch("jobs.executor._handle_script") as mock_script, \
+             patch("jobs.executor._update_job_state"), \
+             patch("jobs.executor.send_post_job_notification"):
+            mock_agent.return_value = JobResult(
+                job_id="test-monitor",
+                timestamp=datetime.now(timezone.utc),
+                status="auth_failed",
+                summary="Slack MCP auth expired",
+                duration_seconds=5,
+            )
+            mock_script.return_value = JobResult(
+                job_id="test-monitor-fallback",
+                timestamp=datetime.now(timezone.utc),
+                status="success",
+                summary="Fallback: 30 messages fetched",
+                duration_seconds=2,
+            )
+
+            from jobs.executor import execute_job
+            result = execute_job(job, state, feeds=[])
+
+            # Fallback script should have been called
+            mock_script.assert_called_once()
+            # Result should be the successful fallback
+            assert result.status == "success"
+            assert result.job_id == "test-monitor"
+
+    def test_no_fallback_without_config(self):
+        """When fallback_script is not configured, auth_failed stays as-is."""
+        from jobs.models import Job, JobResult, JobSafety, SchedulerState
+
+        state = SchedulerState(jobs={})
+
+        job = Job(
+            id="test-monitor-no-fb",
+            name="Test Monitor",
+            type="agent_task",
+            schedule="0 * * * *",
+            enabled=True,
+            category="user",
+            config={"prompt": "Test prompt"},
+            safety=JobSafety(max_budget_usd=1.0, timeout_seconds=30),
+        )
+
+        with patch("jobs.executor._handle_agent_task") as mock_agent, \
+             patch("jobs.executor._handle_script") as mock_script, \
+             patch("jobs.executor._update_job_state"), \
+             patch("jobs.executor.send_post_job_notification"):
+            mock_agent.return_value = JobResult(
+                job_id="test-monitor-no-fb",
+                timestamp=datetime.now(timezone.utc),
+                status="auth_failed",
+                summary="Slack MCP auth expired",
+                duration_seconds=5,
+            )
+
+            from jobs.executor import execute_job
+            result = execute_job(job, state, feeds=[])
+
+            # No fallback — script handler should NOT be called
+            mock_script.assert_not_called()
+            assert result.status == "auth_failed"

@@ -254,6 +254,36 @@ def execute_job(
                 duration_seconds=0,
             )
 
+        # Auth-failure fallback: if an agent_task fails with auth_failed and
+        # the job defines a fallback_script, run it as a script job instead.
+        # This decouples jobs from MCP auth availability (e.g., channel-monitor
+        # can read channels via bot_token when slack-mcp Midway expires).
+        if (
+            result.status == "auth_failed"
+            and job.config.get("fallback_script")
+        ):
+            logger.info(
+                "Job '%s' auth failed — running fallback_script", job.id,
+            )
+            fallback_job = Job(
+                id=f"{job.id}-fallback",
+                name=f"{job.name} (fallback)",
+                type="script",
+                schedule=job.schedule,
+                enabled=True,
+                category=job.category,
+                config={
+                    "command": job.config["fallback_script"],
+                    "cwd": job.config.get("fallback_cwd"),
+                    "output_mode": job.config.get("output_mode", "report"),
+                },
+                safety=job.safety,
+            )
+            fallback_result = _handle_script(fallback_job, state)
+            if fallback_result.status == "success":
+                result = fallback_result
+                result.job_id = job.id  # keep original job_id
+
         _update_job_state(state, job.id, result)
 
         # Post-job notification (if configured via config.notify)

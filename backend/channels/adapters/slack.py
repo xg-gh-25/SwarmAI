@@ -54,6 +54,21 @@ _BLOCK_SECTION_LIMIT = 3_000   # single section block text limit
 _MAX_BLOCKS_PER_MSG = 50       # max blocks array length per message
 _MAX_BLOCKS_TEXT_BYTES = 38_000  # total text across all blocks in one API call (~40K payload limit)
 
+# Static mapping of known Slack user IDs → display names.
+# AWS internal Slack doesn't allow users:read or users.profile:read scopes
+# (COE02), so API resolution always fails. Pre-populate the cache to avoid
+# per-message warning noise and provide human-readable sender names.
+_KNOWN_USERS: dict[str, str] = {
+    "REDACTED_ID1": "XG",              # REDACTED_NAME (owner)
+    "REDACTED_ID2": "Titus",           # REDACTED_NAME
+    "REDACTED_ID3": "REDACTED",          # REDACTED_NAME
+    "REDACTED_ID4": "REDACTED",     # REDACTED_NAME
+    "REDACTED_ID5": "REDACTED_NAME",       # REDACTED_NAME
+    "REDACTED_ID6": "REDACTED",          # REDACTED_NAME
+    "REDACTED_ID7": "REDACTED",           # REDACTED_NAME
+    "REDACTED_ID8": "REDACTED",      # REDACTED_NAME
+}
+
 
 def _split_blocks_for_payload(
     blocks: list[dict],
@@ -379,7 +394,9 @@ class SlackChannelAdapter(ChannelAdapter):
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._stopped = False
         # User name cache: user_id -> display_name
-        self._user_cache: dict[str, str] = {}
+        # Pre-populate with known users to avoid per-message API failures
+        # when Slack scopes (users:read) are unavailable (COE02).
+        self._user_cache: dict[str, str] = dict(_KNOWN_USERS)
         # MCP fallback bridge (lazy — spawned on first proxy error)
         self._mcp_bridge: Optional[SlackMcpBridge] = None
         # Auth health tracking
@@ -679,6 +696,9 @@ class SlackChannelAdapter(ChannelAdapter):
         except Exception as exc:
             logger.warning("users.profile.get also failed for %s: %s", user_id, exc)
 
+        # Cache the raw user_id as negative result — prevents retrying
+        # known-failing API calls on every subsequent message (AC1).
+        self._user_cache[user_id] = user_id
         return user_id
 
     # ------------------------------------------------------------------
