@@ -62,28 +62,41 @@ mkdir -p /etc/caddy /var/log/caddy
 echo "[6/9] Configuring Caddy with basic auth..."
 cat > /etc/caddy/Caddyfile << 'CADDY'
 :80 {
+    # Health check BEFORE auth — enables external monitors (G11)
+    handle /health {
+        reverse_proxy 127.0.0.1:18321
+    }
+
     basicauth * {
         ${auth_user} ${auth_hash}
     }
+
+    # SSE streaming — MUST be before generic /api/* (first-match)
     handle /api/chat/stream {
         reverse_proxy 127.0.0.1:18321 {
             flush_interval -1
+            transport http {
+                read_timeout 300s
+            }
         }
     }
     handle /api/chat/answer-question {
         reverse_proxy 127.0.0.1:18321 {
             flush_interval -1
+            transport http {
+                read_timeout 120s
+            }
         }
     }
     handle /api/chat/cmd-permission-continue {
         reverse_proxy 127.0.0.1:18321 {
             flush_interval -1
+            transport http {
+                read_timeout 120s
+            }
         }
     }
     handle /api/* {
-        reverse_proxy 127.0.0.1:18321
-    }
-    handle /health {
         reverse_proxy 127.0.0.1:18321
     }
     handle {
@@ -94,7 +107,14 @@ cat > /etc/caddy/Caddyfile << 'CADDY'
     header {
         X-Content-Type-Options nosniff
         X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
         -Server
+    }
+    log {
+        output file /var/log/caddy/hive-access.log {
+            roll_size 100mb
+            roll_keep 5
+        }
     }
 }
 CADDY
@@ -163,6 +183,23 @@ tee /etc/logrotate.d/swarmai > /dev/null << 'LOGROTATE'
     copytruncate
 }
 LOGROTATE
+
+# ── 10. Nightly workspace backup (G8) ──
+# Tar /home/swarm/.swarm-ai/ to S3 daily. 7-day retention via lifecycle.
+cat > /etc/cron.daily/swarmai-backup << 'BACKUP'
+#!/bin/bash
+BACKUP_FILE="/tmp/swarm-backup-$(date +%Y%m%d).tar.gz"
+tar czf "$BACKUP_FILE" -C /home/swarm .swarm-ai/ 2>/dev/null
+BUCKET=$(awk '/swarmai-hive-/{for(i=1;i<=NF;i++)if($i~/^swarmai-hive-/)print $i;exit}' /var/log/hive-setup.log)
+REGION=$(curl -sf -H "X-aws-ec2-metadata-token: $(curl -sf -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')" http://169.254.169.254/latest/meta-data/placement/region)
+if [ -n "$BUCKET" ] && [ -n "$REGION" ]; then
+    aws s3 cp "$BACKUP_FILE" "s3://$BUCKET/backups/$(hostname)/$(basename $BACKUP_FILE)" --region "$REGION" 2>/dev/null
+fi
+rm -f "$BACKUP_FILE"
+# Prune backups older than 7 days
+find /tmp -name 'swarm-backup-*.tar.gz' -mtime +7 -delete 2>/dev/null
+BACKUP
+chmod +x /etc/cron.daily/swarmai-backup
 
 echo "=== Hive Setup Complete — status=$TAG_STATUS — $(date) ==="
 """

@@ -481,6 +481,11 @@ async def update_instance(instance_id: str, body: HiveInstanceUpdate):
     provisioner = _get_provisioner()
     try:
         await provisioner.update(instance_id, body.version)
+    except RuntimeError as e:
+        # G6: Concurrent update or invalid state → 409 Conflict
+        if "not in 'running' state" in str(e):
+            raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     return {"status": "updated", "version": body.version}
@@ -531,6 +536,7 @@ async def reset_password(instance_id: str):
 @router.get("/instances/{instance_id}/credentials")
 async def get_instance_credentials(instance_id: str):
     """Return only the auth credentials for a Hive instance."""
+    _require_desktop()  # G2: prevent Hive from reading its own credentials
     async with _conn() as c:
         cursor = await c.execute(
             "SELECT auth_user, auth_password FROM hive_instances WHERE id = ?",

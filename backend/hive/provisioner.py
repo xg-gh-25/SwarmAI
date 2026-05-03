@@ -893,27 +893,62 @@ class HiveProvisioner:
 
         except Exception as e:
             logger.exception("Deploy failed for instance %s", instance_id)
+            # G10: Track resource cleanup status so users know if they're being billed
+            cleanup_status = "no_resources"
+            if created_resources:
+                try:
+                    instance = await self._get_instance(instance_id)
+                    account = await self._get_account(instance["account_ref"])
+                    await self._cleanup_resources(
+                        self._get_session(account, instance["region"]),
+                        instance["region"],
+                        created_resources,
+                    )
+                    cleanup_status = "cleaned"
+                except Exception as cleanup_err:
+                    logger.error("Cleanup also failed: %s", cleanup_err)
+                    cleanup_status = f"partial_cleanup_failed: {str(cleanup_err)[:100]}"
+
             await self._update_instance(
                 instance_id,
                 status="error",
-                error_message=str(e)[:500],
+                error_message=f"{str(e)[:400]} [resources: {cleanup_status}]",
             )
-            # Cleanup partial resources
+
+    # ── CloudFront toggle ────────────────────────────────────────────
+
+    async def _set_cloudfront_enabled(
+        self, session, dist_id: str, enabled: bool
+    ) -> None:
+        """Enable or disable a CloudFront distribution (G3).
+
+        Best-effort: logs warning on failure, never blocks stop/start.
+        """
+        if not dist_id:
+            return
+
+        def _toggle():
+            cf = session.client("cloudfront")
             try:
-                instance = await self._get_instance(instance_id)
-                account = await self._get_account(instance["account_ref"])
-                await self._cleanup_resources(
-                    self._get_session(account, instance["region"]),
-                    instance["region"],
-                    created_resources,
+                dist = cf.get_distribution(Id=dist_id)
+                config = dist["Distribution"]["DistributionConfig"]
+                if config["Enabled"] == enabled:
+                    return  # already in desired state
+                config["Enabled"] = enabled
+                cf.update_distribution(
+                    Id=dist_id, DistributionConfig=config, IfMatch=dist["ETag"]
                 )
-            except Exception as cleanup_err:
-                logger.error("Cleanup also failed: %s", cleanup_err)
+                logger.info("CloudFront %s %s", dist_id, "enabled" if enabled else "disabled")
+            except Exception as e:
+                logger.warning("Failed to %s CloudFront %s: %s",
+                               "enable" if enabled else "disable", dist_id, e)
+
+        await asyncio.to_thread(_toggle)
 
     # ── Lifecycle operations ───────────────────────────────────────
 
     async def stop(self, instance_id: str) -> None:
-        """Stop a running Hive (EC2 stop)."""
+        """Stop a running Hive (EC2 stop + disable CloudFront)."""
         instance = await self._get_instance(instance_id)
         account = await self._get_account(instance["account_ref"])
         session = self._get_session(account, instance["region"])
@@ -927,10 +962,14 @@ class HiveProvisioner:
             ec2.get_waiter("instance_stopped").wait(InstanceIds=[ec2_id])
 
         await asyncio.to_thread(_stop)
+        # G3: Disable CloudFront to avoid 502s for users
+        await self._set_cloudfront_enabled(
+            session, instance.get("cloudfront_dist_id"), enabled=False
+        )
         await self._update_instance(instance_id, status="stopped")
 
     async def start(self, instance_id: str) -> None:
-        """Start a stopped Hive (EC2 start + wait healthy)."""
+        """Start a stopped Hive (EC2 start + wait healthy + enable CloudFront)."""
         instance = await self._get_instance(instance_id)
         account = await self._get_account(instance["account_ref"])
         region = instance["region"]
@@ -951,6 +990,10 @@ class HiveProvisioner:
         if ec2_id:
             healthy = await self._wait_healthy_via_ssm(session, ec2_id, region, timeout=180)
             if healthy:
+                # G3: Re-enable CloudFront after successful start
+                await self._set_cloudfront_enabled(
+                    session, instance.get("cloudfront_dist_id"), enabled=True
+                )
                 await self._update_instance(instance_id, status="running")
             else:
                 await self._update_instance(
@@ -962,6 +1005,20 @@ class HiveProvisioner:
 
     async def update(self, instance_id: str, version: str) -> None:
         """Update a Hive to a new version via SSM Run Command."""
+        # G6: Atomic status gate — prevents concurrent updates
+        async with aiosqlite.connect(str(self.db_path)) as conn:
+            await conn.execute("PRAGMA busy_timeout = 500")
+            cursor = await conn.execute(
+                "UPDATE hive_instances SET status = 'updating', updated_at = datetime('now') "
+                "WHERE id = ? AND status = 'running'",
+                (instance_id,),
+            )
+            await conn.commit()
+            if cursor.rowcount == 0:
+                raise RuntimeError(
+                    f"Instance {instance_id} is not in 'running' state (concurrent update?)"
+                )
+
         instance = await self._get_instance(instance_id)
         account = await self._get_account(instance["account_ref"])
         session = self._get_session(account, instance["region"])
@@ -970,10 +1027,12 @@ class HiveProvisioner:
         region = instance["region"]
 
         if not ec2_id:
+            await self._update_instance(instance_id, status="running")
             raise ValueError("No EC2 instance ID")
 
         import re
         if not re.match(r'^[a-zA-Z0-9._\-]+$', version):
+            await self._update_instance(instance_id, status="running")
             raise ValueError(f"Invalid version string: {version!r}")
 
         # Ensure new version is in S3
@@ -983,6 +1042,9 @@ class HiveProvisioner:
         update_script = f"""#!/bin/bash
 set -euo pipefail
 echo "=== Updating to v{version} ==="
+# G7: Pre-update backup for rollback
+echo "Backing up current installation..."
+cp -a /opt/swarmai/backend /opt/swarmai/backend.bak 2>/dev/null || true
 aws s3 cp s3://{bucket}/v{version}/swarmai-hive-v{version}-linux-arm64.tar.gz /tmp/hive-update.tar.gz --region {region}
 mkdir -p /tmp/hive-new
 tar xzf /tmp/hive-update.tar.gz --strip-components=1 -C /tmp/hive-new/
@@ -1006,9 +1068,17 @@ done
 if ! systemctl is-active --quiet swarmai-hive; then
   echo "ERROR: swarmai-hive failed to start within 30s"
   systemctl status swarmai-hive --no-pager || true
+  # G7: Rollback on failure
+  if [ -d /opt/swarmai/backend.bak ]; then
+    echo "Rolling back to previous version..."
+    rm -rf /opt/swarmai/backend
+    mv /opt/swarmai/backend.bak /opt/swarmai/backend
+    systemctl restart swarmai-hive --no-block || true
+  fi
   exit 1
 fi
-rm -rf /tmp/hive-new /tmp/hive-update.tar.gz
+# G7: Remove backup after successful update
+rm -rf /opt/swarmai/backend.bak /tmp/hive-new /tmp/hive-update.tar.gz
 echo "=== Update complete ==="
 """
 
@@ -1042,11 +1112,12 @@ echo "=== Update complete ==="
                 session, ec2_id, region, timeout=60
             )
             if healthy:
-                await self._update_instance(instance_id, version=version)
+                await self._update_instance(instance_id, version=version, status="running")
                 logger.info("Hive %s updated to v%s (health verified)", instance["name"], version)
             else:
                 await self._update_instance(
                     instance_id,
+                    status="running",
                     error_message=f"Update deployed but health check failed after 60s",
                 )
                 raise RuntimeError(
@@ -1055,6 +1126,7 @@ echo "=== Update complete ==="
         else:
             await self._update_instance(
                 instance_id,
+                status="running",
                 error_message=f"Update failed: {status}. {output[:200]}",
             )
             raise RuntimeError(f"SSM update failed: {status}")
@@ -1097,6 +1169,8 @@ echo "=== Update complete ==="
         import base64
         hash_b64 = base64.b64encode(new_hash.encode()).decode()
 
+        # G9: Use Python for password replacement — avoids sed fragility
+        # and shell escaping issues with bcrypt $ characters
         reset_script = f"""#!/bin/bash
 set -euo pipefail
 CADDYFILE="/etc/caddy/Caddyfile"
@@ -1108,15 +1182,30 @@ fi
 NEW_HASH=$(echo '{hash_b64}' | base64 -d)
 # Backup current Caddyfile
 cp "$CADDYFILE" "$CADDYFILE.bak"
-# Replace the bcrypt hash line (matches: "    admin $2b$..." or "    admin $2a$...")
-# Use | as sed delimiter (bcrypt never contains |). The hash is in a
-# variable, not inline, so $ signs are not expanded during sed parsing.
-sed -i "s|        admin \\$2[ab]\\$.*|        admin $NEW_HASH|" "$CADDYFILE"
+# G9: Use Python for precise hash replacement (replaces fragile sed)
+python3 -c "
+import re, sys
+new_hash = sys.argv[1]
+with open('/etc/caddy/Caddyfile') as f:
+    content = f.read()
+# Match 'admin' followed by a bcrypt hash (starts with dollar sign)
+# Anchored to bcrypt format to avoid matching comments or other 'admin' occurrences
+new_content = re.sub(
+    r'(\\s+admin\\s+)(\\$2[ab]\\$\\S+)',
+    r'\\1' + new_hash,
+    content,
+    count=1,
+)
+if new_content == content:
+    print('ERROR: Could not find admin hash line in Caddyfile', file=sys.stderr)
+    sys.exit(1)
+with open('/etc/caddy/Caddyfile', 'w') as f:
+    f.write(new_content)
+print('Hash replaced successfully')
+" "$NEW_HASH"
 # Validate and reload Caddy
-# Note: systemctl reload is not supported for Caddy — use caddy reload
-# which hot-swaps the config via Caddy's admin API (zero downtime).
 if caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1; then
-  caddy reload --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1
+  systemctl restart caddy
   rm -f "$CADDYFILE.bak"
   echo "Password reset complete"
 else
@@ -1158,6 +1247,114 @@ fi
             return new_password
         else:
             raise RuntimeError(f"Password reset failed: {status}. {output[:200]}")
+
+    # ── Caddy config management (G5) ─────────────────────────────
+
+    async def update_caddyfile(
+        self, instance_id: str, new_routes: list[dict] | None = None
+    ) -> None:
+        """Update Caddy config on a running Hive via SSM (G5).
+
+        Adds new route handles to the Caddyfile. Each route dict:
+          {"path": "/api/new/endpoint", "flush": True, "timeout": 120}
+
+        Uses Python on the instance for safe file manipulation.
+        Validates via `caddy validate` and rolls back on failure.
+        """
+        instance = await self._get_instance(instance_id)
+        account = await self._get_account(instance["account_ref"])
+        session = self._get_session(account, instance["region"])
+        ec2_id = instance.get("ec2_instance_id")
+        region = instance["region"]
+
+        if not ec2_id:
+            raise ValueError("No EC2 instance ID")
+
+        # Build route insertion snippet
+        route_lines = []
+        _SAFE_PATH = re.compile(r'^/[a-zA-Z0-9/_\-.*]+$')
+        for route in (new_routes or []):
+            path = route["path"]
+            if not _SAFE_PATH.match(path):
+                raise ValueError(f"Invalid route path: {path!r} — must be /alphanumeric")
+            if len(path) > 200:
+                raise ValueError(f"Route path too long: {len(path)} chars (max 200)")
+            if route.get("flush"):
+                timeout = route.get("timeout", 120)
+                route_lines.append(
+                    f'    handle {path} {{\n'
+                    f'        reverse_proxy 127.0.0.1:18321 {{\n'
+                    f'            flush_interval -1\n'
+                    f'            transport http {{\n'
+                    f'                read_timeout {timeout}s\n'
+                    f'            }}\n'
+                    f'        }}\n'
+                    f'    }}'
+                )
+            else:
+                route_lines.append(
+                    f'    handle {path} {{\n'
+                    f'        reverse_proxy 127.0.0.1:18321\n'
+                    f'    }}'
+                )
+
+        import base64
+        routes_b64 = base64.b64encode('\n'.join(route_lines).encode()).decode()
+
+        update_script = f"""#!/bin/bash
+set -euo pipefail
+CADDYFILE="/etc/caddy/Caddyfile"
+cp "$CADDYFILE" "$CADDYFILE.bak"
+ROUTES=$(echo '{routes_b64}' | base64 -d)
+python3 -c "
+import sys
+routes = sys.argv[1]
+with open('/etc/caddy/Caddyfile') as f:
+    content = f.read()
+# Insert new routes before the generic /api/* catch-all
+marker = '    handle /api/* {{'
+if marker in content:
+    content = content.replace(marker, routes + '\\n' + marker, 1)
+    with open('/etc/caddy/Caddyfile', 'w') as f:
+        f.write(content)
+    print('Routes inserted')
+else:
+    print('WARNING: catch-all marker not found, routes not inserted', file=sys.stderr)
+" "$ROUTES"
+if caddy validate --config "$CADDYFILE" --adapter caddyfile >/dev/null 2>&1; then
+  systemctl restart caddy
+  rm -f "$CADDYFILE.bak"
+  echo "Caddyfile updated"
+else
+  mv "$CADDYFILE.bak" "$CADDYFILE"
+  echo "ERROR: validation failed, rolled back" >&2
+  exit 1
+fi
+"""
+
+        def _run():
+            ssm = session.client("ssm", region_name=region)
+            resp = ssm.send_command(
+                InstanceIds=[ec2_id],
+                DocumentName="AWS-RunShellScript",
+                Parameters={"commands": [update_script]},
+                TimeoutSeconds=30,
+                Comment="SwarmAI Hive Caddyfile update",
+            )
+            command_id = resp["Command"]["CommandId"]
+            for _ in range(12):
+                result = ssm.get_command_invocation(
+                    CommandId=command_id, InstanceId=ec2_id
+                )
+                if result["Status"] in ("Success", "Failed", "Cancelled", "TimedOut"):
+                    return result["Status"], result.get("StandardOutputContent", "")
+                time.sleep(5)
+            return "TimedOut", ""
+
+        status, output = await asyncio.to_thread(_run)
+        if status != "Success":
+            raise RuntimeError(f"Caddyfile update failed: {status}. {output[:200]}")
+        logger.info("Hive %s Caddyfile updated", instance["name"])
 
     # ── Cleanup ────────────────────────────────────────────────────
 

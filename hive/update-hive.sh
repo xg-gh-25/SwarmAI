@@ -1,11 +1,21 @@
 #!/bin/bash
-# SwarmAI Hive — update script (run from local Mac)
-#
-# Builds frontend locally, syncs to EC2, restarts services.
-# No git pull / npm ci / vite build on EC2 — deploy pre-built artifacts.
-#
-# Usage: ./hive/update-hive.sh [IP_ADDRESS]
-#        ./hive/update-hive.sh all          # update all hives
+# ┌──────────────────────────────────────────────────────────────┐
+# │  DEPRECATED — Do NOT use this script.                        │
+# │                                                              │
+# │  SSH-based updates are replaced by SSM Run Command:          │
+# │    POST /api/hive/instances/{id}/update {"version": "x.y.z"} │
+# │                                                              │
+# │  Or via SwarmAI desktop app → Hive tab → Update button.     │
+# │                                                              │
+# │  This script has stale IPs, copies repo Caddyfile (breaks   │
+# │  auth — see H4/H5 incident), and requires SSH keys that     │
+# │  no longer exist (SG only allows CloudFront, no SSH).       │
+# └──────────────────────────────────────────────────────────────┘
+echo "ERROR: This script is deprecated. Use the Hive API or desktop app to update." >&2
+echo "  API: POST /api/hive/instances/{id}/update {\"version\": \"x.y.z\"}" >&2
+exit 1
+
+# --- Original script below (preserved for reference) ---
 
 set -euo pipefail
 
