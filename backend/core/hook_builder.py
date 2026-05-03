@@ -289,8 +289,10 @@ async def build_hooks(
             from core.code_intel.code_intel_hook import create_code_intel_hook
             ci_hook = create_code_intel_hook()
 
-            async def _code_intel_wrapper(hook_input, tool_name, hook_context):
-                tool_input = hook_input if isinstance(hook_input, dict) else getattr(hook_input, "__dict__", {})
+            async def _code_intel_wrapper(input_data, tool_use_id, hook_context):
+                data = input_data if isinstance(input_data, dict) else getattr(input_data, "__dict__", {})
+                tool_name = data.get("tool_name", "")
+                tool_input = data.get("tool_input", {})
                 return ci_hook(tool_name, tool_input)
 
             registry.register("PreToolUse", _code_intel_wrapper, "code_intel_context")

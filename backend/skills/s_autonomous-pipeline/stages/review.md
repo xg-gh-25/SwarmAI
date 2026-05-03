@@ -102,39 +102,43 @@ organized into tiers:
 
 ### 0. Code Intelligence Context (if available)
 
-**When `code_intel.db` exists for the project**, run before all other checks:
+**When `code_intel.db` exists for the project**, run before all other checks.
 
-1. **Incremental update**: index any files changed since last index
-   ```bash
-   python -c "from core.code_intel.graph_store import GraphStore; from core.code_intel.freshness import check_freshness; \
-     g = GraphStore('Projects/PROJECT/code_intel.db'); f = check_freshness(g); print(f'Stale: {f.stale}, files: {len(f.changed_files)}')"
-   ```
+The agent does NOT run `python -c` commands for this. Instead, read the code_intel
+data by using the Read tool on the project's `code_intel.db` existence check, then
+reason about blast radius from the changeset:
 
-2. **Blast radius** (2-hop bidirectional):
-   ```bash
-   python -c "from core.code_intel.blast_radius import analyze_diff; from core.code_intel.graph_store import GraphStore; from pathlib import Path; \
-     g = GraphStore('Projects/PROJECT/code_intel.db'); r = analyze_diff(g, Path('REPO_ROOT')); print(r.to_minimal_context())"
-   ```
+1. **Check freshness**: Is `Projects/<PROJECT>/code_intel.db` present? If the session
+   just started, `context_health_hook` already ran an incremental refresh.
 
-3. **Risk score** (6 dimensions):
-   ```bash
-   python -c "from core.code_intel.change_risk_score import score_change; ..."
-   ```
+2. **Blast radius** — For each file in the changeset, use `find_callers` / `find_dependents`
+   logic: which other files import or call symbols from this file? List them.
+
+3. **Risk assessment** — Count: how many modules does this changeset cross?
+   Are there changed functions with high caller counts? Any changed code without
+   test coverage (test file callers)?
 
 4. **Inject context** into review preamble:
    ```
-   Risk Map: 0.72 HIGH | 3 functions changed | 14 downstream | 2 untested
+   Risk Map: HIGH | 3 functions changed | 14 downstream | 2 untested
    Modules crossed: core → hooks → channels (3-way)
    Top concern: session_unit._send_to_sdk() has 8 callers, 0 tests for error path
    ```
 
-**If risk > 0.6**: expand full blast radius details before running checks.
-**If risk > 0.8**: WARN — "This changeset has CRITICAL risk. Consider splitting."
+**If risk is HIGH**: expand full blast radius details before running checks.
+**If risk is CRITICAL**: WARN — "This changeset has CRITICAL risk. Consider splitting."
 
 This context feeds into existing checks:
 - Check 3 (Integration Trace): code_intel provides caller list automatically
 - Check 6 (RP Checklist): RP25 blast radius is now computed, not manual
 - Check 8 (Depth & Seam): module_map provides seam count
+
+When populating the **review artifact**, include a `"code_intel"` section:
+```json
+{"code_intel": {"blast_radius_computed": true, "risk_score": 0.45, "risk_mitigated": true,
+  "untested_callers": 2, "modules_crossed": 3, "cross_module_justified": true}}
+```
+This feeds into confidence_score.py rules (+1 blast computed, -2 high risk, -2 untested, -1 cross-module).
 
 **Skip** when no `code_intel.db` exists for the project.
 

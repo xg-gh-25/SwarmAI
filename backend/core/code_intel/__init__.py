@@ -72,14 +72,24 @@ def detect_project_from_path(file_path: str) -> str | None:
 
 
 def invalidate_cache(project_name: str | None = None):
-    """Invalidate caches. Called on project create/delete."""
+    """Invalidate caches. Called on project create/delete. Closes evicted GraphStores."""
     global _cache_initialized
     if project_name:
-        _graph_cache.pop(project_name, None)
+        old = _graph_cache.pop(project_name, None)
+        if old:
+            try:
+                old.close()
+            except Exception:
+                pass
         to_remove = [k for k, v in _project_path_cache.items() if v == project_name]
         for k in to_remove:
             del _project_path_cache[k]
     else:
+        for g in _graph_cache.values():
+            try:
+                g.close()
+            except Exception:
+                pass
         _graph_cache.clear()
         _project_path_cache.clear()
         _cache_initialized = False
