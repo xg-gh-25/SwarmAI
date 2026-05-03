@@ -251,6 +251,241 @@ class TestConfidenceScoring:
         assert "score" in result
         assert result["score"] >= 1
 
+    def test_completion_audit_all_green_bonus(self):
+        """completion_audit.all_green → +2 bonus."""
+        d = _make_run_dir(
+            run_json={
+                "id": "run_test_audit",
+                "project": "TestProject",
+                "profile": "full",
+                "status": "running",
+                "stages": [
+                    {"name": "plan", "status": "complete"},
+                ],
+                "taste_decisions": [],
+                "completion_audit": {
+                    "all_green": True,
+                    "gaps": 0,
+                    "unfixable_gaps": 0,
+                },
+            },
+            evaluation={"acceptance_criteria": ["c1", "c2"]},
+            changeset={
+                "files_changed": ["a.py"],
+                "tdd": {
+                    "green_pass": True,
+                    "regressions": 0,
+                    "smoke_tests": 1,
+                    "user_path_traces": 1,
+                },
+            },
+            review={
+                "findings": [],
+                "integration_trace": {"checked": 3},
+                "runtime_patterns": {"checked": 5},
+            },
+            test_report={"passed": 5, "failed": 0, "wtf_score": 0},
+        )
+        result = _run_score(d)
+        # Should include the +2 audit bonus
+        audit_rules = [b for b in result["breakdown"] if b["rule"] == "completion_audit_all_green"]
+        assert len(audit_rules) == 1
+        assert audit_rules[0]["points"] == 2
+
+    def test_completion_audit_gaps_not_fixed_penalty(self):
+        """completion_audit.gaps > 0 and not fixed → -3 penalty."""
+        d = _make_run_dir(
+            run_json={
+                "id": "run_test_gaps",
+                "project": "TestProject",
+                "profile": "full",
+                "status": "running",
+                "stages": [
+                    {"name": "plan", "status": "complete"},
+                ],
+                "taste_decisions": [],
+                "completion_audit": {
+                    "all_green": False,
+                    "gaps": 2,
+                    "unfixable_gaps": 0,
+                },
+            },
+            evaluation={"acceptance_criteria": ["c1", "c2"]},
+            changeset={
+                "files_changed": ["a.py"],
+                "tdd": {
+                    "green_pass": True,
+                    "regressions": 0,
+                    "smoke_tests": 1,
+                    "user_path_traces": 1,
+                },
+            },
+            review={
+                "findings": [],
+                "integration_trace": {"checked": 3},
+                "runtime_patterns": {"checked": 5},
+            },
+            test_report={"passed": 5, "failed": 0, "wtf_score": 0},
+        )
+        result = _run_score(d)
+        gap_penalties = [p for p in result["penalties"] if p["rule"] == "completion_audit_gaps"]
+        assert len(gap_penalties) == 1
+        assert gap_penalties[0]["points"] == -3
+
+    def test_completion_audit_unfixable_gaps_penalty(self):
+        """completion_audit.unfixable_gaps > 0 → -1 penalty."""
+        d = _make_run_dir(
+            run_json={
+                "id": "run_test_unfixable",
+                "project": "TestProject",
+                "profile": "full",
+                "status": "running",
+                "stages": [
+                    {"name": "plan", "status": "complete"},
+                ],
+                "taste_decisions": [],
+                "completion_audit": {
+                    "all_green": False,
+                    "gaps": 0,
+                    "unfixable_gaps": 1,
+                },
+            },
+            evaluation={"acceptance_criteria": ["c1"]},
+            changeset={
+                "files_changed": ["a.py"],
+                "tdd": {
+                    "green_pass": True,
+                    "regressions": 0,
+                    "smoke_tests": 1,
+                    "user_path_traces": 1,
+                },
+            },
+            review={
+                "findings": [],
+                "integration_trace": {"checked": 3},
+                "runtime_patterns": {"checked": 5},
+            },
+            test_report={"passed": 5, "failed": 0, "wtf_score": 0},
+        )
+        result = _run_score(d)
+        unfixable_penalties = [p for p in result["penalties"] if p["rule"] == "completion_audit_unfixable"]
+        assert len(unfixable_penalties) == 1
+        assert unfixable_penalties[0]["points"] == -1
+
+    def test_completion_audit_in_deliver_stage_fallback(self):
+        """completion_audit nested inside deliver stage record → still detected."""
+        d = _make_run_dir(
+            run_json={
+                "id": "run_test_nested",
+                "project": "TestProject",
+                "profile": "full",
+                "status": "running",
+                "stages": [
+                    {"name": "plan", "status": "complete"},
+                    {
+                        "stage": "deliver",
+                        "status": "complete",
+                        "completion_audit": {
+                            "all_green": True,
+                            "gaps": 0,
+                            "unfixable_gaps": 0,
+                        },
+                    },
+                ],
+                "taste_decisions": [],
+                # NOTE: no top-level completion_audit — tests the fallback path
+            },
+            evaluation={"acceptance_criteria": ["c1"]},
+            changeset={
+                "files_changed": ["a.py"],
+                "tdd": {
+                    "green_pass": True,
+                    "regressions": 0,
+                    "smoke_tests": 1,
+                    "user_path_traces": 1,
+                },
+            },
+            review={
+                "findings": [],
+                "integration_trace": {"checked": 3},
+                "runtime_patterns": {"checked": 5},
+            },
+            test_report={"passed": 5, "failed": 0, "wtf_score": 0},
+        )
+        result = _run_score(d)
+        audit_rules = [b for b in result["breakdown"] if b["rule"] == "completion_audit_all_green"]
+        assert len(audit_rules) == 1, f"Expected audit bonus from stage fallback, got: {result['breakdown']}"
+        assert audit_rules[0]["points"] == 2
+
+    def test_completion_audit_contradictory_state(self):
+        """all_green=True with unfixable_gaps=1 → bonus wins, no unfixable penalty."""
+        d = _make_run_dir(
+            run_json={
+                "id": "run_test_contradict",
+                "project": "TestProject",
+                "profile": "full",
+                "status": "running",
+                "stages": [
+                    {"name": "plan", "status": "complete"},
+                ],
+                "taste_decisions": [],
+                "completion_audit": {
+                    "all_green": True,
+                    "gaps": 0,
+                    "unfixable_gaps": 1,  # contradicts all_green
+                },
+            },
+            evaluation={"acceptance_criteria": ["c1"]},
+            changeset={
+                "files_changed": ["a.py"],
+                "tdd": {
+                    "green_pass": True,
+                    "regressions": 0,
+                    "smoke_tests": 1,
+                    "user_path_traces": 1,
+                },
+            },
+            review={
+                "findings": [],
+                "integration_trace": {"checked": 3},
+                "runtime_patterns": {"checked": 5},
+            },
+            test_report={"passed": 5, "failed": 0, "wtf_score": 0},
+        )
+        result = _run_score(d)
+        # all_green=True → bonus applies
+        audit_rules = [b for b in result["breakdown"] if b["rule"] == "completion_audit_all_green"]
+        assert len(audit_rules) == 1
+        # unfixable penalty should NOT apply when all_green=True
+        unfixable_penalties = [p for p in result["penalties"] if p["rule"] == "completion_audit_unfixable"]
+        assert len(unfixable_penalties) == 0
+
+    def test_no_completion_audit_no_effect(self):
+        """Missing completion_audit field → no bonus, no penalty."""
+        d = _make_run_dir(
+            evaluation={"acceptance_criteria": ["c1"]},
+            changeset={
+                "files_changed": ["a.py"],
+                "tdd": {
+                    "green_pass": True,
+                    "regressions": 0,
+                    "smoke_tests": 1,
+                    "user_path_traces": 1,
+                },
+            },
+            review={
+                "findings": [],
+                "integration_trace": {"checked": 3},
+                "runtime_patterns": {"checked": 5},
+            },
+            test_report={"passed": 5, "failed": 0, "wtf_score": 0},
+        )
+        result = _run_score(d)
+        audit_rules = [b for b in result["breakdown"] if "audit" in b["rule"]]
+        audit_penalties = [p for p in result["penalties"] if "audit" in p["rule"]]
+        assert len(audit_rules) == 0
+        assert len(audit_penalties) == 0
+
 
 class TestWtfGate:
     """Test WTF gate scoring — separate script."""

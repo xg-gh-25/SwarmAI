@@ -22,7 +22,7 @@ Usage:
 Output (JSON):
     {
         "score": 9,
-        "max_possible": 10,
+        "max_possible": 12,
         "flag_for_review": false,
         "breakdown": [
             {"rule": "acceptance_criteria_tested", "points": 3, "detail": "3/3 criteria have tests"}
@@ -144,6 +144,23 @@ def calculate_score(
             "detail": "PLAN stage completed — design doc available",
         })
 
+    # +2: completion audit all green (every AC has verified evidence)
+    # Check top-level first (direct injection), then fall back to deliver stage record
+    # (via --stage-json which nests inside stages array)
+    audit = run.get("completion_audit", {})
+    if not audit:
+        deliver_stage = next(
+            (s for s in stages if s.get("stage", s.get("name")) == "deliver"),
+            {},
+        )
+        audit = deliver_stage.get("completion_audit", {})
+    if audit.get("all_green"):
+        breakdown.append({
+            "rule": "completion_audit_all_green",
+            "points": 2,
+            "detail": "Completion audit: all acceptance criteria have verified evidence",
+        })
+
     # --- Penalties ---
 
     files_changed = (changeset or {}).get("files_changed", [])
@@ -231,6 +248,22 @@ def calculate_score(
                 "detail": "cross-layer change but 0 probes",
             })
 
+    # -3: completion audit has gaps that weren't fixed
+    if audit and not audit.get("all_green") and audit.get("gaps", 0) > 0:
+        penalties.append({
+            "rule": "completion_audit_gaps",
+            "points": -3,
+            "detail": f"Completion audit: {audit['gaps']} gap(s) not fixed",
+        })
+
+    # -1: completion audit has unfixable gaps (mutually exclusive with all_green)
+    if audit and not audit.get("all_green") and audit.get("unfixable_gaps", 0) > 0:
+        penalties.append({
+            "rule": "completion_audit_unfixable",
+            "points": -1,
+            "detail": f"Completion audit: {audit['unfixable_gaps']} unfixable gap(s)",
+        })
+
     # Calculate final score
     positive = sum(item["points"] for item in breakdown)
     negative = sum(item["points"] for item in penalties)
@@ -238,7 +271,7 @@ def calculate_score(
 
     return {
         "score": score,
-        "max_possible": 10,
+        "max_possible": 12,
         "flag_for_review": score < 7,
         "breakdown": breakdown,
         "penalties": penalties,

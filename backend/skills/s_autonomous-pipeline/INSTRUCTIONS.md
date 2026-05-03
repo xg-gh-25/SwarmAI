@@ -18,7 +18,7 @@ For every pipeline run, follow this loop:
                d. Classify decisions (mechanical/taste/judgment)
                e. Verify output (artifact published + schema valid)
                f. Handle result (advance / retry / checkpoint)
-4. DELIVER  -- at delivery stage, run the Delivery Gate
+4. DELIVER  -- Delivery Gate, Confidence Score, Completion Audit, Report, CI
 5. COMPLETE -- summarize, reflect, record metrics
 ```
 

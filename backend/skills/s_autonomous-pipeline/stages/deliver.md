@@ -20,18 +20,21 @@ Assess confidence via script:
 python backend/skills/s_autonomous-pipeline/scripts/confidence_score.py --run-dir <path>
 ```
 
-Confidence score formula (1-10):
+Confidence score formula (1-12):
 ```
 +3 if all acceptance criteria have passing tests
 +2 if review found 0 critical issues
 +2 if TDD red-green cycle completed cleanly
++2 if completion_audit.all_green (every AC has verified evidence)
 +1 if no taste decisions were overridden
 +1 if zero regressions on existing tests
 +1 if design_doc was available (not just evaluation)
+-3 if completion_audit.gaps > 0 and gaps not fixed (deliverable mismatch)
 -2 if any acceptance criterion lacks a test
 -2 if WTF gate triggered (even if resolved)
 -2 if smoke_tests == 0 and files_changed > 1 (runtime crashes likely hidden)
 -2 if user_path_traces == 0 and files_changed > 1 (real data flow unverified)
+-1 if completion_audit.unfixable_gaps > 0 (known incompleteness)
 -1 if integration_trace.checked == 0 (wiring unverified)
 -1 if frontend files changed but ux_review.triggered == false (UX unverified)
 -1 if runtime_patterns.checked == 0 and applicable patterns exist (known bugs unchecked)
@@ -41,6 +44,60 @@ Confidence score formula (1-10):
 ```
 
 If confidence < 7 -- flag for human review even without judgment decisions.
+
+### Completion Audit
+
+**After confidence scoring, before generating the report,** run the Completion
+Audit Protocol. This verifies that deliverables actually match the requirement —
+confidence scoring checks "did we follow the process", the audit checks "did we
+build the right thing."
+
+```
+COMPLETION AUDIT — Verify before declaring done.
+
+1. RESTATE: What were the deliverables?
+   - Copy the original requirement verbatim
+   - List every acceptance criterion from EVALUATE
+
+2. CHECKLIST: For each deliverable, what's the evidence?
+   | # | Acceptance Criterion | Evidence | Status |
+   |---|---------------------|----------|--------|
+   | 1 | AC text...          | test_xxx passes, file created | ✅ |
+   | 2 | AC text...          | [no evidence found]           | ❌ |
+
+3. INSPECT: Verify evidence exists (don't trust memory)
+   - For each ✅: cite the specific file, test name, or output
+   - For each test cited: confirm it actually tests the criterion
+     (not just named similarly)
+   - For each file cited: confirm the relevant code/content exists
+
+4. GAPS: What's missing or incomplete?
+   - List any ❌ items from step 2
+   - List anything the requirement implies but AC didn't capture
+   - grep for "TODO", "FIXME", "placeholder" in changed files
+
+5. VERDICT:
+   - ALL GREEN → set completion_audit.all_green = true, proceed
+   - ANY GAP → fix before proceeding (loop back to BUILD/TEST)
+   - UNFIXABLE GAP → surface as attention flag with explanation
+```
+
+**Record the audit results in run.json** (used by confidence scoring):
+
+```json
+{
+  "completion_audit": {
+    "all_green": true,
+    "gaps": 0,
+    "unfixable_gaps": 0
+  }
+}
+```
+
+**Confidence impact:**
+- `all_green: true` → +2 bonus
+- `gaps > 0` (not fixed) → -3 penalty
+- `unfixable_gaps > 0` → -1 penalty
 
 ### Pipeline Report
 
@@ -111,7 +168,15 @@ Written for someone who won't read the rest of the report. Skip jargon.>
 | BUILD (user-path) | T traces, B bugs found and fixed |
 | TEST (TDD) | pass |
 | VALIDATOR | 6/6 checks |
-| Confidence | X/10 |
+| Confidence | X/12 |
+
+## 7.5 Completion Audit
+| # | Acceptance Criterion | Evidence | Verified |
+|---|---------------------|----------|----------|
+| 1 | ... | test_xxx.py::test_yyy | ✅ |
+| 2 | ... | [gap: not implemented] | ❌ |
+
+**Gaps found:** N | **Gaps fixed:** M | **Attention flags:** K
 
 ## 8. Files Changed
 - `path/to/file.py` (created, N lines)
