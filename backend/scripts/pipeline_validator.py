@@ -546,17 +546,8 @@ def _check_depth(stage: str, artifact_data: dict, profile: str) -> list[str]:
                     "run confidence_score.py to generate a real score"
                 )
 
-    if stage == "build":
-        # tdd: must include green_pass
-        tdd = artifact_data.get("tdd")
-        if isinstance(tdd, dict) and "green_pass" not in tdd:
-            errors.append(
-                "Depth: tdd.green_pass missing — was the RED→GREEN cycle completed?"
-            )
-
-    # --- Rule 18: Adversarial findings must be specific ---
-    if stage == "deliver":
-        ar = artifact_data.get("adversarial_review", {})
+        # --- Rule 18: Adversarial findings must be specific ---
+        # Reuses `ar` from this deliver block (F1 fix: no duplicate fetch)
         if isinstance(ar, dict) and ar.get("profile_tier") not in ("skipped", None):
             findings = ar.get("findings", [])
             if isinstance(findings, list) and len(findings) > 0:
@@ -576,6 +567,14 @@ def _check_depth(stage: str, artifact_data: dict, profile: str) -> list[str]:
                         f"(no file path, function name, or line reference). "
                         f"Rule 18: findings must include file, what's wrong, and concrete fix."
                     )
+
+    if stage == "build":
+        # tdd: must include green_pass
+        tdd = artifact_data.get("tdd")
+        if isinstance(tdd, dict) and "green_pass" not in tdd:
+            errors.append(
+                "Depth: tdd.green_pass missing — was the RED→GREEN cycle completed?"
+            )
 
     return errors
 
