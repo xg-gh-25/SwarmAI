@@ -250,7 +250,14 @@ datas += collect_data_files('sqlite_vec')  # vec0.dylib native extension for vec
 datas += collect_data_files('awscrt')  # AWS CRT native libraries (.dylib/.so)
 # Include built-in context files and skills for agent workspace initialization
 datas += [('context', 'context')]
-datas += [('skills', 'skills')]
+# Include skills but EXCLUDE node_modules — Remotion's alone is 609MB/15K+ files
+# which causes PyInstaller OOM (SIGKILL exit 137). Templates run npm install at runtime.
+import os as _os
+for _root, _dirs, _files in _os.walk('skills'):
+    _dirs[:] = [d for d in _dirs if d != 'node_modules' and d != '__pycache__']
+    for _f in _files:
+        _src = _os.path.join(_root, _f)
+        datas.append((_src, _os.path.dirname(_src)))
 # Include DDD templates for default project provisioning
 datas += [('templates', 'templates')]
 # Include MCP catalog and CLI tool registry at bundle root

@@ -812,21 +812,40 @@ class SlackChannelAdapter(ChannelAdapter):
         external_thread_id: Optional[str] = None,
         text: Optional[str] = None,
         recipient_user_id: Optional[str] = None,
+        *,
+        inbound_ts: Optional[str] = None,
     ) -> Optional[str]:
         """Start a native streaming session via chat.startStream.
 
         Returns the stream_id (ts) on success, None on failure.
         Falls back to legacy send_typing_indicator on API error.
+
+        ``thread_ts`` is **required** by the Slack API — it tells Slack
+        which thread to stream into.  For non-threaded DMs the user's
+        message timestamp (``inbound_ts``) serves the same purpose:
+        the bot's streaming reply becomes a threaded response.
         """
         if not self._slack_client:
             return None
+        # Resolve thread_ts: explicit thread > user message ts > skip
+        thread_ts = external_thread_id or inbound_ts
+        if not thread_ts:
+            logger.debug(
+                "start_stream: no thread_ts or inbound_ts for %s — "
+                "cannot start native stream",
+                self.channel_id,
+            )
+            return None
         loop = asyncio.get_running_loop()
         try:
-            kwargs: dict = {"channel": external_chat_id}
-            if external_thread_id:
-                kwargs["thread_ts"] = external_thread_id
+            kwargs: dict = {
+                "channel": external_chat_id,
+                "thread_ts": thread_ts,
+            }
             if text:
                 kwargs["markdown_text"] = text
+            if recipient_user_id:
+                kwargs["recipient_user_id"] = recipient_user_id
             result = await loop.run_in_executor(
                 None, lambda: self._slack_client.chat_startStream(**kwargs),
             )

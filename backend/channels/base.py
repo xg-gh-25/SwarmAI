@@ -224,16 +224,21 @@ class ChannelAdapter(ABC):
         external_thread_id: Optional[str] = None,
         text: Optional[str] = None,
         recipient_user_id: Optional[str] = None,
+        *,
+        inbound_ts: Optional[str] = None,
     ) -> Optional[str]:
         """Start a native streaming session. Returns stream ts.
 
         Args:
             external_chat_id: Channel ID.
-            external_thread_id: Thread ts to stream into. For DMs, use the
-                inbound message ts so the stream appears as a reply.
+            external_thread_id: Thread ts to stream into (existing thread).
             text: Optional initial markdown text.
             recipient_user_id: Required for DM streaming on Slack — the user
                 ID of the message recipient.
+            inbound_ts: The user's inbound message timestamp.  Used as
+                fallback ``thread_ts`` when *external_thread_id* is ``None``
+                (non-threaded DMs).  The streaming reply becomes a threaded
+                response to the user's original message.
         """
         return None
 
