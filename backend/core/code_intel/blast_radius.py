@@ -178,11 +178,20 @@ def analyze_diff(
     graph_store: GraphStore,
     repo_root: Path,
     base_ref: str = "HEAD~1",
+    end_ref: str | None = None,
 ) -> BlastRadiusResult:
-    """Run blast radius analysis for changes since *base_ref*.
+    """Run blast radius analysis for changes between *base_ref* and *end_ref*.
+
+    Parameters
+    ----------
+    base_ref : str
+        Starting point for diff (e.g. "HEAD~1" or a commit SHA).
+    end_ref : str | None
+        Ending point. ``None`` means HEAD (current working tree).
+        Pass an explicit SHA when analyzing a specific commit range.
 
     Steps:
-    1. ``git diff {base_ref} --unified=0`` to get changed lines per file.
+    1. ``git diff base_ref [end_ref] --unified=0`` to get changed lines per file.
     2. Map changed lines to code_nodes (line range overlap).
     3. ``graph_store.blast_radius(changed_nodes, max_depth=2)`` for bidirectional
        transitive impact.
@@ -192,9 +201,13 @@ def analyze_diff(
     result = BlastRadiusResult()
 
     # 1. Get diff output
+    diff_cmd = ["git", "diff", base_ref]
+    if end_ref:
+        diff_cmd.append(end_ref)
+    diff_cmd.append("--unified=0")
     try:
         proc = subprocess.run(
-            ["git", "diff", base_ref, "--unified=0"],
+            diff_cmd,
             cwd=str(repo_root),
             capture_output=True,
             text=True,
@@ -250,11 +263,17 @@ def analyze_diff(
             id_to_node[n["id"]] = n
 
     # 4. Build ImpactNode list with annotations
+    #    Skip unresolved bare names (no "::" = builtins/stdlib/unresolved)
     seen_ids: set[str] = set(changed_node_ids)
     for node_id, depth in affected_tuples:
         if node_id in seen_ids:
             continue
         seen_ids.add(node_id)
+
+        # Filter: bare names without qualified separator are unresolved
+        # (e.g. "Lock", "RuntimeError", "ValueError") — not real nodes
+        if _QUALIFIED_SEP not in node_id and ":" not in node_id:
+            continue
 
         # Resolve node metadata -- try cache first, then graph lookup
         node_info = id_to_node.get(node_id) or _resolve_node(node_id, graph_store)
