@@ -396,12 +396,16 @@ class SlackChannelAdapter(ChannelAdapter):
         # User name cache: user_id -> display_name
         # Pre-populate with known users to avoid per-message API failures
         # when Slack scopes (users:read) are unavailable (COE02).
+        # LRU eviction: cap at 500 entries (G9).
         self._user_cache: dict[str, str] = dict(_KNOWN_USERS)
+        self._user_cache_maxsize: int = 500
         # MCP fallback bridge (lazy — spawned on first proxy error)
         self._mcp_bridge: Optional[SlackMcpBridge] = None
         # Auth health tracking
         self._last_auth_check: float = 0.0
-        self._consecutive_auth_failures: int = 0
+        # G1: Auth failure counting unified in gateway._auth_failure_counts.
+        # Adapter no longer maintains its own counter — all auth failures
+        # are reported to gateway via _on_error callback.
         # Polling fallback state
         self._connection_mode: str = "socket"  # "socket" or "polling"
         self._ws_fail_count: int = 0
@@ -638,6 +642,24 @@ class SlackChannelAdapter(ChannelAdapter):
         return "channel"
 
     # ------------------------------------------------------------------
+    # Auth failure reporting (G1: unified counter in gateway)
+    # ------------------------------------------------------------------
+
+    async def _report_auth_failure(self, error_msg: str) -> None:
+        """Report an auth failure to the gateway for circuit-breaking.
+
+        Outbound API calls (send_message, update_message, typing_indicator)
+        can encounter auth errors independently of the Socket Mode connection.
+        These must reach the gateway's single circuit breaker.
+        """
+        if self._on_error is None:
+            return
+        try:
+            await self._on_error(self.channel_id, error_msg)
+        except Exception:
+            logger.debug("Failed to report auth failure to gateway")
+
+    # ------------------------------------------------------------------
     # User name resolution
     # ------------------------------------------------------------------
 
@@ -699,7 +721,22 @@ class SlackChannelAdapter(ChannelAdapter):
         # Cache the raw user_id as negative result — prevents retrying
         # known-failing API calls on every subsequent message (AC1).
         self._user_cache[user_id] = user_id
+        self._evict_user_cache_if_full()
         return user_id
+
+    def _evict_user_cache_if_full(self) -> None:
+        """Evict oldest entries when cache exceeds maxsize (G9: LRU cap)."""
+        if len(self._user_cache) > self._user_cache_maxsize:
+            # Remove oldest entries (first inserted). dict preserves insertion
+            # order in Python 3.7+. Keep known users (they're pre-populated).
+            to_remove = len(self._user_cache) - self._user_cache_maxsize
+            removed = 0
+            for key in list(self._user_cache.keys()):
+                if removed >= to_remove:
+                    break
+                if key not in _KNOWN_USERS:
+                    del self._user_cache[key]
+                    removed += 1
 
     # ------------------------------------------------------------------
     # File download
@@ -1169,23 +1206,44 @@ class SlackChannelAdapter(ChannelAdapter):
             self._poll_task = asyncio.create_task(self._run_polling())
 
     async def _discover_poll_channels(self) -> None:
-        """Discover DM channels to poll via ``conversations.list``."""
+        """Discover DM channels to poll via ``conversations.list``.
+
+        G3: Clears stale ``_poll_channels`` on each discovery so mode
+        switches (Socket → Polling → Socket → Polling) don't accumulate
+        closed DM channel IDs.
+
+        G4: Paginates using ``next_cursor`` to discover >100 DM channels
+        (AWS Enterprise Slack can have many DMs).
+        """
         if not self._slack_client:
             return
         loop = asyncio.get_running_loop()
+        # G3: Rebuild channel list from API — stale channels from prior mode
+        # switch are discarded, but existing timestamps for still-active
+        # channels are preserved (avoids re-fetching old messages).
+        discovered: dict[str, str] = {}
         try:
-            result = await loop.run_in_executor(
-                None,
-                # TODO: paginate if >100 DMs (response_metadata.next_cursor)
-                lambda: self._slack_client.conversations_list(
-                    types="im", limit=100, exclude_archived=True,
-                ),
-            )
-            for ch in result.get("channels", []):
-                ch_id = ch.get("id", "")
-                if ch_id and ch_id not in self._poll_channels:
-                    # New channel — start polling from now
-                    self._poll_channels[ch_id] = str(time.time())
+            cursor = None
+            while True:
+                kwargs = {"types": "im", "limit": 100, "exclude_archived": True}
+                if cursor:
+                    kwargs["cursor"] = cursor
+                result = await loop.run_in_executor(
+                    None,
+                    lambda kw=kwargs: self._slack_client.conversations_list(**kw),
+                )
+                for ch in result.get("channels", []):
+                    ch_id = ch.get("id", "")
+                    if ch_id:
+                        # Preserve existing timestamp, or start from now
+                        discovered[ch_id] = self._poll_channels.get(ch_id, str(time.time()))
+                # G4: Cursor pagination — continue until no more pages
+                meta = result.get("response_metadata", {})
+                cursor = meta.get("next_cursor")
+                if not cursor:
+                    break
+            # G3: Atomic swap — stale channels gone, active preserved
+            self._poll_channels = discovered
             logger.info(
                 "Channel %s: discovered %d DM channels for polling",
                 self.channel_id,
@@ -1423,13 +1481,11 @@ class SlackChannelAdapter(ChannelAdapter):
                 if not self._stopped:
                     is_auth = _is_auth_error(exc)
                     if is_auth:
-                        # Auth errors → escalate to gateway (circuit breaker)
-                        self._consecutive_auth_failures += 1
+                        # Auth errors → escalate to gateway (circuit breaker).
+                        # G1: No local counter — gateway tracks all auth failures.
                         logger.error(
-                            "Slack Socket Mode AUTH_ERROR for channel %s "
-                            "(consecutive=%d): %s",
+                            "Slack Socket Mode AUTH_ERROR for channel %s: %s",
                             self.channel_id,
-                            self._consecutive_auth_failures,
                             exc,
                         )
                         error_msg = (
@@ -1501,11 +1557,19 @@ class SlackChannelAdapter(ChannelAdapter):
             # Split blocks by both count (50) and text size (38K) per API call
             first_ts: Optional[str] = None
             block_chunks = _split_blocks_for_payload(blocks)
+            total_chunks = len(block_chunks)
 
             for idx, chunk in enumerate(block_chunks):
+                # G10: Add chunk indicator for multi-part messages
+                chunk_label = f" ({idx + 1}/{total_chunks})" if total_chunks > 1 else ""
+                base_text = fallback if idx == 0 else "(continued)"
+                # Ensure chunk label doesn't exceed Slack's text fallback limit
+                max_base = _TEXT_FALLBACK_LIMIT - len(chunk_label)
+                text_with_label = base_text[:max_base] + chunk_label
+
                 kwargs = {
                     "channel": message.external_chat_id,
-                    "text": fallback if idx == 0 else "(continued)",
+                    "text": text_with_label,
                     "blocks": chunk,
                 }
                 if thread_ts:
@@ -1529,11 +1593,9 @@ class SlackChannelAdapter(ChannelAdapter):
             )
         except Exception as exc:
             if _is_auth_error(exc):
-                self._consecutive_auth_failures += 1
-                logger.error(
-                    "Slack AUTH_ERROR in send_message (consecutive=%d): %s",
-                    self._consecutive_auth_failures, exc,
-                )
+                # G1: Report auth failure to gateway for unified circuit breaking.
+                logger.error("Slack AUTH_ERROR in send_message: %s", exc)
+                await self._report_auth_failure(f"AUTH_ERROR: send_message: {exc}")
                 # Try MCP fallback — different auth path
                 return await self._mcp_post_message(
                     message.external_chat_id,
