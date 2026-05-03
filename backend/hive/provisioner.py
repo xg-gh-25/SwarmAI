@@ -48,8 +48,8 @@ _VALID_INSTANCE_COLUMNS = frozenset({
     "auth_user", "auth_password",
 })
 
-# Hive name regex — must match router's _HIVE_NAME_RE
-_HIVE_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
+# Hive name regex — single source of truth, imported by routers/hive.py
+HIVE_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 
 # IAM policy for Hive instances
 HIVE_IAM_POLICY = {
@@ -148,7 +148,7 @@ class HiveProvisioner:
         sets = ", ".join(f"{k} = ?" for k in fields)
         vals = list(fields.values()) + [instance_id]
         async with aiosqlite.connect(str(self.db_path)) as conn:
-            await conn.execute("PRAGMA busy_timeout = 500")
+            await conn.execute("PRAGMA busy_timeout = 3000")
             await conn.execute("PRAGMA foreign_keys = ON")
             await conn.execute(
                 f"UPDATE hive_instances SET {sets}, updated_at = datetime('now') WHERE id = ?",
@@ -160,7 +160,7 @@ class HiveProvisioner:
         """Fetch account row by id."""
         async with aiosqlite.connect(str(self.db_path)) as conn:
             conn.row_factory = aiosqlite.Row
-            await conn.execute("PRAGMA busy_timeout = 500")
+            await conn.execute("PRAGMA busy_timeout = 3000")
             await conn.execute("PRAGMA foreign_keys = ON")
             cursor = await conn.execute(
                 "SELECT * FROM hive_accounts WHERE id = ?", (account_ref,)
@@ -174,7 +174,7 @@ class HiveProvisioner:
         """Fetch instance row by id."""
         async with aiosqlite.connect(str(self.db_path)) as conn:
             conn.row_factory = aiosqlite.Row
-            await conn.execute("PRAGMA busy_timeout = 500")
+            await conn.execute("PRAGMA busy_timeout = 3000")
             await conn.execute("PRAGMA foreign_keys = ON")
             cursor = await conn.execute(
                 "SELECT * FROM hive_instances WHERE id = ?", (instance_id,)
@@ -347,7 +347,14 @@ class HiveProvisioner:
                     InstanceProfileName=profile_name, RoleName=role_name
                 )
             except iam.exceptions.LimitExceededException:
-                pass  # Role already attached
+                # M3: Verify the attached role is the one we want
+                ip = iam.get_instance_profile(InstanceProfileName=profile_name)
+                attached = [r["RoleName"] for r in ip["InstanceProfile"].get("Roles", [])]
+                if role_name not in attached:
+                    raise RuntimeError(
+                        f"Instance profile {profile_name} has wrong role attached: "
+                        f"{attached} (expected {role_name})"
+                    )
             except Exception as e:
                 if "Cannot exceed quota" in str(e) or "already" in str(e).lower():
                     pass
@@ -456,13 +463,10 @@ class HiveProvisioner:
         """Get latest Amazon Linux 2023 ARM64 AMI via SSM parameter."""
         def _lookup():
             ssm = session.client("ssm", region_name=region)
-            try:
-                resp = ssm.get_parameter(Name=AL2023_ARM64_SSM_PARAM)
-                return resp["Parameter"]["Value"]
-            except Exception:
-                # Fallback: known-good AMI (us-east-1, Apr 2026)
-                logger.warning("SSM AMI lookup failed, using fallback")
-                return "ami-0f935a2ecd3a7bd5c"
+            # L: No fallback — region-specific hardcoded AMI would fail in other regions.
+            # Let the exception propagate so deploy() reports a clear error.
+            resp = ssm.get_parameter(Name=AL2023_ARM64_SSM_PARAM)
+            return resp["Parameter"]["Value"]
 
         return await asyncio.to_thread(_lookup)
 
@@ -737,9 +741,11 @@ class HiveProvisioner:
         self, session, dist_id: str, timeout: int = 1200
     ) -> bool:
         """Wait for CloudFront distribution to reach Deployed status."""
+        # M1: Create client once — reused across all poll iterations
+        cf_client = session.client("cloudfront")
+
         def _check():
-            cf = session.client("cloudfront")
-            resp = cf.get_distribution(Id=dist_id)
+            resp = cf_client.get_distribution(Id=dist_id)
             return resp["Distribution"]["Status"]
 
         start = time.monotonic()
@@ -768,7 +774,7 @@ class HiveProvisioner:
             # PE-review P0-4: atomic status gate prevents TOCTOU race.
             # UPDATE WHERE returns rowcount=0 if another task already claimed it.
             async with aiosqlite.connect(str(self.db_path)) as conn:
-                await conn.execute("PRAGMA busy_timeout = 500")
+                await conn.execute("PRAGMA busy_timeout = 3000")
                 cursor = await conn.execute(
                     "UPDATE hive_instances SET status = 'provisioning', updated_at = datetime('now') "
                     "WHERE id = ? AND status IN ('pending', 'error')",
@@ -783,7 +789,7 @@ class HiveProvisioner:
             account = await self._get_account(instance["account_ref"])
             name = instance["name"]
             # PE-review P1-8: defensive name validation (not just router-level)
-            if not _HIVE_NAME_RE.match(name):
+            if not HIVE_NAME_RE.match(name):
                 raise ValueError(f"Invalid hive name: {name!r}")
             region = instance["region"]
             version = await self._resolve_version(instance.get("version"))
@@ -949,6 +955,19 @@ class HiveProvisioner:
 
     async def stop(self, instance_id: str) -> None:
         """Stop a running Hive (EC2 stop + disable CloudFront)."""
+        # H1: Atomic status gate — prevents concurrent stop calls
+        async with aiosqlite.connect(str(self.db_path)) as conn:
+            await conn.execute("PRAGMA busy_timeout = 3000")
+            await conn.execute("PRAGMA foreign_keys = ON")
+            cursor = await conn.execute(
+                "UPDATE hive_instances SET status = 'stopping', updated_at = datetime('now') "
+                "WHERE id = ? AND status = 'running'",
+                (instance_id,),
+            )
+            await conn.commit()
+            if cursor.rowcount == 0:
+                raise RuntimeError(f"Instance {instance_id} is not in 'running' state")
+
         instance = await self._get_instance(instance_id)
         account = await self._get_account(instance["account_ref"])
         session = self._get_session(account, instance["region"])
@@ -961,7 +980,15 @@ class HiveProvisioner:
             ec2.stop_instances(InstanceIds=[ec2_id])
             ec2.get_waiter("instance_stopped").wait(InstanceIds=[ec2_id])
 
-        await asyncio.to_thread(_stop)
+        try:
+            await asyncio.to_thread(_stop)
+        except Exception as e:
+            # U1/PE-3: Rollback status on failure — prevent zombie 'stopping' state
+            await self._update_instance(
+                instance_id, status="error",
+                error_message=f"Stop failed: {str(e)[:300]}",
+            )
+            raise
         # G3: Disable CloudFront to avoid 502s for users
         await self._set_cloudfront_enabled(
             session, instance.get("cloudfront_dist_id"), enabled=False
@@ -970,6 +997,19 @@ class HiveProvisioner:
 
     async def start(self, instance_id: str) -> None:
         """Start a stopped Hive (EC2 start + wait healthy + enable CloudFront)."""
+        # H1: Atomic status gate — prevents concurrent start calls
+        async with aiosqlite.connect(str(self.db_path)) as conn:
+            await conn.execute("PRAGMA busy_timeout = 3000")
+            await conn.execute("PRAGMA foreign_keys = ON")
+            cursor = await conn.execute(
+                "UPDATE hive_instances SET status = 'starting', updated_at = datetime('now') "
+                "WHERE id = ? AND status = 'stopped'",
+                (instance_id,),
+            )
+            await conn.commit()
+            if cursor.rowcount == 0:
+                raise RuntimeError(f"Instance {instance_id} is not in 'stopped' state")
+
         instance = await self._get_instance(instance_id)
         account = await self._get_account(instance["account_ref"])
         region = instance["region"]
@@ -983,7 +1023,15 @@ class HiveProvisioner:
             ec2.start_instances(InstanceIds=[ec2_id])
             ec2.get_waiter("instance_running").wait(InstanceIds=[ec2_id])
 
-        await asyncio.to_thread(_start)
+        try:
+            await asyncio.to_thread(_start)
+        except Exception as e:
+            # U1/PE-3: Rollback status on failure — prevent zombie 'starting' state
+            await self._update_instance(
+                instance_id, status="error",
+                error_message=f"Start failed: {str(e)[:300]}",
+            )
+            raise
         await self._update_instance(instance_id, status="installing")
 
         # Health check via SSM (SG blocks non-CloudFront HTTP traffic)
@@ -1007,7 +1055,8 @@ class HiveProvisioner:
         """Update a Hive to a new version via SSM Run Command."""
         # G6: Atomic status gate — prevents concurrent updates
         async with aiosqlite.connect(str(self.db_path)) as conn:
-            await conn.execute("PRAGMA busy_timeout = 500")
+            await conn.execute("PRAGMA busy_timeout = 3000")
+            await conn.execute("PRAGMA foreign_keys = ON")
             cursor = await conn.execute(
                 "UPDATE hive_instances SET status = 'updating', updated_at = datetime('now') "
                 "WHERE id = ? AND status = 'running'",
@@ -1377,6 +1426,8 @@ fi
         }
 
         await self._cleanup_resources(session, region, resources)
+        # H5: Set terminal status so retry path doesn't find instance stuck in 'deleting'
+        await self._update_instance(instance_id, status="deleted")
 
     async def _cleanup_resources(
         self, session, region: str, resources: dict[str, Optional[str]]

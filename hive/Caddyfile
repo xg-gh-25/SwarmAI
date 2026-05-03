@@ -16,7 +16,7 @@
     # G11: /health returns no secrets, safe to expose unauthenticated.
     # Enables Route53 health checks, UptimeRobot, etc.
     handle /health {
-        reverse_proxy localhost:18321
+        reverse_proxy 127.0.0.1:18321
     }
 
     # --- Authentication (MVP: basic auth) ---
@@ -29,7 +29,7 @@
 
     # --- SSE streaming — MUST be before generic /api/* (first-match) ---
     handle /api/chat/stream {
-        reverse_proxy localhost:18321 {
+        reverse_proxy 127.0.0.1:18321 {
             flush_interval -1
             transport http {
                 read_timeout 300s
@@ -38,7 +38,7 @@
     }
 
     handle /api/chat/answer-question {
-        reverse_proxy localhost:18321 {
+        reverse_proxy 127.0.0.1:18321 {
             flush_interval -1
             transport http {
                 read_timeout 120s
@@ -47,7 +47,7 @@
     }
 
     handle /api/chat/cmd-permission-continue {
-        reverse_proxy localhost:18321 {
+        reverse_proxy 127.0.0.1:18321 {
             flush_interval -1
             transport http {
                 read_timeout 120s
@@ -57,7 +57,7 @@
 
     # --- Generic API reverse proxy (catch-all for non-SSE) ---
     handle /api/* {
-        reverse_proxy localhost:18321
+        reverse_proxy 127.0.0.1:18321
     }
 
     # /shutdown intentionally NOT proxied — any auth'd user could kill
