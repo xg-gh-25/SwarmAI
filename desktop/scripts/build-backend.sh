@@ -239,6 +239,8 @@ hiddenimports += collect_submodules('slack_sdk')
 hiddenimports += ['sqlite_vec']  # Vector search extension (try/except import in vec_db.py)
 hiddenimports += collect_submodules('amazon_transcribe')  # Voice transcription (Transcribe Streaming)
 hiddenimports += collect_submodules('awscrt')  # AWS Common Runtime (native C extensions)
+hiddenimports += ['tree_sitter', 'tree_sitter._binding']  # Code Intelligence AST parsing (native C extension)
+hiddenimports += collect_submodules('tree_sitter_language_pack')  # Language grammars for tree-sitter
 
 # Collect data files (including bundled CLI binary from claude_agent_sdk)
 datas = []
