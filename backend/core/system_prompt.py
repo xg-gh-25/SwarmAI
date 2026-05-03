@@ -237,7 +237,8 @@ class SystemPromptBuilder:
         tz_name = local_now.strftime("%Z") or "Local"
         return (
             f"Current date/time: {utc_now.strftime('%Y-%m-%d %H:%M UTC')} "
-            f"/ {local_now.strftime('%Y-%m-%d %H:%M')} {tz_name}"
+            f"/ {local_now.strftime('%Y-%m-%d %H:%M')} {tz_name} "
+            f"({local_now.strftime('%A')})"
         )
 
     def _section_runtime(self) -> str:
