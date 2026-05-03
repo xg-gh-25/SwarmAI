@@ -964,11 +964,8 @@ class SlackChannelAdapter(ChannelAdapter):
             )
         except Exception as exc:
             if _is_auth_error(exc):
-                self._consecutive_auth_failures += 1
-                logger.error(
-                    "Slack AUTH_ERROR in typing indicator (consecutive=%d): %s",
-                    self._consecutive_auth_failures, exc,
-                )
+                logger.error("Slack AUTH_ERROR in typing indicator: %s", exc)
+                await self._report_auth_failure(f"AUTH_ERROR: typing_indicator: {exc}")
                 # Try MCP fallback — different auth path
                 return await self._mcp_post_message(
                     external_chat_id,
@@ -1051,11 +1048,8 @@ class SlackChannelAdapter(ChannelAdapter):
             await self._mcp_update_message(external_chat_id, message_id, text)
         except Exception as exc:
             if _is_auth_error(exc):
-                self._consecutive_auth_failures += 1
-                logger.error(
-                    "Slack AUTH_ERROR in update_message (consecutive=%d): %s",
-                    self._consecutive_auth_failures, exc,
-                )
+                logger.error("Slack AUTH_ERROR in update_message: %s", exc)
+                await self._report_auth_failure(f"AUTH_ERROR: update_message: {exc}")
                 await self._mcp_update_message(external_chat_id, message_id, text)
                 return
             logger.exception("Error updating Slack message")
