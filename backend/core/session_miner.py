@@ -257,20 +257,21 @@ class SessionMiner:
         """Check if a keyword match is a strong intent signal (not casual mention).
 
         Returns True if:
-        - The keyword appears as the first word or in an imperative opening, OR
-        - The message is short (<80 chars) so it's likely a direct command, OR
-        - The keyword match is at the very start of the text.
+        - The message is short-to-medium (<200 chars) — likely a direct command, OR
+        - The keyword appears in the first 60 chars of the message (imperative opening).
 
-        This reduces false positives from casual mid-sentence mentions of
-        generic keywords like "pdf", "slack", "weather".
+        Old thresholds (80 chars / position 20) were too restrictive — multi-word
+        triggers like "weekly report" or "forecast report" at natural sentence
+        positions got rejected, causing 48 of 56 skills to have zero usage data
+        in the evolution pipeline (F4 fix, 2026-05-03).
         """
         text = user_text.strip()
-        # Short messages are almost always direct commands
-        if len(text) < 80:
+        # Short-to-medium messages are almost always direct commands
+        if len(text) < 200:
             return True
-        # Keyword at start of message (imperative)
+        # Keyword in the opening portion of a longer message (imperative)
         match = kw_pattern.search(text)
-        if match and match.start() < 20:
+        if match and match.start() < 60:
             return True
         return False
 

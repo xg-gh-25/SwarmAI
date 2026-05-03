@@ -328,7 +328,7 @@ class TestComputeConfidence:
         """1 correction → evidence=0.3, low end of range."""
         result = compute_confidence(1, 10, 0.5)
         assert result > 0.0
-        assert result < 0.35  # Should not reach deploy threshold
+        assert result < 0.25  # Single correction should stay low-confidence
 
     # ── v2.1 band-specific tests ──
 
@@ -412,6 +412,28 @@ class TestConfidenceBoosts:
             recent_corrections=10, repeat_count=10,
         )
         assert result <= 1.0
+
+
+class TestHighConfidenceThreshold:
+    """F3: HIGH_CONFIDENCE must be low enough for real data to reach it."""
+
+    def test_high_confidence_is_reachable(self):
+        """HIGH_CONFIDENCE should be ≤0.15, not 0.35 — reachable with real correction data."""
+        from core.evolution_optimizer import HIGH_CONFIDENCE
+        assert HIGH_CONFIDENCE <= 0.15, (
+            f"HIGH_CONFIDENCE={HIGH_CONFIDENCE} is too high — autonomous-pipeline with "
+            f"5 corrections only reaches 0.16. Threshold must be ≤0.15."
+        )
+
+    def test_autonomous_pipeline_scenario_deploys(self):
+        """Real scenario: 5 corrections, 64 examples, fitness 1.0 → should reach HIGH threshold."""
+        from core.evolution_optimizer import HIGH_CONFIDENCE
+        # This is the real autonomous-pipeline data from skill_health.json
+        result = compute_confidence(5, 64, 1.0)
+        assert result >= HIGH_CONFIDENCE, (
+            f"conf={result} < HIGH={HIGH_CONFIDENCE} for 5 corrections/64 examples — "
+            f"threshold is unreachable with real data"
+        )
 
 
 class TestAtomicDeploy:

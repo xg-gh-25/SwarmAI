@@ -389,3 +389,49 @@ class TestRealTranscriptFormat:
         assert len(examples) >= 1
         assert examples[0].score == 0.0
         assert examples[0].final_outcome == "abandoned"
+
+
+class TestStrongKeywordSignal:
+    """F4: _is_strong_keyword_signal should accept matches in messages up to 200 chars."""
+
+    def test_medium_message_with_keyword(self):
+        """A 120-char message with keyword at position 30 should be a strong signal."""
+        from core.session_miner import SessionMiner
+        import re
+        kw_pattern = re.compile(r"\bweekly report\b", re.IGNORECASE)
+        text = "Hey can you please generate the weekly report for this week? I need it for the Monday meeting with the leadership team."
+        assert len(text) > 80  # Longer than old threshold
+        assert len(text) < 200  # Within new threshold
+        result = SessionMiner._is_strong_keyword_signal(text, kw_pattern)
+        assert result is True, (
+            f"Message of {len(text)} chars with keyword at position "
+            f"{text.lower().find('weekly report')} should be a strong signal"
+        )
+
+    def test_long_prose_rejected(self):
+        """A 300-char message should be rejected (casual mention, not a command)."""
+        from core.session_miner import SessionMiner
+        import re
+        kw_pattern = re.compile(r"\bpdf\b", re.IGNORECASE)
+        text = (
+            "I was looking at the architecture docs and noticed that the PDF generation module has some "
+            "issues. The main problem is that the template engine doesn't handle UTF-8 correctly for CJK "
+            "characters. Also the font loading path is hardcoded. But that's a separate topic from what we're "
+            "working on today, which is the session resume enrichment."
+        )
+        assert len(text) > 200
+        result = SessionMiner._is_strong_keyword_signal(text, kw_pattern)
+        assert result is False
+
+    def test_keyword_at_position_50_accepted(self):
+        """A keyword at character position 50 in a 150-char message should be accepted."""
+        from core.session_miner import SessionMiner
+        import re
+        kw_pattern = re.compile(r"\bforecast report\b", re.IGNORECASE)
+        text = "I need you to help me with generating the forecast report for the Q2 review meeting tomorrow morning."
+        match = kw_pattern.search(text)
+        assert match is not None
+        assert match.start() > 20  # Beyond old position threshold
+        assert match.start() < 60  # Within new position threshold
+        result = SessionMiner._is_strong_keyword_signal(text, kw_pattern)
+        assert result is True
