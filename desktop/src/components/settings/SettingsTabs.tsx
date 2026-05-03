@@ -17,18 +17,30 @@ import HiveTab from './HiveTab';
 import BackupTab from './BackupTab';
 import { isDesktop } from '../../services/tauri';
 
+/**
+ * Width tiers:
+ * - 'full'  — no max-width, own padding (data tables like Skills)
+ * - '6xl'   — max-w-6xl 1152px (card grids: MCP, Hive, Engine)
+ * - '4xl'   — max-w-4xl 896px  (forms: General, AI, Channels, etc.)
+ */
 const ALL_TABS = [
-  { id: 'general', label: 'General', icon: 'settings' },
-  { id: 'ai-models', label: 'AI & Models', icon: 'smart_toy' },
-  { id: 'channels', label: 'Channels', icon: 'forum' },
-  { id: 'skills', label: 'Skills', icon: 'extension' },
-  { id: 'mcp-servers', label: 'MCP Servers', icon: 'device_hub' },
-  { id: 'hive', label: 'Hive', icon: 'cloud', desktopOnly: true },
-  { id: 'backup', label: 'Backup', icon: 'cloud_upload' },
-  { id: 'engine', label: 'Core Engine', icon: 'psychology' },
-  { id: 'system', label: 'System', icon: 'dns' },
-  { id: 'about', label: 'About', icon: 'info' },
+  { id: 'general', label: 'General', icon: 'settings', width: '4xl' as const },
+  { id: 'ai-models', label: 'AI & Models', icon: 'smart_toy', width: '4xl' as const },
+  { id: 'channels', label: 'Channels', icon: 'forum', width: '4xl' as const },
+  { id: 'skills', label: 'Skills', icon: 'extension', width: 'full' as const },
+  { id: 'mcp-servers', label: 'MCP Servers', icon: 'device_hub', width: '6xl' as const },
+  { id: 'hive', label: 'Hive', icon: 'cloud', desktopOnly: true, width: '6xl' as const },
+  { id: 'backup', label: 'Backup', icon: 'cloud_upload', width: '4xl' as const },
+  { id: 'engine', label: 'Core Engine', icon: 'psychology', width: '6xl' as const },
+  { id: 'system', label: 'System', icon: 'dns', width: '4xl' as const },
+  { id: 'about', label: 'About', icon: 'info', width: '4xl' as const },
 ] as const;
+
+const WIDTH_CLASSES = {
+  'full': '',
+  '6xl': 'max-w-6xl mx-auto p-6',
+  '4xl': 'max-w-4xl mx-auto p-6',
+} as const;
 
 type TabId = typeof ALL_TABS[number]['id'];
 
@@ -81,31 +93,24 @@ export default function SettingsTabs({ initialTab }: SettingsTabsProps) {
 
       {/* Tab content — scrollable, fills remaining space */}
       <div className="flex-1 min-h-0 overflow-y-auto">
-        {/* Wide tabs (data tables, lists) use full width; form tabs stay constrained */}
-        {activeTab === 'skills' ? (
-          <SkillsSettingsTab />
-        ) : activeTab === 'mcp-servers' ? (
-          <div className="max-w-6xl mx-auto p-6">
-            <MCPServersTab />
-          </div>
-        ) : activeTab === 'hive' ? (
-          <div className="max-w-6xl mx-auto p-6">
-            <HiveTab />
-          </div>
-        ) : activeTab === 'engine' ? (
-          <div className="max-w-6xl mx-auto p-6">
-            <EngineMetricsTab />
-          </div>
-        ) : (
-          <div className="max-w-4xl mx-auto p-6">
-            {activeTab === 'general' && <GeneralTab />}
-            {activeTab === 'ai-models' && <AIModelsTab />}
-            {activeTab === 'channels' && <ChannelsTab />}
-            {activeTab === 'backup' && <BackupTab />}
-            {activeTab === 'system' && <SystemTab />}
-            {activeTab === 'about' && <AboutTab />}
-          </div>
-        )}
+        {(() => {
+          const widthClass = WIDTH_CLASSES[TABS.find(t => t.id === activeTab)?.width ?? '4xl'];
+          const content = (
+            <>
+              {activeTab === 'general' && <GeneralTab />}
+              {activeTab === 'ai-models' && <AIModelsTab />}
+              {activeTab === 'channels' && <ChannelsTab />}
+              {activeTab === 'skills' && <SkillsSettingsTab />}
+              {activeTab === 'mcp-servers' && <MCPServersTab />}
+              {activeTab === 'hive' && <HiveTab />}
+              {activeTab === 'backup' && <BackupTab />}
+              {activeTab === 'engine' && <EngineMetricsTab />}
+              {activeTab === 'system' && <SystemTab />}
+              {activeTab === 'about' && <AboutTab />}
+            </>
+          );
+          return widthClass ? <div className={widthClass}>{content}</div> : content;
+        })()}
       </div>
     </div>
   );
