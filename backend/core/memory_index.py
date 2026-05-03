@@ -91,6 +91,9 @@ _STOP_WORDS = frozenset({
 
 # ── Tokenization ─────────────────────────────────────────────────────
 
+# CJK Unified Ideographs (U+4E00–U+9FFF) — compiled once at module level
+_CJK_RE = re.compile(r"[一-鿿]")
+
 
 def _tokenize_lower(text: str) -> list[str]:
     """Split text into lowercase tokens, filtering short/stop words.
@@ -100,7 +103,10 @@ def _tokenize_lower(text: str) -> list[str]:
     """
     # \w with re.UNICODE includes CJK; add hyphen for compound terms
     tokens = re.findall(r"[\w\-]+", text.lower(), re.UNICODE)
-    return [t for t in tokens if len(t) > 2 and t not in _STOP_WORDS]
+    # CJK words can be 2 chars (竞品, 测试) — only drop short ASCII tokens
+    return [t for t in tokens if t not in _STOP_WORDS and (
+        len(t) > 2 or _CJK_RE.search(t)
+    )]
 
 
 # ── Entry Parsing ─────────────────────────────────────────────────────
@@ -164,14 +170,11 @@ def _extract_keywords(entry_text: str) -> list[str]:
     """
     tokens = re.findall(r"[\w\-]+", entry_text, re.UNICODE)
 
-    # Detect if token contains CJK characters (U+4E00–U+9FFF)
-    _cjk_re = re.compile(r"[一-鿿]")
-
     # Score tokens by distinctiveness
     scored: dict[str, float] = {}
     for token in tokens:
         t_lower = token.lower()
-        is_cjk = bool(_cjk_re.search(token))
+        is_cjk = bool(_CJK_RE.search(token))
 
         # Length filter: 2-char CJK words (竞品, 测试) are meaningful;
         # 2-char English tokens (is, at, to) are noise.
@@ -454,11 +457,26 @@ def keyword_relevance(
     if not entry_tokens and not alias_tokens:
         return 0.0
 
-    title_hits = msg_tokens & entry_tokens
-    alias_hits = msg_tokens & alias_tokens
+    # For English (space-separated) exact set intersection works.
+    # For CJK (no word boundaries) we need substring matching:
+    # "单进程" should match "单进程架构保持不动".
+    def _match_count(query_toks: set[str], target_toks: set[str]) -> int:
+        """Count query tokens that match target tokens (exact or CJK substring)."""
+        count = 0
+        for qt in query_toks:
+            if qt in target_toks:
+                count += 1
+            elif _CJK_RE.search(qt):
+                # CJK substring: 单进程 ⊂ 单进程架构保持不动
+                if any(qt in tt for tt in target_toks):
+                    count += 1
+        return count
+
+    title_hit_count = _match_count(msg_tokens, entry_tokens)
+    alias_hit_count = _match_count(msg_tokens, alias_tokens)
 
     # Meaningful overlap (already filtered by _tokenize_lower)
-    if not title_hits and not alias_hits:
+    if title_hit_count == 0 and alias_hit_count == 0:
         return 0.0
 
     # Denominator = user's message tokens.  This measures "what fraction of
@@ -467,7 +485,7 @@ def keyword_relevance(
     # being diluted by alias-rich entries (old bug: max(msg, entry) as
     # denominator made 2-token queries score ~0.15 against 20-alias entries).
     # Cap at 1.0 since alias_hits * 1.5 can exceed denominator.
-    score = (len(title_hits) + len(alias_hits) * 1.5) / len(msg_tokens)
+    score = (title_hit_count + alias_hit_count * 1.5) / len(msg_tokens)
     return min(score, 1.0)
 
 
