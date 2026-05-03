@@ -55,6 +55,7 @@ cp -r "$BACKEND_DIR"/* "$BUILD_DIR/"
 # Copy resource files needed by PyInstaller into the build directory
 cp "$PROJECT_ROOT/resources/mcp-catalog.json" "$BUILD_DIR/mcp-catalog.json"
 cp "$PROJECT_ROOT/resources/required-cli-tools.json" "$BUILD_DIR/required-cli-tools.json"
+cp "$PROJECT_ROOT/VERSION" "$BUILD_DIR/VERSION"
 
 # Create entry point script for PyInstaller
 cat > "$BUILD_DIR/desktop_main.py" << 'EOF'
@@ -254,7 +255,7 @@ datas += [('templates', 'templates')]
 datas += [('mcp-catalog.json', '.')]
 datas += [('required-cli-tools.json', '.')]
 # VERSION file — single source of truth for app version (eliminates hardcoded fallback in config.py)
-datas += [('../VERSION', '.')]
+datas += [('VERSION', '.')]
 
 # Auto-discover local modules from filesystem instead of hardcoding.
 # This eliminates the class of bugs where new .py files are added to the
