@@ -69,7 +69,12 @@ function getSourceDisplay(skill: Skill): { label: string; icon: string; color: s
   }
 }
 
-export default function SkillsPage() {
+interface SkillsPageProps {
+  /** When true, hides breadcrumb + page title (used when embedded in Settings modal) */
+  embedded?: boolean;
+}
+
+export default function SkillsPage({ embedded = false }: SkillsPageProps) {
   const { t } = useTranslation();
   const [skills, setSkills] = useState<Skill[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -156,13 +161,15 @@ export default function SkillsPage() {
   };
 
   return (
-    <div className="p-8">
-      <Breadcrumb currentPage={t('skills.title')} />
-
-      {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-[var(--color-text)]">{t('skills.title')}</h1>
-      </div>
+    <div className={embedded ? 'p-6' : 'p-8'}>
+      {!embedded && (
+        <>
+          <Breadcrumb currentPage={t('skills.title')} />
+          <div className="mb-6">
+            <h1 className="text-2xl font-bold text-[var(--color-text)]">{t('skills.title')}</h1>
+          </div>
+        </>
+      )}
 
       {/* Toolbar */}
       <div className="flex items-center justify-between mb-6">

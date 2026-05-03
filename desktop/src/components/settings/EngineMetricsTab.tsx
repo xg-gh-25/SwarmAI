@@ -91,14 +91,11 @@ export default function EngineMetricsTab() {
 
   return (
     <div className="space-y-6">
-      {/* Header with refresh */}
+      {/* Toolbar */}
       <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-semibold text-[var(--color-text)]">Core Engine</h2>
-          <p className="text-xs text-[var(--color-text-muted)]">
-            Self-governing intelligence metrics
-          </p>
-        </div>
+        <p className="text-xs text-[var(--color-text-muted)]">
+          Self-governing intelligence metrics
+        </p>
         <button
           onClick={refresh}
           disabled={loading}
@@ -264,7 +261,7 @@ export default function EngineMetricsTab() {
             <div className="mt-3 pt-3 border-t border-[var(--color-border)]">
               <p className="text-xs text-[var(--color-text-muted)] mb-2">Suggested Updates</p>
               {metrics.dddSuggestions.map((s, i) => (
-                <div key={i} className="text-xs text-yellow-300 mb-1">
+                <div key={i} className="text-xs text-yellow-600 dark:text-yellow-300 mb-1">
                   {s.doc} ({s.section}): {s.reason}
                 </div>
               ))}

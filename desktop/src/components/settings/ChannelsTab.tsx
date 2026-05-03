@@ -8,8 +8,10 @@ import { useState, useEffect } from 'react';
 import { channelsService } from '../../services/channels';
 import type { Channel } from '../../types';
 import ChannelConfigForm from './ChannelConfigForm';
+import { useToast } from '../../contexts/ToastContext';
 
 export default function ChannelsTab() {
+  const { addToast } = useToast();
   const [channels, setChannels] = useState<Channel[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -32,18 +34,20 @@ export default function ChannelsTab() {
     try {
       await channelsService.stop(channel.id);
       await channelsService.delete(channel.id);
+      addToast({ severity: 'success', message: 'Channel disconnected.' });
       await loadChannels();
     } catch (e) {
-      console.error('Failed to disconnect channel:', e);
+      addToast({ severity: 'error', message: `Failed to disconnect: ${e instanceof Error ? e.message : 'Unknown error'}` });
     }
   };
 
   const handleReconnect = async (channel: Channel) => {
     try {
       await channelsService.restart(channel.id);
+      addToast({ severity: 'success', message: 'Channel reconnecting...' });
       await loadChannels();
     } catch (e) {
-      console.error('Failed to reconnect channel:', e);
+      addToast({ severity: 'error', message: `Failed to reconnect: ${e instanceof Error ? e.message : 'Unknown error'}` });
     }
   };
 

@@ -108,17 +108,10 @@ export default function HiveTab() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-semibold text-[var(--color-text)]">
-            {'\u{1F41D}'} Hive — Your AI in the Cloud
-          </h2>
-          <p className="text-xs text-[var(--color-text-muted)] mt-1">
-            Deploy SwarmAI to your AWS account. Each Hive has its own memory, skills, and workspace.
-          </p>
-        </div>
-      </div>
+      {/* Intro */}
+      <p className="text-sm text-[var(--color-text-muted)]">
+        Deploy SwarmAI to your AWS account. Each Hive has its own memory, skills, and workspace.
+      </p>
 
       {/* My Hives */}
       {myHives.length > 0 && (
