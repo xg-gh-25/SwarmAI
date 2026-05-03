@@ -929,6 +929,25 @@ def _build_suggestions(
     return _build_suggestions_raw(threads, continue_hints, signals, _DATE_REF_RE)
 
 
+def _detect_active_project(workspace: Path) -> str | None:
+    """Detect the active project from Projects/ directory.
+
+    Simple heuristic: if SwarmAI project has a code_intel.db, use it.
+    Future: detect from recent DailyActivity file mentions.
+    """
+    projects_dir = workspace / "Projects"
+    if not projects_dir.is_dir():
+        return None
+    # Check SwarmAI first (default project), then others
+    for name in ["SwarmAI"] + sorted(
+        d.name for d in projects_dir.iterdir()
+        if d.is_dir() and d.name != "SwarmAI"
+    ):
+        if (projects_dir / name / "code_intel.db").exists():
+            return name
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Briefing builder — main entry point
 # ---------------------------------------------------------------------------
@@ -1036,6 +1055,20 @@ def build_session_briefing(
         skill_health_lines = _get_skill_health_highlights(ctx_dir)
         if skill_health_lines:
             sections.append("**Skill health:**\n" + "\n".join(f"  - {line}" for line in skill_health_lines))
+
+        # L5: Codebase intelligence from code_intel.db
+        try:
+            from core.code_intel.codebase_map import generate_codebase_map
+            # Detect active project from recent DailyActivity or default to SwarmAI
+            active_project = _detect_active_project(workspace)
+            if active_project:
+                codebase_ctx = generate_codebase_map(active_project)
+                if codebase_ctx:
+                    sections.append(f"**Codebase intelligence ({active_project}):**\n{codebase_ctx}")
+        except ImportError:
+            pass  # code_intel not available
+        except Exception as exc:
+            logger.debug("Codebase map generation failed: %s", exc)
 
         # L3: Surface learning insight
         learning_insight = learning_state.learning_summary()

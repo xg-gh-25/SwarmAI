@@ -34,8 +34,8 @@ Once all sub-agent reports are back:
 
 1. **Deduplicate** — same finding from 2 agents = keep the more specific one
 2. **Cross-reference** — security finding + code quality finding on same function = same root cause?
-3. **Apply anti-rationalization gate** (check 10 below) — reject shortcuts
-4. **Produce exit evidence checklist** (check 11 below) — every check has evidence
+3. **Apply anti-rationalization gate** (check 14 below) — reject shortcuts
+4. **Produce exit evidence checklist** (check 15 below) — every check has evidence
 5. **Single verdict** — GO (advance to TEST) or BLOCK (fix findings first)
 
 ### When to Skip Fan-Out
@@ -75,7 +75,47 @@ refactors.
 
 ## Pipeline-Specific Checks
 
-The REVIEW stage extends the base code review with 12 pipeline-specific checks:
+The REVIEW stage extends the base code review with 16 pipeline-specific checks:
+
+---
+
+### 0. Code Intelligence Context (if available)
+
+**When `code_intel.db` exists for the project**, run before all other checks:
+
+1. **Incremental update**: index any files changed since last index
+   ```bash
+   python -c "from core.code_intel.graph_store import GraphStore; from core.code_intel.freshness import check_freshness; \
+     g = GraphStore('Projects/PROJECT/code_intel.db'); f = check_freshness(g); print(f'Stale: {f.stale}, files: {len(f.changed_files)}')"
+   ```
+
+2. **Blast radius** (2-hop bidirectional):
+   ```bash
+   python -c "from core.code_intel.blast_radius import analyze_diff; from core.code_intel.graph_store import GraphStore; from pathlib import Path; \
+     g = GraphStore('Projects/PROJECT/code_intel.db'); r = analyze_diff(g, Path('REPO_ROOT')); print(r.to_minimal_context())"
+   ```
+
+3. **Risk score** (6 dimensions):
+   ```bash
+   python -c "from core.code_intel.change_risk_score import score_change; ..."
+   ```
+
+4. **Inject context** into review preamble:
+   ```
+   Risk Map: 0.72 HIGH | 3 functions changed | 14 downstream | 2 untested
+   Modules crossed: core → hooks → channels (3-way)
+   Top concern: session_unit._send_to_sdk() has 8 callers, 0 tests for error path
+   ```
+
+**If risk > 0.6**: expand full blast radius details before running checks.
+**If risk > 0.8**: WARN — "This changeset has CRITICAL risk. Consider splitting."
+
+This context feeds into existing checks:
+- Check 3 (Integration Trace): code_intel provides caller list automatically
+- Check 6 (RP Checklist): RP25 blast radius is now computed, not manual
+- Check 8 (Depth & Seam): module_map provides seam count
+
+**Skip** when no `code_intel.db` exists for the project.
 
 ---
 
@@ -313,7 +353,96 @@ Blast radius trace:
 
 ---
 
-### 10. Anti-Rationalization Gate
+### 10. Operational Pattern Checklist (P2)
+
+**When changeset adds/modifies lifecycle operations** (CRUD, deploy, update,
+stop, start, delete, reset, config changes):
+
+**BLOCKING: Read `backend/skills/s_autonomous-pipeline/OPERATIONAL_PATTERNS.md`
+and apply OP1-OP8.**
+
+These are architectural invariants (concurrency, rollback, backup, access
+control, health auth, placeholders, single path, config consistency). Unlike
+RP1-RP29 (code patterns), these check "does the system operate correctly" not
+"is the code written correctly."
+
+Include checklist results in the review artifact under `"operational_patterns"`.
+
+**When to skip:** Pure logic changes, UI-only, test-only.
+
+---
+
+### 11. Inverse Operation Check (P4)
+
+For each **new state transition** in the changeset (status change, resource
+creation, config modification, enable/disable):
+
+| New Operation | Required Inverse | Example |
+|---------------|-----------------|---------|
+| create/deploy | cleanup/delete | EC2 launch → terminate + release EIP + delete SG |
+| start/enable | stop/disable | EC2 start → stop + disable CloudFront |
+| update/modify | rollback/restore | rsync new code → restore .bak on failure |
+| write config | validate + rollback | write Caddyfile → caddy validate → mv .bak back |
+| acquire resource | release in finally | allocate EIP → release in cleanup |
+
+For each row that applies, verify the inverse exists AND is reachable from
+the failure path (not just the happy path).
+
+**Action on findings:** Missing inverse = P0 finding. The system can get
+stuck in an irrecoverable state.
+
+Include in review artifact under `"inverse_operations"`.
+
+---
+
+### 12. Cross-File Consistency Check (P3)
+
+For each **modified file**, identify files that serve a similar role:
+
+| If you modified... | Also check... | What to compare |
+|-------------------|---------------|-----------------|
+| A template/config | Other templates of the same config | Same features, same structure |
+| A deploy script | Other deploy/update scripts | Same mechanism, no duplicates |
+| An API endpoint | Adjacent endpoints in the same router | Same guards, same patterns |
+| A shell script | Other scripts in the same directory | Same conventions, no stale values |
+
+**How to find related files:**
+```bash
+# Find files with similar names/roles
+ls -la $(dirname <modified_file>)/
+# Find files that reference the same config/resource
+grep -rl "Caddyfile\|basicauth\|reverse_proxy" . --include="*.py" --include="*.sh"
+```
+
+**Action on findings:** Drift between related files = WARN. If one has a
+feature (logging, timeout, header) that the other lacks, either sync them
+or document why they differ.
+
+Include in review artifact under `"cross_file_consistency"`.
+
+---
+
+### 13. Neighborhood Review (P5)
+
+**For every modified function**, read the 2 functions immediately above and
+below it in the same file. Check:
+
+1. **Same pattern applied?** — If the modified function now has a guard/lock/
+   check, do adjacent functions that do similar things also have it?
+2. **Stale references?** — Do adjacent functions reference constants, imports,
+   or patterns that the modification invalidated?
+3. **Copy-paste drift?** — If the modified function was clearly copied from
+   an adjacent one, are both now in sync?
+
+This extends RP25 (blast radius) from "system lifecycle" to "code neighborhood."
+The insight: bugs cluster. If one function in a file is wrong, the adjacent
+functions that were written at the same time likely have the same issue.
+
+Include in review artifact under `"neighborhood_review"`.
+
+---
+
+### 14. Anti-Rationalization Gate
 
 Before concluding REVIEW, reject these shortcuts:
 
@@ -322,23 +451,31 @@ Before concluding REVIEW, reject these shortcuts:
 | "Changeset is small, skip integration trace" | Small changes with unwired symbols are the #1 silent failure. Trace every new symbol. |
 | "Security scan isn't needed for internal code" | Internal code with injection paths gets exploited via MCP tools and API calls. Scan it. |
 | "Runtime pattern checklist doesn't apply here" | Check every pattern. Write N/A explicitly. Silence = unchecked. |
+| "Operational patterns don't apply — this is just code" | If the code changes ANY lifecycle operation, OP1-OP8 apply. "Just code" that deploys without rollback is an incident waiting to happen. |
 | "Wire test is overkill -- the types match" | Types matching != serialization matching. Content-Type bugs are invisible to type checkers. |
 | "UX review isn't needed -- the UI change is trivial" | Trivial UI changes cause scroll breaks and accessibility regressions. If UI files changed, check UX. |
 | "Review is clean, marking confidence 10/10" | Confidence without evidence is fiction. Score against the checklist, not gut feel. |
 | "Blast radius trace not needed -- I only changed scripts" | Infra/release bugs are invisible in the diff and break the system. If it touches build/deploy/CI, trace the lifecycle. |
+| "Adjacent functions are fine — I only changed this one" | Bugs cluster. If this function was wrong, the one copied from it 20 lines up is wrong too. Check the neighborhood. |
+| "The other config file is fine — I only changed this one" | Config drift is guaranteed if you don't verify. If two files describe the same thing, compare them. |
+| "Adversarial review is redundant — REVIEW already checked everything" | REVIEW uses the builder's perspective. Adversarial review uses user + skeptical-reviewer perspectives. They find different classes of bugs. 12+ pipeline runs prove this. |
 
 ---
 
-### 11. Exit Evidence Checklist
+### 15. Exit Evidence Checklist
 
 Confirm each before publishing:
 - [ ] Integration trace output present (`N symbols checked, M connected, K warnings`)
 - [ ] Runtime pattern checklist complete (every applicable RP has pass or N/A)
+- [ ] Operational pattern checklist complete (every applicable OP has pass or N/A, or "no lifecycle ops, N/A")
 - [ ] Security scan ran with confidence scores (or "no security-relevant changes" stated)
 - [ ] Wire test results shown (or "single-layer change, N/A" stated)
 - [ ] Depth & seam analysis completed for new files (or "no new files, N/A" stated)
 - [ ] UX review completed (or "no frontend files, N/A" stated)
 - [ ] Blast radius trace completed (or "no infra/release/deploy files, N/A" stated)
+- [ ] Inverse operations checked (or "no state transitions, N/A" stated)
+- [ ] Cross-file consistency checked (or "no related files found, N/A" stated)
+- [ ] Neighborhood review done (or "single-function change, N/A" stated)
 
 ---
 
