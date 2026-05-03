@@ -5,6 +5,29 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.0] - 2026-05-03
+
+### Added
+
+- **Code Intelligence Platform Phase 1**: Project-scoped code graph with tree-sitter AST parsing, blast radius analysis, dead code detection, and codebase map. Language-scoped regex patterns + builtin filter. Wired into production via 4 integration points (code_intel_hook, session briefing, context assembly, API endpoint)
+- **Pollinate Studio**: `studio.html` — visual management UI for media pipeline outputs. Pipeline hardening: 27 findings fixed, video E2E proven with Remotion template lockfile
+- **Hive E2E Hardening**: 12 structural gaps fixed (G1-G11+G13), update flow hardening (H1-H5), Caddy @protected named matcher for auth exclusion, atomic stop/start gates, error rollback, systemd circuit breaker, busy_timeout 3000ms
+- **Hive Test Coverage Overhaul**: 76 tests (was 50), behavioral > source inspection
+- **Theme System Enhancement**: FOUC elimination, transitions, accent colors, warmer dark palette
+- **Pipeline Structural Improvements**: Adversarial Review Gate (P1-P6), profile-aware sub-agent
+
+### Fixed
+
+- **Slack Native Streaming**: thread_ts was missing for DMs — native streaming never activated. 6 additional bugs fixed via PE review (truncation, buffer management)
+- **Build Script OOM**: PyInstaller bundled Remotion `node_modules` (609MB/15K+ files including ffmpeg) causing SIGKILL exit 137. Now excludes `node_modules` and `__pycache__` via os.walk filter
+- **PE Re-review Findings**: check_same_thread + remove_file encapsulation, hook signatures, orphan edges, resource lifecycle (14 findings across 3 rounds)
+- **Settings Page**: Fullscreen utilization, token masking, light theme support, data-driven widths
+- **VERSION Single Source of Truth**: Eliminated config.py fallback, copy VERSION into build dir before PyInstaller
+
+### Changed
+
+- **build-backend.sh**: Skills inclusion switched from bulk directory copy to os.walk with node_modules/\_\_pycache\_\_ exclusion — build size reduced ~600MB
+
 ## [1.9.3] - 2026-05-03
 
 ### Added
