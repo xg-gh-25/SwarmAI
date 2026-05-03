@@ -38,6 +38,27 @@ cost 15 minutes; fixing the gaps individually over time would have cost 15 hours
 **When to skip:** Greenfield features (no existing subsystem to audit), trivial
 one-line fixes, or when the user explicitly says "just fix this one thing."
 
+### Codebase Complexity Assessment (if code_intel.db exists)
+
+After DDD doc scoring, if the project has a `code_intel.db`, read the codebase
+summary to enrich the feasibility score:
+
+```python
+from core.code_intel import load_project_graph
+g = load_project_graph("PROJECT_NAME")
+if g:
+    summary = g.get_codebase_summary()
+    # Use: modules affected (keyword → symbol search), dead code in target
+    # modules (cleanup overhead), most-connected nodes (fragility indicator)
+```
+
+Adjust **Feasibility** score:
+- Target module has >5 dead code symbols → -0.5 (cleanup overhead)
+- Target module's top node has >50 callers → -0.5 (high fragility)
+- Change crosses 3+ modules → -0.5 (coordination cost)
+
+**Skip** when no `code_intel.db` exists or requirement is research-only.
+
 ### Pre-mortem Gate
 
 After scoring, if the initial recommendation is GO, the base methodology's

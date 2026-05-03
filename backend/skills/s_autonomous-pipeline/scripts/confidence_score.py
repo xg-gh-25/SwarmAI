@@ -161,6 +161,15 @@ def calculate_score(
             "detail": "Completion audit: all acceptance criteria have verified evidence",
         })
 
+    # +1: blast radius was computed (code_intel available)
+    ci = (review or {}).get("code_intel", {})
+    if ci.get("blast_radius_computed"):
+        breakdown.append({
+            "rule": "blast_radius_computed",
+            "points": 1,
+            "detail": "Code intelligence blast radius was computed for this run",
+        })
+
     # --- Penalties ---
 
     files_changed = (changeset or {}).get("files_changed", [])
@@ -254,6 +263,32 @@ def calculate_score(
             "rule": "completion_audit_gaps",
             "points": -3,
             "detail": f"Completion audit: {audit['gaps']} gap(s) not fixed",
+        })
+
+    # -2: code_intel risk > 0.6 but no explicit mitigation in review
+    if ci.get("risk_score", 0) > 0.6 and not ci.get("risk_mitigated"):
+        penalties.append({
+            "rule": "high_risk_unacknowledged",
+            "points": -2,
+            "detail": f"code_intel risk {ci['risk_score']:.2f} but no risk mitigation in review",
+        })
+
+    # -2: blast radius has untested downstream nodes
+    untested_count = ci.get("untested_callers", 0)
+    if untested_count > 0:
+        penalties.append({
+            "rule": "untested_blast_radius",
+            "points": -2,
+            "detail": f"{untested_count} downstream nodes in blast radius have no test coverage",
+        })
+
+    # -1: changeset crosses 3+ modules without architecture justification
+    modules_crossed = ci.get("modules_crossed", 0)
+    if modules_crossed >= 3 and not ci.get("cross_module_justified"):
+        penalties.append({
+            "rule": "cross_module_unreviewed",
+            "points": -1,
+            "detail": f"Changeset crosses {modules_crossed} modules without justification",
         })
 
     # -1: completion audit has unfixable gaps (mutually exclusive with all_green)

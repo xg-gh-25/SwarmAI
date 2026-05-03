@@ -60,6 +60,8 @@ CAPABILITY_MANIFEST = [
     ("numpy",               "numpy",                         "important"),
     ("amazon_transcribe",   "amazon_transcribe",             "critical"),
     ("awscrt",              "awscrt",                        "critical"),
+    ("tree_sitter",         "tree_sitter",                   "important"),
+    ("tree_sitter_langs",   "tree_sitter_language_pack",     "important"),
 
     # ── Local modules (must be bundled) ──
     ("vec_db",              "core.vec_db",                   "critical"),

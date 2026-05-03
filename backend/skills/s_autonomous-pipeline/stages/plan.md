@@ -59,6 +59,27 @@ the exit conditions for the DELIVER stage.
 or a visual check. "Works correctly" is not a success criterion. "Returns 200
 with valid JSON body containing `transcript` field" is.
 
+### Impact Projection (if code_intel.db exists)
+
+After design decisions are made, use code_intel to project the blast radius
+of the planned changeset:
+
+```python
+from core.code_intel import load_project_graph
+g = load_project_graph("PROJECT_NAME")
+if g:
+    for file_path in planned_files:
+        callers = g.find_dependents(file_path, max_hops=2)
+        # List ALL files that will need testing even if not directly modified
+```
+
+Output: `"Impact projection: 5 files to change, 12 files to test, crosses core→hooks→channels"`
+
+Add the impact projection to the design_doc artifact under `"impact_projection"`.
+This gives BUILD a testing roadmap beyond just the changed files.
+
+**Skip** when no `code_intel.db` exists for the project.
+
 ## Artifact Publish
 
 The design_doc artifact MUST include `boundaries` and `success_criteria` fields.
