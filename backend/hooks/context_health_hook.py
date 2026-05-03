@@ -179,7 +179,7 @@ class ContextHealthHook:
                         logger.debug("code_intel: failed to parse %s: %s", rel_path, file_err)
                 else:
                     # File was deleted — remove stale nodes/edges
-                    graph._remove_file(rel_path)
+                    graph.remove_file(rel_path)
 
             graph.rebuild_fts()
             if freshness.current_head:
