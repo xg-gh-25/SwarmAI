@@ -118,6 +118,71 @@ class ContextHealthHook:
         except Exception as exc:
             logger.debug("context_health: transcript sync skipped: %s", exc)
 
+        # Code Intelligence — incremental graph refresh (<2s for typical changeset)
+        try:
+            self._refresh_code_intel(root)
+        except Exception as exc:
+            logger.debug("context_health: code_intel refresh skipped: %s", exc)
+
+    def _refresh_code_intel(self, root: Path) -> None:
+        """Refresh code_intel.db if the indexed commit is behind HEAD."""
+        projects_dir = root / "Projects"
+        if not projects_dir.is_dir():
+            return
+
+        from core.code_intel import load_project_graph
+        from core.code_intel.freshness import check_freshness
+
+        for project_dir in projects_dir.iterdir():
+            if not project_dir.is_dir():
+                continue
+            db_path = project_dir / "code_intel.db"
+            if not db_path.exists():
+                continue
+
+            graph = load_project_graph(project_dir.name)
+            if not graph:
+                continue
+
+            freshness = check_freshness(graph)
+            if not freshness.stale:
+                continue
+
+            if freshness.suggest_full_rebuild:
+                logger.info(
+                    "code_intel %s: %d commits behind, %d files — suggest rebuild",
+                    project_dir.name, freshness.commits_behind,
+                    len(freshness.changed_files),
+                )
+                continue  # don't auto-rebuild large changes at session start
+
+            # Incremental update for small changes
+            from core.code_intel.parser import parse_file
+            from pathlib import Path as P
+
+            repo_root = P(graph.get_meta("repo_root") or "")
+            if not repo_root.is_dir():
+                continue
+
+            for rel_path in freshness.changed_files[:50]:  # cap at 50
+                full_path = repo_root / rel_path
+                if full_path.exists():
+                    result = parse_file(full_path, repo_root)
+                    if result.nodes:
+                        file_hash = result.nodes[0].sha256 or ""
+                        graph.store_file_nodes_edges(
+                            rel_path, result.nodes, result.edges, file_hash
+                        )
+
+            graph.rebuild_fts()
+            if freshness.current_head:
+                graph.set_meta("last_indexed_commit", freshness.current_head)
+
+            logger.info(
+                "code_intel %s: incremental update — %d files refreshed",
+                project_dir.name, len(freshness.changed_files),
+            )
+
     def _refresh_knowledge_sync(self, root: Path) -> None:
         """Synchronous KNOWLEDGE.md index refresh — filesystem scan only."""
         knowledge_dir = root / "Knowledge"

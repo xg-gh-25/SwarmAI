@@ -45,7 +45,22 @@ Pipeline-owned stage (no sibling skill).
    to avoid contradicting existing decisions. If a new requirement conflicts with
    an ADR, EVALUATE surfaces it explicitly.
 
-6. Record outcome for learning:
+6. **Dead Code Checkpoint** (if code_intel.db exists)
+
+   Compare dead code count before vs after this pipeline run:
+   ```python
+   from core.code_intel import load_project_graph
+   g = load_project_graph("PROJECT_NAME")
+   if g:
+       dead = g.find_dead_code()
+       # Compare with snapshot taken at REVIEW Step 0 (if available)
+   ```
+   - If dead code increased: note in IMPROVEMENT.md "What to Watch For"
+   - If dead code decreased: note in "What Worked"
+
+   **Skip** when no `code_intel.db` exists.
+
+7. Record outcome for learning:
 
 ```bash
 python backend/scripts/artifact_cli.py learn --project <PROJECT> \
