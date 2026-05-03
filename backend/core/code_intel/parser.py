@@ -358,22 +358,57 @@ def _get_call_name(node, language: str) -> str | None:
 # ── Regex Fallback ──────────────────────────────────────────────────────
 
 # Patterns for extracting definitions via regex (language-agnostic)
-_REGEX_DEF_PATTERNS = [
-    # Python: def func_name(
+# Language-specific regex patterns — keyed by language to avoid cross-contamination
+# (e.g., Java method pattern matching Python builtins like isinstance/len/bool)
+_REGEX_DEF_PATTERNS_BY_LANG: dict[str, list[re.Pattern]] = {
+    "python": [
+        re.compile(r'^(?:async\s+)?def\s+(\w+)\s*\(', re.MULTILINE),
+        re.compile(r'^class\s+(\w+)', re.MULTILINE),
+    ],
+    "typescript": [
+        re.compile(r'^(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\(', re.MULTILINE),
+        re.compile(r'^(?:export\s+)?class\s+(\w+)', re.MULTILINE),
+    ],
+    "javascript": [
+        re.compile(r'^(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\(', re.MULTILINE),
+        re.compile(r'^(?:export\s+)?class\s+(\w+)', re.MULTILINE),
+    ],
+    "java": [
+        re.compile(r'^\s*(?:public|private|protected)\s+(?:static\s+)?(?:\w+\s+)+(\w+)\s*\(', re.MULTILINE),
+        re.compile(r'^(?:public\s+)?(?:abstract\s+)?class\s+(\w+)', re.MULTILINE),
+        re.compile(r'^(?:public\s+)?interface\s+(\w+)', re.MULTILINE),
+    ],
+    "go": [
+        re.compile(r'^func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)\s*\(', re.MULTILINE),
+        re.compile(r'^type\s+(\w+)\s+(?:struct|interface)', re.MULTILINE),
+    ],
+}
+
+# Fallback for unknown languages — conservative, avoids Java-style broad match
+_REGEX_DEF_PATTERNS_GENERIC = [
     re.compile(r'^(?:async\s+)?def\s+(\w+)\s*\(', re.MULTILINE),
-    # Python: class ClassName
     re.compile(r'^class\s+(\w+)', re.MULTILINE),
-    # JS/TS: function funcName(
     re.compile(r'^(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*\(', re.MULTILINE),
-    # JS/TS: class ClassName
-    re.compile(r'^(?:export\s+)?class\s+(\w+)', re.MULTILINE),
-    # Java: public/private/protected type methodName(
-    re.compile(r'^\s*(?:public|private|protected|static|\s)+\s+\w+\s+(\w+)\s*\(', re.MULTILINE),
-    # Go: func funcName(
-    re.compile(r'^func\s+(?:\(\w+\s+\*?\w+\)\s+)?(\w+)\s*\(', re.MULTILINE),
 ]
 
 _REGEX_CALL_PATTERN = re.compile(r'(\w+)\s*\(', re.MULTILINE)
+
+# Python/JS builtins that regex might mistake for definitions
+_BUILTIN_NAMES = frozenset({
+    "isinstance", "len", "bool", "int", "str", "float", "list", "dict", "set",
+    "tuple", "type", "print", "range", "enumerate", "zip", "map", "filter",
+    "sorted", "reversed", "hasattr", "getattr", "setattr", "delattr",
+    "super", "property", "staticmethod", "classmethod", "abstractmethod",
+    "open", "close", "read", "write", "append", "extend", "update", "pop",
+    "get", "keys", "values", "items", "format", "join", "split", "strip",
+    "replace", "startswith", "endswith", "lower", "upper", "encode", "decode",
+    "any", "all", "min", "max", "sum", "abs", "round", "id", "hash", "repr",
+    "callable", "next", "iter", "input", "exit", "quit",
+    # JS/TS builtins
+    "require", "console", "setTimeout", "setInterval", "clearTimeout",
+    "clearInterval", "parseInt", "parseFloat", "isNaN", "Array", "Object",
+    "String", "Number", "Boolean", "Promise", "Symbol", "Error",
+})
 
 
 def _regex_fallback(path: Path, repo_root: Path) -> ParseResult:
@@ -392,11 +427,14 @@ def _regex_fallback(path: Path, repo_root: Path) -> ParseResult:
     edges = []
     defined_names = set()
 
+    # Use language-specific patterns to avoid cross-contamination
+    patterns = _REGEX_DEF_PATTERNS_BY_LANG.get(lang, _REGEX_DEF_PATTERNS_GENERIC)
+
     # Extract definitions
-    for pattern in _REGEX_DEF_PATTERNS:
+    for pattern in patterns:
         for m in pattern.finditer(content):
             name = _sanitize_name(m.group(1))
-            if not name or name in defined_names:
+            if not name or name in defined_names or name in _BUILTIN_NAMES:
                 continue
             defined_names.add(name)
 
