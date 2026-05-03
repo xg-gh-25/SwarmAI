@@ -153,7 +153,8 @@ class _StreamContext:
     stream_thread_ts: Optional[str] = None
 
     # Buffer + state
-    stream_buf: list = dataclasses.field(default_factory=list)
+    stream_buf: list[str] = dataclasses.field(default_factory=list)
+    flush_lock: asyncio.Lock = dataclasses.field(default_factory=asyncio.Lock)
     stream_flushed: str = ""
     stream_done: asyncio.Event = dataclasses.field(default_factory=asyncio.Event)
 
@@ -227,6 +228,8 @@ class ChannelGateway:
         # latency on the owner's first message after daemon restart.
         self._prewarmed_session_id: Optional[str] = None
         self._prewarm_task: Optional[asyncio.Task] = None
+        # Message counter for lazy rate-limiter eviction (G8/PE6)
+        self._msg_counter: int = 0
 
     @property
     def startup_state(self) -> str:
@@ -900,10 +903,7 @@ class ChannelGateway:
         )
 
         # G8: Lazily evict stale rate-limiter entries (~every 100 messages)
-        if hasattr(self, '_msg_counter'):
-            self._msg_counter += 1
-        else:
-            self._msg_counter = 1
+        self._msg_counter += 1
         if self._msg_counter % 100 == 0:
             evicted = self._rate_limiter.evict_stale()
             if evicted:
@@ -1127,8 +1127,11 @@ class ChannelGateway:
         """Flush buffered tokens via legacy chat.update."""
         if not ctx.streaming or not ctx.streaming_msg_id or not ctx.stream_buf:
             return
-        ctx.stream_flushed += "".join(ctx.stream_buf)
-        ctx.stream_buf.clear()
+        async with ctx.flush_lock:
+            if not ctx.stream_buf:
+                return  # another flush drained it
+            ctx.stream_flushed += "".join(ctx.stream_buf)
+            ctx.stream_buf.clear()
         try:
             await ctx.adapter.update_message(
                 external_chat_id=ctx.external_chat_id,
