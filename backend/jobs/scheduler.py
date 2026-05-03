@@ -124,14 +124,66 @@ def save_state(state: SchedulerState) -> None:
 
 
 def load_user_context() -> str:
-    """Read user context from MEMORY.md + PROJECTS.md for relevance scoring."""
-    context_parts = []
-    for filename in ("MEMORY.md", "PROJECTS.md"):
-        path = SWARMWS / ".context" / filename
-        if path.exists():
-            content = path.read_text()[:2000]  # cap to keep prompt small
-            context_parts.append(f"## {filename}\n{content}")
-    return "\n\n".join(context_parts) if context_parts else ""
+    """Build user context for signal relevance scoring.
+
+    Combines three sources (priority order):
+    1. config.yaml ``user_context`` — curated interests/projects/tech_stack
+       from self_tune (highest signal, structured)
+    2. USER.md — user profile (role, work context, preferences)
+    3. MEMORY.md key decisions — recent focus areas (capped)
+
+    The result is what the LLM uses to decide "is this signal relevant to
+    this user?" — it must reflect actual interests, not internal metadata.
+    """
+    parts: list[str] = []
+
+    # 1. Structured interests from config.yaml (self_tune maintained)
+    try:
+        config_path = SWARMWS / "Services" / "swarm-jobs" / "config.yaml"
+        if config_path.exists():
+            import yaml
+            with open(config_path) as f:
+                config = yaml.safe_load(f) or {}
+            uc = config.get("user_context", {})
+            interests = uc.get("interests", [])
+            projects = uc.get("projects", [])
+            tech_stack = uc.get("tech_stack", [])
+            if interests or projects or tech_stack:
+                lines = ["## Interests & Focus"]
+                if interests:
+                    lines.append(f"Topics: {', '.join(interests)}")
+                if projects:
+                    lines.append(f"Active projects: {', '.join(projects)}")
+                if tech_stack:
+                    lines.append(f"Tech stack: {', '.join(tech_stack)}")
+                parts.append("\n".join(lines))
+    except Exception:
+        pass
+
+    # 2. USER.md — role, work context (first 800 chars = Bio + Work Context)
+    user_path = SWARMWS / ".context" / "USER.md"
+    if user_path.exists():
+        try:
+            content = user_path.read_text()[:800]
+            parts.append(f"## User Profile\n{content}")
+        except Exception:
+            pass
+
+    # 3. MEMORY.md — only Key Decisions section (recent focus, not COE/LL noise)
+    mem_path = SWARMWS / ".context" / "MEMORY.md"
+    if mem_path.exists():
+        try:
+            content = mem_path.read_text()
+            # Extract just the Key Decisions section (most signal-dense)
+            kd_start = content.find("## Key Decisions")
+            if kd_start >= 0:
+                kd_end = content.find("\n## ", kd_start + 10)
+                kd_section = content[kd_start:kd_end if kd_end > 0 else kd_start + 1500]
+                parts.append(kd_section[:1000])
+        except Exception:
+            pass
+
+    return "\n\n".join(parts) if parts else ""
 
 
 def is_job_due(job: Job, state: SchedulerState) -> bool:
