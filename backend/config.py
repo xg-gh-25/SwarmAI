@@ -10,19 +10,33 @@ _BACKEND_DIR = Path(__file__).resolve().parent
 _PROJECT_ROOT = _BACKEND_DIR.parent
 
 
-def _read_version(fallback: str) -> str:
+def _read_version() -> str:
     """Read version from VERSION file (single source of truth).
 
-    In dev: reads from VERSION file at project root.
-    In prod (PyInstaller): VERSION file absent, uses fallback
-    (which sync-version.sh keeps in sync with VERSION at build time).
+    Search order:
+    1. Project root (dev: backend/../VERSION)
+    2. PyInstaller bundle root (prod: sys._MEIPASS/VERSION)
+    3. Fallback "0.0.0-dev" — clearly wrong so drift is loud, not silent
     """
+    import sys
+
+    # Dev: VERSION at project root (backend/../)
     version_file = _PROJECT_ROOT / "VERSION"
     if version_file.exists():
         v = version_file.read_text().strip()
         if v:
             return v
-    return fallback
+
+    # Prod (PyInstaller): VERSION bundled at _MEIPASS root
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        bundled = Path(meipass) / "VERSION"
+        if bundled.exists():
+            v = bundled.read_text().strip()
+            if v:
+                return v
+
+    return "0.0.0-dev"
 
 
 def get_app_data_dir() -> Path:
@@ -70,7 +84,7 @@ class Settings(BaseSettings):
 
     # Application
     app_name: str = "SwarmAI"
-    app_version: str = _read_version("1.9.3")  # fallback synced by scripts/sync-version.sh
+    app_version: str = _read_version()  # reads from VERSION file (single source of truth)
     debug: bool = False
 
     # Server

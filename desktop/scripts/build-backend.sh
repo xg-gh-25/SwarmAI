@@ -253,6 +253,8 @@ datas += [('templates', 'templates')]
 # Include MCP catalog and CLI tool registry at bundle root
 datas += [('mcp-catalog.json', '.')]
 datas += [('required-cli-tools.json', '.')]
+# VERSION file — single source of truth for app version (eliminates hardcoded fallback in config.py)
+datas += [('../VERSION', '.')]
 
 # Auto-discover local modules from filesystem instead of hardcoding.
 # This eliminates the class of bugs where new .py files are added to the
