@@ -822,19 +822,19 @@ class TestG10ResourceCleanupStatus:
 
 
 class TestG11HealthExemptFromAuth:
-    """G11: /health must be before basicauth in Caddyfile."""
+    """G11: /health must be excluded from auth via @protected matcher."""
 
-    def test_repo_caddyfile_health_before_auth(self):
-        """In hive/Caddyfile, /health handle must appear before basicauth."""
+    def test_repo_caddyfile_uses_protected_matcher(self):
+        """hive/Caddyfile must use @protected not path /health."""
         caddyfile = Path(__file__).parent.parent.parent / "hive" / "Caddyfile"
         content = caddyfile.read_text()
-        health_pos = content.index("handle /health")
-        auth_pos = content.index("basicauth *")
-        assert health_pos < auth_pos, \
-            "G11: /health must appear BEFORE basicauth in Caddyfile"
+        assert "@protected not path /health" in content, \
+            "G11: Caddyfile must use @protected matcher to exclude /health"
+        assert "basic_auth @protected" in content, \
+            "G11: Auth must scope to @protected (not basicauth *)"
 
-    def test_user_data_caddyfile_health_before_auth(self):
-        """In user_data.py template, /health must appear before basicauth."""
+    def test_user_data_caddyfile_uses_protected_matcher(self):
+        """user_data.py template must use @protected not path /health."""
         from hive.user_data import render_user_data
 
         result = render_user_data(
@@ -842,10 +842,10 @@ class TestG11HealthExemptFromAuth:
             auth_user="admin", auth_hash="$2a$14$test",
             region="us-east-1",
         )
-        health_pos = result.index("handle /health")
-        auth_pos = result.index("basicauth *")
-        assert health_pos < auth_pos, \
-            "G11: /health must appear BEFORE basicauth in user_data template"
+        assert "@protected not path /health" in result, \
+            "G11: user_data template must use @protected matcher"
+        assert "basic_auth @protected" in result, \
+            "G11: user_data auth must scope to @protected"
 
 
 class TestG13InvalidPlaceholder:
