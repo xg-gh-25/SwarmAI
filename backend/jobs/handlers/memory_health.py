@@ -100,16 +100,10 @@ def _run_integrity_checks(memory_content: str) -> list[dict]:
         findings.append({"check": "index_roundtrip", "status": "fail",
                          "detail": f"exception: {e}"})
 
-    # ── 3. Duplicate keys (within index block only) ──────────────
+    # ── 3. Duplicate keys ──────────────────────────────────────────
     try:
-        # Parse entries ONLY from the marker block to avoid counting
-        # the body's rendered copy as duplicates.
-        idx_match = re.search(
-            r"<!-- MEMORY_INDEX_START -->(.*?)<!-- MEMORY_INDEX_END -->",
-            memory_content, re.DOTALL,
-        )
-        idx_block = idx_match.group(0) if idx_match else memory_content
-        entries = _parse_index_entries(idx_block)
+        # _parse_index_entries now auto-scopes to the marker block
+        entries = _parse_index_entries(memory_content)
         keys = [e["key"] for e in entries]
         dupes = [k for k, v in Counter(keys).items() if v > 1 and k != "Archived"]
         if not dupes:
