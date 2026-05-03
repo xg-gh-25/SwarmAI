@@ -81,16 +81,16 @@ def _run_integrity_checks(memory_content: str) -> list[dict]:
 
     # ── 2. Index round-trip (generate → parse → same count) ────────
     try:
-        from core.memory_index import generate_memory_index, _parse_index_entries
+        from core.memory_index import (
+            generate_memory_index, _parse_index_entries,
+            extract_body_without_index,
+        )
 
         current_entries = _parse_index_entries(memory_content)
-        new_index = generate_memory_index(memory_content)
-        # Build a temp document with the new index to parse
-        replaced = re.sub(
-            r"<!-- MEMORY_INDEX_START -->.*?<!-- MEMORY_INDEX_END -->",
-            "<!-- MEMORY_INDEX_START -->\n" + new_index + "\n<!-- MEMORY_INDEX_END -->",
-            memory_content, flags=re.DOTALL,
-        )
+        # generate_memory_index output INCLUDES markers — use it directly
+        body = extract_body_without_index(memory_content)
+        new_index = generate_memory_index(body)
+        replaced = new_index + "\n\n" + body
         regen_entries = _parse_index_entries(replaced)
 
         if len(current_entries) == len(regen_entries):
