@@ -30,26 +30,26 @@ def create_code_intel_hook():
     def hook(tool_name: str, tool_input: dict) -> dict:
         """
         Hook signature: (tool_name, tool_input) → dict.
-        Returns {} (implicit allow) always, with optional additionalContext
+        Returns {"decision": "approve"} always, with optional additionalContext
         via hookSpecificOutput for Read/Grep on indexed projects.
         """
         if tool_name not in ("Read", "Grep"):
-            return {}
+            return {"decision": "approve"}
 
         file_path = tool_input.get("file_path") or tool_input.get("path", "")
         if not file_path:
-            return {}
+            return {"decision": "approve"}
 
         # Detect project from file path
         project = detect_project_from_path(file_path)
         if not project:
-            return {}
+            return {"decision": "approve"}
 
         try:
             # Load graph (cached per session)
             graph = _get_or_load_graph(project, _cache)
             if not graph:
-                return {}
+                return {"decision": "approve"}
 
             start_time = time.monotonic()
 
@@ -61,6 +61,7 @@ def create_code_intel_hook():
 
             if context:
                 return {
+                    "decision": "approve",
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
                         "additionalContext": context,
@@ -69,7 +70,7 @@ def create_code_intel_hook():
         except Exception as e:
             logger.debug(f"code_intel hook error for {file_path}: {e}")
 
-        return {}
+        return {"decision": "approve"}
 
     return hook
 

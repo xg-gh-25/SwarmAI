@@ -42,7 +42,7 @@ async def pre_tool_logger(
     tool_name = input_data.get('tool_name', 'unknown')
     tool_input = input_data.get('tool_input', {})
     logger.info(f"[PRE-TOOL] Tool: {tool_name}, Input keys: {list(tool_input.keys())}")
-    return {}
+    return {"decision": "approve"}
 
 
 # ---------------------------------------------------------------------------
@@ -127,16 +127,16 @@ def create_dangerous_command_gate(
         context: Any,
     ) -> dict[str, Any]:
         if input_data.get("tool_name") != "Bash":
-            return {}
+            return {"decision": "approve"}
 
         command = input_data.get("tool_input", {}).get("command", "")
         if not command:
-            return {}
+            return {"decision": "approve"}
 
         # Check if command matches any dangerous pattern (glob)
         is_dangerous = any(fnmatch.fnmatch(command, p) for p in patterns)
         if not is_dangerous:
-            return {}
+            return {"decision": "approve"}
 
         # Auto-deny when human approval is disabled
         if not enable_human_approval:
@@ -152,7 +152,7 @@ def create_dangerous_command_gate(
         # Check session approvals
         if permission_mgr.is_command_approved(session_key, command):
             logger.info("[APPROVED] Session-approved command: %s", command[:50])
-            return {}
+            return {"decision": "approve"}
 
         # --- HITL prompt flow ---
         # Read session ID dynamically from the (mutable) session_context dict.
@@ -196,7 +196,7 @@ def create_dangerous_command_gate(
 
         if decision == "approve":
             permission_mgr.approve_command(session_key, command)
-            return {}
+            return {"decision": "approve"}
 
         return {
             "hookSpecificOutput": {
@@ -358,7 +358,7 @@ def create_skill_access_checker(
             # Built-in skills are always allowed
             if requested_skill in _builtin_set:
                 logger.debug(f"[ALLOWED] Built-in skill access granted: {requested_skill}")
-                return {}
+                return {"decision": "approve"}
 
             # Empty allowed list means no non-built-in skills are allowed
             if not _allowed_set:
@@ -383,6 +383,6 @@ def create_skill_access_checker(
                 }
 
             logger.debug(f"[ALLOWED] Skill access granted: {requested_skill}")
-        return {}
+        return {"decision": "approve"}
 
     return skill_access_checker

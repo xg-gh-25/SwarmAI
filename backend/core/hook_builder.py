@@ -239,7 +239,7 @@ async def build_hooks(
                 f"session={session_context.get('sdk_session_id')}"
             )
             session_context["_compacted"] = True
-            return {}
+            return {"decision": "approve"}
 
         registry.register("PreCompact", _pre_compact_hook, "pre_compact_flag")
 
@@ -257,7 +257,7 @@ async def build_hooks(
                 "type": notif_type,
                 "message": message,
             }
-            return {}
+            return {"decision": "approve"}
 
         registry.register("Notification", _notification_hook, "notification_capture")
 
@@ -273,7 +273,7 @@ async def build_hooks(
             session_context["_stop_info"] = {
                 "stop_hook_active": stop_active,
             }
-            return {}
+            return {"decision": "approve"}
 
         registry.register("Stop", _stop_hook, "stop_capture")
 

@@ -199,7 +199,12 @@ cmd_daemon() {
     local sub="${1:-status}"
     case "$sub" in
         restart)
-            _check_daemon_version || true
+            if ! _check_daemon_version; then
+                _err "Binary is stale — restart would use outdated code."
+                _err "Run: ./${_DAEMON_CMD} deploy   (build backend + deploy + restart)"
+                _log "Or force restart anyway: ./${_DAEMON_CMD} daemon force-restart"
+                return 1
+            fi
 
             _log "Stopping daemon..."
             launchctl bootout "$GUI_TARGET" 2>/dev/null || true
@@ -215,6 +220,24 @@ cmd_daemon() {
                 fi
             fi
 
+            _log "Starting daemon..."
+            _bootstrap_daemon
+            _daemon_wait_healthy 90
+            ;;
+        force-restart)
+            _warn "Force restart — skipping version check"
+            _log "Stopping daemon..."
+            launchctl bootout "$GUI_TARGET" 2>/dev/null || true
+            _log "Waiting for port ${DAEMON_PORT} to release..."
+            if ! _wait_port_free "$DAEMON_PORT" 15; then
+                _warn "Port still in use — force-killing..."
+                local stale_pids2
+                stale_pids2=$(lsof -i :"${DAEMON_PORT}" -t 2>/dev/null)
+                if [ -n "$stale_pids2" ]; then
+                    echo "$stale_pids2" | xargs kill -9 2>/dev/null || true
+                    sleep 1
+                fi
+            fi
             _log "Starting daemon..."
             _bootstrap_daemon
             _daemon_wait_healthy 90

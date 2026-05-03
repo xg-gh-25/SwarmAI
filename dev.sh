@@ -5,6 +5,7 @@
 #   ./dev.sh backend      — Restart backend only (after Python changes)
 #   ./dev.sh frontend     — Start frontend only (backend already running)
 #   ./dev.sh build        — Full production build (PyInstaller + Tauri + DMG)
+#   ./dev.sh deploy       — Build backend only + deploy to daemon (fastest)
 #   ./dev.sh quick        — Quick build: skip PyInstaller, rebuild Tauri only
 #   ./dev.sh kill         — Kill all dev processes
 #   ./dev.sh status       — Show what's running
@@ -230,6 +231,47 @@ cmd_build() {
     fi
 }
 
+cmd_deploy() {
+    local start=$(date +%s)
+    _log "Backend-only deploy to daemon (no frontend/Tauri)..."
+    echo ""
+
+    # Step 0: Sync versions
+    _log "Step 0: Syncing version from VERSION file..."
+    bash "$PROJECT_ROOT/scripts/sync-version.sh"
+    echo ""
+
+    # Step 1: PyInstaller
+    _log "Step 1/3: PyInstaller backend build..."
+    cd "$DESKTOP_DIR"
+    npm run build:backend
+
+    # Step 2: Verify
+    _log "Step 2/3: Post-build verification..."
+    cd "$BACKEND_DIR"
+    if python scripts/verify_build.py "$SIDECAR_BINARY"; then
+        _ok "Verification passed"
+    else
+        _err "Verification FAILED — binary has missing capabilities"
+        return 1
+    fi
+
+    # Step 3: Deploy to daemon
+    _log "Step 3/3: Deploy to daemon..."
+    _deploy_daemon_binary
+
+    echo ""
+    _ok "Deploy complete in $(_build_time $start)"
+
+    # Auto-restart daemon if running
+    if _daemon_is_running; then
+        _log "Daemon running — restarting to pick up new binary..."
+        cmd_daemon restart
+    else
+        _log "Daemon not running. Start with: ./dev.sh daemon start"
+    fi
+}
+
 cmd_quick() {
     local start=$(date +%s)
     _log "Quick build (skip PyInstaller, Tauri only)..."
@@ -397,6 +439,7 @@ case "${1:-start}" in
     backend)  cmd_backend ;;
     frontend) cmd_frontend ;;
     build)    cmd_build ;;
+    deploy)   cmd_deploy ;;
     quick)    cmd_quick ;;
     kill)     cmd_kill ;;
     status)   cmd_status ;;
@@ -410,6 +453,7 @@ case "${1:-start}" in
         echo "  backend          Restart backend only (after Python changes)"
         echo "  frontend         Start frontend only"
         echo "  build            Full production build (PyInstaller + Tauri → DMG)"
+        echo "  deploy           Build backend + deploy to daemon (no frontend/Tauri)"
         echo "  quick            Quick build: skip PyInstaller (frontend/Rust only)"
         echo "  kill             Stop all dev processes"
         echo "  status           Show what's running"
