@@ -34,7 +34,8 @@ L4_DIGEST_PATH = SWARMWS / "Services" / "signals" / "signal_digest.json"
 
 # Bedrock config
 MAX_INPUT_TOKENS = 4000
-MAX_OUTPUT_TOKENS = 2000
+MAX_OUTPUT_TOKENS_MD = 3000   # markdown digest (longer, narrative)
+MAX_OUTPUT_TOKENS_JSON = 1500  # JSON scores only (compact, structured)
 
 # Trending feed IDs — signals from these feeds are tagged for hot-news routing
 TRENDING_FEED_IDS = frozenset({"china-trending"})
@@ -229,98 +230,164 @@ def _llm_digest(
 
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-    prompt = f"""You are Swarm's signal intelligence system. Analyze these signals and produce TWO outputs.
+    _default_ctx = ("Building SwarmAI (AI desktop app), interested in AI agents, "
+                     "Claude SDK, LLM frameworks, context engineering, "
+                     "Chinese AI industry, Physical AI, 大模型应用.")
+    ctx = user_context or _default_ctx
+
+    _tier_guide = """- 🔵 FRONTIER LAB: Official AI lab announcements. Highest authority.
+- 👤 LEADERS: AI thought leaders & founders. High-signal opinion.
+- 🟣 RESEARCH: Academic papers and research blogs.
+- ⚙️ ENGINEERING: Practitioner blogs and frameworks.
+- 💭 OPINION: Thought leader commentary.
+- 📰 AGGREGATE: Newsletters and aggregators."""
+
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    # ── Call 1: Markdown digest ──────────────────────────────────────
+    md_prompt = f"""You are Swarm's signal intelligence system. Produce a markdown digest.
 
 ## User Context
-{user_context or "Building SwarmAI (AI desktop app), interested in AI agents, Claude SDK, LLM frameworks, context engineering."}
+{ctx}
 
-## Signal Tier System
-Each signal is tagged with a source authority tier. Weight your scoring accordingly:
-- 🔵 FRONTIER LAB: Official AI lab announcements. Highest authority — these define the landscape.
-- 👤 LEADERS: AI thought leaders & founders (Sam Altman, Karpathy, etc.). High-signal opinion — score like frontier.
-- 🟣 RESEARCH: Academic papers and research blogs. Trend indicators for 3-12 month horizon.
-- ⚙️ ENGINEERING: Practitioner blogs and frameworks. Direct actionability.
-- 💭 OPINION: Thought leader commentary. Directional, not definitive.
-- 📰 AGGREGATE: Newsletters and aggregators. Useful for coverage but second-hand.
-
-Frontier, Leaders, and Research signals should be scored higher for relevance when equally interesting.
+## Signal Tiers
+{_tier_guide}
 
 ## Raw Signals
 {signal_text}
 
-## Output 1: Markdown Digest
-Create a markdown digest with these sections:
-1. **🔴 Act Now** — signals requiring immediate attention or action
-2. **🟡 Worth Knowing** — interesting developments relevant to our work
-3. **🟢 Background** — general industry movement, nice to know
+## Output: Markdown Digest
+Sections: 🔴 Act Now, 🟡 Worth Knowing, 🟢 Background.
+For each signal: 1-2 sentence summary, "Why it matters", source tier tag, URL.
+YAML frontmatter: date ({today}), signals_count, sources.
+Skip irrelevant signals. Include Chinese signals if relevant to user context."""
 
-For each signal: 1-2 sentence summary, "Why it matters" annotation, source tier tag, original URL.
-Start with YAML frontmatter: date, signals_count, sources (unique source names).
-Skip irrelevant signals entirely.
-
-## Output 2: JSON Scores
-After the markdown, output a line "---JSON---" then a JSON array of objects, one per RELEVANT signal (skip irrelevant ones):
-```
-[{{"idx": 0, "relevance_score": 0.85, "urgency": "high", "summary": "one-line summary"}}]
-```
-- relevance_score: 0.0 to 1.0 based on relevance to user context (before tier weighting — we apply tier multipliers post-hoc)
-- urgency: "high" (act now), "medium" (worth knowing), "low" (background)
-- summary: concise one-line summary
-
-Output the markdown first, then ---JSON--- separator, then the JSON array. Nothing else."""
-
-    content, input_tokens, output_tokens = invoke(
-        prompt, max_tokens=MAX_OUTPUT_TOKENS, temperature=0.3,
+    markdown_part, md_in, md_out = invoke(
+        md_prompt, max_tokens=MAX_OUTPUT_TOKENS_MD, temperature=0.3,
     )
-    total_tokens = input_tokens + output_tokens
 
-    # Split markdown and JSON parts
+    # ── Call 2: JSON scores (separate call = never truncated) ────────
+    json_prompt = f"""Score these signals for relevance. User context:
+{ctx}
+
+Signals:
+{signal_text}
+
+Output ONLY a JSON array — no markdown, no explanation:
+[{{"idx": 0, "relevance_score": 0.85, "urgency": "high", "summary": "one-line"}}]
+
+Rules:
+- relevance_score: 0.0–1.0 based on relevance to user context
+- urgency: "high" / "medium" / "low"
+- Skip completely irrelevant signals (don't include idx)
+- Include Chinese signals if they match user interests (中文AI, 具身智能, 大模型)
+- Output valid JSON only"""
+
+    json_content, js_in, js_out = invoke(
+        json_prompt, max_tokens=MAX_OUTPUT_TOKENS_JSON, temperature=0.1,
+    )
+    total_tokens = md_in + md_out + js_in + js_out
+
+    # Parse JSON scores
     scored_items: list[dict] = []
-    markdown_part = content
-    if "---JSON---" in content:
-        parts = content.split("---JSON---", 1)
-        markdown_part = parts[0].strip()
-        try:
-            json_text = parts[1].strip()
-            # Strip markdown code fences if present
-            if json_text.startswith("```"):
-                json_text = json_text.split("\n", 1)[-1]
-            if json_text.endswith("```"):
-                json_text = json_text.rsplit("```", 1)[0]
-            raw_scores = json.loads(json_text.strip())
-            # Map idx back to sampled signal data, apply tier weighting
-            for score_obj in raw_scores:
-                idx = score_obj.get("idx", -1)
-                if 0 <= idx < len(sampled):
-                    s = sampled[idx]
-                    raw_score = float(score_obj.get("relevance_score", 0.5))
-                    tier_weight = TIER_WEIGHTS.get(s.tier, 1.0)
-                    weighted_score = min(raw_score * tier_weight, 1.0)
-                    scored_items.append({
-                        "title": s.title,
-                        "summary": score_obj.get("summary", s.summary or ""),
-                        "source": s.source,
-                        "url": s.url,
-                        "relevance_score": round(weighted_score, 3),
-                        "raw_relevance_score": round(raw_score, 3),
-                        "tier": s.tier,
-                        "tier_weight": tier_weight,
-                        "urgency": score_obj.get("urgency", "low"),
-                        "fetched_at": datetime.now(timezone.utc).isoformat(),
-                        "lang": _detect_lang(s.title),
-                        "feed_id": s.feed_id,
-                        "platform": s.source if s.feed_id in TRENDING_FEED_IDS else "",
-                        "rank": 0,
-                        "region": "cn" if s.feed_id in TRENDING_FEED_IDS else "",
-                    })
-        except (json.JSONDecodeError, ValueError, IndexError) as e:
-            logger.warning(f"Failed to parse LLM JSON scores: {e}")
-            scored_items = _simple_scored_items(signals)
+    try:
+        json_text = json_content.strip()
+        # Strip markdown code fences if LLM wraps output
+        if json_text.startswith("```"):
+            json_text = json_text.split("\n", 1)[-1]
+        if json_text.endswith("```"):
+            json_text = json_text.rsplit("```", 1)[0]
+        raw_scores = json.loads(json_text.strip())
+        for score_obj in raw_scores:
+            idx = score_obj.get("idx", -1)
+            if 0 <= idx < len(sampled):
+                s = sampled[idx]
+                raw_score = min(max(float(score_obj.get("relevance_score", 0.5)), 0), 1.0)
+                tier_weight = TIER_WEIGHTS.get(s.tier, 1.0)
+                weighted_score = min(raw_score * tier_weight, 1.0)
+                scored_items.append({
+                    "title": s.title,
+                    "summary": score_obj.get("summary", s.summary or ""),
+                    "source": s.source,
+                    "url": s.url,
+                    "relevance_score": round(weighted_score, 3),
+                    "raw_relevance_score": round(raw_score, 3),
+                    "tier": s.tier,
+                    "tier_weight": tier_weight,
+                    "urgency": score_obj.get("urgency", "low"),
+                    "fetched_at": datetime.now(timezone.utc).isoformat(),
+                    "lang": _detect_lang(s.title),
+                    "feed_id": s.feed_id,
+                    "platform": s.source if s.feed_id in TRENDING_FEED_IDS else "",
+                    "rank": 0,
+                    "region": "cn" if s.feed_id in TRENDING_FEED_IDS else "",
+                })
+    except (json.JSONDecodeError, ValueError, IndexError) as e:
+        logger.warning(f"Failed to parse LLM JSON scores: {e}")
+        scored_items = _keyword_scored_items(signals, ctx)
 
     if not scored_items:
-        scored_items = _simple_scored_items(signals)
+        scored_items = _keyword_scored_items(signals, ctx)
 
     return markdown_part, scored_items, total_tokens
+
+
+def _keyword_scored_items(signals: list[RawSignal], user_context: str = "") -> list[dict]:
+    """Smart fallback: keyword-match scoring when LLM JSON parsing fails.
+
+    Instead of flat 0.5 for everything, checks signal title + summary against
+    keywords extracted from user_context. Matched signals get 0.7, unmatched
+    get 0.3. This ensures "具身智能" scores higher than "茶颜悦色" even without LLM.
+    """
+    # Extract keywords from user context (simple word extraction)
+    keywords: set[str] = set()
+    if user_context:
+        import re
+        # English words (3+ chars)
+        keywords.update(w.lower() for w in re.findall(r'[a-zA-Z]{3,}', user_context))
+        # CJK phrases (2+ chars) — split on non-CJK
+        cjk_chunks = re.findall(r'[一-鿿㐀-䶿]{2,}', user_context)
+        keywords.update(cjk_chunks)
+    # Always include core AI terms
+    keywords.update({"agent", "llm", "model", "memory", "claude", "bedrock",
+                     "智能", "模型", "agent", "AI"})
+
+    now = datetime.now(timezone.utc).isoformat()
+    items = []
+    for s in signals:
+        text = f"{s.title} {s.summary or ''}".lower()
+        # Check keyword matches
+        match_count = sum(1 for kw in keywords if kw.lower() in text)
+        if match_count >= 2:
+            raw_score = 0.8
+            urgency = "medium"
+        elif match_count == 1:
+            raw_score = 0.6
+            urgency = "low"
+        else:
+            raw_score = 0.3
+            urgency = "low"
+
+        tier_weight = TIER_WEIGHTS.get(s.tier, 1.0)
+        weighted_score = min(raw_score * tier_weight, 1.0)
+        items.append({
+            "title": s.title,
+            "summary": (s.summary or "")[:200],
+            "source": s.source,
+            "url": s.url,
+            "relevance_score": round(weighted_score, 3),
+            "raw_relevance_score": round(raw_score, 3),
+            "tier": s.tier,
+            "tier_weight": tier_weight,
+            "urgency": urgency,
+            "fetched_at": now,
+            "lang": _detect_lang(s.title),
+            "feed_id": s.feed_id,
+            "platform": s.source if s.feed_id in TRENDING_FEED_IDS else "",
+            "rank": 0,
+            "region": "cn" if s.feed_id in TRENDING_FEED_IDS else "",
+        })
+    return items
 
 
 def _simple_scored_items(signals: list[RawSignal]) -> list[dict]:
@@ -567,7 +634,7 @@ Create a concise weekly summary with:
 Be concise. This is a rollup, not a repeat — synthesize patterns, don't list individual signals."""
 
     content, input_tokens, output_tokens = invoke(
-        prompt, max_tokens=MAX_OUTPUT_TOKENS, temperature=0.3,
+        prompt, max_tokens=MAX_OUTPUT_TOKENS_MD, temperature=0.3,
     )
 
     header = (
