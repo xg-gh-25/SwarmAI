@@ -23,7 +23,7 @@ export default function SettingsModal({ isOpen, onClose, initialTab }: SettingsM
       title="Settings"
       size="fullscreen"
     >
-      <div className="h-full overflow-y-auto -m-6">
+      <div className="h-full flex flex-col -m-6 overflow-hidden">
         <SettingsPage initialTab={initialTab} />
       </div>
     </Modal>

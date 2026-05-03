@@ -68,14 +68,11 @@ export default function MCPSettingsPanel() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
+      {/* Toolbar */}
       <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-lg font-semibold text-[var(--color-text)]">{t('mcp.title')}</h3>
-          <p className="text-sm text-[var(--color-text-muted)] mt-1">
-            {t('mcp.subtitle')}
-          </p>
-        </div>
+        <p className="text-sm text-[var(--color-text-muted)]">
+          {t('mcp.subtitle')}
+        </p>
         <Button icon="add" onClick={() => setShowAddForm(true)}>{t('mcp.addMcp')}</Button>
       </div>
 

@@ -172,7 +172,7 @@ export default function BackupTab() {
           Only works on a fresh install (no existing data).
         </p>
 
-        {!restoring && restoreEvents.length === 0 && (
+        {!restoring && (
           <button
             onClick={async () => {
               if (!repoUrl) {
@@ -198,7 +198,7 @@ export default function BackupTab() {
             }}
             className="px-3 py-1.5 text-sm font-medium rounded-md border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
           >
-            Restore from Backup
+            {restoreEvents.length > 0 ? 'Retry Restore' : 'Restore from Backup'}
           </button>
         )}
 

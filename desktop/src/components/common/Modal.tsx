@@ -78,8 +78,8 @@ export default function Modal({
           </button>
         </div>
 
-        {/* Content - scrollable */}
-        <div className="p-6 overflow-y-auto">{children}</div>
+        {/* Content - scrollable, fills remaining height */}
+        <div className="p-6 overflow-y-auto flex-1 min-h-0">{children}</div>
       </div>
     </div>
   );

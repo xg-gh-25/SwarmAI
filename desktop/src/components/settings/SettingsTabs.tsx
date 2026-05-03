@@ -58,39 +58,54 @@ export default function SettingsTabs({ initialTab }: SettingsTabsProps) {
   }, [initialTab, TABS]);
 
   return (
-    <div className="p-6 max-w-4xl mx-auto">
-      <h1 className="text-2xl font-bold text-[var(--color-text)] mb-6">Settings</h1>
-
-      {/* Tab bar */}
-      <div className="flex gap-1 mb-6 border-b border-[var(--color-border)] overflow-x-auto">
-        {TABS.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`px-3 py-2.5 text-sm font-medium transition-colors flex items-center gap-1.5 border-b-2 -mb-px whitespace-nowrap ${
-              activeTab === tab.id
-                ? 'text-[var(--color-primary)] border-[var(--color-primary)]'
-                : 'text-[var(--color-text-muted)] border-transparent hover:text-[var(--color-text)] hover:border-[var(--color-border)]'
-            }`}
-          >
-            <span className="material-symbols-outlined text-base">{tab.icon}</span>
-            {tab.label}
-          </button>
-        ))}
+    <div className="flex flex-col h-full">
+      {/* Tab bar — pinned at top */}
+      <div className="shrink-0 px-6 pt-4 border-b border-[var(--color-border)] overflow-x-auto">
+        <div className="flex gap-1">
+          {TABS.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`px-3 py-2.5 text-sm font-medium transition-colors flex items-center gap-1.5 border-b-2 -mb-px whitespace-nowrap ${
+                activeTab === tab.id
+                  ? 'text-[var(--color-primary)] border-[var(--color-primary)]'
+                  : 'text-[var(--color-text-muted)] border-transparent hover:text-[var(--color-text)] hover:border-[var(--color-border)]'
+              }`}
+            >
+              <span className="material-symbols-outlined text-base">{tab.icon}</span>
+              {tab.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Tab content */}
-      <div>
-        {activeTab === 'general' && <GeneralTab />}
-        {activeTab === 'ai-models' && <AIModelsTab />}
-        {activeTab === 'channels' && <ChannelsTab />}
-        {activeTab === 'skills' && <SkillsSettingsTab />}
-        {activeTab === 'mcp-servers' && <MCPServersTab />}
-        {activeTab === 'hive' && <HiveTab />}
-        {activeTab === 'backup' && <BackupTab />}
-        {activeTab === 'engine' && <EngineMetricsTab />}
-        {activeTab === 'system' && <SystemTab />}
-        {activeTab === 'about' && <AboutTab />}
+      {/* Tab content — scrollable, fills remaining space */}
+      <div className="flex-1 min-h-0 overflow-y-auto">
+        {/* Wide tabs (data tables, lists) use full width; form tabs stay constrained */}
+        {activeTab === 'skills' ? (
+          <SkillsSettingsTab />
+        ) : activeTab === 'mcp-servers' ? (
+          <div className="max-w-6xl mx-auto p-6">
+            <MCPServersTab />
+          </div>
+        ) : activeTab === 'hive' ? (
+          <div className="max-w-6xl mx-auto p-6">
+            <HiveTab />
+          </div>
+        ) : activeTab === 'engine' ? (
+          <div className="max-w-6xl mx-auto p-6">
+            <EngineMetricsTab />
+          </div>
+        ) : (
+          <div className="max-w-4xl mx-auto p-6">
+            {activeTab === 'general' && <GeneralTab />}
+            {activeTab === 'ai-models' && <AIModelsTab />}
+            {activeTab === 'channels' && <ChannelsTab />}
+            {activeTab === 'backup' && <BackupTab />}
+            {activeTab === 'system' && <SystemTab />}
+            {activeTab === 'about' && <AboutTab />}
+          </div>
+        )}
       </div>
     </div>
   );

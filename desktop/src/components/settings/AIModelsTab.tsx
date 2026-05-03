@@ -15,6 +15,13 @@ export default function AIModelsTab() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  // Auto-clear success messages after 3 seconds
+  useEffect(() => {
+    if (message?.type === 'success') {
+      const timer = setTimeout(() => setMessage(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [message]);
 
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [defaultModel, setDefaultModel] = useState<string>('');
@@ -58,7 +65,14 @@ export default function AIModelsTab() {
   };
 
   const handleDeleteModel = async (modelId: string) => {
-    if (modelId === defaultModel || availableModels.length <= 1) return;
+    if (availableModels.length <= 1) {
+      setMessage({ type: 'error', text: 'Cannot remove the last model.' });
+      return;
+    }
+    if (modelId === defaultModel) {
+      setMessage({ type: 'error', text: 'Cannot remove the default model. Change the default first.' });
+      return;
+    }
     await saveModelConfig(availableModels.filter(m => m !== modelId), defaultModel);
   };
 
