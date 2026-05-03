@@ -127,11 +127,15 @@ def main() -> None:
     lines.append(f"- Mode: bot_token fallback (no AI categorization)")
     lines.append("")
 
-    # Write report
+    # Write report — don't overwrite a better agent_task report (PE5)
     report_dir = Path.home() / ".swarm-ai" / "SwarmWS" / "Knowledge" / "JobResults"
     report_dir.mkdir(parents=True, exist_ok=True)
     report_path = report_dir / f"{date_str}-channel-monitor.md"
     report_content = "\n".join(lines)
+    if report_path.exists():
+        # Existing report from agent_task is likely higher quality (AI-categorized).
+        # Append fallback as supplement instead of overwriting.
+        report_path = report_dir / f"{date_str}-channel-monitor-fallback.md"
     report_path.write_text(report_content)
 
     # Also print to stdout for job executor

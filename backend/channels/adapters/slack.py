@@ -690,6 +690,7 @@ class SlackChannelAdapter(ChannelAdapter):
                     or user_id
                 )
                 self._user_cache[user_id] = name
+                self._evict_user_cache_if_full()
                 return name
             logger.warning(
                 "users.info returned ok=false for %s: %s",
@@ -714,6 +715,7 @@ class SlackChannelAdapter(ChannelAdapter):
                     or user_id
                 )
                 self._user_cache[user_id] = name
+                self._evict_user_cache_if_full()
                 return name
         except Exception as exc:
             logger.warning("users.profile.get also failed for %s: %s", user_id, exc)
