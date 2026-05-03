@@ -5,15 +5,22 @@
     <link rel="icon" type="image/svg+xml" href="/swarm-avatar.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>SwarmAI</title>
-    <!-- FOUC Prevention: Apply theme before CSS loads -->
+    <meta name="color-scheme" content="light dark" />
+    <!-- FOUC Prevention: Apply theme + accent before CSS loads.
+         Also sets .no-transitions to prevent CSS transition on first paint. -->
     <script>
       (function() {
         try {
+          var d = document.documentElement;
           var theme = localStorage.getItem('theme');
-          var resolved = (theme === 'light' || theme === 'dark') ? theme : 'dark';
-          document.documentElement.classList.add(resolved);
+          var accent = localStorage.getItem('accentColor');
+          var resolved = theme === 'light' ? 'light'
+            : theme === 'dark' ? 'dark'
+            : (matchMedia('(prefers-color-scheme:dark)').matches ? 'dark' : 'light');
+          d.classList.add(resolved, 'no-transitions');
+          if (accent && accent !== 'blue') d.dataset.accent = accent;
         } catch (e) {
-          document.documentElement.classList.add('dark');
+          document.documentElement.classList.add('dark', 'no-transitions');
         }
       })();
     </script>
