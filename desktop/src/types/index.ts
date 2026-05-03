@@ -694,7 +694,7 @@ export interface PluginUninstallResponse {
 // ============== Channel Types ==============
 
 export type ChannelType = 'slack';
-export type ChannelStatus = 'active' | 'inactive' | 'error' | 'starting' | 'failed';
+export type ChannelStatus = 'active' | 'inactive' | 'error' | 'starting' | 'failed' | 'auth_error';
 export type ChannelAccessMode = 'open' | 'allowlist' | 'blocklist';
 
 export interface Channel {
