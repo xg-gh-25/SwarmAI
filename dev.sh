@@ -343,6 +343,29 @@ cmd_status() {
         _err "Frontend: not running"
     fi
 
+    # Daemon
+    echo ""
+    if _daemon_is_running; then
+        local daemon_port=""
+        local daemon_health=""
+        # Read port from backend.json (source of truth written by running daemon)
+        local bjson="$HOME/.swarm-ai/backend.json"
+        if [ -f "$bjson" ]; then
+            daemon_port=$(python3 -c "import json; print(json.load(open('$bjson')).get('port',''))" 2>/dev/null)
+        fi
+        : "${daemon_port:=$DAEMON_PORT}"  # fallback to hardcoded constant
+        daemon_health=$(curl -sf --max-time 2 "http://127.0.0.1:${daemon_port}/health" 2>/dev/null)
+        if [ -n "$daemon_health" ]; then
+            local dver=$(echo "$daemon_health" | python3 -c "import sys,json; print(json.load(sys.stdin).get('version','?'))" 2>/dev/null)
+            _ok "Daemon: healthy on port ${daemon_port} (v${dver})"
+        else
+            _warn "Daemon: launchd running but API not responding on port ${daemon_port}"
+        fi
+        _check_daemon_version 2>/dev/null || true
+    else
+        _err "Daemon: not running"
+    fi
+
     # Sidecar binary
     local binary="$DESKTOP_DIR/src-tauri/binaries/python-backend-aarch64-apple-darwin"
     if [ -f "$binary" ]; then

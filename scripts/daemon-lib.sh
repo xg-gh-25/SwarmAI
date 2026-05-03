@@ -31,8 +31,16 @@ _daemon_is_running() {
 }
 
 _daemon_health_status() {
+    local api_url="$DAEMON_API"
+    # Prefer port from backend.json (daemon writes this at startup)
+    local bjson="$HOME/.swarm-ai/backend.json"
+    if [ -f "$bjson" ]; then
+        local bjson_port
+        bjson_port=$(python3 -c "import json; print(json.load(open('$bjson')).get('port',''))" 2>/dev/null)
+        [ -n "$bjson_port" ] && api_url="http://127.0.0.1:${bjson_port}"
+    fi
     local resp
-    resp=$(curl -sf --max-time 2 "${DAEMON_API}/health" 2>/dev/null) || { echo "unreachable"; return; }
+    resp=$(curl -sf --max-time 2 "${api_url}/health" 2>/dev/null) || { echo "unreachable"; return; }
     local status
     status=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','unknown'))" 2>/dev/null)
     echo "${status:-unknown}"
