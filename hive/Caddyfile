@@ -20,8 +20,10 @@
     }
 
     # --- Authentication (MVP: basic auth) ---
-    # Generate hash: caddy hash-password --plaintext 'your-password'
-    basicauth * {
+    # @protected excludes /health so external monitors can reach it (G11)
+    # Use basic_auth (not deprecated basicauth)
+    @protected not path /health
+    basic_auth @protected {
         {$HIVE_USER:admin} {$HIVE_PASS_HASH:INVALID_NOT_A_REAL_HASH}
     }
 

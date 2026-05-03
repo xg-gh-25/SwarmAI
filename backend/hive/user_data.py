@@ -67,7 +67,8 @@ cat > /etc/caddy/Caddyfile << 'CADDY'
         reverse_proxy 127.0.0.1:18321
     }
 
-    basicauth * {
+    @protected not path /health
+    basic_auth @protected {
         ${auth_user} ${auth_hash}
     }
 
