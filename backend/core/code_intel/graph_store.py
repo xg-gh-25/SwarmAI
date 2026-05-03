@@ -99,7 +99,11 @@ class GraphStore:
         """
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self._db_path))
+        # check_same_thread=False: GraphStore is cached at module level and
+        # accessed from both the main asyncio thread (code_intel_hook) and
+        # BackgroundHookExecutor threads (context_health_hook). WAL mode +
+        # busy_timeout handle concurrent access at the SQLite level.
+        self._conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.executescript(_SCHEMA_SQL)
@@ -718,7 +722,7 @@ class GraphStore:
             full = repo_root / fpath
             if not full.exists():
                 # File was deleted — remove its nodes/edges.
-                self._remove_file(fpath)
+                self.remove_file(fpath)
                 updated.append(fpath)
                 continue
 
@@ -868,7 +872,7 @@ class GraphStore:
 
     # ── internal helpers ─────────────────────────────────────────────────
 
-    def _remove_file(self, file_path: str) -> None:
+    def remove_file(self, file_path: str) -> None:
         """Remove all nodes, edges, and FTS entries for a deleted file."""
         # 1. Delete FTS entries (must happen before node deletion — needs rowid)
         old_rowids = self._conn.execute(
