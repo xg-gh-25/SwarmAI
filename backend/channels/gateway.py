@@ -1188,12 +1188,14 @@ class ChannelGateway:
                         if not ctx.thinking_set:
                             ctx.thinking_set = True
                             set_reaction(ctx, EMOJI_THINKING)
+                        reset_stall_timers(ctx)
                         try:
                             await adapter.append_stream(
                                 ctx.external_chat_id,
                                 ctx.streaming_msg_id,
                                 "💭 _",
                             )
+                            ctx.thinking_content_sent = True
                         except Exception:
                             pass
                     continue
@@ -1306,12 +1308,17 @@ class ChannelGateway:
                             if fe_type == "thinking_start":
                                 if ctx.streaming and ctx.streaming_msg_id and ctx.native_streaming:
                                     ctx.in_thinking = True
+                                    if not ctx.thinking_set:
+                                        ctx.thinking_set = True
+                                        set_reaction(ctx, EMOJI_THINKING)
+                                    reset_stall_timers(ctx)
                                     try:
                                         await adapter.append_stream(
                                             ctx.external_chat_id,
                                             ctx.streaming_msg_id,
                                             "💭 _",
                                         )
+                                        ctx.thinking_content_sent = True
                                     except Exception:
                                         pass
                                 continue
