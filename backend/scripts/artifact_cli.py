@@ -24,6 +24,10 @@ Usage — Pipeline Runs (stored in .artifacts/runs/<run_id>/):
     python artifact_cli.py run-status [--active-only]
     python artifact_cli.py run-resume --project SwarmAI --run-id run_xxx
 
+Usage — Pipeline Metrics:
+    python artifact_cli.py run-metrics --project SwarmAI --run-id run_xxx
+    python artifact_cli.py run-analytics --project SwarmAI [--limit 50]
+
 Storage layout:
     Projects/<project>/.artifacts/
         manifest.json                   # global artifact index
@@ -31,6 +35,7 @@ Storage layout:
         runs/
             <run_id>/
                 run.json                # pipeline run state
+                METRICS.json            # extracted metrics (auto on completion)
                 <type>-<date>.json      # artifacts scoped to this run
 
 Public symbols:
@@ -208,6 +213,12 @@ def _auto_validate_before_advance(project: str, next_state: str) -> None:
             validation = json.loads(result.stdout)
             if not validation.get("valid", True):
                 errors = validation.get("errors", [])
+                # Record validation block event in run.json
+                _record_validation_event(
+                    project, run_id, current_stage,
+                    passed=False, errors=errors,
+                    warnings=validation.get("warnings", []),
+                )
                 print(json.dumps({
                     "validation_blocked": True,
                     "stage": current_stage,
@@ -423,6 +434,8 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         run_state["status"] = args.status
         if args.status == "completed":
             run_state["completed_at"] = now
+            # Auto-generate METRICS.json on completion
+            _try_generate_metrics(args.project, args.run_id, run_state, reg)
 
     if args.stage_json:
         stage_record = json.loads(args.stage_json)
@@ -1053,6 +1066,376 @@ Pipeline status: **{run_state.get('status', 'unknown')}**
     }))
 
 
+def _record_validation_event(
+    project: str, run_id: str, stage: str,
+    passed: bool, errors: list[str], warnings: list[str],
+) -> None:
+    """Append a validation event to run.json.validation_events[].
+
+    Non-critical — failures are silently ignored (metrics are best-effort).
+    """
+    from datetime import datetime, timezone
+    try:
+        run_file = _run_dir(project, run_id) / "run.json"
+        if not run_file.exists():
+            return
+        run_state = json.loads(run_file.read_text(encoding="utf-8"))
+        events = run_state.setdefault("validation_events", [])
+        events.append({
+            "stage": stage,
+            "passed": passed,
+            "error_count": len(errors),
+            "warning_count": len(warnings),
+            "errors": errors[:5],  # Cap at 5 to avoid bloat
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+        run_file.write_text(json.dumps(run_state, indent=2), encoding="utf-8")
+    except (OSError, json.JSONDecodeError):
+        pass  # Best-effort — never crash pipeline for metrics
+
+
+def _try_generate_metrics(
+    project: str, run_id: str, run_state: dict, reg: ArtifactRegistry,
+) -> None:
+    """Auto-generate METRICS.json when a pipeline run completes.
+
+    Extracts catch metrics from review/deliver artifacts + validation events.
+    Non-critical — failures silently ignored.
+    """
+    try:
+        metrics = _extract_run_metrics(project, run_id, run_state)
+        metrics_file = _run_dir(project, run_id) / "METRICS.json"
+        metrics_file.parent.mkdir(parents=True, exist_ok=True)
+        metrics_file.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    except Exception:
+        pass  # Best-effort
+
+
+def _extract_run_metrics(project: str, run_id: str, run_state: dict) -> dict:
+    """Extract comprehensive metrics from a completed pipeline run.
+
+    Reads run.json + artifact data to produce a flat metrics dict.
+    """
+    from datetime import datetime, timezone
+
+    stages = run_state.get("stages", [])
+    profile = run_state.get("profile", "full")
+
+    # --- Token metrics ---
+    total_tokens = sum(s.get("token_cost", 0) for s in stages)
+    stage_tokens = {
+        s.get("stage", "?"): s.get("token_cost", 0)
+        for s in stages
+    }
+
+    # --- Decision metrics ---
+    all_decisions = []
+    for s in stages:
+        for d in s.get("decisions", []):
+            all_decisions.append(d)
+    decision_counts = {
+        "mechanical": sum(1 for d in all_decisions if d.get("classification") == "mechanical"),
+        "taste": sum(1 for d in all_decisions if d.get("classification") == "taste"),
+        "judgment": sum(1 for d in all_decisions if d.get("classification") == "judgment"),
+        "total": len(all_decisions),
+    }
+
+    # --- Catch metrics (from artifacts) ---
+    review_findings = 0
+    review_rp_checked = 0
+    adversarial_findings = 0
+    adversarial_high = 0
+    adversarial_resolved = 0
+    confidence_score = 0
+    completion_all_green = False
+    test_passed = 0
+    test_failed = 0
+    build_files_changed = 0
+    build_tests_generated = 0
+
+    for s in stages:
+        art_id = s.get("artifact_id")
+        if not art_id:
+            continue
+
+        data = _load_artifact_for_metrics(project, art_id)
+        if not data:
+            continue
+
+        stage_name = s.get("stage", "?")
+
+        if stage_name == "review":
+            fc = data.get("findings_count", 0)
+            findings_list = data.get("findings", [])
+            review_findings = fc if fc else (len(findings_list) if isinstance(findings_list, list) else 0)
+            rp = data.get("runtime_patterns", {})
+            review_rp_checked = rp.get("checked", 0) if isinstance(rp, dict) else 0
+
+        elif stage_name == "deliver":
+            ar = data.get("adversarial_review", {})
+            if isinstance(ar, dict):
+                findings = ar.get("findings", [])
+                adversarial_findings = len(findings)
+                adversarial_high = sum(
+                    1 for f in findings
+                    if isinstance(f, dict) and f.get("severity") == "HIGH"
+                )
+                adversarial_resolved = sum(
+                    1 for f in findings
+                    if isinstance(f, dict) and f.get("resolved")
+                )
+            cs = data.get("confidence_score", {})
+            if isinstance(cs, dict):
+                confidence_score = cs.get("score", 0)
+            elif isinstance(cs, (int, float)):
+                confidence_score = cs
+            ca = data.get("completion_audit", {})
+            completion_all_green = ca.get("all_green", False) if isinstance(ca, dict) else False
+
+        elif stage_name == "test":
+            test_passed = data.get("passed", 0)
+            test_failed = data.get("failed", 0)
+
+        elif stage_name == "build":
+            fc = data.get("files_changed", [])
+            build_files_changed = len(fc) if isinstance(fc, list) else fc
+            tdd = data.get("tdd", {})
+            build_tests_generated = tdd.get("tests_generated", tdd.get("smoke_tests", 0)) if isinstance(tdd, dict) else 0
+
+    # --- Validation events ---
+    validation_events = run_state.get("validation_events", [])
+    validation_blocks = sum(1 for v in validation_events if not v.get("passed"))
+
+    # --- Duration ---
+    created = run_state.get("created_at", "")
+    completed = run_state.get("completed_at", "")
+    duration_minutes = None
+    if created and completed:
+        try:
+            t0 = datetime.fromisoformat(created)
+            t1 = datetime.fromisoformat(completed)
+            duration_minutes = round((t1 - t0).total_seconds() / 60, 1)
+        except (ValueError, TypeError):
+            pass
+
+    return {
+        "run_id": run_id,
+        "project": project,
+        "profile": profile,
+        "status": run_state.get("status", "?"),
+        "stages_completed": sum(1 for s in stages if s.get("status") in ("completed", "done")),
+        "stages_total": len(stages),
+        "duration_minutes": duration_minutes,
+        # Tokens
+        "total_tokens": total_tokens,
+        "stage_tokens": stage_tokens,
+        # Decisions
+        "decisions": decision_counts,
+        # Catches
+        "catches": {
+            "review_findings": review_findings,
+            "review_rp_checked": review_rp_checked,
+            "adversarial_findings": adversarial_findings,
+            "adversarial_high": adversarial_high,
+            "adversarial_resolved": adversarial_resolved,
+            "validation_blocks": validation_blocks,
+            "test_regressions": test_failed,
+        },
+        # Quality
+        "quality": {
+            "confidence_score": confidence_score,
+            "completion_all_green": completion_all_green,
+            "test_passed": test_passed,
+            "test_failed": test_failed,
+        },
+        # Build
+        "build": {
+            "files_changed": build_files_changed,
+            "tests_generated": build_tests_generated,
+        },
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _load_artifact_for_metrics(project: str, artifact_id: str) -> dict | None:
+    """Load artifact data by ID from manifest (metrics-safe: returns None on failure)."""
+    ws = _get_workspace()
+    manifest_file = ws / "Projects" / project / ".artifacts" / "manifest.json"
+    if not manifest_file.exists():
+        return None
+    try:
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    artifacts_dir = ws / "Projects" / project / ".artifacts"
+    for entry in manifest.get("artifacts", []):
+        if entry.get("id") == artifact_id:
+            data_file = artifacts_dir / entry.get("file", "")
+            if data_file.exists():
+                try:
+                    return json.loads(data_file.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    return None
+    return None
+
+
+def cmd_run_metrics(args, reg: ArtifactRegistry) -> None:
+    """Generate or read METRICS.json for a pipeline run.
+
+    Extracts catch rates, token costs, and quality metrics from
+    run.json + artifacts. Writes METRICS.json to the run directory.
+    """
+    run_file = _resolve_run_file(args.project, args.run_id)
+    run_state = json.loads(run_file.read_text(encoding="utf-8"))
+
+    metrics = _extract_run_metrics(args.project, args.run_id, run_state)
+
+    # Write METRICS.json
+    metrics_file = run_file.parent / "METRICS.json"
+    metrics_file.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+
+    print(json.dumps(metrics, indent=2))
+
+
+def cmd_run_analytics(args, reg: ArtifactRegistry) -> None:
+    """Cross-run analytics: aggregate metrics across completed pipeline runs.
+
+    Reports: catch rates per stage, token trends, confidence distribution,
+    adversarial review ROI, and validation block frequency.
+    """
+    runs = _load_completed_runs(args.project, limit=args.limit)
+    if not runs:
+        print(json.dumps({
+            "project": args.project,
+            "message": "No completed pipeline runs found",
+        }))
+        return
+
+    # Collect metrics from each run (generate if needed)
+    all_metrics: list[dict] = []
+    for run_state in runs:
+        run_id = run_state["id"]
+        metrics_file = _run_dir(args.project, run_id) / "METRICS.json"
+        if metrics_file.exists():
+            try:
+                m = json.loads(metrics_file.read_text(encoding="utf-8"))
+                all_metrics.append(m)
+                continue
+            except (json.JSONDecodeError, OSError):
+                pass
+        # Generate on-demand
+        m = _extract_run_metrics(args.project, run_id, run_state)
+        all_metrics.append(m)
+        # Persist for next time
+        try:
+            metrics_file.parent.mkdir(parents=True, exist_ok=True)
+            metrics_file.write_text(json.dumps(m, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
+    if not all_metrics:
+        print(json.dumps({"project": args.project, "message": "No metrics extracted"}))
+        return
+
+    n = len(all_metrics)
+
+    # --- Token analytics ---
+    total_tokens_list = [m.get("total_tokens", 0) for m in all_metrics if m.get("total_tokens", 0) > 0]
+    stage_token_agg: dict[str, list[int]] = {}
+    for m in all_metrics:
+        for stage, cost in m.get("stage_tokens", {}).items():
+            if cost > 0:
+                stage_token_agg.setdefault(stage, []).append(cost)
+
+    # --- Catch rate analytics ---
+    total_review_findings = sum(m.get("catches", {}).get("review_findings", 0) for m in all_metrics)
+    total_adversarial = sum(m.get("catches", {}).get("adversarial_findings", 0) for m in all_metrics)
+    total_adversarial_high = sum(m.get("catches", {}).get("adversarial_high", 0) for m in all_metrics)
+    total_validation_blocks = sum(m.get("catches", {}).get("validation_blocks", 0) for m in all_metrics)
+    total_test_regressions = sum(m.get("catches", {}).get("test_regressions", 0) for m in all_metrics)
+
+    runs_with_adversarial = sum(1 for m in all_metrics if m.get("catches", {}).get("adversarial_findings", 0) > 0)
+    runs_with_blocks = sum(1 for m in all_metrics if m.get("catches", {}).get("validation_blocks", 0) > 0)
+
+    # --- Confidence distribution ---
+    confidence_scores = [m.get("quality", {}).get("confidence_score", 0) for m in all_metrics if m.get("quality", {}).get("confidence_score", 0) > 0]
+
+    # --- Decision analytics ---
+    total_decisions = {
+        "mechanical": sum(m.get("decisions", {}).get("mechanical", 0) for m in all_metrics),
+        "taste": sum(m.get("decisions", {}).get("taste", 0) for m in all_metrics),
+        "judgment": sum(m.get("decisions", {}).get("judgment", 0) for m in all_metrics),
+    }
+
+    # --- Profile distribution ---
+    profile_counts: dict[str, int] = {}
+    for m in all_metrics:
+        p = m.get("profile", "unknown")
+        profile_counts[p] = profile_counts.get(p, 0) + 1
+
+    # --- Duration analytics ---
+    durations = [m["duration_minutes"] for m in all_metrics if m.get("duration_minutes")]
+
+    def _safe_avg(lst: list) -> float:
+        return round(sum(lst) / len(lst), 1) if lst else 0
+
+    analytics = {
+        "project": args.project,
+        "runs_analyzed": n,
+        "profiles": profile_counts,
+        # Token analytics
+        "tokens": {
+            "avg_per_run": _safe_avg(total_tokens_list),
+            "min_per_run": min(total_tokens_list) if total_tokens_list else 0,
+            "max_per_run": max(total_tokens_list) if total_tokens_list else 0,
+            "total_all_runs": sum(total_tokens_list),
+            "per_stage_avg": {
+                stage: _safe_avg(costs)
+                for stage, costs in sorted(stage_token_agg.items())
+            },
+        },
+        # Catch analytics — the core value
+        "catches": {
+            "review_findings_total": total_review_findings,
+            "review_findings_avg": round(total_review_findings / n, 2),
+            "adversarial_findings_total": total_adversarial,
+            "adversarial_high_total": total_adversarial_high,
+            "adversarial_hit_rate": f"{runs_with_adversarial}/{n} runs ({round(runs_with_adversarial/n*100)}%)",
+            "validation_blocks_total": total_validation_blocks,
+            "validation_block_rate": f"{runs_with_blocks}/{n} runs ({round(runs_with_blocks/n*100)}%)",
+            "test_regressions_total": total_test_regressions,
+        },
+        # Quality analytics
+        "quality": {
+            "confidence_avg": _safe_avg(confidence_scores),
+            "confidence_min": min(confidence_scores) if confidence_scores else 0,
+            "confidence_max": max(confidence_scores) if confidence_scores else 0,
+            "confidence_distribution": {
+                "low_0_4": sum(1 for s in confidence_scores if s <= 4),
+                "med_5_7": sum(1 for s in confidence_scores if 5 <= s <= 7),
+                "high_8_12": sum(1 for s in confidence_scores if s >= 8),
+            },
+        },
+        # Decision analytics
+        "decisions": {
+            **total_decisions,
+            "total": sum(total_decisions.values()),
+            "automation_rate": (
+                f"{round(total_decisions['mechanical'] / sum(total_decisions.values()) * 100)}%"
+                if sum(total_decisions.values()) > 0 else "N/A"
+            ),
+        },
+        # Duration analytics
+        "duration": {
+            "avg_minutes": _safe_avg(durations),
+            "min_minutes": min(durations) if durations else 0,
+            "max_minutes": max(durations) if durations else 0,
+        },
+    }
+
+    print(json.dumps(analytics, indent=2))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Artifact registry CLI for SwarmAI pipeline"
@@ -1148,6 +1531,16 @@ def main() -> None:
     p_run_report.add_argument("--project", required=True)
     p_run_report.add_argument("--run-id", required=True, help="Pipeline run ID")
 
+    # run-metrics (generate METRICS.json for one run)
+    p_run_metrics = sub.add_parser("run-metrics", help="Generate METRICS.json for a pipeline run")
+    p_run_metrics.add_argument("--project", required=True)
+    p_run_metrics.add_argument("--run-id", required=True, help="Pipeline run ID")
+
+    # run-analytics (cross-run aggregation)
+    p_run_analytics = sub.add_parser("run-analytics", help="Cross-run pipeline analytics")
+    p_run_analytics.add_argument("--project", required=True)
+    p_run_analytics.add_argument("--limit", type=int, default=50, help="Max runs to analyze")
+
     args = parser.parse_args()
     reg = ArtifactRegistry(_get_workspace())
 
@@ -1167,6 +1560,8 @@ def main() -> None:
         "run-status": cmd_run_status,
         "run-resume": cmd_run_resume,
         "run-report": cmd_run_report,
+        "run-metrics": cmd_run_metrics,
+        "run-analytics": cmd_run_analytics,
     }
     handlers[args.command](args, reg)
 

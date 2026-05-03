@@ -504,7 +504,7 @@ def _check_depth(stage: str, artifact_data: dict, profile: str) -> list[str]:
                         f"unresolved HIGH finding(s) — fix before delivery"
                     )
 
-        # completion_audit: must have explicit all_green
+        # completion_audit: must have explicit all_green + evidence quality
         ca = artifact_data.get("completion_audit")
         if isinstance(ca, dict):
             if "all_green" not in ca:
@@ -519,6 +519,14 @@ def _check_depth(stage: str, artifact_data: dict, profile: str) -> list[str]:
                         f"Depth: completion_audit has {fixable} fixable gap(s) — "
                         f"fix them or mark as unfixable_gaps before delivery"
                     )
+            # Rule 16: unfixable_gaps must have justification
+            unfixable = ca.get("unfixable_gaps", 0)
+            if unfixable > 0 and not ca.get("unfixable_justification"):
+                errors.append(
+                    f"Depth: completion_audit has {unfixable} unfixable_gaps "
+                    f"but no 'unfixable_justification' — explain why each gap "
+                    f"cannot be fixed (Rule 17: no premature completion)"
+                )
 
         # confidence_score: must be dict from script, not hand-written number
         cs = artifact_data.get("confidence_score")
@@ -542,6 +550,29 @@ def _check_depth(stage: str, artifact_data: dict, profile: str) -> list[str]:
             errors.append(
                 "Depth: tdd.green_pass missing — was the RED→GREEN cycle completed?"
             )
+
+    # --- Rule 18: Adversarial findings must be specific ---
+    if stage == "deliver":
+        ar = artifact_data.get("adversarial_review", {})
+        if isinstance(ar, dict) and ar.get("profile_tier") not in ("skipped", None):
+            findings = ar.get("findings", [])
+            if isinstance(findings, list) and len(findings) > 0:
+                vague_count = 0
+                for f in findings:
+                    if not isinstance(f, dict):
+                        continue
+                    # A specific finding should reference a file path or function
+                    desc = str(f.get("finding", f.get("desc", f.get("description", ""))))
+                    has_file_ref = ("." in desc and ("/" in desc or ".py" in desc or ".ts" in desc or ".js" in desc))
+                    has_func_ref = ("()" in desc or "def " in desc or "function " in desc or "line" in desc.lower())
+                    if not has_file_ref and not has_func_ref and len(desc) < 50:
+                        vague_count += 1
+                if vague_count > 0 and vague_count >= len(findings) * 0.5:
+                    errors.append(
+                        f"Depth: {vague_count}/{len(findings)} adversarial findings are vague "
+                        f"(no file path, function name, or line reference). "
+                        f"Rule 18: findings must include file, what's wrong, and concrete fix."
+                    )
 
     return errors
 
