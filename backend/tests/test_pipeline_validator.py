@@ -448,7 +448,7 @@ class TestSummary:
         _make_artifact(artifacts_dir, "run_test1", "art_eval", "evaluation",
                        {"recommendation": "GO", "scope": "standard"})
         _make_artifact(artifacts_dir, "run_test1", "art_build", "changeset",
-                       {"files_changed": ["a.py"]})
+                       {"files_changed": ["a.py"], "tdd": {"green_pass": True}})
 
         _make_run(runs_dir, profile="trivial", stages=[
             _stage_record("evaluate", artifact_id="art_eval"),
@@ -923,3 +923,254 @@ class TestStalenessInValidate:
         result = validate("TestProject", "run_test1", "evaluate")
         staleness_warnings = [w for w in result["warnings"] if "staleness" in w.lower()]
         assert len(staleness_warnings) == 0
+
+
+# ---------------------------------------------------------------------------
+# Enforcement Redesign Tests (L0-L3)
+# ---------------------------------------------------------------------------
+
+
+class TestL0ArtifactAuthenticity:
+    """Layer 0: artifact_id must resolve to a real artifact in the manifest."""
+
+    def test_fabricated_artifact_id_blocks(self, workspace):
+        """Artifact ID not in manifest → BLOCK error."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        # Create run with a fabricated artifact_id (no matching manifest entry)
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate", artifact_id="art_FABRICATED"),
+        ])
+        # Empty manifest (no artifacts)
+        (artifacts_dir / "manifest.json").write_text(json.dumps({"artifacts": [], "pipeline_state": "evaluate"}))
+
+        result = validate("TestProject", "run_test1", "evaluate")
+        assert result["valid"] is False
+        assert any("not found in manifest" in e or "missing or corrupt" in e for e in result["errors"]), \
+            f"Expected artifact resolution error, got: {result['errors']}"
+
+    def test_real_artifact_id_passes(self, workspace):
+        """Artifact ID that exists in manifest → passes L0."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_artifact(artifacts_dir, "run_test1", "art_eval", "evaluation",
+                       {"recommendation": "GO", "scope": "standard"})
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate", artifact_id="art_eval"),
+        ])
+
+        result = validate("TestProject", "run_test1", "evaluate")
+        assert result["valid"] is True
+
+
+class TestL1SchemaEnforcement:
+    """Layer 1: V1.10.0 required fields must be present in artifacts."""
+
+    def test_review_missing_runtime_patterns_blocks(self, workspace):
+        """REVIEW artifact without runtime_patterns → BLOCK."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        # Review artifact with old schema (no runtime_patterns)
+        _make_artifact(artifacts_dir, "run_test1", "art_rev", "review",
+                       {"approved": True, "integration_trace": {"checked": 1}})
+        _make_run(runs_dir, profile="full", stages=[
+            _stage_record("evaluate", artifact_id="art_e"),
+            _stage_record("think", artifact_id="art_t"),
+            _stage_record("plan", artifact_id="art_p"),
+            _stage_record("build", artifact_id="art_b"),
+            _stage_record("review", artifact_id="art_rev"),
+        ])
+        # Create minimal artifacts for prior stages
+        for aid, atype, data in [
+            ("art_e", "evaluation", {"recommendation": "GO", "scope": "standard"}),
+            ("art_t", "think", {"key_findings": ["x"]}),
+            ("art_p", "plan", {"acceptance_criteria": ["x"]}),
+            ("art_b", "build", {"files_changed": ["a.py"], "tdd": {"green_pass": True}}),
+        ]:
+            _make_artifact(artifacts_dir, "run_test1", aid, atype, data)
+
+        result = validate("TestProject", "run_test1", "review")
+        schema_errors = [e for e in result["errors"] if "runtime_patterns" in e]
+        assert len(schema_errors) >= 1, f"Expected runtime_patterns error, got: {result['errors']}"
+
+    def test_deliver_missing_adversarial_review_blocks(self, workspace):
+        """DELIVER artifact without adversarial_review on bugfix profile → BLOCK."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_artifact(artifacts_dir, "run_test1", "art_del", "delivery",
+                       {"title": "Done", "status": "delivered", "confidence_score": {"score": 8, "breakdown": [], "penalties": []}, "completion_audit": {"all_green": True, "gaps": 0}})
+        _make_run(runs_dir, profile="bugfix", stages=[
+            _stage_record("evaluate", artifact_id="art_e"),
+            _stage_record("plan", artifact_id="art_p"),
+            _stage_record("build", artifact_id="art_b"),
+            _stage_record("review", artifact_id="art_r"),
+            _stage_record("test", artifact_id="art_t"),
+            _stage_record("deliver", artifact_id="art_del"),
+        ])
+        for aid, atype, data in [
+            ("art_e", "evaluation", {"recommendation": "GO", "scope": "bugfix"}),
+            ("art_p", "plan", {"acceptance_criteria": ["x"]}),
+            ("art_b", "build", {"files_changed": ["a.py"], "tdd": {"green_pass": True}}),
+            ("art_r", "review", {"approved": True, "integration_trace": {"checked": 1}, "runtime_patterns": {"checked": 1, "patterns": [{"id": "RP1", "result": "N/A"}]}, "findings_count": 0}),
+            ("art_t", "test", {"passed": 10}),
+        ]:
+            _make_artifact(artifacts_dir, "run_test1", aid, atype, data)
+
+        result = validate("TestProject", "run_test1", "deliver")
+        adv_errors = [e for e in result["errors"] if "adversarial_review" in e]
+        assert len(adv_errors) >= 1, f"Expected adversarial_review error, got: {result['errors']}"
+
+    def test_build_missing_tdd_blocks(self, workspace):
+        """BUILD artifact without tdd → BLOCK."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_artifact(artifacts_dir, "run_test1", "art_b", "build",
+                       {"files_changed": ["a.py"]})  # no tdd field
+        _make_run(runs_dir, profile="bugfix", stages=[
+            _stage_record("evaluate", artifact_id="art_e"),
+            _stage_record("plan", artifact_id="art_p"),
+            _stage_record("build", artifact_id="art_b"),
+        ])
+        for aid, atype, data in [
+            ("art_e", "evaluation", {"recommendation": "GO", "scope": "bugfix"}),
+            ("art_p", "plan", {"acceptance_criteria": ["x"]}),
+        ]:
+            _make_artifact(artifacts_dir, "run_test1", aid, atype, data)
+
+        result = validate("TestProject", "run_test1", "build")
+        tdd_errors = [e for e in result["errors"] if "tdd" in e.lower()]
+        assert len(tdd_errors) >= 1, f"Expected tdd error, got: {result['errors']}"
+
+
+class TestL2DepthValidation:
+    """Layer 2: field values must indicate real work, not hollow data."""
+
+    def test_confidence_score_bare_number_blocks(self, workspace):
+        """confidence_score as a bare integer → BLOCK (must be from script)."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_artifact(artifacts_dir, "run_test1", "art_del", "delivery",
+                       {"title": "X", "status": "delivered", "confidence_score": 9,
+                        "completion_audit": {"all_green": True, "gaps": 0},
+                        "adversarial_review": {"profile_tier": "pe_only", "findings": []}})
+        _make_run(runs_dir, profile="bugfix", stages=[
+            _stage_record("evaluate", artifact_id="art_e"),
+            _stage_record("plan", artifact_id="art_p"),
+            _stage_record("build", artifact_id="art_b"),
+            _stage_record("review", artifact_id="art_r"),
+            _stage_record("test", artifact_id="art_t"),
+            _stage_record("deliver", artifact_id="art_del"),
+        ])
+        for aid, atype, data in [
+            ("art_e", "evaluation", {"recommendation": "GO", "scope": "bugfix"}),
+            ("art_p", "plan", {"acceptance_criteria": ["x"]}),
+            ("art_b", "build", {"files_changed": ["a.py"], "tdd": {"green_pass": True}}),
+            ("art_r", "review", {"approved": True, "integration_trace": {"checked": 1}, "runtime_patterns": {"checked": 1, "patterns": [{"id": "RP1", "result": "N/A"}]}, "findings_count": 0}),
+            ("art_t", "test", {"passed": 10}),
+        ]:
+            _make_artifact(artifacts_dir, "run_test1", aid, atype, data)
+
+        result = validate("TestProject", "run_test1", "deliver")
+        cs_errors = [e for e in result["errors"] if "confidence_score" in e.lower() and ("bare number" in e.lower() or "must run" in e.lower())]
+        assert len(cs_errors) >= 1, f"Expected bare-number confidence error, got: {result['errors']}"
+
+    def test_adversarial_review_skipped_on_bugfix_blocks(self, workspace):
+        """adversarial_review.profile_tier='skipped' on bugfix → BLOCK."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_artifact(artifacts_dir, "run_test1", "art_del", "delivery",
+                       {"title": "X", "status": "delivered",
+                        "confidence_score": {"score": 8, "breakdown": [], "penalties": []},
+                        "completion_audit": {"all_green": True, "gaps": 0},
+                        "adversarial_review": {"profile_tier": "skipped"}})
+        _make_run(runs_dir, profile="bugfix", stages=[
+            _stage_record("evaluate", artifact_id="art_e"),
+            _stage_record("plan", artifact_id="art_p"),
+            _stage_record("build", artifact_id="art_b"),
+            _stage_record("review", artifact_id="art_r"),
+            _stage_record("test", artifact_id="art_t"),
+            _stage_record("deliver", artifact_id="art_del"),
+        ])
+        for aid, atype, data in [
+            ("art_e", "evaluation", {"recommendation": "GO", "scope": "bugfix"}),
+            ("art_p", "plan", {"acceptance_criteria": ["x"]}),
+            ("art_b", "build", {"files_changed": ["a.py"], "tdd": {"green_pass": True}}),
+            ("art_r", "review", {"approved": True, "integration_trace": {"checked": 1}, "runtime_patterns": {"checked": 1, "patterns": [{"id": "RP1", "result": "N/A"}]}, "findings_count": 0}),
+            ("art_t", "test", {"passed": 10}),
+        ]:
+            _make_artifact(artifacts_dir, "run_test1", aid, atype, data)
+
+        result = validate("TestProject", "run_test1", "deliver")
+        adv_errors = [e for e in result["errors"] if "adversarial_review" in e and "skipped" in e]
+        assert len(adv_errors) >= 1, f"Expected skipped-on-bugfix error, got: {result['errors']}"
+
+
+class TestL3ConfidenceGate:
+    """Layer 3: confidence < 7 blocks delivery unless human_override."""
+
+    def test_low_confidence_blocks_delivery(self, workspace):
+        """confidence_score.score=4 without human_override → BLOCK."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_artifact(artifacts_dir, "run_test1", "art_del", "delivery",
+                       {"title": "X", "status": "delivered",
+                        "confidence_score": {"score": 4, "max_possible": 12, "flag_for_review": True, "breakdown": [], "penalties": [{"rule": "test", "points": -3, "detail": "x"}]},
+                        "completion_audit": {"all_green": True, "gaps": 0},
+                        "adversarial_review": {"profile_tier": "pe_only", "findings": []}})
+        _make_run(runs_dir, profile="bugfix", stages=[
+            _stage_record("evaluate", artifact_id="art_e"),
+            _stage_record("plan", artifact_id="art_p"),
+            _stage_record("build", artifact_id="art_b"),
+            _stage_record("review", artifact_id="art_r"),
+            _stage_record("test", artifact_id="art_t"),
+            _stage_record("deliver", artifact_id="art_del"),
+        ])
+        for aid, atype, data in [
+            ("art_e", "evaluation", {"recommendation": "GO", "scope": "bugfix"}),
+            ("art_p", "plan", {"acceptance_criteria": ["x"]}),
+            ("art_b", "build", {"files_changed": ["a.py"], "tdd": {"green_pass": True}}),
+            ("art_r", "review", {"approved": True, "integration_trace": {"checked": 1}, "runtime_patterns": {"checked": 1, "patterns": [{"id": "RP1", "result": "N/A"}]}, "findings_count": 0}),
+            ("art_t", "test", {"passed": 10}),
+        ]:
+            _make_artifact(artifacts_dir, "run_test1", aid, atype, data)
+
+        result = validate("TestProject", "run_test1", "deliver")
+        gate_errors = [e for e in result["errors"] if "confidence" in e.lower() and ("< 7" in e or "score=" in e)]
+        assert len(gate_errors) >= 1, f"Expected confidence gate error, got: {result['errors']}"
+
+    def test_human_override_downgrades_to_warning(self, workspace):
+        """confidence_score.score=4 WITH human_override → WARNING not BLOCK."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_artifact(artifacts_dir, "run_test1", "art_del", "delivery",
+                       {"title": "X", "status": "delivered",
+                        "confidence_score": {"score": 4, "max_possible": 12, "flag_for_review": True, "breakdown": [], "penalties": [{"rule": "test", "points": -3, "detail": "x"}]},
+                        "completion_audit": {"all_green": True, "gaps": 0},
+                        "adversarial_review": {"profile_tier": "pe_only", "findings": []}})
+        run = _make_run(runs_dir, profile="bugfix", stages=[
+            _stage_record("evaluate", artifact_id="art_e"),
+            _stage_record("plan", artifact_id="art_p"),
+            _stage_record("build", artifact_id="art_b"),
+            _stage_record("review", artifact_id="art_r"),
+            _stage_record("test", artifact_id="art_t"),
+            _stage_record("deliver", artifact_id="art_del"),
+        ])
+        # Add human_override flag
+        run["human_override"] = True
+        (runs_dir / "run.json").write_text(json.dumps(run))
+        for aid, atype, data in [
+            ("art_e", "evaluation", {"recommendation": "GO", "scope": "bugfix"}),
+            ("art_p", "plan", {"acceptance_criteria": ["x"]}),
+            ("art_b", "build", {"files_changed": ["a.py"], "tdd": {"green_pass": True}}),
+            ("art_r", "review", {"approved": True, "integration_trace": {"checked": 1}, "runtime_patterns": {"checked": 1, "patterns": [{"id": "RP1", "result": "N/A"}]}, "findings_count": 0}),
+            ("art_t", "test", {"passed": 10}),
+        ]:
+            _make_artifact(artifacts_dir, "run_test1", aid, atype, data)
+
+        result = validate("TestProject", "run_test1", "deliver")
+        # Should NOT have confidence BLOCK error
+        gate_errors = [e for e in result["errors"] if "confidence" in e.lower() and "< 7" in e]
+        assert len(gate_errors) == 0, f"human_override should prevent BLOCK, got: {result['errors']}"
+        # Should have WARNING instead
+        gate_warns = [w for w in result["warnings"] if "confidence" in w.lower() and "override" in w.lower()]
+        assert len(gate_warns) >= 1, f"Expected override warning, got: {result['warnings']}"
