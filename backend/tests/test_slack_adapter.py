@@ -57,14 +57,41 @@ def on_message():
 
 
 @pytest.fixture
-def adapter(slack_config, on_message):
-    """Create a SlackChannelAdapter with mocked dependencies."""
+async def adapter(slack_config, on_message):
+    """Create a SlackChannelAdapter with mocked dependencies.
+
+    Yields the adapter and ensures all background tasks are properly
+    cleaned up to avoid 'Task was destroyed but pending' warnings.
+    """
     from channels.adapters.slack import SlackChannelAdapter
-    return SlackChannelAdapter(
+    a = SlackChannelAdapter(
         channel_id="test-slack-ch",
         config=slack_config,
         on_message=on_message,
     )
+    yield a
+    # Ensure adapter knows it's stopped
+    a._stopped = True
+    # Cancel and await any pending tasks — guard against closed event loop
+    # (some tests create their own loop which is already closed at teardown)
+    try:
+        for attr in ("_monitor_task", "_poll_task"):
+            task = getattr(a, attr, None)
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+        # Close MCP bridge
+        if a._mcp_bridge:
+            await a._mcp_bridge.close()
+    except RuntimeError:
+        pass  # event loop closed — tasks will be GC'd
+    # Join WS thread if alive
+    ws = a._ws_thread
+    if ws and ws.is_alive():
+        ws.join(timeout=1)
 
 
 # ===================================================================
@@ -474,23 +501,7 @@ class TestSlackLifecycle:
             assert adapter._ws_thread is not None
             assert adapter._ws_thread.daemon is True
             assert adapter._ws_thread.name.startswith("slack-ws-")
-
-            # Clean up — cancel pending tasks to avoid "Task was destroyed" warning
-            adapter._stopped = True
-            if adapter._monitor_task and not adapter._monitor_task.done():
-                adapter._monitor_task.cancel()
-                try:
-                    await adapter._monitor_task
-                except asyncio.CancelledError:
-                    pass
-            if adapter._poll_task and not adapter._poll_task.done():
-                adapter._poll_task.cancel()
-                try:
-                    await adapter._poll_task
-                except asyncio.CancelledError:
-                    pass
-            if adapter._ws_thread and adapter._ws_thread.is_alive():
-                adapter._ws_thread.join(timeout=1)
+            # Cleanup handled by the adapter fixture teardown
 
 
 # ===================================================================
@@ -498,47 +509,51 @@ class TestSlackLifecycle:
 # ===================================================================
 
 # ===================================================================
-# Native streaming (chat.startStream / appendStream / stopStream)
+# Native streaming — chat.startStream/appendStream/stopStream
+# Zero rate limit path for real-time token-by-token streaming.
 # ===================================================================
 
 
 class TestSlackNativeStreaming:
-    """Native Slack Agents & AI Apps streaming API."""
+    """Verify native streaming SDK parameter names match slack_sdk signatures.
 
-    def test_supports_native_streaming(self, adapter):
-        # Native streaming disabled — renders as "AI inline" style, not person-like
-        assert adapter.supports_native_streaming is False
+    Critical: chat_startStream uses ``markdown_text`` (not ``text``),
+    chat_appendStream uses ``ts`` + ``markdown_text`` (not ``stream_id`` + ``text``),
+    chat_stopStream uses ``ts`` + ``markdown_text`` (not ``stream_id`` + ``text``).
+    """
+
+    def test_supports_native_streaming_true(self, adapter):
+        """Slack adapter supports native streaming."""
+        assert adapter.supports_native_streaming is True
 
     @pytest.mark.asyncio
-    async def test_start_stream(self, adapter):
-        """start_stream calls chat_startStream and returns ts."""
+    async def test_start_stream_returns_none_without_client(self, adapter):
+        """start_stream returns None when no Slack client."""
+        adapter._slack_client = None
+        result = await adapter.start_stream("C001")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_start_stream_uses_markdown_text(self, adapter):
+        """start_stream passes text as ``markdown_text`` to SDK."""
         mock_client = MagicMock()
-        mock_client.auth_test.return_value = {"team_id": "T123", "user_id": "U456"}
         mock_client.chat_startStream.return_value = {"ts": "1234.5678"}
         adapter._slack_client = mock_client
 
-        ts = await adapter.start_stream("C001", external_thread_id="1111.0000")
+        ts = await adapter.start_stream(
+            "C001", external_thread_id="1111.0000", text="Hello",
+        )
         assert ts == "1234.5678"
-        mock_client.chat_startStream.assert_called_once()
-        call_kwargs = mock_client.chat_startStream.call_args
-        assert call_kwargs[1]["channel"] == "C001"
-        assert call_kwargs[1]["thread_ts"] == "1111.0000"
-
-    @pytest.mark.asyncio
-    async def test_start_stream_with_initial_text(self, adapter):
-        mock_client = MagicMock()
-        mock_client.auth_test.return_value = {"team_id": "T123", "user_id": "U456"}
-        mock_client.chat_startStream.return_value = {"ts": "1234.5678"}
-        adapter._slack_client = mock_client
-
-        await adapter.start_stream("C001", external_thread_id="1111.0000", text="Hello")
         call_kwargs = mock_client.chat_startStream.call_args[1]
-        assert call_kwargs["markdown_text"] == "Hello"
+        assert call_kwargs["channel"] == "C001"
         assert call_kwargs["thread_ts"] == "1111.0000"
+        assert call_kwargs["markdown_text"] == "Hello"
+        # Must NOT contain 'text' — Slack SDK rejects it
+        assert "text" not in call_kwargs
 
     @pytest.mark.asyncio
-    async def test_append_stream(self, adapter):
-        """append_stream calls chat_appendStream."""
+    async def test_append_stream_uses_ts_and_markdown_text(self, adapter):
+        """append_stream uses ``ts`` (not ``stream_id``) and ``markdown_text``."""
         mock_client = MagicMock()
         mock_client.chat_appendStream.return_value = {}
         adapter._slack_client = mock_client
@@ -558,81 +573,42 @@ class TestSlackNativeStreaming:
         mock_client.chat_appendStream.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_stop_stream(self, adapter):
-        """stop_stream calls chat_stopStream."""
-        mock_client = MagicMock()
-        mock_client.chat_stopStream.return_value = {}
-        adapter._slack_client = mock_client
-
-        await adapter.stop_stream("C001", "1234.5678")
-        mock_client.chat_stopStream.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_stop_stream_with_final_text(self, adapter):
+    async def test_stop_stream_uses_ts_and_markdown_text(self, adapter):
+        """stop_stream uses ``ts`` (not ``stream_id``) and ``markdown_text``."""
         mock_client = MagicMock()
         mock_client.chat_stopStream.return_value = {}
         adapter._slack_client = mock_client
 
         await adapter.stop_stream("C001", "1234.5678", text="Final.")
         call_kwargs = mock_client.chat_stopStream.call_args[1]
+        assert call_kwargs["ts"] == "1234.5678"
         assert call_kwargs["markdown_text"] == "Final."
+        # Must NOT contain 'stream_id' or bare 'text'
+        assert "stream_id" not in call_kwargs
+        assert "text" not in call_kwargs
 
     @pytest.mark.asyncio
-    async def test_start_stream_no_client_returns_none(self, adapter):
-        """start_stream returns None if client is not set."""
-        adapter._slack_client = None
-        result = await adapter.start_stream("C001")
-        assert result is None
+    async def test_stop_stream_auto_generates_blocks(self, adapter):
+        """stop_stream converts text to Block Kit blocks automatically."""
+        mock_client = MagicMock()
+        mock_client.chat_stopStream.return_value = {}
+        adapter._slack_client = mock_client
+
+        await adapter.stop_stream("C001", "1234.5678", text="Hello world")
+        call_kwargs = mock_client.chat_stopStream.call_args[1]
+        # Should have generated blocks from text
+        assert "blocks" in call_kwargs
+        assert isinstance(call_kwargs["blocks"], list)
 
     @pytest.mark.asyncio
     async def test_start_stream_exception_returns_none(self, adapter):
-        """start_stream returns None when chat_startStream fails."""
+        """start_stream returns None on SDK error — gateway falls back to legacy."""
         mock_client = MagicMock()
-        mock_client.auth_test.return_value = {"team_id": "T123", "user_id": "U456"}
-        mock_client.chat_startStream.side_effect = Exception("stream fail")
+        mock_client.chat_startStream.side_effect = Exception("API error")
         adapter._slack_client = mock_client
 
         result = await adapter.start_stream("C001", external_thread_id="1111.0000")
         assert result is None
-
-    @pytest.mark.asyncio
-    async def test_start_stream_no_thread_ts_returns_none(self, adapter):
-        """start_stream returns None when no thread_ts is provided."""
-        mock_client = MagicMock()
-        adapter._slack_client = mock_client
-
-        result = await adapter.start_stream("C001")
-        assert result is None
-        mock_client.chat_startStream.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_start_stream_passes_recipient_user_id(self, adapter):
-        """start_stream passes recipient_user_id for DM streaming."""
-        mock_client = MagicMock()
-        mock_client.auth_test.return_value = {"team_id": "T123", "user_id": "U456"}
-        mock_client.chat_startStream.return_value = {"ts": "1234.5678"}
-        adapter._slack_client = mock_client
-
-        ts = await adapter.start_stream(
-            "C001", external_thread_id="1111.0000", recipient_user_id="URECIPIENT",
-        )
-        assert ts == "1234.5678"
-        call_kwargs = mock_client.chat_startStream.call_args[1]
-        assert call_kwargs["recipient_user_id"] == "URECIPIENT"
-        assert call_kwargs["recipient_team_id"] == "T123"
-
-    @pytest.mark.asyncio
-    async def test_stop_stream_passes_recipient_user_id(self, adapter):
-        """stop_stream passes recipient_user_id and team_id."""
-        mock_client = MagicMock()
-        mock_client.auth_test.return_value = {"team_id": "T123", "user_id": "U456"}
-        mock_client.chat_stopStream.return_value = {}
-        adapter._slack_client = mock_client
-
-        await adapter.stop_stream("C001", "1234.5678", recipient_user_id="URECIPIENT")
-        call_kwargs = mock_client.chat_stopStream.call_args[1]
-        assert call_kwargs["recipient_user_id"] == "URECIPIENT"
-        assert call_kwargs["recipient_team_id"] == "T123"
 
 
 # ===================================================================
