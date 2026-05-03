@@ -20,7 +20,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 
 from database import db
-from hive.provisioner import HiveProvisioner
+from hive.provisioner import ALLOWED_INSTANCE_TYPES, HiveProvisioner, HIVE_NAME_RE
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +74,7 @@ async def _conn():
     """
     c = await aiosqlite.connect(str(db.db_path))
     c.row_factory = aiosqlite.Row
-    await c.execute("PRAGMA busy_timeout = 500")
+    await c.execute("PRAGMA busy_timeout = 3000")
     await c.execute("PRAGMA foreign_keys = ON")
     try:
         yield c
@@ -131,12 +131,18 @@ class HiveInstanceCreate(BaseModel):
             )
         return v
 
+    @field_validator("instance_type")
+    @classmethod
+    def validate_instance_type(cls, v: str) -> str:
+        if v not in ALLOWED_INSTANCE_TYPES:
+            raise ValueError(
+                f"Instance type '{v}' not allowed. Must be one of: {sorted(ALLOWED_INSTANCE_TYPES)}"
+            )
+        return v
+
 
 class HiveInstanceUpdate(BaseModel):
     version: str
-
-
-_HIVE_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 
 
 class HiveInstanceResponse(BaseModel):
@@ -227,11 +233,13 @@ async def delete_account(account_id: str):
     Cleans up AWS resources for each instance before deleting DB rows.
     """
     _require_desktop()
+    # U2: Read instances first, then cleanup AWS (long-running) OUTSIDE the connection,
+    # then delete DB rows in a quick transaction. Avoids holding DB lock during AWS calls.
     async with _conn() as c:
         cursor = await c.execute("SELECT * FROM hive_instances WHERE account_ref = ?", (account_id,))
         instances = [dict(r) for r in await cursor.fetchall()]
 
-    # Cleanup AWS resources for each instance that has an EC2 instance
+    # Cleanup AWS resources (potentially minutes — EC2 terminate + CF disable)
     provisioner = _get_provisioner()
     for inst in instances:
         if inst.get("ec2_instance_id"):
@@ -242,6 +250,7 @@ async def delete_account(account_id: str):
                     "Cleanup failed for instance %s (continuing): %s", inst["id"], e
                 )
 
+    # Quick transaction: delete DB rows
     async with _conn() as c:
         await c.execute("DELETE FROM hive_instances WHERE account_ref = ?", (account_id,))
         cursor = await c.execute("DELETE FROM hive_accounts WHERE id = ?", (account_id,))
@@ -265,7 +274,8 @@ async def verify_account(account_id: str):
     auth_config = json.loads(row.get("auth_config", "{}"))
     region = row.get("default_region", "us-east-1")
 
-    try:
+    # M4: Wrap all boto3 calls in to_thread to avoid blocking the event loop
+    def _run_checks():
         import boto3
         kwargs: dict = {"region_name": region}
         if row["auth_method"] == "access_keys" and auth_config.get("access_key_id"):
@@ -282,11 +292,10 @@ async def verify_account(account_id: str):
         identity = sts.get_caller_identity()
         checks["sts"] = {"status": "pass", "account": identity["Account"]}
 
-        # EC2 (launch permission)
+        # EC2
         try:
             ec2 = session.client("ec2")
             ec2.describe_instances(MaxResults=5)
-            # Also check we can describe VPCs (needed for SG creation)
             vpcs = ec2.describe_vpcs(Filters=[{"Name": "isDefault", "Values": ["true"]}])
             has_vpc = len(vpcs.get("Vpcs", [])) > 0
             checks["ec2"] = {"status": "pass", "default_vpc": has_vpc}
@@ -295,7 +304,7 @@ async def verify_account(account_id: str):
         except Exception as e:
             checks["ec2"] = {"status": "fail", "error": str(e)[:100]}
 
-        # Bedrock (Claude model access)
+        # Bedrock
         try:
             models = session.client("bedrock").list_foundation_models(byProvider="Anthropic")
             claude_models = [m for m in models.get("modelSummaries", []) if "claude" in m["modelId"]]
@@ -306,7 +315,7 @@ async def verify_account(account_id: str):
         except Exception as e:
             checks["bedrock"] = {"status": "fail", "error": str(e)[:100]}
 
-        # IAM (can create roles — needed for Hive instance profiles)
+        # IAM
         try:
             iam = session.client("iam")
             iam.list_roles(MaxItems=1)
@@ -314,7 +323,7 @@ async def verify_account(account_id: str):
         except Exception as e:
             checks["iam"] = {"status": "fail", "error": str(e)[:100]}
 
-        # S3 (can create buckets — needed for hive release storage)
+        # S3
         try:
             s3 = session.client("s3")
             s3.list_buckets()
@@ -322,7 +331,7 @@ async def verify_account(account_id: str):
         except Exception as e:
             checks["s3"] = {"status": "fail", "error": str(e)[:100]}
 
-        # CloudFront (can create distributions)
+        # CloudFront
         try:
             cf = session.client("cloudfront")
             dists = cf.list_distributions(MaxItems="1")
@@ -331,14 +340,19 @@ async def verify_account(account_id: str):
         except Exception as e:
             checks["cloudfront"] = {"status": "fail", "error": str(e)[:100]}
 
-        # Update verified_at
+        return identity["Account"], checks
+
+    try:
+        import asyncio
+        aws_account_id, checks = await asyncio.to_thread(_run_checks)
+
         async with _conn() as c:
             await c.execute("UPDATE hive_accounts SET verified_at = ? WHERE id = ?", (_now(), account_id))
             await c.commit()
 
         return VerifyResult(
             success=all(v.get("status") == "pass" for v in checks.values()),
-            account_id=identity["Account"],
+            account_id=aws_account_id,
             checks=checks,
         )
     except Exception as e:
@@ -365,7 +379,7 @@ async def create_instance(body: HiveInstanceCreate):
     immediately with status='pending'. Poll GET /instances/{id} for progress.
     """
     _require_desktop()
-    if not _HIVE_NAME_RE.match(body.name):
+    if not HIVE_NAME_RE.match(body.name):
         raise HTTPException(
             status_code=422,
             detail="Name must start with a letter, contain only lowercase letters/numbers/hyphens, max 63 chars.",
@@ -430,17 +444,20 @@ async def get_instance(instance_id: str):
 async def stop_instance(instance_id: str):
     """Stop a running Hive (EC2 stop_instances)."""
     _require_desktop()
+    # U3: No redundant status check — provisioner's atomic gate is the single source of truth.
+    # Avoids TOCTOU and inconsistent error responses (400 vs 409).
     async with _conn() as c:
-        cursor = await c.execute("SELECT status FROM hive_instances WHERE id = ?", (instance_id,))
-        row = await cursor.fetchone()
-        if not row:
+        cursor = await c.execute("SELECT id FROM hive_instances WHERE id = ?", (instance_id,))
+        if not await cursor.fetchone():
             raise HTTPException(status_code=404, detail="Instance not found")
-        if dict(row)["status"] != "running":
-            raise HTTPException(status_code=400, detail="Instance is not running")
 
     provisioner = _get_provisioner()
     try:
         await provisioner.stop(instance_id)
+    except RuntimeError as e:
+        if "not in" in str(e):
+            raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     return {"status": "stopped"}
@@ -450,17 +467,19 @@ async def stop_instance(instance_id: str):
 async def start_instance(instance_id: str):
     """Start a stopped Hive (EC2 start_instances + wait healthy)."""
     _require_desktop()
+    # U3: No redundant status check — provisioner's atomic gate is the single source of truth.
     async with _conn() as c:
-        cursor = await c.execute("SELECT status FROM hive_instances WHERE id = ?", (instance_id,))
-        row = await cursor.fetchone()
-        if not row:
+        cursor = await c.execute("SELECT id FROM hive_instances WHERE id = ?", (instance_id,))
+        if not await cursor.fetchone():
             raise HTTPException(status_code=404, detail="Instance not found")
-        if dict(row)["status"] != "stopped":
-            raise HTTPException(status_code=400, detail="Instance is not stopped")
 
     provisioner = _get_provisioner()
     try:
         await provisioner.start(instance_id)
+    except RuntimeError as e:
+        if "not in" in str(e):
+            raise HTTPException(status_code=409, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     return {"status": "running"}

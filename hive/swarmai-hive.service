@@ -2,6 +2,10 @@
 Description=SwarmAI Hive Backend
 After=network-online.target
 Wants=network-online.target
+# H3/PE-5: Circuit breaker — max 3 restarts per 5 minutes.
+# Must be in [Unit] section (not [Service]) per systemd docs.
+StartLimitBurst=3
+StartLimitIntervalSec=300
 
 [Service]
 Type=simple
@@ -11,6 +15,7 @@ WorkingDirectory=/opt/swarmai/backend
 ExecStart=/opt/swarmai/hive/swarmai-hive.sh
 Restart=always
 RestartSec=10
+TimeoutStartSec=120
 
 # Health check — restart if /health doesn't respond within 60s.
 # First boot needs extra time (workspace init 10-20s + Python/uvicorn startup).

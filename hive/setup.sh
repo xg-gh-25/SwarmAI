@@ -1,16 +1,21 @@
 #!/bin/bash
-# SwarmAI Hive — EC2 one-shot setup script
-#
-# Installs SwarmAI on a fresh Amazon Linux 2023 (ARM64) EC2 instance.
-# Idempotent — safe to re-run.
-#
-# Usage: sudo bash setup.sh
-#
-# Prerequisites:
-#   - EC2 instance with IAM role (bedrock:InvokeModel*)
-#   - Security group: 443 + 80 inbound, 22 (SSH) inbound
-#   - Elastic IP attached (for DNS)
-#   - DNS A record pointing to Elastic IP
+# ┌──────────────────────────────────────────────────────────────┐
+# │  DEPRECATED — Do NOT use this script.                        │
+# │                                                              │
+# │  Hive provisioning is now automated via the desktop app:     │
+# │    POST /api/hive/instances  (triggers HiveProvisioner)      │
+# │                                                              │
+# │  This script deploys a Caddyfile with placeholder auth       │
+# │  that always returns 401. The provisioner's user_data.py     │
+# │  generates the correct Caddyfile with real bcrypt auth.      │
+# │                                                              │
+# │  See: backend/hive/user_data.py for the canonical setup.     │
+# └──────────────────────────────────────────────────────────────┘
+echo "ERROR: This script is deprecated. Use the desktop app to provision Hive instances." >&2
+echo "  The automated provisioner handles IAM, SG, EC2, EIP, CloudFront, and auth." >&2
+exit 1
+
+# --- Original script below (preserved for reference) ---
 
 set -euo pipefail
 

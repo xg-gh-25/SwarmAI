@@ -39,6 +39,8 @@ aws s3 cp "s3://$HIVE_S3_BUCKET/v$HIVE_VERSION/swarmai-hive-v$HIVE_VERSION-linux
 tar xzf /tmp/hive.tar.gz --strip-components=1 -C "$INSTALL_DIR"
 chown -R "$SWARM_USER:$SWARM_USER" "$INSTALL_DIR"
 rm /tmp/hive.tar.gz
+# M7: Persist bucket name for backup cron (avoid parsing log files)
+echo "$HIVE_S3_BUCKET" > "$INSTALL_DIR/.hive-bucket"
 
 # ── 4. Python venv + deps ──
 echo "[4/9] Setting up Python environment..."
@@ -54,7 +56,8 @@ if file /tmp/caddy | grep -q "ELF.*executable"; then
     mv /tmp/caddy /usr/bin/caddy && chmod +x /usr/bin/caddy
 else
     echo "ERROR: Caddy download failed integrity check" >&2
-    TAG_STATUS="error"
+    # H2: Abort immediately — continuing without Caddy = instance looks healthy but 401s everything
+    exit 1
 fi
 mkdir -p /etc/caddy /var/log/caddy
 
@@ -191,7 +194,7 @@ cat > /etc/cron.daily/swarmai-backup << 'BACKUP'
 #!/bin/bash
 BACKUP_FILE="/tmp/swarm-backup-$(date +%Y%m%d).tar.gz"
 tar czf "$BACKUP_FILE" -C /home/swarm .swarm-ai/ 2>/dev/null
-BUCKET=$(awk '/swarmai-hive-/{for(i=1;i<=NF;i++)if($i~/^swarmai-hive-/)print $i;exit}' /var/log/hive-setup.log)
+BUCKET=$(cat /opt/swarmai/.hive-bucket 2>/dev/null)
 REGION=$(curl -sf -H "X-aws-ec2-metadata-token: $(curl -sf -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')" http://169.254.169.254/latest/meta-data/placement/region)
 if [ -n "$BUCKET" ] && [ -n "$REGION" ]; then
     aws s3 cp "$BACKUP_FILE" "s3://$BUCKET/backups/$(hostname)/$(basename $BACKUP_FILE)" --region "$REGION" 2>/dev/null
@@ -309,10 +312,17 @@ def render_user_data(
             )
 
     tmpl = Template(_USER_DATA_TEMPLATE)
-    return tmpl.safe_substitute(
+    result = tmpl.safe_substitute(
         s3_bucket=s3_bucket,
         version=version,
         auth_user=auth_user,
         auth_hash=auth_hash,
         region=region,
     )
+    # M13: Catch misspelled template variables — safe_substitute leaves them as-is.
+    # Only check for our 5 known template vars (shell vars like ${i}, ${HASH} are expected).
+    _TEMPLATE_VARS = {"s3_bucket", "version", "auth_user", "auth_hash", "region"}
+    for var in _TEMPLATE_VARS:
+        if f"${{{var}}}" in result:
+            raise ValueError(f"Unresolved template variable: ${{{var}}}")
+    return result
