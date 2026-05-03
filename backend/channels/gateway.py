@@ -1116,6 +1116,7 @@ class ChannelGateway:
                     external_thread_id=msg.external_thread_id,
                     text=":bee: _Thinking..._",
                     recipient_user_id=msg.external_sender_id,
+                    inbound_ts=msg.external_message_id,
                 )
                 if not ctx.streaming_msg_id:
                     # start_stream failed — fall back to legacy
@@ -1125,9 +1126,21 @@ class ChannelGateway:
                         "falling back to legacy",
                         channel_id,
                     )
+                else:
+                    logger.info(
+                        "Native streaming started for channel %s "
+                        "(stream_ts=%s, thread_ts=%s)",
+                        channel_id,
+                        ctx.streaming_msg_id,
+                        msg.external_thread_id or msg.external_message_id,
+                    )
             except Exception:
                 ctx.native_streaming = False
-                logger.debug("Native streaming start failed, using legacy")
+                logger.warning(
+                    "Native streaming start failed for channel %s, "
+                    "using legacy",
+                    channel_id, exc_info=True,
+                )
 
         # Legacy path: postMessage → progressive chat.update
         if ctx.streaming and not ctx.native_streaming:
@@ -1369,6 +1382,11 @@ class ChannelGateway:
                     text=reply_text,
                 )
                 external_message_id = ctx.streaming_msg_id
+                logger.info(
+                    "Native stream finalized for channel %s "
+                    "(stream_ts=%s, reply_len=%d)",
+                    channel_id, ctx.streaming_msg_id, len(reply_text),
+                )
             except Exception:
                 logger.exception("Failed to stop native stream; falling back")
                 ctx.streaming = False
