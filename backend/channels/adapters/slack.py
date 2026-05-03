@@ -23,7 +23,6 @@ import asyncio
 import json
 import logging
 import os
-import subprocess
 import threading
 import time
 from pathlib import Path
@@ -211,11 +210,15 @@ def _find_slack_mcp_config() -> Optional[dict]:
 
 
 class SlackMcpBridge:
-    """Thin stdio JSON-RPC 2.0 bridge to the slack-mcp binary.
+    """Async stdio JSON-RPC 2.0 bridge to the slack-mcp binary.
 
-    Spawns the slack-mcp process on first use, performs the MCP
-    initialization handshake, then reuses the connection for subsequent
-    calls.  Thread-safe: all access serialized by ``_lock``.
+    Spawns the slack-mcp process on first use via ``asyncio.create_subprocess_exec``,
+    performs the MCP initialization handshake, then reuses the connection for
+    subsequent calls.  Concurrency-safe via ``asyncio.Lock``.
+
+    Previous design used ``threading.Lock`` + ``subprocess.Popen`` + a reader
+    thread for timeouts — three layers of thread nesting.  Now native async
+    throughout: proper ``asyncio.wait_for`` timeouts, no thread pool.
     """
 
     def __init__(self) -> None:
@@ -228,10 +231,10 @@ class SlackMcpBridge:
             self._command = ""
             self._args = []
             self._env = {}
-        self._process: Optional[subprocess.Popen] = None
+        self._process: Optional[asyncio.subprocess.Process] = None
         self._initialized = False
         self._request_id = 0
-        self._lock = threading.Lock()
+        self._lock = asyncio.Lock()
 
     @property
     def available(self) -> bool:
@@ -248,9 +251,9 @@ class SlackMcpBridge:
             "params": {"name": tool_name, "arguments": arguments},
         }
 
-    def _spawn(self) -> bool:
+    async def _spawn(self) -> bool:
         """Spawn the slack-mcp subprocess if not already running."""
-        if self._process and self._process.poll() is None:
+        if self._process and self._process.returncode is None:
             return True  # already alive
 
         if not self._command:
@@ -263,13 +266,12 @@ class SlackMcpBridge:
 
         env = {**os.environ, **self._env}
         try:
-            self._process = subprocess.Popen(
-                [self._command, *self._args],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+            self._process = await asyncio.create_subprocess_exec(
+                self._command, *self._args,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
                 env=env,
-                bufsize=0,
             )
             self._initialized = False
             return True
@@ -278,51 +280,34 @@ class SlackMcpBridge:
             self._process = None
             return False
 
-    def _send_receive(self, request: dict, timeout: float = 15.0) -> Optional[dict]:
+    async def _send_receive(self, request: dict, timeout: float = 15.0) -> Optional[dict]:
         """Send a JSON-RPC request and read the response line."""
         proc = self._process
-        if not proc or proc.poll() is not None:
+        if not proc or proc.returncode is not None:
             return None
 
         line = json.dumps(request) + "\n"
         try:
             proc.stdin.write(line.encode())
-            proc.stdin.flush()
+            await proc.stdin.drain()
 
-            # Read one line with timeout via threading
-            result = [None]
-            exc_holder = [None]
-
-            def _reader():
-                try:
-                    result[0] = proc.stdout.readline()
-                except Exception as e:
-                    exc_holder[0] = e
-
-            t = threading.Thread(target=_reader, daemon=True)
-            t.start()
-            t.join(timeout=timeout)
-
-            if t.is_alive():
-                logger.warning("slack-mcp response timed out after %.1fs", timeout)
-                return None
-            if exc_holder[0]:
-                raise exc_holder[0]
-
-            raw = result[0]
+            raw = await asyncio.wait_for(proc.stdout.readline(), timeout=timeout)
             if not raw:
                 return None
             return json.loads(raw)
+        except asyncio.TimeoutError:
+            logger.warning("slack-mcp response timed out after %.1fs", timeout)
+            return None
         except Exception:
             logger.debug("slack-mcp send/receive failed", exc_info=True)
             return None
 
-    def _ensure_initialized(self) -> bool:
+    async def _ensure_initialized(self) -> bool:
         """Perform the MCP initialize + initialized notification handshake."""
         if self._initialized:
             return True
 
-        if not self._spawn():
+        if not await self._spawn():
             return False
 
         # Step 1: send initialize
@@ -337,10 +322,10 @@ class SlackMcpBridge:
             },
         }
         self._request_id = 1
-        resp = self._send_receive(init_req, timeout=10.0)
+        resp = await self._send_receive(init_req, timeout=10.0)
         if not resp or "result" not in resp:
             logger.warning("slack-mcp initialize handshake failed: %s", resp)
-            self.close()
+            await self.close()
             return False
 
         # Step 2: send initialized notification (no id, no response expected)
@@ -350,10 +335,10 @@ class SlackMcpBridge:
             "params": {},
         }
         proc = self._process
-        if proc and proc.poll() is None:
+        if proc and proc.returncode is None:
             try:
                 proc.stdin.write((json.dumps(notif) + "\n").encode())
-                proc.stdin.flush()
+                await proc.stdin.drain()
             except Exception:
                 pass
 
@@ -361,31 +346,31 @@ class SlackMcpBridge:
         logger.info("slack-mcp bridge initialized (pid=%s)", proc.pid if proc else "?")
         return True
 
-    def call_tool(self, tool_name: str, arguments: dict) -> Optional[dict]:
-        """Call an MCP tool and return the result (blocking, thread-safe).
+    async def call_tool(self, tool_name: str, arguments: dict) -> Optional[dict]:
+        """Call an MCP tool and return the result.
 
         Returns the ``result`` dict from the JSON-RPC response, or None
-        on any error.
+        on any error.  Concurrency-safe via asyncio.Lock.
         """
-        with self._lock:
-            if not self._ensure_initialized():
+        async with self._lock:
+            if not await self._ensure_initialized():
                 return None
             request = self._build_request(tool_name, arguments)
-            resp = self._send_receive(request)
+            resp = await self._send_receive(request)
             if resp and "result" in resp:
                 return resp["result"]
             if resp and "error" in resp:
                 logger.warning("slack-mcp tool error: %s", resp["error"])
             return None
 
-    def close(self) -> None:
+    async def close(self) -> None:
         """Terminate the MCP subprocess."""
         proc = self._process
         if proc:
             try:
                 proc.terminate()
-                proc.wait(timeout=3)
-            except Exception:
+                await asyncio.wait_for(proc.wait(), timeout=3)
+            except (asyncio.TimeoutError, Exception):
                 try:
                     proc.kill()
                 except Exception:
@@ -545,7 +530,7 @@ class SlackChannelAdapter(ChannelAdapter):
 
         # Clean up MCP bridge subprocess
         if self._mcp_bridge:
-            self._mcp_bridge.close()
+            await self._mcp_bridge.close()
             self._mcp_bridge = None
 
         logger.info("Slack adapter stopped for channel %s", self.channel_id)
@@ -819,26 +804,7 @@ class SlackChannelAdapter(ChannelAdapter):
 
     @property
     def supports_native_streaming(self) -> bool:
-        # Disabled: native streaming (startStream/appendStream/stopStream) renders
-        # with an "AI inline" style that looks tool-like, not person-like.
-        # Legacy path (postMessage → update) produces normal bot messages
-        # with "🐝 Thinking..." → progressive updates → Block Kit final.
-        return False
-
-    async def _ensure_identity(self) -> None:
-        """Resolve and cache team_id / bot_user_id (one-time, lazy)."""
-        if hasattr(self, "_team_id"):
-            return
-        try:
-            loop = asyncio.get_running_loop()
-            info = await loop.run_in_executor(
-                None, self._slack_client.auth_test,
-            )
-            self._team_id: str = info.get("team_id", "")
-            self._bot_user_id: str = info.get("user_id", "")
-        except Exception:
-            self._team_id = ""
-            self._bot_user_id = ""
+        return True
 
     async def start_stream(
         self,
@@ -847,43 +813,30 @@ class SlackChannelAdapter(ChannelAdapter):
         text: Optional[str] = None,
         recipient_user_id: Optional[str] = None,
     ) -> Optional[str]:
-        """Start a native Slack stream. Returns stream message ts.
+        """Start a native streaming session via chat.startStream.
 
-        Args:
-            external_chat_id: Channel ID.
-            external_thread_id: Thread ts (required — even for DMs, pass the
-                inbound message ts).
-            text: Optional initial markdown text.
-            recipient_user_id: User ID for DM streaming (stopStream needs it).
+        Returns the stream_id (ts) on success, None on failure.
+        Falls back to legacy send_typing_indicator on API error.
         """
         if not self._slack_client:
             return None
-        if not external_thread_id:
-            logger.warning("start_stream called without thread_ts — native streaming requires it")
-            return None
+        loop = asyncio.get_running_loop()
         try:
-            loop = asyncio.get_running_loop()
-            await self._ensure_identity()
-
-            kwargs: dict = {
-                "channel": external_chat_id,
-                "thread_ts": external_thread_id,
-            }
+            kwargs: dict = {"channel": external_chat_id}
+            if external_thread_id:
+                kwargs["thread_ts"] = external_thread_id
             if text:
                 kwargs["markdown_text"] = text
-            if self._team_id:
-                kwargs["recipient_team_id"] = self._team_id
-            if recipient_user_id:
-                kwargs["recipient_user_id"] = recipient_user_id
-
             result = await loop.run_in_executor(
                 None, lambda: self._slack_client.chat_startStream(**kwargs),
             )
-            ts = result.get("ts")
-            logger.info("Slack stream started: channel=%s thread=%s ts=%s", external_chat_id, external_thread_id, ts)
-            return ts
-        except Exception:
-            logger.exception("Failed to start Slack native stream")
+            return result.get("ts") or result.get("stream_id")
+        except Exception as exc:
+            logger.debug(
+                "chat.startStream failed for channel %s: %s — "
+                "gateway will fall back to legacy streaming",
+                self.channel_id, exc,
+            )
             return None
 
     async def append_stream(
@@ -892,11 +845,14 @@ class SlackChannelAdapter(ChannelAdapter):
         stream_ts: str,
         text: str,
     ) -> None:
-        """Append markdown text to an active Slack stream (no rate limit)."""
+        """Append text to an active native stream via chat.appendStream.
+
+        No rate limit — can be called per-token if desired.
+        """
         if not self._slack_client or not text:
             return
+        loop = asyncio.get_running_loop()
         try:
-            loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 None,
                 lambda: self._slack_client.chat_appendStream(
@@ -906,7 +862,8 @@ class SlackChannelAdapter(ChannelAdapter):
                 ),
             )
         except Exception:
-            logger.debug("Failed to append to Slack stream ts=%s", stream_ts)
+            # Non-fatal — next append will retry
+            logger.debug("chat.appendStream failed for %s", stream_ts)
 
     async def stop_stream(
         self,
@@ -914,35 +871,52 @@ class SlackChannelAdapter(ChannelAdapter):
         stream_ts: str,
         text: Optional[str] = None,
         final_blocks: Optional[list[dict]] = None,
-        recipient_user_id: Optional[str] = None,
     ) -> None:
-        """Stop a native Slack stream — message becomes a normal message."""
+        """Finalize a native stream into a regular message via chat.stopStream.
+
+        If ``final_blocks`` is not provided but ``text`` is, blocks are
+        auto-generated via :meth:`_text_to_blocks` so the final message
+        renders with full Block Kit formatting (bold, links, code blocks).
+        """
         if not self._slack_client:
             return
+        loop = asyncio.get_running_loop()
         try:
-            loop = asyncio.get_running_loop()
-            await self._ensure_identity()
-
+            # Auto-generate Block Kit if only text was provided
+            blocks = final_blocks
+            if blocks is None and text:
+                blocks = self._text_to_blocks(text)
             kwargs: dict = {
                 "channel": external_chat_id,
                 "ts": stream_ts,
             }
+            if blocks:
+                kwargs["blocks"] = blocks
             if text:
-                kwargs["markdown_text"] = text
-            if final_blocks:
-                kwargs["blocks"] = final_blocks
-            if self._team_id:
-                kwargs["recipient_team_id"] = self._team_id
-            if recipient_user_id:
-                kwargs["recipient_user_id"] = recipient_user_id
+                kwargs["markdown_text"] = text[:_TEXT_FALLBACK_LIMIT]
             await loop.run_in_executor(
-                None, lambda: self._slack_client.chat_stopStream(**kwargs),
+                None,
+                lambda: self._slack_client.chat_stopStream(**kwargs),
             )
-            logger.info("Slack stream stopped: channel=%s ts=%s", external_chat_id, stream_ts)
         except Exception:
-            logger.exception("Failed to stop Slack stream")
+            logger.debug("chat.stopStream failed for %s", stream_ts)
 
-    # Legacy fallback — kept for non-native-streaming code paths
+    async def _ensure_identity(self) -> None:
+        """Resolve and cache bot_user_id (one-time, lazy).
+
+        Used by polling mode to filter out the bot's own messages.
+        """
+        if self._bot_user_id:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            info = await loop.run_in_executor(
+                None, self._slack_client.auth_test,
+            )
+            self._bot_user_id = info.get("user_id", "")
+        except Exception:
+            self._bot_user_id = ""
+
     async def send_typing_indicator(
         self,
         external_chat_id: str,
@@ -1140,7 +1114,7 @@ class SlackChannelAdapter(ChannelAdapter):
         text: str,
         thread_ts: Optional[str] = None,
     ) -> Optional[str]:
-        """Send a message via slack-mcp MCP fallback (async wrapper).
+        """Send a message via slack-mcp MCP fallback.
 
         Returns the message ``ts`` on success, None on failure.
         """
@@ -1152,10 +1126,7 @@ class SlackChannelAdapter(ChannelAdapter):
         if thread_ts:
             args["thread_ts"] = thread_ts
 
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None, lambda: bridge.call_tool("post_message", args),
-        )
+        result = await bridge.call_tool("post_message", args)
         if result:
             # MCP response: {"content": [{"type": "text", "text": "..."}]}
             # Try to extract ts from the text content
@@ -1182,17 +1153,14 @@ class SlackChannelAdapter(ChannelAdapter):
         message_ts: str,
         text: str,
     ) -> bool:
-        """Update a message via slack-mcp MCP fallback (async wrapper)."""
+        """Update a message via slack-mcp MCP fallback."""
         bridge = self._get_mcp_bridge()
         if not bridge:
             return False
 
         args: dict = {"channel_id": channel, "message_ts": message_ts, "text": text}
 
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None, lambda: bridge.call_tool("edit_message", args),
-        )
+        result = await bridge.call_tool("edit_message", args)
         return result is not None
 
     # ------------------------------------------------------------------
@@ -1300,7 +1268,12 @@ class SlackChannelAdapter(ChannelAdapter):
             for msg_data in reversed(messages):
                 msg_data.setdefault("channel", channel_id)
                 msg_data.setdefault("channel_type", "im")
-                msg = self._normalize_event(msg_data)
+                # _normalize_event calls _download_file_sync which does
+                # blocking HTTP.  In polling mode we're on the async event
+                # loop, so offload to the executor to avoid blocking.
+                msg = await loop.run_in_executor(
+                    None, self._normalize_event, msg_data,
+                )
                 if msg is not None:
                     await self._on_message(msg)
                 # Always advance watermark (even for skipped bot messages)

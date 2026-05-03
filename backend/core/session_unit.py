@@ -1840,8 +1840,12 @@ class SessionUnit:
                     self._model_name,
                     self._lifecycle_response_count,
                 )
+                stop_reason = getattr(message, "stop_reason", None) or ""
+                subtype = getattr(message, "subtype", "") or ""
                 yield {
                     "type": "result",
+                    "subtype": subtype,
+                    "stop_reason": stop_reason,
                     "session_id": self.session_id,
                     "duration_ms": getattr(message, "duration_ms", 0),
                     "total_cost_usd": getattr(message, "total_cost_usd", None),

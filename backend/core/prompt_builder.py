@@ -1201,6 +1201,16 @@ class PromptBuilder:
         thinking_config = self._build_thinking_config()
         effort = self._build_effort()
 
+        # Channel sessions: cap max_turns to prevent unbounded tool loops
+        # that cause truncation.  Agent config default is 100 but the SDK
+        # default (None = unlimited) is fine for chat tabs where the user
+        # can interrupt.  Channel sessions run unattended — a runaway loop
+        # burns cost and hits output limits.  20 turns is enough for any
+        # single Slack question (most complete in 1-3 turns).
+        max_turns = agent_config.get("max_turns") or None
+        if channel_context and (max_turns is None or max_turns > 30):
+            max_turns = 30
+
         return ClaudeAgentOptions(
             system_prompt=system_prompt_config,
             allowed_tools=allowed_tools if allowed_tools else None,
@@ -1223,4 +1233,5 @@ class PromptBuilder:
             enable_file_checkpointing=True,
             thinking=thinking_config,
             effort=effort,
+            max_turns=max_turns,
         )

@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
 from pathlib import Path
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
@@ -293,6 +292,7 @@ class TestSlackMcpBridge:
         bridge._process = None
         bridge._initialized = False
         bridge._request_id = 0
+        bridge._lock = asyncio.Lock()
 
         request = bridge._build_request("post_message", {"channel_id": "C123", "text": "hi"})
         assert request["jsonrpc"] == "2.0"

@@ -176,6 +176,12 @@ async def update_channel(channel_id: str, request: ChannelUpdateRequest):
         if updated:
             channel = updated
 
+    # Invalidate the gateway's in-memory config cache so that access
+    # control, rate limits, and other settings take effect immediately
+    # without requiring a channel restart.  The gateway re-reads from DB
+    # on the next inbound message (cache-miss path).
+    channel_gateway._channel_cache.pop(channel_id, None)
+
     # Enrich with agent name
     agent_id = channel.get("agent_id") if channel else None
     agent = await build_agent_config(agent_id) if agent_id else None

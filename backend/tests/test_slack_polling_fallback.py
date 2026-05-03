@@ -56,14 +56,30 @@ def on_message():
 
 
 @pytest.fixture
-def adapter(slack_config, on_message):
+async def adapter(slack_config, on_message):
     from channels.adapters.slack import SlackChannelAdapter
     a = SlackChannelAdapter(
         channel_id="ch-test-001",
         config=slack_config,
         on_message=on_message,
     )
-    return a
+    yield a
+    # Ensure proper cleanup to avoid "Task was destroyed" warnings
+    a._stopped = True
+    try:
+        for attr in ("_monitor_task", "_poll_task"):
+            task = getattr(a, attr, None)
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+    except RuntimeError:
+        pass  # event loop closed — tasks will be GC'd
+    ws = a._ws_thread
+    if ws and ws.is_alive():
+        ws.join(timeout=1)
 
 
 # ---------------------------------------------------------------------------
