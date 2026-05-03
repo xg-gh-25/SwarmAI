@@ -479,57 +479,83 @@ class TestH4CaddyfileHTTPOnly:
         assert "{$HIVE_DOMAIN" not in result
 
 
-class TestUpdateScriptCopiesVERSION:
-    """F1: Update script must copy VERSION file to /opt/swarmai/."""
+class TestUpdateDenylistDesign:
+    """Update uses denylist (protect runtime state) not allowlist (cherry-pick targets).
 
-    def test_update_script_copies_version_file(self):
-        """Update rsync copies VERSION to root install dir."""
+    Prior bug: allowlist rsync'd backend/, desktop/dist/, hive/ but missed VERSION.
+    Fix: single rsync from tarball → install dir, exclude only runtime state.
+    """
+
+    def test_single_rsync_not_multiple(self):
+        """Update script must use ONE rsync from tarball to install dir."""
         import inspect
         from hive.provisioner import HiveProvisioner
 
         source = inspect.getsource(HiveProvisioner.update)
-        assert "cp -f /tmp/hive-new/VERSION /opt/swarmai/VERSION" in source, \
-            "Update script must copy VERSION file (health endpoint reads it)"
+        # Should have one rsync with --delete from /tmp/hive-new/ to /opt/swarmai/
+        assert "rsync -a --delete" in source
+        assert "/tmp/hive-new/ /opt/swarmai/" in source, \
+            "Must rsync entire tarball to install dir, not cherry-pick subdirectories"
 
-    def test_update_script_backs_up_version_file(self):
-        """Update script must back up VERSION before overwriting."""
+    def test_denylist_protects_venv(self):
+        """rsync must --exclude .venv (runtime state, not in tarball)."""
         import inspect
         from hive.provisioner import HiveProvisioner
 
         source = inspect.getsource(HiveProvisioner.update)
-        assert "VERSION.bak" in source, \
-            "Update script must back up VERSION for rollback"
+        assert "--exclude='backend/.venv'" in source or "--exclude=backend/.venv" in source, \
+            ".venv must be protected from --delete"
 
-    def test_update_script_post_restart_version_check(self):
-        """Update script must verify version via health endpoint after restart."""
+    def test_denylist_protects_hive_bucket(self):
+        """rsync must --exclude .hive-bucket (deploy-time config)."""
         import inspect
         from hive.provisioner import HiveProvisioner
 
         source = inspect.getsource(HiveProvisioner.update)
-        assert "health" in source and "version" in source, \
-            "Update script must check version via health after restart"
+        assert ".hive-bucket" in source, \
+            ".hive-bucket config must be protected from --delete"
 
-
-class TestRollbackCompleteness:
-    """F2: Rollback must restore all backed-up directories, not just backend/."""
-
-    def test_rollback_restores_desktop_dist(self):
-        """Rollback restores desktop/dist/ from backup."""
+    def test_caddyfile_outside_rsync_scope(self):
+        """Caddyfile is at /etc/caddy/ — outside /opt/swarmai/, never touched."""
         import inspect
         from hive.provisioner import HiveProvisioner
 
         source = inspect.getsource(HiveProvisioner.update)
-        assert "desktop-dist.bak" in source, \
-            "Rollback must include desktop/dist/"
+        assert "/etc/caddy/" in source or "OUTSIDE /opt/swarmai/" in source, \
+            "Must document that Caddyfile is outside rsync scope"
 
-    def test_rollback_restores_version(self):
-        """Rollback restores VERSION file from backup."""
+    def test_post_restart_version_verification(self):
+        """Update must verify actual version matches expected after restart."""
         import inspect
         from hive.provisioner import HiveProvisioner
 
         source = inspect.getsource(HiveProvisioner.update)
-        assert "VERSION.bak" in source, \
-            "Rollback must include VERSION"
+        assert f"health" in source and "version" in source, \
+            "Must verify version via health endpoint after restart"
+        assert "rolling back" in source.lower(), \
+            "Version mismatch must trigger rollback"
+
+
+class TestRollbackSymmetry:
+    """Rollback scope must equal deploy scope — backup/restore the same directory."""
+
+    def test_backup_is_full_install_dir(self):
+        """Backup must copy entire /opt/swarmai, not individual subdirectories."""
+        import inspect
+        from hive.provisioner import HiveProvisioner
+
+        source = inspect.getsource(HiveProvisioner.update)
+        assert "cp -a /opt/swarmai /opt/swarmai.bak" in source, \
+            "Backup must be entire install dir (denylist = no drift)"
+
+    def test_rollback_restores_full_install_dir(self):
+        """Rollback must restore entire backup, not individual pieces."""
+        import inspect
+        from hive.provisioner import HiveProvisioner
+
+        source = inspect.getsource(HiveProvisioner.update)
+        assert "mv /opt/swarmai.bak /opt/swarmai" in source, \
+            "Rollback must restore entire backup atomically"
 
 
 class TestVersionValidation:
@@ -561,24 +587,17 @@ class TestVersionValidation:
 
 
 class TestH5UpdateNeverOverwritesCaddyfile:
-    """H5: Update script must never copy repo Caddyfile to /etc/caddy/.
+    """H5: Update must never touch /etc/caddy/Caddyfile.
 
     The deployed Caddyfile has inline bcrypt credentials. The repo Caddyfile
     has placeholders. Overwriting breaks auth permanently.
+
+    Design: rsync scope is /opt/swarmai/ only. Caddyfile lives at /etc/caddy/
+    — outside rsync scope entirely. No exclude needed.
     """
 
-    def test_update_script_excludes_caddyfile(self):
-        """Update script rsync of hive/ excludes Caddyfile."""
-        import inspect
-        from hive.provisioner import HiveProvisioner
-
-        source = inspect.getsource(HiveProvisioner.update)
-        # Must exclude Caddyfile in hive rsync
-        assert "--exclude='Caddyfile'" in source or '--exclude="Caddyfile"' in source, \
-            "hive/ rsync must exclude Caddyfile"
-
     def test_update_script_no_caddyfile_copy(self):
-        """Update script must not cp Caddyfile to /etc/caddy/."""
+        """Update script must not copy any Caddyfile to /etc/caddy/."""
         import inspect
         from hive.provisioner import HiveProvisioner
 
@@ -587,6 +606,15 @@ class TestH5UpdateNeverOverwritesCaddyfile:
             "Update must not copy repo Caddyfile to deployed Caddyfile"
         assert "caddy reload" not in source, \
             "Update must not reload Caddy (Caddyfile unchanged)"
+
+    def test_rsync_scope_is_opt_swarmai_only(self):
+        """rsync target is /opt/swarmai/, Caddyfile at /etc/caddy/ is untouched."""
+        import inspect
+        from hive.provisioner import HiveProvisioner
+
+        source = inspect.getsource(HiveProvisioner.update)
+        assert "/tmp/hive-new/ /opt/swarmai/" in source, \
+            "rsync scope must be /opt/swarmai/ (Caddyfile at /etc/caddy/ is outside)"
 
 
 class TestH2SystemctlTimeout:
@@ -838,25 +866,25 @@ class TestG6AtomicUpdateLock:
 
 
 class TestG7PreUpdateBackup:
-    """G7: Update script must backup before rsync."""
+    """G7: Update script must backup entire install dir before rsync."""
 
     @pytest.mark.asyncio
     async def test_update_script_has_backup(self):
-        """SSM update script must create .bak before changes."""
+        """SSM update script must create full backup before changes."""
         import inspect
         from hive.provisioner import HiveProvisioner
 
         source = inspect.getsource(HiveProvisioner.update)
-        assert "backend.bak" in source
+        assert "swarmai.bak" in source
 
     @pytest.mark.asyncio
     async def test_update_script_has_rollback(self):
-        """SSM update script must rollback .bak on failure."""
+        """SSM update script must rollback full backup on failure."""
         import inspect
         from hive.provisioner import HiveProvisioner
 
         source = inspect.getsource(HiveProvisioner.update)
-        assert "Rolling back" in source
+        assert "Rolling back" in source or "rolling back" in source
 
 
 class TestG8NightlyBackup:
