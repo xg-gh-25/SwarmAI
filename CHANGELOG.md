@@ -5,6 +5,38 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.3] - 2026-05-03
+
+### Added
+
+- **Session Resume Enrichment**: 5-layer resume context (checkpoint + git state + conclusions + tool results + 30 turns), model-aware budgets (150K/60K/20K), priority-based trimming. Cold resume from ~3K to ~50-100K tokens
+- **Runtime Hooks Phase 2**: Mid-session checkpoint (every 10 tool calls), memory edit guard (PostToolUse validates MEMORY.md/EVOLUTION.md writes), git commit capture
+- **Memory Health Integrity Checks**: Deterministic Phase 1 — index markers, round-trip, duplicate keys, recall accuracy, CJK aliases, MemoryGuard injection scan
+- **Signal Intelligence Upgrade**: Split LLM scoring (markdown + JSON), keyword fallback, config-driven user context, Chinese signal 5-slot reserve
+- **Workspace Backup & Restore**: Private GitHub repo backup with tiered DB export, restore wizard UI, Hive token fallback
+- **Thesis System**: Cognitive judgment layer for taste decisions in autonomous pipeline
+- **Completion Audit Protocol**: Structured verification in DELIVER stage
+- **Day-of-week in system prompt**: Agent now knows what day it is
+
+### Fixed
+
+- **P0 Bootstrap**: First DM sender auto-promoted to owner when Slack allowlist empty
+- **Channel Subsystem Overhaul**: 10 E2E audit gaps — gateway mode guard (sidecar/dev no longer compete for Socket Mode), auth failure unification (adapter → gateway circuit breaker), streaming state extraction, rate limiter cleanup, user cache LRU cap
+- **locked_write.py UTF-8 Corruption**: `errors="replace"` permanently destroyed non-UTF-8 bytes — changed to `surrogateescape` (PEP 383) for lossless round-trip
+- **CJK Regex**: `\b` never fires between CJK characters — split Chinese directive words into separate non-`\b` branch; `ord(c) > 0x4e00` off-by-one missed U+4E00 (一)
+- **Memory Index Double-Counting**: `generate_memory_index()` no longer includes markers, `_parse_index_entries()` scoped to marker block
+- **Memory Guard Consolidation**: Merged `memory_validation.py` (16 patterns) into `MemoryGuard` (25 patterns) — single source of truth, 4 call paths covered
+- **Signal Scoring Stability**: Split-prompt eliminates JSON truncation; keyword fallback when LLM fails; user context from config interests (not raw Memory Index)
+- **ChannelStatus Type**: Added `auth_error` to TypeScript union — backend returns it on auth circuit breaker
+- **CJK Recall E2E**: Bidirectional substring + shared prefix matching, 2-char Chinese word extraction
+- **Hardcoded Deployment Config**: Extracted `_KNOWN_USERS`, `_CHANNELS_TO_MONITOR`, `_swarmai_root` to config files / `__file__`-relative resolution
+
+### Changed
+
+- **Evolution Pipeline**: `deploy_optimization()` removed (deprecated v2), production uses `atomic_deploy()`. `dry_run=True` default — pipeline analyzes and recommends but doesn't deploy
+- **Shadow Recall Removed**: Recall is live, shadow validation deleted (~170 lines + test file)
+- **README (EN + CN)**: Swarm Hive promoted to highlight feature, stale stats refreshed (1,165+ commits, 75+ skills, 15 corrections)
+
 ## [1.9.2] - 2026-04-30
 
 ### Fixed

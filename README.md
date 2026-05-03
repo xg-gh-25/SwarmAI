@@ -251,10 +251,10 @@ Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv)
 
 | Version | Highlights |
 |---------|-----------|
+| **v1.9.3** (May 3) | Session resume enrichment (3K→100K tokens), channel subsystem overhaul (P0 bootstrap, auth unification, mode guard), memory hardening (CJK, guard merge, integrity checks), signal intelligence upgrade, 8 bug fixes, config extraction |
 | **v1.9.2** (Apr 30) | Cross-platform Release workflow fixes, CI test stability (dynamic skip + best-effort), monotonic clock cooldown bug |
 | **v1.9.1** (Apr 30) | 4-gate CI pipeline, shared AI context (AGENTS.md), CONTEXT.md glossary, v1.9.0 P0 fixes |
 | **v1.9.0** (Apr 29) | Hive cloud deployment (EC2 + CloudFront + Caddy), unified FileViewer (7 renderers), skill platform filtering, thinking toolkit, 32 PE security fixes, pipeline quality gates |
-| **v1.8.0** (Apr 26) | Pollinate media engine (poster, 4K video, podcast, narrative + SSML), Briefing Hub v2, SwarmWS Explorer redesign, session pre-warming, Slack 3-tier delivery, autonomous pipeline v2 |
 
 ---
 
