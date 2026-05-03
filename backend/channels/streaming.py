@@ -105,6 +105,7 @@ class StreamContext:
 
     # Thinking streaming — shows thinking tokens in italic before the reply
     in_thinking: bool = False
+    thinking_content_sent: bool = False  # True once any thinking content delivered to adapter
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +282,11 @@ async def end_thinking_phase(ctx: StreamContext) -> None:
         pending = "".join(ctx.native_pending_buf)
         ctx.native_pending_buf.clear()
 
+    # Only emit separator if thinking content was actually delivered to user.
+    # If the opener (💭 _) failed, sending a stray _\n\n---\n\n is confusing.
+    if not ctx.thinking_content_sent and not pending:
+        return
+
     # Close the italic block and add a visual separator before the reply
     separator = "_\n\n---\n\n"
     try:
@@ -336,11 +342,10 @@ async def cleanup_stream(ctx: StreamContext) -> None:
         except asyncio.CancelledError:
             pass
 
-    # Final drain — merge remaining buffers into stream_flushed
+    # Final drain — merge remaining stream_buf into stream_flushed
     # so the final reply_text captures everything.
-    if ctx.native_pending_buf:
-        ctx.stream_buf.extend(ctx.native_pending_buf)
-        ctx.native_pending_buf.clear()
+    # Note: native_pending_buf is already empty (cleared by thinking
+    # discard or final native flush above), so only stream_buf needs draining.
     if ctx.stream_buf:
         ctx.stream_flushed += "".join(ctx.stream_buf)
         ctx.stream_buf.clear()

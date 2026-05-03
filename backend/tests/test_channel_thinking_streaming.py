@@ -82,9 +82,10 @@ class TestEndThinkingPhase:
 
     @pytest.mark.asyncio
     async def test_sends_separator(self):
-        """Closing italic + visual separator is sent even without pending tokens."""
+        """Closing italic + visual separator is sent when opener was delivered."""
         ctx = _make_ctx()
         ctx.in_thinking = True
+        ctx.thinking_content_sent = True  # opener (💭 _) was delivered
         ctx.native_pending_buf = []
 
         await end_thinking_phase(ctx)
@@ -92,6 +93,19 @@ class TestEndThinkingPhase:
         ctx.adapter.append_stream.assert_awaited_once()
         chunk = ctx.adapter.append_stream.call_args[0][2]
         assert chunk == "_\n\n---\n\n"
+
+    @pytest.mark.asyncio
+    async def test_skips_separator_when_opener_failed(self):
+        """No stray separator if thinking opener was never delivered."""
+        ctx = _make_ctx()
+        ctx.in_thinking = True
+        ctx.thinking_content_sent = False  # opener failed
+        ctx.native_pending_buf = []
+
+        await end_thinking_phase(ctx)
+
+        ctx.adapter.append_stream.assert_not_awaited()
+        assert ctx.in_thinking is False
 
     @pytest.mark.asyncio
     async def test_noop_when_not_thinking(self):
@@ -289,8 +303,9 @@ class TestEmptyThinkingBlock:
         """No crash or stale state from empty thinking block."""
         ctx = _make_ctx()
 
-        # thinking_start
+        # thinking_start — opener was delivered
         ctx.in_thinking = True
+        ctx.thinking_content_sent = True
 
         # Immediately text_start — no thinking_delta between them
         await end_thinking_phase(ctx)
