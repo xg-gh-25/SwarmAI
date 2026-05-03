@@ -114,6 +114,9 @@ DECISION_OPTIONAL_STAGES = {"reflect", "deliver"}
 # Code file extensions for changeset analysis
 _CODE_EXTS = {".py", ".ts", ".tsx", ".js", ".jsx", ".rs", ".go", ".java", ".sh"}
 
+# Evidence file extensions for semantic depth checks (includes docs + config)
+_EVIDENCE_FILE_EXTS = (".py", ".ts", ".tsx", ".js", ".jsx", ".rs", ".go", ".md", ".json", ".yaml", ".sh")
+
 
 # ---------------------------------------------------------------------------
 # Workspace resolution
@@ -577,18 +580,127 @@ def _check_depth(stage: str, artifact_data: dict, profile: str) -> list[str]:
     return errors
 
 
+def _check_semantic_depth(
+    stage: str, artifact_data: dict, run: dict, project: str, run_id: str,
+) -> list[str]:
+    """Layer 2.5: semantic heuristic checks — WARN level.
+
+    Catches artifacts that are structurally valid but content-lazy.
+    Returns a list of warning strings (never errors/blocks).
+
+    Three checks:
+      1. Completion audit evidence quality (deliver) — >=70% cite file/test
+      2. RP patterns evidence quality (review) — >=50% non-N/A have >10 char evidence
+      3. Confidence penalty consistency (deliver) — empty penalties when issues exist
+    """
+    warnings: list[str] = []
+
+    # --- Check 1: Completion audit evidence quality (deliver stage) ---
+    if stage == "deliver":
+        ca = artifact_data.get("completion_audit", {})
+        checklist = ca.get("checklist", []) if isinstance(ca, dict) else []
+        if isinstance(checklist, list) and len(checklist) >= 2:
+            substantive = 0
+            for entry in checklist:
+                if not isinstance(entry, dict):
+                    continue
+                ev = str(entry.get("evidence", ""))
+                has_file = any(ext in ev for ext in _EVIDENCE_FILE_EXTS)
+                has_test = "test_" in ev or "test(" in ev or "::test" in ev
+                has_line = "line " in ev.lower() or "line:" in ev.lower()
+                if has_file or has_test or has_line:
+                    substantive += 1
+            ratio = substantive / len(checklist)  # PE-8: len >= 2 guaranteed
+            if ratio < 0.7:
+                warnings.append(
+                    f"Semantic: completion_audit evidence quality — "
+                    f"{substantive}/{len(checklist)} entries ({ratio:.0%}) cite a file path "
+                    f"or test name. Rule 16 requires verifiable evidence, not assertions "
+                    f"like 'implemented' or 'verified'. Aim for >=70%."
+                )
+
+    # --- Check 2: RP patterns evidence quality (review stage) ---
+    if stage == "review":
+        rp = artifact_data.get("runtime_patterns", {})
+        if isinstance(rp, dict):
+            patterns = rp.get("patterns", [])
+            if isinstance(patterns, list):
+                non_na = [
+                    p for p in patterns
+                    if isinstance(p, dict) and str(p.get("result", "")).upper() != "N/A"
+                ]
+                if len(non_na) >= 2:
+                    with_evidence = sum(
+                        1 for p in non_na
+                        if isinstance(p.get("evidence"), str) and len(p["evidence"]) > 10
+                    )
+                    ratio = with_evidence / len(non_na)
+                    if ratio < 0.5:
+                        warnings.append(
+                            f"Semantic: runtime_patterns evidence quality — "
+                            f"{with_evidence}/{len(non_na)} non-N/A patterns have "
+                            f"evidence text >10 chars. 'PASS' without context is not "
+                            f"verifiable. Add what was checked (e.g., 'No subprocess in "
+                            f"changeset' or 'Error constant matches line 85'). Aim for >=50%."
+                        )
+
+    # --- Check 3: Confidence penalty consistency (deliver stage) ---
+    # Skip if confidence_score isn't a dict — _check_depth already BLOCKs on bare numbers (PE-5)
+    if stage == "deliver" and isinstance(artifact_data.get("confidence_score"), dict):
+        cs = artifact_data["confidence_score"]
+        penalties = cs.get("penalties", [])
+
+        # Check if review had findings
+        review_findings = 0
+        test_failures = 0
+        for s in run.get("stages", []):
+            s_name = s.get("stage", s.get("name", ""))
+            s_art_id = s.get("artifact_id")
+            if not s_art_id:
+                continue
+            if s_name == "review":
+                rev_data = _load_artifact_data(project, run_id, s_art_id)
+                if rev_data:
+                    review_findings = rev_data.get("findings_count", 0)
+                    if not isinstance(review_findings, int):
+                        review_findings = 0
+            elif s_name == "test":
+                test_data = _load_artifact_data(project, run_id, s_art_id)
+                if test_data:
+                    test_failures = test_data.get("failed", 0)
+                    if not isinstance(test_failures, int):
+                        test_failures = 0
+
+        has_issues = review_findings > 0 or test_failures > 0
+        if has_issues and isinstance(penalties, list) and len(penalties) == 0:
+            warnings.append(
+                f"Semantic: confidence_score penalties empty but issues exist — "
+                f"review had {review_findings} finding(s), tests had {test_failures} "
+                f"failure(s). A score with zero penalties despite known issues suggests "
+                f"the scoring didn't account for them. Even if all were fixed, record "
+                f"the penalty + resolution."
+            )
+
+    return warnings
+
+
 # ---------------------------------------------------------------------------
 # Core validation
 # ---------------------------------------------------------------------------
 
 def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
-    """Validate a pipeline stage against 7 structural invariants.
+    """Validate a pipeline stage against structural + semantic invariants.
+
+    Checks 1-8: structural invariants (BLOCK on violations)
+    Check 9: depth validation L2 (BLOCK on hollow artifacts)
+    Check 10: confidence gate L3 (BLOCK on score < 7)
+    Check 11: semantic depth L2.5 (WARN on content-lazy artifacts)
 
     Returns a result dict with:
         valid: bool — False if any BLOCK errors
         stage: str — the validated stage
         errors: list[str] — BLOCK-level violations
-        warnings: list[str] — informational issues
+        warnings: list[str] — informational issues + semantic heuristics
         checks_passed: int
         checks_total: int
     """
@@ -777,6 +889,7 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
         # Check 8c: UX review when frontend files are in the changeset (WARN only)
         _FRONTEND_EXTS = (".tsx", ".jsx", ".css", ".html", ".svelte", ".vue")
         has_frontend = False
+        build_data = None  # PE-1 fix: initialize before conditional assignment
         # Look for frontend files in the build stage's changeset artifact
         build_stage = next(
             (s for s in stages_list if s.get("stage", s.get("name")) == "build"),
@@ -827,7 +940,7 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
                                 f"{tests_gen} tests. Verify this is genuine — large changesets "
                                 f"with zero findings often indicate a skipped review."
                             )
-                elif is_large_changeset and not artifact_id:
+                elif is_large_changeset and not _art_id:  # PE-2 fix: was `artifact_id` (NameError)
                     errors.append(
                         f"Review completeness: build touched {len(code_files)} code files "
                         f"but REVIEW stage has no artifact_id. The review was skipped entirely."
@@ -863,6 +976,11 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
         checks_total += 1
         if not any("confidence gate" in e.lower() for e in errors):
             checks_passed += 1
+
+    # --- Check 11: Semantic depth (L2.5) — content quality heuristics (WARN) ---
+    if artifact_data and stage in ("review", "deliver"):
+        sem_warnings = _check_semantic_depth(stage, artifact_data, run, project, run_id)
+        warnings.extend(sem_warnings)
 
     return {
         "valid": len(errors) == 0,
