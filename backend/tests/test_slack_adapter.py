@@ -706,3 +706,64 @@ class TestSlackRegistration:
             assert get_adapter_class("slack") is not None
         except ImportError:
             pass  # OK — slack not installed, adapter won't register
+
+
+# ===================================================================
+# User name resolution — negative caching (AC1, AC2)
+# ===================================================================
+
+class TestUserNameResolution:
+    """Verify display_name cache and known-user annotations."""
+
+    def test_negative_cache_prevents_retry(self, adapter):
+        """After both API calls fail, subsequent lookups skip API (AC1)."""
+        mock_client = MagicMock()
+        mock_client.users_info.side_effect = Exception("missing_scope")
+        mock_client.users_profile_get.side_effect = Exception("missing_scope")
+        adapter._slack_client = mock_client
+
+        # First call: tries both APIs, falls back to user_id
+        result1 = adapter._get_user_name("U_UNKNOWN")
+        assert result1 == "U_UNKNOWN"
+        assert mock_client.users_info.call_count == 1
+
+        # Second call: should NOT call APIs again (cached negative result)
+        result2 = adapter._get_user_name("U_UNKNOWN")
+        assert result2 == "U_UNKNOWN"
+        assert mock_client.users_info.call_count == 1  # still 1, not 2
+
+    def test_known_users_prepopulated(self, adapter):
+        """Known user IDs resolve to human-readable names without API calls (AC2)."""
+        from channels.adapters.slack import _KNOWN_USERS
+        # _KNOWN_USERS should exist and have at least XG's mapping
+        assert isinstance(_KNOWN_USERS, dict)
+        assert len(_KNOWN_USERS) > 0
+        # XG's ID should map to a readable name
+        assert "W017T04E8MS" in _KNOWN_USERS
+        assert _KNOWN_USERS["W017T04E8MS"] != "W017T04E8MS"  # not raw ID
+
+    def test_known_user_resolved_without_api(self, adapter):
+        """Known users resolve from cache, no Slack API call needed."""
+        from channels.adapters.slack import _KNOWN_USERS
+        # Pre-populate cache from known users (done in __init__)
+        adapter._user_cache.update(_KNOWN_USERS)
+        adapter._slack_client = MagicMock()
+
+        name = adapter._get_user_name("W017T04E8MS")
+        assert name != "W017T04E8MS"  # got a real name
+        adapter._slack_client.users_info.assert_not_called()
+
+    def test_successful_lookup_still_cached(self, adapter):
+        """Successful API resolution is still cached (existing behavior preserved)."""
+        mock_client = MagicMock()
+        mock_client.users_info.return_value = {
+            "ok": True,
+            "user": {"real_name": "Test User", "profile": {"real_name_normalized": "Test User"}},
+        }
+        adapter._slack_client = mock_client
+
+        result1 = adapter._get_user_name("U_NEW")
+        assert result1 == "Test User"
+        result2 = adapter._get_user_name("U_NEW")
+        assert result2 == "Test User"
+        assert mock_client.users_info.call_count == 1
