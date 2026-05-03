@@ -132,14 +132,16 @@ class TestGitHubTrendingAdapterBasic:
         assert "github" in sig.tags
 
     def test_stars_today_in_score(self, mock_trending_response):
-        """stars_today stored as score for downstream ranking."""
+        """stars_today normalized to 0-1 (500+ = 1.0) for fair cross-feed scoring."""
         from jobs.adapters.github_trending import fetch_github_trending
 
         feed = _make_github_trending_feed()
         signals = fetch_github_trending(feed)
 
-        assert signals[0].score == 5645.0
-        assert signals[1].score == 498.0
+        # 5645 stars/day → min(5645/500, 1.0) = 1.0
+        assert signals[0].score == 1.0
+        # 498 stars/day → min(498/500, 1.0) = 0.996
+        assert 0.99 <= signals[1].score <= 1.0
 
     def test_top_n_limits_results(self):
         """top_n config limits number of repos returned."""

@@ -141,10 +141,11 @@ def fetch_github_trending(feed: Feed, max_age_hours: int = 48) -> list[RawSignal
                 published=datetime.now(timezone.utc),
                 source=language,  # language as source for display
                 tags=feed.tags + ([language.lower()] if language else []),
-                # score = raw stars_today (NOT normalized). Downstream consumers
-                # rank by this value within the github-trending feed only.
-                # Cross-feed comparison requires normalization at the digest layer.
-                score=float(stars_today),
+                # score = stars_today normalized to 0-1 (500+ stars/day = 1.0).
+                # Raw star counts (38-1284) caused github-trending to dominate
+                # the digest top-50 and crowd out all other feeds including
+                # Chinese trending signals.
+                score=min(float(stars_today) / 500.0, 1.0),
             ))
 
         except Exception as e:
