@@ -283,4 +283,21 @@ async def build_hooks(
         except Exception:
             logger.exception("Failed to register runtime hooks — skipping")
 
+    # ── Code Intelligence: inject dependency context on Read/Grep ──
+    if agent_config.get("code_intel_enabled", True):
+        try:
+            from core.code_intel.code_intel_hook import create_code_intel_hook
+            ci_hook = create_code_intel_hook()
+
+            async def _code_intel_wrapper(hook_input, tool_name, hook_context):
+                tool_input = hook_input if isinstance(hook_input, dict) else getattr(hook_input, "__dict__", {})
+                return ci_hook(tool_name, tool_input)
+
+            registry.register("PreToolUse", _code_intel_wrapper, "code_intel_context")
+            logger.info("Code intelligence hook registered")
+        except ImportError:
+            logger.debug("code_intel not available — skipping")
+        except Exception:
+            logger.exception("Failed to register code_intel hook — skipping")
+
     return registry.build_sdk_hooks(), effective_allowed_skills, allow_all_skills

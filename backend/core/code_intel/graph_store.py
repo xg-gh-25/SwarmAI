@@ -652,6 +652,15 @@ class GraphStore:
             self.upsert_edges(d["edges"])
         self.rebuild_fts()
 
+        # Layer 2: resolve bare call targets across files
+        try:
+            from .parser import resolve_bare_targets
+            resolved = resolve_bare_targets(self)
+            if resolved:
+                logger.info("Cross-file resolution: %d bare targets resolved", resolved)
+        except Exception as e:
+            logger.debug("Cross-file resolution skipped: %s", e)
+
     def incremental_update(
         self,
         repo_root: str | Path,
