@@ -40,10 +40,45 @@ Confidence score formula (1-12):
 -1 if runtime_patterns.checked == 0 and applicable patterns exist (known bugs unchecked)
 -2 if frontend+backend changed but wire_test.boundaries == 0 (cross-layer contract unverified)
 -2 if new endpoint + frontend consumer but probes == 0 (real HTTP path untested)
+-1 if lifecycle ops changed but operational_patterns.checked == 0 (OP invariants unchecked)
+-1 if state transitions added but inverse_operations.checked == 0 (stuck states possible)
+-3 if adversarial_review not run (user-side + PE-side are mandatory)
+-3 if adversarial_review has unfixed HIGH PE finding
 -1 per unresolved warning from validator
 ```
 
 If confidence < 7 -- flag for human review even without judgment decisions.
+
+### Fresh User Audit (P6)
+
+**Before confidence scoring, if the changeset touches user-facing infrastructure**
+(deploy, onboarding, config, CLI, API endpoints), answer this question:
+
+> "Could a new user, starting from zero, successfully use this feature
+> without modifying source code?"
+
+Check:
+1. **No stale values** — hardcoded IPs, usernames, paths, URLs that only
+   work for the developer
+2. **No hidden prerequisites** — tools, keys, permissions, env vars that
+   aren't documented or auto-provisioned
+3. **No placeholder that passes silently** — config values that look valid
+   but aren't (e.g., a bcrypt hash placeholder that Caddy accepts but
+   always rejects auth)
+4. **Clear error messages** — if prerequisites are missing, the error says
+   what's wrong and how to fix it (not a raw stack trace)
+5. **Single documented path** — if multiple ways to do the same thing exist,
+   only one is documented; alternatives are deprecated or removed
+
+**Output:** List findings as attention flags. Each flag = a friction point
+for a new user.
+
+**Why this exists:** Hive provisioner passed 28 tests and 10/10 confidence
+but a "fresh user" audit found 7 P0 gaps in 10 minutes: hardcoded GitHub
+repo, S3 bucket collision, stale IPs in update script, placeholder hash that
+looked valid, npm blocking EC2 startup, auth_password in list response, no
+permission pre-check. All invisible to automated tests because tests run in
+the developer's environment. (2026-04-29 + 2026-05-03)
 
 ### Completion Audit
 
@@ -98,6 +133,152 @@ COMPLETION AUDIT — Verify before declaring done.
 - `all_green: true` → +2 bonus
 - `gaps > 0` (not fixed) → -3 penalty
 - `unfixable_gaps > 0` → -1 penalty
+
+### Adversarial Review Gate (BLOCKING)
+
+**After Completion Audit, BEFORE generating the report or committing.**
+
+Independent sub-agent review that breaks builder context bias. The builder
+agent is too close to the code to catch its own blind spots — a fresh agent
+reading the diff cold finds different classes of bugs.
+
+**Why sub-agent, not inline:** The same model in the same context can't
+"pretend" to be a different reviewer — cognitive bias doesn't vanish from
+a "perspective shift" prompt. A sub-agent starts with zero builder context:
+no memory of design decisions, no emotional attachment to the approach. This
+is the closest we get to a real second pair of eyes. (Inspired by gstack's
+cross-model triangulation pattern.)
+
+**Why mandatory:** 12+ pipeline runs in IMPROVEMENT.md show PE/user reviews
+find critical bugs AFTER 10/10 confidence: regex too greedy (this session),
+voice input 100% non-functional (C011), 3 CRITICAL subprocess bugs
+(run_c2881d2f). Mechanical REVIEW checks verify process; adversarial review
+verifies reality.
+
+---
+
+#### Profile-Aware Tiering
+
+| Profile | What runs | Rationale |
+|---------|-----------|-----------|
+| **full, standard** | Both passes (User-Side + PE) | New capability = highest risk |
+| **bugfix** | PE pass only | Bug fixes have narrow scope, user-side trace is low ROI |
+| **trivial** | Skip entirely | One-line fix, tests pass, not worth the token cost |
+| **research, docs** | Skip entirely | No code changes |
+
+---
+
+#### Execution: Spawn Sub-Agent
+
+**BLOCKING: Use the Agent tool to spawn an independent reviewer.** Do NOT
+run this inline — the whole point is context isolation.
+
+```
+Agent({
+  description: "Adversarial review of pipeline changeset",
+  prompt: <see template below>
+  // Use default model (opus). Adversarial review needs the strongest
+  // code reasoning — subtle bugs (regex anchoring, status code misuse,
+  // config injection) require deep understanding of surrounding context.
+  // Sonnet saves 30s but risks missing the exact findings this gate exists to catch.
+})
+```
+
+**Sub-agent prompt template:**
+
+```
+You are a paranoid staff engineer reviewing code you didn't write. Your job
+is to find what the builder missed. You have no context about why decisions
+were made — judge the code on its own merits.
+
+## Context
+Project: <PROJECT>
+Requirement: <requirement from run.json>
+Acceptance criteria: <list from evaluation artifact>
+Profile: <full|bugfix>
+Files changed: <list>
+
+## Your Task
+
+Read every changed file listed above. For each file, run two passes:
+
+### Pass 1: User-Side Functional Review (SKIP if profile=bugfix)
+For every changed function:
+1. What user action triggers this? Trace from user → code, not code → user.
+2. Walk the happy path through REAL code (not tests). Does data arrive in
+   the right format at each boundary?
+3. Walk 3 failure paths: concurrent execution, partial failure, missing
+   prerequisite. What breaks?
+4. Read 5 lines above and below. Stale code? Duplicate logic? Same bug?
+
+### Pass 2: PE (Production Engineering) Review
+For every changed line:
+1. Correctness — does this do what the comment says? Edge cases handled?
+   Regex/query/format correct for ALL inputs (not just test inputs)?
+2. Robustness — empty/None/wrong-type input? Unexpected external response?
+   File locked? DB missing?
+3. Security — user input sanitized before shell/SQL/config/HTML/JSON?
+4. Consistency — same error handling, naming, HTTP status codes as adjacent code?
+5. Dead code — unused imports? Stale comments? Duplicate headers? Debug leftovers?
+
+## Output Format
+```json
+{
+  "user_side": [
+    {"id": "U1", "severity": "HIGH|MED|LOW", "finding": "...", "fix": "..."}
+  ],
+  "pe_side": [
+    {"id": "PE-1", "severity": "HIGH|MED|LOW", "finding": "...", "fix": "..."}
+  ],
+  "summary": "N user findings, M PE findings, K HIGH"
+}
+```
+
+Be specific. "Regex might be wrong" is useless. "Regex `\\s+admin\\s+\\S+`
+matches any word after 'admin' including comments — anchoring to bcrypt
+format `\\$2[ab]\\$` prevents false match" is actionable.
+```
+
+**After sub-agent returns:**
+
+1. Fix all HIGH and MED findings immediately
+2. Note LOW findings in the pipeline report
+3. Re-run affected tests if any code changed
+4. Record results in run.json
+
+---
+
+#### Gate Outcome
+
+```
+Adversarial Review Gate:
+  User-side: N findings, M fixed (or "skipped — bugfix profile")
+  PE-side:   N findings, M fixed, K noted
+
+  PASS → proceed to Pipeline Report
+  FAIL → loop back: fix → re-test → re-review (max 1 loop)
+```
+
+**Record in run.json:**
+```json
+{
+  "adversarial_review": {
+    "profile_tier": "full|pe_only|skipped",
+    "user_findings": 3,
+    "user_fixed": 3,
+    "pe_findings": 6,
+    "pe_fixed": 5,
+    "pe_noted": 1
+  }
+}
+```
+
+**Confidence impact:**
+- Not run (when required by profile) → **-3**
+- All HIGH/MED fixed → no penalty (gate working as designed)
+- Unfixed HIGH PE finding → **-3** (blocking bug shipped)
+
+---
 
 ### Pipeline Report
 
@@ -170,7 +351,13 @@ Written for someone who won't read the rest of the report. Skip jargon.>
 | VALIDATOR | 6/6 checks |
 | Confidence | X/12 |
 
-## 7.5 Completion Audit
+## 7.5 Adversarial Review
+| Pass | Findings | Fixed | Noted |
+|------|----------|-------|-------|
+| User-side | N | M | — |
+| PE-side | N | M | K |
+
+## 7.6 Completion Audit
 | # | Acceptance Criterion | Evidence | Verified |
 |---|---------------------|----------|----------|
 | 1 | ... | test_xxx.py::test_yyy | ✅ |
