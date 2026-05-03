@@ -55,7 +55,7 @@ cp -r "$BACKEND_DIR"/* "$BUILD_DIR/"
 # Copy resource files needed by PyInstaller into the build directory
 cp "$PROJECT_ROOT/resources/mcp-catalog.json" "$BUILD_DIR/mcp-catalog.json"
 cp "$PROJECT_ROOT/resources/required-cli-tools.json" "$BUILD_DIR/required-cli-tools.json"
-cp "$PROJECT_ROOT/VERSION" "$BUILD_DIR/VERSION"
+cp "$BACKEND_DIR/../VERSION" "$BUILD_DIR/VERSION"
 
 # Create entry point script for PyInstaller
 cat > "$BUILD_DIR/desktop_main.py" << 'EOF'
