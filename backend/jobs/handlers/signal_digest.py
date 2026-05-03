@@ -328,7 +328,10 @@ def _simple_scored_items(signals: list[RawSignal]) -> list[dict]:
     now = datetime.now(timezone.utc).isoformat()
     items = []
     for s in signals:
-        raw_score = max(s.score, 0.5)
+        # Clamp raw_score to [0, 1] — some adapters (github-trending) store
+        # un-normalized values (star counts) in score. Without clamping, they
+        # dominate the top-50 and crowd out all other feeds.
+        raw_score = min(max(s.score, 0.5), 1.0)
         tier_weight = TIER_WEIGHTS.get(s.tier, 1.0)
         weighted_score = min(raw_score * tier_weight, 1.0)
         items.append({
