@@ -12,10 +12,17 @@
 
 :80 {
 
+    # --- Health check — BEFORE auth so external monitors can reach it ---
+    # G11: /health returns no secrets, safe to expose unauthenticated.
+    # Enables Route53 health checks, UptimeRobot, etc.
+    handle /health {
+        reverse_proxy localhost:18321
+    }
+
     # --- Authentication (MVP: basic auth) ---
     # Generate hash: caddy hash-password --plaintext 'your-password'
     basicauth * {
-        {$HIVE_USER:admin} {$HIVE_PASS_HASH:$2a$14$PLACEHOLDER_CHANGE_ME}
+        {$HIVE_USER:admin} {$HIVE_PASS_HASH:INVALID_NOT_A_REAL_HASH}
     }
 
     # --- SSE streaming — MUST be before generic /api/* (first-match) ---
@@ -48,11 +55,6 @@
 
     # --- Generic API reverse proxy (catch-all for non-SSE) ---
     handle /api/* {
-        reverse_proxy localhost:18321
-    }
-
-    # --- Root-level backend endpoints (not under /api/) ---
-    handle /health {
         reverse_proxy localhost:18321
     }
 

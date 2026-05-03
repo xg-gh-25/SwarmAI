@@ -545,12 +545,22 @@ class TestH1PostUpdateHealthVerification:
         async def fake_to_thread(fn, *args, **kwargs):
             return ("Success", "Update complete")
 
+        # Mock the G6 atomic lock DB connection
+        mock_cursor = MagicMock()
+        mock_cursor.rowcount = 1  # simulate successful lock acquisition
+        mock_conn = AsyncMock()
+        mock_conn.execute = AsyncMock(return_value=mock_cursor)
+        mock_conn.commit = AsyncMock()
+        mock_conn.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_conn.__aexit__ = AsyncMock(return_value=False)
+
         with patch.object(p, "_get_instance", new_callable=AsyncMock, return_value=mock_instance), \
              patch.object(p, "_get_account", new_callable=AsyncMock, return_value=mock_account), \
              patch.object(p, "_update_instance", new_callable=AsyncMock), \
              patch.object(p, "_sync_release_to_s3", new_callable=AsyncMock), \
              patch.object(p, "_wait_healthy_via_ssm", new_callable=AsyncMock, return_value=True) as mock_health, \
              patch.object(p, "_get_session") as mock_session_fn, \
+             patch("hive.provisioner.aiosqlite.connect", return_value=mock_conn), \
              patch("hive.provisioner.asyncio.to_thread", side_effect=fake_to_thread):
 
             mock_session = MagicMock()
@@ -580,12 +590,22 @@ class TestH1PostUpdateHealthVerification:
         async def fake_to_thread(fn, *args, **kwargs):
             return ("Success", "Update complete")
 
+        # Mock the G6 atomic lock DB connection
+        mock_cursor = MagicMock()
+        mock_cursor.rowcount = 1
+        mock_conn = AsyncMock()
+        mock_conn.execute = AsyncMock(return_value=mock_cursor)
+        mock_conn.commit = AsyncMock()
+        mock_conn.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_conn.__aexit__ = AsyncMock(return_value=False)
+
         with patch.object(p, "_get_instance", new_callable=AsyncMock, return_value=mock_instance), \
              patch.object(p, "_get_account", new_callable=AsyncMock, return_value=mock_account), \
              patch.object(p, "_update_instance", new_callable=AsyncMock), \
              patch.object(p, "_sync_release_to_s3", new_callable=AsyncMock), \
              patch.object(p, "_wait_healthy_via_ssm", new_callable=AsyncMock, return_value=False), \
              patch.object(p, "_get_session") as mock_session_fn, \
+             patch("hive.provisioner.aiosqlite.connect", return_value=mock_conn), \
              patch("hive.provisioner.asyncio.to_thread", side_effect=fake_to_thread):
 
             mock_session = MagicMock()
@@ -606,3 +626,234 @@ class TestH3HealthProxyFollowRedirects:
         source = inspect.getsource(health_proxy)
         assert "follow_redirects=True" in source, \
             "Health proxy must follow redirects to handle Caddy 308"
+
+
+# ── G-series tests (E2E hardening gaps) ──────────────────────────
+
+
+class TestG1DeprecateUpdateScript:
+    """G1: update-hive.sh must be deprecated."""
+
+    def test_update_script_exits_with_error(self):
+        """Running update-hive.sh must exit immediately with error."""
+        import subprocess
+        result = subprocess.run(
+            ["bash", "hive/update-hive.sh"],
+            capture_output=True, text=True, timeout=5,
+            cwd=Path(__file__).parent.parent.parent,  # repo root
+        )
+        assert result.returncode == 1
+        assert "deprecated" in result.stderr.lower()
+
+
+class TestG2CredentialsDesktopGuard:
+    """G2: /credentials endpoint must require desktop mode."""
+
+    def test_credentials_requires_desktop(self):
+        """_require_desktop() must be called in get_instance_credentials."""
+        import inspect
+        from routers.hive import get_instance_credentials
+
+        source = inspect.getsource(get_instance_credentials)
+        assert "_require_desktop()" in source, \
+            "G2: credentials endpoint must check desktop mode"
+
+
+class TestG3CloudFrontToggle:
+    """G3: stop() disables CF, start() enables CF."""
+
+    def test_stop_calls_cf_disable(self):
+        """stop() must call _set_cloudfront_enabled(False)."""
+        import inspect
+        from hive.provisioner import HiveProvisioner
+
+        source = inspect.getsource(HiveProvisioner.stop)
+        assert "_set_cloudfront_enabled" in source
+        assert "enabled=False" in source
+
+    def test_start_calls_cf_enable(self):
+        """start() must call _set_cloudfront_enabled(True)."""
+        import inspect
+        from hive.provisioner import HiveProvisioner
+
+        source = inspect.getsource(HiveProvisioner.start)
+        assert "_set_cloudfront_enabled" in source
+        assert "enabled=True" in source
+
+    @pytest.mark.asyncio
+    async def test_cf_toggle_handles_no_dist_id(self):
+        """_set_cloudfront_enabled with None dist_id is a no-op."""
+        from hive.provisioner import HiveProvisioner
+
+        p = HiveProvisioner(Path("/tmp/test.db"))
+        session = MagicMock()
+        # Should not raise
+        await p._set_cloudfront_enabled(session, None, enabled=False)
+        await p._set_cloudfront_enabled(session, "", enabled=True)
+
+
+class TestG4UnifiedCaddyfile:
+    """G4: user_data.py Caddyfile template must match hive/Caddyfile features."""
+
+    def test_user_data_has_read_timeout(self):
+        """SSE routes must have read_timeout in user_data template."""
+        from hive.user_data import render_user_data
+
+        result = render_user_data(
+            s3_bucket="test-bucket", version="1.0.0",
+            auth_user="admin", auth_hash="$2a$14$test",
+            region="us-east-1",
+        )
+        assert "read_timeout 300s" in result  # stream endpoint
+        assert "read_timeout 120s" in result  # answer/permission endpoints
+
+    def test_user_data_has_referrer_policy(self):
+        """Referrer-Policy header must be in user_data template."""
+        from hive.user_data import render_user_data
+
+        result = render_user_data(
+            s3_bucket="test-bucket", version="1.0.0",
+            auth_user="admin", auth_hash="$2a$14$test",
+            region="us-east-1",
+        )
+        assert "Referrer-Policy strict-origin-when-cross-origin" in result
+
+    def test_user_data_has_logging(self):
+        """Logging block must be in user_data template."""
+        from hive.user_data import render_user_data
+
+        result = render_user_data(
+            s3_bucket="test-bucket", version="1.0.0",
+            auth_user="admin", auth_hash="$2a$14$test",
+            region="us-east-1",
+        )
+        assert "hive-access.log" in result
+        assert "roll_size" in result
+
+
+class TestG5UpdateCaddyfileMethod:
+    """G5: update_caddyfile() method must exist."""
+
+    def test_method_exists(self):
+        """HiveProvisioner must have update_caddyfile method."""
+        from hive.provisioner import HiveProvisioner
+
+        assert hasattr(HiveProvisioner, "update_caddyfile")
+        assert callable(getattr(HiveProvisioner, "update_caddyfile"))
+
+
+class TestG6AtomicUpdateLock:
+    """G6: update() must use atomic status gate."""
+
+    @pytest.mark.asyncio
+    async def test_update_sets_updating_status(self):
+        """update() must atomically set status to 'updating' first."""
+        import inspect
+        from hive.provisioner import HiveProvisioner
+
+        source = inspect.getsource(HiveProvisioner.update)
+        assert "status = 'updating'" in source
+        assert "AND status = 'running'" in source
+
+
+class TestG7PreUpdateBackup:
+    """G7: Update script must backup before rsync."""
+
+    @pytest.mark.asyncio
+    async def test_update_script_has_backup(self):
+        """SSM update script must create .bak before changes."""
+        import inspect
+        from hive.provisioner import HiveProvisioner
+
+        source = inspect.getsource(HiveProvisioner.update)
+        assert "backend.bak" in source
+
+    @pytest.mark.asyncio
+    async def test_update_script_has_rollback(self):
+        """SSM update script must rollback .bak on failure."""
+        import inspect
+        from hive.provisioner import HiveProvisioner
+
+        source = inspect.getsource(HiveProvisioner.update)
+        assert "Rolling back" in source
+
+
+class TestG8NightlyBackup:
+    """G8: user_data.py must install nightly backup cron."""
+
+    def test_user_data_has_backup_cron(self):
+        """Nightly backup cron must be in user_data template."""
+        from hive.user_data import render_user_data
+
+        result = render_user_data(
+            s3_bucket="test-bucket", version="1.0.0",
+            auth_user="admin", auth_hash="$2a$14$test",
+            region="us-east-1",
+        )
+        assert "swarmai-backup" in result
+        assert "cron.daily" in result
+
+
+class TestG9PythonPasswordRewrite:
+    """G9: reset_password must use Python, not sed."""
+
+    def test_no_sed_in_reset_script(self):
+        """reset_password script must not use sed for hash replacement."""
+        import inspect
+        from hive.provisioner import HiveProvisioner
+
+        source = inspect.getsource(HiveProvisioner.reset_password)
+        # Should use Python, not sed
+        assert "python3 -c" in source
+        assert "re.sub" in source
+
+
+class TestG10ResourceCleanupStatus:
+    """G10: deploy error must include resource cleanup status."""
+
+    def test_deploy_has_cleanup_status(self):
+        """deploy() error path must track cleanup_status."""
+        import inspect
+        from hive.provisioner import HiveProvisioner
+
+        source = inspect.getsource(HiveProvisioner.deploy)
+        assert "cleanup_status" in source
+        assert "resources:" in source
+
+
+class TestG11HealthExemptFromAuth:
+    """G11: /health must be before basicauth in Caddyfile."""
+
+    def test_repo_caddyfile_health_before_auth(self):
+        """In hive/Caddyfile, /health handle must appear before basicauth."""
+        caddyfile = Path(__file__).parent.parent.parent / "hive" / "Caddyfile"
+        content = caddyfile.read_text()
+        health_pos = content.index("handle /health")
+        auth_pos = content.index("basicauth *")
+        assert health_pos < auth_pos, \
+            "G11: /health must appear BEFORE basicauth in Caddyfile"
+
+    def test_user_data_caddyfile_health_before_auth(self):
+        """In user_data.py template, /health must appear before basicauth."""
+        from hive.user_data import render_user_data
+
+        result = render_user_data(
+            s3_bucket="test-bucket", version="1.0.0",
+            auth_user="admin", auth_hash="$2a$14$test",
+            region="us-east-1",
+        )
+        health_pos = result.index("handle /health")
+        auth_pos = result.index("basicauth *")
+        assert health_pos < auth_pos, \
+            "G11: /health must appear BEFORE basicauth in user_data template"
+
+
+class TestG13InvalidPlaceholder:
+    """G13: Caddyfile placeholder must not look like valid bcrypt."""
+
+    def test_placeholder_is_invalid_format(self):
+        """Placeholder hash must NOT start with $2a$ or $2b$."""
+        caddyfile = Path(__file__).parent.parent.parent / "hive" / "Caddyfile"
+        content = caddyfile.read_text()
+        assert "INVALID_NOT_A_REAL_HASH" in content
+        assert "$2a$14$PLACEHOLDER" not in content
