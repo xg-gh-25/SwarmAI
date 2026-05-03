@@ -13,18 +13,19 @@ commit on main → push → CI runs (backend + backend-windows + frontend + vers
 This prevents v1.9.0-class failures (3 P0 bugs that CI would have caught).
 No branches, no PRs, no human review. CI is the only gate.
 
-## Version Files (ALL 5 MUST BE UPDATED)
+## Version Files
+
+**Single source of truth: `VERSION` file at project root.** `backend/config.py` reads it at runtime (dev + PyInstaller bundle). The 4 package files below are synced by `sync-version.sh`.
 
 | # | File | Field | Format |
 |---|------|-------|--------|
-| 0 | **`VERSION`** (root) | `X.Y.Z` (plain text) | **Source of truth** — `sync-version.sh` reads this and overwrites all others |
-| 1 | `backend/config.py` | `_read_version("X.Y.Z")` | Python |
-| 2 | `backend/pyproject.toml` | `version = "X.Y.Z"` | TOML |
-| 3 | `desktop/package.json` | `"version": "X.Y.Z"` | JSON |
-| 4 | `desktop/src-tauri/Cargo.toml` | `version = "X.Y.Z"` | TOML |
-| 5 | `desktop/src-tauri/tauri.conf.json` | `"version": "X.Y.Z"` | JSON |
+| 0 | **`VERSION`** (root) | `X.Y.Z` (plain text) | **Source of truth** — everything reads from this |
+| 1 | `backend/pyproject.toml` | `version = "X.Y.Z"` | TOML |
+| 2 | `desktop/package.json` | `"version": "X.Y.Z"` | JSON |
+| 3 | `desktop/src-tauri/Cargo.toml` | `version = "X.Y.Z"` | TOML |
+| 4 | `desktop/src-tauri/tauri.conf.json` | `"version": "X.Y.Z"` | JSON |
 
-> ⚠️ **CRITICAL:** The `VERSION` file MUST be updated first. `dev.sh` and `prod.sh` both call `sync-version.sh` on startup, which reads `VERSION` and overwrites all 4 package files. If `VERSION` is stale, every dev/build run silently downgrades all versions.
+> `backend/config.py` no longer has a hardcoded version — `_read_version()` reads the VERSION file directly (dev: project root, prod: PyInstaller `_MEIPASS` bundle). Fallback is `"0.0.0-dev"` to make drift loud.
 
 ## README Files (MUST STAY IN SYNC)
 

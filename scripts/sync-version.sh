@@ -56,21 +56,17 @@ fi
 # Each target: file path, grep pattern to extract current version, sed pattern to replace
 
 declare -a TARGETS=(
-    "backend/config.py"
     "backend/pyproject.toml"
     "desktop/package.json"
     "desktop/src-tauri/tauri.conf.json"
     "desktop/src-tauri/Cargo.toml"
 )
+# Note: backend/config.py removed — it reads VERSION file directly at runtime (no hardcoded fallback)
 
 _get_version() {
     local file="$1"
     local basename=$(basename "$file")
     case "$basename" in
-        config.py)
-            # Pattern: app_version: str = _read_version("X.Y.Z")
-            grep 'app_version.*_read_version(' "$file" | head -1 | sed 's/.*_read_version("\([^"]*\)").*/\1/'
-            ;;
         pyproject.toml)
             # Match the project-level version, not dependency versions
             grep '^version = ' "$file" | head -1 | sed 's/version = "\(.*\)"/\1/'
@@ -89,16 +85,6 @@ _set_version() {
     local ver="$2"
     local basename=$(basename "$file")
     case "$basename" in
-        config.py)
-            # Pattern: _read_version("X.Y.Z") — use Python for cross-platform compat
-            # (BSD sed -i '' is macOS-only; GNU sed and Windows Git Bash reject it)
-            python3 -c "
-import re, pathlib, sys
-p = pathlib.Path(sys.argv[1])
-txt = p.read_text()
-p.write_text(re.sub(r'_read_version\(\"[^\"]*\"\)', '_read_version(\"' + sys.argv[2] + '\")', txt, count=1))
-" "$file" "$ver"
-            ;;
         pyproject.toml|Cargo.toml)
             # BSD sed (macOS) doesn't support 0,/pat/ — use python for reliable first-match replace
             python3 -c "
