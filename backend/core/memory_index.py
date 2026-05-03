@@ -318,6 +318,10 @@ def generate_memory_index(content: str) -> str:
 
     Each entry includes keyword aliases for enhanced recall.
 
+    **Output INCLUDES ``<!-- MEMORY_INDEX_START/END -->`` markers.**
+    Do NOT wrap in additional markers — use ``inject_index_into_memory()``
+    for safe insert/replace into a MEMORY.md file.
+
     Args:
         content: Full MEMORY.md content (may already contain an index block).
 
@@ -492,13 +496,23 @@ def keyword_relevance(
 # ── Section Selection ─────────────────────────────────────────────────
 
 
-def _parse_index_entries(index_block: str) -> list[dict]:
-    """Parse index entries from an index block.
+def _parse_index_entries(content: str) -> list[dict]:
+    """Parse index entries from MEMORY.md content.
+
+    Scopes to the ``<!-- MEMORY_INDEX_START/END -->`` block when present,
+    so entries in the body's rendered copy are not double-counted.
 
     Returns list of dicts with: key, summary, aliases.
     """
+    # Scope to marker block if markers exist
+    idx_match = re.search(
+        r"<!-- MEMORY_INDEX_START -->(.*?)<!-- MEMORY_INDEX_END -->",
+        content, re.DOTALL,
+    )
+    text = idx_match.group(1) if idx_match else content
+
     entries = []
-    for line in index_block.split("\n"):
+    for line in text.split("\n"):
         line = line.strip()
         # Match: - [KEY] summary | alias1, alias2
         m = re.match(r"^- \[(\w+)\]\s+(.+)$", line)
