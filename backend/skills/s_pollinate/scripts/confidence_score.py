@@ -265,6 +265,84 @@ def calculate_score(content_dir: str, platforms: list[str] | None = None) -> dic
     }
 
 
+def dry_run_check(content_dir: str) -> dict:
+    """I2: Validate content directory structure without needing rendered assets.
+
+    Checks timing.json structure, SRT entry count, required files tree, and
+    content_package.md presence. Useful during BUILD for fast iteration.
+    """
+    issues = []
+    checks = []
+
+    # 1. content_package.md
+    cp_path = os.path.join(content_dir, "content_package.md")
+    if os.path.isfile(cp_path):
+        checks.append({"name": "content_package", "status": "PASS"})
+    else:
+        issues.append("content_package.md missing")
+        checks.append({"name": "content_package", "status": "FAIL"})
+
+    # 2. timing.json structure
+    timing_path = os.path.join(content_dir, "video", "timing.json")
+    if os.path.isfile(timing_path):
+        try:
+            with open(timing_path, "r", encoding="utf-8") as f:
+                timing = json.load(f)
+            sections = timing.get("sections", [])
+            if sections:
+                # Validate each section has required fields
+                for sec in sections:
+                    for field in ("name", "start_frame", "duration_frames"):
+                        if field not in sec:
+                            issues.append(f"timing.json section missing '{field}': {sec.get('name', '?')}")
+                checks.append({"name": "timing.json", "status": "PASS", "detail": f"{len(sections)} sections"})
+            else:
+                issues.append("timing.json has no sections")
+                checks.append({"name": "timing.json", "status": "FAIL"})
+        except (json.JSONDecodeError, OSError) as e:
+            issues.append(f"timing.json unreadable: {e}")
+            checks.append({"name": "timing.json", "status": "FAIL"})
+    else:
+        checks.append({"name": "timing.json", "status": "SKIP", "detail": "not yet generated"})
+
+    # 3. SRT file
+    srt_path = os.path.join(content_dir, "video", "podcast_audio.srt")
+    if os.path.isfile(srt_path):
+        with open(srt_path, "r", encoding="utf-8") as f:
+            srt_text = f.read()
+        entry_count = len(re.findall(r"^\d+$", srt_text, re.MULTILINE))
+        checks.append({"name": "srt", "status": "PASS", "detail": f"{entry_count} entries"})
+    else:
+        checks.append({"name": "srt", "status": "SKIP", "detail": "not yet generated"})
+
+    # 4. Script file
+    script_path = os.path.join(content_dir, "video", "podcast.txt")
+    if os.path.isfile(script_path):
+        with open(script_path, "r", encoding="utf-8") as f:
+            script_text = f.read()
+        section_markers = re.findall(r"\[SECTION:\w+\]", script_text)
+        checks.append({"name": "podcast_script", "status": "PASS", "detail": f"{len(section_markers)} section markers"})
+    else:
+        checks.append({"name": "podcast_script", "status": "SKIP"})
+
+    # 5. Strategy / PRFAQ
+    for fname in ("strategy.json", "PRFAQ.md"):
+        fpath = os.path.join(content_dir, fname)
+        if os.path.isfile(fpath):
+            checks.append({"name": fname, "status": "PASS"})
+        else:
+            checks.append({"name": fname, "status": "SKIP"})
+
+    valid = len(issues) == 0
+    return {
+        "mode": "dry-run",
+        "valid": valid,
+        "issues": issues,
+        "checks": checks,
+        "recommendation": "proceed to BUILD" if valid else "fix issues first",
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="Calculate Pollinate confidence score")
     parser.add_argument("content_dir", help="Path to content directory")
@@ -273,7 +351,28 @@ def main():
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     parser.add_argument("--artifacts", default=None,
                        help="Path to .artifacts/ directory (for future use)")
+    parser.add_argument("--dry-run", action="store_true",
+                       help="I2: Validate structure without rendered assets")
     args = parser.parse_args()
+
+    if args.dry_run:
+        result = dry_run_check(args.content_dir)
+        if args.json:
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+        else:
+            status = "✅ VALID" if result["valid"] else "❌ ISSUES FOUND"
+            print(f"\nDry-run: {status}")
+            for c in result["checks"]:
+                icon = {"PASS": "✅", "FAIL": "❌", "SKIP": "⏭️"}.get(c["status"], "?")
+                detail = f" — {c['detail']}" if c.get("detail") else ""
+                print(f"  {icon} {c['name']}{detail}")
+            if result["issues"]:
+                print(f"\nIssues:")
+                for issue in result["issues"]:
+                    print(f"  ❌ {issue}")
+            print(f"\nRecommendation: {result['recommendation']}")
+        sys.exit(0 if result["valid"] else 1)
+        return
 
     platforms = [p.strip() for p in args.platforms.split(",")] if args.platforms else None
     result = calculate_score(args.content_dir, platforms)

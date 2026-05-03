@@ -266,6 +266,16 @@ After exhaustion -> checkpoint with all failure details.
 
 8. **Save** `content/{name}/evaluation.json`
 
+9. **I1: Show topic backlog suggestions** (if backlog exists):
+   ```bash
+   python "$SKILL_DIR/scripts/topic_backlog.py" list --json
+   ```
+   Display the top 3 pending topics by ROI score as "alternatively, consider:"
+   alongside the current evaluation result. This helps the user decide whether
+   the current topic is the highest-value use of a pipeline run, or if a
+   backlogged topic scores higher. The backlog is informational — never
+   auto-switch topics.
+
 If DEFER or REJECT -> pipeline ends. Log reason and exit.
 
 ### Decisions
@@ -1500,3 +1510,89 @@ The confidence formula adapts: video-specific items score +1 each as N/A (neutra
 10. **Platform specs are non-negotiable.** `check_specs.py` must pass for
     every target platform before delivery. No exceptions, no "mostly passes,"
     no manual overrides.
+
+---
+
+## Process Enforcement Gates (G1-G6)
+
+_Added 2026-05-03 from user-perspective pipeline audit._
+
+### G1: Studio Preview Gate Enforcement
+
+The Studio preview gate at BUILD Stage 5 is the single most important quality
+control in the pipeline. It has NO enforcement mechanism beyond agent honesty.
+
+**Explicit enforcement rules:**
+
+1. Agent MUST output a visible preview: either open the browser via `npx remotion
+   preview` or output an inline image `![preview](path/to/screenshot.png)`.
+2. User approval MUST use one of these exact tokens: `"approved"`, `"looks good"`,
+   `"render 4K"`, `"render final"`, `"proceed"`.
+3. **Anti-rationalization:** If you catch yourself about to type _"the preview looks
+   correct based on the composition data"_ or _"the timing.json structure validates
+   correctly"_ — **STOP.** That's data review, not visual review. You haven't
+   previewed. Open the browser.
+4. No auto-proceed after timeout. No implicit approval. No "user didn't object."
+
+### G2: RP-V Checklist Automation
+
+Run `python scripts/check_rpv.py <content_dir>` at REVIEW stage. The script
+auto-checks 6 patterns from data files (timing.json, SRT, composition):
+
+- RP-V1: Audio-video sync (timing.json vs SRT alignment)
+- RP-V3: Information density (sections × key points)
+- RP-V4: Subtitle accuracy (SRT entry count vs script sections)
+- RP-V5: Thumbnail sizes (all required aspects present)
+- RP-V8: Duration target (within platform range)
+- RP-V11: Text sizes (from composition data)
+
+Remaining 6 (RP-V2, V6, V7, V9, V10, V12) require human judgment — agent must
+explicitly list each with PASS/FAIL/N-A and evidence.
+
+### G3: Git Commit Strategy
+
+Commit at the end of each pipeline stage. Message format:
+```
+content(pollinate): {topic-slug} — stage {N} {STAGE_NAME}
+```
+REFLECT stage does the final commit including REPORT.md.
+
+### G4: Delivery Gate Override Cascade
+
+When user overrides a taste decision at the Delivery Gate, re-run the minimum
+set of affected stages:
+
+| Decision made in | Override re-runs |
+|------------------|-----------------|
+| EVALUATE | EVALUATE + all downstream |
+| THINK | THINK + STRATEGIZE + PLAN + BUILD |
+| STRATEGIZE | STRATEGIZE + PLAN + BUILD |
+| PLAN | PLAN + BUILD |
+| BUILD | BUILD only |
+| REVIEW | REVIEW only (re-check) |
+
+Never re-run EVALUATE or THINK for taste overrides in BUILD or later stages.
+
+### G5: REFLECT Observation Schema
+
+Each observation in REFLECT MUST follow this structure:
+```json
+{
+  "stage": "build",
+  "category": "worked|failed|process",
+  "observation": "Specific factual observation",
+  "action_taken": "What was done about it (or 'logged for future')",
+  "reusable": true
+}
+```
+After ≥3 runs, observations with `"reusable": true` promote to `user_prefs.json`
+as learned preferences.
+
+### G6: Context Budget Tracking
+
+After each stage completes, output:
+```
+Stage {N} complete. Context: ~{X}% estimated.
+```
+If >60%, checkpoint. If >80%, compress content_package to thesis + key_points only
+and resume in new session with truncated context.

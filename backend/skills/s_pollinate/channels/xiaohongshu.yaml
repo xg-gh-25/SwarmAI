@@ -12,6 +12,7 @@ video:
   fps: 30
   audio_codec: aac
   audio_bitrate: "192k"
+  color_space: "bt709"  # C4: explicit color space
 
 duration:
   min_seconds: 30
@@ -43,11 +44,11 @@ description:
 
 tags:
   count: 8
-  format: "#tag#"  # DOUBLE hash (小红书 specific)
+  format: "#tag"  # C2: single hash — platform accepts both, single is current standard
   examples:
-    - "#AI实践#"
-    - "#人工智能#"
-    - "#技术分享#"
+    - "#AI实践"
+    - "#人工智能"
+    - "#技术分享"
 
 chapters:
   enabled: false

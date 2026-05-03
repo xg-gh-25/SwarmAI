@@ -5,9 +5,9 @@
 | Element | Minimum Size |
 |---------|-------------|
 | Any text | 24px |
-| Hero title | 84px |
-| Section title | 72px |
-| Card title | 40px |
+| Hero title | 96px |
+| Section title | 80px |
+| Card title | 38px |
 | Body text | 32px |
 | Icons | 56px |
 | Section padding | 40px |

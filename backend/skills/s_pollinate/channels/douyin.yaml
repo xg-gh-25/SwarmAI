@@ -12,6 +12,7 @@ video:
   fps: 30
   audio_codec: aac
   audio_bitrate: "192k"
+  color_space: "bt709"  # C4: explicit color space
 
 duration:
   min_seconds: 30

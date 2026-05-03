@@ -14,9 +14,11 @@ export const ChapterProgressBar = ({
   const frame = useCurrentFrame();
   const timing = useTiming();
   const totalFrames = timing.total_frames;
-  const progress = frame / totalFrames;
 
-  if (!props.showProgressBar) return null;
+  // B2 fix: Guard against division by zero when timing.json is corrupted or empty
+  if (!props.showProgressBar || !totalFrames) return null;
+
+  const progress = frame / totalFrames;
 
   return (
     <div

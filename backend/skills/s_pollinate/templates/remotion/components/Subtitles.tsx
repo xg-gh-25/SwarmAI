@@ -65,7 +65,9 @@ const useSrt = (src: string): SrtEntry[] => {
         srtCache[src] = parsed;
         setEntries(parsed);
       })
-      .catch(() => {});
+      .catch((err) => {
+        console.warn(`[Subtitles] Failed to load SRT from ${src}:`, err);
+      });
   }, [src]);
   return entries;
 };

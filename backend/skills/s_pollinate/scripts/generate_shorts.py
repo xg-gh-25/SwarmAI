@@ -24,7 +24,7 @@ Usage:
 Outputs per short (in content/{name}/shorts/{short_id}/):
     short_audio.wav     — cut audio segment
     short_audio.srt     — rebased subtitles
-    timing_short.json   — rebased section timing for Remotion
+    timing.json         — rebased section timing for Remotion (matches useTiming() expectation)
     short_config.json   — metadata for ShortVideo.tsx composition
 """
 import argparse

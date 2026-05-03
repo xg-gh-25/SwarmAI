@@ -50,10 +50,15 @@ def check():
         if not os.environ.get(var):
             missing.append(var)
 
+    # I5: Check for pollinate-accounts.yaml (optional, for publish metadata)
+    accounts_path = os.path.expanduser("~/.swarm-ai/pollinate-accounts.yaml")
+    has_accounts = os.path.isfile(accounts_path)
+
     if missing:
         print(f"MISSING:{' '.join(missing)} (backend={backend})")
     else:
-        print(f"ALL_OK (backend={backend})")
+        accounts_note = "" if has_accounts else " [NOTE: ~/.swarm-ai/pollinate-accounts.yaml not found — publish_meta.py will skip account identity]"
+        print(f"ALL_OK (backend={backend}){accounts_note}")
 
 
 if __name__ == "__main__":

@@ -45,10 +45,15 @@ voice:
   note: "Voice must be consistent across voice conversation and video content"
 
 audio:
-  bgm_volume: 0.05
+  bgm_volume: 0.05          # relative gain applied to BGM track during mix
+  bgm_target_lufs: -23      # C5: YouTube integrated loudness standard (LUFS)
+  bgm_note: "0.05 is relative gain on top of master. Target -23 LUFS for YouTube compliance."
   default_bgm: "calm-piano"
 
 # Domain-specific visual overrides
+# C6: Domain themes apply to poster backgrounds and video accent colors.
+# Base brand (Swarm Orange #FF6B35) is ALWAYS present in hero text and CTA.
+# When a domain theme is active, primary_override replaces the accent color only.
 domain_themes:
   aidlc:
     theme: "light"

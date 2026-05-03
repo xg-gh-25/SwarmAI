@@ -12,10 +12,11 @@ video:
   fps: 30
   audio_codec: aac
   audio_bitrate: "192k"
+  color_space: "bt709"  # C4: explicit color space
 
 duration:
   min_seconds: 30
-  max_seconds: 120
+  max_seconds: 3600  # C1: verified accounts support up to 60 min; unverified: 120s
   target: "60-90s"
 
 thumbnails:
