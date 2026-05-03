@@ -1048,23 +1048,41 @@ def extract_index_from_memory(content: str) -> Optional[str]:
 def extract_body_without_index(content: str) -> str:
     """Get MEMORY.md content with the index block removed.
 
+    Strips both:
+    1. Marker-delimited index blocks (<!-- MEMORY_INDEX_START/END -->)
+    2. Bare '## Memory Index' sections written by agent Edit tool (no markers)
+
+    The bare section is the root cause of duplicate indexes: the agent
+    writes a '## Memory Index' via Edit, then inject_index_into_memory
+    adds a marker-wrapped copy at the top — two copies coexist.
+
     Returns the original content if no index block is present.
     """
     start = content.find(MEMORY_INDEX_START)
     end = content.find(MEMORY_INDEX_END)
 
     if start == -1 or end == -1 or end <= start:
-        return content
+        result = content
+    else:
+        # Remove from start marker to end marker (inclusive) + trailing whitespace
+        after_index = content[end + len(MEMORY_INDEX_END):]
+        before_index = content[:start]
+        result = before_index + after_index
 
-    # Remove from start marker to end marker (inclusive) + trailing whitespace
-    after_index = content[end + len(MEMORY_INDEX_END):]
-    before_index = content[:start]
+    # Also strip any bare '## Memory Index' sections (not marker-wrapped).
+    # These are agent-written duplicates that persist across sessions.
+    # Pattern: '## Memory Index' followed by lines until the next ## header or EOF.
+    # Uses .* (not .+) so blank lines within the index section are consumed.
+    result = re.sub(
+        r"^## Memory Index\n(?:(?!^## ).*\n?)*",
+        "",
+        result,
+        flags=re.MULTILINE,
+    )
 
-    result = before_index + after_index
     # Clean up extra blank lines
     result = re.sub(r"\n{3,}", "\n\n", result)
     # If stripping the index left nothing meaningful, return as-is
-    # (avoids returning original content with index still in it)
     stripped = result.strip()
     return stripped + "\n" if stripped else ""
 

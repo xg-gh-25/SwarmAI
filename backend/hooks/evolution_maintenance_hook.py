@@ -479,7 +479,7 @@ class EvolutionMaintenanceHook:
             loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(
                 None,
-                partial(run_evolution_cycle, skills_dir, transcripts_dir, evals_dir, dry_run=True),
+                partial(run_evolution_cycle, skills_dir, transcripts_dir, evals_dir, dry_run=False),
             )
             logger.info("Evolution cycle complete: %s", result.to_dict())
 

@@ -447,3 +447,46 @@ class TestCJKKeywordExtraction:
         assert "memory" in tokens
         # Should have CJK tokens (not empty due to ASCII-only regex)
         assert any(ord(c) > 127 for t in tokens for c in t)
+
+
+class TestDuplicateMemoryIndex:
+    """F1: extract_body_without_index must strip both marker-wrapped AND bare '## Memory Index' duplicates."""
+
+    def test_bare_memory_index_stripped(self):
+        """When MEMORY.md has a marker-wrapped index + a bare '## Memory Index', body extraction removes both."""
+        from core.memory_index import extract_body_without_index, MEMORY_INDEX_START, MEMORY_INDEX_END
+
+        content = (
+            f"{MEMORY_INDEX_START}\n"
+            "## Memory Index\n"
+            "19 recent context | 32 key decisions\n"
+            "- [RC01] Entry one | keyword1\n"
+            f"{MEMORY_INDEX_END}\n\n"
+            "## Memory Index\n"
+            "18 recent context | 31 key decisions\n"
+            "- [RC01] Entry one | keyword1\n\n"
+            "# Memory — What I Remember\n\n"
+            "## Recent Context\n\n"
+            "- 2026-05-03: Real entry\n"
+        )
+        body = extract_body_without_index(content)
+        # Should have NO '## Memory Index' left
+        assert body.count("## Memory Index") == 0
+        # Should preserve real content
+        assert "## Recent Context" in body
+        assert "Real entry" in body
+
+    def test_inject_produces_single_index(self):
+        """inject_index_into_memory on content with a bare duplicate produces exactly 1 index."""
+        from core.memory_index import inject_index_into_memory, MEMORY_INDEX_START
+
+        content_with_bare_dup = (
+            "## Memory Index\n"
+            "stale index data\n\n"
+            "# Memory — What I Remember\n\n"
+            "## Recent Context\n\n"
+            "- 2026-05-03: Real entry\n"
+        )
+        result = inject_index_into_memory(content_with_bare_dup)
+        assert result.count(MEMORY_INDEX_START) == 1
+        assert result.count("## Memory Index") == 1  # only inside the marker block

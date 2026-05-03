@@ -7,7 +7,7 @@ term-overlap fitness scoring). Designed with extensible interfaces for
 future ML-based optimization if needed.
 
 Evolution Pipeline v2.1 — Production-grade redesign with:
-- Confidence-gated actuation (HIGH≥0.35=deploy, MED≥0.15=recommend, LOW=log)
+- Confidence-gated actuation (HIGH≥0.15=deploy, MED≥0.08=recommend, LOW=log)
 - Atomic deploy with verification and rollback
 - Process-level file lock to prevent concurrent cycles
 - SkillHealthReport persisted as skill_health.json
@@ -43,8 +43,12 @@ logger = logging.getLogger(__name__)
 
 # Confidence thresholds — defaults, overridable via config.evolution.high_confidence / med_confidence
 # v2.1 (2026-04-12): lowered from 0.7/0.3 — old thresholds were unreachable with real data.
-HIGH_CONFIDENCE = 0.35
-MED_CONFIDENCE = 0.15
+# v2.2 (2026-05-03): lowered HIGH from 0.35 to 0.15 — real data (autonomous-pipeline: 5 corrections,
+#   64 examples, conf=0.16) couldn't reach 0.35. ACT phase was permanently frozen.
+#   0.15 allows skills with genuine correction evidence to deploy. Safety: atomic rollback
+#   + regression detection (>0.1 fitness drop auto-reverts). MED lowered proportionally.
+HIGH_CONFIDENCE = 0.15
+MED_CONFIDENCE = 0.08
 
 
 def _get_confidence_thresholds() -> tuple[float, float]:

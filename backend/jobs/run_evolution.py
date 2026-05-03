@@ -45,7 +45,7 @@ def main() -> None:
 
     from core.evolution_optimizer import run_evolution_cycle
 
-    result = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
+    result = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir, dry_run=False)
     logger.info("Evolution cycle complete: %s", json.dumps(result.to_dict()))
 
     if hasattr(result, "health_report_path") and result.health_report_path:
