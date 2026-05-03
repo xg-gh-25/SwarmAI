@@ -280,7 +280,8 @@ def _extract_files_touched(tool_summary: dict[str, set[str]]) -> list[str]:
     """
     # SwarmWS root for making paths relative
     _ws_root = str(Path.home() / ".swarm-ai" / "SwarmWS") + "/"
-    _swarmai_root = str(Path.home() / "Desktop" / "SwarmAI-Workspace" / "swarmai") + "/"
+    # Resolve swarmai root from this file: context_injector.py → core/ → backend/ → swarmai/
+    _swarmai_root = str(Path(__file__).resolve().parents[2]) + "/"
 
     try:
         files: set[str] = set()
