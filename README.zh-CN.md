@@ -258,10 +258,10 @@ npm install && cp backend.env.example ../backend/.env
 
 | 版本 | 亮点 |
 |------|------|
+| **v1.9.3** (5/3) | Session Resume 增强（3K→100K tokens）、Channel 子系统大修（P0 Bootstrap、Auth 统一、Mode Guard）、Memory 加固（CJK、Guard 合并、完整性检查）、Signal 智能升级、8 项 bug 修复、配置外部化 |
 | **v1.9.2** (4/30) | 跨平台 Release 修复、CI 测试稳定性（动态跳过 + best-effort）、monotonic clock 冷启动 bug |
 | **v1.9.1** (4/30) | 4 门 CI 流水线、共享 AI 上下文（AGENTS.md）、CONTEXT.md 术语表、v1.9.0 P0 修复 |
 | **v1.9.0** (4/29) | Hive 云部署（EC2 + CloudFront + Caddy）、统一 FileViewer（7 渲染器）、Skill 平台过滤、思维工具箱、32 项 PE 安全修复、流水线质量门控 |
-| **v1.8.0** (4/26) | Pollinate 媒体引擎（海报、4K 视频、播客、叙事 + SSML），Briefing Hub v2，SwarmWS Explorer 重设计，会话预热，Slack 三级投递，自主流水线 v2 |
 
 ---
 
