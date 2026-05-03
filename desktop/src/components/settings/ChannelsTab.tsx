@@ -54,7 +54,7 @@ export default function ChannelsTab() {
   }
 
   const isConnected = slackChannel && slackChannel.status === 'active';
-  const isError = slackChannel && (slackChannel.status === 'error' || slackChannel.status === 'inactive' || slackChannel.status === 'failed');
+  const isError = slackChannel && (slackChannel.status === 'error' || slackChannel.status === 'inactive' || slackChannel.status === 'failed' || slackChannel.status === 'auth_error');
   const showForm = editingId === slackChannel?.id || addingSlack;
 
   return (
