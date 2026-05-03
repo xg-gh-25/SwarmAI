@@ -573,7 +573,7 @@ async def health_proxy(instance_id: str):
         if not cf_domain.endswith(".cloudfront.net"):
             raise HTTPException(status_code=400, detail="Invalid CloudFront domain")
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
                 resp = await client.get(f"https://{cf_domain}/health", auth=auth)
                 return resp.json()
         except Exception as e:
@@ -594,7 +594,7 @@ async def health_proxy(instance_id: str):
         raise HTTPException(status_code=400, detail="Invalid IP address for this instance")
 
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as client:
             resp = await client.get(f"http://{ip}/health", auth=auth)
             return resp.json()
     except Exception as e:
