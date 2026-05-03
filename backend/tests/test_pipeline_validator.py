@@ -1,4 +1,4 @@
-"""Tests for pipeline_validator.py — 7 structural invariant checks.
+"""Tests for pipeline_validator.py — structural + semantic invariant checks.
 
 Tests the validator against synthetic pipeline runs with known
 good/bad data to verify all 7 checks fire correctly.
@@ -1184,6 +1184,241 @@ class TestL3ConfidenceGate:
 # ---------------------------------------------------------------------------
 # Pipeline Metrics Tests
 # ---------------------------------------------------------------------------
+
+class TestSemanticDepthChecks:
+    """Test _check_semantic_depth() — WARN-level heuristic checks for content quality."""
+
+    # --- AC1: Completion audit evidence quality ---
+
+    def test_completion_audit_weak_evidence_warns(self, workspace):
+        """>=70% of checklist entries lack file/test refs → WARN."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_artifact(artifacts_dir, "run_test1", "art_del", "delivery", {
+            "title": "X", "status": "done",
+            "confidence_score": {"score": 8, "breakdown": [], "penalties": []},
+            "completion_audit": {
+                "all_green": True, "gaps": 0,
+                "checklist": [
+                    {"criterion": "AC1", "evidence": "implemented", "status": "pass"},
+                    {"criterion": "AC2", "evidence": "verified", "status": "pass"},
+                    {"criterion": "AC3", "evidence": "done", "status": "pass"},
+                ],
+            },
+            "adversarial_review": {"profile_tier": "pe_only", "findings": []},
+        })
+        _make_run(runs_dir, profile="bugfix", stages=[
+            _stage_record("evaluate", artifact_id="art_e"),
+            _stage_record("plan", artifact_id="art_p"),
+            _stage_record("build", artifact_id="art_b"),
+            _stage_record("review", artifact_id="art_r"),
+            _stage_record("test", artifact_id="art_t"),
+            _stage_record("deliver", artifact_id="art_del"),
+        ])
+        for aid, atype, data in [
+            ("art_e", "evaluation", {"recommendation": "GO", "scope": "bugfix"}),
+            ("art_p", "plan", {"acceptance_criteria": ["x"]}),
+            ("art_b", "build", {"files_changed": ["a.py"], "tdd": {"green_pass": True}}),
+            ("art_r", "review", {"approved": True, "integration_trace": {"checked": 1},
+                                 "runtime_patterns": {"checked": 1, "patterns": [{"id": "RP1", "result": "N/A"}]},
+                                 "findings_count": 0}),
+            ("art_t", "test", {"passed": 10}),
+        ]:
+            _make_artifact(artifacts_dir, "run_test1", aid, atype, data)
+
+        result = validate("TestProject", "run_test1", "deliver")
+        evidence_warns = [w for w in result["warnings"] if "evidence" in w.lower() and "completion" in w.lower()]
+        assert len(evidence_warns) >= 1, f"Expected evidence quality warning, got warnings: {result['warnings']}"
+
+    def test_completion_audit_strong_evidence_no_warn(self, workspace):
+        """>=70% entries cite file paths or test names → no WARN."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_artifact(artifacts_dir, "run_test1", "art_del", "delivery", {
+            "title": "X", "status": "done",
+            "confidence_score": {"score": 8, "breakdown": [], "penalties": []},
+            "completion_audit": {
+                "all_green": True, "gaps": 0,
+                "checklist": [
+                    {"criterion": "AC1", "evidence": "test_session_unit.py::test_spawn passes", "status": "pass"},
+                    {"criterion": "AC2", "evidence": "backend/core/memory_index.py line 42 verified", "status": "pass"},
+                    {"criterion": "AC3", "evidence": "CHANGELOG.md updated with version entry", "status": "pass"},
+                ],
+            },
+            "adversarial_review": {"profile_tier": "pe_only", "findings": []},
+        })
+        _make_run(runs_dir, profile="bugfix", stages=[
+            _stage_record("evaluate", artifact_id="art_e"),
+            _stage_record("plan", artifact_id="art_p"),
+            _stage_record("build", artifact_id="art_b"),
+            _stage_record("review", artifact_id="art_r"),
+            _stage_record("test", artifact_id="art_t"),
+            _stage_record("deliver", artifact_id="art_del"),
+        ])
+        for aid, atype, data in [
+            ("art_e", "evaluation", {"recommendation": "GO", "scope": "bugfix"}),
+            ("art_p", "plan", {"acceptance_criteria": ["x"]}),
+            ("art_b", "build", {"files_changed": ["a.py"], "tdd": {"green_pass": True}}),
+            ("art_r", "review", {"approved": True, "integration_trace": {"checked": 1},
+                                 "runtime_patterns": {"checked": 1, "patterns": [{"id": "RP1", "result": "N/A"}]},
+                                 "findings_count": 0}),
+            ("art_t", "test", {"passed": 10}),
+        ]:
+            _make_artifact(artifacts_dir, "run_test1", aid, atype, data)
+
+        result = validate("TestProject", "run_test1", "deliver")
+        evidence_warns = [w for w in result["warnings"] if "evidence" in w.lower() and "completion" in w.lower()]
+        assert len(evidence_warns) == 0, f"Strong evidence should not warn, got: {result['warnings']}"
+
+    # --- AC2: RP patterns evidence quality ---
+
+    def test_rp_patterns_bare_pass_warns(self, workspace):
+        """Non-N/A patterns with just 'PASS' (no evidence) → WARN."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_artifact(artifacts_dir, "run_test1", "art_rev", "review", {
+            "approved": True,
+            "integration_trace": {"checked": 1},
+            "runtime_patterns": {
+                "checked": 4,
+                "patterns": [
+                    {"id": "RP1", "result": "PASS"},
+                    {"id": "RP7", "result": "PASS"},
+                    {"id": "RP8", "result": "N/A"},
+                    {"id": "RP17", "result": "PASS"},
+                ],
+            },
+            "findings_count": 0,
+        })
+        _make_run(runs_dir, profile="bugfix", stages=[
+            _stage_record("evaluate", artifact_id="art_e"),
+            _stage_record("plan", artifact_id="art_p"),
+            _stage_record("build", artifact_id="art_b"),
+            _stage_record("review", artifact_id="art_rev"),
+        ])
+        for aid, atype, data in [
+            ("art_e", "evaluation", {"recommendation": "GO", "scope": "bugfix"}),
+            ("art_p", "plan", {"acceptance_criteria": ["x"]}),
+            ("art_b", "build", {"files_changed": ["a.py"], "tdd": {"green_pass": True}}),
+        ]:
+            _make_artifact(artifacts_dir, "run_test1", aid, atype, data)
+
+        result = validate("TestProject", "run_test1", "review")
+        rp_warns = [w for w in result["warnings"] if "runtime_patterns" in w.lower() and "evidence" in w.lower()]
+        assert len(rp_warns) >= 1, f"Expected RP evidence warning, got warnings: {result['warnings']}"
+
+    def test_rp_patterns_with_evidence_no_warn(self, workspace):
+        """Non-N/A patterns with substantive evidence → no WARN."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_artifact(artifacts_dir, "run_test1", "art_rev", "review", {
+            "approved": True,
+            "integration_trace": {"checked": 1},
+            "runtime_patterns": {
+                "checked": 3,
+                "patterns": [
+                    {"id": "RP1", "result": "PASS", "evidence": "No subprocess calls in changeset"},
+                    {"id": "RP7", "result": "PASS", "evidence": "Error constants match in validator.py line 85"},
+                    {"id": "RP8", "result": "N/A"},
+                ],
+            },
+            "findings_count": 0,
+        })
+        _make_run(runs_dir, profile="bugfix", stages=[
+            _stage_record("evaluate", artifact_id="art_e"),
+            _stage_record("plan", artifact_id="art_p"),
+            _stage_record("build", artifact_id="art_b"),
+            _stage_record("review", artifact_id="art_rev"),
+        ])
+        for aid, atype, data in [
+            ("art_e", "evaluation", {"recommendation": "GO", "scope": "bugfix"}),
+            ("art_p", "plan", {"acceptance_criteria": ["x"]}),
+            ("art_b", "build", {"files_changed": ["a.py"], "tdd": {"green_pass": True}}),
+        ]:
+            _make_artifact(artifacts_dir, "run_test1", aid, atype, data)
+
+        result = validate("TestProject", "run_test1", "review")
+        rp_warns = [w for w in result["warnings"] if "runtime_patterns" in w.lower() and "evidence" in w.lower()]
+        assert len(rp_warns) == 0, f"Evidenced patterns should not warn, got: {result['warnings']}"
+
+    # --- AC3: Confidence penalty consistency ---
+
+    def test_no_penalties_with_findings_warns(self, workspace):
+        """Review had findings but confidence penalties is empty → WARN."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        # Review artifact with 3 findings
+        _make_artifact(artifacts_dir, "run_test1", "art_rev", "review", {
+            "approved": True,
+            "integration_trace": {"checked": 1},
+            "runtime_patterns": {"checked": 1, "patterns": [{"id": "RP1", "result": "N/A"}]},
+            "findings_count": 3,
+        })
+        # Deliver artifact with EMPTY penalties despite findings
+        _make_artifact(artifacts_dir, "run_test1", "art_del", "delivery", {
+            "title": "X", "status": "done",
+            "confidence_score": {"score": 9, "breakdown": [{"rule": "x", "points": 3}], "penalties": []},
+            "completion_audit": {"all_green": True, "gaps": 0},
+            "adversarial_review": {"profile_tier": "pe_only", "findings": []},
+        })
+        _make_run(runs_dir, profile="bugfix", stages=[
+            _stage_record("evaluate", artifact_id="art_e"),
+            _stage_record("plan", artifact_id="art_p"),
+            _stage_record("build", artifact_id="art_b"),
+            _stage_record("review", artifact_id="art_rev"),
+            _stage_record("test", artifact_id="art_t"),
+            _stage_record("deliver", artifact_id="art_del"),
+        ])
+        for aid, atype, data in [
+            ("art_e", "evaluation", {"recommendation": "GO", "scope": "bugfix"}),
+            ("art_p", "plan", {"acceptance_criteria": ["x"]}),
+            ("art_b", "build", {"files_changed": ["a.py"], "tdd": {"green_pass": True}}),
+            ("art_t", "test", {"passed": 10}),
+        ]:
+            _make_artifact(artifacts_dir, "run_test1", aid, atype, data)
+
+        result = validate("TestProject", "run_test1", "deliver")
+        penalty_warns = [w for w in result["warnings"] if "penalt" in w.lower() and "finding" in w.lower()]
+        assert len(penalty_warns) >= 1, f"Expected penalty consistency warning, got warnings: {result['warnings']}"
+
+    def test_penalties_present_with_findings_no_warn(self, workspace):
+        """Review had findings AND penalties are non-empty → no WARN."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_artifact(artifacts_dir, "run_test1", "art_rev", "review", {
+            "approved": True,
+            "integration_trace": {"checked": 1},
+            "runtime_patterns": {"checked": 1, "patterns": [{"id": "RP1", "result": "N/A"}]},
+            "findings_count": 2,
+        })
+        _make_artifact(artifacts_dir, "run_test1", "art_del", "delivery", {
+            "title": "X", "status": "done",
+            "confidence_score": {"score": 7, "breakdown": [], "penalties": [
+                {"rule": "review_findings", "points": -2, "detail": "2 findings fixed"}
+            ]},
+            "completion_audit": {"all_green": True, "gaps": 0},
+            "adversarial_review": {"profile_tier": "pe_only", "findings": []},
+        })
+        _make_run(runs_dir, profile="bugfix", stages=[
+            _stage_record("evaluate", artifact_id="art_e"),
+            _stage_record("plan", artifact_id="art_p"),
+            _stage_record("build", artifact_id="art_b"),
+            _stage_record("review", artifact_id="art_rev"),
+            _stage_record("test", artifact_id="art_t"),
+            _stage_record("deliver", artifact_id="art_del"),
+        ])
+        for aid, atype, data in [
+            ("art_e", "evaluation", {"recommendation": "GO", "scope": "bugfix"}),
+            ("art_p", "plan", {"acceptance_criteria": ["x"]}),
+            ("art_b", "build", {"files_changed": ["a.py"], "tdd": {"green_pass": True}}),
+            ("art_t", "test", {"passed": 10}),
+        ]:
+            _make_artifact(artifacts_dir, "run_test1", aid, atype, data)
+
+        result = validate("TestProject", "run_test1", "deliver")
+        penalty_warns = [w for w in result["warnings"] if "penalt" in w.lower() and "finding" in w.lower()]
+        assert len(penalty_warns) == 0, f"Penalties present should not warn, got: {result['warnings']}"
+
 
 class TestValueDeliveryRules:
     """Test Rules 15-18: value over completion, evidence over assertion,
