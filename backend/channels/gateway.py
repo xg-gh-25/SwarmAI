@@ -566,6 +566,36 @@ class ChannelGateway:
             await db.channels.update(channel_id, {"status": "error", "error_message": error_msg})
             raise ValueError(error_msg)
 
+        # P0: Auto-populate allowed_senders if empty.
+        # When a new channel is created via the UI, the form only collects
+        # tokens — allowed_senders defaults to []. With an empty allowlist,
+        # _check_access denies ALL DMs (secure default). This auto-detects
+        # the bot installer's user_id via auth_test and adds them as owner.
+        allowed = _parse_json_list(channel.get("allowed_senders"))
+        if not allowed and hasattr(adapter, '_bot_token') and adapter._bot_token:
+            try:
+                from slack_sdk import WebClient
+                _client = WebClient(token=adapter._bot_token)
+                loop = asyncio.get_running_loop()
+                auth_result = await loop.run_in_executor(None, _client.auth_test)
+                installer_id = auth_result.get("user_id", "")
+                if installer_id:
+                    await db.channels.update(channel_id, {
+                        "allowed_senders": [installer_id],
+                    })
+                    # Refresh the channel record with the updated allowed_senders
+                    channel = await db.channels.get(channel_id)
+                    logger.info(
+                        "Channel %s: auto-populated allowed_senders with "
+                        "bot installer %s (empty allowlist = locked out)",
+                        channel_id, installer_id,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "Channel %s: failed to auto-populate allowed_senders: %s",
+                    channel_id, exc,
+                )
+
         # Cache the channel record
         self._channel_cache[channel_id] = channel
 
@@ -940,9 +970,9 @@ class ChannelGateway:
                     await adapter.send_message(OutboundMessage(
                         channel_id=channel_id,
                         external_chat_id=msg.external_chat_id,
-                        text="Hi! I'm XG's AI assistant. "
+                        text="Hi! I'm a personal AI assistant. "
                              "DM access is limited to approved contacts. "
-                             "Please reach out to XG if you'd like access, "
+                             "Please reach out to the owner if you'd like access, "
                              "or @mention me in a channel — I'm happy to help there!",
                     ))
                 except Exception:
