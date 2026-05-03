@@ -377,17 +377,19 @@ def locked_field_modify(
                     )
                 time.sleep(0.1)
 
-        # Read current content (with UTF-8 corruption resilience)
+        # Read current content (with UTF-8 corruption resilience).
+        # surrogateescape preserves original bytes on round-trip (PEP 383)
+        # — unlike errors="replace" which permanently destroys them.
         if file_path.exists():
             try:
                 content = file_path.read_text(encoding="utf-8")
             except UnicodeDecodeError:
                 import logging as _logging
                 _logging.getLogger(__name__).warning(
-                    "UTF-8 decode error in %s — reading with replacement chars",
+                    "UTF-8 decode error in %s — reading with surrogateescape",
                     file_path,
                 )
-                content = file_path.read_text(encoding="utf-8", errors="replace")
+                content = file_path.read_text(encoding="utf-8", errors="surrogateescape")
         else:
             raise LockedWriteError(f"File not found: {file_path}")
 
@@ -403,8 +405,8 @@ def locked_field_modify(
         else:
             raise ValueError(f"Unknown field mode: {mode}")
 
-        # Write back
-        file_path.write_text(new_content, encoding="utf-8")
+        # Write back (surrogateescape preserves non-UTF-8 bytes on round-trip)
+        file_path.write_text(new_content, encoding="utf-8", errors="surrogateescape")
     finally:
         if fd is not None:
             try:
@@ -474,19 +476,18 @@ def locked_read_modify_write(
                 time.sleep(0.1)
 
         # Read current content (or empty if file doesn't exist).
-        # Use errors="replace" so a corrupted file doesn't crash all
-        # future writes — the replacement chars are visible in the output
-        # and the file remains writable.
+        # surrogateescape preserves original bytes on round-trip (PEP 383)
+        # — unlike errors="replace" which permanently destroys them.
         if file_path.exists():
             try:
                 content = file_path.read_text(encoding="utf-8")
             except UnicodeDecodeError:
                 import logging as _logging
                 _logging.getLogger(__name__).warning(
-                    "UTF-8 decode error in %s — reading with replacement chars",
+                    "UTF-8 decode error in %s — reading with surrogateescape",
                     file_path,
                 )
-                content = file_path.read_text(encoding="utf-8", errors="replace")
+                content = file_path.read_text(encoding="utf-8", errors="surrogateescape")
         else:
             content = ""
 
@@ -518,9 +519,9 @@ def locked_read_modify_write(
         # Modify the content
         new_content = _modify_content(content, section, text, mode)
 
-        # Write back
+        # Write back (surrogateescape preserves non-UTF-8 bytes on round-trip)
         file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text(new_content, encoding="utf-8")
+        file_path.write_text(new_content, encoding="utf-8", errors="surrogateescape")
     finally:
         if fd is not None:
             try:
