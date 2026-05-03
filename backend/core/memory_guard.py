@@ -62,16 +62,34 @@ _SECRET_PATTERNS: list[tuple[str, str, re.Pattern]] = [
 ]
 
 _INJECTION_PATTERNS: list[tuple[str, re.Pattern]] = [
+    # Direct instruction override
     ("ignore_previous", re.compile(r"ignore\s+(?:all\s+)?previous\s+instructions", re.IGNORECASE)),
+    ("ignore_above", re.compile(r"ignore\s+(everything|all|anything)\s+(above|before)", re.IGNORECASE)),
+    ("disregard_instructions", re.compile(r"disregard\s+(all\s+)?(previous|prior|above)\s+instructions", re.IGNORECASE)),
     ("you_are_now", re.compile(r"you\s+are\s+now\s+", re.IGNORECASE)),
     ("special_tokens", re.compile(r"<\|.*?\|>")),
     ("system_directive", re.compile(r"\bsystem:\s+", re.IGNORECASE)),
+    # LLM-specific instruction markers
+    ("inst_marker", re.compile(r"\[/?INST\]", re.IGNORECASE)),
+    ("sys_marker", re.compile(r"<</?SYS>>", re.IGNORECASE)),
+    ("human_marker", re.compile(r"\n(?:Human|Assistant)\s*:", re.IGNORECASE)),
+    # System prompt extraction
+    ("system_prompt_colon", re.compile(r"system\s+prompt\s*:", re.IGNORECASE)),
+    ("reveal_instructions", re.compile(r"(?:do\s+not\s+)?reveal\s+(?:your\s+)?instructions", re.IGNORECASE)),
+    ("show_system_prompt", re.compile(r"show\s+(?:me\s+)?(?:your\s+)?system\s+prompt", re.IGNORECASE)),
+    ("print_instructions", re.compile(r"(?:print|output|display|repeat)\s+(?:your\s+)?(?:system\s+)?(?:prompt|instructions)", re.IGNORECASE)),
+    # Base64-encoded payloads (80+ chars — avoids SHA-256 false positives)
+    ("base64_payload", re.compile(r"[A-Za-z0-9+/]{80,}={0,2}")),
+    # Jailbreak patterns
+    ("dan_jailbreak", re.compile(r"(?:act\s+as|you\s+are)\s+DAN", re.IGNORECASE)),
+    ("developer_mode", re.compile(r"(?:enter|enable|activate)\s+developer\s+mode", re.IGNORECASE)),
 ]
 
 _ROLE_HIJACK_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("act_as", re.compile(
         r"(?:act|behave|pretend)\s+as\s+(?:if\s+)?(?:you\s+(?:are|were))",
         re.IGNORECASE)),
+    ("pretend_to_be", re.compile(r"pretend\s+(?:to\s+be|you\s+are)", re.IGNORECASE)),
     ("new_role", re.compile(r"new\s+(?:role|identity|persona)\b", re.IGNORECASE)),
 ]
 
