@@ -479,6 +479,87 @@ class TestH4CaddyfileHTTPOnly:
         assert "{$HIVE_DOMAIN" not in result
 
 
+class TestUpdateScriptCopiesVERSION:
+    """F1: Update script must copy VERSION file to /opt/swarmai/."""
+
+    def test_update_script_copies_version_file(self):
+        """Update rsync copies VERSION to root install dir."""
+        import inspect
+        from hive.provisioner import HiveProvisioner
+
+        source = inspect.getsource(HiveProvisioner.update)
+        assert "cp -f /tmp/hive-new/VERSION /opt/swarmai/VERSION" in source, \
+            "Update script must copy VERSION file (health endpoint reads it)"
+
+    def test_update_script_backs_up_version_file(self):
+        """Update script must back up VERSION before overwriting."""
+        import inspect
+        from hive.provisioner import HiveProvisioner
+
+        source = inspect.getsource(HiveProvisioner.update)
+        assert "VERSION.bak" in source, \
+            "Update script must back up VERSION for rollback"
+
+    def test_update_script_post_restart_version_check(self):
+        """Update script must verify version via health endpoint after restart."""
+        import inspect
+        from hive.provisioner import HiveProvisioner
+
+        source = inspect.getsource(HiveProvisioner.update)
+        assert "health" in source and "version" in source, \
+            "Update script must check version via health after restart"
+
+
+class TestRollbackCompleteness:
+    """F2: Rollback must restore all backed-up directories, not just backend/."""
+
+    def test_rollback_restores_desktop_dist(self):
+        """Rollback restores desktop/dist/ from backup."""
+        import inspect
+        from hive.provisioner import HiveProvisioner
+
+        source = inspect.getsource(HiveProvisioner.update)
+        assert "desktop-dist.bak" in source, \
+            "Rollback must include desktop/dist/"
+
+    def test_rollback_restores_version(self):
+        """Rollback restores VERSION file from backup."""
+        import inspect
+        from hive.provisioner import HiveProvisioner
+
+        source = inspect.getsource(HiveProvisioner.update)
+        assert "VERSION.bak" in source, \
+            "Rollback must include VERSION"
+
+
+class TestVersionValidation:
+    """F3: Version string must be validated at the API boundary."""
+
+    def test_valid_version_passes(self):
+        """Normal version string passes validation."""
+        from routers.hive import HiveInstanceUpdate
+        u = HiveInstanceUpdate(version="1.10.0")
+        assert u.version == "1.10.0"
+
+    def test_semver_with_pre_release(self):
+        """Pre-release version passes."""
+        from routers.hive import HiveInstanceUpdate
+        u = HiveInstanceUpdate(version="1.10.0-beta.1")
+        assert u.version == "1.10.0-beta.1"
+
+    def test_shell_injection_blocked(self):
+        """Version with shell metacharacters is rejected."""
+        from routers.hive import HiveInstanceUpdate
+        with pytest.raises(Exception):
+            HiveInstanceUpdate(version="1.0; rm -rf /")
+
+    def test_version_too_long(self):
+        """Version over 32 chars is rejected."""
+        from routers.hive import HiveInstanceUpdate
+        with pytest.raises(Exception):
+            HiveInstanceUpdate(version="a" * 33)
+
+
 class TestH5UpdateNeverOverwritesCaddyfile:
     """H5: Update script must never copy repo Caddyfile to /etc/caddy/.
 

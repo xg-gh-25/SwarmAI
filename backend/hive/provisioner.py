@@ -1082,7 +1082,6 @@ class HiveProvisioner:
             if not ec2_id:
                 raise ValueError("No EC2 instance ID")
 
-            import re
             if not re.match(r'^[a-zA-Z0-9._\-]+$', version):
                 raise ValueError(f"Invalid version string: {version!r}")
 
@@ -1093,15 +1092,19 @@ class HiveProvisioner:
             update_script = f"""#!/bin/bash
 set -euo pipefail
 echo "=== Updating to v{version} ==="
-# G7: Pre-update backup for rollback
+# G7: Pre-update backup for rollback (all directories, not just backend)
 echo "Backing up current installation..."
 cp -a /opt/swarmai/backend /opt/swarmai/backend.bak 2>/dev/null || true
+cp -a /opt/swarmai/desktop/dist /opt/swarmai/desktop-dist.bak 2>/dev/null || true
+cp -f /opt/swarmai/VERSION /opt/swarmai/VERSION.bak 2>/dev/null || true
 aws s3 cp s3://{bucket}/v{version}/swarmai-hive-v{version}-linux-arm64.tar.gz /tmp/hive-update.tar.gz --region {region}
 mkdir -p /tmp/hive-new
 tar xzf /tmp/hive-update.tar.gz --strip-components=1 -C /tmp/hive-new/
 rsync -a --delete /tmp/hive-new/backend/ /opt/swarmai/backend/ --exclude='.venv'
 rsync -a --delete /tmp/hive-new/desktop/dist/ /opt/swarmai/desktop/dist/
 rsync -a /tmp/hive-new/hive/ /opt/swarmai/hive/ --exclude='Caddyfile'
+# Root-level files (VERSION is read by health endpoint for version reporting)
+cp -f /tmp/hive-new/VERSION /opt/swarmai/VERSION 2>/dev/null || true
 cd /opt/swarmai/backend && sudo -u swarm .venv/bin/pip install -q -e .
 # NOTE: /etc/caddy/Caddyfile is NEVER updated from the repo copy.
 # The deployed Caddyfile has inline bcrypt auth written by user_data.py.
@@ -1119,17 +1122,21 @@ done
 if ! systemctl is-active --quiet swarmai-hive; then
   echo "ERROR: swarmai-hive failed to start within 30s"
   systemctl status swarmai-hive --no-pager || true
-  # G7: Rollback on failure
-  if [ -d /opt/swarmai/backend.bak ]; then
-    echo "Rolling back to previous version..."
-    rm -rf /opt/swarmai/backend
-    mv /opt/swarmai/backend.bak /opt/swarmai/backend
-    systemctl restart swarmai-hive --no-block || true
-  fi
+  # G7: Rollback on failure (restore ALL backed-up directories)
+  echo "Rolling back to previous version..."
+  [ -d /opt/swarmai/backend.bak ] && rm -rf /opt/swarmai/backend && mv /opt/swarmai/backend.bak /opt/swarmai/backend
+  [ -d /opt/swarmai/desktop-dist.bak ] && rm -rf /opt/swarmai/desktop/dist && mv /opt/swarmai/desktop-dist.bak /opt/swarmai/desktop/dist
+  [ -f /opt/swarmai/VERSION.bak ] && mv -f /opt/swarmai/VERSION.bak /opt/swarmai/VERSION
+  systemctl restart swarmai-hive --no-block || true
   exit 1
 fi
-# G7: Remove backup after successful update
-rm -rf /opt/swarmai/backend.bak /tmp/hive-new /tmp/hive-update.tar.gz
+# F1: Post-restart version verification — defense-in-depth
+ACTUAL_V=$(curl -sf http://127.0.0.1:18321/health 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('version',''))" 2>/dev/null || echo "")
+if [ -n "$ACTUAL_V" ] && [ "$ACTUAL_V" != "{version}" ]; then
+  echo "WARNING: Expected v{version} but health reports v$ACTUAL_V"
+fi
+# G7: Remove backups after successful update
+rm -rf /opt/swarmai/backend.bak /opt/swarmai/desktop-dist.bak /opt/swarmai/VERSION.bak /tmp/hive-new /tmp/hive-update.tar.gz
 echo "=== Update complete ==="
 """
 

@@ -60,11 +60,11 @@ class TestHookRegistry:
 
         async def hook_a(input_data, tool_use_id, context):
             call_order.append("a")
-            return {"additionalContext": "from_a"}
+            return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "from_a"}}
 
         async def hook_b(input_data, tool_use_id, context):
             call_order.append("b")
-            return {"additionalContext": "from_b"}
+            return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "from_b"}}
 
         registry = HookRegistry()
         registry.register("PostToolUse", hook_a, "a")
@@ -76,8 +76,10 @@ class TestHookRegistry:
         result = await chained({}, None, MagicMock())
 
         assert call_order == ["a", "b"]
-        # Last additionalContext wins (or merged — depends on implementation)
-        assert "additionalContext" in result
+        # Last hookSpecificOutput.additionalContext wins
+        hso = result.get("hookSpecificOutput", {})
+        assert "additionalContext" in hso
+        assert hso["additionalContext"] == "from_b"
 
     @pytest.mark.asyncio
     async def test_block_decision_short_circuits(self):
@@ -112,10 +114,10 @@ class TestHookRegistry:
 
         async def slow_hook(input_data, tool_use_id, context):
             await asyncio.sleep(10)
-            return {"additionalContext": "should not appear"}
+            return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "should not appear"}}
 
         async def fast_hook(input_data, tool_use_id, context):
-            return {"additionalContext": "fast"}
+            return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "fast"}}
 
         registry = HookRegistry()
         registry.register("PostToolUse", slow_hook, "slow")
@@ -128,7 +130,7 @@ class TestHookRegistry:
             timeout=8.0  # generous outer timeout
         )
         # fast_hook should have run despite slow_hook timeout
-        assert result.get("additionalContext") == "fast"
+        assert result.get("hookSpecificOutput", {}).get("additionalContext") == "fast"
 
     def test_register_with_matcher(self):
         """Registry supports matcher string (e.g., 'Bash' for PreToolUse)."""
