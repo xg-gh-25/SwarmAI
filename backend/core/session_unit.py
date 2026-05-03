@@ -2512,6 +2512,11 @@ class SessionUnit:
         self._peak_tree_rss_bytes = 0
         # Don't reset _lifecycle_response_count — it tracks across the
         # full unit lifetime (resume awareness persists through kill/restart).
+        # Reset channel history injection flag — the new subprocess
+        # won't have any conversation history, so it needs re-injection.
+        self._channel_history_injected = False
+        # Reset recall injection flag — new subprocess needs fresh recall.
+        self._recall_injected = False
 
     def _full_cleanup(self) -> None:
         """Full cleanup for non-retriable crashes where the session should NOT be resumable.
