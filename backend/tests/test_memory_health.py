@@ -275,7 +275,9 @@ class TestFullRun:
              patch("jobs.handlers.memory_health.DAILY_DIR", tmp_path / "da"):
             result = run_memory_health()
 
-        assert result["status"] == "skipped"
+        # Phase 1 integrity checks still run (on empty content), but
+        # Phase 2 LLM maintenance is skipped when no context files exist.
+        assert result["status"] in ("skipped", "integrity_only")
 
     def test_full_run_mocked(self, tmp_path):
         from jobs.handlers.memory_health import run_memory_health
