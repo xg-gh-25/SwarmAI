@@ -167,12 +167,16 @@ class ContextHealthHook:
             for rel_path in freshness.changed_files[:50]:  # cap at 50
                 full_path = repo_root / rel_path
                 if full_path.exists():
-                    result = parse_file(full_path, repo_root)
-                    if result.nodes:
-                        file_hash = result.nodes[0].sha256 or ""
-                        graph.store_file_nodes_edges(
-                            rel_path, result.nodes, result.edges, file_hash
-                        )
+                    # P1-7: Isolate per-file errors so one bad file doesn't skip the rest
+                    try:
+                        result = parse_file(full_path, repo_root)
+                        if result.nodes:
+                            file_hash = result.nodes[0].sha256 or ""
+                            graph.store_file_nodes_edges(
+                                rel_path, result.nodes, result.edges, file_hash
+                            )
+                    except Exception as file_err:
+                        logger.debug("code_intel: failed to parse %s: %s", rel_path, file_err)
                 else:
                     # File was deleted — remove stale nodes/edges
                     graph._remove_file(rel_path)

@@ -803,6 +803,69 @@ class GraphStore:
         dependent_files.discard(file_path)
         return sorted(dependent_files)[:500]
 
+    # ── bare target resolution (Layer 2) ──────────────────────────────────
+
+    def resolve_bare_targets(self, qualified_separator: str) -> int:
+        """Resolve CALLS edges whose target has no qualified separator.
+
+        For each bare target, build a global name-to-qualified-id lookup.
+        Disambiguate using file import relationships:
+          - 1 candidate: resolve directly (confidence 0.8)
+          - N candidates: prefer the one whose file is imported by the caller
+          - 0 or ambiguous: leave bare (confidence 0.5)
+
+        Returns count of resolved edges.
+        """
+        bare_edges = self._conn.execute(
+            "SELECT rowid, source_id, target_id FROM code_edges "
+            "WHERE edge_type = 'calls' AND target_id NOT LIKE ?",
+            (f"%{qualified_separator}%",)
+        ).fetchall()
+
+        if not bare_edges:
+            return 0
+
+        all_nodes = self._conn.execute(
+            "SELECT id, name FROM code_nodes"
+        ).fetchall()
+        name_to_ids: dict[str, list[str]] = {}
+        for node_id, name in all_nodes:
+            name_to_ids.setdefault(name, []).append(node_id)
+
+        file_imports: dict[str, set[str]] = {}
+        import_edges = self._conn.execute(
+            "SELECT source_id, target_id FROM code_edges WHERE edge_type = 'imports'"
+        ).fetchall()
+        for src, tgt in import_edges:
+            src_file = src.split(qualified_separator)[0] if qualified_separator in src else src
+            tgt_file = tgt.split(qualified_separator)[0] if qualified_separator in tgt else tgt
+            file_imports.setdefault(src_file, set()).add(tgt_file)
+
+        resolved_count = 0
+        for rowid, source_id, target_name in bare_edges:
+            candidates = name_to_ids.get(target_name, [])
+
+            if len(candidates) == 1:
+                self._conn.execute(
+                    "UPDATE code_edges SET target_id = ?, confidence = 0.8 WHERE rowid = ?",
+                    (candidates[0], rowid)
+                )
+                resolved_count += 1
+            elif len(candidates) > 1:
+                caller_file = source_id.split(qualified_separator)[0]
+                imported_files = file_imports.get(caller_file, set())
+                matching = [c for c in candidates
+                           if c.split(qualified_separator)[0] in imported_files]
+                if len(matching) == 1:
+                    self._conn.execute(
+                        "UPDATE code_edges SET target_id = ?, confidence = 0.8 WHERE rowid = ?",
+                        (matching[0], rowid)
+                    )
+                    resolved_count += 1
+
+        self._conn.commit()
+        return resolved_count
+
     # ── internal helpers ─────────────────────────────────────────────────
 
     def _remove_file(self, file_path: str) -> None:
