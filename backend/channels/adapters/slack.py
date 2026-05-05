@@ -891,34 +891,75 @@ class SlackChannelAdapter(ChannelAdapter):
         text: Optional[str] = None,
         final_blocks: Optional[list[dict]] = None,
     ) -> None:
-        """Finalize a native stream into a regular message via chat.stopStream.
+        """Finalize a native stream into a regular message.
 
-        If ``final_blocks`` is not provided but ``text`` is, blocks are
-        auto-generated via :meth:`_text_to_blocks` so the final message
-        renders with full Block Kit formatting (bold, links, code blocks).
+        Two-step approach to avoid content duplication:
+        1. ``chat_stopStream`` (bare — no content) ends the stream state
+        2. ``chat.update`` replaces the message with clean Block Kit
+
+        Previously we passed blocks + markdown_text to stopStream, but
+        the Slack API was appending them alongside the streamed content
+        instead of replacing, causing triplication + thinking leakage.
         """
         if not self._slack_client:
             return
         loop = asyncio.get_running_loop()
+        client = self._slack_client
+
+        # Step 1: End the stream state (bare — no content args)
         try:
-            # Auto-generate Block Kit if only text was provided
-            blocks = final_blocks
-            if blocks is None and text:
-                blocks = self._text_to_blocks(text)
-            kwargs: dict = {
-                "channel": external_chat_id,
-                "ts": stream_ts,
-            }
-            if blocks:
-                kwargs["blocks"] = blocks
-            if text:
-                kwargs["markdown_text"] = text[:_TEXT_FALLBACK_LIMIT]
             await loop.run_in_executor(
                 None,
-                lambda: self._slack_client.chat_stopStream(**kwargs),
+                lambda: client.chat_stopStream(
+                    channel=external_chat_id,
+                    ts=stream_ts,
+                ),
             )
         except Exception:
-            logger.debug("chat.stopStream failed for %s", stream_ts)
+            # Stream state not ended — chat.update would fail too.
+            # Re-raise so gateway falls back to posting a new message.
+            logger.debug("chat.stopStream failed for %s — re-raising", stream_ts)
+            raise
+
+        # Step 2: Replace message content via chat.update (reliable)
+        if not text:
+            return
+        try:
+            blocks = final_blocks
+            if blocks is None:
+                blocks = self._text_to_blocks(text)
+            fallback = text[:_TEXT_FALLBACK_LIMIT]
+
+            # Split blocks for payload size limits (same as update_message)
+            chunks = _split_blocks_for_payload(blocks)
+            first_chunk = chunks[0] if chunks else blocks[:1]
+
+            await loop.run_in_executor(None, lambda: client.chat_update(
+                channel=external_chat_id,
+                ts=stream_ts,
+                text=fallback,
+                blocks=first_chunk,
+            ))
+
+            # Overflow chunks as threaded replies
+            for chunk in chunks[1:]:
+                try:
+                    await loop.run_in_executor(None, lambda c=chunk: client.chat_postMessage(
+                        channel=external_chat_id,
+                        thread_ts=stream_ts,
+                        text="(continued)",
+                        blocks=c,
+                    ))
+                except Exception:
+                    logger.warning("Failed to post overflow chunk in stop_stream")
+                    break
+        except Exception:
+            logger.exception(
+                "stop_stream: chat.update failed for %s — "
+                "re-raising so gateway can fall back to new message",
+                stream_ts,
+            )
+            raise
 
     async def _ensure_identity(self) -> None:
         """Resolve and cache bot_user_id (one-time, lazy).
