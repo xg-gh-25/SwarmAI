@@ -573,32 +573,73 @@ class TestSlackNativeStreaming:
         mock_client.chat_appendStream.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_stop_stream_uses_ts_and_markdown_text(self, adapter):
-        """stop_stream uses ``ts`` (not ``stream_id``) and ``markdown_text``."""
+    async def test_stop_stream_bare_then_chat_update(self, adapter):
+        """stop_stream sends bare stopStream (no content) then chat.update."""
         mock_client = MagicMock()
         mock_client.chat_stopStream.return_value = {}
+        mock_client.chat_update.return_value = {}
         adapter._slack_client = mock_client
 
         await adapter.stop_stream("C001", "1234.5678", text="Final.")
-        call_kwargs = mock_client.chat_stopStream.call_args[1]
-        assert call_kwargs["ts"] == "1234.5678"
-        assert call_kwargs["markdown_text"] == "Final."
-        # Must NOT contain 'stream_id' or bare 'text'
-        assert "stream_id" not in call_kwargs
-        assert "text" not in call_kwargs
+
+        # Step 1: bare stopStream — only channel + ts, no content
+        stop_kwargs = mock_client.chat_stopStream.call_args[1]
+        assert stop_kwargs == {"channel": "C001", "ts": "1234.5678"}
+        assert "markdown_text" not in stop_kwargs
+        assert "blocks" not in stop_kwargs
+
+        # Step 2: chat.update replaces with Block Kit
+        mock_client.chat_update.assert_called_once()
+        update_kwargs = mock_client.chat_update.call_args[1]
+        assert update_kwargs["channel"] == "C001"
+        assert update_kwargs["ts"] == "1234.5678"
+        assert "blocks" in update_kwargs
+        assert isinstance(update_kwargs["blocks"], list)
 
     @pytest.mark.asyncio
-    async def test_stop_stream_auto_generates_blocks(self, adapter):
-        """stop_stream converts text to Block Kit blocks automatically."""
+    async def test_stop_stream_auto_generates_blocks_in_update(self, adapter):
+        """stop_stream converts text to Block Kit blocks via chat.update."""
         mock_client = MagicMock()
         mock_client.chat_stopStream.return_value = {}
+        mock_client.chat_update.return_value = {}
         adapter._slack_client = mock_client
 
         await adapter.stop_stream("C001", "1234.5678", text="Hello world")
-        call_kwargs = mock_client.chat_stopStream.call_args[1]
-        # Should have generated blocks from text
-        assert "blocks" in call_kwargs
-        assert isinstance(call_kwargs["blocks"], list)
+
+        # chat.update should have generated blocks from text
+        update_kwargs = mock_client.chat_update.call_args[1]
+        assert "blocks" in update_kwargs
+        assert isinstance(update_kwargs["blocks"], list)
+        # Verify block content contains our text
+        block_text = update_kwargs["blocks"][0]["text"]["text"]
+        assert "Hello world" in block_text
+
+    @pytest.mark.asyncio
+    async def test_stop_stream_raises_on_stop_failure(self, adapter):
+        """stop_stream re-raises if stopStream fails — gateway can fall back."""
+        mock_client = MagicMock()
+        mock_client.chat_stopStream.side_effect = Exception("network error")
+        adapter._slack_client = mock_client
+
+        with pytest.raises(Exception, match="network error"):
+            await adapter.stop_stream("C001", "1234.5678", text="Final.")
+
+        # chat.update should NOT have been called
+        mock_client.chat_update.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stop_stream_raises_on_update_failure(self, adapter):
+        """stop_stream re-raises if chat.update fails — gateway can fall back."""
+        mock_client = MagicMock()
+        mock_client.chat_stopStream.return_value = {}
+        mock_client.chat_update.side_effect = Exception("rate limited")
+        adapter._slack_client = mock_client
+
+        with pytest.raises(Exception, match="rate limited"):
+            await adapter.stop_stream("C001", "1234.5678", text="Final.")
+
+        # stopStream should have been called first
+        mock_client.chat_stopStream.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_start_stream_exception_returns_none(self, adapter):
