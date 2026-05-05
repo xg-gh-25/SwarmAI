@@ -118,7 +118,10 @@ class PromptBuilder:
     _1M_MODELS = {"claude-opus-4-6", "claude-sonnet-4-6"}
 
     def resolve_model(self, agent_config: dict) -> Optional[str]:
-        """Resolve the model identifier from config.json (single source of truth).
+        """Resolve the model identifier, respecting per-session overrides.
+
+        Priority: agent_config["model"] (per-channel/per-tab override)
+                > config.json default_model (global default)
 
         When Bedrock is enabled, translates to a Bedrock inference profile ID.
         For 4.6 models, appends ``[1m]`` so the CLI uses the full 1M context
@@ -129,12 +132,12 @@ class PromptBuilder:
         """
         from config import get_bedrock_model_id
 
-        # Single source of truth: config.json default_model
-        model = (
-            self._config.get("default_model")
-            if self._config is not None
-            else agent_config.get("model")  # fallback only if config not wired
-        )
+        # Per-session override (e.g. channel model) takes precedence over
+        # the global default.  session_router sets agent_config["model"] from
+        # channel_context["model"] before calling build_options().
+        model = agent_config.get("model")
+        if not model and self._config is not None:
+            model = self._config.get("default_model")
         use_bedrock = (
             self._config.get("use_bedrock", False)
             if self._config is not None

@@ -565,6 +565,13 @@ class SessionRouter:
             if not agent_config:
                 return None
 
+            # Per-channel model override — same logic as run_conversation().
+            # Must be applied BEFORE build_options() so resolve_model() picks
+            # it up.  Without this, pre-warmed subprocess spawns with the
+            # global default model and can't switch after spawn (SDK constraint).
+            if channel_context and channel_context.get("model"):
+                agent_config["model"] = channel_context["model"]
+
             options = await self._prompt_builder.build_options(
                 agent_config=agent_config,
                 enable_skills=True,

@@ -1207,3 +1207,49 @@ class TestChannelModelOverride:
             agent_config["model"] = channel_context["model"]
 
         assert agent_config["model"] == "claude-opus-4-6"
+
+    def test_resolve_model_respects_agent_config_override(self):
+        """resolve_model() must use agent_config['model'] over global config.
+
+        This is the E2E contract: session_router sets agent_config["model"]
+        from channel_context, then build_options() calls resolve_model().
+        The override MUST take precedence over config.json default_model.
+        Regression: prior bug silently read only from self._config, ignoring
+        agent_config entirely — channel always used Opus.
+        """
+        from unittest.mock import MagicMock, patch
+        import sys
+
+        # Mock config module
+        mock_config = MagicMock()
+        mock_config.get_bedrock_model_id = lambda m, config_map=None: f"us.anthropic.{m}-v1"
+        with patch.dict(sys.modules, {"config": mock_config}):
+            from core.prompt_builder import PromptBuilder
+
+            # Simulate: global config says opus, agent_config says sonnet
+            pb = PromptBuilder.__new__(PromptBuilder)
+            pb._config = {"default_model": "claude-opus-4-6", "use_bedrock": True}
+
+            agent_config = {"model": "claude-sonnet-4-6"}
+            result = pb.resolve_model(agent_config)
+
+            # Must resolve to Sonnet (override), not Opus (global)
+            assert "sonnet" in result, f"Expected sonnet in result, got: {result}"
+
+    def test_resolve_model_falls_back_to_global_without_override(self):
+        """Without agent_config override, resolve_model() uses global default."""
+        from unittest.mock import MagicMock, patch
+        import sys
+
+        mock_config = MagicMock()
+        mock_config.get_bedrock_model_id = lambda m, config_map=None: f"us.anthropic.{m}-v1"
+        with patch.dict(sys.modules, {"config": mock_config}):
+            from core.prompt_builder import PromptBuilder
+
+            pb = PromptBuilder.__new__(PromptBuilder)
+            pb._config = {"default_model": "claude-opus-4-6", "use_bedrock": True}
+
+            agent_config = {}  # No override
+            result = pb.resolve_model(agent_config)
+
+            assert "opus" in result, f"Expected opus in result, got: {result}"
