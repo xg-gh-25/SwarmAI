@@ -3,13 +3,18 @@ name: release
 description: >
   Bump version across all package files, update CHANGELOG, create git tag, and
   publish GitHub Release. Ensures no file is missed during version bumps.
-  TRIGGER: "release", "bump version", "cut release", "new version", "发版",
-  "版本升级", "打 tag", "create release".
-  DO NOT USE: for build/verify (use ./prod.sh build), DMG packaging, or deploy.
-  SIBLINGS: deliver = pipeline artifact packaging | qa = test verification |
-  release = version bump + tag + GitHub Release.
+  SUPERSEDED BY: s_swarm-release (which includes build + package + smoke test).
+  Use this skill ONLY for version-bump-without-shipping scenarios.
+  TRIGGER: "bump version only", "version bump", "just tag".
+  DO NOT USE: for full releases (use s_swarm-release), build/verify (use
+  s_swarm-build), DMG packaging, or deploy.
+  SIBLINGS: s_swarm-release = full release cycle | deliver = pipeline artifact
+  packaging | qa = test verification.
 tier: lazy
 ---
-# Release
+# Release (Version Bump Only)
 
-Read INSTRUCTIONS.md for the full release workflow.
+> **Note:** For full releases, use `s_swarm-release` instead. This skill only
+> handles version bump + changelog + tag — no build, no package, no smoke test.
+
+Read INSTRUCTIONS.md for the version bump workflow.
