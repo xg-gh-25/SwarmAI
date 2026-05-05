@@ -421,6 +421,12 @@ class ChannelGateway:
                     is_owner=True,
                 ).to_dict()} if owner_id else {}),
             }
+            # Per-channel model override: must be included at prewarm time
+            # so the subprocess spawns with the correct model (SDK locks model
+            # per-session — can't change after spawn).
+            _prewarm_model = channel_config.get("model")
+            if _prewarm_model:
+                channel_context["model"] = _prewarm_model
 
             temp_id = await router.prewarm_channel_session(
                 agent_id, channel_context=channel_context,
