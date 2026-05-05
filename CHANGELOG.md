@@ -5,6 +5,28 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.1] - 2026-05-05
+
+### Added
+
+- **Thinking Token Streaming to Slack**: Users see thinking tokens in italic immediately (<1s) instead of blank 5-15s wait. StreamContext state machine with clean end_thinking_phase() transition
+- **Pipeline Semantic Depth Checks**: Three heuristic WARN checks catch content-lazy artifacts, metrics tracking across 73 historical runs, value-delivery enforcement rules (15-18)
+- **dev.sh deploy**: Fast backend-only daemon updates without rebuilding frontend/Tauri; restart blocks when binary is stale
+
+### Fixed
+
+- **SDK Zod Validation Errors**: Hooks returned invalid schemas (e.g. `{}` instead of `{"decision":"approve"}`). 148+ ZodErrors per session silently masked native streaming and context injection
+- **Memory & Evolution E2E**: Duplicate MEMORY.md index (bare `## Memory Index` not stripped), evolution ACT phase permanently frozen (`dry_run=True` hardcoded), session miner keyword filter too restrictive
+- **Hive Denylist + Atomic Rollback**: Replaced allowlist cherry-pick (drifts) with single rsync + denylist. Rollback uses mv swap (atomic) instead of rm -rf + mv
+- **Daemon Port Discovery**: dev.sh status reads actual port from backend.json instead of hardcoded fallback
+- **code_intel_hook Tests**: 6 stale assertions updated to match SDK Zod-compliant returns
+
+### Changed
+
+- **handle_tool_use Shared Helper**: Extracted into streaming.py, eliminating duplication between main loop and follow-up loop
+- **Evolution Thresholds**: HIGH 0.35→0.15, MED 0.15→0.08 (real-world data couldn't reach old thresholds; safety nets remain: atomic rollback + regression gate)
+- **Hive Backup**: Excludes .venv (~300MB savings), slim backup before update
+
 ## [1.10.0] - 2026-05-03
 
 ### Added
