@@ -680,6 +680,29 @@ For each modified source file, assign every finding a **confidence score (1-10)*
 - **TECH.md** → Architecture section for auth model (JWT? session? API key?), public vs internal endpoints, trust boundaries. Adjust confidence: finding on an internal-only endpoint gets -2, finding on a public endpoint gets +1.
 - **IMPROVEMENT.md** → Security History section for past vulnerabilities in this project. If a similar pattern was fixed before, confidence +2 (proven attack vector). Known Issues section for acknowledged security debt (don't re-report, but note "known issue, tracked").
 
+## 🚨 CRITICAL: Skills Over Scripts — Agent Operations
+
+Shell scripts (.sh) are designed for Terminal users with real-time stdout. Agent MUST use `s_swarm-*` skills for all SwarmAI operational commands — they decompose long-running operations into per-stage execution with visible progress between steps.
+
+| Operation | Use Skill | NEVER run directly |
+|-----------|-----------|-------------------|
+| Build backend binary | `s_swarm-build` | `./prod.sh build`, `build-backend.sh` |
+| Daemon ops (status/stop/start/restart) | `s_swarm-daemon` | `launchctl ...`, `dev.sh daemon *` |
+| Deploy binary to daemon | `s_swarm-daemon deploy` | manual `cp` + `launchctl` |
+| Release (version + tag + publish) | `s_swarm-release` | `./prod.sh release` |
+| Hive deploy/update | `s_swarm-hive` | `ssh` + manual |
+| CI status | `s_swarm-ci` | `gh run list` (ad-hoc) |
+
+**Why:** Scripts run as single Bash calls → 2-5 min black hole → no progress visibility → timeout → retry loops → session crash. Skills decompose into stages → user sees progress between each step → fail-fast per stage → no wasted retries.
+
+**Project scope guard:** `s_swarm-*` skills are **SwarmAI-project-only**. Before invoking ANY `s_swarm-*` skill, verify:
+- Active project == SwarmAI, OR
+- User explicitly requested it (e.g., "build swarm", "restart daemon")
+
+If the active project is NOT SwarmAI (e.g., CMHK_BIZ, PhysicalAI), do NOT suggest `s_swarm-*` skills as next steps. Each project has its own operational workflow.
+
+**Post-pipeline behavior:** When the autonomous pipeline completes DELIVER for SwarmAI project, suggest `s_swarm-build` as a next step. For any other project, suggest project-appropriate actions (or nothing).
+
 ## Environment & Platform Rules
 
 - **Single source of truth for dependencies** — `pyproject.toml` is the ONLY place to declare dependencies. Build scripts (`build-backend.sh`, `dev.sh`) MUST read from pyproject.toml — never maintain a parallel hardcoded list. When adding a dep: add to `pyproject.toml`, run `uv lock`, done. If you see a hardcoded dep list anywhere, fix it to read from pyproject.toml.
