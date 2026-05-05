@@ -33,7 +33,7 @@ class TestCreateCodeIntelHook:
     def test_non_read_tool_passthrough(self, mock_detect):
         hook = create_code_intel_hook()
         result = hook("Bash", {"command": "ls"})
-        assert result == {}
+        assert result == {"decision": "approve"}
         mock_detect.assert_not_called()
 
     @patch("core.code_intel.code_intel_hook.detect_project_from_path")
@@ -41,7 +41,7 @@ class TestCreateCodeIntelHook:
         mock_detect.return_value = None
         hook = create_code_intel_hook()
         result = hook("Read", {"file_path": "/tmp/unknown/file.py"})
-        assert result == {}
+        assert result == {"decision": "approve"}
 
     @patch("core.code_intel.code_intel_hook.load_project_graph")
     @patch("core.code_intel.code_intel_hook.detect_project_from_path")
@@ -50,7 +50,7 @@ class TestCreateCodeIntelHook:
         mock_load.return_value = None
         hook = create_code_intel_hook()
         result = hook("Read", {"file_path": "/tmp/repo/file.py"})
-        assert result == {}
+        assert result == {"decision": "approve"}
 
     @patch("core.code_intel.code_intel_hook.load_project_graph")
     @patch("core.code_intel.code_intel_hook.detect_project_from_path")
@@ -81,14 +81,14 @@ class TestCreateCodeIntelHook:
 
         hook = create_code_intel_hook()
         result = hook("Grep", {"path": "/tmp/test_repo/core/foo.py"})
-        assert result == {}
+        assert result == {"decision": "approve"}
 
     @patch("core.code_intel.code_intel_hook.load_project_graph")
     @patch("core.code_intel.code_intel_hook.detect_project_from_path")
     def test_empty_file_path(self, mock_detect, mock_load):
         hook = create_code_intel_hook()
         result = hook("Read", {"file_path": ""})
-        assert result == {}
+        assert result == {"decision": "approve"}
         mock_detect.assert_not_called()
 
     @patch("core.code_intel.code_intel_hook.load_project_graph")
@@ -113,7 +113,7 @@ class TestCreateCodeIntelHook:
 
         hook = create_code_intel_hook()
         result = hook("Read", {"file_path": "/tmp/test_repo/a.py"})
-        assert result == {}
+        assert result == {"decision": "approve"}
 
 
 class TestBuildContext:
