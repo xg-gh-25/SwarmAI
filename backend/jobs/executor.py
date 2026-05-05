@@ -737,7 +737,7 @@ def _handle_script(job: Job, state: SchedulerState) -> JobResult:
 
     # Script jobs run from the swarm-jobs directory (where venv and scripts live),
     # not from SwarmWS root. Use config.cwd to override if needed.
-    raw_cwd = job.config.get("cwd", str(Path(__file__).parent))
+    raw_cwd = job.config.get("cwd") or str(Path(__file__).parent)
     if "HOME" not in os.environ:
         script_cwd = raw_cwd.replace("${HOME}", home).replace("$HOME", home)
     else:
