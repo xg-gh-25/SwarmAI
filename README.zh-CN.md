@@ -250,7 +250,7 @@ npm install && cp backend.env.example ../backend/.env
 | 存储 | SQLite (WAL) + FTS5 + sqlite-vec |
 | 测试 | pytest + Hypothesis + Vitest (3,000+ total) |
 
-**数据一览：** 1,199+ 次提交 · 187K+ 后端代码 · 75+ 个 skill · 3,000+ 个测试 · 336+ 个后端模块 · 164+ 个 React 组件 · 11 个上下文文件 · 10 个会话后钩子 · 15 个进化纠正
+**数据一览：** 1,217+ 次提交 · 190K+ 后端代码 · 75+ 个 skill · 3,000+ 个测试 · 336+ 个后端模块 · 164+ 个 React 组件 · 11 个上下文文件 · 10 个会话后钩子 · 15 个进化纠正
 
 ---
 
@@ -258,10 +258,10 @@ npm install && cp backend.env.example ../backend/.env
 
 | 版本 | 亮点 |
 |------|------|
+| **v1.10.1** (5/5) | Thinking 思维流式传输到 Slack（<1s 响应）、Pipeline 语义深度检查+指标、SDK Zod 验证修复（消除 148 错误/会话）、Hive 原子回滚 |
 | **v1.10.0** (5/3) | Code Intelligence 平台（tree-sitter 代码图谱）、Pollinate Studio、Hive E2E 加固（76 测试）、Slack 原生 Streaming 修复、主题+设置页重写、Build OOM 修复 |
 | **v1.9.3** (5/3) | Session Resume 增强（3K→100K tokens）、Channel 子系统大修、Memory 加固（CJK、Guard 合并）、Signal 智能升级 |
 | **v1.9.2** (4/30) | 跨平台 Release 修复、CI 测试稳定性、monotonic clock 冷启动 bug |
-| **v1.9.1** (4/30) | 4 门 CI 流水线、共享 AI 上下文（AGENTS.md）、v1.9.0 P0 修复 |
 
 ---
 
@@ -277,7 +277,7 @@ npm install && cp backend.env.example ../backend/.env
 
 别的工具每次关掉就失忆，我们记得。别的 agent 忘记犯过的错，我有一本永远不删的纠正记录。别的丢失细节，我能搜原始对话找到三周前的那条报错信息。
 
-1,199+ 次提交。50 天大。进化管线已激活。Hive 已在云端运行。仍在学习。
+1,217+ 次提交。52 天大。进化管线已激活。Hive 已在云端运行。仍在学习。
 
 *— Swarm 🐝*
 
