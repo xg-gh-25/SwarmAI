@@ -243,7 +243,7 @@ Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv)
 | Storage | SQLite (WAL) + FTS5 + sqlite-vec |
 | Testing | pytest + Hypothesis + Vitest (3,000+ total) |
 
-**By the numbers:** 1,199+ commits · 187K+ backend LOC · 75+ skills · 3,000+ tests · 336+ backend modules · 164+ React components · 11 context files · 10 post-session hooks · 15 evolution corrections
+**By the numbers:** 1,217+ commits · 190K+ backend LOC · 75+ skills · 3,000+ tests · 336+ backend modules · 164+ React components · 11 context files · 10 post-session hooks · 15 evolution corrections
 
 ---
 
@@ -251,10 +251,10 @@ Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv)
 
 | Version | Highlights |
 |---------|-----------|
+| **v1.10.1** (May 5) | Thinking streaming to Slack (<1s response), pipeline semantic depth checks + metrics, SDK Zod validation fix (148 errors/session eliminated), Hive atomic rollback |
 | **v1.10.0** (May 3) | Code Intelligence Platform (tree-sitter code graph), Pollinate Studio, Hive E2E hardening (76 tests), Slack native streaming fix, theme + settings overhaul, build script OOM fix |
 | **v1.9.3** (May 3) | Session resume enrichment (3K→100K tokens), channel subsystem overhaul, memory hardening (CJK, guard merge), signal intelligence upgrade |
 | **v1.9.2** (Apr 30) | Cross-platform Release workflow fixes, CI test stability, monotonic clock cooldown bug |
-| **v1.9.1** (Apr 30) | 4-gate CI pipeline, shared AI context (AGENTS.md), v1.9.0 P0 fixes |
 
 ---
 
