@@ -1079,6 +1079,11 @@ class ChannelGateway:
             **({"sender_identity": sender_identity.to_dict()} if sender_identity else {}),
             **({"prior_session_id": prior_session_id} if prior_session_id else {}),
         }
+        # Per-channel model override (stored in config.model)
+        _channel_model = channel_config.get("model")
+        if _channel_model:
+            channel_context["model"] = _channel_model
+
         channel_type_str = channel.get("channel_type", "")
         if channel_type_str == "slack":
             channel_context["bot_token"] = channel_config.get("bot_token", "")
@@ -1161,6 +1166,8 @@ class ChannelGateway:
 
         reply_text = ""
         error_occurred = False
+        _ttft_start = time.monotonic()
+        _ttft_logged = False
         try:
             resume_sid = None if is_new_session else session_id
             async for event in session_registry.session_router.run_conversation(
@@ -1200,6 +1207,13 @@ class ChannelGateway:
                     continue
 
                 if event_type == "thinking_delta":
+                    if not _ttft_logged:
+                        _ttft_ms = (time.monotonic() - _ttft_start) * 1000
+                        logger.info(
+                            "channel_gateway.ttft session_id=%s model=%s ttft_ms=%.0f",
+                            session_id, _channel_model or "default", _ttft_ms,
+                        )
+                        _ttft_logged = True
                     thinking_text = event.get("thinking", "")
                     if thinking_text and ctx.in_thinking and ctx.native_streaming and ctx.streaming_msg_id:
                         ctx.native_pending_buf.append(thinking_text)
@@ -1214,6 +1228,13 @@ class ChannelGateway:
 
                 # ── Text streaming ────────────────────────────
                 if event_type == "text_delta":
+                    if not _ttft_logged:
+                        _ttft_ms = (time.monotonic() - _ttft_start) * 1000
+                        logger.info(
+                            "channel_gateway.ttft session_id=%s model=%s ttft_ms=%.0f",
+                            session_id, _channel_model or "default", _ttft_ms,
+                        )
+                        _ttft_logged = True
                     delta_text = event.get("text", "")
                     if delta_text:
                         ctx.stream_buf.append(delta_text)

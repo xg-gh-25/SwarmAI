@@ -171,6 +171,18 @@ async def update_channel(channel_id: str, request: ChannelUpdateRequest):
     if request.enable_mcp is not None:
         updates["enable_mcp"] = request.enable_mcp
 
+    # Per-channel model override: merge into config dict
+    if request.model is not None:
+        import json
+        existing_config = channel.get("config", "{}")
+        if isinstance(existing_config, str):
+            try:
+                existing_config = json.loads(existing_config)
+            except (json.JSONDecodeError, TypeError):
+                existing_config = {}
+        existing_config["model"] = request.model if request.model != "" else None
+        updates["config"] = existing_config
+
     if updates:
         updated = await db.channels.update(channel_id, updates)
         if updated:

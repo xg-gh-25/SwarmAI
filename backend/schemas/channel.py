@@ -21,6 +21,11 @@ class ChannelUpdateRequest(BaseModel):
     name: Optional[str] = None
     config: Optional[dict] = None
     agent_id: Optional[str] = None
+    model: Optional[str] = Field(
+        default=None,
+        description="Override model for this channel (e.g. 'claude-sonnet-4-6'). "
+                    "NULL uses the global default_model.",
+    )
     access_mode: Optional[Literal["open", "allowlist", "blocklist"]] = None
     allowed_senders: Optional[list[str]] = None
     blocked_senders: Optional[list[str]] = None

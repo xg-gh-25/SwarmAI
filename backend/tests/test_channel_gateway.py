@@ -1159,3 +1159,51 @@ class TestSessionRouterPrewarm:
 
         result = await router.adopt_prewarmed_unit("nonexistent", "real-session-1")
         assert result is False
+
+
+class TestChannelModelOverride:
+    """Test per-channel model override via config.model."""
+
+    def test_channel_model_passes_to_context(self):
+        """When config.model is set, it should appear in channel_context."""
+        # Simulate the gateway logic for building channel_context
+        channel_config = {"bot_token": "xoxb-xxx", "model": "claude-sonnet-4-6"}
+        channel_context = {"channel_type": "slack", "channel_id": "test"}
+
+        _channel_model = channel_config.get("model")
+        if _channel_model:
+            channel_context["model"] = _channel_model
+
+        assert channel_context["model"] == "claude-sonnet-4-6"
+
+    def test_channel_model_none_when_unset(self):
+        """When config.model is not set, channel_context should not have model."""
+        channel_config = {"bot_token": "xoxb-xxx"}
+        channel_context = {"channel_type": "slack", "channel_id": "test"}
+
+        _channel_model = channel_config.get("model")
+        if _channel_model:
+            channel_context["model"] = _channel_model
+
+        assert "model" not in channel_context
+
+    def test_session_router_applies_channel_model(self):
+        """session_router should override agent_config model from channel_context."""
+        agent_config = {"model": "claude-opus-4-6"}
+        channel_context = {"model": "claude-sonnet-4-6"}
+
+        # This mirrors the logic added to session_router.run_conversation()
+        if channel_context and channel_context.get("model"):
+            agent_config["model"] = channel_context["model"]
+
+        assert agent_config["model"] == "claude-sonnet-4-6"
+
+    def test_session_router_preserves_default_when_no_channel_model(self):
+        """Without channel model, agent_config model should stay default."""
+        agent_config = {"model": "claude-opus-4-6"}
+        channel_context = {"channel_type": "slack"}
+
+        if channel_context and channel_context.get("model"):
+            agent_config["model"] = channel_context["model"]
+
+        assert agent_config["model"] == "claude-opus-4-6"

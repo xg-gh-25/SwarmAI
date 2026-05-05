@@ -1002,6 +1002,12 @@ class SessionRouter:
             from .agent_defaults import build_agent_config
             agent_config = await build_agent_config(agent_id)
 
+        # Per-channel model override: channel_context["model"] takes precedence
+        # over the global default_model. This allows Slack to use Sonnet while
+        # chat tabs use Opus (or vice versa).
+        if channel_context and channel_context.get("model"):
+            agent_config["model"] = channel_context["model"]
+
         # Detect cold-start resume (Mechanism B): subprocess is gone but
         # session has prior messages in DB (app restarted or session evicted).
         # Set context injection flags so build_system_prompt() injects
