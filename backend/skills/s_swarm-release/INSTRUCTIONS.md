@@ -132,24 +132,25 @@ Stage 2 VERSION BUMP: PASS
 
 ## Stage 3: BUILD (3-5 min)
 
-**🚨 SANDBOX LIMITATION:** PyInstaller and Tauri builds CANNOT run inside the
-Claude Code sandbox (exit 137 = OOM kill, ~500MB-2GB RAM needed). The agent
-MUST delegate heavy builds to the user's Terminal.
+**🚨 MEMORY REQUIREMENT:** PyInstaller needs ~2GB free RAM. Exit 137 = macOS
+jetsam OOM kill. Check free memory before running. If < 4GB free, warn user
+to close apps first. Run with `run_in_background: true` to avoid blocking.
 
 **Execution method:**
-1. Present the user with the Terminal command:
+1. Check free memory (vm_stat). If < 4GB → warn, suggest freeing memory.
+2. Run build in background:
+   ```bash
+   cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop/scripts
+   bash build-backend.sh 2>&1 | tail -20
    ```
-   Please run in Terminal:
-   cd ~/Desktop/SwarmAI-Workspace/swarmai && ./prod.sh build
-   ```
-2. Wait for user confirmation that build completed
-3. Verify the result:
+   With `timeout: 600000` and `run_in_background: true`.
+3. When complete, verify:
    ```bash
    ls -la desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin
    python3 desktop/scripts/verify_build.py
    ```
 
-**NEVER run `bash build-backend.sh` or `./prod.sh build` directly via Bash tool.**
+**On exit 137:** Do NOT retry. Report OOM + suggest freeing memory.
 
 **Pass criteria:**
 - User confirms build completed
@@ -169,22 +170,23 @@ Stage 3 BUILD: PASS (user-built)
 
 Build the desktop application (Tauri → DMG on macOS).
 
-**🚨 SANDBOX LIMITATION:** Same as Stage 3 — Tauri/Rust compilation needs ~2GB RAM.
-Delegate to user Terminal.
+**🚨 MEMORY REQUIREMENT:** Tauri/Rust compilation needs ~2-3GB free RAM.
+Same OOM guard as Stage 3. Run in background with 600s timeout.
 
 **Execution method:**
-1. Present the user with the Terminal command:
+1. Check free memory. If < 5GB → warn user.
+2. Run in background:
+   ```bash
+   cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop
+   npm install && npm run tauri build 2>&1 | tail -20
    ```
-   Please run in Terminal:
-   cd ~/Desktop/SwarmAI-Workspace/swarmai/desktop && npm run tauri build
-   ```
-2. Wait for user confirmation
-3. Verify the output exists:
+   With `timeout: 600000` and `run_in_background: true`.
+3. Verify output:
    ```bash
    ls -la src-tauri/target/release/bundle/dmg/SwarmAI_*.dmg
    ```
 
-**NEVER run `npm run tauri build` directly via Bash tool.**
+**On exit 137:** Do NOT retry. Report OOM + suggest freeing memory.
 
 **Output locations:**
 - macOS DMG: `src-tauri/target/release/bundle/dmg/SwarmAI_<version>_aarch64.dmg`
