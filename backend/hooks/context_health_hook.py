@@ -191,6 +191,9 @@ class ContextHealthHook:
                 project_dir.name, len(freshness.changed_files),
             )
 
+    # High-volume dirs get compact summary instead of per-file table (saves ~1500 tokens)
+    _COMPACT_INDEX_DIRS = {"DailyActivity", "JobResults", "Signals"}
+
     def _refresh_knowledge_sync(self, root: Path) -> None:
         """Synchronous KNOWLEDGE.md index refresh — filesystem scan only."""
         knowledge_dir = root / "Knowledge"
@@ -211,6 +214,17 @@ class ContextHealthHook:
                 if f.suffix == ".md" and f.is_file()
             )
             if not files:
+                continue
+
+            # High-volume dirs: compact summary only (saves ~1500 tokens in system prompt)
+            if subdir.name in self._COMPACT_INDEX_DIRS:
+                first_date = files[0].stem[:10] if len(files[0].stem) > 10 else "unknown"
+                last_date = files[-1].stem[:10] if len(files[-1].stem) > 10 else "unknown"
+                index_lines.append(f"\n### {subdir.name}\n")
+                index_lines.append(
+                    f"{len(files)} files from {first_date} to {last_date}. "
+                    f"Pattern: `Knowledge/{subdir.name}/YYYY-MM-DD-*.md`. Read on demand."
+                )
                 continue
 
             index_lines.append(f"\n### {subdir.name}\n")
