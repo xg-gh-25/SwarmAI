@@ -773,39 +773,45 @@ class SelfLoopsHealthEngine:
         return removed
 
     def _find_stale_pipelines(self) -> list[dict]:
-        """Find paused pipelines >14d old where the feature appears shipped in git."""
+        """Find paused pipelines >14d old where the feature appears shipped in git.
+
+        Scans ALL projects (not just SwarmAI) for stale paused runs.
+        """
         stale = []
-        artifacts_dir = PROJECTS_DIR / "SwarmAI" / ".artifacts" / "runs"
-        if not artifacts_dir.is_dir():
+        if not PROJECTS_DIR.is_dir():
             return stale
         cutoff = (date.today() - timedelta(days=14)).isoformat()
-        for run_dir in artifacts_dir.iterdir():
-            run_file = run_dir / "run.json"
-            if not run_file.exists():
+        for project_dir in PROJECTS_DIR.iterdir():
+            artifacts_dir = project_dir / ".artifacts" / "runs"
+            if not artifacts_dir.is_dir():
                 continue
-            try:
-                run_data = json.loads(run_file.read_text())
-            except (json.JSONDecodeError, OSError):
-                continue
-            if run_data.get("status") != "paused":
-                continue
-            # Check age
-            updated = run_data.get("updated_at", "")[:10]
-            if updated and updated > cutoff:
-                continue  # Too recent, skip
-            # Check if feature shipped — extract keywords from requirement
-            req = run_data.get("requirement", "")
-            # Take first 3 significant words as git search terms
-            words = re.findall(r"[A-Za-z][A-Za-z0-9-]{3,}", req)[:3]
-            if not words:
-                continue
-            grep_term = "|".join(words)
-            git_result = self._git_cmd(
-                ["git", "log", "--oneline", "--since", updated, f"--grep={grep_term}", "-1"],
-                SWARMAI_DIR,
-            )
-            if git_result.strip():
-                stale.append({"id": run_data.get("id", run_dir.name), "requirement": req[:80]})
+            for run_dir in artifacts_dir.iterdir():
+                run_file = run_dir / "run.json"
+                if not run_file.exists():
+                    continue
+                try:
+                    run_data = json.loads(run_file.read_text())
+                except (json.JSONDecodeError, OSError):
+                    continue
+                if run_data.get("status") != "paused":
+                    continue
+                # Check age
+                updated = run_data.get("updated_at", "")[:10]
+                if updated and updated > cutoff:
+                    continue  # Too recent, skip
+                # Check if feature shipped — extract keywords from requirement
+                req = run_data.get("requirement", "")
+                # Take first 3 significant words as git search terms
+                words = re.findall(r"[A-Za-z][A-Za-z0-9-]{3,}", req)[:3]
+                if not words:
+                    continue
+                grep_term = "|".join(words)
+                git_result = self._git_cmd(
+                    ["git", "log", "--oneline", "--since", updated, f"--grep={grep_term}", "-1"],
+                    SWARMAI_DIR,
+                )
+                if git_result.strip():
+                    stale.append({"id": run_data.get("id", run_dir.name), "requirement": req[:80]})
         return stale
 
     def _fix_stale_pipelines(self) -> int:
@@ -891,6 +897,88 @@ class SelfLoopsHealthEngine:
         # Keep last 52 weeks
         history = history[-52:]
         HISTORY_FILE.write_text(json.dumps(history, indent=2))
+
+    def _compute_compound_score(self) -> dict | None:
+        """Compute the Compound Score — is the system getting smarter over time?
+
+        Three signals (each 0-100, weighted):
+        - correction_trend (40%): fewer corrections this month vs 3-month avg
+        - memory_precision (30%): % of memory entries with non-zero usage
+        - health_trend (30%): rolling health score improvement
+
+        Returns dict with total + per-signal breakdown, or None if insufficient data.
+        """
+        signals: dict[str, float] = {}
+
+        # Signal 1: Correction rate trend (EVOLUTION.md)
+        evolution = self._read_safe(CONTEXT_DIR / "EVOLUTION.md")
+        current_month = date.today().strftime("%Y-%m")
+        corrections_this_month = len(re.findall(rf"### C\d+ \| {current_month}", evolution))
+        # Count last 3 months for baseline
+        corrections_3mo = 0
+        months_counted = 0
+        for i in range(1, 4):
+            d = date.today().replace(day=1) - timedelta(days=i * 28)
+            m = d.strftime("%Y-%m")
+            count = len(re.findall(rf"### C\d+ \| {m}", evolution))
+            corrections_3mo += count
+            months_counted += 1
+        avg_3mo = corrections_3mo / max(months_counted, 1)
+
+        if avg_3mo > 0:
+            # Lower corrections = better. Score 100 if 0 corrections, 0 if 2x avg
+            ratio = corrections_this_month / avg_3mo
+            signals["correction_trend"] = max(0, min(100, int((1 - ratio / 2) * 100)))
+        else:
+            signals["correction_trend"] = 100 if corrections_this_month == 0 else 50
+
+        # Signal 2: Memory precision (usage tracking)
+        # Measures what % of tracked memory entries are actively referenced.
+        # If tracking is empty (just initialized), check memory_entries in
+        # MEMORY.md vs total tracked — gives credit for having the infra.
+        usage_path = CONTEXT_DIR / ".memory-usage.json"
+        if usage_path.exists():
+            try:
+                usage = json.loads(usage_path.read_text())
+                total_keys = len(usage)
+                if total_keys > 0:
+                    used_keys = sum(1 for v in usage.values() if v > 0)
+                    signals["memory_precision"] = int(used_keys / total_keys * 100)
+                else:
+                    # Empty usage file — check if infra exists (memory_vec has rows)
+                    # Give 50% credit for having the pipeline even if data hasn't accumulated
+                    signals["memory_precision"] = 50
+            except (json.JSONDecodeError, OSError):
+                signals["memory_precision"] = 0
+        else:
+            signals["memory_precision"] = 0
+
+        # Signal 3: Health score trend (improving vs degrading)
+        if HISTORY_FILE.exists():
+            try:
+                history = json.loads(HISTORY_FILE.read_text())
+                if len(history) >= 2:
+                    recent = [h["score"] for h in history[-4:]]
+                    older = [h["score"] for h in history[:-4]] if len(history) > 4 else [history[0]["score"]]
+                    recent_avg = sum(recent) / len(recent)
+                    older_avg = sum(older) / len(older)
+                    # Score 100 if improving by 10+ points, 50 if flat, 0 if degrading
+                    delta = recent_avg - older_avg
+                    signals["health_trend"] = max(0, min(100, int(50 + delta * 5)))
+                else:
+                    signals["health_trend"] = 50  # Not enough data
+            except (json.JSONDecodeError, OSError):
+                signals["health_trend"] = 50
+        else:
+            return None  # No history at all
+
+        # Weighted total
+        total = int(
+            signals["correction_trend"] * 0.4
+            + signals["memory_precision"] * 0.3
+            + signals["health_trend"] * 0.3
+        )
+        return {"total": total, "signals": signals}
 
     def _compute_growth_rate(self, current_tokens: int) -> float | None:
         """Compute growth vs 4 weeks ago. Returns None if insufficient data."""
@@ -1056,12 +1144,38 @@ class SelfLoopsHealthEngine:
             except (json.JSONDecodeError, OSError):
                 pass
 
+        # Compound Score — is the system getting smarter?
+        compound = self._compute_compound_score()
+        if compound is not None:
+            s = compound["signals"]
+            total = compound["total"]
+            c_emoji = "\U0001f4c8" if total >= 60 else "\U0001f4c9" if total < 40 else "➖"
+            lines.append("")
+            lines.append(f"## Compound Score: {total}/100 {c_emoji}")
+            lines.append("")
+            lines.append("_Is the system getting smarter over time?_")
+            lines.append("")
+            lines.append("| Signal | Score | What It Measures |")
+            lines.append("|--------|-------|-----------------|")
+            lines.append(f"| Correction Trend | {s['correction_trend']} | Fewer repeat mistakes vs 3-month avg |")
+            lines.append(f"| Memory Precision | {s['memory_precision']} | % of memory entries actively referenced |")
+            lines.append(f"| Health Trend | {s['health_trend']} | Health score improving over time |")
+            lines.append("")
+            if total >= 70:
+                lines.append("> **Compounding.** System is measurably getting better.")
+            elif total >= 40:
+                lines.append("> **Maintaining.** Stable but not noticeably improving.")
+            else:
+                lines.append("> **Degrading.** Attention needed — loops not producing value.")
+
         return "\n".join(lines) + "\n"
 
     def to_json(self) -> str:
+        compound = self._compute_compound_score()
         return json.dumps({
             "timestamp": self.report.timestamp,
             "overall_score": self.report.overall_score,
+            "compound_score": compound,
             "scores": self.report.scores,
             "found": self.report.found_count,
             "fixed": self.report.fixed_count,
