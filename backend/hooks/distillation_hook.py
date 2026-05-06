@@ -47,6 +47,9 @@ _IMPLEMENTATION_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 
+# Regex to detect session sections in DailyActivity (## HH:MM format)
+_DA_SECTION_RE = re.compile(r"^## \d{2}:\d{2}", re.MULTILINE)
+
 UNDISTILLED_THRESHOLD = 0  # Run every session close (was 2 — caused 1-2 day staleness)
 FLAG_FILENAME = ".needs_distillation"
 SCAN_DAYS = 30  # Only check files from last 30 days
@@ -890,9 +893,8 @@ class DistillationTriggerHook:
 
         # Marathon bypass: if any source DA file has >30 session sections,
         # it represents a marathon session — entries pass unconditionally.
-        _SECTION_RE = re.compile(r"^## \d{2}:\d{2}", re.MULTILINE)
         for df in da_files:
-            section_count = len(_SECTION_RE.findall(df.get("body", "")))
+            section_count = len(_DA_SECTION_RE.findall(df.get("body", "")))
             if section_count > 30:
                 return True  # Marathon session → bypass frequency gate
 

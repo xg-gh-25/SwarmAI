@@ -242,15 +242,21 @@ class WorkspaceAutoCommitHook:
             if remote_check.returncode != 0:
                 return  # No remote configured — silent skip
 
-            # Rate limit: check commits ahead of remote
-            ahead_check = subprocess.run(
-                ["git", "rev-list", "--count", "origin/HEAD..HEAD"],
-                cwd=ws_path, capture_output=True, text=True, timeout=5,
-            )
-            try:
-                commits_ahead = int(ahead_check.stdout.strip())
-            except (ValueError, AttributeError):
-                commits_ahead = 0
+            # Rate limit: check commits ahead of remote.
+            # Try origin/HEAD first; fall back to @{u} (upstream tracking ref)
+            # because origin/HEAD only exists after clone, can be stale.
+            commits_ahead = 0
+            for ref in ("origin/HEAD", "@{u}"):
+                ahead_check = subprocess.run(
+                    ["git", "rev-list", "--count", f"{ref}..HEAD"],
+                    cwd=ws_path, capture_output=True, text=True, timeout=5,
+                )
+                if ahead_check.returncode == 0:
+                    try:
+                        commits_ahead = int(ahead_check.stdout.strip())
+                    except (ValueError, AttributeError):
+                        continue
+                    break
 
             if commits_ahead == 0:
                 return  # Nothing to push
@@ -258,7 +264,7 @@ class WorkspaceAutoCommitHook:
             if commits_ahead < 20:
                 # Check time since last push (use reflog of remote tracking branch)
                 last_push_check = subprocess.run(
-                    ["git", "log", "-1", "--format=%ct", "origin/HEAD"],
+                    ["git", "log", "-1", "--format=%ct", "@{u}"],
                     cwd=ws_path, capture_output=True, text=True, timeout=5,
                 )
                 try:

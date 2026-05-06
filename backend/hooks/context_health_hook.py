@@ -643,12 +643,18 @@ class ContextHealthHook:
         insert_before = "## The 11 Context Files"
 
         if section_marker in content:
-            # Replace existing section (from marker to next ### or ##)
+            # Replace existing section (from marker to next ## or ### heading)
             start = content.find(section_marker)
-            # Find end: next heading at same or higher level
             rest = content[start + len(section_marker):]
             end_match = re.search(r"\n#{2,3} ", rest)
-            end_pos = start + len(section_marker) + end_match.start() if end_match else start + len(section_marker) + len(rest)
+            if end_match:
+                end_pos = start + len(section_marker) + end_match.start()
+            elif insert_before in rest:
+                # Fallback: find the known insertion anchor
+                end_pos = start + len(section_marker) + rest.find(insert_before)
+            else:
+                # Last resort: don't eat past the section — abort replace
+                return
             content = content[:start] + new_section + content[end_pos:]
         elif insert_before in content:
             # Insert before the marker
