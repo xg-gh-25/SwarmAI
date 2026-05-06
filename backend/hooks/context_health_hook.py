@@ -323,11 +323,21 @@ class ContextHealthHook:
                 except OSError:
                     continue
 
-            # Update scanned marker
+            # Update scanned marker — prune entries for files older than scan window (7d)
+            # Using date-based cutoff instead of count-based cap to prevent re-scanning
+            # files that fell off the cap but are still within the 7d mtime window (G1 fix).
             if new_scanned:
                 all_scanned = list(scanned_set) + new_scanned
-                # Keep only last 200 entries to prevent unbounded growth
-                scanned_marker.write_text("\n".join(all_scanned[-200:]), encoding="utf-8")
+                # Prune: only keep entries whose files still exist and are within 7d
+                mtime_cutoff = time.time() - 7 * 86400
+                pruned = []
+                for entry in all_scanned:
+                    try:
+                        if Path(entry).stat().st_mtime >= mtime_cutoff:
+                            pruned.append(entry)
+                    except OSError:
+                        pass  # File deleted — drop from marker
+                scanned_marker.write_text("\n".join(pruned), encoding="utf-8")
 
         # Source 2: DailyActivity (secondary — may contain refs from session summaries)
         daily_dir = root / "Knowledge" / "DailyActivity"
