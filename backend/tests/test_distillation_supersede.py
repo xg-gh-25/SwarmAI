@@ -166,3 +166,49 @@ class TestSupersedeByTopic:
         assert len(result) == 1
         # 2026-03-19 > 2026-03-18, and among two 03-19 entries, index 2 > index 0
         assert "v7 complete" in result[0]
+
+
+class TestCJKFingerprint:
+    """Tests for CJK (Chinese/Japanese/Korean) fingerprinting in _supersede_by_topic.
+
+    The original _fingerprint() only extracted English words, causing Chinese entries
+    to have empty fingerprints and never be grouped — producing duplicates like
+    LL06/LL10 (CJK 没有词边界) in MEMORY.md.
+    """
+
+    def test_chinese_entries_same_topic_collapse(self):
+        """Two Chinese entries about the same topic should collapse to newest."""
+        entries = [
+            "- 2026-05-03: **CJK 没有词边界 — set intersection 对中文永远不工作** — 第一版",
+            "- 2026-05-03: **CJK 没有词边界 — set intersection 对中文永远不工作** — 完整版修复",
+        ]
+        result = DistillationTriggerHook._supersede_by_topic(entries)
+        assert len(result) == 1
+        assert "完整版" in result[0]
+
+    def test_chinese_entries_different_topics_kept(self):
+        """Different Chinese topics should not collapse."""
+        entries = [
+            "- 2026-05-03: **两套系统做同一件事 = 迟早覆盖不全** — memory_guard 和 memory_validation 合并",
+            "- 2026-05-03: **CJK 没有词边界** — substring fallback 修复",
+        ]
+        result = DistillationTriggerHook._supersede_by_topic(entries)
+        assert len(result) == 2
+
+    def test_mixed_chinese_english_fingerprint(self):
+        """Entries with both Chinese and English share enough to group."""
+        entries = [
+            "- 2026-05-03: **Mock 数据格式 ≠ 生产 DB 格式 — E2E audit 是唯一验证** — 第一版",
+            "- 2026-05-03: **Mock 数据格式 ≠ 生产 DB 格式 — E2E audit 是唯一验证** — 完整版",
+        ]
+        result = DistillationTriggerHook._supersede_by_topic(entries)
+        assert len(result) == 1
+
+    def test_real_duplicate_entries_from_memory(self):
+        """Reproduce the exact duplicates found in MEMORY.md (LL06/LL10 bug)."""
+        entries = [
+            "- 2026-05-03: **CJK 没有词边界 — set intersection 对中文永远不工作，修 bug 必须 grep 相同 pattern** — 5 轮修才完成",
+            "- 2026-05-03: **CJK 没有词边界 — set intersection 对中文永远不工作，修 bug 必须 grep 相同 pattern** — PE review 才发现",
+        ]
+        result = DistillationTriggerHook._supersede_by_topic(entries)
+        assert len(result) == 1, f"Expected 1 (deduped), got {len(result)}: {result}"

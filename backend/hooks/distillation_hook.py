@@ -796,13 +796,22 @@ class DistillationTriggerHook:
         })
 
         def _fingerprint(text: str) -> set[str]:
-            """Extract meaningful words as a topic fingerprint."""
+            """Extract meaningful words as a topic fingerprint.
+
+            Handles both English words and CJK character sequences (LL06 fix:
+            Chinese entries had empty fingerprints because \\w+ regex only
+            matched English, causing duplicates to never be grouped).
+            """
             # Strip leading "- YYYY-MM-DD: " prefix
             cleaned = re.sub(r"^-\s*\d{4}-\d{2}-\d{2}:\s*", "", text)
             # Strip markdown bold
             cleaned = cleaned.replace("**", "")
+            # English words (existing)
             words = re.findall(r"[a-zA-Z][a-zA-Z0-9_.-]+", cleaned.lower())
-            return {w for w in words if w not in _STOP and len(w) > 2}
+            en_tokens = {w for w in words if w not in _STOP and len(w) > 2}
+            # CJK tokens: extract runs of 2+ CJK characters as fingerprint units
+            cjk_tokens = set(re.findall(r"[一-鿿]{2,}", cleaned))
+            return en_tokens | cjk_tokens
 
         def _extract_date(text: str) -> str:
             """Extract YYYY-MM-DD from entry prefix."""
@@ -1285,21 +1294,42 @@ class DistillationTriggerHook:
             else:
                 existing = ""
 
-            # Dedup: filter out entries already present (line-by-line match).
-            # Compare against existing lines to avoid substring false-positives.
-            # Use 120-char prefix (increased from 60) to distinguish entries
-            # that share a common date+category prefix but differ in content.
+            # Dedup: filter out entries already present using TWO strategies:
+            # (1) 120-char prefix match (existing, catches exact duplicates)
+            # (2) Bold-title match (new, catches entries with same topic but
+            #     different detail — e.g. [LL06] and [LL10] both titled
+            #     "CJK 没有词边界..." are the same lesson with different IDs)
             if existing:
                 existing_lines_lower = {
                     ln.strip()[:120].lower()
                     for ln in existing.splitlines()
                     if ln.strip()
                 }
+                # Extract bold titles from existing: "**Some Title**" → "some title"
+                existing_titles = set()
+                for ln in existing.splitlines():
+                    m = re.search(r"\*\*(.+?)\*\*", ln)
+                    if m:
+                        existing_titles.add(m.group(1).strip().lower())
+
                 new_lines = []
                 for line in text.splitlines():
                     entry_key = line.strip()[:120].lower()
+                    # Strategy 1: exact prefix match
                     if entry_key and entry_key in existing_lines_lower:
                         continue
+                    # Strategy 2: bold title match (catches reworded duplicates)
+                    title_match = re.search(r"\*\*(.+?)\*\*", line)
+                    if title_match:
+                        title = title_match.group(1).strip().lower()
+                        if title and title in existing_titles:
+                            logger.debug(
+                                "distillation dedup: skipping duplicate title '%s'",
+                                title[:60],
+                            )
+                            continue
+                        # Also add to existing_titles for intra-batch dedup
+                        existing_titles.add(title)
                     new_lines.append(line)
                 if not new_lines:
                     return  # all entries already present
