@@ -846,11 +846,17 @@ class DistillationTriggerHook:
                 # Threshold tuned for real entries: "Proactive Intelligence"
                 # appearing in both entries (2 words) should match even when
                 # surrounding details differ (version numbers, status verbs).
-                # Guard: both fingerprints must have ≥3 significant words.
-                # Entries like "Fixed bug" are too generic — collapsing them
-                # loses distinct information.
+                # Guard: both fingerprints must have ≥3 significant words
+                # for English. CJK tokens are much more specific (a single
+                # 5-char Chinese phrase like "两套系统做同一件事" is equivalent
+                # to 3+ English words in specificity). Count CJK tokens as 3x.
                 min_size = min(len(fp_i), len(fp_j))
-                if min_size >= 3 and len(overlap) >= max(2, min_size * 0.3):
+                # Effective size: CJK tokens count triple (high specificity)
+                has_cjk_overlap = any(
+                    len(t) >= 4 and ord(t[0]) >= 0x4E00 for t in overlap
+                )
+                effective_threshold = 1 if has_cjk_overlap else 3
+                if min_size >= effective_threshold and len(overlap) >= max(1 if has_cjk_overlap else 2, min_size * 0.3):
                     group.append(jdx)
                     assigned.add(jdx)
             groups.append(group)
