@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 import subprocess
 
 from core.session_hooks import HookContext
@@ -261,7 +262,6 @@ class WorkspaceAutoCommitHook:
                     cwd=ws_path, capture_output=True, text=True, timeout=5,
                 )
                 try:
-                    import time
                     last_push_ts = int(last_push_check.stdout.strip())
                     hours_since_push = (time.time() - last_push_ts) / 3600
                 except (ValueError, AttributeError):
