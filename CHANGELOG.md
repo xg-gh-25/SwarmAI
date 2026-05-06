@@ -5,6 +5,33 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.2] - 2026-05-06
+
+### Added
+
+- **Self-Loops Health Engine**: 31-check monitoring across 7 dimensions (context, memory, knowledge, evolution, coherence, brain safety, infrastructure). Auto-fixes mechanical issues, reports Found/Fixed/Pending. Weekly cron job + on-demand skill (`s_loops-health`)
+- **Compound Score**: Single 0-100 metric answering "is the system getting smarter?" — tracks correction trend, memory precision, and health trend over time
+- **Evolution Approval Gate**: HIGH-confidence skill optimizations now write proposals to `.evolution_proposals.json` + create Radar todo for human approval instead of silent deploy
+- **Knowledge Staleness Detection**: context_health_hook detects when backend code drifts >7 days ahead of KNOWLEDGE.md and surfaces a finding
+- **Memory Usage Tracking (fixed)**: Now scans session transcripts (JSONL) for memory key references. Previous implementation scanned DailyActivity (0 signal). 95 keys tracked with real usage data — cap eviction uses lowest-usage-first
+
+### Fixed
+
+- **Vector Embedding Silent Failure (P0)**: memory_vec was empty for weeks due to silent `logger.debug` on failures + cold-start timeout + no recovery path. Fixed with: WARNING-level logging, rate-limit (max 10 embeds/session), self-healing recovery for orphaned entries
+- **Auto-push Exception Handling**: `_auto_push` moved out of commit try-block — its exceptions no longer caught by commit timeout handler
+- **GIT_TERMINAL_PROMPT=0**: Added to all git push operations (prevents credential prompt blocking background hooks)
+- **Year Hardcoding**: Replaced `2026-*` glob patterns with `20[0-9][0-9]-*` (survives into 2027+)
+- **K1 Index False Positives**: Knowledge Index completeness check now scoped to `## Knowledge Index` section only (was matching inline code references — 134 false positives)
+- **DDD Injection Safety**: `is_file()` guard + defensive end-detection fallback
+- **C014 Session-Switch Gate**: Escalated to AGENT.md CRITICAL section (4th violation)
+
+### Changed
+
+- **Section Caps Rebalanced**: KD 30→40, LL 25→35 (relaxed — permanent knowledge), RC 30→20 (tightened — ephemeral)
+- **Memory Embedding Sync**: Rate-limited to 10 entries/call (~30s max). Cold-start completes over ~9 sessions instead of blocking one
+- **Cross-Loop Signal**: Distillation writes `.evolution_corrections_pending` → evolution hook triggers early cycle when ≥5 corrections pending
+- **Pipeline Report Titles**: Radar and Welcome page now show meaningful feature names instead of generic "Pipeline Report"
+
 ## [1.10.1] - 2026-05-05
 
 ### Added
