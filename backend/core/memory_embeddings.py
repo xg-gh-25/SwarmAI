@@ -228,14 +228,19 @@ class MemoryEmbeddingStore:
         self,
         memory_content: str,
         embed_fn: Callable[[str], list[float]],
+        max_embed: int = 10,
     ) -> dict:
         """Parse MEMORY.md and sync entries with delta detection.
 
         Only re-embeds entries whose content_hash has changed.
+        Rate-limited: embeds at most ``max_embed`` entries per call to avoid
+        blocking session close on cold-start (85 entries × 3s = 255s).
+        Full sync completes over multiple sessions.
 
         Args:
             memory_content: Full MEMORY.md content.
             embed_fn: Function to convert text → embedding vector.
+            max_embed: Max entries to embed per call (default 10 = ~30s max).
 
         Returns:
             Dict with sync stats: total_entries, embedded, skipped, removed.
@@ -275,6 +280,14 @@ class MemoryEmbeddingStore:
                 # Delta check: skip if hash unchanged
                 if existing_hashes.get(key) == content_hash:
                     stats["skipped"] += 1
+                    continue
+
+                # Rate limit: stop embedding after max_embed to avoid
+                # blocking session close (cold-start: 85 entries × 3s = 255s)
+                if stats["embedded"] + stats["embed_failed"] >= max_embed:
+                    # Still upsert metadata (for keyword search) but skip vector
+                    self.upsert_entry(key, sec_name, title, full_text, keywords, None)
+                    stats["embed_failed"] += 1
                     continue
 
                 # Embed and upsert (embedding=None is safe — metadata
