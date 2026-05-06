@@ -1,6 +1,6 @@
 ---
 name: loops-health
-description: "Self-maintenance engine: scan 7 dimensions (29 checks), auto-fix mechanical issues, report Found/Fixed/Pending, escalate only judgment calls."
+description: "Self-maintenance engine: scan 7 dimensions (31 checks), auto-fix mechanical issues, report Found/Fixed/Pending, escalate only judgment calls."
 trigger:
   - loops health
   - self-loops health

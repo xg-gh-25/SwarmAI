@@ -3,7 +3,7 @@
 Verifies that the health check engine:
 - Runs without errors on real workspace
 - Returns valid report with expected schema
-- Covers all 7 dimensions with 29 checks
+- Covers all 7 dimensions with 31 checks
 - Scoring handles n/a gracefully
 - Auto-fix doesn't corrupt files
 """
@@ -54,9 +54,9 @@ class TestHealthCheckSchema:
         # At minimum, core dims should always be present
         assert {"context", "memory", "knowledge", "evolution"}.issubset(actual_dims)
 
-    def test_30_checks(self, health_data):
+    def test_31_checks(self, health_data):
         data = health_data
-        assert len(data["findings"]) == 30
+        assert len(data["findings"]) == 31
 
     def test_finding_schema(self, health_data):
         data = health_data
@@ -103,9 +103,9 @@ class TestDimensionChecks:
 
     def test_infrastructure_checks(self, health_data):
         infra_checks = [f for f in health_data["findings"] if f["dimension"] == "infrastructure"]
-        assert len(infra_checks) == 5
+        assert len(infra_checks) == 6
         ids = {f["id"] for f in infra_checks}
-        assert ids == {"I1", "I2", "I3", "I4", "I5"}
+        assert ids == {"I1", "I2", "I3", "I4", "I5", "I6"}
 
 
 class TestAutoFix:

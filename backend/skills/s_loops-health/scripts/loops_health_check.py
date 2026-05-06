@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Self-Loops Health Engine — 29 checks across 7 dimensions.
+"""Self-Loops Health Engine — 31 checks across 7 dimensions.
 
 Scans all context files, DailyActivity, Knowledge/, Projects/, Evolution state,
 git backup, and infrastructure health. Auto-fixes safe mechanical issues.
@@ -213,10 +213,13 @@ class SelfLoopsHealthEngine:
         # Look for dates that are >30d old in OT entries
         ot_dates = re.findall(r"20\d{2}-\d{2}-\d{2}", ot_section)
         stale = sum(1 for d in ot_dates if (date.today() - date.fromisoformat(d)).days > 30)
+        # Count Resolved entries (candidates for auto-archive)
+        resolved_entries = len(re.findall(r"^- ✅", ot_section, re.MULTILINE))
         self.report.findings.append(Finding(
             id="M4", name="Open Threads hygiene", dimension="memory",
             status="pass" if stale == 0 else ("warn" if stale <= 2 else "fail"),
-            detail=f"{stale} stale date references in OT",
+            detail=f"{stale} stale date references in OT" + (f", {resolved_entries} resolved entries" if resolved_entries else ""),
+            auto_fixable=resolved_entries > 0,
         ))
 
         # M5: Archive health
@@ -569,6 +572,15 @@ class SelfLoopsHealthEngine:
             auto_fixable=bool(stale_locks),
         ))
 
+        # I6: Stale paused pipelines — paused >14d with feature already shipped in git
+        stale_pipelines = self._find_stale_pipelines()
+        self.report.findings.append(Finding(
+            id="I6", name="Stale pipelines", dimension="infrastructure",
+            status="pass" if not stale_pipelines else "warn",
+            detail=f"{len(stale_pipelines)} paused pipelines with shipped features" if stale_pipelines else "No stale pipelines",
+            auto_fixable=bool(stale_pipelines),
+        ))
+
     # ─── Auto-Remediation ────────────────────────────────────────────────────
 
     def _auto_remediate(self):
@@ -604,6 +616,11 @@ class SelfLoopsHealthEngine:
                     if self._fix_commit_context():
                         f.fixed = True
                         f.fix_action = "Committed critical files"
+                elif f.id == "M4":
+                    count = self._fix_ot_resolved()
+                    if count:
+                        f.fixed = True
+                        f.fix_action = f"Archived {count} resolved OT entries"
                 elif f.id == "M6":
                     count = self._fix_content_dedup()
                     if count:
@@ -613,6 +630,11 @@ class SelfLoopsHealthEngine:
                     count = self._fix_stale_locks()
                     f.fixed = True
                     f.fix_action = f"Removed {count} stale lock files"
+                elif f.id == "I6":
+                    count = self._fix_stale_pipelines()
+                    if count:
+                        f.fixed = True
+                        f.fix_action = f"Marked {count} stale pipelines as completed"
             except Exception as exc:
                 f.fix_action = f"Fix failed: {exc}"
 
@@ -713,6 +735,97 @@ class SelfLoopsHealthEngine:
             cwd=str(WORKSPACE), capture_output=True, text=True, timeout=30, env=env,
         )
         return result.returncode == 0
+
+    def _fix_ot_resolved(self) -> int:
+        """Remove resolved (✅) entries from Open Threads section.
+
+        These are already recorded in COE Registry and MEMORY archives.
+        Keeping them in OT causes M4 false positives from stale dates.
+        """
+        mem_path = CONTEXT_DIR / "MEMORY.md"
+        if not mem_path.exists():
+            return 0
+        content = mem_path.read_text(encoding="utf-8")
+        ot_start = content.find("## Open Threads")
+        if ot_start < 0:
+            return 0
+        # Find end of OT section (next ## or end of file)
+        ot_rest = content[ot_start:]
+        next_section = ot_rest.find("\n## ", 4)
+        if next_section < 0:
+            next_section = len(ot_rest)
+        ot_section = ot_rest[:next_section]
+
+        # Remove lines starting with "- ✅" (resolved entries)
+        lines = ot_section.split("\n")
+        new_lines = []
+        removed = 0
+        for line in lines:
+            if line.strip().startswith("- ✅"):
+                removed += 1
+            else:
+                new_lines.append(line)
+        if removed == 0:
+            return 0
+        new_ot = "\n".join(new_lines)
+        content = content[:ot_start] + new_ot + ot_rest[next_section:]
+        mem_path.write_text(content, encoding="utf-8")
+        return removed
+
+    def _find_stale_pipelines(self) -> list[dict]:
+        """Find paused pipelines >14d old where the feature appears shipped in git."""
+        stale = []
+        artifacts_dir = PROJECTS_DIR / "SwarmAI" / ".artifacts" / "runs"
+        if not artifacts_dir.is_dir():
+            return stale
+        cutoff = (date.today() - timedelta(days=14)).isoformat()
+        for run_dir in artifacts_dir.iterdir():
+            run_file = run_dir / "run.json"
+            if not run_file.exists():
+                continue
+            try:
+                run_data = json.loads(run_file.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+            if run_data.get("status") != "paused":
+                continue
+            # Check age
+            updated = run_data.get("updated_at", "")[:10]
+            if updated and updated > cutoff:
+                continue  # Too recent, skip
+            # Check if feature shipped — extract keywords from requirement
+            req = run_data.get("requirement", "")
+            # Take first 3 significant words as git search terms
+            words = re.findall(r"[A-Za-z][A-Za-z0-9-]{3,}", req)[:3]
+            if not words:
+                continue
+            grep_term = "|".join(words)
+            git_result = self._git_cmd(
+                ["git", "log", "--oneline", "--since", updated, f"--grep={grep_term}", "-1"],
+                SWARMAI_DIR,
+            )
+            if git_result.strip():
+                stale.append({"id": run_data.get("id", run_dir.name), "requirement": req[:80]})
+        return stale
+
+    def _fix_stale_pipelines(self) -> int:
+        """Mark stale paused pipelines as completed."""
+        stale = self._find_stale_pipelines()
+        fixed = 0
+        for item in stale:
+            run_id = item["id"]
+            run_file = PROJECTS_DIR / "SwarmAI" / ".artifacts" / "runs" / run_id / "run.json"
+            if not run_file.exists():
+                continue
+            try:
+                data = json.loads(run_file.read_text())
+                data["status"] = "completed"
+                data["updated_at"] = datetime.now(timezone.utc).isoformat()
+                run_file.write_text(json.dumps(data, indent=2))
+                fixed += 1
+            except (json.JSONDecodeError, OSError):
+                continue
+        return fixed
 
     def _fix_content_dedup(self) -> int:
         """Remove duplicate entries from MEMORY.md body (same bold title = same entry).
