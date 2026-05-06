@@ -243,8 +243,11 @@ class SelfLoopsHealthEngine:
         # K1: Index completeness (only checks dirs that SHOULD be indexed —
         # excludes DailyActivity, Signals, JobResults, Archives, Pollinate which
         # are intentionally excluded from the Knowledge Index)
-        # Index uses format: `Subdir/filename.md` or `filename.md`
-        indexed_files = set(re.findall(r"`([^`]+\.md)`", knowledge))
+        # Index uses format: `Subdir/YYYY-MM-DD-topic.md` in table rows (| date | `file` | topic |)
+        # Only match inside Knowledge Index tables to avoid false matches from
+        # inline code references in architecture docs.
+        ki_section = self._extract_section(knowledge, "## Knowledge Index", "")
+        indexed_files = set(re.findall(r"`([^`]+\.md)`", ki_section))
         # Normalize: extract just filename from indexed paths
         indexed_basenames = {Path(f).name for f in indexed_files}
         actual_files: set[str] = set()
@@ -498,14 +501,23 @@ class SelfLoopsHealthEngine:
 
         # I3: Token budget
         total_tokens = 0
+        system_owned = 0  # P0-P2: SWARMAI, IDENTITY, SOUL (not reducible)
+        agent_md_tokens = 0  # P3: AGENT.md (system-owned, large)
+        system_names = {"SWARMAI.md", "IDENTITY.md", "SOUL.md"}
         for f in CONTEXT_DIR.glob("*.md"):
             if f.name.startswith("L0") or f.name == "USER.example.md":
                 continue
-            total_tokens += f.stat().st_size // 4
+            tokens = f.stat().st_size // 4
+            total_tokens += tokens
+            if f.name in system_names:
+                system_owned += tokens
+            elif f.name == "AGENT.md":
+                agent_md_tokens = tokens
+        non_reducible = system_owned + agent_md_tokens
         self.report.findings.append(Finding(
             id="I3", name="Token budget", dimension="infrastructure",
             status="pass" if total_tokens < 40000 else ("warn" if total_tokens < 60000 else "fail"),
-            detail=f"{total_tokens:,} tokens (threshold: 40K warn, 60K critical)",
+            detail=f"{total_tokens:,} tokens ({non_reducible:,} system-owned/non-reducible: AGENT {agent_md_tokens:,} + core {system_owned:,})",
         ))
 
         # I4: Growth rate (from history)
@@ -749,11 +761,16 @@ class SelfLoopsHealthEngine:
 
     @staticmethod
     def _extract_section(text: str, start_marker: str, end_marker: str) -> str:
-        """Extract text between two ## markers."""
+        """Extract text between two ## markers.
+
+        If end_marker is empty string, returns everything from start_marker to EOF.
+        """
         start = text.find(start_marker)
         if start < 0:
             return ""
         after_start = start + len(start_marker)
+        if not end_marker:
+            return text[after_start:]
         # Find next section header (## ) after this one
         end = text.find(f"\n{end_marker}", after_start)
         if end < 0:
@@ -763,9 +780,12 @@ class SelfLoopsHealthEngine:
     @staticmethod
     def _git_cmd(cmd: list[str], cwd: Path, allow_fail: bool = False) -> str:
         try:
+            # GIT_TERMINAL_PROMPT=0 prevents credential prompts from blocking
+            # (e.g., push --dry-run with expired HTTPS token)
+            env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
             result = subprocess.run(
                 cmd, cwd=str(cwd), capture_output=True, text=True,
-                timeout=CHECK_TIMEOUT,
+                timeout=CHECK_TIMEOUT, env=env,
             )
             if result.returncode != 0 and not allow_fail:
                 return ""
@@ -835,7 +855,13 @@ class SelfLoopsHealthEngine:
             lines.append("")
             for f in unfixed:
                 icon = "\U0001f534" if f.status == "fail" else "\U0001f7e1"
-                lines.append(f"- {icon} **{f.id} {f.name}** — {f.detail}")
+                # Add actionability hint so users know what needs action vs what's informational
+                hint = ""
+                if f.auto_fixable:
+                    hint = " *(auto-fixable — run with --auto-fix)*"
+                elif f.status == "warn" and not f.auto_fixable:
+                    hint = " *(known — monitor only)*"
+                lines.append(f"- {icon} **{f.id} {f.name}** — {f.detail}{hint}")
 
         # Trend
         if HISTORY_FILE.exists():
