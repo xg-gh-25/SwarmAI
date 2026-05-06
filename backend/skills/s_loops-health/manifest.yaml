@@ -1,7 +1,7 @@
 scripts:
   - name: loops_health_check
     path: scripts/loops_health_check.py
-    description: "Self-loops health engine — 29 checks, 7 dimensions, auto-fix + report"
+    description: "Self-loops health engine — 31 checks, 7 dimensions, auto-fix + report"
     entry_point: main
     args:
       - "--auto-fix"
