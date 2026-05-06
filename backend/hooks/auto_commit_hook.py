@@ -161,17 +161,18 @@ class WorkspaceAutoCommitHook:
             )
             logger.info("Auto-committed workspace: %s", message)
 
-            # 6. Auto-push to remote (brain safety)
-            # Only push if remote exists and dry-run succeeds.
-            # Non-blocking: failure is logged, not raised.
-            self._auto_push(ws_path)
-
         except subprocess.TimeoutExpired:
             logger.warning(
                 "Git operation timed out after %ds (likely index.lock contention) — "
                 "skipping auto-commit, changes will be picked up next time",
                 self.GIT_TIMEOUT,
             )
+            return  # Don't push if commit failed
+
+        # 6. Auto-push to remote (brain safety)
+        # Runs AFTER the commit try-block so its exceptions don't get caught
+        # by the commit timeout handler. _auto_push has its own exception handling.
+        self._auto_push(ws_path)
 
     @staticmethod
     def _parse_diff_stat(diff_output: str) -> list[str]:

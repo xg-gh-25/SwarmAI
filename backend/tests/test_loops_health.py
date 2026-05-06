@@ -54,9 +54,9 @@ class TestHealthCheckSchema:
         # At minimum, core dims should always be present
         assert {"context", "memory", "knowledge", "evolution"}.issubset(actual_dims)
 
-    def test_29_checks(self, health_data):
+    def test_30_checks(self, health_data):
         data = health_data
-        assert len(data["findings"]) == 29
+        assert len(data["findings"]) == 30
 
     def test_finding_schema(self, health_data):
         data = health_data
@@ -85,9 +85,9 @@ class TestDimensionChecks:
 
     def test_memory_checks(self, health_data):
         mem_checks = [f for f in health_data["findings"] if f["dimension"] == "memory"]
-        assert len(mem_checks) == 5
+        assert len(mem_checks) == 6
         ids = {f["id"] for f in mem_checks}
-        assert ids == {"M1", "M2", "M3", "M4", "M5"}
+        assert ids == {"M1", "M2", "M3", "M4", "M5", "M6"}
 
     def test_evolution_checks(self, health_data):
         evo_checks = [f for f in health_data["findings"] if f["dimension"] == "evolution"]

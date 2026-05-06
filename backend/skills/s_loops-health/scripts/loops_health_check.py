@@ -166,7 +166,7 @@ class SelfLoopsHealthEngine:
         # M1: Distillation recency — parse dates from Recent Context + Key Decisions
         rc_section = self._extract_section(memory, "## Recent Context", "## Key Decisions")
         kd_section = self._extract_section(memory, "## Key Decisions", "## Lessons Learned")
-        dates = re.findall(r"2026-\d{2}-\d{2}", rc_section + kd_section)
+        dates = re.findall(r"20\d{2}-\d{2}-\d{2}", rc_section + kd_section)
         if dates:
             newest = max(dates)
             gap = (date.today() - date.fromisoformat(newest)).days
@@ -182,7 +182,7 @@ class SelfLoopsHealthEngine:
         da_dir = KNOWLEDGE_DIR / "DailyActivity"
         undistilled = 0
         if da_dir.exists():
-            for f in da_dir.glob("2026-*.md"):
+            for f in da_dir.glob("20[0-9][0-9]-*.md"):
                 head = self._read_safe(f, limit=300)
                 if "distilled: true" not in head:
                     undistilled += 1
@@ -222,7 +222,7 @@ class SelfLoopsHealthEngine:
         # M5: Archive health
         if da_dir.exists():
             cutoff = (date.today() - timedelta(days=90)).isoformat()
-            old = [f.name for f in da_dir.glob("2026-*.md") if f.stem < cutoff]
+            old = [f.name for f in da_dir.glob("20[0-9][0-9]-*.md") if f.stem < cutoff]
             self.report.findings.append(Finding(
                 id="M5", name="Archive health", dimension="memory",
                 status="pass" if not old else "warn",
@@ -310,7 +310,7 @@ class SelfLoopsHealthEngine:
 
         # K3: Capability coverage (RC entries reflected)
         memory = self._read_safe(CONTEXT_DIR / "MEMORY.md")
-        rc_terms = re.findall(r"\[RC\d+\] 2026-\d{2}-\d{2} (.+?)(?:\s*[—|])", memory[:5000])
+        rc_terms = re.findall(r"\[RC\d+\] 20\d{2}-\d{2}-\d{2} (.+?)(?:\s*[—|])", memory[:5000])
         arch_section = knowledge[:knowledge.find("## Knowledge Index")] if "## Knowledge Index" in knowledge else knowledge
         gaps = sum(1 for term in rc_terms[:5] if term[:20].lower() not in arch_section.lower())
         self.report.findings.append(Finding(
@@ -396,7 +396,7 @@ class SelfLoopsHealthEngine:
         evolution = self._read_safe(CONTEXT_DIR / "EVOLUTION.md")
 
         # X1: Memory→Knowledge sync
-        rc_terms = re.findall(r"\[RC\d+\] 2026-\d{2}-\d{2} (.+?)(?:\s*[—|])", memory[:5000])
+        rc_terms = re.findall(r"\[RC\d+\] 20\d{2}-\d{2}-\d{2} (.+?)(?:\s*[—|])", memory[:5000])
         arch = knowledge[:knowledge.find("## Knowledge Index")] if "## Knowledge Index" in knowledge else ""
         unsynced = sum(1 for t in rc_terms[:5] if t[:15].lower() not in arch.lower())
         self.report.findings.append(Finding(
@@ -418,9 +418,9 @@ class SelfLoopsHealthEngine:
         # X3: DA→Memory lag
         da_dir = KNOWLEDGE_DIR / "DailyActivity"
         if da_dir.exists():
-            da_files = sorted(da_dir.glob("2026-*.md"))
+            da_files = sorted(da_dir.glob("20[0-9][0-9]-*.md"))
             latest_da = da_files[-1].stem if da_files else "none"
-            mem_dates = re.findall(r"2026-\d{2}-\d{2}", memory[:5000])
+            mem_dates = re.findall(r"20\d{2}-\d{2}-\d{2}", memory[:5000])
             latest_mem = max(mem_dates) if mem_dates else "none"
             lag = 0
             if latest_da != "none" and latest_mem != "none":
@@ -654,12 +654,22 @@ class SelfLoopsHealthEngine:
             if len(content) < 100:
                 return False
 
+        # Stage .context/ files
         result = subprocess.run(
             ["git", "add", ".context/"], cwd=str(WORKSPACE),
             capture_output=True, timeout=CHECK_TIMEOUT,
         )
         if result.returncode != 0:
             return False
+
+        # Check if there's actually something staged (avoids empty commit failure)
+        status = subprocess.run(
+            ["git", "diff", "--cached", "--quiet", ".context/"],
+            cwd=str(WORKSPACE), capture_output=True, timeout=CHECK_TIMEOUT,
+        )
+        if status.returncode == 0:
+            return True  # Nothing staged — state is already clean
+
         result = subprocess.run(
             ["git", "commit", "-m", "chore: auto-commit context (loops-health)"],
             cwd=str(WORKSPACE), capture_output=True, timeout=CHECK_TIMEOUT,
@@ -684,7 +694,7 @@ class SelfLoopsHealthEngine:
         archive_dir.mkdir(exist_ok=True)
         cutoff = (date.today() - timedelta(days=90)).isoformat()
         archived = 0
-        for f in da_dir.glob("2026-*.md"):
+        for f in da_dir.glob("20[0-9][0-9]-*.md"):
             if f.stem < cutoff:
                 head = f.read_text(encoding="utf-8", errors="ignore")[:300]
                 if "distilled: true" in head:
@@ -697,9 +707,10 @@ class SelfLoopsHealthEngine:
         dry = self._git_cmd(["git", "push", "--dry-run", "origin", "HEAD"], WORKSPACE, allow_fail=True)
         if "fatal" in dry or "error" in dry.lower():
             return False
+        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
         result = subprocess.run(
             ["git", "push", "origin", "HEAD"],
-            cwd=str(WORKSPACE), capture_output=True, text=True, timeout=30,
+            cwd=str(WORKSPACE), capture_output=True, text=True, timeout=30, env=env,
         )
         return result.returncode == 0
 
