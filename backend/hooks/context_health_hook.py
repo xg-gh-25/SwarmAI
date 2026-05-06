@@ -398,7 +398,14 @@ class ContextHealthHook:
         available for user recall queries even in full-injection mode.
 
         Only re-embeds entries whose content changed (via content_hash).
-        Failures are silent — hybrid retrieval degrades to keyword-only.
+
+        Recovery: detects entries with metadata but no vector (embed_failed
+        on a prior run) and retries them. This prevents the "stuck forever"
+        state where delta-sync skips because hash matches but vector is empty.
+
+        Rate-limiting: on cold-start (>20 entries to embed), processes max 10
+        per session to avoid blocking session close. Full sync completes over
+        multiple sessions (~9 sessions for 85 entries).
         """
         try:
             from core.memory_embeddings import MemoryEmbeddingStore
@@ -407,34 +414,64 @@ class ContextHealthHook:
 
             with open_vec_db() as conn:
                 if conn is None:
+                    logger.warning("context_health: vec_db conn is None — sqlite-vec not available")
                     return
 
                 store = MemoryEmbeddingStore(conn)
                 store.ensure_tables()
 
                 client = EmbeddingClient()
+                embed_failures = 0
 
                 def _safe_embed(text: str) -> list[float] | None:
-                    """Embed text, returning None (not []) on failure.
-
-                    Returning None causes sync_from_memory to skip the
-                    vector upsert — no garbage zero-vectors in the index.
-                    """
-                    return client.embed_text(text)
+                    """Embed text, returning None on failure. Tracks failures."""
+                    nonlocal embed_failures
+                    result = client.embed_text(text)
+                    if result is None:
+                        embed_failures += 1
+                    return result
 
                 stats = store.sync_from_memory(
                     memory_content,
                     embed_fn=_safe_embed,
                 )
 
-            if stats["embedded"] > 0:
+                # Recovery: find entries with metadata but no vector (orphaned
+                # from prior failed embed attempts). Re-embed up to 10 per session.
+                orphaned = conn.execute("""
+                    SELECT me.key, me.full_text FROM memory_entries me
+                    LEFT JOIN memory_vec mv ON me.key = mv.key
+                    WHERE mv.key IS NULL
+                    LIMIT 10
+                """).fetchall()
+
+                recovery_count = 0
+                for key, full_text in orphaned:
+                    vec = client.embed_text(full_text)
+                    if vec is not None:
+                        store._upsert_vec(key, vec)
+                        recovery_count += 1
+                if recovery_count:
+                    conn.commit()
+
+            # Always log at INFO level so failures are visible in daemon logs
+            total_actioned = stats["embedded"] + recovery_count
+            if total_actioned > 0 or embed_failures > 0:
                 logger.info(
-                    "context_health: memory embeddings synced — "
-                    "%d embedded, %d skipped, %d removed",
-                    stats["embedded"], stats["skipped"], stats["removed"],
+                    "context_health: memory embeddings — "
+                    "embedded=%d, recovered=%d, skipped=%d, removed=%d, failed=%d",
+                    stats["embedded"], recovery_count,
+                    stats["skipped"], stats["removed"], embed_failures,
+                )
+            elif stats["skipped"] > 0:
+                logger.debug(
+                    "context_health: memory embeddings — all %d entries up-to-date",
+                    stats["skipped"],
                 )
         except Exception as exc:
-            logger.debug("context_health: memory embedding sync skipped: %s", exc)
+            # Log at WARNING (not debug!) — silent failures here caused memory_vec
+            # to stay empty for weeks. This is P0 infrastructure.
+            logger.warning("context_health: memory embedding sync FAILED: %s", exc)
 
     def _sync_knowledge_library(self, root: Path) -> None:
         """Incremental sync of Knowledge/ files into FTS5 + sqlite-vec.
