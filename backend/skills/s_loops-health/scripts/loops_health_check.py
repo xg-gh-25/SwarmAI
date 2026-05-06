@@ -805,9 +805,12 @@ class SelfLoopsHealthEngine:
                 words = re.findall(r"[A-Za-z][A-Za-z0-9-]{3,}", req)[:3]
                 if not words:
                     continue
-                grep_term = "|".join(words)
+                # git log --grep doesn't support | natively; use multiple --grep (implicit OR)
+                grep_args = []
+                for w in words:
+                    grep_args.extend(["--grep", w])
                 git_result = self._git_cmd(
-                    ["git", "log", "--oneline", "--since", updated, f"--grep={grep_term}", "-1"],
+                    ["git", "log", "--oneline", "--since", updated, *grep_args, "-1"],
                     SWARMAI_DIR,
                 )
                 if git_result.strip():
@@ -820,30 +823,42 @@ class SelfLoopsHealthEngine:
         fixed = 0
         for item in stale:
             run_id = item["id"]
-            run_file = PROJECTS_DIR / "SwarmAI" / ".artifacts" / "runs" / run_id / "run.json"
-            if not run_file.exists():
-                continue
-            try:
-                data = json.loads(run_file.read_text())
-                data["status"] = "completed"
-                data["updated_at"] = datetime.now(timezone.utc).isoformat()
-                run_file.write_text(json.dumps(data, indent=2))
-                fixed += 1
-            except (json.JSONDecodeError, OSError):
-                continue
+            # Search all projects for this run_id
+            for project_dir in PROJECTS_DIR.iterdir():
+                run_file = project_dir / ".artifacts" / "runs" / run_id / "run.json"
+                if not run_file.exists():
+                    continue
+                try:
+                    data = json.loads(run_file.read_text())
+                    data["status"] = "completed"
+                    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    run_file.write_text(json.dumps(data, indent=2))
+                    fixed += 1
+                except (json.JSONDecodeError, OSError):
+                    continue
+                break  # Found the run, no need to check other projects
         return fixed
 
     def _fix_content_dedup(self) -> int:
         """Remove duplicate entries from MEMORY.md body (same bold title = same entry).
 
         Keeps the FIRST occurrence (which is the newest due to prepend ordering)
-        and removes subsequent duplicates. Only operates on body sections, not index.
+        and removes subsequent duplicates. Only operates BELOW the index marker
+        (MEMORY_INDEX_END) to avoid removing index entries.
         """
         mem_path = CONTEXT_DIR / "MEMORY.md"
         if not mem_path.exists():
             return 0
         content = mem_path.read_text(encoding="utf-8")
-        lines = content.split("\n")
+        # Split at index end marker — only dedup the body
+        marker = "<!-- MEMORY_INDEX_END -->"
+        marker_pos = content.find(marker)
+        if marker_pos < 0:
+            return 0  # No marker = don't touch (safety)
+        header = content[:marker_pos + len(marker)]
+        body = content[marker_pos + len(marker):]
+
+        lines = body.split("\n")
         seen_titles: set[str] = set()
         new_lines: list[str] = []
         removed = 0
@@ -857,7 +872,7 @@ class SelfLoopsHealthEngine:
                 seen_titles.add(title)
             new_lines.append(line)
         if removed > 0:
-            mem_path.write_text("\n".join(new_lines), encoding="utf-8")
+            mem_path.write_text(header + "\n".join(new_lines), encoding="utf-8")
         return removed
 
     def _fix_stale_locks(self) -> int:
