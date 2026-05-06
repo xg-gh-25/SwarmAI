@@ -57,23 +57,33 @@ Stage 1 PREFLIGHT: PASS
 
 The longest stage. PyInstaller requires ~500MB RAM + full filesystem access.
 
-**🚨 SANDBOX LIMITATION:** PyInstaller CANNOT run inside the Claude Code sandbox
-(exit 137 = OOM kill). The agent MUST delegate this to the user's Terminal.
+**🚨 MEMORY REQUIREMENT:** PyInstaller needs ~2GB free RAM. Exit 137 = macOS
+jetsam OOM kill. Before running, check available memory:
 
-**Execution method:**
-1. Print the command for the user to run in Terminal:
-   ```
-   Please run in Terminal:
-   cd ~/Desktop/SwarmAI-Workspace/swarmai && ./prod.sh build
-   ```
-2. Wait for user to confirm it completed
-3. Verify the binary exists:
-   ```bash
-   ls -la desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin
-   ```
+```bash
+# Pre-check: need at least 4GB free (2GB for PyInstaller + 2GB headroom)
+FREE_GB=$(vm_stat | awk '/Pages free|Pages inactive/ {sum += $NF} END {printf "%.0f", sum*4096/1024/1024/1024}')
+echo "Free memory: ${FREE_GB}GB"
+if [ "$FREE_GB" -lt 4 ]; then
+  echo "WARN: Only ${FREE_GB}GB free. Build may OOM. Close other apps first."
+fi
+```
 
-**NEVER run `bash build-backend.sh` or `./prod.sh build` directly via Bash tool.**
-It will OOM-kill every time (exit 137). This is a sandbox constraint, not a code bug.
+If memory is sufficient, run the build directly:
+
+```bash
+cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop/scripts
+bash build-backend.sh 2>&1 | tail -20
+```
+
+Use `timeout: 600000` (10 min max) and `run_in_background: true` to avoid
+blocking the conversation. Do NOT retry on exit 137 — it means OOM, not a
+code bug. Ask user to close apps and free memory first.
+
+**On exit 137 (OOM kill):**
+1. Do NOT retry immediately (same result)
+2. Report: "Build killed by macOS memory pressure (exit 137). ~XGB free, need 4GB+."
+3. Suggest: "Close other apps or restart daemon to free memory, then retry."
 
 **Pass criteria:**
 - User confirms build completed
