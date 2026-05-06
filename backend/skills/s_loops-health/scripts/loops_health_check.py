@@ -235,6 +235,28 @@ class SelfLoopsHealthEngine:
                 status="n/a", detail="DailyActivity dir not found",
             ))
 
+        # M6: Content dedup — detect duplicate entries in MEMORY.md body
+        # Extracts **bold titles** from Lessons Learned and Key Decisions;
+        # exact title duplicates indicate distillation promoted the same lesson twice.
+        dupes_found: list[str] = []
+        for section_name in ("Lessons Learned", "Key Decisions", "Recent Context"):
+            section = self._extract_section(memory, f"## {section_name}", "## ")
+            titles_seen: dict[str, int] = {}
+            for line in section.split("\n"):
+                m = re.search(r"\*\*(.+?)\*\*", line)
+                if m:
+                    title = m.group(1).strip().lower()
+                    if title in titles_seen:
+                        dupes_found.append(f"{section_name}: '{title[:50]}...'")
+                    else:
+                        titles_seen[title] = 1
+        self.report.findings.append(Finding(
+            id="M6", name="Content dedup", dimension="memory",
+            status="pass" if not dupes_found else "warn",
+            detail=", ".join(dupes_found[:3]) if dupes_found else "No duplicates",
+            auto_fixable=bool(dupes_found),
+        ))
+
     # ─── Dimension 3: Self-Knowledge ─────────────────────────────────────────
 
     def _check_knowledge(self):
@@ -582,6 +604,11 @@ class SelfLoopsHealthEngine:
                     if self._fix_commit_context():
                         f.fixed = True
                         f.fix_action = "Committed critical files"
+                elif f.id == "M6":
+                    count = self._fix_content_dedup()
+                    if count:
+                        f.fixed = True
+                        f.fix_action = f"Removed {count} duplicate entries from MEMORY.md"
                 elif f.id == "I5":
                     count = self._fix_stale_locks()
                     f.fixed = True
@@ -675,6 +702,33 @@ class SelfLoopsHealthEngine:
             cwd=str(WORKSPACE), capture_output=True, text=True, timeout=30,
         )
         return result.returncode == 0
+
+    def _fix_content_dedup(self) -> int:
+        """Remove duplicate entries from MEMORY.md body (same bold title = same entry).
+
+        Keeps the FIRST occurrence (which is the newest due to prepend ordering)
+        and removes subsequent duplicates. Only operates on body sections, not index.
+        """
+        mem_path = CONTEXT_DIR / "MEMORY.md"
+        if not mem_path.exists():
+            return 0
+        content = mem_path.read_text(encoding="utf-8")
+        lines = content.split("\n")
+        seen_titles: set[str] = set()
+        new_lines: list[str] = []
+        removed = 0
+        for line in lines:
+            m = re.search(r"\*\*(.+?)\*\*", line)
+            if m and line.strip().startswith("- "):
+                title = m.group(1).strip().lower()
+                if title in seen_titles:
+                    removed += 1
+                    continue  # skip duplicate
+                seen_titles.add(title)
+            new_lines.append(line)
+        if removed > 0:
+            mem_path.write_text("\n".join(new_lines), encoding="utf-8")
+        return removed
 
     def _fix_stale_locks(self) -> int:
         """Remove lock files older than 1 hour."""
