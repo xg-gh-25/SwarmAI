@@ -17,6 +17,7 @@ import logging
 import os
 import re
 import subprocess
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -250,37 +251,86 @@ class ContextHealthHook:
             logger.warning("context_health: KNOWLEDGE.md refresh failed: %s", exc)
 
     def _track_memory_usage(self, root: Path) -> None:
-        """Scan recent DailyActivity for memory key references.
+        """Scan session transcripts for memory key references.
 
         Finds patterns like ``[RC04]``, ``[KD05]``, ``[LL07]``, ``[COE02]``
-        in DailyActivity files from the last 7 days and writes cumulative
-        counts to ``.context/.memory-usage.json``.
+        in recent Claude session transcripts (JSONL) where the agent actually
+        references memory entries during conversations.
+
+        Previous implementation scanned DailyActivity (0 signal — DA never
+        contains memory keys). Session transcripts DO contain them in both
+        tool_use blocks and assistant responses.
 
         Distillation reads this file to decide eviction order: entries with
         zero usage are evicted first when section caps are exceeded, forming
         the compound loop: use → track → evict unused → memory improves.
         """
-        daily_dir = root / "Knowledge" / "DailyActivity"
-        if not daily_dir.is_dir():
-            return
-
-        cutoff = (date.today() - timedelta(days=7)).isoformat()
-        usage: dict[str, int] = {}
         _KEY_RE = re.compile(r"\[([A-Z]{2,3}\d{2,3})\]")
 
-        for f in sorted(daily_dir.glob("*.md"), reverse=True):
-            if f.stem < cutoff:
-                break
-            try:
-                body = f.read_text(encoding="utf-8", errors="ignore")
-            except OSError:
-                continue
-            for key in _KEY_RE.findall(body):
-                usage[key] = usage.get(key, 0) + 1
-
+        # Load existing usage (cumulative — don't reset each session)
         usage_path = root / ".context" / ".memory-usage.json"
+        usage: dict[str, int] = {}
+        if usage_path.exists():
+            try:
+                usage = json.loads(usage_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # Source 1: Recent session transcripts (last 7 days)
+        transcripts_dir = Path.home() / ".claude" / "projects"
+        if transcripts_dir.is_dir():
+            cutoff = (date.today() - timedelta(days=7)).isoformat()
+            # Track which files we've already scanned (avoid re-counting)
+            scanned_marker = root / ".context" / ".memory-usage-scanned.txt"
+            scanned_set: set[str] = set()
+            if scanned_marker.exists():
+                try:
+                    scanned_set = set(scanned_marker.read_text().splitlines())
+                except OSError:
+                    pass
+
+            new_scanned: list[str] = []
+            for jsonl_file in transcripts_dir.rglob("*.jsonl"):
+                # Only scan recent files (mtime check is fast)
+                try:
+                    if jsonl_file.stat().st_mtime < (time.time() - 7 * 86400):
+                        continue
+                except OSError:
+                    continue
+                file_key = str(jsonl_file)
+                if file_key in scanned_set:
+                    continue
+                # Read and scan for memory key references
+                try:
+                    content = jsonl_file.read_text(encoding="utf-8", errors="ignore")
+                    for key in _KEY_RE.findall(content):
+                        usage[key] = usage.get(key, 0) + 1
+                    new_scanned.append(file_key)
+                except OSError:
+                    continue
+
+            # Update scanned marker
+            if new_scanned:
+                all_scanned = list(scanned_set) + new_scanned
+                # Keep only last 200 entries to prevent unbounded growth
+                scanned_marker.write_text("\n".join(all_scanned[-200:]), encoding="utf-8")
+
+        # Source 2: DailyActivity (secondary — may contain refs from session summaries)
+        daily_dir = root / "Knowledge" / "DailyActivity"
+        if daily_dir.is_dir():
+            cutoff_da = (date.today() - timedelta(days=7)).isoformat()
+            for f in sorted(daily_dir.glob("*.md"), reverse=True):
+                if f.stem < cutoff_da:
+                    break
+                try:
+                    body = f.read_text(encoding="utf-8", errors="ignore")
+                except OSError:
+                    continue
+                for key in _KEY_RE.findall(body):
+                    usage[key] = usage.get(key, 0) + 1
+
         usage_path.parent.mkdir(parents=True, exist_ok=True)
-        usage_path.write_text(json.dumps(usage, indent=2), encoding="utf-8")
+        usage_path.write_text(json.dumps(usage, indent=2, sort_keys=True), encoding="utf-8")
 
     def _refresh_memory_index(self, root: Path) -> None:
         """Regenerate the compact index block in MEMORY.md.
@@ -533,6 +583,13 @@ class ContextHealthHook:
         except Exception as exc:
             logger.warning("context_health: DDD injection failed (non-blocking): %s", exc)
 
+        # 3d. Knowledge auto-refresh detection — flag when backend code changed
+        # but KNOWLEDGE.md architecture section hasn't been updated.
+        try:
+            findings += self._detect_knowledge_staleness(root, ws_path)
+        except Exception as exc:
+            logger.warning("context_health: knowledge staleness check failed: %s", exc)
+
         # 4. DailyActivity — today's file should exist if we're running
         da_dir = root / "Knowledge" / "DailyActivity"
         today_file = da_dir / f"{date.today().isoformat()}.md"
@@ -664,6 +721,57 @@ class ContextHealthHook:
 
         knowledge_path.write_text(content, encoding="utf-8")
         logger.info("context_health: injected DDD summary into KNOWLEDGE.md (%d projects)", sum(1 for l in lines if l.startswith("- ")))
+
+    def _detect_knowledge_staleness(self, root: Path, ws_path: str) -> list[str]:
+        """Detect when backend code changed but KNOWLEDGE.md hasn't been updated.
+
+        Compares the last commit touching key backend directories (session/,
+        core/, hooks/, routers/) against the last commit touching KNOWLEDGE.md.
+        If backend is >7 days newer than KNOWLEDGE, surfaces a finding.
+
+        This is the "knowledge auto-refresh" detection — it flags staleness
+        but never auto-rewrites content (that requires human judgment).
+        """
+        findings = []
+        swarmai_dir = Path(os.environ.get(
+            "SWARMAI_SOURCE",
+            str(Path.home() / "Desktop" / "SwarmAI-Workspace" / "swarmai"),
+        ))
+        if not (swarmai_dir / ".git").exists():
+            return findings
+
+        # Get last commit date for key backend directories
+        key_dirs = ["backend/core", "backend/hooks", "backend/routers", "backend/channels"]
+        try:
+            result = subprocess.run(
+                ["git", "log", "-1", "--format=%ct", "--"] + key_dirs,
+                cwd=str(swarmai_dir), capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return findings
+            backend_ts = int(result.stdout.strip())
+        except (subprocess.TimeoutExpired, ValueError, OSError):
+            return findings
+
+        # Get last commit date for KNOWLEDGE.md
+        knowledge_path = root / ".context" / "KNOWLEDGE.md"
+        if not knowledge_path.exists():
+            return findings
+        knowledge_mtime = int(knowledge_path.stat().st_mtime)
+
+        drift_days = (backend_ts - knowledge_mtime) // 86400
+        if drift_days > 7:
+            findings.append(
+                f"STALE: KNOWLEDGE.md architecture may be outdated — "
+                f"backend code changed {drift_days}d after last KNOWLEDGE edit. "
+                f"Run `loops health` or manually review Architecture section."
+            )
+            logger.info(
+                "context_health: KNOWLEDGE.md is %dd behind backend changes",
+                drift_days,
+            )
+
+        return findings
 
     def _check_ddd_staleness(self, root: Path, ws_path: str) -> list[str]:
         """Flag DDD docs stale >14 days vs active code commits."""

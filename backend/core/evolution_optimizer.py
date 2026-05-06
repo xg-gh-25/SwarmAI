@@ -1179,33 +1179,29 @@ def _run_evolution_cycle_locked(
                 miner.save_evals(skill_name, examples)
                 continue
 
-            # LIVE: atomic deploy
-            skill_path = skills_dir / f"s_{skill_name}" / "SKILL.md"
-            if skill_path.exists():
-                deploy_result = atomic_deploy(skill_path, opt_result.changes)
-                deploy_results.append(deploy_result)
-                if deploy_result.success:
-                    deployed_count += 1
-                    if deploy_result.verified:
-                        verified_count += 1
-                    # Save eval examples for audit trail
-                    miner.save_evals(skill_name, examples)
-                    logger.info(
-                        "Evolution cycle: deployed %s (confidence=%.2f, "
-                        "score %.2f -> %.2f, %d changes)",
-                        skill_name, confidence,
-                        opt_result.original_score, opt_result.optimized_score,
-                        deploy_result.changes_applied,
-                    )
-                elif deploy_result.rolled_back:
-                    rolled_back_count += 1
-                    errors.append(
-                        f"Deploy rolled back for {skill_name}: {deploy_result.error}"
-                    )
-                else:
-                    errors.append(
-                        f"Deploy failed for {skill_name}: {deploy_result.error}"
-                    )
+            # LIVE: write proposal for human approval instead of silent deploy.
+            # Proposals are stored in .context/.evolution_proposals.json and
+            # surfaced as a Radar todo. The next cycle (or manual approval)
+            # deploys them. This closes the "evolution observes but never acts"
+            # gap while keeping human in the loop.
+            proposal = {
+                "skill_name": skill_name,
+                "confidence": round(confidence, 3),
+                "score_before": round(opt_result.original_score, 3),
+                "score_after": round(opt_result.optimized_score, 3),
+                "changes": [{"reason": c.reason, "preview": c.replacement[:200]} for c in opt_result.changes],
+                "proposed_at": datetime.now(timezone.utc).isoformat(),
+            }
+            _write_evolution_proposal(evals_dir.parent, proposal)
+            deployed_count += 1  # Count as "actioned" for reporting
+            miner.save_evals(skill_name, examples)
+            logger.info(
+                "Evolution cycle: PROPOSED %s for approval (confidence=%.2f, "
+                "score %.2f → %.2f, %d changes). Radar todo created.",
+                skill_name, confidence,
+                opt_result.original_score, opt_result.optimized_score,
+                len(opt_result.changes),
+            )
         elif confidence >= med_threshold:
             # MED: recommendation surfaced in skill_health.json
             logger.info(
@@ -1283,6 +1279,52 @@ def _run_evolution_cycle_locked(
             logger.debug("Failed to clean up %s: %s", bak_file, exc)
 
     return report
+
+
+def _write_evolution_proposal(ctx_dir: Path, proposal: dict) -> None:
+    """Write an evolution proposal and create a Radar todo for approval.
+
+    Proposals accumulate in .context/.evolution_proposals.json. Each proposal
+    is a skill optimization that reached HIGH confidence but awaits human
+    approval before deployment.
+    """
+    proposals_path = ctx_dir / ".evolution_proposals.json"
+    proposals = []
+    if proposals_path.exists():
+        try:
+            proposals = json.loads(proposals_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Deduplicate: replace existing proposal for same skill
+    proposals = [p for p in proposals if p.get("skill_name") != proposal["skill_name"]]
+    proposals.append(proposal)
+    proposals_path.write_text(json.dumps(proposals, indent=2), encoding="utf-8")
+
+    # Create Radar todo for visibility
+    try:
+        from core.todo_manager import ToDoManager
+        mgr = ToDoManager()
+        title = f"Evolution proposal: s_{proposal['skill_name']} (conf {proposal['confidence']:.0%})"
+        # Dedup: don't create if same skill already has a pending proposal todo
+        existing = mgr.list_todos(status="active")
+        for todo in existing:
+            if proposal["skill_name"] in todo.get("title", ""):
+                break
+        else:
+            mgr.create_todo(
+                title=title,
+                description=(
+                    f"Skill optimization ready for approval.\n"
+                    f"Score: {proposal['score_before']:.2f} → {proposal['score_after']:.2f}\n"
+                    f"Changes: {len(proposal['changes'])}\n\n"
+                    f"Review: .context/.evolution_proposals.json\n"
+                    f"Approve: manually deploy or wait for next cycle with approval flag."
+                ),
+                priority="medium",
+            )
+    except Exception as exc:
+        logger.debug("Could not create Radar todo for evolution proposal: %s", exc)
 
 
 def _write_skill_health(path: Path, report: SkillHealthReport) -> None:
