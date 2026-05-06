@@ -741,36 +741,68 @@ class SelfLoopsHealthEngine:
 
         These are already recorded in COE Registry and MEMORY archives.
         Keeping them in OT causes M4 false positives from stale dates.
+        Uses flock to prevent concurrent write corruption (B1 fix).
         """
         mem_path = CONTEXT_DIR / "MEMORY.md"
         if not mem_path.exists():
             return 0
-        content = mem_path.read_text(encoding="utf-8")
-        ot_start = content.find("## Open Threads")
-        if ot_start < 0:
-            return 0
-        # Find end of OT section (next ## or end of file)
-        ot_rest = content[ot_start:]
-        next_section = ot_rest.find("\n## ", 4)
-        if next_section < 0:
-            next_section = len(ot_rest)
-        ot_section = ot_rest[:next_section]
+        lock_path = mem_path.with_suffix(".md.lock")
+        fd = None
+        try:
+            from utils.file_lock import flock_exclusive, flock_unlock
+            fd = open(lock_path, "w")
+            flock_exclusive(fd)
 
-        # Remove lines starting with "- ✅" (resolved entries)
-        lines = ot_section.split("\n")
-        new_lines = []
-        removed = 0
-        for line in lines:
-            if line.strip().startswith("- ✅"):
-                removed += 1
-            else:
-                new_lines.append(line)
-        if removed == 0:
-            return 0
-        new_ot = "\n".join(new_lines)
-        content = content[:ot_start] + new_ot + ot_rest[next_section:]
-        mem_path.write_text(content, encoding="utf-8")
-        return removed
+            content = mem_path.read_text(encoding="utf-8")
+            ot_start = content.find("## Open Threads")
+            if ot_start < 0:
+                return 0
+            ot_rest = content[ot_start:]
+            next_section = ot_rest.find("\n## ", 4)
+            if next_section < 0:
+                next_section = len(ot_rest)
+            ot_section = ot_rest[:next_section]
+
+            lines = ot_section.split("\n")
+            new_lines = []
+            removed = 0
+            for line in lines:
+                if line.strip().startswith("- ✅"):
+                    removed += 1
+                else:
+                    new_lines.append(line)
+            if removed == 0:
+                return 0
+            new_ot = "\n".join(new_lines)
+            content = content[:ot_start] + new_ot + ot_rest[next_section:]
+            mem_path.write_text(content, encoding="utf-8")
+            return removed
+        except ImportError:
+            # file_lock not available (standalone CLI run) — fall through without lock
+            content = mem_path.read_text(encoding="utf-8")
+            ot_start = content.find("## Open Threads")
+            if ot_start < 0:
+                return 0
+            ot_rest = content[ot_start:]
+            next_section = ot_rest.find("\n## ", 4)
+            if next_section < 0:
+                next_section = len(ot_rest)
+            ot_section = ot_rest[:next_section]
+            lines = ot_section.split("\n")
+            new_lines = [l for l in lines if not l.strip().startswith("- ✅")]
+            removed = len(lines) - len(new_lines)
+            if removed == 0:
+                return 0
+            content = content[:ot_start] + "\n".join(new_lines) + ot_rest[next_section:]
+            mem_path.write_text(content, encoding="utf-8")
+            return removed
+        finally:
+            if fd is not None:
+                try:
+                    flock_unlock(fd)
+                except (OSError, NameError):
+                    pass
+                fd.close()
 
     def _find_stale_pipelines(self) -> list[dict]:
         """Find paused pipelines >14d old where the feature appears shipped in git.
@@ -845,35 +877,52 @@ class SelfLoopsHealthEngine:
         Keeps the FIRST occurrence (which is the newest due to prepend ordering)
         and removes subsequent duplicates. Only operates BELOW the index marker
         (MEMORY_INDEX_END) to avoid removing index entries.
+        Uses flock to prevent concurrent write corruption (B1 fix).
         """
         mem_path = CONTEXT_DIR / "MEMORY.md"
         if not mem_path.exists():
             return 0
-        content = mem_path.read_text(encoding="utf-8")
-        # Split at index end marker — only dedup the body
-        marker = "<!-- MEMORY_INDEX_END -->"
-        marker_pos = content.find(marker)
-        if marker_pos < 0:
-            return 0  # No marker = don't touch (safety)
-        header = content[:marker_pos + len(marker)]
-        body = content[marker_pos + len(marker):]
+        lock_path = mem_path.with_suffix(".md.lock")
+        fd = None
+        try:
+            from utils.file_lock import flock_exclusive, flock_unlock
+            fd = open(lock_path, "w")
+            flock_exclusive(fd)
+        except ImportError:
+            fd = None  # Standalone CLI — proceed without lock
 
-        lines = body.split("\n")
-        seen_titles: set[str] = set()
-        new_lines: list[str] = []
-        removed = 0
-        for line in lines:
-            m = re.search(r"\*\*(.+?)\*\*", line)
-            if m and line.strip().startswith("- "):
-                title = m.group(1).strip().lower()
-                if title in seen_titles:
-                    removed += 1
-                    continue  # skip duplicate
-                seen_titles.add(title)
-            new_lines.append(line)
-        if removed > 0:
-            mem_path.write_text(header + "\n".join(new_lines), encoding="utf-8")
-        return removed
+        try:
+            content = mem_path.read_text(encoding="utf-8")
+            marker = "<!-- MEMORY_INDEX_END -->"
+            marker_pos = content.find(marker)
+            if marker_pos < 0:
+                return 0
+            header = content[:marker_pos + len(marker)]
+            body = content[marker_pos + len(marker):]
+
+            lines = body.split("\n")
+            seen_titles: set[str] = set()
+            new_lines: list[str] = []
+            removed = 0
+            for line in lines:
+                m = re.search(r"\*\*(.+?)\*\*", line)
+                if m and line.strip().startswith("- "):
+                    title = m.group(1).strip().lower()
+                    if title in seen_titles:
+                        removed += 1
+                        continue
+                    seen_titles.add(title)
+                new_lines.append(line)
+            if removed > 0:
+                mem_path.write_text(header + "\n".join(new_lines), encoding="utf-8")
+            return removed
+        finally:
+            if fd is not None:
+                try:
+                    flock_unlock(fd)
+                except (OSError, NameError):
+                    pass
+                fd.close()
 
     def _fix_stale_locks(self) -> int:
         """Remove lock files older than 1 hour."""
@@ -1159,8 +1208,10 @@ class SelfLoopsHealthEngine:
             except (json.JSONDecodeError, OSError):
                 pass
 
-        # Compound Score — is the system getting smarter?
-        compound = self._compute_compound_score()
+        # Compound Score — is the system getting smarter? (cached for to_json reuse)
+        if not hasattr(self.report, "_compound_cache"):
+            self.report._compound_cache = self._compute_compound_score()
+        compound = self.report._compound_cache
         if compound is not None:
             s = compound["signals"]
             total = compound["total"]
@@ -1186,7 +1237,9 @@ class SelfLoopsHealthEngine:
         return "\n".join(lines) + "\n"
 
     def to_json(self) -> str:
-        compound = self._compute_compound_score()
+        if not hasattr(self.report, "_compound_cache"):
+            self.report._compound_cache = self._compute_compound_score()
+        compound = self.report._compound_cache
         return json.dumps({
             "timestamp": self.report.timestamp,
             "overall_score": self.report.overall_score,
