@@ -440,12 +440,31 @@ class EvolutionMaintenanceHook:
 
                 days_since = (now - last_run).days
                 if days_since < run_interval_days:
-                    logger.debug(
-                        "Evolution cycle: %d days since last run (threshold %d), skipping",
-                        days_since,
-                        run_interval_days,
-                    )
-                    return
+                    # Cross-loop signal: check if distillation produced ≥5
+                    # pending corrections — if so, run cycle early.
+                    signal_path = ctx_dir.parent / ".evolution_corrections_pending"
+                    should_early_trigger = False
+                    if signal_path.exists():
+                        try:
+                            signal = json.loads(signal_path.read_text(encoding="utf-8"))
+                            if signal.get("count", 0) >= 5:
+                                should_early_trigger = True
+                                logger.info(
+                                    "Evolution cycle: early trigger — %d pending corrections",
+                                    signal["count"],
+                                )
+                                # Clear signal after consuming
+                                signal_path.unlink()
+                        except (OSError, ValueError):
+                            pass
+
+                    if not should_early_trigger:
+                        logger.debug(
+                            "Evolution cycle: %d days since last run (threshold %d), skipping",
+                            days_since,
+                            run_interval_days,
+                        )
+                        return
         except OSError as exc:
             logger.debug("Cannot read evolution state file: %s", exc)
 

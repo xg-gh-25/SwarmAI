@@ -527,6 +527,12 @@ class ContextHealthHook:
         except Exception as exc:
             logger.warning("context_health: DDD auto-apply failed (non-blocking): %s", exc)
 
+        # 3c. Inject Active Projects & DDD section into KNOWLEDGE.md
+        try:
+            self._inject_ddd_into_knowledge(root)
+        except Exception as exc:
+            logger.warning("context_health: DDD injection failed (non-blocking): %s", exc)
+
         # 4. DailyActivity — today's file should exist if we're running
         da_dir = root / "Knowledge" / "DailyActivity"
         today_file = da_dir / f"{date.today().isoformat()}.md"
@@ -601,6 +607,57 @@ class ContextHealthHook:
             pass
 
         return findings
+
+    def _inject_ddd_into_knowledge(self, root: Path) -> None:
+        """Inject or update Active Projects & DDD section in KNOWLEDGE.md.
+
+        Scans Projects/ for directories with DDD docs and injects a summary
+        section into KNOWLEDGE.md before '## The 11 Context Files'. Idempotent:
+        replaces existing section if present, inserts if not.
+        """
+        projects_dir = root / "Projects"
+        knowledge_path = root / ".context" / "KNOWLEDGE.md"
+        if not projects_dir.is_dir() or not knowledge_path.exists():
+            return
+
+        # Build DDD summary
+        lines = ["### Active Projects & DDD\n", "\n"]
+        ddd_names = {"PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"}
+        found_any = False
+        for d in sorted(projects_dir.iterdir()):
+            if not d.is_dir() or d.name.startswith("."):
+                continue
+            ddd_files = sorted(f.name for f in d.iterdir() if f.name in ddd_names)
+            if ddd_files:
+                lines.append(f"- **{d.name}** — {', '.join(ddd_files)}\n")
+                found_any = True
+
+        if not found_any:
+            return
+
+        lines.append("\n")
+        new_section = "".join(lines)
+
+        content = knowledge_path.read_text(encoding="utf-8")
+        section_marker = "### Active Projects & DDD"
+        insert_before = "## The 11 Context Files"
+
+        if section_marker in content:
+            # Replace existing section (from marker to next ### or ##)
+            start = content.find(section_marker)
+            # Find end: next heading at same or higher level
+            rest = content[start + len(section_marker):]
+            end_match = re.search(r"\n#{2,3} ", rest)
+            end_pos = start + len(section_marker) + end_match.start() if end_match else start + len(section_marker) + len(rest)
+            content = content[:start] + new_section + content[end_pos:]
+        elif insert_before in content:
+            # Insert before the marker
+            content = content.replace(insert_before, new_section + insert_before)
+        else:
+            return  # Can't find insertion point
+
+        knowledge_path.write_text(content, encoding="utf-8")
+        logger.info("context_health: injected DDD summary into KNOWLEDGE.md (%d projects)", sum(1 for l in lines if l.startswith("- ")))
 
     def _check_ddd_staleness(self, root: Path, ws_path: str) -> list[str]:
         """Flag DDD docs stale >14 days vs active code commits."""

@@ -52,10 +52,10 @@ FLAG_FILENAME = ".needs_distillation"
 SCAN_DAYS = 30  # Only check files from last 30 days
 ARCHIVE_DAYS = 90  # Move files older than this to Archives/
 SECTION_CAPS = {  # Max entries per MEMORY.md section after distillation
-    "Key Decisions": 30,
-    "Lessons Learned": 25,
+    "Key Decisions": 40,
+    "Lessons Learned": 35,
+    "Recent Context": 20,
     "COE Registry": 15,
-    "Recent Context": 30,
     "Open Threads": 10,
 }
 
@@ -517,12 +517,17 @@ class DistillationTriggerHook:
             self._write_corrections(evolution_path, all_corrections)
             # Auto-trigger steeringify proposals when new corrections are written
             self._check_steeringify_proposals(evolution_path, ws_path)
+            # Cross-loop signal: notify evolution pipeline that new corrections
+            # are available. If ≥5 pending, evolution_maintenance_hook will run
+            # the cycle on next session close without waiting for the 7-day timer.
+            self._signal_evolution_corrections(ws_path, len(all_corrections))
         if all_competence:
             self._write_competence(evolution_path, all_competence)
 
-        # Enforce section caps on MEMORY.md to prevent unbounded growth
-        if all_decisions or all_lessons or coe_entries:
-            self._enforce_section_caps(memory_path, ws_path)
+        # Enforce section caps on MEMORY.md to prevent unbounded growth.
+        # Always run — caps must be enforced even when no new entries were added
+        # this cycle (prior runs may have accumulated entries past the cap).
+        self._enforce_section_caps(memory_path, ws_path)
 
         # Mark files as distilled AFTER all writes succeed.
         # Previous ordering (mark inside loop, write after) could lose entries:
@@ -873,10 +878,23 @@ class DistillationTriggerHook:
         Cold-start safety: when only 1 DA file exists (first sessions),
         the gate passes unconditionally — don't block onboarding.
 
+        Marathon session bypass: a DailyActivity file with >30 session
+        sections is a marathon (e.g., CMHK full-day sprint). Entries from
+        marathon files pass unconditionally — they represent intensive,
+        high-value work that shouldn't wait for a second mention.
+
         Returns ``True`` when the gate passes (entry may be promoted).
         """
         if not da_files or len(da_files) < min_mentions:
             return True  # Not enough history → let through (cold start)
+
+        # Marathon bypass: if any source DA file has >30 session sections,
+        # it represents a marathon session — entries pass unconditionally.
+        _SECTION_RE = re.compile(r"^## \d{2}:\d{2}", re.MULTILINE)
+        for df in da_files:
+            section_count = len(_SECTION_RE.findall(df.get("body", "")))
+            if section_count > 30:
+                return True  # Marathon session → bypass frequency gate
 
         # Build fingerprint — reuses _supersede_by_topic stop words / logic
         _STOP = frozenset({
@@ -1134,6 +1152,25 @@ class DistillationTriggerHook:
         logger.info(
             "Wrote %d correction entries to EVOLUTION.md", len(corrections)
         )
+
+    @staticmethod
+    def _signal_evolution_corrections(ws_path: Path, count: int) -> None:
+        """Write signal file for evolution_maintenance_hook.
+
+        When ≥5 corrections are pending, evolution hook will trigger the
+        cycle early (without waiting for the 7-day timer). This closes
+        the feedback loop: corrections → skill optimization faster.
+        """
+        signal_path = ws_path / ".evolution_corrections_pending"
+        try:
+            existing = {}
+            if signal_path.exists():
+                existing = json.loads(signal_path.read_text(encoding="utf-8"))
+            existing["count"] = existing.get("count", 0) + count
+            existing["last_updated"] = datetime.now(timezone.utc).isoformat()
+            signal_path.write_text(json.dumps(existing), encoding="utf-8")
+        except Exception as exc:
+            logger.debug("Failed to write evolution signal: %s", exc)
 
     @staticmethod
     def _check_steeringify_proposals(
