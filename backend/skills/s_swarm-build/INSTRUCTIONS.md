@@ -55,27 +55,39 @@ Stage 1 PREFLIGHT: PASS
 
 ## Stage 2: PYINSTALLER (2-5 min)
 
-The longest stage. Run the existing build script with 600s timeout.
+The longest stage. PyInstaller requires ~500MB RAM + full filesystem access.
 
-```bash
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop/scripts
-bash build-backend.sh 2>&1 | tail -20
-```
+**🚨 SANDBOX LIMITATION:** PyInstaller CANNOT run inside the Claude Code sandbox
+(exit 137 = OOM kill). The agent MUST delegate this to the user's Terminal.
 
-**IMPORTANT:** Use `timeout: 600000` (10 min max). Do NOT retry on failure.
+**Execution method:**
+1. Print the command for the user to run in Terminal:
+   ```
+   Please run in Terminal:
+   cd ~/Desktop/SwarmAI-Workspace/swarmai && ./prod.sh build
+   ```
+2. Wait for user to confirm it completed
+3. Verify the binary exists:
+   ```bash
+   ls -la desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin
+   ```
+
+**NEVER run `bash build-backend.sh` or `./prod.sh build` directly via Bash tool.**
+It will OOM-kill every time (exit 137). This is a sandbox constraint, not a code bug.
 
 **Pass criteria:**
-- Exit code 0
+- User confirms build completed
 - Binary exists at expected output path
+- Binary is newer than the release commit
 
 **Report format:**
 ```
-Stage 2 PYINSTALLER: PASS (187s)
+Stage 2 PYINSTALLER: PASS (user-built)
   Binary: python-backend-aarch64-apple-darwin (48.2 MB)
   Location: src-tauri/binaries/
 ```
 
-**On failure:** Report the last 20 lines of output and STOP. Do not retry.
+**On failure:** Report the last 20 lines of user's Terminal output and STOP.
 Common failures:
 - Missing hidden imports → fix in build-backend.sh, re-run
 - OOM → close other apps, re-run

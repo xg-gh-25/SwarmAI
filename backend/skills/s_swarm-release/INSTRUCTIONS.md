@@ -132,33 +132,33 @@ Stage 2 VERSION BUMP: PASS
 
 ## Stage 3: BUILD (3-5 min)
 
-Invoke s_swarm-build for the binary. This is the longest stage.
+**🚨 SANDBOX LIMITATION:** PyInstaller and Tauri builds CANNOT run inside the
+Claude Code sandbox (exit 137 = OOM kill, ~500MB-2GB RAM needed). The agent
+MUST delegate heavy builds to the user's Terminal.
 
-```
-→ Execute s_swarm-build stages 1-6 (preflight through health)
-```
+**Execution method:**
+1. Present the user with the Terminal command:
+   ```
+   Please run in Terminal:
+   cd ~/Desktop/SwarmAI-Workspace/swarmai && ./prod.sh build
+   ```
+2. Wait for user confirmation that build completed
+3. Verify the result:
+   ```bash
+   ls -la desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin
+   python3 desktop/scripts/verify_build.py
+   ```
 
-Or equivalently, run the build script directly:
-
-```bash
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop/scripts
-bash build-backend.sh 2>&1 | tail -20
-```
-
-With `timeout: 600000` (10 min).
-
-Then verify:
-```bash
-python3 desktop/scripts/verify_build.py
-```
+**NEVER run `bash build-backend.sh` or `./prod.sh build` directly via Bash tool.**
 
 **Pass criteria:**
-- Binary built successfully
+- User confirms build completed
+- Binary exists at expected output path
 - verify_build.py passes all checks
 
 **Report format:**
 ```
-Stage 3 BUILD: PASS (195s)
+Stage 3 BUILD: PASS (user-built)
   Binary: python-backend-aarch64-apple-darwin (48.2 MB)
   Verify: 38/38 checks passed
 ```
@@ -169,17 +169,22 @@ Stage 3 BUILD: PASS (195s)
 
 Build the desktop application (Tauri → DMG on macOS).
 
-```bash
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop
+**🚨 SANDBOX LIMITATION:** Same as Stage 3 — Tauri/Rust compilation needs ~2GB RAM.
+Delegate to user Terminal.
 
-# Install frontend deps
-npm install
+**Execution method:**
+1. Present the user with the Terminal command:
+   ```
+   Please run in Terminal:
+   cd ~/Desktop/SwarmAI-Workspace/swarmai/desktop && npm run tauri build
+   ```
+2. Wait for user confirmation
+3. Verify the output exists:
+   ```bash
+   ls -la src-tauri/target/release/bundle/dmg/SwarmAI_*.dmg
+   ```
 
-# Build Tauri app
-npm run tauri build 2>&1 | tail -20
-```
-
-With `timeout: 600000` (10 min).
+**NEVER run `npm run tauri build` directly via Bash tool.**
 
 **Output locations:**
 - macOS DMG: `src-tauri/target/release/bundle/dmg/SwarmAI_<version>_aarch64.dmg`
@@ -191,7 +196,7 @@ With `timeout: 600000` (10 min).
 
 **Report format:**
 ```
-Stage 4 PACKAGE: PASS (240s)
+Stage 4 PACKAGE: PASS (user-built)
   DMG: SwarmAI_1.11.0_aarch64.dmg (156 MB)
   App: SwarmAI.app
 ```
