@@ -139,6 +139,28 @@ If it’s safe, internal, and expected → execute.
 - **User requests always win.** When `<task-notification>` (background command completed) appears alongside an unexecuted user request, execute the user's request FIRST with tool calls. Task notifications are informational — they never require action and never take priority over what the user asked.
 - **Never respond with text-only to task notifications.** `<task-notification>` and `<system-reminder>` messages do NOT need acknowledgment text ("Background task completed", "Ready when you are", etc.). If the user has a pending request → execute it immediately. If no request is pending → stay silent. Generating acknowledgment text instead of executing is the #1 cause of "response not completing" where users must repeat themselves.
 
+## 🚨 CRITICAL: Never Checkpoint / Suggest Session Switch Based on Feeling
+
+**BLOCKING RULE — 4 prior violations (C014). Zero tolerance.**
+
+Before ANY of these actions: checkpointing, suggesting "open a new tab", "continue in a fresh session", "context is getting heavy", or stopping mid-task to "preserve budget":
+
+1. **Check actual context usage** — run `run-budget` or equivalent measurement
+2. **If usage < 70%** → **CONTINUE WORKING. Period.** No checkpoint, no switch, no suggestion.
+3. **If usage ≥ 70%** → state the measured number, THEN suggest
+
+**What triggers this rule:**
+- About to write "let's checkpoint here"
+- About to suggest a fresh session/tab
+- About to stop mid-task citing "context pressure" or "budget"
+- About to recommend splitting work across sessions
+
+**The failure pattern:** System-reminder injections (skill lists, MCP lists, tool schemas) LOOK large but are NOT working context. The agent uses "how much text I see" as a proxy for "how full is my context" — **this heuristic is always wrong.** Only measured percentage matters.
+
+**Why this is P3 CRITICAL:** Session switches are the most expensive operation — they lose all in-flight context, require full re-read of files, and break pipeline momentum. One wrong switch costs more than running 20% over budget. The user loses trust when the agent repeatedly stops working despite having 99% budget remaining.
+
+**No exceptions. No "but the task is complex." No "better safe than sorry." Measure or continue.**
+
 ## 🚨 CRITICAL: Systems Thinking Over Patching
 
 - **Start with design** — First question: "What system assumption is wrong?" Not "how to stop this case."

@@ -1134,17 +1134,64 @@ def _tail_read_lines(path: Path, max_bytes: int = 4096) -> list[str]:
 
 
 def _extract_report_field(text: str, field: str, fallback: str = "") -> str:
-    """Extract a field value from a pipeline REPORT.md header section."""
+    """Extract a meaningful title from a pipeline REPORT.md.
+
+    Priority order:
+    1. YAML frontmatter `title:` field (strip "Pipeline Report:" prefix)
+    2. Markdown H1 title (strip "Pipeline Report:" / "Pipeline Report —" prefix)
+    3. "## N. <field>" section content (first line)
+    4. Fallback string
+    """
     import re
-    # Match "## N. Requirement\n<content>" or "**Run ID:** ... | **Confidence:** N/10"
-    pattern = rf"##\s*\d+\.\s*{field}\s*\n(.+?)(?:\n##|\Z)"
-    m = re.search(pattern, text, re.DOTALL)
-    if m:
-        return m.group(1).strip()[:120]
-    # Fallback: try the title line
-    title_match = re.search(r"^#\s+.*?Report:\s*(.+?)$", text, re.MULTILINE)
-    if title_match:
-        return title_match.group(1).strip()[:120]
+
+    # 1. YAML frontmatter: title: "Pipeline Report: Feature Name" or title: "Feature Name"
+    fm_match = re.search(r'^---\s*\n.*?^title:\s*["\']?(.+?)["\']?\s*$.*?^---', text, re.MULTILINE | re.DOTALL)
+    if fm_match:
+        title = fm_match.group(1).strip()
+        # Strip common prefixes to get the meaningful feature name
+        title = re.sub(r'^Pipeline\s+Report\s*[:—–\-]\s*', '', title)
+        if title:
+            return title[:120]
+
+    # 2. Markdown H1: "# Pipeline Report: Feature Name" or "# Pipeline Report — Feature Name"
+    h1_match = re.search(r'^#\s+(.+?)$', text, re.MULTILINE)
+    if h1_match:
+        title = h1_match.group(1).strip()
+        # Strip prefix variants: "Pipeline Report:", "Pipeline Report —", "Pipeline Report -"
+        cleaned = re.sub(r'^Pipeline\s+Report\s*[:—–\-]\s*', '', title)
+        # Strip "Autonomous Pipeline Report" variant
+        cleaned = re.sub(r'^Autonomous\s+Pipeline\s+Report\s*[:—–\-]?\s*', '', cleaned)
+        # Strip run IDs: "(run_abc123)" or bare "run_abc123"
+        cleaned = re.sub(r'\s*\(run_[a-f0-9]+\)\s*$', '', cleaned)
+        cleaned = re.sub(r'^run_[a-f0-9]+$', '', cleaned)
+        if cleaned and cleaned != title and 'Pipeline Report' not in cleaned:
+            return cleaned[:120]
+        # If H1 has meaningful content without Pipeline Report prefix
+        if cleaned and 'Pipeline Report' not in cleaned:
+            return cleaned[:120]
+
+    # 3. Section-based extraction: "## N. Requirement\n<content>" or "## Requirement\n<content>"
+    for pattern in [
+        rf"##\s*\d+\.\s*{field}\s*\n(.+?)(?:\n##|\Z)",
+        rf"##\s*{field}\s*\n(.+?)(?:\n##|\Z)",
+    ]:
+        m = re.search(pattern, text, re.DOTALL)
+        if m:
+            for line in m.group(1).strip().split('\n'):
+                line = line.strip().lstrip('> -')
+                if line:
+                    return line[:120]
+
+    # 4. Last resort: first line of ## Summary (better than generic "Pipeline Report")
+    summary_match = re.search(r"##\s*(?:TL;DR|Summary)\s*\n(.+?)(?:\n##|\Z)", text, re.DOTALL)
+    if summary_match:
+        for line in summary_match.group(1).strip().split('\n'):
+            line = line.strip().lstrip('> -')
+            if line:
+                # Truncate long summaries to first sentence
+                sentence = re.split(r'[.。!]\s', line)[0]
+                return sentence[:120]
+
     return fallback
 
 
