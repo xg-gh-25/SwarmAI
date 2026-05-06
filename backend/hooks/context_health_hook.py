@@ -627,7 +627,7 @@ class ContextHealthHook:
         for d in sorted(projects_dir.iterdir()):
             if not d.is_dir() or d.name.startswith("."):
                 continue
-            ddd_files = sorted(f.name for f in d.iterdir() if f.name in ddd_names)
+            ddd_files = sorted(f.name for f in d.iterdir() if f.is_file() and f.name in ddd_names)
             if ddd_files:
                 lines.append(f"- **{d.name}** — {', '.join(ddd_files)}\n")
                 found_any = True

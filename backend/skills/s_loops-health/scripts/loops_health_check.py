@@ -602,7 +602,7 @@ class SelfLoopsHealthEngine:
         for d in sorted(PROJECTS_DIR.iterdir()):
             if not d.is_dir() or d.name.startswith("."):
                 continue
-            ddd = sorted(f.name for f in d.iterdir() if f.name in ddd_names)
+            ddd = sorted(f.name for f in d.iterdir() if f.is_file() and f.name in ddd_names)
             if ddd:
                 lines.append(f"- **{d.name}** — {', '.join(ddd)}\n")
         lines.append("\n")
