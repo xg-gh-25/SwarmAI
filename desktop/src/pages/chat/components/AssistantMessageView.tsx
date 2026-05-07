@@ -214,9 +214,9 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
 
       {message.isError ? (
         <div
-          className="border border-red-500/60 bg-red-500/10 rounded-lg p-3"
+          className="border border-amber-500/60 bg-amber-500/10 rounded-lg p-3"
           role="alert"
-          aria-label="Error message"
+          aria-label="Connection interrupted"
         >
           <div className="space-y-3">{contentBlocks}</div>
         </div>
