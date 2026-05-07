@@ -804,12 +804,10 @@ class SessionUnit:
         # preserved _sdk_session_id but the next spawn didn't use it.
         if self._sdk_session_id:
             options = self._build_retry_options(options, self._sdk_session_id)
-            # Post-kill cooldown: give the old subprocess time to fully
-            # terminate before attempting to reconnect to its session.
-            # Without this, the first resume after stop often fails because
-            # the old process is still in zombie state or holds the session
-            # file lock, forcing the user to send a second message.
-            await asyncio.sleep(1.5)
+            # No fixed sleep needed here — _force_kill() now polls for
+            # process exit via _await_process_exit() before returning.
+            # The old 1.5s sleep was a timing guess that failed on slow
+            # machines and wasted latency on fast ones.
 
         try:
             await self._spawn(options, config)
@@ -914,7 +912,8 @@ class SessionUnit:
         self._buffer_overflow_recovery = True
         resume_sid = self._sdk_session_id
         await self._crash_to_cold_async()
-        await asyncio.sleep(2.0)  # brief cooldown
+        # No fixed sleep needed — _crash_to_cold_async() calls _force_kill()
+        # which polls for process exit before returning.
 
         retry_options = self._build_retry_options(options, resume_sid)
         try:
@@ -2479,6 +2478,12 @@ class SessionUnit:
                         pid, self.session_id, exc,
                     )
 
+        # Poll for process exit instead of relying on fixed sleeps downstream.
+        # SIGKILL is immediate on macOS/Linux but the OS needs time to reap
+        # the zombie entry and release file locks (e.g. session lock file).
+        if pid:
+            await self._await_process_exit(pid, timeout=3.0)
+
         # Also try graceful wrapper cleanup
         if self._wrapper is not None:
             try:
@@ -2496,6 +2501,34 @@ class SessionUnit:
                     "Wrapper cleanup error for session %s (expected)",
                     self.session_id,
                 )
+
+    @staticmethod
+    async def _await_process_exit(pid: int, timeout: float = 3.0) -> None:
+        """Poll for process exit with backoff, up to *timeout* seconds.
+
+        Replaces fixed ``asyncio.sleep(1.5)`` cooldowns with a deterministic
+        check: on fast machines exits in <10ms, on slow/loaded machines waits
+        up to *timeout* before giving up (non-fatal — the process is already
+        SIGKILLed so it *will* die, we just can't confirm reap timing).
+        """
+        deadline = asyncio.get_event_loop().time() + timeout
+        interval = 0.05  # start at 50ms, double each poll
+        while asyncio.get_event_loop().time() < deadline:
+            try:
+                os.kill(pid, 0)  # 0-signal = existence check
+            except ProcessLookupError:
+                return  # process fully reaped — safe to proceed
+            except PermissionError:
+                return  # pid recycled to another user — original is gone
+            await asyncio.sleep(interval)
+            interval = min(interval * 2, 0.5)  # cap at 500ms between polls
+        # Timeout — process still shows as alive (zombie or slow reap).
+        # Not fatal: SIGKILL is delivered, locks will release momentarily.
+        logger.debug(
+            "session_unit._await_process_exit: pid %d still visible after %.1fs "
+            "(zombie reap pending — proceeding anyway)",
+            pid, timeout,
+        )
 
     def _cleanup_internal(self) -> None:
         """Reset transient subprocess fields after subprocess death.
