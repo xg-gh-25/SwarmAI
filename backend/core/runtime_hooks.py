@@ -108,7 +108,7 @@ def create_correction_capture_hook(
     """Factory: creates a PostToolUseFailure hook that logs tool failures.
 
     Args:
-        corrections_path: Path to corrections.jsonl (default: ~/.swarm-ai/.context/)
+        corrections_path: Path to corrections.jsonl (default: ~/.swarm-ai/state/)
         session_context: Session context dict for session_id extraction
     """
     path = corrections_path or _DEFAULT_CORRECTIONS_PATH

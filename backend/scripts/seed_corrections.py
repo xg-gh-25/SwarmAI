@@ -168,7 +168,7 @@ def main() -> int:
         "--output-path",
         type=Path,
         default=None,
-        help="Path to corrections.jsonl (default: ~/.swarm-ai/.context/corrections.jsonl)",
+        help="Path to corrections.jsonl (default: ~/.swarm-ai/state/corrections.jsonl)",
     )
     parser.add_argument(
         "--dry-run",
