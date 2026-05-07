@@ -9,7 +9,7 @@
  * - Fires a persistent warning toast on connected → disconnected
  * - Fires a success toast on disconnected → connected
  * - Handles `initializing` status from the backend response body
- * - Listens for Tauri sidecar events for instant crash/restart detection
+ * - Listens for Tauri backend events for instant crash/restart detection
  * - Uses `useRef` for interval/failure tracking to avoid re-renders
  *   on every poll; only updates React state on actual transitions
  * - Uses plain `fetch` (not axios) to avoid circular dependency with
@@ -188,7 +188,7 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
     }
   }, [handleSuccess, handleFailure]);
 
-  // Stable ref for performHealthCheck — used by sidecar event handlers
+  // Stable ref for performHealthCheck — used by backend event handlers
   // so they don't cause effect re-subscriptions.
   const performHealthCheckRef = useRef(performHealthCheck);
   performHealthCheckRef.current = performHealthCheck;
@@ -215,11 +215,11 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
   }, [performHealthCheck, intervalMs]);
 
   // ------------------------------------------------------------------
-  // Tauri sidecar events: instant health transitions on backend death/restart
+  // Tauri backend events: instant health transitions on daemon death/restart
   // ------------------------------------------------------------------
 
   useEffect(() => {
-    // Only relevant in production (Tauri sidecar mode)
+    // Only relevant in production (Tauri daemon mode)
     const isDev = import.meta.env.DEV;
     if (isDev) return;
 

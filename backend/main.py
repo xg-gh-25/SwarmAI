@@ -66,13 +66,12 @@ _phase_timings: dict[str, float] | None = None
 def get_log_file_path() -> Path:
     """Get the log file path based on run mode.
 
-    Daemon and sidecar write separate log files to avoid RotatingFileHandler
-    multi-process race (rename collisions during rotation).  dev.sh already
-    redirects to backend-dev.log, so three processes never share a file.
+    Daemon writes to backend-daemon.log.  dev.sh already redirects to
+    backend-dev.log, so multiple processes never share a file.
     """
     log_dir = get_app_data_dir() / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    mode = os.environ.get("SWARMAI_MODE", "sidecar")
+    mode = os.environ.get("SWARMAI_MODE", "daemon")
     if mode == "daemon":
         return log_dir / "backend-daemon.log"
     return log_dir / "backend.log"
@@ -137,14 +136,12 @@ def _is_port_listening(host: str, port: int) -> bool:
 
 
 def _detect_run_mode() -> str:
-    """Detect whether this backend is running as daemon, sidecar, or hive.
+    """Detect backend run mode from SWARMAI_MODE env var.
 
-    Resolution: ``SWARMAI_MODE`` env var.
-    - ``"daemon"`` — macOS launchd 24/7 service
+    - ``"daemon"`` — macOS launchd 24/7 service (default, production)
     - ``"hive"``   — EC2 cloud deployment (systemd)
-    - ``"sidecar"`` — Tauri desktop app (default)
     """
-    return os.environ.get("SWARMAI_MODE", "sidecar")
+    return os.environ.get("SWARMAI_MODE", "daemon")
 
 
 def _backend_json_lock(path: str) -> str:
@@ -239,8 +236,8 @@ def remove_backend_json(
     Uses an exclusive file lock to prevent races with concurrent writers.
 
     **Mode guard:** If ``startup_mode`` is provided, only delete when the
-    mode recorded in the file matches.  This prevents a sidecar that briefly
-    co-existed with a daemon from deleting the daemon's discovery file on exit.
+    mode recorded in the file matches.  This prevents a dev instance from
+    deleting the daemon's discovery file on exit.
 
     **PID ownership guard:** Only delete if the file's PID matches our PID.
     This prevents a late-exiting old process from deleting a newer process's
@@ -874,7 +871,7 @@ async def lifespan(app: FastAPI):
     )
     logger.info("Startup complete - ready to serve requests")
 
-    # ── Start managed sidecar services (Slack bot, etc.) ─────────────
+    # ── Start managed subsidiary services (Slack bot, etc.) ─────────────
     # Deferred to background so it never blocks startup.  Services
     # discover the backend via ~/.swarm-ai/backend.port written here.
     from core.service_manager import service_manager as _svc_mgr
@@ -1175,7 +1172,7 @@ async def get_capabilities():
 
 @app.get("/api/system/mode")
 async def get_system_mode():
-    """Return the backend's running mode (daemon vs sidecar)."""
+    """Return the backend's running mode (daemon or hive)."""
     uptime = time.monotonic() - _backend_start_monotonic if _backend_start_monotonic else 0
     return {
         "mode": _detect_run_mode(),

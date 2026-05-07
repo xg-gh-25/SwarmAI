@@ -793,7 +793,7 @@ export default function ChatPage() {
     const doRestore = async () => {
       setIsLoadingHistory(true);
 
-      // Retry loop: backend sidecar may not be ready on first mount.
+      // Retry loop: backend daemon may not be ready on first mount.
       // Try up to 5 times with 500ms delay between attempts.
       let restored = false;
       for (let attempt = 0; attempt < 5 && !restored && mounted; attempt++) {

@@ -31,7 +31,7 @@ let _isDesktopLogged = false;
 
 // Store the backend port globally
 // In development mode, always use 8000 (manual python main.py)
-// In production, Tauri sidecar will set this dynamically
+// In production, Tauri connects to daemon on fixed port 18321
 let _backendPort: number = 8000;
 
 // Check if running in development mode (Vite dev server)
@@ -122,7 +122,7 @@ export const tauriService = {
     return listen<number>('backend-restarted', (event) => callback(event.payload));
   },
 
-  /** Backend mode notification: "daemon" or "sidecar". */
+  /** Backend mode notification: always "daemon" in production. */
   async onBackendMode(callback: (mode: string) => void): Promise<UnlistenFn> {
     return listen<string>('backend-mode', (event) => callback(event.payload));
   },

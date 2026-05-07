@@ -20,13 +20,16 @@ synonyms — they cause confusion across the 69-skill ecosystem.
   is one part of the unit).
 
 - **daemon** — The always-on `com.swarmai.backend` launchd process
-  (`SWARMAI_MODE=daemon`). Runs Slack, background jobs, and channels 24/7.
-  _Avoid:_ "server", "service" (too generic), "backend" (ambiguous — sidecar is
-  also a backend).
+  (`SWARMAI_MODE=daemon`). Runs Slack, background jobs, channels, and serves
+  all desktop app connections. Fixed port 18321. Auto-installed by Tauri on
+  first launch. This is THE backend — there is no other mode in production.
+  _Avoid:_ "server", "service" (too generic).
 
-- **sidecar** — The Python backend spawned by the Tauri desktop app
-  (`SWARMAI_MODE=sidecar`). Lives only while the desktop window is open.
-  _Avoid:_ "backend" (ambiguous with daemon), "app backend".
+- **sidecar** — ⚠️ DEPRECATED (2026-05-07). Previously referred to a Python
+  backend spawned by Tauri that lived only while the desktop window was open.
+  No longer exists. All production backend runs as daemon.
+  _If you see "sidecar" in code/docs, it's stale unless referring to JSONL
+  companion files (DailyActivity sidecar = different concept)._
 
 ## Task & Work Units
 
