@@ -507,7 +507,7 @@ async fn get_daemon_version() -> Option<String> {
 /// Sync daemon binary to match app version when a mismatch is detected.
 ///
 /// Flow: graceful shutdown → atomic binary deploy → restart launchd → verify.
-/// Returns Ok(()) on success, Err on failure (caller should fall back to sidecar).
+/// Returns Ok(()) on success, Err(msg) on failure (surfaced to user via event).
 ///
 /// NOTE: the `app` parameter is retained for API compatibility with the
 /// background wrapper (`sync_daemon_version_background`).  Event emission

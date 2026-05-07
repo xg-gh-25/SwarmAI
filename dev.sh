@@ -95,7 +95,9 @@ _start_backend() {
     uv sync --group dev
 
     # Start in background, log to separate dev file (don't clobber daemon's backend.log)
-    DATABASE_TYPE=sqlite python main.py --port $BACKEND_PORT \
+    # SWARMAI_MODE=dev prevents channel gateway startup (avoids Slack Socket Mode conflict
+    # with the production daemon which may be running simultaneously).
+    SWARMAI_MODE=dev DATABASE_TYPE=sqlite python main.py --port $BACKEND_PORT \
         > "$LOG_DIR/backend-dev.log" 2>&1 &
     local pid=$!
     echo "$pid" > "$BACKEND_PID_FILE"
