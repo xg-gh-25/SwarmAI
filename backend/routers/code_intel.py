@@ -5,13 +5,15 @@ Endpoints:
     POST /api/code-intel/{project}/reindex  — trigger background re-index
 """
 
+import asyncio
 import logging
+import re
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 
-from core.code_intel import load_project_graph, get_code_intel_db_path
+from core.code_intel import load_project_graph, get_code_intel_db_path, invalidate_cache
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,9 @@ router = APIRouter()
 # ── Constants ────────────────────────────────────────────────────────────────
 
 _STALE_THRESHOLD_DAYS = 7
+
+# Concurrency guard: prevent multiple parallel reindex for the same project (F3)
+_reindex_in_progress: set[str] = set()
 
 
 # ── Response Models ──────────────────────────────────────────────────────────
@@ -51,12 +56,15 @@ async def get_code_intel_summary(project: str):
     """Return compact codebase stats for the given project.
 
     Returns 404 if no code_intel.db exists for the project.
+    Uses asyncio.to_thread to avoid blocking the event loop (F1 fix:
+    get_codebase_summary() calls find_dead_code() which is a full table scan).
     """
     graph = load_project_graph(project)
     if graph is None:
         raise HTTPException(status_code=404, detail=f"Code intelligence not found for project '{project}'")
 
-    summary = graph.get_codebase_summary()
+    # F1: Offload sync SQLite I/O to threadpool — find_dead_code() is O(n) scan
+    summary = await asyncio.to_thread(graph.get_codebase_summary)
 
     total_nodes = summary.get("total_nodes", 0)
     dead_count = summary.get("dead_code_count", 0)
@@ -97,11 +105,18 @@ async def trigger_reindex(project: str, background_tasks: BackgroundTasks):
 
     Returns 202 Accepted immediately; indexing runs in background.
     Returns 404 if project has no code_intel.db.
+    Returns 409 if reindex already in progress for this project.
     """
-    graph = load_project_graph(project)
-    if graph is None:
+    # F2: Check existence via path, not by loading full GraphStore
+    db_path = get_code_intel_db_path(project)
+    if not db_path.exists():
         raise HTTPException(status_code=404, detail=f"Code intelligence not found for project '{project}'")
 
+    # F3: Concurrency guard — only one reindex per project at a time
+    if project in _reindex_in_progress:
+        return ReindexResponse(status="already_indexing", project=project)
+
+    _reindex_in_progress.add(project)
     background_tasks.add_task(_run_reindex, project)
 
     return ReindexResponse(status="indexing", project=project)
@@ -125,9 +140,11 @@ def _compute_freshness(last_indexed: str | None) -> str:
 
 
 def _run_reindex(project: str) -> None:
-    """Run incremental re-index for a project. Called as background task."""
+    """Run incremental re-index for a project. Called as background task.
+
+    Releases _reindex_in_progress guard on completion (success or failure).
+    """
     try:
-        from core.code_intel import get_code_intel_db_path, invalidate_cache
         from core.code_intel.graph_store import GraphStore
         from core.code_intel.parser import parse_repository
 
@@ -143,7 +160,6 @@ def _run_reindex(project: str) -> None:
             logger.warning(f"Cannot reindex {project}: no TECH.md with repo path")
             return
 
-        import re
         content = tech_md.read_text(encoding="utf-8")
         match = re.search(r"\*\*Repo Path:\*\*\s*`([^`]+)`", content)
         if not match:
@@ -165,3 +181,6 @@ def _run_reindex(project: str) -> None:
 
     except Exception as e:
         logger.error(f"Re-index failed for {project}: {e}", exc_info=True)
+    finally:
+        # F3: Always release the concurrency guard
+        _reindex_in_progress.discard(project)

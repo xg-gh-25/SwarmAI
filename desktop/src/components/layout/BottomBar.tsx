@@ -25,7 +25,7 @@ function CodeIntelPopover({ summary, onReindex, isReindexing }: {
   const topLang = Object.entries(summary.languages)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 3)
-    .map(([lang, count]) => `${lang} ${Math.round(count / summary.symbolCount * 100)}%`)
+    .map(([lang, count]) => `${lang} ${summary.symbolCount > 0 ? Math.round(count / summary.symbolCount * 100) : 0}%`)
     .join(', ');
 
   return (
@@ -58,7 +58,10 @@ function CodeIntelPopover({ summary, onReindex, isReindexing }: {
 
 function _formatAge(isoStr: string): string {
   try {
-    const dt = new Date(isoStr);
+    // F5: Ensure timezone-naive strings are treated as UTC (backend stores UTC)
+    const normalized = isoStr.includes('+') || isoStr.includes('Z') ? isoStr : isoStr + 'Z';
+    const dt = new Date(normalized);
+    if (isNaN(dt.getTime())) return '—';
     const diffMs = Date.now() - dt.getTime();
     const days = Math.floor(diffMs / 86400000);
     if (days === 0) return 'today';
