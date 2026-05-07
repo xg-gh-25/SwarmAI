@@ -576,8 +576,8 @@ def _merge_crash_checkpoint(checkpoint_path=None) -> str | None:
     Returns formatted string or None if no checkpoint exists.
     """
     if checkpoint_path is None:
-        from config import get_app_data_dir as _get_app_data_dir_ci
-        checkpoint_path = _get_app_data_dir_ci() / ".context" / "session_checkpoint.json"
+        from jobs.paths import STATE_DIR as _state_dir_ci
+        checkpoint_path = _state_dir_ci / "session_checkpoint.json"
     else:
         checkpoint_path = Path(checkpoint_path)
 
