@@ -15,6 +15,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from config import get_bedrock_model_id
+from jobs.paths import PORT_FILE
 from database import db
 from core.agent_defaults import build_agent_config, DEFAULT_AGENT_ID
 from core.app_config_manager import AppConfigManager
@@ -375,10 +376,16 @@ def _verify_bedrock(config: dict) -> dict:
                 "Credentials are invalid. Re-authenticate with ada or aws sso login."
             )
         if "not authorized" in error_str.lower() or "AccessDenied" in error_str:
-            return _auth_error(
-                error_str, "access_denied",
-                "Model access not enabled in this region. Check Bedrock console."
-            )
+            run_mode = os.environ.get("SWARMAI_MODE", "sidecar")
+            if run_mode == "hive":
+                hint = (
+                    "IAM instance role lacks bedrock:InvokeModel permission. "
+                    "Add it to the role's policy, or check that Bedrock model access "
+                    "is enabled in this region via the AWS Console."
+                )
+            else:
+                hint = "Model access not enabled in this region. Check Bedrock console."
+            return _auth_error(error_str, "access_denied", hint)
         return _auth_error(error_str, "unknown", "Check AWS configuration and try again.")
 
 
@@ -468,12 +475,15 @@ async def get_auth_hint():
     if run_mode == "hive":
         import asyncio as _asyncio
         iam_details = await _asyncio.to_thread(_probe_iam_instance_role)
-        if iam_details:
-            suggested = "iam_role"
+        # On Hive, ALWAYS suggest iam_role even if IMDS probe fails —
+        # it's the only valid auth method. Desktop methods are noise.
+        suggested = "iam_role"
+        ada_details = None
+        aws_profiles = None
 
     return {
-        "has_ada_dir": has_ada,
-        "has_sso_cache": has_sso_cache,
+        "has_ada_dir": has_ada if run_mode != "hive" else False,
+        "has_sso_cache": has_sso_cache if run_mode != "hive" else False,
         "has_api_key": has_api_key,
         "suggested_method": suggested,
         "ada_details": ada_details,
@@ -903,7 +913,7 @@ async def uninstall_cleanup():
         results["services"] = f"error: {e}"
 
     # 3. Remove port file
-    port_file = Path.home() / ".swarm-ai" / "backend.port"
+    port_file = PORT_FILE
     try:
         port_file.unlink(missing_ok=True)
         results["port_file"] = "removed"

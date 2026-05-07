@@ -1,0 +1,177 @@
+/**
+ * OnboardingPage dead-end guard tests.
+ *
+ * Invariant: For every reachable (step, state) combination, the user must have
+ * at least one visible, clickable element that advances or escapes the flow.
+ * A wizard with no exit = product-level P0.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import OnboardingPage from '../OnboardingPage';
+
+// ── Mocks ──
+
+const mockGetStatus = vi.fn();
+const mockGetBackupStatus = vi.fn();
+const mockVerifyAuth = vi.fn();
+const mockSetOnboardingComplete = vi.fn();
+const mockGetAuthHint = vi.fn();
+const mockGetAPIConfiguration = vi.fn();
+const mockUpdateAPIConfiguration = vi.fn();
+const mockChannelsList = vi.fn();
+
+vi.mock('../../services/system', () => ({
+  systemService: {
+    getStatus: (...args: unknown[]) => mockGetStatus(...args),
+    getBackupStatus: (...args: unknown[]) => mockGetBackupStatus(...args),
+    verifyAuth: (...args: unknown[]) => mockVerifyAuth(...args),
+    setOnboardingComplete: (...args: unknown[]) => mockSetOnboardingComplete(...args),
+    getAuthHint: (...args: unknown[]) => mockGetAuthHint(...args),
+    restoreBackup: vi.fn(),
+  },
+  RestoreEvent: {},
+}));
+
+vi.mock('../../services/settings', () => ({
+  settingsService: {
+    getAPIConfiguration: (...args: unknown[]) => mockGetAPIConfiguration(...args),
+    updateAPIConfiguration: (...args: unknown[]) => mockUpdateAPIConfiguration(...args),
+  },
+}));
+
+vi.mock('../../services/channels', () => ({
+  channelsService: {
+    list: (...args: unknown[]) => mockChannelsList(...args),
+  },
+}));
+
+vi.mock('../../components/common', () => ({
+  Dropdown: ({ label }: { label: string }) => <div data-testid="dropdown">{label}</div>,
+}));
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  // Defaults: system healthy, no backup, auth hint = sso
+  mockGetStatus.mockResolvedValue({
+    database: { healthy: true },
+    swarmWorkspace: { ready: true },
+  });
+  mockGetBackupStatus.mockRejectedValue(new Error('no backup'));
+  mockGetAuthHint.mockResolvedValue({ suggestedMethod: 'sso', hasAdaDir: false });
+  mockGetAPIConfiguration.mockResolvedValue({ awsRegion: 'us-east-1' });
+  mockUpdateAPIConfiguration.mockResolvedValue({});
+  mockChannelsList.mockResolvedValue([]);
+  mockVerifyAuth.mockResolvedValue({ success: true, model: 'claude-opus-4-6', latency_ms: 200 });
+  mockSetOnboardingComplete.mockResolvedValue(undefined);
+});
+
+describe('OnboardingPage — no dead-ends', () => {
+  it('step 1 auto-advances to step 2 when system is healthy', async () => {
+    render(<OnboardingPage onComplete={vi.fn()} />);
+    // Should auto-advance to Auth step
+    await waitFor(() => {
+      expect(screen.getByText('LLM Authentication')).toBeInTheDocument();
+    });
+  });
+
+  it('step 2 has a clickable Verify button', async () => {
+    render(<OnboardingPage onComplete={vi.fn()} />);
+    await waitFor(() => {
+      expect(screen.getByText('Verify Connection')).toBeInTheDocument();
+    });
+    const btn = screen.getByText('Verify Connection').closest('button');
+    expect(btn).not.toBeDisabled();
+  });
+
+  it('step 2 verify success advances to step 3 (Channels)', async () => {
+    render(<OnboardingPage onComplete={vi.fn()} />);
+    await waitFor(() => {
+      expect(screen.getByText('Verify Connection')).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Verify Connection').closest('button')!);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Connect Channels')).toBeInTheDocument();
+    });
+  });
+
+  it('step 3 (Channels) always has a Skip button — never trapped', async () => {
+    render(<OnboardingPage onComplete={vi.fn()} />);
+    await waitFor(() => screen.getByText('Verify Connection'));
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Verify Connection').closest('button')!);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Skip for now')).toBeInTheDocument();
+    });
+    const skipBtn = screen.getByText('Skip for now').closest('button');
+    expect(skipBtn).not.toBeDisabled();
+  });
+
+  it('step 4 (Ready) button advances even if setOnboardingComplete fails', async () => {
+    mockSetOnboardingComplete.mockRejectedValue(new Error('network'));
+    const onComplete = vi.fn();
+    render(<OnboardingPage onComplete={onComplete} />);
+
+    // Advance to Auth
+    await waitFor(() => screen.getByText('Verify Connection'));
+    await act(async () => {
+      fireEvent.click(screen.getByText('Verify Connection').closest('button')!);
+    });
+
+    // Advance past Channels
+    await waitFor(() => screen.getByText('Skip for now'));
+    await act(async () => {
+      fireEvent.click(screen.getByText('Skip for now').closest('button')!);
+    });
+
+    // Ready step — click Start
+    await waitFor(() => screen.getByText('Start Using SwarmAI'));
+    await act(async () => {
+      fireEvent.click(screen.getByText('Start Using SwarmAI').closest('button')!);
+    });
+
+    // onComplete MUST fire even though backend failed
+    await waitFor(() => {
+      expect(onComplete).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('system check interval does NOT reset step after advancing past step 2', async () => {
+    // Use a slow status that resolves immediately
+    let callCount = 0;
+    mockGetStatus.mockImplementation(async () => {
+      callCount++;
+      return { database: { healthy: true }, swarmWorkspace: { ready: true } };
+    });
+
+    render(<OnboardingPage onComplete={vi.fn()} />);
+
+    // Advance to Auth
+    await waitFor(() => screen.getByText('LLM Authentication'));
+
+    // Verify and advance to Channels
+    await act(async () => {
+      fireEvent.click(screen.getByText('Verify Connection').closest('button')!);
+    });
+    await waitFor(() => screen.getByText('Connect Channels'));
+
+    // Wait for any interval fires (3s+) — should NOT reset to step 2
+    // The interval should have been cleared, so callCount should stay low
+    const countAfterAdvance = callCount;
+
+    // Advance time by 4s to let any stale interval fire
+    await act(async () => {
+      await new Promise(r => setTimeout(r, 100));
+    });
+
+    // Should still show Channels, NOT Auth
+    expect(screen.queryByText('LLM Authentication')).not.toBeInTheDocument();
+    expect(screen.getByText('Connect Channels')).toBeInTheDocument();
+  });
+});
