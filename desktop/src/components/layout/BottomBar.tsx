@@ -2,16 +2,17 @@
  * BottomBar -- thin status bar spanning full app width below all 3 columns.
  *
  * Displays:
- * - Left: connection status dot, agent name, workspace name
+ * - Left: connection status dot, agent name, workspace name, app version
  * - Right: keyboard shortcut hints with badge styling
  *
  * Uses raw useContext (not useHealth) to avoid crashes when HealthProvider
  * is not in the tree (e.g. in isolated component tests).
  */
 
-import { useContext } from 'react';
+import { useContext, useState, useEffect } from 'react';
 import { HealthContext } from '../../contexts/HealthContext';
 import { useSessionMeta } from '../../contexts/LayoutContext';
+import { isDesktop } from '../../services/tauri';
 
 export function BottomBar() {
   // Safe: useContext returns undefined when provider is missing (no throw)
@@ -19,6 +20,20 @@ export function BottomBar() {
   const isConnected = healthCtx?.health?.status === 'connected';
   const { activeSessionMeta } = useSessionMeta();
   const agentName = activeSessionMeta?.agentName || 'Swarm';
+
+  const [appVersion, setAppVersion] = useState('');
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      setAppVersion('dev');
+    } else if (isDesktop()) {
+      import('@tauri-apps/api/app').then(m => m.getVersion()).then(setAppVersion).catch(() => {});
+    } else {
+      fetch('/health', { signal: AbortSignal.timeout(2000) })
+        .then(r => r.json())
+        .then(d => setAppVersion(d.version || ''))
+        .catch(() => {});
+    }
+  }, []);
 
   return (
     <div
@@ -43,6 +58,9 @@ export function BottomBar() {
           {/* SwarmWS is the canonical agent workspace name (single-workspace app) */}
           <span>SwarmWS</span>
         </span>
+        {appVersion && (
+          <span className="opacity-60">v{appVersion}</span>
+        )}
       </div>
 
       {/* Spacer */}
