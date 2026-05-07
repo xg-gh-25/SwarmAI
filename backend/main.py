@@ -992,6 +992,10 @@ app.include_router(hive_router, prefix="/api/hive", tags=["hive"])
 from routers.memory import router as memory_router
 app.include_router(memory_router, tags=["memory"])
 
+# Code Intelligence API
+from routers.code_intel import router as code_intel_router
+app.include_router(code_intel_router, prefix="/api/code-intel", tags=["code-intel"])
+
 # Register development-only router when DEBUG=true
 if settings.debug:
     from routers.dev import router as dev_router

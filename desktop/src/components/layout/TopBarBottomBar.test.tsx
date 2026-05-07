@@ -23,6 +23,12 @@ vi.mock('@tauri-apps/api/window', () => ({
   }),
 }));
 
+// Mock Code Intelligence service (BottomBar dependency)
+vi.mock('../../services/codeIntel', () => ({
+  getCodeIntelSummary: vi.fn().mockResolvedValue(null),
+  triggerReindex: vi.fn().mockResolvedValue(undefined),
+}));
+
 // Mock LayoutContext with separate session meta
 vi.mock('../../contexts/LayoutContext', () => {
   const actual = vi.importActual('../../contexts/LayoutContext');
