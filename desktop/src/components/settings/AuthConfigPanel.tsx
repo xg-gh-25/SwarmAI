@@ -14,6 +14,7 @@ type AuthMethod = 'sso' | 'ada' | 'apikey';
 interface AuthConfigPanelProps {
   mode: 'onboarding' | 'settings';
   onVerifySuccess?: () => void;
+  onVerifyFail?: () => void;
 }
 
 const AWS_REGION_OPTIONS = [
@@ -25,7 +26,7 @@ const AWS_REGION_OPTIONS = [
   { id: 'ap-southeast-1', name: 'Asia Pacific (Singapore)', description: 'ap-southeast-1' },
 ];
 
-export default function AuthConfigPanel({ mode, onVerifySuccess }: AuthConfigPanelProps) {
+export default function AuthConfigPanel({ mode, onVerifySuccess, onVerifyFail }: AuthConfigPanelProps) {
   const [method, setMethod] = useState<AuthMethod>('sso');
   const [region, setRegion] = useState('us-east-1');
   const [accountId, setAccountId] = useState('');
@@ -93,6 +94,8 @@ export default function AuthConfigPanel({ mode, onVerifySuccess }: AuthConfigPan
 
       if (result.success && onVerifySuccess) {
         onVerifySuccess();
+      } else if (!result.success && onVerifyFail) {
+        onVerifyFail();
       }
     } catch (e) {
       setVerifyResult({
@@ -102,6 +105,7 @@ export default function AuthConfigPanel({ mode, onVerifySuccess }: AuthConfigPan
         fixHint: 'Check your network connection and try again.',
       });
       setVerifyState('error');
+      if (onVerifyFail) onVerifyFail();
     }
   };
 

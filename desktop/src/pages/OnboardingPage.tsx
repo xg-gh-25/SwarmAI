@@ -1,7 +1,8 @@
 /**
  * First-run onboarding page.
  *
- * 4-step flow: System Check -> LLM Auth (blocking) -> Channels (optional) -> Ready.
+ * 4-or-5-step flow depending on backup detection:
+ *   System Check -> LLM Auth (blocking) -> [Restore (if backup)] -> Channels (optional) -> Ready.
  * Shown when onboardingComplete is false in system status.
  */
 import { useState, useEffect, useCallback } from 'react';
@@ -25,37 +26,49 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
   // Step 1: Auto-check system with retry every 3s until backend is ready
   useEffect(() => {
     let cancelled = false;
+    let done = false;
+    let interval: ReturnType<typeof setInterval> | null = null;
     const check = async () => {
+      if (done) return; // Already succeeded — no-op for late interval fires
       try {
         const status = await systemService.getStatus();
         if (!cancelled && status.database.healthy && status.swarmWorkspace.ready) {
+          done = true;
           setSystemOk(true);
           // Check if backup exists (fresh install might have a backup to restore)
+          // Skip on Hive — cloud instances don't restore from user backups
           try {
-            const backup = await systemService.getBackupStatus();
-            if (backup.repoUrl && backup.lastBackup) {
-              setHasBackup(true);
+            const hint = await systemService.getAuthHint();
+            if (hint.runMode !== 'hive') {
+              const backup = await systemService.getBackupStatus();
+              if (backup.repoUrl && backup.lastBackup) {
+                setHasBackup(true);
+              }
             }
           } catch { /* no backup configured — skip */ }
-          setStep(2); // Auto-advance to Auth (or Restore if detected)
+          setStep(2); // Auto-advance to Auth
+          // Stop polling — system is confirmed ready, step 1 done
+          if (interval) { clearInterval(interval); interval = null; }
         }
       } catch {
         // Backend not ready yet — retry will fire via interval
       }
     };
     check();
-    const interval = setInterval(check, 3000);
-    return () => { cancelled = true; clearInterval(interval); };
+    interval = setInterval(check, 3000);
+    return () => { cancelled = true; if (interval) clearInterval(interval); };
   }, []);
 
-  // Step 4: Complete
+  // Step 4: Complete — always proceed even if backend flag fails to persist
   const handleComplete = useCallback(async () => {
     try {
       await systemService.setOnboardingComplete();
-      onComplete();
     } catch (e) {
       console.error('Failed to set onboarding complete:', e);
+      // Still proceed — user shouldn't be blocked by a flag persistence failure.
+      // Worst case: they see onboarding again next launch (not a dead-end).
     }
+    onComplete();
   }, [onComplete]);
 
   // Show restore step only if backup was detected and not skipped
@@ -112,7 +125,7 @@ export default function OnboardingPage({ onComplete }: OnboardingPageProps) {
         {step === 3 && showRestore && (
           <StepRestore
             onRestored={() => setStep(4)}
-            onSkip={() => { setRestoreSkipped(true); setStep(4); }}
+            onSkip={() => { setRestoreSkipped(true); setStep(3); }}
           />
         )}
         {step === (showRestore ? 4 : 3) && (
@@ -152,13 +165,36 @@ function Step1SystemCheck({ ok }: { ok: boolean }) {
 // ── Step 2: LLM Authentication ──
 
 function Step2Auth({ onVerified }: { onVerified: () => void }) {
+  const [failCount, setFailCount] = useState(0);
+  const [isHive, setIsHive] = useState(false);
+
+  // Detect Hive mode for escape-hatch visibility
+  useEffect(() => {
+    systemService.getAuthHint()
+      .then((hint) => { if (hint.runMode === 'hive') setIsHive(true); })
+      .catch(() => {});
+  }, []);
+
   return (
     <div>
       <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">LLM Authentication</h2>
       <p className="text-[var(--color-text-muted)] mb-6">
         Connect to Claude so Swarm can help you. This is the only required step.
       </p>
-      <AuthConfigPanel mode="onboarding" onVerifySuccess={onVerified} />
+      <AuthConfigPanel
+        mode="onboarding"
+        onVerifySuccess={onVerified}
+        onVerifyFail={() => setFailCount(c => c + 1)}
+      />
+      {/* Escape hatch: after 2+ failures on Hive, let user proceed (they can't fix IAM from UI) */}
+      {isHive && failCount >= 2 && (
+        <button
+          onClick={onVerified}
+          className="mt-4 px-4 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+        >
+          Skip — fix IAM permissions later
+        </button>
+      )}
     </div>
   );
 }
@@ -344,6 +380,19 @@ function StepRestore({ onRestored, onSkip }: { onRestored: () => void; onSkip: (
                 style={{ width: `${events[events.length - 1]?.progress ?? 0}%` }} />
             </div>
           )}
+          {/* Show escape hatch when restore failed (not restoring, has error) */}
+          {!restoring && events.some(e => e.error) && (
+            <div className="flex gap-3 pt-2">
+              <button onClick={() => { setEvents([]); }}
+                className="px-4 py-2 text-sm bg-[var(--color-primary)] text-white rounded-lg hover:opacity-90">
+                Try Again
+              </button>
+              <button onClick={onSkip}
+                className="px-4 py-2 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
+                Skip — start fresh
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -353,6 +402,7 @@ function StepRestore({ onRestored, onSkip }: { onRestored: () => void; onSkip: (
 // ── Step 4: Ready ──
 
 function Step4Ready({ onStart }: { onStart: () => void }) {
+  const [starting, setStarting] = useState(false);
   return (
     <div>
       <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">You're All Set!</h2>
@@ -391,10 +441,11 @@ function Step4Ready({ onStart }: { onStart: () => void }) {
       </div>
 
       <button
-        onClick={onStart}
-        className="w-full px-6 py-3 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 font-medium text-lg"
+        onClick={() => { if (!starting) { setStarting(true); onStart(); } }}
+        disabled={starting}
+        className="w-full px-6 py-3 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 font-medium text-lg disabled:opacity-50"
       >
-        Start Using SwarmAI
+        {starting ? 'Starting...' : 'Start Using SwarmAI'}
       </button>
     </div>
   );
