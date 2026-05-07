@@ -4,8 +4,7 @@ use std::env;
 use tauri::{Emitter, Manager};
 use tauri::webview::WebviewWindowBuilder;
 use tauri::utils::config::WebviewUrl;
-use tauri_plugin_shell::ShellExt;
-use tauri_plugin_shell::process::CommandChild;
+// tauri_plugin_shell::ShellExt removed — no sidecar spawning in daemon-only mode
 use tokio::sync::Mutex;
 
 #[cfg(target_os = "windows")]
@@ -249,34 +248,29 @@ fn get_fallback_path() -> String {
     paths.join(path_separator)
 }
 
-/// Fixed port for daemon mode. When a launchd-managed backend is already
-/// listening on this port, Tauri connects to it instead of spawning a sidecar.
+/// Fixed port for daemon mode.
 const DAEMON_PORT: u16 = 18321;
 const DAEMON_PLIST_RELPATH: &str = "Library/LaunchAgents/com.swarmai.backend.plist";
 
-// Backend state management
+// Backend state — tracks connection to the daemon (Tauri does NOT own the process).
 struct BackendState {
-    child: Option<CommandChild>,
     port: u16,
     running: bool,
-    pid: Option<u32>,  // Store PID for process tree cleanup on Windows
+    pid: Option<u32>,
     /// Set to `true` when shutdown is intentional (stop_backend, window close, app exit).
-    /// Prevents the terminated-event handler from auto-restarting.
     intentional_shutdown: bool,
-    /// Set to `true` when connected to an external daemon (not our sidecar).
-    /// When true, Tauri must NOT kill the backend on exit.
+    /// Always true in production. Kept for graceful_shutdown_and_kill to skip kill.
     is_daemon_mode: bool,
 }
 
 impl Default for BackendState {
     fn default() -> Self {
         Self {
-            child: None,
-            port: 8000,
+            port: DAEMON_PORT,
             running: false,
             pid: None,
             intentional_shutdown: false,
-            is_daemon_mode: false,
+            is_daemon_mode: true,
         }
     }
 }
@@ -286,17 +280,8 @@ impl Default for BackendState {
 /// The curl/PowerShell timeout is set to this value.
 const SHUTDOWN_GRACE_SECONDS: u64 = 10;
 
-/// Maximum number of automatic restart attempts before giving up.
-/// Prevents infinite restart loops when the backend consistently crashes.
-const MAX_AUTO_RESTARTS: u32 = 3;
-
-/// Time window (seconds) for counting restart attempts.
-/// Restart counter resets if the backend survives longer than this.
-const RESTART_WINDOW_SECS: u64 = 60;
-
-/// Post-shutdown sleep (seconds) for the manual `stop_backend` command.
-/// Proportional to SHUTDOWN_GRACE_SECONDS for manual stop operations.
-const STOP_BACKEND_SLEEP_SECONDS: u64 = 5;
+// NOTE: MAX_AUTO_RESTARTS, RESTART_WINDOW_SECS, STOP_BACKEND_SLEEP_SECONDS removed.
+// Daemon auto-restart is handled by launchd KeepAlive — no Tauri-side restart logic.
 
 // Send graceful shutdown request to backend via HTTP
 // This allows the backend to properly terminate Claude CLI child processes before being killed
@@ -410,30 +395,7 @@ fn kill_claude_child_processes(parent_pid: u32) {
     println!("Finished checking for claude.exe child processes of PID {}", parent_pid);
 }
 
-// On Unix systems (macOS/Linux), kill the process tree using pkill
-#[cfg(not(target_os = "windows"))]
-fn kill_process_tree(pid: u32) {
-    // First, kill all child processes recursively using pkill -P
-    // This sends SIGTERM to all processes whose parent PID matches
-    let _ = std::process::Command::new("pkill")
-        .args(["-TERM", "-P", &pid.to_string()])
-        .output();
-
-    // Give child processes a moment to terminate gracefully
-    std::thread::sleep(std::time::Duration::from_millis(100));
-
-    // Force kill any remaining child processes
-    let _ = std::process::Command::new("pkill")
-        .args(["-KILL", "-P", &pid.to_string()])
-        .output();
-
-    // Finally, kill the parent process itself
-    let _ = std::process::Command::new("kill")
-        .args(["-9", &pid.to_string()])
-        .output();
-
-    println!("Killed process tree for PID: {}", pid);
-}
+// NOTE: Unix kill_process_tree removed — daemon lifecycle managed by launchd, not Tauri.
 
 type SharedBackendState = Arc<Mutex<BackendState>>;
 
@@ -444,138 +406,10 @@ pub struct BackendStatus {
     is_daemon_mode: bool,
 }
 
-/// Handle sidecar stdout/stderr/terminated events in a loop.
-///
-/// On unexpected termination (intentional_shutdown == false), waits 2 seconds
-/// then spawns a fresh sidecar on a new port and loops back to handle the new
-/// receiver. Uses iteration (not recursion) to avoid non-Send future issues.
-///
-/// Restart cap: at most `MAX_AUTO_RESTARTS` within a `RESTART_WINDOW_SECS`
-/// sliding window. If the backend survives beyond the window, the counter
-/// resets — so a one-off crash after hours of uptime gets a fresh budget.
-async fn handle_sidecar_output(
-    rx: tauri::async_runtime::Receiver<tauri_plugin_shell::process::CommandEvent>,
-    app_handle: tauri::AppHandle,
-    state: SharedBackendState,
-) {
-    use tauri_plugin_shell::process::CommandEvent;
-
-    let mut current_rx = rx;
-    let mut restart_count: u32 = 0;
-    let mut window_start = std::time::Instant::now();
-
-    loop {
-        let mut should_restart = false;
-
-        while let Some(event) = current_rx.recv().await {
-            match event {
-                CommandEvent::Stdout(line) => {
-                    let _ = app_handle.emit("backend-log", String::from_utf8_lossy(&line).to_string());
-                }
-                CommandEvent::Stderr(line) => {
-                    let _ = app_handle.emit("backend-error", String::from_utf8_lossy(&line).to_string());
-                }
-                CommandEvent::Terminated(payload) => {
-                    let was_intentional = {
-                        let mut backend = state.lock().await;
-                        let intentional = backend.intentional_shutdown;
-                        backend.running = false;
-                        backend.child = None;
-                        backend.pid = None;
-                        intentional
-                    };
-
-                    if was_intentional {
-                        println!("[Tauri] Backend terminated intentionally (exit code: {:?})", payload.code);
-                        let _ = app_handle.emit("backend-terminated", payload.code);
-                        return; // Done — no restart needed
-                    }
-
-                    // --- Restart budget check ---
-                    // Reset counter if the backend survived past the window
-                    if window_start.elapsed().as_secs() > RESTART_WINDOW_SECS {
-                        restart_count = 0;
-                        window_start = std::time::Instant::now();
-                    }
-
-                    restart_count += 1;
-                    if restart_count > MAX_AUTO_RESTARTS {
-                        eprintln!(
-                            "[Tauri] Backend crashed {} times within {}s — giving up auto-restart",
-                            restart_count, RESTART_WINDOW_SECS
-                        );
-                        let _ = app_handle.emit("backend-terminated", payload.code);
-                        return; // Exhausted restart budget
-                    }
-
-                    // Unexpected death (e.g. killed by external pkill, OOM, crash)
-                    println!(
-                        "[Tauri] Backend terminated UNEXPECTEDLY (exit code: {:?}) — auto-restart {}/{}",
-                        payload.code, restart_count, MAX_AUTO_RESTARTS
-                    );
-                    let _ = app_handle.emit("backend-terminated-restarting", payload.code);
-
-                    // Exponential backoff: 2s, 4s, 8s for attempts 1, 2, 3
-                    let backoff_secs = 2u64.pow(restart_count);
-                    tokio::time::sleep(tokio::time::Duration::from_secs(backoff_secs)).await;
-
-                    // Auto-restart: pick new port, re-spawn sidecar
-                    let new_port = match portpicker::pick_unused_port() {
-                        Some(p) => p,
-                        None => {
-                            eprintln!("[Tauri] No available port for backend restart — giving up");
-                            let _ = app_handle.emit("backend-terminated", payload.code);
-                            return;
-                        }
-                    };
-                    let enhanced_path = get_enhanced_path();
-
-                    match app_handle
-                        .shell()
-                        .sidecar("python-backend")
-                        .map(|cmd| cmd.args(["--port", &new_port.to_string()]).env("PATH", &enhanced_path))
-                    {
-                        Ok(sidecar_cmd) => match sidecar_cmd.spawn() {
-                            Ok((new_rx, new_child)) => {
-                                let new_pid = new_child.pid();
-                                {
-                                    let mut backend = state.lock().await;
-                                    backend.child = Some(new_child);
-                                    backend.port = new_port;
-                                    backend.running = true;
-                                    backend.pid = Some(new_pid);
-                                    backend.intentional_shutdown = false;
-                                }
-                                println!("[Tauri] Backend auto-restarted on port {} (PID: {})", new_port, new_pid);
-                                let _ = app_handle.emit("backend-restarted", new_port);
-
-                                // Loop back with the new receiver
-                                current_rx = new_rx;
-                                should_restart = true;
-                            }
-                            Err(e) => {
-                                eprintln!("[Tauri] Failed to auto-restart backend: {}", e);
-                                let _ = app_handle.emit("backend-terminated", payload.code);
-                                return; // Give up
-                            }
-                        },
-                        Err(e) => {
-                            eprintln!("[Tauri] Failed to create sidecar command for restart: {}", e);
-                            let _ = app_handle.emit("backend-terminated", payload.code);
-                            return; // Give up
-                        }
-                    }
-                    break; // Break inner loop to restart outer loop with new rx
-                }
-                _ => {}
-            }
-        }
-
-        if !should_restart {
-            return; // Receiver closed without termination event — nothing to do
-        }
-    }
-}
+// NOTE: handle_sidecar_output removed — sidecar mode is fully deprecated.
+// Backend auto-restart is now handled by launchd KeepAlive (daemon mode).
+// The health watchdog (spawn_daemon_health_watchdog) monitors daemon liveness
+// and emits frontend events on death/recovery.
 
 /// Gracefully shut down the backend and then force-kill as safety net.
 ///
@@ -591,13 +425,9 @@ async fn handle_sidecar_output(
 fn graceful_shutdown_and_kill(state: SharedBackendState, context: &str) {
     tauri::async_runtime::block_on(async {
         let mut backend = state.lock().await;
-        let was_running = backend.running;
         let port = backend.port;
-        let pid = backend.pid;
-        let child = backend.child.take();
-        let is_daemon = backend.is_daemon_mode;
 
-        // Mark as intentional + not running under lock — prevents double-fire and auto-restart
+        // Mark as intentional + not running under lock
         backend.intentional_shutdown = true;
         backend.running = false;
         backend.pid = None;
@@ -605,30 +435,7 @@ fn graceful_shutdown_and_kill(state: SharedBackendState, context: &str) {
 
         // Daemon mode: do NOT kill the backend — it's an external process that
         // should keep running after Tauri exits (channels, jobs stay alive).
-        if is_daemon {
-            println!("[{}] Backend is in daemon mode — leaving it running on port {}", context, port);
-            return;
-        }
-
-        // Graceful shutdown only if backend was actually running
-        if was_running {
-            println!("[{}] Attempting graceful shutdown on port {}", context, port);
-            // Fast-path: curl timeout (10s = SHUTDOWN_GRACE_SECONDS) serves as the
-            // grace period. If curl succeeds, backend already completed disconnect_all().
-            // If curl times out, 10s has already elapsed. No additional sleep needed.
-            // Return value intentionally ignored — both paths proceed to force-kill.
-            send_shutdown_request(port);
-        }
-
-        // Force kill as safety net (always, even if shutdown request succeeded)
-        if let Some(pid) = pid {
-            kill_process_tree(pid);
-            println!("[{}] Killed backend process tree (PID: {})", context, pid);
-        }
-
-        if let Some(child) = child {
-            let _ = child.kill();
-        }
+        println!("[{}] Backend is daemon — leaving it running on port {}", context, port);
     });
 }
 
@@ -961,20 +768,165 @@ async fn sync_daemon_version_background(
     }
 }
 
-/// Ensure the daemon plist is installed and bootstrapped into launchd.
-/// Idempotent: safe to call when already bootstrapped (exit 37 is OK).
-async fn ensure_daemon_bootstrapped() -> Result<(), String> {
+/// Auto-install the daemon: deploy binary + wrapper + plist, then bootstrap.
+///
+/// This runs on EVERY app launch (idempotent). On first launch it provisions
+/// everything from scratch. On subsequent launches it updates the binary if
+/// the app bundle has a newer version, and ensures launchd has it loaded.
+///
+/// Steps:
+/// 1. Copy `python-backend` binary from app bundle to `~/.swarm-ai/daemon/`
+/// 2. Copy `swarmai_backend.sh` wrapper from app resources to `~/.swarm-ai/`
+/// 3. Generate plist from template (substitute HOME, LOG_DIR, WRAPPER_PATH)
+/// 4. Write plist to `~/Library/LaunchAgents/com.swarmai.backend.plist`
+/// 5. `launchctl bootstrap gui/<uid> <plist_path>`
+///
+/// Idempotent — safe to call on every launch.
+fn auto_install_daemon(app: &tauri::AppHandle) -> Result<(), String> {
     let home = std::env::var("HOME").unwrap_or_default();
+    if home.is_empty() {
+        return Err("HOME not set".to_string());
+    }
+    let home_path = std::path::Path::new(&home);
+
+    let daemon_dir = home_path.join(".swarm-ai").join("daemon");
+    let log_dir = home_path.join(".swarm-ai").join("logs");
+    let launch_agents = home_path.join("Library").join("LaunchAgents");
+
+    // Create directories
+    std::fs::create_dir_all(&daemon_dir)
+        .map_err(|e| format!("Failed to create daemon dir: {}", e))?;
+    std::fs::create_dir_all(&log_dir)
+        .map_err(|e| format!("Failed to create log dir: {}", e))?;
+    std::fs::create_dir_all(&launch_agents)
+        .map_err(|e| format!("Failed to create LaunchAgents dir: {}", e))?;
+
+    // Step 1: Deploy python-backend binary from app bundle → ~/.swarm-ai/daemon/
+    let daemon_binary = daemon_dir.join("python-backend");
+    // In a Tauri .app bundle: SwarmAI.app/Contents/MacOS/python-backend
+    let bundle_base = app.path().resource_dir()
+        .map_err(|e| format!("Failed to get resource dir: {}", e))?;
+    // resource_dir = .app/Contents/Resources/ → parent = Contents/ → join MacOS
+    let app_binary = bundle_base.parent()
+        .ok_or("No parent of resource dir")?
+        .join("MacOS")
+        .join("python-backend");
+
+    if app_binary.exists() {
+        // Only copy if source is newer (or dest doesn't exist)
+        let should_copy = if daemon_binary.exists() {
+            let src_mtime = std::fs::metadata(&app_binary)
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            let dst_mtime = std::fs::metadata(&daemon_binary)
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            src_mtime > dst_mtime
+        } else {
+            true
+        };
+
+        if should_copy {
+            // Atomic copy: write .tmp then rename
+            let tmp = daemon_binary.with_extension("tmp");
+            std::fs::copy(&app_binary, &tmp)
+                .map_err(|e| format!("Failed to copy binary: {}", e))?;
+            std::fs::rename(&tmp, &daemon_binary)
+                .map_err(|e| format!("Failed to rename binary: {}", e))?;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&daemon_binary, std::fs::Permissions::from_mode(0o755))
+                    .map_err(|e| format!("Failed to chmod binary: {}", e))?;
+            }
+            println!("[Tauri] Deployed daemon binary from {:?}", app_binary);
+        }
+    } else {
+        // Dev mode: binary not in app bundle. Check if previously deployed.
+        if !daemon_binary.exists() {
+            return Err(format!(
+                "Backend binary not found in app bundle ({:?}) or daemon dir ({:?}). \
+                 Run `./prod.sh build` to create it.",
+                app_binary, daemon_binary
+            ));
+        }
+        println!("[Tauri] Using previously deployed daemon binary");
+    }
+
+    // Write version file alongside binary
+    let version = app.config().version.clone().unwrap_or_default();
+    if !version.is_empty() {
+        let _ = std::fs::write(daemon_dir.join(".version"), &version);
+    }
+
+    // Step 2: Deploy wrapper script from bundled resources → ~/.swarm-ai/swarmai_backend.sh
+    let wrapper_dest = home_path.join(".swarm-ai").join("swarmai_backend.sh");
+    let wrapper_src = bundle_base.join("daemon").join("swarmai_backend.sh");
+
+    if wrapper_src.exists() {
+        std::fs::copy(&wrapper_src, &wrapper_dest)
+            .map_err(|e| format!("Failed to copy wrapper: {}", e))?;
+    } else if !wrapper_dest.exists() {
+        return Err(format!(
+            "Wrapper script not found in bundle ({:?}) or at dest ({:?})",
+            wrapper_src, wrapper_dest
+        ));
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&wrapper_dest, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| format!("Failed to chmod wrapper: {}", e))?;
+    }
+
+    // Clear quarantine (macOS Gatekeeper blocks quarantined scripts via launchd)
+    let _ = std::process::Command::new("xattr")
+        .args(["-d", "com.apple.quarantine"])
+        .arg(&wrapper_dest)
+        .output();
+    let _ = std::process::Command::new("xattr")
+        .args(["-d", "com.apple.quarantine"])
+        .arg(&daemon_binary)
+        .output();
+
+    // Step 3+4: Generate plist from template and write
+    let plist_template_path = bundle_base.join("daemon").join("com.swarmai.backend.plist.template");
+    let plist_dest = launch_agents.join("com.swarmai.backend.plist");
+
+    if plist_template_path.exists() {
+        let plist_content = std::fs::read_to_string(&plist_template_path)
+            .map_err(|e| format!("Failed to read plist template: {}", e))?;
+
+        let plist_content = plist_content
+            .replace("__WRAPPER_PATH__", wrapper_dest.to_str().unwrap_or(""))
+            .replace("__LOG_DIR__", log_dir.to_str().unwrap_or(""))
+            .replace("__HOME__", &home);
+
+        std::fs::write(&plist_dest, &plist_content)
+            .map_err(|e| format!("Failed to write plist: {}", e))?;
+        println!("[Tauri] Installed daemon plist: {:?}", plist_dest);
+    } else if !plist_dest.exists() {
+        return Err(format!(
+            "Plist template not found ({:?}) and no existing plist",
+            plist_template_path
+        ));
+    }
+
+    // Step 5: Bootstrap via launchctl
+    bootstrap_daemon(&home)
+}
+
+/// Bootstrap the daemon via launchctl. Idempotent.
+fn bootstrap_daemon(home: &str) -> Result<(), String> {
     let plist_path = format!("{}/{}", home, DAEMON_PLIST_RELPATH);
 
-    // If plist doesn't exist, we can't bootstrap. The install_backend_daemon.py
-    // script handles plist generation, but it requires the Python backend venv.
-    // For now, if plist is missing, we fall back to sidecar.
     if !std::path::Path::new(&plist_path).exists() {
         return Err(format!("Daemon plist not found: {}", plist_path));
     }
 
-    // Get UID via id -u (portable, no libc dependency)
+    // Get UID via id -u
     let uid_output = std::process::Command::new("id")
         .arg("-u")
         .output()
@@ -997,8 +949,6 @@ async fn ensure_daemon_bootstrapped() -> Result<(), String> {
             Ok(())
         }
         Some(5) | Some(37) => {
-            // Code 5 can mean "already loaded" (Ventura+) or genuine I/O error.
-            // Code 37 = "already bootstrapped". Verify with launchctl list.
             let code = output.status.code().unwrap_or(-1);
             let verify = std::process::Command::new("launchctl")
                 .args(["list", "com.swarmai.backend"])
@@ -1144,7 +1094,14 @@ fn spawn_daemon_health_watchdog(
     });
 }
 
-// Start the Python backend sidecar
+// Start the backend — daemon-only architecture.
+//
+// Flow:
+// 1. If daemon is already running → connect immediately
+// 2. Otherwise → auto_install_daemon (deploy binary + plist + bootstrap) → wait for daemon
+//
+// No sidecar fallback. In dev mode, frontend skips this entirely (isDev = true)
+// and connects directly to localhost:8000 (manually started via ./dev.sh backend).
 #[tauri::command]
 async fn start_backend(
     app: tauri::AppHandle,
@@ -1158,221 +1115,77 @@ async fn start_backend(
         }
     }
 
-    // ── Daemon-first architecture ──────────────────────────────────────
-    // Phase 1: Probe for existing daemon (handles 99% case: already running)
-    // Phase 2: If not running, auto-bootstrap via launchd
-    // Phase 3: Fallback to sidecar only if daemon cannot start
-    {
-        // Helper: connect to daemon and start health watchdog
-        let connect_daemon = |state: &tauri::State<'_, SharedBackendState>, app: &tauri::AppHandle| {
-            let state_inner = state.inner().clone();
-            let app_clone = app.clone();
-            async move {
-                {
-                    let mut backend = state_inner.lock().await;
-                    backend.port = DAEMON_PORT;
-                    backend.running = true;
-                    backend.is_daemon_mode = true;
-                    backend.child = None;
-                    backend.pid = None;
-                }
-                // Start background health watchdog (10s interval for faster detection)
-                spawn_daemon_health_watchdog(app_clone.clone(), state_inner, 10);
-                // Notify frontend of backend mode for UI display / onboarding
-                let _ = app_clone.emit("backend-mode", "daemon");
-                DAEMON_PORT
+    // Helper: connect to daemon and start health watchdog
+    let connect_daemon = |state: &tauri::State<'_, SharedBackendState>, app: &tauri::AppHandle| {
+        let state_inner = state.inner().clone();
+        let app_clone = app.clone();
+        async move {
+            {
+                let mut backend = state_inner.lock().await;
+                backend.port = DAEMON_PORT;
+                backend.running = true;
+                backend.is_daemon_mode = true;
+                backend.pid = None;
             }
-        };
+            spawn_daemon_health_watchdog(app_clone.clone(), state_inner, 10);
+            let _ = app_clone.emit("backend-mode", "daemon");
+            DAEMON_PORT
+        }
+    };
 
-        // Phase 1: probe with retry (daemon might be mid-restart via ThrottleInterval)
-        if let Some(_port) = probe_daemon_health(5, 2).await {
-            println!("[Tauri] Found existing daemon on port {} — connecting", DAEMON_PORT);
+    // ── Step 1: Probe for existing daemon ──────────────────────────────
+    if let Some(_port) = probe_daemon_health(5, 2).await {
+        println!("[Tauri] Found existing daemon on port {} — connecting", DAEMON_PORT);
 
-            // Version reconciliation is a best-effort maintenance task. It must
-            // NOT block the Tauri command return — doing so caused the v1.9.0
-            // "Backend service failed to start within 60 seconds" regression on
-            // any version drift. Dispatch onto the Tauri async runtime and
-            // return the port immediately.
-            let app_version = app.config().version.clone().unwrap_or_default();
-            if !app_version.is_empty() {
-                let app_handle = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    sync_daemon_version_background(app_handle, app_version).await;
-                });
-            }
-
-            let port = connect_daemon(&state, &app).await;
-            return Ok(port);
+        // Background version reconciliation (non-blocking)
+        let app_version = app.config().version.clone().unwrap_or_default();
+        if !app_version.is_empty() {
+            let app_handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                sync_daemon_version_background(app_handle, app_version).await;
+            });
         }
 
-        // Phase 2: daemon not running — attempt auto-bootstrap
-        println!("[Tauri] No daemon found — attempting auto-bootstrap");
-        if let Ok(()) = ensure_daemon_bootstrapped().await {
-            // Wait for daemon to come up (cold start can take a few seconds)
-            if let Some(_port) = probe_daemon_health(10, 2).await {
-                println!("[Tauri] Daemon bootstrapped and healthy on port {}", DAEMON_PORT);
-                let port = connect_daemon(&state, &app).await;
-                return Ok(port);
-            }
-            println!("[Tauri] Daemon bootstrapped but not responding — falling back to sidecar");
-        } else {
-            println!("[Tauri] Daemon bootstrap failed — falling back to sidecar");
-        }
+        let port = connect_daemon(&state, &app).await;
+        return Ok(port);
     }
 
-    // Phase 3: Sidecar fallback — only when daemon plist does NOT exist.
-    // When the plist exists, the daemon is the intended backend. Spawning a
-    // sidecar alongside it causes two backends competing for SQLite,
-    // backend.json, and workspace git.  Return an error instead so the user
-    // can diagnose the daemon issue (./dev.sh daemon logs).
-    {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let plist_path = format!("{}/{}", home, DAEMON_PLIST_RELPATH);
-        if std::path::Path::new(&plist_path).exists() {
-            return Err(format!(
-                "Daemon is installed but not responding on port {}. \
-                 Check daemon logs: ~/.swarm-ai/logs/backend-stderr.log \
-                 or restart with: ./dev.sh daemon restart",
-                DAEMON_PORT,
-            ));
-        }
+    // ── Step 2: Daemon not running — install/provision and bootstrap ────
+    println!("[Tauri] No daemon found — auto-installing");
+
+    // auto_install_daemon is synchronous (file I/O + launchctl) — fine for startup
+    if let Err(e) = auto_install_daemon(&app) {
+        return Err(format!(
+            "Failed to install daemon: {}. \
+             Check ~/.swarm-ai/logs/backend-stderr.log for details.",
+            e
+        ));
     }
 
-    // Find an available port
-    let port = portpicker::pick_unused_port()
-        .ok_or_else(|| "No available port for backend".to_string())?;
-
-    // Get enhanced PATH for the sidecar
-    let enhanced_path = get_enhanced_path();
-
-    // Start the sidecar with enhanced environment
-    let sidecar = app
-        .shell()
-        .sidecar("python-backend")
-        .map_err(|e| format!("Failed to create sidecar command: {}", e))?
-        .args(["--port", &port.to_string()])
-        .env("PATH", enhanced_path);
-
-    let (rx, child) = sidecar
-        .spawn()
-        .map_err(|e| format!("Failed to spawn sidecar: {}", e))?;
-
-    // Get PID for process tree cleanup on Windows
-    let pid = child.pid();
-
-    // Store the child process (short lock)
-    {
-        let mut backend = state.lock().await;
-        backend.child = Some(child);
-        backend.port = port;
-        backend.running = true;
-        backend.pid = Some(pid);
-        backend.intentional_shutdown = false;
+    // Wait for daemon to come up (cold start takes a few seconds)
+    if let Some(_port) = probe_daemon_health(15, 2).await {
+        println!("[Tauri] Daemon installed and healthy on port {}", DAEMON_PORT);
+        let port = connect_daemon(&state, &app).await;
+        return Ok(port);
     }
 
-    // Delegate sidecar output + auto-restart handling to the standalone function
-    let app_handle = app.clone();
-    let state_clone = state.inner().clone();
-    tauri::async_runtime::spawn(async move {
-        handle_sidecar_output(rx, app_handle, state_clone).await;
-    });
-
-    // Poll the /health endpoint until the backend reports "healthy"
-    let health_url = format!("http://127.0.0.1:{}/health", port);
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-
-    let max_attempts = 30; // 30 attempts × 2s = 60s total timeout
-    for attempt in 1..=max_attempts {
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-        match client.get(&health_url).send().await {
-            Ok(resp) => {
-                if let Ok(body) = resp.text().await {
-                    let (is_healthy, _, _) = parse_health_response(&body);
-                    if is_healthy {
-                        println!("[Tauri] Backend healthy after {} attempts", attempt);
-                        // Notify frontend: running in sidecar mode (no 24/7 daemon)
-                        let _ = app.emit("backend-mode", "sidecar");
-                        return Ok(port);
-                    }
-                    println!(
-                        "[Tauri] Backend not ready (attempt {}/{}): {}",
-                        attempt, max_attempts, body
-                    );
-                }
-            }
-            Err(e) => {
-                println!(
-                    "[Tauri] Health check attempt {}/{} failed: {}",
-                    attempt, max_attempts, e
-                );
-            }
-        }
-
-        // Check if backend process is still alive
-        let backend = state.lock().await;
-        if !backend.running {
-            return Err("Backend process terminated during startup".to_string());
-        }
-    }
-
+    // Daemon didn't come up — hard error. No fallback.
     Err(format!(
-        "Backend failed to become healthy within {} seconds",
-        max_attempts * 2
+        "Daemon installed but not responding on port {} after 30s. \
+         Check logs: ~/.swarm-ai/logs/backend-stderr.log",
+        DAEMON_PORT,
     ))
 }
 
-// Stop the Python backend
+// Stop the backend connection (daemon keeps running — Tauri just disconnects).
 #[tauri::command]
 async fn stop_backend(state: tauri::State<'_, SharedBackendState>) -> Result<(), String> {
-    // Step 1: Capture all needed state under lock, then release
-    // This avoids race conditions from dropping and re-acquiring the lock
-    let (was_running, port, pid, child) = {
-        let mut backend = state.lock().await;
-        let was_running = backend.running;
-        let port = backend.port;
-        let pid = backend.pid;
-        let child = backend.child.take();
-
-        // Mark as intentional + not running to prevent auto-restart and concurrent operations
-        backend.intentional_shutdown = true;
-        backend.running = false;
-        backend.pid = None;
-
-        (was_running, port, pid, child)
-    };
-    // Lock is now released
-
-    // Step 2: Try graceful shutdown via HTTP request (all platforms)
-    // This allows the backend to properly terminate Claude CLI child processes
-    if was_running {
-        let success = send_shutdown_request(port);
-        if !success {
-            // Backend didn't respond — give it extra time before force-killing
-            tokio::time::sleep(tokio::time::Duration::from_secs(STOP_BACKEND_SLEEP_SECONDS)).await;
-        }
-        // Fast path: if shutdown request succeeded, skip sleep — backend already cleaned up
-    }
-
-    // Step 3: Kill the entire process tree (works on all platforms)
-    if let Some(pid) = pid {
-        kill_process_tree(pid);
-    }
-
-    if let Some(child) = child {
-        let _ = child.kill(); // Also try normal kill as fallback
-    }
-
-    // Step 4: On Windows, wait for processes to fully exit to release file handles
-    // This is important for updates where the installer needs to overwrite the exe
-    #[cfg(target_os = "windows")]
-    if let Some(pid) = pid {
-        wait_for_processes_exit(pid).await;
-    }
-
+    let mut backend = state.lock().await;
+    backend.intentional_shutdown = true;
+    backend.running = false;
+    backend.pid = None;
+    // NOTE: We do NOT kill the daemon process. It stays alive for 24/7 operation.
+    // Daemon lifecycle is managed by launchd, not Tauri.
     Ok(())
 }
 
