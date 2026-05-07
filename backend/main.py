@@ -138,8 +138,12 @@ def _is_port_listening(host: str, port: int) -> bool:
 def _detect_run_mode() -> str:
     """Detect backend run mode from SWARMAI_MODE env var.
 
-    - ``"daemon"`` — macOS launchd 24/7 service (default, production)
-    - ``"hive"``   — EC2 cloud deployment (systemd)
+    - ``"daemon"``     — macOS launchd 24/7 service (default)
+    - ``"subprocess"`` — Windows/Linux desktop (Tauri child process, dies with app)
+    - ``"hive"``       — EC2 cloud deployment (systemd, 24/7)
+    - ``"dev"``        — Local development (manual start, no channels)
+
+    Gateway runs only in {daemon, hive}. /shutdown blocked in {daemon, hive}.
     """
     return os.environ.get("SWARMAI_MODE", "daemon")
 

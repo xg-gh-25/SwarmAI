@@ -4,7 +4,8 @@ use std::env;
 use tauri::{Emitter, Manager};
 use tauri::webview::WebviewWindowBuilder;
 use tauri::utils::config::WebviewUrl;
-// tauri_plugin_shell::ShellExt removed — no sidecar spawning in daemon-only mode
+// tauri_plugin_shell: ShellExt import removed (no sidecar spawning), but plugin
+// still initialized for its "open" capability (open URLs in system browser).
 use tokio::sync::Mutex;
 
 #[cfg(target_os = "windows")]
@@ -1389,56 +1390,6 @@ async fn stop_backend(state: tauri::State<'_, SharedBackendState>) -> Result<(),
         }
     }
     Ok(())
-}
-
-// Wait for processes to exit on Windows (checks both python-backend and claude.exe)
-#[cfg(target_os = "windows")]
-async fn wait_for_processes_exit(backend_pid: u32) {
-    use std::time::Duration;
-
-    // Process names to check - Claude CLI processes may outlive the Python backend
-    // Note: On Windows, tasklist requires the full executable name with .exe extension
-    let process_names = ["python-backend.exe", "claude.exe"];
-
-    // Try up to 20 times with 500ms delay (10 seconds total)
-    for i in 0..20 {
-        let mut any_running = false;
-
-        // Check each process name
-        for process_name in &process_names {
-            let output = std::process::Command::new("tasklist")
-                .args(["/FI", &format!("IMAGENAME eq {}", process_name), "/NH"])
-                .creation_flags(0x08000000) // CREATE_NO_WINDOW
-                .output();
-
-            if let Ok(out) = output {
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                // tasklist returns "INFO: No tasks are running..." if no matches
-                if stdout.contains(process_name) && !stdout.contains("INFO:") {
-                    any_running = true;
-                    println!("Process {} still running at check {}", process_name, i + 1);
-                    break;
-                }
-            }
-        }
-
-        if !any_running {
-            println!("All processes exited after {} checks", i + 1);
-            return;
-        }
-
-        // Every 4 checks (2 seconds), try to kill any remaining claude.exe child processes
-        // This handles orphaned processes that may have been missed by the initial kill
-        if i > 0 && i % 4 == 0 {
-            kill_claude_child_processes(backend_pid);
-        }
-
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
-
-    // Final attempt to kill any remaining claude.exe child processes
-    kill_claude_child_processes(backend_pid);
-    println!("Warning: Some processes may still be running after timeout (backend PID: {})", backend_pid);
 }
 
 // Get backend status
