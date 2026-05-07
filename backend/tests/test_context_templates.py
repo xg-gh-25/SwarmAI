@@ -331,7 +331,7 @@ class TestDistillationSkill:
         """SKILL.md has YAML frontmatter with name and description."""
         content = (SKILLS_DIR / "s_memory-distill" / "SKILL.md").read_text()
         assert content.startswith("---"), "SKILL.md missing YAML frontmatter"
-        assert "name: Memory Distill" in content
+        assert "name: memory-distill" in content
 
     def test_skill_has_detection_section(self):
         """Req 3.2/3.3: SKILL.md has Detection section with threshold."""
