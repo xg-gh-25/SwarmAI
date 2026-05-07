@@ -252,14 +252,15 @@ fn get_fallback_path() -> String {
 const DAEMON_PORT: u16 = 18321;
 const DAEMON_PLIST_RELPATH: &str = "Library/LaunchAgents/com.swarmai.backend.plist";
 
-// Backend state — tracks connection to the daemon (Tauri does NOT own the process).
+// Backend state — tracks connection to daemon (macOS) or owned subprocess (Windows).
 struct BackendState {
     port: u16,
     running: bool,
     pid: Option<u32>,
     /// Set to `true` when shutdown is intentional (stop_backend, window close, app exit).
     intentional_shutdown: bool,
-    /// Always true in production. Kept for graceful_shutdown_and_kill to skip kill.
+    /// macOS: true (launchd daemon, survives app close).
+    /// Windows: false (subprocess, dies with app).
     is_daemon_mode: bool,
 }
 
@@ -270,7 +271,11 @@ impl Default for BackendState {
             running: false,
             pid: None,
             intentional_shutdown: false,
+            // macOS uses launchd daemon; Windows uses subprocess
+            #[cfg(target_os = "macos")]
             is_daemon_mode: true,
+            #[cfg(not(target_os = "macos"))]
+            is_daemon_mode: false,
         }
     }
 }
@@ -395,7 +400,28 @@ fn kill_claude_child_processes(parent_pid: u32) {
     println!("Finished checking for claude.exe child processes of PID {}", parent_pid);
 }
 
-// NOTE: Unix kill_process_tree removed — daemon lifecycle managed by launchd, not Tauri.
+// On Linux, kill the process tree (used in subprocess mode).
+// macOS doesn't need this — daemon lifecycle managed by launchd.
+#[cfg(target_os = "linux")]
+fn kill_process_tree(pid: u32) {
+    let _ = std::process::Command::new("pkill")
+        .args(["-TERM", "-P", &pid.to_string()])
+        .output();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let _ = std::process::Command::new("pkill")
+        .args(["-KILL", "-P", &pid.to_string()])
+        .output();
+    let _ = std::process::Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .output();
+    println!("Killed process tree for PID: {}", pid);
+}
+
+// macOS: no-op (daemon mode, never called — but needed for compilation)
+#[cfg(target_os = "macos")]
+fn kill_process_tree(_pid: u32) {
+    // Daemon mode: process lifecycle is managed by launchd, not Tauri.
+}
 
 type SharedBackendState = Arc<Mutex<BackendState>>;
 
@@ -413,19 +439,19 @@ pub struct BackendStatus {
 
 /// Gracefully shut down the backend and then force-kill as safety net.
 ///
-/// Mirrors the `stop_backend` command pattern:
-/// 1. Capture state under lock, mark as not running
-/// 2. Release lock before blocking I/O
-/// 3. If was running: send_shutdown_request (curl timeout = 10s IS the grace period)
-/// 4. Force kill process tree + child as safety net
+/// Platform behavior:
+/// - macOS (daemon mode): do NOT kill — daemon survives app close.
+/// - Windows (subprocess mode): send /shutdown → wait → force-kill process tree.
 ///
 /// Double-fire safe: if `backend.running` is already false (set by a
-/// previous handler in the same close sequence), skips the shutdown
-/// request and sleep, proceeding directly to force-kill.
+/// previous handler in the same close sequence), skips the kill.
 fn graceful_shutdown_and_kill(state: SharedBackendState, context: &str) {
     tauri::async_runtime::block_on(async {
         let mut backend = state.lock().await;
         let port = backend.port;
+        let pid = backend.pid;
+        let is_daemon = backend.is_daemon_mode;
+        let was_running = backend.running;
 
         // Mark as intentional + not running under lock
         backend.intentional_shutdown = true;
@@ -433,9 +459,32 @@ fn graceful_shutdown_and_kill(state: SharedBackendState, context: &str) {
         backend.pid = None;
         drop(backend); // Release lock before blocking I/O
 
-        // Daemon mode: do NOT kill the backend — it's an external process that
-        // should keep running after Tauri exits (channels, jobs stay alive).
-        println!("[{}] Backend is daemon — leaving it running on port {}", context, port);
+        if is_daemon {
+            // Daemon mode (macOS): leave it running — channels, jobs stay alive.
+            println!("[{}] Backend is daemon — leaving it running on port {}", context, port);
+            return;
+        }
+
+        // Subprocess mode (Windows/Linux): we own the process, must kill it.
+        if !was_running {
+            println!("[{}] Backend already stopped — skipping kill", context);
+            return;
+        }
+
+        println!("[{}] Subprocess mode — shutting down backend on port {}", context, port);
+
+        // Step 1: Graceful HTTP shutdown (gives backend time to disconnect sessions)
+        send_shutdown_request(port);
+
+        // Step 2: Wait briefly for graceful exit
+        std::thread::sleep(std::time::Duration::from_secs(3));
+
+        // Step 3: Force kill process tree as safety net
+        if let Some(pid) = pid {
+            kill_process_tree(pid);
+            #[cfg(target_os = "windows")]
+            kill_claude_child_processes(pid);
+        }
     });
 }
 
@@ -1094,14 +1143,17 @@ fn spawn_daemon_health_watchdog(
     });
 }
 
-// Start the backend — daemon-only architecture.
+// Start the backend — platform-specific architecture.
 //
-// Flow:
-// 1. If daemon is already running → connect immediately
-// 2. Otherwise → auto_install_daemon (deploy binary + plist + bootstrap) → wait for daemon
+// macOS: launchd daemon (24/7, survives app close)
+//   1. Probe existing daemon → connect
+//   2. auto_install_daemon → bootstrap → connect
 //
-// No sidecar fallback. In dev mode, frontend skips this entirely (isDev = true)
-// and connects directly to localhost:8000 (manually started via ./dev.sh backend).
+// Windows/Linux: subprocess (dies with app)
+//   1. Probe existing backend on port → connect
+//   2. Spawn python-backend as child process → wait for health → connect
+//
+// Dev mode: frontend skips this entirely (isDev = true), connects to localhost:8000.
 #[tauri::command]
 async fn start_backend(
     app: tauri::AppHandle,
@@ -1133,59 +1185,198 @@ async fn start_backend(
         }
     };
 
-    // ── Step 1: Probe for existing daemon ──────────────────────────────
-    if let Some(_port) = probe_daemon_health(5, 2).await {
-        println!("[Tauri] Found existing daemon on port {} — connecting", DAEMON_PORT);
+    // ── Step 1: Probe for existing backend on DAEMON_PORT ─────────────
+    if let Some(_port) = probe_daemon_health(3, 1).await {
+        println!("[Tauri] Found existing backend on port {} — connecting", DAEMON_PORT);
 
-        // Background version reconciliation (non-blocking)
-        let app_version = app.config().version.clone().unwrap_or_default();
-        if !app_version.is_empty() {
-            let app_handle = app.clone();
-            tauri::async_runtime::spawn(async move {
-                sync_daemon_version_background(app_handle, app_version).await;
-            });
+        // macOS only: background version reconciliation
+        #[cfg(target_os = "macos")]
+        {
+            let app_version = app.config().version.clone().unwrap_or_default();
+            if !app_version.is_empty() {
+                let app_handle = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    sync_daemon_version_background(app_handle, app_version).await;
+                });
+            }
         }
 
         let port = connect_daemon(&state, &app).await;
         return Ok(port);
     }
 
-    // ── Step 2: Daemon not running — install/provision and bootstrap ────
-    println!("[Tauri] No daemon found — auto-installing");
+    // ── Step 2: Platform-specific provisioning ────────────────────────
 
-    // auto_install_daemon is synchronous (file I/O + launchctl) — fine for startup
-    if let Err(e) = auto_install_daemon(&app) {
+    #[cfg(target_os = "macos")]
+    {
+        // macOS: install launchd daemon and bootstrap
+        println!("[Tauri] No daemon found — auto-installing");
+
+        if let Err(e) = auto_install_daemon(&app) {
+            return Err(format!(
+                "Failed to install daemon: {}. \
+                 Check ~/.swarm-ai/logs/backend-stderr.log for details.",
+                e
+            ));
+        }
+
+        // Wait for daemon to come up (cold start takes a few seconds)
+        if let Some(_port) = probe_daemon_health(15, 2).await {
+            println!("[Tauri] Daemon installed and healthy on port {}", DAEMON_PORT);
+            let port = connect_daemon(&state, &app).await;
+            return Ok(port);
+        }
+
         return Err(format!(
-            "Failed to install daemon: {}. \
-             Check ~/.swarm-ai/logs/backend-stderr.log for details.",
-            e
+            "Daemon installed but not responding on port {} after 30s. \
+             Check logs: ~/.swarm-ai/logs/backend-stderr.log",
+            DAEMON_PORT,
         ));
     }
 
-    // Wait for daemon to come up (cold start takes a few seconds)
-    if let Some(_port) = probe_daemon_health(15, 2).await {
-        println!("[Tauri] Daemon installed and healthy on port {}", DAEMON_PORT);
-        let port = connect_daemon(&state, &app).await;
-        return Ok(port);
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Windows/Linux: spawn backend as subprocess (owned by Tauri)
+        println!("[Tauri] Spawning backend subprocess on port {}", DAEMON_PORT);
+
+        let binary_path = find_backend_binary(&app)?;
+        let enhanced_path = get_enhanced_path();
+
+        let mut cmd = std::process::Command::new(&binary_path);
+        cmd.args(["--host", "127.0.0.1", "--port", &DAEMON_PORT.to_string()])
+            .env("PATH", &enhanced_path)
+            .env("SWARMAI_MODE", "subprocess")
+            .env("SWARMAI_PORT", DAEMON_PORT.to_string())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+
+        #[cfg(target_os = "windows")]
+        {
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+
+        let child = cmd.spawn()
+            .map_err(|e| format!(
+                "Failed to start backend: {}. Binary: {:?}",
+                e, binary_path
+            ))?;
+
+        let child_pid = child.id();
+        println!("[Tauri] Backend subprocess spawned (PID {})", child_pid);
+
+        // Update state with subprocess info
+        {
+            let mut backend = state.lock().await;
+            backend.pid = Some(child_pid);
+            backend.is_daemon_mode = false;
+        }
+
+        // Wait for health endpoint
+        if let Some(_port) = probe_daemon_health(20, 1).await {
+            println!("[Tauri] Backend subprocess healthy on port {}", DAEMON_PORT);
+            {
+                let mut backend = state.lock().await;
+                backend.port = DAEMON_PORT;
+                backend.running = true;
+            }
+            // Start health watchdog for subprocess crash detection
+            spawn_daemon_health_watchdog(app.clone(), state.inner().clone(), 10);
+            let _ = app.emit("backend-mode", "subprocess");
+            return Ok(DAEMON_PORT);
+        }
+
+        // Backend didn't come up — kill the zombie and report error
+        kill_process_tree(child_pid);
+        Err(format!(
+            "Backend started (PID {}) but not responding on port {} after 20s. \
+             Check if port is in use or binary is corrupt.",
+            child_pid, DAEMON_PORT,
+        ))
+    }
+}
+
+/// Find the backend binary — checks app bundle first, then data dir.
+/// Works cross-platform: macOS bundle (Contents/MacOS/), Windows (same dir as exe).
+#[allow(dead_code)] // Used on Windows/Linux only; macOS uses auto_install_daemon path.
+fn find_backend_binary(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let exe_path = std::env::current_exe()
+        .map_err(|e| format!("Cannot determine exe path: {}", e))?;
+    let exe_dir = exe_path.parent().ok_or("Cannot determine exe directory")?;
+
+    // Check adjacent to the executable (Tauri bundles externalBin here)
+    #[cfg(target_os = "windows")]
+    let binary_name = "python-backend.exe";
+    #[cfg(not(target_os = "windows"))]
+    let binary_name = "python-backend";
+
+    let adjacent = exe_dir.join(binary_name);
+    if adjacent.exists() {
+        return Ok(adjacent);
     }
 
-    // Daemon didn't come up — hard error. No fallback.
+    // macOS: check Contents/MacOS/ inside .app bundle
+    #[cfg(target_os = "macos")]
+    {
+        let bundle_dir = app.path().resource_dir()
+            .map_err(|e| format!("Resource dir error: {}", e))?;
+        let macos_binary = bundle_dir.parent()
+            .ok_or("No parent of resource dir")?
+            .join("MacOS")
+            .join(binary_name);
+        if macos_binary.exists() {
+            return Ok(macos_binary);
+        }
+    }
+
+    // Check data directory (~/.swarm-ai/daemon/)
+    #[cfg(target_os = "windows")]
+    let home_str = std::env::var("USERPROFILE").unwrap_or_default();
+    #[cfg(not(target_os = "windows"))]
+    let home_str = std::env::var("HOME").unwrap_or_default();
+    if home_str.is_empty() {
+        return Err(format!(
+            "Backend binary '{}' not found adjacent to exe ({:?}) and HOME not set.",
+            binary_name, adjacent
+        ));
+    }
+    let home = std::path::PathBuf::from(&home_str);
+    let data_binary = home.join(".swarm-ai").join("daemon").join(binary_name);
+    if data_binary.exists() {
+        return Ok(data_binary);
+    }
+
+    // Suppress unused variable warning on non-macOS
+    let _ = app;
+
     Err(format!(
-        "Daemon installed but not responding on port {} after 30s. \
-         Check logs: ~/.swarm-ai/logs/backend-stderr.log",
-        DAEMON_PORT,
+        "Backend binary '{}' not found. Checked:\n  - {:?}\n  - ~/.swarm-ai/daemon/{}",
+        binary_name, adjacent, binary_name
     ))
 }
 
-// Stop the backend connection (daemon keeps running — Tauri just disconnects).
+// Stop the backend.
+// - Daemon mode (macOS): just disconnect — daemon keeps running for 24/7 operation.
+// - Subprocess mode (Windows): kill the owned process.
 #[tauri::command]
 async fn stop_backend(state: tauri::State<'_, SharedBackendState>) -> Result<(), String> {
     let mut backend = state.lock().await;
+    let is_daemon = backend.is_daemon_mode;
+    let port = backend.port;
+    let pid = backend.pid;
+
     backend.intentional_shutdown = true;
     backend.running = false;
     backend.pid = None;
-    // NOTE: We do NOT kill the daemon process. It stays alive for 24/7 operation.
-    // Daemon lifecycle is managed by launchd, not Tauri.
+    drop(backend);
+
+    if !is_daemon {
+        // Subprocess mode: graceful shutdown then kill
+        send_shutdown_request(port);
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        if let Some(pid) = pid {
+            kill_process_tree(pid);
+        }
+    }
     Ok(())
 }
 
