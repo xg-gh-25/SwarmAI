@@ -1188,7 +1188,7 @@ async def shutdown():
 
     Blocked in daemon and hive modes — these run 24/7 background services
     (Slack channels, scheduled jobs) that must survive app window close.
-    Only dev mode allows shutdown (manually started, no background services).
+    Allowed in dev and subprocess modes (no persistent background services).
     """
     mode = _detect_run_mode()
     if mode in ("daemon", "hive"):
