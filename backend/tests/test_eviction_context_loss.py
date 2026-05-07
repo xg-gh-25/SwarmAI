@@ -24,6 +24,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from hypothesis import given, settings, HealthCheck, strategies as st
 
+
+def _kill_after_sigkill(pid, sig):
+    """Mock os.kill: SIGKILL succeeds, signal 0 reports dead."""
+    if sig == 0:
+        raise ProcessLookupError("No such process")
+
 from core.session_unit import SessionState, SessionUnit
 from core.session_router import SessionRouter
 from tests.helpers import PROPERTY_SETTINGS
@@ -97,7 +103,7 @@ class TestEvictedTabLosesContext:
         # Eviction: kill() → DEAD → _cleanup_internal() → COLD
         loop = asyncio.new_event_loop()
         try:
-            with patch("os.kill"):
+            with patch("os.kill", side_effect=_kill_after_sigkill):
                 loop.run_until_complete(unit.kill())
         finally:
             loop.close()
@@ -142,7 +148,7 @@ class TestEvictedTabLosesContext:
         # Evict the unit
         loop = asyncio.new_event_loop()
         try:
-            with patch("os.kill"):
+            with patch("os.kill", side_effect=_kill_after_sigkill):
                 loop.run_until_complete(unit.kill())
         finally:
             loop.close()
@@ -480,7 +486,7 @@ class TestPreservationShutdownDisconnectAll:
         # Run disconnect_all
         loop = asyncio.new_event_loop()
         try:
-            with patch("os.kill"):
+            with patch("os.kill", side_effect=_kill_after_sigkill):
                 loop.run_until_complete(router.disconnect_all())
         finally:
             loop.close()

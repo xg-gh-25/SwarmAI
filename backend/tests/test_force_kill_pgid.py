@@ -54,15 +54,22 @@ class TestForceKillProcessGroup:
         """Safety guard: child shares our pgid → plain os.kill, NOT killpg."""
         unit = _make_unit(pid=1234)
 
+        # Signal-aware mock: SIGKILL succeeds, signal 0 (existence check)
+        # raises ProcessLookupError (process is dead after kill).
+        def smart_kill(pid, sig):
+            if sig == 0:
+                raise ProcessLookupError("No such process")
+
         # Both return same pgid → shared → killpg would kill us
         with patch("core.session_unit.os.getpgid", return_value=5678), \
              patch("core.session_unit.os.getpid", return_value=42), \
              patch("core.session_unit.os.killpg") as mock_killpg, \
-             patch("core.session_unit.os.kill") as mock_kill:
+             patch("core.session_unit.os.kill", side_effect=smart_kill) as mock_kill:
             await unit._force_kill()
 
         mock_killpg.assert_not_called()
-        mock_kill.assert_called_once_with(1234, signal.SIGKILL)
+        # First call is the actual SIGKILL, subsequent calls are existence checks
+        mock_kill.assert_any_call(1234, signal.SIGKILL)
 
     @pytest.mark.asyncio
     async def test_handles_already_dead_process_group(self):
@@ -99,11 +106,16 @@ class TestForceKillProcessGroup:
         """getpgid raises OSError — falls back to os.kill(pid)."""
         unit = _make_unit(pid=1234)
 
+        # Signal-aware mock: SIGKILL succeeds, signal 0 raises ProcessLookupError
+        def smart_kill(pid, sig):
+            if sig == 0:
+                raise ProcessLookupError("No such process")
+
         with patch("core.session_unit.os.getpgid", side_effect=OSError("no pgid")), \
-             patch("core.session_unit.os.kill") as mock_kill:
+             patch("core.session_unit.os.kill", side_effect=smart_kill) as mock_kill:
             await unit._force_kill()
 
-        mock_kill.assert_called_once_with(1234, signal.SIGKILL)
+        mock_kill.assert_any_call(1234, signal.SIGKILL)
 
     @pytest.mark.asyncio
     async def test_fallback_handles_dead_process(self):

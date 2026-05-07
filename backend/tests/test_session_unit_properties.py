@@ -294,7 +294,11 @@ class TestInterruptPreservesSubprocess:
         unit._client = mock_client
         unit._wrapper = mock_wrapper
 
-        with patch("os.kill"):
+        def _kill_signal_aware(pid, sig):
+            if sig == 0:
+                raise ProcessLookupError("No such process")
+
+        with patch("os.kill", side_effect=_kill_signal_aware):
             result = await unit.interrupt(timeout=0.01)
 
         assert result is False

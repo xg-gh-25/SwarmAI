@@ -90,10 +90,8 @@ jobs:
 
       - name: Run non-DB tests
         working-directory: ./backend
-        # Tests are best-effort on CI — DB locking is endemic on cold runners.
-        # Smoke import (above) is the hard gate; tests are bonus coverage.
-        # Failures are reported but don't block the pipeline.
-        continue-on-error: true
+        # Tests now block the pipeline. DB-dependent tests are already excluded
+        # by the dynamic ignore list above — remaining tests should always pass.
         run: |
           SWARMAI_SUITE=1 python -m pytest -n 0 --timeout=120 -q --tb=short \
             --override-ini="maxfail=10" \
@@ -134,6 +132,11 @@ jobs:
       - name: TypeScript typecheck
         working-directory: ./desktop
         run: npx tsc --noEmit
+
+      - name: Run frontend tests
+        working-directory: ./desktop
+        run: npx vitest run --reporter=verbose
+        timeout-minutes: 5
 
       - name: Build frontend
         working-directory: ./desktop
