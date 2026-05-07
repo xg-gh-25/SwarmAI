@@ -194,7 +194,7 @@ cmd_build() {
 
     _log "Step 2/4: Post-build verification..."
     cd "$BACKEND_DIR"
-    if python scripts/verify_build.py "$SIDECAR_BINARY"; then
+    if python scripts/verify_build.py "$BACKEND_BINARY"; then
         _ok "Verification passed"
     else
         _err "Verification FAILED — binary has missing capabilities"
@@ -249,7 +249,7 @@ cmd_deploy() {
     # Step 2: Verify
     _log "Step 2/3: Post-build verification..."
     cd "$BACKEND_DIR"
-    if python scripts/verify_build.py "$SIDECAR_BINARY"; then
+    if python scripts/verify_build.py "$BACKEND_BINARY"; then
         _ok "Verification passed"
     else
         _err "Verification FAILED — binary has missing capabilities"
@@ -277,10 +277,10 @@ cmd_quick() {
     _log "Quick build (skip PyInstaller, Tauri only)..."
     cd "$DESKTOP_DIR"
 
-    # Check sidecar binary exists
+    # Check backend binary exists (bundled into .app for daemon deployment)
     local binary="$DESKTOP_DIR/src-tauri/binaries/python-backend-aarch64-apple-darwin"
     if [ ! -f "$binary" ]; then
-        _warn "No sidecar binary found — need full build first"
+        _warn "No backend binary found — need full build first"
         _log "Running: ./dev.sh build"
         cmd_build
         return
@@ -366,13 +366,13 @@ cmd_status() {
         _err "Daemon: not running"
     fi
 
-    # Sidecar binary
+    # Backend binary (PyInstaller bundle)
     local binary="$DESKTOP_DIR/src-tauri/binaries/python-backend-aarch64-apple-darwin"
     if [ -f "$binary" ]; then
         local age=$(( ($(date +%s) - $(stat -f %m "$binary")) / 3600 ))
-        _ok "Sidecar: exists ($(du -h "$binary" | cut -f1), ${age}h old)"
+        _ok "Backend binary: exists ($(du -h "$binary" | cut -f1), ${age}h old)"
     else
-        _warn "Sidecar: not built"
+        _warn "Backend binary: not built"
     fi
 
     # Recent changes since last build

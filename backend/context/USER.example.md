@@ -10,7 +10,7 @@ _Example of a filled-in USER.md. Copy this to USER.md and customize._
 
 ## Work Context
 
-Building SwarmAI — a Tauri 2.0 desktop app (React + Python FastAPI sidecar) that serves as a personal AI command center. Uses Claude Agent SDK with Bedrock for AI capabilities. Architecture: SQLite for data, filesystem for skills and context, SSE streaming for real-time chat.
+Building SwarmAI — a Tauri 2.0 desktop app (React + Python FastAPI backend daemon) that serves as a personal AI command center. Uses Claude Agent SDK with Bedrock for AI capabilities. Architecture: SQLite for data, filesystem for skills and context, SSE streaming for real-time chat.
 
 Tech stack: Python (FastAPI, asyncio, Pydantic), TypeScript (React, TanStack Query, Tailwind), Rust (Tauri), AWS Bedrock, Claude Agent SDK. Testing: pytest + fast-check property-based tests.
 

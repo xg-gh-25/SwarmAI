@@ -16,7 +16,7 @@ DAEMON_PORT=18321
 DAEMON_API="http://127.0.0.1:${DAEMON_PORT}"
 GUI_TARGET="gui/$(id -u)/${DAEMON_LABEL}"
 
-SIDECAR_BINARY="${DESKTOP_DIR}/src-tauri/binaries/python-backend-aarch64-apple-darwin"
+BACKEND_BINARY="${DESKTOP_DIR}/src-tauri/binaries/python-backend-aarch64-apple-darwin"
 DAEMON_BINARY_DIR="${HOME}/.swarm-ai/daemon"
 DAEMON_BINARY="${DAEMON_BINARY_DIR}/python-backend"
 DAEMON_VERSION_FILE="${DAEMON_BINARY_DIR}/.version"
@@ -91,8 +91,8 @@ _check_daemon_version() {
 }
 
 _deploy_daemon_binary() {
-    if [ ! -f "$SIDECAR_BINARY" ]; then
-        _err "No sidecar binary at $SIDECAR_BINARY"
+    if [ ! -f "$BACKEND_BINARY" ]; then
+        _err "No backend binary at $BACKEND_BINARY"
         _err "Run ./${_DAEMON_CMD} build first"
         return 1
     fi
@@ -100,7 +100,7 @@ _deploy_daemon_binary() {
     mkdir -p "$DAEMON_BINARY_DIR"
 
     # Atomic replace
-    cp -f "$SIDECAR_BINARY" "${DAEMON_BINARY}.tmp"
+    cp -f "$BACKEND_BINARY" "${DAEMON_BINARY}.tmp"
     mv -f "${DAEMON_BINARY}.tmp" "$DAEMON_BINARY"
     chmod +x "$DAEMON_BINARY"
     _ok "Daemon binary deployed: $(du -h "$DAEMON_BINARY" | cut -f1)"

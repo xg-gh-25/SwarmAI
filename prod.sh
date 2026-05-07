@@ -3,7 +3,7 @@
 # Usage:
 #   ./prod.sh build          — Build backend binary (PyInstaller + verify)
 #   ./prod.sh release        — Full release build (backend + frontend + Tauri → DMG)
-#   ./prod.sh deploy         — Deploy sidecar binary to daemon + restart
+#   ./prod.sh deploy         — Deploy backend binary to daemon + restart
 #   ./prod.sh verify         — Verify existing binary capabilities
 #   ./prod.sh status         — Show daemon health, binary versions, staleness
 #
@@ -72,7 +72,7 @@ cmd_build() {
     # Step 2: Verify
     _log "Step 2/3: Post-build verification..."
     cd "$BACKEND_DIR"
-    if python scripts/verify_build.py "$SIDECAR_BINARY"; then
+    if python scripts/verify_build.py "$BACKEND_BINARY"; then
         _ok "Verification passed — all capabilities present"
     else
         _err "Verification FAILED — do NOT release"
@@ -87,7 +87,7 @@ cmd_build() {
 
     echo ""
     _ok "Build complete in $(_build_time $start)"
-    _ok "Binary: $SIDECAR_BINARY ($(du -h "$SIDECAR_BINARY" | cut -f1))"
+    _ok "Binary: $BACKEND_BINARY ($(du -h "$BACKEND_BINARY" | cut -f1))"
 
     # Auto-restart daemon if running (best-effort — build already succeeded)
     if _daemon_is_running; then
@@ -182,7 +182,7 @@ cmd_release() {
     # 2b. Verify binary (38 capability checks)
     _log "Step 2/4: Post-build verification (38 checks)..."
     cd "$BACKEND_DIR"
-    if python scripts/verify_build.py "$SIDECAR_BINARY"; then
+    if python scripts/verify_build.py "$BACKEND_BINARY"; then
         _ok "All capabilities verified"
     else
         _err "Verification FAILED — aborting release"
@@ -304,7 +304,7 @@ cmd_release() {
     echo "  Version:    ${version}"
     echo "  Commit:     $(cd "$PROJECT_ROOT" && git rev-parse --short HEAD)"
     echo "  Built in:   $(_build_time $start)"
-    echo "  Binary:     $(du -h "$SIDECAR_BINARY" | cut -f1)"
+    echo "  Binary:     $(du -h "$BACKEND_BINARY" | cut -f1)"
     if [ -n "$dmg" ]; then
         echo "  DMG:        $(du -h "$dmg" | cut -f1)"
     fi
@@ -326,10 +326,10 @@ cmd_release() {
 
 cmd_deploy() {
     echo ""
-    _log "Deploying sidecar binary to daemon..."
+    _log "Deploying backend binary to daemon..."
 
-    if [ ! -f "$SIDECAR_BINARY" ]; then
-        _err "No sidecar binary found. Run ./prod.sh build first."
+    if [ ! -f "$BACKEND_BINARY" ]; then
+        _err "No backend binary found. Run ./prod.sh build first."
         return 1
     fi
 
@@ -347,7 +347,7 @@ cmd_verify() {
     echo ""
     _log "Running post-build verification..."
 
-    local target="${1:-$SIDECAR_BINARY}"
+    local target="${1:-$BACKEND_BINARY}"
     if [ ! -f "$target" ]; then
         # Fallback to daemon binary
         target="$DAEMON_BINARY"
@@ -368,12 +368,12 @@ cmd_status() {
     echo "═════════════════════════"
     echo ""
 
-    # Sidecar binary
-    if [ -f "$SIDECAR_BINARY" ]; then
-        local age=$(( ($(date +%s) - $(stat -f %m "$SIDECAR_BINARY")) / 3600 ))
-        _ok "Sidecar binary: $(du -h "$SIDECAR_BINARY" | cut -f1), ${age}h old"
+    # Backend binary (PyInstaller bundle)
+    if [ -f "$BACKEND_BINARY" ]; then
+        local age=$(( ($(date +%s) - $(stat -f %m "$BACKEND_BINARY")) / 3600 ))
+        _ok "Backend binary: $(du -h "$BACKEND_BINARY" | cut -f1), ${age}h old"
     else
-        _err "Sidecar binary: not built"
+        _err "Backend binary: not built"
     fi
 
     # Daemon binary
