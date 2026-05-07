@@ -708,13 +708,16 @@ async fn sync_daemon_version(_app: &tauri::AppHandle, app_version: &str) -> Resu
         );
     }
 
-    // Write version file (use date command for timestamp — avoids chrono dep)
+    // Write version file — format: "{semver} {git_hash} {timestamp}"
+    // Consistent with daemon-lib.sh and auto_install_daemon.
+    // git_hash: not available at runtime in production (no .git in app bundle),
+    // so we write "release" as placeholder. Dev deploys via daemon-lib.sh get real hash.
     let timestamp = std::process::Command::new("date")
         .arg("+%Y-%m-%d %H:%M:%S")
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_else(|_| "unknown".to_string());
-    let version_content = format!("{} {}", app_version, timestamp);
+    let version_content = format!("{} release {}", app_version, timestamp);
     let _ = std::fs::write(format!("{}/.version", daemon_dir), version_content);
 
     println!("[Tauri] Daemon binary deployed: {}", target_binary);
@@ -903,10 +906,18 @@ fn auto_install_daemon(app: &tauri::AppHandle) -> Result<(), String> {
         println!("[Tauri] Using previously deployed daemon binary");
     }
 
-    // Write version file alongside binary
+    // Write version file alongside binary — format: "{semver} {git_hash} {timestamp}"
     let version = app.config().version.clone().unwrap_or_default();
     if !version.is_empty() {
-        let _ = std::fs::write(daemon_dir.join(".version"), &version);
+        let timestamp = std::process::Command::new("date")
+            .arg("+%Y-%m-%d %H:%M:%S")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
+        let _ = std::fs::write(
+            daemon_dir.join(".version"),
+            format!("{} release {}", version, timestamp),
+        );
     }
 
     // Step 2: Deploy wrapper script from bundled resources → ~/.swarm-ai/swarmai_backend.sh
