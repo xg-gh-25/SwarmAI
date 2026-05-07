@@ -194,7 +194,7 @@ DAEMON_BIN="${HOME}/.swarm-ai/daemon/python-backend"
 
 # Check source exists
 if [ ! -f "$SIDECAR" ]; then
-  echo "ERROR: No sidecar binary. Run s_swarm-build first."
+  echo "ERROR: No backend binary. Run s_swarm-build first."
   exit 1
 fi
 

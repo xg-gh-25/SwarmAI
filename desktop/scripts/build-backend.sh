@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build Python backend with PyInstaller for Tauri sidecar
+# Build Python backend with PyInstaller (bundled into .app for daemon deployment)
 
 set -e
 
@@ -382,8 +382,8 @@ echo "File size: $(du -h "$OUTPUT_BINARY" | cut -f1)"
 
 # Auto-deploy to daemon if the daemon directory exists.
 # Without this, the daemon runs a stale binary until someone manually
-# runs `./dev.sh build`. This was a recurring issue — the sidecar binary
-# and daemon binary are separate copies that drift silently.
+# runs `./dev.sh build`. The build binary and deployed daemon binary
+# are separate copies — auto-deploy keeps them in sync.
 DAEMON_DIR="${HOME}/.swarm-ai/daemon"
 DAEMON_BINARY="${DAEMON_DIR}/python-backend"
 if [ -d "$DAEMON_DIR" ]; then

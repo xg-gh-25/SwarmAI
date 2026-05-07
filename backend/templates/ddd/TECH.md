@@ -2,7 +2,7 @@
 
 ## Architecture
 
-Desktop app with three layers: a Tauri 2.0 shell (Rust), a React frontend (TypeScript), and a Python FastAPI backend running as a sidecar process. The backend spawns Claude Agent SDK subprocesses for AI capabilities via AWS Bedrock.
+Desktop app with three layers: a Tauri 2.0 shell (Rust), a React frontend (TypeScript), and a Python FastAPI backend running as a launchd daemon (24/7). The backend spawns Claude Agent SDK subprocesses for AI capabilities via AWS Bedrock.
 
 ```
 +------------------------------------------+

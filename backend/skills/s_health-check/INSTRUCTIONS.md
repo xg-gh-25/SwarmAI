@@ -26,12 +26,12 @@ def find_backend_port():
             info = p.info
             name = info["name"] or ""
             cmd = " ".join(info["cmdline"] or [])
-            is_sidecar = name.startswith("python-backend")
+            is_daemon = name.startswith("python-backend")
             is_dev = ("main.py" in cmd and "--port" in cmd and "backend" in cmd)
-            if is_sidecar or is_dev:
+            if is_daemon or is_dev:
                 for c in p.net_connections(kind="tcp"):
                     if c.status == "LISTEN":
-                        return info["pid"], c.laddr.port, "production" if is_sidecar else "dev"
+                        return info["pid"], c.laddr.port, "production" if is_daemon else "dev"
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
     return None, None, None
@@ -242,14 +242,14 @@ PYEOF
 ### 10. Dev Tools
 ```bash
 echo "OK dev.sh exists" && test -x "$HOME/Desktop/SwarmAI-Workspace/swarmai/dev.sh" && echo "  executable: yes" || echo "  WARN not executable"
-# Check sidecar binary age
+# Check backend binary age
 BINARY="$HOME/Desktop/SwarmAI-Workspace/swarmai/desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin"
 if [ -f "$BINARY" ]; then
   AGE=$(( ($(date +%s) - $(stat -f %m "$BINARY")) / 3600 ))
   SIZE=$(du -h "$BINARY" | cut -f1)
-  echo "OK Sidecar binary: $SIZE, ${AGE}h old"
+  echo "OK Backend binary: $SIZE, ${AGE}h old"
 else
-  echo "WARN No sidecar binary — run ./dev.sh build"
+  echo "WARN No backend binary — run ./dev.sh build"
 fi
 ```
 
