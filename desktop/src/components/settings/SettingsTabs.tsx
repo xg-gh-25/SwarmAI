@@ -38,8 +38,8 @@ const ALL_TABS = [
 
 const WIDTH_CLASSES = {
   'full': '',
-  '6xl': 'max-w-6xl mx-auto p-6',
-  '4xl': 'max-w-4xl mx-auto p-6',
+  '6xl': 'max-w-5xl mx-auto p-6',
+  '4xl': 'max-w-3xl mx-auto p-6',
 } as const;
 
 type TabId = typeof ALL_TABS[number]['id'];
@@ -73,7 +73,7 @@ export default function SettingsTabs({ initialTab }: SettingsTabsProps) {
     <div className="flex flex-col h-full">
       {/* Tab bar — pinned at top */}
       <div className="shrink-0 px-6 pt-4 border-b border-[var(--color-border)] overflow-x-auto">
-        <div className="flex gap-1">
+        <div className="flex gap-1 justify-center">
           {TABS.map((tab) => (
             <button
               key={tab.id}

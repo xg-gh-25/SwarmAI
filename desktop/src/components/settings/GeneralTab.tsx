@@ -18,7 +18,7 @@ export default function GeneralTab() {
   return (
     <div className="space-y-6">
       {/* Language */}
-      <section className="bg-[var(--color-card)] rounded-lg p-6">
+      <section className="bg-[var(--color-card)] rounded-lg p-6 border border-[var(--color-border)]">
         <h2 className="text-lg font-semibold text-[var(--color-text)] mb-2">{t('settings.language.title')}</h2>
         <p className="text-sm text-[var(--color-text-muted)] mb-4">{t('settings.language.description')}</p>
         <div className="flex gap-3">
@@ -40,7 +40,7 @@ export default function GeneralTab() {
       </section>
 
       {/* Theme */}
-      <section className="bg-[var(--color-card)] rounded-lg p-6">
+      <section className="bg-[var(--color-card)] rounded-lg p-6 border border-[var(--color-border)]">
         <h2 className="text-lg font-semibold text-[var(--color-text)] mb-2">{t('settings.theme.title')}</h2>
         <p className="text-sm text-[var(--color-text-muted)] mb-4">{t('settings.theme.description')}</p>
         <div className="flex gap-3">
@@ -67,7 +67,7 @@ export default function GeneralTab() {
       </section>
 
       {/* Accent Color */}
-      <section className="bg-[var(--color-card)] rounded-lg p-6">
+      <section className="bg-[var(--color-card)] rounded-lg p-6 border border-[var(--color-border)]">
         <h2 className="text-lg font-semibold text-[var(--color-text)] mb-2">Accent Color</h2>
         <p className="text-sm text-[var(--color-text-muted)] mb-4">Personalize the primary color used across buttons, links, and highlights.</p>
         <div className="flex gap-3">
