@@ -30,6 +30,7 @@ from typing import Optional
 from core.session_hooks import HookContext
 from core.todo_manager import todo_manager
 from database import db
+from jobs.paths import DB_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -277,7 +278,7 @@ class TodoLifecycleHook:
         """
         try:
             import sqlite3
-            db_path = Path.home() / ".swarm-ai" / "data.db"
+            db_path = DB_PATH
             if not db_path.exists():
                 return
 

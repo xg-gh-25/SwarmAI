@@ -18,6 +18,8 @@ import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+from .paths import APP_DATA_DIR, DB_PATH, JOB_RESULTS_DIR
+
 # Channel IDs to monitor — loaded from config file or defaults.
 _DEFAULT_CHANNELS = {
     "C09QMPNSCTS": "#all-things-ai",
@@ -28,7 +30,7 @@ _DEFAULT_CHANNELS = {
 
 def _load_channels_to_monitor() -> dict[str, str]:
     """Load channels from config file, fall back to defaults."""
-    config_path = Path.home() / ".swarm-ai" / "channel-monitor-channels.json"
+    config_path = APP_DATA_DIR / "channel-monitor-channels.json"
     if config_path.exists():
         try:
             data = json.loads(config_path.read_text(encoding="utf-8"))
@@ -44,7 +46,7 @@ _CHANNELS_TO_MONITOR = _load_channels_to_monitor()
 
 def _get_bot_token() -> str:
     """Read bot_token from the channels DB table."""
-    db_path = Path.home() / ".swarm-ai" / "data.db"
+    db_path = DB_PATH
     if not db_path.exists():
         raise FileNotFoundError(f"Database not found: {db_path}")
     conn = sqlite3.connect(str(db_path))
@@ -144,7 +146,7 @@ def main() -> None:
     lines.append("")
 
     # Write report — don't overwrite a better agent_task report (PE5)
-    report_dir = Path.home() / ".swarm-ai" / "SwarmWS" / "Knowledge" / "JobResults"
+    report_dir = JOB_RESULTS_DIR
     report_dir.mkdir(parents=True, exist_ok=True)
     report_path = report_dir / f"{date_str}-channel-monitor.md"
     report_content = "\n".join(lines)

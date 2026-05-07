@@ -1868,7 +1868,7 @@ def _purge_terminal_todos(
             # Archive to JSONL if enabled
             archive_path = None
             if archive_before_purge:
-                _archive_dir = archive_dir or (Path.home() / ".swarm-ai" / "SwarmWS" / "Knowledge" / "Archives")
+                _archive_dir = archive_dir or (SWARMWS / "Knowledge" / "Archives")
                 _archive_dir.mkdir(parents=True, exist_ok=True)
                 archive_path = _archive_dir / "todo-archive.jsonl"
                 with open(archive_path, "a", encoding="utf-8") as f:

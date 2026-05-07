@@ -19,6 +19,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .paths import JOBS_DATA_DIR, LOG_DIR
+
 # Old plists to remove
 OLD_PLISTS = [
     "com.swarm.signal-pipeline",
@@ -41,7 +43,7 @@ def _resolve_python() -> str:
     # Try common locations
     candidates = [
         Path(__file__).parent.parent / ".venv" / "bin" / "python",  # backend/.venv/
-        Path.home() / ".swarm-ai" / "SwarmWS" / "Services" / "swarm-jobs" / "venv" / "bin" / "python",
+        JOBS_DATA_DIR / "venv" / "bin" / "python",
     ]
     for p in candidates:
         if p.exists():
@@ -58,7 +60,7 @@ def _resolve_backend_dir() -> str:
 
 def _resolve_log_dir() -> str:
     """Log directory for scheduler output."""
-    log_dir = Path.home() / ".swarm-ai" / "SwarmWS" / "Services" / "swarm-jobs" / "logs"
+    log_dir = LOG_DIR
     log_dir.mkdir(parents=True, exist_ok=True)
     return str(log_dir)
 

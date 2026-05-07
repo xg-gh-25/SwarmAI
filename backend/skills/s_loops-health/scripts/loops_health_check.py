@@ -25,7 +25,10 @@ from pathlib import Path
 
 # ─── Paths ───────────────────────────────────────────────────────────────────
 
-WORKSPACE = Path(os.environ.get("SWARM_WORKSPACE", Path.home() / ".swarm-ai" / "SwarmWS"))
+def _get_app_data_dir() -> Path:
+    return Path(os.environ.get("SWARM_APP_DATA_DIR", Path.home() / ".swarm-ai"))
+
+WORKSPACE = Path(os.environ.get("SWARM_WORKSPACE", _get_app_data_dir() / "SwarmWS"))
 CONTEXT_DIR = WORKSPACE / ".context"
 KNOWLEDGE_DIR = WORKSPACE / "Knowledge"
 PROJECTS_DIR = WORKSPACE / "Projects"

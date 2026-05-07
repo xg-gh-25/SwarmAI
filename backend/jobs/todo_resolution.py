@@ -31,11 +31,13 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from .paths import DB_PATH, SWARMWS
+
 logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────
 
-_DEFAULT_DB = Path.home() / ".swarm-ai" / "data.db"
+_DEFAULT_DB = DB_PATH
 
 # Words too short or too generic to be meaningful keywords
 _STOPWORDS = frozenset({
@@ -357,7 +359,7 @@ def run_todo_resolution(
 
     # Default artifacts root
     if artifacts_root is None:
-        ws = Path.home() / ".swarm-ai" / "SwarmWS"
+        ws = SWARMWS
         artifacts_root = ws / "Projects" / "SwarmAI" / ".artifacts"
 
     try:

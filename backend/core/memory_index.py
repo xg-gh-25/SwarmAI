@@ -683,8 +683,9 @@ def _hybrid_section_scores(user_message: str) -> dict[str, float]:
     """
     import sqlite3 as _sqlite3
     from pathlib import Path
+    from jobs.paths import DB_PATH as _db_path
 
-    db_path = Path.home() / ".swarm-ai" / "data.db"
+    db_path = _db_path
     if not db_path.exists():
         return {}
 
@@ -968,12 +969,8 @@ def select_memory_sections(
             from core.app_config_manager import app_config_manager
             # Resolve DB path from config (single source of truth),
             # falling back to the default location.
-            data_dir = Path(
-                app_config_manager.get("data_dir", str(Path.home() / ".swarm-ai"))
-                if app_config_manager is not None
-                else str(Path.home() / ".swarm-ai")
-            )
-            db_path = data_dir / "data.db"
+            from jobs.paths import DB_PATH as _db_path_recall
+            db_path = _db_path_recall
             if db_path.exists():
                 recall = _get_session_recall(db_path)
                 recall_text = recall.recall_about(user_message, max_sessions=2)

@@ -81,10 +81,11 @@ async def _seed_skill(name: str = "TestSkill", is_privileged: bool = False) -> s
     folder_name = name.lower().replace(" ", "-")
 
     # Determine skill directory based on privilege level
+    from config import get_app_data_dir
     if is_privileged:
-        skills_dir = Path.home() / ".swarm-ai" / "built-in-skills"
+        skills_dir = get_app_data_dir() / "built-in-skills"
     else:
-        skills_dir = Path.home() / ".swarm-ai" / "skills"
+        skills_dir = get_app_data_dir() / "skills"
 
     skill_path = skills_dir / folder_name
     skill_path.mkdir(parents=True, exist_ok=True)

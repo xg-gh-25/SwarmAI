@@ -32,10 +32,11 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from jobs.paths import PORT_FILE
+
 logger = logging.getLogger(__name__)
 
-# Port file path — written by backend, read by services
-PORT_FILE = Path.home() / ".swarm-ai" / "backend.port"
+# Port file path — written by backend, read by services (imported from jobs.paths)
 
 # Health check interval
 _HEALTH_CHECK_INTERVAL = 30  # seconds

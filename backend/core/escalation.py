@@ -398,7 +398,8 @@ _WORKSPACE_ID = "swarmws"
 
 def _get_db_path() -> Path:
     """Resolve database path. Function (not constant) for testability."""
-    return Path.home() / ".swarm-ai" / "data.db"
+    from jobs.paths import DB_PATH
+    return DB_PATH
 
 
 def create_radar_todo(esc: Escalation, db_path: Path | None = None) -> str | None:

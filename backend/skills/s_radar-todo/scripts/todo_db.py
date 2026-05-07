@@ -30,7 +30,11 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-DB_PATH = Path.home() / ".swarm-ai" / "data.db"
+def _get_app_data_dir() -> Path:
+    import os as _os
+    return Path(_os.environ.get("SWARM_APP_DATA_DIR", Path.home() / ".swarm-ai"))
+
+DB_PATH = _get_app_data_dir() / "data.db"
 WORKSPACE_ID = "swarmws"
 
 VALID_STATUSES = ("pending", "overdue", "in_discussion", "handled", "cancelled", "deleted")

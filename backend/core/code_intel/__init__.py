@@ -29,7 +29,8 @@ _cache_initialized = False
 
 def get_code_intel_db_path(project_name: str) -> Path:
     """Returns: ~/.swarm-ai/SwarmWS/Projects/{project}/code_intel.db"""
-    return Path.home() / ".swarm-ai" / "SwarmWS" / "Projects" / project_name / "code_intel.db"
+    from jobs.paths import PROJECTS_DIR
+    return PROJECTS_DIR / project_name / "code_intel.db"
 
 
 def load_project_graph(project_name: str) -> GraphStore | None:
@@ -109,7 +110,8 @@ def invalidate_cache(project_name: str | None = None):
 
 def _build_project_path_cache():
     """Scan Projects/*/TECH.md for repo_path fields."""
-    projects_dir = Path.home() / ".swarm-ai" / "SwarmWS" / "Projects"
+    from jobs.paths import PROJECTS_DIR
+    projects_dir = PROJECTS_DIR
     if not projects_dir.is_dir():
         return
 

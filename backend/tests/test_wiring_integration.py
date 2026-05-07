@@ -20,7 +20,7 @@ async def _seed_skill(name, is_privileged=False):
     Tracks created paths for cleanup by ``_cleanup_seeded_skills``.
     Name is lowercased to match SDK command-matching convention.
     """
-    from pathlib import Path
+    from config import get_app_data_dir
     from core.skill_manager import skill_manager
 
     # Create folder name from skill name (kebab-case, lowercase)
@@ -28,9 +28,9 @@ async def _seed_skill(name, is_privileged=False):
 
     # Determine skill directory based on privilege level
     if is_privileged:
-        skills_dir = Path.home() / ".swarm-ai" / "built-in-skills"
+        skills_dir = get_app_data_dir() / "built-in-skills"
     else:
-        skills_dir = Path.home() / ".swarm-ai" / "skills"
+        skills_dir = get_app_data_dir() / "skills"
 
     skill_path = skills_dir / folder_name
     skill_path.mkdir(parents=True, exist_ok=True)

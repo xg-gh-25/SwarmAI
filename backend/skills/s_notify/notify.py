@@ -31,7 +31,11 @@ import yaml
 logger = logging.getLogger(__name__)
 
 # Default config location
-DEFAULT_CONFIG_PATH = str(Path.home() / ".swarm-ai" / "notify-channels.yaml")
+def _get_app_data_dir() -> Path:
+    import os as _os
+    return Path(_os.environ.get("SWARM_APP_DATA_DIR", Path.home() / ".swarm-ai"))
+
+DEFAULT_CONFIG_PATH = str(_get_app_data_dir() / "notify-channels.yaml")
 
 
 # ── HTTP helper ───────────────────────────────────────────────────────

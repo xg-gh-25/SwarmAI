@@ -382,7 +382,8 @@ async def _convert_unsupported_blocks_to_path_hints(
                 date_str = _date.today().isoformat()
                 attach_dir = Path(ws_path) / "Attachments" / date_str
             else:
-                attach_dir = Path.home() / ".swarm-ai" / "SwarmWS" / "Attachments"
+                from jobs.paths import SWARMWS as _SWARMWS
+                attach_dir = _SWARMWS / "Attachments"
             attach_dir.mkdir(parents=True, exist_ok=True)
 
             # Preserve original filename if provided by frontend

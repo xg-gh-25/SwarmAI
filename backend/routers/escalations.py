@@ -16,6 +16,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from jobs.paths import SWARMWS
 from core.escalation import (
     Level,
     build_sse_event,
@@ -34,7 +35,7 @@ router = APIRouter(prefix="/api/escalations", tags=["escalations"])
 
 def _get_workspace_root() -> Path:
     """Resolve SwarmWS path. Function (not constant) for testability."""
-    return Path.home() / ".swarm-ai" / "SwarmWS"
+    return SWARMWS
 
 
 class ResolveRequest(BaseModel):

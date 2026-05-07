@@ -36,6 +36,7 @@ try:
 except ImportError:
     SLACK_BOLT_AVAILABLE = False
 
+from config import get_app_data_dir
 from channels.base import (
     ATTACH_TYPE_FILE,
     ATTACH_TYPE_IMAGE,
@@ -73,7 +74,7 @@ _DEFAULT_KNOWN_USERS: dict[str, str] = {
 
 def _load_known_users() -> dict[str, str]:
     """Load known users from config file, fall back to defaults."""
-    config_path = Path.home() / ".swarm-ai" / "slack-known-users.json"
+    config_path = get_app_data_dir() / "slack-known-users.json"
     if config_path.exists():
         try:
             import json as _json
@@ -185,7 +186,7 @@ def _find_slack_mcp_config() -> Optional[dict]:
     Searches the SwarmWS mcp-dev.json for the slack-mcp entry.
     """
     # SwarmWS location (standard path)
-    mcp_dev = Path.home() / ".swarm-ai" / "SwarmWS" / ".claude" / "mcps" / "mcp-dev.json"
+    mcp_dev = get_app_data_dir() / "SwarmWS" / ".claude" / "mcps" / "mcp-dev.json"
     if not mcp_dev.is_file():
         return None
 

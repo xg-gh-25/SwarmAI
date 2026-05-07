@@ -21,6 +21,7 @@ from typing import Optional
 from fastapi import APIRouter, Query
 
 from core.pipeline_profiles import get_profile_stages
+from jobs.paths import SWARMWS
 from schemas.pipeline_run import (
     PipelineCheckpoint,
     PipelineDashboard,
@@ -35,7 +36,7 @@ router = APIRouter()
 
 def _get_swarmws() -> Path:
     """Resolve SwarmWS path. Function (not constant) for testability."""
-    return Path.home() / ".swarm-ai" / "SwarmWS"
+    return SWARMWS
 
 
 def _get_profile_stage_count(profile: str | None) -> int:

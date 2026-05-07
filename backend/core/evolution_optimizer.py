@@ -915,12 +915,8 @@ def _run_evolution_cycle_locked(
     try:
         from core.skill_metrics import SkillMetricsStore
         from core.app_config_manager import app_config_manager
-        data_dir = Path(
-            app_config_manager.get("data_dir", str(Path.home() / ".swarm-ai"))
-            if app_config_manager is not None
-            else str(Path.home() / ".swarm-ai")
-        )
-        db_path = data_dir / "data.db"
+        from jobs.paths import DB_PATH as _db_path_evo
+        db_path = _db_path_evo
         if db_path.exists():
             store = SkillMetricsStore(str(db_path))
             candidates = store.get_evolution_candidates()
