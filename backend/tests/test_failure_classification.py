@@ -295,7 +295,7 @@ class TestHookBuilderFailureHooks:
             {"message": "Rate limit approaching", "notification_type": "rate_limit"},
             None, None,
         )
-        assert result == {}
+        assert result == {"decision": "approve"}
         assert session_ctx["_last_notification"]["type"] == "rate_limit"
         assert "Rate limit" in session_ctx["_last_notification"]["message"]
 
@@ -324,7 +324,7 @@ class TestHookBuilderFailureHooks:
             {"stop_hook_active": True},
             None, None,
         )
-        assert result == {}
+        assert result == {"decision": "approve"}
         assert session_ctx["_stop_info"]["stop_hook_active"] is True
 
     @pytest.mark.asyncio
