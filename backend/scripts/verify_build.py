@@ -151,7 +151,7 @@ def verify_binary(binary_path: str) -> tuple[list[str], list[str], list[str]]:
     env = {
         **os.environ,
         "PORT": str(port),
-        "SWARMAI_MODE": "sidecar",
+        "SWARMAI_MODE": "daemon",
         "DATABASE_TYPE": "sqlite",
         # Gates verify-import/verify-data/verify-native endpoints
         "SWARMAI_VERIFY_BUILD": "1",

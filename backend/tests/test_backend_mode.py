@@ -151,7 +151,7 @@ class TestSystemModeEndpoint:
 
         result = await get_system_mode()
         assert "mode" in result
-        assert result["mode"] in ("daemon", "sidecar")
+        assert result["mode"] in ("daemon", "hive")
         assert "pid" in result
         assert "port" in result
         assert isinstance(result["pid"], int)
@@ -173,7 +173,7 @@ class TestSystemModeEndpoint:
 
 
 class TestDetectRunMode:
-    """_detect_run_mode correctly distinguishes daemon from sidecar."""
+    """_detect_run_mode correctly detects daemon vs hive mode."""
 
     def test_detect_daemon_from_env(self):
         """SWARMAI_MODE=daemon → daemon mode."""
@@ -182,8 +182,8 @@ class TestDetectRunMode:
         with patch.dict(os.environ, {"SWARMAI_MODE": "daemon"}):
             assert _detect_run_mode() == "daemon"
 
-    def test_detect_sidecar_default(self):
-        """No SWARMAI_MODE → sidecar (default)."""
+    def test_detect_daemon_default(self):
+        """No SWARMAI_MODE → daemon (default since 2026-05-07)."""
         from main import _detect_run_mode
 
         with patch.dict(os.environ, {}, clear=True):
@@ -191,7 +191,7 @@ class TestDetectRunMode:
             env = os.environ.copy()
             env.pop("SWARMAI_MODE", None)
             with patch.dict(os.environ, env, clear=True):
-                assert _detect_run_mode() == "sidecar"
+                assert _detect_run_mode() == "daemon"
 
 
 # ---------------------------------------------------------------------------

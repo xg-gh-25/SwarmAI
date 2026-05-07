@@ -130,7 +130,7 @@ async def unified_status():
     Returns:
         scheduled_jobs: Cron + user jobs with last-run and health
         session_hooks: Background hook executor status and per-hook stats
-        services: Managed sidecar services (Slack bot, etc.)
+        services: Managed subsidiary services (Slack bot, etc.)
         overview: Summary counts and monthly spend
     """
     result: dict = {

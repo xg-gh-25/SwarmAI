@@ -8,7 +8,7 @@ Tauri macOS Bundle Structure:
     ├── Contents/
     │   ├── MacOS/
     │   │   ├── swarmai (main Tauri app)
-    │   │   └── python-backend (PyInstaller sidecar)
+    │   │   └── python-backend (PyInstaller binary, deployed to daemon)
     │   └── Resources/
     │       └── _up_/
     │           └── resources/

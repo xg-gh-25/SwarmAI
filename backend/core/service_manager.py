@@ -1,4 +1,4 @@
-"""Service Manager — lifecycle management for sidecar services.
+"""Service Manager — lifecycle management for managed services.
 
 Manages external subprocess services (e.g. Slack bot) that run alongside
 the SwarmAI backend.  Services start after backend startup completes and
@@ -103,7 +103,7 @@ class ManagedService:
 
 
 class ServiceManager:
-    """Manages sidecar service subprocesses.
+    """Manages subsidiary service subprocesses.
 
     Discovers services from ``{workspace}/Services/*/service.json``,
     starts them after the backend is ready, monitors health, and

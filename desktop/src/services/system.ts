@@ -282,7 +282,7 @@ export interface AuthHintResponse {
     instanceId?: string;
   };
   awsProfiles?: string[];
-  runMode?: 'sidecar' | 'daemon' | 'hive';
+  runMode?: 'daemon' | 'hive';
 }
 
 export const systemService = {

@@ -376,7 +376,7 @@ def _verify_bedrock(config: dict) -> dict:
                 "Credentials are invalid. Re-authenticate with ada or aws sso login."
             )
         if "not authorized" in error_str.lower() or "AccessDenied" in error_str:
-            run_mode = os.environ.get("SWARMAI_MODE", "sidecar")
+            run_mode = os.environ.get("SWARMAI_MODE", "daemon")
             if run_mode == "hive":
                 hint = (
                     "IAM instance role lacks bedrock:InvokeModel permission. "
@@ -467,7 +467,7 @@ async def get_auth_hint():
     aws_profiles = _probe_aws_profiles()  # checks config for real SSO profiles
 
     # Detect run mode so frontend can adjust auth UX
-    run_mode = os.environ.get("SWARMAI_MODE", "sidecar")
+    run_mode = os.environ.get("SWARMAI_MODE", "daemon")
 
     # Hive (EC2) uses IAM instance role — no ADA or SSO needed.
     # Run in thread to avoid blocking the event loop (3 sync httpx calls, 1s timeout each).
@@ -843,7 +843,7 @@ async def reset_to_defaults() -> ResetToDefaultsResponse:
 
 @router.get("/services")
 async def get_managed_services():
-    """Get status of all managed sidecar services (Slack bot, etc.)."""
+    """Get status of all managed subsidiary services (Slack bot, etc.)."""
     from core.service_manager import service_manager
     return {"services": service_manager.get_status()}
 
@@ -890,7 +890,7 @@ async def uninstall_cleanup():
 
     Call this before deleting the app to stop the hourly scheduler.
     Safe to call multiple times — idempotent.  Also stops managed
-    sidecar services.
+    subsidiary services.
     """
     results: dict[str, str] = {}
 

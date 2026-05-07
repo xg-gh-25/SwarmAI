@@ -45,7 +45,7 @@ export default function SystemTab() {
           });
           if (resp.ok) {
             const data = await resp.json();
-            const mode = data.mode || 'sidecar';
+            const mode = data.mode || 'daemon';
             setBackendStatus({ running: true, port, is_daemon_mode: mode === 'daemon' || mode === 'hive' });
           } else {
             setBackendStatus({ running: false, port, is_daemon_mode: false });

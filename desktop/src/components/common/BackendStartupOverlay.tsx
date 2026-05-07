@@ -1,7 +1,7 @@
 /**
  * Backend startup overlay component.
  *
- * Displays a splash screen while the FastAPI backend sidecar initializes,
+ * Displays a splash screen while the FastAPI backend daemon initializes,
  * showing user-friendly progress steps and dismissing once the agent and
  * workspace are ready.  The overlay uses SVG status icons, a ~700ms
  * animation budget (100ms × 3 steps + 200ms delay + 200ms fade-out), and
@@ -15,7 +15,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import axios from 'axios';
-// getApiBaseUrl: health checks; getBackendPort/initializeBackend: Tauri sidecar port negotiation
+// getApiBaseUrl: health checks; getBackendPort/initializeBackend: Tauri daemon port negotiation
 import { getApiBaseUrl, getBackendPort, initializeBackend, isDesktop } from '../../services/tauri';
 import { systemService, SystemStatus } from '../../services/system';
 import logo from '../../assets/swarm-avatar.svg';
@@ -400,7 +400,7 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
     const startHealthPolling = async () => {
       try {
         if (isDesktop()) {
-          // Desktop: negotiate port with Tauri sidecar/daemon
+          // Desktop: connect to daemon via Tauri start_backend()
           console.log('[Startup] Calling initializeBackend()...');
           const port = await initializeBackend();
           console.log(`[Startup] initializeBackend() returned port: ${port}`);
