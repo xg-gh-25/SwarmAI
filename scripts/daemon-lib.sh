@@ -63,20 +63,32 @@ _check_daemon_version() {
     if [ ! -f "$DAEMON_VERSION_FILE" ]; then
         return 2
     fi
-    local binary_hash
-    binary_hash=$(awk '{print $1}' "$DAEMON_VERSION_FILE")
+    # Version file format: "{semver} {git_hash} {timestamp}"
+    # Field 1 = semver (for Tauri version sync)
+    # Field 2 = git hash (for dev staleness check)
+    # Fields 3+ = timestamp
+    local binary_version binary_hash
+    binary_version=$(awk '{print $1}' "$DAEMON_VERSION_FILE")
+    binary_hash=$(awk '{print $2}' "$DAEMON_VERSION_FILE")
     local head_hash
     head_hash=$(cd "$PROJECT_ROOT" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
+    # If no git hash in file (legacy format: just semver), can't compare commits
+    if [ -z "$binary_hash" ] || [ "$binary_hash" = "$binary_version" ]; then
+        _warn "Version file has no git hash (v${binary_version}) — can't check staleness"
+        _warn "  Rebuild to update: ./${_DAEMON_CMD} build"
+        return 0  # Don't fail — just warn
+    fi
+
     if [ "$binary_hash" = "$head_hash" ]; then
-        _ok "Binary matches HEAD ($head_hash)"
+        _ok "Binary matches HEAD ($head_hash, v${binary_version})"
         return 0
     fi
 
     local behind
     behind=$(cd "$PROJECT_ROOT" && git rev-list --count "${binary_hash}..HEAD" 2>/dev/null || echo "?")
     _warn "Daemon binary is ${behind} commits behind HEAD"
-    _warn "  Binary: ${binary_hash} ($(awk '{$1=""; print substr($0,2)}' "$DAEMON_VERSION_FILE"))"
+    _warn "  Binary: v${binary_version} ${binary_hash} ($(awk '{$1=$2=""; print substr($0,3)}' "$DAEMON_VERSION_FILE"))"
     _warn "  HEAD:   ${head_hash}"
 
     local backend_changes
@@ -105,10 +117,13 @@ _deploy_daemon_binary() {
     chmod +x "$DAEMON_BINARY"
     _ok "Daemon binary deployed: $(du -h "$DAEMON_BINARY" | cut -f1)"
 
-    # Write version file
-    local git_hash
+    # Write version file — format: "{semver} {git_hash} {timestamp}"
+    # All writers (daemon-lib, Rust auto_install, Rust sync_daemon_version) use this format.
+    # Reader (_check_daemon_version) uses field 2 (git_hash) for staleness check.
+    local git_hash app_version
     git_hash=$(cd "$PROJECT_ROOT" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-    echo "$git_hash $(date '+%Y-%m-%d %H:%M:%S')" > "$DAEMON_VERSION_FILE"
+    app_version=$(cd "$PROJECT_ROOT" && grep -m1 '"version"' desktop/src-tauri/tauri.conf.json 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "0.0.0")
+    echo "${app_version} ${git_hash} $(date '+%Y-%m-%d %H:%M:%S')" > "$DAEMON_VERSION_FILE"
 
     # Deploy resources
     local res_src="$DESKTOP_DIR/resources"
