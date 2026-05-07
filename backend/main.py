@@ -525,7 +525,11 @@ async def lifespan(app: FastAPI):
 
     t0 = time.monotonic()
     phase_timings: dict[str, float] = {}
-    
+
+    # One-time migration: ~/.swarm-ai/.context/ → ~/.swarm-ai/state/
+    from jobs.paths import _migrate_legacy_state_dir
+    _migrate_legacy_state_dir()
+
     # Startup
     logger.info(f"Starting {settings.app_name} v{settings.app_version}")
     logger.info(f"Debug mode: {settings.debug}")
