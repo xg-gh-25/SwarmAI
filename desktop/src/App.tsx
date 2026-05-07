@@ -49,7 +49,10 @@ export default function App() {
     // In production mode, BackendStartupOverlay handles backend initialization
   }, []);
 
-  // Graceful shutdown on app close
+  // Window close handling — daemon-only architecture.
+  // The daemon survives app close (channels, jobs, Slack stay alive).
+  // We do NOT call /shutdown — that would kill all active sessions including Slack.
+  // Tauri's graceful_shutdown_and_kill already correctly leaves the daemon running.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
 
@@ -58,33 +61,18 @@ export default function App() {
         const { listen } = await import('@tauri-apps/api/event');
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
         unlisten = await listen('tauri://close-requested', async () => {
-          try {
-            const apiBase = getApiBaseUrl();
-            await fetch(`${apiBase}/shutdown`, { method: 'POST' });
-          } catch {
-            // Backend may already be down
-          }
+          // No /shutdown call — daemon keeps running for background services.
+          // Tauri lib.rs graceful_shutdown_and_kill handles the rest.
           await getCurrentWindow().close();
         });
       } catch {
-        // Not in Tauri environment — beforeunload fallback only
+        // Not in Tauri environment — no-op
       }
     };
     setupTauriCloseHandler();
 
-    // Desktop-only: shutdown backend when browser tab closes.
-    // In Hive mode, closing a tab must NOT shut down the shared backend
-    // (other tabs or Slack may still be using it).
-    const handleBeforeUnload = () => {
-      if (!isDesktop()) return;
-      const apiBase = getApiBaseUrl();
-      navigator.sendBeacon(`${apiBase}/shutdown`);
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-
     return () => {
       unlisten?.();
-      window.removeEventListener('beforeunload', handleBeforeUnload);
     };
   }, []);
 

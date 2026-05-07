@@ -1186,15 +1186,14 @@ async def get_system_mode():
 async def shutdown():
     """Graceful shutdown endpoint - disconnects all Claude SDK clients.
 
-    This endpoint is called by the Tauri app before killing the backend process
-    to ensure all Claude CLI child processes are properly terminated.
-
-    Blocked in Hive mode — any authenticated user could kill the shared
-    backend. Desktop-only (Tauri close handler is the sole caller).
+    Blocked in daemon and hive modes — these run 24/7 background services
+    (Slack channels, scheduled jobs) that must survive app window close.
+    Only dev mode allows shutdown (manually started, no background services).
     """
-    if _detect_run_mode() == "hive":
-        logger.warning("Shutdown endpoint blocked in Hive mode")
-        return {"status": "ignored", "reason": "shutdown disabled in hive mode"}
+    mode = _detect_run_mode()
+    if mode in ("daemon", "hive"):
+        logger.warning("Shutdown endpoint blocked in %s mode", mode)
+        return {"status": "ignored", "reason": f"shutdown disabled in {mode} mode"}
     logger.info("Shutdown endpoint called - disconnecting all clients")
     t0 = time.monotonic()
     try:
