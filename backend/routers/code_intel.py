@@ -5,7 +5,6 @@ Endpoints:
     POST /api/code-intel/{project}/reindex  — trigger background re-index
 """
 
-import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
 
