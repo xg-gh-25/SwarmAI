@@ -746,7 +746,7 @@ If the active project is NOT SwarmAI (e.g., CMHK_BIZ, PhysicalAI), do NOT sugges
 - **PyInstaller trap** — `sys.executable` ≠ Python. Use direct imports or `get_python_executable()`.
 - **Sandbox writes** — Configure write access in `_build_sandbox_config`, not ad-hoc overrides.
 - **Sandbox process visibility** — `pgrep`, `ps`, `top` are blocked by the Claude SDK sandbox ("operation not permitted"). Never use them to check if the app is running. You ARE the app — if you’re executing, the backend is alive.
-- **Backend health endpoint** — `GET /health` (root level, NOT `/api/system/health` or `/api/health`). Returns `{"status":"healthy",...}` on 200. **Port is random each launch** (Tauri `portpicker`). Discover via psutil: find process `python-backend*` → `p.net_connections()` → LISTEN port. Dev mode uses port 8000. Never hardcode ports.
+- **Backend health endpoint** — `GET /health` (root level, NOT `/api/system/health` or `/api/health`). Returns `{"status":"healthy",...}` on 200. **Port is fixed: 18321** (daemon mode). Dev mode uses port 8000. Health check: `curl http://127.0.0.1:18321/health`.
 - **pytest — targeted tests OK, full suite needs user approval** — After code changes, run targeted tests for the files you changed. **Never run full test suite proactively** — PreToolUse hook blocks it (700+ tests, 2-3 min).
   ```
   cd backend && python -m pytest tests/test_<module>.py -v --timeout=60      # targeted (default)

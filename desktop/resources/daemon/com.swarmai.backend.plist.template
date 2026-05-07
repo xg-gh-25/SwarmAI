@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.swarmai.backend</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__WRAPPER_PATH__</string>
+    </array>
+
+    <!-- Start on login and restart on crash -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Background priority — won't interfere with user apps -->
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <!-- Throttle restarts: wait 10s between launches -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>__LOG_DIR__/backend-stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__LOG_DIR__/backend-stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>PATH</key>
+        <string>__HOME__/.toolbox/bin:__HOME__/.local/bin:__HOME__/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>SWARMAI_MODE</key>
+        <string>daemon</string>
+    </dict>
+</dict>
+</plist>

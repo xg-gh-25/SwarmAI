@@ -31,5 +31,5 @@ export { default as BackendStartupOverlay } from './BackendStartupOverlay';
 export { default as BackendUpgradeBanner } from './BackendUpgradeBanner';
 export { default as UpdateNotification } from './UpdateNotification';
 export { default as ShutdownOverlay } from './ShutdownOverlay';
-export { default as DaemonNudgeBanner } from './DaemonNudgeBanner';
+// DaemonNudgeBanner removed — daemon is now auto-installed on first launch (no opt-in needed)
 
