@@ -101,19 +101,39 @@ class TestCodeIntelReindex:
 
     def test_reindex_returns_accepted(self, client):
         """AC4: re-index triggers background task and returns 202."""
-        mock_graph = MagicMock()
+        from pathlib import Path
+        mock_path = MagicMock(spec=Path)
+        mock_path.exists.return_value = True
 
-        with patch("routers.code_intel.load_project_graph", return_value=mock_graph), \
-             patch("routers.code_intel._run_reindex") as mock_reindex:
+        with patch("routers.code_intel.get_code_intel_db_path", return_value=mock_path), \
+             patch("routers.code_intel._run_reindex") as mock_reindex, \
+             patch("routers.code_intel._reindex_in_progress", set()):
             resp = client.post("/api/code-intel/SwarmAI/reindex")
 
         assert resp.status_code == 202
         assert resp.json()["status"] == "indexing"
-        mock_reindex.assert_called_once()
+        mock_reindex.assert_called_once_with("SwarmAI")
 
     def test_reindex_404_when_no_project(self, client):
         """Re-index on project without code_intel returns 404."""
-        with patch("routers.code_intel.load_project_graph", return_value=None):
+        from pathlib import Path
+        mock_path = MagicMock(spec=Path)
+        mock_path.exists.return_value = False
+
+        with patch("routers.code_intel.get_code_intel_db_path", return_value=mock_path):
             resp = client.post("/api/code-intel/NonExistent/reindex")
 
         assert resp.status_code == 404
+
+    def test_reindex_returns_already_indexing_when_in_progress(self, client):
+        """F3: concurrent reindex guard — returns already_indexing."""
+        from pathlib import Path
+        mock_path = MagicMock(spec=Path)
+        mock_path.exists.return_value = True
+
+        with patch("routers.code_intel.get_code_intel_db_path", return_value=mock_path), \
+             patch("routers.code_intel._reindex_in_progress", {"SwarmAI"}):
+            resp = client.post("/api/code-intel/SwarmAI/reindex")
+
+        assert resp.status_code == 202
+        assert resp.json()["status"] == "already_indexing"
