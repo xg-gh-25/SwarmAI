@@ -19,6 +19,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from jobs.paths import APP_DATA_DIR, DAEMON_DIR
+
 DAEMON_LABEL = "com.swarmai.backend"
 LAUNCH_AGENTS = Path.home() / "Library" / "LaunchAgents"
 TEMPLATE = Path(__file__).parent / "com.swarmai.backend.plist"
@@ -27,7 +29,7 @@ WRAPPER_SOURCE = Path(__file__).parent / "swarmai_backend.sh"
 # macOS TCC blocks launchd daemons from reading files under ~/Desktop,
 # ~/Documents, ~/Downloads without Full Disk Access.  Copying the wrapper
 # to ~/.swarm-ai/ avoids the "Operation not permitted" error entirely.
-WRAPPER_DEST = Path.home() / ".swarm-ai" / "swarmai_backend.sh"
+WRAPPER_DEST = APP_DATA_DIR / "swarmai_backend.sh"
 
 
 def _uid() -> int:
@@ -56,7 +58,7 @@ def _resolve_wrapper() -> str:
 
 def _resolve_log_dir() -> str:
     """Log directory for daemon output."""
-    log_dir = Path.home() / ".swarm-ai" / "logs"
+    log_dir = APP_DATA_DIR / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     return str(log_dir)
 
@@ -74,7 +76,7 @@ def _deploy_daemon_binary() -> bool:
     import platform as _platform
     import shutil
 
-    daemon_dir = Path.home() / ".swarm-ai" / "daemon"
+    daemon_dir = DAEMON_DIR
     daemon_binary = daemon_dir / "python-backend"
 
     # Source 1: Installed Tauri app bundle

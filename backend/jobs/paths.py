@@ -10,8 +10,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-# Root workspace
-SWARMWS = Path.home() / ".swarm-ai" / "SwarmWS"
+from config import get_app_data_dir
+
+# Root paths (derived from single source of truth: config.get_app_data_dir())
+APP_DATA_DIR = get_app_data_dir()
+SWARMWS = APP_DATA_DIR / "SwarmWS"
 
 # Job system data directory (workspace-level)
 JOBS_DATA_DIR = SWARMWS / "Services" / "swarm-jobs"
@@ -21,7 +24,7 @@ USER_JOBS_FILE = JOBS_DATA_DIR / "user-jobs.yaml"
 LOG_DIR = JOBS_DATA_DIR / "logs"
 
 # SwarmAI data
-DB_PATH = Path.home() / ".swarm-ai" / "data.db"
+DB_PATH = APP_DATA_DIR / "data.db"
 CONTEXT_DIR = SWARMWS / ".context"
 DAILY_DIR = SWARMWS / "Knowledge" / "DailyActivity"
 SIGNALS_DIR = SWARMWS / "Knowledge" / "Signals"
@@ -34,4 +37,10 @@ SIGNAL_DIGEST_FILE = SWARMWS / "Services" / "signals" / "signal_digest.json"
 MCPS_DIR = SWARMWS / ".claude" / "mcps"
 
 # Estimation learner (EMA-based job duration prediction)
-ESTIMATION_LEARNER_FILE = Path.home() / ".swarm-ai" / "estimation_learner.json"
+ESTIMATION_LEARNER_FILE = APP_DATA_DIR / "estimation_learner.json"
+
+# Daemon binary location
+DAEMON_DIR = APP_DATA_DIR / "daemon"
+
+# Port discovery file
+PORT_FILE = APP_DATA_DIR / "backend.port"

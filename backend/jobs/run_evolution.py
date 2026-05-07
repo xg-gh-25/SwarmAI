@@ -20,6 +20,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .paths import CONTEXT_DIR
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -37,7 +39,7 @@ def main() -> None:
     # ALL transcripts across all project subdirectories (Gap 2 fix).
     transcripts_dir = Path.home() / ".claude" / "projects"
 
-    evals_dir = Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / "SkillEvals"
+    evals_dir = CONTEXT_DIR / "SkillEvals"
     evals_dir.mkdir(parents=True, exist_ok=True)
 
     # Add backend to sys.path for core imports
@@ -53,7 +55,7 @@ def main() -> None:
 
     # Update last-run state file ONLY if cycle actually ran (not lock-rejected)
     if not result.errors:
-        state_file = Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / ".evolution_last_run"
+        state_file = CONTEXT_DIR / ".evolution_last_run"
         state_file.write_text(
             datetime.now(timezone.utc).strftime("%Y-%m-%d"), encoding="utf-8"
         )

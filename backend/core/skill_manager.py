@@ -393,15 +393,17 @@ class SkillManager:
         if user_skills_path is not None:
             self.user_skills_path = user_skills_path
         else:
+            from config import get_app_data_dir
             self.user_skills_path = (
-                Path.home() / ".swarm-ai" / "skills"
+                get_app_data_dir() / "skills"
             )
 
         if plugin_skills_path is not None:
             self.plugin_skills_path = plugin_skills_path
         else:
+            from config import get_app_data_dir as _get_app_data_dir
             self.plugin_skills_path = (
-                Path.home() / ".swarm-ai" / "plugin-skills"
+                _get_app_data_dir() / "plugin-skills"
             )
 
         # Cache state — populated by scan_all(), invalidated on CRUD ops.

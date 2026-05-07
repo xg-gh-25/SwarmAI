@@ -783,7 +783,7 @@ async def lifespan(app: FastAPI):
     # IMPROVEMENT.md write-back: closes the DDD learning loop.
     # Runs after auto-commit so workspace state is settled.
     hook_manager.register(ImprovementWritebackHook(
-        workspace_path=app_config.get("workspace_path", str(Path.home() / ".swarm-ai" / "SwarmWS")),
+        workspace_path=app_config.get("workspace_path", str(get_app_data_dir() / "SwarmWS")),
     ))
     # ToDo lifecycle: auto-complete bound todos, implicit file matching
     # Runs after auto-commit so git log reflects the session's work.

@@ -124,7 +124,8 @@ _EVIDENCE_FILE_EXTS = (".py", ".ts", ".tsx", ".js", ".jsx", ".rs", ".go", ".md",
 
 def _get_workspace() -> Path:
     import os
-    ws = os.environ.get("SWARM_WORKSPACE", str(Path.home() / ".swarm-ai" / "SwarmWS"))
+    from config import get_app_data_dir
+    ws = os.environ.get("SWARM_WORKSPACE", str(get_app_data_dir() / "SwarmWS"))
     return Path(ws).expanduser().resolve()
 
 

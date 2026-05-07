@@ -58,7 +58,8 @@ from core.pipeline_profiles import get_profile_stages
 def _get_workspace() -> Path:
     """Resolve workspace root from environment or default."""
     import os
-    ws = os.environ.get("SWARM_WORKSPACE", str(Path.home() / ".swarm-ai" / "SwarmWS"))
+    from config import get_app_data_dir
+    ws = os.environ.get("SWARM_WORKSPACE", str(get_app_data_dir() / "SwarmWS"))
     return Path(ws).expanduser().resolve()
 
 
@@ -625,7 +626,8 @@ def _create_checkpoint_todo(
     import uuid as _uuid
 
     if db_path is None:
-        db_path = Path.home() / ".swarm-ai" / "data.db"
+        from config import get_app_data_dir
+        db_path = get_app_data_dir() / "data.db"
     if not db_path.exists():
         return None
 

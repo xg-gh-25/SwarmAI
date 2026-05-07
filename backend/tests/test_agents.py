@@ -1,6 +1,7 @@
 """Tests for agent API endpoints."""
 import pytest
 from fastapi.testclient import TestClient
+from config import get_app_data_dir
 
 
 class TestAgentsList:
@@ -272,14 +273,12 @@ class TestSwarmAgentProtections:
         Returns the skill folder name of the created user skill.
         """
         import os
-        from pathlib import Path
-
         # Use a skill folder name that exists in the filesystem
         # For testing, we'll use a known user skill folder name
         skill_folder = "user-test-skill"
-        
+
         # Create the skill directory if it doesn't exist (for testing)
-        skills_dir = Path.home() / ".swarm-ai" / "skills"
+        skills_dir = get_app_data_dir() / "skills"
         skill_path = skills_dir / skill_folder
         skill_path.mkdir(parents=True, exist_ok=True)
         

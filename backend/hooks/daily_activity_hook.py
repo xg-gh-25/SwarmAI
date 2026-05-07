@@ -22,6 +22,7 @@ from core.summarization import SummarizationPipeline
 from core.daily_activity_writer import write_daily_activity
 from core.compliance import ComplianceTracker
 from database import db
+from jobs.paths import CONTEXT_DIR, SWARMWS
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,7 @@ def recover_crash_checkpoint(workspace_dir: Path | None = None) -> bool:
 
     Returns True if a checkpoint was recovered, False otherwise.
     """
-    checkpoint_path = Path.home() / ".swarm-ai" / ".context" / "session_checkpoint.json"
+    checkpoint_path = CONTEXT_DIR / "session_checkpoint.json"
     if not checkpoint_path.exists():
         return False
 
@@ -123,7 +124,7 @@ def recover_crash_checkpoint(workspace_dir: Path | None = None) -> bool:
             entry += f"**Corrections:** {corrections_count}\n"
 
         # Append to today's DailyActivity
-        ws = workspace_dir or (Path.home() / ".swarm-ai" / "SwarmWS")
+        ws = workspace_dir or SWARMWS
         today = datetime.now().strftime("%Y-%m-%d")
         da_dir = ws / "Knowledge" / "DailyActivity"
         da_dir.mkdir(parents=True, exist_ok=True)
@@ -187,7 +188,7 @@ class DailyActivityExtractionHook:
         # 0. Clean up session checkpoint — normal session end means no crash.
         # If the file is not deleted, recover_crash_checkpoint() would
         # incorrectly treat it as a crash on next startup.
-        _checkpoint_path = Path.home() / ".swarm-ai" / ".context" / "session_checkpoint.json"
+        _checkpoint_path = CONTEXT_DIR / "session_checkpoint.json"
         _checkpoint_path.unlink(missing_ok=True)
 
         # 1. Retrieve conversation log (capped for memory safety)

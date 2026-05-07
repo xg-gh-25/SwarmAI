@@ -804,6 +804,12 @@ class SessionUnit:
         # preserved _sdk_session_id but the next spawn didn't use it.
         if self._sdk_session_id:
             options = self._build_retry_options(options, self._sdk_session_id)
+            # Post-kill cooldown: give the old subprocess time to fully
+            # terminate before attempting to reconnect to its session.
+            # Without this, the first resume after stop often fails because
+            # the old process is still in zombie state or holds the session
+            # file lock, forcing the user to send a second message.
+            await asyncio.sleep(1.5)
 
         try:
             await self._spawn(options, config)

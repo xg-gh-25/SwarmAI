@@ -27,8 +27,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Default corrections log path — can be overridden in factory functions
+from config import get_app_data_dir as _get_app_data_dir
 _DEFAULT_CORRECTIONS_PATH = str(
-    Path.home() / ".swarm-ai" / ".context" / "corrections.jsonl"
+    _get_app_data_dir() / ".context" / "corrections.jsonl"
 )
 
 # Consecutive failure threshold before injecting a hint
@@ -282,7 +283,7 @@ def create_file_tracker(
 # ---------------------------------------------------------------------------
 
 _DEFAULT_CHECKPOINT_PATH = str(
-    Path.home() / ".swarm-ai" / ".context" / "session_checkpoint.json"
+    _get_app_data_dir() / ".context" / "session_checkpoint.json"
 )
 _DEFAULT_CHECKPOINT_INTERVAL = 10
 
@@ -326,7 +327,8 @@ def create_session_checkpoint(
     """
     path = checkpoint_path or _DEFAULT_CHECKPOINT_PATH
     ctx = session_context or {}
-    ws = workspace_dir or str(Path.home() / ".swarm-ai" / "SwarmWS")
+    from jobs.paths import SWARMWS as _SWARMWS
+    ws = workspace_dir or str(_SWARMWS)
     counter_key = "_tool_count"
     start_ts_key = "_session_start_ts"
     last_da_count_key = "_last_da_checkpoint_count"
@@ -589,7 +591,8 @@ def create_high_signal_capture(
     writing the same signal twice if the user repeats.
     """
     ctx = session_context or {}
-    ws = workspace_dir or str(Path.home() / ".swarm-ai" / "SwarmWS")
+    from jobs.paths import SWARMWS as _SWARMWS_hs
+    ws = workspace_dir or str(_SWARMWS_hs)
     captured_key = "_high_signal_captured"
 
     async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:

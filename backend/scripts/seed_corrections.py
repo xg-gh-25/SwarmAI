@@ -16,10 +16,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from config import get_app_data_dir
 
 
 def parse_corrections(evolution_text: str) -> list[dict]:
@@ -157,7 +161,7 @@ def main() -> int:
     parser.add_argument(
         "--evolution-path",
         type=Path,
-        default=Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / "EVOLUTION.md",
+        default=get_app_data_dir() / "SwarmWS" / ".context" / "EVOLUTION.md",
         help="Path to EVOLUTION.md",
     )
     parser.add_argument(
@@ -175,7 +179,7 @@ def main() -> int:
 
     if args.output_path is None:
         # Write to the runtime corrections path that read_correction_stats() reads
-        args.output_path = Path.home() / ".swarm-ai" / ".context" / "corrections.jsonl"
+        args.output_path = get_app_data_dir() / ".context" / "corrections.jsonl"
 
     if not args.evolution_path.exists():
         print(f"ERROR: {args.evolution_path} not found", file=sys.stderr)

@@ -279,7 +279,8 @@ def _extract_files_touched(tool_summary: dict[str, set[str]]) -> list[str]:
     'Editing /path/to/file.py'.
     """
     # SwarmWS root for making paths relative
-    _ws_root = str(Path.home() / ".swarm-ai" / "SwarmWS") + "/"
+    from jobs.paths import SWARMWS as _swarmws_path
+    _ws_root = str(_swarmws_path) + "/"
     # Resolve swarmai root from this file: context_injector.py → core/ → backend/ → swarmai/
     _swarmai_root = str(Path(__file__).resolve().parents[2]) + "/"
 
@@ -575,7 +576,8 @@ def _merge_crash_checkpoint(checkpoint_path=None) -> str | None:
     Returns formatted string or None if no checkpoint exists.
     """
     if checkpoint_path is None:
-        checkpoint_path = Path.home() / ".swarm-ai" / ".context" / "session_checkpoint.json"
+        from config import get_app_data_dir as _get_app_data_dir_ci
+        checkpoint_path = _get_app_data_dir_ci() / ".context" / "session_checkpoint.json"
     else:
         checkpoint_path = Path(checkpoint_path)
 
@@ -1027,7 +1029,8 @@ async def build_resume_context(
 
             # Enrichment layer: uncommitted git state (async, with timeout)
             # Use caller-provided working_directory; fall back to SwarmWS default
-            ws_dir = working_directory or str(Path.home() / ".swarm-ai" / "SwarmWS")
+            from jobs.paths import SWARMWS as _swarmws_ci
+            ws_dir = working_directory or str(_swarmws_ci)
             uncommitted = await _extract_uncommitted_state(ws_dir)
         except Exception:
             logger.warning("Structured checkpoint extraction failed",

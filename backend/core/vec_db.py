@@ -35,7 +35,7 @@ except ImportError:
     VEC_AVAILABLE = False
 
 # Default database path (all SwarmAI data lives under ~/.swarm-ai/)
-_DEFAULT_DB_PATH = Path.home() / ".swarm-ai" / "data.db"
+from jobs.paths import DB_PATH as _DEFAULT_DB_PATH
 
 # Module-level singleton connection (thread-safe init via lock).
 # Reused across calls to avoid repeated connect + load_extension overhead

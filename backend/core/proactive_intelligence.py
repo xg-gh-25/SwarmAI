@@ -697,11 +697,11 @@ def _get_todo_highlights(max_items: int = 5) -> list[str]:
     Graceful no-op if DB unavailable.
     """
     import sqlite3
-    db_path = Path.home() / ".swarm-ai" / "data.db"
-    if not db_path.exists():
+    from jobs.paths import DB_PATH as _db_path
+    if not _db_path.exists():
         return []
     try:
-        conn = sqlite3.connect(str(db_path), timeout=5)
+        conn = sqlite3.connect(str(_db_path), timeout=5)
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT title, priority, status, linked_context "
@@ -1248,7 +1248,8 @@ def _extract_jobs_summary() -> dict[str, Any]:
         import yaml
 
         # Load scheduler state
-        state_path = Path.home() / ".swarm-ai" / "SwarmWS" / "Services" / "swarm-jobs" / "state.json"
+        from jobs.paths import STATE_FILE as _state_file
+        state_path = _state_file
         state_data: dict = {}
         if state_path.exists():
             try:
@@ -1260,7 +1261,8 @@ def _extract_jobs_summary() -> dict[str, Any]:
 
         # Collect all job definitions (system + user)
         all_jobs = list(SYSTEM_JOBS)
-        user_jobs_path = Path.home() / ".swarm-ai" / "SwarmWS" / "Services" / "swarm-jobs" / "user-jobs.yaml"
+        from jobs.paths import USER_JOBS_FILE as _user_jobs_file
+        user_jobs_path = _user_jobs_file
         if user_jobs_path.exists():
             try:
                 from jobs.models import Job
@@ -1627,7 +1629,8 @@ def build_session_briefing_data(
         todos: list[dict[str, Any]] = []
         try:
             import sqlite3
-            db_path = Path.home() / ".swarm-ai" / "data.db"
+            from jobs.paths import DB_PATH as _db_path_todos
+            db_path = _db_path_todos
             if db_path.exists():
                 conn = sqlite3.connect(str(db_path), timeout=5)
                 conn.row_factory = sqlite3.Row
