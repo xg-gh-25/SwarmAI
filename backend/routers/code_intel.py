@@ -8,6 +8,7 @@ Endpoints:
 import asyncio
 import logging
 import re
+import time
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
@@ -23,8 +24,14 @@ router = APIRouter()
 
 _STALE_THRESHOLD_DAYS = 7
 
+# Project name validation: alphanumeric, hyphens, underscores only.
+# Prevents path traversal (../, /) in the {project} path parameter.
+_SAFE_PROJECT_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
+
 # Concurrency guard: prevent multiple parallel reindex for the same project (F3)
-_reindex_in_progress: set[str] = set()
+# Keyed by project → start timestamp. TTL prevents permanent stall on crash.
+_reindex_in_progress: dict[str, float] = {}
+_REINDEX_TTL_SECONDS = 600  # 10 min max
 
 
 # ── Response Models ──────────────────────────────────────────────────────────
@@ -59,6 +66,8 @@ async def get_code_intel_summary(project: str):
     Uses asyncio.to_thread to avoid blocking the event loop (F1 fix:
     get_codebase_summary() calls find_dead_code() which is a full table scan).
     """
+    if not _SAFE_PROJECT_RE.match(project):
+        raise HTTPException(status_code=400, detail="Invalid project name")
     graph = load_project_graph(project)
     if graph is None:
         raise HTTPException(status_code=404, detail=f"Code intelligence not found for project '{project}'")
@@ -107,16 +116,22 @@ async def trigger_reindex(project: str, background_tasks: BackgroundTasks):
     Returns 404 if project has no code_intel.db.
     Returns 409 if reindex already in progress for this project.
     """
+    if not _SAFE_PROJECT_RE.match(project):
+        raise HTTPException(status_code=400, detail="Invalid project name")
+
     # F2: Check existence via path, not by loading full GraphStore
     db_path = get_code_intel_db_path(project)
     if not db_path.exists():
         raise HTTPException(status_code=404, detail=f"Code intelligence not found for project '{project}'")
 
-    # F3: Concurrency guard — only one reindex per project at a time
+    # F3: Concurrency guard with TTL — prevent stale locks on crash
     if project in _reindex_in_progress:
-        return ReindexResponse(status="already_indexing", project=project)
+        if time.time() - _reindex_in_progress[project] < _REINDEX_TTL_SECONDS:
+            return ReindexResponse(status="already_indexing", project=project)
+        # Stale lock — allow retry
+        logger.warning(f"Stale reindex lock for {project}, allowing retry")
 
-    _reindex_in_progress.add(project)
+    _reindex_in_progress[project] = time.time()
     background_tasks.add_task(_run_reindex, project)
 
     return ReindexResponse(status="indexing", project=project)
@@ -183,4 +198,4 @@ def _run_reindex(project: str) -> None:
         logger.error(f"Re-index failed for {project}: {e}", exc_info=True)
     finally:
         # F3: Always release the concurrency guard
-        _reindex_in_progress.discard(project)
+        _reindex_in_progress.pop(project, None)

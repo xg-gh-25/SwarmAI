@@ -1,5 +1,7 @@
 """Tests for code intelligence API router (GET /api/code-intel/{project}/summary)."""
 
+import time
+
 import pytest
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
@@ -107,7 +109,7 @@ class TestCodeIntelReindex:
 
         with patch("routers.code_intel.get_code_intel_db_path", return_value=mock_path), \
              patch("routers.code_intel._run_reindex") as mock_reindex, \
-             patch("routers.code_intel._reindex_in_progress", set()):
+             patch("routers.code_intel._reindex_in_progress", {}):
             resp = client.post("/api/code-intel/SwarmAI/reindex")
 
         assert resp.status_code == 202
@@ -132,7 +134,7 @@ class TestCodeIntelReindex:
         mock_path.exists.return_value = True
 
         with patch("routers.code_intel.get_code_intel_db_path", return_value=mock_path), \
-             patch("routers.code_intel._reindex_in_progress", {"SwarmAI"}):
+             patch("routers.code_intel._reindex_in_progress", {"SwarmAI": time.time()}):
             resp = client.post("/api/code-intel/SwarmAI/reindex")
 
         assert resp.status_code == 202

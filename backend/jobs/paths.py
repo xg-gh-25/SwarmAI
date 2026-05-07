@@ -78,4 +78,5 @@ def _migrate_legacy_state_dir() -> None:
         pass  # not empty — leave it
 
 
-_migrate_legacy_state_dir()
+# Called explicitly in main.py lifespan, not at import time.
+# This avoids surprising filesystem mutations during test imports.
