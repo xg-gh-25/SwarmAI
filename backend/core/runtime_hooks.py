@@ -27,9 +27,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Default corrections log path — can be overridden in factory functions
-from config import get_app_data_dir as _get_app_data_dir
+from jobs.paths import STATE_DIR as _STATE_DIR
 _DEFAULT_CORRECTIONS_PATH = str(
-    _get_app_data_dir() / ".context" / "corrections.jsonl"
+    _STATE_DIR / "corrections.jsonl"
 )
 
 # Consecutive failure threshold before injecting a hint
@@ -283,7 +283,7 @@ def create_file_tracker(
 # ---------------------------------------------------------------------------
 
 _DEFAULT_CHECKPOINT_PATH = str(
-    _get_app_data_dir() / ".context" / "session_checkpoint.json"
+    _STATE_DIR / "session_checkpoint.json"
 )
 _DEFAULT_CHECKPOINT_INTERVAL = 10
 

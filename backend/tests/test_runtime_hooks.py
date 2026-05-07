@@ -582,10 +582,10 @@ class TestCrashCheckpointRecovery:
         from hooks.daily_activity_hook import recover_crash_checkpoint
         import unittest.mock as mock
 
-        # Create fake home structure: tmp_path/.swarm-ai/.context/session_checkpoint.json
-        ctx_dir = tmp_path / ".swarm-ai" / ".context"
-        ctx_dir.mkdir(parents=True)
-        checkpoint = ctx_dir / "session_checkpoint.json"
+        # Create fake state dir: tmp_path/state/session_checkpoint.json
+        state_dir = tmp_path / "state"
+        state_dir.mkdir(parents=True)
+        checkpoint = state_dir / "session_checkpoint.json"
         checkpoint.write_text(json.dumps({
             "session_id": "crash-session-42",
             "ts": time.time() - 300,
@@ -597,7 +597,8 @@ class TestCrashCheckpointRecovery:
         ws = tmp_path / ".swarm-ai" / "SwarmWS"
         ws.mkdir(parents=True)
 
-        with mock.patch.object(Path, "home", return_value=tmp_path):
+        with mock.patch("hooks.daily_activity_hook.STATE_DIR", state_dir), \
+             mock.patch("hooks.daily_activity_hook.SWARMWS", ws):
             result = recover_crash_checkpoint(workspace_dir=ws)
 
         assert result is True
@@ -617,7 +618,9 @@ class TestCrashCheckpointRecovery:
         """No checkpoint file → returns False, no crash."""
         from hooks.daily_activity_hook import recover_crash_checkpoint
         import unittest.mock as mock
-        with mock.patch.object(Path, "home", return_value=tmp_path):
+        state_dir = tmp_path / "state"
+        state_dir.mkdir(parents=True)
+        with mock.patch("hooks.daily_activity_hook.STATE_DIR", state_dir):
             assert recover_crash_checkpoint() is False
 
     def test_corrupt_checkpoint_deleted(self, tmp_path):
@@ -625,12 +628,12 @@ class TestCrashCheckpointRecovery:
         from hooks.daily_activity_hook import recover_crash_checkpoint
         import unittest.mock as mock
 
-        ctx_dir = tmp_path / ".swarm-ai" / ".context"
-        ctx_dir.mkdir(parents=True)
-        checkpoint = ctx_dir / "session_checkpoint.json"
+        state_dir = tmp_path / "state"
+        state_dir.mkdir(parents=True)
+        checkpoint = state_dir / "session_checkpoint.json"
         checkpoint.write_text("not valid json at all")
 
-        with mock.patch.object(Path, "home", return_value=tmp_path):
+        with mock.patch("hooks.daily_activity_hook.STATE_DIR", state_dir):
             result = recover_crash_checkpoint()
 
         assert result is False
@@ -641,9 +644,9 @@ class TestCrashCheckpointRecovery:
         from hooks.daily_activity_hook import recover_crash_checkpoint
         import unittest.mock as mock
 
-        ctx_dir = tmp_path / ".swarm-ai" / ".context"
-        ctx_dir.mkdir(parents=True)
-        checkpoint = ctx_dir / "session_checkpoint.json"
+        state_dir = tmp_path / "state"
+        state_dir.mkdir(parents=True)
+        checkpoint = state_dir / "session_checkpoint.json"
         checkpoint.write_text(json.dumps({
             "session_id": "git-session-12345",
             "ts": 180.0,
@@ -654,7 +657,8 @@ class TestCrashCheckpointRecovery:
         }))
 
         ws = tmp_path / ".swarm-ai" / "SwarmWS"
-        with mock.patch.object(Path, "home", return_value=tmp_path):
+        with mock.patch("hooks.daily_activity_hook.STATE_DIR", state_dir), \
+             mock.patch("hooks.daily_activity_hook.SWARMWS", ws):
             result = recover_crash_checkpoint(workspace_dir=ws)
 
         assert result is True

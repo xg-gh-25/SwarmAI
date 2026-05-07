@@ -179,7 +179,8 @@ def main() -> int:
 
     if args.output_path is None:
         # Write to the runtime corrections path that read_correction_stats() reads
-        args.output_path = get_app_data_dir() / ".context" / "corrections.jsonl"
+        from jobs.paths import STATE_DIR
+        args.output_path = STATE_DIR / "corrections.jsonl"
 
     if not args.evolution_path.exists():
         print(f"ERROR: {args.evolution_path} not found", file=sys.stderr)
