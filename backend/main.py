@@ -1197,7 +1197,10 @@ async def shutdown():
     mode = _detect_run_mode()
     if mode in ("daemon", "hive"):
         logger.warning("Shutdown endpoint blocked in %s mode", mode)
-        return {"status": "ignored", "reason": f"shutdown disabled in {mode} mode"}
+        return JSONResponse(
+            status_code=403,
+            content={"status": "forbidden", "reason": f"shutdown disabled in {mode} mode"},
+        )
     logger.info("Shutdown endpoint called - disconnecting all clients")
     t0 = time.monotonic()
     try:
