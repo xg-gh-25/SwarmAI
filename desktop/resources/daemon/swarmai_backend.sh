@@ -17,11 +17,11 @@ DAEMON_BINARY="${HOME}/.swarm-ai/daemon/python-backend"
 LOG_DIR="${HOME}/.swarm-ai/logs"
 
 # ---------------------------------------------------------------------------
-# Port conflict check
+# Port conflict check — uses nc -z (instant, no hang unlike lsof on macOS)
 # ---------------------------------------------------------------------------
 
 FAIL_STAMP="${HOME}/.swarm-ai/.daemon-port-fail"
-if lsof -i :"${DAEMON_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
+if nc -z 127.0.0.1 "${DAEMON_PORT}" 2>/dev/null; then
     FAIL_COUNT=$(cat "$FAIL_STAMP" 2>/dev/null || echo 0)
     FAIL_COUNT=$((FAIL_COUNT + 1))
     echo "$FAIL_COUNT" > "$FAIL_STAMP"
