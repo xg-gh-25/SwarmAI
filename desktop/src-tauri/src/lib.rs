@@ -690,6 +690,15 @@ async fn sync_daemon_version(_app: &tauri::AppHandle, app_version: &str) -> Resu
     std::fs::create_dir_all(&daemon_dir)
         .map_err(|e| format!("Failed to create daemon dir: {}", e))?;
 
+    // Backup existing binary before deploy — allows rollback if bootstrap fails.
+    // Without this, a failed step 5 (bootstrap) leaves no working binary.
+    let backup_binary = format!("{}/python-backend.backup", daemon_dir);
+    if std::path::Path::new(&target_binary).exists() {
+        std::fs::copy(&target_binary, &backup_binary)
+            .map_err(|e| format!("Failed to backup old binary: {}", e))?;
+        println!("[Tauri] Backed up old daemon binary for rollback");
+    }
+
     // Atomic deploy: copy to .tmp, then rename (cleanup .tmp on failure)
     std::fs::copy(&bundled_binary, &tmp_binary)
         .map_err(|e| format!("Failed to copy binary: {}", e))?;
@@ -743,7 +752,17 @@ async fn sync_daemon_version(_app: &tauri::AppHandle, app_version: &str) -> Resu
         );
     }
 
-    Err("Daemon upgrade failed — daemon not responding after restart".to_string())
+    // Rollback: restore backup binary so the old version can still run
+    if std::path::Path::new(&backup_binary).exists() {
+        println!("[Tauri] Rolling back to previous daemon binary");
+        let _ = std::fs::rename(&backup_binary, &target_binary);
+        // Attempt to bootstrap the old binary so daemon is at least running
+        let _ = std::process::Command::new("launchctl")
+            .args(["bootstrap", &gui_target, &plist_path])
+            .output();
+    }
+
+    Err("Daemon upgrade failed — daemon not responding after restart. Rolled back to previous binary.".to_string())
 }
 
 /// Background wrapper around `sync_daemon_version`.
@@ -1074,13 +1093,24 @@ async fn spawn_subprocess(app: &tauri::AppHandle, state: &SharedBackendState) ->
     // Wait for health endpoint
     if probe_daemon_health(20, 1).await.is_some() {
         let mut backend = state.lock().await;
+        // Guard: if app closed during the probe, don't mark as running
+        if backend.intentional_shutdown {
+            drop(backend);
+            kill_process_tree(child_pid);
+            return Err("Backend came up but app is shutting down — killed".to_string());
+        }
         backend.port = DAEMON_PORT;
         backend.running = true;
         return Ok(child_pid);
     }
 
-    // Didn't come up — kill the zombie
+    // Didn't come up — kill the zombie and clear state
     kill_process_tree(child_pid);
+    {
+        let mut backend = state.lock().await;
+        backend.pid = None;
+        backend.running = false;
+    }
     Err(format!("Backend spawned (PID {}) but not healthy after 20s", child_pid))
 }
 
