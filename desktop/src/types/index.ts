@@ -230,13 +230,29 @@ export interface CmdPermissionContent {
   decision?: 'approve' | 'deny';
 }
 
+export interface EscalationOption {
+  label: string;
+  description: string;
+  recommended?: boolean;
+}
+
+export interface EscalationContent {
+  type: 'escalation';
+  id: string;
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  reason: string;
+  options: EscalationOption[];
+  status: 'pending' | 'resolved';
+  resolution?: string;
+}
+
 export interface TodoItem {
   content: string;
   status: 'pending' | 'in_progress' | 'completed';
   activeForm: string;
 }
 
-export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | AskUserQuestionContent | CmdPermissionContent | ThinkingContent;
+export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | AskUserQuestionContent | CmdPermissionContent | ThinkingContent | EscalationContent;
 
 export interface Message {
   id: string;

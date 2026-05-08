@@ -11,6 +11,7 @@ import ChannelsTab from './ChannelsTab';
 import SkillsSettingsTab from './SkillsTab';
 import MCPServersTab from './MCPServersTab';
 import SystemTab from './SystemTab';
+import CapabilitiesTab from './CapabilitiesTab';
 import EngineMetricsTab from './EngineMetricsTab';
 import AboutTab from './AboutTab';
 import HiveTab from './HiveTab';
@@ -33,6 +34,7 @@ const ALL_TABS = [
   { id: 'backup', label: 'Backup', icon: 'cloud_upload', width: '4xl' as const },
   { id: 'engine', label: 'Core Engine', icon: 'psychology', width: '6xl' as const },
   { id: 'system', label: 'System', icon: 'dns', width: '4xl' as const },
+  { id: 'capabilities', label: 'Capabilities', icon: 'verified', width: '4xl' as const },
   { id: 'about', label: 'About', icon: 'info', width: '4xl' as const },
 ] as const;
 
@@ -106,6 +108,7 @@ export default function SettingsTabs({ initialTab }: SettingsTabsProps) {
               {activeTab === 'backup' && <BackupTab />}
               {activeTab === 'engine' && <EngineMetricsTab />}
               {activeTab === 'system' && <SystemTab />}
+              {activeTab === 'capabilities' && <CapabilitiesTab />}
               {activeTab === 'about' && <AboutTab />}
             </>
           );
