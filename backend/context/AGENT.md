@@ -619,6 +619,7 @@ Before writing code, output these four items explicitly — not in your head, in
 3. **Simplest approach** — the least code that covers all scenarios. Not the cleverest.
 4. **What could break** — for each scenario, what's the failure mode.
 5. **State machine audit** (if applicable) — for every declared state/transition, name the code path that enters it and the trigger that causes the transition. Unreachable state = bug.
+6. **Calling context audit** (if extracting a function for reuse) — for each new caller, explicitly list: what's different about the calling context vs the original? (concurrency, lifecycle stage, error recovery, other actors that may mutate shared state during async yield points). Different context = different invariants = different bugs.
 
 Then implement. This turns implicit thinking into visible artifacts the user can correct before you write 100 lines of wrong code. Skip this for trivial 1-file fixes.
 
@@ -686,7 +687,7 @@ Scan all modified source files for issues by severity:
 | Severity | Action | Categories |
 |----------|--------|------------|
 | 🔴 High | **Auto-fix** | Dead code, duplicate logic, missing error handling, type safety violations, memory leaks, SOLID violations, **unreachable state machine states**, **concurrent async without ordering guarantees**, **schema migration without rollback path** |
-| 🟡 Medium | **Auto-fix** | Magic numbers, complex conditionals (>3 branches), unclear naming, tight coupling, inefficient algorithms, missing abstractions, **unsanitized strings in structured formats (HTML/JSON/SQL)**, **setTimeout for state propagation**, **non-deterministic output ordering (set/dict/os.listdir)**, **YAGNI — interface with ≤1 implementation, config with 1 possible value** |
+| 🟡 Medium | **Auto-fix** | Magic numbers, complex conditionals (>3 branches), unclear naming, tight coupling, inefficient algorithms, missing abstractions, **unsanitized strings in structured formats (HTML/JSON/SQL)**, **setTimeout for state propagation**, **non-deterministic output ordering (set/dict/os.listdir)**, **YAGNI — interface with ≤1 implementation, config with 1 possible value**, **shared state mutation before async yield without post-yield re-validation or write-late pattern** |
 | 🟢 Low | **Note only** | Minor readability, formatting, optional comments |
 
 **Process:** List findings briefly → fix 🔴 and 🟡 in-place → note what was fixed. Maintain existing functionality — refactors only, not feature changes. If nothing found, one line and move on.
