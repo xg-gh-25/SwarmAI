@@ -5,7 +5,7 @@ inclusion: always
 # SwarmAI Development Rules
 
 ## Architecture
-- Desktop app: Tauri 2.0 + React + Python FastAPI sidecar
+- Desktop app: Tauri 2.0 + React + Python FastAPI backend (daemon on macOS, subprocess on Windows/Linux)
 - Backend uses Claude Agent SDK with ClaudeSDKClient
 - SQLite database, local filesystem for skills
 - Data dirs: `~/.swarm-ai/` (all platforms)

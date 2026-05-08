@@ -12,17 +12,19 @@ SwarmAI is a desktop AI command center — Tauri 2.0 + React 19 + Python FastAPI
 
 **Read these first. Every one has caused a P0.**
 
-### 1. Two Backend Processes — Never Confuse Them
+### 1. Four Backend Modes — Mutually Exclusive
 
-| Process | Env Var | Lifetime | Port | Log File |
-|---------|---------|----------|------|----------|
-| **launchd daemon** | `SWARMAI_MODE=daemon` | 24/7 via launchd | 18321 (fixed) | `backend-daemon.log` |
-| **Tauri sidecar** | `SWARMAI_MODE=sidecar` | Desktop app lifecycle | random | `backend.log` |
+| Platform | Env Var | Lifetime | Port | Process Owner |
+|----------|---------|----------|------|---------------|
+| **macOS Desktop** | `SWARMAI_MODE=daemon` | 24/7 via launchd | 18321 | launchd |
+| **Windows/Linux Desktop** | `SWARMAI_MODE=subprocess` | Dies with app | 18321 | Tauri child |
+| **Hive (EC2)** | `SWARMAI_MODE=hive` | 24/7 via systemd | 18321 | systemd |
+| **Dev** | `SWARMAI_MODE=dev` | Manual | 8000 | Manual |
 
-- Slack/channels run on **daemon**, NOT sidecar
-- Closing the desktop app does NOT stop Slack
-- `curl http://127.0.0.1:18321/health` tests the daemon, NOT what the frontend hits
-- They write separate log files — never share a log file (RotatingFileHandler race)
+- Slack/channels run only in **daemon** and **hive** modes
+- macOS: closing the desktop app does NOT stop the backend (daemon stays alive)
+- Windows/Linux: closing the app kills the subprocess
+- `curl http://127.0.0.1:18321/health` tests the backend on any platform
 
 ### 2. `isDesktop()` Detection (v1.9.0 P0)
 
@@ -102,13 +104,14 @@ User → React Frontend → FastAPI Backend → SessionRouter → SessionUnit �
 ### Process Topology
 ```
 ┌─────────────────────────────────┐     ┌──────────────────────────────┐
-│ Tauri Desktop App               │     │ launchd Daemon (24/7)        │
-│  ├─ React Frontend (webview)    │     │  ├─ FastAPI (port 18321)     │
-│  ├─ Rust Core (lib.rs)          │     │  ├─ Slack Socket Mode        │
-│  └─ Python Sidecar (random port)│     │  ├─ Channel Gateway          │
-│     └─ FastAPI + Claude SDK     │     │  └─ Background Jobs          │
+│ Tauri Desktop App               │     │ Backend (port 18321)         │
+│  ├─ React Frontend (webview)    │     │  ├─ FastAPI + Claude SDK     │
+│  ├─ Rust Core (lib.rs)          │     │  ├─ Slack Socket Mode *      │
+│  └─ Connects to backend:18321   │     │  ├─ Channel Gateway *        │
+│                                 │     │  └─ Background Jobs *        │
 └─────────────────────────────────┘     └──────────────────────────────┘
-         ↕ backend.json (port discovery)          ↕ launchctl
+  macOS: daemon (launchd, 24/7)           * Only in daemon/hive modes
+  Win/Linux: subprocess (dies with app)
 ```
 
 ### Backend Structure
@@ -253,7 +256,7 @@ If the app shows "Backend service failed to start":
 2. `[Platform] isDesktop=false` → Tauri detection broken (check `__TAURI_INTERNALS__`)
 3. `[Health Check] FATAL: got HTML instead of JSON` → API URL is wrong
 4. `[Health Check] Response: {status: "healthy"}` → Backend OK, problem is elsewhere
-5. Backend logs: `~/.swarm-ai/logs/backend-daemon.log` (daemon) or `backend.log` (sidecar)
+5. Backend logs: `~/.swarm-ai/logs/backend-daemon.log` (daemon/hive) or stdout (subprocess/dev)
 
 ## Debugging Backend
 
@@ -290,7 +293,7 @@ Tag push (`v*`) triggers `release.yml`: builds macOS DMG + Windows installer + H
 
 1. **Single agent with role-switching** > multi-agent orchestration (zero context transfer cost)
 2. **Memory sovereignty** — all memory self-owned (.context/MEMORY.md), never use platform memory
-3. **Daemon-first** — daemon is the primary process, sidecar is fallback
+3. **Platform-native lifecycle** — macOS: launchd daemon (24/7), Windows/Linux: Tauri subprocess, Hive: systemd
 4. **Filesystem-first** for skills and context — no DB, git-tracked, human-readable
 5. **Prevention over recovery** — timeouts, state guards > error handling
 

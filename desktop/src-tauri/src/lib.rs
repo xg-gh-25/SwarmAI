@@ -4,8 +4,8 @@ use std::env;
 use tauri::{Emitter, Manager};
 use tauri::webview::WebviewWindowBuilder;
 use tauri::utils::config::WebviewUrl;
-// tauri_plugin_shell: ShellExt import removed (no sidecar spawning), but plugin
-// still initialized for its "open" capability (open URLs in system browser).
+// tauri_plugin_shell: ShellExt import removed, but plugin still initialized
+// for its "open" capability (open URLs in system browser via shell:allow-open).
 use tokio::sync::Mutex;
 
 #[cfg(target_os = "windows")]
@@ -433,9 +433,8 @@ pub struct BackendStatus {
     is_daemon_mode: bool,
 }
 
-// NOTE: handle_sidecar_output removed — sidecar mode is fully deprecated.
-// Backend auto-restart is now handled by launchd KeepAlive (daemon mode).
-// The health watchdog (spawn_daemon_health_watchdog) monitors daemon liveness
+// Backend auto-restart: launchd KeepAlive (macOS daemon), or Tauri respawn (Windows/Linux subprocess).
+// The health watchdog (spawn_daemon_health_watchdog) monitors backend liveness
 // and emits frontend events on death/recovery.
 
 /// Gracefully shut down the backend and then force-kill as safety net.

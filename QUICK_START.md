@@ -63,7 +63,7 @@ Two paths to develop and test:
 ./dev.sh status    # Show what's running
 ```
 
-**`./dev.sh build`** — rebuilds sidecar binary + Tauri app (takes longer, production-like)
+**`./dev.sh build`** — rebuilds backend binary + Tauri app (takes longer, production-like)
 
 ```bash
 # Full production build (PyInstaller + Tauri → DMG)

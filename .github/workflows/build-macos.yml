@@ -84,7 +84,7 @@ jobs:
       - name: Verify Python backend binary
         working-directory: ./desktop
         run: |
-          echo "=== Checking sidecar binary ==="
+          echo "=== Checking backend binary ==="
           ls -la src-tauri/binaries/
           echo ""
           echo "=== Binary info ==="
@@ -104,9 +104,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
-      - name: Verify sidecar in app bundle
+      - name: Verify backend binary in app bundle
         run: |
-          echo "=== Checking sidecar in app bundle ==="
+          echo "=== Checking backend binary in app bundle ==="
           APP_PATH="desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/SwarmAI.app"
           if [ -d "$APP_PATH" ]; then
             echo "App bundle exists: $APP_PATH"

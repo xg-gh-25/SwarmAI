@@ -631,7 +631,7 @@ async def lifespan(app: FastAPI):
     # Validates: Requirements 1.1, 1.2, 1.3, 1.4
     #
     # MODE GUARD: Only daemon and hive run the channel gateway.
-    # Sidecar/dev must NOT start it — Socket Mode allows only ONE
+    # Subprocess/dev must NOT start it — Socket Mode allows only ONE
     # connection per app token.  Two processes competing causes
     # rapid reconnect churn (770+ "connection closed" events observed).
     phase_timings["gateway_ms"] = 0  # Updated by background task on completion
@@ -886,7 +886,7 @@ async def lifespan(app: FastAPI):
             backend_port = _detect_backend_port()
             await _svc_mgr.start_all(ws_path, backend_port)
         except Exception:
-            logger.exception("Sidecar services startup failed (non-fatal)")
+            logger.exception("Managed services startup failed (non-fatal)")
 
     asyncio.create_task(_deferred_services_startup())
 
@@ -895,7 +895,7 @@ async def lifespan(app: FastAPI):
     _startup_complete = False
     logger.info("Shutting down...")
     await _svc_mgr.stop_all()
-    logger.info("Sidecar services stopped")
+    logger.info("Managed services stopped")
     await channel_gateway.shutdown()
     logger.info("Channel gateway stopped")
     await session_registry.stop_lifecycle()
