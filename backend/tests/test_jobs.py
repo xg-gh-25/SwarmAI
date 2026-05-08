@@ -247,6 +247,82 @@ class TestPaths:
         assert STATE_FILE.parent == JOBS_DATA_DIR
 
 
+# ── Migration ─────────────────────────────────────────────────────────
+
+class TestMigrateLegacyStateDir:
+    """Tests for _migrate_legacy_state_dir — runs on every startup for existing users."""
+
+    def test_migrates_files_from_old_to_new(self, tmp_path, monkeypatch):
+        """Old dir exists with known files → files move to STATE_DIR."""
+        from jobs import paths
+
+        old_dir = tmp_path / ".context"
+        old_dir.mkdir()
+        (old_dir / "session_checkpoint.json").write_text('{"test": 1}')
+        (old_dir / "corrections.jsonl").write_text('{"line": 1}\n')
+
+        state_dir = tmp_path / "state"
+        monkeypatch.setattr(paths, "APP_DATA_DIR", tmp_path)
+        monkeypatch.setattr(paths, "STATE_DIR", state_dir)
+
+        paths._migrate_legacy_state_dir()
+
+        assert (state_dir / "session_checkpoint.json").read_text() == '{"test": 1}'
+        assert (state_dir / "corrections.jsonl").read_text() == '{"line": 1}\n'
+        assert not old_dir.exists()  # empty dir removed
+
+    def test_noop_when_old_dir_missing(self, tmp_path, monkeypatch):
+        """Old dir doesn't exist → no-op, no error."""
+        from jobs import paths
+
+        monkeypatch.setattr(paths, "APP_DATA_DIR", tmp_path)
+        monkeypatch.setattr(paths, "STATE_DIR", tmp_path / "state")
+
+        paths._migrate_legacy_state_dir()  # should not raise
+        assert not (tmp_path / "state").exists()
+
+    def test_skips_if_target_exists(self, tmp_path, monkeypatch):
+        """New file already exists → don't overwrite (no data loss)."""
+        from jobs import paths
+
+        old_dir = tmp_path / ".context"
+        old_dir.mkdir()
+        (old_dir / "session_checkpoint.json").write_text("old")
+
+        state_dir = tmp_path / "state"
+        state_dir.mkdir()
+        (state_dir / "session_checkpoint.json").write_text("new")
+
+        monkeypatch.setattr(paths, "APP_DATA_DIR", tmp_path)
+        monkeypatch.setattr(paths, "STATE_DIR", state_dir)
+
+        paths._migrate_legacy_state_dir()
+
+        # New file preserved, old file untouched (not moved)
+        assert (state_dir / "session_checkpoint.json").read_text() == "new"
+        assert (old_dir / "session_checkpoint.json").exists()
+
+    def test_old_dir_kept_if_has_unexpected_files(self, tmp_path, monkeypatch):
+        """Old dir has extra files → dir NOT removed (rmdir fails on non-empty)."""
+        from jobs import paths
+
+        old_dir = tmp_path / ".context"
+        old_dir.mkdir()
+        (old_dir / "session_checkpoint.json").write_text("data")
+        (old_dir / "unknown_file.txt").write_text("surprise")
+
+        state_dir = tmp_path / "state"
+        monkeypatch.setattr(paths, "APP_DATA_DIR", tmp_path)
+        monkeypatch.setattr(paths, "STATE_DIR", state_dir)
+
+        paths._migrate_legacy_state_dir()
+
+        # Known file migrated, but dir stays because unknown_file.txt remains
+        assert (state_dir / "session_checkpoint.json").exists()
+        assert old_dir.exists()
+        assert (old_dir / "unknown_file.txt").exists()
+
+
 # ── Scheduler ──────────────────────────────────────────────────────────
 
 class TestScheduler:

@@ -30,6 +30,10 @@ _SAFE_PROJECT_RE = re.compile(r"^[a-zA-Z0-9_\-]+$")
 
 # Concurrency guard: prevent multiple parallel reindex for the same project (F3)
 # Keyed by project → start timestamp. TTL prevents permanent stall on crash.
+# NOTE: This is process-local — a daemon restart clears the dict. This is safe
+# because the background thread running _run_reindex dies with the process,
+# so no orphan indexing survives a restart. The TTL exists for the edge case
+# where _run_reindex raises before reaching its `finally` cleanup.
 _reindex_in_progress: dict[str, float] = {}
 _REINDEX_TTL_SECONDS = 600  # 10 min max
 

@@ -741,6 +741,8 @@ async fn sync_daemon_version(_app: &tauri::AppHandle, app_version: &str) -> Resu
         let new_version = get_daemon_version().await.unwrap_or_default();
         if new_version == app_version {
             println!("[Tauri] Daemon upgraded successfully: {}", app_version);
+            // Clean up backup — upgrade confirmed good
+            let _ = std::fs::remove_file(&backup_binary);
             // NOTE: the `backend-upgraded` event is emitted by
             // `sync_daemon_version_background` — the single source of
             // truth for upgrade lifecycle events.
