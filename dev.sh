@@ -149,7 +149,7 @@ cmd_start() {
         launchctl bootout "$GUI_TARGET" 2>/dev/null || true
         # Wait for daemon to fully release port (graceful shutdown + uvicorn drain)
         for _i in $(seq 1 10); do
-            lsof -i :${DAEMON_PORT} -sTCP:LISTEN >/dev/null 2>&1 || break
+            nc -z 127.0.0.1 "${DAEMON_PORT}" 2>/dev/null || break
             sleep 0.5
         done
         _ok "Daemon stopped (will re-bootstrap on ./dev.sh kill or next app launch)"
