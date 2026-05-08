@@ -8,11 +8,12 @@
  * @exports ContentBlockRenderer — The routing component
  */
 
-import type { ContentBlock, ToolResultContent } from '../../../types';
+import type { ContentBlock, ToolResultContent, EscalationContent } from '../../../types';
 import { MarkdownRenderer, AskUserQuestion } from '../../../components/common';
 import { MergedToolBlock } from './MergedToolBlock';
 import { ToolResultBlock } from './ToolResultBlock';
 import { InlinePermissionRequest } from './InlinePermissionRequest';
+import { EscalationBlock } from './EscalationBlock';
 
 interface ContentBlockRendererProps {
   block: ContentBlock;
@@ -106,6 +107,20 @@ export function ContentBlockRenderer({
         isPending={pendingPermissionRequestId === block.requestId}
         decision={block.decision}
         onDecision={onPermissionDecision}
+      />
+    );
+  }
+
+  if (block.type === 'escalation') {
+    const esc = block as EscalationContent;
+    return (
+      <EscalationBlock
+        id={esc.id}
+        severity={esc.severity}
+        reason={esc.reason}
+        options={esc.options || []}
+        status={esc.status}
+        resolution={esc.resolution}
       />
     );
   }
