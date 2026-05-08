@@ -92,7 +92,7 @@ export default function SystemTab() {
             <div className="flex items-center justify-between">
               <span className="text-[var(--color-text-muted)]">Mode</span>
               <span className={backendStatus.is_daemon_mode ? 'text-green-400' : 'text-[var(--color-text)]'}>
-                {backendStatus.is_daemon_mode ? 'Daemon (24/7)' : 'Sidecar'}
+                {backendStatus.is_daemon_mode ? 'Daemon (24/7)' : 'Subprocess'}
               </span>
             </div>
           </div>

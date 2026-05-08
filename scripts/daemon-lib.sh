@@ -134,6 +134,28 @@ _deploy_daemon_binary() {
         cp -f "$res_src"/*.db "$res_dst/" 2>/dev/null || true
         _ok "Resources deployed"
     fi
+
+    # Deploy wrapper script + plist (keeps daemon infrastructure in sync with source)
+    local wrapper_src="$DESKTOP_DIR/resources/daemon/swarmai_backend.sh"
+    local wrapper_dst="$HOME/.swarm-ai/swarmai_backend.sh"
+    if [ -f "$wrapper_src" ]; then
+        cp -f "$wrapper_src" "$wrapper_dst"
+        chmod +x "$wrapper_dst"
+        _ok "Wrapper script deployed"
+    fi
+
+    local plist_template="$DESKTOP_DIR/resources/daemon/com.swarmai.backend.plist.template"
+    local plist_dst="$HOME/Library/LaunchAgents/${DAEMON_LABEL}.plist"
+    if [ -f "$plist_template" ]; then
+        local log_dir="$HOME/.swarm-ai/logs"
+        mkdir -p "$log_dir"
+        mkdir -p "$(dirname "$plist_dst")"
+        sed -e "s|__WRAPPER_PATH__|${wrapper_dst}|g" \
+            -e "s|__LOG_DIR__|${log_dir}|g" \
+            -e "s|__HOME__|${HOME}|g" \
+            "$plist_template" > "$plist_dst"
+        _ok "Plist deployed"
+    fi
 }
 
 # ── Bootstrap & Health ─────────────────────────────────────────

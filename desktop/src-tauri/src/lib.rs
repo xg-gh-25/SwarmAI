@@ -1038,7 +1038,7 @@ fn bootstrap_daemon(home: &str) -> Result<(), String> {
 
 /// Background health watchdog for daemon mode.
 ///
-/// When Tauri connects to an external daemon (not a sidecar it owns),
+/// When Tauri connects to an external daemon (not a subprocess it owns),
 /// there's no process monitor. This task polls the daemon health endpoint
 /// every `interval_secs` and emits frontend events on state changes:
 ///   - `backend-terminated-restarting` when daemon becomes unreachable (launchd will restart)
@@ -1079,11 +1079,11 @@ fn spawn_daemon_health_watchdog(
             let sleep_secs = if was_healthy { std::cmp::max(interval_secs, 30) } else { RECOVERY_POLL_SECS };
             tokio::time::sleep(tokio::time::Duration::from_secs(sleep_secs)).await;
 
-            // Check if we're still in daemon mode (user might have stopped backend)
+            // Check if backend was intentionally stopped (user or app close)
             {
                 let backend = state.lock().await;
-                if !backend.is_daemon_mode || !backend.running {
-                    println!("[Tauri] Daemon watchdog: no longer in daemon mode — exiting");
+                if !backend.running || backend.intentional_shutdown {
+                    println!("[Tauri] Health watchdog: backend stopped intentionally — exiting");
                     return;
                 }
             }
