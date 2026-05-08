@@ -1035,6 +1035,61 @@ fn bootstrap_daemon(home: &str) -> Result<(), String> {
     }
 }
 
+/// Spawn the backend as a subprocess (Windows/Linux).
+///
+/// Returns Ok(pid) on success, Err(msg) on failure.
+/// Used by both `start_backend` (initial spawn) and the watchdog (crash recovery).
+#[cfg(not(target_os = "macos"))]
+async fn spawn_subprocess(app: &tauri::AppHandle, state: &SharedBackendState) -> Result<u32, String> {
+    let binary_path = find_backend_binary(app)?;
+    let enhanced_path = get_enhanced_path();
+
+    let mut cmd = std::process::Command::new(&binary_path);
+    cmd.args(["--host", "127.0.0.1", "--port", &DAEMON_PORT.to_string()])
+        .env("PATH", &enhanced_path)
+        .env("SWARMAI_MODE", "subprocess")
+        .env("SWARMAI_PORT", DAEMON_PORT.to_string())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    #[cfg(target_os = "windows")]
+    {
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    let child = cmd.spawn()
+        .map_err(|e| format!("Failed to start backend: {}. Binary: {:?}", e, binary_path))?;
+
+    let child_pid = child.id();
+    println!("[Tauri] Backend subprocess spawned (PID {})", child_pid);
+
+    // Update state
+    {
+        let mut backend = state.lock().await;
+        backend.pid = Some(child_pid);
+        backend.is_daemon_mode = false;
+        backend.intentional_shutdown = false;
+    }
+
+    // Wait for health endpoint
+    if probe_daemon_health(20, 1).await.is_some() {
+        let mut backend = state.lock().await;
+        backend.port = DAEMON_PORT;
+        backend.running = true;
+        return Ok(child_pid);
+    }
+
+    // Didn't come up — kill the zombie
+    kill_process_tree(child_pid);
+    Err(format!("Backend spawned (PID {}) but not healthy after 20s", child_pid))
+}
+
+/// No-op on macOS — subprocess spawn is never called (daemon mode only).
+#[cfg(target_os = "macos")]
+async fn spawn_subprocess(_app: &tauri::AppHandle, _state: &SharedBackendState) -> Result<u32, String> {
+    Err("spawn_subprocess not supported on macOS (daemon mode only)".to_string())
+}
+
 /// Background health watchdog for daemon mode.
 ///
 /// When Tauri connects to an external daemon (not a subprocess it owns),
@@ -1122,29 +1177,71 @@ fn spawn_daemon_health_watchdog(
             }
 
             if was_healthy && !healthy {
-                // Daemon just went down — signal "restarting" (launchd will handle it)
+                // Backend just went down
                 recovery_attempts = 1;
-                println!("[Tauri] Daemon watchdog: daemon unreachable — restarting via launchd (attempt {}/{})",
-                    recovery_attempts, MAX_RECOVERY_ATTEMPTS);
+                let is_daemon = { state.lock().await.is_daemon_mode };
                 let _ = app_handle.emit("backend-terminated-restarting", Option::<i32>::None);
-            } else if !was_healthy && !healthy {
-                // Still down — increment recovery counter
-                recovery_attempts += 1;
-                println!("[Tauri] Daemon watchdog: still waiting for daemon recovery (attempt {}/{})",
-                    recovery_attempts, MAX_RECOVERY_ATTEMPTS);
 
-                if recovery_attempts >= MAX_RECOVERY_ATTEMPTS {
-                    // Give up — daemon is permanently dead
-                    println!("[Tauri] Daemon watchdog: daemon failed to recover after {} attempts — permanent failure",
-                        MAX_RECOVERY_ATTEMPTS);
-                    let _ = app_handle.emit("backend-terminated", Option::<i32>::None);
-                    // Keep watching in case it eventually comes back
+                if is_daemon {
+                    // Daemon mode: launchd KeepAlive will restart it — just wait
+                    println!("[Tauri] Watchdog: daemon unreachable — waiting for launchd restart (attempt {}/{})",
+                        recovery_attempts, MAX_RECOVERY_ATTEMPTS);
+                } else {
+                    // Subprocess mode: WE must restart it
+                    const SUBPROCESS_BACKOFF: [u64; 3] = [3, 6, 12];
+                    let backoff = SUBPROCESS_BACKOFF[0];
+                    println!("[Tauri] Watchdog: subprocess crashed — re-spawning in {}s (attempt 1/3)", backoff);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(backoff)).await;
+                    match spawn_subprocess(&app_handle, &state).await {
+                        Ok(pid) => {
+                            println!("[Tauri] Watchdog: subprocess re-spawned (PID {})", pid);
+                            let _ = app_handle.emit("backend-restarted", DAEMON_PORT);
+                            recovery_attempts = 0;
+                            was_healthy = true;
+                            continue;
+                        }
+                        Err(e) => println!("[Tauri] Watchdog: re-spawn attempt 1 failed: {}", e),
+                    }
+                }
+            } else if !was_healthy && !healthy {
+                recovery_attempts += 1;
+                let is_daemon = { state.lock().await.is_daemon_mode };
+
+                if !is_daemon && recovery_attempts <= 3 {
+                    // Subprocess mode: retry with exponential backoff
+                    const SUBPROCESS_BACKOFF: [u64; 3] = [3, 6, 12];
+                    let backoff = SUBPROCESS_BACKOFF[(recovery_attempts - 1).min(2) as usize];
+                    println!("[Tauri] Watchdog: subprocess still down — re-spawning in {}s (attempt {}/3)",
+                        backoff, recovery_attempts);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(backoff)).await;
+                    match spawn_subprocess(&app_handle, &state).await {
+                        Ok(pid) => {
+                            println!("[Tauri] Watchdog: subprocess re-spawned (PID {})", pid);
+                            let _ = app_handle.emit("backend-restarted", DAEMON_PORT);
+                            recovery_attempts = 0;
+                            was_healthy = true;
+                            continue;
+                        }
+                        Err(e) => println!("[Tauri] Watchdog: re-spawn attempt {} failed: {}", recovery_attempts, e),
+                    }
+                    if recovery_attempts >= 3 {
+                        println!("[Tauri] Watchdog: subprocess failed to recover after 3 attempts — giving up");
+                        let _ = app_handle.emit("backend-terminated", Option::<i32>::None);
+                    }
+                } else if is_daemon {
+                    // Daemon mode: just wait for launchd
+                    println!("[Tauri] Watchdog: still waiting for daemon recovery (attempt {}/{})",
+                        recovery_attempts, MAX_RECOVERY_ATTEMPTS);
+                    if recovery_attempts >= MAX_RECOVERY_ATTEMPTS {
+                        println!("[Tauri] Watchdog: daemon failed to recover after {} attempts — permanent failure",
+                            MAX_RECOVERY_ATTEMPTS);
+                        let _ = app_handle.emit("backend-terminated", Option::<i32>::None);
+                    }
                 }
             } else if !was_healthy && healthy {
-                // Daemon recovered (launchd KeepAlive restarted it)
-                println!("[Tauri] Daemon watchdog: daemon recovered after {} attempts — emitting backend-restarted",
-                    recovery_attempts);
-                known_boot_id = current_boot_id; // Update to new boot_id
+                // Backend recovered (launchd restarted it, or our re-spawn succeeded on probe)
+                println!("[Tauri] Watchdog: backend recovered after {} attempts", recovery_attempts);
+                known_boot_id = current_boot_id;
                 let _ = app_handle.emit("backend-restarted", DAEMON_PORT);
                 recovery_attempts = 0;
             }
@@ -1250,59 +1347,17 @@ async fn start_backend(
         // Windows/Linux: spawn backend as subprocess (owned by Tauri)
         println!("[Tauri] Spawning backend subprocess on port {}", DAEMON_PORT);
 
-        let binary_path = find_backend_binary(&app)?;
-        let enhanced_path = get_enhanced_path();
-
-        let mut cmd = std::process::Command::new(&binary_path);
-        cmd.args(["--host", "127.0.0.1", "--port", &DAEMON_PORT.to_string()])
-            .env("PATH", &enhanced_path)
-            .env("SWARMAI_MODE", "subprocess")
-            .env("SWARMAI_PORT", DAEMON_PORT.to_string())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-
-        #[cfg(target_os = "windows")]
-        {
-            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
-
-        let child = cmd.spawn()
-            .map_err(|e| format!(
-                "Failed to start backend: {}. Binary: {:?}",
-                e, binary_path
-            ))?;
-
-        let child_pid = child.id();
-        println!("[Tauri] Backend subprocess spawned (PID {})", child_pid);
-
-        // Update state with subprocess info
-        {
-            let mut backend = state.lock().await;
-            backend.pid = Some(child_pid);
-            backend.is_daemon_mode = false;
-        }
-
-        // Wait for health endpoint
-        if let Some(_port) = probe_daemon_health(20, 1).await {
-            println!("[Tauri] Backend subprocess healthy on port {}", DAEMON_PORT);
-            {
-                let mut backend = state.lock().await;
-                backend.port = DAEMON_PORT;
-                backend.running = true;
+        let state_inner = state.inner().clone();
+        match spawn_subprocess(&app, &state_inner).await {
+            Ok(pid) => {
+                println!("[Tauri] Backend subprocess healthy (PID {})", pid);
+                // Start health watchdog for crash detection + auto-restart
+                spawn_daemon_health_watchdog(app.clone(), state_inner, 10);
+                let _ = app.emit("backend-mode", "subprocess");
+                Ok(DAEMON_PORT)
             }
-            // Start health watchdog for subprocess crash detection
-            spawn_daemon_health_watchdog(app.clone(), state.inner().clone(), 10);
-            let _ = app.emit("backend-mode", "subprocess");
-            return Ok(DAEMON_PORT);
+            Err(e) => Err(e),
         }
-
-        // Backend didn't come up — kill the zombie and report error
-        kill_process_tree(child_pid);
-        Err(format!(
-            "Backend started (PID {}) but not responding on port {} after 20s. \
-             Check if port is in use or binary is corrupt.",
-            child_pid, DAEMON_PORT,
-        ))
     }
 }
 
