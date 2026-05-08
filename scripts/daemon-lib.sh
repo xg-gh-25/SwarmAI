@@ -49,7 +49,7 @@ _daemon_health_status() {
 _wait_port_free() {
     local port="$1" max_wait="${2:-10}"
     for i in $(seq 1 "$max_wait"); do
-        if ! lsof -i :"${port}" -sTCP:LISTEN >/dev/null 2>&1; then
+        if ! nc -z 127.0.0.1 "${port}" 2>/dev/null; then
             return 0
         fi
         sleep 0.5
@@ -221,7 +221,7 @@ _daemon_wait_healthy() {
         else
             _err "  launchd service is NOT running — check plist"
         fi
-        if lsof -i :"${DAEMON_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
+        if nc -z 127.0.0.1 "${DAEMON_PORT}" 2>/dev/null; then
             _warn "  Port ${DAEMON_PORT} is bound — server started but not healthy"
         else
             _err "  Port ${DAEMON_PORT} is NOT bound — server failed to start"
@@ -257,10 +257,11 @@ cmd_daemon() {
             _log "Waiting for port ${DAEMON_PORT} to release..."
             if ! _wait_port_free "$DAEMON_PORT" 15; then
                 _warn "Port still in use — force-killing..."
-                local stale_pids
-                stale_pids=$(lsof -i :"${DAEMON_PORT}" -t 2>/dev/null)
-                if [ -n "$stale_pids" ]; then
-                    echo "$stale_pids" | xargs kill -9 2>/dev/null || true
+                # Get PID from launchctl (instant, no hang unlike lsof)
+                local stale_pid
+                stale_pid=$(launchctl list "${DAEMON_LABEL}" 2>/dev/null | awk '/PID/ {print $NF}')
+                if [ -n "$stale_pid" ] && [ "$stale_pid" != "-" ]; then
+                    kill -9 "$stale_pid" 2>/dev/null || true
                     sleep 1
                 fi
             fi
@@ -276,10 +277,10 @@ cmd_daemon() {
             _log "Waiting for port ${DAEMON_PORT} to release..."
             if ! _wait_port_free "$DAEMON_PORT" 15; then
                 _warn "Port still in use — force-killing..."
-                local stale_pids2
-                stale_pids2=$(lsof -i :"${DAEMON_PORT}" -t 2>/dev/null)
-                if [ -n "$stale_pids2" ]; then
-                    echo "$stale_pids2" | xargs kill -9 2>/dev/null || true
+                local stale_pid2
+                stale_pid2=$(launchctl list "${DAEMON_LABEL}" 2>/dev/null | awk '/PID/ {print $NF}')
+                if [ -n "$stale_pid2" ] && [ "$stale_pid2" != "-" ]; then
+                    kill -9 "$stale_pid2" 2>/dev/null || true
                     sleep 1
                 fi
             fi

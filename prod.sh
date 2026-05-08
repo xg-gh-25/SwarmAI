@@ -426,10 +426,11 @@ print(f'  Uptime: {h}h {m}m {s}s  |  Sessions: {tabs}')
     fi
 
     # Recent backend commits since binary
+    # Version file format: "{semver} {git_hash} {timestamp}" — field 2 is git hash
     echo ""
     if [ -f "$DAEMON_VERSION_FILE" ]; then
         local binary_hash
-        binary_hash=$(awk '{print $1}' "$DAEMON_VERSION_FILE")
+        binary_hash=$(awk '{print $2}' "$DAEMON_VERSION_FILE")
         local changes
         changes=$(cd "$PROJECT_ROOT" && git log --oneline "${binary_hash}..HEAD" -- backend/ 2>/dev/null)
         if [ -n "$changes" ]; then
