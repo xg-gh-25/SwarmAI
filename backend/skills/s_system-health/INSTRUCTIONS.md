@@ -159,7 +159,7 @@ Add the following to the psutil collection script above, **after the ORPHAN_CHEC
 # === BACKEND API (dynamic port discovery) ===
 def find_swarmai_backend_port():
     """Find SwarmAI backend port via process name + listening socket.
-    1. 'python-backend*' process = Tauri production sidecar
+    1. 'python-backend*' process = production binary (daemon or subprocess)
     2. 'main.py --port' in backend dir = dev.sh mode
     3. Return first TCP LISTEN port on the matched process
     """
@@ -168,13 +168,13 @@ def find_swarmai_backend_port():
             info = p.info
             name = info["name"] or ""
             cmd = " ".join(info["cmdline"] or [])
-            is_sidecar = name.startswith("python-backend")
+            is_production = name.startswith("python-backend")
             is_dev = ("main.py" in cmd and "--port" in cmd and "backend" in cmd)
-            if is_sidecar or is_dev:
+            if is_production or is_dev:
                 for c in p.net_connections(kind="tcp"):
                     if c.status == "LISTEN":
                         return {"pid": info["pid"], "port": c.laddr.port,
-                                "mode": "production" if is_sidecar else "dev"}
+                                "mode": "production" if is_production else "dev"}
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
     return None
@@ -355,7 +355,7 @@ Apply these thresholds to determine status and generate suggestions:
 3. Never use `ps`, `pgrep`, `top` — they are blocked by Claude SDK sandbox
 
 **What to show:**
-- Backend sidecar process (python main.py)
+- Backend process (python-backend binary or main.py in dev)
 - Each Claude CLI subprocess with session state (COLD/STREAMING/IDLE/WAITING_INPUT/DEAD)
 - Each MCP server process with name
 - Total SwarmAI RSS footprint
@@ -584,7 +584,7 @@ These lessons come from actual production bugs in SwarmAI (March 2026). They are
 |-------|-------|-----|
 | psutil not found | System Python doesn't have it | Activate SwarmAI venv first: `source .../backend/.venv/bin/activate` |
 | `ps`/`pgrep` "operation not permitted" | Claude SDK sandbox blocks process listing | Use psutil `process_iter()` instead — always works |
-| Backend API returns connection refused | Backend sidecar crashed or port changed | Use `find_swarmai_backend_port()` (psutil socket discovery). Port is random each launch. You ARE the app — it's running |
+| Backend API returns connection refused | Backend crashed or not started | Use `find_swarmai_backend_port()` (psutil socket discovery). Port is fixed at 18321. You ARE the app — it's running |
 | psutil `boot_time()` PermissionError | Sandbox blocks `sysctl()` | Skip boot_time — not essential for health report |
 | psutil `swap_memory()` OSError | Sandbox blocks swap inspection | Skip swap — not essential |
 | MCP process names vary | Depends on config | Match `mcp` keyword in cmdline via psutil |

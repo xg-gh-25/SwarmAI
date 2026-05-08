@@ -8,13 +8,13 @@ Desktop app with three layers: a Tauri 2.0 shell (Rust), a React frontend (TypeS
 +------------------------------------------+
 |  Tauri Shell (Rust)                       |
 |  - Window management, native APIs        |
-|  - Sidecar lifecycle (start/stop/health) |
-|  - Random port assignment (portpicker)   |
+|  - Backend lifecycle (start/stop/health) |
+|  - Fixed port 18321 (all platforms)      |
 +------------------------------------------+
          |                    |
          v                    v
 +-----------------+  +------------------------+
-| React Frontend  |  | Python Backend Sidecar |
+| React Frontend  |  | Python Backend          |
 | - Chat UI       |  | - FastAPI + asyncio    |
 | - Workspace     |  | - Session management   |
 |   Explorer      |  | - Claude Agent SDK     |
@@ -167,7 +167,7 @@ Product-level background automation. System jobs in code, user jobs in YAML.
 
 API: `GET /api/jobs/` (list), `POST /api/jobs/run` (force-run), `GET /api/jobs/status` (overview).
 Scheduler: single launchd plist (`com.swarmai.scheduler`), hourly trigger.
-Sidecar services (e.g. Slack bot): managed by `service_manager.py`, lifecycle tied to app.
+Managed services (e.g. Slack bot): managed by `service_manager.py`, lifecycle tied to backend.
 
 ### Skill System
 
@@ -182,7 +182,7 @@ External tool servers via Model Context Protocol (stdio/SSE/HTTP). 2-layer file-
 SwarmWS (`~/.swarm-ai/SwarmWS/`) is the agent's working directory. Git-tracked filesystem with:
 - `Knowledge/` -- Notes, Reports, Meetings, Library, Archives, DailyActivity
 - `Projects/` -- DDD-structured project contexts (this directory)
-- `Services/` -- Sidecar service definitions (hidden from explorer)
+- `Services/` -- Managed service definitions (hidden from explorer)
 - `Attachments/` -- File uploads and exports
 - `.context/` -- 11 context files loaded into system prompt
 
@@ -200,7 +200,7 @@ backend/
     context_directory_loader.py        # Context file assembly
     prompt_builder.py                  # Prompt composition pipeline
     skill_manager.py                   # Skill discovery + loading
-    service_manager.py                 # Sidecar service lifecycle
+    service_manager.py                 # Managed service lifecycle
     mcp_config_loader.py               # MCP server configuration
     swarm_workspace_manager.py         # Workspace provisioning + project CRUD
     proactive_intelligence.py          # Session briefings (L0-L4)

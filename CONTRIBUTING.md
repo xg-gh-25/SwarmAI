@@ -62,7 +62,7 @@ SwarmAI/
 │   │   ├── hooks/           # React hooks (tab state, streaming, attachments)
 │   │   ├── services/        # API layer with snake_case ↔ camelCase conversion
 │   │   └── components/      # UI components
-│   └── src-tauri/           # Rust sidecar management
+│   └── src-tauri/           # Rust backend lifecycle management
 ├── backend/                 # FastAPI Python backend
 │   ├── core/                # Core logic (sessions, context, security)
 │   ├── routers/             # API endpoints

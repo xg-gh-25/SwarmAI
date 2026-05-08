@@ -25,11 +25,13 @@ synonyms — they cause confusion across the 69-skill ecosystem.
   first launch. This is THE backend — there is no other mode in production.
   _Avoid:_ "server", "service" (too generic).
 
-- **sidecar** — ⚠️ DEPRECATED (2026-05-07). Previously referred to a Python
-  backend spawned by Tauri that lived only while the desktop window was open.
-  No longer exists. All production backend runs as daemon.
-  _If you see "sidecar" in code/docs, it's stale unless referring to JSONL
-  companion files (DailyActivity sidecar = different concept)._
+- **subprocess** — Windows/Linux backend mode. Python backend spawned by Tauri
+  as a child process that dies when the desktop app closes. No channels/jobs.
+  Contrast with daemon (macOS, 24/7). See `SWARMAI_MODE=subprocess`.
+
+- **sidecar (file)** — A companion file that lives alongside a primary file.
+  E.g., `2026-05-08.jsonl` is the JSONL sidecar for `2026-05-08.md`.
+  _Not a process concept — purely a file-pairing convention._
 
 ## Task & Work Units
 
