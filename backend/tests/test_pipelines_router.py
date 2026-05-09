@@ -11,6 +11,7 @@ Tests cover:
 
 import json
 import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -46,18 +47,22 @@ def _create_run(workspace: Path, project: str, run_id: str, **overrides) -> Path
     artifacts_dir = workspace / "Projects" / project / ".artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
 
+    # Use current time as default for running pipelines (avoids stale detection)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    status = overrides.get("status", "running")
+
     state = {
         "id": run_id,
         "project": project,
         "requirement": overrides.get("requirement", "Test requirement"),
         "profile": overrides.get("profile", "full"),
-        "status": overrides.get("status", "running"),
+        "status": status,
         "stages": overrides.get("stages", []),
         "taste_decisions": overrides.get("taste_decisions", []),
         "budget": {},
         "checkpoint": overrides.get("checkpoint", None),
         "created_at": "2026-03-24T10:00:00+00:00",
-        "updated_at": overrides.get("updated_at", "2026-03-24T10:00:00+00:00"),
+        "updated_at": overrides.get("updated_at", now_iso),
         "completed_at": overrides.get("completed_at", None),
     }
 
@@ -99,8 +104,9 @@ class TestPipelinesEndpoint:
         assert pipeline["progress"] == "2/8"
 
     def test_active_only_filter(self, client, workspace):
+        now_iso = datetime.now(timezone.utc).isoformat()
         _create_run(workspace, "Proj", "run_active", status="running",
-                     updated_at="2026-03-24T10:01:00+00:00")
+                     updated_at=now_iso)
         _create_run(workspace, "Proj", "run_done", status="completed",
                      updated_at="2026-03-24T10:00:00+00:00")
 
@@ -190,3 +196,40 @@ class TestPipelinesEndpoint:
 
         resp = client.get("/api/pipelines")
         assert resp.json()["pipelines"][0]["taste_decisions"] == 2
+
+    def test_stale_running_auto_marked_failed(self, client, workspace):
+        """A run stuck in 'running' with no update for >60min is auto-failed."""
+        stale_time = "2026-01-01T00:00:00+00:00"  # definitely stale
+        run_file = _create_run(workspace, "Proj", "run_stale",
+                               status="running", updated_at=stale_time)
+
+        resp = client.get("/api/pipelines")
+        pipeline = resp.json()["pipelines"][0]
+        assert pipeline["status"] == "failed"
+
+        # Verify it was persisted to disk
+        on_disk = json.loads(run_file.read_text())
+        assert on_disk["status"] == "failed"
+        assert "auto-detected stale" in on_disk.get("failure_reason", "")
+
+    def test_stale_detection_ignores_non_running(self, client, workspace):
+        """Completed and paused runs are not affected by stale detection."""
+        old_time = "2026-01-01T00:00:00+00:00"
+        _create_run(workspace, "Proj", "run_completed",
+                     status="completed", updated_at=old_time)
+        _create_run(workspace, "Proj", "run_paused",
+                     status="paused", updated_at=old_time)
+
+        resp = client.get("/api/pipelines")
+        statuses = {p["id"]: p["status"] for p in resp.json()["pipelines"]}
+        assert statuses["run_completed"] == "completed"
+        assert statuses["run_paused"] == "paused"
+
+    def test_recent_running_not_marked_stale(self, client, workspace):
+        """A run updated within the threshold stays running."""
+        recent = datetime.now(timezone.utc).isoformat()
+        _create_run(workspace, "Proj", "run_fresh",
+                     status="running", updated_at=recent)
+
+        resp = client.get("/api/pipelines")
+        assert resp.json()["pipelines"][0]["status"] == "running"
