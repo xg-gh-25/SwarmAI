@@ -216,13 +216,7 @@ Open a GitHub Issue with the `enhancement` label. Describe:
 
 ## License
 
-SwarmAI is dual-licensed under **AGPL v3** and a **Commercial License**.
+SwarmAI is licensed under the [MIT License](./LICENSE).
 
-By contributing to SwarmAI, you agree that:
-
-1. Your contributions will be licensed under the [AGPL v3](./LICENSE-AGPL)
-2. You grant the project maintainers the right to offer your contributions
-   under the commercial license as well
-
-This is necessary to maintain the dual-licensing model. We may ask contributors
-to sign a Contributor License Agreement (CLA) in the future to formalize this.
+By contributing to SwarmAI, you agree that your contributions will be licensed
+under the same MIT License.
