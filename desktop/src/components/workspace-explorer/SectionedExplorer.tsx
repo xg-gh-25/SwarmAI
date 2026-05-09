@@ -33,16 +33,16 @@ interface WorkingFile {
 }
 
 /** Recursively collect files with git status (modified, added, untracked)
- *  ONLY from user content directories (Knowledge, Projects). */
+ *  ONLY from user content directories (Knowledge, Projects).
+ *  Root-level items (files or non-user dirs) are never included. */
 function collectWorkingFiles(nodes: TreeNode[], parentName: string = ''): WorkingFile[] {
   const results: WorkingFile[] = [];
+  const isRoot = !parentName;
   for (const node of nodes) {
     if (node.type === 'directory' && node.children) {
-      // At root level, only recurse into user content dirs
-      if (!parentName && !USER_CONTENT_DIRS.has(node.name)) continue;
+      if (isRoot && !USER_CONTENT_DIRS.has(node.name)) continue;
       results.push(...collectWorkingFiles(node.children, node.name));
-    }
-    if (node.type === 'file' && node.gitStatus && ['modified', 'added', 'untracked'].includes(node.gitStatus)) {
+    } else if (!isRoot && node.type === 'file' && node.gitStatus && ['modified', 'added', 'untracked'].includes(node.gitStatus)) {
       results.push({ node, parentName });
     }
   }
