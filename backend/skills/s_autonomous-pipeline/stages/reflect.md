@@ -60,7 +60,29 @@ Pipeline-owned stage (no sibling skill).
 
    **Skip** when no `code_intel.db` exists.
 
-7. Record outcome for learning:
+7. **Record stage with structured lessons in run.json** — the REFLECT stage record
+   MUST include a `lessons` list so REPORT.md can inline them:
+
+```bash
+python backend/scripts/artifact_cli.py run-update --project <PROJECT> \
+  --run-id <RUN_ID> --stage-json '{
+    "stage": "reflect",
+    "status": "completed",
+    "token_cost": <tokens>,
+    "lessons": [
+      "Lesson 1 — concise, actionable, one sentence",
+      "Lesson 2 — what worked, what failed, what to do differently"
+    ],
+    "decisions": []
+  }'
+```
+
+   **Lesson quality bar:** Each lesson must be specific and self-contained.
+   Bad: "3 lessons captured" / "Tests pass" / "Report written"
+   Good: "SMOKE is highest ROI — caught 2 runtime crashes that unit tests missed"
+   Good: "setTimeout for state propagation is always wrong — use event-driven transitions"
+
+8. Record outcome for learning feedback (calibration):
 
 ```bash
 python backend/scripts/artifact_cli.py learn --project <PROJECT> \
@@ -68,3 +90,14 @@ python backend/scripts/artifact_cli.py learn --project <PROJECT> \
   --actual-effort "<T-shirt>" \
   --lessons "lesson 1;lesson 2"
 ```
+
+9. **Regenerate REPORT.md** — DELIVER generated the report before REFLECT ran,
+   so lessons were missing. Regenerate to inline them:
+
+```bash
+python backend/scripts/artifact_cli.py run-report --project <PROJECT> \
+  --run-id <RUN_ID> --force
+```
+
+   This is the final version of the report. Section 9 will now contain the
+   actual lessons from step 7 above.

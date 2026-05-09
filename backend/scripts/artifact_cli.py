@@ -434,6 +434,75 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
     if args.status:
         run_state["status"] = args.status
         if args.status == "completed":
+            # ── Completion Gate: ALL profile stages must be done or explicitly skipped ──
+            # Every stage in the DDD+pipeline loop has purpose. No silent skips.
+            profile = run_state.get("profile", "full")
+            profile_stages = _get_profile_stages(profile)
+
+            stage_status_map: dict[str, str] = {}
+            for s in run_state.get("stages", []):
+                name = s.get("stage", s.get("name", "?"))
+                stage_status_map[name] = s.get("status", "unknown")
+
+            missing_stages = []
+            for stg in profile_stages:
+                status = stage_status_map.get(stg)
+                if status in ("completed", "done"):
+                    continue
+                elif status == "skipped":
+                    # Skipped is allowed ONLY with an explicit reason in the record
+                    record = next(
+                        (s for s in run_state.get("stages", [])
+                         if s.get("stage", s.get("name")) == stg),
+                        {},
+                    )
+                    reason = record.get("skip_reason") or record.get("notes") or ""
+                    if not reason.strip():
+                        missing_stages.append(
+                            f"{stg} (skipped without reason — add skip_reason field)"
+                        )
+                else:
+                    missing_stages.append(
+                        f"{stg} (status={status or 'not recorded'})"
+                    )
+
+            if missing_stages:
+                print(json.dumps({
+                    "error": "Cannot mark completed: not all profile stages are done. "
+                             "Every stage in the pipeline serves the DDD learning loop — "
+                             "execute them or explicitly skip with a reason.",
+                    "pipeline_id": args.run_id,
+                    "profile": profile,
+                    "missing_stages": missing_stages,
+                }))
+                return
+
+            # ── REFLECT quality gate: lessons must be substantive ──
+            # The whole point of REFLECT is DDD refresh. Empty/trivial lessons = didn't reflect.
+            if "reflect" in profile_stages:
+                reflect_record = next(
+                    (s for s in run_state.get("stages", [])
+                     if s.get("stage", s.get("name")) == "reflect"
+                     and s.get("status") in ("completed", "done")),
+                    None,
+                )
+                if reflect_record:
+                    lessons = reflect_record.get("lessons", [])
+                    valid_lessons = [
+                        l for l in (lessons if isinstance(lessons, list) else [])
+                        if isinstance(l, str) and len(l.strip()) > 20
+                    ]
+                    if not valid_lessons:
+                        print(json.dumps({
+                            "error": "Cannot mark completed: REFLECT stage has no substantive lessons. "
+                                     "Each lesson must be >20 chars and actionable. "
+                                     "Bad: 'done', '3 lessons captured'. "
+                                     "Good: 'SMOKE tests caught 2 runtime crashes that unit tests missed'.",
+                            "pipeline_id": args.run_id,
+                            "lessons_found": lessons,
+                        }))
+                        return
+
             run_state["completed_at"] = now
             # Auto-generate METRICS.json on completion
             _try_generate_metrics(args.project, args.run_id, run_state, reg)
@@ -1041,7 +1110,10 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> None:
             elif profile == "research" and stg in ("build", "review", "test", "deliver"):
                 skipped_stages[stg] = f"Skipped — profile '{profile}' is research-only"
             else:
-                skipped_stages[stg] = f"Skipped — not required for profile '{profile}'"
+                if stg == "reflect" and profile == "full":
+                    skipped_stages[stg] = "Not executed — pipeline completed before REFLECT"
+                else:
+                    skipped_stages[stg] = f"Skipped — not required for profile '{profile}'"
 
     # ── Collect decisions ─────────────────────────────────────────────
     all_decisions = []
@@ -1325,9 +1397,67 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> None:
         files_section += "(No changeset data captured for this run)\n"
     sections.append(files_section)
 
-    # 9. Lessons
-    sections.append("""## 9. Lessons
-(Captured in REFLECT stage — see DailyActivity or MEMORY.md for session lessons)""")
+    # 9. Lessons — inline from REFLECT stage + calibration history
+    lessons_section = "## 9. Lessons\n"
+    lessons_items: list[str] = []
+
+    # Source 1: REFLECT stage record in run.json
+    reflect_stage = stage_data_map.get("reflect", {})
+
+    # Primary: structured lessons list (new format from reflect.md step 7)
+    stage_lessons = reflect_stage.get("lessons", [])
+    if isinstance(stage_lessons, list):
+        for item in stage_lessons:
+            if isinstance(item, str) and item.strip() and len(item.strip()) > 5:
+                lessons_items.append(item.strip())
+
+    # Fallback: parse summary/notes (legacy format)
+    if not lessons_items:
+        reflect_summary = reflect_stage.get("summary", "") or ""
+        if reflect_summary:
+            if ": " in reflect_summary and "lesson" in reflect_summary.lower():
+                _, _, lessons_text = reflect_summary.partition(": ")
+                for item in lessons_text.split(", "):
+                    item = item.strip()
+                    if item and len(item) > 5:
+                        lessons_items.append(item)
+            elif len(reflect_summary) > 10:
+                lessons_items.append(reflect_summary)
+
+    # Source 2: calibration_history in decision-strategy.json (matched by eval artifact_id)
+    eval_art_id = None
+    for s in stages:
+        if s.get("stage") == "evaluate":
+            eval_art_id = s.get("artifact_id")
+            break
+
+    if eval_art_id:
+        strategy_path = Path(reg.projects_root) / args.project / "decision-strategy.json"
+        if strategy_path.is_file():
+            try:
+                strategy = json.loads(strategy_path.read_text(encoding="utf-8"))
+                for entry in strategy.get("calibration_history", []):
+                    if entry.get("evaluation_id") == eval_art_id:
+                        for lesson in entry.get("lessons", []):
+                            if lesson.strip() and lesson.strip() not in lessons_items:
+                                lessons_items.append(lesson.strip())
+            except (json.JSONDecodeError, OSError):
+                pass
+
+    # Source 3: REFLECT stage decisions (if any contain lessons)
+    for d in reflect_stage.get("decisions", []):
+        desc = d.get("description", "").strip()
+        if desc and desc not in lessons_items:
+            lessons_items.append(desc)
+
+    if lessons_items:
+        for item in lessons_items:
+            lessons_section += f"- {item}\n"
+    elif "reflect" in skipped_stages:
+        lessons_section += f"**⏭ Skipped** — {skipped_stages['reflect']}\n"
+    else:
+        lessons_section += "(REFLECT stage did not record lessons for this run)\n"
+    sections.append(lessons_section)
 
     # 10. Known Gaps
     gaps_section = "## 10. Known Gaps & Attention Flags\n"

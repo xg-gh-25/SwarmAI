@@ -53,6 +53,44 @@ def _run_cli(workspace: Path, *args: str) -> dict:
         pytest.fail(f"CLI output not valid JSON: {output}\nstderr: {result.stderr}")
 
 
+def _complete_all_stages(workspace: Path, run_id: str, profile: str = "full",
+                         skip_existing: bool = True):
+    """Add all profile stages as completed so the run can be marked done.
+
+    If skip_existing=True, won't overwrite stages already in run.json.
+    """
+    profiles = {
+        "full": ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"],
+        "trivial": ["evaluate", "build", "review", "test", "deliver", "reflect"],
+        "research": ["evaluate", "think", "reflect"],
+        "docs": ["evaluate", "think", "plan", "deliver", "reflect"],
+        "bugfix": ["evaluate", "plan", "build", "review", "test", "deliver", "reflect"],
+    }
+    # Check which stages already exist if skipping
+    existing_stages: set = set()
+    if skip_existing:
+        state = _run_cli(workspace, "run-get",
+                         "--project", "TestProject", "--run-id", run_id)
+        existing_stages = {
+            s.get("stage", s.get("name", "?"))
+            for s in state.get("stages", [])
+            if s.get("status") in ("completed", "done")
+        }
+
+    for stg in profiles.get(profile, profiles["full"]):
+        if stg in existing_stages:
+            continue
+        _run_cli(workspace, "run-update",
+                 "--project", "TestProject", "--run-id", run_id,
+                 "--stage-json", json.dumps({
+                     "stage": stg, "status": "completed",
+                     "token_cost": 2000,
+                     "artifact_id": f"art_{stg}" if stg != "reflect" else None,
+                     "lessons": ["Substantive lesson learned from this pipeline run"] if stg == "reflect" else None,
+                     "decisions": [],
+                 }))
+
+
 class TestRunCreate:
     def test_creates_run_file(self, workspace):
         result = _run_cli(workspace, "run-create",
@@ -113,6 +151,8 @@ class TestRunUpdate:
         assert state["status"] == "paused"
 
     def test_update_completed_sets_timestamp(self, workspace, run_id):
+        # Completion gate: ALL profile stages must be done
+        _complete_all_stages(workspace, run_id, "full")
         _run_cli(workspace, "run-update",
                  "--project", "TestProject", "--run-id", run_id,
                  "--status", "completed")
@@ -120,6 +160,71 @@ class TestRunUpdate:
                          "--project", "TestProject", "--run-id", run_id)
         assert state["status"] == "completed"
         assert state["completed_at"] is not None
+
+    def test_completion_gate_blocks_without_all_stages(self, workspace, run_id):
+        """ALL profile stages must be done or explicitly skipped before completion."""
+        result = _run_cli(workspace, "run-update",
+                          "--project", "TestProject", "--run-id", run_id,
+                          "--status", "completed")
+        assert "error" in result
+        assert "missing_stages" in result
+        assert len(result["missing_stages"]) > 0
+        # Run should still be running
+        state = _run_cli(workspace, "run-get",
+                         "--project", "TestProject", "--run-id", run_id)
+        assert state["status"] == "running"
+
+    def test_completion_gate_allows_skipped_with_reason(self, workspace, run_id):
+        """Skipped stages with explicit reason pass the gate."""
+        # Add all full-profile stages as completed or skipped-with-reason
+        full_stages = ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"]
+        for stg in full_stages:
+            if stg == "think":
+                # Simulate explicit skip with reason
+                _run_cli(workspace, "run-update",
+                         "--project", "TestProject", "--run-id", run_id,
+                         "--stage-json", json.dumps({
+                             "stage": stg, "status": "skipped",
+                             "skip_reason": "User override: approach already known",
+                             "decisions": [],
+                         }))
+            else:
+                _run_cli(workspace, "run-update",
+                         "--project", "TestProject", "--run-id", run_id,
+                         "--stage-json", json.dumps({
+                             "stage": stg, "status": "completed",
+                             "token_cost": 1000,
+                             "lessons": ["Skipped stages with explicit reason pass the completion gate"] if stg == "reflect" else None,
+                             "decisions": [],
+                         }))
+        result = _run_cli(workspace, "run-update",
+                          "--project", "TestProject", "--run-id", run_id,
+                          "--status", "completed")
+        assert "error" not in result
+        assert result.get("updated") is True
+
+    def test_reflect_quality_gate_blocks_trivial_lessons(self, workspace, run_id):
+        """REFLECT lessons must be >20 chars — no 'done' or '3 lessons captured'."""
+        # Add all stages but with trivial reflect lessons
+        for stg in ["evaluate", "think", "plan", "build", "review", "test", "deliver"]:
+            _run_cli(workspace, "run-update",
+                     "--project", "TestProject", "--run-id", run_id,
+                     "--stage-json", json.dumps({
+                         "stage": stg, "status": "completed",
+                         "token_cost": 2000, "decisions": [],
+                     }))
+        _run_cli(workspace, "run-update",
+                 "--project", "TestProject", "--run-id", run_id,
+                 "--stage-json", json.dumps({
+                     "stage": "reflect", "status": "completed",
+                     "token_cost": 2000, "lessons": ["done", "3 captured"],
+                     "decisions": [],
+                 }))
+        result = _run_cli(workspace, "run-update",
+                          "--project", "TestProject", "--run-id", run_id,
+                          "--status", "completed")
+        assert "error" in result
+        assert "substantive" in result["error"].lower()
 
     def test_add_stage_record(self, workspace, run_id):
         stage = json.dumps({
@@ -319,6 +424,18 @@ class TestPipelineRunIntegration:
                      "reasoning": "Fewer deps, simpler, matches codebase",
                  }))
 
+        # Remaining stages (completion gate requires ALL profile stages)
+        for stg in ["plan", "build", "review", "test", "deliver", "reflect"]:
+            _run_cli(workspace, "run-update", "--project", "TestProject",
+                     "--run-id", run_id,
+                     "--stage-json", json.dumps({
+                         "stage": stg, "status": "completed",
+                         "token_cost": 3000,
+                         "artifact_id": f"art_{stg}" if stg != "reflect" else None,
+                         "lessons": ["httpx built-in retry is simpler than tenacity"] if stg == "reflect" else None,
+                         "decisions": [],
+                     }))
+
         # Complete
         _run_cli(workspace, "run-update", "--project", "TestProject",
                  "--run-id", run_id, "--status", "completed")
@@ -328,7 +445,7 @@ class TestPipelineRunIntegration:
                          "--project", "TestProject", "--run-id", run_id)
         assert state["status"] == "completed"
         assert state["completed_at"] is not None
-        assert len(state["stages"]) == 2
+        assert len(state["stages"]) == 8  # all full-profile stages
         assert len(state["taste_decisions"]) == 1
         assert state["stages"][0]["decisions"][0]["classification"] == "mechanical"
 
@@ -442,6 +559,8 @@ class TestRunHistory:
                              "token_cost": cost, "retry_count": 0,
                              "notes": None, "decisions": [],
                          }))
+            # Completion gate: all profile stages must be present
+            _complete_all_stages(workspace, rid, "full")
             _run_cli(workspace, "run-update",
                      "--project", "TestProject", "--run-id", rid,
                      "--status", "completed")
@@ -544,6 +663,8 @@ class TestRunStatus:
                        "--requirement", "Running")
         r2 = _run_cli(workspace, "run-create", "--project", "TestProject",
                        "--requirement", "Done")
+        # Completion gate: all stages must be present
+        _complete_all_stages(workspace, r2["pipeline_id"], "full")
         _run_cli(workspace, "run-update", "--project", "TestProject",
                  "--run-id", r2["pipeline_id"], "--status", "completed")
 
