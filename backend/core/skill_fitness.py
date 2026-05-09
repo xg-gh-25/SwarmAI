@@ -212,8 +212,10 @@ class LLMJudge:
     Falls back to None on any failure (timeout, API error, parse failure).
     """
 
-    # Haiku model ID for cost-efficient judging
-    MODEL_ID = "us.anthropic.claude-haiku-4-5-v1"
+    # Sonnet 4 for judging (~$0.003/call) — Haiku not available on this account's
+    # cross-region inference profiles. Sonnet is 5x cheaper than Opus, good enough
+    # for rubric-based scoring. Falls back gracefully on any failure.
+    MODEL_ID = "us.anthropic.claude-sonnet-4-20250514-v1:0"
     TIMEOUT_SECONDS = 30
 
     def __init__(self):
