@@ -143,22 +143,27 @@ export function PipelineSection({ onCountChange, onSendMessage }: PipelineSectio
   }, [load]);
 
   const handleResume = useCallback((run: PipelineRun) => {
-    onSendMessage?.(`resume pipeline ${run.id}`);
+    onSendMessage?.(`resume pipeline ${run.id} for ${run.project}`);
   }, [onSendMessage]);
 
   const handleCancel = useCallback(async (run: PipelineRun) => {
-    await cancelPipeline(run.id);
-    // Optimistic: update local state immediately
-    setData((prev) => {
-      if (!prev) return prev;
-      return {
-        ...prev,
-        pipelines: prev.pipelines.map((p) =>
-          p.id === run.id ? { ...p, status: 'cancelled' as const } : p
-        ),
-      };
-    });
-  }, []);
+    try {
+      await cancelPipeline(run.id);
+      // Optimistic: update local state immediately
+      setData((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          pipelines: prev.pipelines.map((p) =>
+            p.id === run.id ? { ...p, status: 'cancelled' as const } : p
+          ),
+        };
+      });
+    } catch {
+      // Cancel failed — re-fetch true state from backend
+      load();
+    }
+  }, [load]);
 
   if (!data || data.pipelines.length === 0) {
     return (

@@ -85,7 +85,7 @@ export function EscalationBlock({
               type="button"
               onClick={() => onSelectOption?.(id, opt.label)}
               disabled={!onSelectOption}
-              className={`w-full text-left flex items-start gap-2 px-3 py-2 rounded-md text-sm transition-colors ${
+              className={`group/opt w-full text-left flex items-start gap-2 px-3 py-2 rounded-md text-sm transition-colors ${
                 opt.recommended
                   ? 'border border-[var(--color-primary)]/30 bg-[var(--color-primary)]/5 hover:bg-[var(--color-primary)]/15'
                   : 'border border-[var(--color-border)] bg-[var(--color-bg)] hover:bg-[var(--color-hover)]'
@@ -101,7 +101,7 @@ export function EscalationBlock({
                 )}
               </div>
               {onSelectOption && (
-                <span className="material-symbols-outlined text-sm text-[var(--color-text-muted)] opacity-0 group-hover:opacity-100 shrink-0 mt-0.5">
+                <span className="material-symbols-outlined text-sm text-[var(--color-text-muted)] opacity-0 group-hover/opt:opacity-100 shrink-0 mt-0.5">
                   send
                 </span>
               )}

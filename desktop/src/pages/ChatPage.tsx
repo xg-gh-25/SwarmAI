@@ -1841,12 +1841,10 @@ export default function ChatPage() {
           : block,
       ),
     })));
-    // Send the choice as a user message (same path as typing + enter)
+    // Send the choice as a user message (same path as handleFocusClick)
     inputValueRef.current = optionLabel;
-    setInputValue(optionLabel);
-    // Use setTimeout to ensure state is settled before sending
-    setTimeout(() => handleSendMessage(), 0);
-  }, [handleSendMessage, setInputValue, setMessages]);
+    handleSendMessage();
+  }, [handleSendMessage, setMessages]);
 
   // Handle inline permission decision — called from InlinePermissionRequest component
   // via ContentBlockRenderer → AssistantMessageView → MessageBubble prop chain.
