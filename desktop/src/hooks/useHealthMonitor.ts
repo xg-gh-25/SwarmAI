@@ -98,17 +98,21 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
       failureCountRef.current = 0;
       currentStatusRef.current = backendStatus;
 
-      // Transition: disconnected → connected — fire recovery toast + chat event.
-      if (previousStatus === 'disconnected' && backendStatus === 'connected') {
+      // Transition: disconnected → ANY responsive state — clear error toast + notify.
+      // Previous bug: only cleared on disconnected→connected, missing
+      // disconnected→initializing→connected path (toast stayed permanently).
+      if (previousStatus === 'disconnected' && backendStatus !== 'disconnected') {
         removeToastRef.current(HEALTH_DISCONNECTED_TOAST_ID);
-        addToastRef.current({
-          severity: 'success',
-          message: 'Backend reconnected',
-          autoDismiss: true,
-        });
-        // Notify chat layer so active tabs can recover SSE streams.
-        // ChatPage listens for this to show recovery UI or auto-retry.
-        window.dispatchEvent(new CustomEvent('swarm:backend-recovered'));
+        if (backendStatus === 'connected') {
+          addToastRef.current({
+            severity: 'success',
+            message: 'Backend reconnected',
+            autoDismiss: true,
+          });
+          // Notify chat layer so active tabs can recover SSE streams.
+          // ChatPage listens for this to show recovery UI or auto-retry.
+          window.dispatchEvent(new CustomEvent('swarm:backend-recovered'));
+        }
       }
 
       setHealthState({
@@ -264,7 +268,9 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
       }),
     );
 
-    // Backend terminated permanently (intentional shutdown OR restart budget exhausted)
+    // Backend terminated — watchdog exhausted recovery attempts.
+    // In daemon mode (macOS), launchd WILL eventually restart it — just takes longer.
+    // Don't tell user to "restart the app" unless it's truly unrecoverable.
     unlisteners.push(
       tauriService.onBackendTerminated(() => {
         if (!mountedRef.current) return;
@@ -273,8 +279,8 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
         currentStatusRef.current = 'disconnected';
 
         addToastRef.current({
-          severity: 'error',
-          message: 'Backend stopped — restart the app to recover',
+          severity: 'warning',
+          message: 'Backend is taking longer than expected to restart…',
           id: HEALTH_DISCONNECTED_TOAST_ID,
         });
 
