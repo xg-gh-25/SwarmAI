@@ -422,6 +422,12 @@ class SessionUnit:
         # ── SSE stop notification ─────────────────────────────────
         self._stop_event: asyncio.Event = asyncio.Event()
 
+        # ── Pipe flush background task ────────────────────────────
+        # Tracks the fire-and-forget flush_subprocess_pipe() task so
+        # send() can cancel it before starting a new stream.  Without
+        # this, the flush's _client.interrupt() races with the new stream.
+        self._pipe_flush_task: Optional[asyncio.Task] = None
+
         # ── Send generation counter (stale-interrupt guard) ────────
         # Monotonically incremented at the start of each send().
         # interrupt() captures this at entry and skips state
@@ -644,6 +650,22 @@ class SessionUnit:
         self._send_generation += 1
         self._stop_event.clear()
         self._interrupted = False
+
+        # Cancel any in-flight pipe flush from a prior SSE disconnect.
+        # The flush calls _client.interrupt() which would kill OUR new
+        # stream if it fires after we transition to STREAMING.
+        #
+        # Note: task.cancel() is a request, not immediate — the task stops
+        # at its next await point (CancelledError into asyncio.wait_for).
+        # We don't need to await cancellation because: (1) asyncio is
+        # single-threaded — no code runs between our cancel() and the next
+        # line here, (2) flush's CancelledError handler only logs + returns,
+        # never touches _client or state, (3) even if flush resumes before
+        # our STREAMING transition, the generation guard inside flush will
+        # detect the mismatch and bail.
+        if self._pipe_flush_task and not self._pipe_flush_task.done():
+            self._pipe_flush_task.cancel()
+            self._pipe_flush_task = None
 
         # If a previous request got stuck (SDK never sent ResultMessage),
         # the unit stays in STREAMING forever.  Instead of rejecting the
@@ -2176,6 +2198,28 @@ class SessionUnit:
         self.last_used = time.time()
         return True
 
+    def schedule_pipe_flush(
+        self, loop: asyncio.AbstractEventLoop, cleanup_coro=None,
+    ) -> None:
+        """Schedule a background pipe flush and track the task.
+
+        Called by the router layer after ``recover_from_disconnect()``.
+        Stores the task reference so ``send()`` can cancel it if the user
+        immediately sends a new message.
+
+        Parameters
+        ----------
+        loop:
+            The running event loop to schedule on.
+        cleanup_coro:
+            Optional coroutine to use as the task body.  If None, calls
+            ``self.flush_subprocess_pipe()`` directly.  The router passes
+            its own wrapper that adds error suppression.
+        """
+        coro = cleanup_coro if cleanup_coro is not None else self.flush_subprocess_pipe()
+        task = loop.create_task(coro)
+        self._pipe_flush_task = task
+
     async def flush_subprocess_pipe(self, timeout: float = 3.0) -> None:
         """Interrupt the CLI subprocess to flush stale pipe events.
 
@@ -2186,16 +2230,52 @@ class SessionUnit:
         Bypasses ``interrupt()`` which is state-gated on STREAMING.
         If the client interrupt times out, kills the subprocess for
         a clean respawn on next ``send()``.
+
+        Generation-guarded: if ``send()`` starts (advancing
+        ``_send_generation``) between our state check and the actual
+        interrupt call, we bail out — the new stream owns the subprocess.
         """
         if self.state != SessionState.IDLE or self._client is None:
             return
+
+        # Capture generation — if send() starts while we're awaiting,
+        # generation advances and we must NOT interrupt the new stream.
+        gen_at_entry = self._send_generation
+
         try:
             await asyncio.wait_for(self._client.interrupt(), timeout=timeout)
+
+            # Post-interrupt generation check: if send() started during
+            # the await, our interrupt hit the new stream — log but don't
+            # escalate (send() already handles the recovery).
+            if self._send_generation != gen_at_entry:
+                logger.info(
+                    "session_unit.flush_pipe session_id=%s — send() started "
+                    "during flush (gen %d→%d), skipping state changes",
+                    self.session_id, gen_at_entry, self._send_generation,
+                )
+                return
+
             logger.info(
                 "session_unit.flush_pipe session_id=%s — pipe flushed",
                 self.session_id,
             )
+        except asyncio.CancelledError:
+            # send() cancelled us — expected, means user sent quickly after stop.
+            logger.info(
+                "session_unit.flush_pipe session_id=%s — cancelled by send()",
+                self.session_id,
+            )
+            return
         except asyncio.TimeoutError:
+            # Only kill if no new send() has started
+            if self._send_generation != gen_at_entry:
+                logger.info(
+                    "session_unit.flush_pipe session_id=%s — timeout but "
+                    "send() started (gen %d→%d), not killing",
+                    self.session_id, gen_at_entry, self._send_generation,
+                )
+                return
             logger.warning(
                 "session_unit.flush_pipe session_id=%s — interrupt timed out, "
                 "killing for clean respawn",

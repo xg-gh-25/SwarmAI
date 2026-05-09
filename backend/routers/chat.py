@@ -83,11 +83,13 @@ def _recover_streaming_on_disconnect(session_id: Optional[str]) -> None:
                 "STREAMING → IDLE",
                 session_id,
             )
-            # Phase 2: schedule subprocess pipe cleanup
+            # Phase 2: schedule subprocess pipe cleanup via unit method.
+            # Unit tracks the task so send() can cancel it on quick resume.
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(
-                    _cleanup_subprocess_after_disconnect(unit, session_id)
+                unit.schedule_pipe_flush(
+                    loop,
+                    cleanup_coro=_cleanup_subprocess_after_disconnect(unit, session_id),
                 )
             except RuntimeError:
                 pass  # No running event loop — skip async cleanup
