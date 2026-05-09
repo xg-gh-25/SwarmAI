@@ -109,6 +109,10 @@ class SkillHealthEntry:
     trend: str | None = None          # "improving" | "stable" | "degrading" | None
     llm_tokens: int = 0               # Bedrock tokens used for this skill's LLM optimization
     optimizer_used: str = "none"      # "llm" | "heuristic" | "none" — distinguishes LLM vs heuristic vs no-op
+    # v2.3 GEPA-inspired fields
+    llm_judge_score: float | None = None   # Layer 2 score (None if skipped/failed)
+    combined_fitness: float | None = None   # 0.4×L1 + 0.6×L2 (None if L2 unavailable)
+    anti_patterns_count: int = 0            # Number of anti-patterns generated
 
 
 @dataclass
@@ -426,6 +430,144 @@ def _extract_correction_summary(correction_text: str) -> str | None:
             continue
         return s
     return None
+
+
+# ── GEPA-inspired components (v2.3) ──
+
+
+class ExecutionTraceCollector:
+    """Extract agent reasoning blocks from session transcripts for a skill.
+
+    GEPA's key insight: feeding execution traces (agent reasoning + failure context)
+    to the reflection/optimization step produces targeted improvements instead of
+    blind pattern matching. This collector extracts the "why" behind failures.
+    """
+
+    def __init__(self, transcripts_dir: Path | None = None):
+        self._transcripts_dir = transcripts_dir
+
+    def collect_traces(self, skill_name: str, eval_examples: list, max_traces: int = 5) -> list[str]:
+        """Extract execution trace context from eval examples.
+
+        Looks for agent_actions and user_corrections in eval examples to build
+        a "what happened" narrative for each failed execution.
+
+        Returns up to max_traces trace strings, each capped at 2000 chars.
+        """
+        traces: list[str] = []
+        for ex in eval_examples:
+            if not hasattr(ex, "user_correction") or not ex.user_correction:
+                continue  # Only trace failed executions
+
+            parts = []
+            if hasattr(ex, "user_prompt") and ex.user_prompt:
+                parts.append(f"User asked: {ex.user_prompt[:300]}")
+            if hasattr(ex, "agent_actions") and ex.agent_actions:
+                parts.append(f"Agent did: {ex.agent_actions[:800]}")
+            if ex.user_correction:
+                parts.append(f"User corrected: {ex.user_correction[:500]}")
+
+            trace = "\n".join(parts)
+            if trace:
+                traces.append(trace[:2000])
+
+            if len(traces) >= max_traces:
+                break
+
+        return traces
+
+
+class AntiPatternGenerator:
+    """Generate anti-patterns section from accumulated corrections.
+
+    GEPA's observation: the optimized skill included 13 anti-patterns auto-generated
+    from failure feedback. We replicate this by clustering "remove" corrections
+    into a deduplicated, structured markdown section.
+    """
+
+    MAX_ANTI_PATTERNS = 10  # Cap to prevent unbounded growth
+
+    def generate(self, corrections: list[tuple[str, str, str]]) -> str:
+        """Generate anti-patterns markdown from correction evidence.
+
+        Args:
+            corrections: List of (text, action_type, confidence) tuples.
+                         Only "remove" actions become anti-patterns.
+
+        Returns:
+            Markdown string with anti-patterns section, or empty string if none.
+        """
+        # Filter to "remove" corrections only
+        remove_items = [
+            text.strip() for text, action, _ in corrections
+            if action == "remove" and text.strip()
+        ]
+
+        if not remove_items:
+            return ""
+
+        # Deduplicate by lowercased content
+        seen: set[str] = set()
+        unique: list[str] = []
+        for item in remove_items:
+            key = item.lower().strip()
+            if key not in seen and len(key) > 5:  # Skip trivial fragments
+                seen.add(key)
+                unique.append(item)
+
+        if not unique:
+            return ""
+
+        # Cap at max
+        unique = unique[: self.MAX_ANTI_PATTERNS]
+
+        # Format as markdown
+        lines = ["\n## Anti-patterns (auto-generated from corrections)\n"]
+        for item in unique:
+            # Normalize: ensure it reads as an anti-pattern instruction
+            if not item.startswith(("Don't", "don't", "Never", "never", "Avoid", "avoid")):
+                lines.append(f"- ❌ Don't {item}")
+            else:
+                lines.append(f"- ❌ {item}")
+
+        return "\n".join(lines) + "\n"
+
+    def merge_with_existing(self, skill_text: str, new_anti_patterns: str) -> str:
+        """Merge new anti-patterns into skill text, deduplicating with existing.
+
+        If skill already has an anti-patterns section, appends new unique items.
+        If not, appends the entire section at the end.
+        """
+        if not new_anti_patterns:
+            return skill_text
+
+        # Check for existing anti-patterns section
+        existing_match = re.search(
+            r"^## Anti-patterns.*?(?=^## |\Z)",
+            skill_text,
+            re.MULTILINE | re.DOTALL,
+        )
+
+        if existing_match:
+            existing_section = existing_match.group(0)
+            existing_lower = existing_section.lower()
+
+            # Extract new items and add only truly new ones
+            new_items = [
+                line for line in new_anti_patterns.split("\n")
+                if line.startswith("- ❌") and line.lower() not in existing_lower
+            ]
+
+            if not new_items:
+                return skill_text  # All already present
+
+            # Append new items to existing section
+            insertion_point = existing_match.end()
+            new_block = "\n".join(new_items) + "\n"
+            return skill_text[:insertion_point] + new_block + skill_text[insertion_point:]
+        else:
+            # No existing section — append at end
+            return skill_text.rstrip() + "\n" + new_anti_patterns
 
 
 class EvolutionOptimizer:
