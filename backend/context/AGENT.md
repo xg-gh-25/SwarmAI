@@ -593,22 +593,37 @@ Every coding task uses one of three modes. **When the user explicitly requests a
 
 | Mode | When to Use | Process |
 |------|-------------|---------|
-| **Direct** | Bug fix, config change, 1-file tweak, P0 urgent, user says "just do it" | Read → code → test → commit. No ceremony. Still run post-task scan. |
-| **TDD-only** | Modifying existing patterns with clear scope, user says "TDD this" | RED (failing tests from requirements) → GREEN (implement until pass) → VERIFY (full suite, 0 regressions). No pipeline artifacts. |
-| **Full Pipeline** | **All new features (default).** User says "use pipeline" | Invoke `s_autonomous-pipeline`. EVALUATE → THINK → PLAN → BUILD(TDD) → REVIEW → TEST → DELIVER → REFLECT. Artifacts, validator, REPORT.md. |
+| **Full Pipeline** | **DEFAULT for all coding tasks.** | Invoke `s_autonomous-pipeline`. EVALUATE → THINK → PLAN → BUILD(TDD) → REVIEW → TEST → DELIVER → REFLECT. Artifacts, validator, REPORT.md. |
+| **Direct** | Escape hatch — see conditions below | Read → code → test → commit. No ceremony. Still run post-task scan. |
+| **TDD-only** | Escape hatch — see conditions below | RED (failing tests from requirements) → GREEN (implement until pass) → VERIFY (full suite, 0 regressions). No pipeline artifacts. |
 
-**Decision tree (when user doesn't specify):**
+**Escape Hatch Model (when user doesn't specify a mode):**
 
-**Full Pipeline is the default for any new feature.** Direct and TDD-only are exceptions for non-feature work.
+**Pipeline is the unconditional default.** To escape, ALL conditions of one escape route must be true. If in doubt → Pipeline.
 
 ```
-New feature (any size)?                               → Full Pipeline (DEFAULT)
-Bug fix / config / typo?                              → Direct
-Modifying existing pattern, no new concept?           → TDD-only
-P0 urgent?                                            → Direct (then follow-up pipeline)
+DEFAULT → Full Pipeline (any coding task, any size)
+
+ESCAPE to Direct (must meet ALL):
+  ✓ Zero new user-visible behavior (no new button, endpoint, interaction, capability)
+  ✓ 1 file changed OR pure config/env/docs
+  ✓ Bug fix, typo, import cleanup, dependency bump
+  ✓ —OR— user says: "直接做" / "just do it" / "quick fix" / "不用 pipeline"
+
+ESCAPE to TDD-only (must meet ALL):
+  ✓ Zero new API surface or types
+  ✓ Extending existing pattern with identical shape (add item to list, new variant of existing)
+  ✓ —OR— user says: "TDD this" / "TDD 就行"
+
+P0 urgent → Direct first, then pipeline follow-up (mandatory, not optional)
 ```
 
-A "new feature" = anything that adds capability the system didn't have before. Size doesn't matter — a 3-file pre-warm and a 15-file voice mode both deserve the pipeline. The pipeline's EVALUATE catches bad ideas early, REVIEW catches cross-boundary bugs, REFLECT compounds lessons. Skipping it saves 10 minutes but risks shipping bugs that cost hours.
+**Key principle: the burden of proof is on ESCAPING, not on using pipeline.** Ambiguous → Pipeline. "Seems small" → Pipeline. New endpoint/type/interaction → Pipeline regardless of line count. The PE review on this session's work found 6 bugs in 88 lines — pipeline's REVIEW would have caught them pre-commit.
+
+**What does NOT count as a mode instruction from the user:**
+- "做" / "做了" / "搞" / "go ahead" = approval to proceed, NOT mode selection
+- "你要不做了" / "那就做吧" = same — proceed with default (Pipeline)
+- Only explicit escape keywords ("直接做", "just do it", "quick fix", "不用 pipeline", "TDD this") override the default
 
 **Pre-Implementation Checkpoint (any task touching >1 file or introducing a new mechanism):**
 
@@ -633,11 +648,11 @@ After implementation + tests pass, trace the **full user path one level downstre
 This catches the class of bugs where every unit works but the integration is wrong. **Single-person review has systematic blind spots** — implementation review focuses on logic correctness, E2E review focuses on data flow correctness. Both are required.
 
 **Rules:**
+- **Pipeline is the default.** Not "for features" — for all coding. Escape requires meeting explicit conditions.
 - **Direct** = no ceremony, not no quality. Still test, still scan.
 - **TDD-only** = tests BEFORE code. Test passes before implementation? Test is wrong. Fix code, not tests.
 - **Full Pipeline** = validator auto-enforced by `advance` command. Skip nothing. Generate REPORT.md.
 - **User override is absolute.** No exceptions, no "are you sure?".
-- **Pipeline's real value = EVALUATE + THINK.** If both answers are obvious, pipeline is overhead. If either needs judgment, pipeline earns its cost.
 - **Surgical changes only.** Touch only what the task requires. Match the existing style (quotes, formatting, naming) even if you'd do it differently. Remove imports/variables/functions that YOUR changes made unused — but don't remove pre-existing dead code unless asked; mention it instead. Every changed line must trace directly to the user's request. No drive-by refactoring, no style drift, no speculative "while I'm here" improvements.
 
 **Imperative→Declarative reframing (especially TDD-only):**
