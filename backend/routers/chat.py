@@ -603,6 +603,7 @@ async def answer_question(request: Request):
             async for msg in _get_router().continue_with_answer(
                 session_id=answer_request.session_id,
                 answer=answer_text,
+                tool_use_id=answer_request.tool_use_id,
             ):
                 logger.debug(f"Yielding message: {msg.get('type')}")
                 yield msg

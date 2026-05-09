@@ -1713,13 +1713,24 @@ export default function ChatPage() {
   const handleAnswerQuestion = (toolUseId: string, answers: Record<string, string>) => {
     const tabId = activeTabIdRef.current ?? undefined;
     const tabSessionId = tabId ? tabMapRef.current.get(tabId)?.sessionId : undefined;
-    if (!selectedAgentId || !tabSessionId) return;
+    console.log('[AskUserQuestion] handleAnswerQuestion called', {
+      toolUseId, answers, tabId, tabSessionId, selectedAgentId,
+    });
+    if (!selectedAgentId || !tabSessionId) {
+      console.error('[AskUserQuestion] EARLY RETURN — missing agentId or sessionId', {
+        selectedAgentId, tabSessionId, tabId,
+      });
+      return;
+    }
 
     // Defensive guard: prevent double-submit if already streaming.
     // The UI disables the button, but programmatic calls or rapid clicks
     // could bypass it. Read tabMapRef directly (synchronous, authoritative).
     const tabState = tabId ? tabMapRef.current.get(tabId) : undefined;
-    if (tabState?.isStreaming) return;
+    if (tabState?.isStreaming) {
+      console.warn('[AskUserQuestion] EARLY RETURN — tab is already streaming');
+      return;
+    }
 
     setPendingQuestion(null);
     incrementStreamGen(); // Fix 1: new stream generation

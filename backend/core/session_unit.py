@@ -1464,6 +1464,7 @@ class SessionUnit:
     async def _stream_response(
         self,
         query_content: Any,
+        parent_tool_use_id: str | None = None,
     ) -> AsyncIterator[dict]:
         """Send query and yield raw SDK messages.
 
@@ -1477,6 +1478,13 @@ class SessionUnit:
 
         The caller (``send()``) is responsible for retry logic and
         error event construction.
+
+        Args:
+            query_content: User message text (str) or multimodal blocks (list).
+            parent_tool_use_id: When set, the message is linked to a prior
+                tool_use block (e.g. AskUserQuestion response). The CLI uses
+                this to route the answer as a tool result rather than a new
+                conversation turn.
         """
         if self._client is None:
             raise RuntimeError(
@@ -1501,11 +1509,24 @@ class SessionUnit:
                 msg = {
                     "type": "user",
                     "message": {"role": "user", "content": query_content},
-                    "parent_tool_use_id": None,
+                    "parent_tool_use_id": parent_tool_use_id,
                 }
                 yield msg
 
             await self._client.query(_multimodal_gen())
+        elif parent_tool_use_id:
+            # Tool result response (e.g. AskUserQuestion answer) — must use
+            # the streaming protocol with parent_tool_use_id so the CLI treats
+            # it as a tool result, not a new user message.
+            async def _tool_result_gen():
+                msg = {
+                    "type": "user",
+                    "message": {"role": "user", "content": query_content},
+                    "parent_tool_use_id": parent_tool_use_id,
+                }
+                yield msg
+
+            await self._client.query(_tool_result_gen())
         else:
             await self._client.query(query_content)
 
@@ -1725,6 +1746,55 @@ class SessionUnit:
                             }
                             self._transition(SessionState.WAITING_INPUT)
                             self.last_used = time.time()
+                            # Drain remaining messages until ResultMessage
+                            # so the shared message queue is clean for the
+                            # next receive_response() call in continue_with_answer.
+                            # Without this, the stale ResultMessage from this
+                            # turn would terminate the next response immediately.
+                            try:
+                                while True:
+                                    drain_timeout = 5.0
+                                    sdk_task = asyncio.ensure_future(
+                                        asyncio.wait_for(
+                                            _next_or_sentinel(),
+                                            timeout=drain_timeout,
+                                        )
+                                    )
+                                    # Cancel perm_task race — we only care about SDK
+                                    perm_task_drain = asyncio.ensure_future(perm_queue.get())
+                                    done, pending = await asyncio.wait(
+                                        [sdk_task, perm_task_drain],
+                                        return_when=asyncio.FIRST_COMPLETED,
+                                    )
+                                    for t in pending:
+                                        t.cancel()
+                                        try:
+                                            await t
+                                        except (asyncio.CancelledError, asyncio.TimeoutError):
+                                            pass
+                                    if sdk_task in done:
+                                        try:
+                                            drain_msg = sdk_task.result()
+                                        except (asyncio.TimeoutError, Exception):
+                                            break
+                                        if drain_msg is _STREAM_EXHAUSTED:
+                                            break
+                                        if isinstance(drain_msg, ResultMessage):
+                                            logger.debug(
+                                                "session_unit: drained ResultMessage "
+                                                "after AskUserQuestion (session=%s)",
+                                                self.session_id,
+                                            )
+                                            break
+                                    else:
+                                        # perm_task won — ignore, keep draining
+                                        pass
+                            except Exception as drain_err:
+                                logger.warning(
+                                    "session_unit: drain after AskUserQuestion "
+                                    "failed: %s (session=%s)",
+                                    drain_err, self.session_id,
+                                )
                             return
                         if _has_tool_summarizer:
                             summary = summarize_tool_use(block.name, block.input)
@@ -2125,13 +2195,20 @@ class SessionUnit:
             return False
 
     async def continue_with_answer(
-        self, answer: str,
+        self, answer: str, tool_use_id: str | None = None,
     ) -> AsyncIterator[dict]:
         """Continue after ask_user_question.
 
         State: WAITING_INPUT → STREAMING → IDLE/WAITING_INPUT.
 
         Yields raw SDK messages for the router to format.
+
+        Args:
+            answer: JSON-encoded answer text from the user.
+            tool_use_id: The AskUserQuestion tool_use block ID. When provided,
+                the answer is sent with ``parent_tool_use_id`` so the CLI links
+                it back to the correct tool call (required for the SDK to treat
+                the answer as a tool result rather than a new user message).
         """
         if self.state != SessionState.WAITING_INPUT:
             raise RuntimeError(
@@ -2146,12 +2223,19 @@ class SessionUnit:
 
         # User responded — reset compaction guard so tool counts
         # don't accumulate across the permission/answer boundary.
+        logger.info(
+            "session_unit.continue_with_answer session_id=%s "
+            "tool_use_id=%s answer_len=%d state=%s",
+            self.session_id, tool_use_id, len(answer), self.state.value,
+        )
         self._compaction_guard.reset()
         self._content_emitted = False  # Reset zombie detection for new stream
         self._transition(SessionState.STREAMING)
 
         try:
-            async for event in self._stream_response(answer):
+            async for event in self._stream_response(
+                answer, parent_tool_use_id=tool_use_id,
+            ):
                 yield event
         except Exception:
             await self._crash_to_cold_async(clear_identity=False)
