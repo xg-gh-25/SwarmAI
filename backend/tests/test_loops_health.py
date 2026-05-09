@@ -108,6 +108,10 @@ class TestDimensionChecks:
         assert ids == {"I1", "I2", "I3", "I4", "I5", "I6"}
 
 
+@pytest.mark.skipif(
+    not Path.home().joinpath(".swarm-ai/SwarmWS/.context/MEMORY.md").exists(),
+    reason="Requires real SwarmWS workspace (CI has no ~/.swarm-ai/)"
+)
 class TestAutoFix:
     """Verify auto-fix safety."""
 

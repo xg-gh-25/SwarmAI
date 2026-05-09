@@ -27,8 +27,12 @@ def _make_build_artifact(code_files, tests_generated=0):
     }
 
 
-def _make_review_artifact(findings_count=None, integration_trace_checked=1):
-    art = {"integration_trace": {"checked": integration_trace_checked}}
+def _make_review_artifact(findings_count=None, integration_trace_checked=1, runtime_patterns_checked=1):
+    art = {
+        "approved": True,
+        "integration_trace": {"checked": integration_trace_checked},
+        "runtime_patterns": {"checked": runtime_patterns_checked},
+    }
     if findings_count is not None:
         art["findings_count"] = findings_count
     return art
@@ -159,7 +163,7 @@ def test_small_changeset_no_findings_ok(run_dir, monkeypatch):
     monkeypatch.setenv("SWARM_WORKSPACE", str(run_dir.parent.parent))
 
     build_art = _make_build_artifact(["hooks/a.py"], tests_generated=3)
-    review_art = _make_review_artifact(findings_count=None, integration_trace_checked=1)
+    review_art = _make_review_artifact(findings_count=0, integration_trace_checked=1)
 
     stages = [
         {"name": "evaluate", "status": "completed", "artifact_id": "art_eval"},
