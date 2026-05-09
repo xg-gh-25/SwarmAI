@@ -1265,6 +1265,7 @@ class ChannelGateway:
 
                 if event_type == "ask_user_question":
                     questions = event.get("questions", [])
+                    ask_tool_use_id = event.get("toolUseId")
                     auto_answer = "; ".join(
                         q.get("question", "yes") if isinstance(q, dict) else str(q)
                         for q in questions
@@ -1282,6 +1283,7 @@ class ChannelGateway:
                         async for follow_event in (
                             session_registry.session_router.continue_with_answer(
                                 session_id, answer_text,
+                                tool_use_id=ask_tool_use_id,
                             )
                         ):
                             fe_type = follow_event.get("type", "")

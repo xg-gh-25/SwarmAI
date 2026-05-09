@@ -5,6 +5,47 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] - 2026-05-09
+
+### Added
+
+- **4-Platform Backend Architecture**: Replaced sidecar model with 4 mutually exclusive platform modes (macOS daemon, Windows subprocess, Linux subprocess, Hive systemd) via `SWARMAI_MODE` env var. Each platform has tailored lifecycle management.
+- **Windows/Linux Subprocess Mode**: Tauri spawns backend as child process with health watchdog and auto-restart on crash. Deterministic exit polling replaces timing-based sleeps.
+- **EscalationBlock UI**: Inline permission/escalation rendering in chat messages — users see structured prompts instead of raw text blocks.
+- **Pipeline Dashboard**: Right sidebar section showing active pipeline status with resume/cancel controls and smart polling.
+- **Capabilities Tab**: New Settings tab displaying system capabilities overview.
+- **Code Intelligence BottomBar**: Health indicator + `/api/code-intel/health` endpoint showing indexing status in the bottom bar.
+- **Daemon Deploy Scripts**: `desktop/resources/daemon/swarmai_backend.sh` wrapper + `com.swarmai.backend.plist.template` for macOS launchd auto-install.
+- **Lint Hardcoded Paths**: `lint_hardcoded_paths.py` CI script prevents future `Path.home()/.swarm-ai` drift.
+
+### Fixed
+
+- **P0: /shutdown Killing Daemon Sessions**: App close sent /shutdown which terminated the 24/7 daemon. Now returns 403 in daemon/hive mode.
+- **P0: lsof Hangs on macOS**: `lsof -i :PORT` hangs indefinitely on certain macOS configs (sandbox, network extensions). Replaced with `nc -z` everywhere.
+- **P0: .version Format Drift**: 3 writers produced different formats. Unified to `{semver} {git_hash} {timestamp}`.
+- **Path Traversal in Code Intel**: Reindex endpoint now validates paths against workspace root.
+- **Onboarding Dead-Ends**: 3 blockers eliminated — Hive path hardened, auth config panel fixed.
+- **Daily Activity Checkpoint Path**: Was writing to workspace `.context/` instead of app-level `state/`.
+- **Deterministic Process Exit**: Timing-based `thread::sleep` replaced with process exit polling in session_unit and CI.
+- **Error UX**: Red error messages softened to amber — reduces user panic on transient issues.
+
+### Changed
+
+- **License: AGPL + Commercial → MIT**: Simplified licensing. Removed `LICENSE-AGPL` and `LICENSE-COMMERCIAL`.
+- **Path Centralization**: All 36 files with hardcoded `Path.home()/.swarm-ai` now use `config.get_app_data_dir()`.
+- **App-level `.context/` → `state/`**: Renamed to eliminate collision with workspace `.context/` directory.
+- **Sidecar Terminology Purged**: All references to "sidecar" replaced with platform-appropriate terms (daemon, subprocess, backend). `SIDECAR_BINARY` → `BACKEND_BINARY`.
+- **`DaemonNudgeBanner` Removed**: Daemon auto-installs on first launch — no more manual nudge.
+- **Fixed Port 18321**: No more dynamic port allocation. All platforms use the same port.
+- **Pipeline Coding Mode**: Flipped to escape-hatch model — pipeline is unconditional default for new features.
+- **.kiro Specs Refreshed**: 6 shipped specs removed (-5,978 lines), system specs updated to 4-platform architecture.
+- **Calling-Context Audit**: AGENT.md Pre-Implementation Checkpoint expanded with async state mutation scan.
+
+### Security
+
+- **Path Traversal Guard**: Code intel reindex validates against workspace root.
+- **Reindex TTL**: Rate-limited to prevent abuse.
+
 ## [1.10.2] - 2026-05-06
 
 ### Added

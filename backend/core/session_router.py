@@ -1247,10 +1247,17 @@ class SessionRouter:
 
     async def continue_with_answer(
         self, session_id: str, answer: str,
+        tool_use_id: str | None = None,
     ) -> AsyncIterator[dict]:
         """Delegate to SessionUnit.continue_with_answer().
 
         Persists each assistant message immediately (crash-safe).
+
+        Args:
+            session_id: The session to continue.
+            answer: JSON-encoded answer text.
+            tool_use_id: The AskUserQuestion tool_use block ID so the CLI
+                links this response back to the correct tool call.
         """
         unit = self.get_unit(session_id)
         if unit is None:
@@ -1261,7 +1268,7 @@ class SessionRouter:
             )
             return
 
-        async for event in unit.continue_with_answer(answer):
+        async for event in unit.continue_with_answer(answer, tool_use_id=tool_use_id):
             if event.get("type") == "assistant" and event.get("content"):
                 await self._persist_assistant_blocks(
                     session_id, event["content"], event.get("model"),
