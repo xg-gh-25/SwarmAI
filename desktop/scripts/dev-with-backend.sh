@@ -23,8 +23,8 @@ _is_backend_running() {
         fi
         rm -f "$BACKEND_PID_FILE"
     fi
-    # Fallback: check by port
-    lsof -i :$BACKEND_PORT -t >/dev/null 2>&1
+    # Fallback: check by port (nc -z is instant; lsof hangs on some macOS configs)
+    nc -z 127.0.0.1 $BACKEND_PORT 2>/dev/null
 }
 
 _start_backend() {

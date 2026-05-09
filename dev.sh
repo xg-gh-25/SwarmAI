@@ -44,6 +44,29 @@ _ok()   { echo -e "${GREEN}✅${NC} $*"; }
 _warn() { echo -e "${YELLOW}⚠️${NC}  $*"; }
 _err()  { echo -e "${RED}❌${NC} $*"; }
 
+# ── Port PID helpers (lsof with 2s timeout — never hangs) ──
+# These are the ONLY places lsof is used. Wrapped with `timeout` to prevent
+# the macOS lsof hang (sandbox/network extensions). nc -z for port checks,
+# these only for PID discovery when we need to kill.
+
+_get_port_pid() {
+    # Get first PID listening on a port. Returns empty string on failure/timeout.
+    local port="$1"
+    timeout 2 lsof -ti :"$port" 2>/dev/null | head -1
+}
+
+_kill_port_holders() {
+    # Kill all processes listening on a port (with 2s timeout on PID lookup).
+    local port="$1"
+    local pids
+    pids=$(timeout 2 lsof -ti :"$port" 2>/dev/null)
+    if [ -n "$pids" ]; then
+        _log "Killing processes on port $port: $pids"
+        echo "$pids" | xargs kill -9 2>/dev/null || true
+        sleep 0.5
+    fi
+}
+
 # ── Daemon (shared library) ────────────────────────────────
 _DAEMON_CMD="dev.sh"
 _DAEMON_VERBOSE=1
@@ -57,8 +80,8 @@ _is_backend_running() {
         fi
         rm -f "$BACKEND_PID_FILE"
     fi
-    # Fallback: check by port
-    lsof -i :$BACKEND_PORT -t >/dev/null 2>&1
+    # Fallback: check by port (nc -z is instant; lsof hangs on some macOS configs)
+    nc -z 127.0.0.1 $BACKEND_PORT 2>/dev/null
 }
 
 _kill_backend() {
@@ -72,12 +95,9 @@ _kill_backend() {
         fi
         rm -f "$BACKEND_PID_FILE"
     fi
-    # Kill anything else on the port
-    local pids=$(lsof -i :$BACKEND_PORT -t 2>/dev/null)
-    if [ -n "$pids" ]; then
-        _log "Killing processes on port $BACKEND_PORT: $pids"
-        echo "$pids" | xargs kill -9 2>/dev/null || true
-        sleep 0.5
+    # Kill anything else on the port — use kill-by-port helper
+    if nc -z 127.0.0.1 $BACKEND_PORT 2>/dev/null; then
+        _kill_port_holders "$BACKEND_PORT"
     fi
 }
 
@@ -222,15 +242,29 @@ cmd_build() {
 
     # ── Deploy binary to daemon directory ────────────────────────
     # The daemon runs from ~/.swarm-ai/daemon/python-backend (NOT the
-    # dev source directory).  This ensures untested code changes never
-    # crash the production daemon.  Flow: code change → build → deploy.
+    # dev source directory).  Flow: kill → deploy → launchd KeepAlive restarts.
+    #
+    # IMPORTANT: kill BEFORE deploy to avoid onedir zlib corruption —
+    # rsync while process is running corrupts _internal/ offsets.
+    # Use `launchctl kill` (not bootout) so service stays registered and
+    # KeepAlive auto-restarts after deploy. This is safe even when run
+    # from inside the daemon (Claude CLI subprocess) because kill SIGTERM
+    # doesn't deregister the service.
+    if _daemon_is_running; then
+        _log "Stopping daemon before deploy (KeepAlive will auto-restart)..."
+        launchctl kill SIGTERM "$GUI_TARGET" 2>/dev/null || true
+        _wait_port_free "$DAEMON_PORT" 15 || {
+            _warn "Port still bound — force-killing..."
+            launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
+            sleep 1
+        }
+    fi
+
     _deploy_daemon_binary
 
-    # Auto-restart daemon if it's running — pick up new binary
-    if _daemon_is_running; then
-        _log "Daemon running — restarting to pick up new binary..."
-        cmd_daemon restart
-    fi
+    # launchd KeepAlive auto-restarts with new binary. Wait for healthy.
+    _log "Waiting for daemon to restart with new binary..."
+    _daemon_wait_healthy 90
 }
 
 cmd_deploy() {
@@ -258,20 +292,28 @@ cmd_deploy() {
         return 1
     fi
 
-    # Step 3: Deploy to daemon
+    # Step 3: Deploy to daemon (kill first to avoid onedir corruption)
     _log "Step 3/3: Deploy to daemon..."
+    if _daemon_is_running; then
+        _log "Stopping daemon before deploy (KeepAlive will auto-restart)..."
+        launchctl kill SIGTERM "$GUI_TARGET" 2>/dev/null || true
+        _wait_port_free "$DAEMON_PORT" 15 || {
+            _warn "Port still bound — force-killing..."
+            launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
+            sleep 1
+        }
+    fi
+
     _deploy_daemon_binary
 
     echo ""
     _ok "Deploy complete in $(_build_time $start)"
 
-    # Auto-restart daemon if running
-    if _daemon_is_running; then
-        _log "Daemon running — restarting to pick up new binary..."
-        cmd_daemon restart
-    else
-        _log "Daemon not running. Start with: ./dev.sh daemon start"
-    fi
+    # launchd KeepAlive auto-restarts with new binary
+    _log "Waiting for daemon to restart with new binary..."
+    _daemon_wait_healthy 90 || {
+        _warn "Daemon not running. Start with: ./dev.sh daemon start"
+    }
 }
 
 cmd_quick() {
@@ -305,10 +347,9 @@ cmd_quick() {
 cmd_kill() {
     _kill_backend
     # Kill Vite dev server
-    local vite_pids=$(lsof -i :1420 -t 2>/dev/null)
-    if [ -n "$vite_pids" ]; then
+    if nc -z 127.0.0.1 1420 2>/dev/null; then
         _log "Killing Vite dev server..."
-        echo "$vite_pids" | xargs kill -9 2>/dev/null || true
+        _kill_port_holders 1420
     fi
     _ok "All dev processes stopped"
 
@@ -327,7 +368,7 @@ cmd_status() {
 
     # Backend
     if _is_backend_running; then
-        local pid=$(cat "$BACKEND_PID_FILE" 2>/dev/null || lsof -i :$BACKEND_PORT -t 2>/dev/null | head -1)
+        local pid=$(cat "$BACKEND_PID_FILE" 2>/dev/null || _get_port_pid $BACKEND_PORT)
         local health=$(curl -s --max-time 2 "http://localhost:$BACKEND_PORT/health" 2>/dev/null)
         if echo "$health" | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if d.get('status')=='healthy' else 1)" 2>/dev/null; then
             _ok "Backend: running (PID $pid, port $BACKEND_PORT)"
@@ -339,7 +380,7 @@ cmd_status() {
     fi
 
     # Frontend
-    if lsof -i :1420 -t >/dev/null 2>&1; then
+    if nc -z 127.0.0.1 1420 2>/dev/null; then
         _ok "Frontend: Vite dev server running (port 1420)"
     else
         _err "Frontend: not running"

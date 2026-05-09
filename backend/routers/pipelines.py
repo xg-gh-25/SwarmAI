@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -35,7 +36,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Runs stuck in "running" with no update for this long are auto-marked failed.
-_STALE_THRESHOLD_MINUTES = 60
+# Configurable via env var for long-running pipelines (default: 60 min).
+_STALE_THRESHOLD_MINUTES = int(os.environ.get("PIPELINE_STALE_THRESHOLD_MINUTES", "60"))
 
 
 def _get_swarmws() -> Path:

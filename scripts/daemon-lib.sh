@@ -256,41 +256,43 @@ cmd_daemon() {
                 return 1
             fi
 
-            _log "Stopping daemon..."
-            launchctl bootout "$GUI_TARGET" 2>/dev/null || true
+            # Use `launchctl kill` instead of bootout+bootstrap.
+            # bootout DEREGISTERS the service — if this script dies mid-restart
+            # (e.g. when run inside the daemon's own subprocess), nobody re-registers.
+            # kill SIGTERM keeps the service registered; KeepAlive auto-restarts it.
+            _log "Sending SIGTERM to daemon (service stays registered)..."
+            launchctl kill SIGTERM "$GUI_TARGET" 2>/dev/null || {
+                _warn "kill SIGTERM failed — daemon may not be running, trying bootstrap..."
+                _bootstrap_daemon
+                _daemon_wait_healthy 90
+                return $?
+            }
 
             _log "Waiting for port ${DAEMON_PORT} to release..."
             if ! _wait_port_free "$DAEMON_PORT" 15; then
                 _warn "Port still in use — force-killing..."
-                # Get PID from launchctl (instant, no hang unlike lsof)
-                local stale_pid
-                stale_pid=$(launchctl list "${DAEMON_LABEL}" 2>/dev/null | awk '/PID/ {print $NF}')
-                if [ -n "$stale_pid" ] && [ "$stale_pid" != "-" ]; then
-                    kill -9 "$stale_pid" 2>/dev/null || true
-                    sleep 1
-                fi
+                launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
+                sleep 1
             fi
 
-            _log "Starting daemon..."
-            _bootstrap_daemon
+            _log "Waiting for launchd KeepAlive to restart daemon..."
             _daemon_wait_healthy 90
             ;;
         force-restart)
             _warn "Force restart — skipping version check"
-            _log "Stopping daemon..."
-            launchctl bootout "$GUI_TARGET" 2>/dev/null || true
+            # Same approach: kill process, let KeepAlive restart.
+            _log "Sending SIGKILL to daemon..."
+            launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || {
+                _warn "kill failed — daemon may not be running, trying bootstrap..."
+                _bootstrap_daemon
+                _daemon_wait_healthy 90
+                return $?
+            }
+
             _log "Waiting for port ${DAEMON_PORT} to release..."
-            if ! _wait_port_free "$DAEMON_PORT" 15; then
-                _warn "Port still in use — force-killing..."
-                local stale_pid2
-                stale_pid2=$(launchctl list "${DAEMON_LABEL}" 2>/dev/null | awk '/PID/ {print $NF}')
-                if [ -n "$stale_pid2" ] && [ "$stale_pid2" != "-" ]; then
-                    kill -9 "$stale_pid2" 2>/dev/null || true
-                    sleep 1
-                fi
-            fi
-            _log "Starting daemon..."
-            _bootstrap_daemon
+            _wait_port_free "$DAEMON_PORT" 10 || true
+
+            _log "Waiting for launchd KeepAlive to restart daemon..."
             _daemon_wait_healthy 90
             ;;
         stop)

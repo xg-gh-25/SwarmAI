@@ -752,12 +752,23 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
     std::fs::create_dir_all(&daemon_dir)
         .map_err(|e| format!("Failed to create daemon dir: {}", e))?;
 
-    // Backup existing binary before deploy — allows rollback if bootstrap fails.
-    let backup_binary = format!("{}/python-backend.backup", daemon_dir);
+    // Backup entire daemon directory before deploy — allows full rollback if
+    // bootstrap fails. Binary-only backup is insufficient because onedir layout
+    // means old binary + new _internal/ = zlib corruption.
+    let backup_dir = format!("{}/.swarm-ai/daemon.backup", home);
+    let backup_dir_path = std::path::Path::new(&backup_dir);
     if std::path::Path::new(&target_binary).exists() {
-        std::fs::copy(&target_binary, &backup_binary)
-            .map_err(|e| format!("Failed to backup old binary: {}", e))?;
-        println!("[Tauri] Backed up old daemon binary for rollback");
+        // Remove stale backup if exists
+        if backup_dir_path.exists() {
+            let _ = std::fs::remove_dir_all(backup_dir_path);
+        }
+        // Rename current daemon/ → daemon.backup/ (atomic on same filesystem)
+        std::fs::rename(daemon_dir_path, backup_dir_path)
+            .map_err(|e| format!("Failed to backup daemon dir: {}", e))?;
+        // Re-create daemon dir for the new deploy
+        std::fs::create_dir_all(&daemon_dir)
+            .map_err(|e| format!("Failed to re-create daemon dir: {}", e))?;
+        println!("[Tauri] Backed up entire daemon directory for rollback");
     }
 
     // Deploy entire onedir bundle via recursive copy
@@ -798,8 +809,10 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
         let new_version = get_daemon_version().await.unwrap_or_default();
         if new_version == app_version {
             println!("[Tauri] Daemon upgraded successfully: {}", app_version);
-            // Clean up backup — upgrade confirmed good
-            let _ = std::fs::remove_file(&backup_binary);
+            // Clean up backup directory — upgrade confirmed good
+            if backup_dir_path.exists() {
+                let _ = std::fs::remove_dir_all(backup_dir_path);
+            }
             // NOTE: the `backend-upgraded` event is emitted by
             // `sync_daemon_version_background` — the single source of
             // truth for upgrade lifecycle events.
@@ -811,17 +824,18 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
         );
     }
 
-    // Rollback: restore backup binary so the old version can still run
-    if std::path::Path::new(&backup_binary).exists() {
-        println!("[Tauri] Rolling back to previous daemon binary");
-        let _ = std::fs::rename(&backup_binary, &target_binary);
+    // Rollback: restore entire daemon directory so old binary + _internal/ are consistent
+    if backup_dir_path.exists() {
+        println!("[Tauri] Rolling back to previous daemon directory");
+        let _ = std::fs::remove_dir_all(daemon_dir_path);
+        let _ = std::fs::rename(backup_dir_path, daemon_dir_path);
         // Attempt to bootstrap the old binary so daemon is at least running
         let _ = std::process::Command::new("launchctl")
             .args(["bootstrap", &gui_target, &plist_path])
             .output();
     }
 
-    Err("Daemon upgrade failed — daemon not responding after restart. Rolled back to previous binary.".to_string())
+    Err("Daemon upgrade failed — daemon not responding after restart. Rolled back to previous version.".to_string())
 }
 
 /// Background wrapper around `sync_daemon_version`.
@@ -1194,7 +1208,11 @@ fn spawn_daemon_health_watchdog(
     state: SharedBackendState,
     interval_secs: u64,
 ) {
-    const MAX_RECOVERY_ATTEMPTS: u32 = 20; // 20 × 3s = 60s max wait for launchd restart
+    // Daemon mode: launchd ALWAYS restarts (KeepAlive:true). Onedir cold start
+    // after a binary deploy can take 30-60s (ThrottleInterval 10s + extraction).
+    // 40 × 3s = 120s is enough for even the worst-case deploy scenario.
+    // Subprocess mode: 3 re-spawn attempts with backoff (handled separately below).
+    const MAX_RECOVERY_ATTEMPTS: u32 = 40; // 40 × 3s = 120s max wait for launchd restart
     const RECOVERY_POLL_SECS: u64 = 3;
 
     tauri::async_runtime::spawn(async move {
@@ -1313,11 +1331,16 @@ fn spawn_daemon_health_watchdog(
                         let _ = app_handle.emit("backend-terminated", Option::<i32>::None);
                     }
                 } else if is_daemon {
-                    // Daemon mode: just wait for launchd
-                    println!("[Tauri] Watchdog: still waiting for daemon recovery (attempt {}/{})",
-                        recovery_attempts, MAX_RECOVERY_ATTEMPTS);
-                    if recovery_attempts >= MAX_RECOVERY_ATTEMPTS {
-                        println!("[Tauri] Watchdog: daemon failed to recover after {} attempts — permanent failure",
+                    // Daemon mode: launchd will restart — keep waiting indefinitely.
+                    // Log every 10 attempts (30s) to avoid spam.
+                    if recovery_attempts % 10 == 0 {
+                        println!("[Tauri] Watchdog: still waiting for daemon recovery (attempt {}, {}s elapsed)",
+                            recovery_attempts, recovery_attempts * RECOVERY_POLL_SECS as u32);
+                    }
+                    // Emit "terminated" exactly once at the threshold — frontend shows warning.
+                    // Don't give up: daemon WILL come back (KeepAlive:true), just slow cold start.
+                    if recovery_attempts == MAX_RECOVERY_ATTEMPTS {
+                        println!("[Tauri] Watchdog: daemon recovery taking longer than expected ({} attempts)",
                             MAX_RECOVERY_ATTEMPTS);
                         let _ = app_handle.emit("backend-terminated", Option::<i32>::None);
                     }
