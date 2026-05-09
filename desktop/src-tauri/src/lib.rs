@@ -512,7 +512,18 @@ fn parse_health_response(body: &str) -> (bool, Option<String>, Option<String>) {
 
 /// Probe daemon health endpoint with retries.
 /// Returns Some(port) if daemon is healthy, None otherwise.
+/// Optionally emits progress events to the frontend via `app_handle`.
 async fn probe_daemon_health(max_attempts: u32, interval_secs: u64) -> Option<u16> {
+    probe_daemon_health_with_progress(max_attempts, interval_secs, None).await
+}
+
+/// Probe daemon health with optional progress events emitted to the frontend.
+/// Each attempt emits `backend-starting-progress` with `{ attempt, max_attempts, elapsed_secs }`.
+async fn probe_daemon_health_with_progress(
+    max_attempts: u32,
+    interval_secs: u64,
+    app_handle: Option<&tauri::AppHandle>,
+) -> Option<u16> {
     let probe_url = format!("http://127.0.0.1:{}/health", DAEMON_PORT);
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
@@ -523,6 +534,17 @@ async fn probe_daemon_health(max_attempts: u32, interval_secs: u64) -> Option<u1
     };
 
     for attempt in 1..=max_attempts {
+        // Emit progress event to frontend
+        if let Some(handle) = app_handle {
+            let elapsed = (attempt - 1) as u64 * interval_secs;
+            let _ = handle.emit("backend-starting-progress", serde_json::json!({
+                "attempt": attempt,
+                "maxAttempts": max_attempts,
+                "elapsedSecs": elapsed,
+                "totalSecs": max_attempts as u64 * interval_secs,
+            }));
+        }
+
         if let Ok(resp) = client.get(&probe_url).send().await {
             if let Ok(body) = resp.text().await {
                 let (healthy, _, _) = parse_health_response(&body);
@@ -562,7 +584,7 @@ async fn get_daemon_version() -> Option<String> {
 /// background wrapper (`sync_daemon_version_background`).  Event emission
 /// has been moved to the wrapper, so this function no longer emits
 /// `backend-upgrading` or `backend-upgraded` directly.
-async fn sync_daemon_version(_app: &tauri::AppHandle, app_version: &str) -> Result<(), String> {
+async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Result<(), String> {
     let daemon_version = get_daemon_version().await
         .unwrap_or_else(|| "unknown".to_string());
 
@@ -736,8 +758,8 @@ async fn sync_daemon_version(_app: &tauri::AppHandle, app_version: &str) -> Resu
         .args(["bootstrap", &gui_target, &plist_path])
         .output();
 
-    // Step 6: Verify new version
-    if let Some(_port) = probe_daemon_health(10, 2).await {
+    // Step 6: Verify new version (cold start after binary swap can take 30-60s)
+    if let Some(_port) = probe_daemon_health_with_progress(30, 2, Some(app)).await {
         let new_version = get_daemon_version().await.unwrap_or_default();
         if new_version == app_version {
             println!("[Tauri] Daemon upgraded successfully: {}", app_version);
@@ -1360,15 +1382,15 @@ async fn start_backend(
             ));
         }
 
-        // Wait for daemon to come up (cold start takes a few seconds)
-        if let Some(_port) = probe_daemon_health(15, 2).await {
+        // Wait for daemon to come up (cold start after rebuild can take 45-60s)
+        if let Some(_port) = probe_daemon_health_with_progress(30, 2, Some(&app)).await {
             println!("[Tauri] Daemon installed and healthy on port {}", DAEMON_PORT);
             let port = connect_daemon(&state, &app).await;
             return Ok(port);
         }
 
         return Err(format!(
-            "Daemon installed but not responding on port {} after 30s. \
+            "Daemon installed but not responding on port {} after 60s. \
              Check logs: ~/.swarm-ai/logs/backend-stderr.log",
             DAEMON_PORT,
         ));
