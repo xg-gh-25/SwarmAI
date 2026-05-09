@@ -199,6 +199,20 @@ cmd_release() {
     _log "Step 4/4: Tauri build → DMG..."
     npm run tauri build
 
+    # 2e. Inject backend bundle into .app (onedir — no PyInstaller extraction at runtime)
+    local app_bundle="$DESKTOP_DIR/src-tauri/target/release/bundle/macos/SwarmAI.app"
+    local backend_src="$DESKTOP_DIR/src-tauri/binaries/python-backend-aarch64-apple-darwin"
+    local backend_dst="${app_bundle}/Contents/Resources/python-backend"
+    if [ -d "$app_bundle" ] && [ -d "$backend_src" ]; then
+        _log "Injecting backend bundle into .app..."
+        mkdir -p "$backend_dst"
+        rsync -a "$backend_src/" "$backend_dst/"
+        chmod +x "$backend_dst/python-backend"
+        _ok "Backend bundle injected ($(du -sh "$backend_dst" | cut -f1))"
+    else
+        _warn "Skipping .app backend injection (app_bundle or backend_src missing)"
+    fi
+
     echo ""
 
     # ── Phase 3: Deploy + Verify ──────────────────────────────

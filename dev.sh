@@ -279,10 +279,10 @@ cmd_quick() {
     _log "Quick build (skip PyInstaller, Tauri only)..."
     cd "$DESKTOP_DIR"
 
-    # Check backend binary exists (bundled into .app for daemon deployment)
-    local binary="$DESKTOP_DIR/src-tauri/binaries/python-backend-aarch64-apple-darwin"
+    # Check backend bundle exists (onedir, bundled into .app for daemon deployment)
+    local binary="$DESKTOP_DIR/src-tauri/binaries/python-backend-aarch64-apple-darwin/python-backend"
     if [ ! -f "$binary" ]; then
-        _warn "No backend binary found — need full build first"
+        _warn "No backend bundle found — need full build first"
         _log "Running: ./dev.sh build"
         cmd_build
         return
@@ -368,13 +368,14 @@ cmd_status() {
         _err "Daemon: not running"
     fi
 
-    # Backend binary (PyInstaller bundle)
-    local binary="$DESKTOP_DIR/src-tauri/binaries/python-backend-aarch64-apple-darwin"
+    # Backend bundle (PyInstaller onedir)
+    local binary="$DESKTOP_DIR/src-tauri/binaries/python-backend-aarch64-apple-darwin/python-backend"
     if [ -f "$binary" ]; then
+        local bundle_dir="$DESKTOP_DIR/src-tauri/binaries/python-backend-aarch64-apple-darwin"
         local age=$(( ($(date +%s) - $(stat -f %m "$binary")) / 3600 ))
-        _ok "Backend binary: exists ($(du -h "$binary" | cut -f1), ${age}h old)"
+        _ok "Backend bundle: exists ($(du -sh "$bundle_dir" | cut -f1), ${age}h old)"
     else
-        _warn "Backend binary: not built"
+        _warn "Backend bundle: not built"
     fi
 
     # Recent changes since last build
