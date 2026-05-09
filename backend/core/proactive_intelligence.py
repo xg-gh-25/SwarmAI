@@ -1706,6 +1706,7 @@ def build_session_briefing_data(
         projects_dir = workspace / "Projects"
         if projects_dir.is_dir():
             try:
+                import json as _json
                 cutoff_7d = time.time() - 7 * 86400
                 for proj_dir in projects_dir.iterdir():
                     runs_dir = proj_dir / ".artifacts" / "runs"
@@ -1713,24 +1714,44 @@ def build_session_briefing_data(
                         continue
                     for run_dir in runs_dir.iterdir():
                         report = run_dir / "REPORT.md"
-                        if not report.exists():
+                        run_json = run_dir / "run.json"
+                        if not run_json.exists():
                             continue
-                        if report.stat().st_mtime < cutoff_7d:
+                        if run_json.stat().st_mtime < cutoff_7d:
                             continue
-                        text = report.read_text(encoding="utf-8")[:600]
-                        title = _extract_report_field(text, "Requirement", "Pipeline Report")
-                        confidence = _extract_report_confidence(text)
+                        # Use run.json completed_at for authoritative date
+                        try:
+                            run_data = _json.loads(run_json.read_text(encoding="utf-8"))
+                        except (ValueError, OSError):
+                            continue
+                        if run_data.get("status") != "completed":
+                            continue
+                        # Prefer completed_at from run.json for sort order
+                        completed_at = run_data.get("completed_at", "")
+                        if not completed_at:
+                            completed_at = datetime.fromtimestamp(run_json.stat().st_mtime).isoformat()
+                        # Extract title from REPORT.md if exists, else requirement
+                        if report.exists():
+                            text = report.read_text(encoding="utf-8")[:600]
+                            title = _extract_report_field(text, "Requirement", "Pipeline Report")
+                            confidence = _extract_report_confidence(text)
+                            report_file = str(report.relative_to(workspace))
+                        else:
+                            req = run_data.get("requirement", "Pipeline Run")
+                            title = req[:100] if len(req) > 100 else req
+                            confidence = None
+                            report_file = ""
                         builds.append({
                             "runId": run_dir.name,
                             "project": proj_dir.name,
                             "title": title,
                             "confidence": confidence,
                             "status": "complete",
-                            "date": datetime.fromtimestamp(report.stat().st_mtime).isoformat(),
-                            "reportFile": str(report.relative_to(workspace)),
+                            "date": completed_at,
+                            "reportFile": report_file,
                         })
                 builds.sort(key=lambda x: x["date"], reverse=True)
-                builds = builds[:5]
+                builds = builds[:10]
             except OSError:
                 pass
 

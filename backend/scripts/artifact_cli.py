@@ -960,10 +960,12 @@ def cmd_run_resume(args, reg: ArtifactRegistry) -> None:
 
 
 def cmd_run_report(args, reg: ArtifactRegistry) -> None:
-    """Generate REPORT.md for a completed (or running) pipeline run.
+    """Generate comprehensive REPORT.md for a completed (or running) pipeline run.
 
-    Reads run.json + all published artifacts, produces a structured
-    markdown report at .artifacts/runs/<RUN_ID>/REPORT.md.
+    Aggregates run.json + ALL published artifacts (evaluation, design_doc,
+    changeset, review, test_report, delivery) into a full retrospective report.
+    Covers: evaluation rationale, design approach, TDD results, review findings,
+    adversarial review, completion audit, files changed, and lessons.
     """
     from datetime import datetime, timezone
 
@@ -971,11 +973,77 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> None:
     run_state = json.loads(run_file.read_text(encoding="utf-8"))
 
     stages = run_state.get("stages", [])
-    taste_decisions = run_state.get("taste_decisions", [])
     profile = run_state.get("profile", "full")
     requirement = run_state.get("requirement", "")
 
-    # Collect all decisions from stages
+    # ── Load artifact data strictly from this run ──────────────────────
+    # IMPORTANT: Only load artifacts linked by this run's stage artifact_ids
+    # or matching this run's date. Never use "latest" fallback — causes
+    # cross-contamination between runs.
+    art_data: dict[str, dict] = {}  # stage_name -> artifact data
+    run_date = (run_state.get("created_at", "") or "")[:10].replace("-", "")  # YYYYMMDD
+
+    for s in stages:
+        stage_name = s.get("stage", "?")
+        art_id = s.get("artifact_id")
+        if art_id and art_id != "changeset":
+            loaded = _load_artifact_for_metrics(args.project, art_id)
+            if loaded:
+                art_data[stage_name] = loaded
+        elif art_id == "changeset" and run_date:
+            # Changeset stored as date-stamped file — load matching run date
+            art_data["build"] = _load_artifact_by_date(args.project, "changeset", run_date) or {}
+
+    # Date-scoped fallback for stages without manifest-linked artifacts
+    # Only loads artifacts from the SAME DATE as the run (prevents cross-contamination)
+    if run_date:
+        if "evaluate" not in art_data or not art_data["evaluate"].get("scores"):
+            dated = _load_artifact_by_date(args.project, "evaluation", run_date)
+            if dated:
+                art_data["evaluate"] = dated
+        if "plan" not in art_data and "think" not in art_data:
+            dated = _load_artifact_by_date(args.project, "design_doc", run_date)
+            if dated:
+                art_data["plan"] = dated
+        elif "plan" in art_data and not art_data["plan"].get("approach"):
+            # plan artifact from manifest lacks approach — try date-scoped
+            dated = _load_artifact_by_date(args.project, "design_doc", run_date)
+            if dated and dated.get("approach"):
+                art_data["plan"] = dated
+        if "build" not in art_data or not art_data["build"].get("files_changed"):
+            dated = _load_artifact_by_date(args.project, "changeset", run_date)
+            if dated:
+                art_data["build"] = dated
+        if "review" not in art_data:
+            dated = _load_artifact_by_date(args.project, "review", run_date)
+            if dated:
+                art_data["review"] = dated
+        if "test" not in art_data or not art_data["test"].get("total"):
+            dated = _load_artifact_by_date(args.project, "test_report", run_date)
+            if dated:
+                art_data["test"] = dated
+        if "deliver" not in art_data or not art_data["deliver"].get("title"):
+            dated = _load_artifact_by_date(args.project, "delivery", run_date)
+            if dated:
+                art_data["deliver"] = dated
+
+    # ── Determine skipped stages ──────────────────────────────────────
+    ALL_STAGES = ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"]
+    present_stages = {s.get("stage", s.get("name", "?")) for s in stages}
+    skipped_stages: dict[str, str] = {}  # stage -> reason
+    for stg in ALL_STAGES:
+        if stg not in present_stages:
+            # Determine skip reason from profile
+            if profile == "trivial" and stg in ("think", "plan", "reflect"):
+                skipped_stages[stg] = f"Skipped — profile '{profile}' omits research/planning"
+            elif profile == "bugfix" and stg in ("think", "review"):
+                skipped_stages[stg] = f"Skipped — profile '{profile}' uses direct fix path"
+            elif profile == "research" and stg in ("build", "review", "test", "deliver"):
+                skipped_stages[stg] = f"Skipped — profile '{profile}' is research-only"
+            else:
+                skipped_stages[stg] = f"Skipped — not required for profile '{profile}'"
+
+    # ── Collect decisions ─────────────────────────────────────────────
     all_decisions = []
     for s in stages:
         for d in s.get("decisions", []):
@@ -984,87 +1052,318 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> None:
                 **d,
             })
 
-    # Count decision types
     mech = sum(1 for d in all_decisions if d.get("classification") == "mechanical")
     taste = sum(1 for d in all_decisions if d.get("classification") == "taste")
     judgment = sum(1 for d in all_decisions if d.get("classification") == "judgment")
 
-    # Build stage table
-    stage_lines = []
-    for s in stages:
-        stage_name = s.get("stage", s.get("name", "?"))
-        status = s.get("status", "?")
-        artifact = s.get("artifact_id", "-")
-        summary = s.get("summary", "")[:60]
-        stage_lines.append(f"| {stage_name} | {status} | {artifact} | {summary} |")
+    # ── Section 1: TL;DR ──────────────────────────────────────────────
+    delivery = art_data.get("deliver", {})
+    title = delivery.get("title", requirement[:80] or "Pipeline Report")
 
-    # Build decision table
+    # ── Section 2: Evaluation ─────────────────────────────────────────
+    eval_data = art_data.get("evaluate", {})
+    eval_scores = eval_data.get("scores", {})
+    eval_recommendation = eval_data.get("recommendation", "?")
+    eval_scope = eval_data.get("scope", "?")
+    eval_criteria = eval_data.get("acceptance_criteria", [])
+
+    eval_table_lines = []
+    for dim in ["strategic", "priority", "historical", "feasibility"]:
+        score = eval_scores.get(dim)
+        if score is not None:
+            eval_table_lines.append(f"| {dim.capitalize()} | {score:.2f} | |")
+    roi = eval_scores.get("roi")
+    if roi is not None:
+        eval_table_lines.append(f"| **ROI** | **{roi:.3f}** | **{eval_recommendation}** |")
+
+    # ── Section 3: Design & Approach ──────────────────────────────────
+    # Design data lives in plan stage (approach, boundaries) or think stage (alternatives)
+    design = art_data.get("plan", {})
+    if not design.get("approach"):
+        design = art_data.get("think", {})
+    approach = design.get("approach", "")
+    boundaries = design.get("boundaries", {})
+    success_criteria = design.get("success_criteria", design.get("acceptance_criteria", []))
+    files_to_change = design.get("files_to_change", [])
+    # Think stage research findings
+    think_data = art_data.get("think", {})
+    key_findings = think_data.get("key_findings", [])
+    alternatives = think_data.get("alternatives", [])
+
+    # ── Section 4: Pipeline Execution ─────────────────────────────────
+    # Show ALL 8 standard stages — executed ones with data, skipped with reason
+    stage_lines = []
+    stage_data_map = {s.get("stage", s.get("name", "?")): s for s in stages}
+    for stg in ALL_STAGES:
+        if stg in stage_data_map:
+            s = stage_data_map[stg]
+            status = s.get("status", "?")
+            artifact = s.get("artifact_id", "-")
+            tokens = s.get("token_cost", 0)
+            summary = s.get("summary", "")[:50]
+            stage_lines.append(f"| {stg} | {status} | {artifact} | {tokens:,} | {summary} |")
+        elif stg in skipped_stages:
+            stage_lines.append(f"| {stg} | ⏭ skipped | - | 0 | {skipped_stages[stg]} |")
+
+    # ── Section 5: TDD Results ────────────────────────────────────────
+    test_data = art_data.get("test", {})
+    test_total = test_data.get("total", test_data.get("passed", 0) + test_data.get("failed", 0))
+    test_passed = test_data.get("passed", 0)
+    test_failed = test_data.get("failed", 0)
+    test_new = test_data.get("new_tests", 0)
+    test_duration = test_data.get("duration_s", 0)
+
+    changeset = art_data.get("build", {})
+    tests_added = changeset.get("tests_added", test_new)
+
+    # ── Section 6: Decision Log ───────────────────────────────────────
     decision_lines = []
     for d in all_decisions:
         decision_lines.append(
-            f"| {d.get('stage', '?')} | {d.get('description', '')[:50]} | "
-            f"{d.get('classification', '?')} | {d.get('reasoning', '')[:40]} |"
+            f"| {d.get('stage', '?')} | {d.get('description', '')[:60]} | "
+            f"{d.get('classification', '?')} | {d.get('reasoning', '')[:50]} |"
         )
 
-    # Confidence scoring
-    confidence = 5  # base
-    test_stage = next((s for s in stages if s.get("stage", s.get("name")) == "test"), None)
-    review_stage = next((s for s in stages if s.get("stage", s.get("name")) == "review"), None)
-    build_stage = next((s for s in stages if s.get("stage", s.get("name")) == "build"), None)
+    # ── Section 7: Quality Gates ──────────────────────────────────────
+    review_data = art_data.get("review", {})
+    _rf = review_data.get("findings", [])
+    review_findings = _rf if isinstance(_rf, list) else []
+    review_findings_count = len(review_findings) if isinstance(_rf, list) else (_rf if isinstance(_rf, int) else 0)
+    review_severity = review_data.get("severity", "?")
 
-    if test_stage and "pass" in (test_stage.get("summary", "")).lower():
-        confidence += 2
-    if review_stage and "clean" in (review_stage.get("summary", "")).lower():
-        confidence += 1
-    if build_stage and "tdd" in (build_stage.get("summary", "")).lower():
-        confidence += 1
-    if judgment == 0:
-        confidence += 1
-    confidence = min(confidence, 10)
+    adversarial = delivery.get("adversarial_review", {})
+    adversarial_findings = adversarial.get("findings", [])
+    adversarial_verdict = adversarial.get("verdict", "?")
+
+    completion_audit = delivery.get("completion_audit", {})
+    criteria_met = completion_audit.get("criteria_met", [])
+    criteria_unmet = completion_audit.get("criteria_unmet", [])
+
+    confidence_score = delivery.get("confidence_score", 0)
+    if isinstance(confidence_score, dict):
+        confidence_score = confidence_score.get("score", 0)
+
+    # ── Section 8: Files Changed ──────────────────────────────────────
+    _fc = changeset.get("files_changed", [])
+    files_changed = _fc if isinstance(_fc, list) else []
+    files_changed_count = len(files_changed) if isinstance(_fc, list) else (_fc if isinstance(_fc, int) else 0)
+    lines_added = changeset.get("lines_added", 0)
+    lines_removed = changeset.get("lines_removed", 0)
+
+    # ── Duration & timestamps ─────────────────────────────────────────
+    created = run_state.get("created_at", "")
+    completed = run_state.get("completed_at", "")
+    duration_str = ""
+    if created and completed:
+        try:
+            t0 = datetime.fromisoformat(created)
+            t1 = datetime.fromisoformat(completed)
+            mins = round((t1 - t0).total_seconds() / 60, 1)
+            duration_str = f"{mins} min"
+        except (ValueError, TypeError):
+            pass
+
+    # ── Validation events ─────────────────────────────────────────────
+    validation_events = run_state.get("validation_events", [])
+    validation_blocks = sum(1 for v in validation_events if not v.get("passed"))
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-    report = f"""# Autonomous Pipeline Report
+    # ══════════════════════════════════════════════════════════════════
+    # BUILD REPORT
+    # ══════════════════════════════════════════════════════════════════
+    sections = []
+
+    sections.append(f"""# Autonomous Pipeline Report: {title}
 
 **Run ID:** {run_state['id']} | **Project:** {args.project} | **Profile:** {profile}
-**Date:** {now} | **Confidence:** {confidence}/10
+**Date:** {now} | **Duration:** {duration_str or 'N/A'} | **Confidence:** {confidence_score}/10""")
 
-## 1. Requirement
-{requirement}
+    # TL;DR
+    summary_text = delivery.get("summary", requirement[:200])
+    sections.append(f"""## TL;DR
+{summary_text}""")
 
-## 2. Pipeline Execution
-| Stage | Status | Artifact | Summary |
-|-------|--------|----------|---------|
-{chr(10).join(stage_lines) if stage_lines else "| (no stages) | | | |"}
+    # 1. Requirement
+    sections.append(f"""## 1. Requirement
+{requirement}""")
 
-## 3. Decision Log
+    # 2. Evaluation
+    eval_section = "## 2. Evaluation\n"
+    if eval_table_lines:
+        eval_section += "| Dimension | Score | Recommendation |\n|---|---|---|\n"
+        eval_section += "\n".join(eval_table_lines)
+    else:
+        eval_section += f"Recommendation: **{eval_recommendation}** | Scope: {eval_scope}"
+    if eval_criteria:
+        eval_section += "\n\n**Acceptance Criteria:**\n"
+        for i, ac in enumerate(eval_criteria[:12], 1):
+            eval_section += f"{i}. {ac}\n"
+    sections.append(eval_section)
+
+    # 3. Design & Approach
+    design_section = "## 3. Design & Approach\n"
+    if key_findings:
+        design_section += "**Research Findings (THINK):**\n"
+        for kf in key_findings[:8]:
+            design_section += f"- {kf}\n"
+        design_section += "\n"
+    if alternatives:
+        design_section += "**Alternatives Evaluated:**\n"
+        for alt in alternatives[:4]:
+            if isinstance(alt, dict):
+                rec = " ✅ (recommended)" if alt.get("recommendation") else ""
+                design_section += f"- {alt.get('constraint', '?')} — effort: {alt.get('effort', '?')}{rec}\n"
+            else:
+                design_section += f"- {str(alt)[:80]}\n"
+        design_section += "\n"
+    if approach:
+        design_section += f"**Chosen Approach:** {approach}\n\n"
+    if success_criteria:
+        design_section += "**Success Criteria:**\n"
+        for sc in success_criteria[:10]:
+            design_section += f"- {sc}\n"
+    if boundaries and isinstance(boundaries, dict):
+        always_rules = boundaries.get("always", [])
+        never_rules = boundaries.get("never", [])
+        if always_rules:
+            design_section += "\n**Always:**\n"
+            for r in always_rules[:5]:
+                design_section += f"- {r}\n"
+        if never_rules:
+            design_section += "\n**Never:**\n"
+            for r in never_rules[:5]:
+                design_section += f"- {r}\n"
+    if not approach and not success_criteria and not key_findings:
+        if "think" in skipped_stages or "plan" in skipped_stages:
+            design_section += f"**⏭ Skipped** — {skipped_stages.get('think', skipped_stages.get('plan', ''))}\n"
+        else:
+            design_section += "(No design artifact data captured for this run)\n"
+    sections.append(design_section)
+
+    # 4. Pipeline Execution
+    total_tokens = sum(s.get("token_cost", 0) for s in stages)
+    exec_section = f"""## 4. Pipeline Execution
+| Stage | Status | Artifact | Tokens | Summary |
+|-------|--------|----------|--------|---------|
+{chr(10).join(stage_lines) if stage_lines else "| (no stages) | | | | |"}
+
+**Total tokens:** {total_tokens:,} | **Stages:** {sum(1 for s in stages if s.get('status') in ('done', 'completed'))}/{len(stages)} completed"""
+    if validation_blocks:
+        exec_section += f" | **Validation blocks:** {validation_blocks}"
+    sections.append(exec_section)
+
+    # 5. TDD Results
+    tdd_section = f"""## 5. TDD Results
+| Metric | Value |
+|--------|-------|
+| Tests total | {test_total} |
+| Tests passed | {test_passed} |
+| Tests failed | {test_failed} |
+| New tests added | {tests_added} |
+| Duration | {test_duration}s |
+| Regressions | {test_failed} |"""
+    sections.append(tdd_section)
+
+    # 6. Decision Log
+    decision_section = f"""## 6. Decision Log
 | Stage | Decision | Classification | Reasoning |
 |-------|----------|---------------|-----------|
-{chr(10).join(decision_lines) if decision_lines else "| (no decisions logged) | | | |"}
+{chr(10).join(decision_lines) if decision_lines else "| (no decisions) | | | |"}
 
-**Summary:** {mech} mechanical, {taste} taste, {judgment} judgment
+**Summary:** {mech} mechanical, {taste} taste, {judgment} judgment"""
+    sections.append(decision_section)
 
-## 4. Quality Assessment
-- **Confidence:** {confidence}/10
-- **Taste decisions:** {len(taste_decisions)} accumulated
-- **Stages completed:** {sum(1 for s in stages if s.get('status') in ('done', 'completed'))}/{len(stages)}
+    # 7. Quality Gates
+    quality_section = "## 7. Quality Gates\n"
+    quality_section += "| Gate | Result |\n|------|--------|\n"
+    quality_section += f"| REVIEW (code quality) | {review_findings_count} findings ({review_severity}) |\n"
+    quality_section += f"| TEST (suite) | {test_passed}/{test_total} pass |\n"
+    quality_section += f"| Confidence | {confidence_score}/10 |\n"
 
-## 5. Status
-Pipeline status: **{run_state.get('status', 'unknown')}**
+    # 7.5 Adversarial Review
+    quality_section += f"\n### 7.5 Adversarial Review\n"
+    if not adversarial and "deliver" not in stage_data_map:
+        quality_section += f"**⏭ NOT RUN** — deliver stage was skipped (profile: {profile})\n"
+    elif not adversarial or (adversarial_verdict == "?" and not adversarial_findings):
+        quality_section += "**⚠️ NOT RUN** — adversarial sub-agent was not spawned during this run.\n"
+        quality_section += "This is a quality gap. Pipeline DELIVER requires adversarial review.\n"
+    elif adversarial_findings:
+        quality_section += f"**{len(adversarial_findings)} findings** (verdict: {adversarial_verdict})\n"
+        for f in adversarial_findings[:5]:
+            if isinstance(f, dict):
+                quality_section += f"- [{f.get('severity', '?')}] {f.get('description', f.get('finding', ''))[:80]}\n"
+            else:
+                quality_section += f"- {str(f)[:80]}\n"
+    else:
+        quality_section += f"Verdict: **{adversarial_verdict}** | Sub-agent spawned: ✅ | Findings: 0\n"
 
----
-*Generated by SwarmAI Autonomous Pipeline | {now}*
-"""
+    # 7.6 Completion Audit
+    quality_section += f"\n### 7.6 Completion Audit\n"
+    if criteria_met or criteria_unmet:
+        for c in criteria_met:
+            quality_section += f"- [x] {c}\n"
+        for c in criteria_unmet:
+            quality_section += f"- [ ] {c}\n"
+        quality_section += f"\n**Met:** {len(criteria_met)} | **Unmet:** {len(criteria_unmet)}"
+    else:
+        quality_section += "(No completion audit data)\n"
+    sections.append(quality_section)
 
-    # Write REPORT.md
+    # 8. Files Changed
+    files_section = "## 8. Files Changed\n"
+    if files_changed:
+        for f in files_changed:
+            files_section += f"- `{f}`\n"
+        files_section += f"\n**+{lines_added} / -{lines_removed} lines** | {files_changed_count} files"
+    elif files_changed_count > 0:
+        files_section += f"**{files_changed_count} files** | +{lines_added} / -{lines_removed} lines\n"
+        files_section += "(file list not captured in changeset artifact)\n"
+    elif "build" in skipped_stages:
+        files_section += f"**⏭ Skipped** — {skipped_stages['build']}\n"
+    else:
+        files_section += "(No changeset data captured for this run)\n"
+    sections.append(files_section)
+
+    # 9. Lessons
+    sections.append("""## 9. Lessons
+(Captured in REFLECT stage — see DailyActivity or MEMORY.md for session lessons)""")
+
+    # 10. Known Gaps
+    gaps_section = "## 10. Known Gaps & Attention Flags\n"
+    if criteria_unmet:
+        for c in criteria_unmet:
+            gaps_section += f"- {c}\n"
+    if validation_blocks:
+        gaps_section += f"- Validator blocked {validation_blocks} time(s) during execution\n"
+    if not criteria_unmet and not validation_blocks:
+        gaps_section += "None identified.\n"
+    sections.append(gaps_section)
+
+    # Footer
+    sections.append(f"---\n*Generated by SwarmAI Autonomous Pipeline | {now}*")
+
+    report = "\n\n".join(sections) + "\n"
+
+    # Write REPORT.md — never overwrite hand-written reports unless --force
     report_path = run_file.parent / "REPORT.md"
+    if report_path.exists() and not getattr(args, "force", False):
+        print(json.dumps({
+            "skipped": True,
+            "reason": "REPORT.md already exists (use --force to overwrite)",
+            "report_path": str(report_path),
+        }))
+        return
+
     report_path.write_text(report, encoding="utf-8")
 
     print(json.dumps({
         "report_path": str(report_path),
-        "confidence": confidence,
+        "confidence": confidence_score,
         "stages": len(stages),
         "decisions": len(all_decisions),
+        "files_changed": files_changed_count,
+        "tests": test_total,
     }))
 
 
@@ -1279,6 +1578,50 @@ def _load_artifact_for_metrics(project: str, artifact_id: str) -> dict | None:
                 except (json.JSONDecodeError, OSError):
                     return None
     return None
+
+
+def _load_latest_artifact_by_type(project: str, artifact_type: str) -> dict | None:
+    """Load the most recent artifact file by type prefix (e.g. 'evaluation', 'changeset').
+
+    Artifacts are stored as <type>-YYYYMMDD.json in .artifacts/ directory.
+    Returns the most recent one (sorted by filename descending).
+
+    WARNING: Only use for non-report contexts (e.g. metrics). For report generation,
+    use _load_artifact_by_date() to prevent cross-contamination between runs.
+    """
+    ws = _get_workspace()
+    artifacts_dir = ws / "Projects" / project / ".artifacts"
+    if not artifacts_dir.is_dir():
+        return None
+    try:
+        candidates = sorted(
+            [f for f in artifacts_dir.iterdir()
+             if f.name.startswith(f"{artifact_type}-") and f.suffix == ".json"],
+            key=lambda p: p.name,
+            reverse=True,
+        )
+        if not candidates:
+            return None
+        return json.loads(candidates[0].read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _load_artifact_by_date(project: str, artifact_type: str, date_str: str) -> dict | None:
+    """Load artifact file matching exact date (YYYYMMDD format).
+
+    Prevents cross-contamination by only loading artifacts from the same day
+    as the pipeline run. Returns None if no matching file exists.
+    """
+    ws = _get_workspace()
+    artifacts_dir = ws / "Projects" / project / ".artifacts"
+    target = artifacts_dir / f"{artifact_type}-{date_str}.json"
+    if not target.exists():
+        return None
+    try:
+        return json.loads(target.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
 
 
 def cmd_run_metrics(args, reg: ArtifactRegistry) -> None:
@@ -1532,6 +1875,7 @@ def main() -> None:
     p_run_report = sub.add_parser("run-report", help="Generate REPORT.md for a pipeline run")
     p_run_report.add_argument("--project", required=True)
     p_run_report.add_argument("--run-id", required=True, help="Pipeline run ID")
+    p_run_report.add_argument("--force", action="store_true", help="Overwrite existing REPORT.md")
 
     # run-metrics (generate METRICS.json for one run)
     p_run_metrics = sub.add_parser("run-metrics", help="Generate METRICS.json for a pipeline run")
