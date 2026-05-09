@@ -420,7 +420,7 @@ class TestExtractUncommittedState:
     def test_returns_git_status_output(self):
         mock_result = " M file1.py\n?? file2.py\n"
         with patch("core.context_injector._run_git_command", return_value=mock_result):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 _extract_uncommitted_state("/some/dir")
             )
         assert "file1.py" in result
@@ -428,14 +428,14 @@ class TestExtractUncommittedState:
 
     def test_returns_empty_on_timeout(self):
         with patch("core.context_injector._run_git_command", return_value=""):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 _extract_uncommitted_state("/some/dir")
             )
         assert result == ""
 
     def test_returns_empty_on_exception(self):
         with patch("core.context_injector._run_git_command", side_effect=Exception("boom")):
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 _extract_uncommitted_state("/some/dir")
             )
         assert result == ""

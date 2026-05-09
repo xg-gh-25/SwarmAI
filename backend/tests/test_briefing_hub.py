@@ -278,7 +278,7 @@ class TestExtractBuilds:
         ctx.mkdir()
         (ctx / "MEMORY.md").write_text("## Open Threads\n_(None)_\n")
 
-        # Create pipeline run with REPORT.md
+        # Create pipeline run with REPORT.md + run.json
         run_dir = tmp_path / "Projects" / "TestProj" / ".artifacts" / "runs" / "run_abc12345"
         run_dir.mkdir(parents=True)
         (run_dir / "REPORT.md").write_text(
@@ -287,6 +287,15 @@ class TestExtractBuilds:
             "**Date:** 2026-04-26 | **Confidence:** 9/10\n\n"
             "## 1. Requirement\nTest feature requirement\n"
         )
+        import json as _json
+        (run_dir / "run.json").write_text(_json.dumps({
+            "id": "run_abc12345",
+            "status": "completed",
+            "completed_at": "2026-04-26T12:00:00",
+            "requirement": "Test feature requirement",
+            "profile": "full",
+            "stages": []
+        }))
 
         result = build_session_briefing_data(str(tmp_path))
         output = result.get("output", {})
