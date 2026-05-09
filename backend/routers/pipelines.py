@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -33,6 +34,9 @@ from schemas.pipeline_run import (
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# Runs stuck in "running" with no update for this long are auto-marked failed.
+_STALE_THRESHOLD_MINUTES = 60
+
 
 def _get_swarmws() -> Path:
     """Resolve SwarmWS path. Function (not constant) for testability."""
@@ -43,10 +47,40 @@ def _get_profile_stage_count(profile: str | None) -> int:
     return len(get_profile_stages(profile))
 
 
+def _is_stale(state: dict) -> bool:
+    """Check if a running pipeline has gone stale (no update in threshold)."""
+    if state.get("status") != "running":
+        return False
+    updated_at = state.get("updated_at", "")
+    if not updated_at:
+        return True
+    try:
+        updated = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+        age_minutes = (datetime.now(timezone.utc) - updated).total_seconds() / 60
+        return age_minutes > _STALE_THRESHOLD_MINUTES
+    except (ValueError, TypeError):
+        return True
+
+
+def _mark_failed(run_file: Path, state: dict) -> None:
+    """Atomically mark a stale run as failed on disk."""
+    state["status"] = "failed"
+    state["failure_reason"] = "session ended without completion (auto-detected stale)"
+    state["updated_at"] = datetime.now(timezone.utc).isoformat()
+    try:
+        tmp = run_file.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        tmp.replace(run_file)
+        logger.info("Auto-marked stale pipeline %s as failed", state.get("id"))
+    except OSError as e:
+        logger.warning("Failed to mark stale pipeline %s: %s", state.get("id"), e)
+
+
 def _load_pipeline_runs() -> list[dict]:
     """Scan all projects for pipeline run files.
 
     Returns raw dicts sorted by updated_at (newest first).
+    Automatically marks stale "running" pipelines as "failed".
     Never raises — returns empty list on any error.
     """
     projects_dir = _get_swarmws() / "Projects"
@@ -71,6 +105,9 @@ def _load_pipeline_runs() -> list[dict]:
                 if rf.exists():
                     try:
                         state = json.loads(rf.read_text(encoding="utf-8"))
+                        # Auto-fail stale runs
+                        if _is_stale(state):
+                            _mark_failed(rf, state)
                         state["_project"] = project_dir.name
                         seen_ids.add(state.get("id", ""))
                         runs.append(state)
@@ -83,6 +120,8 @@ def _load_pipeline_runs() -> list[dict]:
                 state = json.loads(run_file.read_text(encoding="utf-8"))
                 if state.get("id") in seen_ids:
                     continue
+                if _is_stale(state):
+                    _mark_failed(run_file, state)
                 state["_project"] = project_dir.name
                 runs.append(state)
             except (json.JSONDecodeError, OSError, KeyError) as e:

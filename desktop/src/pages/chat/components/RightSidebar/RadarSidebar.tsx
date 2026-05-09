@@ -17,7 +17,6 @@ import type { RadarSidebarProps } from './types';
 import { RADAR_SIDEBAR_WIDTH_KEY } from './types';
 import { CollapsibleSection } from './shared/CollapsibleSection';
 import { TodoSection } from './TodoSection';
-import { PipelineSection } from './PipelineSection';
 import { ArtifactsSection } from './ArtifactsSection';
 import {
   systemService,
@@ -72,7 +71,6 @@ export function RadarSidebar({
   onDeleteSession,
   workspaceId,
   onItemClick,
-  onSendMessage,
 }: RadarSidebarProps) {
   // Auto-hide when file editor panel is open
   const [hiddenByEditorPanel, setHiddenByEditorPanel] = useState(false);
@@ -131,7 +129,6 @@ export function RadarSidebar({
 
   // Section counts
   const [todoCount, setTodoCount] = useState(0);
-  const [pipelineCount, setPipelineCount] = useState(0);
   const [artifactCount, setArtifactCount] = useState(0);
 
   const workingCount = briefing?.working.length ?? 0;
@@ -235,11 +232,6 @@ export function RadarSidebar({
             <SwarmOutputSection output={briefing!.output} compact />
           </CollapsibleSection>
         )}
-
-        {/* Pipelines — purple (engineering) */}
-        <CollapsibleSection name="pipelines" icon="account_tree" label="Pipeline" count={pipelineCount} defaultExpanded={pipelineCount > 0} accent="rgba(139,92,246,0.35)">
-          <PipelineSection onCountChange={setPipelineCount} onSendMessage={onSendMessage} />
-        </CollapsibleSection>
 
         {/* Artifacts — neutral (no accent) */}
         <CollapsibleSection name="artifacts" icon="folder_open" label="Artifacts" count={artifactCount} defaultExpanded={false}>
