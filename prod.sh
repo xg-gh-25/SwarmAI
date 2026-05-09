@@ -81,18 +81,14 @@ cmd_build() {
         return 1
     fi
 
-    # Step 3: Deploy to daemon
-    # Kill daemon BEFORE deploy to avoid onedir zlib corruption (rsync over running binary).
-    # Use `launchctl kill` (not bootout) — keeps service registered, KeepAlive auto-restarts.
+    # Step 3: Deploy then restart
+    # Order: deploy FIRST, then kill. This script may run from inside the daemon
+    # (Claude CLI subprocess). Deploy must complete before kill signal — after kill,
+    # daemon dies → CLI dies → script dies. KeepAlive restarts with new binary.
     _log "Step 3/3: Deploy to daemon..."
+    local daemon_was_running=false
     if _daemon_is_running; then
-        _log "Stopping daemon before deploy..."
-        launchctl kill SIGTERM "$GUI_TARGET" 2>/dev/null || true
-        _wait_port_free "$DAEMON_PORT" 15 || {
-            _warn "Port still bound — force-killing..."
-            launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
-            sleep 1
-        }
+        daemon_was_running=true
     fi
 
     _deploy_daemon_binary
@@ -101,10 +97,11 @@ cmd_build() {
     _ok "Build complete in $(_build_time $start)"
     _ok "Binary: $BACKEND_BINARY ($(du -h "$BACKEND_BINARY" | cut -f1))"
 
-    # launchd KeepAlive auto-restarts with new binary (if service was registered)
-    if _daemon_is_running 2>/dev/null || launchctl print "$GUI_TARGET" &>/dev/null; then
+    # Kill old daemon so it restarts with new binary (deploy already done)
+    if [ "$daemon_was_running" = true ]; then
         echo ""
-        _log "Waiting for daemon to restart with new binary..."
+        _log "Restarting daemon to pick up new binary..."
+        launchctl kill SIGTERM "$GUI_TARGET" 2>/dev/null || true
         _daemon_wait_healthy 90 || {
             _warn "Daemon didn't come up — try: ./prod.sh daemon start"
         }
@@ -230,23 +227,22 @@ cmd_release() {
     echo -e "${BOLD}Phase 3/4: Deploy & Verify${NC}"
     echo "──────────────────────────"
 
-    # 3a. Kill daemon before deploy (avoid onedir zlib corruption)
+    # 3a. Deploy binary (BEFORE kill — script may die when daemon is killed)
+    local daemon_was_running=false
     if _daemon_is_running; then
-        _log "Stopping daemon before deploy..."
-        launchctl kill SIGTERM "$GUI_TARGET" 2>/dev/null || true
-        _wait_port_free "$DAEMON_PORT" 15 || {
-            launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
-            sleep 1
-        }
+        daemon_was_running=true
     fi
 
-    # 3b. Deploy binary
     _deploy_daemon_binary
 
-    # 3c. Wait for KeepAlive restart or bootstrap fresh
-    if launchctl print "$GUI_TARGET" &>/dev/null; then
-        _log "Waiting for daemon to restart with new binary..."
+    # 3b. Kill old daemon so it restarts with new binary (deploy already done)
+    if [ "$daemon_was_running" = true ]; then
+        _log "Restarting daemon to pick up new binary..."
+        launchctl kill SIGTERM "$GUI_TARGET" 2>/dev/null || true
         _daemon_wait_healthy 90 || _warn "Daemon restart slow — try: ./prod.sh daemon restart"
+    elif launchctl print "$GUI_TARGET" &>/dev/null; then
+        _log "Service registered but not running — starting..."
+        cmd_daemon start || _warn "Daemon start failed — try: ./prod.sh daemon start"
     else
         _log "Starting daemon..."
         cmd_daemon start || _warn "Daemon start failed — try: ./prod.sh daemon start"
@@ -368,21 +364,18 @@ cmd_deploy() {
         return 1
     fi
 
-    # Kill before deploy (avoid onedir zlib corruption)
+    # Deploy first, then kill (script may die when daemon is killed)
+    local daemon_was_running=false
     if _daemon_is_running; then
-        _log "Stopping daemon before deploy..."
-        launchctl kill SIGTERM "$GUI_TARGET" 2>/dev/null || true
-        _wait_port_free "$DAEMON_PORT" 15 || {
-            launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
-            sleep 1
-        }
+        daemon_was_running=true
     fi
 
     _deploy_daemon_binary
 
-    # KeepAlive auto-restarts if service is registered
-    if launchctl print "$GUI_TARGET" &>/dev/null; then
-        _log "Waiting for daemon to restart with new binary..."
+    # Kill old daemon so it restarts with new binary (deploy already done)
+    if [ "$daemon_was_running" = true ]; then
+        _log "Restarting daemon to pick up new binary..."
+        launchctl kill SIGTERM "$GUI_TARGET" 2>/dev/null || true
         _daemon_wait_healthy 90 || _warn "Daemon restart slow — try: ./prod.sh daemon restart"
     else
         _ok "Deployed. Start daemon with: ./prod.sh daemon start"
