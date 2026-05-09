@@ -135,6 +135,8 @@ Deploy your AI team to the cloud in one click. Same brain, same skills, accessib
 
 ![SwarmAI Workspace](./assets/swarm-3.png)
 
+![SwarmAI Workspace](./assets/swarm-4.png)
+
 ---
 
 ## Architecture — Six Self-Growing Flywheels
