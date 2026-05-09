@@ -207,25 +207,37 @@ Stage 4 PACKAGE: PASS (user-built)
 
 ---
 
-## Stage 5: SMOKE TEST (30s)
+## Stage 5: SMOKE TEST (90s max)
 
-Verify the daemon is running the NEW version correctly.
+Deploy new binary to daemon and verify health with correct version.
+
+**CRITICAL:** Kill daemon BEFORE deploying to avoid onedir zlib corruption. Use `launchctl kill` (not bootout) so KeepAlive auto-restarts.
 
 ```bash
 cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai
 
-# 1. Deploy new binary to daemon
-SIDECAR="desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin"
-cp "$SIDECAR" ~/.swarm-ai/daemon/python-backend
+# 1. Kill daemon BEFORE deploy (prevent zlib corruption from rsync over running binary)
+launchctl kill SIGTERM gui/$(id -u)/com.swarmai.backend 2>/dev/null || true
+for i in $(seq 1 15); do
+  nc -z 127.0.0.1 18321 2>/dev/null || break
+  sleep 1
+done
+
+# 2. Deploy new binary (onedir bundle)
+BUNDLE_DIR="desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin"
+rsync -a --delete "$BUNDLE_DIR/" ~/.swarm-ai/daemon/
 chmod +x ~/.swarm-ai/daemon/python-backend
-echo "$(git rev-parse --short HEAD) $(date -u +%Y-%m-%dT%H:%M:%SZ)" > ~/.swarm-ai/daemon/.version
 
-# 2. Restart daemon
-launchctl kickstart -k gui/$(id -u)/com.swarmai.backend
-sleep 5
+# 3. Version marker
+APP_VER=$(grep -m1 '"version"' desktop/src-tauri/tauri.conf.json | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+echo "${APP_VER} $(git rev-parse --short HEAD) $(date '+%Y-%m-%d %H:%M:%S')" > ~/.swarm-ai/daemon/.version
 
-# 3. Health check — must return JSON, not HTML (prod.sh lesson)
-HEALTH=$(curl -s http://localhost:18321/health)
+# 4. Wait for KeepAlive to restart daemon, then health check
+for i in $(seq 1 45); do
+  HEALTH=$(curl -sf http://127.0.0.1:18321/health 2>/dev/null) && break
+  sleep 2
+done
+
 echo "$HEALTH" | python3 -c "
 import sys, json
 try:
@@ -241,9 +253,9 @@ except AssertionError as e:
     sys.exit(1)
 "
 
-# 4. Version semantic check
+# 5. Version semantic check
 DEPLOYED=$(cat ~/.swarm-ai/daemon/.version | awk '{print $1}')
-echo "Deployed commit: $DEPLOYED"
+echo "Deployed version: $DEPLOYED"
 ```
 
 **Pass criteria:**

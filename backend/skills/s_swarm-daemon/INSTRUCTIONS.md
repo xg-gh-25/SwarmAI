@@ -70,25 +70,22 @@ DAEMON STATUS
 
 ### `stop`
 
-Gracefully stop the daemon.
+Permanently stop the daemon (deregisters from launchd — KeepAlive will NOT restart).
 
 ```bash
-# Bootout (graceful unload)
+# Bootout = deregister service permanently (use only for intentional stop)
 launchctl bootout gui/$(id -u)/com.swarmai.backend 2>/dev/null
 
 # Wait for port to free (max 10s)
 for i in $(seq 1 10); do
-  if ! lsof -ti :18321 >/dev/null 2>&1; then
-    echo "Port 18321 free"
-    break
-  fi
+  nc -z 127.0.0.1 18321 2>/dev/null || { echo "Port 18321 free"; break; }
   sleep 1
 done
 
-# Verify
-if lsof -ti :18321 >/dev/null 2>&1; then
+# Verify — force kill only if port still bound
+if nc -z 127.0.0.1 18321 2>/dev/null; then
   echo "WARNING: Port still in use after 10s — force killing"
-  kill -9 $(lsof -ti :18321) 2>/dev/null
+  launchctl kill SIGKILL gui/$(id -u)/com.swarmai.backend 2>/dev/null || true
 fi
 ```
 
@@ -147,30 +144,36 @@ DAEMON STARTED
 
 ### `restart`
 
-Stop + start with health verification.
+Kill process, let KeepAlive auto-restart. **NEVER use bootout for restart** — bootout deregisters the service, and if the script dies mid-execution, nobody re-registers.
 
 ```bash
-# 1. Stop
-launchctl bootout gui/$(id -u)/com.swarmai.backend 2>/dev/null
-sleep 2
+# 1. Send SIGTERM — service stays registered, KeepAlive will restart
+launchctl kill SIGTERM gui/$(id -u)/com.swarmai.backend 2>/dev/null || {
+  echo "kill failed — daemon may not be running, bootstrapping fresh..."
+  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.swarmai.backend.plist
+}
 
-# 2. Start
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.swarmai.backend.plist
-
-# 3. Wait healthy (30s)
+# 2. Wait for port to release
 for i in $(seq 1 15); do
-  HEALTH=$(curl -s http://localhost:18321/health 2>/dev/null)
+  nc -z 127.0.0.1 18321 2>/dev/null || break
+  sleep 1
+done
+
+# 3. Force-kill if still stuck
+if nc -z 127.0.0.1 18321 2>/dev/null; then
+  launchctl kill SIGKILL gui/$(id -u)/com.swarmai.backend 2>/dev/null || true
+  sleep 1
+fi
+
+# 4. Wait for KeepAlive to restart daemon (ThrottleInterval=10s + cold start)
+for i in $(seq 1 45); do
+  HEALTH=$(curl -sf http://127.0.0.1:18321/health 2>/dev/null)
   if echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='healthy'" 2>/dev/null; then
-    echo "$HEALTH"
+    echo "$HEALTH" | python3 -m json.tool
     break
   fi
   sleep 2
 done
-```
-
-**Alternative (faster, if supported):**
-```bash
-launchctl kickstart -k gui/$(id -u)/com.swarmai.backend
 ```
 
 **Report:**
@@ -198,21 +201,31 @@ if [ ! -f "$SIDECAR" ]; then
   exit 1
 fi
 
-# Atomic deploy
-cp "$SIDECAR" "${DAEMON_BIN}.new"
-mv "${DAEMON_BIN}.new" "$DAEMON_BIN"
+# Kill BEFORE deploy to avoid onedir zlib corruption (rsync over running binary)
+launchctl kill SIGTERM gui/$(id -u)/com.swarmai.backend 2>/dev/null || true
+for i in $(seq 1 15); do
+  nc -z 127.0.0.1 18321 2>/dev/null || break
+  sleep 1
+done
+
+# Deploy via rsync (fast incremental, handles onedir _internal/)
+rsync -a --delete "$BUNDLE_DIR/" "${HOME}/.swarm-ai/daemon/"
 chmod +x "$DAEMON_BIN"
 
 # Version marker
 cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai
-echo "$(git rev-parse --short HEAD) $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${HOME}/.swarm-ai/daemon/.version"
+APP_VER=$(grep -m1 '"version"' desktop/src-tauri/tauri.conf.json | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+echo "${APP_VER} $(git rev-parse --short HEAD) $(date '+%Y-%m-%d %H:%M:%S')" > "${HOME}/.swarm-ai/daemon/.version"
 
-# Restart to pick up new binary
-launchctl kickstart -k gui/$(id -u)/com.swarmai.backend
-
-# Verify health
-sleep 3
-curl -s http://localhost:18321/health
+# KeepAlive auto-restarts with new binary — wait for healthy
+for i in $(seq 1 45); do
+  HEALTH=$(curl -sf http://127.0.0.1:18321/health 2>/dev/null)
+  if echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='healthy'" 2>/dev/null; then
+    echo "$HEALTH" | python3 -m json.tool
+    break
+  fi
+  sleep 2
+done
 ```
 
 **Report:**
@@ -298,12 +311,15 @@ DAEMON HEALTH
 
 | Symptom | Likely Cause | Fix |
 |---------|--------------|-----|
-| Port 18321 in use but daemon not loaded | Orphan process | `kill -9 $(lsof -ti :18321)` then `start` |
-| "service already loaded" on bootstrap | Double-load | `bootout` first, then `bootstrap` |
+| Port 18321 in use but daemon not loaded | Orphan process | `launchctl kill SIGKILL gui/$(id -u)/com.swarmai.backend` then `start` |
+| "service already loaded" on bootstrap | Double-load | `launchctl bootout` first, then `bootstrap` |
 | Health returns HTML not JSON | Caddy proxy issue (Hive) | N/A for desktop daemon |
-| Version mismatch | Old binary loaded | `deploy` (copies + restarts) |
+| Version mismatch | Old binary loaded | `deploy` (kill + rsync + KeepAlive restart) |
 | Repeated crashes | Check logs | `logs` → fix code → `s_swarm-build` |
-| "Operation not permitted" | launchd I/O error | Wait 5s, retry. If persistent: `launchctl remove` + `bootstrap` |
+| "Operation not permitted" | launchd I/O error | Wait 5s, retry. If persistent: `launchctl bootout` + `bootstrap` |
+| Daemon dead after dev.sh build | bootout killed registration | `start` (re-bootstraps from plist) |
+
+**Critical rule:** Use `launchctl kill SIGTERM` for restart (keeps service registered). Use `launchctl bootout` ONLY for permanent stop. Never use `lsof` for port checks — use `nc -z 127.0.0.1 18321`.
 
 ---
 

@@ -49,14 +49,20 @@ class TestWrapperPortConflictExitCode:
         exit 1 tells launchd 'failed' and KeepAlive triggers a retry.
         """
         content = WRAPPER_SCRIPT.read_text()
-        # Find the port conflict block (from lsof check to the outer fi)
+        # Find the port conflict block (from nc -z or lsof check to the outer fi)
         lines = content.split("\n")
         in_port_check = False
         depth = 0
         exit_codes_in_block = []
         for line in lines:
             stripped = line.strip()
-            if "lsof" in stripped and ("DAEMON_PORT" in stripped or str(DAEMON_PORT) in stripped) and "if " in line:
+            # Match port check: nc -z or lsof with DAEMON_PORT
+            is_port_check = (
+                ("nc " in stripped or "lsof" in stripped)
+                and ("DAEMON_PORT" in stripped or str(DAEMON_PORT) in stripped)
+                and "if " in line
+            )
+            if is_port_check:
                 in_port_check = True
                 depth = 1
                 continue
@@ -96,7 +102,7 @@ class TestWrapperPortConflictExitCode:
         """After a successful start, the failure counter should be cleared."""
         content = WRAPPER_SCRIPT.read_text()
         # After the port check passes (port is free), should clear any counter
-        # Look for rm/reset of the stamp file after the lsof check
+        # Look for rm/reset of the stamp file after the port check
         assert any(
             keyword in content
             for keyword in ["rm -f", "rm ", "echo 0", "> /dev/null", "FAIL_STAMP"]

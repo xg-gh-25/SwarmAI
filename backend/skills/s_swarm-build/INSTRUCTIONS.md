@@ -167,38 +167,45 @@ Stage 4 DEPLOY: PASS
 
 ---
 
-## Stage 5: RESTART (15s)
+## Stage 5: RESTART (90s max, typically 15-30s)
 
-Restart the launchd daemon to pick up the new binary.
+Kill daemon process so KeepAlive auto-restarts with new binary.
+
+**CRITICAL:** Use `launchctl kill SIGTERM`, NOT `bootout`. Bootout deregisters the service — if this script dies mid-execution (e.g. running inside daemon's own subprocess), nobody re-registers and daemon is permanently dead.
 
 ```bash
-# Stop
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.swarmai.backend.plist 2>/dev/null
+# Kill process — service stays registered, KeepAlive will restart
+launchctl kill SIGTERM gui/$(id -u)/com.swarmai.backend 2>/dev/null || {
+  # If kill fails (daemon wasn't running), bootstrap fresh
+  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.swarmai.backend.plist 2>/dev/null || true
+}
 
-# Wait for port to free
-sleep 2
+# Wait for port to release
+for i in $(seq 1 15); do
+  nc -z 127.0.0.1 18321 2>/dev/null || break
+  sleep 1
+done
 
-# Start
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.swarmai.backend.plist
+# Force-kill if stuck
+if nc -z 127.0.0.1 18321 2>/dev/null; then
+  launchctl kill SIGKILL gui/$(id -u)/com.swarmai.backend 2>/dev/null || true
+  sleep 1
+fi
 
-echo "Daemon restarted"
+echo "Daemon killed — KeepAlive will restart with new binary"
 ```
 
 **Pass criteria:**
-- No error from bootstrap command
-- Process is running after restart
+- Port 18321 released (nc -z fails)
+- Daemon will auto-restart via KeepAlive (verified in Stage 6)
 
 **Report format:**
 ```
 Stage 5 RESTART: PASS
-  Daemon: com.swarmai.backend restarted
+  Daemon: com.swarmai.backend killed, KeepAlive will restart
 ```
 
-**On failure:** If bootout fails with "No such process", that's OK (wasn't running).
-If bootstrap fails with "service already loaded", try kickstart instead:
-```bash
-launchctl kickstart -k gui/$(id -u)/com.swarmai.backend
-```
+**On failure:** If kill fails AND bootstrap fails → plist may be missing. Report: "Check ~/Library/LaunchAgents/com.swarmai.backend.plist exists."
 
 ---
 
