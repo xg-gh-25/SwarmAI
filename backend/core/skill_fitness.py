@@ -1,27 +1,38 @@
-"""Skill fitness evaluator using multi-signal heuristics.
+"""Skill fitness evaluator with two-layer scoring: structural heuristics + LLM judge.
 
+Layer 1 (structural, 40% weight):
 Scores skill outputs against expected behavior on 3 dimensions:
 correctness (50%), procedure_following (30%), judgment_quality (20%).
-
 Correctness uses three complementary signals blended together:
 - Jaccard term overlap (word-level, broad)
 - Bigram overlap (phrase-level, catches word ordering)
 - Containment ratio (asymmetric: what fraction of expected terms appear in actual)
 
-This avoids the pure-Jaccard trap where two texts share keywords but
-have completely different instructions.  The threshold in
-``run_evolution_cycle`` uses an adaptive formula that requires more
-evidence (lower threshold) when example count is low.
+Layer 2 (LLM-as-judge, 60% weight):
+Rubric-based scoring via Bedrock Haiku. Evaluates whether the actual output
+demonstrates correct application of the skill instructions, penalizes missing
+patterns, allows naming flexibility. Returns score + justification.
+
+GEPA-inspired: two-layer metric pattern from DSPy/GEPA (ICLR 2026 Oral).
+Layer 1 gives smooth gradient (fast, deterministic, zero-cost).
+Layer 2 gives semantic understanding (catches what structural checks miss).
 
 Key public symbols:
 - ``FitnessScore``          -- 3-dimensional score dataclass.
-- ``SkillFitnessEvaluator`` -- Multi-signal heuristic scorer.
+- ``JudgeScore``            -- Combined two-layer score with justification.
+- ``SkillFitnessEvaluator`` -- Multi-signal heuristic scorer (Layer 1).
+- ``LLMJudge``             -- Rubric-based LLM scorer (Layer 2).
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+import boto3
+from botocore.config import Config as BotoConfig
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +43,15 @@ class FitnessScore:
     procedure: float       # 0.0-1.0 -- action verbs present
     judgment: float        # 0.0-1.0 -- decision outcomes match
     overall: float         # Weighted: 0.5*c + 0.3*p + 0.2*j
+
+
+@dataclass
+class JudgeScore:
+    """Combined two-layer fitness score with justification."""
+    score: float               # 0.0-1.0 combined (0.4*L1 + 0.6*L2)
+    layer1_score: float        # Structural heuristic score
+    layer2_score: float | None  # LLM judge score (None if skipped/failed)
+    justification: str = ""    # LLM judge's one-sentence explanation
 
 
 _STOPWORDS = frozenset({
@@ -154,3 +174,193 @@ class SkillFitnessEvaluator:
             return 0.0
         scores = [self.score(exp, act).overall for exp, act in examples]
         return sum(scores) / len(scores)
+
+
+# ── Layer 2: LLM-as-Judge ──
+
+_JUDGE_SYSTEM_PROMPT = """\
+You are a skill quality judge for SwarmAI. You evaluate whether an AI agent's
+actual output demonstrates correct application of skill instructions.
+
+Score on a 0.0-1.0 scale using this rubric:
+- 1.0: Output perfectly follows the skill's patterns and addresses the user's request
+- 0.8: Output follows most patterns, minor omissions
+- 0.6: Output partially correct but misses key patterns or has significant gaps
+- 0.4: Output shows awareness of the skill but applies it incorrectly
+- 0.2: Output barely relates to what the skill instructs
+- 0.0: Output is completely wrong or unrelated
+
+Rules for judging:
+- DO NOT penalize naming differences (e.g., different variable names, ordering)
+- DO penalize: missing the core action entirely, breaking existing behavior,
+  using a different approach than instructed, hallucinating capabilities
+- Weight "did it do what the user asked?" highest
+- Consider the correction context: if the user corrected the agent, the output
+  was wrong — factor that into your score
+
+Return ONLY valid JSON: {"score": 0.7, "justification": "One sentence explaining the score."}
+"""
+
+
+class LLMJudge:
+    """Layer 2 scoring: rubric-based LLM judgment via Bedrock Haiku.
+
+    Evaluates (skill_text, expected, actual) triples against a quality rubric.
+    Returns 0.0-1.0 score with justification text.
+
+    Uses Haiku for cost efficiency (~$0.001/call vs $0.05 for Opus).
+    Falls back to None on any failure (timeout, API error, parse failure).
+    """
+
+    # Haiku model ID for cost-efficient judging
+    MODEL_ID = "us.anthropic.claude-haiku-4-5-v1"
+    TIMEOUT_SECONDS = 30
+
+    def __init__(self):
+        self._client = None
+        self._client_created_at: float = 0.0
+
+    def _get_client(self):
+        """Lazy Bedrock client with 1-hour TTL."""
+        import time
+        now = time.monotonic()
+        if self._client is None or (now - self._client_created_at) > 3600:
+            region = os.environ.get(
+                "AWS_REGION",
+                os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
+            )
+            self._client = boto3.client(
+                "bedrock-runtime",
+                region_name=region,
+                config=BotoConfig(
+                    read_timeout=self.TIMEOUT_SECONDS,
+                    connect_timeout=10,
+                    retries={"max_attempts": 1},
+                ),
+            )
+            self._client_created_at = now
+        return self._client
+
+    def _build_judge_prompt(
+        self,
+        skill_text: str,
+        expected: str,
+        actual: str,
+        correction_context: str = "",
+    ) -> str:
+        """Build the judge prompt with skill context and output pair."""
+        # Truncate skill text to 4KB for judge (it just needs the gist)
+        if len(skill_text.encode("utf-8")) > 4096:
+            skill_text = skill_text[:4000] + "\n[... truncated ...]"
+
+        parts = [
+            f"## Skill Instructions (what the agent should follow)\n{skill_text}",
+            f"\n## Expected Output\n{expected[:2000]}",
+            f"\n## Actual Output\n{actual[:2000]}",
+        ]
+        if correction_context:
+            parts.append(f"\n## User Correction (agent was wrong)\n{correction_context[:500]}")
+
+        parts.append("\nScore this output. Return JSON only.")
+        return "\n".join(parts)
+
+    def score(
+        self,
+        skill_text: str,
+        expected: str,
+        actual: str,
+        correction_context: str = "",
+    ) -> float | None:
+        """Score a single (expected, actual) pair using LLM judge.
+
+        Returns 0.0-1.0 on success, None on failure (timeout, parse error, etc.).
+        """
+        if not expected and not actual:
+            return 1.0  # Both empty = trivially correct
+
+        prompt = self._build_judge_prompt(skill_text, expected, actual, correction_context)
+
+        try:
+            client = self._get_client()
+            response = client.converse(
+                modelId=self.MODEL_ID,
+                messages=[{"role": "user", "content": [{"text": prompt}]}],
+                system=[{"text": _JUDGE_SYSTEM_PROMPT}],
+                inferenceConfig={"maxTokens": 200, "temperature": 0.1},
+            )
+
+            # Extract text
+            content_blocks = response.get("output", {}).get("message", {}).get("content", [])
+            text = ""
+            for block in content_blocks:
+                if "text" in block:
+                    text = block["text"]
+                    break
+
+            if not text:
+                return None
+
+            # Parse JSON response
+            data = json.loads(text.strip())
+            score_val = float(data.get("score", 0.0))
+            return max(0.0, min(1.0, score_val))
+
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            logger.warning("LLM judge parse error: %s", exc)
+            return None
+        except Exception as exc:
+            logger.warning("LLM judge call failed: %s", exc)
+            return None
+
+    def score_batch(
+        self,
+        skill_text: str,
+        examples: list[tuple[str, str]],
+        corrections: list[str] | None = None,
+    ) -> JudgeScore:
+        """Score a batch of examples with combined two-layer metric.
+
+        Returns JudgeScore with:
+        - layer1_score: structural heuristic average
+        - layer2_score: LLM judge average (None if all failed)
+        - score: combined 0.4*L1 + 0.6*L2 (or L1-only if L2 failed)
+        - justification: from the last successful judge call
+
+        Args:
+            skill_text: Full SKILL.md body for context.
+            examples: List of (expected, actual) pairs.
+            corrections: Optional correction texts for context (one per example).
+        """
+        if not examples:
+            return JudgeScore(score=0.0, layer1_score=0.0, layer2_score=None)
+
+        # Layer 1: structural heuristic
+        evaluator = SkillFitnessEvaluator()
+        layer1 = evaluator.score_batch(examples)
+
+        # Layer 2: LLM judge (sample up to 5 examples for cost)
+        sample = examples[:5]
+        judge_scores: list[float] = []
+        for i, (expected, actual) in enumerate(sample):
+            correction = corrections[i] if corrections and i < len(corrections) else ""
+            s = self.score(skill_text, expected, actual, correction)
+            if s is not None:
+                judge_scores.append(s)
+
+        if judge_scores:
+            layer2 = sum(judge_scores) / len(judge_scores)
+            combined = 0.4 * layer1 + 0.6 * layer2
+            return JudgeScore(
+                score=combined,
+                layer1_score=layer1,
+                layer2_score=layer2,
+                justification=f"L1={layer1:.2f}, L2={layer2:.2f} (n={len(judge_scores)})",
+            )
+        else:
+            # LLM judge failed entirely — fall back to Layer 1 only
+            return JudgeScore(
+                score=layer1,
+                layer1_score=layer1,
+                layer2_score=None,
+                justification="LLM judge unavailable, using structural score only",
+            )

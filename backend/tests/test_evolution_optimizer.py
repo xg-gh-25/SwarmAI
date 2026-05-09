@@ -807,6 +807,144 @@ class TestSkillHealthHighlightsApplyAffordance:
             if "save-memory" in line:
                 assert "apply" not in line.lower()
 
+
+# ── v2.3 GEPA-inspired components ──
+
+from core.evolution_optimizer import ExecutionTraceCollector, AntiPatternGenerator
+
+
+class TestExecutionTraceCollector:
+    """Tests for trace extraction from eval examples."""
+
+    @pytest.fixture
+    def collector(self):
+        return ExecutionTraceCollector()
+
+    def test_collect_traces_from_corrections(self, collector):
+        """Extracts traces only from examples with corrections."""
+        examples = [
+            _make_example(correction=None),  # No correction = skip
+            _make_example(correction="don't include verbose output"),
+            _make_example(correction="should add timestamps"),
+        ]
+        traces = collector.collect_traces("test-skill", examples)
+        assert len(traces) == 2
+        assert "verbose output" in traces[0]
+        assert "timestamps" in traces[1]
+
+    def test_collect_traces_max_limit(self, collector):
+        """Respects max_traces limit."""
+        examples = [_make_example(correction=f"fix {i}") for i in range(10)]
+        traces = collector.collect_traces("test", examples, max_traces=3)
+        assert len(traces) == 3
+
+    def test_collect_traces_empty(self, collector):
+        """No corrections = empty trace list."""
+        examples = [_make_example(correction=None) for _ in range(5)]
+        traces = collector.collect_traces("test", examples)
+        assert traces == []
+
+    def test_trace_includes_all_parts(self, collector):
+        """Trace contains user prompt, agent actions, and correction."""
+        ex = _make_example(correction="don't do that")
+        traces = collector.collect_traces("test", [ex])
+        assert len(traces) == 1
+        assert "User asked:" in traces[0]
+        assert "Agent did:" in traces[0]
+        assert "User corrected:" in traces[0]
+
+    def test_trace_capped_at_2000_chars(self, collector):
+        """Individual trace capped at 2000 characters."""
+        ex = _make_example(correction="x" * 3000)
+        traces = collector.collect_traces("test", [ex])
+        assert len(traces[0]) <= 2000
+
+
+class TestAntiPatternGenerator:
+    """Tests for anti-pattern section generation from corrections."""
+
+    @pytest.fixture
+    def generator(self):
+        return AntiPatternGenerator()
+
+    def test_generate_from_remove_corrections(self, generator):
+        """Generates anti-patterns from 'remove' action corrections."""
+        corrections = [
+            ("include verbose output", "remove", "high"),
+            ("use deprecated API calls", "remove", "high"),
+            ("add timestamps", "add", "high"),  # 'add' = not an anti-pattern
+        ]
+        result = generator.generate(corrections)
+        assert "## Anti-patterns" in result
+        assert "verbose output" in result
+        assert "deprecated API" in result
+        assert "timestamps" not in result  # 'add' corrections excluded
+
+    def test_generate_empty_when_no_remove(self, generator):
+        """Returns empty string when no 'remove' corrections exist."""
+        corrections = [
+            ("add error handling", "add", "high"),
+            ("use async", "add", "low"),
+        ]
+        result = generator.generate(corrections)
+        assert result == ""
+
+    def test_deduplicates_similar_corrections(self, generator):
+        """Deduplicates by lowercased content."""
+        corrections = [
+            ("Include Verbose Output", "remove", "high"),
+            ("include verbose output", "remove", "high"),  # duplicate
+            ("use deprecated calls", "remove", "high"),
+        ]
+        result = generator.generate(corrections)
+        # Should have exactly 2 items, not 3
+        assert result.count("- ❌") == 2
+
+    def test_caps_at_max_anti_patterns(self, generator):
+        """Caps at MAX_ANTI_PATTERNS (10)."""
+        corrections = [(f"bad pattern number {i}", "remove", "high") for i in range(20)]
+        result = generator.generate(corrections)
+        assert result.count("- ❌") == 10
+
+    def test_skips_short_fragments(self, generator):
+        """Skips corrections shorter than 5 chars."""
+        corrections = [
+            ("ok", "remove", "high"),  # Too short
+            ("use deprecated API patterns", "remove", "high"),
+        ]
+        result = generator.generate(corrections)
+        assert result.count("- ❌") == 1
+
+    def test_prefix_normalization(self, generator):
+        """Adds 'Don't' prefix when correction doesn't start with negation."""
+        corrections = [("include verbose output", "remove", "high")]
+        result = generator.generate(corrections)
+        assert "Don't include verbose output" in result
+
+    def test_preserves_existing_negation_prefix(self, generator):
+        """Doesn't double-negate corrections that already start with 'Don't'."""
+        corrections = [("Don't use verbose mode", "remove", "high")]
+        result = generator.generate(corrections)
+        assert "Don't use verbose mode" in result
+        assert "Don't Don't" not in result
+
+    def test_merge_with_no_existing_section(self, generator):
+        """Appends anti-patterns section when none exists."""
+        skill_text = "# My Skill\n\nDo things properly.\n"
+        anti_patterns = generator.generate([("verbose output", "remove", "high")])
+        merged = generator.merge_with_existing(skill_text, anti_patterns)
+        assert "## Anti-patterns" in merged
+        assert merged.startswith("# My Skill")
+
+    def test_merge_with_existing_section_dedup(self, generator):
+        """Deduplicates when merging with existing anti-patterns section."""
+        skill_text = "# My Skill\n\n## Anti-patterns\n\n- ❌ Don't use verbose output\n\n## Other\n"
+        new_anti_patterns = "## Anti-patterns (auto-generated from corrections)\n\n- ❌ Don't use verbose output\n- ❌ Don't use deprecated APIs\n"
+        merged = generator.merge_with_existing(skill_text, new_anti_patterns)
+        # Should only add the new one, not duplicate "verbose output"
+        assert merged.count("verbose output") == 1
+        assert "deprecated APIs" in merged
+
     def test_empty_evidence_no_crash(self, tmp_path):
         """Recommend-tier with empty evidence_summary should not crash."""
         from core.proactive_intelligence import _get_skill_health_highlights

@@ -112,8 +112,14 @@ def _build_prompt(
     skill_text: str,
     corrections: list[tuple[str, str, str]],
     skill_name: str,
+    execution_traces: list[str] | None = None,
 ) -> str:
-    """Build the user prompt with skill text and correction evidence."""
+    """Build the user prompt with skill text, correction evidence, and execution traces.
+
+    v2.3: Added execution_traces parameter. GEPA-inspired: feeding the agent's
+    reasoning traces (what it was thinking when it went wrong) produces targeted
+    mutations instead of blind pattern matching.
+    """
     # Truncate oversized skills to stay within token budget
     if len(skill_text.encode("utf-8")) > MAX_SKILL_TEXT_BYTES:
         truncated = skill_text.encode("utf-8")[:MAX_SKILL_TEXT_BYTES].decode(
@@ -132,6 +138,18 @@ def _build_prompt(
         else "  (no corrections — optimize for clarity and completeness)"
     )
 
+    # v2.3: Include execution traces for context-aware optimization
+    trace_block = ""
+    if execution_traces:
+        trace_lines = []
+        for i, trace in enumerate(execution_traces[:5], 1):
+            trace_lines.append(f"  Trace {i}:\n    {trace[:1500]}")
+        trace_block = f"""
+
+Execution traces (what the agent was doing when it went wrong):
+{chr(10).join(trace_lines)}
+"""
+
     return f"""Skill: {skill_name}
 
 Current instructions:
@@ -141,7 +159,7 @@ Current instructions:
 
 User corrections (where the AI went wrong):
 {corrections_block}
-
+{trace_block}
 Propose specific text changes to improve these instructions. Return JSON only."""
 
 
@@ -241,11 +259,17 @@ def optimize_skill_with_llm(
     skill_text: str,
     corrections: list[tuple[str, str, str]],
     skill_name: str,
+    execution_traces: list[str] | None = None,
 ) -> tuple[list[TextChange], LLMUsage]:
     """Optimize a skill's instructions using Bedrock Opus.
 
     Takes the skill body text and all correction evidence (high + low confidence),
     asks Opus to propose specific text changes that address the correction patterns.
+
+    v2.3: Added execution_traces parameter. GEPA-inspired trace-guided mutation:
+    feeding the agent's reasoning during failed executions gives the optimizer
+    targeted context for what specifically went wrong, enabling precise fixes
+    instead of generic improvements.
 
     Returns (changes, usage) where changes are compatible with atomic_deploy().
     Returns ([], LLMUsage()) on any failure — caller should fall back to heuristic.
@@ -254,13 +278,14 @@ def optimize_skill_with_llm(
         skill_text: The SKILL.md body text (below YAML frontmatter).
         corrections: List of (correction_text, action_type, confidence) tuples.
         skill_name: Skill name for prompt context.
+        execution_traces: Optional list of agent reasoning traces from failed executions.
     """
     empty = ([], LLMUsage())
 
     if not corrections:
         return empty
 
-    prompt = _build_prompt(skill_text, corrections, skill_name)
+    prompt = _build_prompt(skill_text, corrections, skill_name, execution_traces)
 
     try:
         response_text, usage = _call_bedrock_opus(prompt)
