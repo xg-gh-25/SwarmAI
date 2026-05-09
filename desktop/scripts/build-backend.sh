@@ -230,6 +230,7 @@ hiddenimports += collect_submodules('pydantic')
 hiddenimports += collect_submodules('pydantic_settings')
 hiddenimports += collect_submodules('anyio')
 hiddenimports += collect_submodules('slowapi')
+hiddenimports += collect_submodules('limits')  # slowapi dependency — imports redis/memcached at class level
 hiddenimports += collect_submodules('claude_agent_sdk')
 hiddenimports += collect_submodules('boto3')
 hiddenimports += collect_submodules('botocore')
@@ -248,6 +249,7 @@ datas += collect_data_files('claude_agent_sdk')
 datas += collect_data_files('certifi')
 datas += collect_data_files('sqlite_vec')  # vec0.dylib native extension for vector search
 datas += collect_data_files('awscrt')  # AWS CRT native libraries (.dylib/.so)
+datas += collect_data_files('limits')  # Lua scripts for redis rate limiting (loaded at import time)
 # Include built-in context files and skills for agent workspace initialization
 datas += [('context', 'context')]
 # Include skills but EXCLUDE node_modules — Remotion's alone is 609MB/15K+ files
