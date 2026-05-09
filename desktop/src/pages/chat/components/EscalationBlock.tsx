@@ -29,20 +29,24 @@ interface EscalationBlockProps {
   options: EscalationOption[];
   status: 'pending' | 'resolved';
   resolution?: string;
+  /** Called when user clicks an option — sends as chat response. */
+  onSelectOption?: (escalationId: string, optionLabel: string) => void;
 }
 
 export function EscalationBlock({
+  id,
   severity,
   reason,
   options,
   status,
   resolution,
+  onSelectOption,
 }: EscalationBlockProps) {
   const style = SEVERITY_STYLES[severity] || SEVERITY_STYLES.medium;
 
   if (status === 'resolved') {
     return (
-      <div className="my-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-4 py-3">
+      <div data-testid={`escalation-${id}`} className="my-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-4 py-3">
         <div className="flex items-center gap-2">
           <span className="material-symbols-outlined text-base text-green-400">check_circle</span>
           <span className="text-sm text-[var(--color-text-muted)]">Escalation resolved</span>
@@ -55,7 +59,7 @@ export function EscalationBlock({
   }
 
   return (
-    <div className="my-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] overflow-hidden">
+    <div data-testid={`escalation-${id}`} className="my-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] overflow-hidden">
       {/* Header with severity badge */}
       <div className="flex items-center gap-2 px-4 py-2.5 border-b border-[var(--color-border)]">
         <span className="material-symbols-outlined text-base text-[var(--color-text-muted)]">
@@ -72,29 +76,42 @@ export function EscalationBlock({
         <p className="text-sm text-[var(--color-text)] leading-relaxed">{reason}</p>
       </div>
 
-      {/* Options */}
+      {/* Options — clickable when handler provided */}
       {options.length > 0 && (
         <div className="px-4 pb-3 space-y-1.5">
           {options.map((opt, i) => (
-            <div
+            <button
               key={i}
-              className={`flex items-start gap-2 px-3 py-2 rounded-md text-sm ${
+              type="button"
+              onClick={() => onSelectOption?.(id, opt.label)}
+              disabled={!onSelectOption}
+              className={`w-full text-left flex items-start gap-2 px-3 py-2 rounded-md text-sm transition-colors ${
                 opt.recommended
-                  ? 'border border-[var(--color-primary)]/30 bg-[var(--color-primary)]/5'
-                  : 'border border-[var(--color-border)] bg-[var(--color-bg)]'
-              }`}
+                  ? 'border border-[var(--color-primary)]/30 bg-[var(--color-primary)]/5 hover:bg-[var(--color-primary)]/15'
+                  : 'border border-[var(--color-border)] bg-[var(--color-bg)] hover:bg-[var(--color-hover)]'
+              } ${onSelectOption ? 'cursor-pointer' : 'cursor-default'}`}
             >
               <span className="text-[var(--color-text-muted)] shrink-0 mt-0.5">
                 {opt.recommended ? '★' : `${i + 1}.`}
               </span>
-              <div>
+              <div className="flex-1">
                 <span className="font-medium text-[var(--color-text)]">{opt.label}</span>
                 {opt.description && (
                   <span className="text-[var(--color-text-muted)]"> — {opt.description}</span>
                 )}
               </div>
-            </div>
+              {onSelectOption && (
+                <span className="material-symbols-outlined text-sm text-[var(--color-text-muted)] opacity-0 group-hover:opacity-100 shrink-0 mt-0.5">
+                  send
+                </span>
+              )}
+            </button>
           ))}
+          {onSelectOption && (
+            <p className="text-[10px] text-[var(--color-text-muted)] mt-1 px-1">
+              Click an option to respond
+            </p>
+          )}
         </div>
       )}
     </div>

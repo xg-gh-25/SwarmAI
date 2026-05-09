@@ -146,12 +146,15 @@ class TestCaffeinateIntegration:
     """Verify caffeinate is configured correctly for sleep prevention."""
 
     def test_wrapper_caffeinate_flags(self):
-        """caffeinate should use -is (idle + system sleep prevention)."""
+        """caffeinate should use -i (idle sleep prevention only, not -s system sleep)."""
         content = WRAPPER_SCRIPT.read_text()
-        # Should contain caffeinate -is or caffeinate -i -s or similar
-        assert any(
-            flag in content for flag in ["-is", "-i -s", "-si"]
-        ), "caffeinate missing -is flags (idle + system sleep prevention)"
+        # Should contain caffeinate -i (idle only) — NOT -s (system sleep blocks lid-close)
+        assert "caffeinate -i" in content, "caffeinate missing -i flag (idle sleep prevention)"
+        # Ensure we're NOT preventing system sleep (battery drain on laptops)
+        assert "caffeinate -is" not in content, (
+            "caffeinate should use -i only, not -is — "
+            "-s prevents lid-close sleep and drains laptop battery"
+        )
 
 
 # ---------------------------------------------------------------------------

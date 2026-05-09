@@ -115,8 +115,8 @@ if [ -x "${DAEMON_BINARY}" ]; then
     echo "[swarmai-backend] PATH: ${PATH}"
     echo "[swarmai-backend] ada: $(which ada 2>/dev/null || echo 'NOT FOUND')"
 
-    # caffeinate -is: prevent idle sleep (-i) and system sleep (-s)
-    exec caffeinate -is "${DAEMON_BINARY}" \
+    # caffeinate -i: prevent idle sleep only (allow lid-close/system sleep to save battery)
+    exec caffeinate -i "${DAEMON_BINARY}" \
         --host 127.0.0.1 \
         --port "${DAEMON_PORT}"
 
@@ -131,7 +131,7 @@ elif [ -x "${VENV_PYTHON}" ]; then
     echo "[swarmai-backend] ada: $(which ada 2>/dev/null || echo 'NOT FOUND')"
 
     cd "${BACKEND_DIR}"
-    exec caffeinate -is "${VENV_PYTHON}" -m uvicorn main:app \
+    exec caffeinate -i "${VENV_PYTHON}" -m uvicorn main:app \
         --host 127.0.0.1 \
         --port "${DAEMON_PORT}" \
         --log-level info
