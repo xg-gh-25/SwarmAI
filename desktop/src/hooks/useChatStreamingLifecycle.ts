@@ -1427,6 +1427,34 @@ export function useChatStreamingLifecycle(
             return;
           }
 
+          // POST-STOP SILENT RETRY: If we haven't received any data yet
+          // (connection-phase) and we have a retry function, auto-retry once
+          // instead of showing a scary error. This catches the race where
+          // the backend's pipe flush kills our new stream before it produces
+          // any output. The user never sees the error — just a brief delay.
+          if (
+            tabState &&
+            !tabState.hasReceivedData &&
+            tabState.retryStreamFn &&
+            (tabState.reconnectionAttempt ?? 0) < 1
+          ) {
+            console.log('[StreamHandler] Post-stop silent retry — error before any data received', { capturedTabId });
+            tabState.reconnectionAttempt = 1;
+            const retryFn = tabState.retryStreamFn;
+            setTimeout(() => {
+              if (!capturedTabId || !tabMapRef.current.has(capturedTabId)) return;
+              const currentTabState = tabMapRef.current.get(capturedTabId);
+              if (!currentTabState) return;
+              currentTabState.hasReceivedData = false;
+              const newAbort = retryFn();
+              currentTabState.abortController = {
+                abort: () => { newAbort(); },
+                signal: { aborted: false },
+              } as unknown as AbortController;
+            }, 300); // 300ms — enough for pipe flush to complete
+            return;
+          }
+
           // SESSION_BUSY: Backend rejected our send because the session is
           // still actively streaming (SSE disconnect caused a race).
           // Backend deletes the orphaned user message from DB on SESSION_BUSY,
@@ -1454,7 +1482,7 @@ export function useChatStreamingLifecycle(
             event.message ||
             event.error ||
             event.detail ||
-            'An unknown error occurred';
+            'Connection interrupted — send your message again to continue.';
           const suggestedAction =
             event.suggestedAction ||
             ((event as unknown as Record<string, unknown>)

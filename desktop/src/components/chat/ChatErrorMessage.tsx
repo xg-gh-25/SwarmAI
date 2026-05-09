@@ -44,19 +44,35 @@ export function ChatErrorMessage({ error, onRetry }: ChatErrorMessageProps) {
 
   return (
     <div
-      className="border-l-4 border-red-500 bg-red-950/40 rounded-r-lg p-4 my-2"
+      className={`border-l-4 rounded-r-lg p-4 my-2 ${
+        // Informational errors (timeouts, queue) get amber styling — less alarming.
+        // Hard errors (rate limit, credentials, service down) get red.
+        error.code === 'SDK_SUBPROCESS_TIMEOUT' || error.code === 'AGENT_TIMEOUT' || error.code === 'QUEUE_TIMEOUT' || !error.code
+          ? 'border-amber-500 bg-amber-950/30'
+          : 'border-red-500 bg-red-950/40'
+      }`}
       role="alert"
     >
       {/* Error header */}
       <div className="flex items-center gap-2 mb-1">
-        <span className="material-symbols-outlined text-red-400 text-lg">
+        <span className={`material-symbols-outlined text-lg ${
+          error.code === 'SDK_SUBPROCESS_TIMEOUT' || error.code === 'AGENT_TIMEOUT' || error.code === 'QUEUE_TIMEOUT' || !error.code
+            ? 'text-amber-400'
+            : 'text-red-400'
+        }`}>
           {error.code === 'SDK_SUBPROCESS_TIMEOUT' || error.code === 'AGENT_TIMEOUT'
             ? 'schedule'
             : error.code === 'QUEUE_TIMEOUT'
               ? 'hourglass_top'
-              : 'error'}
+              : !error.code
+                ? 'sync_problem'
+                : 'error'}
         </span>
-        <span className="text-red-400 font-semibold text-sm">
+        <span className={`font-semibold text-sm ${
+          error.code === 'SDK_SUBPROCESS_TIMEOUT' || error.code === 'AGENT_TIMEOUT' || error.code === 'QUEUE_TIMEOUT' || !error.code
+            ? 'text-amber-400'
+            : 'text-red-400'
+        }`}>
           {error.code === 'SDK_SUBPROCESS_TIMEOUT'
             ? 'AI Service Timeout'
             : error.code === 'AGENT_TIMEOUT'
@@ -69,7 +85,7 @@ export function ChatErrorMessage({ error, onRetry }: ChatErrorMessageProps) {
                     ? 'Credentials Expired'
                     : error.code === 'QUEUE_TIMEOUT'
                       ? 'Slots Busy'
-                      : error.code ?? 'Error'}
+                      : error.code ?? 'Interrupted'}
         </span>
       </div>
 
