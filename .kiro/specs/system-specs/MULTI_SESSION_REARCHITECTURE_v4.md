@@ -1,3 +1,7 @@
+> **⚠️ HISTORICAL DOCUMENT** — This spec shipped in March 2026. The architecture described here is now production code in `backend/core/`. Key deviations from this spec: (1) Concurrency is dynamic via `ResourceMonitor.compute_max_tabs()` [1,4], not fixed MAX_CONCURRENT=2. (2) Zustand store migration (Phase 3) was NOT done — useUnifiedTabState remains. (3) Lazy MCP (Phase 4) was superseded by all-always loading. Read this for design rationale, not for current behavior.
+
+---
+
 ---
 title: "Multi-Session Re-Architecture Design"
 date: 2026-03-18

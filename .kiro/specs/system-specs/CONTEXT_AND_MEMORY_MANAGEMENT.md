@@ -6,7 +6,7 @@ SwarmAI's context and memory system gives agents persistent identity, personalit
 
 Three cooperating systems build the final system prompt:
 1. `ContextDirectoryLoader` — reads 11 source files from `.context/`, enforces token budget
-2. `_build_system_prompt()` in SessionRouter — orchestrates assembly, adds ephemeral context
+2. `_build_system_prompt()` in `prompt_builder.py` — orchestrates assembly, adds ephemeral context
 3. `SystemPromptBuilder` — appends non-file sections (safety, datetime, runtime metadata)
 
 ---
@@ -36,7 +36,7 @@ Three cooperating systems build the final system prompt:
 │                     │                                            │
 │  ┌──────────────────▼───────────────────────────┐               │
 │  │         _build_system_prompt()                │               │
-│  │         (SessionRouter)                        │               │
+│  │         (prompt_builder.py)                    │               │
 │  │                                               │               │
 │  │  1. ContextDirectoryLoader output             │               │
 │  │  2. BOOTSTRAP.md (ephemeral, first-run)       │               │
@@ -160,10 +160,27 @@ Key design decisions:
 
 | Model Context Window | Token Budget | Constant |
 |---------------------|-------------|----------|
+| ≥ 500K tokens | 100,000 | `BUDGET_1M_MODEL` |
 | ≥ 200K tokens | 50,000 | `BUDGET_LARGE_MODEL` |
 | 64K – 200K | 30,000 | `DEFAULT_TOKEN_BUDGET` |
 | < 64K | 30,000 (instance default) | `self.token_budget` |
 | None / 0 | 30,000 | `DEFAULT_TOKEN_BUDGET` |
+
+### Ephemeral Headroom (`EPHEMERAL_HEADROOM`)
+
+The effective budget available for `.context/` files is reduced by ephemeral overhead:
+
+```
+effective_budget = base_budget - EPHEMERAL_HEADROOM (9,000 tokens)
+
+EPHEMERAL_HEADROOM breakdown:
+  DailyActivity cap (2 files × 2,000 tokens)   = 4,000
+  Resume context headroom                       = 5,000
+                                                ───────
+  Total                                         = 9,000
+```
+
+This means for a 1M model, the actual budget for context files is ~91,000 tokens (100,000 - 9,000).
 
 ### Token Estimation
 
@@ -258,7 +275,7 @@ Entire method wrapped in try/except — context loading failures never block age
 
 ---
 
-## Context Assembly in SessionRouter (`_build_system_prompt`)
+## Context Assembly in `prompt_builder.py` (`_build_system_prompt`)
 
 This is the orchestration method that calls ContextDirectoryLoader and adds ephemeral context:
 
@@ -305,7 +322,7 @@ _build_system_prompt(agent_config, working_directory, channel_context)
 
 ```python
 _MODEL_CONTEXT_WINDOWS = {
-    "claude-opus-4-6": 200_000,
+    "claude-opus-4-6": 1_000_000,       # 1M context (default model)
     "claude-sonnet-4-6": 200_000,
     "claude-sonnet-4-5-20250929": 200_000,
     "claude-opus-4-5-20251101": 200_000,
@@ -313,7 +330,9 @@ _MODEL_CONTEXT_WINDOWS = {
 _DEFAULT_CONTEXT_WINDOW = 200_000
 ```
 
-Bedrock model IDs are stripped of prefix/suffix before lookup: `us.anthropic.claude-opus-4-6-v1` → `claude-opus-4-6`.
+Bedrock model IDs are stripped of prefix/suffix before lookup: `us.anthropic.claude-opus-4-6-v1[1m]` → `claude-opus-4-6`.
+
+Note: Claude Opus 4.6 with 1M context (`us.anthropic.claude-opus-4-6-v1[1m]`) maps to 1,000,000 window size, triggering the `BUDGET_1M_MODEL` tier (100,000 tokens).
 
 ---
 
@@ -595,18 +614,21 @@ Current date/time: 2026-03-07 10:30 UTC / 2026-03-07 18:30 CST
 
 ---
 
-## Token Budget Reality Check (200K model)
+## Token Budget Reality Check (1M model — default)
 
 ```
-Context window: 200,000 tokens
+Context window: 1,000,000 tokens (Claude Opus 4.6 with 1M context)
+Token budget: 100,000 (BUDGET_1M_MODEL)
+Effective budget: ~91,000 (after EPHEMERAL_HEADROOM of 9,000)
 
 Fixed overhead:
-  System prompt (.context/ files)        ~30,000-50,000  (15-25%)
-  SDK internal instructions               ~8,000          (4%)
-  MCP tool definitions (5 servers)        ~10,000-20,000  (5-10%)
+  System prompt (.context/ files)        ~50,000-91,000  (5-9%)
+  Ephemeral context (DailyActivity+resume) ~9,000        (<1%)
+  SDK internal instructions               ~8,000          (<1%)
+  MCP tool definitions (5 servers)        ~10,000-20,000  (1-2%)
   ──────────────────────────────────────────────────────────
-  Total overhead                          ~48,000-78,000  (24-39%)
-  Remaining for conversation              ~122,000-152,000
+  Total overhead                          ~77,000-128,000 (8-13%)
+  Remaining for conversation              ~872,000-923,000
 
 Per conversation turn (heavy agentic):
   User message                              ~500
@@ -616,8 +638,27 @@ Per conversation turn (heavy agentic):
   ──────────────────────────────────────────────────────────
   ~15,500 tokens per turn
 
-Estimated turns: ~8-10 heavy turns, ~26-31 light turns
+Estimated turns: ~56-60 heavy turns, ~175-185 light turns
 Bottleneck: tool results, not system prompt size
+```
+
+### Comparison: 200K model
+
+```
+Context window: 200,000 tokens
+Token budget: 50,000 (BUDGET_LARGE_MODEL)
+Effective budget: ~41,000 (after EPHEMERAL_HEADROOM of 9,000)
+
+Fixed overhead:
+  System prompt (.context/ files)        ~30,000-41,000  (15-21%)
+  Ephemeral context (DailyActivity+resume) ~9,000        (5%)
+  SDK internal instructions               ~8,000          (4%)
+  MCP tool definitions (5 servers)        ~10,000-20,000  (5-10%)
+  ──────────────────────────────────────────────────────────
+  Total overhead                          ~57,000-78,000  (29-39%)
+  Remaining for conversation              ~122,000-143,000
+
+Estimated turns: ~8-9 heavy turns, ~24-29 light turns
 ```
 
 ---
@@ -640,7 +681,8 @@ backend/
 ├── core/
 │   ├── context_directory_loader.py  # ContextDirectoryLoader, ContextFileSpec, CONTEXT_FILES
 │   ├── system_prompt.py             # SystemPromptBuilder (non-file sections)
-│   ├── session_registry.py             # _build_system_prompt(), _get_model_context_window()
+│   ├── prompt_builder.py            # _build_system_prompt(), _get_model_context_window()
+│   ├── session_registry.py          # Session lifecycle management
 │   ├── session_hooks.py             # SessionLifecycleHookManager, HookContext, Protocol
 │   ├── summarization.py             # SummarizationPipeline, StructuredSummary
 │   ├── daily_activity_writer.py     # write_daily_activity(), parse/write_frontmatter

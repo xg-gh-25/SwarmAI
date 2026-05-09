@@ -12,6 +12,54 @@ SwarmAI's self-evolution system enables the agent to detect capability gaps, lea
 
 ---
 
+## Evolution Pipeline v2 (Current Production)
+
+The prompt-driven architecture above remains the runtime trigger/execution model. In production, a **4-phase backend pipeline** now orchestrates the end-to-end evolution cycle:
+
+### Phases
+
+```
+MINE → ASSESS → ACT → AUDIT
+```
+
+| Phase | Component | Responsibility |
+|-------|-----------|----------------|
+| **MINE** | `SessionMiner` | Scans JSONL transcripts from completed sessions to extract evolution signals (capability gaps, repeated failures, correction patterns) |
+| **ASSESS** | `SkillFitness` | 3-dimensional heuristic scoring of candidate evolutions (reusability, error-prevention, efficiency-gain). Produces a confidence score. |
+| **ACT** | Pipeline executor | Applies the evolution action based on confidence gating (see below) |
+| **AUDIT** | `EvolutionMaintenanceHook` | Deprecates idle entries >30d, prunes deprecated entries, logs all mutations to `EVOLUTION_CHANGELOG.jsonl` |
+
+### Confidence Gating
+
+| Confidence | Threshold | Action |
+|------------|-----------|--------|
+| HIGH | >= 0.7 | Auto-deploys: skill created/updated, EVOLUTION.md entry written |
+| MED | 0.3 - 0.7 | Surfaces recommendation to user; no auto-action |
+| LOW | < 0.3 | Logs to CHANGELOG.jsonl only; no user notification |
+
+### Concurrency Control
+
+A **process-level `fcntl` lock** (`LOCK_EX` on a dedicated lockfile) prevents concurrent evolution cycles. Only one pipeline run executes at a time, even across multiple backend processes. The lock is non-blocking — a second attempt immediately skips rather than queuing.
+
+### SessionMiner
+
+`SessionMiner` scans JSONL transcripts (stored per-session in the workspace) looking for:
+- Repeated tool failures (same tool, same error class)
+- User corrections (agent output followed by user providing the correct answer)
+- Capability gaps (agent explicitly stating it cannot do something)
+- Stuck patterns (multiple retries without progress)
+
+### SkillFitness
+
+3-dimensional heuristic scoring:
+1. **Reusability** — How broadly applicable is this capability?
+2. **Error Prevention** — Does it prevent a class of failures?
+3. **Efficiency Gain** — Does it measurably reduce time/tokens?
+
+Combined into a single confidence score via weighted average (same VFM formula as Pattern Promotion section below).
+
+---
+
 ## End-to-End Lifecycle
 
 ```

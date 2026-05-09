@@ -6,12 +6,22 @@ inclusion: always
 
 ## Architecture
 - Desktop app: Tauri 2.0 + React + Python FastAPI backend (daemon on macOS, subprocess on Windows/Linux)
+- Env: SWARMAI_MODE = daemon | subprocess | hive | dev. Port: 18321 fixed (8000 in dev).
 - Backend uses Claude Agent SDK with ClaudeSDKClient
 - SQLite database, local filesystem for skills
 - Data dirs: `~/.swarm-ai/` (all platforms)
 
+## Platform Rules (CRITICAL)
+- Port 18321 is FIXED on all platforms (no portpicker, no dynamic allocation)
+- Health check: `curl http://127.0.0.1:18321/health` (daemon/hive) or `:8000/health` (dev)
+- `/shutdown` returns 403 in daemon/hive mode — never kill background services via API
+- Channels (Slack) only run in daemon/hive mode — mode guard in main.py
+- No `import fcntl` at module top level — use `from utils.file_lock import flock_exclusive`
+- No `lsof` in scripts — use `nc -z 127.0.0.1 PORT` for port checks (lsof hangs on macOS)
+- `SWARMAI_MODE` detection: Python uses `_detect_run_mode()` in main.py, Rust uses `#[cfg(target_os)]`
+
 ## Storage Model (CRITICAL)
-- **DB-Canonical**: Tasks, ToDos, PlanItems, Communications, ChatThreads (query via API, NOT filesystem)
+- **DB-Canonical**: Tasks, ToDos, ChatThreads (query via API, NOT filesystem)
 - **Filesystem**: Artifacts/, ContextFiles/ (content storage only)
 - **Hybrid**: Artifacts and Reflections have DB metadata + filesystem content
 
@@ -25,8 +35,14 @@ inclusion: always
 # Desktop dev
 cd desktop && npm run tauri:dev
 
-# Backend dev
-cd backend && uv sync && source .venv/bin/activate && python main.py
+# Full dev (recommended)
+./dev.sh                        # Starts backend (port 8000) + frontend + Tauri
+./dev.sh backend                # Backend only
+
+# Production build
+./prod.sh build                 # PyInstaller + verify + deploy to daemon
+./prod.sh release               # Full release cycle
+./prod.sh status                # Daemon health + versions
 
 # Run tests
 cd desktop && npm test -- --run
@@ -35,6 +51,14 @@ cd backend && pytest
 # Build
 cd desktop && npm run build:all
 ```
+
+## Test Execution Rules
+- NEVER run full test suite proactively — xdist deadlock risk
+- Targeted tests: `cd backend && python -m pytest tests/test_<module>.py -v --timeout=60`
+- Last-failed: `cd backend && python -m pytest --lf --timeout=60`
+- Full suite only with explicit request: `SWARMAI_SUITE=1 python -m pytest --timeout=120`
+- Before modifying a function: `grep -rn "function_name(" tests/ --include="*.py"`
+- NEVER pipe pytest through `| tail` — causes buffering issues
 
 ## Code Documentation Standards (CRITICAL)
 When creating or modifying code files, ALWAYS include a detailed module-level docstring at the top of the file. Follow the style established in `backend/core/session_registry.py`:

@@ -68,8 +68,19 @@ description: >
 |-------|----------|-------------|
 | `name` | Yes | Unique skill identifier (kebab-case) |
 | `description` | Yes | What the skill does — Claude uses this to decide when to invoke it |
+| `tier` | No | `always` or `lazy` (default: `lazy`). Always-tier skills have their full SKILL.md injected into the system prompt (~100 tokens each, currently 15 skills). Lazy-tier skills get a stub injection (~25 tokens each, currently 46 skills) and the agent reads INSTRUCTIONS.md on invoke. |
+| `platform` | No | `all`, `macos`, or `desktop` (default: `all`). ProjectionLayer filters skills by the current `SWARMAI_MODE` environment variable — skills with a non-matching platform are not projected. |
 
 The description is critical — it's how Claude discovers your skill. Be specific about when it should be used.
+
+### Injection Tiering
+
+Skills use a two-tier injection model to balance discoverability against token budget:
+
+- **Always-tier** (`tier: always`): Full SKILL.md content injected into system prompt. Use for high-frequency skills that must be instantly available (e.g., self-evolution, save-memory). ~100 tokens per skill, 15 skills currently.
+- **Lazy-tier** (`tier: lazy`): Only a stub (name + description + trigger hints) injected into system prompt. When the agent decides to invoke the skill, it reads the full INSTRUCTIONS.md at runtime. ~25 tokens per stub, 46 skills currently.
+
+Platform filtering happens at projection time: `ProjectionLayer` checks each skill's `platform` field against `SWARMAI_MODE` and only projects matching skills into the workspace.
 
 ---
 

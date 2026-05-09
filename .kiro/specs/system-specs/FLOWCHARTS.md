@@ -8,8 +8,8 @@ Mermaid diagrams for the key flows in SwarmAI.
 
 ```mermaid
 flowchart TD
-    A[Tauri App Launch] --> B[Rust: Start Python sidecar]
-    B --> C[Rust: Assign dynamic port via portpicker]
+    A[Tauri App Launch] --> B[Rust: Start Python backend]
+    B --> C[Rust: Backend binds fixed port 18321]
     C --> D[Python: FastAPI lifespan starts]
     D --> E{data.db exists?}
 
@@ -26,9 +26,9 @@ flowchart TD
     H3 --> H4[Register agents, skills, MCPs]
     H4 --> G
 
-    G --> I[Backend ready on dynamic port]
+    G --> I[Backend ready on fixed port 18321]
     I --> J[React frontend loads]
-    J --> K[Frontend discovers port via Tauri IPC]
+    J --> K[Frontend connects to fixed port 18321]
     K --> L[restoreFromFile - load open_tabs.json]
     L --> M{Tabs found?}
     M -->|YES| N[Hydrate tabs + set activeTabId]
