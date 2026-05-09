@@ -1,7 +1,7 @@
 # SwarmAI Architecture
 
-**Version:** 9.0
-**Last Updated:** March 2026
+**Version:** 10.0
+**Last Updated:** May 2026
 **Status:** Production
 
 ---
@@ -16,7 +16,7 @@ SwarmAI is a persistent agentic operating system for knowledge work. It's a desk
 |-------|------------|
 | Desktop Shell | Tauri 2.0 (Rust) |
 | Frontend | React 19 + TypeScript 5.x + Vite |
-| Backend | FastAPI (Python 3.12+, PyInstaller sidecar) |
+| Backend | FastAPI (Python 3.12+, PyInstaller binary) |
 | AI Engine | Claude Agent SDK + ClaudeSDKClient |
 | AI Providers | AWS Bedrock (default), Anthropic API |
 | Database | SQLite (pre-seeded for fast startup, WAL mode) |
@@ -28,11 +28,26 @@ SwarmAI is a persistent agentic operating system for knowledge work. It's a desk
 
 ## 2. System Architecture
 
+### Platform-Native Backend Lifecycle (4 Platforms)
+
+| Platform | Mode (`SWARMAI_MODE`) | Backend Lifecycle | Port |
+|----------|----------------------|-------------------|------|
+| macOS | `daemon` | launchd daemon (24/7, survives app close) | 18321 |
+| Windows/Linux Desktop | `subprocess` | Tauri subprocess (dies with app) | 18321 |
+| Hive (EC2 Linux) | `hive` | systemd service | 18321 |
+| Dev | `dev` | Manual start (`uvicorn`) | 8000 |
+
+Env var `SWARMAI_MODE` controls lifecycle behavior. Rust isolation uses:
+- `#[cfg(target_os = "macos")]` → daemon management (launchctl load/unload)
+- `#[cfg(not(target_os = "macos"))]` → subprocess management (spawn/kill with app)
+
+Health check (all platforms): `curl http://127.0.0.1:18321/health`
+
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Tauri 2.0 Desktop Shell (Rust)                         │
-│  • Sidecar lifecycle management                         │
-│  • Dynamic port assignment (portpicker)                 │
+│  • Platform-native backend lifecycle                    │
+│  • Fixed port 18321                                     │
 │  • IPC bridge (Tauri commands)                          │
 │  • Auto-updater                                         │
 └────────────────────┬────────────────────────────────────┘
@@ -40,8 +55,8 @@ SwarmAI is a persistent agentic operating system for knowledge work. It's a desk
         ┌────────────┴────────────┐
         │                         │
 ┌───────▼──────────┐    ┌────────▼─────────────────────┐
-│  React Frontend  │    │  Python Backend (sidecar)     │
-│  (Vite bundle)   │◄──►│  FastAPI on dynamic port      │
+│  React Frontend  │    │  Python Backend               │
+│  (Vite bundle)   │◄──►│  FastAPI on port 18321        │
 │                  │HTTP │                               │
 │  Three-column    │+SSE │  ┌─────────────────────────┐ │
 │  layout:         │     │  │ SessionRouter + Units    │ │
@@ -138,7 +153,7 @@ desktop/src/
 │   ├── useRateLimiter.ts         # Rate limit state tracking
 │   └── useRateLimitCountdown.ts  # Rate limit cooldown timer UI
 ├── services/
-│   ├── api.ts                    # Axios client with dynamic port
+│   ├── api.ts                    # Axios client on fixed port 18321
 │   ├── tauri.ts                  # Tauri IPC bridge
 │   ├── chat.ts                   # Chat API + SSE streaming
 │   ├── agents.ts                 # Agent CRUD with case conversion
@@ -190,17 +205,21 @@ _ensure_database_initialized()
     │                            • ensure_default_workspace()
     │                            • Cache workspace path
     │                            • Defer refresh_builtin_defaults to background task
-    │                            • channel_gateway.startup() (deferred if channels exist)
+    │                            • channel_gateway.startup() (daemon/hive mode only, deferred)
     │
     └── data.db missing? ──NO──► Full Init Path
                                  • Copy seed.db from bundled resources
                                  • initialize_database() (DDL + migrations)
                                  • run_full_initialization()
                                  • Register agents, skills, MCPs
-                                 • channel_gateway.startup() (deferred if channels exist)
+                                 • channel_gateway.startup() (daemon/hive mode only, deferred)
 ```
 
 On the fast path, `refresh_builtin_defaults()` (skill re-scan + context file refresh) is deferred to a background `asyncio.Task` so it doesn't block `_startup_complete`. The frontend can start serving requests immediately while built-in defaults are refreshed in the background.
+
+**Mode guards:**
+- Channels only start in `daemon` or `hive` mode (guarded in `main.py` lifespan)
+- `POST /shutdown` returns HTTP 403 in `daemon`/`hive` mode — background services cannot be killed via API
 
 ### Session ID Mapping
 
@@ -222,6 +241,15 @@ Key fields in `session_context`:
 - `sdk_session_id`: Internal SDK ID (set from `init` SystemMessage)
 - `effective_session_id`: `app_session_id ?? sdk_session_id`
 
+### Concurrency Model
+
+`SessionRouter` manages concurrent tab execution via `ResourceMonitor.compute_max_tabs()`:
+
+- **Dynamic range**: [1, 4] concurrent tabs based on available RAM
+- **Ceiling**: 4 (3 chat tabs + 1 channel)
+- **No fixed constant** — adapts at runtime to system resource pressure
+- Requests exceeding the computed cap are queued and processed FIFO
+
 ### Backend File Structure
 
 ```
@@ -231,7 +259,7 @@ backend/
 ├── core/
 │   ├── session_registry.py        # Global singletons, startup/shutdown, skill creator entry
 │   ├── session_unit.py            # SessionUnit: 5-state machine, subprocess lifecycle (per tab)
-│   ├── session_router.py          # SessionRouter: routing, concurrency cap (MAX=2), queue
+│   ├── session_router.py          # SessionRouter: routing, dynamic concurrency (compute_max_tabs), queue
 │   ├── prompt_builder.py          # PromptBuilder: system prompt, SDK options, MCP config
 │   ├── lifecycle_manager.py       # LifecycleManager: 12hr TTL, hooks, orphan reaper
 │   ├── session_utils.py           # Shared error helpers (_build_error_event, etc.)
@@ -375,12 +403,12 @@ Byte-comparison optimization: system files are only rewritten if content actuall
 
 Dynamic budgets scale with model context window:
 
-| Model Context | Token Budget | Strategy |
-|---------------|-------------|----------|
-| ≥ 200K | 50,000 | L1 full assembly or source files |
-| 64K–200K | 30,000 | L1 full assembly |
-| 32K–64K | 30,000 | L0 compact cache |
-| < 32K | 30,000 | L0 compact, skip KNOWLEDGE + PROJECTS |
+| Model Context | Token Budget | Constant | Strategy |
+|---------------|-------------|----------|----------|
+| ≥ 500K | 100,000 | `BUDGET_1M_MODEL` | L1 full assembly or source files |
+| ≥ 200K | 50,000 | `BUDGET_LARGE_MODEL` | L1 full assembly or source files |
+| ≥ 64K | 30,000 | `DEFAULT_TOKEN_BUDGET` | L1 full assembly |
+| < 64K | 30,000 | `DEFAULT_TOKEN_BUDGET` | L0 compact cache |
 
 Truncation order: lowest priority first (PROJECTS → KNOWLEDGE → MEMORY → ...). Priorities 0–2 (SWARMAI, IDENTITY, SOUL) are never truncated.
 
@@ -774,6 +802,18 @@ hooks = {
 
 ### Build Pipeline
 
+**macOS (daemon architecture):**
+```
+./prod.sh build
+    │
+    ├── PyInstaller → swarmai-backend binary
+    ├── verify_build.py → capability smoke tests
+    └── Deploy to daemon (launchd plist, restart service)
+```
+
+The macOS daemon is a **separate process** from the Tauri app bundle. The app communicates with it over port 18321 but does not manage its lifecycle (launchd does).
+
+**Windows/Linux (subprocess architecture):**
 ```
 npm run build:all
     │
@@ -784,11 +824,12 @@ npm run build:all
     │   └── PyInstaller → desktop/src-tauri/binaries/swarmai-backend-{arch}
     │
     └── npm run tauri:build
-        └── Tauri bundles frontend + backend sidecar
-            ├── macOS: .dmg / .app
+        └── Tauri bundles frontend + backend binary as subprocess
             ├── Windows: .msi / .exe
             └── Linux: .deb / .AppImage
 ```
+
+**Full release cycle:** `./prod.sh release` — preflight checks, version bump, binary build, desktop package, smoke test, and GitHub publish.
 
 ### Data Directory
 

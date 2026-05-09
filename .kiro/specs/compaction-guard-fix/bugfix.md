@@ -1,3 +1,20 @@
+## Status: 🟡 PARTIALLY COMPLETED
+
+**Done:**
+- Read-only tool classification (`_READ_ONLY_TOOLS` frozenset) — implemented
+- Grace window (`_GRACE_WINDOW = 3`) — implemented  
+- Resource-management-hardening items — implemented
+
+**Still applies (NOT fixed):**
+- Bug 1.1: `_CONTEXT_ACTIVATION_PCT = 85` is still hardcoded — NOT adaptive to 1M models
+- Bug 1.2: `reset()` still wipes escalation on user message — no partial-reset implemented
+- Bug 1.3: No progress-based detection for read-only loops below 85% threshold
+- Deferred frontend bugs (1.8-1.11): Some may be partially addressed but not systematically verified
+
+Kiro should treat the Done items as implemented (don't re-implement) and the remaining items as valid open work.
+
+---
+
 # Bugfix Requirements Document
 
 ## Introduction

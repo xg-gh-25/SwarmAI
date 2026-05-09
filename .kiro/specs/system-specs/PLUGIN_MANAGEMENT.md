@@ -1,3 +1,5 @@
+> **Status (May 2026):** This spec is broadly accurate and reflects production behavior. Minor note: install paths now use `~/.swarm-ai/plugin-skills/` consistently (not `~/.claude/skills/`). The Storage Layout section at the bottom shows both paths — `~/.claude/skills/` is legacy from pre-SwarmAI Claude Code usage; SkillManager only scans `~/.swarm-ai/plugin-skills/` for the plugin tier. The `~/.claude/plugins/cache/` path for marketplace clones remains correct.
+
 # SwarmAI Plugin Management — End-to-End Architecture
 
 ## Overview
