@@ -2290,6 +2290,7 @@ export default function ChatPage() {
           onDeleteSession={(session) => setDeleteConfirmSession(session)}
           workspaceId={DEFAULT_WORKSPACE_ID}
           onItemClick={handleItemClick}
+          onSendMessage={handleFocusClick}
         />
       </div>
 

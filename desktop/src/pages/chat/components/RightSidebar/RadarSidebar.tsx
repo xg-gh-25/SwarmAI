@@ -72,6 +72,7 @@ export function RadarSidebar({
   onDeleteSession,
   workspaceId,
   onItemClick,
+  onSendMessage,
 }: RadarSidebarProps) {
   // Auto-hide when file editor panel is open
   const [hiddenByEditorPanel, setHiddenByEditorPanel] = useState(false);
@@ -237,7 +238,7 @@ export function RadarSidebar({
 
         {/* Pipelines — purple (engineering) */}
         <CollapsibleSection name="pipelines" icon="account_tree" label="Pipeline" count={pipelineCount} defaultExpanded={pipelineCount > 0} accent="rgba(139,92,246,0.35)">
-          <PipelineSection onCountChange={setPipelineCount} />
+          <PipelineSection onCountChange={setPipelineCount} onSendMessage={onSendMessage} />
         </CollapsibleSection>
 
         {/* Artifacts — neutral (no accent) */}
