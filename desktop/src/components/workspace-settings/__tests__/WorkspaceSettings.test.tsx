@@ -149,8 +149,8 @@ describe('WorkspaceSettingsModal', () => {
     // Switch to MCPs tab
     fireEvent.click(screen.getByText('settings.tabs.mcps'));
     await waitFor(() => {
-      // MCPSettingsPanel renders its own title
-      expect(screen.getByText('mcp.title')).toBeInTheDocument();
+      // MCPSettingsPanel renders subtitle or empty state
+      expect(screen.getByText('mcp.noMcps')).toBeInTheDocument();
     });
 
     // Switch to Knowledgebases tab
