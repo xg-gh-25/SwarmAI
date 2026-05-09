@@ -561,9 +561,11 @@ class AntiPatternGenerator:
             if not new_items:
                 return skill_text  # All already present
 
-            # Append new items to existing section
+            # Insert new items at end of existing section content (before next heading)
+            # existing_match.end() points to the start of the next ## or \Z
+            # We insert with a leading newline to maintain proper markdown spacing
             insertion_point = existing_match.end()
-            new_block = "\n".join(new_items) + "\n"
+            new_block = "\n".join(new_items) + "\n\n"
             return skill_text[:insertion_point] + new_block + skill_text[insertion_point:]
         else:
             # No existing section — append at end
@@ -832,10 +834,15 @@ class EvolutionOptimizer:
             )
             use_heuristic_only = True
 
+        # v2.3: Collect execution traces for trace-guided mutation (GEPA-inspired)
+        trace_collector = ExecutionTraceCollector()
+        execution_traces = trace_collector.collect_traces(skill_name, eval_examples)
+
         # Try LLM optimizer first (unless forced to heuristic)
         if not use_heuristic_only:
             changes, llm_tokens_used = self._try_llm_optimization(
                 skill_name, original_text, corrections,
+                execution_traces=execution_traces,
             )
 
         self.last_llm_tokens = llm_tokens_used
@@ -893,15 +900,20 @@ class EvolutionOptimizer:
         skill_name: str,
         skill_text: str,
         corrections: list[tuple[str, str, str]],
+        execution_traces: list[str] | None = None,
     ) -> tuple[list[TextChange], int]:
-        """Try LLM-based optimization. Returns (changes, tokens_used).
+        """Try LLM-based optimization with trace-guided mutation (v2.3).
 
+        Returns (changes, tokens_used).
         Returns ([], 0) on any failure — caller falls back to heuristic.
         """
         try:
             from core.llm_optimizer import optimize_skill_with_llm
 
-            changes, usage = optimize_skill_with_llm(skill_text, corrections, skill_name)
+            changes, usage = optimize_skill_with_llm(
+                skill_text, corrections, skill_name,
+                execution_traces=execution_traces,
+            )
             return changes, usage.input_tokens + usage.output_tokens
         except Exception as exc:
             logger.warning("LLM optimizer unavailable for %s: %s", skill_name, exc)
@@ -1234,6 +1246,32 @@ def _run_evolution_cycle_locked(
                     constraint_check=opt_result.reason,
                 )
 
+        # v2.3: Generate anti-patterns from "remove" corrections
+        anti_patterns_count = 0
+        if correction_count > 0 and precomputed_corrections:
+            anti_gen = AntiPatternGenerator()
+            anti_section = anti_gen.generate(precomputed_corrections)
+            if anti_section:
+                anti_patterns_count = sum(1 for line in anti_section.split("\n") if line.startswith("- "))
+
+        # v2.3: LLM judge scoring (Layer 2) — run for skills with corrections
+        llm_judge_score = None
+        combined_fitness = None
+        if correction_count > 0 and score_pairs:
+            try:
+                from core.skill_fitness import LLMJudge
+                judge = LLMJudge()
+                skill_text = optimizer._read_skill_text(skill_name) or ""
+                judge_result = judge.score_batch(
+                    skill_text=skill_text,
+                    examples=score_pairs,
+                    corrections=[ex.user_correction for ex in examples if ex.user_correction],
+                )
+                llm_judge_score = judge_result.layer2_score
+                combined_fitness = judge_result.score
+            except Exception as exc:
+                logger.warning("LLM judge failed for %s: %s", skill_name, exc)
+
         health_entry = SkillHealthEntry(
             skill_name=skill_name,
             total_examples=len(examples),
@@ -1246,6 +1284,9 @@ def _run_evolution_cycle_locked(
             trend=trend,
             llm_tokens=skill_llm_tokens,
             optimizer_used=optimizer_used,
+            llm_judge_score=llm_judge_score,
+            combined_fitness=combined_fitness,
+            anti_patterns_count=anti_patterns_count,
         )
         health_entries.append(health_entry)
         skill_assessments.append((skill_name, confidence, avg_score, examples, opt_result))

@@ -27,12 +27,8 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 from dataclasses import dataclass, field
-
-import boto3
-from botocore.config import Config as BotoConfig
 
 logger = logging.getLogger(__name__)
 
@@ -218,29 +214,12 @@ class LLMJudge:
     TIMEOUT_SECONDS = 30
 
     def __init__(self):
-        self._client = None
-        self._client_created_at: float = 0.0
+        pass  # Uses shared Bedrock client from llm_optimizer
 
     def _get_client(self):
-        """Lazy Bedrock client with 1-hour TTL."""
-        import time
-        now = time.monotonic()
-        if self._client is None or (now - self._client_created_at) > 3600:
-            region = os.environ.get(
-                "AWS_REGION",
-                os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
-            )
-            self._client = boto3.client(
-                "bedrock-runtime",
-                region_name=region,
-                config=BotoConfig(
-                    read_timeout=self.TIMEOUT_SECONDS,
-                    connect_timeout=10,
-                    retries={"max_attempts": 1},
-                ),
-            )
-            self._client_created_at = now
-        return self._client
+        """Use the shared Bedrock client from llm_optimizer (one client, one TTL)."""
+        from core.llm_optimizer import _get_bedrock_client
+        return _get_bedrock_client()
 
     def _build_judge_prompt(
         self,
@@ -251,8 +230,10 @@ class LLMJudge:
     ) -> str:
         """Build the judge prompt with skill context and output pair."""
         # Truncate skill text to 4KB for judge (it just needs the gist)
+        # Truncate by bytes (not chars) to handle CJK correctly
         if len(skill_text.encode("utf-8")) > 4096:
-            skill_text = skill_text[:4000] + "\n[... truncated ...]"
+            skill_text = skill_text.encode("utf-8")[:4000].decode("utf-8", errors="ignore")
+            skill_text += "\n[... truncated ...]"
 
         parts = [
             f"## Skill Instructions (what the agent should follow)\n{skill_text}",
@@ -339,10 +320,16 @@ class LLMJudge:
         evaluator = SkillFitnessEvaluator()
         layer1 = evaluator.score_batch(examples)
 
-        # Layer 2: LLM judge (sample up to 5 examples for cost)
+        # Layer 2: LLM judge (sample up to 5 examples, 60s batch timeout)
+        import time as _time
         sample = examples[:5]
         judge_scores: list[float] = []
+        batch_start = _time.monotonic()
+        BATCH_TIMEOUT = 60  # seconds total for all judge calls
         for i, (expected, actual) in enumerate(sample):
+            if _time.monotonic() - batch_start > BATCH_TIMEOUT:
+                logger.warning("LLM judge batch timeout after %d/%d examples", i, len(sample))
+                break
             correction = corrections[i] if corrections and i < len(corrections) else ""
             s = self.score(skill_text, expected, actual, correction)
             if s is not None:
