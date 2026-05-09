@@ -426,7 +426,7 @@ export interface CompactionGuardEvent {
 }
 
 export interface StreamEvent {
-  type: 'assistant' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'reconnecting' | 'session_resuming' | 'ask_user_question' | 'session_start' | 'session_cleared' | 'cmd_permission_request' | 'cmd_permission_decision' | 'cmd_permission_acknowledged' | 'heartbeat' | 'agent_activity' | 'tool_invocation' | 'capability_activated' | 'sources_updated' | 'summary_updated' | 'context_warning' | 'context_compacted' | 'compaction_guard' | (string & {});
+  type: 'assistant' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'reconnecting' | 'session_resuming' | 'ask_user_question' | 'session_start' | 'session_cleared' | 'cmd_permission_request' | 'cmd_permission_decision' | 'cmd_permission_acknowledged' | 'heartbeat' | 'agent_activity' | 'tool_invocation' | 'capability_activated' | 'sources_updated' | 'summary_updated' | 'context_warning' | 'context_compacted' | 'compaction_guard' | 'mcp_health_warning' | (string & {});
   content?: ContentBlock[];
   model?: string;
   sessionId?: string;
@@ -467,6 +467,8 @@ export interface StreamEvent {
   level?: 'ok' | 'warn' | 'critical';
   pct?: number;
   tokensEst?: number;
+  // MCP health warning fields (mcp_health_warning event)
+  missing_servers?: string[];
   // Compaction guard fields (compaction_guard event)
   subtype?: string;
   contextPct?: number;
