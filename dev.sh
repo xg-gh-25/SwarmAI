@@ -242,31 +242,31 @@ cmd_build() {
 
     # ── Deploy binary to daemon directory ────────────────────────
     # The daemon runs from ~/.swarm-ai/daemon/python-backend (NOT the
-    # dev source directory).  Flow: kill → deploy → launchd KeepAlive restarts.
+    # dev source directory).
     #
-    # IMPORTANT: kill BEFORE deploy to avoid onedir zlib corruption —
-    # rsync while process is running corrupts _internal/ offsets.
-    # Use `launchctl kill` (not bootout) so service stays registered and
-    # KeepAlive auto-restarts after deploy. This is safe even when run
-    # from inside the daemon (Claude CLI subprocess) because kill SIGTERM
-    # doesn't deregister the service.
+    # Order: deploy FIRST, then kill. Rationale:
+    # - This script may run from inside the daemon (Claude CLI subprocess).
+    #   When daemon dies → CLI dies → this script dies. So deploy MUST complete
+    #   before we send the kill signal.
+    # - Onedir rsync over a running process: low corruption risk (lazy .so
+    #   imports are rare after startup). Even if daemon crashes mid-rsync,
+    #   KeepAlive restarts → reads the fully-deployed new files.
+    # - Use `launchctl kill` (not bootout) so service stays registered and
+    #   KeepAlive auto-restarts. This is the key safety property: even if
+    #   this script dies mid-execution, the daemon WILL come back.
     local daemon_was_running=false
     if _daemon_is_running; then
         daemon_was_running=true
-        _log "Stopping daemon before deploy (KeepAlive will auto-restart)..."
-        launchctl kill SIGTERM "$GUI_TARGET" 2>/dev/null || true
-        _wait_port_free "$DAEMON_PORT" 15 || {
-            _warn "Port still bound — force-killing..."
-            launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
-            sleep 1
-        }
     fi
 
     _deploy_daemon_binary
 
-    # launchd KeepAlive auto-restarts with new binary (only if it was running)
+    # Now kill the old daemon so it restarts with new binary.
+    # If script dies after this point (daemon kills CLI), that's fine —
+    # deploy already completed, KeepAlive restarts with new binary.
     if [ "$daemon_was_running" = true ]; then
-        _log "Waiting for daemon to restart with new binary..."
+        _log "Restarting daemon to pick up new binary..."
+        launchctl kill SIGTERM "$GUI_TARGET" 2>/dev/null || true
         _daemon_wait_healthy 90
     else
         _log "Daemon was not running. Start with: ./dev.sh daemon start"
@@ -298,18 +298,11 @@ cmd_deploy() {
         return 1
     fi
 
-    # Step 3: Deploy to daemon (kill first to avoid onedir corruption)
+    # Step 3: Deploy then restart (deploy first — script may die on kill)
     _log "Step 3/3: Deploy to daemon..."
     local daemon_was_running=false
     if _daemon_is_running; then
         daemon_was_running=true
-        _log "Stopping daemon before deploy (KeepAlive will auto-restart)..."
-        launchctl kill SIGTERM "$GUI_TARGET" 2>/dev/null || true
-        _wait_port_free "$DAEMON_PORT" 15 || {
-            _warn "Port still bound — force-killing..."
-            launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
-            sleep 1
-        }
     fi
 
     _deploy_daemon_binary
@@ -317,9 +310,10 @@ cmd_deploy() {
     echo ""
     _ok "Deploy complete in $(_build_time $start)"
 
-    # launchd KeepAlive auto-restarts with new binary (only if it was running)
+    # Kill old daemon so it restarts with new binary (deploy already done)
     if [ "$daemon_was_running" = true ]; then
-        _log "Waiting for daemon to restart with new binary..."
+        _log "Restarting daemon to pick up new binary..."
+        launchctl kill SIGTERM "$GUI_TARGET" 2>/dev/null || true
         _daemon_wait_healthy 90
     else
         _log "Daemon was not running. Start with: ./dev.sh daemon start"
