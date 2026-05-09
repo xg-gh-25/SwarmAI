@@ -5,6 +5,36 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.0] - 2026-05-09
+
+### Added
+
+- **MCP Health Detection**: Post-spawn health check alerts users when MCP servers fail to load (mwinit expired, binary missing, network issue). Frontend toast with stable ID, runs once per session.
+- **Evolution Pipeline GEPA v2.3**: Two-layer metric (heuristic + LLM judge), trace-guided mutation, anti-pattern generator. Thread-safe Bedrock client. Historical correction merge prevents amnesia.
+- **Pipeline Mechanical Gates**: Every stage is mandatory — no silent skips. Validator enforces stage completion before advancing.
+- **Pipeline REPORT.md Generation**: Comprehensive delivery reports with radar todo integration.
+- **Stale Run Auto-Detection**: Pipelines stuck in "running" without updates are auto-marked failed (configurable threshold).
+
+### Fixed
+
+- **Startup: onefile → onedir Migration**: Eliminates 25s PyInstaller cold-start extraction penalty. Full directory backup/rollback strategy. Recursive quarantine clear for macOS.
+- **Startup: Deploy-Before-Kill Ordering**: When build script runs inside daemon subprocess, new binary is deployed before killing daemon — prevents self-kill with no recovery.
+- **Startup: Daemon Probe Timeout**: Increased 30s→60s with live progress feedback for onedir cold start.
+- **Startup: Event Listener Race Condition**: Fast unmount no longer leaks listeners.
+- **Build: limits Package Data Files**: Redis Lua scripts now bundled correctly (fixes import crash).
+- **Daemon: Self-Healing Restart**: Rollback hardening, lsof elimination, kill-not-bootout alignment.
+- **PE Review Fixes**: Env var crash guard, watchdog hard cap (10min), stale docstrings, redundant imports.
+- **Evolution: Correction Detection**: Prevent keyword theft between detection paths + historical merge.
+- **Radar: Remove Misleading Pipeline Sidebar**: Replaced with actionable stale-run detection.
+
+### Changed
+
+- **Watchdog Hard Cap**: Daemon health watchdog now exits after 200 attempts (10 min) instead of polling forever. Prevents infinite CPU waste when daemon is truly dead.
+- **LLM Judge Model**: Unified to Opus everywhere (KD28: power over token budget). Zero model-selection complexity.
+- **Adversarial Sub-Agent**: Promoted to mandatory quality gate — pipeline without it scores 0.
+- **npm Dependencies**: Fixed 20 vulnerabilities (0 remaining).
+- **Cargo.lock**: Updated hashbrown 0.17.0 → 0.17.1.
+
 ## [1.11.0] - 2026-05-09
 
 ### Added
