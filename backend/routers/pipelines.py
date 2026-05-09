@@ -133,6 +133,34 @@ def _to_response(raw: dict) -> PipelineRunResponse:
     )
 
 
+@router.patch("/{run_id}/cancel")
+async def cancel_pipeline(run_id: str) -> dict:
+    """Cancel a pipeline run by updating its run.json status to 'cancelled'.
+
+    Returns 200 on success, 404 if run not found.
+    """
+    projects_dir = _get_swarmws() / "Projects"
+    if not projects_dir.exists():
+        return {"status": "not_found", "run_id": run_id}
+
+    for project_dir in projects_dir.iterdir():
+        if not project_dir.is_dir():
+            continue
+        run_file = project_dir / ".artifacts" / "runs" / run_id / "run.json"
+        if run_file.exists():
+            try:
+                state = json.loads(run_file.read_text(encoding="utf-8"))
+                state["status"] = "cancelled"
+                run_file.write_text(json.dumps(state, indent=2), encoding="utf-8")
+                logger.info("Cancelled pipeline %s in project %s", run_id, project_dir.name)
+                return {"status": "cancelled", "run_id": run_id}
+            except (json.JSONDecodeError, OSError) as e:
+                logger.error("Failed to cancel %s: %s", run_id, e)
+                return {"status": "error", "run_id": run_id, "detail": str(e)}
+
+    return {"status": "not_found", "run_id": run_id}
+
+
 @router.get("", response_model=PipelineDashboard)
 async def list_pipelines(
     active: Optional[bool] = Query(None, description="If true, only running/paused"),

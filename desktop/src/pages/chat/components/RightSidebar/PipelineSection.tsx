@@ -98,9 +98,15 @@ async function fetchPipelines(): Promise<PipelineDashboard> {
 
 interface PipelineSectionProps {
   onCountChange?: (count: number) => void;
+  /** Injects text into the ChatInput and sends it as a message. */
+  onSendMessage?: (text: string) => void;
 }
 
-export function PipelineSection({ onCountChange }: PipelineSectionProps) {
+async function cancelPipeline(runId: string): Promise<void> {
+  await api.patch(`/pipelines/${runId}/cancel`);
+}
+
+export function PipelineSection({ onCountChange, onSendMessage }: PipelineSectionProps) {
   const [data, setData] = useState<PipelineDashboard | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -136,6 +142,24 @@ export function PipelineSection({ onCountChange }: PipelineSectionProps) {
     return () => document.removeEventListener('visibilitychange', onVisibility);
   }, [load]);
 
+  const handleResume = useCallback((run: PipelineRun) => {
+    onSendMessage?.(`resume pipeline ${run.id}`);
+  }, [onSendMessage]);
+
+  const handleCancel = useCallback(async (run: PipelineRun) => {
+    await cancelPipeline(run.id);
+    // Optimistic: update local state immediately
+    setData((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        pipelines: prev.pipelines.map((p) =>
+          p.id === run.id ? { ...p, status: 'cancelled' as const } : p
+        ),
+      };
+    });
+  }, []);
+
   if (!data || data.pipelines.length === 0) {
     return (
       <div className="px-3 py-2 text-xs text-[var(--color-text-muted)] italic">
@@ -149,11 +173,13 @@ export function PipelineSection({ onCountChange }: PipelineSectionProps) {
       {data.pipelines.map((run) => {
         const statusStyle = STATUS_STYLES[run.status] || STATUS_STYLES.running;
         const progressPct = run.stagesTotal > 0 ? (run.stagesCompleted / run.stagesTotal) * 100 : 0;
+        const isPaused = run.status === 'paused';
+        const isActive = run.status === 'running' || isPaused;
 
         return (
           <div
             key={run.id}
-            className="group px-2 py-1.5 rounded-md hover:bg-[var(--color-hover)] transition-colors cursor-default"
+            className="group px-2 py-1.5 rounded-md hover:bg-[var(--color-hover)] transition-colors"
           >
             {/* Top row: status icon + requirement */}
             <div className="flex items-start gap-1.5">
@@ -180,10 +206,36 @@ export function PipelineSection({ onCountChange }: PipelineSectionProps) {
             </div>
 
             {/* Checkpoint reason (if paused) */}
-            {run.status === 'paused' && run.checkpoint?.reason && (
+            {isPaused && run.checkpoint?.reason && (
               <p className="mt-1 ml-5 text-[10px] text-yellow-400/80 truncate">
                 {run.checkpoint.reason}
               </p>
+            )}
+
+            {/* Action buttons — visible on hover for active runs */}
+            {isActive && (
+              <div className="flex items-center gap-1 mt-1.5 ml-5 opacity-0 group-hover:opacity-100 transition-opacity">
+                {isPaused && onSendMessage && (
+                  <button
+                    type="button"
+                    onClick={() => handleResume(run)}
+                    className="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium text-green-400 hover:bg-green-500/10 transition-colors"
+                    title="Resume this pipeline"
+                  >
+                    <span className="material-symbols-outlined text-xs">play_arrow</span>
+                    Resume
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => handleCancel(run)}
+                  className="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium text-red-400 hover:bg-red-500/10 transition-colors"
+                  title="Cancel this pipeline"
+                >
+                  <span className="material-symbols-outlined text-xs">close</span>
+                  Cancel
+                </button>
+              </div>
             )}
           </div>
         );

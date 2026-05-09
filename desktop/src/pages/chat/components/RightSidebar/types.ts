@@ -59,6 +59,8 @@ export interface RadarSidebarProps {
   workspaceId: string | null;
   /** Unified callback: populate ChatInput with message + context */
   onItemClick?: ItemClickHandler;
+  /** Auto-send a message to the active chat tab (injects + sends immediately). */
+  onSendMessage?: (text: string) => void;
 }
 
 /** Props for the shared collapsible section wrapper. */
