@@ -12,6 +12,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import api from '../../../../services/api';
 
 // ---------------------------------------------------------------------------
 // Types (mirrors backend PipelineRunResponse schema)
@@ -70,17 +71,21 @@ function camelizeKeys(obj: Record<string, unknown>): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(obj)) {
     const camelKey = key.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
-    result[camelKey] = value && typeof value === 'object' && !Array.isArray(value)
-      ? camelizeKeys(value as Record<string, unknown>)
-      : value;
+    if (Array.isArray(value)) {
+      result[camelKey] = value.map((item) =>
+        item && typeof item === 'object' ? camelizeKeys(item as Record<string, unknown>) : item
+      );
+    } else if (value && typeof value === 'object') {
+      result[camelKey] = camelizeKeys(value as Record<string, unknown>);
+    } else {
+      result[camelKey] = value;
+    }
   }
   return result;
 }
 
 async function fetchPipelines(): Promise<PipelineDashboard> {
-  const resp = await fetch('/api/pipelines?active=true');
-  if (!resp.ok) throw new Error(`Pipeline fetch failed: ${resp.status}`);
-  const raw = await resp.json();
+  const { data: raw } = await api.get('/pipelines', { params: { active: true } });
   // Backend uses snake_case — convert to camelCase
   const pipelines = (raw.pipelines || []).map((p: Record<string, unknown>) => camelizeKeys(p));
   const summary = raw.summary ? camelizeKeys(raw.summary) : { running: 0, paused: 0, completed: 0, totalTokens: 0 };
@@ -109,10 +114,26 @@ export function PipelineSection({ onCountChange }: PipelineSectionProps) {
     }
   }, [onCountChange]);
 
+  // Only poll when there are active pipelines; re-fetch on tab visibility change
+  const hasActive = data && data.pipelines.some((p) => p.status === 'running' || p.status === 'paused');
+
   useEffect(() => {
     load();
+  }, [load]);
+
+  useEffect(() => {
+    if (!hasActive) {
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+      return;
+    }
     pollRef.current = setInterval(load, POLL_INTERVAL_MS);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [hasActive, load]);
+
+  useEffect(() => {
+    const onVisibility = () => { if (document.visibilityState === 'visible') load(); };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
   }, [load]);
 
   if (!data || data.pipelines.length === 0) {

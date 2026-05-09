@@ -24,6 +24,8 @@ interface ContentBlockRendererProps {
   onAnswerQuestion?: (toolUseId: string, answers: Record<string, string>) => void;
   /** Callback when user approves/denies a permission request. */
   onPermissionDecision?: (requestId: string, decision: 'approve' | 'deny') => void;
+  /** Callback when user clicks an escalation option — sends as chat response. */
+  onEscalationSelect?: (escalationId: string, optionLabel: string) => void;
   pendingToolUseId?: string;
   /** The request ID of the currently pending permission (buttons enabled for this one). */
   pendingPermissionRequestId?: string;
@@ -38,6 +40,7 @@ export function ContentBlockRenderer({
   allBlocks,
   onAnswerQuestion,
   onPermissionDecision,
+  onEscalationSelect,
   pendingToolUseId,
   pendingPermissionRequestId,
   isStreaming,
@@ -121,6 +124,7 @@ export function ContentBlockRenderer({
         options={esc.options || []}
         status={esc.status}
         resolution={esc.resolution}
+        onSelectOption={esc.status === 'pending' ? onEscalationSelect : undefined}
       />
     );
   }

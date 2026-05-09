@@ -1829,6 +1829,25 @@ export default function ChatPage() {
     });
   }, [selectedAgentId, enableSkills, enableMCP, incrementStreamGen, setIsStreaming, setMessages, updateTabStatus, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, createDisconnectHandler, activeTabIdRef, tabMapRef]);
 
+  // Handle escalation option click — sends the chosen option as a chat message.
+  // Marks the escalation block as resolved optimistically, then sends.
+  const handleEscalationSelect = useCallback((escalationId: string, optionLabel: string) => {
+    // Optimistic UI: mark escalation as resolved
+    setMessages((prev) => prev.map((msg) => ({
+      ...msg,
+      content: msg.content.map((block) =>
+        block.type === 'escalation' && (block as { id: string }).id === escalationId
+          ? { ...block, status: 'resolved', resolution: optionLabel }
+          : block,
+      ),
+    })));
+    // Send the choice as a user message (same path as typing + enter)
+    inputValueRef.current = optionLabel;
+    setInputValue(optionLabel);
+    // Use setTimeout to ensure state is settled before sending
+    setTimeout(() => handleSendMessage(), 0);
+  }, [handleSendMessage, setInputValue, setMessages]);
+
   // Handle inline permission decision — called from InlinePermissionRequest component
   // via ContentBlockRenderer → AssistantMessageView → MessageBubble prop chain.
   const handlePermissionDecision = async (requestId: string, decision: 'approve' | 'deny') => {
@@ -2193,6 +2212,7 @@ export default function ChatPage() {
                           message={msg}
                           onAnswerQuestion={handleAnswerQuestion}
                           onPermissionDecision={handlePermissionDecision}
+                          onEscalationSelect={handleEscalationSelect}
                           pendingToolUseId={pendingQuestion?.toolUseId}
                           pendingPermissionRequestId={pendingPermissionRequestId ?? undefined}
                           isStreaming={isLastAssistantForStreaming}

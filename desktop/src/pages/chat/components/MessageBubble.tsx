@@ -28,6 +28,7 @@ export interface MessageBubbleProps {
   message: Message;
   onAnswerQuestion?: (toolUseId: string, answers: Record<string, string>) => void;
   onPermissionDecision?: (requestId: string, decision: 'approve' | 'deny') => void;
+  onEscalationSelect?: (escalationId: string, optionLabel: string) => void;
   pendingToolUseId?: string;
   pendingPermissionRequestId?: string;
   isStreaming?: boolean;
@@ -42,6 +43,7 @@ export function MessageBubble({
   message,
   onAnswerQuestion,
   onPermissionDecision,
+  onEscalationSelect,
   pendingToolUseId,
   pendingPermissionRequestId,
   isStreaming,
@@ -64,6 +66,7 @@ export function MessageBubble({
       message={message}
       onAnswerQuestion={onAnswerQuestion}
       onPermissionDecision={onPermissionDecision}
+      onEscalationSelect={onEscalationSelect}
       pendingToolUseId={pendingToolUseId}
       pendingPermissionRequestId={pendingPermissionRequestId}
       isStreaming={isStreaming}

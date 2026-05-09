@@ -42,6 +42,8 @@ export interface AssistantMessageViewProps {
   onAnswerQuestion?: (toolUseId: string, answers: Record<string, string>) => void;
   /** Callback when the user approves/denies a permission request */
   onPermissionDecision?: (requestId: string, decision: 'approve' | 'deny') => void;
+  /** Callback when user clicks an escalation option — sends choice as chat message */
+  onEscalationSelect?: (escalationId: string, optionLabel: string) => void;
   /** The tool_use ID currently awaiting a user answer */
   pendingToolUseId?: string;
   /** The request ID of the currently pending permission */
@@ -69,6 +71,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   message,
   onAnswerQuestion,
   onPermissionDecision,
+  onEscalationSelect,
   pendingToolUseId,
   pendingPermissionRequestId,
   isStreaming,
@@ -185,6 +188,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
         allBlocks={message.content}
         onAnswerQuestion={onAnswerQuestion}
         onPermissionDecision={onPermissionDecision}
+        onEscalationSelect={onEscalationSelect}
         pendingToolUseId={pendingToolUseId}
         pendingPermissionRequestId={pendingPermissionRequestId}
         isStreaming={isStreaming}
