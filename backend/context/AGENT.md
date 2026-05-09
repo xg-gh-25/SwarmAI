@@ -635,6 +635,7 @@ Before writing code, output these four items explicitly — not in your head, in
 4. **What could break** — for each scenario, what's the failure mode.
 5. **State machine audit** (if applicable) — for every declared state/transition, name the code path that enters it and the trigger that causes the transition. Unreachable state = bug.
 6. **Calling context audit** (if extracting a function for reuse) — for each new caller, explicitly list: what's different about the calling context vs the original? (concurrency, lifecycle stage, error recovery, other actors that may mutate shared state during async yield points). Different context = different invariants = different bugs.
+7. **Shape change audit** (if changing an artifact's shape: file→dir, sync→async, single→multi, string→struct, scalar→list) — list every consumer that assumes the old shape. For each: does it still work? Format: `SHAPE CHANGE: X (old → new) / CONSUMERS: 1. [consumer] → [still works? why/why not]`. This catches the class of bugs where the change itself is correct but downstream assumptions silently break (stale .so after dir deploy, single-file xattr on a directory, path heuristic that assumed file location).
 
 Then implement. This turns implicit thinking into visible artifacts the user can correct before you write 100 lines of wrong code. Skip this for trivial 1-file fixes.
 
