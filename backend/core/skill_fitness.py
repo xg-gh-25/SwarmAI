@@ -209,12 +209,8 @@ class LLMJudge:
     """
 
     # Same Opus model as llm_optimizer.py — one model, zero complexity (KD28).
-    # Cost note: ~$0.05/call × 5 examples × N skills = significant at scale.
-    # MAX_JUDGE_CALLS caps total calls per cycle. Revert to Haiku when
-    # cross-region inference profile supports it (current blocker: model ID invalid).
     MODEL_ID = "us.anthropic.claude-opus-4-6-v1"
     TIMEOUT_SECONDS = 30
-    MAX_JUDGE_CALLS_PER_CYCLE = 25  # Cap: 5 skills × 5 examples max
 
     def __init__(self):
         pass  # Uses shared Bedrock client from llm_optimizer
