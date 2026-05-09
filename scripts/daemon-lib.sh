@@ -16,10 +16,11 @@ DAEMON_PORT=18321
 DAEMON_API="http://127.0.0.1:${DAEMON_PORT}"
 GUI_TARGET="gui/$(id -u)/${DAEMON_LABEL}"
 
-BACKEND_BINARY="${DESKTOP_DIR}/src-tauri/binaries/python-backend-aarch64-apple-darwin"
-DAEMON_BINARY_DIR="${HOME}/.swarm-ai/daemon"
-DAEMON_BINARY="${DAEMON_BINARY_DIR}/python-backend"
-DAEMON_VERSION_FILE="${DAEMON_BINARY_DIR}/.version"
+# Build output: onedir bundle (directory containing executable + libs)
+BACKEND_BUNDLE_DIR="${DESKTOP_DIR}/src-tauri/binaries/python-backend-aarch64-apple-darwin"
+DAEMON_DIR="${HOME}/.swarm-ai/daemon"
+DAEMON_BINARY="${DAEMON_DIR}/python-backend"
+DAEMON_VERSION_FILE="${DAEMON_DIR}/.version"
 
 : "${_DAEMON_CMD:=dev.sh}"
 : "${_DAEMON_VERBOSE:=0}"
@@ -103,19 +104,23 @@ _check_daemon_version() {
 }
 
 _deploy_daemon_binary() {
-    if [ ! -f "$BACKEND_BINARY" ]; then
-        _err "No backend binary at $BACKEND_BINARY"
+    if [ ! -d "$BACKEND_BUNDLE_DIR" ]; then
+        _err "No backend bundle at $BACKEND_BUNDLE_DIR"
         _err "Run ./${_DAEMON_CMD} build first"
         return 1
     fi
 
-    mkdir -p "$DAEMON_BINARY_DIR"
+    if [ ! -f "$BACKEND_BUNDLE_DIR/python-backend" ]; then
+        _err "No executable in bundle at $BACKEND_BUNDLE_DIR/python-backend"
+        return 1
+    fi
 
-    # Atomic replace
-    cp -f "$BACKEND_BINARY" "${DAEMON_BINARY}.tmp"
-    mv -f "${DAEMON_BINARY}.tmp" "$DAEMON_BINARY"
+    mkdir -p "$DAEMON_DIR"
+
+    # Deploy onedir bundle via rsync (fast incremental sync)
+    rsync -a --delete "$BACKEND_BUNDLE_DIR/" "$DAEMON_DIR/"
     chmod +x "$DAEMON_BINARY"
-    _ok "Daemon binary deployed: $(du -h "$DAEMON_BINARY" | cut -f1)"
+    _ok "Daemon bundle deployed: $(du -sh "$DAEMON_DIR" | cut -f1)"
 
     # Write version file — format: "{semver} {git_hash} {timestamp}"
     # All writers (daemon-lib, Rust auto_install, Rust sync_daemon_version) use this format.
@@ -127,7 +132,7 @@ _deploy_daemon_binary() {
 
     # Deploy resources
     local res_src="$DESKTOP_DIR/resources"
-    local res_dst="$DAEMON_BINARY_DIR/resources"
+    local res_dst="$DAEMON_DIR/resources"
     if [ -d "$res_src" ]; then
         mkdir -p "$res_dst"
         cp -f "$res_src"/*.json "$res_dst/" 2>/dev/null || true

@@ -510,6 +510,23 @@ fn parse_health_response(body: &str) -> (bool, Option<String>, Option<String>) {
     }
 }
 
+/// Recursively copy a directory's contents to a destination.
+/// Overwrites existing files; creates missing directories.
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
 /// Probe daemon health endpoint with retries.
 /// Returns Some(port) if daemon is healthy, None otherwise.
 /// Optionally emits progress events to the frontend via `app_handle`.
@@ -690,30 +707,33 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
         tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
     }
 
-    // Step 4: Atomic binary deploy from app bundle
+    // Step 4: Deploy onedir bundle from app resources
     let daemon_dir = format!("{}/.swarm-ai/daemon", home);
+    let daemon_dir_path = std::path::Path::new(&daemon_dir);
 
-    // Find the bundled binary — check app bundle Contents/MacOS first
+    // Find bundled onedir — resource_dir/python-backend/
     let exe_path = std::env::current_exe().unwrap_or_default();
     let bundle_dir = exe_path.parent().unwrap_or(std::path::Path::new("/"));
-    let bundled_binary = bundle_dir.join("python-backend");
+    // In .app bundle: Contents/MacOS/ is exe dir, resources at ../Resources/
+    let resources_dir = bundle_dir.parent()
+        .unwrap_or(std::path::Path::new("/"))
+        .join("Resources")
+        .join("python-backend");
 
-    if !bundled_binary.exists() {
+    if !resources_dir.exists() || !resources_dir.join("python-backend").exists() {
         return Err(format!(
-            "Bundled daemon binary not found at: {}",
-            bundled_binary.display()
+            "Bundled daemon bundle not found at: {}",
+            resources_dir.display()
         ));
     }
 
     let target_binary = format!("{}/python-backend", daemon_dir);
-    let tmp_binary = format!("{}/python-backend.tmp", daemon_dir);
 
     // Ensure daemon dir exists
     std::fs::create_dir_all(&daemon_dir)
         .map_err(|e| format!("Failed to create daemon dir: {}", e))?;
 
     // Backup existing binary before deploy — allows rollback if bootstrap fails.
-    // Without this, a failed step 5 (bootstrap) leaves no working binary.
     let backup_binary = format!("{}/python-backend.backup", daemon_dir);
     if std::path::Path::new(&target_binary).exists() {
         std::fs::copy(&target_binary, &backup_binary)
@@ -721,13 +741,9 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
         println!("[Tauri] Backed up old daemon binary for rollback");
     }
 
-    // Atomic deploy: copy to .tmp, then rename (cleanup .tmp on failure)
-    std::fs::copy(&bundled_binary, &tmp_binary)
-        .map_err(|e| format!("Failed to copy binary: {}", e))?;
-    if let Err(e) = std::fs::rename(&tmp_binary, &target_binary) {
-        let _ = std::fs::remove_file(&tmp_binary);  // cleanup partial deploy
-        return Err(format!("Failed to rename binary: {}", e));
-    }
+    // Deploy entire onedir bundle via recursive copy
+    copy_dir_recursive(&resources_dir, daemon_dir_path)
+        .map_err(|e| format!("Failed to deploy daemon bundle: {}", e))?;
 
     // Set executable permissions
     #[cfg(unix)]
@@ -896,21 +912,18 @@ fn auto_install_daemon(app: &tauri::AppHandle) -> Result<(), String> {
     std::fs::create_dir_all(&launch_agents)
         .map_err(|e| format!("Failed to create LaunchAgents dir: {}", e))?;
 
-    // Step 1: Deploy python-backend binary from app bundle → ~/.swarm-ai/daemon/
+    // Step 1: Deploy python-backend bundle (onedir) from app resources → ~/.swarm-ai/daemon/
     let daemon_binary = daemon_dir.join("python-backend");
-    // In a Tauri .app bundle: SwarmAI.app/Contents/MacOS/python-backend
+    // Tauri resources: .app/Contents/Resources/python-backend/
     let bundle_base = app.path().resource_dir()
         .map_err(|e| format!("Failed to get resource dir: {}", e))?;
-    // resource_dir = .app/Contents/Resources/ → parent = Contents/ → join MacOS
-    let app_binary = bundle_base.parent()
-        .ok_or("No parent of resource dir")?
-        .join("MacOS")
-        .join("python-backend");
+    let app_bundle_dir = bundle_base.join("python-backend");
 
-    if app_binary.exists() {
-        // Only copy if source is newer (or dest doesn't exist)
-        let should_copy = if daemon_binary.exists() {
-            let src_mtime = std::fs::metadata(&app_binary)
+    if app_bundle_dir.exists() && app_bundle_dir.join("python-backend").exists() {
+        // Only deploy if source is newer (or dest doesn't exist)
+        let src_binary = app_bundle_dir.join("python-backend");
+        let should_deploy = if daemon_binary.exists() {
+            let src_mtime = std::fs::metadata(&src_binary)
                 .and_then(|m| m.modified())
                 .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
             let dst_mtime = std::fs::metadata(&daemon_binary)
@@ -921,13 +934,10 @@ fn auto_install_daemon(app: &tauri::AppHandle) -> Result<(), String> {
             true
         };
 
-        if should_copy {
-            // Atomic copy: write .tmp then rename
-            let tmp = daemon_binary.with_extension("tmp");
-            std::fs::copy(&app_binary, &tmp)
-                .map_err(|e| format!("Failed to copy binary: {}", e))?;
-            std::fs::rename(&tmp, &daemon_binary)
-                .map_err(|e| format!("Failed to rename binary: {}", e))?;
+        if should_deploy {
+            // Deploy entire onedir bundle via recursive copy
+            copy_dir_recursive(&app_bundle_dir, &daemon_dir)
+                .map_err(|e| format!("Failed to deploy daemon bundle: {}", e))?;
 
             #[cfg(unix)]
             {
@@ -935,18 +945,18 @@ fn auto_install_daemon(app: &tauri::AppHandle) -> Result<(), String> {
                 std::fs::set_permissions(&daemon_binary, std::fs::Permissions::from_mode(0o755))
                     .map_err(|e| format!("Failed to chmod binary: {}", e))?;
             }
-            println!("[Tauri] Deployed daemon binary from {:?}", app_binary);
+            println!("[Tauri] Deployed daemon bundle from {:?}", app_bundle_dir);
         }
     } else {
-        // Dev mode: binary not in app bundle. Check if previously deployed.
+        // Dev mode: bundle not in app resources. Check if previously deployed.
         if !daemon_binary.exists() {
             return Err(format!(
-                "Backend binary not found in app bundle ({:?}) or daemon dir ({:?}). \
+                "Backend bundle not found in app resources ({:?}) or daemon dir ({:?}). \
                  Run `./prod.sh build` to create it.",
-                app_binary, daemon_binary
+                app_bundle_dir, daemon_binary
             ));
         }
-        println!("[Tauri] Using previously deployed daemon binary");
+        println!("[Tauri] Using previously deployed daemon bundle");
     }
 
     // Write version file alongside binary — format: "{semver} {git_hash} {timestamp}"

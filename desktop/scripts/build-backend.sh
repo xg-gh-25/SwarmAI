@@ -340,10 +340,8 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,  # onedir: binaries go into COLLECT
     name='python-backend',
     debug=False,
     bootloader_ignore_signals=False,
@@ -358,33 +356,50 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name='python-backend',
+)
 EOF
 
 # Build with PyInstaller
 echo "Running PyInstaller..."
 pyinstaller backend.spec --clean --noconfirm
 
-# Copy the built binary to output directory
-SOURCE_BINARY="dist/python-backend${BINARY_EXT}"
-OUTPUT_BINARY="$OUTPUT_DIR/python-backend-$TARGET${BINARY_EXT}"
+# Copy the built directory to output location (onedir mode)
+SOURCE_DIR="dist/python-backend"
+OUTPUT_BINARY_DIR="$OUTPUT_DIR/python-backend-$TARGET"
 
-if [[ ! -f "$SOURCE_BINARY" ]]; then
-    echo "Error: Built binary not found at $SOURCE_BINARY"
+if [[ ! -d "$SOURCE_DIR" ]]; then
+    echo "Error: Built directory not found at $SOURCE_DIR"
     exit 1
 fi
 
-cp "$SOURCE_BINARY" "$OUTPUT_BINARY"
-chmod +x "$OUTPUT_BINARY"
+# Clean previous output and copy fresh
+rm -rf "$OUTPUT_BINARY_DIR"
+cp -r "$SOURCE_DIR" "$OUTPUT_BINARY_DIR"
+chmod +x "$OUTPUT_BINARY_DIR/python-backend${BINARY_EXT}"
 
-echo "Backend binary built successfully: $OUTPUT_BINARY"
+echo "Backend built successfully (onedir): $OUTPUT_BINARY_DIR"
 echo ""
-echo "File size: $(du -h "$OUTPUT_BINARY" | cut -f1)"
+echo "Directory size: $(du -sh "$OUTPUT_BINARY_DIR" | cut -f1)"
+echo "Executable: $OUTPUT_BINARY_DIR/python-backend${BINARY_EXT}"
 
 # NOTE: Daemon deploy (binary + wrapper + plist) is handled exclusively by
 # _deploy_daemon_binary in daemon-lib.sh (called via ./dev.sh deploy or ./prod.sh deploy).
 # build-backend.sh only builds the binary — deploy is a separate step.
 echo ""
 echo "To deploy to daemon: ./dev.sh deploy  (or ./prod.sh deploy)"
+
+# The executable path within the onedir bundle
+OUTPUT_EXECUTABLE="$OUTPUT_BINARY_DIR/python-backend${BINARY_EXT}"
 
 # ── Post-build verification ──────────────────────────────────────
 # Ensures the binary has all capabilities that can silently degrade.
@@ -399,19 +414,15 @@ echo ""
 if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" || "$OSTYPE" == "cygwin" ]] && [[ -n "${CI:-}" ]]; then
     echo "Skipping full post-build verification on Windows CI (binary hangs in lifespan startup without workspace)."
     echo "  Running lightweight module-presence check instead..."
-    # Lightweight check: verify the binary can at least import critical modules
-    # without starting the full server (no lifespan, no workspace dirs needed).
-    # This catches missing native extensions (awscrt, sqlite_vec) on Windows
-    # that the macOS build can't verify.
-    if "$OUTPUT_BINARY" --help >/dev/null 2>&1; then
+    if "$OUTPUT_EXECUTABLE" --help >/dev/null 2>&1; then
         echo "  ✅ Binary executes (--help returned successfully)"
     else
         echo "  ⚠️  Binary --help failed (exit code $?) — may be missing dependencies"
-        echo "  Module bundling verified by macOS build. Binary size: $(du -h "$OUTPUT_BINARY" | cut -f1)"
+        echo "  Module bundling verified by macOS build. Dir size: $(du -sh "$OUTPUT_BINARY_DIR" | cut -f1)"
     fi
 else
     echo "Running post-build verification..."
-    if python scripts/verify_build.py "$OUTPUT_BINARY"; then
+    if python scripts/verify_build.py "$OUTPUT_EXECUTABLE"; then
         echo "✅ Build verification passed"
     else
         echo ""
