@@ -252,7 +252,7 @@ cmd_release() {
         cmd_daemon start || _warn "Daemon start failed — try: ./prod.sh daemon start"
     fi
 
-    # 3c. Verify daemon health after restart
+    # 3d. Verify daemon health after restart
     local health=$(_daemon_health_status)
     if [ "$health" = "healthy" ]; then
         _ok "Daemon healthy with new binary"

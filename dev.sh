@@ -250,7 +250,9 @@ cmd_build() {
     # KeepAlive auto-restarts after deploy. This is safe even when run
     # from inside the daemon (Claude CLI subprocess) because kill SIGTERM
     # doesn't deregister the service.
+    local daemon_was_running=false
     if _daemon_is_running; then
+        daemon_was_running=true
         _log "Stopping daemon before deploy (KeepAlive will auto-restart)..."
         launchctl kill SIGTERM "$GUI_TARGET" 2>/dev/null || true
         _wait_port_free "$DAEMON_PORT" 15 || {
@@ -262,9 +264,13 @@ cmd_build() {
 
     _deploy_daemon_binary
 
-    # launchd KeepAlive auto-restarts with new binary. Wait for healthy.
-    _log "Waiting for daemon to restart with new binary..."
-    _daemon_wait_healthy 90
+    # launchd KeepAlive auto-restarts with new binary (only if it was running)
+    if [ "$daemon_was_running" = true ]; then
+        _log "Waiting for daemon to restart with new binary..."
+        _daemon_wait_healthy 90
+    else
+        _log "Daemon was not running. Start with: ./dev.sh daemon start"
+    fi
 }
 
 cmd_deploy() {
@@ -294,7 +300,9 @@ cmd_deploy() {
 
     # Step 3: Deploy to daemon (kill first to avoid onedir corruption)
     _log "Step 3/3: Deploy to daemon..."
+    local daemon_was_running=false
     if _daemon_is_running; then
+        daemon_was_running=true
         _log "Stopping daemon before deploy (KeepAlive will auto-restart)..."
         launchctl kill SIGTERM "$GUI_TARGET" 2>/dev/null || true
         _wait_port_free "$DAEMON_PORT" 15 || {
@@ -309,11 +317,13 @@ cmd_deploy() {
     echo ""
     _ok "Deploy complete in $(_build_time $start)"
 
-    # launchd KeepAlive auto-restarts with new binary
-    _log "Waiting for daemon to restart with new binary..."
-    _daemon_wait_healthy 90 || {
-        _warn "Daemon not running. Start with: ./dev.sh daemon start"
-    }
+    # launchd KeepAlive auto-restarts with new binary (only if it was running)
+    if [ "$daemon_was_running" = true ]; then
+        _log "Waiting for daemon to restart with new binary..."
+        _daemon_wait_healthy 90
+    else
+        _log "Daemon was not running. Start with: ./dev.sh daemon start"
+    fi
 }
 
 cmd_quick() {
