@@ -1500,18 +1500,17 @@ def _write_evolution_proposal(ctx_dir: Path, proposal: dict) -> None:
     proposals.append(proposal)
     proposals_path.write_text(json.dumps(proposals, indent=2), encoding="utf-8")
 
-    # Create Radar todo for visibility
+    # Create Radar todo for visibility (async API)
     try:
+        import asyncio
         from core.todo_manager import ToDoManager
-        mgr = ToDoManager()
-        title = f"Evolution proposal: s_{proposal['skill_name']} (conf {proposal['confidence']:.0%})"
-        # Dedup: don't create if same skill already has a pending proposal todo
-        existing = mgr.list_todos(status="active")
-        for todo in existing:
-            if proposal["skill_name"] in todo.get("title", ""):
-                break
-        else:
-            mgr.create_todo(
+        from schemas.todo import ToDoCreate
+
+        async def _create_proposal_todo():
+            mgr = ToDoManager()
+            title = f"Evolution proposal: s_{proposal['skill_name']} (conf {proposal['confidence']:.0%})"
+            todo_data = ToDoCreate(
+                workspace_id="swarmws",
                 title=title,
                 description=(
                     f"Skill optimization ready for approval.\n"
@@ -1520,8 +1519,21 @@ def _write_evolution_proposal(ctx_dir: Path, proposal: dict) -> None:
                     f"Review: .context/.evolution_proposals.json\n"
                     f"Approve: manually deploy or wait for next cycle with approval flag."
                 ),
+                source="evolution_pipeline",
+                source_type="ai_detected",
                 priority="medium",
             )
+            await mgr.create(todo_data)
+            return title
+
+        # Run async in current or new event loop
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_create_proposal_todo())
+        except RuntimeError:
+            # No event loop — create one (sync context, e.g., CLI/job)
+            title = asyncio.run(_create_proposal_todo())
+            logger.info("Radar todo created: %s", title)
     except Exception as exc:
         logger.debug("Could not create Radar todo for evolution proposal: %s", exc)
 
