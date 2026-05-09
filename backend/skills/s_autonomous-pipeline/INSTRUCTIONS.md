@@ -558,6 +558,29 @@ Status: `[done]` `[>>>>]` `[skip]` `[FAIL]` `[STOP]` `[    ]`
     are noise. If the sub-agent returns vague findings, reject them
     and re-prompt with "be specific: file, line, what's wrong, how to
     fix."
+19. **Every stage is mandatory — the pipeline is a DDD loop, not a checklist.**
+    The completion gate (`run-update --status completed`) mechanically enforces
+    that ALL profile stages are either `completed` or `skipped` (with explicit
+    `skip_reason` field). This is not an honor system — it's a hard gate.
+
+    **Why:** Each stage serves the DDD learning loop:
+    - EVALUATE reads IMPROVEMENT.md (learns from past) → decides GO/DEFER
+    - THINK/PLAN reads PRODUCT.md + TECH.md → informed design
+    - BUILD/REVIEW/TEST writes code → verified implementation
+    - DELIVER packages + audits → qualified delivery
+    - REFLECT writes IMPROVEMENT.md (teaches future) → closes the loop
+
+    A pipeline that skips REFLECT breaks the learning loop. A pipeline that
+    skips EVALUATE might build something already tried and failed. Every stage
+    has a purpose — skipping one creates a gap that compounds over time.
+
+    **To skip a stage:** Set `status: "skipped"` with a `skip_reason` field
+    explaining WHY it's safe to skip. "Budget pressure" is NOT a valid reason —
+    CHECKPOINT instead. Valid reasons: "user override: approach already known",
+    "profile does not include this stage", "prerequisite output empty".
+
+    **If context is exhausted:** CHECKPOINT with the next stage as resume point.
+    Do not compress or skip stages to fit in the current session.
 
 ---
 
