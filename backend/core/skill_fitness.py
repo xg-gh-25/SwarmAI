@@ -199,12 +199,13 @@ Return ONLY valid JSON: {"score": 0.7, "justification": "One sentence explaining
 
 
 class LLMJudge:
-    """Layer 2 scoring: rubric-based LLM judgment via Bedrock Haiku.
+    """Layer 2 scoring: rubric-based LLM judgment via Bedrock Opus.
 
     Evaluates (skill_text, expected, actual) triples against a quality rubric.
     Returns 0.0-1.0 score with justification text.
 
-    Uses Haiku for cost efficiency (~$0.001/call vs $0.05 for Opus).
+    Uses Opus for quality (KD28: power over token budget). Same model as
+    llm_optimizer — one model everywhere, zero complexity.
     Falls back to None on any failure (timeout, API error, parse failure).
     """
 
