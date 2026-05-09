@@ -11,7 +11,7 @@ For every pipeline run, follow this loop:
 ```
 1. INIT     -- parse requirement, detect project, load or create pipeline run
 2. PROFILE  -- select pipeline profile (full/trivial/research/docs/bugfix)
-3. STAGE    -- for each stage in profile:
+3. STAGE    -- for each stage in profile (evaluate → ... → deliver → reflect):
                a. Gate check (budget, escalations, retries)
                b. Load stage context (DDD docs + upstream artifacts)
                c. Execute stage behavior (read stage doc, then execute)
@@ -19,7 +19,8 @@ For every pipeline run, follow this loop:
                e. Verify output (artifact published + schema valid)
                f. Handle result (advance / retry / checkpoint)
 4. DELIVER  -- Delivery Gate, Confidence Score, Completion Audit, Report, CI
-5. COMPLETE -- summarize, reflect, record metrics
+5. REFLECT  -- Read stages/reflect.md, execute: lessons → IMPROVEMENT.md → DDD loop closed
+6. COMPLETE -- summarize, record metrics, final run state
 ```
 
 ---
@@ -319,7 +320,31 @@ downstream stages.
 
 ---
 
-## Step 5: COMPLETE
+## Step 5: REFLECT
+
+After DELIVER completes and advances state to `reflect`, execute the REFLECT
+stage. This is NOT part of COMPLETE — it's a full pipeline stage with its own
+execution behavior.
+
+**Execution (BLOCKING):**
+
+1. Read `backend/skills/s_autonomous-pipeline/stages/reflect.md`
+2. Execute the 9-step methodology defined there inline
+3. Run pipeline validator: `pipeline_validator.py check --stage reflect`
+4. Update run.json with the reflect stage entry
+
+**Why explicit:** REFLECT closes the DDD learning loop — it writes lessons to
+IMPROVEMENT.md so future pipelines learn from this run. Without REFLECT, the
+pipeline generates value but doesn't compound it. A pipeline without REFLECT
+is a single-use tool, not a learning system.
+
+**Gate:** The mechanical completion gate (`run-update --status completed`) will
+REJECT completion if REFLECT is in the profile but has no stage entry. This is
+enforced by the validator, not honor-system.
+
+---
+
+## Step 6: COMPLETE
 
 After reflect stage:
 
