@@ -1332,6 +1332,26 @@ def _run_evolution_cycle_locked(
     # 3b. Deploy new optimizations (or log proposed changes in dry-run mode)
     for skill_name, confidence, avg_score, examples, opt_result in skill_assessments:
         if confidence >= high_threshold and opt_result and opt_result.accepted and opt_result.changes:
+            # v2.3: Generate and append anti-patterns as an additional TextChange
+            precomputed = optimizer._extract_corrections(examples)
+            if precomputed:
+                anti_gen = AntiPatternGenerator()
+                anti_section = anti_gen.generate(precomputed)
+                if anti_section:
+                    # Read current skill to check for existing anti-patterns section
+                    current_text = optimizer._read_skill_text(skill_name) or ""
+                    merged = anti_gen.merge_with_existing(current_text, anti_section)
+                    if merged != current_text:
+                        # Add as a TextChange — appends anti-patterns section
+                        diff_start = len(current_text)
+                        added_text = merged[diff_start:]
+                        if added_text.strip():
+                            opt_result.changes.append(TextChange(
+                                original="",  # append-only change
+                                replacement=added_text.strip(),
+                                reason="Auto-generated anti-patterns from correction history (GEPA v2.3)",
+                            ))
+
             if dry_run:
                 # DRY RUN: log what would be deployed without writing SKILL.md
                 logger.info(
