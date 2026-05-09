@@ -1653,6 +1653,16 @@ export function useChatStreamingLifecycle(
             setPromptMetadata(metadata as SystemPromptMetadata);
           }
         }
+        // MCP health warning — backend emits once per session if configured
+        // MCPs failed to connect. Show a toast notification so the user knows.
+        else if (event.type === 'mcp_health_warning') {
+          const msg = event.message ?? 'Some MCP servers failed to load.';
+          addToast({
+            severity: 'warning',
+            message: msg,
+            id: `mcp-health-${capturedTabId ?? 'global'}`,
+          });
+        }
         // Evolution SSE events — inject as standalone messages in the stream
         else if (event.type?.startsWith('evolution_')) {
           const evolutionMessage: Message = {

@@ -395,6 +395,13 @@ class SessionUnit:
         # so they load regardless of their tier in mcp-dev.json.
         self._extra_mcps: set[str] = set()
 
+        # ── MCP health detection ─────────────────────────────────────
+        # Set of MCP server names that were passed to the CLI at spawn.
+        # Used by post-spawn health check to detect failed MCPs.
+        self._configured_mcps: set[str] = set()
+        # Flag: health check runs only ONCE per session (first ResultMessage).
+        self._mcp_health_checked: bool = False
+
         # ── Proactive RSS restart cooldown ────────────────────────
         # Monotonic timestamp of last proactive compact→kill cycle.
         # Prevents repeated restarts within the PROACTIVE_COOLDOWN window.
@@ -1370,6 +1377,101 @@ class SessionUnit:
 
         return events
 
+    async def _check_mcp_health(self) -> Optional[dict]:
+        """Check MCP server health after first response and return warning event.
+
+        Calls ``get_mcp_status()`` on the CLI subprocess to discover which
+        configured MCPs actually connected.  Compares against
+        ``_configured_mcps`` (captured at spawn).
+
+        Returns:
+            A warning event dict if MCPs failed, or ``None`` if all healthy.
+            Never raises — failures are silently logged.
+        """
+        if self._mcp_health_checked:
+            return None
+        self._mcp_health_checked = True
+
+        if not self._configured_mcps or self._client is None:
+            return None
+
+        try:
+            status_response = await self._client.get_mcp_status()
+        except Exception as exc:
+            logger.debug(
+                "session_unit.mcp_health_check_failed session_id=%s: %s",
+                self.session_id, exc,
+            )
+            return None
+
+        mcp_servers = status_response.get("mcpServers", [])
+
+        # If CLI returned no servers at all, the control command may not be
+        # supported (old SDK version) — skip rather than false-alarm.
+        if not mcp_servers:
+            logger.debug(
+                "session_unit.mcp_health_check_empty session_id=%s "
+                "(CLI returned no MCP status — skipping)",
+                self.session_id,
+            )
+            return None
+
+        # Build set of non-failed MCP names.
+        # "pending" = still initializing (don't alert — not failed yet).
+        # "disabled" = intentionally off (don't alert — user choice).
+        # Only alert on "failed" or "needs-auth" — definitive failures.
+        non_failed: set[str] = set()
+        failed_servers: list[dict] = []
+        for server in mcp_servers:
+            name = server.get("name", "")
+            status = server.get("status", "")
+            if status in ("connected", "pending", "disabled"):
+                non_failed.add(name)
+            elif status in ("failed", "needs-auth"):
+                failed_servers.append(server)
+
+        # Compare: which configured MCPs are definitively missing/failed?
+        missing = self._configured_mcps - non_failed
+        if not missing:
+            logger.info(
+                "session_unit.mcp_health_ok session_id=%s configured=%d ok=%d",
+                self.session_id, len(self._configured_mcps),
+                len(non_failed),
+            )
+            return None
+
+        # Build warning message
+        missing_names = sorted(missing)
+        names_str = ", ".join(missing_names)
+
+        # Try to identify a remediation hint from error messages
+        hints: set[str] = set()
+        for server in failed_servers:
+            if server.get("name") in missing:
+                error = server.get("error", "")
+                if "midway" in error.lower() or "auth" in error.lower():
+                    hints.add("mwinit -s")
+                elif "enoent" in error.lower() or "not found" in error.lower():
+                    hints.add("check MCP binary path")
+                elif "timeout" in error.lower() or "connect" in error.lower():
+                    hints.add("check network connectivity")
+
+        msg = f"⚠️ MCP servers failed to load: {names_str}. These tools are unavailable this session."
+        if hints:
+            msg += f" Try: {'; '.join(sorted(hints))}."
+
+        logger.warning(
+            "session_unit.mcp_health_warning session_id=%s missing=%s",
+            self.session_id, missing_names,
+        )
+
+        return {
+            "type": "mcp_health_warning",
+            "level": "warn",
+            "message": msg,
+            "missing_servers": missing_names,
+        }
+
     async def _spawn(self, options: ClaudeAgentOptions, config: Optional[Any] = None) -> None:
         """Spawn a subprocess under ``_spawn_lock`` + ``_env_lock``.
 
@@ -1450,10 +1552,21 @@ class SessionUnit:
         self._client = client
         self.last_used = time.time()
 
+        # ── Capture configured MCP names for post-spawn health check ──
+        # options.mcp_servers is a dict when MCPs are configured.
+        # Store the names so the health check can compare against
+        # what the CLI actually connected to.
+        if isinstance(options.mcp_servers, dict) and options.mcp_servers:
+            self._configured_mcps = set(options.mcp_servers.keys())
+            self._mcp_health_checked = False
+        else:
+            self._configured_mcps = set()
+
         logger.info(
-            "session_unit.spawn session_id=%s pid=%s",
+            "session_unit.spawn session_id=%s pid=%s mcps_configured=%d",
             self.session_id,
             self.pid,
+            len(self._configured_mcps),
         )
 
         # COLD → IDLE (subprocess is alive and ready)
@@ -1958,6 +2071,19 @@ class SessionUnit:
                     usage, num_turns=result_num_turns,
                 ):
                     yield meta_event
+
+                # ── MCP health check (first response only) ────────
+                if not self._mcp_health_checked and self._configured_mcps:
+                    try:
+                        mcp_warning = await self._check_mcp_health()
+                        if mcp_warning:
+                            yield mcp_warning
+                    except Exception as mcp_exc:
+                        logger.debug(
+                            "session_unit.mcp_health_check_error "
+                            "session_id=%s: %s",
+                            self.session_id, mcp_exc,
+                        )
 
                 # ── Post-interrupt corruption detection ────────────
                 # After a CompactionGuard interrupt, the CLI subprocess
