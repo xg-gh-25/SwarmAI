@@ -137,11 +137,13 @@ def _to_response(raw: dict) -> PipelineRunResponse:
 async def cancel_pipeline(run_id: str) -> dict:
     """Cancel a pipeline run by updating its run.json status to 'cancelled'.
 
-    Returns 200 on success, 404 if run not found.
+    Returns 200 on success, 404 if run not found. Atomic write prevents corruption.
     """
+    from fastapi.responses import JSONResponse
+
     projects_dir = _get_swarmws() / "Projects"
     if not projects_dir.exists():
-        return {"status": "not_found", "run_id": run_id}
+        return JSONResponse(status_code=404, content={"status": "not_found", "run_id": run_id})
 
     for project_dir in projects_dir.iterdir():
         if not project_dir.is_dir():
@@ -151,14 +153,20 @@ async def cancel_pipeline(run_id: str) -> dict:
             try:
                 state = json.loads(run_file.read_text(encoding="utf-8"))
                 state["status"] = "cancelled"
-                run_file.write_text(json.dumps(state, indent=2), encoding="utf-8")
+                # Atomic write: write to tmp then replace to prevent corruption
+                tmp_file = run_file.with_suffix(".tmp")
+                tmp_file.write_text(json.dumps(state, indent=2), encoding="utf-8")
+                tmp_file.replace(run_file)
                 logger.info("Cancelled pipeline %s in project %s", run_id, project_dir.name)
                 return {"status": "cancelled", "run_id": run_id}
             except (json.JSONDecodeError, OSError) as e:
                 logger.error("Failed to cancel %s: %s", run_id, e)
-                return {"status": "error", "run_id": run_id, "detail": str(e)}
+                return JSONResponse(
+                    status_code=500,
+                    content={"status": "error", "run_id": run_id, "detail": str(e)},
+                )
 
-    return {"status": "not_found", "run_id": run_id}
+    return JSONResponse(status_code=404, content={"status": "not_found", "run_id": run_id})
 
 
 @router.get("", response_model=PipelineDashboard)
