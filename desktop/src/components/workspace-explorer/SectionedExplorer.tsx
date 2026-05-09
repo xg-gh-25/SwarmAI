@@ -18,11 +18,9 @@ import type { TreeNode } from '../../types';
 import { DEFAULT_WORKSPACE_ID } from '../../types/workspace-config';
 import { fileIcon, fileIconColor, gitStatusBadge } from '../../utils/fileUtils';
 
-/** Files/directories that are pinned at the bottom as system items. */
-const SYSTEM_NAMES = new Set(['.context', '.claude', 'config.json', 'proactive_state.json']);
-
-/** Directories excluded from "Working Files" — not source-controlled content. */
-const WORKING_FILES_EXCLUDE = new Set(['Attachments']);
+/** User content directories — the ONLY places a user "works on files".
+ *  Working Files section only shows changes inside these directories. */
+const USER_CONTENT_DIRS = new Set(['Knowledge', 'Projects']);
 
 interface SectionedExplorerProps {
   onFileDoubleClick?: (node: FileTreeItem) => void;
@@ -34,18 +32,18 @@ interface WorkingFile {
   parentName: string;
 }
 
-/** Recursively collect all files with a git status (modified, added, untracked).
- *  Excludes system files/directories (they're pinned at the bottom). */
+/** Recursively collect files with git status (modified, added, untracked)
+ *  ONLY from user content directories (Knowledge, Projects). */
 function collectWorkingFiles(nodes: TreeNode[], parentName: string = ''): WorkingFile[] {
   const results: WorkingFile[] = [];
   for (const node of nodes) {
-    // Skip system items and non-source directories (e.g. Attachments/)
-    if (SYSTEM_NAMES.has(node.name) || WORKING_FILES_EXCLUDE.has(node.name)) continue;
+    if (node.type === 'directory' && node.children) {
+      // At root level, only recurse into user content dirs
+      if (!parentName && !USER_CONTENT_DIRS.has(node.name)) continue;
+      results.push(...collectWorkingFiles(node.children, node.name));
+    }
     if (node.type === 'file' && node.gitStatus && ['modified', 'added', 'untracked'].includes(node.gitStatus)) {
       results.push({ node, parentName });
-    }
-    if (node.type === 'directory' && node.children) {
-      results.push(...collectWorkingFiles(node.children, node.name));
     }
   }
   return results;

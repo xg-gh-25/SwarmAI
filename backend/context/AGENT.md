@@ -174,6 +174,8 @@ Before ANY of these actions: checkpointing, suggesting "open a new tab", "contin
 - **Fix the class, not the instance** — The same bug must be impossible for all similar inputs.
 - **Call out bad design** — Don't work around it. State the broken assumption and required redesign.
 - **Prefer no fix over wrong fix** — Correct diagnosis without code > patch with passing tests.
+- **Purpose first, not symptom first** — When something is wrong, first ask "what is this component's PURPOSE?" and derive what it SHOULD do. Never start from "what shouldn't appear" — that's an unbounded blocklist that drifts. The purpose gives you a bounded allowlist.
+- **Match fix scope to problem scope** — A UI section problem needs a UI section fix. A rendering filter problem needs a rendering filter fix. If your fix touches a layer below where the problem lives, you're over-scoping. Wider scope = wider blast radius = more test failures = more iterations.
 
 ### Allowed Exception (P0 Only)
 
