@@ -197,16 +197,20 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
   // Listen for daemon startup progress events from Rust backend
   useEffect(() => {
     if (!isDesktop()) return;
+    let mounted = true;
     let unlisten: UnlistenFn | null = null;
 
     listen<{ attempt: number; maxAttempts: number; elapsedSecs: number; totalSecs: number }>(
       'backend-starting-progress',
       (event) => {
-        setDaemonProgress({ elapsed: event.payload.elapsedSecs, total: event.payload.totalSecs });
+        if (mounted) setDaemonProgress({ elapsed: event.payload.elapsedSecs, total: event.payload.totalSecs });
       }
-    ).then((fn) => { unlisten = fn; });
+    ).then((fn) => {
+      if (mounted) unlisten = fn;
+      else fn(); // already unmounted — immediately unlisten
+    });
 
-    return () => { unlisten?.(); };
+    return () => { mounted = false; unlisten?.(); };
   }, [retryCount]);
 
   /** Map a ready/error pair to a step status. */
