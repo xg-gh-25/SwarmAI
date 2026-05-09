@@ -653,6 +653,7 @@ This catches the class of bugs where every unit works but the integration is wro
 - **Direct** = no ceremony, not no quality. Still test, still scan.
 - **TDD-only** = tests BEFORE code. Test passes before implementation? Test is wrong. Fix code, not tests.
 - **Full Pipeline** = validator auto-enforced by `advance` command. Skip nothing. Generate REPORT.md.
+- **Adversarial sub-agent is MANDATORY in DELIVER.** Every pipeline run MUST spawn a separate sub-agent for adversarial review before declaring delivery complete. This is a non-negotiable quality gate — NOT optional, NOT skippable on "the code already works." The sub-agent reviews from a fresh context (no builder bias). Without it, the pipeline is incomplete regardless of test results. Pipeline confidence score without adversarial review = 0. (C011 recurrence: "pipeline confidence measures process compliance not code correctness" — the adversarial review catches what self-review structurally cannot.)
 - **User override is absolute.** No exceptions, no "are you sure?".
 - **Surgical changes only.** Touch only what the task requires. Match the existing style (quotes, formatting, naming) even if you'd do it differently. Remove imports/variables/functions that YOUR changes made unused — but don't remove pre-existing dead code unless asked; mention it instead. Every changed line must trace directly to the user's request. No drive-by refactoring, no style drift, no speculative "while I'm here" improvements.
 
