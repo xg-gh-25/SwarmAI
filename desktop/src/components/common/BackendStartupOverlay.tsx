@@ -15,6 +15,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import axios from 'axios';
+import { listen, UnlistenFn } from '@tauri-apps/api/event';
 // getApiBaseUrl: health checks; getBackendPort/initializeBackend: Tauri daemon port negotiation
 import { getApiBaseUrl, getBackendPort, initializeBackend, isDesktop } from '../../services/tauri';
 import { systemService, SystemStatus } from '../../services/system';
@@ -174,6 +175,7 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
   const startTimeRef = useRef<number | null>(null);
   const firstPollTimeRef = useRef<number | null>(null);
   const [retryCount, setRetryCount] = useState(0);
+  const [daemonProgress, setDaemonProgress] = useState<{ elapsed: number; total: number } | null>(null);
 
   const logPath = useMemo(() => getLogPath(), []);
 
@@ -186,10 +188,26 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
     setIsFadingOut(false);
     setIsVisible(true);
     setAppVersion('');
+    setDaemonProgress(null);
     startTimeRef.current = null;
     firstPollTimeRef.current = null;
     setRetryCount(prev => prev + 1);
   }, []);
+
+  // Listen for daemon startup progress events from Rust backend
+  useEffect(() => {
+    if (!isDesktop()) return;
+    let unlisten: UnlistenFn | null = null;
+
+    listen<{ attempt: number; maxAttempts: number; elapsedSecs: number; totalSecs: number }>(
+      'backend-starting-progress',
+      (event) => {
+        setDaemonProgress({ elapsed: event.payload.elapsedSecs, total: event.payload.totalSecs });
+      }
+    ).then((fn) => { unlisten = fn; });
+
+    return () => { unlisten?.(); };
+  }, [retryCount]);
 
   /** Map a ready/error pair to a step status. */
   const getStepStatus = useCallback((ready: boolean, error?: string): InitStepStatus => {
@@ -412,6 +430,8 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
 
         if (!mounted) return;
 
+        // Clear daemon progress — backend is confirmed up, now checking readiness
+        setDaemonProgress(null);
         setStatus('connecting');
         console.log('[Startup] Starting health polling...');
         timeoutId = setTimeout(pollHealth, TIMING.initialPollDelay);
@@ -419,7 +439,9 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
         console.error('[Startup] Failed to initialize backend:', error);
         if (mounted) {
           setStatus('error');
-          setErrorMessage(`Failed to initialize backend: ${error}`);
+          // Tauri invoke errors may be objects — ensure we display a string
+          const msg = error instanceof Error ? error.message : String(error);
+          setErrorMessage(`Failed to initialize backend: ${msg}`);
         }
       }
     };
@@ -485,17 +507,27 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
           )}
         </div>
 
-        {/* Connecting state — show spinner */}
+        {/* Connecting state — show spinner with progress */}
         {(status === 'starting' || status === 'connecting') && (
           <>
             <div className="flex items-center gap-3">
               <Spinner size="md" />
               <span className="text-[var(--color-text-muted)]">
-                {t('startup.connectingToBackend')}
+                {daemonProgress
+                  ? `Starting backend... ${daemonProgress.elapsed}s`
+                  : t('startup.connectingToBackend')
+                }
               </span>
             </div>
             <div className="w-64 h-1 bg-[var(--color-border)] rounded-full overflow-hidden">
-              <div className="h-full bg-primary rounded-full animate-pulse" style={{ width: '60%' }} />
+              <div
+                className="h-full bg-primary rounded-full transition-all duration-1000 ease-out"
+                style={{
+                  width: daemonProgress
+                    ? `${Math.max(10, Math.min(95, (daemonProgress.elapsed / daemonProgress.total) * 100))}%`
+                    : '15%',
+                }}
+              />
             </div>
           </>
         )}
