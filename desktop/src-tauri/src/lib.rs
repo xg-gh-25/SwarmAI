@@ -510,10 +510,33 @@ fn parse_health_response(body: &str) -> (bool, Option<String>, Option<String>) {
     }
 }
 
-/// Recursively copy a directory's contents to a destination.
-/// Overwrites existing files; creates missing directories.
+/// Recursively copy a directory's contents to a destination, deleting
+/// files in dst that don't exist in src (mirrors rsync --delete behavior).
+/// Critical for onedir upgrades: stale .so/.dylib from old versions must be removed.
 fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dst)?;
+
+    // Phase 1: Collect source entries for existence check
+    let src_entries: std::collections::HashSet<std::ffi::OsString> = std::fs::read_dir(src)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name())
+        .collect();
+
+    // Phase 2: Delete entries in dst that don't exist in src
+    if let Ok(dst_iter) = std::fs::read_dir(dst) {
+        for entry in dst_iter.filter_map(|e| e.ok()) {
+            if !src_entries.contains(&entry.file_name()) {
+                let path = entry.path();
+                if path.is_dir() {
+                    let _ = std::fs::remove_dir_all(&path);
+                } else {
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+        }
+    }
+
+    // Phase 3: Copy/update from src to dst
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
         let src_path = entry.path();
@@ -711,14 +734,10 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
     let daemon_dir = format!("{}/.swarm-ai/daemon", home);
     let daemon_dir_path = std::path::Path::new(&daemon_dir);
 
-    // Find bundled onedir — resource_dir/python-backend/
-    let exe_path = std::env::current_exe().unwrap_or_default();
-    let bundle_dir = exe_path.parent().unwrap_or(std::path::Path::new("/"));
-    // In .app bundle: Contents/MacOS/ is exe dir, resources at ../Resources/
-    let resources_dir = bundle_dir.parent()
-        .unwrap_or(std::path::Path::new("/"))
-        .join("Resources")
-        .join("python-backend");
+    // Find bundled onedir — same path as auto_install_daemon uses
+    let bundle_base = app.path().resource_dir()
+        .map_err(|e| format!("Failed to get resource dir: {}", e))?;
+    let resources_dir = bundle_base.join("python-backend");
 
     if !resources_dir.exists() || !resources_dir.join("python-backend").exists() {
         return Err(format!(
@@ -995,13 +1014,14 @@ fn auto_install_daemon(app: &tauri::AppHandle) -> Result<(), String> {
     }
 
     // Clear quarantine (macOS Gatekeeper blocks quarantined scripts via launchd)
+    // -r: recursive, clears quarantine on all files in the onedir bundle
     let _ = std::process::Command::new("xattr")
-        .args(["-d", "com.apple.quarantine"])
+        .args(["-dr", "com.apple.quarantine"])
         .arg(&wrapper_dest)
         .output();
     let _ = std::process::Command::new("xattr")
-        .args(["-d", "com.apple.quarantine"])
-        .arg(&daemon_binary)
+        .args(["-dr", "com.apple.quarantine"])
+        .arg(&daemon_dir)
         .output();
 
     // Step 3+4: Generate plist from template and write
