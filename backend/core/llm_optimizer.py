@@ -67,36 +67,45 @@ For append-only changes (new instructions), use empty string for "original":
 
 # ── Bedrock client singleton with TTL ──
 
+import threading
+
 _bedrock_client = None
 _bedrock_client_created_at: float = 0.0
 _CLIENT_TTL_SECONDS = 3600  # Re-create client hourly (credential rotation)
+_client_lock = threading.Lock()  # Thread safety for shared client (Finding 2, adversarial review)
 
 
 def _get_bedrock_client():
-    """Lazy singleton with 1-hour TTL — re-creates after credential rotation."""
+    """Lazy singleton with 1-hour TTL — re-creates after credential rotation.
+
+    Thread-safe: protected by _client_lock to prevent race between
+    reset_bedrock_client() and concurrent callers (LLMJudge + optimizer).
+    """
     global _bedrock_client, _bedrock_client_created_at
     import time
 
-    now = time.monotonic()
-    if _bedrock_client is None or (now - _bedrock_client_created_at) > _CLIENT_TTL_SECONDS:
-        region = os.environ.get(
-            "AWS_REGION",
-            os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
-        )
-        _bedrock_client = boto3.client(
-            "bedrock-runtime",
-            region_name=region,
-            config=BotoConfig(read_timeout=30, connect_timeout=10, retries={"max_attempts": 1}),
-        )
-        _bedrock_client_created_at = now
-    return _bedrock_client
+    with _client_lock:
+        now = time.monotonic()
+        if _bedrock_client is None or (now - _bedrock_client_created_at) > _CLIENT_TTL_SECONDS:
+            region = os.environ.get(
+                "AWS_REGION",
+                os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
+            )
+            _bedrock_client = boto3.client(
+                "bedrock-runtime",
+                region_name=region,
+                config=BotoConfig(read_timeout=30, connect_timeout=10, retries={"max_attempts": 1}),
+            )
+            _bedrock_client_created_at = now
+        return _bedrock_client
 
 
 def reset_bedrock_client():
     """Force re-creation on next call. Called by _run_evolution_cycle_locked at cycle start."""
     global _bedrock_client, _bedrock_client_created_at
-    _bedrock_client = None
-    _bedrock_client_created_at = 0.0
+    with _client_lock:
+        _bedrock_client = None
+        _bedrock_client_created_at = 0.0
 
 
 # ── Token usage tracking ──
