@@ -1223,7 +1223,8 @@ fn spawn_daemon_health_watchdog(
     // after a binary deploy can take 30-60s (ThrottleInterval 10s + extraction).
     // 40 × 3s = 120s is enough for even the worst-case deploy scenario.
     // Subprocess mode: 3 re-spawn attempts with backoff (handled separately below).
-    const MAX_RECOVERY_ATTEMPTS: u32 = 40; // 40 × 3s = 120s max wait for launchd restart
+    const MAX_RECOVERY_ATTEMPTS: u32 = 40; // 40 × 3s = 120s — emit warning to frontend
+    const MAX_DAEMON_WAIT: u32 = 200; // 200 × 3s = 600s — hard cap, stop polling
     const RECOVERY_POLL_SECS: u64 = 3;
 
     tauri::async_runtime::spawn(async move {
@@ -1342,18 +1343,23 @@ fn spawn_daemon_health_watchdog(
                         let _ = app_handle.emit("backend-terminated", Option::<i32>::None);
                     }
                 } else if is_daemon {
-                    // Daemon mode: launchd will restart — keep waiting indefinitely.
+                    // Daemon mode: launchd will restart — wait up to MAX_DAEMON_WAIT.
                     // Log every 10 attempts (30s) to avoid spam.
                     if recovery_attempts % 10 == 0 {
                         println!("[Tauri] Watchdog: still waiting for daemon recovery (attempt {}, {}s elapsed)",
                             recovery_attempts, recovery_attempts * RECOVERY_POLL_SECS as u32);
                     }
-                    // Emit "terminated" exactly once at the threshold — frontend shows warning.
-                    // Don't give up: daemon WILL come back (KeepAlive:true), just slow cold start.
+                    // Emit warning at soft threshold — frontend shows "taking longer" banner.
                     if recovery_attempts == MAX_RECOVERY_ATTEMPTS {
                         println!("[Tauri] Watchdog: daemon recovery taking longer than expected ({} attempts)",
                             MAX_RECOVERY_ATTEMPTS);
                         let _ = app_handle.emit("backend-terminated", Option::<i32>::None);
+                    }
+                    // Hard cap: stop polling after 10 minutes — daemon is truly dead.
+                    if recovery_attempts >= MAX_DAEMON_WAIT {
+                        println!("[Tauri] Watchdog: daemon failed to recover after {} attempts ({}s) — giving up",
+                            MAX_DAEMON_WAIT, MAX_DAEMON_WAIT * RECOVERY_POLL_SECS as u32);
+                        return;
                     }
                 }
             } else if !was_healthy && healthy {

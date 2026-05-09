@@ -1706,7 +1706,7 @@ def build_session_briefing_data(
         projects_dir = workspace / "Projects"
         if projects_dir.is_dir():
             try:
-                import json as _json
+                _json = json  # alias for local scope readability
                 cutoff_7d = time.time() - 7 * 86400
                 for proj_dir in projects_dir.iterdir():
                     runs_dir = proj_dir / ".artifacts" / "runs"

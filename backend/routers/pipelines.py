@@ -37,7 +37,10 @@ router = APIRouter()
 
 # Runs stuck in "running" with no update for this long are auto-marked failed.
 # Configurable via env var for long-running pipelines (default: 60 min).
-_STALE_THRESHOLD_MINUTES = int(os.environ.get("PIPELINE_STALE_THRESHOLD_MINUTES", "60"))
+try:
+    _STALE_THRESHOLD_MINUTES = int(os.environ.get("PIPELINE_STALE_THRESHOLD_MINUTES", "60"))
+except (ValueError, TypeError):
+    _STALE_THRESHOLD_MINUTES = 60
 
 
 def _get_swarmws() -> Path:
