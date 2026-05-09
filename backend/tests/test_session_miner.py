@@ -435,3 +435,135 @@ class TestStrongKeywordSignal:
         assert match.start() < 60  # Within new position threshold
         result = SessionMiner._is_strong_keyword_signal(text, kw_pattern)
         assert result is True
+
+
+class TestCorrectionConsumed:
+    """Verify that correction messages containing skill keywords are not stolen by Path 1."""
+
+    def test_correction_not_stolen_by_keyword_match(self, tmp_path):
+        """A correction that also contains skill keywords should NOT become a new invocation.
+
+        Scenario: user invokes save-memory via Skill tool → assistant responds →
+        user corrects with '不要把token budget saving...' which contains 'save' + 'memory'.
+        Without correction_consumed, Path 1 would claim this as a new invocation.
+        """
+        skills_dir = tmp_path / "skills"
+        (skills_dir / "s_save-memory").mkdir(parents=True)
+        (skills_dir / "s_save-memory" / "SKILL.md").write_text(
+            "---\nname: save-memory\ndescription: >\n"
+            '  TRIGGER: "remember this", "save to memory", "save the lessons", "persist this".\n'
+            "tier: always\n---\n"
+        )
+        evals_dir = tmp_path / "evals"
+        evals_dir.mkdir()
+        transcripts_dir = tmp_path / "transcripts"
+        transcripts_dir.mkdir()
+
+        # Build a transcript: user asks → Skill tool_use → assistant responds → user corrects
+        records = [
+            {"type": "user", "message": {"content": "save this decision to memory"}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Skill", "id": "t1",
+                 "input": {"skill": "save-memory", "args": "decision X"}},
+                {"type": "text", "text": "Done, saved to MEMORY.md."},
+            ]}},
+            # Correction that ALSO contains "save" and "memory" keywords:
+            {"type": "user", "message": {
+                "content": "不要把token budget saving 作为首要考虑因素 save to memory 的时候 永远不是首要考虑"}},
+        ]
+        _write_jsonl(transcripts_dir / "session.jsonl", records)
+
+        miner = SessionMiner(transcripts_dir, skills_dir, evals_dir)
+        results = miner.mine_all()
+        examples = results.get("save-memory", [])
+
+        # Should be exactly 1 example (the tool_use invocation), NOT 2
+        assert len(examples) == 1, f"Expected 1 example, got {len(examples)}"
+        # The correction should be detected on that single example
+        assert examples[0].user_correction is not None
+        assert examples[0].score == 0.5
+        assert "token budget" in examples[0].user_correction
+
+    def test_correction_consumed_across_multiple_invocations(self, tmp_path):
+        """Multiple invocations: correction of first must not become second invocation."""
+        skills_dir = tmp_path / "skills"
+        (skills_dir / "s_save-memory").mkdir(parents=True)
+        (skills_dir / "s_save-memory" / "SKILL.md").write_text(
+            "---\nname: save-memory\ndescription: >\n"
+            '  TRIGGER: "remember this", "save to memory".\n'
+            "tier: always\n---\n"
+        )
+        evals_dir = tmp_path / "evals"
+        evals_dir.mkdir()
+        transcripts_dir = tmp_path / "transcripts"
+        transcripts_dir.mkdir()
+
+        records = [
+            {"type": "user", "message": {"content": "save to memory: our key decision"}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Skill", "id": "t1",
+                 "input": {"skill": "save-memory", "args": "key decision"}},
+                {"type": "text", "text": "Saved."},
+            ]}},
+            # This looks like it could be a new "save to memory" invocation
+            # but it's actually a correction (starts with "不对")
+            {"type": "user", "message": {"content": "不对 save to memory 的格式不对 重做"}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "Fixed the format."},
+            ]}},
+            # A genuinely new invocation later
+            {"type": "user", "message": {"content": "save to memory: lesson learned"}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Skill", "id": "t2",
+                 "input": {"skill": "save-memory", "args": "lesson"}},
+                {"type": "text", "text": "Done."},
+            ]}},
+        ]
+        _write_jsonl(transcripts_dir / "session.jsonl", records)
+
+        miner = SessionMiner(transcripts_dir, skills_dir, evals_dir)
+        results = miner.mine_all()
+        examples = results.get("save-memory", [])
+
+        # Should be 2 invocations: first (with correction), second (clean)
+        assert len(examples) == 2, f"Expected 2, got {len(examples)}: {[(e.user_prompt[:30], e.user_correction) for e in examples]}"
+        # First has correction
+        corrected = [e for e in examples if e.user_correction]
+        assert len(corrected) == 1
+        assert "不对" in corrected[0].user_correction
+        # Second is clean
+        clean = [e for e in examples if not e.user_correction]
+        assert len(clean) == 1
+
+
+class TestLoadHistoricalCorrections:
+    """Verify historical correction loading from persisted evals."""
+
+    def test_loads_corrections_from_evals_file(self, tmp_path):
+        """Historical corrections should be loadable from the evals JSONL file."""
+        evals_dir = tmp_path / "evals"
+        evals_dir.mkdir()
+        # Write a fake evals file with one correction and one non-correction
+        evals_file = evals_dir / "save-memory.jsonl"
+        lines = [
+            json.dumps({"_meta": "run_separator", "timestamp": "2026-04-16", "count": 2}),
+            json.dumps({"user_prompt": "save X", "skill_invoked": "save-memory",
+                        "agent_actions": "done", "user_correction": None,
+                        "final_outcome": "completed", "score": 1.0}),
+            json.dumps({"user_prompt": "save Y", "skill_invoked": "save-memory",
+                        "agent_actions": "done", "user_correction": "wrong format",
+                        "final_outcome": "corrected", "score": 0.5}),
+        ]
+        evals_file.write_text("\n".join(lines))
+
+        miner = SessionMiner(tmp_path / "t", tmp_path / "s", evals_dir)
+        corrections = miner.load_historical_corrections("save-memory")
+        assert len(corrections) == 1
+        assert corrections[0].user_correction == "wrong format"
+        assert corrections[0].score == 0.5
+
+    def test_returns_empty_if_no_file(self, tmp_path):
+        evals_dir = tmp_path / "evals"
+        evals_dir.mkdir()
+        miner = SessionMiner(tmp_path / "t", tmp_path / "s", evals_dir)
+        assert miner.load_historical_corrections("nonexistent") == []
