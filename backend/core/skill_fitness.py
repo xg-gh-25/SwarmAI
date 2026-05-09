@@ -212,10 +212,9 @@ class LLMJudge:
     Falls back to None on any failure (timeout, API error, parse failure).
     """
 
-    # Sonnet 4 for judging (~$0.003/call) — Haiku not available on this account's
-    # cross-region inference profiles. Sonnet is 5x cheaper than Opus, good enough
-    # for rubric-based scoring. Falls back gracefully on any failure.
-    MODEL_ID = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+    # Same Opus model as llm_optimizer.py — no reason to use a different model.
+    # Cost is never the primary concern (KD28). One model, zero complexity.
+    MODEL_ID = "us.anthropic.claude-opus-4-6-v1"
     TIMEOUT_SECONDS = 30
 
     def __init__(self):
