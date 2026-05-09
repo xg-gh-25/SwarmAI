@@ -12,7 +12,7 @@
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=flat&logo=react&logoColor=white)](https://react.dev/)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-FFC131?style=flat&logo=tauri&logoColor=white)](https://tauri.app/)
 [![Claude](https://img.shields.io/badge/Claude-Opus_4.6-191919?style=flat&logo=anthropic&logoColor=white)](https://github.com/anthropics/claude-code)
-[![License](https://img.shields.io/badge/License-AGPL_v3-blue.svg?style=flat)](./LICENSE-AGPL)
+[![License](https://img.shields.io/badge/License-MIT-green.svg?style=flat)](./LICENSE)
 
 </div>
 
@@ -309,9 +309,7 @@ npm install && cp backend.env.example ../backend/.env
 
 ## 许可证
 
-双重许可：[AGPL v3](./LICENSE-AGPL)（开源）+ [商业许可](./LICENSE-COMMERCIAL)（闭源/SaaS）
-
-商业授权联系：📧 **xiao_gang_wang@me.com**
+[MIT 许可证](./LICENSE)
 
 ---
 

@@ -12,7 +12,7 @@ English | [中文](./README.zh-CN.md)
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=flat&logo=react&logoColor=white)](https://react.dev/)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-FFC131?style=flat&logo=tauri&logoColor=white)](https://tauri.app/)
 [![Claude](https://img.shields.io/badge/Claude-Opus_4.6-191919?style=flat&logo=anthropic&logoColor=white)](https://github.com/anthropics/claude-code)
-[![License](https://img.shields.io/badge/License-AGPL_v3-blue.svg?style=flat)](./LICENSE-AGPL)
+[![License](https://img.shields.io/badge/License-MIT-green.svg?style=flat)](./LICENSE)
 
 </div>
 
@@ -302,9 +302,7 @@ The gap between us and stateless tools widens with every session. After 50 sessi
 
 ## License
 
-Dual-licensed: [AGPL v3](./LICENSE-AGPL) (open-source) + [Commercial](./LICENSE-COMMERCIAL) (closed-source/SaaS).
-
-For commercial licensing: 📧 **xiao_gang_wang@me.com**
+[MIT License](./LICENSE)
 
 ---
 

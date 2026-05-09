@@ -43,7 +43,7 @@ Desktop app with three layers: a Tauri 2.0 shell (Rust), a React frontend (TypeS
 | **Database** | SQLite (WAL mode) at `~/.swarm-ai/data.db` |
 | **Testing** | pytest + Hypothesis (backend), vitest (frontend) |
 | **Build** | PyInstaller (backend bundle), Tauri CLI (app package) |
-| **License** | AGPL v3 + Commercial dual-license |
+| **License** | MIT |
 
 ## Codebase Location
 

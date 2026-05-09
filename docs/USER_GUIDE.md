@@ -479,7 +479,7 @@ No — SwarmAI requires an active internet connection to reach the AI provider (
 
 ### How much does it cost to run?
 
-SwarmAI itself is free (AGPL v3). The AI model usage costs depend on your provider:
+SwarmAI itself is free and open-source (MIT). The AI model usage costs depend on your provider:
 - **AWS Bedrock**: Pay-per-token, billed to your AWS account. Claude Opus 4.6 is ~$15/M input tokens, ~$75/M output tokens. A typical heavy session uses $1-5.
 - **Anthropic API**: Similar per-token pricing. Check [anthropic.com/pricing](https://www.anthropic.com/pricing) for current rates.
 
