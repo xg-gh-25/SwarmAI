@@ -1087,6 +1087,30 @@ def _run_evolution_cycle_locked(
     skills_checked = len(all_examples)
     transcripts_scanned = miner.last_transcripts_scanned
 
+    # Merge historical corrections from persisted evals that fresh mining missed.
+    # This preserves corrections detected in prior runs even if transcripts
+    # aged out or parse logic changed (prevents correction amnesia).
+    for name, examples in all_examples.items():
+        historical = miner.load_historical_corrections(name)
+        if historical:
+            # Dedup by (prompt[:200], correction[:200]) to avoid double-counting
+            existing_keys = {
+                (ex.user_prompt[:200], (ex.user_correction or "")[:200])
+                for ex in examples
+            }
+            merged = 0
+            for hist_ex in historical:
+                key = (hist_ex.user_prompt[:200], (hist_ex.user_correction or "")[:200])
+                if key not in existing_keys:
+                    examples.append(hist_ex)
+                    existing_keys.add(key)
+                    merged += 1
+            if merged > 0:
+                logger.info(
+                    "Evolution cycle: merged %d historical corrections for %s",
+                    merged, name,
+                )
+
     # Filter eligible (>=5 examples, or >=3 for priority)
     eligible_skills: list[str] = []
     for name, examples in all_examples.items():

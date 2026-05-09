@@ -181,10 +181,16 @@ class SessionMiner:
                 return idx
         return None
 
-    def _detect_correction(self, records: list[dict], after_idx: int) -> tuple[str | None, float]:
+    def _detect_correction(
+        self, records: list[dict], after_idx: int
+    ) -> tuple[str | None, float, int | None]:
         """Detect user correction/abandonment in the next real user message after ``after_idx``.
 
-        Returns (correction_text | None, score).
+        Returns (correction_text | None, score, correction_idx | None).
+
+        The third element is the record index of the correction message so
+        callers can mark it as "consumed" and prevent Path 1 from stealing
+        it as a new invocation.
 
         Filters out SDK-generated noise (compaction summaries, tool result
         preambles) that are injected as "user" messages but aren't real
@@ -192,19 +198,19 @@ class SessionMiner:
         """
         next_idx = self._find_next_real_user_message(records, after_idx)
         if next_idx is None:
-            return None, 1.0
+            return None, 1.0, None
 
         next_text = self._get_message_content(records[next_idx])
 
         # Filter SDK-injected noise that looks like user messages
         if self._is_sdk_noise(next_text):
-            return None, 1.0
+            return None, 1.0, None
 
         if _ABANDON_PATTERNS.search(next_text):
-            return next_text, 0.0
+            return next_text, 0.0, next_idx
         if _CORRECTION_PATTERNS.search(next_text):
-            return next_text, 0.5
-        return None, 1.0
+            return next_text, 0.5, next_idx
+        return None, 1.0, None
 
     @staticmethod
     def _is_sdk_noise(text: str) -> bool:
@@ -228,9 +234,12 @@ class SessionMiner:
         for prefix in noise_prefixes:
             if prefix in text_start:
                 return True
-        # Very long "user" messages (>2000 chars) are almost certainly
-        # injected context, not real human corrections
-        if len(text) > 2000:
+        # Very long "user" messages (>5000 chars) are almost certainly
+        # injected context, not real human corrections.
+        # Note: real corrections can be 200-3000 chars when users paste
+        # context or write detailed instructions. Prior threshold of 2000
+        # caused false negatives on legitimate corrections.
+        if len(text) > 5000:
             return True
         return False
 
@@ -300,6 +309,8 @@ class SessionMiner:
         # Track which user-message indices were covered by a Path 2 match
         # so Path 1 doesn't double-count them.
         tool_use_covered: set[int] = set()
+        # Track indices consumed as corrections — Path 1 must not steal these.
+        correction_consumed: set[int] = set()
 
         kw_pattern = re.compile(
             r"\b(?:" + "|".join(re.escape(kw) for kw in keywords) + r")\b",
@@ -343,7 +354,9 @@ class SessionMiner:
                                     break
                             agent_text = " ".join(agent_parts).strip()
 
-                            user_correction, score = self._detect_correction(records, i + 1)
+                            user_correction, score, corr_idx = self._detect_correction(records, i + 1)
+                            if corr_idx is not None:
+                                correction_consumed.add(corr_idx)
 
                             examples.append(EvalExample(
                                 user_prompt=user_text,
@@ -367,6 +380,7 @@ class SessionMiner:
                 record.get("type") == "user"
                 and i not in seen_indices
                 and i not in tool_use_covered
+                and i not in correction_consumed
             ):
                 user_text = self._get_message_content(record)
                 if (
@@ -382,7 +396,9 @@ class SessionMiner:
                         j += 1
                     agent_text = agent_text.strip()
 
-                    user_correction, score = self._detect_correction(records, j)
+                    user_correction, score, corr_idx = self._detect_correction(records, j)
+                    if corr_idx is not None:
+                        correction_consumed.add(corr_idx)
 
                     examples.append(EvalExample(
                         user_prompt=user_text,
@@ -523,6 +539,43 @@ class SessionMiner:
             ex.agent_actions = self._scrub_secrets(ex.agent_actions)
             if ex.user_correction:
                 ex.user_correction = self._scrub_secrets(ex.user_correction)
+
+    def load_historical_corrections(self, skill_name: str) -> list[EvalExample]:
+        """Load corrections from persisted evals file that fresh mining missed.
+
+        Returns only examples with user_correction set.  Used by the optimizer
+        to merge historical corrections that are no longer detectable from
+        transcripts (e.g., transcript aged out, parse logic changed).
+        """
+        path = self._evals_dir / f"{skill_name}.jsonl"
+        if not path.exists():
+            return []
+
+        corrections: list[EvalExample] = []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        d = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if d.get("_meta"):
+                        continue
+                    if d.get("user_correction"):
+                        corrections.append(EvalExample(
+                            user_prompt=d.get("user_prompt", ""),
+                            skill_invoked=d.get("skill_invoked", skill_name),
+                            agent_actions=d.get("agent_actions", ""),
+                            user_correction=d.get("user_correction"),
+                            final_outcome=d.get("final_outcome", "corrected"),
+                            score=d.get("score", 0.5),
+                        ))
+        except OSError:
+            pass
+        return corrections
 
     def get_eligible_skills(self, min_examples: int = 5) -> list[str]:
         """Return skill names with >= min_examples eval examples."""
