@@ -449,23 +449,25 @@ class ExecutionTraceCollector:
     def collect_traces(self, skill_name: str, eval_examples: list, max_traces: int = 5) -> list[str]:
         """Extract execution trace context from eval examples.
 
-        Looks for agent_actions and user_corrections in eval examples to build
-        a "what happened" narrative for each failed execution.
+        Accepts any object with user_correction, user_prompt, agent_actions attrs
+        (EvalExample dataclass or duck-typed equivalent from manual cycle runs).
 
         Returns up to max_traces trace strings, each capped at 2000 chars.
         """
         traces: list[str] = []
         for ex in eval_examples:
-            if not hasattr(ex, "user_correction") or not ex.user_correction:
+            correction = getattr(ex, "user_correction", None) or ""
+            if not correction:
                 continue  # Only trace failed executions
 
             parts = []
-            if hasattr(ex, "user_prompt") and ex.user_prompt:
-                parts.append(f"User asked: {ex.user_prompt[:300]}")
-            if hasattr(ex, "agent_actions") and ex.agent_actions:
-                parts.append(f"Agent did: {ex.agent_actions[:800]}")
-            if ex.user_correction:
-                parts.append(f"User corrected: {ex.user_correction[:500]}")
+            user_prompt = getattr(ex, "user_prompt", None) or ""
+            agent_actions = getattr(ex, "agent_actions", None) or ""
+            if user_prompt:
+                parts.append(f"User asked: {user_prompt[:300]}")
+            if agent_actions:
+                parts.append(f"Agent did: {agent_actions[:800]}")
+            parts.append(f"User corrected: {correction[:500]}")
 
             trace = "\n".join(parts)
             if trace:

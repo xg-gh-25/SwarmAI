@@ -208,10 +208,13 @@ class LLMJudge:
     Falls back to None on any failure (timeout, API error, parse failure).
     """
 
-    # Same Opus model as llm_optimizer.py — no reason to use a different model.
-    # Cost is never the primary concern (KD28). One model, zero complexity.
+    # Same Opus model as llm_optimizer.py — one model, zero complexity (KD28).
+    # Cost note: ~$0.05/call × 5 examples × N skills = significant at scale.
+    # MAX_JUDGE_CALLS caps total calls per cycle. Revert to Haiku when
+    # cross-region inference profile supports it (current blocker: model ID invalid).
     MODEL_ID = "us.anthropic.claude-opus-4-6-v1"
     TIMEOUT_SECONDS = 30
+    MAX_JUDGE_CALLS_PER_CYCLE = 25  # Cap: 5 skills × 5 examples max
 
     def __init__(self):
         pass  # Uses shared Bedrock client from llm_optimizer
@@ -229,11 +232,10 @@ class LLMJudge:
         correction_context: str = "",
     ) -> str:
         """Build the judge prompt with skill context and output pair."""
-        # Truncate skill text to 4KB for judge (it just needs the gist)
-        # Truncate by bytes (not chars) to handle CJK correctly
-        if len(skill_text.encode("utf-8")) > 4096:
-            skill_text = skill_text.encode("utf-8")[:4000].decode("utf-8", errors="ignore")
-            skill_text += "\n[... truncated ...]"
+        # Truncate skill text for judge (it just needs the gist).
+        # Use char-level truncation — safe for CJK, simpler than byte-level.
+        if len(skill_text) > 4000:
+            skill_text = skill_text[:4000] + "\n[... truncated ...]"
 
         parts = [
             f"## Skill Instructions (what the agent should follow)\n{skill_text}",
