@@ -135,6 +135,7 @@ SwarmAI 不一样。它在你的本地维护一个**持久化工作空间**—�
 
 ![SwarmAI Workspace](./assets/swarm-3.png)
 
+![SwarmAI Workspace](./assets/swarm-4.png)
 ---
 
 ## 架构——六个自增长飞轮
