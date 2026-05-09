@@ -44,10 +44,11 @@ _ok()   { echo -e "${GREEN}✅${NC} $*"; }
 _warn() { echo -e "${YELLOW}⚠️${NC}  $*"; }
 _err()  { echo -e "${RED}❌${NC} $*"; }
 
-# ── Port PID helpers (lsof with 2s timeout — never hangs) ──
-# These are the ONLY places lsof is used. Wrapped with `timeout` to prevent
-# the macOS lsof hang (sandbox/network extensions). nc -z for port checks,
-# these only for PID discovery when we need to kill.
+# ── Port PID helpers (lsof with 2s timeout — dev script only) ──
+# lsof is the ONLY way to get port→PID on macOS (no `ss`, netstat lacks PIDs).
+# Wrapped with `timeout 2` to prevent macOS hang (sandbox/network extensions).
+# Steering rule "no lsof" applies to daemon/production scripts (use nc -z for
+# port checks). Dev scripts may use lsof with timeout for PID discovery.
 
 _get_port_pid() {
     # Get first PID listening on a port. Returns empty string on failure/timeout.

@@ -717,7 +717,18 @@ async fn sync_daemon_version(app: &tauri::AppHandle, app_version: &str) -> Resul
                 let _ = std::process::Command::new("kill")
                     .args(["-9", &pid.to_string()])
                     .output();
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                // Poll until kernel reaps the process (SIGKILL delivery is async)
+                for _ in 0..3 {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    let reaped = std::process::Command::new("kill")
+                        .args(["-0", &pid.to_string()])
+                        .output()
+                        .map(|o| !o.status.success())
+                        .unwrap_or(true);
+                    if reaped {
+                        break;
+                    }
+                }
                 break;
             }
             tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
