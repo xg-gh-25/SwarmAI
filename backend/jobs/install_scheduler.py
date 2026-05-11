@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-Install the consolidated SwarmAI scheduler launchd plist.
+DEPRECATED: External scheduler plist is no longer used (since v1.13).
 
-Replaces 6 scattered plists with a single com.swarmai.scheduler.plist.
-Run this once after upgrading to the product-level job system.
+The scheduler now runs in-process inside the daemon (main.py asyncio loop).
+This module is retained ONLY for:
+  - uninstall() — app uninstall cleanup (routers/system.py)
+  - Constants (LAUNCH_AGENTS, NEW_LABEL) — used by legacy plist removal
 
-Usage:
-    python -m jobs.install_scheduler           # Install
-    python -m jobs.install_scheduler --uninstall  # Remove
-    python -m jobs.install_scheduler --status     # Check status
+The install() function is a no-op for backwards compatibility.
+The plist template (com.swarmai.scheduler.plist) can be deleted in a future release.
 """
 
 from __future__ import annotations
@@ -66,8 +66,12 @@ def _resolve_log_dir() -> str:
 
 
 def install():
-    """Install the consolidated scheduler plist."""
-    # 1. Unload and remove old plists
+    """DEPRECATED: No-op. Scheduler now runs in-process inside the daemon.
+
+    Retained for CLI backwards compatibility (python -m jobs.install_scheduler).
+    Removes any legacy plists if they still exist but does NOT install a new one.
+    """
+    # Still clean up legacy plists if present
     for label in OLD_PLISTS:
         plist_path = LAUNCH_AGENTS / f"{label}.plist"
         if plist_path.exists():
@@ -76,31 +80,20 @@ def install():
                 capture_output=True,
             )
             plist_path.unlink()
-            print(f"  Removed: {label}")
+            print(f"  Removed legacy: {label}")
 
-    # 2. Generate new plist from template
-    if not TEMPLATE.exists():
-        print(f"Template not found: {TEMPLATE}", file=sys.stderr)
-        sys.exit(1)
-
-    content = TEMPLATE.read_text()
-    content = content.replace("__PYTHON_PATH__", _resolve_python())
-    content = content.replace("__BACKEND_DIR__", _resolve_backend_dir())
-    content = content.replace("__LOG_DIR__", _resolve_log_dir())
-
+    # Remove the consolidated plist too (no longer needed)
     dest = LAUNCH_AGENTS / f"{NEW_LABEL}.plist"
-    LAUNCH_AGENTS.mkdir(parents=True, exist_ok=True)
-    dest.write_text(content)
-    print(f"  Installed: {dest}")
+    if dest.exists():
+        subprocess.run(
+            ["launchctl", "bootout", f"gui/{_uid()}/{NEW_LABEL}"],
+            capture_output=True,
+        )
+        dest.unlink()
+        print(f"  Removed: {NEW_LABEL}")
 
-    # 3. Load the new plist
-    subprocess.run(
-        ["launchctl", "bootstrap", f"gui/{_uid()}", str(dest)],
-        capture_output=True,
-    )
-    print(f"  Loaded: {NEW_LABEL}")
-    print(f"\nDone. One scheduler replaces {len(OLD_PLISTS)} old plists.")
-    print(f"Check: launchctl list | grep swarmai")
+    print("\nScheduler now runs in-process (daemon asyncio loop).")
+    print("No external plist needed.")
 
 
 def uninstall():

@@ -518,6 +518,57 @@ async def _deferred_refresh_defaults(label: str) -> None:
         logger.info("Phase: refresh_builtin_defaults (deferred) — %dms", elapsed)
 
 
+_SCHEDULER_INTERVAL_SECONDS = 3600  # 1 hour — same as the old launchd StartCalendarInterval
+
+
+async def _run_inprocess_scheduler() -> None:
+    """In-process job scheduler loop (daemon/hive only).
+
+    Replaces the external com.swarmai.scheduler launchd job with an asyncio
+    loop inside the daemon process. Eliminates 5 failure modes:
+    1. Path fragility (venv rebuild breaks external plist)
+    2. No catch-up after sleep (launchd StartCalendarInterval doesn't retry)
+    3. Silent failure (KeepAlive=false means no restart)
+    4. Dual management (dev/daemon both install plist)
+    5. No monitoring (nobody detects "scheduler hasn't run in N hours")
+
+    Runs run_scheduler() in a thread to avoid blocking the event loop
+    (it does sync I/O: file reads, network fetches, Bedrock calls).
+    """
+    # Initial delay: let startup settle (30s) then run immediately to catch up
+    await asyncio.sleep(30)
+
+    while True:
+        t0 = time.monotonic()
+        try:
+            logger.info("In-process scheduler: running cycle")
+            # run_scheduler is synchronous — run in thread pool
+            await asyncio.to_thread(_run_scheduler_safe)
+            logger.info("In-process scheduler: cycle complete")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("In-process scheduler: cycle failed (will retry next interval)")
+
+        # Elapsed-aware sleep: maintain stable interval regardless of cycle duration
+        elapsed = time.monotonic() - t0
+        sleep_time = max(0, _SCHEDULER_INTERVAL_SECONDS - elapsed)
+        await asyncio.sleep(sleep_time)
+
+
+def _run_scheduler_safe() -> None:
+    """Wrapper that imports and runs the scheduler with error isolation."""
+    try:
+        from jobs.scheduler import run_scheduler
+        run_scheduler()
+    except SystemExit:
+        # run_scheduler calls sys.exit on config errors — don't kill daemon
+        logger.warning("In-process scheduler: run_scheduler called sys.exit (suppressed)")
+    except Exception:
+        # Re-raise so the async wrapper can log it
+        raise
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
@@ -890,10 +941,29 @@ async def lifespan(app: FastAPI):
 
     asyncio.create_task(_deferred_services_startup())
 
+    # ── In-process job scheduler (daemon/hive only) ───────────────────
+    # Replaces the external com.swarmai.scheduler launchd job.
+    # Benefits: no path fragility, catches up after sleep, self-monitoring,
+    # and inherits the daemon's credentials/env.
+    _scheduler_task: asyncio.Task | None = None
+    if backend_mode in ("daemon", "hive"):
+        _scheduler_task = asyncio.create_task(
+            _run_inprocess_scheduler(),
+            name="inprocess-scheduler",
+        )
+        logger.info("In-process scheduler started (60min interval)")
+
     yield
     # Shutdown
     _startup_complete = False
     logger.info("Shutting down...")
+    if _scheduler_task and not _scheduler_task.done():
+        _scheduler_task.cancel()
+        try:
+            await _scheduler_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("In-process scheduler stopped")
     await _svc_mgr.stop_all()
     logger.info("Managed services stopped")
     await channel_gateway.shutdown()
