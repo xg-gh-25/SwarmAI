@@ -163,6 +163,32 @@ SYSTEM_JOBS: list[Job] = [
             "cwd": _SWARMAI_ROOT,
         },
     ),
+
+    # --- Loops Health (7-dimension self-maintenance scan) ---
+    # Scans context files, DailyActivity, Knowledge/, Projects/, Evolution state,
+    # git backup, and infrastructure health (31 checks). Auto-fixes safe mechanical
+    # issues. Reports Found/Fixed/Pending with a health score (0-100).
+    # Script uses Path.home()/.swarm-ai — works in daemon context without shell env.
+    # NOTE: directory has hyphen (s_loops-health) so python -m doesn't work;
+    # use direct script path relative to _SWARMAI_ROOT (cwd).
+    Job(
+        id="loops-health",
+        name="Self-Loops Health Monitor",
+        type="script",
+        schedule="0 6 * * 1",          # Monday 06:00 UTC = 14:00 ICT
+        enabled=True,
+        category="system",
+        config={
+            "command": (
+                "python backend/skills/s_loops-health/scripts/loops_health_check.py"
+                " --auto-fix"
+                " --output-dir ${HOME}/.swarm-ai/SwarmWS/Knowledge/JobResults"
+                " --alert-threshold 70"
+            ),
+            "cwd": _SWARMAI_ROOT,
+        },
+        safety=JobSafety(max_budget_usd=0, timeout_seconds=300),
+    ),
 ]
 
 SYSTEM_JOB_IDS: set[str] = {j.id for j in SYSTEM_JOBS}

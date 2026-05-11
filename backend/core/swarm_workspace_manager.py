@@ -1613,60 +1613,44 @@ class SwarmWorkspaceManager:
         if not state_file.exists():
             state_file.write_text("{}", encoding="utf-8")
 
-        # Auto-install launchd scheduler plist (macOS only).
-        # Idempotent — skips if plist already installed and up-to-date.
+        # Remove legacy external scheduler plist (macOS only).
+        # The scheduler now runs in-process inside the daemon — the external
+        # launchd job is no longer needed and its path fragility caused the
+        # 5/7-5/11 outage (venv rebuild broke baked Python path).
         import sys
         if sys.platform == "darwin":
-            self._ensure_scheduler_plist()
+            self._remove_legacy_scheduler_plist()
 
-    def _ensure_scheduler_plist(self) -> None:
-        """Install or update the launchd scheduler plist if needed.
+    def _remove_legacy_scheduler_plist(self) -> None:
+        """Remove the legacy external scheduler launchd plist if present.
 
-        Compares the installed plist against the template (with resolved
-        paths). Only writes + reloads if the content differs or the plist
-        doesn't exist. This makes the call cheap on every startup.
+        Since v1.13, the job scheduler runs inside the daemon process (asyncio
+        timer loop). The external plist is dead weight with 5 failure modes:
+        1. Path fragility (venv rebuild breaks baked Python path)
+        2. No catch-up after sleep (StartCalendarInterval doesn't retry)
+        3. Silent failure (KeepAlive=false, no alerting)
+        4. Dual management (dev/daemon both install)
+        5. No monitoring (nobody checks "has it run recently?")
         """
         try:
-            from jobs.install_scheduler import (
-                LAUNCH_AGENTS, NEW_LABEL, TEMPLATE,
-                _resolve_python, _resolve_backend_dir, _resolve_log_dir, _uid,
-            )
-
-            if not TEMPLATE.exists():
-                logger.debug("Scheduler plist template not found — skipping")
-                return
-
-            # Generate expected content from template
-            content = TEMPLATE.read_text()
-            content = content.replace("__PYTHON_PATH__", _resolve_python())
-            content = content.replace("__BACKEND_DIR__", _resolve_backend_dir())
-            content = content.replace("__LOG_DIR__", _resolve_log_dir())
+            from jobs.install_scheduler import LAUNCH_AGENTS, NEW_LABEL, _uid
 
             dest = LAUNCH_AGENTS / f"{NEW_LABEL}.plist"
-            LAUNCH_AGENTS.mkdir(parents=True, exist_ok=True)
-
-            # Skip if already installed with identical content
-            if dest.exists() and dest.read_text() == content:
+            if not dest.exists():
                 return
 
-            # Write (or update) the plist
-            dest.write_text(content)
-
-            # Load into launchd (bootout first if updating)
+            # Bootout (unregister from launchd) then delete file
             uid = _uid()
             subprocess.run(
                 ["launchctl", "bootout", f"gui/{uid}/{NEW_LABEL}"],
                 capture_output=True, timeout=10,
             )
-            subprocess.run(
-                ["launchctl", "bootstrap", f"gui/{uid}", str(dest)],
-                capture_output=True, timeout=10,
-            )
-            logger.info("Scheduler plist installed: %s", dest)
+            dest.unlink(missing_ok=True)
+            logger.info("Removed legacy scheduler plist: %s", dest)
 
         except Exception as e:
-            # Never block startup — scheduler is enhancement, not critical
-            logger.warning("Failed to install scheduler plist: %s", e)
+            # Never block startup
+            logger.warning("Failed to remove legacy scheduler plist: %s", e)
 
     def prune_archives(self, workspace_path: str, max_age_days: int = 90) -> int:
         """Delete archived DailyActivity files older than *max_age_days*.
