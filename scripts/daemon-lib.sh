@@ -18,6 +18,7 @@ GUI_TARGET="gui/$(id -u)/${DAEMON_LABEL}"
 
 # Build output: onedir bundle (directory containing executable + libs)
 BACKEND_BUNDLE_DIR="${DESKTOP_DIR}/src-tauri/binaries/python-backend-aarch64-apple-darwin"
+BACKEND_BINARY="${BACKEND_BUNDLE_DIR}/python-backend"
 DAEMON_DIR="${HOME}/.swarm-ai/daemon"
 DAEMON_BINARY="${DAEMON_DIR}/python-backend"
 DAEMON_VERSION_FILE="${DAEMON_DIR}/.version"
