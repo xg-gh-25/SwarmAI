@@ -3,14 +3,14 @@ Autonomous Skill Proposer — L4.1 Core Engine capability.
 
 When weekly maintenance detects recurring capability gaps (>=3 occurrences,
 priority "high"), this handler generates SKILL.md proposals using Bedrock
-Opus 4.6. Skill creation is a reasoning-heavy task — Opus produces
-significantly better skill architecture, guardrails, and edge case handling.
+Sonnet 4.6. Proposals are drafts for human review — Sonnet is fast (10-20s)
+and sufficient for proposal-quality output that gets refined by the user.
 
 Proposals are written to .artifacts/skill-proposals/ for human review.
 Never auto-deployed. Surfaced in session briefing as [skill-proposal].
 
 Triggered by: weekly-maintenance (after memory_health + ddd_refresh).
-Cost: ~$0.20/run (Opus 4.6, ~8K input, ~3K output). Only runs when
+Cost: ~$0.04/run (Sonnet 4.6, ~8K input, ~3K output). Only runs when
 qualifying gaps exist — most weeks: $0.
 """
 
@@ -26,7 +26,7 @@ from ..paths import SWARMWS, PROJECTS_DIR
 
 logger = logging.getLogger("swarm.jobs.skill_proposer")
 
-MAX_OUTPUT_TOKENS = 4096
+MAX_OUTPUT_TOKENS = 8192
 
 # Gate thresholds
 MIN_OCCURRENCES = 3
@@ -278,19 +278,19 @@ def _generate_skill_proposal(gap: dict, context: dict) -> dict:
     prompt = _build_prompt(gap, context)
 
     content, input_tokens, output_tokens = invoke(
-        prompt, model_key="claude-opus-4-6", max_tokens=MAX_OUTPUT_TOKENS,
+        prompt, model_key="claude-sonnet-4-6", max_tokens=MAX_OUTPUT_TOKENS,
         temperature=0.3,
     )
 
-    # Opus pricing: $15/1M input, $75/1M output
-    cost = input_tokens * 15.0 / 1_000_000 + output_tokens * 75.0 / 1_000_000
+    # Sonnet 4.6 pricing: $3/1M input, $15/1M output
+    cost = input_tokens * 3.0 / 1_000_000 + output_tokens * 15.0 / 1_000_000
 
     logger.info(
-        "Skill proposer LLM (Opus): %d input, %d output tokens (~$%.3f)",
+        "Skill proposer LLM (Sonnet): %d input, %d output tokens (~$%.3f)",
         input_tokens, output_tokens, cost,
     )
 
-    # Parse JSON
+    # Parse JSON — strip markdown fences, handle truncated output
     text = content.strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[1] if "\n" in text else text[3:]
@@ -301,8 +301,22 @@ def _generate_skill_proposal(gap: dict, context: dict) -> dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        logger.warning("Failed to parse skill proposal JSON")
-        return {"raw_response": text, "parse_error": True, "confidence": 0}
+        # Truncated output (hit max_tokens) — try to extract key fields
+        # from partial JSON so we still get confidence + skill_name
+        logger.warning("JSON parse failed — attempting partial extraction")
+        result: dict = {"parse_error": True}
+        for field in ("skill_name", "confidence", "reasoning"):
+            match = re.search(rf'"{field}"\s*:\s*(".*?"|[\d]+)', text)
+            if match:
+                val = match.group(1).strip('"')
+                result[field] = int(val) if val.isdigit() else val
+        # If we got skill_md content (even truncated), keep it
+        md_match = re.search(r'"skill_md"\s*:\s*"(.*?)(?:"\s*[,}]|\Z)', text, re.DOTALL)
+        if md_match:
+            result["skill_md"] = md_match.group(1).replace("\\n", "\n").replace('\\"', '"')
+        if "confidence" not in result:
+            result["confidence"] = 0
+        return result
 
 
 def _build_prompt(gap: dict, context: dict) -> str:
@@ -387,7 +401,7 @@ def _write_skill_proposal(
     # Write metadata
     metadata = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "model": "claude-opus-4-6",
+        "model": "claude-sonnet-4-6",
         "gap_pattern": gap.get("pattern", ""),
         "gap_occurrences": gap.get("occurrences", 0),
         "gap_evidence": gap.get("evidence", []),
