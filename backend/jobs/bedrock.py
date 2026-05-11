@@ -178,7 +178,7 @@ def get_client(*, force_new: bool = False) -> Any:
     boto_config = BotoConfig(
         retries={"max_attempts": 2, "mode": "adaptive"},
         connect_timeout=10,
-        read_timeout=60,  # Job prompts can be 20K+ chars; 30s too tight
+        read_timeout=120,  # Opus 4.6 skill proposals need 60-90s; 60s too tight
     )
 
     # Pre-resolve credentials (same strategy as executor._get_aws_credentials)
