@@ -32,7 +32,7 @@ This is not "an AI coding assistant." It's not "an AI content tool." It is **dom
 
 The insight: AI agents fail not from lack of capability, but from lack of context. GPT-4, Claude, Gemini — they can all write code, generate content, analyze data. But they do it blind. Every session starts from zero. Every output lacks the accumulated wisdom that makes a senior professional's work qualitatively different from a junior's.
 
-**The platform model:** Three layers — each enables the one above. Harness provides substrate (memory, tools, context). DDD provides intelligence (what to do, what not to do, what matters). Engines provide specialized delivery. And critically: 7 feed channels grow DDD continuously, creating a compound loop that accelerates with every session.
+**The platform model:** Three layers — each enables the one above. Harness provides substrate (memory, tools, context). DDD provides intelligence (what to do, what not to do, what matters). Engines provide specialized delivery. And critically: 8 feed channels grow DDD continuously, creating a compound loop that accelerates with every session.
 
 ![Figure 1: Platform Architecture — Layers + Feed Channels](diagrams-platform/01-platform-architecture.svg)
 
@@ -62,7 +62,7 @@ The pattern is consistent: domain knowledge either requires continuous human eff
 
 ![Figure 2: Universal Problem — Domain-Blindness Across All Delivery Types](diagrams-platform/02-universal-problem.svg)
 
-**DDD solves this** by making domain knowledge self-maintaining (cultivation from 7 channels), structured for AI consumption (not human documentation), and shared across delivery engines (one knowledge layer, multiple consumers).
+**DDD solves this** by making domain knowledge self-maintaining (cultivation from 8 channels), structured for AI consumption (not human documentation), and shared across delivery engines (one knowledge layer, multiple consumers).
 
 ---
 
@@ -92,7 +92,7 @@ Specialized workflows that transform requirements into deliverables. Each engine
 
 Currently: Pipeline (code) and Pollinate (content). The platform model means new engines (analysis, operations, advisory) inherit all existing domain knowledge on day one.
 
-**Why this layering matters:** A new engine doesn't need to "learn" the project. It reads DDD. The knowledge already exists because 7 channels have been feeding it continuously. This is what makes it a platform, not just a tool.
+**Why this layering matters:** A new engine doesn't need to "learn" the project. It reads DDD. The knowledge already exists because 8 channels have been feeding it continuously. This is what makes it a platform, not just a tool.
 
 ---
 
@@ -119,11 +119,11 @@ DDD is not a flat document. It's a three-layer system:
 **Orchestration Layer:**
 - Cultivation Engine — processes signals into proposals
 - Entity Index — routes knowledge across projects
-- Feed Channels — 7 sources of continuous input (detailed next)
+- Feed Channels — 8 sources of continuous input (detailed next)
 
 ---
 
-### 4b. The 7 Feed Channels — How DDD Grows
+### 4b. The 8 Feed Channels — How DDD Grows
 
 These channels are **the flywheel fuel.** Without them, DDD would be static documentation that decays. With them, DDD is a living system that grows richer with every session, every commit, every research task, every user correction.
 
@@ -131,17 +131,18 @@ These channels are **the flywheel fuel.** Without them, DDD would be static docu
 |---|---------|--------|-------------------|-----------|
 | 1 | **Code Changes** | Git commits, PRs, refactors | Architecture drift, new patterns, deprecated approaches | TECH.md |
 | 2 | **External Learning** | Research tasks, articles, learn-content skill | New capabilities, industry approaches, emerging patterns | PRODUCT.md / TECH.md |
-| 3 | **Engine Delivery** | REFLECT stage from Pipeline + Pollinate | Lessons, failures, patterns, messaging insights | IMPROVEMENT.md |
+| 3a | **Pipeline Delivery** | REFLECT stage from Pipeline | Lessons, failures, code patterns | IMPROVEMENT.md / TECH.md |
+| 3b | **Pollinate Delivery** | REFLECT stage from Pollinate | Messaging lessons, channel performance, audience insights | IMPROVEMENT.md / PRODUCT.md |
 | 4 | **Industry Signals** | Signal pipeline (GitHub trending, feeds, alerts) | Strategic context shifts, competitive moves, tech trends | PRODUCT.md |
 | 5 | **Conversation** | Session decisions, implicit rules expressed in chat | Team preferences, unstated conventions, decision rationale | PROJECT.md |
 | 6 | **Corrections** | User says "no, do X instead" | High-priority rule updates, misconception fixes | Any doc (highest priority) |
 | 7 | **Code Intelligence** | Static analysis, dependency graph, type inference | Structural truth about the codebase as-built | TECH.md |
 
-**Critical insight:** Pipeline and Pollinate contribute via Channel 3 (their REFLECT stage feeds lessons back). But the **other 6 channels are equally important** — they feed DDD from code changes, research, signals, conversations, corrections, and code analysis. The flywheel runs on ALL 7, not just delivery engine feedback.
+**Critical insight:** Pipeline and Pollinate each have their own channel (3a and 3b). But the **other 6 channels are equally important** — they feed DDD from code changes, research, signals, conversations, corrections, and code analysis. The flywheel runs on ALL 8, not just delivery engine feedback.
 
 This means DDD grows even when no engine is running. A git commit triggers Channel 1. A research session triggers Channel 2. A signal feed fires Channel 4. The system is always learning, always growing.
 
-![Figure 3: Seven Feed Channels — The Flywheel Fuel](diagrams-platform/03-seven-channels.svg)
+![Figure 3: Eight Feed Channels — The Flywheel Fuel](diagrams-platform/03-seven-channels.svg)
 
 ---
 
@@ -151,7 +152,7 @@ Cultivation is the orchestration mechanism that turns raw signals into structure
 
 **The flow:**
 
-1. Signal arrives from any of the 7 channels
+1. Signal arrives from any of the 8 channels
 2. Cultivation Engine processes the signal — determines relevance, identifies target section, drafts proposed update
 3. Proposal enters the **Approval Gate** — human reviews in ~30 seconds (accept/reject/edit)
 4. Approved content merges into the target DDD document
@@ -306,7 +307,7 @@ The key: the message is crafted first (stages 1-3), then expressed across format
 ### The Full Flywheel
 
 ```
-7 Channels feed DDD
+8 Channels feed DDD
     -> DDD powers engines
         -> Engines deliver outputs
             -> Engine REFLECT feeds Channel 3
@@ -337,7 +338,7 @@ The platform model creates cross-engine intelligence that wouldn't exist in silo
 
 Session 1: DDD is sparse. Engines work, but without domain context. Delivery is generic.
 
-Session 10: DDD has absorbed ~70 signals from 7 channels. Engines start making domain-correct decisions. Delivery improves noticeably.
+Session 10: DDD has absorbed ~80 signals from 8 channels. Engines start making domain-correct decisions. Delivery improves noticeably.
 
 Session 50: DDD is rich. Engines rarely make domain errors. Delivery is indistinguishable from a senior team member's work. Human corrections become rare.
 
@@ -362,7 +363,7 @@ Everything together — the architect's complete view:
 |-------|----------|---------|-------------------|
 | **Harness** | Memory, context, tools, evolution, hooks | DDD + Engines | Never forgets, always available |
 | **DDD** | Structured domain expertise | All engines equally | Self-growing, shared, AI-optimized |
-| **7 Channels** | Continuous signal input | DDD (via Cultivation) | Zero human effort, always feeding |
+| **8 Channels** | Continuous signal input | DDD (via Cultivation) | Zero human effort, always feeding |
 | **Engines** | Specialized delivery | End users | Domain-correct, quality-gated |
 | **Cultivation** | Signal-to-knowledge transformation | DDD growth | Propose-approve-grow safety |
 
@@ -370,7 +371,7 @@ Everything together — the architect's complete view:
 
 ```
 SOURCES (external world, codebase, users, signals)
-    | (via 7 Channels)
+    | (via 8 Channels)
     v
 CULTIVATION ENGINE (propose updates)
     | (via Approval Gate)
@@ -391,7 +392,7 @@ CHANNEL 3 (feeds back into DDD)
 
 **Shared knowledge:** Every engine reads the same DDD. Knowledge learned by one engine benefits all others. No duplication, no drift between "what engineering knows" and "what marketing knows."
 
-**Incremental adoption:** DDD starts sparse for any project. You don't need to write documentation upfront. Use the system normally — the 7 channels populate DDD automatically. Value begins accumulating from session 1.
+**Incremental adoption:** DDD starts sparse for any project. You don't need to write documentation upfront. Use the system normally — the 8 channels populate DDD automatically. Value begins accumulating from session 1.
 
 **Filesystem-native:** DDD is markdown files in a directory. No database. No server. No infrastructure to maintain. It works with git, with any editor, with any backup system.
 
@@ -419,11 +420,11 @@ Traditional DDD is a software design methodology — bounded contexts, aggregate
 
 **"What's the adoption cost?"**
 
-Near-zero for getting started. Create a project directory with 4 empty markdown files. Use the system normally. The 7 channels begin populating DDD from session 1. There's no upfront documentation effort — the investment is the normal work you're already doing. DDD extracts knowledge as a byproduct of delivery.
+Near-zero for getting started. Create a project directory with 4 empty markdown files. Use the system normally. The 8 channels begin populating DDD from session 1. There's no upfront documentation effort — the investment is the normal work you're already doing. DDD extracts knowledge as a byproduct of delivery.
 
 **"Does this replace documentation?"**
 
-It replaces the need for manually-maintained documentation. DDD is documentation that maintains itself — updated by 7 channels continuously. But it's AI-optimized documentation (structured for machine consumption, health-scored, progressively loaded) rather than human-optimized documentation (prose meant for onboarding reads). The two can coexist, but DDD is the system's source of truth.
+It replaces the need for manually-maintained documentation. DDD is documentation that maintains itself — updated by 8 channels continuously. But it's AI-optimized documentation (structured for machine consumption, health-scored, progressively loaded) rather than human-optimized documentation (prose meant for onboarding reads). The two can coexist, but DDD is the system's source of truth.
 
 **"What happens if DDD gets something wrong?"**
 
@@ -435,4 +436,4 @@ Yes. DDD is files in a repository. Multiple team members contributing sessions m
 
 ---
 
-*This document is the complete vision of the DDD Platform. After reading it, you understand: what the system is (a platform turning AI engines into domain experts), why it exists (domain-blindness is the universal bottleneck), how it works (7 channels feed DDD, engines consume DDD), what powers the flywheel (cultivation from 7 automatic sources), and what the delivery engines are (Pipeline for code, Pollinate for content, future engines for everything else). One knowledge layer. Multiple delivery engines. Compound growth.*
+*This document is the complete vision of the DDD Platform. After reading it, you understand: what the system is (a platform turning AI engines into domain experts), why it exists (domain-blindness is the universal bottleneck), how it works (8 channels feed DDD, engines consume DDD), what powers the flywheel (cultivation from 8 automatic sources), and what the delivery engines are (Pipeline for code, Pollinate for content, future engines for everything else). One knowledge layer. Multiple delivery engines. Compound growth.*

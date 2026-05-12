@@ -94,7 +94,7 @@
 
   <!-- ═══ 7 CHANNELS (Left Side) ═══ -->
   <rect x="15" y="45" width="165" height="495" rx="8" fill="none" stroke="#f78166" stroke-width="2"/>
-  <text x="97" y="65" text-anchor="middle" fill="#f78166" font-size="9" font-weight="bold">7 FEED CHANNELS</text>
+  <text x="97" y="65" text-anchor="middle" fill="#f78166" font-size="9" font-weight="bold">8 FEED CHANNELS</text>
   <text x="97" y="78" text-anchor="middle" fill="#f78166" font-size="7">(DDD Producers)</text>
 
   <rect x="25" y="88" width="145" height="50" rx="5" fill="#2b1810" stroke="#f78166" stroke-width="1"/>

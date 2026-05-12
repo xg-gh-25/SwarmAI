@@ -2,7 +2,7 @@
   <rect width="780" height="420" fill="#1a1a2e"/>
 
   <!-- Title -->
-  <text x="390" y="30" text-anchor="middle" fill="#e6edf3" font-size="16" font-weight="bold">Seven Feed Channels into the Cultivation Engine</text>
+  <text x="390" y="30" text-anchor="middle" fill="#e6edf3" font-size="16" font-weight="bold">Eight Feed Channels into the Cultivation Engine</text>
 
   <!-- Channel boxes (left side, stacked) -->
   <rect x="30" y="55" width="180" height="34" rx="6" fill="#1a1a2e" stroke="#7ee787" stroke-width="1.5"/>
