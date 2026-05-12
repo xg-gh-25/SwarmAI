@@ -1,0 +1,194 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700" font-family="sans-serif">
+  <!-- Background -->
+  <rect width="900" height="700" fill="#1a1a2e"/>
+
+  <!-- Title -->
+  <text x="450" y="25" fill="#e6edf3" font-size="14" font-weight="bold" text-anchor="middle">DDD Platform Architecture: One Knowledge Layer, Multiple Delivery Engines</text>
+
+  <!-- ================================================================== -->
+  <!-- LEFT SIDE: 3 Major Layers (vertical stack) -->
+  <!-- ================================================================== -->
+
+  <!-- Layer 3 (top): Delivery Engines -->
+  <rect x="20" y="40" width="380" height="130" rx="10" fill="none" stroke="#d2a8ff" stroke-width="1.5"/>
+  <text x="35" y="62" fill="#d2a8ff" font-size="12" font-weight="bold">DELIVERY ENGINES (Applications)</text>
+
+  <rect x="35" y="72" width="110" height="45" rx="6" fill="#221a30" stroke="#d2a8ff" stroke-width="1"/>
+  <text x="90" y="90" fill="#d2a8ff" font-size="9" text-anchor="middle" font-weight="bold">Super Builder</text>
+  <text x="90" y="103" fill="#e6edf3" font-size="8" text-anchor="middle">Pipeline (9 stages)</text>
+  <text x="90" y="113" fill="#e6edf3" font-size="7" text-anchor="middle">Push-Ready Code</text>
+
+  <rect x="155" y="72" width="110" height="45" rx="6" fill="#221a30" stroke="#d2a8ff" stroke-width="1"/>
+  <text x="210" y="90" fill="#d2a8ff" font-size="9" text-anchor="middle" font-weight="bold">Super Marketer</text>
+  <text x="210" y="103" fill="#e6edf3" font-size="8" text-anchor="middle">Pollinate (8 stages)</text>
+  <text x="210" y="113" fill="#e6edf3" font-size="7" text-anchor="middle">Brand-Correct Content</text>
+
+  <rect x="275" y="72" width="110" height="45" rx="6" fill="#1a1a2e" stroke="#e6edf3" stroke-width="0.5" stroke-dasharray="4,2"/>
+  <text x="330" y="90" fill="#e6edf3" font-size="9" text-anchor="middle" fill-opacity="0.5">Future Engines</text>
+  <text x="330" y="103" fill="#e6edf3" font-size="8" text-anchor="middle" fill-opacity="0.4">Analyst, Operator...</text>
+
+  <!-- Reads/Writes annotation -->
+  <text x="210" y="135" fill="#7ee787" font-size="8" text-anchor="middle" fill-opacity="0.8">↓ READS DDD → domain-correct output</text>
+  <text x="210" y="148" fill="#f78166" font-size="8" text-anchor="middle" fill-opacity="0.8">↑ REFLECT writes back → Channels 3a/3b</text>
+
+  <!-- Arrow: Engines → DDD -->
+  <line x1="210" y1="155" x2="210" y2="185" stroke="#7ee787" stroke-width="1" marker-end="url(#arrGreen)"/>
+
+  <!-- Layer 2 (middle): DDD Knowledge Layer -->
+  <rect x="20" y="188" width="380" height="200" rx="10" fill="none" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="35" y="210" fill="#7ee787" font-size="12" font-weight="bold">DDD KNOWLEDGE LAYER (Platform)</text>
+
+  <!-- Interface -->
+  <rect x="35" y="218" width="350" height="42" rx="6" fill="#0a1f10" stroke="#7ee787" stroke-width="0.8"/>
+  <text x="45" y="234" fill="#7ee787" font-size="9" font-weight="bold">Interface Layer (4 Docs × N Projects)</text>
+  <rect x="45" y="241" width="75" height="16" rx="3" fill="#1a1a2e" stroke="#7ee787" stroke-width="0.5"/>
+  <text x="82" y="252" fill="#e6edf3" font-size="7" text-anchor="middle">PRODUCT</text>
+  <rect x="125" y="241" width="60" height="16" rx="3" fill="#1a1a2e" stroke="#7ee787" stroke-width="0.5"/>
+  <text x="155" y="252" fill="#e6edf3" font-size="7" text-anchor="middle">TECH</text>
+  <rect x="190" y="241" width="95" height="16" rx="3" fill="#1a1a2e" stroke="#7ee787" stroke-width="0.5"/>
+  <text x="237" y="252" fill="#e6edf3" font-size="7" text-anchor="middle">IMPROVEMENT</text>
+  <rect x="290" y="241" width="70" height="16" rx="3" fill="#1a1a2e" stroke="#7ee787" stroke-width="0.5"/>
+  <text x="325" y="252" fill="#e6edf3" font-size="7" text-anchor="middle">PROJECT</text>
+
+  <!-- Intelligence -->
+  <rect x="35" y="265" width="350" height="30" rx="6" fill="#0a1420" stroke="#58a6ff" stroke-width="0.8"/>
+  <text x="45" y="283" fill="#58a6ff" font-size="9" font-weight="bold">Intelligence</text>
+  <text x="130" y="283" fill="#e6edf3" font-size="8">Health Scores | Maturity Tracking | Code Graph</text>
+
+  <!-- Orchestration -->
+  <rect x="35" y="300" width="350" height="30" rx="6" fill="#1a0f0a" stroke="#f78166" stroke-width="0.8"/>
+  <text x="45" y="318" fill="#f78166" font-size="9" font-weight="bold">Orchestration</text>
+  <text x="140" y="318" fill="#e6edf3" font-size="8">Cultivation Engine | Entity Index | Progressive Loading</text>
+
+  <!-- DDD summary -->
+  <text x="45" y="348" fill="#e6edf3" font-size="8" fill-opacity="0.8">Consumed by engines | Fed by 8 channels | Self-growing</text>
+  <text x="45" y="362" fill="#e6edf3" font-size="8" fill-opacity="0.8">Domain expertise: structured, health-monitored, cross-project discoverable</text>
+  <text x="210" y="380" fill="#f78166" font-size="8" text-anchor="middle" fill-opacity="0.8">← Fed by 8 Feed Channels (right panel)</text>
+
+  <!-- Arrow: DDD → Harness -->
+  <line x1="210" y1="388" x2="210" y2="405" stroke="#58a6ff" stroke-width="1" marker-end="url(#arrBlue)"/>
+
+  <!-- Layer 1 (bottom): Harness -->
+  <rect x="20" y="408" width="380" height="130" rx="10" fill="none" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="35" y="430" fill="#58a6ff" font-size="12" font-weight="bold">AGENT HARNESS (Foundation)</text>
+
+  <rect x="35" y="438" width="100" height="35" rx="5" fill="#0a1420" stroke="#58a6ff" stroke-width="0.6"/>
+  <text x="85" y="453" fill="#e6edf3" font-size="8" text-anchor="middle">11-File Context</text>
+  <text x="85" y="464" fill="#e6edf3" font-size="7" text-anchor="middle">System Prompt</text>
+
+  <rect x="140" y="438" width="85" height="35" rx="5" fill="#0a1420" stroke="#d2a8ff" stroke-width="0.6"/>
+  <text x="182" y="453" fill="#e6edf3" font-size="8" text-anchor="middle">4-Tier Memory</text>
+  <text x="182" y="464" fill="#e6edf3" font-size="7" text-anchor="middle">Pyramid</text>
+
+  <rect x="230" y="438" width="80" height="35" rx="5" fill="#0a1420" stroke="#f78166" stroke-width="0.6"/>
+  <text x="270" y="453" fill="#e6edf3" font-size="8" text-anchor="middle">Self-Evolution</text>
+  <text x="270" y="464" fill="#e6edf3" font-size="7" text-anchor="middle">Corrections</text>
+
+  <rect x="315" y="438" width="75" height="35" rx="5" fill="#0a1420" stroke="#58a6ff" stroke-width="0.6"/>
+  <text x="352" y="453" fill="#e6edf3" font-size="8" text-anchor="middle">Hooks</text>
+  <text x="352" y="464" fill="#e6edf3" font-size="7" text-anchor="middle">Session End</text>
+
+  <rect x="35" y="480" width="170" height="25" rx="5" fill="#0a1420" stroke="#58a6ff" stroke-width="0.5"/>
+  <text x="120" y="496" fill="#e6edf3" font-size="8" text-anchor="middle">Tools + SDK + MCP</text>
+
+  <rect x="210" y="480" width="180" height="25" rx="5" fill="#0a1420" stroke="#58a6ff" stroke-width="0.5"/>
+  <text x="300" y="496" fill="#e6edf3" font-size="8" text-anchor="middle">Session Mgmt + Skills System</text>
+
+  <text x="210" y="528" fill="#58a6ff" font-size="8" text-anchor="middle" font-style="italic" fill-opacity="0.7">Runtime for DDD + Engines. Zero new infra — all existing.</text>
+
+  <!-- ================================================================== -->
+  <!-- RIGHT SIDE: 8 Feed Channels grouped by type (muted colors) -->
+  <!-- ================================================================== -->
+
+  <rect x="430" y="40" width="450" height="498" rx="10" fill="none" stroke="#e6edf3" stroke-width="0.5" stroke-opacity="0.2"/>
+  <text x="450" y="62" fill="#e6edf3" font-size="12" font-weight="bold">8 FEED CHANNELS — How DDD Grows</text>
+  <text x="450" y="78" fill="#e6edf3" font-size="9" fill-opacity="0.5">Zero human effort. Knowledge extracted from normal work.</text>
+
+  <!-- GROUP 1: Delivery Engines -->
+  <rect x="440" y="86" width="430" height="110" rx="8" fill="#1f1a28" stroke="#d2a8ff" stroke-width="0.8"/>
+  <text x="455" y="103" fill="#d2a8ff" font-size="9" font-weight="bold" fill-opacity="0.9">FROM DELIVERY ENGINES (highest signal)</text>
+
+  <rect x="452" y="110" width="408" height="34" rx="5" fill="#1a1a2e" stroke="#d2a8ff" stroke-width="0.7"/>
+  <text x="462" y="126" fill="#d2a8ff" font-size="8.5" font-weight="bold">Ch 3a: Pipeline REFLECT</text>
+  <text x="462" y="138" fill="#e6edf3" font-size="7.5" fill-opacity="0.8">Lessons, failures, patterns → IMPROVEMENT.md / TECH.md</text>
+  <text x="840" y="126" fill="#d2a8ff" font-size="7" text-anchor="end" fill-opacity="0.7">RICHEST</text>
+
+  <rect x="452" y="148" width="408" height="34" rx="5" fill="#1a1a2e" stroke="#d2a8ff" stroke-width="0.7"/>
+  <text x="462" y="164" fill="#d2a8ff" font-size="8.5" font-weight="bold">Ch 3b: Pollinate REFLECT</text>
+  <text x="462" y="176" fill="#e6edf3" font-size="7.5" fill-opacity="0.8">Messaging lessons, channel performance → IMPROVEMENT.md / PRODUCT.md</text>
+
+  <!-- GROUP 2: Codebase -->
+  <rect x="440" y="202" width="430" height="92" rx="8" fill="#0c1520" stroke="#58a6ff" stroke-width="0.8"/>
+  <text x="455" y="219" fill="#58a6ff" font-size="9" font-weight="bold" fill-opacity="0.9">FROM CODEBASE (automated, structural)</text>
+
+  <rect x="452" y="226" width="408" height="26" rx="5" fill="#1a1a2e" stroke="#58a6ff" stroke-width="0.5"/>
+  <text x="462" y="243" fill="#58a6ff" font-size="8.5">Ch 1: Code Changes</text>
+  <text x="600" y="243" fill="#e6edf3" font-size="7.5" fill-opacity="0.8">Git commits → drift, patterns → TECH.md</text>
+
+  <rect x="452" y="256" width="408" height="26" rx="5" fill="#1a1a2e" stroke="#58a6ff" stroke-width="0.5"/>
+  <text x="462" y="273" fill="#58a6ff" font-size="8.5">Ch 7: Code Intelligence</text>
+  <text x="610" y="273" fill="#e6edf3" font-size="7.5" fill-opacity="0.8">Static analysis → structural truth → TECH.md</text>
+
+  <!-- GROUP 3: External -->
+  <rect x="440" y="300" width="430" height="92" rx="8" fill="#0c1c10" stroke="#7ee787" stroke-width="0.8"/>
+  <text x="455" y="317" fill="#7ee787" font-size="9" font-weight="bold" fill-opacity="0.9">FROM EXTERNAL WORLD (research, signals)</text>
+
+  <rect x="452" y="324" width="408" height="26" rx="5" fill="#1a1a2e" stroke="#7ee787" stroke-width="0.5"/>
+  <text x="462" y="341" fill="#7ee787" font-size="8.5">Ch 2: External Learning</text>
+  <text x="605" y="341" fill="#e6edf3" font-size="7.5" fill-opacity="0.8">Research, articles → PRODUCT.md / TECH.md</text>
+
+  <rect x="452" y="354" width="408" height="26" rx="5" fill="#1a1a2e" stroke="#7ee787" stroke-width="0.5"/>
+  <text x="462" y="371" fill="#7ee787" font-size="8.5">Ch 4: Industry Signals</text>
+  <text x="600" y="371" fill="#e6edf3" font-size="7.5" fill-opacity="0.8">Trends, competitors → PRODUCT.md</text>
+
+  <!-- GROUP 4: Human -->
+  <rect x="440" y="398" width="430" height="92" rx="8" fill="#1a100c" stroke="#f78166" stroke-width="0.8"/>
+  <text x="455" y="415" fill="#f78166" font-size="9" font-weight="bold" fill-opacity="0.9">FROM HUMAN INTERACTION (highest authority)</text>
+
+  <rect x="452" y="422" width="408" height="26" rx="5" fill="#1a1a2e" stroke="#f78166" stroke-width="0.5"/>
+  <text x="462" y="439" fill="#f78166" font-size="8.5">Ch 5: Conversation</text>
+  <text x="590" y="439" fill="#e6edf3" font-size="7.5" fill-opacity="0.8">Session decisions → PROJECT.md</text>
+
+  <rect x="452" y="452" width="408" height="26" rx="5" fill="#1a1a2e" stroke="#f78166" stroke-width="0.8"/>
+  <text x="462" y="469" fill="#f78166" font-size="8.5" font-weight="bold">Ch 6: Corrections (HIGHEST PRIORITY)</text>
+  <text x="690" y="469" fill="#e6edf3" font-size="7.5" fill-opacity="0.8">"No, do X" → Any doc</text>
+
+  <!-- Cultivation summary line -->
+  <rect x="452" y="495" width="408" height="22" rx="4" fill="#1a1a2e" stroke="#e6edf3" stroke-width="0.4"/>
+  <text x="655" y="510" fill="#e6edf3" font-size="8" text-anchor="middle" fill-opacity="0.7">All → Cultivation Engine → Propose → Approve (30s) → DDD Grows</text>
+
+  <!-- ================================================================== -->
+  <!-- BOTTOM: Summary -->
+  <!-- ================================================================== -->
+
+  <rect x="20" y="550" width="860" height="130" rx="10" fill="#1a1a2e" stroke="#e6edf3" stroke-width="0.5" stroke-opacity="0.3"/>
+  <text x="450" y="572" fill="#e6edf3" font-size="11" font-weight="bold" text-anchor="middle">The Platform Model</text>
+
+  <text x="40" y="595" fill="#f78166" font-size="9">Producers (8 channels):</text>
+  <text x="200" y="595" fill="#e6edf3" font-size="9" fill-opacity="0.85">Feed DDD from code, research, signals, conversations, corrections, and delivery engines</text>
+
+  <text x="40" y="615" fill="#7ee787" font-size="9">Platform (DDD):</text>
+  <text x="200" y="615" fill="#e6edf3" font-size="9" fill-opacity="0.85">Grows automatically. Health-monitored. Cross-project discoverable. Section-level loading.</text>
+
+  <text x="40" y="635" fill="#d2a8ff" font-size="9">Consumers (Engines):</text>
+  <text x="200" y="635" fill="#e6edf3" font-size="9" fill-opacity="0.85">Read DDD to deliver domain-correctly. REFLECT feeds back → compound loop.</text>
+
+  <text x="40" y="660" fill="#58a6ff" font-size="9">Foundation (Harness):</text>
+  <text x="200" y="660" fill="#e6edf3" font-size="9" fill-opacity="0.85">Context, memory, tools, hooks. Zero new infra — DDD and engines are consumers of existing.</text>
+
+  <!-- Connection arrow: channels → DDD -->
+  <line x1="430" y1="300" x2="410" y2="300" stroke="#f78166" stroke-width="1" stroke-dasharray="3,2" marker-end="url(#arrOrange)"/>
+
+  <!-- Arrow markers -->
+  <defs>
+    <marker id="arrGreen" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+      <polygon points="0 0, 7 2.5, 0 5" fill="#7ee787"/>
+    </marker>
+    <marker id="arrBlue" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+      <polygon points="0 0, 7 2.5, 0 5" fill="#58a6ff"/>
+    </marker>
+    <marker id="arrOrange" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+      <polygon points="0 0, 7 2.5, 0 5" fill="#f78166"/>
+    </marker>
+  </defs>
+</svg>

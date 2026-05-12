@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 400" font-family="sans-serif">
+  <rect width="720" height="400" fill="#1a1a2e"/>
+
+  <!-- Title -->
+  <text x="360" y="30" text-anchor="middle" fill="#e6edf3" font-size="16" font-weight="bold">Entity Index: Cross-Project Discovery and Routing</text>
+
+  <!-- Query source -->
+  <rect x="30" y="100" width="130" height="60" rx="8" fill="#1a1a2e" stroke="#58a6ff" stroke-width="2"/>
+  <text x="95" y="125" text-anchor="middle" fill="#58a6ff" font-size="11" font-weight="bold">Agent Query</text>
+  <text x="95" y="143" text-anchor="middle" fill="#e6edf3" font-size="9">"What auth pattern</text>
+  <text x="95" y="155" text-anchor="middle" fill="#e6edf3" font-size="9">do we use?"</text>
+
+  <!-- Arrow to Entity Index -->
+  <line x1="160" y1="130" x2="230" y2="130" stroke="#58a6ff" stroke-width="1.5"/>
+  <polygon points="227,126 235,130 227,134" fill="#58a6ff"/>
+
+  <!-- Entity Index (central) -->
+  <rect x="235" y="60" width="200" height="200" rx="8" fill="none" stroke="#d2a8ff" stroke-width="2"/>
+  <text x="335" y="85" text-anchor="middle" fill="#d2a8ff" font-size="12" font-weight="bold">Entity Index</text>
+  <text x="335" y="100" text-anchor="middle" fill="#e6edf3" font-size="9">(PROJECTS.md routing table)</text>
+
+  <!-- Index entries -->
+  <rect x="250" y="112" width="170" height="22" rx="3" fill="#1a1a2e" stroke="#e6edf3" stroke-width="0.8"/>
+  <text x="258" y="127" fill="#e6edf3" font-size="8">auth: ProjectA / TECH / sec-3</text>
+
+  <rect x="250" y="140" width="170" height="22" rx="3" fill="#1a1a2e" stroke="#e6edf3" stroke-width="0.8"/>
+  <text x="258" y="155" fill="#e6edf3" font-size="8">deploy: ProjectB / TECH / sec-2</text>
+
+  <rect x="250" y="168" width="170" height="22" rx="3" fill="#1a1a2e" stroke="#e6edf3" stroke-width="0.8"/>
+  <text x="258" y="183" fill="#e6edf3" font-size="8">pricing: ProjectC / PRODUCT / sec-4</text>
+
+  <rect x="250" y="196" width="170" height="22" rx="3" fill="#1a1a2e" stroke="#e6edf3" stroke-width="0.8"/>
+  <text x="258" y="211" fill="#e6edf3" font-size="8">streaming: ProjectA / TECH / sec-5</text>
+
+  <rect x="250" y="224" width="170" height="22" rx="3" fill="#1a1a2e" stroke="#e6edf3" stroke-width="0.8"/>
+  <text x="258" y="239" fill="#e6edf3" font-size="8">retry: ProjectB / IMPROVE / sec-1</text>
+
+  <!-- Arrow to target projects -->
+  <line x1="435" y1="125" x2="510" y2="95" stroke="#7ee787" stroke-width="1.5"/>
+  <polygon points="507,92 515,93 509,98" fill="#7ee787"/>
+
+  <line x1="435" y1="155" x2="510" y2="180" stroke="#e6edf3" stroke-width="1" stroke-dasharray="3"/>
+  <line x1="435" y1="182" x2="510" y2="265" stroke="#e6edf3" stroke-width="1" stroke-dasharray="3"/>
+  <line x1="435" y1="210" x2="510" y2="95" stroke="#e6edf3" stroke-width="1" stroke-dasharray="3"/>
+
+  <!-- Project A -->
+  <rect x="510" y="60" width="180" height="80" rx="8" fill="none" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="600" y="82" text-anchor="middle" fill="#7ee787" font-size="11" font-weight="bold">Project A</text>
+  <text x="600" y="100" text-anchor="middle" fill="#e6edf3" font-size="9">TECH.md sec-3: Auth patterns</text>
+  <text x="600" y="115" text-anchor="middle" fill="#e6edf3" font-size="9">TECH.md sec-5: Streaming</text>
+  <rect x="525" y="122" width="50" height="14" rx="3" fill="#1a1a2e" stroke="#7ee787" stroke-width="0.8"/>
+  <text x="550" y="133" text-anchor="middle" fill="#7ee787" font-size="7">[Mature]</text>
+
+  <!-- Project B -->
+  <rect x="510" y="155" width="180" height="80" rx="8" fill="none" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="600" y="177" text-anchor="middle" fill="#58a6ff" font-size="11" font-weight="bold">Project B</text>
+  <text x="600" y="195" text-anchor="middle" fill="#e6edf3" font-size="9">TECH.md sec-2: Deploy strategy</text>
+  <text x="600" y="210" text-anchor="middle" fill="#e6edf3" font-size="9">IMPROVEMENT.md sec-1: Retry fix</text>
+  <rect x="525" y="217" width="56" height="14" rx="3" fill="#1a1a2e" stroke="#58a6ff" stroke-width="0.8"/>
+  <text x="553" y="228" text-anchor="middle" fill="#58a6ff" font-size="7">[Growing]</text>
+
+  <!-- Project C -->
+  <rect x="510" y="250" width="180" height="65" rx="8" fill="none" stroke="#f78166" stroke-width="1.5"/>
+  <text x="600" y="272" text-anchor="middle" fill="#f78166" font-size="11" font-weight="bold">Project C</text>
+  <text x="600" y="290" text-anchor="middle" fill="#e6edf3" font-size="9">PRODUCT.md sec-4: Pricing model</text>
+  <rect x="525" y="297" width="50" height="14" rx="3" fill="#1a1a2e" stroke="#f78166" stroke-width="0.8"/>
+  <text x="550" y="308" text-anchor="middle" fill="#f78166" font-size="7">[Sparse]</text>
+
+  <!-- Key insight -->
+  <rect x="80" y="330" width="560" height="50" rx="8" fill="none" stroke="#e6edf3" stroke-width="0.8"/>
+  <text x="360" y="352" text-anchor="middle" fill="#e6edf3" font-size="10">Key: Entity Index is a flat routing table. Lookup cost = O(1).</text>
+  <text x="360" y="370" text-anchor="middle" fill="#e6edf3" font-size="10">Routes to: project + document + section. No graph traversal. No external database.</text>
+</svg>

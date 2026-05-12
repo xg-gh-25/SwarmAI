@@ -92,12 +92,12 @@ Three-column desktop app with parallel sessions, not a single chat thread.
 
 ### ⚡ Autonomous Coding Pipeline
 
-One sentence → PR-ready code in 8 stages. EVALUATE gates bad ideas before wasting effort. TDD writes tests first. REVIEW catches cross-boundary bugs. REFLECT compounds lessons permanently.
+One sentence → push-ready code in 9 stages + Quality Convergence Loop. Adversarial sub-agent catches what self-review structurally cannot. Iterate until 6-layer gate passes — or escalate.
 
-- EVALUATE → THINK → PLAN → BUILD (TDD) → REVIEW → TEST → DELIVER → REFLECT
-- Every decision classified: mechanical (auto), taste (batch), judgment (block)
-- DDD-driven ROI scoring before committing resources
-- Self-improving: each run's lessons feed the next run's review checklists
+- EVALUATE → THINK → PLAN → BUILD (TDD) → REVIEW → TEST → ADVERSARIAL → DELIVER → REFLECT
+- Quality Convergence Loop: iterate until push-ready (single-task, not multi-session)
+- Adversarial Review: separate sub-agent with fresh context (mandatory, not optional)
+- Self-improving: REFLECT feeds DDD via Channel 3 → next run starts smarter
 
 </td>
 <td width="50%">
@@ -139,27 +139,77 @@ Deploy your AI team to the cloud in one click. Same brain, same skills, accessib
 
 ---
 
-## Architecture — Six Self-Growing Flywheels
+## Architecture — DDD Platform: One Knowledge Layer, Multiple Delivery Engines
+
+SwarmAI isn't a feature list — it's a **platform architecture**. One knowledge layer powers multiple specialized delivery engines, and 7 feed channels grow that knowledge automatically from normal work.
+
+### The Platform Model
 
 <div align="center">
-<img src="./assets/swarmai-architecture.svg" alt="SwarmAI Architecture" width="900"/>
+<img src="./assets/platform-architecture.svg" alt="DDD Platform Architecture" width="900"/>
 </div>
 
-SwarmAI isn't a feature list — it's a **growth architecture**. Six interconnected flywheels feed each other:
+Three layers, each enabling the one above:
 
-| Flywheel | What It Does |
-|----------|-------------|
-| **Self-Evolution** | Observes corrections → measures skill fitness → recommends optimizations. 75+ skills, 12 evolution modules, confidence-gated deploy. |
-| **Self-Deploy** | Hive cloud provisioning: EC2 lifecycle, CloudFront CDN, SSM updates. Desktop as command center for cloud instances. |
-| **Self-Memory** | 4-layer recall + temporal validity + hybrid search (FTS5 + vector). 3,000+ tests verify accuracy. |
-| **Self-Context** | 11-file P0-P10 priority chain with token budgets. Every session starts with full awareness. |
-| **Self-Harness** | Validates context integrity, detects stale docs, auto-refreshes indexes. Daily health checks. |
-| **Self-Health** | Monitors processes, resources, sessions. Auto-restarts crashed services. OOM protection. |
-| **Self-Jobs** | Background automation: signal pipeline, scheduled tasks, evolution cycles. Runs 24/7 via launchd. |
+| Layer | What | Role |
+|-------|------|------|
+| **Agent Harness** (Foundation) | 11-file context system, 4-tier memory pipeline, self-evolution, session hooks, tools + SDK | Runtime platform — provides everything DDD and Engines need |
+| **DDD Knowledge Layer** (Platform) | 4 docs × N projects, health scoring, Entity Index, 7 feed channels, progressive loading | Domain expertise — gives every engine domain-correct judgment |
+| **Delivery Engines** (Applications) | Pipeline (code), Pollinate (content), future engines | Specialized delivery — produces verified, domain-correct outputs |
 
-**The compound loop:** Session → Memory captures → Evolution detects patterns → Context assembles smarter prompts → Next session performs better → *(repeat)*
+### How Knowledge Compounds
 
-Every session makes the next one better. Every correction prevents a class of future mistakes.
+<div align="center">
+<img src="./assets/platform-flywheel.svg" alt="Platform Flywheel" width="800"/>
+</div>
+
+7 channels feed DDD automatically from normal work (code commits, research, corrections, signals, conversations, code analysis, engine delivery). Engines consume DDD to deliver domain-correctly. Engine REFLECT writes lessons back. **A regular AI at session 100 = same as session 1. SwarmAI at session 100 = 100x richer knowledge.**
+
+---
+
+### DDD: Domain Expertise as Infrastructure
+
+<div align="center">
+<img src="./assets/ddd-three-layer-stack.svg" alt="DDD 3-Layer Stack" width="800"/>
+</div>
+
+| DDD Layer | Components | Purpose |
+|-----------|-----------|---------|
+| **Interface** | PRODUCT.md · TECH.md · IMPROVEMENT.md · PROJECT.md | AI-readable domain knowledge (4 judgment axes) |
+| **Intelligence** | Health Scores · Maturity Tracking · Code Graph | Detect staleness, measure trust, connect code to docs |
+| **Orchestration** | Cultivation Engine · Entity Index · Progressive Loading | Auto-propose updates, route cross-project knowledge, scale loading |
+
+**Key properties:** Self-growing (7 channels feed it), health-monitored (AI knows what to trust), cross-project (Entity Index routes knowledge), zero human maintenance (cultivation from normal work).
+
+---
+
+### Autonomous Pipeline: Coding as Black Box
+
+<div align="center">
+<img src="./assets/pipeline-architecture.svg" alt="Autonomous Pipeline" width="800"/>
+</div>
+
+One requirement → push-ready code. 9 stages produce a delivery candidate; the **Quality Convergence Loop** iterates until a 6-layer gate passes.
+
+| Stage | Purpose | DDD Integration |
+|-------|---------|-----------------|
+| EVALUATE | GO/DEFER/REJECT | Reads PRODUCT + IMPROVEMENT |
+| THINK | Research approach | Reads TECH + IMPROVEMENT |
+| PLAN | TDD specification | Reads all 4 docs |
+| BUILD | Red-green implementation | Reads TECH conventions |
+| REVIEW | Self-QA | Reads all 4 docs |
+| TEST | Full suite | Reads TECH test strategy |
+| **ADVERSARIAL** | **Fresh sub-agent, no builder bias** | **Reads DDD independently** |
+| DELIVER | Package PR | Reads PROJECT preferences |
+| REFLECT | Extract lessons | **Writes to IMPROVEMENT.md** |
+
+**Quality Convergence Loop:** After stages produce a candidate → evaluate against 6-Layer Push-Ready Gate (tests pass, type-safe, no regressions, adversarial clean, DDD conformance, human decisions resolved). If any layer fails → targeted fix → re-verify. Single-task iteration until push-ready or escalate.
+
+**Adversarial Review (Stage 7):** Separate sub-agent with fresh context. Catches state machine gaps, cross-boundary errors, and happy-path assumptions that self-review structurally cannot see. Mandatory — pipeline without adversarial = incomplete.
+
+---
+
+**Detailed architecture docs:** [Platform Overview](./docs/DDD-Platform-Overview.md) · [DDD HLD](./docs/DDD-Cultivation-Engine-HLD.md) · [Pipeline Design](./docs/Autonomous-Pipeline-Design.md) · [Pollinate Engine](./docs/Pollinate-Content-Engine.md)
 
 ---
 

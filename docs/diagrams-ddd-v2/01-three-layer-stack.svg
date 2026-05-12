@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 520" font-family="sans-serif">
+  <rect width="700" height="520" fill="#1a1a2e"/>
+
+  <!-- Title -->
+  <text x="350" y="35" text-anchor="middle" fill="#e6edf3" font-size="16" font-weight="bold">DDD Cultivation Engine: 3-Layer Architecture</text>
+
+  <!-- Layer 1: Interface Layer -->
+  <rect x="60" y="60" width="580" height="120" rx="8" fill="none" stroke="#58a6ff" stroke-width="2"/>
+  <text x="350" y="85" text-anchor="middle" fill="#58a6ff" font-size="14" font-weight="bold">INTERFACE LAYER</text>
+  <text x="350" y="105" text-anchor="middle" fill="#e6edf3" font-size="11">What AI reads to make autonomous decisions</text>
+
+  <!-- 4 Documents -->
+  <rect x="85" y="118" width="120" height="48" rx="6" fill="#1a1a2e" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="145" y="140" text-anchor="middle" fill="#7ee787" font-size="11" font-weight="bold">PRODUCT.md</text>
+  <text x="145" y="156" text-anchor="middle" fill="#e6edf3" font-size="9">Strategic</text>
+
+  <rect x="225" y="118" width="120" height="48" rx="6" fill="#1a1a2e" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="285" y="140" text-anchor="middle" fill="#7ee787" font-size="11" font-weight="bold">TECH.md</text>
+  <text x="285" y="156" text-anchor="middle" fill="#e6edf3" font-size="9">Tactical</text>
+
+  <rect x="365" y="118" width="120" height="48" rx="6" fill="#1a1a2e" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="425" y="140" text-anchor="middle" fill="#7ee787" font-size="11" font-weight="bold">IMPROVEMENT.md</text>
+  <text x="425" y="156" text-anchor="middle" fill="#e6edf3" font-size="9">Historical</text>
+
+  <rect x="505" y="118" width="120" height="48" rx="6" fill="#1a1a2e" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="565" y="140" text-anchor="middle" fill="#7ee787" font-size="11" font-weight="bold">PROJECT.md</text>
+  <text x="565" y="156" text-anchor="middle" fill="#e6edf3" font-size="9">Operational</text>
+
+  <!-- Arrow down -->
+  <line x1="350" y1="180" x2="350" y2="210" stroke="#d2a8ff" stroke-width="1.5" stroke-dasharray="4"/>
+  <polygon points="345,208 350,218 355,208" fill="#d2a8ff"/>
+
+  <!-- Layer 2: Intelligence Layer -->
+  <rect x="60" y="220" width="580" height="120" rx="8" fill="none" stroke="#d2a8ff" stroke-width="2"/>
+  <text x="350" y="245" text-anchor="middle" fill="#d2a8ff" font-size="14" font-weight="bold">INTELLIGENCE LAYER</text>
+  <text x="350" y="265" text-anchor="middle" fill="#e6edf3" font-size="11">What keeps documents alive and trustworthy</text>
+
+  <!-- Intelligence components -->
+  <rect x="85" y="278" width="150" height="48" rx="6" fill="#1a1a2e" stroke="#f78166" stroke-width="1.5"/>
+  <text x="160" y="298" text-anchor="middle" fill="#f78166" font-size="11" font-weight="bold">Code Graph</text>
+  <text x="160" y="314" text-anchor="middle" fill="#e6edf3" font-size="9">Blast radius, drift</text>
+
+  <rect x="270" y="278" width="160" height="48" rx="6" fill="#1a1a2e" stroke="#f78166" stroke-width="1.5"/>
+  <text x="350" y="298" text-anchor="middle" fill="#f78166" font-size="11" font-weight="bold">Health Scores</text>
+  <text x="350" y="314" text-anchor="middle" fill="#e6edf3" font-size="9">Staleness, completeness, decay</text>
+
+  <rect x="465" y="278" width="150" height="48" rx="6" fill="#1a1a2e" stroke="#f78166" stroke-width="1.5"/>
+  <text x="540" y="298" text-anchor="middle" fill="#f78166" font-size="11" font-weight="bold">Maturity Tracking</text>
+  <text x="540" y="314" text-anchor="middle" fill="#e6edf3" font-size="9">Sparse to Evergreen</text>
+
+  <!-- Arrow down -->
+  <line x1="350" y1="340" x2="350" y2="370" stroke="#d2a8ff" stroke-width="1.5" stroke-dasharray="4"/>
+  <polygon points="345,368 350,378 355,368" fill="#d2a8ff"/>
+
+  <!-- Layer 3: Orchestration Layer -->
+  <rect x="60" y="380" width="580" height="120" rx="8" fill="none" stroke="#7ee787" stroke-width="2"/>
+  <text x="350" y="405" text-anchor="middle" fill="#7ee787" font-size="14" font-weight="bold">ORCHESTRATION LAYER</text>
+  <text x="350" y="425" text-anchor="middle" fill="#e6edf3" font-size="11">What makes the system self-sustaining</text>
+
+  <!-- Orchestration components -->
+  <rect x="85" y="438" width="160" height="48" rx="6" fill="#1a1a2e" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="165" y="458" text-anchor="middle" fill="#58a6ff" font-size="11" font-weight="bold">Cultivation Engine</text>
+  <text x="165" y="474" text-anchor="middle" fill="#e6edf3" font-size="9">7 feeds, proposals, approval</text>
+
+  <rect x="270" y="438" width="160" height="48" rx="6" fill="#1a1a2e" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="350" y="458" text-anchor="middle" fill="#58a6ff" font-size="11" font-weight="bold">Entity Index</text>
+  <text x="350" y="474" text-anchor="middle" fill="#e6edf3" font-size="9">Cross-project routing</text>
+
+  <rect x="465" y="438" width="160" height="48" rx="6" fill="#1a1a2e" stroke="#58a6ff" stroke-width="1.5"/>
+  <text x="545" y="458" text-anchor="middle" fill="#58a6ff" font-size="11" font-weight="bold">Goal Persistence</text>
+  <text x="545" y="474" text-anchor="middle" fill="#e6edf3" font-size="9">GOAL.md + BACKLOG.md</text>
+</svg>
