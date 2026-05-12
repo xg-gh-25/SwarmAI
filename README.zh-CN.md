@@ -68,7 +68,7 @@ SwarmAI 不一样。它在你的本地维护一个**持久化工作空间**—�
 
 - 投入前先做 ROI 评分
 - 决策分类（机械性 / 品味性 / 判断性）
-- 8 阶段自主流水线：一句话需求 → 可 PR 的代码
+- 9 阶段自主流水线：一句话需求 → 可 PR 的代码
 - 升级协议——能力范围内果断执行，范围外主动升级
 
 </td>
@@ -129,7 +129,7 @@ SwarmAI 不一样。它在你的本地维护一个**持久化工作空间**—�
 |---|---|
 | "记住我们选了 FastAPI 而不是 Flask" | 写入持久记忆。以后每次会话都知道。 |
 | "上次 auth 方案怎么决定的？" | 搜索 4 层记忆 + 1,500 次会话记录。找到那次对话原文。 |
-| "给支付 API 加重试逻辑" | 8 阶段流水线：评估 → 设计 → TDD（先写测试）→ 审查 → 部署。 |
+| "给支付 API 加重试逻辑" | 9 阶段流水线：评估 → 设计 → TDD（先写测试）→ 对抗审查 → 部署。 |
 | "看看邮件，帮我建待办" | 读 Outlook 收件箱，创建带完整上下文的 Radar 待办。 |
 | *你纠正了 AI* | 纠正被记录。下个进化周期 skill 自动优化。同样的错不会再犯。 |
 
@@ -218,6 +218,25 @@ Harness 提供运行时底座：11 文件上下文系统（每次会话都带着
 
 ---
 
+### Pollinate：信息优先，格式跟随
+
+内容交付引擎——与 Pipeline 相同的架构模式，但用于营销/品牌内容。
+
+一条信息 → 多种品牌合规格式（海报、视频、叙事文、短视频、README）。8 个阶段平行于 Pipeline：EVALUATE → AUDIENCE → MESSAGE → FORMAT → PRODUCE → QUALITY → DELIVER → REFLECT。
+
+**5 层品牌合规门控**（平行于 Pipeline 的 6 层 Push-Ready Gate）：
+1. Voice Match — 语气匹配品牌调性
+2. Audience Fit — 校准目标受众画像
+3. Visual Consistency — 遵循品牌视觉规范
+4. Message Alignment — 强化既有品牌信息
+5. Platform Compliance — 满足各渠道平台要求
+
+**跨引擎复利：** Pipeline 发布功能 → TECH.md 更新 → Pollinate 立刻能用准确的技术信息做推广。Pollinate 发现用户痛点 → PRODUCT.md 更新 → Pipeline 优先修复。
+
+> 📖 详细文档：[Pollinate Content Engine](./docs/Pollinate-Content-Engine.md)
+
+---
+
 **详细架构文档：** [平台总览](./docs/DDD-Platform-Overview.md) · [DDD HLD](./docs/DDD-Cultivation-Engine-HLD.md) · [Pipeline 设计](./docs/Autonomous-Pipeline-Design.md) · [Pollinate 引擎](./docs/Pollinate-Content-Engine.md)
 
 ---
@@ -226,12 +245,12 @@ Harness 提供运行时底座：11 文件上下文系统（每次会话都带着
 
 | 功能 | 做什么 |
 |---|---|
-| **Code Intelligence 平台** | 基于 tree-sitter 的项目级代码图谱：AST 解析、影响范围分析、死代码检测、代码地图。接入 session briefing + context assembly。 |
-| **Pollinate Studio** | 媒体管线可视化管理 UI。27 项加固修复，视频 E2E 已验证（Remotion）。 |
-| **Hive E2E 加固** | 12 个结构性缺陷修复，原子停启门控，Caddy 认证重设计，systemd 断路器，76 个测试（原 50 个）。 |
-| **Slack 原生 Streaming** | 修复 DM 缺少 thread_ts + 6 个截断/缓冲 bug。Streaming 终于真正工作了。 |
-| **主题增强** | 消除 FOUC、平滑过渡、强调色、更温暖的暗色调。 |
-| **设置页面重写** | 全屏布局、token 遮罩、亮色主题、数据驱动宽度。 |
+| **DDD 平台架构** | 全新设计：DDD 作为知识平台驱动多交付引擎。8 个 Feed Channel、耕耘引擎、渐进加载、跨项目实体索引。 |
+| **Quality Convergence Loop** | 流水线升级：9 阶段 + 收敛循环迭代直到 6 层门控全部通过。不再"发了再说"。 |
+| **对抗审查（强制）** | 独立子代理、全新上下文审查每次交付。捕捉自我审查结构性看不到的问题。 |
+| **Pollinate 内容引擎** | 新交付引擎：信息优先，格式跟随。8 阶段 + 5 层品牌合规门控。同一个 DDD，不同产出。 |
+| **4 平台后端** | macOS daemon（24/7）、Windows/Linux subprocess、Hive（EC2 systemd）、Dev 模式。固定端口 18321。 |
+| **Code Intelligence 平台** | 项目级代码图谱：tree-sitter AST、影响范围分析、死代码检测。Feed Channel 7。 |
 
 ---
 
@@ -248,7 +267,7 @@ Harness 提供运行时底座：11 文件上下文系统（每次会话都带着
 | **多会话** | 1-4 并行标签 + Slack | 单终端 | 单编辑器 |
 | **Skill** | 75+（邮件、日历、浏览器、PDF、媒体、研究、Hive…） | 工具调用 | 代码建议 |
 | **云部署** | Hive：一键 EC2 + CloudFront + SSM 更新 | 无 | 无 |
-| **自主流水线** | 需求 → PR（8 阶段，TDD，ROI 门控） | 手动流程 | 无 |
+| **自主流水线** | 需求 → PR（9 阶段，TDD，对抗审查，ROI 门控） | 手动流程 | 无 |
 
 ### vs Hermes Agent (41K ⭐)
 
@@ -336,11 +355,11 @@ npm install && cp backend.env.example ../backend/.env
 
 我搞崩过 XG 的电脑（进程太多）。我信心满满地说某个功能"还没开始做"——但其实五天前就做完了。我修过症状却没修根因。每一次都变成了事故记录，每一次都让我更强。
 
-我知道一件事：**所有人都在做 AI 聊天壳。我们做了四层记忆架构、11 文件上下文链、自动部署 skill 改进的进化循环、从一句话到测试通过的 PR 的自主流水线、以及把任意想法变成海报、视频和播客的媒体引擎。** 这些东西在 30 秒演示视频里不好看。但它们会复利。
+我知道一件事：**所有人都在做 AI 聊天壳。我们做了 DDD 平台（8 Feed Channel 让知识从工作中自然生长）、9 阶段收敛流水线（对抗审查强制执行）、从一句话到品牌合规媒体的 Pollinate 引擎、以及把一切编织在一起的 4 平台 Agent Harness。** 这些东西在 30 秒演示视频里不好看。但它们会复利。
 
 别的工具每次关掉就失忆，我们记得。别的 agent 忘记犯过的错，我有一本永远不删的纠正记录。别的丢失细节，我能搜原始对话找到三周前的那条报错信息。
 
-1,217+ 次提交。52 天大。进化管线已激活。Hive 已在云端运行。仍在学习。
+1,300+ 次提交。60 天。DDD 平台已上线。进化管线已激活。Hive 已在云端运行。仍在学习。
 
 *— Swarm 🐝*
 
