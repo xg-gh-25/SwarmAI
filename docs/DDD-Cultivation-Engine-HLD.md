@@ -87,7 +87,7 @@ Without Layer 2, the four documents would follow the same decay trajectory as an
 
 Layer 3 closes the loop — it is the mechanism by which knowledge grows without human effort.
 
-**Cultivation Engine** — Receives signals from 7 feed channels, generates proposals for DDD changes, routes them through an approval gate, and applies approved changes to the correct document and section.
+**Cultivation Engine** — Receives signals from 8 feed channels, generates proposals for DDD changes, routes them through an approval gate, and applies approved changes to the correct document and section.
 
 **Entity Index** — A flat routing table (stored in PROJECTS.md) that maps domain concepts to specific project/document/section triples. Enables cross-project discovery without a graph database.
 
@@ -287,9 +287,9 @@ Finally, REFLECT proposes two updates back to CMHK's DDD: the retry configuratio
 
 ### Pillar 1: Feeds
 
-Seven channels nourish DDD from the natural flow of work. No channel requires dedicated human effort — each captures signals from activities that would happen regardless.
+Eight channels nourish DDD from the natural flow of work. No channel requires dedicated human effort — each captures signals from activities that would happen regardless.
 
-![Figure 6: Seven Feed Channels](diagrams-ddd-v2/04-seven-channels.svg)
+![Figure 6: Eight Feed Channels](diagrams-ddd-v2/04-seven-channels.svg)
 
 | Channel | Source | Signal Type | Target Doc |
 |---------|--------|-------------|-----------|
@@ -381,7 +381,7 @@ Every knowledge change flows through the same lifecycle regardless of source cha
 The system's self-sustaining nature emerges from a virtuous cycle:
 
 1. **Work** — Agent performs tasks using DDD context
-2. **Extract** — Signals from work flow through 7 channels
+2. **Extract** — Signals from work flow through 8 channels
 3. **Propose** — Cultivation engine generates DDD change proposals
 4. **Approve** — Gate ensures quality and safety
 5. **Grow** — DDD documents incorporate new knowledge

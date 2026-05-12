@@ -141,7 +141,7 @@ Deploy your AI team to the cloud in one click. Same brain, same skills, accessib
 
 ## Architecture — DDD Platform: One Knowledge Layer, Multiple Delivery Engines
 
-SwarmAI isn't a feature list — it's a **platform architecture**. One knowledge layer powers multiple specialized delivery engines, and 7 feed channels grow that knowledge automatically from normal work.
+SwarmAI isn't a feature list — it's a **platform architecture**. One knowledge layer powers multiple specialized delivery engines, and 8 feed channels grow that knowledge automatically from normal work.
 
 ### The Platform Model
 
@@ -154,7 +154,7 @@ Three layers, each enabling the one above:
 | Layer | What | Role |
 |-------|------|------|
 | **Agent Harness** (Foundation) | 11-file context system, 4-tier memory pipeline, self-evolution, session hooks, tools + SDK | Runtime platform — provides everything DDD and Engines need |
-| **DDD Knowledge Layer** (Platform) | 4 docs × N projects, health scoring, Entity Index, 7 feed channels, progressive loading | Domain expertise — gives every engine domain-correct judgment |
+| **DDD Knowledge Layer** (Platform) | 4 docs × N projects, health scoring, Entity Index, 8 feed channels, progressive loading | Domain expertise — gives every engine domain-correct judgment |
 | **Delivery Engines** (Applications) | Pipeline (code), Pollinate (content), future engines | Specialized delivery — produces verified, domain-correct outputs |
 
 ### How Knowledge Compounds
@@ -163,7 +163,7 @@ Three layers, each enabling the one above:
 <img src="./assets/platform-flywheel.svg" alt="Platform Flywheel" width="800"/>
 </div>
 
-7 channels feed DDD automatically from normal work (code commits, research, corrections, signals, conversations, code analysis, engine delivery). Engines consume DDD to deliver domain-correctly. Engine REFLECT writes lessons back. **A regular AI at session 100 = same as session 1. SwarmAI at session 100 = 100x richer knowledge.**
+8 channels feed DDD automatically from normal work (code commits, research, corrections, signals, conversations, code analysis, engine delivery). Engines consume DDD to deliver domain-correctly. Engine REFLECT writes lessons back. **A regular AI at session 100 = same as session 1. SwarmAI at session 100 = 100x richer knowledge.**
 
 ---
 
@@ -189,7 +189,7 @@ The Harness provides the runtime substrate: 11-file context system (every sessio
 | **Intelligence** | Health Scores · Maturity Tracking · Code Graph | Detect staleness, measure trust, connect code to docs |
 | **Orchestration** | Cultivation Engine · Entity Index · Progressive Loading | Auto-propose updates, route cross-project knowledge, scale loading |
 
-**Key properties:** Self-growing (7 channels feed it), health-monitored (AI knows what to trust), cross-project (Entity Index routes knowledge), zero human maintenance (cultivation from normal work).
+**Key properties:** Self-growing (8 channels feed it), health-monitored (AI knows what to trust), cross-project (Entity Index routes knowledge), zero human maintenance (cultivation from normal work).
 
 ---
 

@@ -67,24 +67,42 @@ Choose the right workflow based on the task:
 
 ---
 
-## Markdown to PDF (pandoc + tectonic)
+## Markdown to PDF (md2pdf.sh)
 
-**This is the PREFERRED method for converting any markdown file to PDF.** Uses pandoc for parsing and tectonic (XeLaTeX) for typesetting. Produces production-grade output with full CJK support, professional tables, syntax-highlighted code blocks, and styled blockquotes.
+**This is the PREFERRED method for converting any markdown file to PDF.** Two engines available:
+
+| Engine | Best For | Command |
+|--------|----------|---------|
+| **tectonic** (default) | Clean docs, CJK, print-quality typography | `scripts/md2pdf.sh input.md` |
+| **weasyprint** | SVG diagrams, heavy unicode/emoji, architecture docs | `scripts/md2pdf.sh input.md --engine weasyprint` |
 
 ### Quick Start
 
 ```bash
-# Basic conversion (uses professional template by default)
+# Basic (tectonic engine, professional style)
 scripts/md2pdf.sh input.md
 
-# With options
-scripts/md2pdf.sh input.md output.pdf --style professional --toc --preview
+# Architecture doc with SVG diagrams (use weasyprint)
+scripts/md2pdf.sh design.md output.pdf --engine weasyprint --toc
 
-# Suppress YAML frontmatter title (when .md has both YAML title and # heading)
+# PE review preset (tectonic)
+scripts/md2pdf.sh input.md output.pdf --preset pe-review -V "title="
+
+# Suppress YAML frontmatter title
 scripts/md2pdf.sh input.md output.pdf -V "title="
 ```
 
-### Available Templates
+### Engine Selection Guide
+
+| Your doc has | Use | Why |
+|-------------|-----|-----|
+| Clean markdown, CJK text | `--engine tectonic` (default) | Best typography, proper CJK font rendering |
+| Inline SVG diagrams | `--engine weasyprint` | LaTeX can't render inline SVG; weasyprint renders natively |
+| Heavy emoji (🌱🔴✅) | `--engine weasyprint` | WeasyPrint uses system fonts that have full unicode coverage |
+| ASCII art in code blocks | `--engine weasyprint` | Tectonic's monospace font missing many unicode glyphs |
+| Print-quality formatting | `--engine tectonic` | LaTeX produces better paragraph flow and kerning |
+
+### Available Templates (tectonic engine only)
 
 | Template | Font | Style | Best For |
 |----------|------|-------|----------|
@@ -93,14 +111,34 @@ scripts/md2pdf.sh input.md output.pdf -V "title="
 
 ### What It Handles
 
-- **Tables**: pandoc parses markdown tables → LaTeX longtable with booktabs rules
-- **Code blocks**: Syntax highlighting via tango theme, framed with background color
-- **CJK**: PingFang SC for Chinese/Japanese/Korean, auto-detected
-- **Blockquotes**: Left-bordered callout boxes (red accent in professional, gray in minimal)
-- **Unicode symbols**: →, ←, ✓, ✗, • all render correctly via PingFang fallback
-- **Images**: SVG shows placeholder text (LaTeX limitation), PNG/JPG render inline
-- **TOC**: `--toc` flag generates a table of contents on its own page
-- **Page numbers**: `Page / Total` in footer
+- **Tables**: pandoc parses markdown tables → LaTeX longtable (tectonic) or CSS tables (weasyprint)
+- **Code blocks**: Syntax highlighting, framed with background color
+- **CJK**: PingFang SC for Chinese/Japanese/Korean
+- **Blockquotes**: Left-bordered callout boxes
+- **Unicode symbols**: Code-block-aware sanitization (text → LaTeX math, code → ASCII)
+- **SVG**: WeasyPrint renders inline; tectonic converts via rsvg-convert
+- **TOC**: `--toc` flag generates table of contents
+- **Page numbers**: `Page / Total` in footer (both engines)
+
+### SVG Diagram Rules (for inline SVG in markdown)
+
+When writing SVG diagrams that will be rendered to PDF via WeasyPrint:
+
+```
+MUST DO:
+- All <path> with stroke → add fill="none" (prevents black fill)
+- Arrows: use <polygon points="..."/> (not <marker> + marker-end)
+- viewBox: use concrete values (e.g. "0 0 800 400")
+- font-family: "-apple-system, Helvetica Neue, sans-serif"
+- Wrap in <div class="diagram"> for page-break-inside: avoid
+
+DO NOT:
+- <defs> with <marker> elements (WeasyPrint renders black blocks)
+- marker-end="url(#...)" on paths
+- Emoji in SVG <text> elements (use in markdown body only)
+- transform="rotate()" on <text> (inconsistent rendering)
+- CSS var() inside SVG
+```
 
 ### When NOT to Use md2pdf
 

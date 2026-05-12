@@ -13,7 +13,7 @@
   <rect width="800" height="560" fill="#1a1a2e" rx="12"/>
 
   <!-- Title -->
-  <text x="400" y="30" text-anchor="middle" fill="#e6edf3" font-size="15" font-weight="bold">The 7 Feed Channels: How DDD Grows Automatically</text>
+  <text x="400" y="30" text-anchor="middle" fill="#e6edf3" font-size="15" font-weight="bold">The 8 Feed Channels: How DDD Grows Automatically</text>
   <text x="400" y="50" text-anchor="middle" fill="#8b8ba0" font-size="10">These are the flywheel fuel -- zero-maintenance knowledge production</text>
 
   <!-- Channel boxes (left column) -->
@@ -69,7 +69,7 @@
   <!-- Cultivation Engine (center-right) -->
   <rect x="420" y="180" width="200" height="90" rx="10" fill="#1a2e1a" stroke="#7ee787" stroke-width="2"/>
   <text x="520" y="205" text-anchor="middle" fill="#7ee787" font-size="12" font-weight="bold">Cultivation Engine</text>
-  <text x="520" y="225" text-anchor="middle" fill="#e6edf3" font-size="9">Receives signals from all 7 channels</text>
+  <text x="520" y="225" text-anchor="middle" fill="#e6edf3" font-size="9">Receives signals from all 8 channels</text>
   <text x="520" y="242" text-anchor="middle" fill="#e6edf3" font-size="9">Generates DDD update proposals</text>
   <text x="520" y="258" text-anchor="middle" fill="#8b8ba0" font-size="8">Automatic, continuous, incremental</text>
 
@@ -116,5 +116,5 @@
 
   <!-- Key insight -->
   <rect x="420" y="520" width="360" height="30" rx="6" fill="#12122a" stroke="#d2a8ff" stroke-width="1"/>
-  <text x="600" y="540" text-anchor="middle" fill="#d2a8ff" font-size="9">KEY: Engines contribute via Channel 3, but ALL 7 channels drive the flywheel equally</text>
+  <text x="600" y="540" text-anchor="middle" fill="#d2a8ff" font-size="9">KEY: Engines contribute via Channel 3, but ALL 8 channels drive the flywheel equally</text>
 </svg>

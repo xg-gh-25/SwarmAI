@@ -25,7 +25,7 @@
   <text x="375" y="293" text-anchor="middle" fill="#8b8ba0" font-size="8">Self-growing</text>
   <text x="375" y="307" text-anchor="middle" fill="#8b8ba0" font-size="8">domain expertise</text>
 
-  <!-- 7 Channels (left arc) -->
+  <!-- 8 Channels (left arc) -->
   <rect x="30" y="70" width="150" height="28" rx="6" fill="#2b1810" stroke="#f78166" stroke-width="1.2"/>
   <text x="105" y="88" text-anchor="middle" fill="#f78166" font-size="8">1. Code Changes</text>
 

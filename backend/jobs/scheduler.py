@@ -312,29 +312,60 @@ def run_scheduler(dry_run: bool = False, force_job: str | None = None) -> None:
             logger.info(f"[DRY RUN] Would execute: {job.id} ({job.type})")
         return
 
-    # Evaluate which jobs are due
-    due_jobs: list[Job] = []
+    # Separate time-based jobs from dependency-based (after:X) jobs.
+    # Time-based jobs are evaluated and executed first, then after:X jobs
+    # are evaluated against the UPDATED state — fixing the race where
+    # dependent jobs missed their parent's execution in the same cycle.
+    time_based_jobs: list[Job] = []
+    dep_based_jobs: list[Job] = []
     for job in jobs:
+        if job.schedule.startswith("after:"):
+            dep_based_jobs.append(job)
+        else:
+            time_based_jobs.append(job)
+
+    # Phase 1: Evaluate and execute time-based jobs
+    due_jobs: list[Job] = []
+    for job in time_based_jobs:
         if is_job_due(job, state) and check_circuit_breaker(job, state):
             due_jobs.append(job)
 
-    if not due_jobs:
-        logger.info("No jobs due")
-        return
-
-    logger.info(f"{len(due_jobs)} jobs due: {[j.id for j in due_jobs]}")
+    if due_jobs:
+        logger.info(f"{len(due_jobs)} time-based jobs due: {[j.id for j in due_jobs]}")
 
     if dry_run:
         for job in due_jobs:
             logger.info(f"[DRY RUN] Would execute: {job.id} ({job.type})")
+        # Still check deps for dry-run visibility
+        for job in dep_based_jobs:
+            if is_job_due(job, state) and check_circuit_breaker(job, state):
+                logger.info(f"[DRY RUN] Would execute (dep): {job.id} ({job.type})")
         return
 
-    # Execute due jobs in order
     results = []
     for job in due_jobs:
         result = execute_job(job, state, feeds, user_context, defaults, all_job_ids)
         results.append(result)
         logger.info(f"  {job.id}: {result.status} — {result.summary}")
+
+    # Phase 2: Re-evaluate dependency-based jobs against updated state.
+    # This ensures after:signal-fetch fires in the SAME cycle that
+    # signal-fetch ran — not deferred to the next hourly tick.
+    due_deps: list[Job] = []
+    for job in dep_based_jobs:
+        if is_job_due(job, state) and check_circuit_breaker(job, state):
+            due_deps.append(job)
+
+    if due_deps:
+        logger.info(f"{len(due_deps)} dependency jobs now due: {[j.id for j in due_deps]}")
+        for job in due_deps:
+            result = execute_job(job, state, feeds, user_context, defaults, all_job_ids)
+            results.append(result)
+            logger.info(f"  {job.id}: {result.status} — {result.summary}")
+
+    if not results:
+        logger.info("No jobs due")
+        return
 
     save_state(state)
 
