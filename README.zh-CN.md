@@ -92,12 +92,12 @@ SwarmAI 不一样。它在你的本地维护一个**持久化工作空间**—�
 
 ### ⚡ 自主编码流水线
 
-一句话需求 → 可 PR 的代码，8 阶段全自动。EVALUATE 在浪费精力之前拦住烂想法。TDD 先写测试。REVIEW 抓跨边界 bug。REFLECT 把教训永久沉淀。
+一句话需求 → push-ready 代码，9 阶段 + Quality Convergence Loop。对抗子代理捕捉自我审查结构性看不到的问题。迭代直到 6 层门控通过——或 escalate。
 
-- EVALUATE → THINK → PLAN → BUILD (TDD) → REVIEW → TEST → DELIVER → REFLECT
-- 每个决策分类：机械性（自动）、品味性（批量）、判断性（阻塞等人）
-- DDD 驱动的 ROI 评分——投入前先算账
-- 自我改进：每次运行的教训 feed 下次运行的 review checklist
+- EVALUATE → THINK → PLAN → BUILD (TDD) → REVIEW → TEST → ADVERSARIAL → DELIVER → REFLECT
+- Quality Convergence Loop：单任务迭代直到 push-ready（不是多 session）
+- 对抗审查：独立子代理，全新上下文（强制，不可跳过）
+- 自我改进：REFLECT 通过 Channel 3 喂养 DDD → 下次运行更聪明
 
 </td>
 <td width="50%">
@@ -138,25 +138,77 @@ SwarmAI 不一样。它在你的本地维护一个**持久化工作空间**—�
 ![SwarmAI Workspace](./assets/swarm-4.png)
 ---
 
-## 架构——六个自增长飞轮
+## 架构——DDD 平台：一层知识，多引擎交付
+
+SwarmAI 不是功能列表——是一套**平台架构**。一层知识驱动多个专业化交付引擎，7 个 feed channel 自动从日常工作中积累知识。
+
+### 平台模型
 
 <div align="center">
-<img src="./assets/swarmai-architecture.svg" alt="SwarmAI Architecture" width="900"/>
+<img src="./assets/platform-architecture.svg" alt="DDD Platform Architecture" width="900"/>
 </div>
 
-SwarmAI 不是功能列表——是一套**增长架构**。六个互连飞轮彼此驱动：
+三层架构，每层为上一层赋能：
 
-| 飞轮 | 做什么 |
-|------|--------|
-| **Self-Evolution** | 观察纠正 → 度量 skill 健康度 → LLM 自动优化。75+ 个 skill，12 个进化模块。 |
-| **Self-Deploy** | Hive 云端部署：EC2 全生命周期、CloudFront CDN、SSM 更新。桌面端作为云实例控制中心。 |
-| **Self-Memory** | 4 层召回 + 时序有效性 + 混合搜索（FTS5 + 向量）。3,000+ 测试验证准确性。 |
-| **Self-Context** | 11 文件 P0-P10 优先级链 + token 预算管理。每次会话都带着完整认知。 |
-| **Self-Harness** | 验证上下文完整性、检测文档过期、自动刷新索引。每日健康检查。 |
-| **Self-Health** | 监控进程、资源、会话。崩溃自动重启。OOM 防护。 |
-| **Self-Jobs** | 后台自动化：信号管线、定时任务、进化周期。通过 launchd 7×24 运行。 |
+| 层级 | 内容 | 角色 |
+|------|------|------|
+| **Agent Harness**（底座） | 11 文件上下文系统、4 层记忆管线、自进化循环、Session Hooks、工具 + SDK | 运行时平台——为 DDD 和引擎提供一切所需 |
+| **DDD 知识层**（平台） | 4 文档 × N 项目、健康评分、Entity Index、7 个 Feed Channel、渐进加载 | 领域专业知识——让每个引擎都能做出领域正确的判断 |
+| **交付引擎**（应用） | Pipeline（代码）、Pollinate（内容）、未来引擎 | 专业化交付——产出经过验证的、领域正确的成果 |
 
-**复利循环：** 会话 → 记忆沉淀 → 进化发现模式 → 上下文更智能 → 下次会话更强 → *（循环加速）*
+### 知识如何复利增长
+
+<div align="center">
+<img src="./assets/platform-flywheel.svg" alt="Platform Flywheel" width="800"/>
+</div>
+
+7 个 channel 自动从日常工作中给 DDD 喂信号（代码提交、研究、纠正、行业信号、对话、代码分析、引擎交付）。引擎读取 DDD 实现领域正确交付。引擎 REFLECT 把经验写回 DDD。**普通 AI 用 100 次 = 跟第 1 次一样。SwarmAI 用 100 次 = 知识丰富 100 倍。**
+
+---
+
+### DDD：领域专业知识即基础设施
+
+<div align="center">
+<img src="./assets/ddd-three-layer-stack.svg" alt="DDD 3-Layer Stack" width="800"/>
+</div>
+
+| DDD 层级 | 组件 | 用途 |
+|----------|------|------|
+| **Interface** | PRODUCT.md · TECH.md · IMPROVEMENT.md · PROJECT.md | AI 可读的领域知识（4 个判断轴） |
+| **Intelligence** | 健康评分 · 成熟度追踪 · 代码图谱 | 检测过期、度量信任、连接代码与文档 |
+| **Orchestration** | Cultivation Engine · Entity Index · 渐进加载 | 自动提议更新、跨项目知识路由、按需加载 |
+
+**核心特性：** 自增长（7 channel 喂养）、健康监控（AI 知道什么可信）、跨项目（Entity Index 路由知识）、零人工维护（从正常工作中培育）。
+
+---
+
+### 自主编码流水线：Coding as Black Box
+
+<div align="center">
+<img src="./assets/pipeline-architecture.svg" alt="Autonomous Pipeline" width="800"/>
+</div>
+
+一句需求 → 可直接合并的代码。9 个阶段产出交付候选；**Quality Convergence Loop** 迭代直到 6 层门控全部通过。
+
+| 阶段 | 用途 | DDD 集成 |
+|------|------|----------|
+| EVALUATE | GO/DEFER/REJECT | 读 PRODUCT + IMPROVEMENT |
+| THINK | 研究方案 | 读 TECH + IMPROVEMENT |
+| PLAN | TDD 规格 | 读全部 4 文档 |
+| BUILD | 红-绿实现 | 读 TECH 约定 |
+| REVIEW | 自检 | 读全部 4 文档 |
+| TEST | 完整测试套件 | 读 TECH 测试策略 |
+| **ADVERSARIAL** | **独立子代理，无构建者偏见** | **独立读 DDD** |
+| DELIVER | 打包 PR | 读 PROJECT 偏好 |
+| REFLECT | 提取经验 | **写回 IMPROVEMENT.md** |
+
+**Quality Convergence Loop：** 阶段产出候选 → 评估 6 层 Push-Ready Gate（测试通过、类型安全、无回归、对抗审查通过、DDD 合规、人类决策已解决）。任何层失败 → 定向修复 → 重新验证。单任务迭代直到 push-ready 或 escalate。
+
+**对抗审查（第 7 阶段）：** 独立子代理，全新上下文。捕捉状态机缺口、跨边界错误和乐观路径假设——这些是自我审查结构性看不到的。强制执行——没有对抗审查的流水线 = 不完整。
+
+---
+
+**详细架构文档：** [平台总览](./docs/DDD-Platform-Overview.md) · [DDD HLD](./docs/DDD-Cultivation-Engine-HLD.md) · [Pipeline 设计](./docs/Autonomous-Pipeline-Design.md) · [Pollinate 引擎](./docs/Pollinate-Content-Engine.md)
 
 ---
 

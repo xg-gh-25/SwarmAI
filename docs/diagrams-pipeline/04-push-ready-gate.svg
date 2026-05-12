@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 450" font-family="sans-serif">
+  <defs>
+    <marker id="arrow4" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#7ee787"/>
+    </marker>
+    <marker id="arrow4f" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#f78166"/>
+    </marker>
+  </defs>
+  <rect width="780" height="450" fill="#1a1a2e" rx="8"/>
+
+  <!-- Title -->
+  <text x="390" y="30" text-anchor="middle" fill="#e6edf3" font-size="16" font-weight="bold">6-Layer Push-Ready Gate</text>
+  <text x="390" y="50" text-anchor="middle" fill="#e6edf3" font-size="10" opacity="0.7">ALL layers must pass for push-ready declaration</text>
+
+  <!-- Delivery candidate input -->
+  <rect x="30" y="200" width="120" height="40" rx="8" fill="#1e2a3a" stroke="#58a6ff" stroke-width="2"/>
+  <text x="90" y="215" text-anchor="middle" fill="#58a6ff" font-size="10">Delivery</text>
+  <text x="90" y="230" text-anchor="middle" fill="#58a6ff" font-size="10">Candidate</text>
+
+  <line x1="150" y1="220" x2="185" y2="220" stroke="#7ee787" stroke-width="2" marker-end="url(#arrow4)"/>
+
+  <!-- Layer 1 -->
+  <rect x="190" y="70" width="340" height="50" rx="8" fill="#1e2a3a" stroke="#7ee787" stroke-width="2"/>
+  <text x="220" y="90" fill="#7ee787" font-size="12" font-weight="bold">L1</text>
+  <text x="250" y="90" fill="#e6edf3" font-size="11" font-weight="bold">Tests Pass</text>
+  <text x="250" y="108" fill="#e6edf3" font-size="9" opacity="0.8">Unit tests + integration tests all green</text>
+  <rect x="470" y="80" width="45" height="25" rx="4" fill="none" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="492" y="97" text-anchor="middle" fill="#7ee787" font-size="9">PASS</text>
+
+  <!-- Layer 2 -->
+  <rect x="190" y="128" width="340" height="50" rx="8" fill="#1e2a3a" stroke="#7ee787" stroke-width="2"/>
+  <text x="220" y="148" fill="#7ee787" font-size="12" font-weight="bold">L2</text>
+  <text x="250" y="148" fill="#e6edf3" font-size="11" font-weight="bold">Type-Safe</text>
+  <text x="250" y="166" fill="#e6edf3" font-size="9" opacity="0.8">No type errors, linter clean, no warnings</text>
+  <rect x="470" y="138" width="45" height="25" rx="4" fill="none" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="492" y="155" text-anchor="middle" fill="#7ee787" font-size="9">PASS</text>
+
+  <!-- Layer 3 -->
+  <rect x="190" y="186" width="340" height="50" rx="8" fill="#1e2a3a" stroke="#7ee787" stroke-width="2"/>
+  <text x="220" y="206" fill="#7ee787" font-size="12" font-weight="bold">L3</text>
+  <text x="250" y="206" fill="#e6edf3" font-size="11" font-weight="bold">No Regressions</text>
+  <text x="250" y="224" fill="#e6edf3" font-size="9" opacity="0.8">All existing tests still pass, no broken behavior</text>
+  <rect x="470" y="196" width="45" height="25" rx="4" fill="none" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="492" y="213" text-anchor="middle" fill="#7ee787" font-size="9">PASS</text>
+
+  <!-- Layer 4 -->
+  <rect x="190" y="244" width="340" height="50" rx="8" fill="#1e2a3a" stroke="#f78166" stroke-width="2"/>
+  <text x="220" y="264" fill="#f78166" font-size="12" font-weight="bold">L4</text>
+  <text x="250" y="264" fill="#e6edf3" font-size="11" font-weight="bold">Adversarial Review Clean</text>
+  <text x="250" y="282" fill="#e6edf3" font-size="9" opacity="0.8">Separate sub-agent found no critical issues</text>
+  <rect x="470" y="254" width="45" height="25" rx="4" fill="none" stroke="#f78166" stroke-width="1.5"/>
+  <text x="492" y="271" text-anchor="middle" fill="#f78166" font-size="9">FAIL</text>
+
+  <!-- Layer 5 -->
+  <rect x="190" y="302" width="340" height="50" rx="8" fill="#1e2a3a" stroke="#7ee787" stroke-width="2"/>
+  <text x="220" y="322" fill="#7ee787" font-size="12" font-weight="bold">L5</text>
+  <text x="250" y="322" fill="#e6edf3" font-size="11" font-weight="bold">DDD Conformance</text>
+  <text x="250" y="340" fill="#e6edf3" font-size="9" opacity="0.8">Follows TECH.md conventions, avoids IMPROVEMENT.md anti-patterns</text>
+  <rect x="470" y="312" width="45" height="25" rx="4" fill="none" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="492" y="329" text-anchor="middle" fill="#7ee787" font-size="9">PASS</text>
+
+  <!-- Layer 6 -->
+  <rect x="190" y="360" width="340" height="50" rx="8" fill="#1e2a3a" stroke="#7ee787" stroke-width="2"/>
+  <text x="220" y="380" fill="#7ee787" font-size="12" font-weight="bold">L6</text>
+  <text x="250" y="380" fill="#e6edf3" font-size="11" font-weight="bold">Human Decisions Resolved</text>
+  <text x="250" y="398" fill="#e6edf3" font-size="9" opacity="0.8">All taste/judgment decisions surfaced and addressed</text>
+  <rect x="470" y="370" width="45" height="25" rx="4" fill="none" stroke="#7ee787" stroke-width="1.5"/>
+  <text x="492" y="387" text-anchor="middle" fill="#7ee787" font-size="9">PASS</text>
+
+  <!-- Gate result -->
+  <rect x="570" y="145" width="180" height="60" rx="8" fill="#1e2a3a" stroke="#f78166" stroke-width="2.5"/>
+  <text x="660" y="170" text-anchor="middle" fill="#f78166" font-size="12" font-weight="bold">GATE: NOT PASSED</text>
+  <text x="660" y="190" text-anchor="middle" fill="#e6edf3" font-size="9">L4 failed — loop back</text>
+
+  <!-- Arrow to gate result -->
+  <line x1="520" y1="269" x2="565" y2="195" stroke="#f78166" stroke-width="2" marker-end="url(#arrow4f)"/>
+
+  <!-- If all pass -->
+  <rect x="570" y="270" width="180" height="60" rx="8" fill="#1e2a3a" stroke="#7ee787" stroke-width="2" stroke-dasharray="5,3"/>
+  <text x="660" y="295" text-anchor="middle" fill="#7ee787" font-size="12" font-weight="bold">ALL PASS</text>
+  <text x="660" y="315" text-anchor="middle" fill="#e6edf3" font-size="9">Push-Ready confirmed</text>
+
+  <!-- Bottom note -->
+  <text x="390" y="435" text-anchor="middle" fill="#e6edf3" font-size="10" font-style="italic">Any single layer failure triggers the convergence loop for targeted fix</text>
+</svg>
