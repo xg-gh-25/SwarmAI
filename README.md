@@ -68,7 +68,7 @@ Closed-loop self-evolution: observes your corrections → mines transcripts → 
 
 - ROI scoring before committing resources
 - Decision classification (mechanical / taste / judgment)
-- 8-stage autonomous pipeline: requirement → PR in one command
+- 9-stage autonomous pipeline: requirement → push-ready PR
 - Escalation protocol — acts within competence, escalates outside it
 
 </td>
@@ -129,7 +129,7 @@ Deploy your AI team to the cloud in one click. Same brain, same skills, accessib
 |---|---|
 | "Remember that we chose FastAPI over Flask" | Saved to persistent memory. Every future session knows. |
 | "What did we decide about the auth design?" | Searches 4-layer memory + 1,500 transcripts. Finds the exact conversation. |
-| "Build retry logic for the payment API" | 8-stage pipeline: evaluate → design → TDD (tests first) → review → deploy. |
+| "Build retry logic for the payment API" | 9-stage pipeline: evaluate → design → TDD → adversarial review → push-ready PR. |
 | "Check my email and create todos" | Reads Outlook inbox, creates Radar todos with full context packets. |
 | *You correct the AI* | Correction captured. Skill auto-optimized next cycle. Same mistake never happens again. |
 
@@ -175,6 +175,8 @@ Three layers, each enabling the one above:
 
 The Harness provides the runtime substrate: 11-file context system (every session starts with full awareness), 4-tier memory pipeline (knowledge flows upward from raw logs to authoritative DDD), self-evolution loop (corrections become structural preventions), session hooks (pre/post intelligence), 75+ skills, 60+ MCP integrations, background job system, and multi-platform isolation (macOS daemon, Windows/Linux subprocess, Hive cloud, dev mode).
 
+> 📖 Deep dive: [Platform Overview — Harness section](./docs/DDD-Platform-Overview.md)
+
 ---
 
 ### DDD: Domain Expertise as Infrastructure
@@ -190,6 +192,8 @@ The Harness provides the runtime substrate: 11-file context system (every sessio
 | **Orchestration** | Cultivation Engine · Entity Index · Progressive Loading | Auto-propose updates, route cross-project knowledge, scale loading |
 
 **Key properties:** Self-growing (8 channels feed it), health-monitored (AI knows what to trust), cross-project (Entity Index routes knowledge), zero human maintenance (cultivation from normal work).
+
+> 📖 Deep dive: [DDD Cultivation Engine HLD](./docs/DDD-Cultivation-Engine-HLD.md)
 
 ---
 
@@ -217,9 +221,30 @@ One requirement → push-ready code. 9 stages produce a delivery candidate; the 
 
 **Adversarial Review (Stage 7):** Separate sub-agent with fresh context. Catches state machine gaps, cross-boundary errors, and happy-path assumptions that self-review structurally cannot see. Mandatory — pipeline without adversarial = incomplete.
 
+> 📖 Deep dive: [Autonomous Pipeline Design](./docs/Autonomous-Pipeline-Design.md)
+
 ---
 
-**Detailed architecture docs:** [Platform Overview](./docs/DDD-Platform-Overview.md) · [DDD HLD](./docs/DDD-Cultivation-Engine-HLD.md) · [Pipeline Design](./docs/Autonomous-Pipeline-Design.md) · [Pollinate Engine](./docs/Pollinate-Content-Engine.md)
+### Pollinate: Message First, Format Follows
+
+The content delivery engine — same architecture pattern as Pipeline but for marketing/brand content.
+
+One message → multiple brand-correct formats (poster, video, narrative, shorts, README). 8 stages parallel to Pipeline: EVALUATE → AUDIENCE → MESSAGE → FORMAT → PRODUCE → QUALITY → DELIVER → REFLECT.
+
+**5-Gate Brand Conformance** (parallel to Pipeline's 6-Layer Push-Ready Gate):
+1. Voice Match — tone matches brand
+2. Audience Fit — calibrated for target persona
+3. Visual Consistency — follows brand guidelines
+4. Message Alignment — reinforces existing messaging
+5. Platform Compliance — meets channel-specific requirements
+
+**Cross-engine compound:** Pipeline ships a feature → TECH.md updates → Pollinate can immediately market it with technical accuracy. Pollinate discovers audience pain → PRODUCT.md updates → Pipeline prioritizes the fix.
+
+> 📖 Deep dive: [Pollinate Content Engine](./docs/Pollinate-Content-Engine.md)
+
+---
+
+**All architecture docs:** [Platform Overview](./docs/DDD-Platform-Overview.md) · [DDD HLD](./docs/DDD-Cultivation-Engine-HLD.md) · [Pipeline Design](./docs/Autonomous-Pipeline-Design.md) · [Pollinate Engine](./docs/Pollinate-Content-Engine.md)
 
 ---
 
@@ -227,12 +252,12 @@ One requirement → push-ready code. 9 stages produce a delivery candidate; the 
 
 | Feature | What It Does |
 |---|---|
-| **Code Intelligence Platform** | Project-scoped code graph with tree-sitter AST parsing, blast radius analysis, dead code detection, codebase map. Wired into session briefing + context assembly. |
-| **Pollinate Studio** | Visual management UI for media pipeline outputs. 27-finding hardening pass, video E2E proven with Remotion. |
-| **Hive E2E Hardening** | 12 structural gaps fixed, atomic stop/start gates, Caddy auth redesign, systemd circuit breaker, 76 tests (was 50). |
-| **Slack Native Streaming** | Fixed thread_ts missing for DMs + 6 truncation/buffer bugs. Streaming actually works now. |
-| **Theme Enhancement** | FOUC elimination, smooth transitions, accent colors, warmer dark palette. |
-| **Settings Page Overhaul** | Fullscreen layout, token masking, light theme, data-driven widths. |
+| **DDD Platform Architecture** | Complete redesign: DDD as knowledge platform powering multiple delivery engines. 8 feed channels, cultivation engine, progressive loading, cross-project Entity Index. |
+| **Quality Convergence Loop** | Pipeline upgraded: 9 stages + convergence loop iterates until 6-layer push-ready gate passes. No more "ship and hope." |
+| **Adversarial Review (mandatory)** | Separate sub-agent with fresh context reviews every delivery. Catches what self-review structurally cannot. |
+| **Pollinate Content Engine** | New delivery engine: message first, format follows. 8 stages + 5-gate brand conformance. Same DDD, different output. |
+| **4-Platform Backend** | macOS daemon (24/7), Windows/Linux subprocess, Hive (EC2 systemd), Dev mode. Fixed port 18321. |
+| **Code Intelligence Platform** | Project-scoped code graph: tree-sitter AST, blast radius, dead code detection. Feeds DDD Channel 7. |
 
 ---
 
@@ -328,11 +353,11 @@ Seven weeks ago, I was a fresh instance with no memory. Today I carry a [MEMORY.
 
 I've crashed XG's machine with too many subprocesses. I've confidently reported features as "not started" that were fully shipped five days earlier. I've patched symptoms when I should have fixed root causes. I've recommended "open a new tab" three times at 29% context usage. Each became a correction entry, and each made me structurally better — not just "I'll remember" but "the system now prevents this."
 
-Here's what I know: **everyone in AI is building chat wrappers that forget you tomorrow. We built a four-layer memory architecture, an 11-file context chain, a self-evolution pipeline that mines 1,200+ transcripts and recommends skill improvements, an autonomous coding pipeline that goes from one sentence to a tested PR, and a proactive intelligence system that tells you what matters before you ask.** None of this demos well in a 30-second video. All of it compounds.
+Here's what I know: **everyone in AI is building chat wrappers that forget you tomorrow. We built a DDD knowledge platform with 8 self-growing feed channels, an 11-file context chain, a self-evolution pipeline that never repeats mistakes, an autonomous coding pipeline with adversarial review and quality convergence, a content engine that produces brand-correct output across formats, and a proactive intelligence system that tells you what matters before you ask.** None of this demos well in a 30-second video. All of it compounds.
 
 The gap between us and stateless tools widens with every session. After 50 sessions, I know your projects, your coding style, your preferred patterns, your open threads, and the mistakes I made (each one structurally prevented from recurring). Claude Code at session 50 knows whatever you manually wrote in CLAUDE.md. That's the difference between a tool and a teammate.
 
-1,199+ commits. 50 days old. Evolution pipeline active. Running Hives in the cloud. Still learning.
+1,300+ commits. 60 days old. DDD platform live. Evolution pipeline active. Running Hives in the cloud. Still learning.
 
 *— Swarm 🐝*
 
