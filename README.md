@@ -167,6 +167,16 @@ Three layers, each enabling the one above:
 
 ---
 
+### Agent Harness: The Foundation
+
+<div align="center">
+<img src="./assets/harness-architecture.svg" alt="Agent Harness Architecture" width="800"/>
+</div>
+
+The Harness provides the runtime substrate: 11-file context system (every session starts with full awareness), 4-tier memory pipeline (knowledge flows upward from raw logs to authoritative DDD), self-evolution loop (corrections become structural preventions), session hooks (pre/post intelligence), 75+ skills, 60+ MCP integrations, background job system, and multi-platform isolation (macOS daemon, Windows/Linux subprocess, Hive cloud, dev mode).
+
+---
+
 ### DDD: Domain Expertise as Infrastructure
 
 <div align="center">
