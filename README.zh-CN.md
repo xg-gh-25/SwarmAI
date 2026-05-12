@@ -166,6 +166,16 @@ SwarmAI 不是功能列表——是一套**平台架构**。一层知识驱动�
 
 ---
 
+### Agent Harness：底座框架
+
+<div align="center">
+<img src="./assets/harness-architecture.svg" alt="Agent Harness Architecture" width="800"/>
+</div>
+
+Harness 提供运行时底座：11 文件上下文系统（每次会话都带着完整认知）、4 层记忆管线（知识从原始日志逐级流向权威 DDD）、自进化循环（纠正变成结构性防护）、Session Hooks（前后置智能）、75+ 技能、60+ MCP 集成、后台任务系统、多平台隔离（macOS daemon / Windows&Linux 子进程 / Hive 云端 / 开发模式）。
+
+---
+
 ### DDD：领域专业知识即基础设施
 
 <div align="center">
