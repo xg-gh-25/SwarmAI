@@ -3,6 +3,21 @@
 Full SwarmAI release pipeline: from pre-flight to GitHub Release. Orchestrates
 version bumps, binary build, desktop packaging, smoke testing, and publishing.
 
+## 🚨 MOMENTUM RULE — DO NOT STOP BETWEEN STAGES
+
+**Once user says "release", treat the entire flow as ONE atomic operation.**
+- Stage passes → immediately proceed to the next stage. NO pause, NO "ready to continue?", NO options.
+- Only STOP for: (1) a stage FAILS, (2) user explicitly interrupts, (3) scope gate >20 commits needs sign-off.
+- Mid-flow fixes (e.g., a dirty tree needs a commit): fix it and CONTINUE. Do not ask "should I commit?" — just commit and proceed.
+- Optional improvements noticed mid-flow: NOTE them for after release, do not propose them mid-flow.
+- The user said "release" once. That's the only approval needed until publish.
+
+**Anti-pattern (what caused 4 breaks in v1.12.2):**
+- ❌ "要不要加第三层 hook？" — proposing optional work mid-release
+- ❌ Reporting stage pass and waiting for "继续"
+- ❌ Asking "should I commit this fix?" when tree is dirty before next stage
+- ✅ Stage pass → next stage. Fix → commit → next stage. All the way to PUBLISH.
+
 ## Stage 0: PROJECT GUARD (blocking)
 
 ```
