@@ -63,17 +63,20 @@ Two paths to develop and test:
 ./dev.sh status    # Show what's running
 ```
 
-**`./dev.sh build`** — rebuilds backend binary + Tauri app (takes longer, production-like)
+**`./dev.sh deploy`** — builds backend binary and deploys to daemon (fastest way to push code changes)
 
 ```bash
-# Full production build (PyInstaller + Tauri → DMG)
-./dev.sh build
+# Build backend + deploy to daemon (3 min)
+./dev.sh deploy
 
-# Quick build: skip PyInstaller (frontend/Rust changes only)
+# Quick build: skip PyInstaller, rebuild Tauri only (frontend/Rust changes)
 ./dev.sh quick
+
+# Full release (backend + DMG + tag + publish)
+./prod.sh release
 ```
 
-Use `./dev.sh start` for daily development — it runs the Python backend directly so code changes take effect immediately without rebuilding. Use `./dev.sh build` when you need to test the production binary or create a release.
+Use `./dev.sh start` for daily development — it runs the Python backend directly so code changes take effect immediately without rebuilding. Use `./dev.sh deploy` when you need to update the production daemon binary. Use `./prod.sh release` for full releases with DMG packaging.
 
 > **Note:** In production, the backend runs as a **launchd daemon** (macOS) that stays alive even when the desktop app is closed. This enables 24/7 Slack bot, background jobs, and scheduled tasks. The dev mode uses direct Python execution instead.
 

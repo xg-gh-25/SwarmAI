@@ -1,11 +1,11 @@
 #!/bin/bash
 # SwarmAI Production Operations
 # Usage:
-#   ./prod.sh build          — Build backend binary (PyInstaller + verify)
-#   ./prod.sh release        — Full release build (backend + frontend + Tauri → DMG)
-#   ./prod.sh deploy         — Deploy backend binary to daemon + restart
+#   ./prod.sh build          — Build backend binary + deploy to daemon + restart
+#   ./prod.sh release        — Full release (backend + DMG + tag + publish)
 #   ./prod.sh verify         — Verify existing binary capabilities
 #   ./prod.sh status         — Show daemon health, binary versions, staleness
+#   ./prod.sh deploy         — (deprecated → runs build)
 #
 # Daemon management:
 #   ./prod.sh daemon restart — Restart the backend daemon (launchd)
@@ -352,28 +352,14 @@ cmd_release() {
 }
 
 cmd_deploy() {
+    # DEPRECATED: ./prod.sh build already includes deploy + restart.
+    # This command only existed for "binary already built, just push it" which
+    # is rare and not worth a separate code path.
+    _warn "DEPRECATED: './prod.sh deploy' is deprecated."
+    _warn "  Use: ./prod.sh build  (includes build + deploy + restart)"
     echo ""
-    _log "Deploying backend binary to daemon..."
-
-    if [ ! -f "$BACKEND_BINARY" ]; then
-        _err "No backend binary found. Run ./prod.sh build first."
-        return 1
-    fi
-
-    # Deploy first, then kill (script may die when daemon is killed)
-    local daemon_was_running=false
-    if _daemon_is_running; then
-        daemon_was_running=true
-    fi
-
-    _deploy_daemon_binary
-
-    # Restart daemon after deploy (SIGKILL+bootout+bootstrap — common function)
-    if [ "$daemon_was_running" = true ]; then
-        _daemon_kill_and_bootstrap 30 || _warn "Daemon restart slow — try: ./prod.sh daemon restart"
-    else
-        _ok "Deployed. Start daemon with: ./prod.sh daemon start"
-    fi
+    _log "Running './prod.sh build' for you..."
+    cmd_build
 }
 
 cmd_verify() {
@@ -686,14 +672,14 @@ case "${1:-help}" in
         echo "Usage: ./prod.sh [command]"
         echo ""
         echo "Build & Deploy:"
-        echo "  build            Build backend binary + verify + deploy to daemon"
-        echo "  release          Desktop release: preflight → build → verify → DMG → smoke test"
+        echo "  build            Build backend binary + verify + deploy to daemon + restart"
+        echo "  release          Full release: build + DMG + tag + publish"
         echo "  release-hive     Hive release: package tar.gz + verify"
         echo "  release-all      Unified: Desktop DMG + Hive tar.gz + GitHub Release"
-        echo "  deploy           Deploy existing binary to daemon + restart"
         echo "  verify           Run post-build capability verification"
         echo "  preflight        Check readiness (tests, dirty tree, version) without building"
         echo "  status           Show daemon health, binary versions, staleness"
+        echo "  deploy           (deprecated → runs build)"
         echo ""
         echo "Daemon:"
         echo "  daemon restart   Restart the backend daemon (launchd)"

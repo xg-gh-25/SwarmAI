@@ -1437,10 +1437,11 @@ async def upgrade_daemon():
         _upgrade_started_at = time.time()
 
     # Upgrader script: deploy directly in Python (no shell subprocess).
-    # Why not `prod.sh deploy`? Because prod.sh kills the daemon, which sends
-    # SIGHUP to its child shells → shell dies → result file never written → lock stuck.
-    # Instead: rsync + write result THEN kill. Kill is the last action — anything
-    # after it is undefined (process may be orphaned by daemon death).
+    # Why not shell scripts (prod.sh/dev.sh)? Because shells are daemon children —
+    # killing daemon sends SIGHUP → shell dies → result file never written → lock stuck.
+    # Instead: pure Python deployer in a new session group (start_new_session=True).
+    # Sequence: SIGKILL + bootout + rsync + bootstrap. Kill is atomic — anything
+    # after it is best-effort (process survives in its own session group).
     # Use repr() for Python string literals (not shlex.quote which is for shell).
     safe_result_file = repr(result_file)
     safe_binary_path = repr(str(binary_path.parent))  # onedir bundle directory
