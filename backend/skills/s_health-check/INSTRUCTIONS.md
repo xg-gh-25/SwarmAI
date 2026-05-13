@@ -2,6 +2,12 @@
 
 Verify that SwarmAI critical subsystems are working after a build. Run all checks and report pass/fail for each.
 
+## 🚨 MOMENTUM RULE — DO NOT STOP BETWEEN CHECKS
+
+**"health check" = run ALL checks and report results. NO pause between checks.**
+- Check passes → immediately run next check. Only report the full summary at the end.
+- Only STOP for: user explicitly interrupts. Individual check failures are noted and reported in the final summary, not escalated mid-flow.
+
 ## When to Run
 
 - After `./dev.sh build` or `./dev.sh quick`
