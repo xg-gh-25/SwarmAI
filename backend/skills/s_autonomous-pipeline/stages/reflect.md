@@ -60,7 +60,26 @@ Pipeline-owned stage (no sibling skill).
 
    **Skip** when no `code_intel.db` exists.
 
-7. **Record stage with structured lessons in run.json** — the REFLECT stage record
+7. **DDD Cultivation** — After extracting lessons, cultivate DDD documents:
+
+   ```python
+   from core.ddd_cultivation import cultivate_from_reflect
+   from pathlib import Path
+
+   project_dir = workspace / "Projects" / "<PROJECT>"
+   result = cultivate_from_reflect(lessons, "<RUN_ID>", "<PROJECT>", project_dir)
+   # result: {"applied": N, "escalated": M, "rejected": K}
+   ```
+
+   **Tiered autonomy model:**
+   - ADDITIVE (IMPROVEMENT.md lessons, TECH.md patterns): auto-applied, logged
+   - RISKY (PRODUCT.md changes, contradictions): escalated to proposal queue
+
+   This is zero-cost (no LLM, keyword heuristic only). Applied changes appear
+   in the weekly DDD report. Escalations surface in session briefing.
+   Do NOT skip this step — it closes the REFLECT → DDD feedback loop.
+
+8. **Record stage with structured lessons in run.json** — the REFLECT stage record
    MUST include a `lessons` list so REPORT.md can inline them:
 
 ```bash
@@ -82,7 +101,7 @@ python backend/scripts/artifact_cli.py run-update --project <PROJECT> \
    Good: "SMOKE is highest ROI — caught 2 runtime crashes that unit tests missed"
    Good: "setTimeout for state propagation is always wrong — use event-driven transitions"
 
-8. Record outcome for learning feedback (calibration):
+9. Record outcome for learning feedback (calibration):
 
 ```bash
 python backend/scripts/artifact_cli.py learn --project <PROJECT> \
@@ -91,7 +110,7 @@ python backend/scripts/artifact_cli.py learn --project <PROJECT> \
   --lessons "lesson 1;lesson 2"
 ```
 
-9. **Regenerate REPORT.md** — DELIVER generated the report before REFLECT ran,
+10. **Regenerate REPORT.md** — DELIVER generated the report before REFLECT ran,
    so lessons were missing. Regenerate to inline them:
 
 ```bash
