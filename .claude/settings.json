@@ -11,6 +11,17 @@
             "statusMessage": "Checking pytest safety..."
           }
         ]
+      },
+      {
+        "matcher": "WebFetch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/spa-domain-redirect.sh",
+            "timeout": 3,
+            "statusMessage": "Checking SPA domain..."
+          }
+        ]
       }
     ]
   }
