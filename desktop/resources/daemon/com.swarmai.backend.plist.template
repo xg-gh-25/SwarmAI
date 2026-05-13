@@ -7,6 +7,7 @@
 
     <key>ProgramArguments</key>
     <array>
+        <string>/bin/bash</string>
         <string>__WRAPPER_PATH__</string>
     </array>
 
@@ -20,6 +21,10 @@
     <!-- Background priority — won't interfere with user apps -->
     <key>ProcessType</key>
     <string>Background</string>
+
+    <!-- Graceful shutdown timeout: SIGKILL after 15s if process ignores SIGTERM -->
+    <key>ExitTimeOut</key>
+    <integer>15</integer>
 
     <!-- Throttle restarts: wait 10s between launches -->
     <key>ThrottleInterval</key>

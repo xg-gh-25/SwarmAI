@@ -164,6 +164,56 @@ _deploy_daemon_binary() {
     fi
 }
 
+# ── Kill + Deploy + Bootstrap (for file-overwriting deploys) ───
+
+_daemon_kill_and_bootstrap() {
+    # Full restart sequence for deploys that overwrite daemon files.
+    # SIGKILL (instant death) → bootout (disable KeepAlive) → bootstrap (start new).
+    #
+    # Use when: rsync/deploy has changed files in ~/.swarm-ai/daemon/ and daemon
+    # was running. KeepAlive would restart the OLD binary (race condition).
+    #
+    # Do NOT use for: simple restart with same binary (use SIGKILL + KeepAlive).
+    local health_timeout="${1:-30}"
+
+    # 1. SIGKILL — instant process death (SSE cannot block SIGKILL)
+    _log "SIGKILL daemon (instant death)..."
+    launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
+    sleep 1
+
+    # 2. bootout — deregister service (process already dead → instant return)
+    #    This disables KeepAlive so nothing restarts during/after our deploy.
+    launchctl bootout "$GUI_TARGET" 2>/dev/null || true
+    sleep 1
+
+    # 3. Confirm port is free
+    _wait_port_free "$DAEMON_PORT" 10 || {
+        _log "Port still held after 10s — force kill..."
+        pkill -9 -f "$HOME/.swarm-ai/daemon/python-backend" 2>/dev/null || true
+        sleep 2
+    }
+
+    # 4. Deploy fresh plist (ensures ExitTimeOut=15 is active for future bootouts)
+    local plist_dst="$HOME/Library/LaunchAgents/${DAEMON_LABEL}.plist"
+    local plist_src="$DESKTOP_DIR/resources/daemon/com.swarmai.backend.plist.template"
+    # Fallback: backend/channels/ has the authoritative template (used by main.py upgrade)
+    [ -f "$plist_src" ] || plist_src="$PROJECT_ROOT/backend/channels/com.swarmai.backend.plist"
+    if [ -f "$plist_src" ]; then
+        local log_dir="$HOME/.swarm-ai/logs"
+        mkdir -p "$log_dir"
+        sed -e "s|__WRAPPER_PATH__|$HOME/.swarm-ai/swarmai_backend.sh|g" \
+            -e "s|__LOG_DIR__|${log_dir}|g" \
+            -e "s|__HOME__|${HOME}|g" \
+            "$plist_src" > "$plist_dst"
+    fi
+
+    # 5. bootstrap with retry (re-register + start new binary)
+    _bootstrap_daemon || return 1
+
+    # 6. Wait for health
+    _daemon_wait_healthy "$health_timeout"
+}
+
 # ── Bootstrap & Health ─────────────────────────────────────────
 
 _bootstrap_daemon() {
