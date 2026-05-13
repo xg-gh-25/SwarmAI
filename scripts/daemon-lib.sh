@@ -257,26 +257,19 @@ cmd_daemon() {
                 return 1
             fi
 
-            # Use `launchctl kill` instead of bootout+bootstrap.
-            # bootout DEREGISTERS the service — if this script dies mid-restart
-            # (e.g. when run inside the daemon's own subprocess), nobody re-registers.
-            # kill SIGTERM keeps the service registered; KeepAlive auto-restarts it.
-            _log "Sending SIGTERM to daemon (service stays registered)..."
-            launchctl kill SIGTERM "$GUI_TARGET" 2>/dev/null || {
-                _warn "kill SIGTERM failed — daemon may not be running, trying bootstrap..."
+            # Use `launchctl kill SIGKILL` — keeps service registered, KeepAlive auto-restarts.
+            # SIGKILL (not SIGTERM): SSE streams block graceful shutdown indefinitely.
+            # Safe for restart-in-place: no rsync, same binary, no file corruption risk.
+            _log "Sending SIGKILL to daemon (service stays registered, KeepAlive restarts)..."
+            launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || {
+                _warn "kill failed — daemon may not be running, trying bootstrap..."
                 _bootstrap_daemon
                 _daemon_wait_healthy 30
                 return $?
             }
 
-            # ExitTimeOut does NOT apply to `launchctl kill` — only to bootout/stop.
-            # Give uvicorn 5s for in-flight requests, then SIGKILL (SSE streams block indefinitely).
-            _log "Waiting for port ${DAEMON_PORT} to release (5s grace)..."
-            if ! _wait_port_free "$DAEMON_PORT" 5; then
-                _log "Port still held after 5s (likely SSE drain) — SIGKILL..."
-                launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
-                _wait_port_free "$DAEMON_PORT" 5 || true
-            fi
+            _log "Waiting for port ${DAEMON_PORT} to release..."
+            _wait_port_free "$DAEMON_PORT" 10 || true
 
             _log "Waiting for launchd KeepAlive to restart daemon..."
             _daemon_wait_healthy 30
