@@ -29,6 +29,8 @@ class JobType(str, Enum):
     MEMORY_HEALTH = "memory_health"
     SKILL_PROPOSER = "skill_proposer"
     TODO_RESOLUTION = "todo_resolution"
+    DDD_WEEKLY_REPORT = "ddd_weekly_report"
+    SWARMAI_MONTHLY_REPORT = "swarmai_monthly_report"
 
 
 class FeedType(str, Enum):
