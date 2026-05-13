@@ -117,7 +117,7 @@ class TestWriteSkillProposal:
         meta = json.loads((skill_dir / "metadata.json").read_text())
         assert meta["confidence"] == 8
         assert meta["gap_pattern"] == "test gap"
-        assert meta["model"] == "claude-opus-4-6"
+        assert meta["model"] == "claude-sonnet-4-6"
 
 
 class TestLoadGapsFromFindings:
