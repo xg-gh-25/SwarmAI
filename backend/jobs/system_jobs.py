@@ -99,6 +99,19 @@ SYSTEM_JOBS: list[Job] = [
         config={"window_days": 7},
     ),
 
+    # --- SwarmAI Monthly Report (comprehensive health + progress MBR) ---
+    # Covers all 12 subsystems. Runs 1st of month after all weekly jobs have
+    # populated their data for the prior month.
+    Job(
+        id="swarmai-monthly-report",
+        name="SwarmAI Monthly Report",
+        type="swarmai_monthly_report",
+        schedule="0 5 1 * *",           # 1st of month, 05:00 UTC = 13:00 ICT
+        enabled=True,
+        category="system",
+        config={},  # Uses previous month by default
+    ),
+
     # --- Skill Proposer (reads health_findings.json, proposes skills for gaps) ---
     # Decoupled from memory-health: health_findings.json is populated by
     # ContextHealthHook (every session) AND memory-health (weekly LLM).
