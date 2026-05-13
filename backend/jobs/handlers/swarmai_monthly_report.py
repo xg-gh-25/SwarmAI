@@ -39,6 +39,7 @@ def run_swarmai_monthly_report(config: dict | None = None) -> dict:
     """
     config = config or {}
     now = datetime.now(timezone.utc)
+    project_name = config.get("project", "SwarmAI")
 
     # Determine report month (default: previous month)
     month_str = config.get("month")
@@ -62,12 +63,12 @@ def run_swarmai_monthly_report(config: dict | None = None) -> dict:
     metrics = {
         "memory": _collect_memory_metrics(month_start, month_end),
         "context": _collect_context_metrics(),
-        "pipeline": _collect_pipeline_metrics(month_start, month_end),
+        "pipeline": _collect_pipeline_metrics(month_start, month_end, project_name),
         "cultivation": _collect_cultivation_metrics(month_start, month_end),
         "evolution": _collect_evolution_metrics(),
         "health": _collect_health_metrics(),
         "jobs": _collect_job_metrics(month_start, month_end),
-        "code_intel": _collect_code_intel_metrics(),
+        "code_intel": _collect_code_intel_metrics(project_name),
         "skills": _collect_skill_metrics(),
         "pollinate": _collect_pollinate_metrics(month_start, month_end),
         "sessions": _collect_session_metrics(month_start, month_end),
@@ -75,7 +76,7 @@ def run_swarmai_monthly_report(config: dict | None = None) -> dict:
     }
 
     # Generate report
-    report = _generate_monthly_report(metrics, month_label, month_start, month_end)
+    report = _generate_monthly_report(metrics, month_label, month_start, month_end, project_name)
 
     # Write output
     output_dir = SWARMWS / "Knowledge" / "Reports"
@@ -141,9 +142,9 @@ def _collect_context_metrics() -> dict:
     return {"total_tokens": total_tokens, "file_sizes": file_sizes}
 
 
-def _collect_pipeline_metrics(month_start: datetime, month_end: datetime) -> dict:
+def _collect_pipeline_metrics(month_start: datetime, month_end: datetime, project_name: str = "SwarmAI") -> dict:
     """Pipeline: runs this month, confidence scores, stages."""
-    runs_dir = PROJECTS_DIR / "SwarmAI" / ".artifacts" / "runs"
+    runs_dir = PROJECTS_DIR / project_name / ".artifacts" / "runs"
     if not runs_dir.exists():
         return {"runs_completed": 0, "avg_confidence": 0, "total_lessons": 0}
 
@@ -179,7 +180,7 @@ def _collect_pipeline_metrics(month_start: datetime, month_end: datetime) -> dic
             continue
 
     # Try to get confidence from delivery artifacts
-    artifacts_dir = PROJECTS_DIR / "SwarmAI" / ".artifacts"
+    artifacts_dir = PROJECTS_DIR / project_name / ".artifacts"
     for f in artifacts_dir.glob("delivery-*.json"):
         try:
             data = json.loads(f.read_text())
@@ -317,11 +318,11 @@ def _collect_job_metrics(month_start: datetime, month_end: datetime) -> dict:
     return {"total_runs": total, "success": success, "failed": failed, "success_rate": rate}
 
 
-def _collect_code_intel_metrics() -> dict:
+def _collect_code_intel_metrics(project_name: str = "SwarmAI") -> dict:
     """Code Intelligence: index stats if available."""
     try:
         from core.code_intel import load_project_graph
-        g = load_project_graph("SwarmAI")
+        g = load_project_graph(project_name)
         if g:
             summary = g.get_codebase_summary()
             return {
@@ -400,10 +401,17 @@ def _collect_git_metrics(month_start: datetime, month_end: datetime) -> dict:
     since = month_start.strftime("%Y-%m-%d")
     until = month_end.strftime("%Y-%m-%d")
 
-    # Find swarmai repo — try common locations
-    swarmai_repo = Path("/Users/gawan/Desktop/SwarmAI-Workspace/swarmai")
+    # Find swarmai repo — walk up from this file to find .git
+    # Path: handlers/swarmai_monthly_report.py → handlers/ → jobs/ → backend/ → swarmai/
+    swarmai_repo = Path(__file__).resolve().parent.parent.parent.parent
     if not (swarmai_repo / ".git").exists():
-        swarmai_repo = SWARMWS.parent  # fallback
+        # Fallback: walk up from SWARMWS until .git found
+        candidate = SWARMWS.parent
+        while candidate != candidate.parent:
+            if (candidate / ".git").exists():
+                swarmai_repo = candidate
+                break
+            candidate = candidate.parent
 
     try:
         result = subprocess.run(
@@ -441,7 +449,8 @@ def _collect_git_metrics(month_start: datetime, month_end: datetime) -> dict:
 
 
 def _generate_monthly_report(
-    metrics: dict, month_label: str, month_start: datetime, month_end: datetime
+    metrics: dict, month_label: str, month_start: datetime, month_end: datetime,
+    project_name: str = "SwarmAI",
 ) -> str:
     """Generate MBR-style monthly report."""
     mem = metrics["memory"]
@@ -459,13 +468,13 @@ def _generate_monthly_report(
 
     lines = [
         "---",
-        "title: SwarmAI Monthly Report",
+        f"title: {project_name} Monthly Report",
         f"date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
         f"month: {month_label}",
         "tags: [swarmai, monthly, core-engine, health]",
         "---",
         "",
-        f"# SwarmAI Monthly — {month_label}",
+        f"# {project_name} Monthly — {month_label}",
         "",
     ]
 
