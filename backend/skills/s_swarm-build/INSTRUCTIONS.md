@@ -4,6 +4,15 @@ Build the SwarmAI backend binary via PyInstaller, verify it, deploy to daemon pa
 restart the daemon, and confirm health. Each stage runs independently with clear
 pass/fail output between steps.
 
+## 🚨 MOMENTUM RULE — DO NOT STOP BETWEEN STAGES
+
+**Once user says "build", treat the entire flow as ONE atomic operation.**
+- Stage passes → immediately proceed to the next stage. NO pause, NO "ready to continue?", NO options.
+- Only STOP for: (1) a stage FAILS, (2) user explicitly interrupts.
+- Mid-flow issues (e.g., dirty tree warning): note it in output and CONTINUE. Do not ask "should I commit first?"
+- Optional improvements noticed mid-flow: NOTE them for after build, do not propose them mid-flow.
+- The user said "build" once. That's the only approval needed until health check passes.
+
 **🚨 SELF-KILL PARADOX:** You (the agent) are a subprocess of the daemon you're
 restarting. Killing the daemon = killing your parent = severing your communication
 channel. Stage 5 (RESTART) WILL disconnect your session. Stage 6 (HEALTH) uses a
