@@ -395,10 +395,10 @@ echo "Directory size: $(du -sh "$OUTPUT_BINARY_DIR" | cut -f1)"
 echo "Executable: $OUTPUT_BINARY_DIR/python-backend${BINARY_EXT}"
 
 # NOTE: Daemon deploy (binary + wrapper + plist) is handled exclusively by
-# _deploy_daemon_binary in daemon-lib.sh (called via ./dev.sh deploy or ./prod.sh deploy).
+# _deploy_daemon_binary in daemon-lib.sh (called via ./dev.sh deploy or ./prod.sh build).
 # build-backend.sh only builds the binary — deploy is a separate step.
 echo ""
-echo "To deploy to daemon: ./dev.sh deploy  (or ./prod.sh deploy)"
+echo "To deploy to daemon: ./dev.sh deploy  (or ./prod.sh build)"
 
 # The executable path within the onedir bundle
 OUTPUT_EXECUTABLE="$OUTPUT_BINARY_DIR/python-backend${BINARY_EXT}"

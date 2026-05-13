@@ -2,10 +2,10 @@
 # SwarmAI Backend Daemon — wrapper script for launchd
 #
 # Runs the PyInstaller-built backend binary from ~/.swarm-ai/daemon/.
-# This binary is produced by `./dev.sh build` and copied here automatically.
+# This binary is produced by `./dev.sh deploy` and copied here automatically.
 #
 # IMPORTANT: The daemon NEVER runs from the dev source directory.
-# Code changes only take effect after: ./dev.sh build
+# Code changes only take effect after: ./dev.sh deploy
 # This prevents untested changes from crashing the production daemon.
 #
 # Fallback: if no binary exists (first install), falls back to venv Python.
@@ -100,7 +100,7 @@ unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy NO_PROXY
 # Resolve backend executable
 # ---------------------------------------------------------------------------
 # Priority: PyInstaller binary > venv Python (fallback)
-# The binary is placed by `./dev.sh build` into ~/.swarm-ai/daemon/.
+# The binary is placed by `./dev.sh deploy` into ~/.swarm-ai/daemon/.
 # This ensures the daemon ONLY runs tested, built code.
 
 if [ -x "${DAEMON_BINARY}" ]; then
@@ -123,7 +123,7 @@ if [ -x "${DAEMON_BINARY}" ]; then
 elif [ -x "${VENV_PYTHON}" ]; then
     LAUNCH_MODE="venv-fallback"
     echo "[swarmai-backend] WARNING: No binary at ${DAEMON_BINARY}"
-    echo "[swarmai-backend] Falling back to venv Python (run './dev.sh build' to fix)"
+    echo "[swarmai-backend] Falling back to venv Python (run './dev.sh deploy' to fix)"
     echo "[swarmai-backend] Starting VENV FALLBACK on port ${DAEMON_PORT} at $(date '+%Y-%m-%d %H:%M:%S')"
     echo "[swarmai-backend] Backend dir: ${BACKEND_DIR}"
     echo "[swarmai-backend] Python: ${VENV_PYTHON}"
@@ -140,6 +140,6 @@ else
     echo "[swarmai-backend] ERROR: No backend binary or venv found" >&2
     echo "[swarmai-backend]   Binary: ${DAEMON_BINARY} (not found)" >&2
     echo "[swarmai-backend]   Venv:   ${VENV_PYTHON} (not found)" >&2
-    echo "[swarmai-backend]   Run './dev.sh build' to create the binary" >&2
+    echo "[swarmai-backend]   Run './dev.sh deploy' to create the binary" >&2
     exit 1
 fi

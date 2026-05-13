@@ -1,14 +1,14 @@
 #!/bin/bash
 # SwarmAI Development Helper
 # Usage:
-#   ./dev.sh              — Start everything (backend + frontend)
+#   ./dev.sh              — Start everything (backend + frontend) in dev mode
 #   ./dev.sh backend      — Restart backend only (after Python changes)
 #   ./dev.sh frontend     — Start frontend only (backend already running)
-#   ./dev.sh build        — Full production build (PyInstaller + Tauri + DMG)
-#   ./dev.sh deploy       — Build backend only + deploy to daemon (fastest)
+#   ./dev.sh deploy       — Build backend + deploy to daemon (the dev deploy path)
 #   ./dev.sh quick        — Quick build: skip PyInstaller, rebuild Tauri only
 #   ./dev.sh kill         — Kill all dev processes
 #   ./dev.sh status       — Show what's running
+#   ./dev.sh build        — (deprecated → runs deploy)
 #
 # Daemon & Channel management:
 #   ./dev.sh daemon restart  — Restart the backend daemon (launchd)
@@ -186,10 +186,10 @@ cmd_backend() {
     _log "Tail logs: tail -f $LOG_DIR/backend-dev.log"
 
     # NOTE: Daemon is NOT restarted here. The daemon runs the built binary,
-    # not dev source code. Use './dev.sh build' to update the daemon.
+    # not dev source code. Use './dev.sh deploy' to update the daemon.
     if _daemon_is_running; then
         _warn "Daemon is running (built binary). Dev backend on port $BACKEND_PORT."
-        _warn "To update daemon: ./dev.sh build"
+        _warn "To update daemon: ./dev.sh deploy"
     fi
 }
 
@@ -202,76 +202,14 @@ cmd_frontend() {
 }
 
 cmd_build() {
-    local start=$(date +%s)
-    _log "Full production build..."
-
-    # Step 0: Sync versions from VERSION file
-    _log "Syncing version from VERSION file..."
-    bash "$PROJECT_ROOT/scripts/sync-version.sh"
-
-    cd "$DESKTOP_DIR"
-
-    _log "Step 1/4: PyInstaller backend build..."
-    npm run build:backend
-
-    _log "Step 2/4: Post-build verification..."
-    cd "$BACKEND_DIR"
-    if python scripts/verify_build.py "$BACKEND_BINARY"; then
-        _ok "Verification passed"
-    else
-        _err "Verification FAILED — binary has missing capabilities"
-        _warn "Fix issues above, then re-run: ./dev.sh build"
-        return 1
-    fi
-
-    cd "$DESKTOP_DIR"
-    _log "Step 3/4: Frontend build..."
-    npm run build
-
-    _log "Step 4/4: Tauri build..."
-    npm run tauri build
-
-    _ok "Full build complete in $(_build_time $start)"
-
-    # Show output
-    local dmg=$(ls "$DESKTOP_DIR/src-tauri/target/release/bundle/dmg/"*.dmg 2>/dev/null | head -1)
-    if [ -n "$dmg" ]; then
-        _ok "DMG: $dmg ($(du -h "$dmg" | cut -f1))"
-        _log "Install: open \"$dmg\""
-    fi
-
-    # ── Deploy binary to daemon directory ────────────────────────
-    # The daemon runs from ~/.swarm-ai/daemon/python-backend (NOT the
-    # dev source directory).
-    #
-    # Order: deploy FIRST, then kill. Rationale:
-    # - This script may run from inside the daemon (Claude CLI subprocess).
-    #   When daemon dies → CLI dies → this script dies. So deploy MUST complete
-    #   before we send the kill signal.
-    # - Onedir rsync over a running process: low corruption risk (lazy .so
-    #   imports are rare after startup). Even if daemon crashes mid-rsync,
-    #   KeepAlive restarts → reads the fully-deployed new files.
-    # - Use `launchctl kill` (not bootout) so service stays registered and
-    #   KeepAlive auto-restarts. This is the key safety property: even if
-    #   this script dies mid-execution, the daemon WILL come back.
-    local daemon_was_running=false
-    if _daemon_is_running; then
-        daemon_was_running=true
-    fi
-
-    _deploy_daemon_binary
-
-    # Now kill the old daemon so it restarts with new binary.
-    # Deploy already completed above — safe to kill now.
-    # Use SIGKILL (not SIGTERM): SSE streams block SIGTERM indefinitely.
-    # KeepAlive is safe here because deploy already finished (no rsync race).
-    if [ "$daemon_was_running" = true ]; then
-        _log "Restarting daemon to pick up new binary..."
-        launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
-        _daemon_wait_healthy 90
-    else
-        _log "Daemon was not running. Start with: ./dev.sh daemon start"
-    fi
+    # DEPRECATED: Use ./prod.sh release for full DMG builds,
+    # or ./dev.sh deploy for backend-only deploy to daemon.
+    _warn "DEPRECATED: './dev.sh build' is deprecated."
+    _warn "  Backend deploy: ./dev.sh deploy  (PyInstaller + deploy + restart)"
+    _warn "  Full release:   ./prod.sh release (backend + DMG + tag + publish)"
+    echo ""
+    _log "Running './dev.sh deploy' for you..."
+    cmd_deploy
 }
 
 cmd_deploy() {
@@ -332,8 +270,8 @@ cmd_quick() {
     local binary="$DESKTOP_DIR/src-tauri/binaries/python-backend-aarch64-apple-darwin/python-backend"
     if [ ! -f "$binary" ]; then
         _warn "No backend bundle found — need full build first"
-        _log "Running: ./dev.sh build"
-        cmd_build
+        _log "Running: ./dev.sh deploy"
+        cmd_deploy
         return
     fi
 
@@ -526,8 +464,8 @@ case "${1:-start}" in
         echo "  start            Start backend + frontend (default)"
         echo "  backend          Restart backend only (after Python changes)"
         echo "  frontend         Start frontend only"
-        echo "  build            Full production build (PyInstaller + Tauri → DMG)"
-        echo "  deploy           Build backend + deploy to daemon (no frontend/Tauri)"
+        echo "  deploy           Build backend + deploy to daemon (the dev deploy path)"
+        echo "  build            (deprecated → runs deploy)"
         echo "  quick            Quick build: skip PyInstaller (frontend/Rust only)"
         echo "  kill             Stop all dev processes"
         echo "  status           Show what's running"

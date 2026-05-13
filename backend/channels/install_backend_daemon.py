@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Install the SwarmAI backend daemon launchd plist.
 
+DEPRECATED: Daemon installation is now handled automatically by the Tauri
+desktop app (auto_install_daemon in lib.rs) on first launch. This script
+is kept for: (1) verify_build.py import check, (2) system.py /api/system/daemon
+endpoint, (3) manual diagnostics. It will be removed in a future version.
+
 Installs a launchd user agent that keeps the SwarmAI backend running
 even when the Tauri desktop app is closed or macOS is locked/sleeping.
 This keeps channels (Slack, etc.) and background jobs alive 24/7.
