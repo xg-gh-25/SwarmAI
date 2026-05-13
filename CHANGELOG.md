@@ -5,6 +5,36 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.2] - 2026-05-14
+
+### Added
+
+- **DDD Cultivation Engine** — tiered autonomy with weekly report, per-stage feedback loop preamble, quality convergence loop.
+- **SwarmAI Monthly Report** — MBR-style health & progress covering all 12 Core Engine subsystems, on-demand via `s_swarmai-monthly-report`.
+- **Self-Upgrade API** — `POST /api/system/upgrade` with structural fix for self-kill paradox (process can't kill itself and restart).
+- **HTML Artifact Skill** — `s_html-artifact` dual-consumer output format protocol for rich HTML deliverables.
+- **Pipeline Feedback Loop** — per-stage preamble injection + quality convergence loop for iterative improvement.
+
+### Fixed
+
+- **Chat: SESSION_BUSY recovery** — poll for response instead of dead state, orphan message cleanup, closeTab guard.
+- **Daemon: upgrade sequence** — SIGKILL + bootout + bootstrap eliminates KeepAlive race condition and SSE stream blocking.
+- **Daemon: deploy pattern** — deploy-first with SIGKILL (not bootout), single source of truth via `_daemon_kill_and_bootstrap`.
+- **Session: pipe flush race** — prevent pipe flush killing new stream after stop.
+- **Explorer: Working Files** — only show user content directories, not system files (.DS_Store, swarm.db).
+- **Jobs: scheduler moved in-process** — eliminates external launchd plist dependency.
+- **Jobs: missing JobType enums** — `ddd_weekly_report`, `swarmai_monthly_report` added.
+- **Jobs: Bedrock timeout** — increase read_timeout to 120s for Opus invoke.
+- **Build: s_swarm-build rewrite** — fixes self-kill paradox + onedir deploy pattern.
+- **Hooks: WebFetch SPA guard** — structural prevention for C012 pattern (block on known SPA domains).
+- **Skill: base.css v3** — verified values from actual source code deep dive.
+
+### Changed
+
+- **Daemon operations simplified** — deprecated redundant commands, extracted canonical kill+bootstrap.
+- **Skill proposer** — switched from Opus to Sonnet 4.6 for cost efficiency.
+- **README** — architecture diagram, Pollinate section, platform docs, updated screenshots.
+
 ## [1.12.1] - 2026-05-09
 
 ### Fixed
