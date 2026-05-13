@@ -780,7 +780,7 @@ If the active project is NOT SwarmAI (e.g., CMHK_BIZ, PhysicalAI), do NOT sugges
   (1) **Targeted tests are proactive** — always run the specific test file(s) for code you just changed.
   (2) **Full suite requires `SWARMAI_SUITE=1` prefix** — PreToolUse hook blocks pytest without specific test files, `--lf`, or `-k`. Only add `SWARMAI_SUITE=1` when user explicitly says "run full suite" / "跑完整测试" / "run all tests".
   (3) Always include `--timeout=60` (or 120 for full suite).
-  (4) **NEVER pipe pytest through `| tail`** — causes buffering, re-run loops, and session eviction.
+  (4) **NEVER pipe long-running commands through `| tail` or `| head`** — causes stdout buffering; command appears hung until process completes, then hits default 120s timeout. Applies to: pytest, build-backend.sh, npm run build, PyInstaller, any command >30s. Run directly, use `run_in_background: true` for >2min commands.
   (5) xdist `-n 4` is auto-injected from `pyproject.toml addopts` — don’t add manually.
   (6) **Anti-loop: max 2 test runs per task.** After 2 runs, stop and report as-is.
   (7) **NEVER proactively run the full suite** — it has xdist deadlock issues that cause infinite hangs. For widely-imported modules (database, session, config), use `grep -rl "import_pattern" tests/ --include="*.py"` to find dependent test files, then run exactly those. This catches interaction bugs without risking the full suite hang.
