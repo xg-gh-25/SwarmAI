@@ -426,6 +426,10 @@ export function useUnifiedTabState(
         }
       }
 
+      // Clear SESSION_BUSY polling if active (prevents orphaned intervals)
+      if (tab.busyPollInterval) clearInterval(tab.busyPollInterval);
+      if (tab.busyPollTimeout) clearTimeout(tab.busyPollTimeout);
+
       // Best-effort backend cleanup removed — backend LifecycleManager
       // handles abandoned sessions via TTL (12hr) and orphan reaper (10min).
       // Frontend-initiated DELETE is unreliable (crash, network failure).

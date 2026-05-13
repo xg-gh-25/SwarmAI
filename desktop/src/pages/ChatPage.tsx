@@ -1316,6 +1316,9 @@ export default function ChatPage() {
     // Hard guard: session creation in-flight — truly can't queue or send
     if (pendingStreamTabs.has(activeTabIdRef.current ?? '')) return;
 
+    // Hard guard: SESSION_BUSY recovery in progress — don't send (prevents duplicates)
+    if (activeTabForGuard?.isWaitingForBusy) return;
+
     // ──── QUEUE PATH: user sends while streaming ────────────────────────
     if (activeTabForGuard?.isStreaming) {
       const trimmedText = messageText.trim();
