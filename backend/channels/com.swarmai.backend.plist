@@ -24,6 +24,10 @@
     <key>ProcessType</key>
     <string>Background</string>
 
+    <!-- Graceful shutdown timeout: SIGKILL after 15s if process ignores SIGTERM -->
+    <key>ExitTimeOut</key>
+    <integer>15</integer>
+
     <!-- Throttle restarts: wait 10s between launches -->
     <key>ThrottleInterval</key>
     <integer>10</integer>

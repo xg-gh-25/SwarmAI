@@ -211,17 +211,22 @@ Stage 4 PACKAGE: PASS (user-built)
 
 Deploy new binary to daemon and verify health with correct version.
 
-**CRITICAL:** Kill daemon BEFORE deploying to avoid onedir zlib corruption. Use `launchctl kill` (not bootout) so KeepAlive auto-restarts.
+**CRITICAL:** Kill daemon BEFORE deploying to avoid onedir zlib corruption. Use `launchctl kill` (not bootout) so KeepAlive auto-restarts. ExitTimeOut does NOT apply to `kill` — SSE streams block indefinitely, so escalate to SIGKILL after 5s.
 
 ```bash
 cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai
 
 # 1. Kill daemon BEFORE deploy (prevent zlib corruption from rsync over running binary)
 launchctl kill SIGTERM gui/$(id -u)/com.swarmai.backend 2>/dev/null || true
-for i in $(seq 1 15); do
+for i in $(seq 1 5); do
   nc -z 127.0.0.1 18321 2>/dev/null || break
   sleep 1
 done
+# SSE streams block graceful shutdown — force-kill if still up
+if nc -z 127.0.0.1 18321 2>/dev/null; then
+  launchctl kill SIGKILL gui/$(id -u)/com.swarmai.backend 2>/dev/null || true
+  sleep 2
+fi
 
 # 2. Deploy new binary (onedir bundle)
 BUNDLE_DIR="desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin"

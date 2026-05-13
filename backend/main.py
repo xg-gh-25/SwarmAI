@@ -1434,43 +1434,85 @@ async def upgrade_daemon():
         _upgrade_in_progress = True
         _upgrade_started_at = time.time()
 
-    # F7: Use shlex.quote to safely escape paths in the generated script
-    import shlex
-    safe_result_file = shlex.quote(result_file)
-    safe_project_root = shlex.quote(str(project_root))
+    # Upgrader script: deploy directly in Python (no shell subprocess).
+    # Why not `prod.sh deploy`? Because prod.sh kills the daemon, which sends
+    # SIGHUP to its child shells → shell dies → result file never written → lock stuck.
+    # Instead: rsync + write result THEN kill. Kill is the last action — anything
+    # after it is undefined (process may be orphaned by daemon death).
+    # Use repr() for Python string literals (not shlex.quote which is for shell).
+    safe_result_file = repr(result_file)
+    safe_binary_path = repr(str(binary_path.parent))  # onedir bundle directory
+    safe_project_root = repr(str(project_root))
 
-    # The upgrader script: deploy then kill (prod.sh deploy does this correctly)
     upgrader_script = f"""
-import subprocess, json, time, pathlib
+import subprocess, json, time, pathlib, os
 
 result_file = {safe_result_file}
+bundle_src = {safe_binary_path}
 project_root = {safe_project_root}
+daemon_dir = os.path.expanduser("~/.swarm-ai/daemon")
+version_file = os.path.join(daemon_dir, ".version")
+env = {{**os.environ, "PATH": "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"}}
+TS_FMT = "%Y-%m-%d %H:%M:%S"
+
+result = {{"status": "unknown", "completed_at": time.strftime(TS_FMT)}}
 
 try:
-    # Run prod.sh deploy (deploys binary THEN kills daemon)
-    r = subprocess.run(
-        ["bash", project_root + "/prod.sh", "deploy"],
-        cwd=project_root,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        env={{**__import__('os').environ, "PATH": "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"}},
-    )
-    result = {{
-        "status": "success" if r.returncode == 0 else "failed",
-        "returncode": r.returncode,
-        "stdout": r.stdout[-2000:] if r.stdout else "",
-        "stderr": r.stderr[-2000:] if r.stderr else "",
-        "completed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-    }}
-except Exception as e:
-    result = {{
-        "status": "error",
-        "error": str(e),
-        "completed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-    }}
+    os.makedirs(daemon_dir, exist_ok=True)
 
-pathlib.Path(result_file).write_text(json.dumps(result, indent=2))
+    # Step 1: rsync bundle → daemon dir (fast incremental)
+    r = subprocess.run(
+        ["rsync", "-a", "--delete", bundle_src + "/", daemon_dir + "/"],
+        capture_output=True, text=True, timeout=60, env=env,
+    )
+    if r.returncode != 0:
+        result = {{"status": "failed", "stage": "rsync", "stderr": r.stderr[-500:],
+                  "completed_at": time.strftime(TS_FMT)}}
+        pathlib.Path(result_file).write_text(json.dumps(result, indent=2))
+        raise SystemExit(1)
+
+    # Step 2: chmod binary
+    binary = os.path.join(daemon_dir, "python-backend")
+    os.chmod(binary, 0o755)
+
+    # Step 3: write .version file (format: "semver git_hash timestamp")
+    version_str = "unknown"
+    try:
+        v = pathlib.Path(os.path.join(project_root, "VERSION")).read_text().strip()
+        h = subprocess.run(["git", "-C", project_root, "rev-parse", "--short", "HEAD"],
+                          capture_output=True, text=True, timeout=5).stdout.strip() or "unknown"
+        version_str = v + " " + h + " " + time.strftime(TS_FMT)
+    except Exception:
+        pass
+    pathlib.Path(version_file).write_text(version_str + "\\n")
+
+    # Step 4: Write result BEFORE kill (kill may orphan us)
+    result = {{
+        "status": "success",
+        "version": version_str,
+        "bundle_size_mb": round(sum(
+            f.stat().st_size for f in pathlib.Path(daemon_dir).rglob("*") if f.is_file()
+        ) / 1024 / 1024, 1),
+        "completed_at": time.strftime(TS_FMT),
+    }}
+    pathlib.Path(result_file).write_text(json.dumps(result, indent=2))
+
+    # Step 5: Kill daemon — LAST action. KeepAlive restarts with new binary.
+    # SIGKILL not SIGTERM: graceful shutdown waits for active SSE connections to drain,
+    # but agent sessions hold SSE streams indefinitely → daemon never exits.
+    # All data is already persisted (result file + .version), nothing to gracefully handle.
+    uid = os.getuid()
+    subprocess.run(
+        ["launchctl", "kill", "SIGKILL", "gui/" + str(uid) + "/com.swarmai.backend"],
+        timeout=5, env=env,
+    )
+
+except SystemExit:
+    pass  # Already wrote result
+except Exception as e:
+    result = {{"status": "error", "error": str(e),
+              "completed_at": time.strftime(TS_FMT)}}
+    pathlib.Path(result_file).write_text(json.dumps(result, indent=2))
 """
 
     # F1: Use get_python_executable() — sys.executable points to frozen binary

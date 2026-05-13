@@ -163,17 +163,73 @@ The endpoint returns 202 immediately. The daemon spawns a detached upgrader that
 Your session stays alive during deploy. It MAY disconnect briefly when daemon
 restarts (~5-15s), but reconnects automatically to the new daemon.
 
-**Fallback — manual bash (if endpoint not available on old daemon):**
+**Fallback — manual bash (if endpoint not available or daemon unhealthy):**
 
-Use the manual bash approach only if the running daemon doesn't have the
-`/api/system/upgrade` endpoint yet (pre-upgrade). See git history for
-the old bash approach (commit 676fafc).
+Use manual approach when: (1) daemon doesn't have `/api/system/upgrade` yet,
+(2) daemon is not responding, or (3) upgrade endpoint returns 5xx.
 
 ```bash
-# Check if endpoint exists
-curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:18321/api/system/upgrade
-# If 404 → use fallback; if 202/403/409 → endpoint exists
+# Check if endpoint exists first
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:18321/api/system/upgrade 2>/dev/null)
+echo "Upgrade endpoint: $HTTP_CODE"
+# If 202 → worked, skip fallback. If 404/000/5xx → use fallback below.
 ```
+
+**Manual fallback sequence (strict order, no skipping steps):**
+
+```bash
+DAEMON_DIR="${HOME}/.swarm-ai/daemon"
+SIDECAR="/Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin"
+GUI_TARGET="gui/$(id -u)/com.swarmai.backend"
+
+# Step 1: Kill daemon FIRST (SIGTERM for graceful, 5s grace then SIGKILL)
+# ExitTimeOut does NOT apply to `launchctl kill` — only to bootout/stop.
+# SSE streams block graceful shutdown indefinitely → SIGKILL after 5s.
+launchctl kill SIGTERM "$GUI_TARGET" 2>/dev/null || true
+
+# Step 2: 🚨 WAIT FOR PORT RELEASE (critical — never skip)
+echo "Waiting for port 18321 to release (5s grace then SIGKILL)..."
+for i in $(seq 1 10); do
+  nc -z 127.0.0.1 18321 2>/dev/null || { echo "Port released after ${i}s"; break; }
+  if [ "$i" -eq 5 ]; then
+    echo "Port still held after 5s (likely SSE drain) — SIGKILL..."
+    launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
+  fi
+  sleep 1
+done
+# Hard fail if port still held after 10s
+if nc -z 127.0.0.1 18321 2>/dev/null; then
+  echo "FAIL: Port 18321 still held after 10s. Likely orphan process."
+  echo "  Debug: nc -z 127.0.0.1 18321 && echo HELD || echo FREE"
+  exit 1
+fi
+
+# Step 3: Deploy (rsync AFTER port is released — prevents file corruption)
+rsync -a --delete "${SIDECAR}/" "${DAEMON_DIR}/"
+# Write version file
+VERSION_LINE="$(cat /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/VERSION) $(git -C /Users/gawan/Desktop/SwarmAI-Workspace/swarmai rev-parse --short HEAD) $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "$VERSION_LINE" > "${DAEMON_DIR}/.version"
+echo "Deployed: $VERSION_LINE"
+
+# Step 4: KeepAlive auto-restarts. Poll for health (hard 40s timeout).
+echo "Waiting for daemon restart..."
+for i in $(seq 1 20); do
+  HEALTH=$(curl -sf http://127.0.0.1:18321/health 2>/dev/null) && {
+    echo "=== Daemon HEALTHY (${i}×2s) ==="
+    echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Version: {d.get(\"version\",\"?\")}')"
+    exit 0
+  }
+  sleep 2
+done
+echo "FAIL: Daemon not healthy after 40s. Check: tail -30 ~/.swarm-ai/logs/backend-stderr.log"
+exit 1
+```
+
+**🚨 NEVER:**
+- rsync while daemon is still running (file corruption)
+- SIGKILL as first action (prevents graceful connection drain)
+- Poll health without confirming port released first (races with old daemon)
+- Retry kill in a tight loop (PID may be reused by new process)
 
 **Pass criteria:**
 - Health verifier spawned (file path echoed)
@@ -211,23 +267,44 @@ restart, then verify.
 
 ```bash
 # Wait for daemon to come back (upgrade kills it, KeepAlive restarts in ~10s)
-echo "Waiting for daemon restart..."
+# 🚨 HARD TIMEOUT: 40s max. If not healthy by then → FAIL, don't loop forever.
+echo "Waiting for daemon restart (max 40s)..."
+HEALTHY=0
 for i in $(seq 1 20); do
-  HEALTH=$(curl -s http://127.0.0.1:18321/health 2>/dev/null)
-  if echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='healthy'" 2>/dev/null; then
-    echo "=== Daemon HEALTHY ==="
-    echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Version: {d.get(\"version\",\"?\")}')"
+  HEALTH=$(curl -sf http://127.0.0.1:18321/health 2>/dev/null) && {
+    HEALTHY=1
+    echo "=== Daemon HEALTHY after $((i*2))s ==="
+    echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'  Status: {d[\"status\"]}\n  Version: {d.get(\"version\",\"?\")}')"
     break
-  fi
+  }
   sleep 2
 done
 
-# Verify version matches what we built
-EXPECTED_HASH=$(awk '{print $2}' ~/.swarm-ai/daemon/.version 2>/dev/null)
-echo "Expected git hash: $EXPECTED_HASH"
+if [ "$HEALTHY" -eq 0 ]; then
+  echo "FAIL: Daemon not healthy after 40s."
+  echo "--- Last 10 lines of stderr ---"
+  tail -10 ~/.swarm-ai/logs/backend-stderr.log 2>/dev/null
+  echo "--- Daemon registered? ---"
+  launchctl print gui/$(id -u)/com.swarmai.backend 2>&1 | head -5
+  echo ""
+  echo "Likely causes: import error, port conflict, missing dependency."
+  echo "Fix, then run: launchctl kill SIGTERM gui/$(id -u)/com.swarmai.backend"
+  exit 1
+fi
 
-# Check upgrade result (if endpoint available on new daemon)
-curl -s http://127.0.0.1:18321/api/system/upgrade/status 2>/dev/null | python3 -c "
+# Verify SEMANTIC CORRECTNESS — not just liveness (LL07)
+EXPECTED_HASH=$(awk '{print $2}' ~/.swarm-ai/daemon/.version 2>/dev/null)
+ACTUAL_HASH=$(echo "$HEALTH" | python3 -c "import sys,json; print(json.load(sys.stdin).get('version','').split()[-1] if ' ' in json.load(open('/dev/stdin')).get('version','') else json.load(open('/dev/stdin')).get('version',''))" 2>/dev/null || echo "?")
+echo "Expected hash: $EXPECTED_HASH"
+echo "Actual hash:   $ACTUAL_HASH"
+if [ "$EXPECTED_HASH" != "?" ] && [ "$ACTUAL_HASH" != "?" ] && [ "$EXPECTED_HASH" != "$ACTUAL_HASH" ]; then
+  echo "⚠️  VERSION MISMATCH — daemon is running old binary."
+  echo "   This means rsync didn't complete or KeepAlive launched stale binary."
+  echo "   Fix: re-run Stage 4+5 (deploy)."
+fi
+
+# Check upgrade status endpoint (informational)
+curl -sf http://127.0.0.1:18321/api/system/upgrade/status 2>/dev/null | python3 -c "
 import sys, json
 try:
     d = json.load(sys.stdin)
@@ -296,17 +373,54 @@ Do NOT retry the entire build — fix the specific stage that failed.
 ### Session hangs after Stage 5
 **Expected behavior.** The daemon (your parent process) was killed. Your session
 SSE stream is severed. The frontend will show "reconnecting" and eventually
-establish a new session on the restarted daemon. Wait ~30s, then check the
-health verifier file.
+establish a new session on the restarted daemon. Wait ~15s, then check health.
+
+**Key fact:** `ExitTimeOut` does NOT apply to `launchctl kill` — only to
+`bootout`/`stop`. If the daemon has active SSE connections, SIGTERM triggers
+graceful shutdown that waits for connection drain **indefinitely**. That's why
+we escalate to SIGKILL after just 5 seconds.
+
+**🚨 DO NOT** run additional kill commands after the SIGKILL. KeepAlive handles
+the rest. PID reuse means a second SIGKILL could hit the NEW daemon.
 
 ### Port 18321 stuck after restart
-Orphan Claude CLI processes may hold resources. Force cleanup:
+**Root cause:** Old daemon's graceful shutdown is draining active connections
+(SSE streams hold indefinitely). SIGKILL is the correct fix — all data is
+persisted before kill in the deploy flow.
+
+**Fix sequence (strict order):**
 ```bash
-pkill -f "claude.*--session" 2>/dev/null || true
-pkill -f "python-backend" 2>/dev/null || true
-sleep 2
-# KeepAlive will spawn a fresh daemon
+# 1. Check if port is still held
+nc -z 127.0.0.1 18321 && echo "PORT HELD" || echo "PORT FREE"
+
+# 2. If held after 5s → SIGKILL (SSE drain will never complete)
+launchctl kill SIGKILL gui/$(id -u)/com.swarmai.backend 2>/dev/null || true
+
+# 3. Wait for release + new daemon health
+for i in $(seq 1 10); do
+  nc -z 127.0.0.1 18321 2>/dev/null || break
+  sleep 1
+done
+for i in $(seq 1 15); do
+  curl -sf http://127.0.0.1:18321/health && break
+  sleep 2
+done
 ```
+
+**🚨 NEVER** retry kill in a tight loop — PID reuse means you may kill the
+new daemon that KeepAlive just spawned. One SIGTERM, wait 5s, one SIGKILL
+if needed. That's it. Max 2 kill attempts total.
+
+### Agent hung waiting after kill
+**What happened:** Agent's `sleep N && nc -z ...` command was still in the sleep
+phase when the daemon already came back. Or: agent ran SIGKILL on the NEW daemon
+(spawned by KeepAlive after SIGTERM, PID reuse).
+
+**Prevention:**
+1. SIGTERM → wait 5s → SIGKILL → wait port free → done
+2. Never wait >10s total for port release
+3. If port is free but health not responding → new daemon starting, just wait 15s
+4. Max 2 kill attempts total. After that: report status and stop.
 
 ### Daemon starts but health returns "initializing"
 Normal during startup. The daemon runs migrations, loads skills, starts

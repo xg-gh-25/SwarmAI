@@ -43,9 +43,13 @@ def get_python_executable() -> str:
     if not getattr(sys, "frozen", False):
         return sys.executable
 
-    # In frozen bundle, try known alternatives
+    # In frozen bundle, try known alternatives.
+    # NOTE: PyInstaller onedir sets sys._base_executable = sys.executable (the frozen
+    # binary), so we must verify it's actually a Python interpreter, not just that
+    # the file exists.
     base = getattr(sys, "_base_executable", None)
-    if base and Path(base).exists():
+    if base and Path(base).exists() and base != sys.executable:
+        # Only use _base_executable if it differs from the frozen binary
         return base
 
     for name in ("python3", "python"):
