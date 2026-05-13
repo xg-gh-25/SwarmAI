@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="{{LANG}}">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{TITLE}}</title>
+  <style>
+    /* === BASE CSS (paste from base.css) === */
+    {{BASE_CSS}}
+
+    /* === Report-specific styles === */
+    .summary-box {
+      background: var(--color-accent-light);
+      border-left: 4px solid var(--color-accent);
+      padding: var(--space-md) var(--space-lg);
+      margin-bottom: var(--space-xl);
+      border-radius: 0 var(--border-radius) var(--border-radius) 0;
+    }
+
+    .summary-box p { margin-bottom: var(--space-xs); }
+    .summary-box p:last-child { margin-bottom: 0; }
+
+    .kpi-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: var(--space-md);
+      margin-bottom: var(--space-xl);
+    }
+
+    .kpi-card {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--border-radius);
+      padding: var(--space-md);
+      text-align: center;
+    }
+
+    .kpi-value {
+      font-size: var(--font-size-2xl);
+      font-weight: 700;
+      line-height: 1.2;
+    }
+
+    .kpi-label {
+      font-size: var(--font-size-xs);
+      color: var(--color-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-top: var(--space-xs);
+    }
+
+    .section { margin-bottom: var(--space-2xl); }
+
+    .toc {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--border-radius);
+      padding: var(--space-md) var(--space-lg);
+      margin-bottom: var(--space-xl);
+    }
+
+    .toc-title {
+      font-size: var(--font-size-sm);
+      font-weight: 600;
+      color: var(--color-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: var(--space-sm);
+    }
+
+    .toc a {
+      color: var(--color-accent);
+      text-decoration: none;
+      font-size: var(--font-size-sm);
+      display: block;
+      padding: var(--space-xs) 0;
+    }
+
+    .toc a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="artifact-header">
+    <h1>{{TITLE}}</h1>
+    <span class="meta">{{DATE}} | {{SUBTITLE}}</span>
+  </div>
+
+  <!-- Optional: Table of Contents -->
+  {{TOC}}
+
+  <!-- Optional: Executive Summary -->
+  {{SUMMARY_BOX}}
+
+  <!-- Optional: KPI Cards Row -->
+  {{KPI_ROW}}
+
+  <!-- Main Content Sections -->
+  {{SECTIONS}}
+
+  <!-- Footer metadata -->
+  <hr style="border: none; border-top: 1px solid var(--color-border); margin-top: var(--space-2xl);">
+  <p class="text-sm text-muted">{{FOOTER}}</p>
+</body>
+</html>

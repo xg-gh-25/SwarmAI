@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="{{LANG}}">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{TITLE}}</title>
+  <style>
+    /* === BASE CSS (paste from base.css) === */
+    {{BASE_CSS}}
+
+    /* === Comparison-specific styles === */
+    .comparison-grid {
+      display: grid;
+      grid-template-columns: repeat({{COLUMN_COUNT}}, 1fr);
+      gap: var(--space-md);
+      margin-bottom: var(--space-xl);
+    }
+
+    @media (max-width: 768px) {
+      .comparison-grid { grid-template-columns: 1fr; }
+    }
+
+    .comparison-column {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--border-radius);
+      overflow: hidden;
+    }
+
+    .comparison-column.recommended {
+      border-color: var(--color-accent);
+      box-shadow: 0 0 0 1px var(--color-accent);
+    }
+
+    .column-header {
+      padding: var(--space-md) var(--space-lg);
+      border-bottom: 1px solid var(--color-border);
+      text-align: center;
+    }
+
+    .column-header h3 {
+      margin: 0;
+      font-size: var(--font-size-lg);
+    }
+
+    .column-header .column-subtitle {
+      font-size: var(--font-size-sm);
+      color: var(--color-muted);
+      margin-top: var(--space-xs);
+    }
+
+    .recommended .column-header {
+      background: var(--color-accent-light);
+    }
+
+    .recommended .column-header::after {
+      content: "Recommended";
+      display: block;
+      font-size: var(--font-size-xs);
+      color: var(--color-accent);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-top: var(--space-xs);
+    }
+
+    .column-body {
+      padding: var(--space-lg);
+    }
+
+    .column-body dl {
+      margin: 0;
+    }
+
+    .column-body dt {
+      font-size: var(--font-size-xs);
+      color: var(--color-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-top: var(--space-md);
+    }
+
+    .column-body dt:first-child { margin-top: 0; }
+
+    .column-body dd {
+      font-size: var(--font-size-sm);
+      margin: var(--space-xs) 0 0 0;
+    }
+
+    /* Feature comparison table */
+    .feature-matrix {
+      width: 100%;
+      margin-bottom: var(--space-xl);
+    }
+
+    .feature-matrix th:first-child {
+      text-align: left;
+      width: 30%;
+    }
+
+    .feature-matrix td {
+      text-align: center;
+    }
+
+    .feature-yes { color: var(--color-success); font-weight: 600; }
+    .feature-no { color: var(--color-muted); }
+    .feature-partial { color: var(--color-warning); }
+
+    /* Tradeoff section */
+    .tradeoffs {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: var(--space-lg);
+      margin-bottom: var(--space-xl);
+    }
+
+    @media (max-width: 768px) {
+      .tradeoffs { grid-template-columns: 1fr; }
+    }
+
+    .tradeoff-pros, .tradeoff-cons {
+      padding: var(--space-md);
+      border-radius: var(--border-radius);
+    }
+
+    .tradeoff-pros {
+      background: var(--color-success-light);
+      border: 1px solid var(--color-success);
+    }
+
+    .tradeoff-cons {
+      background: var(--color-danger-light);
+      border: 1px solid var(--color-danger);
+    }
+
+    .tradeoff-title {
+      font-weight: 600;
+      font-size: var(--font-size-sm);
+      margin-bottom: var(--space-sm);
+    }
+
+    .tradeoff-pros .tradeoff-title { color: var(--color-success); }
+    .tradeoff-cons .tradeoff-title { color: var(--color-danger); }
+
+    .tradeoff-list {
+      list-style: none;
+      padding: 0;
+      font-size: var(--font-size-sm);
+    }
+
+    .tradeoff-list li {
+      padding: var(--space-xs) 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="artifact-header">
+    <h1>{{TITLE}}</h1>
+    <span class="meta">{{DATE}} | {{SUBTITLE}}</span>
+  </div>
+
+  <!-- Export button (L3 — has interactive filtering) -->
+  <button id="export-btn" class="export-button" onclick="exportData()">Copy as Markdown</button>
+
+  <!-- Summary / Context -->
+  {{SUMMARY}}
+
+  <!-- Side-by-side comparison columns -->
+  <h2>Options</h2>
+  <div class="comparison-grid">
+    {{COLUMNS}}
+  </div>
+
+  <!-- Feature comparison matrix (optional) -->
+  {{FEATURE_MATRIX}}
+
+  <!-- Tradeoffs (optional) -->
+  {{TRADEOFFS}}
+
+  <!-- Recommendation -->
+  {{RECOMMENDATION}}
+
+  <!-- Footer -->
+  <hr style="border: none; border-top: 1px solid var(--color-border); margin-top: var(--space-2xl);">
+  <p class="text-sm text-muted">{{FOOTER}}</p>
+
+  <script>
+  /* === Export (L3 mandatory) === */
+  function exportData() {
+    const title = document.querySelector('h1').textContent;
+    const columns = document.querySelectorAll('.comparison-column');
+    let md = `# ${title}\n\n`;
+
+    columns.forEach(col => {
+      const name = col.querySelector('h3')?.textContent || '';
+      const isRec = col.classList.contains('recommended');
+      md += `## ${name}${isRec ? ' (Recommended)' : ''}\n\n`;
+
+      col.querySelectorAll('dt').forEach(dt => {
+        const dd = dt.nextElementSibling;
+        md += `- **${dt.textContent}:** ${dd?.textContent || ''}\n`;
+      });
+      md += '\n';
+    });
+
+    // Copy recommendation if present
+    const rec = document.querySelector('.recommendation');
+    if (rec) {
+      md += `## Recommendation\n\n${rec.textContent.trim()}\n`;
+    }
+
+    navigator.clipboard.writeText(md).then(() => {
+      const btn = document.getElementById('export-btn');
+      btn.textContent = 'Copied!';
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.textContent = 'Copy as Markdown';
+        btn.classList.remove('copied');
+      }, 2000);
+    });
+  }
+  </script>
+</body>
+</html>

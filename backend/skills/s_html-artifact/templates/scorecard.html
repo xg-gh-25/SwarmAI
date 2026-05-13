@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="{{LANG}}">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{TITLE}}</title>
+  <style>
+    /* === BASE CSS (paste from base.css) === */
+    {{BASE_CSS}}
+
+    /* === Scorecard-specific styles === */
+    .score-hero {
+      text-align: center;
+      padding: var(--space-2xl) var(--space-lg);
+      margin-bottom: var(--space-xl);
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--border-radius);
+    }
+
+    .score-hero .score {
+      font-size: 4rem;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .score-hero .score-label {
+      font-size: var(--font-size-lg);
+      color: var(--color-muted);
+      margin-top: var(--space-sm);
+    }
+
+    .score-hero .score-subtitle {
+      font-size: var(--font-size-sm);
+      color: var(--color-text-secondary);
+      margin-top: var(--space-xs);
+    }
+
+    .dimension-list {
+      display: grid;
+      gap: var(--space-md);
+      margin-bottom: var(--space-xl);
+    }
+
+    .dimension {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--border-radius);
+      padding: var(--space-md) var(--space-lg);
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: var(--space-md);
+      align-items: center;
+    }
+
+    .dimension-info { }
+
+    .dimension-name {
+      font-weight: 600;
+      margin-bottom: var(--space-xs);
+    }
+
+    .dimension-detail {
+      font-size: var(--font-size-sm);
+      color: var(--color-text-secondary);
+    }
+
+    .dimension-score {
+      text-align: center;
+      min-width: 60px;
+    }
+
+    .dimension-score .value {
+      font-size: var(--font-size-xl);
+      font-weight: 700;
+    }
+
+    .dimension-score .max {
+      font-size: var(--font-size-xs);
+      color: var(--color-muted);
+    }
+
+    /* Score bar */
+    .score-bar {
+      height: 6px;
+      background: var(--color-border);
+      border-radius: 3px;
+      margin-top: var(--space-sm);
+      overflow: hidden;
+    }
+
+    .score-bar-fill {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.3s ease;
+    }
+
+    /* Recommendation section */
+    .recommendation {
+      background: var(--color-accent-light);
+      border: 1px solid var(--color-accent);
+      border-radius: var(--border-radius);
+      padding: var(--space-lg);
+      margin-top: var(--space-xl);
+    }
+
+    .recommendation h3 {
+      color: var(--color-accent);
+      margin-top: 0;
+      margin-bottom: var(--space-sm);
+    }
+
+    .action-list {
+      list-style: none;
+      padding: 0;
+    }
+
+    .action-list li {
+      padding: var(--space-sm) 0;
+      border-bottom: 1px solid var(--color-border);
+      display: flex;
+      gap: var(--space-sm);
+      align-items: baseline;
+    }
+
+    .action-list li:last-child { border-bottom: none; }
+
+    .action-priority {
+      font-size: var(--font-size-xs);
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="artifact-header">
+    <h1>{{TITLE}}</h1>
+    <span class="meta">{{DATE}} | {{SUBTITLE}}</span>
+  </div>
+
+  <!-- Overall Score -->
+  <div class="score-hero">
+    <div class="score {{SCORE_COLOR_CLASS}}">{{TOTAL_SCORE}}</div>
+    <div class="score-label">{{SCORE_LABEL}}</div>
+    <div class="score-subtitle">{{SCORE_SUBTITLE}}</div>
+  </div>
+
+  <!-- Dimension Scores -->
+  <h2>Dimensions</h2>
+  <div class="dimension-list">
+    {{DIMENSIONS}}
+  </div>
+
+  <!-- Recommendation -->
+  {{RECOMMENDATION}}
+
+  <!-- Detail Sections (optional) -->
+  {{DETAIL_SECTIONS}}
+
+  <!-- Footer -->
+  <hr style="border: none; border-top: 1px solid var(--color-border); margin-top: var(--space-2xl);">
+  <p class="text-sm text-muted">{{FOOTER}}</p>
+</body>
+</html>

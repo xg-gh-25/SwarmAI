@@ -149,6 +149,27 @@ tail -f ~/.swarm-ai/logs/backend-dev.log                        # Dev logs
 - **Colors**: Always use `bg-[var(--color-*)]`, never hardcoded dark theme colors
 - **i18n**: `i18next` with locales in `desktop/src/i18n/locales/{en,zh}.json`
 
+### Output Format Protocol
+
+Two consumers, two formats. **Never cross the streams.**
+
+| Consumer | Format | Examples |
+|----------|--------|----------|
+| **Agent (self)** | Markdown ALWAYS | `.context/*.md`, DDD docs, DailyActivity, CHANGELOG, INSTRUCTIONS.md |
+| **Human (user)** | Markdown (chat) OR HTML (reports/reviews/dashboards) | Reports, scorecards, pipeline REPORT, code review findings |
+
+**When to generate HTML for human consumption:**
+- Output > 100 lines structured content
+- Multi-dimensional comparison (3+ columns × 5+ rows)
+- Data requires spatial layout or visual hierarchy (traffic lights, RAG)
+- Reader will manipulate (filter, sort, tab-switch)
+
+**HTML constraints:** Single file, inline CSS/JS, zero external deps, system fonts, warm professional palette, responsive. No gradients, no glassmorphism, no icon libraries, no dark-theme-default.
+
+**L3+ interactive HTML must have an Export button** (Copy as Markdown/JSON/CSV) — otherwise it's a dead end.
+
+See `Projects/SwarmAI/TECH.md` → "Output Format Protocol" for full spec.
+
 ## Key Design Decisions
 
 1. **Single agent with role-switching** > multi-agent orchestration (zero context transfer cost)
