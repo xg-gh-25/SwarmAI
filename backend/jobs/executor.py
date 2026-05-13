@@ -188,6 +188,18 @@ def execute_job(
                 duration_seconds=duration,
             )
 
+        elif job.type == "swarmai_monthly_report":
+            from .handlers.swarmai_monthly_report import run_swarmai_monthly_report
+            report_result = run_swarmai_monthly_report(config=job.config)
+            duration = (datetime.now(timezone.utc) - start).total_seconds()
+            result = JobResult(
+                job_id=job.id, timestamp=datetime.now(timezone.utc),
+                status="success" if report_result.get("status") == "success" else "skipped",
+                summary=report_result.get("summary", "SwarmAI monthly report"),
+                output_path=report_result.get("output_path"),
+                duration_seconds=duration,
+            )
+
         elif job.type == "memory_health":
             from .handlers.memory_health import run_memory_health
             health_result = run_memory_health()
