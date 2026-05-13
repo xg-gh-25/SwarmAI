@@ -1367,8 +1367,10 @@ async def upgrade_daemon():
 
     The daemon spawns a detached upgrader process (in a new session/process group)
     that:
-      1. Deploys the new binary (rsync from sidecar path to daemon dir)
-      2. Kills the daemon via SIGTERM (KeepAlive restarts with new binary)
+      1. SIGKILL daemon (instant death — SSE cannot block)
+      2. bootout (deregister service — disables KeepAlive to prevent race)
+      3. rsync new binary (safe — no live process)
+      4. Deploy fresh plist + bootstrap (re-register + start)
 
     The upgrader survives daemon death because ``start_new_session=True`` puts it
     in a separate process group that launchd won't kill.
@@ -1602,7 +1604,7 @@ except Exception as e:
             "upgrade_id": upgrade_id,
             "result_file": result_file,
             "python_used": python_path,
-            "message": "Upgrade process spawned. Daemon will restart in ~10s. Session stays alive until SIGTERM.",
+            "message": "Upgrade process spawned. Daemon will restart in ~10s via SIGKILL+bootout+bootstrap.",
         },
     )
 
