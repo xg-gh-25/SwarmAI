@@ -211,68 +211,124 @@ Stage 4 PACKAGE: PASS (user-built)
 
 Deploy new binary to daemon and verify health with correct version.
 
-**CRITICAL:** Kill daemon BEFORE deploying to avoid onedir zlib corruption. Use `launchctl kill` (not bootout) so KeepAlive auto-restarts. ExitTimeOut does NOT apply to `kill` — SSE streams block indefinitely, so escalate to SIGKILL after 5s.
+**CRITICAL: SIGKILL + bootout + rsync + bootstrap.** Never use SIGTERM (SSE streams
+block indefinitely). Never rely on KeepAlive (it restarts the OLD binary before rsync
+finishes → race condition → zlib corruption or I/O hang). See commit cfa1564 for
+full rationale.
+
+**Preferred method — API endpoint (if daemon is healthy):**
 
 ```bash
 cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai
 
-# 1. Kill daemon BEFORE deploy (prevent zlib corruption from rsync over running binary)
-launchctl kill SIGTERM gui/$(id -u)/com.swarmai.backend 2>/dev/null || true
-for i in $(seq 1 5); do
-  nc -z 127.0.0.1 18321 2>/dev/null || break
-  sleep 1
-done
-# SSE streams block graceful shutdown — force-kill if still up
+# Try the upgrade endpoint first — it handles the full sequence internally
+HTTP_CODE=$(curl -s -o /tmp/upgrade_response.json -w "%{http_code}" -X POST http://127.0.0.1:18321/api/system/upgrade 2>/dev/null)
+echo "Upgrade endpoint: $HTTP_CODE"
+if [ "$HTTP_CODE" = "202" ]; then
+  cat /tmp/upgrade_response.json | python3 -c "import sys,json; print(json.dumps(json.load(sys.stdin), indent=2))"
+  echo "Upgrade spawned. Waiting for restart (max 40s)..."
+  sleep 5
+  for i in $(seq 1 18); do
+    HEALTH=$(curl -sf http://127.0.0.1:18321/health 2>/dev/null) && {
+      echo "=== Daemon HEALTHY after $((i*2+5))s ==="
+      echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'  Version: {d.get(\"version\",\"?\")}')"
+      break
+    }
+    sleep 2
+  done
+fi
+# If 404/000/5xx → use manual fallback below
+```
+
+**Manual fallback (if endpoint unavailable or daemon unhealthy):**
+
+```bash
+cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai
+GUI_TARGET="gui/$(id -u)/com.swarmai.backend"
+DAEMON_DIR="${HOME}/.swarm-ai/daemon"
+BUNDLE_DIR="desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin"
+PLIST_SRC="desktop/src-tauri/resources/com.swarmai.backend.plist"
+PLIST_DST="${HOME}/Library/LaunchAgents/com.swarmai.backend.plist"
+
+# Step 1: SIGKILL (instant death — SSE cannot block SIGKILL)
+launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
+sleep 1
+
+# Step 2: bootout (deregister — process already dead so returns instantly)
+# This disables KeepAlive so nothing restarts during rsync
+launchctl bootout "$GUI_TARGET" 2>/dev/null || true
+sleep 1
+
+# Step 3: Confirm port is free (should be — process is dead)
 if nc -z 127.0.0.1 18321 2>/dev/null; then
-  launchctl kill SIGKILL gui/$(id -u)/com.swarmai.backend 2>/dev/null || true
-  sleep 2
+  echo "WARN: Port still held after SIGKILL+bootout. Waiting 5s..."
+  sleep 5
+  if nc -z 127.0.0.1 18321 2>/dev/null; then
+    echo "FAIL: Port 18321 still held. Orphan process. Debug manually."
+    exit 1
+  fi
 fi
 
-# 2. Deploy new binary (onedir bundle)
-BUNDLE_DIR="desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin"
-rsync -a --delete "$BUNDLE_DIR/" ~/.swarm-ai/daemon/
-chmod +x ~/.swarm-ai/daemon/python-backend
+# Step 4: Deploy (safe — no live process, no KeepAlive)
+rsync -a --delete "${BUNDLE_DIR}/" "${DAEMON_DIR}/"
+chmod +x "${DAEMON_DIR}/python-backend"
 
-# 3. Version marker
-APP_VER=$(grep -m1 '"version"' desktop/src-tauri/tauri.conf.json | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
-echo "${APP_VER} $(git rev-parse --short HEAD) $(date '+%Y-%m-%d %H:%M:%S')" > ~/.swarm-ai/daemon/.version
+# Step 5: Version marker
+APP_VER=$(cat VERSION)
+echo "${APP_VER} $(git rev-parse --short HEAD) $(date '+%Y-%m-%d %H:%M:%S')" > "${DAEMON_DIR}/.version"
+echo "Deployed: $(cat ${DAEMON_DIR}/.version)"
 
-# 4. Wait for KeepAlive to restart daemon, then health check
-for i in $(seq 1 45); do
-  HEALTH=$(curl -sf http://127.0.0.1:18321/health 2>/dev/null) && break
+# Step 6: Deploy fresh plist (so ExitTimeOut=15 is active for future restarts)
+if [ -f "$PLIST_SRC" ]; then
+  cp "$PLIST_SRC" "$PLIST_DST"
+fi
+
+# Step 7: bootstrap with retry (re-register + start new binary)
+BOOTSTRAP_OK=0
+for attempt in 1 2 3; do
+  launchctl bootstrap "gui/$(id -u)" "$PLIST_DST" 2>/dev/null && { BOOTSTRAP_OK=1; break; }
+  echo "Bootstrap attempt $attempt failed, retrying in 2s..."
   sleep 2
 done
 
-echo "$HEALTH" | python3 -c "
-import sys, json
-try:
-    d = json.load(sys.stdin)
-    assert d['status'] == 'healthy', f'Status: {d[\"status\"]}'
-    print(f'Health: OK ({d[\"status\"]})')
-    print(f'Version: {d.get(\"version\", \"unknown\")}')
-except json.JSONDecodeError:
-    print('FAIL: Health returned non-JSON (HTML?) — Caddy/proxy issue')
-    sys.exit(1)
-except AssertionError as e:
-    print(f'FAIL: {e}')
-    sys.exit(1)
-"
+if [ "$BOOTSTRAP_OK" -eq 0 ]; then
+  echo "FAIL: bootstrap failed 3x. Service not registered."
+  echo "Manual fix: launchctl bootstrap gui/$(id -u) $PLIST_DST"
+  exit 1
+fi
 
-# 5. Version semantic check
-DEPLOYED=$(cat ~/.swarm-ai/daemon/.version | awk '{print $1}')
+# Step 8: Health check (hard 40s timeout)
+echo "Waiting for daemon startup (max 40s)..."
+for i in $(seq 1 20); do
+  HEALTH=$(curl -sf http://127.0.0.1:18321/health 2>/dev/null) && {
+    echo "=== Daemon HEALTHY after $((i*2))s ==="
+    echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'  Status: {d[\"status\"]}\n  Version: {d.get(\"version\",\"?\")}')"
+    break
+  }
+  sleep 2
+done
+
+# Step 9: Semantic version check
+DEPLOYED=$(awk '{print $1}' "${DAEMON_DIR}/.version")
 echo "Deployed version: $DEPLOYED"
 ```
 
+**🚨 NEVER:**
+- Use SIGTERM on a daemon with SSE streams (blocks indefinitely)
+- Rely on KeepAlive to restart after deploy (restarts OLD binary, races rsync)
+- rsync while daemon is still running (zlib corruption from open file handles)
+- Skip bootout before rsync (KeepAlive fires within 1-3s of SIGKILL)
+
 **Pass criteria:**
 - Health returns JSON with `status: healthy`
-- Version matches deployed commit
+- Version matches deployed binary
 - NOT returning HTML (this caught v1.9.0 regression)
 
 **Report format:**
 ```
 Stage 5 SMOKE TEST: PASS
   Health: JSON, status=healthy
-  Version: abc1234 (matches deployed)
+  Version: 1.12.2 abc1234 (matches deployed)
 ```
 
 ---

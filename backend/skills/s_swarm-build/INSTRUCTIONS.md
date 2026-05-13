@@ -175,47 +175,63 @@ echo "Upgrade endpoint: $HTTP_CODE"
 # If 202 → worked, skip fallback. If 404/000/5xx → use fallback below.
 ```
 
-**Manual fallback sequence (strict order, no skipping steps):**
+**Manual fallback sequence (SIGKILL + bootout + rsync + bootstrap):**
 
 ```bash
 DAEMON_DIR="${HOME}/.swarm-ai/daemon"
 SIDECAR="/Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin"
 GUI_TARGET="gui/$(id -u)/com.swarmai.backend"
+PLIST_SRC="/Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop/src-tauri/resources/com.swarmai.backend.plist"
+PLIST_DST="${HOME}/Library/LaunchAgents/com.swarmai.backend.plist"
 
-# Step 1: Kill daemon FIRST (SIGTERM for graceful, 5s grace then SIGKILL)
-# ExitTimeOut does NOT apply to `launchctl kill` — only to bootout/stop.
-# SSE streams block graceful shutdown indefinitely → SIGKILL after 5s.
-launchctl kill SIGTERM "$GUI_TARGET" 2>/dev/null || true
+# Step 1: SIGKILL (instant death — SSE streams CANNOT block SIGKILL)
+launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
+sleep 1
 
-# Step 2: 🚨 WAIT FOR PORT RELEASE (critical — never skip)
-echo "Waiting for port 18321 to release (5s grace then SIGKILL)..."
-for i in $(seq 1 10); do
-  nc -z 127.0.0.1 18321 2>/dev/null || { echo "Port released after ${i}s"; break; }
-  if [ "$i" -eq 5 ]; then
-    echo "Port still held after 5s (likely SSE drain) — SIGKILL..."
-    launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
-  fi
-  sleep 1
-done
-# Hard fail if port still held after 10s
+# Step 2: bootout (deregister service — process is already dead, so instant)
+# This disables KeepAlive so nothing restarts during rsync
+launchctl bootout "$GUI_TARGET" 2>/dev/null || true
+sleep 1
+
+# Step 3: Confirm port free
 if nc -z 127.0.0.1 18321 2>/dev/null; then
-  echo "FAIL: Port 18321 still held after 10s. Likely orphan process."
-  echo "  Debug: nc -z 127.0.0.1 18321 && echo HELD || echo FREE"
-  exit 1
+  echo "WARN: Port still held after SIGKILL+bootout. Waiting 5s..."
+  sleep 5
+  if nc -z 127.0.0.1 18321 2>/dev/null; then
+    echo "FAIL: Port 18321 still held. Orphan process."
+    exit 1
+  fi
 fi
 
-# Step 3: Deploy (rsync AFTER port is released — prevents file corruption)
+# Step 4: Deploy (safe — no live process, no KeepAlive)
 rsync -a --delete "${SIDECAR}/" "${DAEMON_DIR}/"
-# Write version file
+chmod +x "${DAEMON_DIR}/python-backend"
 VERSION_LINE="$(cat /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/VERSION) $(git -C /Users/gawan/Desktop/SwarmAI-Workspace/swarmai rev-parse --short HEAD) $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "$VERSION_LINE" > "${DAEMON_DIR}/.version"
 echo "Deployed: $VERSION_LINE"
 
-# Step 4: KeepAlive auto-restarts. Poll for health (hard 40s timeout).
-echo "Waiting for daemon restart..."
+# Step 5: Deploy fresh plist (ExitTimeOut=15 for future restarts)
+if [ -f "$PLIST_SRC" ]; then
+  cp "$PLIST_SRC" "$PLIST_DST"
+fi
+
+# Step 6: bootstrap with retry (re-register + start new binary)
+BOOTSTRAP_OK=0
+for attempt in 1 2 3; do
+  launchctl bootstrap "gui/$(id -u)" "$PLIST_DST" 2>/dev/null && { BOOTSTRAP_OK=1; break; }
+  echo "Bootstrap attempt $attempt failed, retrying in 2s..."
+  sleep 2
+done
+if [ "$BOOTSTRAP_OK" -eq 0 ]; then
+  echo "FAIL: bootstrap failed 3x. Manual fix: launchctl bootstrap gui/$(id -u) $PLIST_DST"
+  exit 1
+fi
+
+# Step 7: Health check (hard 40s timeout)
+echo "Waiting for daemon startup (max 40s)..."
 for i in $(seq 1 20); do
   HEALTH=$(curl -sf http://127.0.0.1:18321/health 2>/dev/null) && {
-    echo "=== Daemon HEALTHY (${i}×2s) ==="
+    echo "=== Daemon HEALTHY after $((i*2))s ==="
     echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Version: {d.get(\"version\",\"?\")}')"
     exit 0
   }
@@ -226,10 +242,10 @@ exit 1
 ```
 
 **🚨 NEVER:**
-- rsync while daemon is still running (file corruption)
-- SIGKILL as first action (prevents graceful connection drain)
-- Poll health without confirming port released first (races with old daemon)
-- Retry kill in a tight loop (PID may be reused by new process)
+- Use SIGTERM on a daemon with SSE streams (blocks indefinitely)
+- Rely on KeepAlive to restart after deploy (restarts OLD binary, races rsync)
+- rsync while daemon is still running (zlib corruption from open file handles)
+- Skip bootout before rsync (KeepAlive fires within 1-3s of SIGKILL)
 
 **Pass criteria:**
 - Health verifier spawned (file path echoed)
