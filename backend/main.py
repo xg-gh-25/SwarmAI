@@ -1459,8 +1459,48 @@ result = {{"status": "unknown", "completed_at": time.strftime(TS_FMT)}}
 
 try:
     os.makedirs(daemon_dir, exist_ok=True)
+    uid = os.getuid()
 
-    # Step 1: rsync bundle → daemon dir (fast incremental)
+    # Step 1: Two-phase stop: SIGKILL (instant death) + bootout (deregister).
+    # Why not bootout alone? bootout sends SIGTERM → waits ExitTimeOut (15-20s) → SIGKILL.
+    # SSE streams block SIGTERM indefinitely → guaranteed 15-20s wait. Too slow.
+    # Why not kill alone? KeepAlive restarts old binary in ~1-3s → rsync races.
+    # Correct combo: kill first (instant), then bootout (deregister, no process = instant).
+    gui_target = "gui/" + str(uid) + "/com.swarmai.backend"
+
+    # 1a: SIGKILL — instant process death (no SIGTERM wait, no SSE blocking)
+    subprocess.run(
+        ["launchctl", "kill", "SIGKILL", gui_target],
+        timeout=5, env=env, capture_output=True,
+    )
+
+    # 1b: BOOTOUT — deregister service (KeepAlive can't restart a deregistered service).
+    # Process is already dead → bootout just removes registration → instant return.
+    # ThrottleInterval=10s DOES NOT protect us (only applies to rapid-crash scenarios,
+    # not to a service that ran for hours then was killed). Must deregister.
+    subprocess.run(
+        ["launchctl", "bootout", gui_target],
+        timeout=10, env=env, capture_output=True,
+    )
+
+    # Step 2: Wait for port release (should already be free since SIGKILL)
+    import socket
+    for _i in range(10):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.5)
+        try:
+            s.connect(("127.0.0.1", 18321))
+            s.close()
+            time.sleep(1)  # Port still held — shouldn't happen after SIGKILL
+        except (ConnectionRefusedError, OSError):
+            s.close()
+            break  # Port free
+    else:
+        # Fallback: nuclear option. Use exact binary path to avoid mis-killing.
+        subprocess.run(["pkill", "-9", "-f", daemon_dir + "/python-backend"], timeout=5, env=env, capture_output=True)
+        time.sleep(2)
+
+    # Step 3: rsync bundle → daemon dir (safe — daemon is dead)
     r = subprocess.run(
         ["rsync", "-a", "--delete", bundle_src + "/", daemon_dir + "/"],
         capture_output=True, text=True, timeout=60, env=env,
@@ -1471,11 +1511,11 @@ try:
         pathlib.Path(result_file).write_text(json.dumps(result, indent=2))
         raise SystemExit(1)
 
-    # Step 2: chmod binary
+    # Step 4: chmod binary
     binary = os.path.join(daemon_dir, "python-backend")
     os.chmod(binary, 0o755)
 
-    # Step 3: write .version file (format: "semver git_hash timestamp")
+    # Step 5: write .version file (format: "semver git_hash timestamp")
     version_str = "unknown"
     try:
         v = pathlib.Path(os.path.join(project_root, "VERSION")).read_text().strip()
@@ -1486,26 +1526,46 @@ try:
         pass
     pathlib.Path(version_file).write_text(version_str + "\\n")
 
-    # Step 4: Write result BEFORE kill (kill may orphan us)
+    # Step 6: Deploy fresh plist (ensures ExitTimeOut=15 and latest PATH are active)
+    plist_src = os.path.join(project_root, "backend", "channels", "com.swarmai.backend.plist")
+    plist_dst = os.path.expanduser("~/Library/LaunchAgents/com.swarmai.backend.plist")
+    if os.path.exists(plist_src):
+        # Template uses __HOME__, __WRAPPER_PATH__, __LOG_DIR__ placeholders
+        home = os.path.expanduser("~")
+        wrapper = os.path.join(home, ".swarm-ai", "swarmai_backend.sh")
+        log_dir = os.path.join(home, ".swarm-ai", "logs")
+        content = pathlib.Path(plist_src).read_text()
+        content = content.replace("__HOME__", home)
+        content = content.replace("__WRAPPER_PATH__", wrapper)
+        content = content.replace("__LOG_DIR__", log_dir)
+        pathlib.Path(plist_dst).write_text(content)
+
+    # Step 7: Bootstrap daemon (re-register with new plist + start new binary)
+    # Retry up to 3 times — launchd sometimes returns "service already loaded"
+    # if bootout hasn't fully cleaned up internal state (race in launchd).
+    bootstrap_ok = False
+    for _attempt in range(3):
+        r = subprocess.run(
+            ["launchctl", "bootstrap", "gui/" + str(uid), plist_dst],
+            timeout=10, env=env, capture_output=True, text=True,
+        )
+        if r.returncode == 0:
+            bootstrap_ok = True
+            break
+        time.sleep(2)  # Let launchd finish cleanup
+
+    # Step 8: Write result file — distinguish success vs partial failure
+    status = "success" if bootstrap_ok else "deployed_no_restart"
     result = {{
-        "status": "success",
+        "status": status,
         "version": version_str,
+        "bootstrap_ok": bootstrap_ok,
         "bundle_size_mb": round(sum(
             f.stat().st_size for f in pathlib.Path(daemon_dir).rglob("*") if f.is_file()
         ) / 1024 / 1024, 1),
         "completed_at": time.strftime(TS_FMT),
     }}
     pathlib.Path(result_file).write_text(json.dumps(result, indent=2))
-
-    # Step 5: Kill daemon — LAST action. KeepAlive restarts with new binary.
-    # SIGKILL not SIGTERM: graceful shutdown waits for active SSE connections to drain,
-    # but agent sessions hold SSE streams indefinitely → daemon never exits.
-    # All data is already persisted (result file + .version), nothing to gracefully handle.
-    uid = os.getuid()
-    subprocess.run(
-        ["launchctl", "kill", "SIGKILL", "gui/" + str(uid) + "/com.swarmai.backend"],
-        timeout=5, env=env,
-    )
 
 except SystemExit:
     pass  # Already wrote result
