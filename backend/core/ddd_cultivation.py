@@ -1,0 +1,431 @@
+"""
+DDD Cultivation Engine — Tiered Autonomy Model.
+
+Connects Pipeline REFLECT output to DDD documents with graduated autonomy:
+- ADDITIVE changes (new lessons, patterns): auto-applied, logged to changelog
+- RISKY changes (modify/delete/contradict): escalated via proposal queue
+
+Zero LLM calls — pure keyword heuristic filtering.
+
+Public API:
+    CultivationProposal  — data model for a single proposal
+    filter_lessons_for_ddd(lessons, run_id, project) → List[CultivationProposal]
+    apply_to_ddd(proposal, project_dir) → bool
+    log_application(proposal, project_dir) → None
+    write_proposal(proposal, project_dir) → Path  (escalation path only)
+    read_pending_proposals(workspace_dir, project) → List[CultivationProposal]
+    cultivate_from_reflect(lessons, run_id, project, project_dir) → dict
+"""
+
+import json
+import os
+import re
+import tempfile
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import List, Optional
+
+# Maximum proposals generated per pipeline run (prevents noise)
+MAX_PROPOSALS_PER_RUN = 5
+
+# Minimum lesson length to be considered for DDD promotion
+MIN_LESSON_LENGTH = 30
+
+# Keywords that signal TECH.md relevance (patterns, conventions, rules)
+TECH_KEYWORDS = re.compile(
+    r"\b(pattern|convention|rule|always|never|must|prefer|use\s+\w+\s+instead|"
+    r"standing\s+rule|port|daemon|config|architecture|invariant|guard|"
+    r"nc\s+-z|lsof|asyncio|subprocess|Path\.home)\b",
+    re.IGNORECASE,
+)
+
+# Keywords that signal IMPROVEMENT.md relevance (lessons, outcomes)
+IMPROVEMENT_KEYWORDS = re.compile(
+    r"\b(worked|failed|caught|missed|broke|bug|regression|crash|"
+    r"highest.ROI|anti-pattern|root.cause|fix|prevented|discovered|"
+    r"SMOKE|adversarial|PE.review|pipeline)\b",
+    re.IGNORECASE,
+)
+
+# Keywords that signal PRODUCT.md relevance (strategy, scope)
+PRODUCT_KEYWORDS = re.compile(
+    r"\b(priority|non-goal|scope|strategic|user.facing|phase|milestone|"
+    r"defer|roadmap|vision)\b",
+    re.IGNORECASE,
+)
+
+# Generic/noise patterns to reject
+NOISE_PATTERNS = re.compile(
+    r"^(tests?\s+pass|report\s+written|\d+\s+(lessons?|findings?)\s+captured|"
+    r"all\s+green|done|completed|shipped|fixed)\.?$",
+    re.IGNORECASE,
+)
+
+# Sections where additive append is safe (no escalation needed)
+SAFE_APPEND_SECTIONS = {
+    "IMPROVEMENT.md": {"What Worked", "What Failed", "What to Watch For"},
+    "TECH.md": {"Runtime Traps", "Conventions", "Architecture"},
+}
+
+
+@dataclass
+class CultivationProposal:
+    """A single proposal for DDD document enrichment.
+
+    Created by the filter function from pipeline REFLECT output.
+    For additive changes: auto-applied + logged.
+    For risky changes: stored as JSON in .artifacts/proposals/ for escalation.
+    """
+
+    target_doc: str  # "IMPROVEMENT.md" | "TECH.md" | "PRODUCT.md" | "PROJECT.md"
+    target_section: str  # e.g., "What Worked" or "Runtime Traps"
+    content: str  # The proposed addition (1-3 sentences)
+    source_run_id: str  # pipeline run that generated this
+    confidence: float  # 0.0-1.0
+    id: str = field(default_factory=lambda: f"proposal_{uuid.uuid4().hex[:8]}")
+    source_stage: str = "reflect"
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    ttl_days: int = 14
+    status: str = "pending"  # pending | applied | rejected | expired | escalated
+
+    def to_dict(self) -> dict:
+        """Serialize to dict for JSON storage."""
+        return {
+            "id": self.id,
+            "target_doc": self.target_doc,
+            "target_section": self.target_section,
+            "content": self.content,
+            "source_run_id": self.source_run_id,
+            "source_stage": self.source_stage,
+            "confidence": self.confidence,
+            "created_at": self.created_at,
+            "ttl_days": self.ttl_days,
+            "status": self.status,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CultivationProposal":
+        """Deserialize from dict."""
+        return cls(
+            id=data["id"],
+            target_doc=data["target_doc"],
+            target_section=data["target_section"],
+            content=data["content"],
+            source_run_id=data["source_run_id"],
+            source_stage=data.get("source_stage", "reflect"),
+            confidence=data["confidence"],
+            created_at=data["created_at"],
+            ttl_days=data.get("ttl_days", 14),
+            status=data.get("status", "pending"),
+        )
+
+    def is_expired(self) -> bool:
+        """Check if proposal has exceeded its TTL."""
+        try:
+            created = datetime.fromisoformat(self.created_at)
+            now = datetime.now(timezone.utc)
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            return now > created + timedelta(days=self.ttl_days)
+        except (ValueError, TypeError):
+            return True  # Treat unparseable dates as expired (safe default)
+
+    def is_safe_append(self) -> bool:
+        """Determine if this proposal is a safe additive change (auto-apply)."""
+        allowed = SAFE_APPEND_SECTIONS.get(self.target_doc)
+        if allowed is None:
+            return False  # PRODUCT.md, PROJECT.md changes need escalation
+        return self.target_section in allowed
+
+
+def _classify_lesson(lesson: str) -> Optional[tuple]:
+    """Classify a lesson into target_doc and target_section.
+
+    Returns (target_doc, target_section, confidence) or None if rejected.
+    """
+    stripped = lesson.strip()
+
+    # Reject empty, short, or noise
+    if len(stripped) < MIN_LESSON_LENGTH:
+        return None
+    if NOISE_PATTERNS.match(stripped):
+        return None
+
+    # Count keyword matches per category
+    tech_hits = len(TECH_KEYWORDS.findall(stripped))
+    improvement_hits = len(IMPROVEMENT_KEYWORDS.findall(stripped))
+    product_hits = len(PRODUCT_KEYWORDS.findall(stripped))
+
+    total_hits = tech_hits + improvement_hits + product_hits
+
+    # Need at least 1 keyword match to be considered DDD-relevant
+    if total_hits == 0:
+        return None
+
+    # Route to the category with most hits
+    if tech_hits >= improvement_hits and tech_hits >= product_hits:
+        target_doc = "TECH.md"
+        if any(w in stripped.lower() for w in ("trap", "daemon", "env", "path", "port")):
+            target_section = "Runtime Traps"
+        elif any(w in stripped.lower() for w in ("pattern", "convention", "prefer")):
+            target_section = "Conventions"
+        else:
+            target_section = "Architecture"
+    elif improvement_hits >= product_hits:
+        target_doc = "IMPROVEMENT.md"
+        if any(w in stripped.lower() for w in ("worked", "roi", "caught", "prevented")):
+            target_section = "What Worked"
+        elif any(w in stripped.lower() for w in ("failed", "broke", "bug", "crash")):
+            target_section = "What Failed"
+        else:
+            target_section = "What to Watch For"
+    else:
+        target_doc = "PRODUCT.md"
+        target_section = "Strategic Priorities"
+
+    # Confidence: based on keyword density (more keywords = more relevant)
+    confidence = min(0.5 + (total_hits * 0.1), 0.95)
+
+    return (target_doc, target_section, confidence)
+
+
+def filter_lessons_for_ddd(
+    lessons: List[str], run_id: str, project: str
+) -> List[CultivationProposal]:
+    """Filter pipeline REFLECT lessons into DDD cultivation proposals.
+
+    Pure function — no side effects, no I/O, no LLM calls.
+    Returns at most MAX_PROPOSALS_PER_RUN proposals.
+    """
+    proposals = []
+
+    for lesson in lessons:
+        if not lesson or not isinstance(lesson, str):
+            continue
+
+        classification = _classify_lesson(lesson)
+        if classification is None:
+            continue
+
+        target_doc, target_section, confidence = classification
+
+        proposal = CultivationProposal(
+            target_doc=target_doc,
+            target_section=target_section,
+            content=lesson.strip(),
+            source_run_id=run_id,
+            confidence=confidence,
+        )
+        proposals.append(proposal)
+
+        if len(proposals) >= MAX_PROPOSALS_PER_RUN:
+            break
+
+    return proposals
+
+
+def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> bool:
+    """Apply an additive proposal directly to the target DDD document.
+
+    Appends a bullet point under the target section (newest first).
+    Only works for safe_append sections (IMPROVEMENT.md and TECH.md).
+    Uses fcntl advisory lock to prevent concurrent write corruption.
+
+    Returns True if applied, False if section not found, not safe, or duplicate.
+    """
+    if not proposal.is_safe_append():
+        return False
+
+    doc_path = project_dir / proposal.target_doc
+    if not doc_path.exists():
+        return False
+
+    import fcntl
+
+    # H1 fix: advisory lock prevents concurrent pipeline writes
+    lock_path = doc_path.with_suffix(".lock")
+    lock_fd = None
+    try:
+        lock_fd = open(lock_path, "w")
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (OSError, IOError):
+        # Another process holds the lock — skip this write, it'll retry next run
+        if lock_fd:
+            lock_fd.close()
+        return False
+
+    try:
+        content = doc_path.read_text(encoding="utf-8")
+
+        # M1 fix: match section header at line start (## level only, not ###)
+        section_re = re.compile(
+            r"^## " + re.escape(proposal.target_section) + r"\s*$", re.MULTILINE
+        )
+        match = section_re.search(content)
+        if not match:
+            return False
+
+        # H2: insert after header + blank lines = newest entry first (documented)
+        line_end = content.find("\n", match.start())
+        if line_end == -1:
+            line_end = len(content)
+
+        insert_pos = line_end + 1
+        while insert_pos < len(content) and content[insert_pos] == "\n":
+            insert_pos += 1
+
+        # M2 fix: match existing entry format — plain bullet with trailing attribution
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        entry = f"- {proposal.content} ({date_str}, {proposal.source_run_id}, auto-cultivated)\n"
+
+        # M3 fix: full content substring check instead of 40-char prefix
+        if proposal.content in content:
+            return False  # Already exists (exact match)
+
+        # Atomic write: write to temp, rename over original
+        new_content = content[:insert_pos] + entry + content[insert_pos:]
+        tmp_path = doc_path.with_suffix(".tmp")
+        tmp_path.write_text(new_content, encoding="utf-8")
+        os.replace(str(tmp_path), str(doc_path))
+        return True
+    finally:
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+        lock_fd.close()
+        # Clean up lock file (best effort)
+        try:
+            lock_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def log_application(proposal: CultivationProposal, project_dir: Path) -> None:
+    """Log an applied change to the DDD changelog (append-only JSONL).
+
+    Changelog is used by the weekly report to summarize DDD changes.
+    """
+    changelog_path = project_dir / ".artifacts" / "ddd-changelog.jsonl"
+    changelog_path.parent.mkdir(parents=True, exist_ok=True)
+
+    entry = {
+        "id": proposal.id,
+        "action": "applied",
+        "target_doc": proposal.target_doc,
+        "target_section": proposal.target_section,
+        "content": proposal.content[:200],
+        "source_run_id": proposal.source_run_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    with open(changelog_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def write_proposal(proposal: CultivationProposal, project_dir: Path) -> Path:
+    """Write a proposal as an atomic JSON file (escalation path).
+
+    Used only for RISKY changes that need human approval.
+    Creates .artifacts/proposals/ directory if needed.
+    """
+    proposals_dir = project_dir / ".artifacts" / "proposals"
+    proposals_dir.mkdir(parents=True, exist_ok=True)
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    filename = f"{proposal.id}_{ts}.json"
+    filepath = proposals_dir / filename
+
+    # Atomic write
+    content = json.dumps(proposal.to_dict(), indent=2, ensure_ascii=False)
+    fd, tmp_path = tempfile.mkstemp(dir=str(proposals_dir), suffix=".tmp")
+    try:
+        os.write(fd, content.encode("utf-8"))
+        os.close(fd)
+        os.rename(tmp_path, str(filepath))
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        if Path(tmp_path).exists():
+            os.unlink(tmp_path)
+        raise
+    return filepath
+
+
+def read_pending_proposals(
+    workspace_dir: Path, project: str
+) -> List[CultivationProposal]:
+    """Read all pending (non-expired, non-resolved) proposals for a project.
+
+    These are RISKY changes awaiting human approval (escalations only).
+    """
+    proposals_dir = workspace_dir / "Projects" / project / ".artifacts" / "proposals"
+
+    if not proposals_dir.exists():
+        return []
+
+    pending = []
+    for filepath in proposals_dir.glob("*.json"):
+        try:
+            data = json.loads(filepath.read_text())
+            proposal = CultivationProposal.from_dict(data)
+
+            if proposal.status != "pending":
+                continue
+            if proposal.is_expired():
+                continue
+
+            pending.append(proposal)
+        except (json.JSONDecodeError, KeyError, TypeError):
+            continue
+
+    # Deduplicate by (target_doc, content)
+    seen = set()
+    deduped = []
+    for p in pending:
+        key = (p.target_doc, p.content.strip())
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(p)
+
+    deduped.sort(key=lambda p: p.confidence, reverse=True)
+    return deduped
+
+
+def cultivate_from_reflect(
+    lessons: List[str], run_id: str, project: str, project_dir: Path
+) -> dict:
+    """One-call entry point: filter lessons → auto-apply safe ones → escalate risky ones.
+
+    This is the function the REFLECT stage calls. It handles the full lifecycle:
+    1. Filter lessons into proposals
+    2. For each proposal:
+       - If safe additive: apply directly to DDD + log to changelog
+       - If risky: write to proposal queue for escalation
+    3. Return summary for REFLECT stage output
+
+    Returns:
+        {"applied": N, "escalated": M, "rejected": K}
+    """
+    proposals = filter_lessons_for_ddd(lessons, run_id, project)
+
+    applied = 0
+    escalated = 0
+    rejected = 0
+
+    for proposal in proposals:
+        if proposal.is_safe_append():
+            success = apply_to_ddd(proposal, project_dir)
+            if success:
+                proposal.status = "applied"
+                log_application(proposal, project_dir)
+                applied += 1
+            else:
+                rejected += 1  # Section not found or duplicate
+        else:
+            proposal.status = "escalated"
+            write_proposal(proposal, project_dir)
+            escalated += 1
+
+    return {"applied": applied, "escalated": escalated, "rejected": rejected}

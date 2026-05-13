@@ -1050,6 +1050,19 @@ def build_session_briefing(
         if health_lines:
             sections.append("**System health:**\n" + "\n".join(health_lines))
 
+        # L5: DDD escalations (risky changes needing human decision)
+        try:
+            from core.ddd_cultivation import read_pending_proposals
+            active_proj = _detect_active_project(workspace) or "SwarmAI"
+            ddd_escalations = read_pending_proposals(workspace, active_proj)
+            if ddd_escalations:
+                esc_lines = [f"  - [{p.target_doc}] {p.content[:100]}" for p in ddd_escalations[:3]]
+                sections.append(
+                    f"**DDD escalations ({len(ddd_escalations)} awaiting decision):**\n" + "\n".join(esc_lines)
+                )
+        except Exception as exc:
+            logger.debug("DDD escalations read failed: %s", exc)
+
         # L4: Skill health recommendations from evolution pipeline
         ctx_dir = workspace / ".context"
         skill_health_lines = _get_skill_health_highlights(ctx_dir)

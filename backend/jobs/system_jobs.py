@@ -85,6 +85,20 @@ SYSTEM_JOBS: list[Job] = [
         config={},
     ),
 
+    # --- DDD Weekly Report (summarizes cultivation activity across all projects) ---
+    # Runs after ddd-refresh (which proposes updates). This report surfaces
+    # what was auto-applied, what needs escalation, and DDD health per project.
+    # Output: Knowledge/Reports/YYYY-MM-DD-ddd-weekly.md
+    Job(
+        id="ddd-weekly-report",
+        name="DDD Weekly Report",
+        type="ddd_weekly_report",
+        schedule="0 4 * * 1",           # Monday 04:00 UTC = 12:00 ICT (after ddd-refresh)
+        enabled=True,
+        category="system",
+        config={"window_days": 7},
+    ),
+
     # --- Skill Proposer (reads health_findings.json, proposes skills for gaps) ---
     # Decoupled from memory-health: health_findings.json is populated by
     # ContextHealthHook (every session) AND memory-health (weekly LLM).
