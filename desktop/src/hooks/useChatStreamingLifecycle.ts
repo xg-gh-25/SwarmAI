@@ -654,6 +654,10 @@ export interface ChatStreamingLifecycle {
   // Hang detection — true when streaming but no real (non-heartbeat) SDK events for >60s
   /** True when the active stream has received only heartbeats for >60s. */
   isLikelyStalled: boolean;
+
+  // SESSION_BUSY recovery — true when polling for backend completion
+  /** True when backend returned SESSION_BUSY and we're polling for the response. */
+  isWaitingForBusy: boolean;
 }
 
 /** Context warning payload from the backend context monitor. */
@@ -742,6 +746,9 @@ export function useChatStreamingLifecycle(
   const lastRealEventRef = useRef<number>(Date.now());
   const pendingToolUseRef = useRef<boolean>(false);
   const [isLikelyStalled, setIsLikelyStalled] = useState(false);
+
+  // SESSION_BUSY recovery: polling state (intervals stored per-tab in UnifiedTab)
+  const [isWaitingForBusy, setIsWaitingForBusy] = useState(false);
 
   // Poll for stall state while streaming (10s interval).
   // Heartbeats keep the SSE connection alive but mask SDK hangs from the
@@ -1460,21 +1467,132 @@ export function useChatStreamingLifecycle(
           // Backend deletes the orphaned user message from DB on SESSION_BUSY,
           // so no auto-retry is needed.  The message text stays in the input field.
           // See: 2026-04-02 SSE disconnect kill chain diagnosis.
+          //
+          // Recovery (2026-05-14): Instead of showing a toast and leaving the
+          // user in a dead state, start polling the messages endpoint. When
+          // backend completes, new messages appear → auto-render + clear state.
           if (event.code === 'SESSION_BUSY') {
-            console.log('[StreamHandler] SESSION_BUSY — session still streaming', { capturedTabId });
-            // Clear THIS send's streaming state (isStreaming=false) while
-            // keeping the tab badge as 'streaming' — the original request
-            // is still running on the backend.  These are two different
-            // state dimensions: isStreaming = "am I sending?", tab status
-            // badge = "is the backend processing?"
+            console.log('[StreamHandler] SESSION_BUSY — starting poll recovery', { capturedTabId });
             setIsStreaming(false, capturedTabId ?? undefined);
             incrementStreamGen();
-            if (capturedTabId) updateTabStatus(capturedTabId, 'streaming');
-            addToast({
-              severity: 'info',
-              message: 'Session is busy. Please re-send your message when the current response completes.',
-              id: `session-busy-${capturedTabId}`,
-            });
+            if (capturedTabId) {
+              updateTabStatus(capturedTabId, 'streaming');
+              const tabState = tabMapRef.current.get(capturedTabId);
+              if (tabState) {
+                tabState.isStreaming = false; // Mirror setIsStreaming
+                tabState.isWaitingForBusy = true;
+              }
+            }
+            // Mirror to React state if this is the active tab
+            if (!capturedTabId || capturedTabId === activeTabIdRef.current) {
+              setIsWaitingForBusy(true);
+            }
+
+            // Start polling messages endpoint (ETag-based, cheap 304s)
+            const pollSessionId = capturedTabId
+              ? tabMapRef.current.get(capturedTabId)?.sessionId
+              : undefined;
+
+            if (pollSessionId && capturedTabId) {
+              const busyTab = tabMapRef.current.get(capturedTabId);
+              if (!busyTab) return;
+
+              // Clear any existing poll for this tab (safety)
+              if (busyTab.busyPollInterval) clearInterval(busyTab.busyPollInterval);
+              if (busyTab.busyPollTimeout) clearTimeout(busyTab.busyPollTimeout);
+
+              // Helper: clear all busy-poll state for the tab
+              const clearBusyPoll = (tab: typeof busyTab) => {
+                if (tab.busyPollInterval) clearInterval(tab.busyPollInterval);
+                if (tab.busyPollTimeout) clearTimeout(tab.busyPollTimeout);
+                tab.busyPollInterval = undefined;
+                tab.busyPollTimeout = undefined;
+                tab.isWaitingForBusy = false;
+              };
+
+              // Detection strategy: bypass ETag (which is count-based and won't
+              // change during streaming since the assistant message row already
+              // exists). Instead, invalidate cache before each poll and compare
+              // the last assistant message's content length across polls.
+              // Require 2 consecutive stable polls (6s) to avoid false positives
+              // during tool execution pauses.
+              let prevContentLen = -1;
+              let stableCount = 0;
+
+              busyTab.busyPollInterval = setInterval(async () => {
+                // Guard: tab may have been closed during polling
+                const currentTab = tabMapRef.current.get(capturedTabId);
+                if (!currentTab || !currentTab.isWaitingForBusy) {
+                  clearBusyPoll(busyTab);
+                  return;
+                }
+                try {
+                  // Force fresh fetch by clearing ETag cache
+                  chatService.invalidateMessageCache(pollSessionId);
+                  const msgs = await chatService.getSessionMessages(pollSessionId);
+
+                  // Find the last assistant message
+                  const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant');
+                  if (!lastAssistant) return; // No assistant message yet
+
+                  // Measure content: count text blocks' total length
+                  const contentLen = lastAssistant.content.reduce((acc, block) => {
+                    if ('text' in block && typeof block.text === 'string') {
+                      return acc + block.text.length;
+                    }
+                    return acc + 1; // non-text blocks count as 1
+                  }, 0);
+
+                  // Completion heuristic: content is non-empty AND stable for
+                  // 2 consecutive polls (6s) — avoids false positives during
+                  // tool execution pauses
+                  if (contentLen > 0 && contentLen === prevContentLen) {
+                    stableCount++;
+                    if (stableCount >= 2) {
+                      // Backend completed — map and render
+                      const mapped = msgs.map((m) => ({
+                        id: m.id,
+                        role: m.role as 'user' | 'assistant',
+                        content: m.content as ContentBlock[],
+                        timestamp: m.createdAt || new Date().toISOString(),
+                      }));
+                      currentTab.messages = mapped;
+                      clearBusyPoll(currentTab);
+                      // Mirror to React if active
+                      if (capturedTabId === activeTabIdRef.current) {
+                        setMessages(mapped);
+                        setIsWaitingForBusy(false);
+                      }
+                      updateTabStatus(capturedTabId, 'idle');
+                    }
+                  } else {
+                    stableCount = 0; // Reset on any change
+                  }
+                  prevContentLen = contentLen;
+                } catch {
+                  // Silently ignore poll errors — don't turn recovery into error
+                }
+              }, 3000);
+
+              // Safety timeout: 30s max polling
+              busyTab.busyPollTimeout = setTimeout(() => {
+                const currentTab = tabMapRef.current.get(capturedTabId);
+                if (currentTab) {
+                  clearBusyPoll(currentTab);
+                }
+                if (capturedTabId === activeTabIdRef.current) {
+                  setIsWaitingForBusy(false);
+                }
+                updateTabStatus(capturedTabId, 'idle');
+              }, 30_000);
+            } else {
+              // No session ID — can't poll, clear immediately
+              if (capturedTabId) {
+                const tabState = tabMapRef.current.get(capturedTabId);
+                if (tabState) tabState.isWaitingForBusy = false;
+              }
+              setIsWaitingForBusy(false);
+            }
             return;
           }
 
@@ -2093,6 +2211,9 @@ export function useChatStreamingLifecycle(
       streamStartTimeRef.current = null;
       setElapsedSeconds(0);
     }
+
+    // Sync isWaitingForBusy for the new active tab
+    setIsWaitingForBusy(tabState?.isWaitingForBusy ?? false);
   }, []);
 
   // --- Return lifecycle interface ---
@@ -2131,5 +2252,6 @@ export function useChatStreamingLifecycle(
     compactionGuard,
     setCompactionGuard,
     isLikelyStalled,
+    isWaitingForBusy,
   };
 }

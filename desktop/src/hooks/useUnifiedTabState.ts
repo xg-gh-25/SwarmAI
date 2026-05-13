@@ -146,6 +146,13 @@ export interface UnifiedTab {
     displayContent: ContentBlock[];
     messageId: string;
   };
+  /** True when backend returned SESSION_BUSY — polling for response completion.
+   *  Send button is disabled, "Waiting..." indicator shown, polling active. */
+  isWaitingForBusy?: boolean;
+  /** Per-tab polling interval handle — cleared on tab close or recovery. */
+  busyPollInterval?: ReturnType<typeof setInterval>;
+  /** Per-tab polling timeout handle — cleared on tab close or recovery. */
+  busyPollTimeout?: ReturnType<typeof setTimeout>;
 }
 
 /** Fields persisted to ~/.swarm-ai/open_tabs.json (re-exported from tabPersistence service). */

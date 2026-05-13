@@ -255,6 +255,7 @@ export default function ChatPage() {
     promptMetadata,
     setPromptMetadata,
     isLikelyStalled,
+    isWaitingForBusy,
   } = useChatStreamingLifecycle({
     queryClient,
     getSession: (sid: string) => chatService.getSession(sid),
@@ -2244,6 +2245,13 @@ export default function ChatPage() {
                     <span className="text-sm">{t('chat.thinking')}</span>
                   </div>
                 )}
+                {/* SESSION_BUSY recovery indicator — polling for backend completion */}
+                {isWaitingForBusy && !isStreaming && (
+                  <div className="flex items-center gap-2 text-[var(--color-text-muted)] py-2">
+                    <Spinner size="sm" />
+                    <span className="text-sm">{t('chat.waitingForResponse', 'Waiting for response...')}</span>
+                  </div>
+                )}
                 <div ref={messagesEndRef} />
               </div>
 
@@ -2274,7 +2282,7 @@ export default function ChatPage() {
                 sessionId={sessionId}
                 contextPct={contextWarning?.pct ?? null}
                 promptMetadata={promptMetadata}
-                disabled={health.status === 'disconnected' || isLimited('/chat')}
+                disabled={health.status === 'disconnected' || isLimited('/chat') || isWaitingForBusy}
                 activeTabIdRef={activeTabIdRef}
                 inputValueMapRef={inputValueMapRef}
                 onInputValueChange={(tabId: string, value: string) => {
