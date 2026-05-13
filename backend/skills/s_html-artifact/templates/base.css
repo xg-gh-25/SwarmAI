@@ -1,0 +1,501 @@
+/* SwarmAI HTML Artifact Design System v2
+ *
+ * Stolen from battle-tested sources:
+ * - html-it (robonuggets): typography, warm neutrals, eyebrow labels, breathing
+ * - Lighthouse (Google): color token organization, gauge patterns
+ * - simonw/tools: validates single-file approach at scale (210+ tools)
+ *
+ * Philosophy: "print magazine" not "SaaS dashboard"
+ * Key differentiator from AI-slop: serif headings + warm accent + generous spacing
+ */
+
+/* ── Color Tokens ──────────────────────────────────────────────
+ * Organization: base → semantic → component (Lighthouse pattern)
+ */
+
+:root {
+  /* Base palette (html-it warm neutrals) */
+  --ivory: #FAF9F5;
+  --paper: #FFFFFF;
+  --slate: #141413;
+  --clay: #D97757;
+  --clay-hover: #B85C3E;
+  --oat: #E3DACC;
+  --olive: #788C5D;
+  --g100: #F0EEE6;
+  --g200: #E6E3DA;
+  --g300: #D1CFC5;
+  --g500: #87867F;
+  --g700: #3D3D3A;
+
+  /* Semantic (mapped from base) */
+  --color-bg: var(--ivory);
+  --color-surface: var(--paper);
+  --color-text: var(--slate);
+  --color-text-secondary: var(--g700);
+  --color-muted: var(--g500);
+  --color-accent: var(--clay);
+  --color-accent-hover: var(--clay-hover);
+  --color-accent-light: #FDF8F5;
+  --color-success: var(--olive);
+  --color-success-light: #F4F7F1;
+  --color-warning: #D97706;
+  --color-warning-light: #FFFBEB;
+  --color-danger: #C0392B;
+  --color-danger-light: #FDF2F0;
+  --color-border: var(--g200);
+  --color-border-strong: var(--g300);
+  --color-divider: var(--oat);
+
+  /* Typography (html-it: serif display + sans body + mono meta) */
+  --font-display: ui-serif, Georgia, "Times New Roman", serif;
+  --font-body: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* Type scale (responsive via clamp, html-it approach) */
+  --font-size-xs: clamp(0.7rem, 0.65rem + 0.25vw, 0.75rem);
+  --font-size-sm: clamp(0.8rem, 0.75rem + 0.25vw, 0.875rem);
+  --font-size-base: clamp(0.875rem, 0.825rem + 0.25vw, 1rem);
+  --font-size-lg: clamp(1.05rem, 0.95rem + 0.5vw, 1.25rem);
+  --font-size-xl: clamp(1.3rem, 1.1rem + 1vw, 1.75rem);
+  --font-size-2xl: clamp(1.75rem, 1.4rem + 1.75vw, 2.5rem);
+  --font-size-hero: clamp(2.25rem, 1.8rem + 2.25vw, 3.5rem);
+
+  /* Spacing (generous, report-like, not app-like) */
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2.5rem;
+  --space-2xl: 3.5rem;
+  --space-section: clamp(3rem, 2.5rem + 2.5vw, 5rem); /* 48-80px breathing between sections */
+
+  /* Layout */
+  --max-width: 1140px;
+  --border-radius: 8px;
+  --shadow-sm: 0 1px 3px rgba(20, 20, 19, 0.04);
+  --shadow-md: 0 4px 12px rgba(20, 20, 19, 0.06);
+}
+
+/* ── Dark mode (follows OS preference, warm-neutral not neon) ── */
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ivory: #1A1918;
+    --paper: #242320;
+    --slate: #F0EEE6;
+    --g100: #2A2926;
+    --g200: #353430;
+    --g300: #4A4843;
+    --g500: #A09E97;
+    --g700: #D1CFC5;
+    --oat: #3D3B36;
+    --color-accent-light: #2D2219;
+    --color-success-light: #1E2A1B;
+    --color-warning-light: #2D2410;
+    --color-danger-light: #2D1B18;
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.2);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+}
+
+/* ── Reset & Base ──────────────────────────────────────────── */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 16px;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  font-family: var(--font-body);
+  font-size: var(--font-size-base);
+  line-height: 1.55;
+  color: var(--color-text);
+  background: var(--color-bg);
+  padding: 48px 32px 64px;
+  max-width: var(--max-width);
+  margin: 0 auto;
+}
+
+/* ── Typography (serif display, sans body — magazine aesthetic) ── */
+
+h1, h2, h3, h4 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  line-height: 1.15;
+  color: var(--color-text);
+  letter-spacing: -0.018em;
+}
+
+h1 {
+  font-size: var(--font-size-hero);
+  line-height: 1.06;
+  margin-top: 0;
+  margin-bottom: var(--space-lg);
+}
+
+h2 {
+  font-size: var(--font-size-2xl);
+  margin-top: var(--space-section);
+  margin-bottom: var(--space-md);
+  padding-bottom: var(--space-sm);
+  border-bottom: 1.5px solid var(--color-divider);
+}
+
+h3 {
+  font-size: var(--font-size-xl);
+  margin-top: var(--space-xl);
+  margin-bottom: var(--space-sm);
+}
+
+h4 {
+  font-size: var(--font-size-lg);
+  margin-top: var(--space-lg);
+  margin-bottom: var(--space-xs);
+}
+
+p {
+  margin-bottom: var(--space-md);
+  max-width: 68ch; /* optimal reading width */
+}
+
+em { font-style: italic; } /* italic accent on key words in serif headings */
+
+strong { font-weight: 600; }
+
+a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+a:hover { text-decoration: underline; }
+
+/* ── Eyebrow Label (html-it signature pattern) ─────────────── */
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--color-muted);
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+
+.eyebrow::before {
+  content: "";
+  display: block;
+  width: 24px;
+  height: 3px;
+  background: var(--color-accent);
+  border-radius: 2px;
+}
+
+/* ── Code ──────────────────────────────────────────────────── */
+
+code, pre {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+}
+
+code {
+  background: var(--g100);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+}
+
+pre {
+  background: var(--g100);
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius);
+  padding: var(--space-lg);
+  overflow-x: auto;
+  margin-bottom: var(--space-lg);
+}
+
+pre code { background: none; padding: 0; }
+
+/* ── Tables ────────────────────────────────────────────────── */
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: var(--space-xl);
+  font-size: var(--font-size-sm);
+}
+
+thead {
+  border-bottom: 2px solid var(--color-border-strong);
+}
+
+th {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  text-align: left;
+  padding: var(--space-sm) var(--space-md);
+  color: var(--color-muted);
+  font-size: var(--font-size-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+td {
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: top;
+}
+
+tbody tr:hover {
+  background: var(--color-accent-light);
+}
+
+/* ── Cards ─────────────────────────────────────────────────── */
+
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius);
+  padding: var(--space-xl);
+  margin-bottom: var(--space-md);
+  box-shadow: var(--shadow-sm);
+}
+
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--space-lg);
+  margin-bottom: var(--space-xl);
+}
+
+/* ── KPI Cards (Lighthouse pattern) ────────────────────────── */
+
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: var(--space-md);
+  margin-bottom: var(--space-section);
+}
+
+.kpi-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius);
+  padding: var(--space-lg) var(--space-md);
+  text-align: center;
+}
+
+.kpi-value {
+  font-family: var(--font-display);
+  font-size: var(--font-size-2xl);
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.kpi-label {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-top: var(--space-xs);
+}
+
+/* ── Status / RAG Indicators ───────────────────────────────── */
+
+.status-success { color: var(--color-success); }
+.status-warning { color: var(--color-warning); }
+.status-danger { color: var(--color-danger); }
+
+.badge {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 9999px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.badge-success { background: var(--color-success-light); color: var(--color-success); }
+.badge-warning { background: var(--color-warning-light); color: var(--color-warning); }
+.badge-danger { background: var(--color-danger-light); color: var(--color-danger); }
+.badge-neutral { background: var(--g100); color: var(--color-muted); }
+
+/* ── Score Bar ─────────────────────────────────────────────── */
+
+.score-bar {
+  height: 5px;
+  background: var(--color-border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.score-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+}
+
+/* ── Tabs (L3 interactive) ─────────────────────────────────── */
+
+.tab-container { margin-bottom: var(--space-xl); }
+
+.tab-list {
+  display: flex;
+  gap: 0;
+  border-bottom: 1.5px solid var(--color-divider);
+  margin-bottom: var(--space-xl);
+  overflow-x: auto;
+}
+
+.tab-button {
+  padding: var(--space-sm) var(--space-lg);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1.5px;
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--color-muted);
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.tab-button:hover { color: var(--color-text); }
+.tab-button.active {
+  color: var(--color-accent);
+  border-bottom-color: var(--color-accent);
+}
+
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* ── Export Button (L3+ mandatory) ─────────────────────────── */
+
+.export-button {
+  position: fixed;
+  top: 20px;
+  right: 24px;
+  padding: var(--space-sm) var(--space-lg);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  color: var(--color-muted);
+  cursor: pointer;
+  box-shadow: var(--shadow-md);
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  z-index: 100;
+}
+
+.export-button:hover {
+  background: var(--color-accent-light);
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.export-button.copied {
+  background: var(--color-success-light);
+  color: var(--color-success);
+  border-color: var(--color-success);
+}
+
+/* ── Summary Box (callout) ─────────────────────────────────── */
+
+.summary-box {
+  background: var(--color-accent-light);
+  border-left: 4px solid var(--color-accent);
+  padding: var(--space-lg) var(--space-xl);
+  margin-bottom: var(--space-section);
+  border-radius: 0 var(--border-radius) var(--border-radius) 0;
+}
+
+.summary-box p { margin-bottom: var(--space-xs); }
+.summary-box p:last-child { margin-bottom: 0; }
+
+/* ── Section Dividers (html-it: 1.5px + breathing) ─────────── */
+
+.section {
+  padding-bottom: var(--space-section);
+  margin-bottom: var(--space-section);
+  border-bottom: 1.5px solid var(--color-divider);
+}
+
+.section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+/* ── Metadata Header ───────────────────────────────────────── */
+
+.artifact-header {
+  margin-bottom: var(--space-section);
+  padding-bottom: var(--space-lg);
+  border-bottom: 1.5px solid var(--color-divider);
+}
+
+.artifact-header h1 { margin-bottom: var(--space-xs); }
+
+.artifact-header .meta {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* ── Utility Classes ───────────────────────────────────────── */
+
+.text-muted { color: var(--color-muted); }
+.text-sm { font-size: var(--font-size-sm); }
+.text-xs { font-size: var(--font-size-xs); }
+.text-right { text-align: right; }
+.text-center { text-align: center; }
+.font-mono { font-family: var(--font-mono); }
+.font-serif { font-family: var(--font-display); }
+.font-bold { font-weight: 600; }
+.nowrap { white-space: nowrap; }
+
+/* ── Print ─────────────────────────────────────────────────── */
+
+@media print {
+  body { padding: 0; max-width: none; background: white; color: black; }
+  .export-button { display: none; }
+  .tab-list { display: none; }
+  .tab-panel { display: block !important; page-break-inside: avoid; }
+  .card { box-shadow: none; border: 1px solid #ccc; }
+  h2 { page-break-after: avoid; }
+  .section { page-break-inside: avoid; }
+  a { color: inherit; text-decoration: underline; }
+  @page { margin: 2cm; }
+}
+
+/* ── Responsive ────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  body { padding: 24px 16px 40px; }
+  .card-grid { grid-template-columns: 1fr; }
+  .kpi-row { grid-template-columns: repeat(2, 1fr); }
+  table { font-size: var(--font-size-xs); }
+  th, td { padding: var(--space-xs) var(--space-sm); }
+}
+
+@media (max-width: 480px) {
+  .kpi-row { grid-template-columns: 1fr; }
+  .artifact-header { text-align: center; }
+}

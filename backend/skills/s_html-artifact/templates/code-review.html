@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Code Review: {{TITLE}}</title>
+  <style>
+    /* === BASE CSS (paste from base.css) === */
+    {{BASE_CSS}}
+
+    /* === Code Review-specific styles === */
+    .review-summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: var(--space-md);
+      margin-bottom: var(--space-xl);
+    }
+
+    .count-card {
+      text-align: center;
+      padding: var(--space-md);
+      border-radius: var(--border-radius);
+      border: 1px solid var(--color-border);
+    }
+
+    .count-card .count {
+      font-size: var(--font-size-2xl);
+      font-weight: 700;
+      line-height: 1.2;
+    }
+
+    .count-card .label {
+      font-size: var(--font-size-xs);
+      color: var(--color-muted);
+      text-transform: uppercase;
+      margin-top: var(--space-xs);
+    }
+
+    .count-critical { border-left: 4px solid var(--color-danger); }
+    .count-high { border-left: 4px solid var(--color-warning); }
+    .count-medium { border-left: 4px solid var(--color-accent); }
+    .count-low { border-left: 4px solid var(--color-border-strong); }
+
+    .finding {
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--border-radius);
+      margin-bottom: var(--space-md);
+      overflow: hidden;
+    }
+
+    .finding-header {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      padding: var(--space-sm) var(--space-md);
+      border-bottom: 1px solid var(--color-border);
+      background: var(--color-bg);
+    }
+
+    .finding-severity {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .severity-critical { background: var(--color-danger); }
+    .severity-high { background: var(--color-warning); }
+    .severity-medium { background: var(--color-accent); }
+    .severity-low { background: var(--color-border-strong); }
+
+    .finding-title {
+      font-weight: 600;
+      font-size: var(--font-size-sm);
+      flex: 1;
+    }
+
+    .finding-location {
+      font-family: var(--font-mono);
+      font-size: var(--font-size-xs);
+      color: var(--color-muted);
+    }
+
+    .finding-body {
+      padding: var(--space-md);
+    }
+
+    .finding-body p { margin-bottom: var(--space-sm); }
+    .finding-body p:last-child { margin-bottom: 0; }
+
+    .finding-fix {
+      background: var(--color-success-light);
+      border-radius: 4px;
+      padding: var(--space-sm) var(--space-md);
+      font-size: var(--font-size-sm);
+      margin-top: var(--space-sm);
+    }
+
+    .finding-fix::before {
+      content: "Fix: ";
+      font-weight: 600;
+    }
+
+    .file-tree {
+      font-family: var(--font-mono);
+      font-size: var(--font-size-sm);
+      background: var(--color-surface);
+      border: 1px solid var(--color-border);
+      border-radius: var(--border-radius);
+      padding: var(--space-md);
+      margin-bottom: var(--space-xl);
+    }
+
+    .file-tree .file {
+      padding: var(--space-xs) 0;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .file-tree .file-status {
+      font-size: var(--font-size-xs);
+    }
+  </style>
+</head>
+<body>
+  <div class="artifact-header">
+    <h1>Code Review: {{TITLE}}</h1>
+    <span class="meta">{{DATE}} | {{FILE_COUNT}} files | {{COMMIT_RANGE}}</span>
+  </div>
+
+  <!-- Finding Count Summary -->
+  <div class="review-summary">
+    <div class="count-card count-critical">
+      <div class="count status-danger">{{CRITICAL_COUNT}}</div>
+      <div class="label">Critical</div>
+    </div>
+    <div class="count-card count-high">
+      <div class="count status-warning">{{HIGH_COUNT}}</div>
+      <div class="label">High</div>
+    </div>
+    <div class="count-card count-medium">
+      <div class="count" style="color: var(--color-accent);">{{MEDIUM_COUNT}}</div>
+      <div class="label">Medium</div>
+    </div>
+    <div class="count-card count-low">
+      <div class="count text-muted">{{LOW_COUNT}}</div>
+      <div class="label">Low</div>
+    </div>
+  </div>
+
+  <!-- Files Changed -->
+  <h2>Files Changed</h2>
+  <div class="file-tree">
+    {{FILE_TREE}}
+  </div>
+
+  <!-- Findings -->
+  <h2>Findings</h2>
+  {{FINDINGS}}
+
+  <!-- Footer -->
+  <hr style="border: none; border-top: 1px solid var(--color-border); margin-top: var(--space-2xl);">
+  <p class="text-sm text-muted">{{FOOTER}}</p>
+</body>
+</html>
