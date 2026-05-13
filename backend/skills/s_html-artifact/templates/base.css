@@ -72,7 +72,7 @@
 
   /* Layout */
   --max-width: 1140px;
-  --border-radius: 8px;
+  --border-radius: 12px;  /* verified: Thariq uses 12px, warmer/softer than 8px */
   --shadow-sm: 0 1px 3px rgba(20, 20, 19, 0.04);
   --shadow-md: 0 4px 12px rgba(20, 20, 19, 0.06);
 }
@@ -127,10 +127,10 @@ body {
 
 h1, h2, h3, h4 {
   font-family: var(--font-display);
-  font-weight: 600;
+  font-weight: 500;  /* verified: Thariq uses 500, lighter = more editorial */
   line-height: 1.15;
   color: var(--color-text);
-  letter-spacing: -0.018em;
+  letter-spacing: -0.01em;  /* verified: Thariq uses -0.01em, subtle not aggressive */
 }
 
 h1 {
@@ -179,10 +179,10 @@ a:hover { text-decoration: underline; }
 
 .eyebrow {
   font-family: var(--font-mono);
-  font-size: var(--font-size-xs);
+  font-size: 11px;  /* verified: Thariq uses fixed 11px, not clamp */
   font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;  /* verified: Thariq uses 0.08em */
   color: var(--color-muted);
   display: flex;
   align-items: center;
@@ -266,6 +266,12 @@ tbody tr:hover {
   padding: var(--space-xl);
   margin-bottom: var(--space-md);
   box-shadow: var(--shadow-sm);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.card:hover {
+  transform: translateY(-3px);  /* verified: Thariq uses -3px lift */
+  box-shadow: 0 10px 30px rgba(20, 20, 19, 0.10);  /* verified from Thariq source */
 }
 
 .card-grid {
@@ -470,6 +476,59 @@ tbody tr:hover {
 .font-serif { font-family: var(--font-display); }
 .font-bold { font-weight: 600; }
 .nowrap { white-space: nowrap; }
+
+/* ── color-mix() Utilities (from simonw/claude-code-timeline) ── */
+/* Use with any accent color to derive tints/shades systematically */
+
+.tint-accent { background: color-mix(in srgb, var(--color-accent) 12%, transparent); }
+.border-accent { border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border)); }
+.focus-ring { box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 14%, transparent); }
+
+/* ── Segmented Control (from simonw/tools — modern tab alternative) ── */
+
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+}
+
+.segmented button {
+  border: none;
+  padding: 8px 14px;
+  font-family: var(--font-body);
+  font-size: var(--font-size-sm);
+  background: transparent;
+  color: var(--color-muted);
+  cursor: pointer;
+  min-width: 72px;
+  transition: color 0.12s, background 0.12s;
+}
+
+.segmented button:hover { color: var(--color-text); }
+
+.segmented button.active {
+  background: color-mix(in srgb, var(--color-accent) 16%, transparent);
+  color: var(--color-text);
+}
+
+/* ── Code Panel (dark, from Thariq pattern) ────────────────── */
+
+.code-panel {
+  background: var(--slate);
+  color: var(--g200);
+  border-radius: var(--border-radius);
+  padding: var(--space-lg);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  line-height: 1.45;
+}
+
+.code-panel .kw { color: var(--clay); }      /* keywords */
+.code-panel .str { color: var(--olive); }     /* strings */
+.code-panel .cm { color: var(--g500); }       /* comments */
 
 /* ── Print ─────────────────────────────────────────────────── */
 
