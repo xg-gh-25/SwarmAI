@@ -3,6 +3,14 @@
 Manage the SwarmAI backend launchd daemon (`com.swarmai.backend`). This skill
 provides structured commands for all daemon lifecycle operations.
 
+## 🚨 MOMENTUM RULE — DO NOT STOP BETWEEN STEPS
+
+**Multi-step commands (deploy, restart) are ONE atomic operation.**
+- Step passes → immediately proceed to the next step. NO pause, NO "ready?", NO options.
+- Only STOP for: (1) a step FAILS, (2) user explicitly interrupts.
+- The user said "deploy" / "restart" once. That's the only approval needed until health check passes.
+- Single-step commands (status, logs, stop) are already atomic — this rule is redundant for them.
+
 ## Stage 0: PROJECT GUARD (blocking)
 
 Before any command, verify this is a SwarmAI context:

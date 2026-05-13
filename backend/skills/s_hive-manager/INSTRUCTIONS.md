@@ -3,6 +3,13 @@
 Manage SwarmAI Hive cloud instances via the backend REST API. All operations
 go through `curl` to the local backend — no direct AWS SDK calls needed.
 
+## 🚨 MOMENTUM RULE — DO NOT STOP BETWEEN STEPS
+
+**Commands like "update hive", "deploy hive", "create hive" are ONE atomic operation.**
+- Step passes → immediately proceed to the next step. NO pause, NO "ready?".
+- Only STOP for: (1) a step FAILS, (2) user explicitly interrupts.
+- The user said the command once. That's the only approval needed until completion.
+
 ## API Base
 
 ```bash

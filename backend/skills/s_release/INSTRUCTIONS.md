@@ -2,6 +2,13 @@
 
 Bump version, update CHANGELOG, tag, and publish GitHub Release. Zero files missed.
 
+## 🚨 MOMENTUM RULE — DO NOT STOP BETWEEN STEPS
+
+**"release" / "bump version" = ONE atomic operation (bump → changelog → commit → push → tag → publish).**
+- Step passes → immediately proceed. NO pause, NO "should I continue?".
+- Only STOP for: (1) a step FAILS, (2) user explicitly interrupts, (3) CI gate needs wait.
+- The user said "release" once. That's the only approval needed.
+
 ## Release CI Gate
 
 All work stays on `main`. Push triggers CI automatically. **Wait for CI green before tagging.**
