@@ -6,12 +6,15 @@ from contextlib import asynccontextmanager
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 import asyncio
+import json
 import logging
 import os
 import shutil
 import sqlite3
+import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 from config import settings, get_app_data_dir
@@ -1286,9 +1289,76 @@ async def shutdown():
 
 # ── Upgrade (daemon/hive only) ────────────────────────────────────────────────
 
-# Module-level lock to prevent concurrent upgrades
+# Upgrade state — protected by asyncio.Lock (F3: race condition fix)
+_upgrade_lock = asyncio.Lock()
 _upgrade_in_progress: bool = False
+_upgrade_started_at: float | None = None
 _upgrade_result_file: str | None = None
+
+# Timeout for auto-clearing stuck upgrades (F2: lock leak prevention)
+_UPGRADE_TIMEOUT_S = 180
+
+
+def _resolve_project_root() -> Path | None:
+    """Locate swarmai project root. Works in dev, frozen, and hive contexts.
+
+    Resolution order (F5: robust project root detection):
+    1. SWARMAI_PROJECT_ROOT env var (explicit override)
+    2. __file__ relative (dev mode: backend/main.py → swarmai/)
+    3. Hardcoded fallback (XG's Mac layout)
+    """
+    # 1. Environment variable — most reliable, works everywhere
+    env_root = os.environ.get("SWARMAI_PROJECT_ROOT")
+    if env_root:
+        p = Path(env_root)
+        if (p / "prod.sh").exists():
+            return p
+
+    # 2. Relative to __file__ (dev mode: swarmai/backend/main.py)
+    if not getattr(sys, "frozen", False):
+        p = Path(__file__).resolve().parent.parent
+        if (p / "prod.sh").exists():
+            return p
+
+    # 3. Hardcoded fallback (frozen daemon on XG's Mac)
+    p = Path.home() / "Desktop" / "SwarmAI-Workspace" / "swarmai"
+    if (p / "prod.sh").exists():
+        return p
+
+    return None
+
+
+def _resolve_sidecar_binary(project_root: Path) -> Path | None:
+    """Locate built backend binary, platform-aware (F4: not just aarch64-apple-darwin).
+
+    Checks current platform's triple first, then falls back to any existing triple.
+    """
+    import platform as _platform
+
+    # Determine current platform triple
+    machine = _platform.machine()
+    arch = "aarch64" if machine in ("arm64", "aarch64") else "x86_64"
+    if sys.platform == "darwin":
+        triple = f"python-backend-{arch}-apple-darwin"
+    elif sys.platform == "linux":
+        triple = f"python-backend-{arch}-unknown-linux-gnu"
+    else:
+        triple = f"python-backend-{arch}-pc-windows-msvc"
+
+    binaries_dir = project_root / "desktop" / "src-tauri" / "binaries"
+
+    # Try platform-specific path first
+    candidate = binaries_dir / triple / "python-backend"
+    if candidate.exists():
+        return candidate
+
+    # Fallback: find any existing binary (covers cross-compilation scenarios)
+    if binaries_dir.exists():
+        for child in binaries_dir.iterdir():
+            if child.is_dir() and (child / "python-backend").exists():
+                return child / "python-backend"
+
+    return None
 
 
 @app.post("/api/system/upgrade")
@@ -1305,7 +1375,7 @@ async def upgrade_daemon():
 
     Allowed ONLY in daemon/hive modes (requires KeepAlive/Restart=always).
     """
-    global _upgrade_in_progress, _upgrade_result_file
+    global _upgrade_in_progress, _upgrade_result_file, _upgrade_started_at
 
     mode = _detect_run_mode()
     if mode not in ("daemon", "hive"):
@@ -1317,65 +1387,69 @@ async def upgrade_daemon():
             },
         )
 
-    if _upgrade_in_progress:
-        return JSONResponse(
-            status_code=409,
-            content={
-                "status": "conflict",
-                "reason": "upgrade already in progress",
-                "result_file": _upgrade_result_file,
-            },
-        )
+    # F3: asyncio.Lock prevents check-then-act race between concurrent requests
+    async with _upgrade_lock:
+        if _upgrade_in_progress:
+            # F2: auto-clear if upgrade process timed out (crash recovery)
+            if _upgrade_started_at and (time.time() - _upgrade_started_at) > _UPGRADE_TIMEOUT_S:
+                logger.warning("Clearing stale upgrade lock (started %.0fs ago)", time.time() - _upgrade_started_at)
+                _upgrade_in_progress = False
+                _upgrade_started_at = None
+            else:
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "status": "conflict",
+                        "reason": "upgrade already in progress",
+                        "result_file": _upgrade_result_file,
+                    },
+                )
 
-    # Locate the project root and verify binary exists
-    project_root = Path(__file__).resolve().parent.parent
-    prod_script = project_root / "prod.sh"
+        # F5: Robust project root resolution
+        project_root = _resolve_project_root()
+        if project_root is None:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "reason": "Cannot locate swarmai project root. Set SWARMAI_PROJECT_ROOT env var.",
+                },
+            )
 
-    # Fallback: check common locations
-    if not prod_script.exists():
-        # PyInstaller bundle — prod.sh won't be there. Use daemon-lib.sh directly.
-        project_root = Path.home() / "Desktop" / "SwarmAI-Workspace" / "swarmai"
-        prod_script = project_root / "prod.sh"
+        # F4: Platform-aware binary detection
+        binary_path = _resolve_sidecar_binary(project_root)
+        if binary_path is None:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "reason": f"No built binary found in {project_root}/desktop/src-tauri/binaries/. Run build first.",
+                },
+            )
 
-    if not prod_script.exists():
-        return JSONResponse(
-            status_code=400,
-            content={
-                "status": "error",
-                "reason": f"prod.sh not found at {prod_script}",
-            },
-        )
+        # Set lock state inside the critical section (F3: atomic check-and-set)
+        upgrade_id = uuid.uuid4().hex[:8]
+        result_file = f"/tmp/swarm-upgrade-{upgrade_id}.json"
+        _upgrade_result_file = result_file
+        _upgrade_in_progress = True
+        _upgrade_started_at = time.time()
 
-    # Check binary exists (sidecar path)
-    sidecar_dir = project_root / "desktop" / "src-tauri" / "binaries" / "python-backend-aarch64-apple-darwin"
-    if not (sidecar_dir / "python-backend").exists():
-        return JSONResponse(
-            status_code=400,
-            content={
-                "status": "error",
-                "reason": f"No built binary at {sidecar_dir}/python-backend. Run build first.",
-            },
-        )
-
-    # Spawn the upgrader in a new process session (survives daemon death)
-    import uuid as _uuid
-
-    upgrade_id = _uuid.uuid4().hex[:8]
-    result_file = f"/tmp/swarm-upgrade-{upgrade_id}.json"
-    _upgrade_result_file = result_file
-    _upgrade_in_progress = True
+    # F7: Use shlex.quote to safely escape paths in the generated script
+    import shlex
+    safe_result_file = shlex.quote(result_file)
+    safe_project_root = shlex.quote(str(project_root))
 
     # The upgrader script: deploy then kill (prod.sh deploy does this correctly)
     upgrader_script = f"""
 import subprocess, json, time, pathlib
 
-result_file = "{result_file}"
-project_root = "{project_root}"
+result_file = {safe_result_file}
+project_root = {safe_project_root}
 
 try:
     # Run prod.sh deploy (deploys binary THEN kills daemon)
     r = subprocess.run(
-        ["bash", f"{{project_root}}/prod.sh", "deploy"],
+        ["bash", project_root + "/prod.sh", "deploy"],
         cwd=project_root,
         capture_output=True,
         text=True,
@@ -1399,21 +1473,24 @@ except Exception as e:
 pathlib.Path(result_file).write_text(json.dumps(result, indent=2))
 """
 
-    # Spawn Python in a new session — this process survives daemon death
-    import subprocess as _sp
-    import sys as _sys
+    # F1: Use get_python_executable() — sys.executable points to frozen binary
+    # in PyInstaller bundles (e.g. ~/.swarm-ai/daemon/python-backend), which
+    # doesn't accept -c flag. get_python_executable() resolves to a real Python.
+    from utils.bundle_paths import get_python_executable
 
-    _sp.Popen(
-        [_sys.executable, "-c", upgrader_script],
+    python_path = get_python_executable()
+
+    subprocess.Popen(
+        [python_path, "-c", upgrader_script],
         start_new_session=True,
-        stdout=_sp.DEVNULL,
-        stderr=_sp.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         close_fds=True,
     )
 
     logger.info(
-        "Upgrade initiated: id=%s result_file=%s project=%s",
-        upgrade_id, result_file, project_root,
+        "Upgrade initiated: id=%s python=%s result_file=%s project=%s",
+        upgrade_id, python_path, result_file, project_root,
     )
 
     return JSONResponse(
@@ -1422,6 +1499,7 @@ pathlib.Path(result_file).write_text(json.dumps(result, indent=2))
             "status": "initiated",
             "upgrade_id": upgrade_id,
             "result_file": result_file,
+            "python_used": python_path,
             "message": "Upgrade process spawned. Daemon will restart in ~10s. Session stays alive until SIGTERM.",
         },
     )
@@ -1430,28 +1508,37 @@ pathlib.Path(result_file).write_text(json.dumps(result, indent=2))
 @app.get("/api/system/upgrade/status")
 async def upgrade_status():
     """Check the result of the last upgrade operation."""
-    global _upgrade_in_progress, _upgrade_result_file
+    global _upgrade_in_progress, _upgrade_result_file, _upgrade_started_at
 
     if _upgrade_result_file is None:
         return {"status": "no_upgrade", "message": "No upgrade has been initiated"}
 
     result_path = Path(_upgrade_result_file)
     if not result_path.exists():
+        # F2: Auto-clear if upgrade timed out (upgrader crashed without writing result)
+        if _upgrade_started_at and (time.time() - _upgrade_started_at) > _UPGRADE_TIMEOUT_S:
+            _upgrade_in_progress = False
+            _upgrade_started_at = None
+            return {
+                "status": "timeout",
+                "message": f"Upgrade process did not complete within {_UPGRADE_TIMEOUT_S}s — lock cleared",
+                "result_file": _upgrade_result_file,
+            }
         return {
             "status": "in_progress",
             "result_file": _upgrade_result_file,
+            "elapsed_s": round(time.time() - _upgrade_started_at, 1) if _upgrade_started_at else None,
             "message": "Upgrade is still running",
         }
 
-    import json as _json
-
     try:
-        result = _json.loads(result_path.read_text())
+        result = json.loads(result_path.read_text())
     except Exception as e:
         result = {"status": "error", "parse_error": str(e)}
 
     # Reset the lock once we've read the result
     _upgrade_in_progress = False
+    _upgrade_started_at = None
     return {"status": "completed", "result": result}
 
 
