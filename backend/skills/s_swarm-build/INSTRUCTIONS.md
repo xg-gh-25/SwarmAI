@@ -74,14 +74,19 @@ if [ "$FREE_GB" -lt 4 ]; then
 fi
 ```
 
-If memory is sufficient, run the build directly:
+If memory is sufficient, run the build in background:
 
 ```bash
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop/scripts
-bash build-backend.sh 2>&1 | tail -30
+cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop/scripts && bash build-backend.sh
 ```
 
-Use `timeout: 600000` (10 min max) to avoid blocking the conversation.
+Use `timeout: 600000` (10 min max) and `run_in_background: true`.
+
+**🚨 NEVER pipe through `| tail` or `| head`** — causes stdout buffering that makes
+the command appear hung for the entire 2-5 min build duration. The Bash tool captures
+all output when the command completes. If output is too long, read the last N lines
+AFTER completion, not during.
+
 Do NOT retry on exit 137 — it means OOM, not a code bug.
 
 **On exit 137 (OOM kill):**
