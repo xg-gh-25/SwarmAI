@@ -102,7 +102,14 @@ cmd_build() {
         echo ""
         _log "Restarting daemon to pick up new binary..."
         launchctl kill SIGTERM "$GUI_TARGET" 2>/dev/null || true
-        _daemon_wait_healthy 90 || {
+        # ExitTimeOut does NOT apply to `launchctl kill` — only to bootout/stop.
+        # Give uvicorn 5s for in-flight requests, then SIGKILL (SSE streams block indefinitely).
+        if ! _wait_port_free "$DAEMON_PORT" 5; then
+            _log "Port still held after 5s (likely SSE drain) — SIGKILL..."
+            launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
+            _wait_port_free "$DAEMON_PORT" 5 || true
+        fi
+        _daemon_wait_healthy 30 || {
             _warn "Daemon didn't come up — try: ./prod.sh daemon start"
         }
     else
@@ -239,7 +246,14 @@ cmd_release() {
     if [ "$daemon_was_running" = true ]; then
         _log "Restarting daemon to pick up new binary..."
         launchctl kill SIGTERM "$GUI_TARGET" 2>/dev/null || true
-        _daemon_wait_healthy 90 || _warn "Daemon restart slow — try: ./prod.sh daemon restart"
+        # ExitTimeOut does NOT apply to `launchctl kill` — only to bootout/stop.
+        # Give uvicorn 5s for in-flight requests, then SIGKILL (SSE streams block indefinitely).
+        if ! _wait_port_free "$DAEMON_PORT" 5; then
+            _log "Port still held after 5s (likely SSE drain) — SIGKILL..."
+            launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
+            _wait_port_free "$DAEMON_PORT" 5 || true
+        fi
+        _daemon_wait_healthy 30 || _warn "Daemon restart slow — try: ./prod.sh daemon restart"
     elif launchctl print "$GUI_TARGET" &>/dev/null; then
         _log "Service registered but not running — starting..."
         cmd_daemon start || _warn "Daemon start failed — try: ./prod.sh daemon start"
@@ -376,7 +390,14 @@ cmd_deploy() {
     if [ "$daemon_was_running" = true ]; then
         _log "Restarting daemon to pick up new binary..."
         launchctl kill SIGTERM "$GUI_TARGET" 2>/dev/null || true
-        _daemon_wait_healthy 90 || _warn "Daemon restart slow — try: ./prod.sh daemon restart"
+        # ExitTimeOut does NOT apply to `launchctl kill` — only to bootout/stop.
+        # Give uvicorn 5s for in-flight requests, then SIGKILL (SSE streams block indefinitely).
+        if ! _wait_port_free "$DAEMON_PORT" 5; then
+            _log "Port still held after 5s (likely SSE drain) — SIGKILL..."
+            launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
+            _wait_port_free "$DAEMON_PORT" 5 || true
+        fi
+        _daemon_wait_healthy 30 || _warn "Daemon restart slow — try: ./prod.sh daemon restart"
     else
         _ok "Deployed. Start daemon with: ./prod.sh daemon start"
     fi

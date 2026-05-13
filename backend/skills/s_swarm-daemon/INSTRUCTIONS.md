@@ -153,14 +153,16 @@ launchctl kill SIGTERM gui/$(id -u)/com.swarmai.backend 2>/dev/null || {
   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.swarmai.backend.plist
 }
 
-# 2. Wait for port to release
-for i in $(seq 1 15); do
+# 2. Wait 5s for port to release (ExitTimeOut does NOT apply to `kill`)
+# SSE streams block graceful shutdown indefinitely → SIGKILL after 5s
+for i in $(seq 1 5); do
   nc -z 127.0.0.1 18321 2>/dev/null || break
   sleep 1
 done
 
-# 3. Force-kill if still stuck
+# 3. Force-kill if still stuck (SSE drain will never complete)
 if nc -z 127.0.0.1 18321 2>/dev/null; then
+  echo "Port still held after 5s (SSE drain) — SIGKILL..."
   launchctl kill SIGKILL gui/$(id -u)/com.swarmai.backend 2>/dev/null || true
   sleep 1
 fi

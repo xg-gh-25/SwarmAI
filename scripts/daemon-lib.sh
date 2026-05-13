@@ -265,19 +265,21 @@ cmd_daemon() {
             launchctl kill SIGTERM "$GUI_TARGET" 2>/dev/null || {
                 _warn "kill SIGTERM failed — daemon may not be running, trying bootstrap..."
                 _bootstrap_daemon
-                _daemon_wait_healthy 90
+                _daemon_wait_healthy 30
                 return $?
             }
 
-            _log "Waiting for port ${DAEMON_PORT} to release..."
-            if ! _wait_port_free "$DAEMON_PORT" 15; then
-                _warn "Port still in use — force-killing..."
+            # ExitTimeOut does NOT apply to `launchctl kill` — only to bootout/stop.
+            # Give uvicorn 5s for in-flight requests, then SIGKILL (SSE streams block indefinitely).
+            _log "Waiting for port ${DAEMON_PORT} to release (5s grace)..."
+            if ! _wait_port_free "$DAEMON_PORT" 5; then
+                _log "Port still held after 5s (likely SSE drain) — SIGKILL..."
                 launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
-                sleep 1
+                _wait_port_free "$DAEMON_PORT" 5 || true
             fi
 
             _log "Waiting for launchd KeepAlive to restart daemon..."
-            _daemon_wait_healthy 90
+            _daemon_wait_healthy 30
             ;;
         force-restart)
             _warn "Force restart — skipping version check"
