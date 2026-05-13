@@ -255,9 +255,15 @@ Adversarial Review Gate:
   User-side: N findings, M fixed (or "skipped — bugfix profile")
   PE-side:   N findings, M fixed, K noted
 
-  PASS → proceed to Pipeline Report
+  PASS → enter Quality Convergence Loop (INSTRUCTIONS.md Step 4c)
   FAIL → loop back: fix → re-test → re-review (max 1 loop)
 ```
+
+**After adversarial review passes:** Enter the Quality Convergence Loop
+(INSTRUCTIONS.md Step 4c). The convergence loop re-verifies all 6 push-ready
+layers (including that adversarial findings stay fixed) and iterates up to
+3 times if gaps remain. Only after convergence declares push-ready → proceed
+to Pipeline Report.
 
 **Record in run.json:**
 ```json

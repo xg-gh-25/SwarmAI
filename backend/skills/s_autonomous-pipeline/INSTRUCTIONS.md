@@ -12,13 +12,16 @@ For every pipeline run, follow this loop:
 1. INIT     -- parse requirement, detect project, load or create pipeline run
 2. PROFILE  -- select pipeline profile (full/trivial/research/docs/bugfix)
 3. STAGE    -- for each stage in profile (evaluate → ... → deliver → reflect):
-               a. Gate check (budget, escalations, retries)
-               b. Load stage context (DDD docs + upstream artifacts)
-               c. Execute stage behavior (read stage doc, then execute)
-               d. Classify decisions (mechanical/taste/judgment)
-               e. Verify output (artifact published + schema valid)
-               f. Handle result (advance / retry / checkpoint)
-4. DELIVER  -- Delivery Gate, Confidence Score, Completion Audit, Report, CI
+               a. Feedback Loop preamble (SIGNAL/CHECK/FAIL for this stage)
+               b. Gate check (budget, escalations, retries)
+               c. Load stage context (DDD docs + upstream artifacts)
+               d. Execute stage behavior (read stage doc, then execute)
+               e. Classify decisions (mechanical/taste/judgment)
+               f. Verify output (artifact published + schema valid)
+               g. Handle result (advance / retry / checkpoint)
+4. DELIVER  -- Delivery Gate → Completion Audit → Adversarial Review →
+               Quality Convergence Loop (6-layer gate × max 3 iterations) →
+               push-ready or escalate. Then: Report, CI.
 5. REFLECT  -- Read stages/reflect.md, execute: lessons → IMPROVEMENT.md → DDD loop closed
 6. COMPLETE -- summarize, record metrics, final run state
 ```
@@ -112,7 +115,46 @@ The user can override: "skip research, I know the approach" → switch to bugfix
 
 ## Step 3: STAGE EXECUTION
 
-For each stage in the selected profile, execute in order:
+For each stage in the selected profile, execute in order.
+
+### Stage Feedback Loop (Per-Stage Preamble)
+
+**Before executing each stage, establish its feedback loop:**
+
+```
+1. SIGNAL — What observable output proves this stage succeeded?
+   (artifact published, test passing, file exists, command returns expected)
+2. CHECK  — How do I verify the signal is real, not assumed?
+   (grep for the artifact, run the test, Read the file, execute the command)
+3. FAIL   — What does failure look like? (Define explicitly so I recognize
+   it immediately instead of rationalizing partial success)
+```
+
+**Why this exists:** Bugs become mechanical work when you build the right
+feedback loop BEFORE executing. Without pre-defined signals, stages pass on
+"vibes" — the builder FEELS done but has no external evidence. With signals,
+every stage has a verifiable exit criterion that transforms quality from
+probabilistic to deterministic.
+
+**Example (BUILD stage):**
+- SIGNAL: All acceptance criteria have a passing test (`pytest -k test_<feature>` exits 0)
+- CHECK: Run the test. Read the output. Green = signal confirmed.
+- FAIL: Any test red, any criterion without a test, any test that tests the wrong thing.
+
+**Example (REVIEW stage):**
+- SIGNAL: 0 high/medium findings in the adversarial review output
+- CHECK: Count findings by severity in the sub-agent response
+- FAIL: Any finding severity >= medium, or sub-agent returned vague non-findings
+
+**Output the SIGNAL/CHECK/FAIL as inline text in chat** before executing the
+stage. This makes the loop inspectable — the user can correct wrong signals
+before you spend tokens executing against them.
+
+This preamble takes 30 seconds. It prevents 30 minutes of rework. The loop is
+not bureaucracy — it is the cheapest insurance against "tests pass but feature
+doesn't work" (C011 pattern).
+
+---
 
 ### 3a. Gate Check
 
@@ -290,10 +332,20 @@ After verification:
 
 ---
 
-## Step 4: DELIVERY GATE
+## Step 4: DELIVER (includes Quality Convergence Loop)
 
-At the deliver stage, BEFORE generating the delivery report, collect ALL taste
-decisions from ALL prior stages and present them as a batch:
+The DELIVER step has 4 phases executed in order:
+1. **Taste Decision Gate** — batch review of accumulated taste decisions
+2. **Deliver stage execution** — read `stages/deliver.md`, run Completion Audit + Adversarial Review
+3. **Quality Convergence Loop** — 6-layer push-ready gate, iterate until converged or escalate
+4. **Report & CI** — generate REPORT.md, confidence score, final artifacts
+
+---
+
+### 4a. Taste Decision Gate
+
+BEFORE executing deliver stage behavior, collect ALL taste decisions from ALL
+prior stages and present them as a batch:
 
 ```
 DELIVERY GATE -- <N> taste decisions for review:
@@ -320,11 +372,131 @@ downstream stages.
 
 ---
 
+### 4b. Deliver Stage Execution
+
+Read and execute `stages/deliver.md` inline. This runs:
+- Fresh User Audit (P6)
+- Completion Audit (verify deliverables match requirement)
+- Adversarial Review Gate (spawn sub-agent — see deliver.md for profile-aware tiering)
+- Confidence Scoring (`scripts/confidence_score.py`)
+
+The adversarial review in deliver.md is the FIRST pass — it produces the initial
+set of findings. The Quality Convergence Loop below re-verifies after fixes.
+
+---
+
+### 4c. Quality Convergence Loop
+
+After deliver stage execution produces a delivery candidate (code written, tests
+pass, adversarial review done, confidence scored), the Quality Convergence Loop
+evaluates whether the candidate is truly push-ready — and iterates until it is,
+or escalates.
+
+**This is NOT a separate pipeline stage.** It does not produce its own artifact,
+does not appear in the profile stage list, and is not checked by the validator.
+It is an internal sub-loop of the DELIVER step that bridges "delivery candidate"
+to "push-ready."
+
+#### The 6-Layer Push-Ready Gate
+
+ALL 6 layers must pass simultaneously. A candidate that passes 5/6 is not push-ready.
+
+| Layer | What It Checks | How to Verify |
+|-------|----------------|---------------|
+| L1: Tests Pass | All new + existing tests green | `pytest --timeout=60` exits 0 |
+| L2: Type-Safe | No type errors, linter clean | Type checker + linter (if configured) |
+| L3: No Regressions | Pre-existing tests still pass | Run dependent test files (grep -rl pattern) |
+| L4: Adversarial Clean | No critical/medium findings from deliver.md review | All findings fixed or explicitly accepted |
+| L5: DDD Conformance | Follows TECH.md, avoids IMPROVEMENT.md anti-patterns | Pattern match against project conventions |
+| L6: Decisions Resolved | All taste/judgment decisions surfaced | Decision log complete, no hidden choices |
+
+**L4 clarification:** The adversarial sub-agent was already spawned in 4b (deliver
+stage). L4 checks whether all its findings are resolved. Only re-spawn the
+sub-agent if a convergence fix changes code that the original review didn't cover.
+
+#### Convergence Behavior
+
+```
+LOOP (max 3 iterations):
+  1. EVALUATE — Check all 6 gate layers. Collect failures.
+  2. If ALL PASS + agent self-assessment positive + goal aligned → EXIT: push-ready
+  3. If failures exist:
+     a. Identify the SPECIFIC layer that failed
+     b. Identify the SPECIFIC issue causing the failure
+     c. Apply a MINIMAL, TARGETED fix (not a rewrite)
+     d. Re-verify the ENTIRE gate (fix may introduce new failures)
+  4. Increment iteration counter
+```
+
+**Key properties:**
+- Fixes are TARGETED — the loop does not re-run all stages. It fixes the
+  specific gap and re-verifies.
+- Each iteration NARROWS the gap. If an iteration makes the gap wider
+  (introduces more failures than it fixes), STOP and escalate.
+- The adversarial sub-agent is only re-spawned when a fix introduces new code
+  paths not covered by the original review — scoped to the delta, not the
+  entire delivery.
+
+#### Exit Conditions
+
+The loop exits when ALL THREE are true:
+1. **All 6 gate layers pass** — no quality gap remains
+2. **Agent self-assessment positive** — "I am satisfied with this delivery"
+3. **Task goal alignment confirmed** — "This solves what was asked"
+
+If all three: declare push-ready. Proceed to Report & CI (4d).
+
+#### Failure Mode (Max Iterations Exhausted)
+
+If 3 iterations pass without convergence:
+- **Do NOT ship** — quality standard not met
+- **Escalate with precision:**
+  ```
+  CONVERGENCE FAILED after 3 iterations:
+    Remaining failures: [L3: test_foo_bar regresses, L4: race condition in async path]
+    Attempted fixes: [iteration 1: ..., iteration 2: ..., iteration 3: ...]
+    Root cause hypothesis: [why this isn't converging]
+    Recommendation: [fix manually / adjust requirement / accept known limitation]
+  ```
+- **CHECKPOINT** — human decides next step
+
+#### Relationship to Stage Feedback Loops
+
+The per-stage feedback loop (§3 preamble) is SHIFT-LEFT prevention — it catches
+issues before they flow into the delivery candidate. The Quality Convergence Loop
+is the FINAL GATE — it catches issues that escaped individual stages because each
+stage only sees its own scope.
+
+Together: per-stage loops prevent 80% of defects. Convergence loop catches the
+remaining 20% that only emerge at the system level. Neither alone is sufficient.
+
+---
+
+### 4d. Report & CI
+
+After the convergence loop declares push-ready:
+
+1. Generate REPORT.md at `.artifacts/runs/<RUN_ID>/REPORT.md`
+2. Record final confidence score (post-convergence — may be higher than initial)
+3. Record convergence metadata in run.json:
+   ```json
+   {
+     "convergence": {
+       "iterations": 2,
+       "initial_failures": ["L3", "L4"],
+       "final_status": "push-ready"
+     }
+   }
+   ```
+4. Advance pipeline state to next stage (reflect)
+
+---
+
 ## Step 5: REFLECT
 
-After DELIVER completes and advances state to `reflect`, execute the REFLECT
-stage. This is NOT part of COMPLETE — it's a full pipeline stage with its own
-execution behavior.
+After the Quality Convergence Loop declares push-ready and DELIVER advances
+state to `reflect`, execute the REFLECT stage. This is NOT part of COMPLETE —
+it's a full pipeline stage with its own execution behavior.
 
 **Execution (BLOCKING):**
 
@@ -424,7 +596,7 @@ token_cost = base_stage_cost
 | build | 40K | 15-80K | TDD cycle: tests + code + verify |
 | review | 15K | 8-25K | Code review + security scan |
 | test | 25K | 10-50K | Run suite + fix failures |
-| deliver | 8K | 5-15K | Report generation + gate |
+| deliver | 20K | 8-50K | Audit + adversarial + convergence loop (max 3 iter) + report |
 | reflect | 3K | 2-5K | Lesson extraction |
 
 After 5+ completed runs, `run-history` provides calibrated averages per stage
@@ -528,6 +700,11 @@ Project: <PROJECT> | Profile: <profile>
 
 Status: `[done]` `[>>>>]` `[skip]` `[FAIL]` `[STOP]` `[    ]`
 
+**During DELIVER convergence loop**, show iteration status inline:
+```
+  [>>>>] DELIVER   converge: iteration 2/3 (L3 regression fix applied, re-verifying)
+```
+
 ---
 
 ## Rules
@@ -569,13 +746,12 @@ Status: `[done]` `[>>>>]` `[skip]` `[FAIL]` `[STOP]` `[    ]`
     all fixed` is evidence. Every claim in Completion Audit must cite
     a verifiable artifact.
 17. **No premature completion.** Do not advance to REFLECT or mark
-    status=completed unless DELIVER's Completion Audit verdict is ALL
-    GREEN or all gaps are explicitly flagged as unfixable with
-    justification. Budget pressure is not a valid reason to skip
-    verification — if budget is low, CHECKPOINT with clear remaining
-    work, don't compress the audit. A half-delivered feature with a
-    checkpoint resume plan is better than a "completed" pipeline with
-    hidden gaps.
+    status=completed unless the Quality Convergence Loop (Step 4c) exits
+    push-ready — all 6 gate layers pass, self-assessment positive, goal
+    aligned. Budget pressure is not a valid reason to skip convergence —
+    if budget is low, CHECKPOINT with clear remaining work, don't
+    compress the loop. A half-delivered feature with a checkpoint resume
+    plan is better than a "completed" pipeline with hidden gaps.
 18. **Adversarial findings must be specific.** Each adversarial review
     finding must include: (a) file path and line number or function name,
     (b) what's wrong, (c) concrete fix. Findings like "looks good",
