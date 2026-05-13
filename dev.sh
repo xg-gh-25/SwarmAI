@@ -163,16 +163,15 @@ _build_time() {
 cmd_start() {
     _log "Starting SwarmAI dev environment..."
 
-    # Daemon conflict: bootout daemon before dev mode to avoid two backends
+    # Daemon conflict: kill + bootout daemon before dev mode to avoid two backends
     # (two ChannelGateways = duplicate Slack connections, DB write conflicts)
+    # SIGKILL first (SSE streams block SIGTERM/bootout's internal SIGTERM for 20s)
     if _daemon_is_running; then
         _warn "Backend daemon running — stopping for dev mode..."
+        launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
+        sleep 1
         launchctl bootout "$GUI_TARGET" 2>/dev/null || true
-        # Wait for daemon to fully release port (graceful shutdown + uvicorn drain)
-        for _i in $(seq 1 10); do
-            nc -z 127.0.0.1 "${DAEMON_PORT}" 2>/dev/null || break
-            sleep 0.5
-        done
+        _wait_port_free "$DAEMON_PORT" 5 || true
         _ok "Daemon stopped (will re-bootstrap on ./dev.sh kill or next app launch)"
     fi
 
@@ -263,11 +262,12 @@ cmd_build() {
     _deploy_daemon_binary
 
     # Now kill the old daemon so it restarts with new binary.
-    # If script dies after this point (daemon kills CLI), that's fine —
-    # deploy already completed, KeepAlive restarts with new binary.
+    # Deploy already completed above — safe to kill now.
+    # Use SIGKILL (not SIGTERM): SSE streams block SIGTERM indefinitely.
+    # KeepAlive is safe here because deploy already finished (no rsync race).
     if [ "$daemon_was_running" = true ]; then
         _log "Restarting daemon to pick up new binary..."
-        launchctl kill SIGTERM "$GUI_TARGET" 2>/dev/null || true
+        launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
         _daemon_wait_healthy 90
     else
         _log "Daemon was not running. Start with: ./dev.sh daemon start"
@@ -312,9 +312,11 @@ cmd_deploy() {
     _ok "Deploy complete in $(_build_time $start)"
 
     # Kill old daemon so it restarts with new binary (deploy already done)
+    # Use SIGKILL (not SIGTERM): SSE streams block SIGTERM indefinitely.
+    # KeepAlive is safe here because deploy already finished (no rsync race).
     if [ "$daemon_was_running" = true ]; then
         _log "Restarting daemon to pick up new binary..."
-        launchctl kill SIGTERM "$GUI_TARGET" 2>/dev/null || true
+        launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
         _daemon_wait_healthy 90
     else
         _log "Daemon was not running. Start with: ./dev.sh daemon start"

@@ -97,33 +97,10 @@ cmd_build() {
     _ok "Build complete in $(_build_time $start)"
     _ok "Binary: $BACKEND_BINARY ($(du -h "$BACKEND_BINARY" | cut -f1))"
 
-    # Restart daemon: bootout → wait → bootstrap (not kill — KeepAlive races with rsync)
+    # Restart daemon after deploy (SIGKILL+bootout+bootstrap — common function)
     if [ "$daemon_was_running" = true ]; then
         echo ""
-        _log "Restarting daemon (SIGKILL → bootout → bootstrap)..."
-        # SIGKILL first (instant death), then bootout (deregister, no SIGTERM wait)
-        launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
-        launchctl bootout "$GUI_TARGET" 2>/dev/null || true
-        _wait_port_free "$DAEMON_PORT" 10 || {
-            _log "Port still held after 10s — force kill..."
-            pkill -9 -f "$HOME/.swarm-ai/daemon/python-backend" 2>/dev/null || true
-            sleep 2
-        }
-        # Deploy fresh plist (ensures ExitTimeOut=15 is active for future bootouts)
-        local plist_src="$PROJECT_ROOT/backend/channels/com.swarmai.backend.plist"
-        local plist_dst="$HOME/Library/LaunchAgents/com.swarmai.backend.plist"
-        if [ -f "$plist_src" ]; then
-            sed -e "s|__HOME__|$HOME|g" \
-                -e "s|__WRAPPER_PATH__|$HOME/.swarm-ai/swarmai_backend.sh|g" \
-                -e "s|__LOG_DIR__|$HOME/.swarm-ai/logs|g" \
-                "$plist_src" > "$plist_dst"
-        fi
-        # Bootstrap with retry (launchd may briefly report "already loaded")
-        for i in 1 2 3; do
-            launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.swarmai.backend.plist 2>/dev/null && break
-            sleep 2
-        done
-        _daemon_wait_healthy 30 || {
+        _daemon_kill_and_bootstrap 30 || {
             _warn "Daemon didn't come up — try: ./prod.sh daemon start"
         }
     else
@@ -256,32 +233,9 @@ cmd_release() {
 
     _deploy_daemon_binary
 
-    # 3b. Restart daemon: bootout → wait → bootstrap (not kill — KeepAlive races with rsync)
+    # 3b. Restart daemon after deploy (SIGKILL+bootout+bootstrap — common function)
     if [ "$daemon_was_running" = true ]; then
-        _log "Restarting daemon (SIGKILL → bootout → bootstrap)..."
-        # SIGKILL first (instant death), then bootout (deregister, no SIGTERM wait)
-        launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
-        launchctl bootout "$GUI_TARGET" 2>/dev/null || true
-        _wait_port_free "$DAEMON_PORT" 10 || {
-            _log "Port still held after 10s — force kill..."
-            pkill -9 -f "$HOME/.swarm-ai/daemon/python-backend" 2>/dev/null || true
-            sleep 2
-        }
-        # Deploy fresh plist (ensures ExitTimeOut=15 is active for future bootouts)
-        local plist_src="$PROJECT_ROOT/backend/channels/com.swarmai.backend.plist"
-        local plist_dst="$HOME/Library/LaunchAgents/com.swarmai.backend.plist"
-        if [ -f "$plist_src" ]; then
-            sed -e "s|__HOME__|$HOME|g" \
-                -e "s|__WRAPPER_PATH__|$HOME/.swarm-ai/swarmai_backend.sh|g" \
-                -e "s|__LOG_DIR__|$HOME/.swarm-ai/logs|g" \
-                "$plist_src" > "$plist_dst"
-        fi
-        # Bootstrap with retry (launchd may briefly report "already loaded")
-        for i in 1 2 3; do
-            launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.swarmai.backend.plist 2>/dev/null && break
-            sleep 2
-        done
-        _daemon_wait_healthy 30 || _warn "Daemon restart slow — try: ./prod.sh daemon restart"
+        _daemon_kill_and_bootstrap 30 || _warn "Daemon restart slow — try: ./prod.sh daemon restart"
     elif launchctl print "$GUI_TARGET" &>/dev/null; then
         _log "Service registered but not running — starting..."
         cmd_daemon start || _warn "Daemon start failed — try: ./prod.sh daemon start"
@@ -414,32 +368,9 @@ cmd_deploy() {
 
     _deploy_daemon_binary
 
-    # Restart daemon: bootout → wait → bootstrap (not kill — KeepAlive races with rsync)
+    # Restart daemon after deploy (SIGKILL+bootout+bootstrap — common function)
     if [ "$daemon_was_running" = true ]; then
-        _log "Restarting daemon (SIGKILL → bootout → bootstrap)..."
-        # SIGKILL first (instant death), then bootout (deregister, no SIGTERM wait)
-        launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
-        launchctl bootout "$GUI_TARGET" 2>/dev/null || true
-        _wait_port_free "$DAEMON_PORT" 10 || {
-            _log "Port still held after 10s — force kill..."
-            pkill -9 -f "$HOME/.swarm-ai/daemon/python-backend" 2>/dev/null || true
-            sleep 2
-        }
-        # Deploy fresh plist (ensures ExitTimeOut=15 is active for future bootouts)
-        local plist_src="$PROJECT_ROOT/backend/channels/com.swarmai.backend.plist"
-        local plist_dst="$HOME/Library/LaunchAgents/com.swarmai.backend.plist"
-        if [ -f "$plist_src" ]; then
-            sed -e "s|__HOME__|$HOME|g" \
-                -e "s|__WRAPPER_PATH__|$HOME/.swarm-ai/swarmai_backend.sh|g" \
-                -e "s|__LOG_DIR__|$HOME/.swarm-ai/logs|g" \
-                "$plist_src" > "$plist_dst"
-        fi
-        # Bootstrap with retry (launchd may briefly report "already loaded")
-        for i in 1 2 3; do
-            launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.swarmai.backend.plist 2>/dev/null && break
-            sleep 2
-        done
-        _daemon_wait_healthy 30 || _warn "Daemon restart slow — try: ./prod.sh daemon restart"
+        _daemon_kill_and_bootstrap 30 || _warn "Daemon restart slow — try: ./prod.sh daemon restart"
     else
         _ok "Deployed. Start daemon with: ./prod.sh daemon start"
     fi
