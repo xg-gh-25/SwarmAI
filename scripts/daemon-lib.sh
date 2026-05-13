@@ -167,13 +167,19 @@ _deploy_daemon_binary() {
 # ── Kill + Deploy + Bootstrap (for file-overwriting deploys) ───
 
 _daemon_kill_and_bootstrap() {
-    # Full restart sequence for deploys that overwrite daemon files.
+    # Kill-first restart: for processes that need to deploy AFTER killing daemon.
     # SIGKILL (instant death) → bootout (disable KeepAlive) → bootstrap (start new).
     #
-    # Use when: rsync/deploy has changed files in ~/.swarm-ai/daemon/ and daemon
-    # was running. KeepAlive would restart the OLD binary (race condition).
+    # Use when: you are an INDEPENDENT process that will rsync AFTER this function.
+    #   Examples: /api/system/upgrade endpoint, s_swarm-release manual fallback.
+    #   Why: KeepAlive would restart the OLD binary during rsync → race condition.
     #
-    # Do NOT use for: simple restart with same binary (use SIGKILL + KeepAlive).
+    # Do NOT use for:
+    #   - Deploy-first pattern (rsync already done) → just SIGKILL + KeepAlive.
+    #     Examples: prod.sh build, dev.sh deploy (script is daemon subprocess,
+    #     must deploy before kill because script dies with daemon).
+    #   - Simple restart with same binary → just SIGKILL + KeepAlive.
+    #     Examples: daemon-lib restart, daemon-lib force-restart.
     local health_timeout="${1:-30}"
 
     # 1. SIGKILL — instant process death (SSE cannot block SIGKILL)

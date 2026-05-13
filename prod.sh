@@ -97,10 +97,17 @@ cmd_build() {
     _ok "Build complete in $(_build_time $start)"
     _ok "Binary: $BACKEND_BINARY ($(du -h "$BACKEND_BINARY" | cut -f1))"
 
-    # Restart daemon after deploy (SIGKILL+bootout+bootstrap — common function)
+    # Restart daemon to pick up new binary.
+    # Deploy-first pattern: rsync already completed above, so KeepAlive is SAFE
+    # (restarts the NEW binary). No need for bootout — KeepAlive IS the restart.
+    # SIGKILL (not SIGTERM): SSE streams block graceful shutdown indefinitely.
+    # NOTE: If this runs from agent subprocess, script dies after SIGKILL — that's
+    # fine because deploy is already done and KeepAlive handles restart.
     if [ "$daemon_was_running" = true ]; then
         echo ""
-        _daemon_kill_and_bootstrap 30 || {
+        _log "Restarting daemon (SIGKILL → KeepAlive restarts new binary)..."
+        launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
+        _daemon_wait_healthy 30 || {
             _warn "Daemon didn't come up — try: ./prod.sh daemon start"
         }
     else
@@ -233,9 +240,11 @@ cmd_release() {
 
     _deploy_daemon_binary
 
-    # 3b. Restart daemon after deploy (SIGKILL+bootout+bootstrap — common function)
+    # 3b. Restart daemon — deploy-first pattern (SIGKILL + KeepAlive restarts new binary)
     if [ "$daemon_was_running" = true ]; then
-        _daemon_kill_and_bootstrap 30 || _warn "Daemon restart slow — try: ./prod.sh daemon restart"
+        _log "Restarting daemon (SIGKILL → KeepAlive restarts new binary)..."
+        launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
+        _daemon_wait_healthy 30 || _warn "Daemon restart slow — try: ./prod.sh daemon restart"
     elif launchctl print "$GUI_TARGET" &>/dev/null; then
         _log "Service registered but not running — starting..."
         cmd_daemon start || _warn "Daemon start failed — try: ./prod.sh daemon start"
