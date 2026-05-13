@@ -138,104 +138,41 @@ Stage 3 VERIFY: PASS (46/46 checks)
 
 ---
 
-## Stage 4+5: DEPLOY & RESTART (single atomic operation)
+## Stage 4+5: DEPLOY & RESTART
 
-Deploy the verified onedir bundle and restart daemon in ONE bash call.
+Deploy the verified binary and restart daemon via the `/api/system/upgrade` endpoint.
 
-**🚨 WHY SINGLE CALL:** You are a subprocess of the daemon. Killing the daemon
-severs your communication channel. Also, KeepAlive restarts the daemon within
-~1s of kill — if deploy and kill are separate calls, KeepAlive can restart the
-daemon with OLD files mid-rsync (corruption). Single call = kill → rsync → done,
-no gap for KeepAlive to race.
+**🚨 NO SELF-KILL:** The endpoint spawns a detached upgrader process (in a new
+session) that deploys THEN kills the daemon. Your session stays alive through
+the deploy phase. The daemon dies only after rsync is complete — KeepAlive
+restarts with the new binary.
 
-**🚨 ONEDIR FORMAT:** The binary is a DIRECTORY (not a single file):
-```
-python-backend-aarch64-apple-darwin/
-  ├── python-backend          (executable)
-  └── _internal/              (libraries, ~200MB)
-```
-
-**CRITICAL:** Use `launchctl kill SIGTERM`, NOT `bootout`. Bootout deregisters
-the service permanently — dangerous when running inside daemon's own subprocess.
-
-Run this as a SINGLE Bash tool call:
+**Preferred method — API endpoint (no self-kill):**
 
 ```bash
-PROJECT_ROOT="/Users/gawan/Desktop/SwarmAI-Workspace/swarmai"
-BACKEND_BUNDLE_DIR="${PROJECT_ROOT}/desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin"
-DAEMON_DIR="${HOME}/.swarm-ai/daemon"
-GIT_HASH=$(cd "$PROJECT_ROOT" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-APP_VERSION=$(cd "$PROJECT_ROOT" && grep -m1 '"version"' desktop/src-tauri/tauri.conf.json 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || cat "$PROJECT_ROOT/VERSION" 2>/dev/null || echo "0.0.0")
-HEALTH_FILE="/tmp/swarm-build-health-${GIT_HASH}-$(date +%s).txt"
+# Call the upgrade endpoint — daemon handles deploy+restart internally
+RESPONSE=$(curl -s -X POST http://127.0.0.1:18321/api/system/upgrade)
+echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(json.dumps(d, indent=2))"
+```
 
-# ── Step 1: Spawn detached health verifier BEFORE any killing ──
-# Uses setsid (if available) or nohup to survive parent death.
-# Verifier checks that the NEW daemon (matching GIT_HASH) is healthy.
-nohup bash -c "
-  EXPECTED_HASH='${GIT_HASH}'
-  sleep 12  # Wait for KeepAlive to restart daemon
-  for i in \$(seq 1 24); do
-    HEALTH=\$(curl -s http://127.0.0.1:18321/health 2>/dev/null)
-    if echo \"\$HEALTH\" | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d['status']=='healthy'\" 2>/dev/null; then
-      VERSION=\$(echo \"\$HEALTH\" | python3 -c \"import sys,json; print(json.load(sys.stdin).get('version',''))\" 2>/dev/null)
-      echo \"HEALTHY\"
-      echo \"version=\$VERSION\"
-      echo \"expected_hash=\$EXPECTED_HASH\"
-      echo \"verified_at=\$(date '+%Y-%m-%d %H:%M:%S')\"
-      exit 0
-    fi
-    sleep 5
-  done
-  echo 'TIMEOUT: daemon did not become healthy within 120s'
-  echo \"expected_hash=\$EXPECTED_HASH\"
-  echo \"last_check=\$(date '+%Y-%m-%d %H:%M:%S')\"
-  tail -5 ~/.swarm-ai/logs/backend-stderr.log 2>/dev/null
-  exit 1
-" > "$HEALTH_FILE" 2>&1 &
-disown
-echo "Health verifier spawned → $HEALTH_FILE (expects hash: $GIT_HASH)"
+The endpoint returns 202 immediately. The daemon spawns a detached upgrader that:
+1. Deploys new binary (rsync from sidecar to daemon dir)
+2. Kills daemon via SIGTERM
+3. KeepAlive restarts with new binary
 
-# ── Step 2: Kill daemon (SIGTERM for graceful shutdown) ──
-# After kill, KeepAlive will try to restart — but rsync overwrites files first.
-launchctl kill SIGTERM gui/$(id -u)/com.swarmai.backend 2>/dev/null || true
+Your session stays alive during deploy. It MAY disconnect briefly when daemon
+restarts (~5-15s), but reconnects automatically to the new daemon.
 
-# ── Step 3: Wait for process to die (port release confirms death) ──
-# Short wait — just enough for graceful shutdown, NOT long enough for KeepAlive restart.
-for i in $(seq 1 8); do
-  nc -z 127.0.0.1 18321 2>/dev/null || break
-  sleep 0.5
-done
+**Fallback — manual bash (if endpoint not available on old daemon):**
 
-# Force-kill if still alive after 4s
-if nc -z 127.0.0.1 18321 2>/dev/null; then
-  echo "WARN: Graceful shutdown failed — force-killing..."
-  launchctl kill SIGKILL gui/$(id -u)/com.swarmai.backend 2>/dev/null || true
-  sleep 1
-fi
+Use the manual bash approach only if the running daemon doesn't have the
+`/api/system/upgrade` endpoint yet (pre-upgrade). See git history for
+the old bash approach (commit 676fafc).
 
-# ── Step 4: Deploy (rsync while daemon is dead, before KeepAlive restarts) ──
-rsync -a --delete "$BACKEND_BUNDLE_DIR/" "$DAEMON_DIR/"
-chmod +x "$DAEMON_DIR/python-backend"
-
-# Write version file — canonical format: "{semver} {git_hash} {timestamp}"
-echo "${APP_VERSION} ${GIT_HASH} $(date '+%Y-%m-%d %H:%M:%S')" > "$DAEMON_DIR/.version"
-
-echo ""
-echo "Deploy complete:"
-cat "$DAEMON_DIR/.version"
-echo "Bundle: $(du -sh "$DAEMON_DIR" | cut -f1)"
-
-# ── Step 5: KeepAlive will now restart daemon with NEW binary ──
-# Session may die at this point (we're an orphan of the killed daemon).
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  Deploy + restart complete."
-echo "  KeepAlive will start new daemon with $GIT_HASH in ~10s."
-echo ""
-echo "  Session MAY disconnect (self-kill paradox)."
-echo "  Health verifier: $HEALTH_FILE"
-echo "  On cold resume, Stage 6 reads this file."
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+```bash
+# Check if endpoint exists
+curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:18321/api/system/upgrade
+# If 404 → use fallback; if 202/403/409 → endpoint exists
 ```
 
 **Pass criteria:**
@@ -267,50 +204,40 @@ and has no valid binary. Fix the issue and re-run this stage.
 
 ---
 
-## Stage 6: HEALTH (verify on resume)
+## Stage 6: HEALTH (verify after upgrade)
 
-**Context:** This runs AFTER your session reconnects (cold resume) or immediately
-if the session survived Stage 4+5. You're now on the NEW daemon.
-
-**Always do a live health check first** — it's the ground truth. The health
-verifier file is supplementary evidence (confirms the daemon came up promptly
-after deploy, not just "is healthy now").
+**Context:** After calling `/api/system/upgrade`, wait ~15-30s for the daemon to
+restart, then verify.
 
 ```bash
+# Wait for daemon to come back (upgrade kills it, KeepAlive restarts in ~10s)
+echo "Waiting for daemon restart..."
+for i in $(seq 1 20); do
+  HEALTH=$(curl -s http://127.0.0.1:18321/health 2>/dev/null)
+  if echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='healthy'" 2>/dev/null; then
+    echo "=== Daemon HEALTHY ==="
+    echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Version: {d.get(\"version\",\"?\")}')"
+    break
+  fi
+  sleep 2
+done
+
+# Verify version matches what we built
 EXPECTED_HASH=$(awk '{print $2}' ~/.swarm-ai/daemon/.version 2>/dev/null)
 echo "Expected git hash: $EXPECTED_HASH"
 
-# ── Live health check (primary) ──
-HEALTH=$(curl -s http://127.0.0.1:18321/health 2>/dev/null)
-if echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='healthy'" 2>/dev/null; then
-  echo "=== Live Health: HEALTHY ==="
-  echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Version: {d.get(\"version\",\"?\")}')"
-else
-  echo "=== Live Health: NOT HEALTHY ==="
-  echo "Raw: $HEALTH"
-  echo "Check logs: tail -30 ~/.swarm-ai/logs/backend-stderr.log"
-fi
-
-# ── Health verifier file (supplementary — confirms timely startup) ──
-# File named with git hash to prevent stale reads from prior builds
-VERIFIER_FILE=$(ls -t /tmp/swarm-build-health-${EXPECTED_HASH}-*.txt 2>/dev/null | head -1)
-
-if [ -n "$VERIFIER_FILE" ]; then
-  # Check the verifier has finished (first line is HEALTHY or TIMEOUT)
-  FIRST_LINE=$(head -1 "$VERIFIER_FILE" 2>/dev/null)
-  if [ "$FIRST_LINE" = "HEALTHY" ] || echo "$FIRST_LINE" | grep -q "TIMEOUT"; then
-    echo ""
-    echo "=== Verifier Result (from background check) ==="
-    cat "$VERIFIER_FILE"
-    rm -f "$VERIFIER_FILE"
-  else
-    echo ""
-    echo "=== Verifier still running (file incomplete) — relying on live check ==="
-  fi
-else
-  echo ""
-  echo "(No verifier file for hash $EXPECTED_HASH — relying on live check only)"
-fi
+# Check upgrade result (if endpoint available on new daemon)
+curl -s http://127.0.0.1:18321/api/system/upgrade/status 2>/dev/null | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    print(f'Upgrade status: {d.get(\"status\", \"unknown\")}')
+    if 'result' in d:
+        r = d['result']
+        print(f'  Deploy: {r.get(\"status\", \"?\")}')
+        print(f'  Completed: {r.get(\"completed_at\", \"?\")}')
+except: pass
+" 2>/dev/null || true
 ```
 
 **Pass criteria:**

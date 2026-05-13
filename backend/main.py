@@ -1284,6 +1284,177 @@ async def shutdown():
     return {"status": "shutting_down"}
 
 
+# ── Upgrade (daemon/hive only) ────────────────────────────────────────────────
+
+# Module-level lock to prevent concurrent upgrades
+_upgrade_in_progress: bool = False
+_upgrade_result_file: str | None = None
+
+
+@app.post("/api/system/upgrade")
+async def upgrade_daemon():
+    """Trigger a binary upgrade without killing the agent session.
+
+    The daemon spawns a detached upgrader process (in a new session/process group)
+    that:
+      1. Deploys the new binary (rsync from sidecar path to daemon dir)
+      2. Kills the daemon via SIGTERM (KeepAlive restarts with new binary)
+
+    The upgrader survives daemon death because ``start_new_session=True`` puts it
+    in a separate process group that launchd won't kill.
+
+    Allowed ONLY in daemon/hive modes (requires KeepAlive/Restart=always).
+    """
+    global _upgrade_in_progress, _upgrade_result_file
+
+    mode = _detect_run_mode()
+    if mode not in ("daemon", "hive"):
+        return JSONResponse(
+            status_code=403,
+            content={
+                "status": "forbidden",
+                "reason": f"upgrade requires daemon/hive mode (current: {mode})",
+            },
+        )
+
+    if _upgrade_in_progress:
+        return JSONResponse(
+            status_code=409,
+            content={
+                "status": "conflict",
+                "reason": "upgrade already in progress",
+                "result_file": _upgrade_result_file,
+            },
+        )
+
+    # Locate the project root and verify binary exists
+    project_root = Path(__file__).resolve().parent.parent
+    prod_script = project_root / "prod.sh"
+
+    # Fallback: check common locations
+    if not prod_script.exists():
+        # PyInstaller bundle — prod.sh won't be there. Use daemon-lib.sh directly.
+        project_root = Path.home() / "Desktop" / "SwarmAI-Workspace" / "swarmai"
+        prod_script = project_root / "prod.sh"
+
+    if not prod_script.exists():
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "reason": f"prod.sh not found at {prod_script}",
+            },
+        )
+
+    # Check binary exists (sidecar path)
+    sidecar_dir = project_root / "desktop" / "src-tauri" / "binaries" / "python-backend-aarch64-apple-darwin"
+    if not (sidecar_dir / "python-backend").exists():
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "reason": f"No built binary at {sidecar_dir}/python-backend. Run build first.",
+            },
+        )
+
+    # Spawn the upgrader in a new process session (survives daemon death)
+    import uuid as _uuid
+
+    upgrade_id = _uuid.uuid4().hex[:8]
+    result_file = f"/tmp/swarm-upgrade-{upgrade_id}.json"
+    _upgrade_result_file = result_file
+    _upgrade_in_progress = True
+
+    # The upgrader script: deploy then kill (prod.sh deploy does this correctly)
+    upgrader_script = f"""
+import subprocess, json, time, pathlib
+
+result_file = "{result_file}"
+project_root = "{project_root}"
+
+try:
+    # Run prod.sh deploy (deploys binary THEN kills daemon)
+    r = subprocess.run(
+        ["bash", f"{{project_root}}/prod.sh", "deploy"],
+        cwd=project_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env={{**__import__('os').environ, "PATH": "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin"}},
+    )
+    result = {{
+        "status": "success" if r.returncode == 0 else "failed",
+        "returncode": r.returncode,
+        "stdout": r.stdout[-2000:] if r.stdout else "",
+        "stderr": r.stderr[-2000:] if r.stderr else "",
+        "completed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }}
+except Exception as e:
+    result = {{
+        "status": "error",
+        "error": str(e),
+        "completed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }}
+
+pathlib.Path(result_file).write_text(json.dumps(result, indent=2))
+"""
+
+    # Spawn Python in a new session — this process survives daemon death
+    import subprocess as _sp
+    import sys as _sys
+
+    _sp.Popen(
+        [_sys.executable, "-c", upgrader_script],
+        start_new_session=True,
+        stdout=_sp.DEVNULL,
+        stderr=_sp.DEVNULL,
+        close_fds=True,
+    )
+
+    logger.info(
+        "Upgrade initiated: id=%s result_file=%s project=%s",
+        upgrade_id, result_file, project_root,
+    )
+
+    return JSONResponse(
+        status_code=202,
+        content={
+            "status": "initiated",
+            "upgrade_id": upgrade_id,
+            "result_file": result_file,
+            "message": "Upgrade process spawned. Daemon will restart in ~10s. Session stays alive until SIGTERM.",
+        },
+    )
+
+
+@app.get("/api/system/upgrade/status")
+async def upgrade_status():
+    """Check the result of the last upgrade operation."""
+    global _upgrade_in_progress, _upgrade_result_file
+
+    if _upgrade_result_file is None:
+        return {"status": "no_upgrade", "message": "No upgrade has been initiated"}
+
+    result_path = Path(_upgrade_result_file)
+    if not result_path.exists():
+        return {
+            "status": "in_progress",
+            "result_file": _upgrade_result_file,
+            "message": "Upgrade is still running",
+        }
+
+    import json as _json
+
+    try:
+        result = _json.loads(result_path.read_text())
+    except Exception as e:
+        result = {"status": "error", "parse_error": str(e)}
+
+    # Reset the lock once we've read the result
+    _upgrade_in_progress = False
+    return {"status": "completed", "result": result}
+
+
 @app.get("/")
 async def root():
     """Root endpoint."""
