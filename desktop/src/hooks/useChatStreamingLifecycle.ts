@@ -1481,11 +1481,32 @@ export function useChatStreamingLifecycle(
               if (tabState) {
                 tabState.isStreaming = false; // Mirror setIsStreaming
                 tabState.isWaitingForBusy = true;
+                // Remove the orphan messages from this failed send:
+                // the assistant placeholder (known ID) + the user message
+                // immediately before it. Backend already deleted the user
+                // msg from DB. Without this, orphans display for 6-9s until
+                // polling overwrites messages with DB truth.
+                const assistantIdx = tabState.messages.findIndex(
+                  (m) => m.id === assistantMessageId
+                );
+                if (assistantIdx >= 0) {
+                  // Remove assistant placeholder and the user msg before it (if exists)
+                  const removeIds = new Set([assistantMessageId]);
+                  if (assistantIdx > 0 && tabState.messages[assistantIdx - 1].role === 'user') {
+                    removeIds.add(tabState.messages[assistantIdx - 1].id);
+                  }
+                  tabState.messages = tabState.messages.filter(m => !removeIds.has(m.id));
+                }
               }
             }
             // Mirror to React state if this is the active tab
             if (!capturedTabId || capturedTabId === activeTabIdRef.current) {
               setIsWaitingForBusy(true);
+              // Also sync the orphan removal to React
+              const tabState = capturedTabId ? tabMapRef.current.get(capturedTabId) : undefined;
+              if (tabState) {
+                setMessages([...tabState.messages]);
+              }
             }
 
             // Start polling messages endpoint (ETag-based, cheap 304s)
