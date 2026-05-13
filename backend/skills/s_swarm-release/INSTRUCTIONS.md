@@ -140,10 +140,10 @@ to close apps first. Run with `run_in_background: true` to avoid blocking.
 1. Check free memory (vm_stat). If < 4GB → warn, suggest freeing memory.
 2. Run build in background:
    ```bash
-   cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop/scripts
-   bash build-backend.sh 2>&1 | tail -20
+   cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop/scripts && bash build-backend.sh
    ```
    With `timeout: 600000` and `run_in_background: true`.
+   **🚨 NEVER pipe through `| tail`** — causes buffering hang.
 3. When complete, verify:
    ```bash
    ls -la desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin
@@ -177,10 +177,10 @@ Same OOM guard as Stage 3. Run in background with 600s timeout.
 1. Check free memory. If < 5GB → warn user.
 2. Run in background:
    ```bash
-   cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop
-   npm install && npm run tauri build 2>&1 | tail -20
+   cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop && npm install && npm run tauri build
    ```
    With `timeout: 600000` and `run_in_background: true`.
+   **🚨 NEVER pipe through `| tail`** — causes buffering hang.
 3. Verify output:
    ```bash
    ls -la src-tauri/target/release/bundle/dmg/SwarmAI_*.dmg
