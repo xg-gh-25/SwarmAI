@@ -4,6 +4,11 @@ Build the SwarmAI backend binary via PyInstaller, verify it, deploy to daemon pa
 restart the daemon, and confirm health. Each stage runs independently with clear
 pass/fail output between steps.
 
+**🚨 SELF-KILL PARADOX:** You (the agent) are a subprocess of the daemon you're
+restarting. Killing the daemon = killing your parent = severing your communication
+channel. Stage 5 (RESTART) WILL disconnect your session. Stage 6 (HEALTH) uses a
+detached verifier that survives the kill — you read its result on cold resume.
+
 ## Stage 0: PROJECT GUARD (blocking)
 
 Before anything else, verify this is a SwarmAI task:
@@ -73,12 +78,11 @@ If memory is sufficient, run the build directly:
 
 ```bash
 cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop/scripts
-bash build-backend.sh 2>&1 | tail -20
+bash build-backend.sh 2>&1 | tail -30
 ```
 
-Use `timeout: 600000` (10 min max) and `run_in_background: true` to avoid
-blocking the conversation. Do NOT retry on exit 137 — it means OOM, not a
-code bug. Ask user to close apps and free memory first.
+Use `timeout: 600000` (10 min max) to avoid blocking the conversation.
+Do NOT retry on exit 137 — it means OOM, not a code bug.
 
 **On exit 137 (OOM kill):**
 1. Do NOT retry immediately (same result)
@@ -86,18 +90,19 @@ code bug. Ask user to close apps and free memory first.
 3. Suggest: "Close other apps or restart daemon to free memory, then retry."
 
 **Pass criteria:**
-- User confirms build completed
-- Binary exists at expected output path
-- Binary is newer than the release commit
+- build-backend.sh exits 0
+- Binary directory exists at expected output path
+- verify_build.py passes (build-backend.sh runs it automatically)
 
 **Report format:**
 ```
-Stage 2 PYINSTALLER: PASS (user-built)
-  Binary: python-backend-aarch64-apple-darwin (48.2 MB)
+Stage 2 PYINSTALLER: PASS
+  Binary: python-backend-aarch64-apple-darwin/ (onedir bundle)
   Location: src-tauri/binaries/
+  Verify: XX/XX checks passed
 ```
 
-**On failure:** Report the last 20 lines of user's Terminal output and STOP.
+**On failure:** Report the last 20 lines of output and STOP.
 Common failures:
 - Missing hidden imports → fix in build-backend.sh, re-run
 - OOM → close other apps, re-run
@@ -107,7 +112,7 @@ Common failures:
 
 ## Stage 3: VERIFY (10s)
 
-Run the 38-check verification suite against the built binary.
+Run the verification suite against the built binary (if not already run by build-backend.sh).
 
 ```bash
 cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai
@@ -120,7 +125,7 @@ python3 desktop/scripts/verify_build.py
 
 **Report format:**
 ```
-Stage 3 VERIFY: PASS (38/38 checks)
+Stage 3 VERIFY: PASS (46/46 checks)
   Core imports: OK
   MCP catalog: OK
   Skills bundled: OK
@@ -133,118 +138,198 @@ Stage 3 VERIFY: PASS (38/38 checks)
 
 ---
 
-## Stage 4: DEPLOY (5s)
+## Stage 4+5: DEPLOY & RESTART (single atomic operation)
 
-Copy the verified binary to the daemon directory.
+Deploy the verified onedir bundle and restart daemon in ONE bash call.
+
+**🚨 WHY SINGLE CALL:** You are a subprocess of the daemon. Killing the daemon
+severs your communication channel. Also, KeepAlive restarts the daemon within
+~1s of kill — if deploy and kill are separate calls, KeepAlive can restart the
+daemon with OLD files mid-rsync (corruption). Single call = kill → rsync → done,
+no gap for KeepAlive to race.
+
+**🚨 ONEDIR FORMAT:** The binary is a DIRECTORY (not a single file):
+```
+python-backend-aarch64-apple-darwin/
+  ├── python-backend          (executable)
+  └── _internal/              (libraries, ~200MB)
+```
+
+**CRITICAL:** Use `launchctl kill SIGTERM`, NOT `bootout`. Bootout deregisters
+the service permanently — dangerous when running inside daemon's own subprocess.
+
+Run this as a SINGLE Bash tool call:
 
 ```bash
-# Source and destination
-SIDECAR="/Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin"
+PROJECT_ROOT="/Users/gawan/Desktop/SwarmAI-Workspace/swarmai"
+BACKEND_BUNDLE_DIR="${PROJECT_ROOT}/desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin"
 DAEMON_DIR="${HOME}/.swarm-ai/daemon"
-DAEMON_BIN="${DAEMON_DIR}/python-backend"
+GIT_HASH=$(cd "$PROJECT_ROOT" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+APP_VERSION=$(cd "$PROJECT_ROOT" && grep -m1 '"version"' desktop/src-tauri/tauri.conf.json 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || cat "$PROJECT_ROOT/VERSION" 2>/dev/null || echo "0.0.0")
+HEALTH_FILE="/tmp/swarm-build-health-${GIT_HASH}-$(date +%s).txt"
 
-# Atomic deploy: copy to temp, then move (prevents partial binary)
-cp "$SIDECAR" "${DAEMON_BIN}.new"
-mv "${DAEMON_BIN}.new" "$DAEMON_BIN"
-chmod +x "$DAEMON_BIN"
+# ── Step 1: Spawn detached health verifier BEFORE any killing ──
+# Uses setsid (if available) or nohup to survive parent death.
+# Verifier checks that the NEW daemon (matching GIT_HASH) is healthy.
+nohup bash -c "
+  EXPECTED_HASH='${GIT_HASH}'
+  sleep 12  # Wait for KeepAlive to restart daemon
+  for i in \$(seq 1 24); do
+    HEALTH=\$(curl -s http://127.0.0.1:18321/health 2>/dev/null)
+    if echo \"\$HEALTH\" | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d['status']=='healthy'\" 2>/dev/null; then
+      VERSION=\$(echo \"\$HEALTH\" | python3 -c \"import sys,json; print(json.load(sys.stdin).get('version',''))\" 2>/dev/null)
+      echo \"HEALTHY\"
+      echo \"version=\$VERSION\"
+      echo \"expected_hash=\$EXPECTED_HASH\"
+      echo \"verified_at=\$(date '+%Y-%m-%d %H:%M:%S')\"
+      exit 0
+    fi
+    sleep 5
+  done
+  echo 'TIMEOUT: daemon did not become healthy within 120s'
+  echo \"expected_hash=\$EXPECTED_HASH\"
+  echo \"last_check=\$(date '+%Y-%m-%d %H:%M:%S')\"
+  tail -5 ~/.swarm-ai/logs/backend-stderr.log 2>/dev/null
+  exit 1
+" > "$HEALTH_FILE" 2>&1 &
+disown
+echo "Health verifier spawned → $HEALTH_FILE (expects hash: $GIT_HASH)"
 
-# Write version marker
-echo "$(cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai && git rev-parse --short HEAD) $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${DAEMON_DIR}/.version"
+# ── Step 2: Kill daemon (SIGTERM for graceful shutdown) ──
+# After kill, KeepAlive will try to restart — but rsync overwrites files first.
+launchctl kill SIGTERM gui/$(id -u)/com.swarmai.backend 2>/dev/null || true
 
-cat "${DAEMON_DIR}/.version"
-```
-
-**Pass criteria:**
-- Binary exists at daemon path
-- .version file written
-
-**Report format:**
-```
-Stage 4 DEPLOY: PASS
-  Binary: ~/.swarm-ai/daemon/python-backend (48.2 MB)
-  Version: abc1234 2026-05-05T09:30:00Z
-```
-
----
-
-## Stage 5: RESTART (90s max, typically 15-30s)
-
-Kill daemon process so KeepAlive auto-restarts with new binary.
-
-**CRITICAL:** Use `launchctl kill SIGTERM`, NOT `bootout`. Bootout deregisters the service — if this script dies mid-execution (e.g. running inside daemon's own subprocess), nobody re-registers and daemon is permanently dead.
-
-```bash
-# Kill process — service stays registered, KeepAlive will restart
-launchctl kill SIGTERM gui/$(id -u)/com.swarmai.backend 2>/dev/null || {
-  # If kill fails (daemon wasn't running), bootstrap fresh
-  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.swarmai.backend.plist 2>/dev/null || true
-}
-
-# Wait for port to release
-for i in $(seq 1 15); do
+# ── Step 3: Wait for process to die (port release confirms death) ──
+# Short wait — just enough for graceful shutdown, NOT long enough for KeepAlive restart.
+for i in $(seq 1 8); do
   nc -z 127.0.0.1 18321 2>/dev/null || break
-  sleep 1
+  sleep 0.5
 done
 
-# Force-kill if stuck
+# Force-kill if still alive after 4s
 if nc -z 127.0.0.1 18321 2>/dev/null; then
+  echo "WARN: Graceful shutdown failed — force-killing..."
   launchctl kill SIGKILL gui/$(id -u)/com.swarmai.backend 2>/dev/null || true
   sleep 1
 fi
 
-echo "Daemon killed — KeepAlive will restart with new binary"
+# ── Step 4: Deploy (rsync while daemon is dead, before KeepAlive restarts) ──
+rsync -a --delete "$BACKEND_BUNDLE_DIR/" "$DAEMON_DIR/"
+chmod +x "$DAEMON_DIR/python-backend"
+
+# Write version file — canonical format: "{semver} {git_hash} {timestamp}"
+echo "${APP_VERSION} ${GIT_HASH} $(date '+%Y-%m-%d %H:%M:%S')" > "$DAEMON_DIR/.version"
+
+echo ""
+echo "Deploy complete:"
+cat "$DAEMON_DIR/.version"
+echo "Bundle: $(du -sh "$DAEMON_DIR" | cut -f1)"
+
+# ── Step 5: KeepAlive will now restart daemon with NEW binary ──
+# Session may die at this point (we're an orphan of the killed daemon).
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "  Deploy + restart complete."
+echo "  KeepAlive will start new daemon with $GIT_HASH in ~10s."
+echo ""
+echo "  Session MAY disconnect (self-kill paradox)."
+echo "  Health verifier: $HEALTH_FILE"
+echo "  On cold resume, Stage 6 reads this file."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 ```
 
 **Pass criteria:**
-- Port 18321 released (nc -z fails)
-- Daemon will auto-restart via KeepAlive (verified in Stage 6)
+- Health verifier spawned (file path echoed)
+- Daemon killed (port released)
+- rsync completed (version file written)
+- "Deploy + restart complete" message shown
 
 **Report format:**
 ```
-Stage 5 RESTART: PASS
-  Daemon: com.swarmai.backend killed, KeepAlive will restart
+Stage 4+5 DEPLOY+RESTART: PASS
+  Version: 1.12.2 793f3c4 2026-05-13 11:51:10
+  Bundle: 210 MB
+  Health verifier: /tmp/swarm-build-health-793f3c4-XXXXX.txt
+  Session may disconnect — verify on cold resume (Stage 6)
 ```
 
-**On failure:** If kill fails AND bootstrap fails → plist may be missing. Report: "Check ~/Library/LaunchAgents/com.swarmai.backend.plist exists."
+**What happens next:**
+- KeepAlive detects daemon is gone → spawns new process with NEW binary
+- Health verifier polls every 5s for 120s → writes result with version check
+- Your session may die (parent was killed) → frontend shows reconnecting
+- On next message, cold resume → you read the health file in Stage 6
+
+**On failure:** If `launchctl kill` returns error AND port is not occupied → daemon
+was already dead. rsync still runs (safe). KeepAlive will start it.
+
+If rsync fails (disk full, permissions): STOP. Do NOT proceed — daemon is dead
+and has no valid binary. Fix the issue and re-run this stage.
 
 ---
 
-## Stage 6: HEALTH (15s, poll)
+## Stage 6: HEALTH (verify on resume)
 
-Verify the daemon is healthy AND running the correct version.
+**Context:** This runs AFTER your session reconnects (cold resume) or immediately
+if the session survived Stage 4+5. You're now on the NEW daemon.
+
+**Always do a live health check first** — it's the ground truth. The health
+verifier file is supplementary evidence (confirms the daemon came up promptly
+after deploy, not just "is healthy now").
 
 ```bash
-# Wait for startup (poll up to 30s)
-for i in $(seq 1 15); do
-  HEALTH=$(curl -s http://localhost:18321/health 2>/dev/null)
-  if echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='healthy'" 2>/dev/null; then
-    echo "$HEALTH"
-    break
-  fi
-  sleep 2
-done
+EXPECTED_HASH=$(awk '{print $2}' ~/.swarm-ai/daemon/.version 2>/dev/null)
+echo "Expected git hash: $EXPECTED_HASH"
 
-# Verify version matches what we deployed
-DEPLOYED_VERSION=$(cat ~/.swarm-ai/daemon/.version | awk '{print $1}')
-HEALTH_VERSION=$(echo "$HEALTH" | python3 -c "import sys,json; print(json.load(sys.stdin).get('version','unknown'))" 2>/dev/null)
-echo "Deployed: $DEPLOYED_VERSION | Running: $HEALTH_VERSION"
+# ── Live health check (primary) ──
+HEALTH=$(curl -s http://127.0.0.1:18321/health 2>/dev/null)
+if echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='healthy'" 2>/dev/null; then
+  echo "=== Live Health: HEALTHY ==="
+  echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Version: {d.get(\"version\",\"?\")}')"
+else
+  echo "=== Live Health: NOT HEALTHY ==="
+  echo "Raw: $HEALTH"
+  echo "Check logs: tail -30 ~/.swarm-ai/logs/backend-stderr.log"
+fi
+
+# ── Health verifier file (supplementary — confirms timely startup) ──
+# File named with git hash to prevent stale reads from prior builds
+VERIFIER_FILE=$(ls -t /tmp/swarm-build-health-${EXPECTED_HASH}-*.txt 2>/dev/null | head -1)
+
+if [ -n "$VERIFIER_FILE" ]; then
+  # Check the verifier has finished (first line is HEALTHY or TIMEOUT)
+  FIRST_LINE=$(head -1 "$VERIFIER_FILE" 2>/dev/null)
+  if [ "$FIRST_LINE" = "HEALTHY" ] || echo "$FIRST_LINE" | grep -q "TIMEOUT"; then
+    echo ""
+    echo "=== Verifier Result (from background check) ==="
+    cat "$VERIFIER_FILE"
+    rm -f "$VERIFIER_FILE"
+  else
+    echo ""
+    echo "=== Verifier still running (file incomplete) — relying on live check ==="
+  fi
+else
+  echo ""
+  echo "(No verifier file for hash $EXPECTED_HASH — relying on live check only)"
+fi
 ```
 
 **Pass criteria:**
 - Health endpoint returns `{"status": "healthy"}`
-- Version in health response matches deployed version (semantic correctness, not just liveness)
+- Version in health response matches deployed git hash (semantic correctness)
 
 **Report format:**
 ```
 Stage 6 HEALTH: PASS
   Status: healthy
-  Version: abc1234 (matches deployed)
-  Uptime: 5s
+  Version: 1.12.2 (matches deployed)
+  Verifier: confirmed healthy at 2026-05-13 11:52:30
 ```
 
 **On failure:**
-- If health never returns: check `log stream --predicate 'subsystem == "com.swarmai.backend"' --last 30s`
-- If version mismatch: daemon loaded old binary — check plist WorkingDirectory
+- Health verifier says TIMEOUT → check daemon logs: `tail -30 ~/.swarm-ai/logs/backend-stderr.log`
+- Version mismatch → old binary still in daemon dir (rsync failed)
+- No health file + no live health → daemon never started, check plist:
+  `launchctl print gui/$(id -u)/com.swarmai.backend 2>&1 | head -20`
 
 ---
 
@@ -254,9 +339,9 @@ After all 6 stages pass, report:
 
 ```
 BUILD COMPLETE ✅
-  Version: abc1234
-  Binary: 48.2 MB
-  Verify: 38/38 checks
+  Version: 1.12.2 abc1234
+  Bundle: 210 MB (onedir)
+  Verify: 46/46 checks
   Daemon: healthy, correct version
   Duration: ~3m 45s total
 ```
@@ -268,12 +353,39 @@ Do NOT retry the entire build — fix the specific stage that failed.
 
 ## Quick Reference
 
-| Stage | Duration | Can Fail? | Retry? |
-|-------|----------|-----------|--------|
-| 0. Guard | instant | Yes (abort) | No |
-| 1. Preflight | 5s | Warn only | No |
-| 2. PyInstaller | 2-5 min | Yes | No (fix first) |
-| 3. Verify | 10s | Yes | After fix |
-| 4. Deploy | 5s | Rare | Yes |
-| 5. Restart | 15s | Rare | Alt method |
-| 6. Health | 15-30s | Yes | Check logs |
+| Stage | Duration | Can Fail? | Session Impact |
+|-------|----------|-----------|----------------|
+| 0. Guard | instant | Yes (abort) | None |
+| 1. Preflight | 5s | Warn only | None |
+| 2. PyInstaller | 2-5 min | Yes | None |
+| 3. Verify | 10s | Yes | None |
+| 4+5. Deploy+Restart | 5-10s | Rare | **SESSION MAY DIE** (self-kill) |
+| 6. Health | 5s | Yes | Runs on cold resume |
+
+---
+
+## Troubleshooting
+
+### Session hangs after Stage 5
+**Expected behavior.** The daemon (your parent process) was killed. Your session
+SSE stream is severed. The frontend will show "reconnecting" and eventually
+establish a new session on the restarted daemon. Wait ~30s, then check the
+health verifier file.
+
+### Port 18321 stuck after restart
+Orphan Claude CLI processes may hold resources. Force cleanup:
+```bash
+pkill -f "claude.*--session" 2>/dev/null || true
+pkill -f "python-backend" 2>/dev/null || true
+sleep 2
+# KeepAlive will spawn a fresh daemon
+```
+
+### Daemon starts but health returns "initializing"
+Normal during startup. The daemon runs migrations, loads skills, starts
+channels. Full startup takes 5-15s. The health verifier polls for 120s —
+it will catch the transition to "healthy."
+
+### build-backend.sh succeeds but verify_build.py fails
+The build script runs verify internally. If you see this, the binary was
+likely corrupted during deploy (rsync mid-write). Re-run Stage 4 (deploy).
