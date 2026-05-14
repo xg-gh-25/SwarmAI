@@ -11,10 +11,10 @@ Usage:
 """
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
 # Profiles that produce code deliveries worthy of a PR
@@ -66,7 +66,6 @@ def _infer_scope(files: list[str]) -> str:
     if not dirs:
         return ""
     # Most frequent directory
-    from collections import Counter
     common = Counter(dirs).most_common(1)[0][0]
     return common
 
@@ -236,6 +235,32 @@ def create_pr(run_dir: str, dry_run: bool = False) -> dict:
     auth_ok, auth_err = _check_gh_auth()
     if not auth_ok:
         return {"success": False, "error": f"gh auth failed: {auth_err}"}
+
+    # Branch handling (AC5): if on main, create a feature branch first
+    branch = _get_current_branch()
+    if branch in ("main", "master"):
+        run_id = run_data.get("id", "pipeline")
+        feature_branch = f"pipeline/{run_id}"
+        try:
+            subprocess.run(
+                ["git", "checkout", "-b", feature_branch],
+                capture_output=True, text=True, timeout=10, check=True,
+            )
+            subprocess.run(
+                ["git", "push", "-u", "origin", feature_branch],
+                capture_output=True, text=True, timeout=30, check=True,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            return {"success": False, "error": f"Branch creation failed: {e}"}
+    else:
+        # Push current branch to remote
+        try:
+            subprocess.run(
+                ["git", "push", "-u", "origin", branch],
+                capture_output=True, text=True, timeout=30, check=True,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            return {"success": False, "error": f"Push failed: {e}"}
 
     # Execute PR creation
     try:
