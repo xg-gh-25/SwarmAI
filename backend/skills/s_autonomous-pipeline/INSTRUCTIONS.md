@@ -755,30 +755,115 @@ Reason: <why>
 
 ---
 
-## Progress Display
+## Progress Display (Structured Landmarks)
 
-Show progress after each stage completes:
+### Quality First Rule
 
+Output formatting MUST NOT degrade pipeline execution quality.
+- Output is generated AFTER stage execution completes, not during
+- Output is NEVER a retry trigger (validator + tests = the only gates)
+- If token budget is tight (run-budget > 70%), compress to status-only lines
+- Agent priority: execute → verify → THEN format output
+
+### Format
+
+Show progress as structured landmarks after each stage completes. Each stage
+header includes its **methodology concept** in brackets — these serve as anchor
+points for live demo (user can point at them and explain the approach verbally).
+
+**Pipeline header (shown once at start):**
 ```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Pipeline: <requirement> (run_<id>)
 Project: <PROJECT> | Profile: <profile>
-
-  [done] EVALUATE  <one-line summary>
-  [done] THINK     <one-line summary>
-  [>>>>] PLAN      <what's happening now>
-  [    ] BUILD
-  [    ] REVIEW
-  [    ] TEST
-  [    ] DELIVER
-  [    ] REFLECT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-Status: `[done]` `[>>>>]` `[skip]` `[FAIL]` `[STOP]` `[    ]`
+**Per-stage output (1-3 lines each, shown after stage completes):**
 
-**During DELIVER convergence loop**, show iteration status inline:
 ```
-  [>>>>] DELIVER   converge: iteration 2/3 (L3 regression fix applied, re-verifying)
+## ✦ EVALUATE [DDD-Informed Decision Gate]
+→ <GO/DEFER/REJECT> | ROI <X.X> | <N> AC | <scope> scope
+  <DDD insight if it influenced a decision — omit if none>
+
+## ✦ THINK [Constraint-Driven Alternatives]
+→ Recommend: <Approach X> (<CONSTRAINT>)
+  <N> approaches evaluated, <DDD influence summary>, <grill questions resolved>
+
+## ✦ PLAN [SDD: Spec Before Code]
+→ <N> AC → <N> test strategies mapped | ~<M> lines | <K> files
+  Boundaries: <key always/never constraints>
+
+## ✦ BUILD [TDD: Red-Green-Verify]
+→ <N> RED → <M> GREEN | <K> tests | <L> lines | <J> atomic commits
+  SMOKE <✓/✗>  USER-PATH <✓/✗>  PROBE <✓/✗>
+  <DDD insight if TECH.md trap or pattern was applied — omit if none>
+
+## ✦ REVIEW [DDD Conformance + Pattern Checks]
+→ <N> high | <M> med fixed | integration trace <clean/N warnings>
+  L5 pre-check: TECH.md <N/N> ✓ | IMPROVEMENT.md anti-patterns <N/N> ✓
+
+## ✦ TEST [Regression Scope]
+→ <N> new + <M> existing pass | <K> regressions | WTF: <J>
+
+## ✦ DELIVER
+  ├─ Taste Gate: <N> decisions → <approved/overridden>
+  ├─ ★ Adversarial Review: <summary — e.g., "3 findings, 1 HIGH fixed">
+  ├─ ★ Quality Convergence: L1-L6 <result> (<N> iterations)
+  └─ CI <✅/⏳/❌> | <PR info if created>
+
+## ✦ REFLECT [DDD Knowledge Loop]
+→ <N> lessons → IMPROVEMENT.md
+  <one-line: what future pipelines will know>
 ```
+
+**Goal profile — GOAL LOOP replaces BUILD/REVIEW/TEST/DELIVER:**
+
+```
+## ✦ GOAL LOOP [Iterative Convergence]
+→ Cycle <N>/<max> | <X>/<Y> DoD met | velocity: <Δ>/cycle
+  ✓ <met criteria>
+  ~ <in-progress criteria with current→target>
+  ○ <pending criteria>
+  ★ Periodic Review: <if triggered this cycle>
+  ★ Final Adversarial: <runs when all DoD met>
+```
+
+**Completion summary (shown once at end):**
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✦ COMPLETE | Confidence <X>/12
+  TDD: <N>→<M>→<K> bugs | Adversarial: <summary> | DDD: <N> decisions shaped
+  <PR/CI status> | .artifacts/runs/run_<id>/REPORT.md
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+### Display Rules
+
+1. **Concept brackets are mandatory** — every `## ✦` header includes `[Concept Name]`.
+   These are the demo anchor points. Even if the user doesn't read the content,
+   scanning the headers tells the methodology story.
+
+2. **DDD insights only when real** — show DDD influence only when a DDD doc actually
+   changed a decision. "DDD: TECH.md was read" is not an insight. Silence > false attribution.
+
+3. **★ marks core methodology features** — Adversarial Review, Quality Convergence,
+   Goal Loop get `★` when they are ACTIVE in that stage. This visually highlights
+   the pipeline's unique capabilities.
+
+4. **DELIVER always shows the tree** — Even if all sub-steps pass cleanly, show the
+   three branches (Taste Gate, Adversarial, Convergence). These are the methodology
+   differentiators that the user points to during demo.
+
+5. **Skip visibility** — If a core feature is skipped due to profile:
+   ```
+   ⊘ Adversarial: skipped (trivial profile)
+   ```
+   Only for surprising absence. Don't annotate every stage where Goal Loop "doesn't apply."
+
+6. **Density is flexible** — The templates above are maximums. A bugfix BUILD that
+   changes 1 line gets: `→ 1 RED → 1 GREEN | 2 tests | 3 lines | 1 commit`. Done.
 
 ---
 
