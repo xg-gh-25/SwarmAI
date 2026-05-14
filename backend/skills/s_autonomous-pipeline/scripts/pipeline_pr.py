@@ -14,6 +14,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 from collections import Counter
 from pathlib import Path
 
@@ -26,12 +27,21 @@ MAX_TITLE_LENGTH = 70
 # Max body size (GitHub API limit is 65536 chars)
 MAX_BODY_LENGTH = 60000
 
+# Strict allowlist for run_id in branch names (PE-1: prevent ref manipulation)
+_RUN_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
 
 def _load_json(path: Path) -> dict:
-    """Load JSON file, return empty dict on failure."""
+    """Load JSON file, return empty dict on failure.
+
+    Logs specific error to stderr for debugging (PE-6).
+    """
     try:
         return json.loads(path.read_text())
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
+    except FileNotFoundError:
+        return {}
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"[pipeline_pr] Warning: failed to load {path}: {e}", file=sys.stderr)
         return {}
 
 
@@ -57,7 +67,6 @@ def _infer_scope(files: list[str]) -> str:
     """Infer PR scope prefix from changed file paths."""
     if not files:
         return ""
-    # Find most common top-level directory
     dirs = []
     for f in files:
         parts = Path(f).parts
@@ -65,7 +74,6 @@ def _infer_scope(files: list[str]) -> str:
             dirs.append(parts[0] if parts[0] != "." else parts[1])
     if not dirs:
         return ""
-    # Most frequent directory
     common = Counter(dirs).most_common(1)[0][0]
     return common
 
@@ -79,7 +87,6 @@ def format_pr_title(requirement: str, files_changed: list[str]) -> str:
     scope = _infer_scope(files_changed)
     prefix = f"feat({scope}): " if scope else "feat: "
 
-    # Condense requirement to fit
     max_desc = MAX_TITLE_LENGTH - len(prefix)
     desc = requirement.strip()
 
@@ -87,8 +94,13 @@ def format_pr_title(requirement: str, files_changed: list[str]) -> str:
     desc = re.sub(r"^(Add|Implement|Create|Build)\s+", "", desc, flags=re.IGNORECASE)
 
     if len(desc) > max_desc:
-        # Truncate at word boundary
-        desc = desc[: max_desc - 1].rsplit(" ", 1)[0] + "…"
+        # Truncate at word boundary (PE-4: handle no-space case)
+        truncated = desc[: max_desc - 1].rsplit(" ", 1)[0]
+        desc = (truncated if truncated else desc[: max_desc - 1]) + "…"
+
+    # Capitalize first char for consistent casing (PE-9)
+    if desc and desc[0].islower():
+        desc = desc[0].upper() + desc[1:]
 
     return prefix + desc
 
@@ -97,6 +109,7 @@ def format_pr_body(run_data: dict, report_text: str) -> str:
     """Format PR body from run.json data and REPORT.md content.
 
     Includes: Summary, Pipeline Delivery stats, Files Changed, Test Plan.
+    Test Plan checkboxes reflect actual data (PE-5: no hardcoded [x]).
     """
     tldr = _extract_tldr(report_text)
     files_section = _extract_files_section(report_text)
@@ -104,23 +117,30 @@ def format_pr_body(run_data: dict, report_text: str) -> str:
     profile = run_data.get("profile", "unknown")
     confidence = run_data.get("confidence_score", "?")
 
-    # Adversarial stats
+    # Adversarial stats (PE-8: coerce to int for safety)
     adv = run_data.get("adversarial_review", {})
-    adv_total = adv.get("pe_findings", 0) + adv.get("user_findings", 0)
-    adv_fixed = adv.get("pe_fixed", 0) + adv.get("user_fixed", 0)
+    adv_total = int(adv.get("pe_findings", 0) or 0) + int(adv.get("user_findings", 0) or 0)
+    adv_fixed = int(adv.get("pe_fixed", 0) or 0) + int(adv.get("user_fixed", 0) or 0)
+    adv_unfixed = adv_total - adv_fixed
 
     # Convergence
     conv = run_data.get("convergence", {})
     conv_iter = conv.get("iterations", 0)
 
     # TDD from stages
-    tdd_info = ""
+    regressions = 0
     for stage in run_data.get("stages", []):
         if stage.get("stage") == "build":
             tdd = stage.get("tdd", {})
-            regressions = tdd.get("regressions", 0)
-            tdd_info = f"0 regressions" if regressions == 0 else f"{regressions} regressions"
+            regressions = int(tdd.get("regressions", 0) or 0)
             break
+
+    tdd_info = "0 regressions" if regressions == 0 else f"{regressions} regressions"
+
+    # PE-5: dynamic checkboxes based on actual state
+    ac_check = "[x]" if run_data.get("ac_verification", {}).get("status") == "verified" else "[ ]"
+    regression_check = "[x]" if regressions == 0 else "[ ]"
+    adversarial_check = "[x]" if adv_unfixed == 0 else "[ ]"
 
     body = f"""## Summary
 {tldr}
@@ -135,17 +155,16 @@ def format_pr_body(run_data: dict, report_text: str) -> str:
 {files_section if files_section else "(see REPORT.md)"}
 
 ## Test Plan
-- [x] All acceptance criteria verified (AC Verification)
-- [x] Full test suite passes (0 regressions)
-- [x] Adversarial review clean
+- {ac_check} All acceptance criteria verified (AC Verification)
+- {regression_check} Full test suite passes ({tdd_info})
+- {adversarial_check} Adversarial review clean
 
 Full report: `.artifacts/runs/{run_id}/REPORT.md`
 
 Generated with [SwarmAI Autonomous Pipeline](https://github.com/xg-gh-25/SwarmAI)
 """
-    # Truncate if too long
     if len(body) > MAX_BODY_LENGTH:
-        body = body[:MAX_BODY_LENGTH - 50] + f"\n\n...(truncated, see REPORT.md)"
+        body = body[:MAX_BODY_LENGTH - 50] + "\n\n...(truncated, see REPORT.md)"
 
     return body
 
@@ -189,6 +208,11 @@ def create_pr(run_dir: str, dry_run: bool = False) -> dict:
         Dict with keys: success, skipped, pr_url, command, error, reason.
     """
     run_path = Path(run_dir)
+
+    # PE-7: validate run_dir is a directory
+    if not run_path.is_dir():
+        return {"success": False, "error": f"Not a directory: {run_dir}"}
+
     run_data = _load_json(run_path / "run.json")
 
     if not run_data:
@@ -219,14 +243,12 @@ def create_pr(run_dir: str, dry_run: bool = False) -> dict:
     title = format_pr_title(requirement, files_changed)
     body = format_pr_body(run_data, report_text)
 
-    # Build the gh command
-    gh_cmd = ["gh", "pr", "create", "--title", title, "--body", body, "--auto"]
-
+    # Build the gh command — use --body-file to avoid ARG_MAX and ps leakage (PE-2)
     if dry_run:
         return {
             "success": True,
             "skipped": False,
-            "command": " ".join(["gh", "pr", "create", "--title", repr(title), "--auto"]),
+            "command": " ".join(["gh", "pr", "create", "--title", repr(title), "--body-file", "<tmp>", "--auto"]),
             "title": title,
             "body_length": len(body),
         }
@@ -240,6 +262,9 @@ def create_pr(run_dir: str, dry_run: bool = False) -> dict:
     branch = _get_current_branch()
     if branch in ("main", "master"):
         run_id = run_data.get("id", "pipeline")
+        # PE-1: validate run_id before using in branch name
+        if not _RUN_ID_PATTERN.match(run_id):
+            return {"success": False, "error": f"Invalid run_id for branch name: {run_id!r}"}
         feature_branch = f"pipeline/{run_id}"
         try:
             subprocess.run(
@@ -251,6 +276,8 @@ def create_pr(run_dir: str, dry_run: bool = False) -> dict:
                 capture_output=True, text=True, timeout=30, check=True,
             )
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            # PE-3: cleanup — return to original branch on failure
+            subprocess.run(["git", "checkout", branch], capture_output=True, timeout=5)
             return {"success": False, "error": f"Branch creation failed: {e}"}
     else:
         # Push current branch to remote
@@ -262,8 +289,16 @@ def create_pr(run_dir: str, dry_run: bool = False) -> dict:
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
             return {"success": False, "error": f"Push failed: {e}"}
 
-    # Execute PR creation
+    # Execute PR creation using --body-file (PE-2: avoids ARG_MAX + process table leak)
+    body_file = None
     try:
+        body_file = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", prefix="pr-body-", delete=False
+        )
+        body_file.write(body)
+        body_file.close()
+
+        gh_cmd = ["gh", "pr", "create", "--title", title, "--body-file", body_file.name, "--auto"]
         result = subprocess.run(
             gh_cmd,
             capture_output=True,
@@ -277,6 +312,13 @@ def create_pr(run_dir: str, dry_run: bool = False) -> dict:
             return {"success": False, "error": f"gh pr create failed: {result.stderr.strip()}"}
     except (subprocess.TimeoutExpired, OSError) as e:
         return {"success": False, "error": f"PR creation error: {e}"}
+    finally:
+        # Cleanup temp file
+        if body_file:
+            try:
+                Path(body_file.name).unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def main():
