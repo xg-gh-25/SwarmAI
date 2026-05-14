@@ -29,8 +29,8 @@ Triggered when goal_cycle exits with SUCCESS (all DoD met + adversarial clean):
 5. **Update PROJECT.md:** goal completed, date, cycles taken, key insight
 6. **DDD Cultivation** (Step 7 below): run normally on distilled lessons
 
-Then continue with Steps 4-10 below as normal (checklist maintenance, ADR gate,
-dead code, cultivation, record stage, learn, report).
+Then continue with the Standard Methodology below, starting from Step 4
+(checklist maintenance → ADR gate → dead code → cultivation → record → learn → report).
 
 **For non-goal profiles:** skip this section, start directly at Step 1 below.
 

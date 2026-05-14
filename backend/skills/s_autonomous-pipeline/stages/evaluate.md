@@ -124,6 +124,11 @@ classify as `goal_mode: true` and switch to `goal` profile.
 
 **If NOT goal mode:** proceed with standard evaluation (scope = standard/complex/trivial/bugfix).
 
+**Ordering note:** Goal Mode Detection runs AFTER scoring. If scoring recommends
+DEFER/REJECT, that takes precedence — the requirement isn't worth pursuing
+regardless of whether it's a goal or a feature. If scoring recommends GO and
+the requirement matches goal indicators → override scope to "goal".
+
 ### Pre-mortem Gate
 
 After scoring, if the initial recommendation is GO, the base methodology's

@@ -40,7 +40,7 @@ if remaining_tokens < 150_000:
 
 ### 2. DoD Check (exit-first)
 
-Run ALL DoD criteria. If all pass → EXIT with SUCCESS (skip to Final Gate).
+Run ALL DoD criteria. If all pass → proceed to **Final Quality Gate** section below (adversarial on total changeset), then EXIT with SUCCESS.
 
 For each criterion:
 - **command type:** Run the shell command. Exit code 0 = pass, non-zero = fail.
@@ -149,8 +149,9 @@ Attempt 2:
   - Different fix approach
   - Re-run TEST
     → Pass: continue to Step 8
-    → Fail: REVERT all cycle N changes
-      - git checkout -- <files changed this cycle>
+    → Fail: REVERT cycle N source code changes only
+      - git checkout -- <source files changed this cycle>
+      - Do NOT revert progress file (it lives in .artifacts/, tracks state)
       - Mark step as "blocked by [test/reason]" in progress file
       - Increment revert counter
       - Continue to Step 11 (Revert Check)
