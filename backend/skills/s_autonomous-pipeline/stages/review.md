@@ -270,6 +270,82 @@ Include wire test results in the review artifact under `"wire_test"`.
 
 ---
 
+### 7b. Operational Context Check (Auto-Selected)
+
+**BLOCKING when changeset touches operational code.** Skip for pure business logic.
+
+Infer execution context from file paths in the changeset, then apply the
+matching checklist. This catches bugs that are invisible in dev but fatal in
+production — the class that pipeline REVIEW + adversarial structurally miss.
+
+**Context detection (automatic, based on file path):**
+
+| File path pattern | Context | Checklist |
+|-------------------|---------|-----------|
+| `hooks/*.py` | Per-session recurring | HOOK checklist |
+| `jobs/*.py`, `scheduler.py` | Cron/background | CRON checklist |
+| `routers/*.py`, `channels/*.py` | Request/message handler | ENDPOINT checklist |
+| `main.py`, `lifecycle_*.py`, `daemon*` | Startup/shutdown | LIFECYCLE checklist |
+| `scripts/*.py`, CLI tools | One-shot invocation | SCRIPT checklist |
+
+**HOOK checklist (per-session hooks):**
+```
+□ No-op cost: what happens when hook fires and finds nothing? (RP30)
+□ Scaling: does no-op cost grow with data accumulation?
+□ Time bound: is there a mtime/count filter to cap scan?
+□ Error isolation: failure logged + skipped, not blocking session?
+□ Idempotent: re-running produces same result (no double-writes)?
+```
+
+**CRON checklist (background jobs):**
+```
+□ Concurrent guard: what if previous run is still running?
+□ Stale data: what if external data source returns yesterday's data?
+□ Failure notification: does failure surface somewhere (log, health)?
+□ Resource cleanup: temp files, connections closed on any exit path?
+□ Clock drift: UTC vs local time assumptions correct?
+```
+
+**ENDPOINT checklist (request handlers):**
+```
+□ Auth: is this endpoint behind the correct auth middleware?
+□ Concurrent: can 2 requests race on shared state?
+□ Timeout: does the handler have a wall-clock upper bound?
+□ Error response: does failure return structured JSON, not 500 HTML?
+□ Input validation: all path/query/body params validated before use?
+```
+
+**LIFECYCLE checklist (startup/shutdown code):**
+```
+□ Daemon env: no $HOME, $USER, $SHELL assumptions (launchd strips them)
+□ Kill semantics: SIGTERM vs SIGKILL vs bootout — which fires here?
+□ Partial startup: what if step 3/5 fails? Previous steps cleaned up?
+□ Reentrancy: can this be called twice (KeepAlive restart)?
+□ Port conflict: what if port 18321 is already occupied?
+```
+
+**SCRIPT checklist (one-shot CLI tools):**
+```
+□ Idempotent: safe to re-run if killed midway?
+□ Output: returns structured JSON (not human prose) for agent consumption?
+□ Error exit code: non-zero on failure?
+□ Path assumptions: uses Path.home() or explicit args, not $HOME?
+```
+
+**Output format (added to review artifact under `operational_context`):**
+```
+Context: HOOK (hooks/context_health_hook.py)
+  □ No-op cost: pass — 30-day mtime filter bounds scan
+  □ Scaling: pass — O(recent), not O(total)
+  □ Time bound: pass — mtime_cutoff = 30 days
+  □ Error isolation: pass — try/except per-run, logger.warning
+  □ Idempotent: pass — cultivated:true prevents re-processing
+```
+
+If no file in the changeset matches any context pattern → skip this check.
+
+---
+
 ### 8. Depth & Seam Analysis (T3 + P4)
 
 **For each new file in the changeset**, assess architectural depth and seam

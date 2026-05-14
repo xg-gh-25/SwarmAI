@@ -280,7 +280,7 @@ Read from `backend/skills/` (source of truth), NOT `.claude/skills/`
 | build | `stages/build.md` | — |
 | review | `stages/review.md` AND `REVIEW_PATTERNS.md` AND `OPERATIONAL_PATTERNS.md` | — |
 | test | `stages/test.md` | `scripts/wtf_gate.py` |
-| deliver | `stages/deliver.md` | `scripts/confidence_score.py` |
+| deliver | `stages/deliver.md` | — |
 | reflect | `stages/reflect.md` | — |
 
 After reading, execute the stage behavior inline in this session.
@@ -386,7 +386,7 @@ The DELIVER step has 4 phases executed in order:
 1. **Taste Decision Gate** — batch review of accumulated taste decisions
 2. **Deliver stage execution** — read `stages/deliver.md`, run Completion Audit + Adversarial Review
 3. **Quality Convergence Loop** — 6-layer push-ready gate, iterate until converged or escalate
-4. **Report & CI** — generate REPORT.md, confidence score, final artifacts
+4. **Report & CI** — generate REPORT.md, push-ready verdict, final artifacts
 
 ---
 
@@ -426,7 +426,8 @@ Read and execute `stages/deliver.md` inline. This runs:
 - Fresh User Audit (P6)
 - Completion Audit (verify deliverables match requirement)
 - Adversarial Review Gate (spawn sub-agent — see deliver.md for profile-aware tiering)
-- Confidence Scoring (`scripts/confidence_score.py`)
+- Meta-Review: "What did the pipeline miss?" (operational blind spot analysis)
+- Push-Ready Gate (binary: push-ready / not-push-ready)
 
 The adversarial review in deliver.md is the FIRST pass — it produces the initial
 set of findings. The Quality Convergence Loop below re-verifies after fixes.
@@ -550,7 +551,7 @@ remaining 20% that only emerge at the system level. Neither alone is sufficient.
 After the convergence loop declares push-ready:
 
 1. Generate REPORT.md at `.artifacts/runs/<RUN_ID>/REPORT.md`
-2. Record final confidence score (post-convergence — may be higher than initial)
+2. Record push-ready verdict and meta-review result in run.json
 3. Record convergence metadata in run.json:
    ```json
    {
@@ -605,19 +606,17 @@ After reflect stage:
 
 ```
 Pipeline COMPLETE (run_<id>) -- <N> stages, <M> skipped, <K> escalations
-Confidence: <score>/10
+Status: PUSH-READY
 
   TL;DR: <2-3 sentences: what was built, what problem it solves, what value
          it delivers. Written for someone who won't read the rest.>
 
   Artifacts:
     evaluation  -> art_xxxx (GO, ROI 4.2)
-    research    -> art_xxxx (3 alternatives, chose: <approach>)
     design_doc  -> art_xxxx (<approach>, 5 acceptance criteria)
     changeset   -> art_xxxx (47 lines, 2 files, TDD: 5 red → all green)
     review      -> art_xxxx (clean, 0 findings)
-    test_report -> art_xxxx (5/5 pass, 0 regressions)
-    delivery    -> art_xxxx (PR ready, confidence 9/10)
+    delivery    -> art_xxxx (PUSH-READY, meta-review: CLEAR)
 
   TDD: <N> criteria → <M> tests generated → <K> bugs caught → all green
   Decisions: <X> mechanical, <Y> taste (all approved), <Z> judgment
@@ -853,8 +852,8 @@ Autonomous Pipeline — from requirement to push-ready code.
 For standard/full/bugfix profiles:
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✦ COMPLETE | Confidence <X>/12
-  TDD: <N>→<M>→<K> bugs | Adversarial: <summary> | Convergence: <N> iter | DDD: <N> decisions shaped
+✦ COMPLETE | PUSH-READY
+  TDD: <N>→<M>→<K> bugs | Adversarial: <summary> | Meta-review: CLEAR | DDD: <N> decisions shaped
   <PR/CI status> | .artifacts/runs/run_<id>/REPORT.md
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
@@ -914,8 +913,8 @@ For goal profile:
 10. **Judgment decisions block immediately.** CHECKPOINT at once.
 11. **DEFER/REJECT at evaluate ends the pipeline.**
 12. **Always generate REPORT.md.** at `.artifacts/runs/<RUN_ID>/REPORT.md`.
-13. **Confidence score at delivery.** Use `scripts/confidence_score.py`.
-    Below 7 → flag for human review.
+13. **Binary push-ready gate at delivery.** No numeric score. Binary:
+    PUSH-READY (all gates pass) or NOT-PUSH-READY (blockers listed).
 14. **Source-path reads.** Always read from `backend/skills/` (source of truth),
     not `.claude/skills/` (projected copy).
 15. **Value over completion.** The pipeline's purpose is to deliver qualified

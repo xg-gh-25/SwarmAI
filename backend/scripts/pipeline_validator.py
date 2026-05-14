@@ -95,18 +95,24 @@ STAGE_SCHEMAS: dict[str, dict[str, list[str]]] = {
     "deliver": {
         "required": [
             "title",
-            "status",
-            "confidence_score",    # V1.10.0: must be from confidence_score.py
-            "completion_audit",    # V1.10.0: AC → evidence verification
+            "quality",             # V2: binary push_ready gate (replaces confidence_score)
             "adversarial_review",  # V1.10.0: independent sub-agent review
         ],
-        "recommended": ["decisions", "attention_flags", "report_path"],
+        "recommended": ["decisions", "attention_flags", "report_path",
+                         "meta_review", "completion_audit"],
     },
     # reflect has no artifact — skip schema check
 }
 
-# Stages that don't require an artifact
+# Stages that never require an artifact (regardless of profile)
 NO_ARTIFACT_STAGES = {"reflect"}
+
+# Stages where artifact is optional for bugfix/trivial profiles
+# (reduces ceremony — validator warns instead of blocking)
+ARTIFACT_OPTIONAL_FOR_PROFILES: dict[str, set[str]] = {
+    "bugfix": {"plan", "build", "review", "test", "deliver"},
+    "trivial": {"build", "review", "test", "deliver"},
+}
 
 # Stages where decisions are optional (informational stages)
 DECISION_OPTIONAL_STAGES = {"reflect", "deliver"}
@@ -770,14 +776,19 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
     if _check_artifact_exists(stage, stage_record):
         checks_passed += 1
     else:
-        if stage not in NO_ARTIFACT_STAGES:
+        if stage in NO_ARTIFACT_STAGES:
+            checks_passed += 1  # Never required
+        elif stage in ARTIFACT_OPTIONAL_FOR_PROFILES.get(profile or "", set()):
+            # Optional for this profile — warn, don't block
+            warnings.append(
+                f"No artifact for '{stage}' (optional in {profile} profile)"
+            )
+            checks_passed += 1
+        else:
             errors.append(
                 f"No artifact published for '{stage}' — "
                 f"artifact_id is missing or empty in stage record"
             )
-        else:
-            # Shouldn't reach here, but be safe
-            checks_passed += 1
 
     # --- Check 3: Artifact schema ---
     schema_result = _check_artifact_schema(stage, stage_record, project, run_id)
