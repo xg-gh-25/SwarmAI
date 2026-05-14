@@ -37,7 +37,13 @@ MIN_LESSON_LENGTH = 30
 TECH_KEYWORDS = re.compile(
     r"\b(pattern|convention|rule|always|never|must|prefer|use\s+\w+\s+instead|"
     r"standing\s+rule|port|daemon|config|architecture|invariant|guard|"
-    r"nc\s+-z|lsof|asyncio|subprocess|Path\.home)\b",
+    r"nc\s+-z|lsof|asyncio|subprocess|Path\.home|"
+    # F1: verb-phrase patterns that express conventions without meta-words
+    r"separates|prevents|eliminates|enables|correct\s+\w+\s+for|"
+    r"safer\s+than|trivial\s+to|atomic|idempotent|"
+    r"should\s+be\s+stored|needs\s+\d+|include\s+a\s+\w+|"
+    r"skill.layer|CLI\s+bridge|content.addressable|"
+    r"polling|ETag|per.tab|stabilization)\b",
     re.IGNORECASE,
 )
 
@@ -45,7 +51,11 @@ TECH_KEYWORDS = re.compile(
 IMPROVEMENT_KEYWORDS = re.compile(
     r"\b(worked|failed|caught|missed|broke|bug|regression|crash|"
     r"highest.ROI|anti-pattern|root.cause|fix|prevented|discovered|"
-    r"SMOKE|adversarial|PE.review|pipeline)\b",
+    r"SMOKE|adversarial|PE.review|pipeline|"
+    # F1: verb-phrase patterns for lessons/outcomes
+    r"zero\s+regression|integration\s+gap|wiring\s+matters|"
+    r"reusing\s+existing|battle.tested|diagnostic|"
+    r"trivial\s+to\s+test|zero\s+mocking)\b",
     re.IGNORECASE,
 )
 
@@ -164,21 +174,37 @@ def _classify_lesson(lesson: str) -> Optional[tuple]:
     if total_hits == 0:
         return None
 
-    # Route to the category with most hits
-    if tech_hits >= improvement_hits and tech_hits >= product_hits:
+    # F2: Tie-break uses section-level keywords, not just category hits.
+    # When tech == improvement, check if the lesson describes an OUTCOME
+    # (caught/found/review → Improvement) or a RULE (correct/always/use → Tech).
+    lower = stripped.lower()
+
+    if tech_hits > improvement_hits and tech_hits >= product_hits:
         target_doc = "TECH.md"
-        if any(w in stripped.lower() for w in ("trap", "daemon", "env", "path", "port")):
+        if any(w in lower for w in ("trap", "daemon", "env", "path", "port", "launchd", "mode guard")):
             target_section = "Runtime Traps"
-        elif any(w in stripped.lower() for w in ("pattern", "convention", "prefer")):
+        elif any(w in lower for w in ("pattern", "convention", "prefer", "correct", "safer", "atomic", "idempotent")):
             target_section = "Conventions"
         else:
             target_section = "Architecture"
+    elif tech_hits == improvement_hits and tech_hits > 0:
+        # F2: tie-break — outcome words → Improvement, rule words → Tech
+        outcome_signal = any(w in lower for w in ("caught", "found", "missed", "review", "discovered", "prevented"))
+        if outcome_signal:
+            target_doc = "IMPROVEMENT.md"
+            target_section = "What Worked" if any(w in lower for w in ("caught", "prevented", "found")) else "What to Watch For"
+        else:
+            target_doc = "TECH.md"
+            target_section = "Conventions"
     elif improvement_hits >= product_hits:
         target_doc = "IMPROVEMENT.md"
-        if any(w in stripped.lower() for w in ("worked", "roi", "caught", "prevented")):
+        if any(w in lower for w in ("worked", "roi", "caught", "prevented", "highest", "effective")):
             target_section = "What Worked"
-        elif any(w in stripped.lower() for w in ("failed", "broke", "bug", "crash")):
+        elif any(w in lower for w in ("failed", "broke", "bug", "crash", "gap", "friction", "wrong")):
             target_section = "What Failed"
+        # F3: positive keywords for "What to Watch For" (risks, warnings, subtle issues)
+        elif any(w in lower for w in ("risk", "watch", "careful", "subtle", "hidden", "invisible", "structurally cannot")):
+            target_section = "What to Watch For"
         else:
             target_section = "What to Watch For"
     else:
