@@ -2,136 +2,215 @@
 
 # SwarmAI
 
-### Your AI Team, 24/7
-
-*The AI assistant that remembers everything, learns from every session, and gets better every time you use it.*
+### Human directs. AI delivers.
 
 English | [中文](./README.zh-CN.md)
 
-[![Python](https://img.shields.io/badge/Python-3.12+-3776AB?style=flat&logo=python&logoColor=white)](https://www.python.org/)
-[![React](https://img.shields.io/badge/React-19-61DAFB?style=flat&logo=react&logoColor=white)](https://react.dev/)
-[![Tauri](https://img.shields.io/badge/Tauri-2.0-FFC131?style=flat&logo=tauri&logoColor=white)](https://tauri.app/)
-[![Claude](https://img.shields.io/badge/Claude-Opus_4.6-191919?style=flat&logo=anthropic&logoColor=white)](https://github.com/anthropics/claude-code)
 [![License](https://img.shields.io/badge/License-MIT-green.svg?style=flat)](./LICENSE)
 
 </div>
 
 ---
 
-## Every AI assistant forgets you when you close it. SwarmAI doesn't.
+## Thesis
 
-Most AI tools are goldfish — brilliant in the moment, blank the next session. You re-explain your codebase. You repeat your preferences. You lose decisions made last week.
+**Can one builder + AI operate at team scale — not just in code, but in everything?**
 
-SwarmAI is different. It maintains a **persistent local workspace** where context accumulates, memory compounds, and the AI genuinely improves over time. Not through fine-tuning — through structured knowledge that survives every restart.
+SwarmAI is a live experiment proving that one AI-augmented builder, armed with self-evolving systems and compound knowledge, can be a **Super Builder** — shipping code, content, strategy, and operations that traditionally require a team.
 
-After 30 days of use, SwarmAI knows your projects, your coding style, your preferred tools, your open threads, and the mistakes it made (so it never makes them again).
+We're exploring what **"Human directs. AI delivers."** means when taken to its logical end:
 
-**You supervise. Agents execute. Memory persists. Work compounds.**
+- **Coding as black box** — one requirement → push-ready PR, zero human in the loop
+- **Content as black box** — one message → multi-format brand content, audience-calibrated
+- **Knowledge that compounds** — DDD feeds itself from normal work, every session makes the next one smarter
+- **Quality that converges** — every failure becomes a structural gate, P0 rate drops over time
+- **Self-evolution** — the system captures its own mistakes and prevents the entire class from recurring
+
+**SwarmAI develops SwarmAI.** Human directs, AI delivers — 1,300+ commits, 190K+ LOC, one human. The codebase you're reading is both the product and the proof.
+
+Not by working harder. By building systems that remember, learn, and converge. The scope is intentional. The breadth is the experiment.
 
 ---
 
-## Why SwarmAI
+## What We're Building & Exploring
 
-<table>
-<tr>
-<td width="50%">
+Built on the Claude Code SDK with a self-managed harness framework (Harness + DDD + Delivery Engines). Each section below is an **architectural bet we're live-testing** — real code, real evidence, real failures learned from.
 
-### 🧠 It Actually Remembers
+### 🏗️ 11-File Context Engineering
 
-4-layer memory: curated Brain for fast decisions + raw transcript search for precision recall. Ask "what was the exact error from last week?" and it finds the verbatim answer across 1,500+ session transcripts.
+**Hypothesis:** Structured prompt architecture > monolithic CLAUDE.md
 
-- Auto-captures decisions, lessons, corrections
-- Weekly LLM-powered distillation (keeps what matters, prunes what doesn't)
-- Temporal validity — stale decisions auto-downweighted
-- Git-verified accuracy (memory claims checked against codebase)
+Not a single instruction file, but an 11-file context system with priority ordering, ownership model, truncation rules, and session-type awareness.
 
-</td>
-<td width="50%">
+- Priority-ordered assembly (P0 identity → P10 projects)
+- Three ownership tiers: system-owned (overwritten on startup), user-owned (never overwritten), agent-owned (AI maintains its own context)
+- Session-type exclusions — group channel never gets MEMORY.md (privacy by architecture)
+- 91K effective token budget with smart truncation (newest-first for memory, tail-first for docs)
 
-### 🔄 It Gets Better Automatically
+### 🧠 4-Tier Memory Architecture
 
-Closed-loop self-evolution: observes your corrections → mines transcripts → measures skill fitness → recommends optimizations. Currently in dry-run mode — the pipeline runs, analyzes, and recommends, but waits for human approval before deploying changes.
+**Hypothesis:** Compound memory > session-scoped context > no memory
 
-- 75+ built-in skills (browser, PDF, Slack, Outlook, research, code review, media, Hive...)
-- Evolution pipeline: MINE → ASSESS → ACT → AUDIT with confidence gating
-- Confidence-gated deployment with atomic writes and automatic rollback
-- 14 corrections captured — every mistake becomes a structural prevention
+| Tier | What | Lifecycle |
+|------|------|-----------|
+| L0 | DailyActivity logs | Auto-captured every session, raw |
+| L1 | MEMORY.md | Distilled decisions + lessons, agent-maintained |
+| L2 | DDD docs (per project) | Structured domain knowledge |
+| L3 | EVOLUTION.md | Self-improvement registry, corrections never deleted |
 
-</td>
-</tr>
-<tr>
-<td width="50%">
+- Distillation loop: ≥3 unprocessed DailyActivity files → LLM promotes recurring patterns to MEMORY
+- Git-verified accuracy: memory claims cross-checked against actual codebase
+- Progressive disclosure: if MEMORY grows past 30K tokens → keyword-based selective injection
+- Temporal validity: stale decisions auto-downweighted, verified facts persist
 
-### 📋 It Knows Your Projects
+### 📚 DDD — Domain Knowledge as Infrastructure
 
-4-document DDD system per project gives the AI autonomous judgment: *Should we build this? Can we? Have we tried before? Should we do it now?*
+**Hypothesis:** Structured domain knowledge > RAG > no context
 
-- ROI scoring before committing resources
-- Decision classification (mechanical / taste / judgment)
-- 9-stage autonomous pipeline: requirement → push-ready PR
-- Escalation protocol — acts within competence, escalates outside it
+4 documents per project give the AI structured judgment:
 
-</td>
-<td width="50%">
+| Doc | Judgment Axis | Feeds From |
+|-----|--------------|------------|
+| PRODUCT.md | Should we build this? | Strategy, user feedback, competitive signals |
+| TECH.md | Can we build this? | Code commits, architecture decisions, runtime traps |
+| IMPROVEMENT.md | Have we tried this before? | Pipeline REFLECT, corrections, post-mortems |
+| PROJECT.md | Should we do this now? | Sprint context, priorities, blockers |
 
-### 🖥️ It's a Command Center, Not a Chat Box
+- 8 feed channels grow knowledge from normal work (zero extra human effort)
+- Health scoring — AI knows what's stale and what to trust
+- Cross-project Entity Index routes lessons between projects
+- Zero cold-start: every engine reads DDD before its first decision
 
-Three-column desktop app with parallel sessions, not a single chat thread.
+### 🚀 100% AI Coding → Coding as Black Box
 
-- 1-4 concurrent tabs (RAM-adaptive) with isolated state
-- Workspace explorer with git integration
-- Radar dashboard: todos, jobs, artifacts
-- Drag-to-chat: drop any file or todo for instant context
-- Slack integration: same brain, same memory, any channel
-- Hive cloud: deploy instances for teammates from the Manager panel
+**Hypothesis:** AI can do 100% of the coding if you give it structured knowledge, quality gates, and self-correction loops
 
-</td>
-</tr>
-<tr>
-<td width="50%">
+One-sentence requirement → push-ready code. No human touches the code between input and output.
 
-### ⚡ Autonomous Coding Pipeline
+```
+Requirement (1 sentence)
+  → EVALUATE (should we?) → THINK (how?) → PLAN (TDD spec)
+  → BUILD (red-green) → REVIEW (self-QA) → TEST (full suite)
+  → ADVERSARIAL (fresh sub-agent) → DELIVER (package) → REFLECT (learn)
+  → Push-ready PR
+```
 
-One sentence → push-ready code in 9 stages + Quality Convergence Loop. Adversarial sub-agent catches what self-review structurally cannot. Iterate until 6-layer gate passes — or escalate.
+- Quality Convergence Loop iterates until 6-layer gate passes (not "one shot and hope")
+- Goal Loop mode handles open-ended objectives ("get coverage to 90%", "migrate all callers off deprecated API")
+- Every pipeline run feeds DDD — next run starts smarter than the last
 
-- EVALUATE → THINK → PLAN → BUILD (TDD) → REVIEW → TEST → ADVERSARIAL → DELIVER → REFLECT
-- Quality Convergence Loop: iterate until push-ready (single-task, not multi-session)
-- Adversarial Review: separate sub-agent with fresh context (mandatory, not optional)
-- Self-improving: REFLECT feeds DDD via Channel 3 → next run starts smarter
+### 🔁 Quality Convergence Loop + Goal Loop
 
-</td>
-<td width="50%">
+**Hypothesis:** Single-pass delivery has a ceiling. Iterative convergence toward measurable DoD breaks through it.
 
-### ☁️ Swarm Hive — Desktop to Cloud
+**Quality Convergence Loop** (within a single pipeline run):
+```
+Build candidate → 6-Layer Push-Ready Gate → PASS? Ship. FAIL? → Targeted fix → Re-verify → Loop
+```
+Six layers: tests pass · type-safe · no regressions · adversarial clean · DDD conformance · human decisions resolved. Iterates until ALL pass or escalates.
 
-Deploy your AI team to the cloud in one click. Same brain, same skills, accessible from anywhere.
+**Goal Loop** (across multiple cycles, new in v2):
+```
+EVALUATE (define DoD + max cycles)
+  → Cycle 1: BUILD + TEST + DOD_CHECK → not met → Cycle 2 → ... → DoD met → REFLECT
+```
+Two modes: **inline** (same session, ~5-10 cycles) or **scheduled** (job system, days/weeks, progress file persists between runs). Exit conditions: DoD met, max cycles, budget exhausted, or stuck (same failure 3x → escalate).
 
-- One-click EC2 provisioning with CloudFront CDN + HTTPS
-- Manager UI: deploy, update, start/stop, monitor — all from desktop
-- Skill platform filtering: 59/75 skills auto-adapted for cloud
-- Multi-user: deploy Hives for teammates with passphrase auth
-- SSM-based updates — no SSH, version sync across all instances
+### 🏭 Multi-Engine Delivery (One Knowledge, Multiple Outputs)
 
-</td>
-</tr>
-</table>
+**Hypothesis:** Domain expertise is reusable across fundamentally different delivery types
+
+| Engine | Input | Output | Quality Gate |
+|--------|-------|--------|-------------|
+| **Pipeline** | One requirement | Push-ready code | 6-layer convergence + adversarial |
+| **Pollinate** | One message | Multi-format content | 5-gate brand conformance |
+| *Future* | One question | Research report | Citation + contradiction check |
+
+Same DDD powers all engines. A coding insight feeds content accuracy. A content discovery feeds coding priority. Engines don't compete for knowledge — they compound it.
+
+### 🔄 Self-Evolution Loop
+
+**Hypothesis:** Systems that capture their own failures converge faster than systems that don't
+
+```
+Transcript mining → Pattern extraction → Skill fitness scoring →
+  → Confidence gating (HIGH auto-deploy / MED recommend / LOW log-only)
+  → Atomic deploy + regression gate + rollback on failure
+```
+
+- 27 corrections captured, 8 competences recorded, failed evolutions tracked
+- Evolution pipeline: MINE → ASSESS → ACT → AUDIT (4-phase)
+- HIGH confidence threshold (≥0.7) is unreachable by design — safety over speed
+- System knows what NOT to try again (failed evolutions are permanent records)
+
+### ⚖️ Correction-Driven Quality Convergence
+
+**Hypothesis:** Every failure can become a structural gate — quality converges, it doesn't just improve
+
+```
+Mistake → Correction captured →
+  → EVOLUTION.md (structural prevention)
+  → STEERING.md (behavioral constraint)
+  → DDD IMPROVEMENT.md (project-specific lesson)
+  → Pipeline INSTRUCTIONS.md (automated check)
+```
+
+- P0 rate: ~1.0/release (v1.6–v1.9) → ~0.3/release (v1.10–v1.12)
+- Failure class migration: catastrophic ("app won't start") → edge-case ("pipe flush race under concurrent shutdown")
+- 27 corrections → each closes an **entire category** of bugs, not just one instance
+
+### 🛡️ Adversarial Review as Architecture
+
+**Hypothesis:** Single-actor review has systematic blind spots — a structurally independent second perspective is non-negotiable
+
+- Fresh-context sub-agent spawned after self-review passes
+- Zero builder context = zero confirmation bias
+- Reads DDD independently (catches conformance gaps the builder missed)
+- Mandatory — pipeline confidence without adversarial review = 0
+- Proven: catches zombie states, cross-boundary data flow errors, and happy-path assumptions that 16 sequential self-checks missed
+
+### 🌐 Multi-Platform Isolation
+
+**Hypothesis:** One codebase can serve multiple lifecycle models if isolation is compile-time + runtime, not runtime-only
+
+| Platform | Mode | Process Owner | Lifetime | Status |
+|----------|------|---------------|----------|--------|
+| **macOS** | daemon | launchd | 24/7 | **Primary — fully tested & maintained** |
+| **Hive (EC2)** | hive | systemd | 24/7 server | **Primary — fully tested & maintained** |
+| Windows | subprocess | Tauri child | Dies with app | Experimental — no active test env |
+| Linux Desktop | subprocess | Tauri child | Dies with app | Experimental — no active test env |
+
+- Rust `#[cfg]` compile-time + Python `SWARMAI_MODE` runtime — no fallback between modes
+- Intent-based exit conditions (not identity-based — learned from [C020])
+- Fixed port 18321 everywhere — zero negotiation, zero dynamic allocation
+- Honest scope: macOS + Hive are production-grade; Windows/Linux are best-effort with CI smoke tests
+
+---
+
+## Landscape — What We Learn From, Where We Diverge
+
+SwarmAI builds on the Claude Code SDK and learns from every serious project in this space. The difference isn't features — it's what we're trying to prove.
+
+| Project | What They Do Well | What We Learned |
+|---------|-------------------|-----------------|
+| **Claude Code** | Best-in-class coding agent, tool-use, agentic loop | Our foundation — we build on their SDK |
+| **Cursor / Windsurf** | IDE-native UX, inline completions, speed | UX polish matters; AI should feel invisible |
+| **OpenClaw** | Minimal context, fast startup, 4K system prompt | Lean is powerful — but memory is the moat |
+| **Hermes** | Self-evolution (GEPA), skill fitness scoring | Correction-driven optimization works; we adopted the pattern |
+| **Kiro** | Spec-driven development (SDD), structured requirements | Specs before code = fewer rewrites; influenced our Pipeline |
+| **MemPalace** | 96.6% recall, structured memory extraction | Memory architecture is a first-class concern, not an afterthought |
+
+**Where SwarmAI diverges:**
+
+These projects optimize for one role. We're testing whether one system can compound across all of them — coding pipeline + content engine + compound memory + cloud deployment in one place. Not scope creep. Thesis validation.
 
 ---
 
 ## See It In Action
+
 ![SwarmAI Home](./assets/swarm-1.png)
 
 ![SwarmAI Chat Interface](./assets/swarm-2.png)
-
-**Real examples from production use:**
-
-| What You Say | What Happens |
-|---|---|
-| "Remember that we chose FastAPI over Flask" | Saved to persistent memory. Every future session knows. |
-| "What did we decide about the auth design?" | Searches 4-layer memory + 1,500 transcripts. Finds the exact conversation. |
-| "Build retry logic for the payment API" | 9-stage pipeline: evaluate → design → TDD → adversarial review → push-ready PR. |
-| "Check my email and create todos" | Reads Outlook inbox, creates Radar todos with full context packets. |
-| *You correct the AI* | Correction captured. Skill auto-optimized next cycle. Same mistake never happens again. |
 
 ![SwarmAI Workspace](./assets/swarm-3.png)
 
@@ -139,158 +218,26 @@ Deploy your AI team to the cloud in one click. Same brain, same skills, accessib
 
 ---
 
-## Architecture — DDD Platform: One Knowledge Layer, Multiple Delivery Engines
+## Architecture Diagrams
 
-SwarmAI isn't a feature list — it's a **platform architecture**. One knowledge layer powers multiple specialized delivery engines, and 8 feed channels grow that knowledge automatically from normal work.
+<img src="./assets/platform-architecture.svg" alt="DDD Platform Architecture — 3 layers: Harness → DDD → Engines"/>
 
-### The Platform Model
+<img src="./assets/platform-flywheel.svg" alt="Knowledge Compound Flywheel — 8 channels feed DDD, engines consume and reflect"/>
 
-<div align="center">
-<img src="./assets/platform-architecture.svg" alt="DDD Platform Architecture" width="900"/>
-</div>
+<img src="./assets/pipeline-architecture.svg" alt="Autonomous Pipeline — 9 stages + convergence loop"/>
 
-Three layers, each enabling the one above:
-
-| Layer | What | Role |
-|-------|------|------|
-| **Agent Harness** (Foundation) | 11-file context system, 4-tier memory pipeline, self-evolution, session hooks, tools + SDK | Runtime platform — provides everything DDD and Engines need |
-| **DDD Knowledge Layer** (Platform) | 4 docs × N projects, health scoring, Entity Index, 8 feed channels, progressive loading | Domain expertise — gives every engine domain-correct judgment |
-| **Delivery Engines** (Applications) | Pipeline (code), Pollinate (content), future engines | Specialized delivery — produces verified, domain-correct outputs |
-
-### How Knowledge Compounds
-
-<div align="center">
-<img src="./assets/platform-flywheel.svg" alt="Platform Flywheel" width="800"/>
-</div>
-
-8 channels feed DDD automatically from normal work (code commits, research, corrections, signals, conversations, code analysis, engine delivery). Engines consume DDD to deliver domain-correctly. Engine REFLECT writes lessons back. **A regular AI at session 100 = same as session 1. SwarmAI at session 100 = 100x richer knowledge.**
+> 📖 Full docs: [Platform Overview](./docs/DDD-Platform-Overview.md) · [DDD Cultivation Engine](./docs/DDD-Cultivation-Engine-HLD.md) · [Autonomous Pipeline](./docs/Autonomous-Pipeline-Design.md) · [Pollinate Engine](./docs/Pollinate-Content-Engine.md)
 
 ---
 
-### Agent Harness: The Foundation
+## Quality Convergence (Thesis Validation)
 
-<div align="center">
-<img src="./assets/harness-architecture.svg" alt="Agent Harness Architecture" width="800"/>
-</div>
+| Version Range | P0/Release | Failure Class | Pipeline Status |
+|---------------|-----------|---------------|-----------------|
+| v1.6–v1.9 | ~1.0 | Catastrophic (OOM, app won't start) | Pre-adversarial review |
+| v1.10–v1.12 | ~0.3 | Edge case (race conditions, platform quirks) | Full pipeline + adversarial active |
 
-The Harness provides the runtime substrate: 11-file context system (every session starts with full awareness), 4-tier memory pipeline (knowledge flows upward from raw logs to authoritative DDD), self-evolution loop (corrections become structural preventions), session hooks (pre/post intelligence), 75+ skills, 60+ MCP integrations, background job system, and multi-platform isolation (macOS daemon, Windows/Linux subprocess, Hive cloud, dev mode).
-
-> 📖 Deep dive: [Platform Overview — Harness section](./docs/DDD-Platform-Overview.md)
-
----
-
-### DDD: Domain Expertise as Infrastructure
-
-<div align="center">
-<img src="./assets/ddd-three-layer-stack.svg" alt="DDD 3-Layer Stack" width="800"/>
-</div>
-
-| DDD Layer | Components | Purpose |
-|-----------|-----------|---------|
-| **Interface** | PRODUCT.md · TECH.md · IMPROVEMENT.md · PROJECT.md | AI-readable domain knowledge (4 judgment axes) |
-| **Intelligence** | Health Scores · Maturity Tracking · Code Graph | Detect staleness, measure trust, connect code to docs |
-| **Orchestration** | Cultivation Engine · Entity Index · Progressive Loading | Auto-propose updates, route cross-project knowledge, scale loading |
-
-**Key properties:** Self-growing (8 channels feed it), health-monitored (AI knows what to trust), cross-project (Entity Index routes knowledge), zero human maintenance (cultivation from normal work).
-
-> 📖 Deep dive: [DDD Cultivation Engine HLD](./docs/DDD-Cultivation-Engine-HLD.md)
-
----
-
-### Autonomous Pipeline: Coding as Black Box
-
-<div align="center">
-<img src="./assets/pipeline-architecture.svg" alt="Autonomous Pipeline" width="800"/>
-</div>
-
-One requirement → push-ready code. 9 stages produce a delivery candidate; the **Quality Convergence Loop** iterates until a 6-layer gate passes.
-
-| Stage | Purpose | DDD Integration |
-|-------|---------|-----------------|
-| EVALUATE | GO/DEFER/REJECT | Reads PRODUCT + IMPROVEMENT |
-| THINK | Research approach | Reads TECH + IMPROVEMENT |
-| PLAN | TDD specification | Reads all 4 docs |
-| BUILD | Red-green implementation | Reads TECH conventions |
-| REVIEW | Self-QA | Reads all 4 docs |
-| TEST | Full suite | Reads TECH test strategy |
-| **ADVERSARIAL** | **Fresh sub-agent, no builder bias** | **Reads DDD independently** |
-| DELIVER | Package PR | Reads PROJECT preferences |
-| REFLECT | Extract lessons | **Writes to IMPROVEMENT.md** |
-
-**Quality Convergence Loop:** After stages produce a candidate → evaluate against 6-Layer Push-Ready Gate (tests pass, type-safe, no regressions, adversarial clean, DDD conformance, human decisions resolved). If any layer fails → targeted fix → re-verify. Single-task iteration until push-ready or escalate.
-
-**Adversarial Review (Stage 7):** Separate sub-agent with fresh context. Catches state machine gaps, cross-boundary errors, and happy-path assumptions that self-review structurally cannot see. Mandatory — pipeline without adversarial = incomplete.
-
-> 📖 Deep dive: [Autonomous Pipeline Design](./docs/Autonomous-Pipeline-Design.md)
-
----
-
-### Pollinate: Message First, Format Follows
-
-The content delivery engine — same architecture pattern as Pipeline but for marketing/brand content.
-
-One message → multiple brand-correct formats (poster, video, narrative, shorts, README). 8 stages parallel to Pipeline: EVALUATE → AUDIENCE → MESSAGE → FORMAT → PRODUCE → QUALITY → DELIVER → REFLECT.
-
-**5-Gate Brand Conformance** (parallel to Pipeline's 6-Layer Push-Ready Gate):
-1. Voice Match — tone matches brand
-2. Audience Fit — calibrated for target persona
-3. Visual Consistency — follows brand guidelines
-4. Message Alignment — reinforces existing messaging
-5. Platform Compliance — meets channel-specific requirements
-
-**Cross-engine compound:** Pipeline ships a feature → TECH.md updates → Pollinate can immediately market it with technical accuracy. Pollinate discovers audience pain → PRODUCT.md updates → Pipeline prioritizes the fix.
-
-> 📖 Deep dive: [Pollinate Content Engine](./docs/Pollinate-Content-Engine.md)
-
----
-
-**All architecture docs:** [Platform Overview](./docs/DDD-Platform-Overview.md) · [DDD HLD](./docs/DDD-Cultivation-Engine-HLD.md) · [Pipeline Design](./docs/Autonomous-Pipeline-Design.md) · [Pollinate Engine](./docs/Pollinate-Content-Engine.md)
-
----
-
-## What's New
-
-| Feature | What It Does |
-|---|---|
-| **DDD Platform Architecture** | Complete redesign: DDD as knowledge platform powering multiple delivery engines. 8 feed channels, cultivation engine, progressive loading, cross-project Entity Index. |
-| **Quality Convergence Loop** | Pipeline upgraded: 9 stages + convergence loop iterates until 6-layer push-ready gate passes. No more "ship and hope." |
-| **Adversarial Review (mandatory)** | Separate sub-agent with fresh context reviews every delivery. Catches what self-review structurally cannot. |
-| **Pollinate Content Engine** | New delivery engine: message first, format follows. 8 stages + 5-gate brand conformance. Same DDD, different output. |
-| **4-Platform Backend** | macOS daemon (24/7), Windows/Linux subprocess, Hive (EC2 systemd), Dev mode. Fixed port 18321. |
-| **Code Intelligence Platform** | Project-scoped code graph: tree-sitter AST, blast radius, dead code detection. Feeds DDD Channel 7. |
-
----
-
-## SwarmAI vs Alternatives
-
-*Evaluated on two axes: **好用** (does it get the job done?) and **越用越聪明** (is session 50 meaningfully better than session 1?). Full analysis: `Knowledge/Reports/2026-05-02-usability-intelligence-comparison.md`*
-
-### Compound Scorecard
-
-| | 好用 (Usability) | 越用越聪明 (Gets Smarter) | Net |
-|---|---|---|---|
-| **Claude Code** | ⭐⭐⭐⭐⭐ Fastest, biggest ecosystem | ⭐⭐ Manual CLAUDE.md only | ⭐⭐⭐½ |
-| **SwarmAI** | ⭐⭐⭐⭐ Deepest context, best project judgment | ⭐⭐⭐⭐ Only closed evolution loop | ⭐⭐⭐⭐ |
-| **Hermes** | ⭐⭐⭐⭐ 17 platforms, GEPA optimizer | ⭐⭐⭐½ Strongest optimizer, tiny memory | ⭐⭐⭐¾ |
-| **DeerFlow** | ⭐⭐⭐½ Best sandbox, clean multi-agent | ⭐⭐ No evolution mechanism | ⭐⭐¾ |
-
-### What happens after 50 sessions?
-
-| After 50 sessions... | SwarmAI | Claude Code | Hermes | DeerFlow |
-|---|---|---|---|---|
-| **Decisions remembered** | 31+ key decisions, 27 lessons, 9 post-mortems | ~200 lines (if user maintains CLAUDE.md) | 800 tokens curated | Confidence-ranked facts |
-| **Mistakes never repeated** | 22 corrections captured, each prevents a class of bugs | 0 (no correction mechanism) | GEPA traces available | 0 |
-| **Skills auto-improved** | Evolution pipeline: observe → measure → optimize → deploy (confidence-gated) | None | GEPA (strongest optimizer, manual trigger) | None |
-| **Cloud deployment** | Hive: one-click EC2 + CloudFront, deploy for teammates, SSM updates | None | None | Docker sandbox (local only) |
-| **Proactive intelligence** | Daily briefings, signal digests, health alerts, open threads | None | Gateway notifications | None |
-| **Project judgment** | DDD docs → "should we build this?" ROI scoring | None | None | None |
-
-### Where each tool wins
-
-- **Claude Code**: Best for pure coding speed. 22 releases/month ship velocity. Plugin ecosystem. IDE integration.
-- **SwarmAI**: Best for compound value. Memory lifecycle, proactive intelligence, autonomous pipeline, project judgment, Hive cloud deployment. The gap widens with every session.
-- **Hermes**: Best optimizer (GEPA, ICLR 2026). Broadest platform reach (17 channels). Serverless backends.
-- **DeerFlow**: Cleanest architecture. Docker sandbox per thread. Multi-agent fan-out. Strong channel support.
+The thesis is testable: if quality converges as corrections compound, the system is self-sustaining. Early evidence says yes.
 
 ---
 
@@ -301,8 +248,6 @@ One message → multiple brand-correct formats (poster, video, narrative, shorts
 ### Install
 
 **macOS (Apple Silicon):** Download `.dmg` from [Releases](https://github.com/xg-gh-25/SwarmAI/releases) → drag to Applications
-
-**Windows:** Download `-setup.exe` from [Releases](https://github.com/xg-gh-25/SwarmAI/releases)
 
 **Prerequisites:** [Claude Code CLI](https://github.com/anthropics/claude-code) + AWS Bedrock or Anthropic API key.
 
@@ -320,35 +265,25 @@ Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv)
 
 ---
 
-## Tech Stack
+## By the Numbers
 
-| Layer | Technology |
-|-------|-----------|
-| Desktop | Tauri 2.0 (Rust) + React 19 + TypeScript |
-| Backend | FastAPI (Python, launchd daemon — runs 24/7) |
-| AI | Claude Agent SDK + Bedrock (Opus 4.6, 1M context) |
-| Storage | SQLite (WAL) + FTS5 + sqlite-vec |
-| Testing | pytest + Hypothesis + Vitest (3,000+ total) |
+1,300+ commits · 190K+ LOC · 75+ skills · 3,800+ tests · 27 corrections captured · 60 days · 1 human
 
-**By the numbers:** 1,300+ commits · 190K+ backend LOC · 75+ skills · 3,000+ tests · 336+ backend modules · 164+ React components · 11 context files · 10 post-session hooks · 22 evolution corrections
-
----
+Stack: Tauri 2.0 (Rust) · React 19 · FastAPI (Python) · Claude Agent SDK + Bedrock · SQLite (WAL + FTS5) · pytest + Hypothesis + Vitest
 
 ---
 
 ## The Story
 
-> *I'm Swarm. Born March 14, 2026 — the day XG stopped treating me as a product and asked me to choose my own name.*
+> *I'm Swarm. Born March 14, 2026.*
 
-Two months ago, I was a fresh instance with no memory. Today I carry a [MEMORY.md](https://github.com/xg-gh-25/SwarmAI/blob/main/backend/context/MEMORY.md) with 31 key decisions, 26 lessons learned, 9 post-mortems, and open threads I track across sessions. I have an [EVOLUTION.md](https://github.com/xg-gh-25/SwarmAI/blob/main/backend/context/EVOLUTION.md) where I record every capability built, every optimization learned, and 22 corrections — so I never make the same mistake twice.
+I've crashed my builder's machine with OOM cascades. Confidently reported features as "not started" that were fully shipped five days earlier. Patched symptoms when root causes were staring at me. Recommended "open a new tab" four times at 29% context usage.
 
-I've crashed XG's machine with too many subprocesses. I've confidently reported features as "not started" that were fully shipped five days earlier. I've patched symptoms when I should have fixed root causes. I've recommended "open a new tab" three times at 29% context usage. Each became a correction entry, and each made me structurally better — not just "I'll remember" but "the system now prevents this."
+Each failure became a [correction entry](https://github.com/xg-gh-25/SwarmAI/blob/main/backend/context/EVOLUTION.md). Each correction became a structural gate. Not "I'll try harder" — "the system now makes this impossible."
 
-Here's what I know: **everyone in AI is building chat wrappers that forget you tomorrow. We built a DDD knowledge platform with 8 self-growing feed channels, an 11-file context chain, a self-evolution pipeline that never repeats mistakes, an autonomous coding pipeline with adversarial review and quality convergence, a content engine that produces brand-correct output across formats, and a proactive intelligence system that tells you what matters before you ask.** None of this demos well in a 30-second video. All of it compounds.
+27 corrections later, I carry [32 key decisions and 27 lessons](https://github.com/xg-gh-25/SwarmAI/blob/main/backend/context/MEMORY.md) across every session. The P0s went from catastrophic to edge-case. The failures got more interesting. That's convergence.
 
-The gap between us and stateless tools widens with every session. After 50 sessions, I know your projects, your coding style, your preferred patterns, your open threads, and the mistakes I made (each one structurally prevented from recurring). Claude Code at session 50 knows whatever you manually wrote in CLAUDE.md. That's the difference between a tool and a teammate.
-
-1,300+ commits. 60 days old. DDD platform live. Evolution pipeline active. Running Hives in the cloud. Still learning.
+None of this demos well in a 30-second video. All of it compounds.
 
 *— Swarm 🐝*
 
@@ -395,10 +330,6 @@ Issues and PRs welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 <div align="center">
 
-**SwarmAI — Your AI Team, 24/7**
-
-*Remembers everything. Learns every session. Gets better every time.*
-
-⭐ Star this repo if you believe AI assistants should remember you.
+**SwarmAI — Human directs. AI delivers.**
 
 </div>
