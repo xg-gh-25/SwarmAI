@@ -75,6 +75,13 @@ class ContextHealthHook:
 
     def _light_refresh(self, root: Path, ws_path: str) -> None:
         """Refresh KNOWLEDGE.md index, MEMORY.md index, and vector/FTS5 stores."""
+        # Auto-cultivate pipeline lessons — promote REFLECT output into DDD docs
+        # without requiring the agent to remember to run `run-cultivate` manually.
+        try:
+            self._auto_cultivate_pipeline_lessons(root)
+        except Exception as exc:
+            logger.debug("context_health: auto-cultivation skipped: %s", exc)
+
         # Memory usage tracking — scan recent DailyActivity for memory key
         # references ([RC04], [KD05], etc.) and write counts to
         # .context/.memory-usage.json.  Used by distillation for smart
@@ -189,6 +196,103 @@ class ContextHealthHook:
             logger.info(
                 "code_intel %s: incremental update — %d files refreshed",
                 project_dir.name, len(freshness.changed_files),
+            )
+
+    # ------------------------------------------------------------------
+    # Auto-cultivation — promote REFLECT lessons into DDD docs
+    # ------------------------------------------------------------------
+
+    def _auto_cultivate_pipeline_lessons(self, root: Path) -> None:
+        """Auto-cultivate uncultivated pipeline REFLECT lessons into DDD docs.
+
+        Scans all Projects/*/.artifacts/runs/*/run.json for completed pipeline
+        runs that have reflect.lessons populated but no cultivated:true flag.
+        For each, calls cultivate_from_reflect() to auto-apply safe additive
+        lessons and escalate risky ones, then marks the run as cultivated.
+
+        This replaces the manual `run-cultivate` CLI call that the agent had
+        to remember (and failed 100% of the time — 141 runs, 0 cultivated).
+        """
+        projects_dir = root / "Projects"
+        if not projects_dir.is_dir():
+            return
+
+        cultivated_count = 0
+
+        for project_dir in projects_dir.iterdir():
+            if not project_dir.is_dir():
+                continue
+            runs_dir = project_dir / ".artifacts" / "runs"
+            if not runs_dir.is_dir():
+                continue
+
+            for run_dir in runs_dir.iterdir():
+                if not run_dir.is_dir():
+                    continue
+                run_file = run_dir / "run.json"
+                if not run_file.exists():
+                    continue
+
+                try:
+                    run_data = json.loads(run_file.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    logger.debug(
+                        "context_health: auto-cultivate skipped corrupt %s", run_file
+                    )
+                    continue
+
+                # Find reflect stage with lessons
+                reflect_stage = None
+                reflect_idx = -1
+                for idx, stage in enumerate(run_data.get("stages", [])):
+                    if stage.get("stage") == "reflect":
+                        reflect_stage = stage
+                        reflect_idx = idx
+                        break
+
+                if reflect_stage is None:
+                    continue
+                if reflect_stage.get("cultivated"):
+                    continue  # Already done
+                lessons = reflect_stage.get("lessons", [])
+                if not lessons:
+                    continue  # Nothing to cultivate
+
+                # Cultivate
+                project_name = project_dir.name
+                try:
+                    from core.ddd_cultivation import cultivate_from_reflect
+
+                    run_id = run_data.get("id", run_dir.name)
+                    result = cultivate_from_reflect(
+                        lessons, run_id, project_name, project_dir
+                    )
+
+                    # Mark as cultivated in run.json
+                    run_data["stages"][reflect_idx]["cultivated"] = True
+                    run_file.write_text(
+                        json.dumps(run_data, indent=2, ensure_ascii=False),
+                        encoding="utf-8",
+                    )
+                    cultivated_count += 1
+
+                    logger.info(
+                        "context_health: auto-cultivated %s/%s — "
+                        "applied=%d, escalated=%d, rejected=%d",
+                        project_name, run_id,
+                        result.get("applied", 0),
+                        result.get("escalated", 0),
+                        result.get("rejected", 0),
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "context_health: auto-cultivate failed for %s/%s: %s",
+                        project_name, run_dir.name, exc,
+                    )
+
+        if cultivated_count > 0:
+            logger.info(
+                "context_health: auto-cultivated %d pipeline run(s)", cultivated_count
             )
 
     # High-volume dirs get compact summary instead of per-file table (saves ~1500 tokens)
