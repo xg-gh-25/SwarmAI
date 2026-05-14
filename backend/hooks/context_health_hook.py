@@ -213,7 +213,12 @@ class ContextHealthHook:
         This replaces the manual `run-cultivate` CLI call that the agent had
         to remember (and failed 100% of the time — 141 runs, 0 cultivated).
 
-        Capped at 5 cultivations per session to keep light-refresh fast.
+        Capped at 5 cultivations per session AND 25s cooperative time budget.
+        The hook executor enforces a 30s timeout via asyncio.wait_for, but that
+        cannot actually cancel a thread-pool thread in CPython — it just stops
+        waiting while the thread continues silently. The cooperative budget bails
+        early so the hook finishes cleanly within the executor's window.
+
         Remaining uncultivated runs are processed in subsequent sessions.
         """
         projects_dir = root / "Projects"
@@ -223,6 +228,8 @@ class ContextHealthHook:
         from core.ddd_cultivation import cultivate_from_reflect
 
         _MAX_PER_SESSION = 5
+        _TIME_BUDGET_SECONDS = 25.0  # Bail before 30s hook timeout
+        _start = time.monotonic()
         cultivated_count = 0
 
         for project_dir in sorted(projects_dir.iterdir()):
@@ -236,14 +243,28 @@ class ContextHealthHook:
             # Filter to last 30 days — older uncultivated runs are stale and
             # won't produce useful DDD content. Also bounds scan cost to O(recent)
             # instead of O(total history) as pipelines accumulate.
+            # Cache stat to avoid double syscall (meta-review finding).
             mtime_cutoff = time.time() - 30 * 86400
+            run_items = [
+                (d, d.stat().st_mtime)
+                for d in runs_dir.iterdir()
+                if d.is_dir()
+            ]
             run_dirs = sorted(
-                (d for d in runs_dir.iterdir()
-                 if d.is_dir() and d.stat().st_mtime > mtime_cutoff),
-                key=lambda d: d.stat().st_mtime,
+                ((d, mt) for d, mt in run_items if mt > mtime_cutoff),
+                key=lambda x: x[1],
             )
 
-            for run_dir in run_dirs:
+            for run_dir, _ in run_dirs:
+                # Cooperative time budget — bail cleanly before hook timeout
+                if time.monotonic() - _start > _TIME_BUDGET_SECONDS:
+                    logger.info(
+                        "context_health: auto-cultivate hit time budget (%.1fs), "
+                        "deferring remaining to next session",
+                        _TIME_BUDGET_SECONDS,
+                    )
+                    break
+
                 run_file = run_dir / "run.json"
                 if not run_file.exists():
                     continue
@@ -310,6 +331,8 @@ class ContextHealthHook:
                     )
 
             if cultivated_count >= _MAX_PER_SESSION:
+                break
+            if time.monotonic() - _start > _TIME_BUDGET_SECONDS:
                 break
 
         if cultivated_count > 0:
