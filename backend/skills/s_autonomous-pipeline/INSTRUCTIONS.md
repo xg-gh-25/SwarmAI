@@ -107,9 +107,52 @@ based on the evaluation's scope classification:
 | research-only | **research** | evaluate, think, reflect |
 | docs-only | **docs** | evaluate, think, plan, deliver, reflect |
 | bugfix | **bugfix** | evaluate, plan, build, review, test, deliver, reflect |
+| goal (open-ended) | **goal** | evaluate, plan, goal_cycle |
 
 If the evaluate stage doesn't classify scope (L0), default to **full**.
 The user can override: "skip research, I know the approach" → switch to bugfix.
+
+### Goal Profile Orchestration
+
+When profile is `goal`, the pipeline operates differently after PLAN:
+
+1. **EVALUATE** — standard + goal_mode detection (DoD criteria, max_cycles)
+2. **PLAN** — standard (defines approach for achieving the goal, not per-step)
+3. **GOAL_CYCLE** — the stage itself loops internally:
+   - Each cycle: budget gate → DoD check → pick step → BUILD+TEST → progress → mini-reflect
+   - Periodic REVIEW every N cycles on accumulated diff
+   - Final ADVERSARIAL on total changeset when DoD met
+   - Full REFLECT at goal completion (distills all mini-reflects)
+   - See `stages/goal_cycle.md` for complete behavior
+
+**No DELIVER stage** — goal profile doesn't produce a single "delivery candidate."
+Instead, each cycle commits incremental progress. Quality is assured by:
+- Per-cycle TEST (regression check)
+- Periodic REVIEW (convention/pattern compliance)
+- Final ADVERSARIAL (fresh-eyes attack on total changeset)
+
+**Scheduled mode** (for goals spanning multiple sessions):
+After EVALUATE+PLAN, if the user requests overnight/unattended execution or
+EVALUATE estimates >10 cycles needed, offer scheduled mode:
+
+```yaml
+# Job template for scheduled goal execution
+jobs:
+  - id: goal-<slug>
+    name: "<goal description>"
+    type: agent_task
+    schedule: "0 */4 * * *"
+    enabled: true
+    config:
+      prompt: |
+        Resume goal loop for <PROJECT>.
+        Progress: <progress_path>
+        1. Read progress → 2. Check DoD (if met: disable job, notify)
+        3. Execute ONE cycle → 4. Save progress → exit
+    safety:
+      max_budget_usd: 1.50
+      timeout_seconds: 600
+```
 
 ---
 

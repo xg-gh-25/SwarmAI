@@ -11,6 +11,7 @@ PIPELINE_PROFILES: dict[str, list[str]] = {
     "research": ["evaluate", "think", "reflect"],
     "docs": ["evaluate", "think", "plan", "deliver", "reflect"],
     "bugfix": ["evaluate", "plan", "build", "review", "test", "deliver", "reflect"],
+    "goal": ["evaluate", "plan", "goal_cycle"],
 }
 
 
