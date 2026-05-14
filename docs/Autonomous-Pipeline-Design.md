@@ -163,7 +163,7 @@ Running these 9 stages produces a candidate that is likely correct but not guara
 
 Adversarial review exists because the builder cannot find its own blind spots. The same context window that produced the code cannot objectively evaluate that code — it shares the same assumptions, the same mental model, the same happy-path bias.
 
-The historical evidence is clear: code that passes 8 stages of self-review can still be fundamentally broken. Tests pass because they test the same assumptions the code makes. Types check because the interface was designed to match the implementation, not the other way around.
+The historical evidence is clear: code that passes all other stages of self-review can still be fundamentally broken. Tests pass because they test the same assumptions the code makes. Types check because the interface was designed to match the implementation, not the other way around.
 
 ### How It Works
 

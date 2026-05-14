@@ -24,7 +24,7 @@ The architecture rests on three interlocking methodologies that form a single cl
 
 **Without DDD**, the pipeline builds the wrong thing. **Without SDD**, the pipeline builds something undefined. **Without TDD**, there's no way to verify the pipeline built it correctly.
 
-The pipeline processes a one-sentence requirement through 8 stages (EVALUATE → THINK → PLAN → BUILD → REVIEW → TEST → DELIVER → REFLECT), classifies every decision as mechanical/taste/judgment, and writes lessons back to the knowledge layer — making every run smarter than the last.
+The pipeline processes a one-sentence requirement through 9 stages (EVALUATE → THINK → PLAN → BUILD → REVIEW → TEST → ADVERSARIAL → DELIVER → REFLECT), classifies every decision as mechanical/taste/judgment, and writes lessons back to the knowledge layer — making every run smarter than the last.
 
 **Target outcomes:**
 - 6x throughput over Phase 1 baseline
@@ -342,7 +342,7 @@ They become **domain architects** — not code reviewers. Their judgment encodes
 
 ---
 
-## 7. The 8-Stage Autonomous Pipeline
+## 7. The 9-Stage Autonomous Pipeline
 
 ### Pipeline Flow
 
@@ -524,7 +524,7 @@ The pipeline orchestrator's design was directly influenced by [gstack](https://g
 
 | gstack Pattern | What We Adopted | How We Extended |
 |---|---|---|
-| **Sequential stage execution** with auto-decision principles | 8-stage pipeline with auto-advance between stages | + Checkpoint/resume across sessions, token budget tracking, 5 profiles |
+| **Sequential stage execution** with auto-decision principles | 9-stage pipeline with auto-advance between stages | + Checkpoint/resume across sessions, token budget tracking, 5 profiles |
 | **Decision classification** — mechanical vs. taste | Maps to L0/L1/L2 escalation (mechanical=auto, taste=batch, judgment=block) | + Delivery Gate batches all taste decisions into one review moment |
 | **Phase-transition verification** — verify completion before advancing | Inter-stage gate validates artifacts exist and match schema | + Content validation, not just presence check |
 | **3-attempt escalation cap** — stop after 3 failed attempts | Per-stage `max_retries` (1-3 depending on variance) | + Checkpoint on exhaustion with full error context for resume |
@@ -1028,7 +1028,7 @@ This architecture is not tied to any specific agent framework. To adopt:
 
 5. **Implement the REFLECT stage.** Writing lessons to IMPROVEMENT.md after every task is the minimal flywheel — even without the full MINE→ASSESS→ACT→AUDIT cycle, it compounds knowledge.
 
-6. **Implement the full pipeline when ready.** The 8 stages, artifact registry, checkpoint/resume, and escalation protocol complete the system.
+6. **Implement the full pipeline when ready.** The 9 stages, artifact registry, checkpoint/resume, and escalation protocol complete the system.
 
 **Minimum viable adoption:** Items 1-3 above. The pipeline, escalation protocol, and self-improvement flywheel add value incrementally.
 
@@ -1055,7 +1055,7 @@ Each skill links to its source in the [reference implementation](https://github.
 
 | Skill | Purpose |
 |---|---|
-| [s_autonomous-pipeline](https://github.com/xg-gh-25/SwarmAI/tree/main/backend/skills/s_autonomous-pipeline) | Full AIDLC pipeline orchestration (8 stages, 5 profiles) |
+| [s_autonomous-pipeline](https://github.com/xg-gh-25/SwarmAI/tree/main/backend/skills/s_autonomous-pipeline) | Full AIDLC pipeline orchestration (9 stages, 5 profiles) |
 | [s_evaluate](https://github.com/xg-gh-25/SwarmAI/tree/main/backend/skills/s_evaluate) | Requirement evaluation and ROI scoring against DDD |
 | [s_code-review](https://github.com/xg-gh-25/SwarmAI/tree/main/backend/skills/s_code-review) | Structured code review for PRs, files, or diffs |
 | [s_qa](https://github.com/xg-gh-25/SwarmAI/tree/main/backend/skills/s_qa) | Diff-aware QA with WTF gate and atomic commits |

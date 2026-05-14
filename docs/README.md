@@ -20,7 +20,7 @@
 
 | Document | Pages | Description |
 |----------|-------|-------------|
-| [AIDLC Phase 3: Autonomous Pipeline](AIDLC-Phase3-Design.pdf) | 30 | The methodology framework (implementation-agnostic). DDD+SDD+TDD closed loop, 8-stage pipeline, decision classification, self-improvement flywheel. |
+| [AIDLC Phase 3: Autonomous Pipeline](AIDLC-Phase3-Design.pdf) | 30 | The methodology framework (implementation-agnostic). DDD+SDD+TDD closed loop, 9-stage pipeline, decision classification, self-improvement flywheel. |
 | [DDD Platform Overview](DDD-Platform-Overview.md) | — | One knowledge layer powering multiple delivery engines. Platform thesis, 3-layer architecture, 8 feed channels. |
 | [Autonomous Pipeline Design](Autonomous-Pipeline-Design.md) | — | 9-stage pipeline + Quality Convergence Loop. Push-ready delivery guarantee. |
 | [Goal Loop Design](Goal-Loop-Design.md) | — | Iterative convergence for open-ended objectives. Inline + scheduled modes, DoD-driven cycles, velocity tracking. |
@@ -87,7 +87,7 @@ All diagrams live in [`diagrams/`](diagrams/) as PNG files with dark backgrounds
 
 | Diagram | Description |
 |---------|-------------|
-| `01-overall-architecture` | DDD+SDD+TDD closed loop with 8-stage pipeline |
+| `01-overall-architecture` | DDD+SDD+TDD closed loop with 9-stage pipeline |
 | `02-ddd-four-pillars` | PRODUCT / TECH / IMPROVEMENT / PROJECT documents |
 | `03-pipeline-stages` | EVALUATE->REFLECT end-to-end flow with artifacts |
 | `04-self-improvement-flywheel` | MINE->ASSESS->ACT->AUDIT confidence-gated cycle |
