@@ -1,7 +1,9 @@
 """Goal loop feedback metrics — track cycle efficiency and goal completion.
 
-Provides historical velocity data for auto-tuning cycle scope in future goals.
-Stores metrics inside run.json under the 'goal_metrics' field.
+Provides velocity data for auto-tuning cycle scope in future goals.
+Stores per-run metrics in run.json under 'goal_metrics' field.
+Cross-run aggregation scans multiple completed run.json files for
+historical trends.
 
 Usage:
     from scripts.goal_metrics import GoalMetrics
@@ -11,6 +13,9 @@ Usage:
     gm.track_cycle(cycle_num=1, progress_delta=0.33, ...)
     gm.track_goal_complete(status="success", ...)
     velocity = gm.get_velocity()
+
+    # Cross-run (reads all completed goal runs in a project):
+    agg = GoalMetrics.aggregate_velocity(Path("Projects/SwarmAI/.artifacts/runs"))
 """
 import json
 import os
@@ -20,6 +25,29 @@ from pathlib import Path
 
 # Valid status values for track_goal_complete
 VALID_STATUSES = frozenset({"success", "checkpoint", "stop", "revert_limit", "budget"})
+
+
+def _compute_cycle_stats(cycles: list[dict]) -> dict:
+    """Compute velocity stats from a list of cycle entries.
+
+    Shared by get_velocity() and summary() to avoid duplication.
+
+    Returns:
+        Dict with avg_delta, regression_count, regression_rate.
+    """
+    if not cycles:
+        return {"avg_delta": 0.0, "regression_count": 0, "regression_rate": 0.0}
+
+    total_delta = sum(c.get("progress_delta", 0.0) for c in cycles)
+    avg_delta = total_delta / len(cycles)
+    regression_count = sum(1 for c in cycles if c.get("regression"))
+    regression_rate = regression_count / len(cycles)
+
+    return {
+        "avg_delta": avg_delta,
+        "regression_count": regression_count,
+        "regression_rate": regression_rate,
+    }
 
 
 class GoalMetrics:
@@ -39,30 +67,54 @@ class GoalMetrics:
                      If None, operates in read-only mode with empty data.
         """
         self._run_dir = Path(run_dir) if run_dir else None
+        self._load_was_corrupt = False
 
     def _load_run(self) -> dict:
         """Load run.json from the run directory.
 
         Returns empty dict if file is missing or contains invalid JSON.
+        Sets _load_was_corrupt flag if file existed but failed to parse.
         """
+        self._load_was_corrupt = False
         if not self._run_dir:
             return {}
         run_file = self._run_dir / "run.json"
         if not run_file.exists():
             return {}
         try:
-            return json.loads(run_file.read_text())
+            data = json.loads(run_file.read_text())
+            if not isinstance(data, dict):
+                self._load_was_corrupt = True
+                return {}
+            return data
         except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+            self._load_was_corrupt = True
             return {}
 
     def _save_run(self, data: dict) -> None:
         """Save updated run.json atomically (write to temp + rename).
 
         Atomic write prevents corruption from crashes mid-write.
+        Refuses to write if the prior load detected corruption (P1 guard:
+        avoids overwriting a valid-but-temporarily-unreadable file with
+        just goal_metrics, losing all other run.json fields).
         """
         if not self._run_dir:
             return
+        if self._load_was_corrupt:
+            # Don't overwrite — the file existed but couldn't be read.
+            # Writing now would lose all non-metrics fields.
+            return
+
         run_file = self._run_dir / "run.json"
+
+        # Clean up any stale temp files from prior crashes (P3)
+        for stale in self._run_dir.glob("*.tmp"):
+            try:
+                stale.unlink()
+            except OSError:
+                pass
+
         # Atomic write: temp file in same dir + rename
         fd, tmp_path = tempfile.mkstemp(dir=self._run_dir, suffix=".tmp")
         try:
@@ -70,7 +122,6 @@ class GoalMetrics:
                 json.dump(data, f, indent=2)
             os.replace(tmp_path, run_file)
         except OSError:
-            # Best-effort cleanup on failure
             try:
                 os.unlink(tmp_path)
             except OSError:
@@ -88,7 +139,6 @@ class GoalMetrics:
         if "goal_metrics" not in data:
             data["goal_metrics"] = defaults
         else:
-            # Merge defaults for any missing keys (defensive against partial data)
             for k, v in defaults.items():
                 data["goal_metrics"].setdefault(k, v)
         return data["goal_metrics"]
@@ -104,7 +154,6 @@ class GoalMetrics:
         data = self._load_run()
         gm = self._ensure_goal_metrics(data)
 
-        # Idempotent — don't overwrite if already started
         if gm["started_at"] is not None:
             return
 
@@ -121,9 +170,16 @@ class GoalMetrics:
                     regression: bool = False) -> None:
         """Record per-cycle metrics for velocity tracking.
 
+        Idempotent on cycle_num: if a cycle with the same number already
+        exists, silently skips (prevents double-tracking on retries).
+
         Args:
             cycle_num: 1-indexed cycle number.
-            progress_delta: Fraction of DoD criteria newly met (0.0-1.0).
+            progress_delta: Fraction of DoD criteria newly met this cycle.
+                Calculated as: (criteria_met_after - criteria_met_before) / total_criteria.
+                Range: 0.0 (no criterion flipped) to 1.0 (all criteria met in one cycle).
+                For partial progress within a criterion, use 0.0 and log details
+                in the progress file text (avoids ambiguous fractional encoding).
             files_changed: Number of source files modified this cycle.
             tests_added: Number of new tests written this cycle.
             regression: Whether a test regression occurred this cycle.
@@ -140,6 +196,10 @@ class GoalMetrics:
 
         data = self._load_run()
         gm = self._ensure_goal_metrics(data)
+
+        # Idempotent: skip if cycle already tracked (P7 — prevents inflation)
+        if any(c.get("num") == cycle_num for c in gm["cycles"]):
+            return
 
         gm["cycles"].append({
             "num": cycle_num,
@@ -183,7 +243,10 @@ class GoalMetrics:
         self._save_run(data)
 
     def get_velocity(self) -> dict:
-        """Return historical velocity stats from the current run.
+        """Return velocity stats from the current run.
+
+        For cross-run historical velocity, use the classmethod
+        aggregate_velocity() which scans multiple completed runs.
 
         Returns:
             Dict with keys: avg_cycles_per_goal, avg_delta_per_cycle,
@@ -191,7 +254,6 @@ class GoalMetrics:
         """
         data = self._load_run()
         gm = data.get("goal_metrics", {})
-
         cycles = gm.get("cycles", [])
 
         if not cycles:
@@ -202,28 +264,24 @@ class GoalMetrics:
                 "regression_rate": 0.0,
             }
 
-        # Defensive: .get() for each cycle field to handle partial data
-        total_delta = sum(c.get("progress_delta", 0.0) for c in cycles)
-        avg_delta = total_delta / len(cycles)
-        regression_count = sum(1 for c in cycles if c.get("regression"))
-        regression_rate = regression_count / len(cycles)
+        stats = _compute_cycle_stats(cycles)
 
-        # Completion rate: 1.0 if completed successfully, 0.0 otherwise
         status = gm.get("status")
         completion_rate = 1.0 if status == "success" else 0.0
-
-        # Cycles per goal: total_cycles if completed, len(cycles) if in-progress
         total_cycles = gm.get("total_cycles", len(cycles))
 
         return {
             "avg_cycles_per_goal": total_cycles,
-            "avg_delta_per_cycle": round(avg_delta, 4),
+            "avg_delta_per_cycle": round(stats["avg_delta"], 4),
             "completion_rate": completion_rate,
-            "regression_rate": round(regression_rate, 4),
+            "regression_rate": round(stats["regression_rate"], 4),
         }
 
     def get_recommended_cycle_scope(self) -> str:
-        """Auto-tune: recommend cycle scope based on historical velocity.
+        """Auto-tune: recommend cycle scope based on velocity.
+
+        Uses cross-run aggregate if available (via runs_dir parent scan),
+        falls back to current run's velocity.
 
         High velocity (>15% delta/cycle) → larger scope per cycle.
         Low velocity (<5% delta/cycle) → smaller, more focused scope.
@@ -231,8 +289,18 @@ class GoalMetrics:
         Returns:
             Human-readable scope recommendation string.
         """
-        velocity = self.get_velocity()
-        avg_delta = velocity["avg_delta_per_cycle"]
+        # Try cross-run aggregate first (more data = better recommendation)
+        avg_delta = 0.0
+        if self._run_dir:
+            runs_dir = self._run_dir.parent  # e.g., .artifacts/runs/
+            if runs_dir.is_dir():
+                agg = GoalMetrics.aggregate_velocity(runs_dir)
+                avg_delta = agg["avg_delta_per_cycle"]
+
+        # Fall back to current run if no cross-run data
+        if avg_delta == 0.0:
+            velocity = self.get_velocity()
+            avg_delta = velocity["avg_delta_per_cycle"]
 
         if avg_delta == 0.0:
             return "one function or one test file per cycle (no history, using default)"
@@ -252,16 +320,78 @@ class GoalMetrics:
         """
         data = self._load_run()
         gm = data.get("goal_metrics", {})
-
         cycles = gm.get("cycles", [])
-        total_delta = sum(c.get("progress_delta", 0.0) for c in cycles)
-        avg_delta = total_delta / len(cycles) if cycles else 0.0
+
+        stats = _compute_cycle_stats(cycles)
 
         return {
             "dod_criteria_count": gm.get("dod_criteria_count", 0),
             "cycles_completed": len(cycles),
-            "current_velocity": round(avg_delta, 4),
+            "current_velocity": round(stats["avg_delta"], 4),
             "status": gm.get("status"),
             "total_cycles": gm.get("total_cycles"),
             "dod_met": gm.get("dod_met"),
+        }
+
+    @classmethod
+    def aggregate_velocity(cls, runs_dir: Path) -> dict:
+        """Compute velocity stats across all completed goal runs in a directory.
+
+        Scans all run_*/run.json files for goal_metrics with status != None.
+        Aggregates cycle data across runs for meaningful auto-tuning.
+
+        Args:
+            runs_dir: Path to the runs directory (e.g., .artifacts/runs/).
+
+        Returns:
+            Dict with: avg_cycles_per_goal, avg_delta_per_cycle,
+            completion_rate, regression_rate, runs_analyzed.
+        """
+        all_cycles: list[dict] = []
+        goals_started = 0
+        goals_completed = 0
+
+        if not runs_dir.is_dir():
+            return {
+                "avg_cycles_per_goal": 0,
+                "avg_delta_per_cycle": 0.0,
+                "completion_rate": 0.0,
+                "regression_rate": 0.0,
+                "runs_analyzed": 0,
+            }
+
+        for run_json in runs_dir.glob("run_*/run.json"):
+            try:
+                data = json.loads(run_json.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+
+            gm = data.get("goal_metrics")
+            if not gm or not isinstance(gm, dict):
+                continue
+            if gm.get("started_at") is None:
+                continue  # Not a goal run
+
+            goals_started += 1
+            cycles = gm.get("cycles", [])
+            all_cycles.extend(cycles)
+
+            if gm.get("status") == "success":
+                goals_completed += 1
+
+        stats = _compute_cycle_stats(all_cycles)
+        avg_cycles = (
+            sum(1 for _ in all_cycles) / goals_started
+            if goals_started > 0 else 0
+        )
+        completion_rate = (
+            goals_completed / goals_started if goals_started > 0 else 0.0
+        )
+
+        return {
+            "avg_cycles_per_goal": round(avg_cycles, 1),
+            "avg_delta_per_cycle": round(stats["avg_delta"], 4),
+            "completion_rate": round(completion_rate, 4),
+            "regression_rate": round(stats["regression_rate"], 4),
+            "runs_analyzed": goals_started,
         }

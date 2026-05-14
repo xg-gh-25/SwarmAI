@@ -24,9 +24,13 @@ calls this stage once; the stage itself manages the cycle loop.
 5. **Initialize GoalMetrics** — create ONE instance, reuse throughout stage:
    ```python
    from scripts.goal_metrics import GoalMetrics
+
+   # Extract dod_criteria from the evaluation artifact loaded in step 1:
+   dod_criteria = evaluation_artifact["dod_criteria"]
+
    gm = GoalMetrics(run_dir=Path(run_dir))
    gm.track_goal_start(dod_criteria=dod_criteria)
-   # Check historical velocity for cycle_scope auto-tuning:
+   # Check cross-run velocity for cycle_scope auto-tuning:
    recommended_scope = gm.get_recommended_cycle_scope()
    # If recommended_scope differs from evaluation's cycle_scope, log it
    ```
@@ -139,9 +143,16 @@ gm.track_cycle(
 This feeds the velocity auto-tuning system. Higher-quality data here →
 better `cycle_scope` recommendations for future goals.
 
-**progress_delta calculation:** `(dod_criteria_met_after - dod_criteria_met_before) / dod_total`.
-If no criterion flipped but incremental progress was made (e.g., coverage went from 73% to 76%
-toward 90%), estimate as fraction of remaining gap closed.
+**progress_delta calculation (strict definition):**
+```
+progress_delta = (criteria_met_after - criteria_met_before) / total_criteria
+```
+- If 1 of 3 criteria flipped this cycle → `1/3 ≈ 0.33`
+- If no criterion flipped → `0.0` (even if partial progress occurred)
+- Partial progress within a criterion (e.g., coverage 73%→76% toward 90%)
+  is logged in the progress file text but NOT encoded in progress_delta.
+  This keeps velocity a clean integer-step metric: each delta represents
+  a criterion completion event, not a continuous estimate.
 
 ### 10. Periodic REVIEW Gate
 
