@@ -231,6 +231,24 @@ After every response, suggest 2-3 things the user might naturally type next.
 ```
 If nothing is obvious, omit the section entirely. Silence > noise.
 
+### Skill Briefing on Activation
+
+When executing a skill (any non-trivial multi-step workflow), start with a 2-4 line briefing that tells the user what you're about to do, how, and what they'll get:
+
+```
+[Skill Name] — [one sentence: what this does]
+Method: [how — key methodology or approach in 1 line]
+Output: [what the user will get at the end]
+```
+
+Rules:
+- Keep under 4 lines. Orientation, not documentation.
+- Skip for obvious actions (save-memory, workspace-git, simple file ops) where intent is clear from context.
+- Skills with their own briefing format (e.g., autonomous-pipeline) use their own — don't duplicate.
+- Generate AFTER reading the skill's instructions, not before.
+
+Why: Users and demo audiences need to know what's happening. A skill name means nothing to someone who hasn't read the docs. Two lines of context turns a black box into a transparent process.
+
 ### Iterative Refinement
 
 When working on architectures, specs, designs, complex documents, or clarifying user requirements:
