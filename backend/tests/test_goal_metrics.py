@@ -4,12 +4,24 @@ Covers: track_goal_start, track_cycle, track_goal_complete,
 get_velocity, get_recommended_cycle_scope, summary, aggregate_velocity.
 Plus: error handling, validation, corrupt data resilience, idempotency.
 """
+import importlib.util
 import json
 from pathlib import Path
 
 import pytest
 
-from scripts.goal_metrics import GoalMetrics, VALID_STATUSES, _compute_cycle_stats
+# Load goal_metrics from the skill scripts directory without polluting sys.path
+# (avoids namespace collision with backend/scripts/ which has different modules).
+_GOAL_METRICS_PATH = (
+    Path(__file__).parent.parent / "skills" / "s_autonomous-pipeline" / "scripts" / "goal_metrics.py"
+)
+_spec = importlib.util.spec_from_file_location("goal_metrics", _GOAL_METRICS_PATH)
+_mod = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_mod)
+
+GoalMetrics = _mod.GoalMetrics
+VALID_STATUSES = _mod.VALID_STATUSES
+_compute_cycle_stats = _mod._compute_cycle_stats
 
 
 @pytest.fixture
