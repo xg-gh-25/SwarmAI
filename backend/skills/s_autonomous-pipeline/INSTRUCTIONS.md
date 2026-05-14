@@ -19,7 +19,7 @@ For every pipeline run, follow this loop:
                e. Classify decisions (mechanical/taste/judgment)
                f. Verify output (artifact published + schema valid)
                g. Handle result (advance / retry / checkpoint)
-4. DELIVER  -- Delivery Gate → Completion Audit → Adversarial Review →
+4. DELIVER  -- Delivery Gate → Completion Audit → AC Verification → Adversarial Review →
                Quality Convergence Loop (6-layer gate × max 3 iterations) →
                push-ready or escalate. Then: Report, CI.
 5. REFLECT  -- Read stages/reflect.md, execute: lessons → IMPROVEMENT.md → DDD loop closed

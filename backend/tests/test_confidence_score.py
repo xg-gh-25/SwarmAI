@@ -487,6 +487,112 @@ class TestConfidenceScoring:
         assert len(audit_penalties) == 0
 
 
+class TestACVerification:
+    """Test AC verification scoring — verified vs claimed vs failed."""
+
+    def test_ac_verified_gives_plus_3(self):
+        """ac_verification.status == 'verified' → +3 (replaces old +3 for claimed)."""
+        d = _make_run_dir(
+            run_json={
+                "id": "run_ac_verified",
+                "project": "TestProject",
+                "profile": "full",
+                "status": "running",
+                "stages": [{"name": "plan", "status": "complete"}],
+                "taste_decisions": [],
+                "ac_verification": {
+                    "status": "verified",
+                    "matrix": [
+                        {"ac": "Feature works E2E", "test": "test_e2e", "verifies_ac": True, "e2e_connected": True}
+                    ],
+                },
+            },
+            evaluation={"acceptance_criteria": ["Feature works E2E"]},
+            changeset={
+                "files_changed": ["a.py"],
+                "tdd": {"green_pass": True, "regressions": 0, "smoke_tests": 1, "user_path_traces": 1},
+            },
+            review={"findings": [], "integration_trace": {"checked": 3}, "runtime_patterns": {"checked": 5}},
+            test_report={"passed": 5, "failed": 0, "wtf_score": 0},
+        )
+        result = _run_score(d)
+        ac_rules = [b for b in result["breakdown"] if b["rule"] == "ac_verified"]
+        assert len(ac_rules) == 1
+        assert ac_rules[0]["points"] == 3
+
+    def test_ac_claimed_gives_plus_1(self):
+        """ac_verification.status == 'claimed' (or absent) + tests exist → +1."""
+        d = _make_run_dir(
+            run_json={
+                "id": "run_ac_claimed",
+                "project": "TestProject",
+                "profile": "full",
+                "status": "running",
+                "stages": [{"name": "plan", "status": "complete"}],
+                "taste_decisions": [],
+                "ac_verification": {"status": "claimed"},
+            },
+            evaluation={"acceptance_criteria": ["Feature works"]},
+            changeset={
+                "files_changed": ["a.py"],
+                "tdd": {"green_pass": True, "regressions": 0, "smoke_tests": 1, "user_path_traces": 1},
+            },
+            review={"findings": [], "integration_trace": {"checked": 3}, "runtime_patterns": {"checked": 5}},
+            test_report={"passed": 5, "failed": 0, "wtf_score": 0},
+        )
+        result = _run_score(d)
+        ac_rules = [b for b in result["breakdown"] if b["rule"] == "ac_claimed"]
+        assert len(ac_rules) == 1
+        assert ac_rules[0]["points"] == 1
+
+    def test_ac_failed_gives_minus_3(self):
+        """ac_verification.status == 'failed' → -3 penalty."""
+        d = _make_run_dir(
+            run_json={
+                "id": "run_ac_failed",
+                "project": "TestProject",
+                "profile": "full",
+                "status": "running",
+                "stages": [{"name": "plan", "status": "complete"}],
+                "taste_decisions": [],
+                "ac_verification": {
+                    "status": "failed",
+                    "matrix": [
+                        {"ac": "Feature works", "test": "test_foo", "verifies_ac": False, "e2e_connected": False}
+                    ],
+                },
+            },
+            evaluation={"acceptance_criteria": ["Feature works"]},
+            changeset={
+                "files_changed": ["a.py"],
+                "tdd": {"green_pass": True, "regressions": 0, "smoke_tests": 1, "user_path_traces": 1},
+            },
+            review={"findings": [], "integration_trace": {"checked": 3}, "runtime_patterns": {"checked": 5}},
+            test_report={"passed": 5, "failed": 0, "wtf_score": 0},
+        )
+        result = _run_score(d)
+        ac_penalties = [p for p in result["penalties"] if p["rule"] == "ac_verification_failed"]
+        assert len(ac_penalties) == 1
+        assert ac_penalties[0]["points"] == -3
+
+    def test_no_ac_verification_backward_compat(self):
+        """No ac_verification field at all → falls back to old +3 (tests exist logic)."""
+        d = _make_run_dir(
+            evaluation={"acceptance_criteria": ["c1", "c2"]},
+            changeset={
+                "files_changed": ["a.py"],
+                "tdd": {"green_pass": True, "regressions": 0, "smoke_tests": 1, "user_path_traces": 1},
+            },
+            review={"findings": [], "integration_trace": {"checked": 3}, "runtime_patterns": {"checked": 5}},
+            test_report={"passed": 5, "failed": 0, "wtf_score": 0},
+        )
+        result = _run_score(d)
+        # Should use old logic: +3 for acceptance_criteria_tested
+        ac_rules = [b for b in result["breakdown"] if b["rule"] == "acceptance_criteria_tested"]
+        assert len(ac_rules) == 1
+        assert ac_rules[0]["points"] == 3
+
+
 class TestWtfGate:
     """Test WTF gate scoring — separate script."""
 

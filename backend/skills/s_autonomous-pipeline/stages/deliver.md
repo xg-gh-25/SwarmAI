@@ -100,6 +100,56 @@ COMPLETION AUDIT — Verify before declaring done.
    | 1 | AC text...          | test_xxx passes, file created | ✅ |
    | 2 | AC text...          | [no evidence found]           | ❌ |
 
+2.5. INDEPENDENT AC VERIFICATION (Pre-flight for Adversarial)
+   For each AC → test mapping claimed in Step 2:
+
+   a. READ the test file and function body (fresh read, not from memory)
+   b. VERIFY the test exercises the AC's behavior:
+      - Does the test input match what the AC describes?
+      - Does the assertion check the AC's expected output?
+      - Could this test pass while the AC is NOT satisfied?
+        (If yes → test is necessary but not sufficient → flag as ⚠️)
+   c. TRACE one level downstream:
+      - Does the implementation connect to the tested interface?
+      - Is there a gap between "unit passes" and "feature works E2E"?
+
+   OUTPUT: AC Verification Matrix
+   | # | AC | Test | Verifies AC? | E2E Connected? |
+   |---|----|----- |--------------|----------------|
+   | 1 | ... | test_foo | ✅ Yes | ✅ Yes |
+   | 2 | ... | test_bar | ⚠️ Unit only | ❌ No E2E |
+   | 3 | ... | test_baz | ❌ Wrong assertion | — |
+
+   VERDICT:
+   - All ✅/✅ → set ac_verification.status = "verified", proceed
+   - Any ⚠️ or ❌ → fix before proceeding (write integration test, fix assertion)
+   - After fix: re-verify only the fixed items, then proceed
+   - If fixes attempted but ❌ persists → set ac_verification.status = "failed"
+
+   Record in run.json:
+   ```json
+   {
+     "ac_verification": {
+       "status": "verified",  // or "claimed" or "failed"
+       "matrix": [
+         {"ac": "...", "test": "test_foo", "verifies_ac": true, "e2e_connected": true}
+       ]
+     }
+   }
+   ```
+
+   **Why this exists:** C011 (Voice Mode) passed 8 stages with 10/10 confidence
+   and 57 green tests. Feature was 100% non-functional. Builder claimed tests
+   verified the spec — they didn't. This step separates "builder claims evidence"
+   from "verifier confirms evidence." Same principle as adversarial review
+   (different read of the same code catches assumption drift), but cheaper and
+   targeted at the AC→test mapping specifically.
+
+   **Confidence impact:**
+   - status="verified" → +3 (strong: independently confirmed)
+   - status="claimed" (or step skipped) → +1 (weak: tests exist, unverified)
+   - status="failed" → -3 (blocker: known gap in spec satisfaction)
+
 3. INSPECT: Verify evidence exists (don't trust memory)
    - For each ✅: cite the specific file, test name, or output
    - For each test cited: confirm it actually tests the criterion

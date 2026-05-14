@@ -82,16 +82,45 @@ def calculate_score(
 
     # --- Positive criteria ---
 
-    # +3: all acceptance criteria have passing tests
-    if evaluation and test_report:
-        criteria_count = len(evaluation.get("acceptance_criteria", []))
-        passed = test_report.get("passed", 0)
-        if criteria_count > 0 and passed > 0:
-            breakdown.append({
-                "rule": "acceptance_criteria_tested",
-                "points": 3,
-                "detail": f"{criteria_count} criteria, {passed} tests pass",
-            })
+    # AC Verification: +3 verified, +1 claimed, -3 failed (backward compat: +3 if no field)
+    ac_verification = run.get("ac_verification", {})
+    ac_v_status = ac_verification.get("status") if ac_verification else None
+
+    if ac_v_status == "verified":
+        # Independent verification confirmed all ACs have correct test mappings
+        matrix = ac_verification.get("matrix", [])
+        breakdown.append({
+            "rule": "ac_verified",
+            "points": 3,
+            "detail": f"AC verification: all {len(matrix)} criteria independently verified",
+        })
+    elif ac_v_status == "claimed":
+        # Tests exist but verification was not run or only partial
+        breakdown.append({
+            "rule": "ac_claimed",
+            "points": 1,
+            "detail": "AC tests exist but not independently verified",
+        })
+    elif ac_v_status == "failed":
+        # Verification found gaps that weren't fixed
+        matrix = ac_verification.get("matrix", [])
+        failed_count = sum(1 for m in matrix if not m.get("verifies_ac"))
+        penalties.append({
+            "rule": "ac_verification_failed",
+            "points": -3,
+            "detail": f"AC verification: {failed_count} criteria have incorrect test mappings",
+        })
+    else:
+        # Backward compat: no ac_verification field → use old logic (+3 if tests exist)
+        if evaluation and test_report:
+            criteria_count = len(evaluation.get("acceptance_criteria", []))
+            passed = test_report.get("passed", 0)
+            if criteria_count > 0 and passed > 0:
+                breakdown.append({
+                    "rule": "acceptance_criteria_tested",
+                    "points": 3,
+                    "detail": f"{criteria_count} criteria, {passed} tests pass",
+                })
 
     # +2: review found 0 critical issues
     if review:
