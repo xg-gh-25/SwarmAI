@@ -2,9 +2,9 @@
 
 ## Vision
 
-SwarmAI is a personal AI command center that compounds value across every interaction. Not a chatbot -- a colleague that remembers, learns, evolves, and gets things done.
+SwarmAI is a live experiment proving that one builder + AI can operate at team scale. Human directs, AI delivers — coding, content, strategy, and operations through self-evolving systems and compound knowledge.
 
-Your AI Team, 24/7.
+Human directs. AI delivers.
 
 ## What Makes SwarmAI Different
 

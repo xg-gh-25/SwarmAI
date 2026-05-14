@@ -155,7 +155,7 @@ async def build_agent_config(agent_id: str) -> dict | None:
         # Identity
         "id": DEFAULT_AGENT_ID,
         "name": SWARM_AGENT_NAME,
-        "description": base.get("description", "Your AI Team, 24/7"),
+        "description": base.get("description", "Human directs. AI delivers."),
         "is_default": True,
         "is_system_agent": True,
         "status": "active",
@@ -247,7 +247,7 @@ async def ensure_default_agent(skip_registration: bool = False) -> dict:
         marker = {
             "id": DEFAULT_AGENT_ID,
             "name": SWARM_AGENT_NAME,
-            "description": "SwarmAI — Your AI Team, 24/7",
+            "description": "SwarmAI — Human directs. AI delivers.",
             "model": None,           # Runtime config comes from config.json
             "permission_mode": "bypassPermissions",
             "system_prompt": "",

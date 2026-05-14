@@ -1,7 +1,7 @@
 [project]
 name = "swarmai-backend"
 version = "1.12.2"
-description = "SwarmAI Backend - Your AI Team, 24/7"
+description = "SwarmAI Backend - Human directs. AI delivers."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [

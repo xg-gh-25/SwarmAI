@@ -1,7 +1,7 @@
 {
   "id": "default",
   "name": "SwarmAI",
-  "description": "SwarmAI \u2014 Your AI Team, 24/7",
+  "description": "SwarmAI \u2014 Human directs. AI delivers.",
   "permission_mode": "bypassPermissions",
   "max_turns": 100,
   "is_default": true,

@@ -4,10 +4,10 @@
 
 **FOR IMMEDIATE RELEASE**
 
-### SwarmAI Launches: Your AI Team, 24/7  
-**Work Smarter. Stress Less.**
+### SwarmAI: Human Directs. AI Delivers.
+**One builder + AI, operating at team scale.**
 
-Today we introduce SwarmAI — a persistent Agentic Operating System for Knowledge Work where a supervised team of AI agents plans, executes, and follows through on real work across emails, meetings, tasks, documents, and projects — with memory that persists and progress that compounds.
+Today we introduce SwarmAI — a live experiment proving that one AI-augmented builder can ship code, content, strategy, and operations at team scale. Not by working harder — by building systems that remember, learn, and converge.
 
 Unlike traditional AI tools that reset every session, SwarmAI maintains long-lived memory and project context. Users delegate intent signals, agents execute under governance, and outcomes become durable knowledge that compounds over time.
 
@@ -130,9 +130,9 @@ SwarmAI ingests signals, executes structured work, and then replies or updates b
 
 ---
 
-### 8. Why “Your AI Team, 24/7”?
+### 8. Why “Human directs. AI delivers.”?
 
-Because SwarmAI is built around a multi-agent model where specialized agents collaborate:
+Because SwarmAI is built around a thesis: one builder + AI can operate at team scale. The human provides direction, the AI delivers across every domain:
 - planning work
 - researching context
 - drafting outputs
