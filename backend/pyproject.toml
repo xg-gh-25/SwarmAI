@@ -72,7 +72,6 @@ packages = ["."]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = [".", "skills/s_autonomous-pipeline"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 python_files = ["test_*.py"]
