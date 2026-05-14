@@ -21,6 +21,15 @@ calls this stage once; the stage itself manages the cycle loop.
 3. **Record start commit** — `git rev-parse HEAD` (used for periodic REVIEW
    and final ADVERSARIAL diff base)
 4. **Set cycle counter** to last recorded cycle + 1 (or 1 if fresh)
+5. **Initialize GoalMetrics** — record goal start for velocity tracking:
+   ```python
+   from scripts.goal_metrics import GoalMetrics
+   gm = GoalMetrics(run_dir=Path(run_dir))
+   gm.track_goal_start(run_id, dod_criteria=dod_criteria)
+   # Also check historical velocity for cycle_scope auto-tuning:
+   recommended_scope = gm.get_recommended_cycle_scope()
+   # If recommended_scope differs from evaluation's cycle_scope, log it
+   ```
 
 ---
 
@@ -110,6 +119,31 @@ Append ONE line to progress file Cycle Log:
 
 No DDD write. No LLM call for distillation. Just text.
 
+### 9.5. Track Cycle Metrics (GoalMetrics)
+
+After mini-reflect, record this cycle's metrics for velocity tracking:
+
+```python
+from scripts.goal_metrics import GoalMetrics
+
+gm = GoalMetrics(run_dir=Path(run_dir))
+gm.track_cycle(
+    run_id,
+    cycle_num=current_cycle,
+    progress_delta=<fraction of DoD newly met this cycle>,  # 0.0-1.0
+    files_changed=<count of source files modified>,
+    tests_added=<count of new tests written>,
+    regression=<True if regression protocol fired>,
+)
+```
+
+This feeds the velocity auto-tuning system. Higher-quality data here →
+better `cycle_scope` recommendations for future goals.
+
+**progress_delta calculation:** `(dod_criteria_met_after - dod_criteria_met_before) / dod_total`.
+If no criterion flipped but incremental progress was made (e.g., coverage went from 73% to 76%
+toward 90%), estimate as fraction of remaining gap closed.
+
 ### 10. Periodic REVIEW Gate
 
 ```
@@ -165,6 +199,23 @@ Attempt 2:
 
 All DoD criteria pass (verified by running commands/rubrics).
 
+**Record Goal Completion (GoalMetrics):**
+```python
+from scripts.goal_metrics import GoalMetrics
+
+gm = GoalMetrics(run_dir=Path(run_dir))
+gm.track_goal_complete(
+    run_id,
+    status="success",
+    total_cycles=current_cycle,
+    dod_met=<criteria met>,
+    dod_total=<criteria total>,
+)
+# Write velocity summary to progress file
+velocity = gm.get_velocity()
+# Append to progress file: "## Velocity Summary\n- Avg delta/cycle: {velocity['avg_delta_per_cycle']}\n..."
+```
+
 **Final Quality Gate (before REFLECT):**
 1. Full ADVERSARIAL review on total changeset:
    ```bash
@@ -179,6 +230,12 @@ Then proceed to REFLECT (full mode).
 ### EXIT with CHECKPOINT
 
 Max cycles reached without DoD met.
+
+**Record Goal Metrics:**
+```python
+gm.track_goal_complete(run_id, status="checkpoint",
+                       total_cycles=current_cycle, dod_met=<met>, dod_total=<total>)
+```
 
 Output:
 ```
@@ -195,6 +252,12 @@ Creates Radar todo for user.
 
 3 consecutive cycles with zero DoD progress.
 
+**Record Goal Metrics:**
+```python
+gm.track_goal_complete(run_id, status="stop",
+                       total_cycles=current_cycle, dod_met=<met>, dod_total=<total>)
+```
+
 Output:
 ```
 Goal Loop STOPPED — structural blocker detected:
@@ -208,6 +271,12 @@ Goal Loop STOPPED — structural blocker detected:
 
 2 consecutive cycle reverts (changes break existing tests, can't make progress).
 
+**Record Goal Metrics:**
+```python
+gm.track_goal_complete(run_id, status="revert_limit",
+                       total_cycles=current_cycle, dod_met=<met>, dod_total=<total>)
+```
+
 Output:
 ```
 Goal Loop CONFLICT — cannot progress without regression:
@@ -220,6 +289,12 @@ Goal Loop CONFLICT — cannot progress without regression:
 ### EXIT with BUDGET
 
 Remaining tokens < 150K mid-session.
+
+**Record Goal Metrics:**
+```python
+gm.track_goal_complete(run_id, status="budget",
+                       total_cycles=current_cycle, dod_met=<met>, dod_total=<total>)
+```
 
 Output:
 ```
