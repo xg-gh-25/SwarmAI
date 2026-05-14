@@ -230,7 +230,7 @@ These projects optimize for one role. We're testing whether one system can compo
 
 <img src="./assets/pipeline-architecture.svg" alt="Autonomous Pipeline — 9 stages + convergence loop"/>
 
-> 📖 Full docs: [Platform Overview](./docs/DDD-Platform-Overview.md) · [DDD Cultivation Engine](./docs/DDD-Cultivation-Engine-HLD.md) · [Autonomous Pipeline](./docs/Autonomous-Pipeline-Design.md) · [Pollinate Engine](./docs/Pollinate-Content-Engine.md)
+> 📖 Full docs: [Platform Overview](./docs/DDD-Platform-Overview.md) · [DDD Cultivation Engine](./docs/DDD-Cultivation-Engine-HLD.md) · [Autonomous Pipeline](./docs/Autonomous-Pipeline-Design.md) · [Goal Loop](./docs/Goal-Loop-Design.md) · [Pollinate Engine](./docs/Pollinate-Content-Engine.md)
 
 ---
 
@@ -271,7 +271,7 @@ Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv)
 
 ## By the Numbers
 
-1,300+ commits · 190K+ LOC · 75+ skills · 3,800+ tests · 27 corrections captured · 60 days · 1 human
+1,300+ commits · 190K+ LOC · 82 skills · 3,800+ tests · 27 corrections captured · 60 days · 1 human
 
 Stack: Tauri 2.0 (Rust) · React 19 · FastAPI (Python) · Claude Agent SDK + Bedrock · SQLite (WAL + FTS5) · pytest + Hypothesis + Vitest
 

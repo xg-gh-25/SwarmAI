@@ -7,7 +7,7 @@
 | # | Document | Pages | Description |
 |---|----------|-------|-------------|
 | 1 | [SwarmAI Architecture Design](SwarmAI-Architecture-Design.pdf) | 22 | **Start here.** Six-layer architecture, 11-file context chain, compound learning loop, daemon-first backend, OOM resilience, competitive positioning. |
-| 2 | [Self-Evolution Harness](Self-Evolution-Harness-Design.pdf) | 27 | **The core innovation.** Context engineering (11-file P0-P10 chain), 9 post-session hooks, 19-module agent intelligence (4-phase), evolution pipeline v2 (MINE->ASSESS->ACT->AUDIT), 61-skill architecture, proactive intelligence (L0-L4), 7-layer safety. 28 files, 14,500+ lines. |
+| 2 | [Self-Evolution Harness](Self-Evolution-Harness-Design.pdf) | 27 | **The core innovation.** Context engineering (11-file P0-P10 chain), 9 post-session hooks, 19-module agent intelligence (4-phase), evolution pipeline v2 (MINE->ASSESS->ACT->AUDIT), 82-skill architecture, proactive intelligence (L0-L4), 7-layer safety. 28 files, 14,500+ lines. |
 | 3 | [Memory Management](Memory-Management-Design.pdf) | 19 | **How the agent remembers.** 4-level cognitive memory (Semantic->Verbatim), hybrid recall engine (vector+FTS5), transcript indexing (1,500+ JSONL, 700MB+), temporal validity. 9 modules, 5,447 lines. |
 
 ## Reading Order
@@ -21,7 +21,11 @@
 | Document | Pages | Description |
 |----------|-------|-------------|
 | [AIDLC Phase 3: Autonomous Pipeline](AIDLC-Phase3-Design.pdf) | 30 | The methodology framework (implementation-agnostic). DDD+SDD+TDD closed loop, 8-stage pipeline, decision classification, self-improvement flywheel. |
-| [Next-Gen Agent Intelligence](Next-Gen-Agent-Intelligence-Design.pdf) | 20 | Detailed reference for the 19-module intelligence system. Subsumed by Self-Evolution Harness doc for PE review. |
+| [DDD Platform Overview](DDD-Platform-Overview.md) | — | One knowledge layer powering multiple delivery engines. Platform thesis, 3-layer architecture, 8 feed channels. |
+| [Autonomous Pipeline Design](Autonomous-Pipeline-Design.md) | — | 9-stage pipeline + Quality Convergence Loop. Push-ready delivery guarantee. |
+| [Goal Loop Design](Goal-Loop-Design.md) | — | Iterative convergence for open-ended objectives. Inline + scheduled modes, DoD-driven cycles, velocity tracking. |
+| [Pollinate Content Engine](Pollinate-Content-Engine.md) | — | Content delivery engine. 8-stage pipeline + 5-gate brand conformance. Same DDD, different output type. |
+| [DDD Cultivation Engine](DDD-Cultivation-Engine-HLD.md) | — | How DDD self-grows from normal work. 8 feed channels, health scoring, cross-project routing. |
 
 ## Markdown Sources
 
@@ -95,8 +99,9 @@ All diagrams live in [`diagrams/`](diagrams/) as PNG files with dark backgrounds
 | Document | Description |
 |----------|-------------|
 | [User Guide](USER_GUIDE.md) | Getting started, daily workflows, tips |
-| [Release Notes v1.1.0](RELEASE_NOTES_v1.1.0.md) | Changelog for v1.1.0 release |
+| [Quick Start](../QUICK_START.md) | Installation and first-run guide |
+| [AI Context](../AI_CONTEXT.md) | Structured evaluation guide for AI reviewers |
 
 ---
 
-*Last updated: April 15, 2026 --- v2.1*
+*Last updated: May 14, 2026 --- v3.0*

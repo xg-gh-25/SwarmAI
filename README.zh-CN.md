@@ -230,7 +230,7 @@ SwarmAI 基于 Claude Code SDK 构建，向每一个认真的项目学习。差�
 
 <img src="./assets/pipeline-architecture.svg" alt="自主流水线 — 9 阶段 + 收敛循环"/>
 
-> 📖 完整文档：[平台总览](./docs/DDD-Platform-Overview.md) · [DDD 耕耘引擎](./docs/DDD-Cultivation-Engine-HLD.md) · [自主 Pipeline](./docs/Autonomous-Pipeline-Design.md) · [Pollinate 引擎](./docs/Pollinate-Content-Engine.md)
+> 📖 完整文档：[平台总览](./docs/DDD-Platform-Overview.md) · [DDD 耕耘引擎](./docs/DDD-Cultivation-Engine-HLD.md) · [自主 Pipeline](./docs/Autonomous-Pipeline-Design.md) · [Goal Loop](./docs/Goal-Loop-Design.md) · [Pollinate 引擎](./docs/Pollinate-Content-Engine.md)
 
 ---
 
@@ -271,7 +271,7 @@ npm install && cp backend.env.example ../backend/.env
 
 ## 数据一览
 
-1,300+ 次提交 · 190K+ 行代码 · 75+ 个 skill · 3,800+ 个测试 · 27 个纠正 · 60 天 · 1 个人
+1,300+ 次提交 · 190K+ 行代码 · 82 个 skill · 3,800+ 个测试 · 27 个纠正 · 60 天 · 1 个人
 
 技术栈: Tauri 2.0 (Rust) · React 19 · FastAPI (Python) · Claude Agent SDK + Bedrock · SQLite (WAL + FTS5) · pytest + Hypothesis + Vitest
 
