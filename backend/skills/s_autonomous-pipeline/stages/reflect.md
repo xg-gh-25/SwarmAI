@@ -96,13 +96,15 @@ Then continue with the Standard Methodology below, starting from Step 4
 
 7. **DDD Cultivation** — After extracting lessons, cultivate DDD documents:
 
-   ```python
-   from core.ddd_cultivation import cultivate_from_reflect
-   from pathlib import Path
+   ```bash
+   python backend/scripts/artifact_cli.py run-cultivate \
+     --project <PROJECT> --run-id <RUN_ID>
+   ```
 
-   project_dir = workspace / "Projects" / "<PROJECT>"
-   result = cultivate_from_reflect(lessons, "<RUN_ID>", "<PROJECT>", project_dir)
-   # result: {"applied": N, "escalated": M, "rejected": K}
+   This reads the `lessons` field from the reflect stage in run.json and
+   routes them through the cultivation engine. Output:
+   ```json
+   {"applied": N, "escalated": M, "rejected": K}
    ```
 
    **Tiered autonomy model:**
