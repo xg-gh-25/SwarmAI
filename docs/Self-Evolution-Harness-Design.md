@@ -35,7 +35,7 @@ The harness is the core innovation. It provides:
 | Post-session hooks | 9 (all async via BackgroundHookExecutor except 1 synchronous) |
 | Context files | 11 (P0--P10 priority chain) |
 | Token budget tiers | 3 (30K default, 50K large, 100K for 1M-context models) |
-| Skills | 61 (15 always-loaded, 46 lazy-loaded) |
+| Skills | 82 (15 always-loaded, 67 lazy-loaded) |
 | Evolution pipeline | 4-phase MINE -> ASSESS -> ACT -> AUDIT, confidence-gated |
 | Proactive intelligence | 5 levels (L0 parsing -> L4 external signals), 1,149 lines |
 | Safety layers | 7 defense-in-depth |
@@ -576,7 +576,7 @@ The Core Engine is the meta-architecture that ties all subsystems together. Six 
 
 ## 10. Integration with Autonomous Pipeline
 
-The harness powers the 8-stage autonomous pipeline (EVALUATE -> THINK -> PLAN -> BUILD -> REVIEW -> TEST -> DELIVER -> REFLECT). Each pipeline stage invokes specific skills and consumes harness capabilities:
+The harness powers the 9-stage autonomous pipeline (EVALUATE -> THINK -> PLAN -> BUILD -> REVIEW -> TEST -> ADVERSARIAL -> DELIVER -> REFLECT). Each pipeline stage invokes specific skills and consumes harness capabilities:
 
 | Stage | Harness Dependency |
 |-------|-------------------|

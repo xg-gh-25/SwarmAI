@@ -32,9 +32,9 @@ regenerate_pdf: "python3 Projects/SwarmAI/assets/generate-arch-doc.py"
 | **11-File Context Chain** | P0–P10 priority system with token budgets and L0/L1 caching |
 | **3-Layer Memory Pipeline** | Session capture → distillation → curated long-term memory (git-verified) |
 | **Hybrid Memory Recall** | FTS5 keyword + sqlite-vec vector search (Bedrock Titan v2 embeddings) |
-| **61 Skills (15 always + 46 lazy)** | Two-tier loading with manifest.yaml — 49% token reduction in skill listing |
+| **82 Skills (15 always + 67 lazy)** | Two-tier loading with manifest.yaml — 49% token reduction in skill listing |
 | **4-Phase Evolution Pipeline** | MINE → ASSESS → ACT → AUDIT with confidence-gated deployment |
-| **8-Stage Autonomous Pipeline** | EVALUATE → THINK → PLAN → BUILD → REVIEW → TEST → DELIVER → REFLECT |
+| **9-Stage Autonomous Pipeline + Goal Loop** | EVALUATE → THINK → PLAN → BUILD → REVIEW → TEST → ADVERSARIAL → DELIVER → REFLECT; Goal Loop wraps multi-cycle convergence |
 | **Daemon-First Backend** | launchd daemon runs 24/7 — desktop app is optional UI layer |
 | **OOM Resilience** | Proactive RSS-based restart at 1.8GB — prevents macOS jetsam kills |
 | **Multi-Channel Unified Brain** | Desktop + Slack — same agent, same memory, same context |
@@ -78,8 +78,8 @@ The core thesis: most AI tools reset when you close them. Context is lost, decis
 
 | Metric | Value |
 |--------|-------|
-| Commits | 838+ |
-| Built-in Skills | 61 (15 always-loaded, 46 lazy-loaded via manifest.yaml) |
+| Commits | 1,380+ |
+| Built-in Skills | 82 (15 always-loaded, 67 lazy-loaded via manifest.yaml) |
 | Context Files | 11 (P0–P10 priority chain) |
 | Post-Session Hooks | 8 (auto-commit, DailyActivity, distillation, evolution ×2, context-health, improvement, user-observer) |
 | Pipeline Stages | 8 (EVALUATE → REFLECT) |
@@ -250,7 +250,7 @@ ACT:     HIGH → auto-deploy (.bak backup + verify + rollback)
 AUDIT:   Verify deployment, rollback on failure, log to EVOLUTION.md
 ```
 
-**Skill tiering** — 61 skills split into always-loaded (15, ~100 tokens each) and lazy-loaded (46, ~25-token stubs). Lazy skills read INSTRUCTIONS.md via agent Read tool on invocation. 49% token reduction. Complex skills declare scripts via `manifest.yaml`.
+**Skill tiering** — 82 skills split into always-loaded (15, ~100 tokens each) and lazy-loaded (67, ~25-token stubs). Lazy skills read INSTRUCTIONS.md via agent Read tool on invocation. 49% token reduction. Complex skills declare scripts via `manifest.yaml`.
 
 **Key design: confidence gating.** With ~6% correction rate, HIGH threshold is unreachable for most skills — the pipeline safely accumulates data until evidence justifies deployment. Observation is always safe; actuation is gated.
 
@@ -340,7 +340,7 @@ The Intelligence layer provides proactive awareness, autonomous execution, and b
 Drives the full development lifecycle from a one-sentence requirement to PR-ready delivery. Implementation of AIDLC Phase 3 (AI-Management): AI makes autonomous decisions, humans step in when needed.
 
 ![Figure 8: Autonomous Pipeline](autonomous-pipeline.svg)
-*Figure 8: Autonomous Pipeline — 8-stage lifecycle with DDD+SDD+TDD methodology and safety mechanisms*
+*Figure 8: Autonomous Pipeline — 9-stage lifecycle + Goal Loop (iterative convergence) with DDD+SDD+TDD methodology and safety mechanisms*
 
 | Stage | Output | Gate |
 |-------|--------|------|
@@ -481,8 +481,8 @@ SwarmAI occupies a unique position: not a code editor, not an IDE, not a CLI age
 | Memory | 3-layer + hybrid vector recall | CLAUDE.md (manual) | Per-project | Per-project | Session pruning |
 | Context | 11-file + budgets | Single prompt | Spec-driven | Codebase index | Standard |
 | Multi-session | 1-4 parallel tabs | 1 session | 1 session | 1 session | Per-channel |
-| Self-evolution | 61 skills + 4-phase evolution pipeline | No | No | No | No |
-| Autonomous pipeline | 8-stage + DDD+TDD | Manual | Spec-driven | No | No |
+| Self-evolution | 82 skills + 4-phase evolution pipeline | No | No | No | No |
+| Autonomous pipeline | 9-stage + Goal Loop + DDD+TDD | Manual | Spec-driven | No | No |
 | Multi-channel | Unified brain | Terminal | IDE only | IDE only | 21+ (isolated) |
 | Scope | All knowledge work | Coding | Coding | Coding | Messaging |
 | OOM protection | Proactive RSS restart | No | No | No | No |
@@ -504,7 +504,8 @@ SwarmAI occupies a unique position: not a code editor, not an IDE, not a CLI age
 ---
 
 **Document History:**
-- v2.1 (April 15, 2026) — Updated: 4-level memory recall, Evolution Pipeline v2 (MINE→ASSESS→ACT→AUDIT), lazy/always skill tiering (61 skills), OOM threshold 1.8GB, 838+ commits, signal fetcher service resolved.
+- v2.2 (May 14, 2026) — Updated: 82 skills, 1,380+ commits, Goal Loop design doc added.
+- v2.1 (April 15, 2026) — Updated: 4-level memory recall, Evolution Pipeline v2 (MINE→ASSESS→ACT→AUDIT), lazy/always skill tiering, OOM threshold 1.8GB, signal fetcher service resolved.
 - v2.0 (April 8, 2026) — Major refresh: Daemon-first backend, OOM resilience, hybrid memory recall, updated metrics & competitive positioning.
 - v1.0 (March 26, 2026) — Initial release for PE/Tech Leadership review.
 
