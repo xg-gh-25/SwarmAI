@@ -212,11 +212,15 @@ class ContextHealthHook:
 
         This replaces the manual `run-cultivate` CLI call that the agent had
         to remember (and failed 100% of the time — 141 runs, 0 cultivated).
+
+        Capped at 5 cultivations per session to keep light-refresh fast.
+        Remaining uncultivated runs are processed in subsequent sessions.
         """
         projects_dir = root / "Projects"
         if not projects_dir.is_dir():
             return
 
+        _MAX_PER_SESSION = 5
         cultivated_count = 0
 
         for project_dir in projects_dir.iterdir():
@@ -258,6 +262,10 @@ class ContextHealthHook:
                 if not lessons:
                     continue  # Nothing to cultivate
 
+                # Cap per session to keep _light_refresh fast
+                if cultivated_count >= _MAX_PER_SESSION:
+                    break
+
                 # Cultivate
                 project_name = project_dir.name
                 try:
@@ -289,6 +297,9 @@ class ContextHealthHook:
                         "context_health: auto-cultivate failed for %s/%s: %s",
                         project_name, run_dir.name, exc,
                     )
+
+            if cultivated_count >= _MAX_PER_SESSION:
+                break
 
         if cultivated_count > 0:
             logger.info(
