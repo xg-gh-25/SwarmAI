@@ -8,15 +8,23 @@
 
 ## Pipeline-Specific Behavior
 
-### Delivery Gate
+### Execution Order
 
-Run the Delivery Gate first (see confidence scoring below), then proceed.
+```
+1. Fresh User Audit (P6) — if user-facing infra changed
+2. Completion Audit — AC → evidence verification
+3. Adversarial Review Gate — spawn sub-agent (code correctness)
+4. Meta-Review — spawn sub-agent (operational blind spots)
+5. Push-Ready Gate — binary final verdict
+```
 
-### Push-Ready Gate (Binary — replaces confidence scoring)
+### Push-Ready Gate (Binary — Final Verdict)
 
-**No numeric score. Binary: PUSH-READY or NOT-PUSH-READY.**
+**Evaluated LAST, after all other checks complete.**
 
-Numeric confidence (C011: 10/10 with 100% broken code) measures process compliance,
+No numeric score. Binary: PUSH-READY or NOT-PUSH-READY.
+
+Numeric confidence (C011: 10/10 with 100% broken code) measured process compliance,
 not code correctness. A number between "push" and "don't push" creates false
 gradients — there is no meaningful difference between 7/10 and 8/10.
 
@@ -27,20 +35,22 @@ gradients — there is no meaningful difference between 7/10 and 8/10.
 □ Zero HIGH findings from adversarial review (or all fixed)
 □ Completion audit: all_green = true (deliverables match requirement)
 □ Zero regressions on existing tests
-□ Meta-review completed (see below)
+□ Meta-review completed with no unaddressed HIGH risks
 ```
 
 **NOT-PUSH-READY triggers:**
 - Any unfixed HIGH finding → block
 - Any AC without a passing test → block
 - Completion audit gap → block
-- Meta-review flags unaddressed risk → escalate to user
+- Meta-review HIGH risk unaddressed → escalate to user
 
 **Output:** `{"push_ready": true/false, "blockers": [...]}` — no score, no gradient.
 
+---
+
 ### Fresh User Audit (P6)
 
-**Before confidence scoring, if the changeset touches user-facing infrastructure**
+**If the changeset touches user-facing infrastructure**
 (deploy, onboarding, config, CLI, API endpoints), answer this question:
 
 > "Could a new user, starting from zero, successfully use this feature
@@ -71,9 +81,9 @@ the developer's environment. (2026-04-29 + 2026-05-03)
 
 ### Completion Audit
 
-**After confidence scoring, before generating the report,** run the Completion
+**After the push-ready gate, before generating the report,** run the Completion
 Audit Protocol. This verifies that deliverables actually match the requirement —
-confidence scoring checks "did we follow the process", the audit checks "did we
+the push-ready gate checks "did we pass all quality gates", the audit checks "did we
 build the right thing."
 
 ```
@@ -134,10 +144,10 @@ COMPLETION AUDIT — Verify before declaring done.
    (different read of the same code catches assumption drift), but cheaper and
    targeted at the AC→test mapping specifically.
 
-   **Confidence impact:**
-   - status="verified" → +3 (strong: independently confirmed)
-   - status="claimed" (or step skipped) → +1 (weak: tests exist, unverified)
-   - status="failed" → -3 (blocker: known gap in spec satisfaction)
+   **Push-ready impact:**
+   - status="verified" → gate passes (AC evidence confirmed)
+   - status="claimed" (or step skipped) → warning (tests exist, unverified)
+   - status="failed" → NOT-PUSH-READY (blocker: known gap in spec satisfaction)
 
 3. INSPECT: Verify evidence exists (don't trust memory)
    - For each ✅: cite the specific file, test name, or output
@@ -156,7 +166,7 @@ COMPLETION AUDIT — Verify before declaring done.
    - UNFIXABLE GAP → surface as attention flag with explanation
 ```
 
-**Record the audit results in run.json** (used by confidence scoring):
+**Record the audit results in run.json** (used by push-ready gate):
 
 ```json
 {
@@ -168,10 +178,10 @@ COMPLETION AUDIT — Verify before declaring done.
 }
 ```
 
-**Confidence impact:**
-- `all_green: true` → +2 bonus
-- `gaps > 0` (not fixed) → -3 penalty
-- `unfixable_gaps > 0` → -1 penalty
+**Push-ready impact:**
+- `all_green: true` → gate passes
+- `gaps > 0` (not fixed) → NOT-PUSH-READY (blocker)
+- `unfixable_gaps > 0` → WARNING (note in report, user decides)
 
 ### Adversarial Review Gate (BLOCKING)
 
@@ -495,7 +505,7 @@ Bugs caught in RED phase: <N> (<brief description of most significant>)
 | BUILD (user-path) | T traces, B bugs found and fixed |
 | TEST (TDD) | pass |
 | VALIDATOR | 6/6 checks |
-| Confidence | X/12 |
+| Push-Ready | ✅ PUSH-READY / ❌ NOT-PUSH-READY (blockers: ...) |
 
 ## 7.5 Adversarial Review
 | Pass | Findings | Fixed | Noted |
@@ -510,7 +520,17 @@ Bugs caught in RED phase: <N> (<brief description of most significant>)
 
 **Gate value:** <HIGH/MED/LOW — one sentence explaining what adversarial uniquely provided>
 
-## 7.6 Completion Audit
+## 7.6 Meta-Review (Pipeline Blind Spot Analysis)
+| Category | Verdict | Detail |
+|----------|---------|--------|
+| Deployment context | CLEAR / RISK | <what was found> |
+| Operational scaling | CLEAR / RISK | <no-op cost, steady-state> |
+| Cross-boundary format | CLEAR / RISK | <format assumptions> |
+| First-run vs steady-state | CLEAR / RISK | <backlog behavior> |
+
+**Overall:** CLEAR / RISKS_IDENTIFIED (N items, M addressed)
+
+## 7.7 Completion Audit
 | # | Acceptance Criterion | Evidence | Verified |
 |---|---------------------|----------|----------|
 | 1 | ... | test_xxx.py::test_yyy | ✅ |
@@ -527,7 +547,7 @@ Bugs caught in RED phase: <N> (<brief description of most significant>)
 - Lesson 2
 
 ## 10. Known Gaps & Attention Flags
-<any warnings, low-confidence items, or deferred issues>
+<any warnings, meta-review risks accepted, or deferred issues>
 
 ## 11. Methodology Impact
 | Concept | Decision Point | Impact | Counterfactual (without this) |

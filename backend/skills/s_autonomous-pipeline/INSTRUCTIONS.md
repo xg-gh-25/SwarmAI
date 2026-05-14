@@ -437,7 +437,7 @@ set of findings. The Quality Convergence Loop below re-verifies after fixes.
 ### 4c. Quality Convergence Loop
 
 After deliver stage execution produces a delivery candidate (code written, tests
-pass, adversarial review done, confidence scored), the Quality Convergence Loop
+pass, adversarial review done, meta-review complete), the Quality Convergence Loop
 evaluates whether the candidate is truly push-ready — and iterates until it is,
 or escalates.
 

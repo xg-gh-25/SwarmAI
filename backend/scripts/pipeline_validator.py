@@ -973,10 +973,28 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
             checks_passed += 1
         checks_total += 1
 
-    # --- Check 10: Confidence gate (L3) — score < 7 blocks delivery ---
+    # --- Check 10: Push-Ready gate (L3) — binary verdict ---
+    # V2: reads `quality.push_ready` (boolean). V1 compat: reads `confidence_score.score < 7`.
     if stage == "deliver" and artifact_data:
+        quality = artifact_data.get("quality", {})
         conf = artifact_data.get("confidence_score", {})
-        if isinstance(conf, dict):
+        if isinstance(quality, dict) and "push_ready" in quality:
+            # V2 path: binary gate
+            if not quality["push_ready"]:
+                blockers = quality.get("blockers", [])
+                has_override = run.get("human_override", False)
+                if not has_override:
+                    errors.append(
+                        f"Push-ready gate: NOT-PUSH-READY. "
+                        f"Blockers: {blockers}"
+                    )
+                else:
+                    warnings.append(
+                        f"Push-ready gate: NOT-PUSH-READY — "
+                        f"OVERRIDDEN by human_override flag."
+                    )
+        elif isinstance(conf, dict):
+            # V1 compat: numeric confidence score
             score = conf.get("score", 0)
             has_override = run.get("human_override", False)
             if score < 7 and not has_override:
@@ -990,7 +1008,7 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
                     f"OVERRIDDEN by human_override flag."
                 )
         checks_total += 1
-        if not any("confidence gate" in e.lower() for e in errors):
+        if not any("push-ready gate" in e.lower() or "confidence gate" in e.lower() for e in errors):
             checks_passed += 1
 
     # --- Check 11: Semantic depth (L2.5) — content quality heuristics (WARN) ---
