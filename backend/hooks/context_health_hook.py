@@ -232,9 +232,14 @@ class ContextHealthHook:
             if not runs_dir.is_dir():
                 continue
 
-            # Sort by mtime (oldest first) to ensure FIFO processing
+            # Sort by mtime (oldest first) to ensure FIFO processing.
+            # Filter to last 30 days — older uncultivated runs are stale and
+            # won't produce useful DDD content. Also bounds scan cost to O(recent)
+            # instead of O(total history) as pipelines accumulate.
+            mtime_cutoff = time.time() - 30 * 86400
             run_dirs = sorted(
-                (d for d in runs_dir.iterdir() if d.is_dir()),
+                (d for d in runs_dir.iterdir()
+                 if d.is_dir() and d.stat().st_mtime > mtime_cutoff),
                 key=lambda d: d.stat().st_mtime,
             )
 
