@@ -113,7 +113,7 @@ Pipeline: `ContextDirectoryLoader` (L1 cache, budget tiers) -> `PromptBuilder` (
 
 | Component | Location | Purpose |
 |-----------|----------|---------|
-| **SKILL.md** | `backend/skills/s_autonomous-pipeline/` | 8-stage behavioral loop with TDD, decisions, delivery gate |
+| **SKILL.md** | `backend/skills/s_autonomous-pipeline/` | 9-stage behavioral loop with TDD, decisions, adversarial review, delivery gate |
 | **artifact_cli.py** | `backend/scripts/` | 13 CLI commands: publish, discover, run-*, status, resume |
 | **pipeline_validator.py** | `backend/scripts/` | 6 structural invariant checks after each stage |
 | **pipeline_profiles.py** | `backend/core/` | 5 profiles: full, trivial, research, docs, bugfix |

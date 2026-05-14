@@ -66,8 +66,9 @@ synonyms — they cause confusion across the 69-skill ecosystem.
   Examples: `Read`, `Edit`, `Bash`, `mcp__slack-mcp__post_message`.
   _Avoid:_ "skill" (skills orchestrate tools, they are not tools themselves).
 
-- **pipeline** — The autonomous 8-stage lifecycle: EVALUATE → THINK → PLAN →
-  BUILD → REVIEW → TEST → DELIVER → REFLECT. Tracked via `run.json` + artifacts.
+- **pipeline** — The autonomous 9-stage lifecycle: EVALUATE → THINK → PLAN →
+  BUILD → REVIEW → TEST → ADVERSARIAL → DELIVER → REFLECT. Tracked via
+  `run.json` + artifacts. (ADVERSARIAL executes inside DELIVER as blocking gate.)
   _Avoid:_ "workflow" (too generic), "process" (too generic).
 
 - **artifact** — A pipeline-stage output stored in `.artifacts/`. Has an `art_`

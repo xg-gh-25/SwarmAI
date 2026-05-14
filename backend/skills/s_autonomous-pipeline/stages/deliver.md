@@ -138,7 +138,7 @@ COMPLETION AUDIT — Verify before declaring done.
    }
    ```
 
-   **Why this exists:** C011 (Voice Mode) passed 8 stages with 10/10 confidence
+   **Why this exists:** C011 (Voice Mode) passed all stages with 10/10 confidence
    and 57 green tests. Feature was 100% non-functional. Builder claimed tests
    verified the spec — they didn't. This step separates "builder claims evidence"
    from "verifier confirms evidence." Same principle as adversarial review

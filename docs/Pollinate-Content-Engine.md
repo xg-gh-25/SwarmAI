@@ -12,7 +12,7 @@ status: PE-review
 
 Pollinate is the content delivery engine for SwarmAI. It takes a one-sentence message and produces brand-correct, audience-correct content across multiple formats — poster, video, narrative essay, social shorts, README, and presentation — without ever drifting off-brand, making false claims, or repeating stale messaging angles.
 
-The core insight: **the same DDD (Domain-Driven Design) knowledge layer that makes Pipeline produce domain-correct code makes Pollinate produce brand-correct content.** Both engines read from and write back to the same four documents. Both engines use the same 8-stage structure with quality convergence. The difference is the domain — code delivery vs. content delivery — not the architecture.
+The core insight: **the same DDD (Domain-Driven Design) knowledge layer that makes Pipeline produce domain-correct code makes Pollinate produce brand-correct content.** Both engines read from and write back to the same four documents. Both engines use a similar stage-based structure with quality convergence (Pipeline: 9 stages, Pollinate: 8 stages). The difference is the domain — code delivery vs. content delivery — not the architecture.
 
 **Architecture in one sentence:** Pollinate reads brand knowledge from DDD, selects the optimal format(s) for message and audience, produces content through a quality-convergence loop, and writes messaging learnings back to DDD for cross-engine benefit.
 

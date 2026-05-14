@@ -13,7 +13,7 @@ Most AI assistants are stateless -- every conversation starts from scratch. Swar
 - **Swarm Core Engine** -- Six interconnected flywheels (Self-Evolution, Self-Memory, Self-Context, Self-Harness, Self-Health, Self-Jobs) that feed each other. Every session makes the next one better. Every correction prevents a class of future mistakes.
 - **Memory that persists** -- 3-layer pipeline (DailyActivity -> distillation -> MEMORY.md) with LLM-powered weekly pruning. Git-verified accuracy. Decisions, lessons, and preferences survive across sessions.
 - **Skills that compound** -- 50+ built-in skills, and Swarm builds new ones when it hits capability gaps. Skills improve from usage.
-- **Autonomous Pipeline** -- 8-stage lifecycle (EVALUATE -> THINK -> PLAN -> BUILD(TDD) -> REVIEW -> TEST -> DELIVER -> REFLECT) with ROI gate, decision classification, and delivery gate. From one-sentence requirement to PR-ready delivery.
+- **Autonomous Pipeline** -- 9-stage lifecycle (EVALUATE -> THINK -> PLAN -> BUILD(TDD) -> REVIEW -> TEST -> ADVERSARIAL -> DELIVER -> REFLECT) with ROI gate, decision classification, and delivery gate. From one-sentence requirement to PR-ready delivery.
 - **Projects that accumulate knowledge** -- DDD documents (PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md) give Swarm autonomous judgment: Should we? Can we? Have we tried? Should we now?
 - **Proactive intelligence** -- Session briefings with health alerts, signal highlights, temporal awareness, and learning patterns. Swarm doesn't wait to be asked.
 - **Three execution modes** -- Direct (bug fix), TDD-only (clear scope), Full Pipeline (new architecture). Right process for right task.
