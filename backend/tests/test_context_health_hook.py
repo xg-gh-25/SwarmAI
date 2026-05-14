@@ -1,4 +1,5 @@
 """Tests for hooks.context_health_hook — context health harness."""
+import json
 import logging
 import os
 import subprocess
@@ -266,3 +267,126 @@ class TestDDDStaleness:
         """No staleness flag when DDD docs are recent."""
         findings = hook._check_ddd_staleness(workspace, str(workspace))
         assert not any("DDD-STALE" in f for f in findings)
+
+
+# --------------------------------------------------------------------------
+# Auto-cultivation
+# --------------------------------------------------------------------------
+
+class TestAutoCultivation:
+    """Tests for _auto_cultivate_pipeline_lessons."""
+
+    def _make_run(self, workspace, project, run_id, *, lessons=None, cultivated=False):
+        """Create a run.json with a reflect stage."""
+        runs_dir = workspace / "Projects" / project / ".artifacts" / "runs" / run_id
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        stages = []
+        if lessons is not None:
+            reflect_stage = {"stage": "reflect", "status": "completed", "lessons": lessons}
+            if cultivated:
+                reflect_stage["cultivated"] = True
+            stages.append(reflect_stage)
+        run_data = {
+            "id": run_id,
+            "project": project,
+            "status": "completed",
+            "stages": stages,
+        }
+        (runs_dir / "run.json").write_text(json.dumps(run_data), encoding="utf-8")
+        return runs_dir / "run.json"
+
+    def test_cultivates_uncultivated_run(self, hook, workspace):
+        """Cultivates a completed run with reflect.lessons and no cultivated flag."""
+        # Create project with DDD docs (needed for cultivation target)
+        proj = workspace / "Projects" / "TestProject"
+        (proj / "IMPROVEMENT.md").write_text(
+            "# Lessons\n\n## What Worked\n\n- existing\n\n## What Failed\n\n- nothing\n"
+        )
+
+        run_file = self._make_run(
+            workspace, "TestProject", "run_abc123",
+            lessons=["Use nc -z instead of lsof for port checks"]
+        )
+
+        hook._auto_cultivate_pipeline_lessons(workspace)
+
+        # Verify cultivated:true was set
+        run_data = json.loads(run_file.read_text(encoding="utf-8"))
+        reflect_stage = next(s for s in run_data["stages"] if s["stage"] == "reflect")
+        assert reflect_stage["cultivated"] is True
+
+    def test_skips_already_cultivated(self, hook, workspace):
+        """Skips runs that already have cultivated:true."""
+        proj = workspace / "Projects" / "TestProject"
+        (proj / "IMPROVEMENT.md").write_text("# Lessons\n\n## What Worked\n\n- x\n")
+
+        run_file = self._make_run(
+            workspace, "TestProject", "run_def456",
+            lessons=["Some lesson"], cultivated=True
+        )
+
+        # Should not re-cultivate (file unchanged)
+        original_content = run_file.read_text()
+        hook._auto_cultivate_pipeline_lessons(workspace)
+        assert run_file.read_text() == original_content
+
+    def test_skips_run_without_lessons(self, hook, workspace):
+        """Skips runs whose reflect stage has no lessons."""
+        proj = workspace / "Projects" / "TestProject"
+        (proj / "IMPROVEMENT.md").write_text("# Lessons\n\n## What Worked\n\n- x\n")
+
+        run_file = self._make_run(
+            workspace, "TestProject", "run_ghi789",
+            lessons=[]
+        )
+
+        original_content = run_file.read_text()
+        hook._auto_cultivate_pipeline_lessons(workspace)
+        # No cultivated flag should be added for empty lessons
+        run_data = json.loads(run_file.read_text(encoding="utf-8"))
+        reflect_stage = next(s for s in run_data["stages"] if s["stage"] == "reflect")
+        assert "cultivated" not in reflect_stage
+
+    def test_handles_missing_reflect_stage(self, hook, workspace):
+        """Gracefully handles runs without a reflect stage."""
+        proj = workspace / "Projects" / "TestProject"
+        (proj / "IMPROVEMENT.md").write_text("# Lessons\n\n## What Worked\n\n- x\n")
+
+        self._make_run(workspace, "TestProject", "run_jkl012", lessons=None)
+        # Should not raise
+        hook._auto_cultivate_pipeline_lessons(workspace)
+
+    def test_handles_corrupt_json(self, hook, workspace, caplog):
+        """Gracefully handles corrupt run.json files."""
+        proj = workspace / "Projects" / "TestProject"
+        proj.mkdir(parents=True, exist_ok=True)
+        runs_dir = proj / ".artifacts" / "runs" / "run_bad"
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        (runs_dir / "run.json").write_text("not valid json{{{")
+
+        with caplog.at_level(logging.DEBUG):
+            hook._auto_cultivate_pipeline_lessons(workspace)
+        # Should not raise — just log and continue
+
+    def test_idempotent_multiple_calls(self, hook, workspace):
+        """Multiple calls don't re-cultivate already-done runs."""
+        proj = workspace / "Projects" / "TestProject"
+        (proj / "IMPROVEMENT.md").write_text(
+            "# Lessons\n\n## What Worked\n\n- existing\n\n## What Failed\n\n- nothing\n"
+        )
+
+        self._make_run(
+            workspace, "TestProject", "run_idempotent",
+            lessons=["Pattern: always validate threshold against real data"]
+        )
+
+        # First call cultivates
+        hook._auto_cultivate_pipeline_lessons(workspace)
+        # Second call skips (cultivated:true now set)
+        hook._auto_cultivate_pipeline_lessons(workspace)
+
+        # Should still only be cultivated once
+        run_file = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_idempotent" / "run.json"
+        run_data = json.loads(run_file.read_text(encoding="utf-8"))
+        reflect_stage = next(s for s in run_data["stages"] if s["stage"] == "reflect")
+        assert reflect_stage["cultivated"] is True
