@@ -771,11 +771,25 @@ Show progress as structured landmarks after each stage completes. Each stage
 header includes its **methodology concept** in brackets — these serve as anchor
 points for live demo (user can point at them and explain the approach verbally).
 
-**Pipeline header (shown once at start):**
+**Pipeline briefing (shown once at start, before first stage):**
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Pipeline: <requirement> (run_<id>)
 Project: <PROJECT> | Profile: <profile>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Autonomous Pipeline — from requirement to push-ready code.
+
+  How: DDD (domain knowledge) informs every decision
+       SDD (spec before code) defines what to build
+       TDD (test before implement) proves it works
+
+  Quality gates:
+       ★ Adversarial Review — independent AI reviews code cold, finds builder blind spots
+       ★ Quality Convergence — 6 layers must pass simultaneously before shipping
+       ★ Goal Loop — iterative cycles with measurable progress (goal profile only)
+
+  Stages: <stage list for this profile, e.g., EVALUATE → THINK → PLAN → BUILD → REVIEW → TEST → DELIVER → REFLECT>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
@@ -806,7 +820,7 @@ Project: <PROJECT> | Profile: <profile>
 ## ✦ TEST [Regression Scope]
 → <N> new + <M> existing pass | <K> regressions | WTF: <J>
 
-## ✦ DELIVER
+## ✦ DELIVER [Multi-Gate Quality Assurance]
   ├─ Taste Gate: <N> decisions → <approved/overridden>
   ├─ ★ Adversarial Review: <summary — e.g., "3 findings, 1 HIGH fixed">
   ├─ ★ Quality Convergence: L1-L6 <result> (<N> iterations)
@@ -831,11 +845,21 @@ Project: <PROJECT> | Profile: <profile>
 
 **Completion summary (shown once at end):**
 
+For standard/full/bugfix profiles:
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ✦ COMPLETE | Confidence <X>/12
-  TDD: <N>→<M>→<K> bugs | Adversarial: <summary> | DDD: <N> decisions shaped
+  TDD: <N>→<M>→<K> bugs | Adversarial: <summary> | Convergence: <N> iter | DDD: <N> decisions shaped
   <PR/CI status> | .artifacts/runs/run_<id>/REPORT.md
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+For goal profile:
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✦ COMPLETE | <X>/<Y> DoD met in <N> cycles
+  Goal: <velocity summary> | Adversarial: <summary> | DDD: <N> decisions shaped
+  .artifacts/runs/run_<id>/REPORT.md
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
