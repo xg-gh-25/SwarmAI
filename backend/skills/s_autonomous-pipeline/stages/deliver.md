@@ -468,6 +468,41 @@ else:
 If CI is red, the pipeline must fix the issue and re-commit before DELIVER is complete.
 Do NOT proceed to REFLECT with red CI — a delivered feature that breaks the build is not delivered.
 
+### Auto PR Creation (full/bugfix profiles only)
+
+After CI confirms green, create a PR automatically to close the "Coding as
+Black Box" delivery loop. The user stated a requirement; now a PR appears.
+
+```bash
+python backend/skills/s_autonomous-pipeline/scripts/pipeline_pr.py \
+  --run-dir <run_dir>
+```
+
+**Guards (handled by the script internally):**
+- Profile must be `full` or `bugfix` (research/docs/goal/trivial = skip silently)
+- `gh auth status` must succeed (else: warn, don't block — push-ready is still valid)
+- If on `main` branch: creates `pipeline/<run_id>` branch, pushes, then PRs against main
+- If on feature branch: pushes to remote with `-u`, then PRs against main
+
+**PR contents:**
+- Title: `feat(<scope>): <requirement condensed>` (always <=70 chars)
+- Body: TL;DR + Pipeline Delivery stats + Files Changed + link to full REPORT.md
+- Flag: `--auto` (auto-merge when CI required checks pass)
+
+**Failure handling (AC6):**
+- PR creation failure is a WARNING, not an error
+- Pipeline status is still "push-ready" regardless of PR outcome
+- Record result in run.json under `"pr_result"` field
+
+**When to use `--dry-run`:**
+- User explicitly said "don't create PR" or "I'll handle the PR"
+- Pass `--dry-run` to get the formatted command without executing
+
+Record PR URL in run.json if successful:
+```json
+{"pr_result": {"success": true, "pr_url": "https://github.com/..."}}
+```
+
 ### PROJECT.md Update
 
 Update PROJECT.md with delivery entry.
