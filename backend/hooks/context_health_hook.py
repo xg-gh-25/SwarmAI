@@ -220,19 +220,25 @@ class ContextHealthHook:
         if not projects_dir.is_dir():
             return
 
+        from core.ddd_cultivation import cultivate_from_reflect
+
         _MAX_PER_SESSION = 5
         cultivated_count = 0
 
-        for project_dir in projects_dir.iterdir():
+        for project_dir in sorted(projects_dir.iterdir()):
             if not project_dir.is_dir():
                 continue
             runs_dir = project_dir / ".artifacts" / "runs"
             if not runs_dir.is_dir():
                 continue
 
-            for run_dir in runs_dir.iterdir():
-                if not run_dir.is_dir():
-                    continue
+            # Sort by mtime (oldest first) to ensure FIFO processing
+            run_dirs = sorted(
+                (d for d in runs_dir.iterdir() if d.is_dir()),
+                key=lambda d: d.stat().st_mtime,
+            )
+
+            for run_dir in run_dirs:
                 run_file = run_dir / "run.json"
                 if not run_file.exists():
                     continue
@@ -269,19 +275,19 @@ class ContextHealthHook:
                 # Cultivate
                 project_name = project_dir.name
                 try:
-                    from core.ddd_cultivation import cultivate_from_reflect
-
                     run_id = run_data.get("id", run_dir.name)
                     result = cultivate_from_reflect(
                         lessons, run_id, project_name, project_dir
                     )
 
-                    # Mark as cultivated in run.json
+                    # Atomic write: mark cultivated in run.json via tmp+replace
                     run_data["stages"][reflect_idx]["cultivated"] = True
-                    run_file.write_text(
+                    tmp_file = run_file.with_suffix(".tmp")
+                    tmp_file.write_text(
                         json.dumps(run_data, indent=2, ensure_ascii=False),
                         encoding="utf-8",
                     )
+                    os.replace(tmp_file, run_file)
                     cultivated_count += 1
 
                     logger.info(
