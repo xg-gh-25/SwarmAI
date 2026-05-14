@@ -1,0 +1,346 @@
+# GOAL_CYCLE Stage
+
+## Purpose
+
+Iterative execution toward an open-ended goal. Repeats BUILD+TEST cycles
+until Definition of Done (DoD) criteria are met, max cycles reached, or a
+structural blocker is detected.
+
+This is NOT a one-shot stage — it loops internally. The pipeline orchestrator
+calls this stage once; the stage itself manages the cycle loop.
+
+---
+
+## Pre-Cycle Setup (runs once, at stage entry)
+
+1. **Load evaluation artifact** — extract `dod_criteria`, `max_cycles`,
+   `progress_path`, `cycle_scope`, `review_cadence`
+2. **Initialize or load progress file** at `progress_path`:
+   - If file exists → resume from last recorded state
+   - If file doesn't exist → create with DoD criteria + empty metrics table
+3. **Record start commit** — `git rev-parse HEAD` (used for periodic REVIEW
+   and final ADVERSARIAL diff base)
+4. **Set cycle counter** to last recorded cycle + 1 (or 1 if fresh)
+
+---
+
+## Per-Cycle Execution
+
+Each cycle follows this exact sequence:
+
+### 1. Budget Gate
+
+```
+remaining_tokens = session_budget - tokens_consumed
+if remaining_tokens < 150_000:
+    → EXIT with BUDGET (save progress, checkpoint)
+```
+
+150K = enough for 1 more cycle (~50K) + REFLECT (~30K) + overhead.
+
+### 2. DoD Check (exit-first)
+
+Run ALL DoD criteria. If all pass → EXIT with SUCCESS (skip to Final Gate).
+
+For each criterion:
+- **command type:** Run the shell command. Exit code 0 = pass, non-zero = fail.
+  ```bash
+  bash -c '<check_command>' 2>&1; echo "EXIT:$?"
+  ```
+  Parse the last line for `EXIT:0` (pass) or `EXIT:N` (fail).
+
+- **rubric type:** Read the state described in the rubric, evaluate against
+  the explicit pass/fail criteria. Output `PASS` or `FAIL: <reason>`.
+
+Record per-criterion results in progress file.
+
+### 3. Stuck Detection
+
+```
+if last 3 cycles all have zero progress (same DoD results, no criterion flipped):
+    → EXIT with STOP (structural blocker)
+```
+
+### 4. Read Progress
+
+- Read progress file → identify: completed criteria, remaining gaps, last
+  cycle's action, blockers from prior cycles
+- Determine which DoD criterion has the largest gap (most leverage)
+
+### 5. Pick Step
+
+Based on DoD gap analysis, select ONE bounded step:
+- Touch 1-3 files
+- Address one specific gap toward one DoD criterion
+- Respect `cycle_scope` from evaluation (default: "one test file or one module fix")
+
+Announce: `Cycle N: targeting [DoD criterion] via [specific action]`
+
+### 6. Execute Step (BUILD-equivalent)
+
+Standard TDD discipline within the step:
+- Write test for the expected improvement (RED)
+- Implement the fix/addition (GREEN)
+- Verify no regressions on touched files
+
+### 7. Test
+
+Run targeted tests for files changed in this cycle:
+```bash
+pytest tests/test_<module>.py -v --timeout=60
+```
+
+If tests fail → Regression Protocol (see below).
+
+### 8. Update Progress
+
+Append to progress file:
+```markdown
+| N | YYYY-MM-DD | <metric_before> → <metric_after> | +<delta> | <action taken> |
+```
+
+Update "Current State" section with new targets.
+
+### 9. Mini-Reflect
+
+Append ONE line to progress file Cycle Log:
+```markdown
+**Cycle N:** <what worked or didn't> → <insight for next cycle>
+```
+
+No DDD write. No LLM call for distillation. Just text.
+
+### 10. Periodic REVIEW Gate
+
+```
+if cycle_number % review_cadence == 0:
+    git_diff = git diff <last_review_commit>..HEAD
+    → Run REVIEW stage behavior on this diff
+    → If findings: add to "Blockers" section of progress file
+    → Update last_review_commit to HEAD
+```
+
+### 11. Revert Check
+
+```
+if 2 consecutive cycles ended in revert:
+    → EXIT with REVERT_LIMIT (conflicting constraints)
+```
+
+### 12. Loop
+
+Return to Step 1 (Budget Gate) for next cycle.
+
+---
+
+## Regression Protocol
+
+When TEST fails on current cycle's changes:
+
+```
+Attempt 1:
+  - Diagnose: which test fails and why?
+  - Fix: scoped to the failing test (≤3 file changes)
+  - Re-run TEST
+    → Pass: continue to Step 8
+    → Fail: go to Attempt 2
+
+Attempt 2:
+  - Different fix approach
+  - Re-run TEST
+    → Pass: continue to Step 8
+    → Fail: REVERT all cycle N changes
+      - git checkout -- <files changed this cycle>
+      - Mark step as "blocked by [test/reason]" in progress file
+      - Increment revert counter
+      - Continue to Step 11 (Revert Check)
+```
+
+---
+
+## Exit Conditions
+
+### EXIT with SUCCESS
+
+All DoD criteria pass (verified by running commands/rubrics).
+
+**Final Quality Gate (before REFLECT):**
+1. Full ADVERSARIAL review on total changeset:
+   ```bash
+   git diff <start_commit>..HEAD
+   ```
+   Spawn sub-agent with this diff + DoD criteria + requirement.
+2. If adversarial finds issues → execute up to 3 more fix cycles
+3. If issues persist after 3 fix cycles → CHECKPOINT with findings
+
+Then proceed to REFLECT (full mode).
+
+### EXIT with CHECKPOINT
+
+Max cycles reached without DoD met.
+
+Output:
+```
+Goal Loop CHECKPOINT after N cycles:
+- DoD criteria: X/Y met
+- Progress trend: [improving/stalled/regressing]
+- What's left: [remaining criteria with current values]
+- Recommendation: [extend cycles / adjust DoD / manual fix needed]
+```
+
+Creates Radar todo for user.
+
+### EXIT with STOP
+
+3 consecutive cycles with zero DoD progress.
+
+Output:
+```
+Goal Loop STOPPED — structural blocker detected:
+- Last 3 cycles: [actions taken]
+- No criterion improved
+- Likely cause: [diagnosis]
+- Suggestion: [decompose goal / different approach / human intervention]
+```
+
+### EXIT with REVERT_LIMIT
+
+2 consecutive cycle reverts (changes break existing tests, can't make progress).
+
+Output:
+```
+Goal Loop CONFLICT — cannot progress without regression:
+- Cycle N: [action] → broke [test]
+- Cycle N+1: [different action] → broke [test]
+- Conflicting constraints: [what the goal requires vs what existing tests enforce]
+- Suggestion: [refactor needed / relax test / redefine goal scope]
+```
+
+### EXIT with BUDGET
+
+Remaining tokens < 150K mid-session.
+
+Output:
+```
+Goal Loop paused — budget conservation:
+- Cycles completed: N
+- DoD: X/Y met
+- Progress saved to: [progress_path]
+- Resume: "resume pipeline for SwarmAI" or scheduled mode
+```
+
+---
+
+## REFLECT (Two-Tier)
+
+### Mini-Reflect (per cycle)
+
+Already handled in Step 9 — one-line insight appended to progress file.
+No DDD writes. No LLM distillation. Accumulates raw material.
+
+### Full REFLECT (at goal completion)
+
+Triggered only on EXIT with SUCCESS (after final adversarial passes):
+
+1. Read all mini-reflects from progress file
+2. Read the goal requirement and DoD criteria
+3. Distill patterns:
+   - Which DoD criteria were hardest? Why?
+   - Which cycle actions had highest leverage?
+   - Any recurring blockers across cycles?
+4. Write to IMPROVEMENT.md:
+   - "What Worked" entry: the effective patterns
+   - "What Failed" entry (if any cycles stalled): the anti-patterns
+5. Update PROJECT.md: goal completed, date, cycles taken
+
+---
+
+## Progress File Format
+
+```markdown
+# Goal: <goal description>
+
+## Definition of Done
+- [x] <criterion 1> (met cycle N)
+- [ ] <criterion 2> (current: <value>, target: <value>)
+- [ ] <criterion 3> (current: <value>, target: <value>)
+
+## Configuration
+- Max cycles: <N>
+- Review cadence: every <N> cycles
+- Cycle scope: <description>
+- Start commit: <hash>
+- Last review commit: <hash>
+
+## Metrics
+| Cycle | Date | Metric | Delta | Action |
+|-------|------|--------|-------|--------|
+| 1 | 2026-05-14 | 73% → 76% | +3% | Added tests for memory.py |
+| 2 | 2026-05-14 | 76% → 79% | +3% | Added tests for session.py |
+
+## Current State
+- Next target: <what to work on>
+- Lowest-hanging fruit: <specific file/module>
+
+## Blockers
+(none, or list of blocked items with reasons)
+
+## Cycle Log
+**Cycle 1:** <insight>
+**Cycle 2:** <insight>
+```
+
+---
+
+## Scheduled Mode (Job System)
+
+For goals spanning multiple sessions, create a job after EVALUATE+PLAN:
+
+```yaml
+# Append to ~/.swarm-ai/SwarmWS/Services/swarm-jobs/user-jobs.yaml
+jobs:
+  - id: goal-<slug>
+    name: "<goal description>"
+    type: agent_task
+    schedule: "0 */4 * * *"  # every 4 hours (adjust as needed)
+    enabled: true
+    category: user
+    config:
+      prompt: |
+        Resume goal loop for SwarmAI project.
+        Progress file: <progress_path>
+        
+        Steps:
+        1. Read progress file
+        2. Check DoD criteria — if ALL met, disable this job and notify owner
+        3. If not met: execute ONE cycle (pick step, implement, test, update progress)
+        4. Save progress and exit
+        
+        Constraints:
+        - One cycle only per execution
+        - Do not run REVIEW or ADVERSARIAL (those run at cycle boundaries inline)
+        - If stuck (same state 3 runs): disable job and create Radar todo
+      create_todos: false
+    safety:
+      max_budget_usd: 1.50
+      timeout_seconds: 600
+```
+
+**Note:** Scheduled mode loses context between executions. The progress file
+is the ONLY state carrier. Write progress clearly enough that a fresh agent
+can pick up where the last one left off.
+
+---
+
+## Inline vs Scheduled Decision
+
+| Factor | Inline | Scheduled |
+|--------|--------|-----------|
+| Goal completable in ~10 cycles | ✅ Use this | Overkill |
+| Goal needs 30+ cycles | Too expensive (budget) | ✅ Use this |
+| Context continuity matters | ✅ Full context | ❌ Fresh each time |
+| Overnight/unattended | ❌ Needs session open | ✅ Runs via cron |
+| Quality gates (REVIEW, ADVERSARIAL) | Integrated per cycle | Only at completion |
+
+Default: **inline**. Switch to scheduled when EVALUATE estimates >10 cycles
+or the user explicitly requests overnight execution.

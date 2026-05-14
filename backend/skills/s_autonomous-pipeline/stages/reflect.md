@@ -2,7 +2,41 @@
 
 Pipeline-owned stage (no sibling skill).
 
-## Methodology
+## Goal Loop Mode (Two-Tier REFLECT)
+
+When the pipeline profile is `goal`, REFLECT operates differently:
+
+### Mini-Reflect (per cycle — handled in goal_cycle.md Step 9)
+
+Not run here. Each cycle appends a one-line insight to the progress file.
+No DDD writes. Accumulates raw material for full REFLECT.
+
+### Full REFLECT (at goal completion — runs HERE)
+
+Triggered when goal_cycle exits with SUCCESS (all DoD met + adversarial clean):
+
+1. **Read all mini-reflects** from the progress file "Cycle Log" section
+2. **Read the goal requirement** and DoD criteria from evaluation artifact
+3. **Distill patterns:**
+   - Which DoD criteria were hardest? Why?
+   - Which cycle actions had highest leverage? (most progress per cycle)
+   - Any recurring blockers across cycles?
+   - What was the velocity curve? (accelerating, decelerating, flat)
+4. **Write to IMPROVEMENT.md:**
+   - "What Worked" entry: the effective patterns from this goal
+   - "What Failed" entry (if cycles stalled): the anti-patterns
+   - Goal completion metadata: total cycles, wall time, criteria count
+5. **Update PROJECT.md:** goal completed, date, cycles taken, key insight
+6. **DDD Cultivation** (Step 7 below): run normally on distilled lessons
+
+Then continue with Steps 4-10 below as normal (checklist maintenance, ADR gate,
+dead code, cultivation, record stage, learn, report).
+
+**For non-goal profiles:** skip this section, start directly at Step 1 below.
+
+---
+
+## Methodology (Standard — all profiles except goal's per-cycle mini-reflect)
 
 1. Extract lessons from this pipeline run
 2. Write to IMPROVEMENT.md: what worked, what failed, patterns discovered

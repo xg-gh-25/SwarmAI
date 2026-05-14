@@ -341,8 +341,10 @@ class TestProfileRespected:
             assert _check_profile_respected("evaluate", profile) is True
 
     def test_all_profiles_include_reflect(self):
-        """Reflect is in every profile."""
+        """Reflect is in every profile (except goal — handles it inside goal_cycle)."""
         for profile in PIPELINE_PROFILES:
+            if profile == "goal":
+                continue  # goal_cycle manages REFLECT internally (two-tier model)
             assert _check_profile_respected("reflect", profile) is True
 
 

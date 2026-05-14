@@ -86,6 +86,44 @@ Adjust **Feasibility** score:
 
 **Skip** when no `code_intel.db` exists or requirement is research-only.
 
+### Goal Mode Detection
+
+If the requirement describes an open-ended improvement (not a bounded feature),
+classify as `goal_mode: true` and switch to `goal` profile.
+
+**Indicators of goal mode:**
+- "Get X to Y%" / "Improve X until Y" / "Reduce X below Y"
+- "Migrate all callers" / "Fix all warnings" / "Remove all instances of"
+- Measurable end state but unbounded scope (don't know how many changes needed)
+- No single "done" deliverable — done means metric reached
+
+**When detected:**
+1. Set `scope: "goal"` in evaluation (triggers `goal` profile selection)
+2. Generate `dod_criteria` array — each criterion has type + check:
+
+```json
+{
+  "goal_mode": true,
+  "dod_criteria": [
+    {"type": "command", "check": "pytest --cov-fail-under=90 src/", "desc": "Coverage >90%"},
+    {"type": "rubric", "check": "Read each error msg. PASS if: states problem, suggests fix, no stack traces.", "desc": "User-friendly errors"}
+  ],
+  "max_cycles": 10,
+  "progress_path": "Projects/<PROJECT>/.artifacts/goals/<slug>.md",
+  "cycle_scope": "one test file or one module fix per cycle",
+  "review_cadence": 3
+}
+```
+
+**DoD criteria rules:**
+- `command` type: shell command, exit 0 = pass. ALWAYS prefer this.
+- `rubric` type: explicit pass/fail rubric (not just goal statement). Use only
+  when criterion is inherently subjective.
+- If >50% criteria are `rubric` with vague rubrics → ESCALATE (goal too subjective)
+- A goal with ALL `rubric` criteria and no measurable progress metric → ESCALATE
+
+**If NOT goal mode:** proceed with standard evaluation (scope = standard/complex/trivial/bugfix).
+
 ### Pre-mortem Gate
 
 After scoring, if the initial recommendation is GO, the base methodology's
