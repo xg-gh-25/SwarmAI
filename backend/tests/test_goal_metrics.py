@@ -9,12 +9,6 @@ from pathlib import Path
 
 import pytest
 
-import sys
-
-# P6: Add skill scripts to path for test imports.
-# This matches how the agent executes: CWD = skill dir, `from scripts.X`.
-sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "s_autonomous-pipeline"))
-
 from scripts.goal_metrics import GoalMetrics, VALID_STATUSES, _compute_cycle_stats
 
 
