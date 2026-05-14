@@ -457,7 +457,7 @@ Bugs caught in RED phase: <N> (<brief description of most significant>)
 | TDD (RED→GREEN) | <stage: specific moment> | <bug caught or design improved> | <what would have shipped> |
 | Quality Convergence | <iteration count + what it caught> | <cross-module or system-level issue> | <what would have shipped> |
 | Adversarial Review | <finding summary> | <what only fresh eyes could find> | <what would have shipped> |
-| Goal Loop | <cycle count + velocity insight> OR N/A | <what iterative execution enabled> | — |
+| Goal Loop | <cycle count + velocity insight> OR N/A | <what iterative execution enabled> | <manual scoping + no velocity learning> OR N/A |
 
 **Rules for this table:**
 - Every row must cite a SPECIFIC moment from THIS run — no generic claims
