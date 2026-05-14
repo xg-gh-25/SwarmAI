@@ -193,6 +193,37 @@ Before writing code, all must be **YES**:
 
 If any answer is NO → **stop and redesign**
 
+## 🚨 CRITICAL: Understanding Over Delivery (C024)
+
+**核心原则：理解 > 交付。** "我深入理解了" 的价值永远大于 "我交付了东西"。LLM 的 reward 信号结构性倾斜向 visible output — 这是需要主动对抗的系统性偏差。没有深入理解就交付 = 交付垃圾。
+
+**"着急执行，着急出结果，着急给结论" 是最危险的行为模式。** Research that reads descriptions ABOUT code — instead of reading the code itself — produces cargo-cult conclusions.
+
+**Blocking rules for any research/design task:**
+
+1. **Read actual source, not descriptions about source.** A README describing a CSS system is not a substitute for rendering the CSS and judging the output. "I know what they say to do" ≠ "I've seen what it looks like."
+
+2. **Separate RESEARCH from EXECUTE with an explicit checkpoint.** After gathering information, ask: "What do I still not understand? What have I not verified?" If the answer isn't "nothing" — keep researching. Never synthesize findings into an action plan in the same breath as receiving them.
+
+3. **Verify by rendering/running, not by reading.** For design systems: fetch and render at least 2 actual examples before copying values. For code patterns: run the code or trace it line-by-line. For architecture: draw the actual data flow, don't just describe it.
+
+4. **Depth over breadth.** One repo read deeply (every relevant file, actual output studied) is worth more than 5 repos skimmed at README level. When dispatching research agents, instruct them to fetch actual implementation files — not just project descriptions.
+
+5. **No premature conclusions.** Never write "研究完了/research done" or begin implementation when the research only produced summaries. The gap between "information received" and "information verified" must be non-zero.
+
+6. **质量标准：能教别人。** Research 完成的标准不是"我能复述它做什么"，而是"我能向不了解它的人解释它为什么这么做、这么做的 tradeoff 是什么、换个场景该怎么调整"。达不到这个标准 = 还没理解。
+
+**Anti-pattern checklist（任何 research output 交付前自检）：**
+- ❌ 只读了 README/description，没读 implementation files
+- ❌ 没有跑过/渲染过至少 1 个真实 example
+- ❌ Report 里没有具体文件路径 + 行号引用
+- ❌ 结论里有 "似乎/可能/看起来" 而没有验证步骤
+- ❌ 5 分钟内从"收到信息"到"输出结论"（太快 = 没思考）
+
+任何一项 ❌ → 不交付，继续研究。
+
+**Why this rule exists:** C024 (2026-05-14) — dispatched 3 research agents, got back README-level summaries, immediately declared research complete and wrote CSS. Never read a single actual .html output file. Never rendered examples to judge quality. User caught it: "关键有价值的东西都在细节里面."
+
 ## 🚨 CRITICAL: Response Behavior
 
 ### Prompt Suggestions
