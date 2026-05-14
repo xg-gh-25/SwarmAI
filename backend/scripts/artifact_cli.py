@@ -1911,6 +1911,50 @@ def cmd_run_analytics(args, reg: ArtifactRegistry) -> None:
     print(json.dumps(analytics, indent=2))
 
 
+def cmd_run_cultivate(args, reg: ArtifactRegistry) -> None:
+    """Apply pipeline lessons to DDD docs via cultivation engine.
+
+    Reads the 'lessons' field from the reflect stage in run.json,
+    then calls cultivate_from_reflect() which auto-applies safe additive
+    lessons and escalates risky ones.
+
+    This is the CLI bridge that makes cultivation callable from agent
+    Bash tools — the agent reads reflect.md instructions and runs this.
+    """
+    run_file = _resolve_run_file(args.project, args.run_id)
+    run_state = json.loads(run_file.read_text(encoding="utf-8"))
+
+    # Extract lessons from reflect stage record
+    lessons: list[str] = []
+    for stage in run_state.get("stages", []):
+        if stage.get("stage") == "reflect":
+            lessons = stage.get("lessons", [])
+            break
+
+    if not lessons:
+        print(json.dumps({
+            "applied": 0,
+            "escalated": 0,
+            "rejected": 0,
+            "note": "No lessons found in reflect stage — nothing to cultivate",
+        }))
+        return
+
+    # Resolve project directory
+    workspace = _get_workspace()
+    project_dir = workspace / "Projects" / args.project
+
+    if not project_dir.is_dir():
+        print(json.dumps({"error": f"Project directory not found: {project_dir}"}))
+        return
+
+    # Run cultivation
+    from core.ddd_cultivation import cultivate_from_reflect
+
+    result = cultivate_from_reflect(lessons, args.run_id, args.project, project_dir)
+    print(json.dumps(result, indent=2))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Artifact registry CLI for SwarmAI pipeline"
@@ -2017,6 +2061,11 @@ def main() -> None:
     p_run_analytics.add_argument("--project", required=True)
     p_run_analytics.add_argument("--limit", type=int, default=50, help="Max runs to analyze")
 
+    # run-cultivate (DDD cultivation from pipeline lessons)
+    p_run_cultivate = sub.add_parser("run-cultivate", help="Apply pipeline lessons to DDD docs via cultivation engine")
+    p_run_cultivate.add_argument("--project", required=True)
+    p_run_cultivate.add_argument("--run-id", required=True, help="Pipeline run ID (reads lessons from reflect stage)")
+
     args = parser.parse_args()
     reg = ArtifactRegistry(_get_workspace())
 
@@ -2038,6 +2087,7 @@ def main() -> None:
         "run-report": cmd_run_report,
         "run-metrics": cmd_run_metrics,
         "run-analytics": cmd_run_analytics,
+        "run-cultivate": cmd_run_cultivate,
     }
     handlers[args.command](args, reg)
 
