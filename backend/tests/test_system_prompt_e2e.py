@@ -240,7 +240,7 @@ def _simulate_build(
     # ── Merge into agent system_prompt ──
     agent_config = {
         "name": agent_name,
-        "description": "Your AI Team, 24/7",
+        "description": "Human directs. AI delivers.",
         "model": agent_model,
         "system_prompt": "",
     }

@@ -110,7 +110,7 @@ class SeedDatabaseGenerator:
         agent = {
             "id": agent_config.get("id", "default"),
             "name": agent_config.get("name", "SwarmAI"),
-            "description": agent_config.get("description", "SwarmAI — Your AI Team, 24/7"),
+            "description": agent_config.get("description", "SwarmAI — Human directs. AI delivers."),
             "model": None,  # Model resolved at runtime from config.json
             "permission_mode": agent_config.get("permission_mode", "bypassPermissions"),
             "max_turns": agent_config.get("max_turns", 100),

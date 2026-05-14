@@ -15,10 +15,10 @@
 
 # 1. Product Overview
 
-## SwarmAI — Your AI Team, 24/7  
-**Work Smarter. Stress Less. Execute Continuously.**
+## SwarmAI — Human Directs. AI Delivers.
+**One builder + AI, operating at team scale.**
 
-SwarmAI is a persistent Agentic Operating System for Knowledge Work where a supervised team of AI agents plans, executes, and follows through on your daily work.
+SwarmAI is a live experiment proving that one AI-augmented builder, armed with self-evolving systems and compound knowledge, can be a Super Builder — shipping code, content, strategy, and operations that traditionally require a team.
 
 It unifies emails, meetings, communications, tasks, documents, and projects into a single operating environment — where context persists, priorities stay visible, and progress compounds over time.
 

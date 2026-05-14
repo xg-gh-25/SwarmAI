@@ -71,7 +71,7 @@ export const createWelcomeMessage = (customText?: string): Message => ({
       type: 'text',
       text: customText ?? `# Welcome to SwarmAI! 🐝
 
-**Your AI Team, 24/7 — Work smarter, move faster, and enjoy the journey.**
+**Human directs. AI delivers.**
 `,
     },
   ],
@@ -90,5 +90,5 @@ export const createWorkspaceChangeMessage = (workspaceName?: string, workspacePa
 
 # Welcome to SwarmAI! 🐝
 
-**Your AI Team, 24/7 — Work smarter, move faster, and enjoy the journey.**`);
+**Human directs. AI delivers.**`);
 };
