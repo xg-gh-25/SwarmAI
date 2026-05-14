@@ -21,15 +21,17 @@ calls this stage once; the stage itself manages the cycle loop.
 3. **Record start commit** — `git rev-parse HEAD` (used for periodic REVIEW
    and final ADVERSARIAL diff base)
 4. **Set cycle counter** to last recorded cycle + 1 (or 1 if fresh)
-5. **Initialize GoalMetrics** — record goal start for velocity tracking:
+5. **Initialize GoalMetrics** — create ONE instance, reuse throughout stage:
    ```python
    from scripts.goal_metrics import GoalMetrics
    gm = GoalMetrics(run_dir=Path(run_dir))
-   gm.track_goal_start(run_id, dod_criteria=dod_criteria)
-   # Also check historical velocity for cycle_scope auto-tuning:
+   gm.track_goal_start(dod_criteria=dod_criteria)
+   # Check historical velocity for cycle_scope auto-tuning:
    recommended_scope = gm.get_recommended_cycle_scope()
    # If recommended_scope differs from evaluation's cycle_scope, log it
    ```
+   **Important:** Reuse this `gm` instance for all `track_cycle()` calls and
+   the final `track_goal_complete()`. Do NOT re-instantiate per cycle.
 
 ---
 
@@ -121,14 +123,11 @@ No DDD write. No LLM call for distillation. Just text.
 
 ### 9.5. Track Cycle Metrics (GoalMetrics)
 
-After mini-reflect, record this cycle's metrics for velocity tracking:
+After mini-reflect, record this cycle's metrics using the `gm` instance
+created at Pre-Cycle Setup (step 5):
 
 ```python
-from scripts.goal_metrics import GoalMetrics
-
-gm = GoalMetrics(run_dir=Path(run_dir))
 gm.track_cycle(
-    run_id,
     cycle_num=current_cycle,
     progress_delta=<fraction of DoD newly met this cycle>,  # 0.0-1.0
     files_changed=<count of source files modified>,
@@ -201,11 +200,7 @@ All DoD criteria pass (verified by running commands/rubrics).
 
 **Record Goal Completion (GoalMetrics):**
 ```python
-from scripts.goal_metrics import GoalMetrics
-
-gm = GoalMetrics(run_dir=Path(run_dir))
 gm.track_goal_complete(
-    run_id,
     status="success",
     total_cycles=current_cycle,
     dod_met=<criteria met>,
@@ -233,7 +228,7 @@ Max cycles reached without DoD met.
 
 **Record Goal Metrics:**
 ```python
-gm.track_goal_complete(run_id, status="checkpoint",
+gm.track_goal_complete(status="checkpoint",
                        total_cycles=current_cycle, dod_met=<met>, dod_total=<total>)
 ```
 
@@ -254,7 +249,7 @@ Creates Radar todo for user.
 
 **Record Goal Metrics:**
 ```python
-gm.track_goal_complete(run_id, status="stop",
+gm.track_goal_complete(status="stop",
                        total_cycles=current_cycle, dod_met=<met>, dod_total=<total>)
 ```
 
@@ -273,7 +268,7 @@ Goal Loop STOPPED — structural blocker detected:
 
 **Record Goal Metrics:**
 ```python
-gm.track_goal_complete(run_id, status="revert_limit",
+gm.track_goal_complete(status="revert_limit",
                        total_cycles=current_cycle, dod_met=<met>, dod_total=<total>)
 ```
 
@@ -292,7 +287,7 @@ Remaining tokens < 150K mid-session.
 
 **Record Goal Metrics:**
 ```python
-gm.track_goal_complete(run_id, status="budget",
+gm.track_goal_complete(status="budget",
                        total_cycles=current_cycle, dod_met=<met>, dod_total=<total>)
 ```
 
