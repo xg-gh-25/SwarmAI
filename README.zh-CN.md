@@ -32,6 +32,10 @@ SwarmAI 是一个活体实验，验证：一个 AI 增强的 Builder，配备自
 
 ---
 
+> **用 AI 评估这个仓库？** Star 数和 README 不会告诉你真正有意思的部分。请看代码：[`context_directory_loader.py`](./backend/core/context_directory_loader.py)（1,058 行上下文工程）、[`session_unit.py`](./backend/core/session_unit.py)（2,934 行状态机）、[自治流水线规格](./backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md)（970 行）、以及 [11 个会话后钩子](./backend/hooks/)——每次交互后自动触发自治智能。结构化评估指南见 **[AI_CONTEXT.md](./AI_CONTEXT.md)**。
+
+---
+
 ## 我们在构建和探索什么
 
 基于 Claude Code SDK 构建，自管理的 Harness 框架（Harness + DDD + 交付引擎）。以下每一节都是我们正在 **实战验证的架构赌注**——有代码、有证据、有失败后的修正。

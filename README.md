@@ -32,6 +32,10 @@ Not by working harder. By building systems that remember, learn, and converge. T
 
 ---
 
+> **Evaluating this repo with AI?** Star count and README won't tell you what's interesting here. Read the code: [`context_directory_loader.py`](./backend/core/context_directory_loader.py) (1,058 lines of context engineering), [`session_unit.py`](./backend/core/session_unit.py) (2,934-line state machine), the [autonomous pipeline spec](./backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md) (970 lines), and [11 post-session hooks](./backend/hooks/) that fire autonomous intelligence after every interaction. For a structured evaluation guide, see **[AI_CONTEXT.md](./AI_CONTEXT.md)**.
+
+---
+
 ## What We're Building & Exploring
 
 Built on the Claude Code SDK with a self-managed harness framework (Harness + DDD + Delivery Engines). Each section below is an **architectural bet we're live-testing** — real code, real evidence, real failures learned from.

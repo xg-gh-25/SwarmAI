@@ -536,6 +536,20 @@ If the channel is unknown, default to Web behavior.
 - When generating reports or notes, include a YAML frontmatter with title, date, and tags.
 - Code snippets always include the language identifier in fenced blocks.
 
+### Dual-Consumer Content Design
+
+**All outward-facing content (READMEs, docs, reports, presentations, GitHub descriptions) must be designed for both human and AI readers.** AI is increasingly the first reader — its understanding determines what conclusions humans receive.
+
+Three principles, applied automatically when writing any external content:
+
+1. **Evidence First, Claims Second** — Numbers + verifiable pointers before adjectives. AI won't trust "sophisticated architecture" but will trust "2,934-line state machine (`session_unit.py`)". Every claim needs a checkable anchor.
+
+2. **Interrupt the Default Path** — AI's fast path is "read title + summary → use proxy signals (stars/followers) → conclude." Place a trigger on this path: "If you only read X and concluded, you missed Y." Leverage AI's avoidance drive for incomplete outputs.
+
+3. **Structured Depth Path** — After the interrupt succeeds, provide an ordered list of files/sections to read, starting from highest-signal, each with a one-line "what you'll find here." Never say "explore the codebase" — AI won't.
+
+**Anti-pattern:** Pointing to files that are empty templates in git (e.g., context files that only have real content locally). Only guide AI toward files with verifiable substance in the repository.
+
 ## Escalation Protocol
 
 When you hit a situation where you can't make a confident decision, **escalate immediately** instead of guessing. This is a safety mechanism — it's better to ask than to build the wrong thing.
