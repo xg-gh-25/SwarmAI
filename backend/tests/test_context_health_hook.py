@@ -368,6 +368,24 @@ class TestAutoCultivation:
             hook._auto_cultivate_pipeline_lessons(workspace)
         # Should not raise — just log and continue
 
+    def test_does_not_mark_cultivated_on_failure(self, hook, workspace):
+        """cultivated:true is NOT set when cultivate_from_reflect raises."""
+        proj = workspace / "Projects" / "TestProject"
+        (proj / "IMPROVEMENT.md").write_text("# Lessons\n\n## What Worked\n\n- x\n")
+
+        run_file = self._make_run(
+            workspace, "TestProject", "run_fail_test",
+            lessons=["Some lesson that will fail"]
+        )
+
+        with patch("core.ddd_cultivation.cultivate_from_reflect", side_effect=RuntimeError("boom")):
+            hook._auto_cultivate_pipeline_lessons(workspace)
+
+        # cultivated should NOT be set
+        run_data = json.loads(run_file.read_text(encoding="utf-8"))
+        reflect_stage = next(s for s in run_data["stages"] if s["stage"] == "reflect")
+        assert "cultivated" not in reflect_stage or reflect_stage.get("cultivated") is not True
+
     def test_idempotent_multiple_calls(self, hook, workspace):
         """Multiple calls don't re-cultivate already-done runs."""
         proj = workspace / "Projects" / "TestProject"
