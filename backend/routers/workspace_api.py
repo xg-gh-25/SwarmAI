@@ -21,7 +21,7 @@ Public endpoints:
 
 Helper functions:
 
-- ``_should_include``      — Hidden-file filter (excludes dotfiles except .project.json)
+- ``_should_include``      — Root-level filter: hide infrastructure, pass system items + user dirs
 - ``_get_git_status``      — Run ``git status --porcelain`` and return {path: status} dict
 - ``_build_tree``          — Recursive tree builder with depth bounding, sorting, and git status
 - ``_is_readonly_context_file`` — Check if a path is a readonly system-default context file
@@ -213,27 +213,44 @@ async def update_workspace(request: WorkspaceConfigUpdate):
 # .git is excluded because its internals are not useful to browse.
 _HIDDEN_DIRS = frozenset({"chats", ".git", "Services"})
 
-# Root-level files that are infrastructure/tooling artifacts — hidden from the
-# explorer tree but fully functional on disk (git-tracked, used by tools, etc.).
-_HIDDEN_ROOT_FILES = frozenset({
-    ".gitignore",
-    ".legacy_cleaned",
-    "package-lock.json",
-    "package.json",
+# Root-level items that the frontend displays in a separate "System" section.
+# These MUST pass through _should_include so the frontend can extract them.
+_SYSTEM_ITEMS = frozenset({".context", ".claude", "config.json", "proactive_state.json"})
+
+# Root-level directories that are system/infrastructure — hidden from explorer.
+# Not in _SYSTEM_ITEMS (frontend doesn't use them), not user content.
+_HIDDEN_ROOT_DIRS = frozenset({
+    ".pytest_cache",  # Dev artifact
+    "config-backup",  # System backup
+    "db-export",      # Database export (system)
+    "output",         # Legacy output dir
+    "workspace",      # System workspace dir
 })
 
 
-def _should_include(name: str, *, is_root: bool = False) -> bool:
+def _should_include(
+    name: str, *, is_root: bool = False, is_dir: bool = False
+) -> bool:
     """Return True if a file/directory name should appear in the tree.
 
-    Shows all files and directories including dot-files (like Kiro IDE).
-    Only excludes internal runtime directories listed in ``_HIDDEN_DIRS``
-    and infrastructure files at the workspace root listed in ``_HIDDEN_ROOT_FILES``.
+    Filtering strategy:
+    - At root level: show _SYSTEM_ITEMS (frontend extracts to System section),
+      show user content directories (Knowledge, Projects, Attachments, etc.),
+      hide everything else (infrastructure files, system-only dirs).
+    - At all levels: hide directories in ``_HIDDEN_DIRS`` (chats, .git, Services).
+    - Below root: show everything (user content lives in subdirectories).
     """
     if name in _HIDDEN_DIRS:
         return False
-    if is_root and name in _HIDDEN_ROOT_FILES:
-        return False
+    if is_root:
+        # System items always pass through (frontend needs them)
+        if name in _SYSTEM_ITEMS:
+            return True
+        if not is_dir:
+            # All other root-level files are infrastructure artifacts
+            return False
+        if name in _HIDDEN_ROOT_DIRS:
+            return False
     return True
 
 
@@ -345,9 +362,10 @@ def _build_tree(
     dirs: list[Path] = []
     files: list[Path] = []
     for entry in entries:
-        if not _should_include(entry.name, is_root=is_root):
+        entry_is_dir = entry.is_dir()
+        if not _should_include(entry.name, is_root=is_root, is_dir=entry_is_dir):
             continue
-        if entry.is_dir():
+        if entry_is_dir:
             dirs.append(entry)
         else:
             files.append(entry)
@@ -512,13 +530,18 @@ def _compute_etag_and_tree_sync(workspace_root: Path, depth: int) -> tuple[str, 
     # (6-8) are rare and will be caught on the next TTL expiry (5s).
     _FINGERPRINT_DEPTH = min(depth, 5)
 
-    def _fs_fingerprint(root: Path, max_depth: int) -> str:
+    def _fs_fingerprint(root: Path, max_depth: int, *, at_root: bool = False) -> str:
         if max_depth <= 0 or not root.is_dir():
             return ""
         try:
-            names = sorted(e.name for e in root.iterdir() if _should_include(e.name))
+            entries = list(root.iterdir())
         except OSError:
             return ""
+        # Apply same filtering as _build_tree so fingerprint only reflects visible items
+        names = sorted(
+            e.name for e in entries
+            if _should_include(e.name, is_root=at_root, is_dir=e.is_dir())
+        )
         parts = [",".join(names)]
         for name in names:
             child = root / name
@@ -526,7 +549,7 @@ def _compute_etag_and_tree_sync(workspace_root: Path, depth: int) -> tuple[str, 
                 parts.append(f"{name}:{_fs_fingerprint(child, max_depth - 1)}")
         return "|".join(parts)
 
-    fs_hash = hashlib.md5(_fs_fingerprint(workspace_root, _FINGERPRINT_DEPTH).encode()).hexdigest()[:8]
+    fs_hash = hashlib.md5(_fs_fingerprint(workspace_root, _FINGERPRINT_DEPTH, at_root=True).encode()).hexdigest()[:8]
     etag = hashlib.md5(f"{git_hash}:{fs_hash}:{depth}".encode()).hexdigest()
     etag_value = f'"{etag}"'
 

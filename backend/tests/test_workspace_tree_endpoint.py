@@ -225,13 +225,13 @@ class TestTreeEndpointStructure:
 
     @given(tree=_filesystem_tree())
     @PROPERTY_SETTINGS
-    def test_hidden_dirs_excluded_but_dotfiles_shown(
+    def test_hidden_dirs_excluded_and_root_files_hidden(
         self,
         tmp_path: Path,
         tree: list[dict],
     ):
-        """All dot-files and dot-directories are shown in the tree (like Kiro IDE),
-        except entries in _HIDDEN_DIRS (.git, chats) which are excluded.
+        """Hidden dirs (_HIDDEN_DIRS) are excluded at all levels.
+        Root-level files are hidden unless they are in _SYSTEM_ITEMS.
 
         **Validates: Requirements 10.1**
         """
@@ -248,6 +248,15 @@ class TestTreeEndpointStructure:
             assert name not in hidden_dirs, (
                 f"Hidden dir '{name}' should be excluded from the tree"
             )
+
+        # Root-level files must be system items only (others hidden)
+        system_items = {".context", ".claude", "config.json", "proactive_state.json"}
+        for node in result:
+            if node["type"] == "file":
+                assert node["name"] in system_items, (
+                    f"Root-level file '{node['name']}' should be hidden "
+                    f"(only system items allowed at root)"
+                )
 
     @given(tree=_filesystem_tree())
     @PROPERTY_SETTINGS
@@ -379,14 +388,12 @@ class TestHiddenDirsFilter:
         (workspace / "chats").mkdir()
         (workspace / "chats" / "thread-1").mkdir()
         (workspace / "Knowledge").mkdir()
-        (workspace / "visible.md").write_text("hello")
 
         result = _build_tree(workspace, workspace, depth=3)
         names = [n["name"] for n in result]
 
         assert "chats" not in names
         assert "Knowledge" in names
-        assert "visible.md" in names
 
     def test_chats_inside_project_also_excluded(self, tmp_path):
         """chats/ inside Projects/{name}/ is also filtered out."""
@@ -409,20 +416,41 @@ class TestHiddenDirsFilter:
         assert "instructions.md" in child_names
 
     def test_visible_dirs_not_affected(self):
-        """Normal directory names are still included."""
-        assert _should_include("Knowledge") is True
-        assert _should_include("Projects") is True
-        assert _should_include("reports") is True
-        assert _should_include("research") is True
+        """Normal directory names are still included at root."""
+        assert _should_include("Knowledge", is_root=True, is_dir=True) is True
+        assert _should_include("Projects", is_root=True, is_dir=True) is True
+        assert _should_include("Attachments", is_root=True, is_dir=True) is True
+        assert _should_include("channel_files", is_root=True, is_dir=True) is True
 
     def test_git_directory_excluded(self):
         """The '.git' directory is excluded from the tree."""
         assert _should_include(".git") is False
 
-    def test_dotfiles_are_visible(self):
-        """Dot-files and dot-directories are shown (like Kiro IDE)."""
-        assert _should_include(".context") is True
-        assert _should_include(".gitignore") is True
-        assert _should_include(".project.json") is True
-        assert _should_include(".claude") is True
-        assert _should_include(".env") is True
+    def test_root_infrastructure_files_hidden(self):
+        """Infrastructure files at workspace root are hidden."""
+        assert _should_include("swarm.db", is_root=True, is_dir=False) is False
+        assert _should_include("hook_stats.json", is_root=True, is_dir=False) is False
+        assert _should_include(".DS_Store", is_root=True, is_dir=False) is False
+        assert _should_include("CLAUDE.md", is_root=True, is_dir=False) is False
+        assert _should_include("AGENTS.md", is_root=True, is_dir=False) is False
+        assert _should_include("skill_health.json", is_root=True, is_dir=False) is False
+
+    def test_root_system_items_visible(self):
+        """Frontend System section items are visible at root."""
+        assert _should_include(".context", is_root=True, is_dir=True) is True
+        assert _should_include(".claude", is_root=True, is_dir=True) is True
+        assert _should_include("config.json", is_root=True, is_dir=False) is True
+        assert _should_include("proactive_state.json", is_root=True, is_dir=False) is True
+
+    def test_root_system_dirs_hidden(self):
+        """Non-system infrastructure directories at root are hidden."""
+        assert _should_include(".pytest_cache", is_root=True, is_dir=True) is False
+        assert _should_include("config-backup", is_root=True, is_dir=True) is False
+        assert _should_include("db-export", is_root=True, is_dir=True) is False
+        assert _should_include("output", is_root=True, is_dir=True) is False
+
+    def test_non_root_files_visible(self):
+        """Files below root are always visible."""
+        assert _should_include("README.md", is_root=False, is_dir=False) is True
+        assert _should_include(".DS_Store", is_root=False, is_dir=False) is True
+        assert _should_include("notes.txt", is_root=False, is_dir=False) is True
