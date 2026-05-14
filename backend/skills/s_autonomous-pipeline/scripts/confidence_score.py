@@ -83,8 +83,8 @@ def calculate_score(
     # --- Positive criteria ---
 
     # AC Verification: +3 verified, +1 claimed, -3 failed (backward compat: +3 if no field)
-    ac_verification = run.get("ac_verification", {})
-    ac_v_status = ac_verification.get("status") if ac_verification else None
+    ac_verification = run.get("ac_verification") or {}
+    ac_v_status = ac_verification.get("status") if isinstance(ac_verification, dict) else None
 
     if ac_v_status == "verified":
         # Independent verification confirmed all ACs have correct test mappings
@@ -105,10 +105,15 @@ def calculate_score(
         # Verification found gaps that weren't fixed
         matrix = ac_verification.get("matrix", [])
         failed_count = sum(1 for m in matrix if not m.get("verifies_ac"))
+        detail = (
+            f"AC verification: {failed_count} criteria have incorrect test mappings"
+            if matrix
+            else "AC verification failed (no matrix detail available)"
+        )
         penalties.append({
             "rule": "ac_verification_failed",
             "points": -3,
-            "detail": f"AC verification: {failed_count} criteria have incorrect test mappings",
+            "detail": detail,
         })
     else:
         # Backward compat: no ac_verification field → use old logic (+3 if tests exist)
