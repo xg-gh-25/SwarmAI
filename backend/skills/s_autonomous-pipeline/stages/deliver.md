@@ -12,42 +12,31 @@
 
 Run the Delivery Gate first (see confidence scoring below), then proceed.
 
-### Confidence Scoring
+### Push-Ready Gate (Binary — replaces confidence scoring)
 
-Assess confidence via script:
+**No numeric score. Binary: PUSH-READY or NOT-PUSH-READY.**
 
-```bash
-python backend/skills/s_autonomous-pipeline/scripts/confidence_score.py --run-dir <path>
+Numeric confidence (C011: 10/10 with 100% broken code) measures process compliance,
+not code correctness. A number between "push" and "don't push" creates false
+gradients — there is no meaningful difference between 7/10 and 8/10.
+
+**PUSH-READY requires ALL of these (any failure = NOT-PUSH-READY):**
+
+```
+□ All acceptance criteria have passing tests (no AC without evidence)
+□ Zero HIGH findings from adversarial review (or all fixed)
+□ Completion audit: all_green = true (deliverables match requirement)
+□ Zero regressions on existing tests
+□ Meta-review completed (see below)
 ```
 
-Confidence score formula (1-12):
-```
-+3 if all acceptance criteria have passing tests
-+2 if review found 0 critical issues
-+2 if TDD red-green cycle completed cleanly
-+2 if completion_audit.all_green (every AC has verified evidence)
-+1 if no taste decisions were overridden
-+1 if zero regressions on existing tests
-+1 if design_doc was available (not just evaluation)
--3 if completion_audit.gaps > 0 and gaps not fixed (deliverable mismatch)
--2 if any acceptance criterion lacks a test
--2 if WTF gate triggered (even if resolved)
--2 if smoke_tests == 0 and files_changed > 1 (runtime crashes likely hidden)
--2 if user_path_traces == 0 and files_changed > 1 (real data flow unverified)
--1 if completion_audit.unfixable_gaps > 0 (known incompleteness)
--1 if integration_trace.checked == 0 (wiring unverified)
--1 if frontend files changed but ux_review.triggered == false (UX unverified)
--1 if runtime_patterns.checked == 0 and applicable patterns exist (known bugs unchecked)
--2 if frontend+backend changed but wire_test.boundaries == 0 (cross-layer contract unverified)
--2 if new endpoint + frontend consumer but probes == 0 (real HTTP path untested)
--1 if lifecycle ops changed but operational_patterns.checked == 0 (OP invariants unchecked)
--1 if state transitions added but inverse_operations.checked == 0 (stuck states possible)
--3 if adversarial_review not run (user-side + PE-side are mandatory)
--3 if adversarial_review has unfixed HIGH PE finding
--1 per unresolved warning from validator
-```
+**NOT-PUSH-READY triggers:**
+- Any unfixed HIGH finding → block
+- Any AC without a passing test → block
+- Completion audit gap → block
+- Meta-review flags unaddressed risk → escalate to user
 
-If confidence < 7 -- flag for human review even without judgment decisions.
+**Output:** `{"push_ready": true/false, "blockers": [...]}` — no score, no gradient.
 
 ### Fresh User Audit (P6)
 
@@ -329,10 +318,100 @@ to Pipeline Report.
 }
 ```
 
-**Confidence impact:**
-- Not run (when required by profile) → **-3**
-- All HIGH/MED fixed → no penalty (gate working as designed)
-- Unfixed HIGH PE finding → **-3** (blocking bug shipped)
+---
+
+### Meta-Review: "What Did the Pipeline Miss?" (BLOCKING)
+
+**After adversarial review passes, BEFORE declaring push-ready.**
+
+A different sub-agent that doesn't review the CODE — it reviews the PIPELINE'S
+BLIND SPOTS for this specific changeset. This is the PE review layer that was
+previously manual (user had to ask "从PE角度看下").
+
+**Why this exists:** Pipeline REVIEW + adversarial consistently catch code
+correctness bugs but miss operational/scaling/deployment-context bugs:
+- run_d73239fe: O(n) no-op scan in a per-session hook (RP30)
+- run_bded2f47: sys.executable in daemon context (environment assumption)
+- run_91a6fb7e: cross-language JSON space after colon (format assumption)
+
+These are NOT code bugs — the code is correct in dev. They're
+**deployment context mismatches** that only surface in production.
+
+**Spawn sub-agent:**
+
+```
+Agent({
+  description: "Meta-review — pipeline blind spot analysis",
+  prompt: <template below>
+})
+```
+
+**Sub-agent prompt template:**
+
+```
+You are NOT reviewing the code for bugs. The adversarial reviewer already did that.
+
+You are reviewing what the PIPELINE LIKELY MISSED — operational, scaling, and
+deployment-context issues that code review structurally cannot catch.
+
+## Context
+Project: <PROJECT>
+Requirement: <requirement>
+Files changed: <list>
+Where this code runs: <hook/endpoint/cron/startup/CLI — infer from file path>
+
+## Your Analysis (answer each explicitly)
+
+1. DEPLOYMENT CONTEXT
+   - Where does this code run? (daemon 24/7, sidecar, CLI, hook, cron)
+   - Does it have different behavior in dev vs production?
+   - Are there assumptions that hold in dev but not in production?
+     (sys.executable, $HOME, network access, file permissions, concurrency)
+
+2. OPERATIONAL SCALING
+   - What's the no-op cost? (this runs every <interval> — what happens when
+     there's nothing to do?)
+   - Does cost scale with data history or just recent data?
+   - What's the steady-state after 6 months of accumulation?
+
+3. CROSS-BOUNDARY FORMAT
+   - Does this produce/consume data across language boundaries?
+   - Are there format assumptions (JSON spacing, encoding, line endings)?
+   - Does a serializer/parser pair from different libraries agree on format?
+
+4. FIRST-RUN vs STEADY-STATE
+   - Is there a backlog that gets processed on first deployment?
+   - Could first-run side effects be different from steady-state?
+   - Is the first-run behavior safe (won't corrupt, won't flood)?
+
+## Output
+```json
+{
+  "risks": [
+    {"category": "deployment|scaling|format|first-run",
+     "description": "...",
+     "severity": "HIGH|MED|LOW",
+     "mitigation": "..."}
+  ],
+  "verdict": "CLEAR" | "RISKS_IDENTIFIED"
+}
+```
+
+If verdict is CLEAR: "I found no operational blind spots. Pipeline coverage
+was adequate for this changeset."
+
+If verdict is RISKS_IDENTIFIED: list each risk with concrete mitigation.
+```
+
+**After meta-review returns:**
+
+- `CLEAR` → proceed to push-ready gate
+- `RISKS_IDENTIFIED` with HIGH → fix before push-ready (same as adversarial HIGH)
+- `RISKS_IDENTIFIED` with only MED/LOW → note in report, proceed (tech debt awareness)
+
+**Profile gating:**
+- full, bugfix → run meta-review
+- trivial, research, docs → skip (no operational context to analyze)
 
 ---
 
@@ -347,7 +426,7 @@ The report follows this template (every run produces one):
 # Autonomous Pipeline Report: <title>
 
 **Run ID:** run_<id> | **Project:** <PROJECT> | **Profile:** <profile>
-**Date:** <ISO date> | **Confidence:** <score>/10
+**Date:** <ISO date> | **Status:** PUSH-READY / NOT-PUSH-READY
 
 ## TL;DR
 <2-3 sentences: what was built, what problem it solves, what value it delivers.
@@ -549,7 +628,7 @@ Check for unresolved issues from upstream stages.
 ```bash
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
   --type delivery --producer s_autonomous-pipeline \
-  --summary "Delivery: <feature title> (confidence: <N>/10)" \
-  --data '{"title":"...","summary":"...","decisions":[...],"quality":{...},"attention_flags":[],"confidence_score":N,"confidence_breakdown":{...},"report_path":"runs/<RUN_ID>/REPORT.md"}'
+  --summary "Delivery: <feature title> (PUSH-READY)" \
+  --data '{"title":"...","summary":"...","decisions":[...],"quality":{"push_ready":true,"blockers":[]},"attention_flags":[],"meta_review":{"verdict":"CLEAR"},"report_path":"runs/<RUN_ID>/REPORT.md"}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state reflect
 ```
