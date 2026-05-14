@@ -76,17 +76,27 @@ function formatToastMessage(data: SaveSessionResponse): string {
  * Module-scoped map preserving incremental save indices across component
  * remounts. Keyed by sessionId so each session tracks its own position.
  */
-const nextMessageIdxMap: Record<string, number> = {};
+const nextMessageIdxMap: Record<string, number> = Object.create(null) as Record<string, number>;
+
+/** Create a null-prototype object — immune to prototype key collisions (e.g. "toString"). */
+function nullMap<T>(): Record<string, T> {
+  return Object.create(null) as Record<string, T>;
+}
+
+/** Spread into a new null-prototype object — prevents prototype pollution on updates. */
+function withEntry<T>(prev: Record<string, T>, key: string, value: T): Record<string, T> {
+  return Object.assign(nullMap<T>(), prev, { [key]: value });
+}
 
 export function useMemorySave(): UseMemorySaveReturn {
-  const [statusMap, setStatusMap] = useState<Record<string, MemorySaveStatus>>({});
-  const [toastMap, setToastMap] = useState<Record<string, string | null>>({});
+  const [statusMap, setStatusMap] = useState<Record<string, MemorySaveStatus>>(nullMap);
+  const [toastMap, setToastMap] = useState<Record<string, string | null>>(nullMap);
 
   const save = useCallback(async (sessionId: string) => {
     if (!sessionId) return;
 
-    setStatusMap(prev => ({ ...prev, [sessionId]: 'loading' }));
-    setToastMap(prev => ({ ...prev, [sessionId]: null }));
+    setStatusMap(prev => withEntry(prev, sessionId, 'loading'));
+    setToastMap(prev => withEntry(prev, sessionId, null));
 
     try {
       const sinceIdx = nextMessageIdxMap[sessionId] || 0;
@@ -104,29 +114,29 @@ export function useMemorySave(): UseMemorySaveReturn {
       }
 
       const message = formatToastMessage(data);
-      setToastMap(prev => ({ ...prev, [sessionId]: message }));
+      setToastMap(prev => withEntry(prev, sessionId, message));
 
       if (data.status === 'saved') {
-        setStatusMap(prev => ({ ...prev, [sessionId]: 'saved' }));
+        setStatusMap(prev => withEntry(prev, sessionId, 'saved'));
       } else if (data.status === 'empty') {
-        setStatusMap(prev => ({ ...prev, [sessionId]: 'empty' }));
+        setStatusMap(prev => withEntry(prev, sessionId, 'empty'));
       } else {
-        setStatusMap(prev => ({ ...prev, [sessionId]: 'error' }));
+        setStatusMap(prev => withEntry(prev, sessionId, 'error'));
       }
     } catch {
-      setStatusMap(prev => ({ ...prev, [sessionId]: 'error' }));
-      setToastMap(prev => ({ ...prev, [sessionId]: 'Failed to save to memory' }));
+      setStatusMap(prev => withEntry(prev, sessionId, 'error'));
+      setToastMap(prev => withEntry(prev, sessionId, 'Failed to save to memory'));
     }
   }, []);
 
   const reset = useCallback((sessionId: string) => {
     setStatusMap(prev => {
-      const next = { ...prev };
+      const next = Object.assign(nullMap<MemorySaveStatus>(), prev);
       delete next[sessionId];
       return next;
     });
     setToastMap(prev => {
-      const next = { ...prev };
+      const next = Object.assign(nullMap<string | null>(), prev);
       delete next[sessionId];
       return next;
     });
