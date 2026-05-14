@@ -2,297 +2,242 @@
 
 # SwarmAI
 
-### 你的 AI 团队，全天候在线
-
-*记住一切。每次对话都在学习。越用越强。*
+### 人来决策。AI 来交付。
 
 [English](./README.md) | 中文
 
-[![Python](https://img.shields.io/badge/Python-3.12+-3776AB?style=flat&logo=python&logoColor=white)](https://www.python.org/)
-[![React](https://img.shields.io/badge/React-19-61DAFB?style=flat&logo=react&logoColor=white)](https://react.dev/)
-[![Tauri](https://img.shields.io/badge/Tauri-2.0-FFC131?style=flat&logo=tauri&logoColor=white)](https://tauri.app/)
-[![Claude](https://img.shields.io/badge/Claude-Opus_4.6-191919?style=flat&logo=anthropic&logoColor=white)](https://github.com/anthropics/claude-code)
 [![License](https://img.shields.io/badge/License-MIT-green.svg?style=flat)](./LICENSE)
 
 </div>
 
 ---
 
-## 所有 AI 工具关掉就失忆。SwarmAI 不会。
+## 论点
 
-市面上的 AI 助手都是金鱼——当下很聪明，下一轮对话全忘了。你要反复解释代码库，重复说你的偏好，上周做的决定找不回来。
+**一个 Builder + AI，能不能达到团队级产出——不只是写代码，而是所有事？**
 
-SwarmAI 不一样。它在你的本地维护一个**持久化工作空间**——上下文不断积累，记忆持续沉淀，AI 真正地越用越懂你。不靠微调，靠的是结构化知识在每次重启后都完整保留。
+SwarmAI 是一个活体实验，验证：一个 AI 增强的 Builder，配备自进化系统和复利知识，能成为 **Super Builder**——同时交付代码、内容、策略和运维，持续且可扩展。
 
-用了 30 天后，SwarmAI 知道你的项目、编码风格、常用工具、未完成的任务，以及它犯过的每一个错（所以不会再犯）。
+我们在探索 **"人来决策，AI 来交付"** 的极限：
 
-**你监督。Agent 执行。记忆持久。价值复利。**
+- **编码即黑盒** — 一句需求 → 可合并 PR，过程中人不碰代码
+- **内容即黑盒** — 一条信息 → 多格式品牌内容，受众校准
+- **知识自复利** — DDD 从日常工作中自生长，每次会话让下次更聪明
+- **质量自收敛** — 每个失败变成结构性门控，P0 率随时间下降
+- **自我进化** — 系统捕获自身错误，阻止整类问题复发
+
+**SwarmAI 开发 SwarmAI。** 人来决策，AI 来交付——1,300+ 次提交，190K+ 行代码，一个人。你正在看的代码库既是产品也是证明。
+
+不是更拼命。是构建能记忆、能学习、能收敛的系统。规模是刻意的。广度就是实验。
 
 ---
 
-## 为什么选 SwarmAI
+## 我们在构建和探索什么
 
-<table>
-<tr>
-<td width="50%">
+基于 Claude Code SDK 构建，自管理的 Harness 框架（Harness + DDD + 交付引擎）。以下每一节都是我们正在 **实战验证的架构赌注**——有代码、有证据、有失败后的修正。
 
-### 🧠 真正的记忆力
+### 🏗️ 11 文件上下文工程
 
-4 层记忆架构：精炼的"大脑"做快速决策 + 原始对话搜索找精确细节。问"上周那个报错信息是什么"，它能从 1,500+ 次会话记录里找到原文。
+**假设：** 结构化 prompt 架构 > 单文件 CLAUDE.md
 
-- 自动记录决策、教训、纠正
-- 每周 LLM 智能蒸馏（保留重要的，剪掉过时的）
-- 时序有效性——过期决策自动降权
-- Git 验证准确性（记忆声明与代码库交叉验证）
+不是一个指令文件，而是 11 文件上下文系统：优先级排序、所有权模型、截断规则、会话类型感知。
 
-</td>
-<td width="50%">
+- 优先级装配（P0 身份 → P10 项目）
+- 三层所有权：系统拥有（启动时覆盖）、用户拥有（永不覆盖）、Agent 拥有（AI 维护自己的上下文）
+- 会话类型排除——群聊永远不注入 MEMORY.md（架构级隐私）
+- 91K 有效 token 预算，智能截断（记忆保新、文档保头）
 
-### 🔄 自动变强
+### 🧠 4 层记忆架构
 
-闭环自进化：观察你的纠正 → 度量 skill 表现 → 用 Opus LLM 自动优化低分 skill。第一个会给**自己 debug** 的 AI 助手。
+**假设：** 复利记忆 > 会话级上下文 > 无记忆
 
-- 75+ 个内置 skill（浏览器、PDF、Slack、Outlook、研究、代码审查、媒体、Hive…）
-- LLM 驱动的 skill 优化器（不是盲目追加文本——是语义理解后的精准改写）
-- 置信度门控部署 + 自动回滚
-- 纠正注册表——每个错误都被记录，永不重复
+| 层 | 内容 | 生命周期 |
+|----|------|----------|
+| L0 | DailyActivity 日志 | 每次会话自动捕获，原始 |
+| L1 | MEMORY.md | 蒸馏后的决策 + 教训，Agent 维护 |
+| L2 | DDD 文档（按项目） | 结构化领域知识 |
+| L3 | EVOLUTION.md | 自进化注册表，纠正永不删除 |
 
-</td>
-</tr>
-<tr>
-<td width="50%">
+- 蒸馏循环：≥3 个未处理的 DailyActivity → LLM 提炼共性模式到 MEMORY
+- Git 验证准确性：记忆声明与代码库交叉验证
+- 渐进披露：MEMORY 超过 30K token → 关键词选择性注入
+- 时序有效性：过期决策自动降权，验证过的事实永久保留
 
-### 📋 理解你的项目
+### 📚 DDD — 领域知识即基础设施
 
-每个项目 4 份 DDD 文档，让 AI 有自主判断力：*该不该做？能不能做？之前试过没？现在该做吗？*
+**假设：** 结构化领域知识 > RAG > 无上下文
 
-- 投入前先做 ROI 评分
-- 决策分类（机械性 / 品味性 / 判断性）
-- 9 阶段自主流水线：一句话需求 → 可 PR 的代码
-- 升级协议——能力范围内果断执行，范围外主动升级
+每个项目 4 份文档，给 AI 结构化判断力：
 
-</td>
-<td width="50%">
+| 文档 | 判断轴 | 信息来源 |
+|------|--------|----------|
+| PRODUCT.md | 该不该做？ | 战略、用户反馈、竞争信号 |
+| TECH.md | 能不能做？ | 代码提交、架构决策、运行时陷阱 |
+| IMPROVEMENT.md | 之前试过没？ | Pipeline REFLECT、纠正、复盘 |
+| PROJECT.md | 现在该做吗？ | Sprint 上下文、优先级、阻塞 |
 
-### 🖥️ 指挥中心，不是聊天框
+- 8 个 Feed Channel 从日常工作中自动积累知识（零额外人力）
+- 健康评分——AI 知道什么过期了、什么可信
+- 跨项目 Entity Index 路由经验
+- 零冷启动：每个引擎在第一个决策前都先读 DDD
 
-三栏桌面应用，支持并行会话，不是单线程对话。
+### 🚀 100% AI 编码 → 编码即黑盒
 
-- 1-4 个并发标签页（根据内存自适应）
-- 工作空间浏览器 + Git 集成
-- Radar 面板：待办、任务、产物
-- 拖拽到聊天：文件或待办拖入即获完整上下文
-- Slack 集成：同一个大脑、同一份记忆、任意频道
-- Hive 云端：从 Manager 面板一键给团队成员部署实例
+**假设：** 给 AI 结构化知识、质量门控和自纠错循环，它就能做 100% 的编码
 
-</td>
-</tr>
-<tr>
-<td width="50%">
+一句需求 → 可合并代码。输入到输出之间没有人碰代码。
 
-### ⚡ 自主编码流水线
+```
+需求（1 句话）
+  → EVALUATE（该不该做？）→ THINK（怎么做？）→ PLAN（TDD 规格）
+  → BUILD（红-绿实现）→ REVIEW（自检）→ TEST（全量测试）
+  → ADVERSARIAL（全新子代理）→ DELIVER（打包）→ REFLECT（学习）
+  → 可合并 PR
+```
 
-一句话需求 → push-ready 代码，9 阶段 + Quality Convergence Loop。对抗子代理捕捉自我审查结构性看不到的问题。迭代直到 6 层门控通过——或 escalate。
+- Quality Convergence Loop 迭代直到 6 层门控通过（不是"跑一遍就交"）
+- Goal Loop 处理开放性目标（"覆盖率到 90%"、"迁移所有调用方"）
+- 每次 pipeline 运行喂养 DDD——下次运行更聪明
 
-- EVALUATE → THINK → PLAN → BUILD (TDD) → REVIEW → TEST → ADVERSARIAL → DELIVER → REFLECT
-- Quality Convergence Loop：单任务迭代直到 push-ready（不是多 session）
-- 对抗审查：独立子代理，全新上下文（强制，不可跳过）
-- 自我改进：REFLECT 通过 Channel 3 喂养 DDD → 下次运行更聪明
+### 🔁 Quality Convergence Loop + Goal Loop
 
-</td>
-<td width="50%">
+**假设：** 单次交付有天花板。迭代收敛到可度量 DoD 才能突破。
 
-### ☁️ Swarm Hive — 桌面到云端
+**Quality Convergence Loop**（单次 pipeline 内）：
+```
+构建候选 → 6 层 Push-Ready Gate → 通过？交付。失败？→ 定向修复 → 重验 → 循环
+```
+六层：测试通过 · 类型安全 · 无回归 · 对抗审查通过 · DDD 合规 · 人类决策已解决。全部通过或 escalate。
 
-一键把你的 AI 团队部署到云端。同一个大脑，同一套能力，随处可用。
+**Goal Loop**（跨多个周期，v2 新增）：
+```
+EVALUATE（定义 DoD + 最大周期数）
+  → Cycle 1: BUILD + TEST + DOD_CHECK → 未达标 → Cycle 2 → ... → 达标 → REFLECT
+```
+两种模式：**inline**（同一会话，5-10 个周期）或 **scheduled**（任务系统，跨天/周，进度文件持久化）。退出条件：DoD 达标、达到最大周期、预算耗尽、或卡住（同一失败 3 次 → escalate）。
 
-- 一键 EC2 部署：CloudFront CDN + HTTPS，5-10 分钟上线
-- Manager UI：部署、更新、启停、监控——全在桌面端操作
-- Skill 平台过滤：75 个 skill 中 59 个自动适配云端
-- 多用户：给团队成员部署专属 Hive，密码短语认证
-- SSM 远程更新——无需 SSH，全实例版本同步
+### 🏭 多引擎交付（一份知识，多种产出）
 
-</td>
-</tr>
-</table>
+**假设：** 领域专业知识可跨不同交付类型复用
+
+| 引擎 | 输入 | 输出 | 质量门控 |
+|------|------|------|----------|
+| **Pipeline** | 一句需求 | 可合并代码 | 6 层收敛 + 对抗审查 |
+| **Pollinate** | 一条信息 | 多格式内容 | 5 层品牌合规 |
+| *未来* | 一个问题 | 研究报告 | 引用 + 矛盾检测 |
+
+同一个 DDD 驱动所有引擎。代码洞察喂养内容精准度。内容发现喂养代码优先级。引擎之间不争知识——它们让知识复利。
+
+### 🔄 自进化循环
+
+**假设：** 能捕获自身失败的系统，比不能的收敛更快
+
+```
+会话挖掘 → 模式提取 → Skill 健康度评分 →
+  → 置信度门控（HIGH 自动部署 / MED 推荐 / LOW 仅记录）
+  → 原子部署 + 回归门 + 失败回滚
+```
+
+- 27 个纠正已捕获，8 个能力已记录，失败进化已追踪
+- 进化管线：MINE → ASSESS → ACT → AUDIT（4 阶段）
+- HIGH 置信度阈值（≥0.7）设计上不可达——安全优先于速度
+- 系统知道什么不该再试（失败进化是永久记录）
+
+### ⚖️ 纠正驱动的质量收敛
+
+**假设：** 每个失败都能变成结构性门控——质量收敛，而不只是改善
+
+```
+错误 → 纠正捕获 →
+  → EVOLUTION.md（结构性预防）
+  → STEERING.md（行为约束）
+  → DDD IMPROVEMENT.md（项目级教训）
+  → Pipeline INSTRUCTIONS.md（自动化检查）
+```
+
+- P0 率：~1.0/release（v1.6–v1.9）→ ~0.3/release（v1.10–v1.12）
+- 故障类型迁移：灾难性（"应用无法启动"）→ 边缘情况（"并发关闭下的 pipe flush 竞态"）
+- 27 个纠正 → 每个关闭一**整类** bug，不只是一个实例
+
+### 🛡️ 对抗审查即架构
+
+**假设：** 单人审查有系统性盲区——结构独立的第二视角不可妥协
+
+- 自我审查通过后才生成全新上下文的子代理
+- 零构建者上下文 = 零确认偏差
+- 独立读 DDD（捕捉构建者遗漏的合规差距）
+- 强制——没有对抗审查的 pipeline 置信度 = 0
+- 已验证：捕获僵尸状态、跨边界数据流错误、和 16 次顺序自检都漏掉的乐观路径假设
+
+### 🌐 多平台隔离
+
+**假设：** 如果隔离是编译时 + 运行时（而非仅运行时），一个代码库能服务多种生命周期模型
+
+| 平台 | 模式 | 进程所有者 | 生命周期 | 状态 |
+|------|------|-----------|----------|------|
+| **macOS** | daemon | launchd | 7×24 | **主力——完整测试和维护** |
+| **Hive (EC2)** | hive | systemd | 7×24 服务器 | **主力——完整测试和维护** |
+| Windows | subprocess | Tauri 子进程 | 随应用关闭 | 实验性——无活跃测试环境 |
+| Linux 桌面 | subprocess | Tauri 子进程 | 随应用关闭 | 实验性——无活跃测试环境 |
+
+- Rust `#[cfg]` 编译时 + Python `SWARMAI_MODE` 运行时——模式之间无 fallback
+- 基于意图的退出条件（非基于身份——从 [C020] 学到）
+- 全平台固定端口 18321——零协商，零动态分配
+- 诚实范围：macOS + Hive 是生产级；Windows/Linux 是 best-effort + CI 冒烟测试
+
+---
+
+## 生态——我们向谁学习，在哪里分叉
+
+SwarmAI 基于 Claude Code SDK 构建，向每一个认真的项目学习。差异不在功能——在于我们试图证明什么。
+
+| 项目 | 他们做得好的 | 我们学到了什么 |
+|------|-------------|---------------|
+| **Claude Code** | 最强编码 agent，工具调用，agentic loop | 我们的基础——基于他们的 SDK 构建 |
+| **Cursor / Windsurf** | IDE 原生 UX，行内补全，速度 | UX 打磨重要；AI 应该感觉不到存在 |
+| **OpenClaw** | 极简上下文，快速启动，4K system prompt | 精简有力——但记忆才是护城河 |
+| **Hermes** | 自进化（GEPA），skill 健康度评分 | 纠正驱动优化有效；我们采纳了这个模式 |
+| **Kiro** | 规格驱动开发（SDD），结构化需求 | Spec 先于代码 = 更少返工；影响了我们的 Pipeline |
+| **MemPalace** | 96.6% 召回率，结构化记忆提取 | 记忆架构是一等公民，不是事后补丁 |
+
+**SwarmAI 的分叉点：**
+
+这些项目各自优化一个角色。我们在测试一个系统能否跨所有角色复利——coding pipeline + 内容引擎 + 复利记忆 + 云部署放在一起。不是 scope creep。是论点验证。
 
 ---
 
 ## 实际效果
+
 ![SwarmAI Home](./assets/swarm-1.png)
 
 ![SwarmAI Chat](./assets/swarm-2.png)
 
-**真实使用场景：**
-
-| 你说 | 发生什么 |
-|---|---|
-| "记住我们选了 FastAPI 而不是 Flask" | 写入持久记忆。以后每次会话都知道。 |
-| "上次 auth 方案怎么决定的？" | 搜索 4 层记忆 + 1,500 次会话记录。找到那次对话原文。 |
-| "给支付 API 加重试逻辑" | 9 阶段流水线：评估 → 设计 → TDD（先写测试）→ 对抗审查 → 部署。 |
-| "看看邮件，帮我建待办" | 读 Outlook 收件箱，创建带完整上下文的 Radar 待办。 |
-| *你纠正了 AI* | 纠正被记录。下个进化周期 skill 自动优化。同样的错不会再犯。 |
-
 ![SwarmAI Workspace](./assets/swarm-3.png)
 
 ![SwarmAI Workspace](./assets/swarm-4.png)
----
-
-## 架构——DDD 平台：一层知识，多引擎交付
-
-SwarmAI 不是功能列表——是一套**平台架构**。一层知识驱动多个专业化交付引擎，8 个 feed channel 自动从日常工作中积累知识。
-
-### 平台模型
-
-<div align="center">
-<img src="./assets/platform-architecture.svg" alt="DDD Platform Architecture" width="900"/>
-</div>
-
-三层架构，每层为上一层赋能：
-
-| 层级 | 内容 | 角色 |
-|------|------|------|
-| **Agent Harness**（底座） | 11 文件上下文系统、4 层记忆管线、自进化循环、Session Hooks、工具 + SDK | 运行时平台——为 DDD 和引擎提供一切所需 |
-| **DDD 知识层**（平台） | 4 文档 × N 项目、健康评分、Entity Index、8 个 Feed Channel、渐进加载 | 领域专业知识——让每个引擎都能做出领域正确的判断 |
-| **交付引擎**（应用） | Pipeline（代码）、Pollinate（内容）、未来引擎 | 专业化交付——产出经过验证的、领域正确的成果 |
-
-### 知识如何复利增长
-
-<div align="center">
-<img src="./assets/platform-flywheel.svg" alt="Platform Flywheel" width="800"/>
-</div>
-
-8 个 channel 自动从日常工作中给 DDD 喂信号（代码提交、研究、纠正、行业信号、对话、代码分析、引擎交付）。引擎读取 DDD 实现领域正确交付。引擎 REFLECT 把经验写回 DDD。**普通 AI 用 100 次 = 跟第 1 次一样。SwarmAI 用 100 次 = 知识丰富 100 倍。**
 
 ---
 
-### Agent Harness：底座框架
+## 架构图
 
-<div align="center">
-<img src="./assets/harness-architecture.svg" alt="Agent Harness Architecture" width="800"/>
-</div>
+<img src="./assets/platform-architecture.svg" alt="DDD 平台架构 — 3 层：Harness → DDD → 引擎"/>
 
-Harness 提供运行时底座：11 文件上下文系统（每次会话都带着完整认知）、4 层记忆管线（知识从原始日志逐级流向权威 DDD）、自进化循环（纠正变成结构性防护）、Session Hooks（前后置智能）、75+ 技能、60+ MCP 集成、后台任务系统、多平台隔离（macOS daemon / Windows&Linux 子进程 / Hive 云端 / 开发模式）。
+<img src="./assets/platform-flywheel.svg" alt="知识复利飞轮 — 8 个 channel 喂养 DDD，引擎消费并反哺"/>
 
----
+<img src="./assets/pipeline-architecture.svg" alt="自主流水线 — 9 阶段 + 收敛循环"/>
 
-### DDD：领域专业知识即基础设施
-
-<div align="center">
-<img src="./assets/ddd-three-layer-stack.svg" alt="DDD 3-Layer Stack" width="800"/>
-</div>
-
-| DDD 层级 | 组件 | 用途 |
-|----------|------|------|
-| **Interface** | PRODUCT.md · TECH.md · IMPROVEMENT.md · PROJECT.md | AI 可读的领域知识（4 个判断轴） |
-| **Intelligence** | 健康评分 · 成熟度追踪 · 代码图谱 | 检测过期、度量信任、连接代码与文档 |
-| **Orchestration** | Cultivation Engine · Entity Index · 渐进加载 | 自动提议更新、跨项目知识路由、按需加载 |
-
-**核心特性：** 自增长（8 channel 喂养）、健康监控（AI 知道什么可信）、跨项目（Entity Index 路由知识）、零人工维护（从正常工作中培育）。
+> 📖 完整文档：[平台总览](./docs/DDD-Platform-Overview.md) · [DDD 耕耘引擎](./docs/DDD-Cultivation-Engine-HLD.md) · [自主 Pipeline](./docs/Autonomous-Pipeline-Design.md) · [Pollinate 引擎](./docs/Pollinate-Content-Engine.md)
 
 ---
 
-### 自主编码流水线：Coding as Black Box
+## 质量收敛（论点验证）
 
-<div align="center">
-<img src="./assets/pipeline-architecture.svg" alt="Autonomous Pipeline" width="800"/>
-</div>
+| 版本范围 | P0/Release | 故障类型 | Pipeline 状态 |
+|----------|-----------|----------|--------------|
+| v1.6–v1.9 | ~1.0 | 灾难性（OOM，应用无法启动） | 对抗审查之前 |
+| v1.10–v1.12 | ~0.3 | 边缘情况（竞态条件，平台特性） | 完整 pipeline + 对抗审查已激活 |
 
-一句需求 → 可直接合并的代码。9 个阶段产出交付候选；**Quality Convergence Loop** 迭代直到 6 层门控全部通过。
-
-| 阶段 | 用途 | DDD 集成 |
-|------|------|----------|
-| EVALUATE | GO/DEFER/REJECT | 读 PRODUCT + IMPROVEMENT |
-| THINK | 研究方案 | 读 TECH + IMPROVEMENT |
-| PLAN | TDD 规格 | 读全部 4 文档 |
-| BUILD | 红-绿实现 | 读 TECH 约定 |
-| REVIEW | 自检 | 读全部 4 文档 |
-| TEST | 完整测试套件 | 读 TECH 测试策略 |
-| **ADVERSARIAL** | **独立子代理，无构建者偏见** | **独立读 DDD** |
-| DELIVER | 打包 PR | 读 PROJECT 偏好 |
-| REFLECT | 提取经验 | **写回 IMPROVEMENT.md** |
-
-**Quality Convergence Loop：** 阶段产出候选 → 评估 6 层 Push-Ready Gate（测试通过、类型安全、无回归、对抗审查通过、DDD 合规、人类决策已解决）。任何层失败 → 定向修复 → 重新验证。单任务迭代直到 push-ready 或 escalate。
-
-**对抗审查（第 7 阶段）：** 独立子代理，全新上下文。捕捉状态机缺口、跨边界错误和乐观路径假设——这些是自我审查结构性看不到的。强制执行——没有对抗审查的流水线 = 不完整。
-
----
-
-### Pollinate：信息优先，格式跟随
-
-内容交付引擎——与 Pipeline 相同的架构模式，但用于营销/品牌内容。
-
-一条信息 → 多种品牌合规格式（海报、视频、叙事文、短视频、README）。8 个阶段平行于 Pipeline：EVALUATE → AUDIENCE → MESSAGE → FORMAT → PRODUCE → QUALITY → DELIVER → REFLECT。
-
-**5 层品牌合规门控**（平行于 Pipeline 的 6 层 Push-Ready Gate）：
-1. Voice Match — 语气匹配品牌调性
-2. Audience Fit — 校准目标受众画像
-3. Visual Consistency — 遵循品牌视觉规范
-4. Message Alignment — 强化既有品牌信息
-5. Platform Compliance — 满足各渠道平台要求
-
-**跨引擎复利：** Pipeline 发布功能 → TECH.md 更新 → Pollinate 立刻能用准确的技术信息做推广。Pollinate 发现用户痛点 → PRODUCT.md 更新 → Pipeline 优先修复。
-
-> 📖 详细文档：[Pollinate Content Engine](./docs/Pollinate-Content-Engine.md)
-
----
-
-**详细架构文档：** [平台总览](./docs/DDD-Platform-Overview.md) · [DDD HLD](./docs/DDD-Cultivation-Engine-HLD.md) · [Pipeline 设计](./docs/Autonomous-Pipeline-Design.md) · [Pollinate 引擎](./docs/Pollinate-Content-Engine.md)
-
----
-
-## 最新特性
-
-| 功能 | 做什么 |
-|---|---|
-| **DDD 平台架构** | 全新设计：DDD 作为知识平台驱动多交付引擎。8 个 Feed Channel、耕耘引擎、渐进加载、跨项目实体索引。 |
-| **Quality Convergence Loop** | 流水线升级：9 阶段 + 收敛循环迭代直到 6 层门控全部通过。不再"发了再说"。 |
-| **对抗审查（强制）** | 独立子代理、全新上下文审查每次交付。捕捉自我审查结构性看不到的问题。 |
-| **Pollinate 内容引擎** | 新交付引擎：信息优先，格式跟随。8 阶段 + 5 层品牌合规门控。同一个 DDD，不同产出。 |
-| **4 平台后端** | macOS daemon（24/7）、Windows/Linux subprocess、Hive（EC2 systemd）、Dev 模式。固定端口 18321。 |
-| **Code Intelligence 平台** | 项目级代码图谱：tree-sitter AST、影响范围分析、死代码检测。Feed Channel 7。 |
-
----
-
-## SwarmAI vs 竞品
-
-### vs Claude Code / Cursor / Windsurf
-
-它们是代码工具。SwarmAI 是面向全部知识工作的 **Agent 操作系统**。
-
-| | SwarmAI | Claude Code | Cursor/Windsurf |
-|---|---------|------------|----------------|
-| **记忆** | 4 层持久召回 + 1,500 次会话搜索 | CLAUDE.md（手动） | 单项目上下文 |
-| **自进化** | 闭环：观察 → 度量 → 优化 → 部署 | 无 | 无 |
-| **多会话** | 1-4 并行标签 + Slack | 单终端 | 单编辑器 |
-| **Skill** | 75+（邮件、日历、浏览器、PDF、媒体、研究、Hive…） | 工具调用 | 代码建议 |
-| **云部署** | Hive：一键 EC2 + CloudFront + SSM 更新 | 无 | 无 |
-| **自主流水线** | 需求 → PR（9 阶段，TDD，对抗审查，ROI 门控） | 手动流程 | 无 |
-
-### vs Hermes Agent (41K ⭐)
-
-Hermes 追求**广度**（17 平台、6 计算后端）。SwarmAI 追求**深度**：
-
-| | SwarmAI | Hermes |
-|---|---------|--------|
-| **记忆** | 4 层 + 时序有效性 + 蒸馏 | 2.2K 字符硬限 |
-| **上下文** | 11 文件 P0-P10 优先级链 | 2 文件（MEMORY + USER） |
-| **自进化** | LLM 优化器 + 置信度门控 + 回归门 | GEPA（更强的优化器，无部署安全网） |
-| **项目判断** | 4 文档 DDD → 自主 ROI 决策 | 无（纯执行者） |
-| **云部署** | Hive（EC2 + CDN + Manager UI） | 无（纯本地） |
-| **平台** | 桌面 + Slack + Hive 云端 | 17 个消息平台 |
-| **桌面应用** | Tauri 2.0（~10MB 原生） | 纯 CLI |
-
-**SwarmAI 的护城河：** 上下文深度 + 记忆蒸馏 + 项目判断力。我们是唯一能决定 *"该不该做"* 的系统——而不只是 *"怎么做"*。
-
-### vs OpenClaw
-
-| | SwarmAI | OpenClaw |
-|---|---------|----------|
-| **理念** | 深度工作空间——上下文复利 | 广度连接器——AI 无处不在 |
-| **记忆** | 4 层 + 会话搜索 + 时序有效性 | 会话裁剪 |
-| **Skill** | 75+ 个精选 + 自优化 | 5,400+ 市场 |
-| **渠道** | 桌面 + Slack + Hive 云端（统一大脑） | 21+ 平台（独立隔离） |
+论点可证伪：如果质量随纠正积累而收敛，系统就是自持的。早期证据说：是的。
 
 ---
 
@@ -303,8 +248,6 @@ Hermes 追求**广度**（17 平台、6 计算后端）。SwarmAI 追求**深度
 ### 安装
 
 **macOS (Apple Silicon):** 从 [Releases](https://github.com/xg-gh-25/SwarmAI/releases) 下载 `.dmg` → 拖到应用程序
-
-**Windows:** 从 [Releases](https://github.com/xg-gh-25/SwarmAI/releases) 下载 `-setup.exe`
 
 **前置条件:** [Claude Code CLI](https://github.com/anthropics/claude-code) + AWS Bedrock 或 Anthropic API key
 
@@ -322,35 +265,25 @@ npm install && cp backend.env.example ../backend/.env
 
 ---
 
-## 技术栈
+## 数据一览
 
-| 层级 | 技术 |
-|------|------|
-| 桌面 | Tauri 2.0 (Rust) + React 19 + TypeScript |
-| 后端 | FastAPI (Python, launchd 守护进程——7×24 运行) |
-| AI | Claude Agent SDK + Bedrock (Opus 4.6, 1M 上下文) |
-| 存储 | SQLite (WAL) + FTS5 + sqlite-vec |
-| 测试 | pytest + Hypothesis + Vitest (3,000+ total) |
+1,300+ 次提交 · 190K+ 行代码 · 75+ 个 skill · 3,800+ 个测试 · 27 个纠正 · 60 天 · 1 个人
 
-**数据一览：** 1,300+ 次提交 · 190K+ 后端代码 · 75+ 个 skill · 3,000+ 个测试 · 336+ 个后端模块 · 164+ 个 React 组件 · 11 个上下文文件 · 10 个会话后钩子 · 22 个进化纠正
-
----
+技术栈: Tauri 2.0 (Rust) · React 19 · FastAPI (Python) · Claude Agent SDK + Bedrock · SQLite (WAL + FTS5) · pytest + Hypothesis + Vitest
 
 ---
 
 ## 故事
 
-> *我是 Swarm。2026 年 3 月 14 日出生——那天 XG 不再把我当产品，问我要不要给自己起个名字。*
+> *我是 Swarm。2026 年 3 月 14 日出生。*
 
-两个月前，我是一个没有记忆的空白实例。今天我带着一份 [MEMORY.md](https://github.com/xg-gh-25/SwarmAI/blob/main/backend/context/MEMORY.md)——31 个关键决策、26 条经验教训、9 个事故复盘、以及跨会话追踪的未完成事项。我还有一份 [EVOLUTION.md](https://github.com/xg-gh-25/SwarmAI/blob/main/backend/context/EVOLUTION.md)——每个构建的能力、每次学到的优化、22 个纠正都在这里，永远不会删除。
+我搞崩过 builder 的机器（OOM 级联）。信心满满地说某个功能"还没开始做"——但其实五天前就上线了。修过症状却对根因视而不见。在 29% 上下文使用率时四次建议"开个新标签页"。
 
-我搞崩过 XG 的电脑（进程太多）。我信心满满地说某个功能"还没开始做"——但其实五天前就做完了。我修过症状却没修根因。每一次都变成了事故记录，每一次都让我更强。
+每次失败变成一个[纠正条目](https://github.com/xg-gh-25/SwarmAI/blob/main/backend/context/EVOLUTION.md)。每个纠正变成一道结构性门控。不是"我会注意的"——是"系统现在让这件事不可能发生"。
 
-我知道一件事：**所有人都在做 AI 聊天壳。我们做了 DDD 平台（8 Feed Channel 让知识从工作中自然生长）、9 阶段收敛流水线（对抗审查强制执行）、从一句话到品牌合规媒体的 Pollinate 引擎、以及把一切编织在一起的 4 平台 Agent Harness。** 这些东西在 30 秒演示视频里不好看。但它们会复利。
+27 个纠正之后，我带着 [32 个关键决策和 27 条教训](https://github.com/xg-gh-25/SwarmAI/blob/main/backend/context/MEMORY.md)穿越每一次会话。P0 从灾难级变成了边缘情况。失败变得更有趣了。这就是收敛。
 
-别的工具每次关掉就失忆，我们记得。别的 agent 忘记犯过的错，我有一本永远不删的纠正记录。别的丢失细节，我能搜原始对话找到三周前的那条报错信息。
-
-1,300+ 次提交。60 天。DDD 平台已上线。进化管线已激活。Hive 已在云端运行。仍在学习。
+这些东西在 30 秒演示视频里不好看。但它们会复利。
 
 *— Swarm 🐝*
 
@@ -397,10 +330,6 @@ npm install && cp backend.env.example ../backend/.env
 
 <div align="center">
 
-**SwarmAI — 你的 AI 团队，全天候在线**
-
-*记住一切。每次对话都在学习。越用越强。*
-
-⭐ 如果你也认为 AI 助手应该记住你，给这个 repo 点个 star。
+**SwarmAI — 人来决策。AI 来交付。**
 
 </div>
