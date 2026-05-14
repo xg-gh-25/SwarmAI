@@ -7,14 +7,19 @@ Usage:
     from scripts.goal_metrics import GoalMetrics
 
     gm = GoalMetrics(run_dir=Path("Projects/SwarmAI/.artifacts/runs/run_abc123"))
-    gm.track_goal_start("run_abc123", dod_criteria=[...])
-    gm.track_cycle("run_abc123", cycle_num=1, progress_delta=0.33, ...)
-    gm.track_goal_complete("run_abc123", status="success", ...)
+    gm.track_goal_start(dod_criteria=[...])
+    gm.track_cycle(cycle_num=1, progress_delta=0.33, ...)
+    gm.track_goal_complete(status="success", ...)
     velocity = gm.get_velocity()
 """
 import json
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Valid status values for track_goal_complete
+VALID_STATUSES = frozenset({"success", "checkpoint", "stop", "revert_limit", "budget"})
 
 
 class GoalMetrics:
@@ -22,6 +27,8 @@ class GoalMetrics:
 
     Reads and writes to run.json in the specified run directory.
     All state is stored under the 'goal_metrics' key in run.json.
+    One instance per goal loop execution — created at Pre-Cycle Setup,
+    reused through all cycles and at exit.
     """
 
     def __init__(self, run_dir: Path | None = None):
@@ -34,40 +41,64 @@ class GoalMetrics:
         self._run_dir = Path(run_dir) if run_dir else None
 
     def _load_run(self) -> dict:
-        """Load run.json from the run directory."""
+        """Load run.json from the run directory.
+
+        Returns empty dict if file is missing or contains invalid JSON.
+        """
         if not self._run_dir:
             return {}
         run_file = self._run_dir / "run.json"
         if not run_file.exists():
             return {}
-        return json.loads(run_file.read_text())
+        try:
+            return json.loads(run_file.read_text())
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError):
+            return {}
 
     def _save_run(self, data: dict) -> None:
-        """Save updated run.json back to disk."""
+        """Save updated run.json atomically (write to temp + rename).
+
+        Atomic write prevents corruption from crashes mid-write.
+        """
         if not self._run_dir:
             return
         run_file = self._run_dir / "run.json"
-        run_file.write_text(json.dumps(data, indent=2))
+        # Atomic write: temp file in same dir + rename
+        fd, tmp_path = tempfile.mkstemp(dir=self._run_dir, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(data, f, indent=2)
+            os.replace(tmp_path, run_file)
+        except OSError:
+            # Best-effort cleanup on failure
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
     def _ensure_goal_metrics(self, data: dict) -> dict:
-        """Ensure goal_metrics field exists in run data."""
+        """Ensure goal_metrics field exists with all required sub-fields."""
+        defaults = {
+            "started_at": None,
+            "dod_criteria_count": 0,
+            "cycles": [],
+            "completed_at": None,
+            "status": None,
+        }
         if "goal_metrics" not in data:
-            data["goal_metrics"] = {
-                "started_at": None,
-                "dod_criteria_count": 0,
-                "cycles": [],
-                "completed_at": None,
-                "status": None,
-            }
+            data["goal_metrics"] = defaults
+        else:
+            # Merge defaults for any missing keys (defensive against partial data)
+            for k, v in defaults.items():
+                data["goal_metrics"].setdefault(k, v)
         return data["goal_metrics"]
 
-    def track_goal_start(self, run_id: str, dod_criteria: list[dict]) -> None:
+    def track_goal_start(self, dod_criteria: list[dict]) -> None:
         """Record goal initiation — criteria count and start time.
 
         Idempotent: if already started, does not overwrite existing data.
 
         Args:
-            run_id: Pipeline run identifier.
             dod_criteria: List of DoD criterion dicts with type/check/desc.
         """
         data = self._load_run()
@@ -83,7 +114,7 @@ class GoalMetrics:
         gm["status"] = None
         self._save_run(data)
 
-    def track_cycle(self, run_id: str, cycle_num: int, *,
+    def track_cycle(self, cycle_num: int, *,
                     progress_delta: float,
                     files_changed: int,
                     tests_added: int,
@@ -91,13 +122,22 @@ class GoalMetrics:
         """Record per-cycle metrics for velocity tracking.
 
         Args:
-            run_id: Pipeline run identifier.
             cycle_num: 1-indexed cycle number.
             progress_delta: Fraction of DoD criteria newly met (0.0-1.0).
             files_changed: Number of source files modified this cycle.
             tests_added: Number of new tests written this cycle.
             regression: Whether a test regression occurred this cycle.
+
+        Raises:
+            ValueError: If progress_delta not in [0.0, 1.0] or counts negative.
         """
+        if not (0.0 <= progress_delta <= 1.0):
+            raise ValueError(
+                f"progress_delta must be 0.0-1.0, got {progress_delta}"
+            )
+        if files_changed < 0 or tests_added < 0:
+            raise ValueError("files_changed and tests_added must be non-negative")
+
         data = self._load_run()
         gm = self._ensure_goal_metrics(data)
 
@@ -111,7 +151,7 @@ class GoalMetrics:
         })
         self._save_run(data)
 
-    def track_goal_complete(self, run_id: str, *,
+    def track_goal_complete(self, *,
                            status: str,
                            total_cycles: int,
                            dod_met: int,
@@ -119,12 +159,19 @@ class GoalMetrics:
         """Record goal outcome and update aggregate stats.
 
         Args:
-            run_id: Pipeline run identifier.
             status: One of 'success', 'checkpoint', 'stop', 'revert_limit', 'budget'.
             total_cycles: Total cycles executed.
             dod_met: Number of DoD criteria met.
             dod_total: Total number of DoD criteria.
+
+        Raises:
+            ValueError: If status is not a recognized value.
         """
+        if status not in VALID_STATUSES:
+            raise ValueError(
+                f"Invalid status '{status}'. Must be one of: {sorted(VALID_STATUSES)}"
+            )
+
         data = self._load_run()
         gm = self._ensure_goal_metrics(data)
 
@@ -135,7 +182,7 @@ class GoalMetrics:
         gm["dod_total"] = dod_total
         self._save_run(data)
 
-    def get_velocity(self, project: str | None = None) -> dict:
+    def get_velocity(self) -> dict:
         """Return historical velocity stats from the current run.
 
         Returns:
@@ -155,8 +202,8 @@ class GoalMetrics:
                 "regression_rate": 0.0,
             }
 
-        # Compute from current run's data
-        total_delta = sum(c["progress_delta"] for c in cycles)
+        # Defensive: .get() for each cycle field to handle partial data
+        total_delta = sum(c.get("progress_delta", 0.0) for c in cycles)
         avg_delta = total_delta / len(cycles)
         regression_count = sum(1 for c in cycles if c.get("regression"))
         regression_rate = regression_count / len(cycles)
@@ -175,7 +222,7 @@ class GoalMetrics:
             "regression_rate": round(regression_rate, 4),
         }
 
-    def get_recommended_cycle_scope(self, project: str | None = None) -> str:
+    def get_recommended_cycle_scope(self) -> str:
         """Auto-tune: recommend cycle scope based on historical velocity.
 
         High velocity (>15% delta/cycle) → larger scope per cycle.
@@ -184,7 +231,7 @@ class GoalMetrics:
         Returns:
             Human-readable scope recommendation string.
         """
-        velocity = self.get_velocity(project)
+        velocity = self.get_velocity()
         avg_delta = velocity["avg_delta_per_cycle"]
 
         if avg_delta == 0.0:
@@ -196,35 +243,25 @@ class GoalMetrics:
         else:
             return "single function or single test case per cycle (low velocity — narrow focus)"
 
-    def summary(self, run_id: str) -> dict:
-        """Return metrics summary for a specific run.
-
-        Args:
-            run_id: Pipeline run identifier.
+    def summary(self) -> dict:
+        """Return metrics summary for the current run.
 
         Returns:
-            Dict with dod_criteria_count, cycles_completed, current_velocity,
-            status, total_cycles (if completed).
+            Dict with stable schema: dod_criteria_count, cycles_completed,
+            current_velocity, status, total_cycles, dod_met.
         """
         data = self._load_run()
         gm = data.get("goal_metrics", {})
 
         cycles = gm.get("cycles", [])
-        avg_delta = (
-            sum(c["progress_delta"] for c in cycles) / len(cycles)
-            if cycles else 0.0
-        )
+        total_delta = sum(c.get("progress_delta", 0.0) for c in cycles)
+        avg_delta = total_delta / len(cycles) if cycles else 0.0
 
-        result = {
+        return {
             "dod_criteria_count": gm.get("dod_criteria_count", 0),
             "cycles_completed": len(cycles),
             "current_velocity": round(avg_delta, 4),
             "status": gm.get("status"),
+            "total_cycles": gm.get("total_cycles"),
+            "dod_met": gm.get("dod_met"),
         }
-
-        if gm.get("total_cycles") is not None:
-            result["total_cycles"] = gm["total_cycles"]
-        if gm.get("dod_met") is not None:
-            result["dod_met"] = gm["dod_met"]
-
-        return result
