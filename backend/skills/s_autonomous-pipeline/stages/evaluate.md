@@ -8,6 +8,33 @@
 
 ## Pipeline-Specific Behavior
 
+### Requirement Clarification Check (P0)
+
+**Before scoring, check the requirement itself for completeness.** A vague
+requirement scored as GO produces an under-specified acceptance criteria set —
+the pipeline builds something that technically passes but misses the real need.
+
+**Process:**
+1. Parse the requirement into: WHO (actor), WHAT (action), WHY (value), WHEN (trigger)
+2. For each undefined element:
+   - Can it be unambiguously derived from DDD docs (PRODUCT.md scope, TECH.md constraints)?
+   - If yes → fill it in, note the derivation source
+   - If no → flag as ambiguity
+3. List edge cases not addressed (empty state, error path, concurrent access, scale)
+4. Cross-reference TECH.md "Constraints" / "Runtime Traps" — does the requirement
+   implicitly violate any? If so → flag as conflict
+
+**Exit conditions:**
+- 0 ambiguities, 0 conflicts → proceed to scoring
+- 1 ambiguity, derivable from context → resolve inline, note assumption in artifact
+- ≥2 unresolvable ambiguities → **ESCALATE** (not GO with assumptions)
+- Any constraint conflict → **ESCALATE** with explicit conflict description
+
+**Why this exists:** spec-kit's `clarify` pattern — AI proactively finding spec
+gaps is higher-yield than human review. Without this step, EVALUATE scores a
+vague requirement as GO, acceptance criteria are under-specified, and BUILD
+delivers something technically correct but wrong.
+
 ### Subsystem Health Audit (P1)
 
 **Before scoring, if the requirement touches an existing subsystem** (not a

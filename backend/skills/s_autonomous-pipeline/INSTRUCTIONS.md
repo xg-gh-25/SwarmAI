@@ -407,12 +407,37 @@ ALL 6 layers must pass simultaneously. A candidate that passes 5/6 is not push-r
 | L2: Type-Safe | No type errors, linter clean | Type checker + linter (if configured) |
 | L3: No Regressions | Pre-existing tests still pass | Run dependent test files (grep -rl pattern) |
 | L4: Adversarial Clean | No critical/medium findings from deliver.md review | All findings fixed or explicitly accepted |
-| L5: DDD Conformance | Follows TECH.md, avoids IMPROVEMENT.md anti-patterns | Pattern match against project conventions |
+| L5: DDD Conformance | No violation of TECH.md constraints or IMPROVEMENT.md anti-patterns | Mechanical checklist extraction + per-item verification (see below) |
 | L6: Decisions Resolved | All taste/judgment decisions surfaced | Decision log complete, no hidden choices |
 
 **L4 clarification:** The adversarial sub-agent was already spawned in 4b (deliver
 stage). L4 checks whether all its findings are resolved. Only re-spawn the
 sub-agent if a convergence fix changes code that the original review didn't cover.
+
+**L5 mechanism (Constitution Pattern):**
+L5 is NOT an honor-system self-assessment. It is a mechanical extraction + verification:
+
+1. **Extract checklist from TECH.md:**
+   - "Runtime Traps" section → each trap becomes a MUST-NOT-VIOLATE item
+   - "Design Principles" section → each principle becomes a SHOULD-FOLLOW item
+   - "Constraints" section → each constraint becomes a MUST-NOT-VIOLATE item
+2. **Extract anti-patterns from IMPROVEMENT.md:**
+   - "What Failed" section → each failed approach becomes a MUST-NOT-REPEAT item
+   - "Anti-Patterns" section (if exists) → same treatment
+3. **Verify diff against checklist:**
+   - For each MUST-NOT-VIOLATE: does the current diff introduce or rely on the
+     prohibited pattern? Binary YES/NO.
+   - For each MUST-NOT-REPEAT: does the current approach structurally resemble
+     a previously failed approach? If yes → explain why it's different this time
+     or flag as violation.
+   - For each SHOULD-FOLLOW: does the diff align? Deviation is acceptable only
+     with explicit justification logged in the decision record.
+4. **Result:** List all violations. Any MUST violation = L5 FAIL. SHOULD deviations
+   are noted but non-blocking if justified.
+
+If the project has no TECH.md or IMPROVEMENT.md → L5 auto-passes (no constitution
+to check against). This incentivizes maintaining DDD docs — richer docs = stronger
+quality gates.
 
 #### Convergence Behavior
 
