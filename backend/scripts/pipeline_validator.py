@@ -205,8 +205,13 @@ def validate_artifact_data(stage: str, data: dict) -> list[str]:
                     errors.append(
                         f"Missing '{parent_field}.{child}' — required for depth validation"
                     )
-                elif isinstance(parent_val[child], list) and len(parent_val[child]) == 0:
-                    # PE-4: Empty list passes existence check but fails advance-time depth
+                elif (
+                    isinstance(parent_val[child], list)
+                    and len(parent_val[child]) == 0
+                    and child == "patterns"  # PE-4: Only patterns must be non-empty
+                ):
+                    # patterns list must have entries (even N/A results).
+                    # findings list can legitimately be empty (clean review).
                     errors.append(
                         f"'{parent_field}.{child}' is empty — must contain at least one entry"
                     )
