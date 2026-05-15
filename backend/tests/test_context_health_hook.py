@@ -408,3 +408,173 @@ class TestAutoCultivation:
         run_data = json.loads(run_file.read_text(encoding="utf-8"))
         reflect_stage = next(s for s in run_data["stages"] if s["stage"] == "reflect")
         assert reflect_stage["cultivated"] is True
+
+
+class TestAutoSessionSignalCultivation:
+    """Tests for _auto_cultivate_session_signals — Ch5 + Ch6 feed."""
+
+    def _write_jsonl(self, da_dir, filename, records):
+        """Write records to a JSONL file in the DailyActivity dir."""
+        path = da_dir / filename
+        with open(path, "w", encoding="utf-8") as f:
+            for rec in records:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        return path
+
+    def test_cultivates_corrections_from_jsonl(self, hook, workspace):
+        """Corrections in JSONL get routed to DDD docs (Ch6)."""
+        # Setup project with IMPROVEMENT.md that has the target sections
+        proj = workspace / "Projects" / "SwarmAI"
+        proj.mkdir(parents=True, exist_ok=True)
+        (proj / "IMPROVEMENT.md").write_text(
+            "# Lessons\n\n## What Worked\n\n- seed\n\n## What Failed\n\n- seed\n"
+        )
+        (proj / "TECH.md").write_text(
+            "# Tech\n\n## Architecture\n\n- seed\n\n## Runtime Traps\n\n- seed\n\n## Conventions\n\n- seed\n"
+        )
+
+        # Create DailyActivity JSONL with a correction
+        da_dir = workspace / "Knowledge" / "DailyActivity"
+        da_dir.mkdir(parents=True, exist_ok=True)
+        today = date.today().isoformat()
+        self._write_jsonl(da_dir, f"{today}.jsonl", [{
+            "session_id": "session_corr_001",
+            "timestamp": "14:00",
+            "corrections": [
+                "Bug: daemon crashed because subprocess.run() blocks the event loop — must use asyncio.to_thread",
+            ],
+            "decisions": [],
+        }])
+
+        hook._auto_cultivate_session_signals(workspace)
+
+        # Verify state file was created with the session ID
+        state_path = workspace / ".context" / ".session_cultivated.json"
+        assert state_path.exists()
+        state = json.loads(state_path.read_text())
+        assert "session_corr_001" in state
+
+    def test_cultivates_decisions_from_jsonl(self, hook, workspace):
+        """Decisions in JSONL get routed to DDD docs (Ch5)."""
+        proj = workspace / "Projects" / "SwarmAI"
+        proj.mkdir(parents=True, exist_ok=True)
+        (proj / "TECH.md").write_text(
+            "# Tech\n\n## Conventions\n\n- seed\n\n## Runtime Traps\n\n- seed\n"
+        )
+
+        da_dir = workspace / "Knowledge" / "DailyActivity"
+        da_dir.mkdir(parents=True, exist_ok=True)
+        today = date.today().isoformat()
+        self._write_jsonl(da_dir, f"{today}.jsonl", [{
+            "session_id": "session_dec_001",
+            "timestamp": "15:00",
+            "corrections": [],
+            "decisions": [
+                "Convention: prefer nc -z over lsof for all port checks in daemon scripts — standing rule",
+            ],
+        }])
+
+        hook._auto_cultivate_session_signals(workspace)
+
+        # Verify the decision was applied to TECH.md
+        content = (proj / "TECH.md").read_text()
+        assert "nc -z" in content or "port checks" in content
+
+    def test_idempotent_skips_already_cultivated_sessions(self, hook, workspace):
+        """Same session is never cultivated twice."""
+        proj = workspace / "Projects" / "SwarmAI"
+        proj.mkdir(parents=True, exist_ok=True)
+        (proj / "TECH.md").write_text(
+            "# Tech\n\n## Conventions\n\n- seed\n\n## Runtime Traps\n\n- seed\n"
+        )
+
+        da_dir = workspace / "Knowledge" / "DailyActivity"
+        da_dir.mkdir(parents=True, exist_ok=True)
+        today = date.today().isoformat()
+        self._write_jsonl(da_dir, f"{today}.jsonl", [{
+            "session_id": "session_idem_001",
+            "timestamp": "16:00",
+            "corrections": [],
+            "decisions": [
+                "Pattern: always use atomic tmp+rename for file writes to prevent corruption",
+            ],
+        }])
+
+        # First call cultivates
+        hook._auto_cultivate_session_signals(workspace)
+        content_after_first = (proj / "TECH.md").read_text()
+
+        # Second call should be no-op (session already in state)
+        hook._auto_cultivate_session_signals(workspace)
+        content_after_second = (proj / "TECH.md").read_text()
+
+        assert content_after_first == content_after_second
+
+    def test_skips_old_jsonl_files(self, hook, workspace):
+        """JSONL files older than 7 days are not processed."""
+        proj = workspace / "Projects" / "SwarmAI"
+        proj.mkdir(parents=True, exist_ok=True)
+        (proj / "TECH.md").write_text("# Tech\n\n## Conventions\n\n- seed\n")
+
+        da_dir = workspace / "Knowledge" / "DailyActivity"
+        da_dir.mkdir(parents=True, exist_ok=True)
+        # Create a file from 10 days ago
+        old_date = (date.today() - timedelta(days=10)).isoformat()
+        self._write_jsonl(da_dir, f"{old_date}.jsonl", [{
+            "session_id": "session_old_001",
+            "timestamp": "10:00",
+            "corrections": ["This pattern always fails — never use it again"],
+            "decisions": [],
+        }])
+
+        hook._auto_cultivate_session_signals(workspace)
+
+        # State should be empty — nothing processed
+        state_path = workspace / ".context" / ".session_cultivated.json"
+        if state_path.exists():
+            state = json.loads(state_path.read_text())
+            assert "session_old_001" not in state
+
+    def test_handles_empty_corrections_and_decisions(self, hook, workspace):
+        """Sessions with no corrections and no decisions are marked done but don't modify DDD."""
+        proj = workspace / "Projects" / "SwarmAI"
+        proj.mkdir(parents=True, exist_ok=True)
+        (proj / "TECH.md").write_text("# Tech\n\n## Conventions\n\n- seed\n")
+
+        da_dir = workspace / "Knowledge" / "DailyActivity"
+        da_dir.mkdir(parents=True, exist_ok=True)
+        today = date.today().isoformat()
+        self._write_jsonl(da_dir, f"{today}.jsonl", [{
+            "session_id": "session_empty_001",
+            "timestamp": "11:00",
+            "corrections": [],
+            "decisions": [],
+        }])
+
+        hook._auto_cultivate_session_signals(workspace)
+
+        # Session marked as cultivated (skip in future) but no DDD changes
+        state_path = workspace / ".context" / ".session_cultivated.json"
+        assert state_path.exists()
+        state = json.loads(state_path.read_text())
+        assert "session_empty_001" in state
+
+        # DDD unchanged
+        content = (proj / "TECH.md").read_text()
+        assert content == "# Tech\n\n## Conventions\n\n- seed\n"
+
+    def test_graceful_on_missing_project_dir(self, hook, workspace):
+        """Does not crash when Projects/SwarmAI doesn't exist."""
+        # Don't create SwarmAI project dir
+        da_dir = workspace / "Knowledge" / "DailyActivity"
+        da_dir.mkdir(parents=True, exist_ok=True)
+        today = date.today().isoformat()
+        self._write_jsonl(da_dir, f"{today}.jsonl", [{
+            "session_id": "session_no_proj",
+            "timestamp": "12:00",
+            "corrections": ["Some correction that should not crash"],
+            "decisions": [],
+        }])
+
+        # Should not raise
+        hook._auto_cultivate_session_signals(workspace)

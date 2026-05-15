@@ -75,12 +75,23 @@ class ContextHealthHook:
 
     def _light_refresh(self, root: Path, ws_path: str) -> None:
         """Refresh KNOWLEDGE.md index, MEMORY.md index, and vector/FTS5 stores."""
+        # PE-4: Shared cultivation deadline (25s total for BOTH passes).
+        # BackgroundHookExecutor has 30s timeout — 25s leaves 5s headroom.
+        _cultivation_deadline = time.monotonic() + 25.0
+
         # Auto-cultivate pipeline lessons — promote REFLECT output into DDD docs
         # without requiring the agent to remember to run `run-cultivate` manually.
         try:
-            self._auto_cultivate_pipeline_lessons(root)
+            self._auto_cultivate_pipeline_lessons(root, _deadline=_cultivation_deadline)
         except Exception as exc:
             logger.debug("context_health: auto-cultivation skipped: %s", exc)
+
+        # Auto-cultivate session signals — promote corrections (Ch6) and
+        # decisions (Ch5) from DailyActivity JSONL into DDD docs.
+        try:
+            self._auto_cultivate_session_signals(root, _deadline=_cultivation_deadline)
+        except Exception as exc:
+            logger.debug("context_health: session signal cultivation skipped: %s", exc)
 
         # Memory usage tracking — scan recent DailyActivity for memory key
         # references ([RC04], [KD05], etc.) and write counts to
@@ -202,7 +213,7 @@ class ContextHealthHook:
     # Auto-cultivation — promote REFLECT lessons into DDD docs
     # ------------------------------------------------------------------
 
-    def _auto_cultivate_pipeline_lessons(self, root: Path) -> None:
+    def _auto_cultivate_pipeline_lessons(self, root: Path, *, _deadline: float = 0) -> None:
         """Auto-cultivate uncultivated pipeline REFLECT lessons into DDD docs.
 
         Scans all Projects/*/.artifacts/runs/*/run.json for completed pipeline
@@ -228,8 +239,8 @@ class ContextHealthHook:
         from core.ddd_cultivation import cultivate_from_reflect
 
         _MAX_PER_SESSION = 5
-        _TIME_BUDGET_SECONDS = 25.0  # Bail before 30s hook timeout
-        _start = time.monotonic()
+        # PE-4: use shared deadline from _light_refresh (25s total for all cultivation)
+        _effective_deadline = _deadline if _deadline > 0 else (time.monotonic() + 25.0)
         cultivated_count = 0
 
         for project_dir in sorted(projects_dir.iterdir()):
@@ -257,11 +268,10 @@ class ContextHealthHook:
 
             for run_dir, _ in run_dirs:
                 # Cooperative time budget — bail cleanly before hook timeout
-                if time.monotonic() - _start > _TIME_BUDGET_SECONDS:
+                if time.monotonic() > _effective_deadline:
                     logger.info(
-                        "context_health: auto-cultivate hit time budget (%.1fs), "
+                        "context_health: auto-cultivate hit shared deadline, "
                         "deferring remaining to next session",
-                        _TIME_BUDGET_SECONDS,
                     )
                     break
 
@@ -332,12 +342,173 @@ class ContextHealthHook:
 
             if cultivated_count >= _MAX_PER_SESSION:
                 break
-            if time.monotonic() - _start > _TIME_BUDGET_SECONDS:
+            if time.monotonic() > _effective_deadline:
                 break
 
         if cultivated_count > 0:
             logger.info(
                 "context_health: auto-cultivated %d pipeline run(s)", cultivated_count
+            )
+
+    # ------------------------------------------------------------------
+    # Auto-cultivation — promote session corrections + decisions into DDD
+    # ------------------------------------------------------------------
+
+    # State file: tracks which JSONL session records have been cultivated
+    _SESSION_CULTIVATED_STATE = ".context/.session_cultivated.json"
+
+    def _auto_cultivate_session_signals(self, root: Path, *, _deadline: float = 0) -> None:
+        """Auto-cultivate corrections and decisions from DailyActivity JSONL into DDD docs.
+
+        Reads recent DailyActivity JSONL sidecars (last 7 days), extracts
+        corrections (Ch6 — highest priority) and decisions (Ch5), feeds them
+        through the same keyword classifier used by pipeline REFLECT cultivation.
+
+        Idempotency: tracks cultivated session_ids in a state file. Each session
+        is processed at most once. State file is a simple JSON list of session IDs.
+
+        Capped at 10 sessions per invocation, sharing the same cooperative time
+        budget mindset as pipeline cultivation.
+        """
+        da_dir = root / "Knowledge" / "DailyActivity"
+        if not da_dir.is_dir():
+            return
+
+        from core.ddd_cultivation import cultivate_from_corrections, cultivate_from_decisions
+
+        # Load cultivated state (ordered list of session_ids already processed).
+        # Uses a list to preserve insertion order — capping takes oldest first.
+        state_path = root / self._SESSION_CULTIVATED_STATE
+        cultivated_list: list = []
+        if state_path.is_file():
+            try:
+                cultivated_list = json.loads(state_path.read_text(encoding="utf-8"))
+                if not isinstance(cultivated_list, list):
+                    cultivated_list = []
+            except (json.JSONDecodeError, OSError):
+                cultivated_list = []
+        cultivated_ids: set = set(cultivated_list)  # O(1) lookup
+
+        # Scan JSONL sidecars from last 7 days
+        today = date.today()
+        cutoff = today - timedelta(days=7)
+
+        jsonl_files = sorted(da_dir.glob("*.jsonl"))
+        # Filter to recent files by filename date prefix
+        recent_jsonls = []
+        for jf in jsonl_files:
+            try:
+                file_date = date.fromisoformat(jf.stem[:10])
+                if file_date >= cutoff:
+                    recent_jsonls.append(jf)
+            except (ValueError, IndexError):
+                continue
+
+        if not recent_jsonls:
+            return
+
+        # Determine project directory for cultivation target.
+        # Default to SwarmAI (the workspace project — corrections about the
+        # agent itself are the most common signal). Future: infer from session
+        # topics or files_modified.
+        projects_dir = root / "Projects"
+        default_project = "SwarmAI"
+        default_project_dir = projects_dir / default_project
+        if not default_project_dir.is_dir():
+            return
+
+        _MAX_SESSIONS = 10
+        # PE-4: use shared deadline from _light_refresh (25s total for all cultivation)
+        _effective_deadline = _deadline if _deadline > 0 else (time.monotonic() + 15.0)
+        processed = 0
+        total_applied = 0
+        total_escalated = 0
+
+        from core.daily_activity_writer import read_jsonl_sidecar
+
+        for jsonl_path in recent_jsonls:
+            if processed >= _MAX_SESSIONS:
+                break
+            if time.monotonic() > _effective_deadline:
+                break
+
+            records = read_jsonl_sidecar(jsonl_path)
+            for record in records:
+                if processed >= _MAX_SESSIONS:
+                    break
+                if time.monotonic() > _effective_deadline:
+                    break
+
+                session_id = record.get("session_id", "")
+                if not session_id or session_id in cultivated_ids:
+                    continue
+
+                corrections = record.get("corrections", [])
+                decisions = record.get("decisions", [])
+
+                if not corrections and not decisions:
+                    cultivated_ids.add(session_id)
+                    # Don't count empty sessions toward _MAX_SESSIONS —
+                    # only actual cultivations should consume the budget.
+                    continue
+
+                # Cultivate corrections (Ch6 — highest priority per HLD)
+                if corrections:
+                    try:
+                        result = cultivate_from_corrections(
+                            corrections, session_id, default_project, default_project_dir
+                        )
+                        total_applied += result.get("applied", 0)
+                        total_escalated += result.get("escalated", 0)
+                    except Exception as exc:
+                        logger.debug(
+                            "context_health: session correction cultivation failed "
+                            "for %s: %s", session_id[:8], exc,
+                        )
+
+                # Cultivate decisions (Ch5)
+                if decisions:
+                    try:
+                        result = cultivate_from_decisions(
+                            decisions, session_id, default_project, default_project_dir
+                        )
+                        total_applied += result.get("applied", 0)
+                        total_escalated += result.get("escalated", 0)
+                    except Exception as exc:
+                        logger.debug(
+                            "context_health: session decision cultivation failed "
+                            "for %s: %s", session_id[:8], exc,
+                        )
+
+                cultivated_ids.add(session_id)
+                processed += 1
+
+        # Persist state — cap at 500 most recent to prevent unbounded growth.
+        # Atomic write (tmp + os.replace) prevents corruption on crash/SIGKILL.
+        # Persist whenever new IDs were added (including empty-signal sessions).
+        if len(cultivated_ids) > len(cultivated_list):
+            # Rebuild ordered list: old (from file) + newly added, deduped, capped
+            new_ids = [sid for sid in cultivated_list if sid in cultivated_ids]
+            existing_set = set(new_ids)  # PE-2: O(1) lookup, built once
+            for sid in cultivated_ids:
+                if sid not in existing_set:
+                    new_ids.append(sid)
+            capped_ids = new_ids[-500:]  # Keep 500 newest (oldest evicted first)
+            try:
+                state_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp_path = state_path.with_suffix(".tmp")
+                tmp_path.write_text(
+                    json.dumps(capped_ids, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                os.replace(tmp_path, state_path)
+            except OSError as exc:
+                logger.debug("context_health: failed to persist cultivation state: %s", exc)
+
+            logger.info(
+                "context_health: session signal cultivation — "
+                "processed=%d, applied=%d, escalated=%d",
+                processed, total_applied, total_escalated,
             )
 
     # High-volume dirs get compact summary instead of per-file table (saves ~1500 tokens)

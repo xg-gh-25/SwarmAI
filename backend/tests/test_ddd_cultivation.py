@@ -410,7 +410,7 @@ class TestCultivateFromReflect:
             # Verify DDD doc was actually modified
             content = doc.read_text()
             assert "SMOKE caught 2 runtime crashes" in content
-            assert "auto-cultivated" in content
+            assert "auto-cultivated" in content  # reflect source_stage = default label
 
             # Verify escalation file exists
             proposals_dir = project_dir / ".artifacts" / "proposals"
@@ -426,3 +426,178 @@ class TestCultivateFromReflect:
             entries = changelog.read_text().strip().split("\n")
             assert len(entries) == 1
             assert json.loads(entries[0])["action"] == "applied"
+
+
+class TestCultivateFromCorrections:
+    """Test corrections cultivation entry point (Ch6 — highest priority)."""
+
+    def test_applies_correction_to_ddd_doc(self):
+        from core.ddd_cultivation import cultivate_from_corrections
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            # Create both docs since classifier routes by keyword heuristic
+            (project_dir / "IMPROVEMENT.md").write_text(
+                "# Lessons\n\n## What Worked\n\n- seed\n\n## What Failed\n\n- seed\n"
+            )
+            (project_dir / "TECH.md").write_text(
+                "# Tech\n\n## Architecture\n\n- seed\n\n## Runtime Traps\n\n- seed\n\n## Conventions\n\n- seed\n"
+            )
+
+            corrections = [
+                "Bug: daemon subprocess PATH was not expanded — must use Path.home() instead of os.path.expandvars",
+            ]
+            result = cultivate_from_corrections(
+                corrections, "session_abc123", "SwarmAI", project_dir
+            )
+
+            # Correction should be classified (has "daemon", "must", "subprocess", "Path.home" → TECH.md)
+            assert result["applied"] >= 1
+            # Verify it landed in a DDD doc
+            tech_content = (project_dir / "TECH.md").read_text()
+            improvement_content = (project_dir / "IMPROVEMENT.md").read_text()
+            assert "Path.home()" in tech_content or "PATH" in improvement_content
+
+    def test_sets_source_stage_to_correction(self):
+        from core.ddd_cultivation import cultivate_from_corrections
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            (project_dir / "IMPROVEMENT.md").write_text(
+                "# Lessons\n\n## What Worked\n\n- seed\n\n## What Failed\n\n- seed\n"
+            )
+            (project_dir / "TECH.md").write_text(
+                "# Tech\n\n## Conventions\n\n- seed\n\n## Runtime Traps\n\n- seed\n"
+            )
+
+            corrections = [
+                "Bug: lsof hangs on macOS sandbox — always use nc -z instead for port checks",
+            ]
+            result = cultivate_from_corrections(
+                corrections, "session_xyz789", "SwarmAI", project_dir
+            )
+
+            # Verify changelog has correct source_stage (PE-3)
+            changelog = project_dir / ".artifacts" / "ddd-changelog.jsonl"
+            assert changelog.exists(), "Expected changelog to be written"
+            lines = changelog.read_text().strip().split("\n")
+            assert len(lines) >= 1, "Expected at least one changelog entry"
+            entry = json.loads(lines[0])
+            assert entry["source_run_id"] == "session_xyz789"
+            assert entry["source_stage"] == "correction"
+
+    def test_empty_corrections_returns_zero(self):
+        from core.ddd_cultivation import cultivate_from_corrections
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            result = cultivate_from_corrections(
+                [], "session_empty", "SwarmAI", project_dir
+            )
+            assert result == {"applied": 0, "escalated": 0, "rejected": 0}
+
+
+class TestCultivateFromDecisions:
+    """Test decisions cultivation entry point (Ch5)."""
+
+    def test_applies_convention_decision_to_tech(self):
+        from core.ddd_cultivation import cultivate_from_decisions
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            doc = project_dir / "TECH.md"
+            doc.write_text("# Tech\n\n## Architecture\n\n- seed\n\n## Conventions\n\n- seed\n\n## Runtime Traps\n\n- seed\n")
+
+            decisions = [
+                "Standing rule: always prefer atomic writes with tmp+rename pattern to prevent corruption",
+            ]
+            result = cultivate_from_decisions(
+                decisions, "session_dec001", "SwarmAI", project_dir
+            )
+
+            # The decision should classify to TECH.md Conventions (has "pattern", "prefer", "atomic")
+            assert result["applied"] >= 1
+
+            content = doc.read_text()
+            assert "atomic writes" in content
+            assert "decision" in content  # source_stage label for decisions
+
+    def test_sets_source_stage_to_decision(self):
+        from core.ddd_cultivation import cultivate_from_decisions
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            doc = project_dir / "TECH.md"
+            doc.write_text("# Tech\n\n## Conventions\n\n- seed\n\n## Runtime Traps\n\n- seed\n")
+
+            decisions = [
+                "Convention: never use lsof in daemon scripts — prefer nc -z for port checking",
+            ]
+            result = cultivate_from_decisions(
+                decisions, "session_dec002", "SwarmAI", project_dir
+            )
+
+            # Verify changelog source attribution (PE-3)
+            changelog = project_dir / ".artifacts" / "ddd-changelog.jsonl"
+            assert changelog.exists(), "Expected changelog to be written"
+            lines = changelog.read_text().strip().split("\n")
+            assert len(lines) >= 1, "Expected at least one changelog entry"
+            entry = json.loads(lines[0])
+            assert entry["source_run_id"] == "session_dec002"
+            assert entry["source_stage"] == "decision"
+
+    def test_empty_decisions_returns_zero(self):
+        from core.ddd_cultivation import cultivate_from_decisions
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            result = cultivate_from_decisions(
+                [], "session_empty", "SwarmAI", project_dir
+            )
+            assert result == {"applied": 0, "escalated": 0, "rejected": 0}
+
+    def test_real_corrections_without_keywords_still_classify(self):
+        """PE-1: Real production corrections lack keywords but should still classify."""
+        from core.ddd_cultivation import cultivate_from_corrections
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            (project_dir / "IMPROVEMENT.md").write_text(
+                "# Lessons\n\n## What Worked\n\n- seed\n\n## What Failed\n\n- seed\n"
+            )
+            (project_dir / "TECH.md").write_text(
+                "# Tech\n\n## Conventions\n\n- seed\n\n## Runtime Traps\n\n- seed\n"
+            )
+
+            # These are REAL corrections from 2026-05-14 JSONL — no magic keywords
+            corrections = [
+                "Agent proposed writing insights into PRODUCT.md/DDD — user reframed: we're building augmented humans, not a better code tool; agent over-indexed on feature comparison",
+                "Agent opened DMG but didn't launch app — user had to ask again explicitly to open/run it",
+                "Agent pushed only swarm-brain when user said push to github — user had to follow up asking about SwarmAI codebase specifically",
+            ]
+            result = cultivate_from_corrections(
+                corrections, "session_pe1_test", "SwarmAI", project_dir
+            )
+
+            # ALL real corrections must classify (not be rejected)
+            total = result["applied"] + result["escalated"]
+            assert total >= 2, f"Expected ≥2 corrections classified, got {total} (applied={result['applied']}, escalated={result['escalated']}, rejected={result['rejected']})"
+
+    def test_noise_decisions_rejected(self):
+        from core.ddd_cultivation import cultivate_from_decisions
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            doc = project_dir / "TECH.md"
+            doc.write_text("# Tech\n\n## Conventions\n\n- seed\n")
+
+            decisions = [
+                "Done",
+                "Tests pass",
+                "Shipped",
+            ]
+            result = cultivate_from_decisions(
+                decisions, "session_noise", "SwarmAI", project_dir
+            )
+            assert result["applied"] == 0
+            assert result["escalated"] == 0
