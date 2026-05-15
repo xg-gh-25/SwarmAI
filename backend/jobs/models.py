@@ -31,6 +31,7 @@ class JobType(str, Enum):
     TODO_RESOLUTION = "todo_resolution"
     DDD_WEEKLY_REPORT = "ddd_weekly_report"
     SWARMAI_MONTHLY_REPORT = "swarmai_monthly_report"
+    SELF_TUNE = "self_tune"
 
 
 class FeedType(str, Enum):
