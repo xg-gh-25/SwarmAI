@@ -164,30 +164,245 @@ Reason: {why}
 
 ---
 
-## Progress Display
+## Structured Chat Output
 
-Show progress after each stage completes. Use this format:
+### Quality First Rule
+
+Output formatting MUST NOT degrade pipeline execution quality.
+- Output is generated AFTER stage execution completes, not during
+- Output is NEVER a retry trigger (gates = the only quality mechanism)
+- If token budget is tight, compress to status-only lines
+- Agent priority: execute → verify → THEN format output
+
+### Pipeline Briefing (shown once at start)
 
 ```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Pollinate: "{topic}" (run_p_{id})
-Domain: {domain} | Formats: Video
-Platforms: B站, YouTube, 小红書
+Domain: {domain} | Formats: {poster/video/narrative/shorts}
+Platforms: {list}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  [done] EVALUATE   GO, ROI 4.2
-  [done] THINK      Differentiation: "两大框架创始人同时验证"
-  [>>>>] STRATEGIZE PR/FAQ + channel matrix...
-  [    ] PLAN
-  [    ] BUILD
-  [    ] REVIEW
-  [    ] TEST
-  [    ] DELIVER
-  [    ] REFLECT
+Message first, format follows.
+
+  How: PR/FAQ distills core message
+       Channel matrix selects audience-format fit
+       Brand conformance gates every output
+
+  Quality gates:
+       ★ Content Principles — P1-P8 anti-pattern scan (external content)
+       ★ Brand Conformance — identity.yaml exact match
+       ★ Platform Specs — per-platform validation
+
+  Stages: EVALUATE → THINK → STRATEGIZE → PLAN → BUILD → REVIEW → DELIVER → REFLECT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-Stage status indicators:
+### Progress Display (per-stage, 1-3 lines each)
+
+```
+## ✦ EVALUATE [Topic-Value Gate]
+→ <GO/DEFER/REJECT> | ROI <X.X> | Format: <formats> | Assets: <N> files
+
+## ✦ THINK [Research + Differentiation]
+→ Thesis: "<one sentence>" | Differentiation: "<angle>"
+  Competitive: <N> sources reviewed | Internal: <N> assets mapped
+
+## ✦ STRATEGIZE [PR/FAQ + Channel Matrix]
+→ <N> channels × <M> formats | Message: "<core message>"
+  Production tracks: <poster/video/narrative/shorts>
+
+## ✦ PLAN [Content Package + Per-Track Specs]
+→ <N> key points | <M> sections | Duration: <est>
+  Components: <list for video> | Spec: <poster dimensions/style>
+
+## ✦ BUILD [Production]
+→ <track>: <status> | Files: <N> produced
+  <per-track one-liner: "TTS 6:42 @ Zhiyu" or "Poster 1080×1080 rendered">
+
+## ✦ REVIEW [Quality Scan]
+→ RP-V: <N>/<total> pass | Brand: <✓/✗> | Content Principles: <✓/✗>
+  Findings: <N> fixed, <M> warnings
+
+## ✦ DELIVER [Structured Delivery]
+  ├─ Taste Gate: <N> decisions → <approved/overridden/none>
+  ├─ Confidence: <score>/10
+  ├─ Platforms: <list with status>
+  └─ Deliverable block (see below)
+
+## ✦ REFLECT [Learn + Improve]
+→ <N> lessons → IMPROVEMENT.md | Prefs updated: <Y/N>
+```
+
+### Deliverable Block (DELIVER stage output — the user's final package)
+
+This is what the user takes away. Every DELIVER stage MUST output this block
+in the chat window. The user should be able to copy-paste directly to publish.
+
+**Format: Poster + Text deliverables:**
+
+```
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ 📦 POLLINATE DELIVERY — run_p_{id}     ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+Topic: {topic}
+Format: {formats} | Confidence: {score}/10
+Platforms: {list}
+
+── POSTER ──────────────────────────────
+
+[inline image — rendered poster]
+
+── COPY (朋友圈) ───────────────────────
+
+{complete text, copy-paste ready}
+
+── COPY (小红书) ───────────────────────
+
+{title}
+
+{body text}
+
+{hashtags}
+
+── FILES ───────────────────────────────
+
+poster:  {relative path to .png}
+html:    {relative path to .html}
+report:  {relative path to REPORT.md}
+
+── TASTE DECISIONS (if any) ────────────
+
+{numbered list of pending taste decisions}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+**Format: Video deliverables:**
+
+```
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ 📦 POLLINATE DELIVERY — run_p_{id}     ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+Topic: {topic}
+Format: Video ({duration}) | Confidence: {score}/10
+Platforms: {list}
+
+── VIDEO ───────────────────────────────
+
+Preview: {path or "open in Studio"}
+Duration: {mm:ss} | Resolution: {WxH}
+TTS: {backend}/{voice} | BGM: {track}
+
+── THUMBNAILS ──────────────────────────
+
+{inline thumbnail image if small enough}
+16:9: {path}  |  4:3: {path}  |  3:4: {path}
+
+── PLATFORM METADATA ───────────────────
+
+B站: {title}
+     Tags: {tags}
+YouTube: {title}
+         Tags: {tags}
+小红书: {title}
+        Tags: {tags}
+
+── FILES ───────────────────────────────
+
+video:     {path}
+script:    {path}
+thumbnails: {paths}
+report:    {path}
+
+── TASTE DECISIONS (if any) ────────────
+
+{numbered list}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+**Format: Multi-deliverable (poster series, campaign):**
+
+```
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ 📦 POLLINATE DELIVERY — run_p_{id}     ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+Topic: {topic}
+Format: {N} pieces × {formats} | Confidence: {score}/10
+Platforms: {list}
+
+── SERIES OVERVIEW ─────────────────────
+
+| # | Title/Hook | Thesis | Status |
+|---|-----------|--------|--------|
+| 1 | ...       | T3     | ✅ ready |
+| 2 | ...       | T1     | ✅ ready |
+| ...
+
+── PIECE #{N} ──────────────────────────
+
+[inline poster image]
+
+朋友圈:
+{copy text}
+
+小红书:
+{title + body + hashtags}
+
+── FILES ───────────────────────────────
+
+{file manifest per piece}
+
+── PUBLISHING PLAN ─────────────────────
+
+Recommended order: #{order}
+Cadence: {interval recommendation}
+First publish: #{which} — {reason}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+### Completion Summary (shown once at end, after REFLECT)
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✦ COMPLETE | READY TO PUBLISH
+  Confidence: {score}/10 | Platforms: {N} | Files: {N} produced
+  Lessons: {N} → IMPROVEMENT.md | Report: {path}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+### Display Rules
+
+1. **Deliverable block is non-negotiable.** Every DELIVER stage outputs the full
+   block in chat. User should never have to ask "where's my output?"
+
+2. **Inline images when possible.** Poster PNGs should be shown inline (via Read
+   tool on the .png file). If too large, show path + thumbnail description.
+
+3. **Copy-paste ready.** Text in the deliverable block must be EXACTLY what the
+   user pastes to the platform. No markdown formatting that breaks on paste. No
+   instruction text mixed with content.
+
+4. **Separate content from metadata.** Platform-specific formatting (hashtags,
+   title rules) goes in the platform section, not mixed into the copy block.
+
+5. **Progress display is lightweight.** Don't repeat full deliverable content in
+   progress lines. Progress = status. Deliverable block = content.
+
+6. **Series deliverables show all pieces.** Don't make the user ask for each one.
+   If it's a 6-poster series, the deliverable block lists all 6 (with inline
+   images for completed ones).
+
+### Stage Status Indicators
+
 - `[done]` = completed successfully
 - `[>>>>]` = currently executing
-- `[skip]` = skipped (not in profile)
+- `[skip]` = skipped (not applicable for this run)
 - `[FAIL]` = failed, will retry or checkpoint
 - `[STOP]` = checkpointed (pipeline paused)
 - `[    ]` = pending
@@ -393,9 +608,27 @@ Before advancing to STRATEGIZE, ALL must be true:
 
 2. After exhaustion -> checkpoint.
 
+### Poster-Specific: Visual Reference Collection
+
+If format includes poster, THINK **must** additionally:
+
+5. **Collect visual references** (minimum 3):
+   - Search 小红书/Pinterest/Dribbble for same topic + "poster" or "长图" or "card design"
+   - For each reference, capture: layout pattern, typography scale, spacing rhythm, color approach
+   - Write to `content/{name}/visual_references.md`
+
+   This is NON-SKIPPABLE. "Poster is simple" is the #1 anti-rationalization for bad design.
+   Visual design requires MORE research than script writing, not less.
+
+| Shortcut | Required Response |
+|----------|-------------------|
+| "Poster is simple, skip visual research" | Visual output has higher quality variance than text. Research is mandatory. |
+| "I know what good design looks like" | Show 3 references or admit you're guessing. |
+
 ### Output Files
 
 - `content/{name}/research.md` -- thesis, audience, differentiation, assets, competitive analysis
+- `content/{name}/visual_references.md` -- (poster format only) 3+ visual references with extracted patterns
 
 ---
 
@@ -688,12 +921,18 @@ Before advancing to BUILD, ALL must be true:
 - `content/{name}/content_package.md` -- core narrative, key points, evidence bank
 - `content/{name}/video/podcast.txt` -- narration script with section markers
 - `content/{name}/visual_plan.md` -- component mapping per section (if separate from content_package)
+- `content/{name}/tracks/poster/spec.md` -- poster spec (if poster in production_tracks)
 
 ---
 
-## Stage 5: BUILD -- TTS + Remotion + Preview
+## Stage 5: BUILD -- Production
 
-### Procedure
+### Track Selection
+
+BUILD executes per-track. Check `strategy.json → production_tracks` and run the
+applicable track(s) below.
+
+### Track A: Video (if "video" in production_tracks)
 
 #### Step 5.1: Prerequisites Check
 
@@ -865,6 +1104,95 @@ Before advancing to REVIEW, ALL must be true:
 
 ---
 
+### Track B: Poster (if "poster" in production_tracks)
+
+#### Step B.1: Load Design System
+
+```
+Read brand/poster_design_system.md
+```
+
+This is MANDATORY before writing any poster HTML. Do not skip. The design system
+defines spacing tokens, typography scale, alignment rules, and anti-patterns.
+
+#### Step B.2: Author HTML
+
+Create `content/{name}/tracks/poster/{variant}.html`:
+
+- Use design tokens from `poster_design_system.md` (spacing multiples of 24px base)
+- All content blocks centered (`margin: 0 auto` + `max-width`)
+- Body text left-aligned WITHIN its centered max-width block
+- Typography: headline 52px / body 24px / eyebrow 12px / tagline 20px
+- Card variety: NEVER same card style consecutively (see design system)
+- Chinese body line-height: 2.0 minimum
+- Max text width: 700px
+
+#### Step B.3: Generate QR Code (if needed)
+
+```bash
+python3 -c "
+import qrcode
+qr = qrcode.QRCode(version=1, box_size=10, border=2)
+qr.add_data('{url}')
+qr.make(fit=True)
+img = qr.make_image(fill_color='#D4A853', back_color='#0A0A0B')
+img.save('content/{name}/tracks/poster/qr.png')
+"
+```
+
+#### Step B.4: Render to PNG
+
+```bash
+python3 -c "
+from playwright.sync_api import sync_playwright
+with sync_playwright() as p:
+    browser = p.chromium.launch()
+    page = browser.new_page(viewport={'width': 1080, 'height': 800})
+    page.goto('file://{absolute_path_to_html}')
+    page.wait_for_timeout(800)
+    page.screenshot(path='{output_png}', type='png', full_page=True)
+    browser.close()
+"
+```
+
+Verify output: < 2MB, width exactly 1080px.
+
+#### Step B.5: Content Principles Check (external content only)
+
+Read `brand/content_principles.md` and run anti-pattern scan on poster text:
+- No LOC/commit/天数 as value (P1)
+- No first-person hero framing (P2)
+- Thesis-driven, not feature-driven (P3)
+- Effects over mechanisms (P4)
+- English only where stronger than Chinese (P5)
+- Each piece standalone (P6)
+- No internal术语 in body text (P7)
+- Positioning hierarchy respected (P8)
+
+**Legacy term blocklist (mechanical check):**
+```
+BLOCKED = ["Your AI Team, 24/7", "AI 实践者，不是布道者"]
+```
+Any match → FAIL → fix before proceeding.
+
+#### Poster Decisions
+
+| Decision | Classification | Default |
+|----------|---------------|---------|
+| Card layout choice | Taste | From design system variety rules |
+| Spacing adjustments | Taste | Start with design system, adjust ±1 base unit |
+| Visual element style | Taste | Abstract geometric (rings, lines, gradients) |
+| QR code inclusion | Mechanical | Include if external-facing |
+| Color exactly matches tokens | Mechanical | Must match brand/identity.yaml |
+
+#### Poster Output Files
+
+- `content/{name}/tracks/poster/{variant}.html` -- source
+- `content/{name}/tracks/poster/{variant}.png` -- rendered output
+- `content/{name}/tracks/poster/qr.png` -- QR code (if generated)
+
+---
+
 ## Stage 6: REVIEW -- Quality Audit
 
 ### Procedure
@@ -886,6 +1214,18 @@ Before advancing to REVIEW, ALL must be true:
    | RP-V10 | **Component variety** | No same component type in consecutive sections |
    | RP-V11 | **Text readability** | All text >= 24px, hero >= 84px, section title >= 72px |
    | RP-V12 | **Content width** | >= 85% of screen width utilized |
+
+1b. **If format includes poster**, additionally run poster patterns (RP-P):
+
+   | # | Pattern | What to Verify |
+   |---|---------|----------------|
+   | RP-P1 | **Alignment consistency** | All sections use same alignment system (center). No mixed left/center. |
+   | RP-P2 | **Spacing rhythm** | All vertical spacing is a multiple of base unit (24px). No arbitrary values. |
+   | RP-P3 | **Text max-width** | Body text never exceeds 700px. Headline never exceeds 800px. |
+   | RP-P4 | **Brand colors** | All colors match `brand/identity.yaml` or `poster_design_system.md` tokens exactly. |
+   | RP-P5 | **Content principles** | Anti-pattern checklist from `brand/content_principles.md` passes (P1-P8). |
+   | RP-P6 | **Platform compliance** | PNG < 2MB, width = 1080px, no text < 20px (unreadable on phone). |
+   | RP-P7 | **Legacy term blocklist** | ZERO matches against: "Your AI Team, 24/7", "AI 实践者，不是布道者". |
 
 2. **Output format** -- write result for EVERY pattern:
    ```
@@ -926,12 +1266,15 @@ Before advancing to REVIEW, ALL must be true:
 ### Verification Gate
 
 Before advancing to TEST, ALL must be true:
-- [ ] All 12 RP-V results are shown (no silence -- every pattern has a result)
+- [ ] All applicable RP results shown (RP-V for video, RP-P for poster — every pattern has a result)
 - [ ] Zero FAIL results remain unfixed
 - [ ] All WARN results have documented reasoning (fix or accepted with justification)
 - [ ] Brand colors match identity.yaml exactly (not "close enough")
-- [ ] Subtitle safe zone verified (no visual content in bottom 100px)
-- [ ] Audio-video sync verified per section
+- [ ] (Video) Subtitle safe zone verified (no visual content in bottom 100px)
+- [ ] (Video) Audio-video sync verified per section
+- [ ] (Poster) Alignment is consistent — no mixed left/center
+- [ ] (Poster) Legacy term blocklist passes (zero matches)
+- [ ] (Poster) Content principles anti-pattern checklist passes
 
 ### Anti-Rationalization
 
@@ -1507,7 +1850,13 @@ The confidence formula adapts: video-specific items score +1 each as N/A (neutra
    colors, fonts, and voice configuration in every output. Swarm Orange is
    #FF6B35, not #FF6C36, not "close enough." PingFang SC, not a substitute.
 
-10. **Platform specs are non-negotiable.** `check_specs.py` must pass for
+10. **External content principles are non-negotiable.** For any externally-facing
+    content (social media, posters, demos, pitches), apply `brand/content_principles.md`
+    anti-pattern checklist at the QUALITY stage. Any violation → fix before delivery.
+    Key rules: no output metrics as value (P1), no first-person hero framing (P2),
+    thesis-driven not feature-driven (P3), effects over mechanisms (P4).
+
+11. **Platform specs are non-negotiable.** `check_specs.py` must pass for
     every target platform before delivery. No exceptions, no "mostly passes,"
     no manual overrides.
 

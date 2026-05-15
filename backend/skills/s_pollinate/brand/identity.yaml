@@ -3,8 +3,9 @@
 
 brand:
   name: "Swarm"
-  tagline: "AI 实践者，不是布道者"
-  tagline_en: "Building with AI, not just talking about it."
+  tagline: "探索 AI 的边界"
+  tagline_en: "Human directs. AI delivers."
+  tagline_legacy: "AI 实践者，不是布道者"  # deprecated, kept for reference
   emoji: "🐝"
   logo:
     primary: "🐝 Swarm"
