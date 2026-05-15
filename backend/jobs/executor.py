@@ -162,6 +162,24 @@ def execute_job(
             else:
                 result = _handle_agent_task(job, state)
 
+        elif job.type == "self_tune":
+            from .self_tune import run_self_tune
+            tune_result = run_self_tune()
+            duration = (datetime.now(timezone.utc) - start).total_seconds()
+            # run_self_tune returns {changes: [...], ...} on success, {error: ...} on failure
+            is_success = "error" not in tune_result
+            changes = tune_result.get("changes", [])
+            summary = (
+                f"Config updated with {len(changes)} changes"
+                if is_success else tune_result.get("error", "Unknown error")
+            )
+            result = JobResult(
+                job_id=job.id, timestamp=datetime.now(timezone.utc),
+                status="success" if is_success else "failed",
+                summary=summary,
+                duration_seconds=duration,
+            )
+
         elif job.type == "script":
             result = _handle_script(job, state)
 
