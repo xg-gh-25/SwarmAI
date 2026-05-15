@@ -99,13 +99,191 @@ def cmd_discover(args, reg: ArtifactRegistry) -> None:
     print(json.dumps({"artifacts": result, "count": len(result)}, indent=2))
 
 
+# ---------------------------------------------------------------------------
+# Pre-publish schema validation (fail-fast at publish time, not advance time)
+# ---------------------------------------------------------------------------
+
+# Stage artifact schemas — mirror of pipeline_validator.py STAGE_SCHEMAS
+# Kept in sync: if validator adds a field, add it here too.
+_PUBLISH_SCHEMAS: dict[str, dict[str, list[str]]] = {
+    "evaluate": {
+        "required": ["recommendation", "scope"],
+        "recommended": ["acceptance_criteria", "scores"],
+    },
+    "think": {
+        "required": ["key_findings"],
+        "recommended": ["alternatives", "sources"],
+    },
+    "plan": {
+        "required": ["acceptance_criteria"],
+        "recommended": ["approach", "data_model", "boundaries", "success_criteria"],
+    },
+    "build": {
+        "required": ["files_changed", "tdd"],
+        "depth": {"tdd": ["green_pass", "smoke_tests"]},
+    },
+    "review": {
+        "required": ["approved", "integration_trace", "runtime_patterns", "findings_count"],
+        "depth": {
+            "runtime_patterns": ["checked", "patterns"],
+            "integration_trace": ["checked"],
+        },
+    },
+    "test": {
+        "required": ["passed"],
+    },
+    "deliver": {
+        "required": ["title", "quality", "adversarial_review"],
+        "depth": {
+            "adversarial_review": ["profile_tier", "findings"],
+        },
+    },
+}
+
+# Templates showing expected JSON shape for each stage
+_SCHEMA_TEMPLATES: dict[str, dict] = {
+    "evaluate": {
+        "recommendation": "GO|DEFER|REJECT",
+        "scope": "trivial|standard|complex",
+        "acceptance_criteria": ["AC1: ...", "AC2: ..."],
+        "scores": {"strategic": 0, "priority": 0, "feasibility": 0},
+    },
+    "think": {
+        "key_findings": ["finding 1", "finding 2"],
+        "alternatives": [{"constraint": "SPEED|QUALITY|SIMPLICITY", "what": "...", "effort": "S|M|L"}],
+        "recommendation": "Approach X because...",
+    },
+    "plan": {
+        "acceptance_criteria": ["AC1: testable statement"],
+        "approach": "description",
+        "boundaries": {"always": [], "ask_first": [], "never": []},
+        "success_criteria": ["verifiable condition"],
+    },
+    "build": {
+        "files_changed": ["path/to/file.py"],
+        "tdd": {"green_pass": True, "smoke_tests": 3, "red_count": 5, "green_count": 5},
+        "commits": ["abc1234"],
+    },
+    "review": {
+        "approved": True,
+        "findings_count": 2,
+        "integration_trace": {"checked": 5, "clean": True, "details": "symbol A → caller B verified"},
+        "runtime_patterns": {
+            "checked": 3,
+            "violations": 0,
+            "patterns": [
+                {"pattern": "pattern_name", "status": "pass|N/A", "detail": "what was checked (>10 chars)"}
+            ],
+        },
+    },
+    "test": {
+        "passed": True,
+        "tests_new": 10,
+        "tests_total": 50,
+        "regressions": 0,
+    },
+    "deliver": {
+        "title": "Feature Name",
+        "quality": {"tests_pass": True, "regressions": 0, "smoke_pass": True},
+        "adversarial_review": {
+            "spawned": True,
+            "profile_tier": "full|lite|skipped",
+            "findings_total": 3,
+            "findings_fixed": 3,
+            "findings_remaining": 0,
+            "findings": [
+                {
+                    "severity": "HIGH|MEDIUM|LOW",
+                    "resolved": True,
+                    "finding": "path/to/file.py function_name() line N: what is wrong. Fixed: how.",
+                }
+            ],
+        },
+        "completion_audit": {"all_green": True, "requirements_met": 5, "requirements_total": 5},
+    },
+}
+
+
+def _validate_artifact_schema(stage: str, data: dict, project: str) -> list[str]:
+    """Validate artifact data against stage schema. Returns list of errors."""
+    errors: list[str] = []
+    schema = _PUBLISH_SCHEMAS.get(stage)
+    if not schema:
+        return []  # Unknown stage — skip validation
+
+    # Check required fields
+    for field in schema.get("required", []):
+        if field not in data:
+            errors.append(f"Missing required field '{field}' for stage '{stage}'")
+
+    # Check depth requirements (nested required fields)
+    for parent_field, child_fields in schema.get("depth", {}).items():
+        parent_val = data.get(parent_field)
+        if isinstance(parent_val, dict):
+            for child in child_fields:
+                if child not in parent_val:
+                    errors.append(
+                        f"Missing '{parent_field}.{child}' — required for depth validation"
+                    )
+
+    # Stage-specific depth checks (subset of validator's _check_depth)
+    if stage == "deliver":
+        ar = data.get("adversarial_review")
+        if isinstance(ar, dict):
+            tier = ar.get("profile_tier", "")
+            if tier and tier != "skipped":
+                findings = ar.get("findings", [])
+                if isinstance(findings, list):
+                    for f in findings:
+                        if not isinstance(f, dict):
+                            continue
+                        if f.get("severity") == "HIGH" and not f.get("resolved"):
+                            errors.append(
+                                f"Unresolved HIGH finding — set 'resolved': true after fixing"
+                            )
+                            break
+
+    if stage == "build":
+        tdd = data.get("tdd")
+        if isinstance(tdd, dict):
+            files = data.get("files_changed", [])
+            smoke = tdd.get("smoke_tests", 0)
+            if isinstance(files, list) and len(files) > 1 and smoke == 0:
+                errors.append(
+                    f"smoke_tests=0 but {len(files)} files changed — "
+                    f"run smoke tests with real objects"
+                )
+
+    return errors
+
+
+def _get_stage_schema_template(stage: str) -> dict:
+    """Return the expected JSON template for a stage artifact."""
+    return _SCHEMA_TEMPLATES.get(stage, {"note": f"No template defined for stage '{stage}'"})
+
+
 def cmd_publish(args, reg: ArtifactRegistry) -> None:
-    """Publish a new artifact."""
+    """Publish a new artifact. Validates schema when --stage is provided."""
     try:
         data = json.loads(args.data)
     except json.JSONDecodeError as e:
         print(json.dumps({"error": f"Invalid JSON data: {e}"}), file=sys.stderr)
         sys.exit(1)
+
+    # Pre-publish validation: check schema + depth BEFORE writing to disk
+    stage = getattr(args, "stage", None)
+    if stage:
+        errors = _validate_artifact_schema(stage, data, args.project)
+        if errors:
+            # Generate expected schema template for the stage
+            expected = _get_stage_schema_template(stage)
+            print(json.dumps({
+                "validation_failed": True,
+                "stage": stage,
+                "errors": errors,
+                "expected_schema": expected,
+            }, indent=2), file=sys.stderr)
+            sys.exit(1)
 
     run_id = getattr(args, "run_id", None)
     try:
@@ -1976,6 +2154,7 @@ def main() -> None:
     p_publish.add_argument("--data", required=True, help="JSON data string")
     p_publish.add_argument("--topic", default="")
     p_publish.add_argument("--run-id", default=None, help="Pipeline run ID (stores in runs/<id>/ subdir)")
+    p_publish.add_argument("--stage", default=None, help="Pipeline stage for schema validation (validates BEFORE publishing)")
 
     # state
     p_state = sub.add_parser("state", help="Get pipeline state")
