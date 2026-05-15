@@ -84,7 +84,7 @@ session to stress-test assumptions:
 ```bash
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
   --type research --producer s_autonomous-pipeline \
-  --summary "3 alternatives for <topic>. Recommending: <approach>" \
+  --summary "3 alternatives for <topic>. Recommending: <approach>" --stage think \
   --data '{"key_findings":[...],"alternatives":[...],"recommendation":"...","sources":[...]}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state plan
 ```

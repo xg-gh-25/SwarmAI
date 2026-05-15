@@ -65,7 +65,7 @@ Confirm each before publishing:
 ```bash
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
   --type test_report --producer s_autonomous-pipeline \
-  --summary "Tests: <passed>/<total> pass, <fixed> bugs fixed" \
-  --data '{"passed":N,"failed":M,"fixed":K,"skipped":J,"bugs":[...],"coverage":"..."}'
+  --summary "Tests: <passed>/<total> pass, <fixed> bugs fixed" --stage test \
+  --data '{"passed":true,"failed":M,"fixed":K,"skipped":J,"tests_new":N,"tests_total":T,"regressions":0}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state deliver
 ```

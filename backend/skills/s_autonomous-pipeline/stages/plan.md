@@ -88,7 +88,7 @@ Pipeline validator will check for their presence.
 ```bash
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
   --type design_doc --producer s_autonomous-pipeline \
-  --summary "Design: <approach> for <requirement>" \
+  --summary "Design: <approach> for <requirement>" --stage plan \
   --data '{"approach":"...","acceptance_criteria":[...],"boundaries":{"always":[...],"ask_first":[...],"never":[...]},"success_criteria":[...],"data_model":"...","api_contract":"...","files_to_change":[...]}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state build
 ```

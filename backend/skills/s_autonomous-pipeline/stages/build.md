@@ -351,7 +351,7 @@ against current docs. Training data goes stale; official docs don't.
 ```bash
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
   --type changeset --producer s_autonomous-pipeline \
-  --summary "<N> files changed, <M> commits, TDD: <red>/<green>/<verify>" \
+  --summary "<N> files changed, <M> commits, TDD: <red>/<green>/<verify>" --stage build \
   --data '{"branch":"...","commits":[...],"files_changed":[...],"diff_summary":"...","tdd":{"acceptance_criteria_count":N,"tests_generated":M,"red_failures":K,"green_pass":true,"regressions":0,"smoke_tests":S,"smoke_crashes_caught":C,"user_path_traces":T,"user_path_bugs_found":B,"probes":P,"probe_bugs_found":Q}}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state review
 ```

@@ -987,9 +987,10 @@ For goal profile:
 # Discover upstream artifacts
 python backend/scripts/artifact_cli.py discover --project <PROJECT> --types <types> --full
 
-# Publish an artifact
+# Publish an artifact (--stage validates schema BEFORE writing; fail-fast on errors)
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
-  --type <type> --producer s_autonomous-pipeline --summary "<summary>" --data '<json>'
+  --type <type> --producer s_autonomous-pipeline --summary "<summary>" \
+  --stage <stage> --data '<json>'
 
 # Get pipeline state
 python backend/scripts/artifact_cli.py state --project <PROJECT>
