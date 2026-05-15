@@ -26,7 +26,7 @@ Public API:
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -428,9 +428,11 @@ def update_evidence_from_changelog(project_dir: Path) -> dict[str, int]:
 
         if changed:
             new_content = inject_maturity(content, states)
-            try:
-                doc_path.write_text(new_content, encoding="utf-8")
-            except OSError:
-                pass
+            # PE-1: Only write if content actually differs — prevents daily git churn
+            if new_content != content:
+                try:
+                    doc_path.write_text(new_content, encoding="utf-8")
+                except OSError:
+                    pass
 
     return {"updated": updated, "unchanged": unchanged}

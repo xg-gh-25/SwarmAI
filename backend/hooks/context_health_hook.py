@@ -96,7 +96,7 @@ class ContextHealthHook:
         # T4: Maturity evidence update + promotion evaluation.
         # Runs AFTER cultivation so new changelog entries are counted.
         try:
-            self._update_maturity(root)
+            self._update_maturity(root, _deadline=_cultivation_deadline)
         except Exception as exc:
             logger.debug("context_health: maturity update skipped: %s", exc)
 
@@ -595,7 +595,7 @@ class ContextHealthHook:
     # T4: Maturity evidence update + auto-promotion
     # ------------------------------------------------------------------
 
-    def _update_maturity(self, root: Path) -> None:
+    def _update_maturity(self, root: Path, *, _deadline: float = 0) -> None:
         """Update maturity evidence from changelog and auto-promote eligible sections.
 
         Steps:
@@ -604,6 +604,7 @@ class ContextHealthHook:
         3. Apply promotions + log to changelog.
 
         Runs after cultivation so new changelog entries are counted.
+        Respects shared _deadline from _light_refresh (PE-3).
         """
         from core.ddd_maturity import (
             evaluate_all_promotions,
@@ -615,9 +616,15 @@ class ContextHealthHook:
         if not projects_dir.is_dir():
             return
 
+        _effective_deadline = _deadline if _deadline > 0 else (time.monotonic() + 10.0)
+
         for project_path in projects_dir.iterdir():
             if not project_path.is_dir():
                 continue
+            # PE-3: Respect time budget
+            if time.monotonic() > _effective_deadline:
+                logger.debug("context_health: maturity update hit deadline, stopping")
+                break
             # Skip projects without DDD docs
             if not (project_path / "TECH.md").exists() and not (project_path / "PRODUCT.md").exists():
                 continue
