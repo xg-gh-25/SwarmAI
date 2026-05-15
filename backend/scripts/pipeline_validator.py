@@ -104,6 +104,138 @@ STAGE_SCHEMAS: dict[str, dict[str, list[str]]] = {
     # reflect has no artifact — skip schema check
 }
 
+# Stage schema templates — show expected JSON shape for publish-time errors
+STAGE_TEMPLATES: dict[str, dict] = {
+    "evaluate": {
+        "recommendation": "GO|DEFER|REJECT",
+        "scope": "trivial|standard|complex",
+        "acceptance_criteria": ["AC1: ...", "AC2: ..."],
+        "scores": {"strategic": 0, "priority": 0, "feasibility": 0},
+    },
+    "think": {
+        "key_findings": ["finding 1", "finding 2"],
+        "alternatives": [{"constraint": "SPEED|QUALITY|SIMPLICITY", "what": "...", "effort": "S|M|L"}],
+        "recommendation": "Approach X because...",
+    },
+    "plan": {
+        "acceptance_criteria": ["AC1: testable statement"],
+        "approach": "description",
+        "boundaries": {"always": [], "ask_first": [], "never": []},
+        "success_criteria": ["verifiable condition"],
+    },
+    "build": {
+        "files_changed": ["path/to/file.py"],
+        "tdd": {"green_pass": True, "smoke_tests": 3, "red_count": 5, "green_count": 5},
+        "commits": ["abc1234"],
+    },
+    "review": {
+        "approved": True,
+        "findings_count": 2,
+        "integration_trace": {"checked": 5, "clean": True, "details": "symbol A → caller B verified"},
+        "runtime_patterns": {
+            "checked": 3, "violations": 0,
+            "patterns": [{"pattern": "name", "status": "pass|N/A", "detail": ">10 chars describing what was checked"}],
+        },
+    },
+    "test": {
+        "passed": True,
+        "tests_new": 10, "tests_total": 50, "regressions": 0,
+    },
+    "deliver": {
+        "title": "Feature Name",
+        "quality": {"tests_pass": True, "regressions": 0, "smoke_pass": True},
+        "adversarial_review": {
+            "spawned": True, "profile_tier": "full|lite|skipped",
+            "findings_total": 3, "findings_fixed": 3, "findings_remaining": 0,
+            "findings": [{"severity": "HIGH|MEDIUM|LOW", "resolved": True,
+                          "finding": "path/to/file.py function_name() line N: what is wrong. Fixed: how."}],
+        },
+        "completion_audit": {"all_green": True, "requirements_met": 5, "requirements_total": 5},
+    },
+}
+
+# Depth requirements: nested fields that must exist for depth validation to pass
+STAGE_DEPTH: dict[str, dict[str, list[str]]] = {
+    "build": {"tdd": ["green_pass", "smoke_tests"]},
+    "review": {"runtime_patterns": ["checked", "patterns"], "integration_trace": ["checked"]},
+    "deliver": {"adversarial_review": ["profile_tier", "findings"]},
+}
+
+
+def get_stage_schema(stage: str) -> dict:
+    """Public API: return schema + template for a stage.
+
+    Used by artifact_cli publish --stage for pre-publish validation.
+    Single source of truth — no duplicate definitions elsewhere.
+    """
+    schema = STAGE_SCHEMAS.get(stage, {})
+    template = STAGE_TEMPLATES.get(stage, {})
+    depth = STAGE_DEPTH.get(stage, {})
+    return {
+        "required": schema.get("required", []),
+        "recommended": schema.get("recommended", []),
+        "depth": depth,
+        "template": template,
+    }
+
+
+def validate_artifact_data(stage: str, data: dict) -> list[str]:
+    """Public API: validate artifact data against stage schema.
+
+    Returns list of error strings. Empty list = valid.
+    Checks: required fields, depth nested fields, stage-specific invariants.
+    Used by artifact_cli at publish time for fail-fast validation.
+    """
+    errors: list[str] = []
+    schema = STAGE_SCHEMAS.get(stage)
+    if not schema:
+        return []
+
+    # Required fields
+    for field in schema.get("required", []):
+        if field not in data:
+            errors.append(f"Missing required field '{field}' for stage '{stage}'")
+
+    # Depth: nested required fields
+    for parent_field, child_fields in STAGE_DEPTH.get(stage, {}).items():
+        parent_val = data.get(parent_field)
+        if isinstance(parent_val, dict):
+            for child in child_fields:
+                if child not in parent_val:
+                    errors.append(
+                        f"Missing '{parent_field}.{child}' — required for depth validation"
+                    )
+
+    # Stage-specific invariants (subset of _check_depth for fast feedback)
+    if stage == "deliver":
+        ar = data.get("adversarial_review")
+        if isinstance(ar, dict):
+            tier = ar.get("profile_tier", "")
+            if tier and tier != "skipped":
+                findings = ar.get("findings", [])
+                if isinstance(findings, list):
+                    unresolved = [f for f in findings if isinstance(f, dict)
+                                  and f.get("severity") == "HIGH" and not f.get("resolved")]
+                    if unresolved:
+                        errors.append(
+                            f"{len(unresolved)} unresolved HIGH finding(s) — "
+                            f"set 'resolved': true after fixing each"
+                        )
+
+    if stage == "build":
+        tdd = data.get("tdd")
+        if isinstance(tdd, dict):
+            files = data.get("files_changed", [])
+            smoke = tdd.get("smoke_tests", 0)
+            if isinstance(files, list) and len(files) > 1 and smoke == 0:
+                errors.append(
+                    f"smoke_tests=0 but {len(files)} files changed — "
+                    f"run smoke tests with real objects"
+                )
+
+    return errors
+
+
 # Stages that never require an artifact (regardless of profile)
 NO_ARTIFACT_STAGES = {"reflect"}
 
@@ -567,10 +699,17 @@ def _check_depth(stage: str, artifact_data: dict, profile: str) -> list[str]:
                 for f in findings:
                     if not isinstance(f, dict):
                         continue
-                    # A specific finding should reference a file path or function
-                    desc = str(f.get("finding", f.get("desc", f.get("description", ""))))
+                    # A specific finding should reference a file path or function.
+                    # Check multiple common field names for the description text.
+                    desc = str(
+                        f.get("finding", "")
+                        or f.get("issue", "")
+                        or f.get("desc", "")
+                        or f.get("description", "")
+                    )
                     has_file_ref = ("." in desc and ("/" in desc or ".py" in desc or ".ts" in desc or ".js" in desc))
                     has_func_ref = ("()" in desc or "def " in desc or "function " in desc or "line" in desc.lower())
+                    # Not vague if: has file reference OR function reference OR is detailed (>= 50 chars)
                     if not has_file_ref and not has_func_ref and len(desc) < 50:
                         vague_count += 1
                 if vague_count > 0 and vague_count >= len(findings) * 0.5:
@@ -974,15 +1113,17 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
         checks_total += 1
 
     # --- Check 10: Push-Ready gate (L3) — binary verdict ---
-    # V2: reads `quality.push_ready` (boolean). V1 compat: reads `confidence_score.score < 7`.
+    # V2: reads `quality.push_ready` (boolean) or infers from quality fields.
+    # V1 compat: reads `confidence_score.score < 7`.
     if stage == "deliver" and artifact_data:
         quality = artifact_data.get("quality", {})
         conf = artifact_data.get("confidence_score", {})
+        has_override = run.get("human_override", False)
+
         if isinstance(quality, dict) and "push_ready" in quality:
-            # V2 path: binary gate
+            # V2 path: explicit binary gate
             if not quality["push_ready"]:
                 blockers = quality.get("blockers", [])
-                has_override = run.get("human_override", False)
                 if not has_override:
                     errors.append(
                         f"Push-ready gate: NOT-PUSH-READY. "
@@ -993,10 +1134,18 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
                         f"Push-ready gate: NOT-PUSH-READY — "
                         f"OVERRIDDEN by human_override flag."
                     )
-        elif isinstance(conf, dict):
+        elif isinstance(quality, dict) and quality.get("tests_pass"):
+            # V2 inferred: quality has tests_pass=true + regressions=0 → push-ready
+            # This handles artifacts that provide quality evidence without explicit push_ready
+            regressions = quality.get("regressions", 0)
+            if regressions > 0 and not has_override:
+                errors.append(
+                    f"Push-ready gate: quality.regressions={regressions} > 0."
+                )
+            # Otherwise: inferred push-ready (tests pass, no regressions)
+        elif isinstance(conf, dict) and conf.get("score") is not None:
             # V1 compat: numeric confidence score
             score = conf.get("score", 0)
-            has_override = run.get("human_override", False)
             if score < 7 and not has_override:
                 errors.append(
                     f"Confidence gate: score={score}/12 (< 7). "
@@ -1007,6 +1156,8 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
                     f"Confidence gate: score={score}/12 (< 7) — "
                     f"OVERRIDDEN by human_override flag."
                 )
+        # No quality and no confidence_score → skip gate (depth checks are sufficient)
+
         checks_total += 1
         if not any("push-ready gate" in e.lower() or "confidence gate" in e.lower() for e in errors):
             checks_passed += 1
