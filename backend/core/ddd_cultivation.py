@@ -15,6 +15,8 @@ Public API:
     write_proposal(proposal, project_dir) → Path  (escalation path only)
     read_pending_proposals(workspace_dir, project) → List[CultivationProposal]
     cultivate_from_reflect(lessons, run_id, project, project_dir) → dict
+    cultivate_from_corrections(corrections, session_id, project, project_dir) → dict
+    cultivate_from_decisions(decisions, session_id, project, project_dir) → dict
 """
 
 import json
@@ -304,7 +306,8 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> bool:
 
         # M2 fix: match existing entry format — plain bullet with trailing attribution
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        entry = f"- {proposal.content} ({date_str}, {proposal.source_run_id}, auto-cultivated)\n"
+        source_label = f"{proposal.source_stage}" if proposal.source_stage != "reflect" else "auto-cultivated"
+        entry = f"- {proposal.content} ({date_str}, {proposal.source_run_id}, {source_label})\n"
 
         # M3 fix: full content substring check instead of 40-char prefix
         if proposal.content in content:
@@ -341,6 +344,7 @@ def log_application(proposal: CultivationProposal, project_dir: Path) -> None:
         "target_section": proposal.target_section,
         "content": proposal.content[:200],
         "source_run_id": proposal.source_run_id,
+        "source_stage": proposal.source_stage,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     with open(changelog_path, "a", encoding="utf-8") as f:
@@ -419,23 +423,14 @@ def read_pending_proposals(
     return deduped
 
 
-def cultivate_from_reflect(
-    lessons: List[str], run_id: str, project: str, project_dir: Path
+def _cultivate_proposals(
+    proposals: List[CultivationProposal], project_dir: Path
 ) -> dict:
-    """One-call entry point: filter lessons → auto-apply safe ones → escalate risky ones.
-
-    This is the function the REFLECT stage calls. It handles the full lifecycle:
-    1. Filter lessons into proposals
-    2. For each proposal:
-       - If safe additive: apply directly to DDD + log to changelog
-       - If risky: write to proposal queue for escalation
-    3. Return summary for REFLECT stage output
+    """Apply or escalate a list of proposals. Shared by all cultivate_from_* entry points.
 
     Returns:
         {"applied": N, "escalated": M, "rejected": K}
     """
-    proposals = filter_lessons_for_ddd(lessons, run_id, project)
-
     applied = 0
     escalated = 0
     rejected = 0
@@ -455,3 +450,97 @@ def cultivate_from_reflect(
             escalated += 1
 
     return {"applied": applied, "escalated": escalated, "rejected": rejected}
+
+
+def cultivate_from_reflect(
+    lessons: List[str], run_id: str, project: str, project_dir: Path
+) -> dict:
+    """One-call entry point: filter lessons → auto-apply safe ones → escalate risky ones.
+
+    This is the function the REFLECT stage calls. It handles the full lifecycle:
+    1. Filter lessons into proposals
+    2. For each proposal:
+       - If safe additive: apply directly to DDD + log to changelog
+       - If risky: write to proposal queue for escalation
+    3. Return summary for REFLECT stage output
+
+    Returns:
+        {"applied": N, "escalated": M, "rejected": K}
+    """
+    proposals = filter_lessons_for_ddd(lessons, run_id, project)
+    return _cultivate_proposals(proposals, project_dir)
+
+
+def cultivate_from_corrections(
+    corrections: List[str], session_id: str, project: str, project_dir: Path
+) -> dict:
+    """Cultivate user corrections from session DailyActivity into DDD docs.
+
+    Corrections are the highest-priority signal (Ch6 in HLD): explicit "no,
+    do X instead" from the user. Routes to TECH.md Runtime Traps / Conventions
+    or IMPROVEMENT.md What Failed based on keyword classification.
+
+    PE-1 fix: corrections are pre-curated by the LLM extraction step — their
+    existence alone proves relevance. When keyword classification returns None
+    (no keyword match), corrections fall through to IMPROVEMENT.md "What Failed"
+    with confidence 0.4 instead of being silently rejected. This ensures ALL
+    corrections produce a DDD entry (the most valuable signal channel).
+
+    Uses the same filter/apply pipeline as reflect lessons — zero LLM cost.
+    source_stage="correction" for changelog attribution.
+
+    Returns:
+        {"applied": N, "escalated": M, "rejected": K}
+    """
+    proposals = filter_lessons_for_ddd(corrections, session_id, project)
+
+    # PE-1: Corrections that fail keyword classification still deserve DDD entry.
+    # They're pre-curated by the extraction LLM — existence = relevance.
+    # Fallback: route to IMPROVEMENT.md "What Failed" (safe append section).
+    classified_contents = {p.content for p in proposals}  # O(1) content-based dedup
+    for correction in corrections:
+        if not correction or not isinstance(correction, str):
+            continue
+        stripped = correction.strip()
+        if len(stripped) < MIN_LESSON_LENGTH:
+            continue
+        if NOISE_PATTERNS.match(stripped):
+            continue
+        # Skip if already classified by keyword path
+        if stripped in classified_contents:
+            continue
+        if len(proposals) >= MAX_PROPOSALS_PER_RUN:
+            break
+        # Fallback: unclassified correction → IMPROVEMENT.md "What Failed"
+        proposals.append(CultivationProposal(
+            target_doc="IMPROVEMENT.md",
+            target_section="What Failed",
+            content=stripped,
+            source_run_id=session_id,
+            confidence=0.4,
+        ))
+
+    for p in proposals:
+        p.source_stage = "correction"
+    return _cultivate_proposals(proposals, project_dir)
+
+
+def cultivate_from_decisions(
+    decisions: List[str], session_id: str, project: str, project_dir: Path
+) -> dict:
+    """Cultivate session decisions from DailyActivity into DDD docs.
+
+    Decisions are explicit choices/commitments made during a session (Ch5 in
+    HLD). Routes to TECH.md Conventions / IMPROVEMENT.md What Worked based on
+    keyword classification.
+
+    Uses the same filter/apply pipeline as reflect lessons — zero LLM cost.
+    source_stage="decision" for changelog attribution.
+
+    Returns:
+        {"applied": N, "escalated": M, "rejected": K}
+    """
+    proposals = filter_lessons_for_ddd(decisions, session_id, project)
+    for p in proposals:
+        p.source_stage = "decision"
+    return _cultivate_proposals(proposals, project_dir)

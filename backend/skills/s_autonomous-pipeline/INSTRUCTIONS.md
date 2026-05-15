@@ -245,6 +245,12 @@ Before executing, check:
 Read the listed DDD docs from `Projects/<PROJECT>/`. Skip any that don't exist
 or contain only template placeholders.
 
+**Progressive loading (T6):** For docs marked as "Large" in PROJECTS.md (with
+section TOC), DON'T read the full file. Instead: read only the section(s)
+relevant to THIS stage's task using `offset/limit` with the line ranges shown
+in PROJECTS.md. Example: BUILD stage working on session code → read TECH.md
+`Key Subsystems` section (L118-L958), not the full 1223-line file.
+
 **Upstream artifacts:**
 
 ```bash

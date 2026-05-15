@@ -925,11 +925,43 @@ class SwarmWorkspaceManager:
                     except (json.JSONDecodeError, OSError):
                         pass
 
-                # Check which DDD docs exist
+                # Check which DDD docs exist + sizes for progressive loading
+                # F3: 30K threshold — files under 30K are small enough to read fully.
+                # Only 60K+ docs truly benefit from section-level loading.
+                _LARGE_DOC_THRESHOLD = 30_000  # bytes
                 ddd_docs = []
+                large_docs_toc: list[dict] = []  # [{doc, size_kb, sections}]
                 for doc in ["PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"]:
-                    if (candidate / doc).exists():
+                    doc_path = candidate / doc
+                    if doc_path.exists():
+                        doc_size = doc_path.stat().st_size
                         ddd_docs.append(doc.replace(".md", ""))
+                        # For large docs, extract section headings with line ranges
+                        if doc_size > _LARGE_DOC_THRESHOLD:
+                            sections = []
+                            try:
+                                lines_text = doc_path.read_text(encoding="utf-8").splitlines()
+                                total_lines = len(lines_text)
+                                for i, line in enumerate(lines_text, 1):
+                                    if line.startswith("## ") and not line.startswith("### "):
+                                        sections.append((line[3:].strip(), i))
+                                # F1: compute end line for each section (next section start - 1)
+                                sections_with_range = []
+                                for idx, (sec_name, sec_start) in enumerate(sections):
+                                    sec_end = (sections[idx + 1][1] - 1
+                                               if idx + 1 < len(sections)
+                                               else total_lines)
+                                    sections_with_range.append(
+                                        (sec_name, sec_start, sec_end)
+                                    )
+                                sections = sections_with_range
+                            except OSError:
+                                pass
+                            large_docs_toc.append({
+                                "doc": doc,
+                                "size_kb": round(doc_size / 1024),
+                                "sections": sections,
+                            })
                 ddd_status = ", ".join(ddd_docs) if ddd_docs else "none"
 
                 # Read one-line vision from PRODUCT.md
@@ -951,6 +983,7 @@ class SwarmWorkspaceManager:
                     "pipeline": pipeline_state,
                     "ddd": ddd_status,
                     "vision": vision,
+                    "large_docs_toc": large_docs_toc,
                 })
             return entries
 
@@ -968,7 +1001,14 @@ class SwarmWorkspaceManager:
             "from file paths being edited, user mentions, or chat thread "
             "binding. No project context? Skip this -- everything works "
             "without DDD. After completing work, UPDATE IMPROVEMENT.md "
-            "with lessons and PROJECT.md with decisions/status.",
+            "with lessons and PROJECT.md with decisions/status.\n"
+            "\n"
+            "**Progressive loading:** For docs marked as \"Large\" below, "
+            "DON'T read the full file. Instead: (1) scan the section TOC shown below, "
+            "(2) Read only the section(s) relevant to your current task "
+            "(use offset/limit with the line numbers provided), "
+            "(3) max 3 section pulls per task. "
+            "Never infer from a section heading what the content says — pull it if deciding.",
             "",
         ]
 
@@ -995,6 +1035,27 @@ class SwarmWorkspaceManager:
                     f"- **Context:** `Projects/{e['name']}/` "
                     f"-- read PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md"
                 )
+
+                # T6: Progressive loading — section TOC for large docs
+                if e.get("large_docs_toc"):
+                    lines.append("")
+                    lines.append(
+                        "**Large docs (read sections on demand — "
+                        "don't load the full file):**"
+                    )
+                    for ld in e["large_docs_toc"]:
+                        # F1: show start line + end line so agent can use offset/limit
+                        sections_str = ", ".join(
+                            f"`{s[0]}` (L{s[1]}-L{s[2]})"
+                            if len(s) == 3
+                            else f"`{s[0]}` (L{s[1]})"
+                            for s in ld["sections"]
+                        )
+                        lines.append(
+                            f"- {ld['doc']} ({ld['size_kb']}K): "
+                            f"{sections_str}"
+                        )
+
                 lines.append("")
         else:
             lines.append("_No projects yet. Tell Swarm: \"Create project MyApp\"_")

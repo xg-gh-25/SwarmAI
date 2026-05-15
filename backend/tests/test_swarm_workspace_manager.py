@@ -1157,3 +1157,74 @@ class TestPruneArchives:
 
         assert deleted == 0
         assert today_file.exists()
+
+
+class TestProgressiveLoadingTOC:
+    """Test DDD T6: progressive loading generates section-level TOC for large docs."""
+
+    @pytest.mark.asyncio
+    async def test_large_doc_gets_section_toc(self):
+        """PROJECTS.md shows section headings + line ranges for docs >30K bytes."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ws = Path(tmpdir)
+            (ws / "Projects" / "BigProject").mkdir(parents=True)
+            (ws / ".context").mkdir(parents=True)
+
+            # Small doc — should NOT get TOC
+            (ws / "Projects" / "BigProject" / "PRODUCT.md").write_text(
+                "# Product\n\n## Vision\n\nSmall content.\n"
+            )
+            # Large doc (>30K) — SHOULD get section TOC with line ranges
+            large_content = "# Tech\n\n"
+            large_content += "## Architecture\n\n" + ("x " * 5000) + "\n\n"
+            large_content += "## Conventions\n\n" + ("y " * 5000) + "\n\n"
+            large_content += "## Runtime Traps\n\n" + ("z " * 5000) + "\n\n"
+            (ws / "Projects" / "BigProject" / "TECH.md").write_text(large_content)
+
+            # Small docs
+            (ws / "Projects" / "BigProject" / "IMPROVEMENT.md").write_text(
+                "# Improvement\n\n## What Failed\n\n- seed\n"
+            )
+            (ws / "Projects" / "BigProject" / "PROJECT.md").write_text(
+                "# Project\n\n## Current Sprint\n\nDoing stuff.\n"
+            )
+
+            mgr = SwarmWorkspaceManager()
+            await mgr.refresh_projects_index(str(ws))
+
+            content = (ws / ".context" / "PROJECTS.md").read_text()
+
+            # Large doc should have section TOC with line ranges
+            assert "TECH.md" in content
+            assert "Architecture" in content
+            assert "Conventions" in content
+            # F1: verify ranges are shown (L<start>-L<end> format)
+            import re
+            assert re.search(r"L\d+-L\d+", content), \
+                f"Expected line ranges (L<start>-L<end>) in TOC, got: {content[:500]}"
+            # Small doc should NOT have section TOC
+            assert "PRODUCT.md" in content
+            # Verify the on-demand directive exists
+            assert "on demand" in content.lower() or "on-demand" in content.lower()
+
+    @pytest.mark.asyncio
+    async def test_small_docs_no_toc(self):
+        """Docs under 30K bytes don't get section-level TOC."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ws = Path(tmpdir)
+            (ws / "Projects" / "SmallProject").mkdir(parents=True)
+            (ws / ".context").mkdir(parents=True)
+
+            for doc in ["PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"]:
+                (ws / "Projects" / "SmallProject" / doc).write_text(
+                    f"# {doc}\n\n## Section One\n\nSmall.\n"
+                )
+
+            mgr = SwarmWorkspaceManager()
+            await mgr.refresh_projects_index(str(ws))
+
+            content = (ws / ".context" / "PROJECTS.md").read_text()
+
+            # No section TOC for small docs
+            assert "Large doc" not in content
+            assert "on demand" not in content.lower() or "read on demand" not in content.lower()

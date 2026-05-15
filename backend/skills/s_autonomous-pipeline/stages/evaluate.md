@@ -129,6 +129,24 @@ DEFER/REJECT, that takes precedence — the requirement isn't worth pursuing
 regardless of whether it's a goal or a feature. If scoring recommends GO and
 the requirement matches goal indicators → override scope to "goal".
 
+### Acceptance Criteria Quality Gate
+
+**Every AC must describe an observable outcome, not a mechanism.**
+
+Test: "If I implement a no-op that produces the named artifact (file, output, endpoint) but delivers zero user value — does this AC still pass?" If yes → AC is too weak.
+
+| ❌ Mechanism AC | ✅ Outcome AC |
+|----------------|--------------|
+| "Save .full_data.json to disk" | "Re-render with insights completes in <2s without network calls" |
+| "Add fallback query to forecast table" | "≥90% of top-20 accounts have non-empty owner field" |
+| "Filter incomplete month" | "No MTD partial data appears in insights_data.json monthly_trend" |
+
+**Rules:**
+- Each AC must be verifiable by a command, assertion, or observation — not by reading code
+- "Does X exist?" is never sufficient — "Does X achieve Y?" is required
+- If the AC is about a cache/optimization: the AC measures the speedup, not the cache existence
+- If the AC is about data quality: the AC measures the output quality, not the query change
+
 ### Pre-mortem Gate
 
 After scoring, if the initial recommendation is GO, the base methodology's
