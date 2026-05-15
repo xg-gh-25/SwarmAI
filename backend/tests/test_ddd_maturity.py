@@ -292,6 +292,47 @@ class TestEvidenceAccumulation:
         states = parse_maturity(updated_content)
         assert states["Architecture"].source_count == 3
 
+    def test_days_at_level_refreshed_from_last_promoted(self, tmp_path):
+        """Fix #2: days_at_level must be computed from last_promoted, not stored stale."""
+        from core.ddd_maturity import update_evidence_from_changelog
+        from datetime import timedelta
+
+        # Section promoted 35 days ago — stored days=0 (stale)
+        promoted_date = (datetime.now(timezone.utc) - timedelta(days=35)).strftime("%Y-%m-%d")
+        tech = tmp_path / "TECH.md"
+        tech.write_text(
+            f"## Architecture\n"
+            f"<!-- maturity: growing | sources: 4 | verified: true | used: true | days: 0 | promoted: {promoted_date} -->\n\n"
+            f"Content.\n",
+            encoding="utf-8",
+        )
+        # Need artifacts dir (even if empty changelog)
+        (tmp_path / ".artifacts").mkdir()
+
+        update_evidence_from_changelog(tmp_path)
+
+        # days_at_level should now be ~35
+        updated = tech.read_text(encoding="utf-8")
+        states = parse_maturity(updated)
+        assert states["Architecture"].days_at_level >= 34  # allow 1 day tolerance
+
+    def test_maturity_promotion_excluded_from_source_count(self, tmp_path):
+        """Fix #3: maturity_promotion entries don't inflate source_count."""
+        from core.ddd_maturity import compute_evidence_from_changelog
+
+        artifacts = tmp_path / ".artifacts"
+        artifacts.mkdir()
+        changelog = artifacts / "ddd-changelog.jsonl"
+        entries = [
+            {"target_doc": "TECH.md", "target_section": "Arch", "source_stage": "reflect"},
+            {"target_doc": "TECH.md", "target_section": "Arch", "source_stage": "maturity_promotion"},
+        ]
+        changelog.write_text("\n".join(json.dumps(e) for e in entries), encoding="utf-8")
+
+        result = compute_evidence_from_changelog(tmp_path)
+        # Only 'reflect' counts — maturity_promotion excluded
+        assert result[("TECH.md", "Arch")]["source_count"] == 1
+
 
 # --- AC6: evaluate_all_promotions + promote_section ---
 

@@ -176,6 +176,7 @@ def inject_maturity(content: str, states: dict[str, MaturityState]) -> str:
     if not content or not states:
         return content
 
+    trailing_newline = content.endswith("\n")
     lines = content.splitlines()
     result_lines: list[str] = []
     current_section: Optional[str] = None
@@ -204,10 +205,6 @@ def inject_maturity(content: str, states: dict[str, MaturityState]) -> str:
             continue
 
         # Skip old annotation line if we're replacing
-        if skip_old_annotation and not injected_for_current:
-            # We already injected — this shouldn't fire
-            pass
-
         if skip_old_annotation:
             stripped = line.strip()
             if _MATURITY_RE.match(stripped):
@@ -226,7 +223,10 @@ def inject_maturity(content: str, states: dict[str, MaturityState]) -> str:
 
         result_lines.append(line)
 
-    return "\n".join(result_lines)
+    result = "\n".join(result_lines)
+    if trailing_newline and not result.endswith("\n"):
+        result += "\n"
+    return result
 
 
 def evaluate_promotion(state: MaturityState) -> Optional[str]:
@@ -258,8 +258,11 @@ def promote_section(
     """Promote a section's maturity level in the actual .md file.
 
     Reads the doc, updates the annotation, writes back.
-    Returns True on success.
+    Returns True on success. Returns False for invalid level.
     """
+    if new_level not in LEVELS:
+        return False
+
     doc_path = project_dir / doc_name
     if not doc_path.is_file():
         return False
@@ -354,6 +357,10 @@ def compute_evidence_from_changelog(project_dir: Path) -> dict[tuple[str, str], 
             if not doc or not section or not source:
                 continue
 
+            # Fix #3: Internal events don't count as external evidence
+            if source == "maturity_promotion":
+                continue
+
             key = (doc, section)
             if key not in section_sources:
                 section_sources[key] = set()
@@ -371,25 +378,20 @@ def update_evidence_from_changelog(project_dir: Path) -> dict[str, int]:
     """Update maturity evidence in DDD docs from changelog data.
 
     Scans changelog for distinct source_stages per section,
-    updates the source_count in each section's maturity annotation.
+    updates source_count AND refreshes days_at_level from last_promoted.
 
     Returns {"updated": N, "unchanged": M} counts.
     """
     evidence = compute_evidence_from_changelog(project_dir)
-    if not evidence:
-        return {"updated": 0, "unchanged": 0}
 
     updated = 0
     unchanged = 0
 
-    # Group by doc
-    docs: dict[str, list[tuple[str, dict]]] = {}
-    for (doc, section), ev in evidence.items():
-        if doc not in docs:
-            docs[doc] = []
-        docs[doc].append((section, ev))
+    # Process ALL DDD docs (not just those with changelog evidence)
+    # because days_at_level needs refreshing for ALL sections.
+    now = datetime.now(timezone.utc)
 
-    for doc_name, section_evidence in docs.items():
+    for doc_name in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
         doc_path = project_dir / doc_name
         if not doc_path.is_file():
             continue
@@ -400,19 +402,29 @@ def update_evidence_from_changelog(project_dir: Path) -> dict[str, int]:
             continue
 
         states = parse_maturity(content)
+        if not states:
+            continue
+
         changed = False
 
-        for section_name, ev in section_evidence:
-            if section_name not in states:
-                continue
-            state = states[section_name]
-            new_count = ev["source_count"]
-            if state.source_count != new_count:
-                state.source_count = new_count
-                changed = True
-                updated += 1
-            else:
-                unchanged += 1
+        for section_name, state in states.items():
+            # Update source_count from changelog evidence
+            key = (doc_name, section_name)
+            if key in evidence:
+                new_count = evidence[key]["source_count"]
+                if state.source_count != new_count:
+                    state.source_count = new_count
+                    changed = True
+                    updated += 1
+                else:
+                    unchanged += 1
+
+            # Fix #2: Refresh days_at_level from last_promoted timestamp
+            if state.last_promoted:
+                computed_days = (now - state.last_promoted).days
+                if state.days_at_level != computed_days:
+                    state.days_at_level = computed_days
+                    changed = True
 
         if changed:
             new_content = inject_maturity(content, states)
