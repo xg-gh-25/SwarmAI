@@ -43,11 +43,11 @@ SYSTEM_JOBS: list[Job] = [
     Job(
         id="self-tune",
         name="Self-Tune Feeds",
-        type="script",
+        type="self_tune",
         schedule="0 1 * * *",          # Daily ICT 09:00 (before first fetch at ICT 10:00)
         enabled=True,
         category="system",
-        config={"command": "python -m backend.jobs.self_tune", "cwd": _SWARMAI_ROOT},
+        config={},
     ),
 
     # --- Maintenance (lightweight: prune caches, trim state, reset counters) ---
