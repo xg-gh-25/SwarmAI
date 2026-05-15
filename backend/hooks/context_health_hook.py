@@ -18,7 +18,7 @@ import os
 import re
 import subprocess
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -92,6 +92,13 @@ class ContextHealthHook:
             self._auto_cultivate_session_signals(root, _deadline=_cultivation_deadline)
         except Exception as exc:
             logger.debug("context_health: session signal cultivation skipped: %s", exc)
+
+        # T4: Maturity evidence update + promotion evaluation.
+        # Runs AFTER cultivation so new changelog entries are counted.
+        try:
+            self._update_maturity(root)
+        except Exception as exc:
+            logger.debug("context_health: maturity update skipped: %s", exc)
 
         # Memory usage tracking — scan recent DailyActivity for memory key
         # references ([RC04], [KD05], etc.) and write counts to
@@ -583,6 +590,80 @@ class ContextHealthHook:
             context_file.write_text(new_content, encoding="utf-8")
         except Exception as exc:
             logger.warning("context_health: KNOWLEDGE.md refresh failed: %s", exc)
+
+    # ------------------------------------------------------------------
+    # T4: Maturity evidence update + auto-promotion
+    # ------------------------------------------------------------------
+
+    def _update_maturity(self, root: Path) -> None:
+        """Update maturity evidence from changelog and auto-promote eligible sections.
+
+        Steps:
+        1. For each project with DDD docs, update source_count from changelog.
+        2. Evaluate promotions (sparse→growing, growing→mature).
+        3. Apply promotions + log to changelog.
+
+        Runs after cultivation so new changelog entries are counted.
+        """
+        from core.ddd_maturity import (
+            evaluate_all_promotions,
+            promote_section,
+            update_evidence_from_changelog,
+        )
+
+        projects_dir = root / "Projects"
+        if not projects_dir.is_dir():
+            return
+
+        for project_path in projects_dir.iterdir():
+            if not project_path.is_dir():
+                continue
+            # Skip projects without DDD docs
+            if not (project_path / "TECH.md").exists() and not (project_path / "PRODUCT.md").exists():
+                continue
+
+            try:
+                # Step 1: Update evidence from changelog
+                update_evidence_from_changelog(project_path)
+
+                # Step 2+3: Evaluate and apply promotions
+                promotions = evaluate_all_promotions(project_path)
+                for promo in promotions:
+                    success = promote_section(
+                        project_path, promo["doc"], promo["section"], promo["to_level"]
+                    )
+                    if success:
+                        # Log promotion to changelog
+                        self._log_maturity_promotion(project_path, promo)
+                        logger.info(
+                            "context_health: maturity promoted %s/%s %s → %s",
+                            promo["doc"], promo["section"],
+                            promo["from_level"], promo["to_level"],
+                        )
+            except Exception as exc:
+                logger.debug(
+                    "context_health: maturity update for %s skipped: %s",
+                    project_path.name, exc,
+                )
+
+    def _log_maturity_promotion(self, project_dir: Path, promo: dict) -> None:
+        """Log a maturity promotion event to the DDD changelog."""
+        import json as _json
+
+        changelog_path = project_dir / ".artifacts" / "ddd-changelog.jsonl"
+        changelog_path.parent.mkdir(parents=True, exist_ok=True)
+
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "target_doc": promo["doc"],
+            "target_section": promo["section"],
+            "source_stage": "maturity_promotion",
+            "change_type": "promotion",
+            "detail": f"{promo['from_level']} → {promo['to_level']}",
+            "evidence": promo.get("evidence", {}),
+        }
+        with open(changelog_path, "a", encoding="utf-8") as f:
+            f.write(_json.dumps(entry) + "\n")
 
     def _track_memory_usage(self, root: Path) -> None:
         """Scan session transcripts for memory key references.
