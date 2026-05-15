@@ -161,7 +161,7 @@ artifact accordingly before publishing.
 ```bash
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
   --type evaluation --producer s_autonomous-pipeline \
-  --summary "<GO/DEFER/REJECT>: <one-line>" \
+  --summary "<GO/DEFER/REJECT>: <one-line>" --stage evaluate \
   --data '{"requirement":"...","scores":{...},"recommendation":"GO","scope":"standard","acceptance_criteria":[...]}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state think
 ```
