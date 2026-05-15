@@ -351,3 +351,74 @@ class TestPromotionExecution:
         tech.write_text("## Real\n\nContent.\n", encoding="utf-8")
         result = promote_section(tmp_path, "TECH.md", "Fake", "growing")
         assert result is False
+
+
+# --- AC7: Pipeline integration (verified_by_production, used_in_decision) ---
+
+
+class TestPipelineIntegration:
+    """AC7: Pipeline stages set verified/used flags via evidence update."""
+
+    def test_verified_by_production_flag(self, tmp_path):
+        """Simulating pipeline deliver success: sections loaded get verified=true."""
+        from core.ddd_maturity import parse_maturity, inject_maturity, MaturityState
+
+        # Setup: TECH.md with unverified section
+        tech = tmp_path / "TECH.md"
+        tech.write_text(
+            "## Architecture\n"
+            "<!-- maturity: sparse | sources: 2 | verified: false | used: false | days: 10 | promoted: none -->\n\n"
+            "Content.\n",
+            encoding="utf-8",
+        )
+
+        # Simulate: pipeline deliver stage marks verified
+        states = parse_maturity(tech.read_text(encoding="utf-8"))
+        states["Architecture"].verified_by_production = True
+        new_content = inject_maturity(tech.read_text(encoding="utf-8"), states)
+        tech.write_text(new_content, encoding="utf-8")
+
+        # Verify: now passes promotion check (sources>=2 + verified)
+        updated_states = parse_maturity(tech.read_text(encoding="utf-8"))
+        assert updated_states["Architecture"].verified_by_production is True
+        from core.ddd_maturity import evaluate_promotion
+        assert evaluate_promotion(updated_states["Architecture"]) == "growing"
+
+    def test_used_in_decision_flag(self, tmp_path):
+        """Simulating pipeline evaluate/think: sections loaded get used=true."""
+        from core.ddd_maturity import parse_maturity, inject_maturity, evaluate_promotion
+
+        tech = tmp_path / "TECH.md"
+        tech.write_text(
+            "## Architecture\n"
+            "<!-- maturity: growing | sources: 4 | verified: true | used: false | days: 35 | promoted: 2026-04-01 -->\n\n"
+            "Content.\n",
+            encoding="utf-8",
+        )
+
+        # Simulate: pipeline evaluate stage marks used
+        states = parse_maturity(tech.read_text(encoding="utf-8"))
+        states["Architecture"].used_in_decision = True
+        new_content = inject_maturity(tech.read_text(encoding="utf-8"), states)
+        tech.write_text(new_content, encoding="utf-8")
+
+        # Verify: now passes growing→mature (sources>=3, days>30, used=true)
+        updated_states = parse_maturity(tech.read_text(encoding="utf-8"))
+        assert evaluate_promotion(updated_states["Architecture"]) == "mature"
+
+
+# --- AC8: Default behavior ---
+
+
+class TestDefaultBehavior:
+    """AC8: All new sections default to Sparse."""
+
+    def test_new_section_no_annotation_is_sparse(self):
+        content = "## BrandNew\n\nJust created.\n"
+        result = parse_maturity(content)
+        assert result["BrandNew"].level == "sparse"
+        assert result["BrandNew"].source_count == 0
+        assert result["BrandNew"].verified_by_production is False
+        assert result["BrandNew"].used_in_decision is False
+        assert result["BrandNew"].days_at_level == 0
+        assert result["BrandNew"].last_promoted is None
