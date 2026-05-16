@@ -124,8 +124,10 @@ class GateManager:
             except (json.JSONDecodeError, OSError, TypeError) as exc:
                 logger.warning("gate_promotion: failed to load %s: %s", self._file, exc)
                 self._gates = {name: self._new_gate() for name in GATE_NAMES}
+                self._save()  # Persist recovery state
         else:
             self._gates = {name: self._new_gate() for name in GATE_NAMES}
+            self._save()  # Initialize file on first creation
 
     def _save(self) -> None:
         """Persist gate data to disk."""

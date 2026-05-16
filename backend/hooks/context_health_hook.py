@@ -473,19 +473,36 @@ class ContextHealthHook:
                             "for %s: %s", session_id[:8], exc,
                         )
 
-                # Cultivate decisions (Ch5)
+                # Cultivate decisions (Ch5) — pre-filter pipeline-internal noise
                 if decisions:
-                    try:
-                        result = cultivate_from_decisions(
-                            decisions, session_id, default_project, default_project_dir
-                        )
-                        total_applied += result.get("applied", 0)
-                        total_escalated += result.get("escalated", 0)
-                    except Exception as exc:
-                        logger.debug(
-                            "context_health: session decision cultivation failed "
-                            "for %s: %s", session_id[:8], exc,
-                        )
+                    # Filter out pipeline-internal decisions that aren't DDD-worthy:
+                    # - "→ Recommend: X" (pipeline alternative recommendations)
+                    # - "advance → rejected" (validator output)
+                    # - "publish --validate" (artifact CLI feedback)
+                    # - "├─ Taste Gate:" (pipeline gate logs)
+                    # Keep: "user override:", "standing rule:", actual architecture decisions
+                    _DECISION_NOISE_PREFIXES = (
+                        "→ Recommend:", "├─", "advance", "publish --validate",
+                        "advance →", "run-", "0/", "1/", "2/", "3/", "4/", "5/",
+                    )
+                    filtered_decisions = [
+                        d for d in decisions
+                        if isinstance(d, str)
+                        and len(d) >= 30
+                        and not any(d.strip().startswith(pfx) for pfx in _DECISION_NOISE_PREFIXES)
+                    ]
+                    if filtered_decisions:
+                        try:
+                            result = cultivate_from_decisions(
+                                filtered_decisions, session_id, default_project, default_project_dir
+                            )
+                            total_applied += result.get("applied", 0)
+                            total_escalated += result.get("escalated", 0)
+                        except Exception as exc:
+                            logger.debug(
+                                "context_health: session decision cultivation failed "
+                                "for %s: %s", session_id[:8], exc,
+                            )
 
                 cultivated_ids.add(session_id)
                 processed += 1

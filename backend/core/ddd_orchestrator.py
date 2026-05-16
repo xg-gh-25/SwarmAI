@@ -60,6 +60,17 @@ class DddCultivationOrchestrator:
         "code_intel_drift": 5.0,
     }
 
+    def _get_gate_manager(self, root: Path) -> "GateManager | None":
+        """Get or create GateManager, initializing gate_promotion_data.json if missing."""
+        try:
+            from core.gate_promotion import GateManager
+            artifacts_dir = self._find_artifacts_dir(root)
+            if artifacts_dir:
+                return GateManager(artifacts_dir)
+        except Exception as exc:
+            logger.debug("ddd_orchestrator: gate manager init failed: %s", exc)
+        return None
+
     def __init__(self) -> None:
         # Each channel: (name, callable, set of subscribed EventTypes)
         self.channels: list[tuple[str, ChannelFn, set[EventType]]] = [
@@ -116,10 +127,8 @@ class DddCultivationOrchestrator:
 
         # Check gate promotions (v2) — evaluate eligibility after channels run
         try:
-            from core.gate_promotion import GateManager
-            artifacts_dir = self._find_artifacts_dir(root)
-            if artifacts_dir:
-                gate_mgr = GateManager(artifacts_dir)
+            gate_mgr = self._get_gate_manager(root)
+            if gate_mgr:
                 promoted = gate_mgr.check_promotions()
                 for gate_name in promoted:
                     all_findings.append(
@@ -236,6 +245,10 @@ class DddCultivationOrchestrator:
                             f"DDD-STALE: {project_dir.name}/{ddd_name} "
                             f"({days_stale}d old, {commit_count} recent commits)"
                         )
+                        # Gate trigger: staleness detected = file_tracker gate fires
+                        gate_mgr = self._get_gate_manager(root)
+                        if gate_mgr:
+                            gate_mgr.record_trigger("file_tracker")
                 except (subprocess.TimeoutExpired, OSError):
                     pass
 
@@ -300,6 +313,10 @@ class DddCultivationOrchestrator:
                     confidence = int(conf_match.group(1))
                     if confidence < 8:
                         proposal_path.rename(proposal_path.with_suffix(".md.applied"))
+                        # Gate trigger: low-confidence proposal rejected = noise_filter fires
+                        gate_mgr = self._get_gate_manager(root)
+                        if gate_mgr:
+                            gate_mgr.record_trigger("noise_filter")
                         continue
 
                     # Check for semantic section targets
@@ -331,15 +348,11 @@ class DddCultivationOrchestrator:
                         )
 
                         if not is_mechanical or targets_semantic:
-                            # PE-2: record gate trigger when skipping
+                            # Gate trigger: semantic section or non-mechanical change skipped
                             if targets_semantic:
-                                try:
-                                    from core.gate_promotion import GateManager
-                                    artifacts = self._find_artifacts_dir(root)
-                                    if artifacts:
-                                        GateManager(artifacts).record_trigger("trust_annotation")
-                                except Exception:
-                                    pass
+                                gate_mgr = self._get_gate_manager(root)
+                                if gate_mgr:
+                                    gate_mgr.record_trigger("trust_annotation")
                             continue
 
                         from utils.file_lock import flock_exclusive, flock_unlock
