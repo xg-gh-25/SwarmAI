@@ -1304,6 +1304,81 @@ L6: Rendered PNG width = 1080px AND file size < 2MB
 L7: `grep "Made with SwarmAI Pollinate" {html}` + `grep "qr-github" {html}`
 L8: Count `*-d*.png` files in output directory ≥ 2
 
+#### Step B.5b: Adversarial Brand Review (BLOCKING — sub-agent)
+
+> Same pattern as Pipeline's adversarial specialist dispatch (deliver.md).
+> Fresh-context sub-agent catches what self-review structurally cannot:
+> brand drift, unconscious style mixing, spacing assumptions from builder bias.
+
+**After the 8-Layer Gate passes (all 8 green), spawn an adversarial sub-agent:**
+
+Use the Agent tool with a **fresh context** (the sub-agent has NOT seen the
+BUILD process — it reviews cold, like an external brand auditor).
+
+**Sub-agent prompt template:**
+
+```
+You are a brand consistency reviewer for SwarmAI Pollinate.
+Review this poster HTML against the brand system and quality patterns.
+Be specific: element/line, what's wrong, how to fix.
+
+## Brand System (source of truth)
+<paste contents of brand/poster_design_system.md>
+
+## Content Principles
+<paste contents of brand/content_principles.md>
+
+## Quality Patterns (RP-P1~P7)
+<paste REVIEW_PATTERNS.md poster section>
+
+## Poster HTML to Review
+<paste the rendered HTML source for EACH variant>
+
+## Output
+For each finding, output:
+- Severity: HIGH (publish-blocking) / MED (should fix) / LOW (polish)
+- Element: CSS selector or text content that violates
+- Rule: which RP-P# or brand rule is violated
+- Fix: specific CSS/HTML change to resolve
+
+If no findings: output `BRAND CLEAN — no violations detected`.
+
+Focus on:
+1. Direction mixing (elements from one direction bleeding into another)
+2. Spacing/alignment drift (gaps > 72px, non-centered text)
+3. Color token violations (hardcoded values that passed L2 somehow)
+4. Content principle violations (P1-P8 in copy text)
+5. Typography scale violations (font sizes outside design system range)
+6. Visual ban list items that may have been missed by mechanical check
+```
+
+**Sub-agent configuration:**
+- Use default model (opus for strongest visual reasoning)
+- Do NOT run in background — must complete before DELIVER
+- If sub-agent returns findings:
+  - HIGH severity → fix in HTML, re-render, re-verify 8-Layer Gate
+  - MED severity → fix if convergence iterations remain, else note in REPORT
+  - LOW severity → note only
+- If sub-agent returns `BRAND CLEAN` → proceed to Content Principles Check
+
+**Why this exists:** The builder (you) wrote the HTML and can't see your own
+assumptions. You might use the correct token variable but the visual result
+clashes. You might declare Direction D4 but unconsciously use D5's spacing
+rhythm. The 8-Layer Gate catches MECHANICAL violations (hex values, missing
+elements). The sub-agent catches AESTHETIC violations (does this LOOK like the
+declared direction? does the spacing FEEL consistent?).
+
+**Record results in convergence-log.txt:**
+```
+Adversarial Brand Review:
+  Spawned: yes
+  Findings: N (H:X M:Y L:Z)
+  Fixed: N | Noted: N
+  Status: CLEAN / FIXED / ESCALATED
+```
+
+---
+
 #### Step B.6: Content Principles Check (external content only)
 
 Read `brand/content_principles.md` and run anti-pattern scan on poster text:

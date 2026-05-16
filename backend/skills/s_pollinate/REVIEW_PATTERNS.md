@@ -52,8 +52,10 @@ RP-V12: ✅ Content width 88%
 ### Poster Output Format (8-Layer Publish-Ready Gate)
 
 The 8-layer gate runs as a convergence loop (max 3 iterations) inside BUILD
-stage Step B.5. REVIEW verifies the gate passed cleanly — checking the
-`convergence-log.txt` output AND re-scanning the final rendered output.
+stage Step B.5. After convergence passes, Step B.5b spawns an adversarial
+sub-agent for independent brand review (fresh context, no builder bias).
+REVIEW verifies BOTH the gate AND the adversarial review passed cleanly —
+checking `convergence-log.txt` output AND re-scanning the final rendered output.
 
 ```
 ── 8-LAYER PUBLISH-READY GATE ──────────
