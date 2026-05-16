@@ -673,6 +673,9 @@ class ContextHealthHook:
 
         Runs after cultivation so new changelog entries are counted.
         Respects shared _deadline from _light_refresh (PE-3).
+
+        Returns:
+            True if any sections were promoted (DDD docs modified), False otherwise.
         """
         from core.ddd_maturity import (
             evaluate_all_promotions,
