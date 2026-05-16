@@ -37,6 +37,32 @@ RP-V11: ✅ Min text 32px, hero 96px
 RP-V12: ✅ Content width 88%
 ```
 
+## Poster Quality Patterns
+
+| # | Pattern | Trigger | What to Verify |
+|---|---------|---------|----------------|
+| RP-P1 | **Direction declared** | Every poster | Poster HTML has a comment or metadata declaring which direction (D1-D5) is active |
+| RP-P2 | **Token consistency** | Every poster | ALL colors reference `var(--token)` — zero hardcoded hex values in the body CSS |
+| RP-P3 | **Anti-Slop clean** | Every poster | Zero violations against Visual Ban List AND Structural Ban List (see `poster_design_system.md`) |
+| RP-P4 | **Platform fit** | Every poster | Dimensions match target platform (per `references/platform-adaptive.md`), density rules followed |
+| RP-P5 | **CJK typography** | CJK content | Line-height ≥ 2.0, max-width ≤ 42em, font stack includes Noto Sans SC or Source Han |
+| RP-P6 | **Direction cohesion** | Every poster | All visual elements belong to the declared direction — no accidental mixing (e.g., gold accent in Paper direction) |
+| RP-P7 | **Contrast & readability** | Every poster | Text:background contrast ≥ 4.5:1 (WCAG AA), no text cut off at edges, minimum 48px edge padding |
+
+### Poster Output Format
+
+```
+RP-P1: ✅ Direction: D5 (Morandi) — declared in HTML comment
+RP-P2: ✅ 0 hardcoded hex values in body (all use var(--token))
+RP-P3: ✅ 0 ban list violations (checked 28 visual + 13 structural rules)
+RP-P4: ✅ 1080×1440 matches XHS Card spec, 4 sections (within max)
+RP-P5: ✅ Chinese line-height 2.0, max-width 700px, Noto Sans SC in stack
+RP-P6: ✅ All colors from D5 palette — no foreign accent colors
+RP-P7: ✅ Contrast ratio 7.2:1 (text-primary on bg-deep), 60px edge padding
+```
+
+---
+
 ## Anti-Rationalization Gate
 
 | Shortcut | Required Response |
