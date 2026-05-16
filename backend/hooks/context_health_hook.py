@@ -1845,8 +1845,10 @@ class ContextHealthHook:
         - DDD document exists
         - ## heading exists in the document
 
+        Only parses lines within the Entity Index section (between
+        "## Cross-Project Knowledge Index" and the next "---" separator).
+
         Returns list of finding strings for stale references found.
-        If stale refs are detected, triggers a PROJECTS.md refresh.
         """
         import re as _re
 
@@ -1860,20 +1862,36 @@ class ContextHealthHook:
         except OSError:
             return findings
 
-        # Only process lines in the Entity Index table
         if "## Cross-Project Knowledge Index" not in content:
             return findings
 
-        # Parse entity table rows: | EntityName | Proj/DOC#Section, Proj/DOC#Section |
-        ref_pattern = _re.compile(r"(\w+)/(\w+)#(.+?)(?:,|$|\s*\|)")
+        # H1+M3 fix: only iterate lines within Entity Index section
+        in_entity_section = False
+        entity_lines: list[str] = []
+        for line in content.splitlines():
+            if "## Cross-Project Knowledge Index" in line:
+                in_entity_section = True
+                continue
+            if in_entity_section:
+                if line.startswith("---") or (line.startswith("## ") and "Cross-Project" not in line):
+                    break  # End of Entity Index section
+                entity_lines.append(line)
+
+        # H1 fix: use [^/]+ instead of \w+ to handle hyphens and special chars
+        ref_pattern = _re.compile(r"([^/|]+)/([^#|]+)#(.+?)(?:,\s*|$|\s*\|)")
         stale_count = 0
 
-        for line in content.splitlines():
+        # M2 fix: cache doc headings to avoid re-reading same file
+        headings_cache: dict[Path, list[str]] = {}
+
+        for line in entity_lines:
             if not line.startswith("| ") or "References" in line or "---" in line:
                 continue
 
             for match in ref_pattern.finditer(line):
-                project, doc, section = match.group(1), match.group(2), match.group(3).strip()
+                project = match.group(1).strip()
+                doc = match.group(2).strip()
+                section = match.group(3).strip()
                 project_dir = root / "Projects" / project
                 doc_path = project_dir / f"{doc}.md"
 
@@ -1881,27 +1899,28 @@ class ContextHealthHook:
                     stale_count += 1
                     continue
 
-                # Check if heading exists
-                try:
-                    doc_content = doc_path.read_text(encoding="utf-8")
-                    headings = [
-                        l[3:].strip()
-                        for l in doc_content.splitlines()
-                        if l.startswith("## ") and not l.startswith("### ")
-                    ]
-                    if section not in headings:
-                        stale_count += 1
-                except OSError:
+                # Check if heading exists (with cache)
+                if doc_path not in headings_cache:
+                    try:
+                        doc_content = doc_path.read_text(encoding="utf-8")
+                        headings_cache[doc_path] = [
+                            l[3:].strip()
+                            for l in doc_content.splitlines()
+                            if l.startswith("## ") and not l.startswith("### ")
+                        ]
+                    except OSError:
+                        headings_cache[doc_path] = []
+
+                if section not in headings_cache[doc_path]:
                     stale_count += 1
 
         if stale_count > 0:
             findings.append(
                 f"STALE_ENTITY_REFS: {stale_count} entity index reference(s) "
-                f"point to missing sections — PROJECTS.md needs refresh"
+                f"point to missing sections — will refresh on next startup"
             )
-            # Trigger refresh (non-blocking — will be picked up on next startup)
             logger.info(
-                "Entity Index has %d stale refs — will refresh on next startup",
+                "Entity Index has %d stale refs — refresh on next startup",
                 stale_count,
             )
 
