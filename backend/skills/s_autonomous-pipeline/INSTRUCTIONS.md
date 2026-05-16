@@ -190,9 +190,9 @@ probabilistic to deterministic.
 - FAIL: Any test red, any criterion without a test, any test that tests the wrong thing.
 
 **Example (REVIEW stage):**
-- SIGNAL: 0 high/medium findings in the adversarial review output
-- CHECK: Count findings by severity in the sub-agent response
-- FAIL: Any finding severity >= medium, or sub-agent returned vague non-findings
+- SIGNAL: 0 high/medium findings (confidence >= 7) in the specialist review outputs
+- CHECK: Count findings by severity after confidence gating in merged results
+- FAIL: Any finding severity >= medium with confidence >= 7, or specialist returned vague non-findings
 
 **Output the SIGNAL/CHECK/FAIL as inline text in chat** before executing the
 stage. This makes the loop inspectable — the user can correct wrong signals
@@ -465,9 +465,9 @@ ALL 6 layers must pass simultaneously. A candidate that passes 5/6 is not push-r
 | L5: DDD Conformance | No violation of TECH.md constraints or IMPROVEMENT.md anti-patterns | Mechanical checklist extraction + per-item verification (see below) |
 | L6: Decisions Resolved | All taste/judgment decisions surfaced | Decision log complete, no hidden choices |
 
-**L4 clarification:** The adversarial sub-agent was already spawned in 4b (deliver
-stage). L4 checks whether all its findings are resolved. Only re-spawn the
-sub-agent if a convergence fix changes code that the original review didn't cover.
+**L4 clarification:** The specialist sub-agents were already spawned in 4b (deliver
+stage). L4 checks whether all their findings are resolved. Only re-spawn
+specialists if a convergence fix changes code that the original review didn't cover.
 
 **L5 mechanism (Constitution Pattern):**
 L5 is NOT an honor-system self-assessment. It is a mechanical extraction + verification:
@@ -513,7 +513,7 @@ LOOP (max 3 iterations):
   specific gap and re-verifies.
 - Each iteration NARROWS the gap. If an iteration makes the gap wider
   (introduces more failures than it fixes), STOP and escalate.
-- The adversarial sub-agent is only re-spawned when a fix introduces new code
+- Specialist sub-agents are only re-spawned when a fix introduces new code
   paths not covered by the original review — scoped to the delta, not the
   entire delivery.
 
