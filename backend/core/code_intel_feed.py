@@ -226,16 +226,22 @@ def _extract_backtick_symbols(text: str) -> set[str]:
     """
     pattern = r"`([^`\s]{3,50})`"
     matches = re.findall(pattern, text)
-    # Filter: must look like a symbol (contains letters, may have _ or .)
+    # Filter: must look like a code symbol, not a filename or config entry
     symbols = set()
     for m in matches:
-        # Skip file paths, URLs, and markdown artifacts
-        if "/" in m and not m.endswith(".py"):
+        # Skip file paths and URLs
+        if "/" in m:
             continue
         if m.startswith("http") or m.startswith("--"):
             continue
-        # Keep function-like names: word chars, dots, underscores
-        if re.match(r"^[\w.]+$", m):
+        # Skip filenames (contain extension-like dots: .py, .md, .json, .toml, etc.)
+        if re.search(r"\.\w{1,4}$", m) and "." in m:
+            continue
+        # Skip attribute access patterns (Foo.bar) — these aren't standalone symbols
+        if "." in m and m[0].isupper():
+            continue
+        # Keep function-like names: word chars and underscores only
+        if re.match(r"^[\w]+$", m):
             symbols.add(m)
     return symbols
 
