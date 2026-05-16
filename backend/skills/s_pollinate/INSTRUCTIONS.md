@@ -463,6 +463,29 @@ First publish: #{which} — {reason}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
+### Structural Validator (BLOCKING — run before presenting deliverable)
+
+Before outputting the deliverable block, run the structural validator:
+
+```bash
+python backend/skills/s_pollinate/scripts/pollinate_validator.py <content_dir> --json
+```
+
+**If `valid: false`:** Fix all errors before presenting to user. Re-run until valid.
+**If `valid: true`:** Proceed to deliverable block.
+
+The validator checks 6 invariants mechanically:
+1. Platform matrix present (platform_matrix.md or section)
+2. QR code image present (qr-*.png)
+3. GitHub link in delivery text
+4. 2+ variant files per track
+5. Output files have valid extensions
+6. Content directory structure valid
+
+These are non-negotiable structural requirements — every delivery must pass regardless
+of content type (poster, video, narrative). The validator is the Pollinate equivalent
+of pipeline_validator.py.
+
 ### Display Rules
 
 1. **Deliverable block is non-negotiable.** Every DELIVER stage outputs the full

@@ -76,13 +76,41 @@ class DddCultivationOrchestrator:
 
     # ── Channel implementations (delegate to existing code) ──────────────
 
+    def _find_proposals_dir(self, root: Path) -> Path | None:
+        """Locate the proposals directory for the active project."""
+        projects_dir = root / "Projects"
+        if not projects_dir.is_dir():
+            return None
+        # Check each project for .artifacts/proposals/
+        for project_dir in projects_dir.iterdir():
+            if not project_dir.is_dir():
+                continue
+            proposals = project_dir / ".artifacts" / "proposals"
+            if proposals.is_dir() and any(proposals.glob("proposal_*.json")):
+                return proposals
+        return None
+
     def _ch_ddd_staleness(self, root: Path, ws_path: str) -> list[str]:
         """Channel 1: Check DDD document staleness."""
         return self._hook._check_ddd_staleness(root, ws_path)
 
     def _ch_auto_apply(self, root: Path, ws_path: str) -> list[str]:
-        """Channel 2: Auto-apply mechanical DDD refresh proposals."""
+        """Channel 2: Auto-apply mechanical DDD refresh proposals + feedback tracking."""
         self._hook._auto_apply_ddd_proposals(root)
+
+        # After applying proposals, compute channel precision stats
+        # This closes the feedback loop: approve/reject → stats → threshold adjustment
+        try:
+            from core.proposal_feedback import ProposalFeedbackTracker
+
+            proposals_dir = self._find_proposals_dir(root)
+            if proposals_dir and proposals_dir.is_dir():
+                tracker = ProposalFeedbackTracker()
+                artifacts_dir = proposals_dir.parent  # .artifacts/
+                tracker.compute_channel_stats(proposals_dir, persist_to=artifacts_dir)
+        except Exception as exc:
+            logger.debug("ddd_orchestrator: feedback tracking skipped: %s", exc)
+
         return []  # Side-effect only, no findings
 
     def _ch_inject_knowledge(self, root: Path, ws_path: str) -> list[str]:

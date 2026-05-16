@@ -277,6 +277,13 @@ def _get_workspace() -> Path:
     return Path(ws).expanduser().resolve()
 
 
+def _get_artifacts_dir(project: str) -> Path | None:
+    """Get the .artifacts/ directory for a project."""
+    ws = _get_workspace()
+    artifacts_dir = ws / "Projects" / project / ".artifacts"
+    return artifacts_dir if artifacts_dir.is_dir() else None
+
+
 def _load_run(project: str, run_id: str) -> dict[str, Any] | None:
     """Load a pipeline run from .artifacts/runs/<run_id>/run.json."""
     ws = _get_workspace()
@@ -1359,6 +1366,19 @@ def main() -> None:
                 total_errors += len(result["errors"])
                 total_warnings += len(result["warnings"])
 
+        # Adversarial meta-monitoring — check review health across runs
+        adversarial_health = {}
+        try:
+            from core.adversarial_meta import check_adversarial_health
+
+            artifacts_dir = _get_artifacts_dir(args.project)
+            if artifacts_dir:
+                adversarial_health = check_adversarial_health(artifacts_dir)
+                if adversarial_health.get("degradation_warning"):
+                    total_warnings += 1
+        except Exception:
+            pass  # Non-blocking — meta-monitoring is advisory
+
         summary = {
             "run_id": args.run_id,
             "project": args.project,
@@ -1367,6 +1387,7 @@ def main() -> None:
             "total_errors": total_errors,
             "total_warnings": total_warnings,
             "results": all_results,
+            "adversarial_health": adversarial_health,
         }
         print(json.dumps(summary, indent=2))
         sys.exit(0 if total_errors == 0 else 1)
