@@ -202,6 +202,13 @@ bugs AFTER confidence was high: voice input 100% non-functional (C011), 3 CRITIC
 subprocess bugs (run_c2881d2f), 4 hallucinated false-positive criticals (IMPROVEMENT.md).
 Confidence gating solves false positives; specialists solve false negatives.
 
+**⚠️ MECHANICALLY ENFORCED:** `run-update --status completed` validates the deliver
+artifact's `adversarial_review.profile_tier` field. If tier is `skipped`/`lite` for
+full/bugfix profiles → pipeline completion is **BLOCKED by code**. You cannot close
+the pipeline without proof that adversarial review ran at the correct tier. This is
+not a prompt guideline — it is a programmatic gate in `artifact_cli.py` that refuses
+to write `status: completed` until the validator passes.
+
 ---
 
 #### Profile-Aware Tiering
