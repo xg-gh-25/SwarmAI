@@ -28,9 +28,14 @@ from uuid import uuid4
 import anyio
 import subprocess
 
+from core.entity_extractor import extract_entities_from_ddd, format_entity_index, prune_entity_index
 from core.project_schema_migrations import CURRENT_SCHEMA_VERSION, migrate_if_needed
 
 logger = logging.getLogger(__name__)
+
+# Write lock for PROJECTS.md / DDD file modifications.
+# Prevents interleaved writes from concurrent refresh triggers.
+_cultivation_write_lock = asyncio.Lock()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Module-level constants
@@ -989,6 +994,17 @@ class SwarmWorkspaceManager:
 
         entries = await anyio.to_thread.run_sync(_generate)
 
+        # Build Entity Index from DDD docs
+        projects_dir_path = root / "Projects"
+        entity_index_lines: list[str] = []
+        if projects_dir_path.exists():
+            raw_entities = await anyio.to_thread.run_sync(
+                lambda: extract_entities_from_ddd(projects_dir_path)
+            )
+            if raw_entities:
+                formatted = format_entity_index(raw_entities)
+                entity_index_lines = prune_entity_index(formatted)
+
         # Build PROJECTS.md content
         lines = [
             "# Projects -- What's In Flight",
@@ -1011,6 +1027,13 @@ class SwarmWorkspaceManager:
             "Never infer from a section heading what the content says — pull it if deciding.",
             "",
         ]
+
+        # Inject Entity Index section (before Active Projects table)
+        if entity_index_lines:
+            lines.extend(entity_index_lines)
+            lines.append("")
+            lines.append("---")
+            lines.append("")
 
         if entries:
             lines.append("## Active Projects")
@@ -1075,12 +1098,19 @@ class SwarmWorkspaceManager:
 
         content = "\n".join(lines)
 
-        def _write():
-            context_file.parent.mkdir(parents=True, exist_ok=True)
-            context_file.write_text(content, encoding="utf-8")
+        async with _cultivation_write_lock:
+            def _write():
+                context_file.parent.mkdir(parents=True, exist_ok=True)
+                context_file.write_text(content, encoding="utf-8")
 
-        await anyio.to_thread.run_sync(_write)
-        logger.info("Refreshed PROJECTS.md with %d projects", len(entries))
+            await anyio.to_thread.run_sync(_write)
+
+        entity_count = len(entity_index_lines) - 6 if entity_index_lines else 0  # subtract header lines
+        logger.info(
+            "Refreshed PROJECTS.md with %d projects, %d entity index entries",
+            len(entries),
+            max(entity_count, 0),
+        )
 
     async def refresh_knowledge_index(self, workspace_path: str) -> None:
         """Regenerate the Knowledge Index section of ``.context/KNOWLEDGE.md``.
