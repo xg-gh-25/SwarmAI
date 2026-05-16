@@ -1228,3 +1228,92 @@ class TestProgressiveLoadingTOC:
             # No section TOC for small docs
             assert "Large doc" not in content
             assert "on demand" not in content.lower() or "read on demand" not in content.lower()
+
+
+class TestEntityIndexIntegration:
+    """Entity Index injection into PROJECTS.md via refresh_projects_index."""
+
+    @pytest.mark.asyncio
+    async def test_entity_index_appears_in_projects_md(self):
+        """AC1+AC7: Entity Index section injected before Active Projects,
+        existing content preserved."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ws = Path(tmpdir)
+            (ws / ".context").mkdir(parents=True)
+
+            # Create 2 projects with shared headings
+            for proj in ["ProjA", "ProjB"]:
+                (ws / "Projects" / proj).mkdir(parents=True)
+                (ws / "Projects" / proj / "TECH.md").write_text(
+                    f"# {proj} Tech\n\n## Architecture\n\nStuff.\n\n"
+                    f"## Stack\n\nPython.\n"
+                )
+                (ws / "Projects" / proj / "IMPROVEMENT.md").write_text(
+                    f"# {proj} Improvement\n\n## What Worked\n\n- Things.\n"
+                )
+
+            mgr = SwarmWorkspaceManager()
+            await mgr.refresh_projects_index(str(ws))
+
+            content = (ws / ".context" / "PROJECTS.md").read_text()
+
+            # Entity Index appears
+            assert "## Cross-Project Knowledge Index" in content
+            # Shared heading "Architecture" routes to both projects
+            assert "Architecture" in content
+            assert "ProjA/TECH#Architecture" in content
+            assert "ProjB/TECH#Architecture" in content
+            # Existing sections preserved
+            assert "## Active Projects" in content
+            assert "ProjA" in content
+            assert "ProjB" in content
+            # Entity Index comes BEFORE Active Projects
+            idx_pos = content.index("Cross-Project Knowledge Index")
+            active_pos = content.index("## Active Projects")
+            assert idx_pos < active_pos
+
+    @pytest.mark.asyncio
+    async def test_entity_index_skipped_when_no_entities(self):
+        """Edge case: empty projects → no Entity Index section."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ws = Path(tmpdir)
+            (ws / ".context").mkdir(parents=True)
+            (ws / "Projects").mkdir(parents=True)
+
+            mgr = SwarmWorkspaceManager()
+            await mgr.refresh_projects_index(str(ws))
+
+            content = (ws / ".context" / "PROJECTS.md").read_text()
+            assert "Cross-Project Knowledge Index" not in content
+
+    @pytest.mark.asyncio
+    async def test_entity_index_budget_enforcement(self):
+        """AC3: Total Entity Index stays under 8000 chars."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ws = Path(tmpdir)
+            (ws / ".context").mkdir(parents=True)
+
+            # Create many projects with many headings to force pruning
+            for i in range(20):
+                proj_dir = ws / "Projects" / f"Project{i:02d}"
+                proj_dir.mkdir(parents=True)
+                # Each project has 10 unique headings → 200 total
+                headings = "\n\n".join(
+                    f"## LongHeadingName{i}_{j} Extra Words Here\n\nContent."
+                    for j in range(10)
+                )
+                (proj_dir / "TECH.md").write_text(
+                    f"# Project{i:02d} Tech\n\n{headings}\n"
+                )
+
+            mgr = SwarmWorkspaceManager()
+            await mgr.refresh_projects_index(str(ws))
+
+            content = (ws / ".context" / "PROJECTS.md").read_text()
+            # Extract just the Entity Index section
+            if "## Cross-Project Knowledge Index" in content:
+                start = content.index("## Cross-Project Knowledge Index")
+                # Find the separator line after Entity Index
+                end = content.index("---", start)
+                entity_section = content[start:end]
+                assert len(entity_section) <= 8000

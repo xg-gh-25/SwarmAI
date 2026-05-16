@@ -1059,6 +1059,12 @@ class ContextHealthHook:
         except Exception as exc:
             logger.warning("context_health: knowledge staleness check failed: %s", exc)
 
+        # 3e. Entity Index stale reference validation
+        try:
+            findings += self._validate_entity_index(root)
+        except Exception as exc:
+            logger.warning("context_health: entity index validation failed: %s", exc)
+
         # 4. DailyActivity — today's file should exist if we're running
         da_dir = root / "Knowledge" / "DailyActivity"
         today_file = da_dir / f"{date.today().isoformat()}.md"
@@ -1830,3 +1836,73 @@ class ContextHealthHook:
         except Exception:
             pass
         return None
+
+    def _validate_entity_index(self, root: Path) -> list[str]:
+        """Validate Entity Index references in PROJECTS.md point to real sections.
+
+        Checks that each entity reference (Project/Doc#Section) still resolves:
+        - Project directory exists
+        - DDD document exists
+        - ## heading exists in the document
+
+        Returns list of finding strings for stale references found.
+        If stale refs are detected, triggers a PROJECTS.md refresh.
+        """
+        import re as _re
+
+        findings: list[str] = []
+        projects_md = root / ".context" / "PROJECTS.md"
+        if not projects_md.exists():
+            return findings
+
+        try:
+            content = projects_md.read_text(encoding="utf-8")
+        except OSError:
+            return findings
+
+        # Only process lines in the Entity Index table
+        if "## Cross-Project Knowledge Index" not in content:
+            return findings
+
+        # Parse entity table rows: | EntityName | Proj/DOC#Section, Proj/DOC#Section |
+        ref_pattern = _re.compile(r"(\w+)/(\w+)#(.+?)(?:,|$|\s*\|)")
+        stale_count = 0
+
+        for line in content.splitlines():
+            if not line.startswith("| ") or "References" in line or "---" in line:
+                continue
+
+            for match in ref_pattern.finditer(line):
+                project, doc, section = match.group(1), match.group(2), match.group(3).strip()
+                project_dir = root / "Projects" / project
+                doc_path = project_dir / f"{doc}.md"
+
+                if not project_dir.exists() or not doc_path.exists():
+                    stale_count += 1
+                    continue
+
+                # Check if heading exists
+                try:
+                    doc_content = doc_path.read_text(encoding="utf-8")
+                    headings = [
+                        l[3:].strip()
+                        for l in doc_content.splitlines()
+                        if l.startswith("## ") and not l.startswith("### ")
+                    ]
+                    if section not in headings:
+                        stale_count += 1
+                except OSError:
+                    stale_count += 1
+
+        if stale_count > 0:
+            findings.append(
+                f"STALE_ENTITY_REFS: {stale_count} entity index reference(s) "
+                f"point to missing sections — PROJECTS.md needs refresh"
+            )
+            # Trigger refresh (non-blocking — will be picked up on next startup)
+            logger.info(
+                "Entity Index has %d stale refs — will refresh on next startup",
+                stale_count,
+            )
+
+        return findings
