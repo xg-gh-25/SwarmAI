@@ -1065,6 +1065,15 @@ class ContextHealthHook:
         except Exception as exc:
             logger.warning("context_health: entity index validation failed: %s", exc)
 
+        # 3f. Signal → DDD bridge (Channel 4: high-relevance signals → PRODUCT.md proposals)
+        try:
+            from hooks.signal_ddd_bridge import bridge_signals_to_ddd
+            proposal_count = bridge_signals_to_ddd(ws_path)
+            if proposal_count > 0:
+                logger.info("context_health: signal bridge generated %d DDD proposals", proposal_count)
+        except Exception as exc:
+            logger.warning("context_health: signal DDD bridge failed (non-blocking): %s", exc)
+
         # 4. DailyActivity — today's file should exist if we're running
         da_dir = root / "Knowledge" / "DailyActivity"
         today_file = da_dir / f"{date.today().isoformat()}.md"
