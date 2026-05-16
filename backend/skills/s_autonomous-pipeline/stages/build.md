@@ -41,7 +41,8 @@ RIGHT (vertical tracer bullet):
 
 ## Step 2: Incremental RED→GREEN Loop
 
-For each remaining acceptance criterion, one at a time:
+**Follow the Change Spec order** (from PLAN artifact). Process sub-changes
+in dependency order — don't skip ahead. For each sub-change's AC:
 
 7. Write the next test → it fails (RED)
 8. Write minimal code to pass → it passes (GREEN)
@@ -49,6 +50,33 @@ For each remaining acceptance criterion, one at a time:
 10. **Don't anticipate future tests** — only enough code for the current test
 11. **Completeness bias:** when the complete implementation costs minutes more
     than the shortcut, do the complete thing. Cover edge cases, handle errors.
+
+### Micro-Replan Trigger (Automatic)
+
+**If the same AC fails RED→GREEN 2 consecutive times** (test written, code attempted,
+still failing — not a typo fix but a fundamental approach mismatch):
+
+**STOP the TDD loop. Do NOT retry a third time.** Instead:
+
+1. **Diagnose**: Why is the approach failing? (interface mismatch? missing
+   dependency? wrong assumption from PLAN?)
+2. **Micro-replan**: For THIS specific AC only, devise a different approach:
+   - Can the test be written differently (testing from a different angle)?
+   - Does the file discovery reveal an interface the plan missed?
+   - Is there an existing utility that handles this differently?
+3. **Record the replan** in run.json: `{"replanned_acs": [{"ac": "AC2", "original_approach": "...", "new_approach": "...", "reason": "..."}]}`
+4. **Resume TDD** with the new approach for this AC
+
+**Rules:**
+- Replan is scoped to ONE AC — don't redesign the whole feature
+- Max 1 replan per AC. If replan also fails → escalate (L2 BLOCK)
+- The replan insight should flow back to REFLECT as a lesson
+
+**Why this exists:** Without a replan trigger, the agent either retries the
+same broken approach indefinitely (wasting cycles) or checkpoint-exits to the
+user (wasting their time on what might be a simple approach mismatch).
+AutoGPT's "replanning on failure" pattern — but scoped to micro-level (one AC)
+instead of the whole plan.
 
 ## Step 3: VERIFY -- Targeted tests, zero regressions
 

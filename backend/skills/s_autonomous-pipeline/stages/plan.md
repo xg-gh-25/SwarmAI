@@ -17,38 +17,97 @@ Pipeline-owned stage (no sibling skill).
    - **Test strategy** (required — see below)
 4. If design requires uncommitted dependencies or API changes -- taste/judgment decision
 
-### Spike Read (Required — Before Writing Design Doc)
+### Exhaustive File Discovery (Required — Before Writing Design Doc)
 
-**Read every file you plan to change BEFORE writing the design.** Design
-decisions made without reading the target code produce plans that don't fit
-reality — BUILD then either hacks around the mismatch or backtracks to PLAN.
+**Find ALL affected files BEFORE writing the design — not just the ones you
+plan to change.** The design must account for callers, consumers, importers,
+and adjacent code. Missing one caller = surprise regression in BUILD.
 
-**Process:**
-1. List the files the chosen approach will touch (from THINK output or inference)
-2. `Read` each file — focus on: interfaces, existing patterns, constraints
-3. For each planned change, answer:
-   - Does the current interface support this? (method signatures, types, exports)
-   - What existing patterns must I match? (error handling style, naming, async/sync)
-   - What adjacent code might break? (callers, imports, shared state)
-   - Are there existing abstractions I should use instead of building new ones?
-4. Update the approach if code reality differs from design assumption
+Inspired by Sweep's scored file localization loop: "search exhaustively,
+then plan" — not "plan, then hope you didn't miss a file."
+
+**Process (search → expand → verify):**
+
+1. **Seed**: List the files the chosen approach will obviously touch
+2. **Expand**: For EACH seed file, search for ALL code that references it:
+   ```bash
+   grep -rn "from <module>\|import <module>\|<ClassName>\|<function_name>" \
+     --include="*.py" --include="*.ts" --include="*.rs" .
+   ```
+3. **Categorize** every discovered file:
+   - **MODIFY** — needs code changes to implement the feature
+   - **TEST** — needs new/updated tests (test files that import MODIFY files)
+   - **VERIFY** — won't change but must be checked for compatibility
+   - **IRRELEVANT** — references exist but unaffected by this change
+4. **Read** all MODIFY + VERIFY files. For each, answer:
+   - Does the current interface support the planned change?
+   - What patterns must the new code match? (error style, async/sync, naming)
+   - Are there existing abstractions to reuse instead of creating new ones?
+5. **Update approach** if discovery reveals:
+   - An existing utility already does 80% of what's needed → extend, don't duplicate
+   - Interface doesn't support the plan → revise approach
+   - More callers than expected → scope is larger, adjust effort estimate
 
 **Output (in design doc):**
 ```markdown
-## Spike Read Findings
-- `file_a.py`: Interface supports planned change. Uses async pattern X.
-- `file_b.py`: Existing `process()` already does 80% of what we need — extend, don't duplicate.
-- `file_c.ts`: Frontend expects camelCase — need toCamelCase() update for new fields.
+## File Discovery
+| File | Category | Key Finding |
+|------|----------|-------------|
+| `session_router.py` | MODIFY | Has `compute_max_tabs()` — extend with new param |
+| `lifecycle_manager.py` | VERIFY | Calls `compute_max_tabs()` — must stay compatible |
+| `test_session.py` | TEST | 12 tests import session_router — run after changes |
+| `frontend/services/chat.ts` | MODIFY | Needs new field in response type |
 ```
 
-**If spike reveals the approach won't work:** Go back to THINK recommendation
-and either choose a different alternative or modify the approach. Do NOT
-proceed with a plan that contradicts what the code actually looks like.
+**If discovery reveals approach won't work:** Go back to THINK and either
+choose a different alternative or modify the approach. Do NOT proceed with
+a plan that contradicts what the code actually looks like.
 
 **Why this exists:** Multiple pipeline runs hit BUILD only to discover the
-planned interface doesn't exist, the function signature is different, or an
-existing utility already handles the need. Reading code in PLAN costs 2 minutes;
-discovering the mismatch in BUILD costs 20 minutes of backtracking.
+planned interface doesn't exist, there are 5 more callers than expected, or
+an existing utility already handles the need. Exhaustive discovery in PLAN
+costs 3 minutes; discovering gaps in BUILD costs 20 minutes of backtracking.
+
+### Change Spec (Required — Ordered Atomic Sub-Changes)
+
+**Decompose the requirement into topologically-sorted atomic code changes.**
+Each AC tells the user "what done looks like" (outcome). The Change Spec tells
+BUILD "what to do, in what order" (action). Without this, BUILD has to figure
+out the sequencing itself — burning TDD time on logistics instead of code.
+
+Inspired by Sweep's "Issue Sub-Request Decomposition" — each sub-change maps
+to a specific file and function, and they're ordered by dependency.
+
+**Format:**
+```markdown
+## Change Spec (ordered)
+1. `backend/routers/chat.py` → Add `POST /api/chat/transcribe` endpoint
+   - Depends on: nothing (new endpoint)
+   - AC: AC1 (returns 200 with transcript)
+
+2. `backend/core/transcribe.py` → Create `transcribe_audio()` function
+   - Depends on: #1 (endpoint calls this)
+   - AC: AC1, AC2 (handles timeout)
+
+3. `desktop/src/services/chat.ts` → Add `transcribeAudio()` client method
+   - Depends on: #1 (needs endpoint contract)
+   - AC: AC3 (frontend integration)
+
+4. `backend/routers/chat.py` → Add error handling for Transcribe failures
+   - Depends on: #2 (extends the function)
+   - AC: AC2 (graceful timeout)
+```
+
+**Rules:**
+- Each sub-change maps to ONE file + ONE function/class/endpoint
+- Dependencies are explicit — BUILD processes them in order
+- Each sub-change links to the AC it satisfies (traceability)
+- No vague items ("improve error handling") — be specific about WHAT changes
+- If a sub-change can't be expressed concretely → the AC is too vague, rewrite it
+
+**Why this exists:** BUILD's TDD loop works best with clear "what to do next."
+Without a change spec, the agent has to re-derive the sequencing every time,
+often picking the wrong order (implementing a consumer before the provider).
 
 ### Boundaries (Required)
 
@@ -150,13 +209,13 @@ This gives BUILD a testing roadmap beyond just the changed files.
 
 ## Artifact Publish
 
-The design_doc artifact MUST include `boundaries`, `success_criteria`, `spike_read`,
-and `test_strategy` fields. Pipeline validator will check for their presence.
+The design_doc artifact MUST include `boundaries`, `success_criteria`, `file_discovery`,
+`change_spec`, and `test_strategy` fields. Pipeline validator will check for their presence.
 
 ```bash
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
   --type design_doc --producer s_autonomous-pipeline \
   --summary "Design: <approach> for <requirement>" --stage plan \
-  --data '{"approach":"...","acceptance_criteria":[...],"boundaries":{"always":[...],"ask_first":[...],"never":[...]},"success_criteria":[...],"spike_read":[{"file":"...","finding":"..."}],"test_strategy":[{"ac":"...","how":"...","mock_boundary":"...","input":"..."}],"data_model":"...","api_contract":"...","files_to_change":[...]}'
+  --data '{"approach":"...","acceptance_criteria":[...],"boundaries":{"always":[...],"ask_first":[...],"never":[...]},"success_criteria":[...],"file_discovery":[{"file":"...","category":"MODIFY|TEST|VERIFY","finding":"..."}],"change_spec":[{"order":1,"file":"...","change":"...","depends_on":[],"ac":"AC1"}],"test_strategy":[{"ac":"...","how":"...","mock_boundary":"...","input":"..."}],"data_model":"...","api_contract":"...","files_to_change":[...]}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state build
 ```
