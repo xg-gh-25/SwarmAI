@@ -76,7 +76,8 @@ def bridge_signals_to_ddd(workspace_path: str) -> int:
         if proposals_generated >= _MAX_PROPOSALS_PER_RUN:
             break
 
-        score = item.get("score", 0)
+        # Support both "score" (test) and "relevance_score" (production)
+        score = item.get("relevance_score") or item.get("score") or 0
         if score < _MIN_RELEVANCE_SCORE:
             continue
 
