@@ -291,6 +291,7 @@ class DddCultivationOrchestrator:
             return
 
         applied_changes: list[dict] = []
+        gate_mgr = self._get_gate_manager(root)  # Create once, reuse per-trigger
 
         for project_dir in sorted(projects_dir.iterdir()):
             if not project_dir.is_dir():
@@ -314,7 +315,6 @@ class DddCultivationOrchestrator:
                     if confidence < 8:
                         proposal_path.rename(proposal_path.with_suffix(".md.applied"))
                         # Gate trigger: low-confidence proposal rejected = noise_filter fires
-                        gate_mgr = self._get_gate_manager(root)
                         if gate_mgr:
                             gate_mgr.record_trigger("noise_filter")
                         continue
@@ -349,10 +349,8 @@ class DddCultivationOrchestrator:
 
                         if not is_mechanical or targets_semantic:
                             # Gate trigger: semantic section or non-mechanical change skipped
-                            if targets_semantic:
-                                gate_mgr = self._get_gate_manager(root)
-                                if gate_mgr:
-                                    gate_mgr.record_trigger("trust_annotation")
+                            if targets_semantic and gate_mgr:
+                                gate_mgr.record_trigger("trust_annotation")
                             continue
 
                         from utils.file_lock import flock_exclusive, flock_unlock
