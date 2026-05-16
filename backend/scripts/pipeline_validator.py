@@ -279,7 +279,9 @@ STAGE_ROUTING: dict[str, dict[str, list[str]]] = {
         "optional_produces": ["security_review"],
     },
     "test": {
-        "consumes": ["changeset", "design_doc", "review"],
+        # F2: design_doc removed — test stage runs tests against changeset,
+        # informed by review findings. design_doc is for build (implementation).
+        "consumes": ["changeset", "review"],
         "produces": ["test_report"],
         "optional_produces": [],
     },
@@ -933,12 +935,18 @@ def _check_skip_justification(stage_record: dict) -> list[str]:
     justification = stage_record.get("skip_justification")
 
     # If no justification object but has skip_reason, that's the legacy path — allow
+    # F7: minimum 15 chars to prevent trivial bypass (".", "ok", "skip")
     if not justification:
         if not skip_reason or not skip_reason.strip():
             errors.append(
                 "BLOCK: Stage skipped without skip_reason or skip_justification. "
                 "Provide at minimum a skip_reason, or a full skip_justification "
                 "with step_skipped, reason, evidence_skip_safe, counter_argument_check."
+            )
+        elif len(skip_reason.strip()) < 15:
+            errors.append(
+                "BLOCK: skip_reason too short (minimum 15 characters). "
+                "Provide meaningful justification for skipping this stage."
             )
         return errors
 
@@ -954,13 +962,21 @@ def _check_skip_justification(stage_record: dict) -> list[str]:
             errors.append(f"BLOCK: skip_justification.{field} is empty or missing")
 
     # THE KEY RULE: if counter-argument exists, skip is blocked
+    # F1 fix: coerce to string to prevent bypass via list/dict/bool types
     counter = justification.get("counter_argument_check")
-    if counter and isinstance(counter, str) and counter.strip():
-        errors.append(
-            f"BLOCK: Anti-rationalization triggered — counter-argument exists: "
-            f"'{counter[:120]}'. Cannot skip when a valid counter-argument is present. "
-            f"Either address the counter-argument or execute the stage."
-        )
+    if counter is not None:
+        if not isinstance(counter, str):
+            # Non-string truthy value (list, dict, int, True) = bypass attempt
+            errors.append(
+                "BLOCK: skip_justification.counter_argument_check must be a string "
+                f"or null, got {type(counter).__name__}. Non-string types are rejected."
+            )
+        elif counter.strip():
+            errors.append(
+                f"BLOCK: Anti-rationalization triggered — counter-argument exists: "
+                f"'{counter[:120]}'. Cannot skip when a valid counter-argument is present. "
+                f"Either address the counter-argument or execute the stage."
+            )
 
     return errors
 
@@ -1109,6 +1125,15 @@ def check_artifact_freshness(
                         }
                 except OSError:
                     pass
+            else:
+                # F6: Document was deleted — stronger staleness signal
+                return {
+                    "fresh": False,
+                    "stale_reason": (
+                        f"DDD doc {doc_name} was deleted since artifact was created"
+                    ),
+                    "age_hours": age_hours,
+                }
 
     # Check 2: TTL advisory (soft)
     ttl = freshness.get("ttl_advisory_hours", _DEFAULT_TTL_HOURS)
@@ -1487,12 +1512,21 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
             checks_passed += 1
 
         # Freshness sub-check: warn on stale consumed artifacts
+        # F3 fix: look up full artifact metadata from manifest (consumed_artifacts
+        # entries typically only have type+id, not created_at/freshness).
         consumed = stage_record.get("consumed_artifacts", [])
         if isinstance(consumed, list):
             for c in consumed:
                 if not isinstance(c, dict):
                     continue
-                freshness_result = check_artifact_freshness(c, project)
+                art_id = c.get("id")
+                # Try to get full metadata from manifest for richer freshness check
+                art_meta = c  # fallback to inline entry
+                if art_id:
+                    full_meta = _load_artifact_meta_from_manifest(project, art_id)
+                    if full_meta:
+                        art_meta = full_meta
+                freshness_result = check_artifact_freshness(art_meta, project)
                 if not freshness_result["fresh"]:
                     warnings.append(
                         f"STALE: Stage '{stage}' consuming stale artifact "
@@ -1625,6 +1659,26 @@ def _find_stage_record(stage_name: str, stages_list: list[dict]) -> dict | None:
     for s in reversed(stages_list):
         if s.get("stage", s.get("name")) == stage_name:
             return s
+    return None
+
+
+def _load_artifact_meta_from_manifest(project: str, artifact_id: str) -> dict | None:
+    """Load artifact metadata (not data) from manifest by ID.
+
+    Returns the manifest entry dict which includes created_at, freshness, etc.
+    Returns None if not found.
+    """
+    ws = _get_workspace()
+    manifest_file = ws / "Projects" / project / ".artifacts" / "manifest.json"
+    if not manifest_file.exists():
+        return None
+    try:
+        manifest = json.loads(manifest_file.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    for entry in manifest.get("artifacts", []):
+        if entry.get("id") == artifact_id:
+            return entry
     return None
 
 

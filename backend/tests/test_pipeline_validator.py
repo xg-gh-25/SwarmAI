@@ -1917,6 +1917,38 @@ class TestAntiRationalization:
         assert len(errors) == 3
         assert all("BLOCK" in e for e in errors)
 
+    def test_non_string_counter_argument_blocks(self):
+        """F1: Non-string counter_argument_check (list/dict/bool) → BLOCK."""
+        for bypass_value in [["C011: tests pass"], {"text": "counter"}, True, 42]:
+            record = {
+                "stage": "deliver", "status": "skipped", "token_cost": 0,
+                "skip_justification": {
+                    "step_skipped": "adversarial_review",
+                    "reason": "Tests pass",
+                    "evidence_skip_safe": "All green",
+                    "counter_argument_check": bypass_value,
+                },
+            }
+            errors = _check_skip_justification(record)
+            assert any("must be a string" in e for e in errors), (
+                f"Non-string type {type(bypass_value).__name__} should BLOCK"
+            )
+
+    def test_short_skip_reason_blocks(self):
+        """F7: skip_reason shorter than 15 chars → BLOCK."""
+        record = {"stage": "think", "status": "skipped", "token_cost": 0,
+                  "skip_reason": "ok"}
+        errors = _check_skip_justification(record)
+        assert len(errors) == 1
+        assert "too short" in errors[0]
+
+    def test_adequate_skip_reason_passes(self):
+        """skip_reason >= 15 chars passes legacy path."""
+        record = {"stage": "think", "status": "skipped", "token_cost": 0,
+                  "skip_reason": "Design pre-approved by user in session"}
+        errors = _check_skip_justification(record)
+        assert errors == []
+
 
 # ---------------------------------------------------------------------------
 # Check 13: Output Routing
