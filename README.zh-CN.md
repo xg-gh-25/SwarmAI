@@ -349,6 +349,19 @@ Pollinate 读 DDD → brand-correct 内容 → REFLECT 写回 insights → DDD �
 
 论点可证伪：如果质量随纠正积累而收敛，系统就是自持的。早期证据说：是的。完整数据：**[docs/CONVERGENCE.md](./docs/CONVERGENCE.md)**。
 
+### 公开什么，不公开什么
+
+| 公开（在本仓库） | 私有（运营数据） |
+|-----------------|-----------------|
+| CONVERGENCE.md — 带 git evidence 的时间序列指标 | MEMORY.md — 75 天的关键决策、教训、纠正记录 |
+| EVOLUTION.md (模板) — 纠正注册表结构 | DailyActivity/ — 逐 session 的原始学习日志 |
+| 完整 commit 历史 — 每个变更可追溯 | 完整 session 记录 — 包含真实工作上下文 |
+| Pipeline artifacts — 含置信度评分的运行报告 | 用户/引导上下文 — 个人工作流数据 |
+
+**为什么不全部公开？** 运营记忆包含真实工作上下文（内部项目、组织细节、客户交互）。公开它会损害隐私，但不增加验证价值。CONVERGENCE.md 中的指标可以通过 git 独立验证 — 你不需要我们的记忆文件来确认数据点。
+
+**外部可验证的内容：** 纠正数量（grep EVOLUTION.md 模板）、测试数量（`pytest --co`）、commit 历史（`git log`）、P0 率（release notes）。如果 CONVERGENCE.md 中的数字有误，git 能证明。
+
 ---
 
 ## 快速开始

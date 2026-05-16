@@ -349,6 +349,19 @@ Remove any one component and the others get weaker. That's the multiplication te
 
 The thesis is testable: if quality converges as corrections compound, the system is self-sustaining. Early evidence says yes. Full data: **[docs/CONVERGENCE.md](./docs/CONVERGENCE.md)**.
 
+### What We Publish vs. What We Don't
+
+| Public (in this repo) | Private (operational data) |
+|------------------------|---------------------------|
+| CONVERGENCE.md — timestamped metrics with git evidence | MEMORY.md — 75 days of key decisions, lessons, corrections |
+| EVOLUTION.md (template) — correction registry structure | DailyActivity/ — raw session-by-session learning logs |
+| Commit history — every change is traceable | Full session transcripts — contain work context |
+| Pipeline artifacts — run reports with confidence scores | User/steering context — personal workflow data |
+
+**Why not open everything?** Operational memory contains real work context (internal projects, org details, customer interactions). Publishing it would compromise privacy without adding verification value. The metrics in CONVERGENCE.md are independently verifiable via git — you don't need our memory files to confirm the data points.
+
+**What you can verify externally:** Correction count (grep EVOLUTION.md template), test count (`pytest --co`), commit history (`git log`), P0 rate (release notes). If a number in CONVERGENCE.md is wrong, git proves it.
+
 ---
 
 ## Quick Start
