@@ -1216,10 +1216,21 @@ def _extract_report_confidence(text: str) -> int | None:
 
 
 def _extract_first_heading(file_path: Path) -> str:
-    """Extract the first markdown heading from a file."""
+    """Extract title from markdown file — checks YAML frontmatter title, then first heading."""
     try:
         text = file_path.read_text(encoding="utf-8")[:500]
-        for line in text.splitlines():
+        lines = text.splitlines()
+        # Check YAML frontmatter for title field
+        if lines and lines[0].strip() == "---":
+            for line in lines[1:]:
+                if line.strip() == "---":
+                    break
+                if line.strip().startswith("title:"):
+                    val = line.split(":", 1)[1].strip().strip('"').strip("'")
+                    if val:
+                        return val[:120]
+        # Fall back to first markdown heading
+        for line in lines:
             line = line.strip()
             if line.startswith("#"):
                 return line.lstrip("#").strip()[:120]
@@ -1781,22 +1792,42 @@ def build_session_briefing_data(
                 for slug_dir in studio_content.iterdir():
                     if not slug_dir.is_dir():
                         continue
+                    # Two formats: (1) content_package.md (legacy), (2) run.json (current)
                     pkg = slug_dir / "content_package.md"
-                    if not pkg.exists():
+                    run_json = slug_dir / "run.json"
+                    if pkg.exists():
+                        # Legacy format: title from markdown heading, date from mtime
+                        if pkg.stat().st_mtime < cutoff_30d:
+                            continue
+                        title = _extract_first_heading(pkg)
+                        media_type = _detect_content_media_type(slug_dir)
+                        item_date = datetime.fromtimestamp(pkg.stat().st_mtime).isoformat()
+                        content_path = str(pkg.relative_to(workspace))
+                    elif run_json.exists():
+                        # Current format: title from run.json topic, date from created_at
+                        if run_json.stat().st_mtime < cutoff_30d:
+                            continue
+                        try:
+                            run_data = json.loads(run_json.read_text())
+                        except (json.JSONDecodeError, OSError):
+                            continue
+                        if run_data.get("type") != "pollinate":
+                            continue
+                        title = run_data.get("topic") or run_data.get("message", slug_dir.name)
+                        media_type = _detect_content_media_type(slug_dir)
+                        item_date = run_data.get("created_at", datetime.fromtimestamp(run_json.stat().st_mtime).isoformat())
+                        content_path = str(run_json.relative_to(workspace))
+                    else:
                         continue
-                    if pkg.stat().st_mtime < cutoff_30d:
-                        continue
-                    title = _extract_first_heading(pkg)
-                    media_type = _detect_content_media_type(slug_dir)
                     content_items.append({
                         "slug": slug_dir.name,
                         "title": title,
                         "type": media_type,
-                        "contentPackage": str(pkg.relative_to(workspace)),
-                        "date": datetime.fromtimestamp(pkg.stat().st_mtime).isoformat(),
+                        "contentPackage": content_path,
+                        "date": item_date,
                     })
                 content_items.sort(key=lambda x: x["date"], reverse=True)
-                content_items = content_items[:5]
+                content_items = content_items[:10]
             except OSError:
                 pass
 
