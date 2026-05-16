@@ -154,12 +154,33 @@ class WorkspaceAutoCommitHook:
                 message = self._generate_commit_message(changed_files)
 
             # 5. Commit
-            subprocess.run(
+            commit_result = subprocess.run(
                 ["git", "commit", "-m", message],
                 cwd=ws_path, capture_output=True,
                 timeout=self.GIT_TIMEOUT,
             )
             logger.info("Auto-committed workspace: %s", message)
+
+            # 5b. Emit GIT_COMMIT event for DDD cultivation v2
+            if commit_result.returncode == 0:
+                try:
+                    from core.cultivation_dispatcher import (
+                        EventType, emit_cultivation_event,
+                    )
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.run_coroutine_threadsafe(
+                            emit_cultivation_event(
+                                EventType.GIT_COMMIT,
+                                source="auto_commit_hook",
+                                payload={"files": changed_files, "message": message},
+                                priority=2,
+                            ),
+                            loop,
+                        )
+                except Exception:
+                    pass  # Non-blocking: cultivation emit failure never breaks commit
 
         except subprocess.TimeoutExpired:
             logger.warning(

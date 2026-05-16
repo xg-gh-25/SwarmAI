@@ -234,3 +234,46 @@ class ChannelExecutor:
             elapsed += time.monotonic() - start
 
         return findings
+
+
+# ── Module-Level Singleton ─────────────────────────────────────────────────
+
+# Shared dispatcher instance. All event sources import and use this.
+# Initialized once at module import. Reset via get_dispatcher().reset_dedup()
+# for testing.
+_dispatcher: EventDispatcher | None = None
+
+
+def get_dispatcher() -> EventDispatcher:
+    """Get or create the module-level singleton EventDispatcher.
+
+    Lazy initialization ensures the asyncio event loop exists when first called.
+    All hooks/lifecycle modules should use this, NOT construct their own instance.
+    """
+    global _dispatcher
+    if _dispatcher is None:
+        _dispatcher = EventDispatcher(queue_size=50, dedup_window_seconds=60.0)
+    return _dispatcher
+
+
+async def emit_cultivation_event(
+    event_type: EventType,
+    source: str,
+    payload: dict[str, Any] | None = None,
+    priority: int = 2,
+) -> bool:
+    """Convenience function to emit a cultivation event.
+
+    This is the primary API for event sources (hooks, lifecycle, etc.).
+    Handles dispatcher singleton + event construction in one call.
+
+    Returns True if enqueued, False if deduped/dropped.
+    """
+    dispatcher = get_dispatcher()
+    event = CultivationEvent(
+        type=event_type,
+        source=source,
+        payload=payload or {},
+        priority=priority,
+    )
+    return await dispatcher.emit(event)
