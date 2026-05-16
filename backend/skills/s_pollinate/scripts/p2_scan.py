@@ -59,7 +59,8 @@ ALLOWLIST_PATTERNS = [
 
 def strip_html(text: str) -> str:
     """Strip HTML tags and collapse whitespace if input looks like HTML."""
-    if "<html" in text.lower() or "<!doctype" in text.lower() or "<div" in text:
+    lower = text.lower()
+    if "<html" in lower or "<!doctype" in lower or "<div" in lower:
         text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL)
         text = re.sub(r"<script[^>]*>.*?</script>", "", text, flags=re.DOTALL)
         text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
