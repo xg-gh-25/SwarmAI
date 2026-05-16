@@ -5,6 +5,32 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.0] - 2026-05-17
+
+### Added
+
+- **DDD Cultivation v2 — Event-Driven Architecture** — Replaces batch-fire cultivation with event-driven pipeline: EventDispatcher (singleton, dedup 60s, queue 50, overflow drop) → ChannelExecutor (priority sort, per-channel timeout, total budget 10s) → 7 channels. Events: GIT_COMMIT, SESSION_CLOSE, TIMER_30MIN, PROPOSAL_DECIDED, DAILY_ACTIVITY, CODE_CHANGE.
+- **6 Event Sources** — auto_commit_hook, daily_activity_hook, context_health_hook, code_change_feed_hook, improvement_writeback_hook, lifecycle_manager timer — all emit via threadsafe singleton.
+- **Feedback Loop v2** — RejectionReason classification (7 categories: stale_context, wrong_section, format_violation, content_regression, scope_creep, already_exists, low_confidence). Auto-targets fixes at root cause.
+- **Gate Promotion** — Soft→observe→hard lifecycle with 30-day data-driven transitions. Auto-demotion on 3 manual overrides. Persistence via gate_data.json.
+- **Event Consumer in LifecycleManager** — `_process_cultivation_events()` drains queue every 30th tick (30 min), maps events to channels, executes via ChannelExecutor.
+- **Pipeline Specialists Sync** — REVIEW_PATTERNS.md (RP1-RP34) now auto-synced to specialist sub-agents.
+- **Convergence Metrics** — Auto-snapshot on every release to `docs/CONVERGENCE.md`.
+
+### Fixed
+
+- **PE-1: Event consumer missing** — Events were queued but never consumed. Added consumer loop in lifecycle_manager.
+- **PE-2: Gate triggers never accumulate** — Wired `record_trigger()` into auto_apply (trust) and daily_activity (noise) channels.
+- **PE-3: First-session events dropped** — Dispatcher loop now set at `LifecycleManager.start()` (warmup).
+- **PE-4: Wrong project for artifacts** — `_find_artifacts_dir()` now explicitly targets SwarmAI project.
+- **PE-5: Timezone mismatch in rejection classification** — UTC normalization in `auto_classify_rejection()`.
+- **CI: deep_check test failure** — Test now forces legacy path via dispatcher.loop=None (Phase E cutover changed the code path).
+
+### Changed
+
+- **Phase E Cutover** — `_deep_check` in context_health_hook now emits SESSION_CLOSE event instead of calling `orchestrator.run()` directly. Graceful fallback to legacy if dispatcher not warmed.
+- **README overhaul** — Dual-consumer design (human + AI readers), compound architecture summary, removed vanity metrics.
+
 ## [1.13.0] - 2026-05-16
 
 ### Added
