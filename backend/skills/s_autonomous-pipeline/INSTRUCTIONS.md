@@ -321,7 +321,7 @@ python backend/scripts/pipeline_validator.py check \
   --project <PROJECT> --run-id <RUN_ID> --stage <STAGE>
 ```
 
-This checks 7 invariants automatically:
+This checks 8 invariants automatically:
 
 | # | Check | Severity | What It Catches |
 |---|-------|----------|-----------------|
@@ -332,11 +332,12 @@ This checks 7 invariants automatically:
 | 5 | **Budget recorded** | WARN | token_cost is 0 — needed for calibration |
 | 6 | **Profile respected** | BLOCK | Stage not in selected profile |
 | 7 | **DDD consistency** | WARN | Non-goals vs TECH.md architecture conflict, failed patterns not recorded, missing DDD docs, staleness since last run. Runs at EVALUATE stage only. |
+| 8 | **Semantic depth** | WARN | BUILD: smoke_tests > 0 when files > 1; REVIEW: integration_trace checked > 0 |
 
 **Response format:**
 ```json
 {"valid": true, "stage": "evaluate", "errors": [], "warnings": [...],
- "checks_passed": 7, "checks_total": 7}
+ "checks_passed": 8, "checks_total": 8}
 ```
 
 **IMPORTANT: Write checksums to run.json after EVALUATE.**
