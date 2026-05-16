@@ -1975,6 +1975,19 @@ def cmd_run_cultivate(args, reg: ArtifactRegistry) -> None:
     print(json.dumps(result, indent=2))
 
 
+def cmd_ddd_health(args, reg: ArtifactRegistry) -> None:
+    """5-dimensional DDD health scoring per section."""
+    project_dir = reg.workspace / "Projects" / args.project
+    if not project_dir.is_dir():
+        print(json.dumps({"error": f"Project '{args.project}' not found"}))
+        return
+
+    from core.ddd_health import compute_section_health
+
+    result = compute_section_health(project_dir)
+    print(json.dumps(result, indent=2, default=str))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Artifact registry CLI for SwarmAI pipeline"
@@ -2087,6 +2100,10 @@ def main() -> None:
     p_run_cultivate.add_argument("--project", required=True)
     p_run_cultivate.add_argument("--run-id", required=True, help="Pipeline run ID (reads lessons from reflect stage)")
 
+    # ddd-health
+    p_ddd_health = sub.add_parser("ddd-health", help="5-dimensional DDD health scoring per section")
+    p_ddd_health.add_argument("--project", required=True)
+
     args = parser.parse_args()
     reg = ArtifactRegistry(_get_workspace())
 
@@ -2109,6 +2126,7 @@ def main() -> None:
         "run-metrics": cmd_run_metrics,
         "run-analytics": cmd_run_analytics,
         "run-cultivate": cmd_run_cultivate,
+        "ddd-health": cmd_ddd_health,
     }
     handlers[args.command](args, reg)
 
