@@ -489,9 +489,19 @@ def _collect_ddd_health(ws_path: Path) -> dict[str, Any]:
             if not project_dir.is_dir() or project_dir.name.startswith("."):
                 continue
             result = compute_section_health(project_dir)
+            # Ensure all 4 standard docs appear with at least an "exists" key
+            # (compute_section_health only includes docs with parseable sections)
+            raw_docs = result.get("docs", {})
+            docs_normalized: dict[str, dict] = {}
+            for doc_name in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+                if doc_name in raw_docs:
+                    docs_normalized[doc_name] = {**raw_docs[doc_name], "exists": True}
+                else:
+                    doc_path = project_dir / doc_name
+                    docs_normalized[doc_name] = {"exists": doc_path.exists()}
             projects.append({
                 "name": project_dir.name,
-                "docs": result.get("docs", {}),
+                "docs": docs_normalized,
                 "computed_at": result.get("computed_at"),
             })
         return {"projects": projects, "scoring": "5-dimensional"}
