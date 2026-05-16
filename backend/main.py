@@ -808,6 +808,7 @@ async def lifespan(app: FastAPI):
     from core.compliance import ComplianceTracker
     from hooks.daily_activity_hook import DailyActivityExtractionHook
     from hooks.auto_commit_hook import WorkspaceAutoCommitHook
+    from hooks.code_change_feed import CodeChangeFeed
     from hooks.context_health_hook import ContextHealthHook
     from hooks.distillation_hook import DistillationTriggerHook
     from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
@@ -834,6 +835,8 @@ async def lifespan(app: FastAPI):
     ))
     # Pass shared git lock to auto-commit hook to prevent .git/index.lock contention
     hook_manager.register(WorkspaceAutoCommitHook(git_lock=hook_executor.git_lock))
+    # Code Change Feed: analyze post-commit diff → propose TECH.md updates (Channel 1)
+    hook_manager.register(CodeChangeFeed(git_lock=hook_executor.git_lock))
     hook_manager.register(DistillationTriggerHook())
     # Context health: light refresh every session (if changed), deep check daily.
     # Runs AFTER distillation so embedding sync picks up fresh MEMORY.md entries.
