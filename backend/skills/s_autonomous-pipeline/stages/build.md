@@ -4,6 +4,14 @@ Pipeline-owned stage (no sibling skill). This is the core implementation stage.
 
 The BUILD stage follows TDD methodology: tests before code, code until tests pass.
 
+### 🚨 CRITICAL: Tests BEFORE Code — Not After, Not "Later"
+
+Write the test FIRST. Watch it FAIL. Then write implementation. If you wrote code
+before a test exists for it, you are not doing TDD — you are doing "code then
+rationalize tests." C009: 5 iterations because tests came after code. C011: 57
+tests passed but tested the wrong thing. **The test defines what "correct" means.
+Code without a pre-existing test has no definition of correct.**
+
 ## Anti-Pattern: Horizontal Slices (BLOCKING)
 
 **DO NOT write all tests first, then all implementation.** This is "horizontal
