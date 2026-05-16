@@ -30,6 +30,30 @@ _CONF_STALE_REFERENCE = 0.9
 _CONF_NEW_ENTRY_POINT = 0.75
 
 
+def _get_channel_threshold(channel: str, default: float) -> float:
+    """Read adjusted confidence threshold from channel_stats.json (feedback loop).
+
+    If the channel has low precision (< 40%), the threshold increases by 0.15
+    per the ProposalFeedbackTracker rules. Falls back to default when stats
+    file is absent or unreadable.
+    """
+    try:
+        from core.proposal_feedback import ProposalFeedbackTracker, THRESHOLD_FLOOR
+        import json as _json
+        from pathlib import Path as _Path
+
+        from config import get_app_data_dir
+        stats_file = get_app_data_dir() / "SwarmWS" / "Projects" / "SwarmAI" / ".artifacts" / "channel_stats.json"
+        if not stats_file.exists():
+            return max(default, THRESHOLD_FLOOR)
+
+        stats = _json.loads(stats_file.read_text(encoding="utf-8"))
+        tracker = ProposalFeedbackTracker()
+        return tracker.get_adjusted_threshold(channel, default, stats)
+    except Exception:
+        return default
+
+
 def detect_tech_drift(workspace_path: str, project: str = "SwarmAI") -> int:
     """Compare code graph against TECH.md to detect architectural drift.
 
@@ -62,6 +86,9 @@ def detect_tech_drift(workspace_path: str, project: str = "SwarmAI") -> int:
 
     proposals_count = 0
 
+    # Feedback loop: read adjusted threshold for this channel
+    channel_threshold = _get_channel_threshold("code_intel_feed", 0.7)
+
     # 1. Undocumented modules (>=5 functions, not mentioned in TECH.md)
     module_map = graph.get_module_map()
     if not module_map:
@@ -91,6 +118,10 @@ def detect_tech_drift(workspace_path: str, project: str = "SwarmAI") -> int:
             continue
 
         # Generate proposal (H1 fix: safe access)
+        # Feedback gate: skip if confidence below adjusted threshold
+        if _CONF_UNDOCUMENTED_MODULE < channel_threshold:
+            continue
+
         symbol_names = [n.get("name", "") for n in nodes if n.get("name")][:5]
         proposal = CultivationProposal(
             target_doc="TECH.md",
@@ -118,6 +149,10 @@ def detect_tech_drift(workspace_path: str, project: str = "SwarmAI") -> int:
             # M6 fix: only flag if it looks like a code symbol (contains _ or camelCase)
             if not ("_" in sym or any(c.isupper() for c in sym[1:])):
                 continue  # Skip common English words like "data", "test", "main"
+
+            # Feedback gate: skip if confidence below adjusted threshold
+            if _CONF_STALE_REFERENCE < channel_threshold:
+                continue
 
             proposal = CultivationProposal(
                 target_doc="TECH.md",
