@@ -114,7 +114,7 @@ Based on heti CLReq + tailwindcss-typography. **All sizes computed for 1080px ca
 | xl | 4× | 96px | Section padding (generous) |
 | 2xl | 5× | 120px | Section breaks / hero spacing |
 
-**Critical rule: ALL vertical spacing must be multiples of 24px.** This creates consistent rhythm. Mixed spacing (48px here, 56px there) = visual chaos.
+**Critical rule: ALL internal vertical spacing (section padding, heading gaps, card internals) must be multiples of 24px.** Edge padding and platform-specific overrides (per `references/platform-adaptive.md`) may use non-24px values for platform-safe-area compliance. Mixed INTERNAL spacing (48px here, 56px there) = visual chaos.
 
 ## Section Spacing (Consistent)
 
@@ -169,24 +169,24 @@ All posters use **semantic token names** (not hardcoded colors). The active dire
 
 ## Visual Rhythm (Card Variety)
 
-For a 6-section poster, alternate card treatments to prevent monotony:
+For a 6-section poster, alternate card treatments to prevent monotony. Each direction defines its own card styles (see direction YAML files), but the PATTERN of alternation is universal:
 
 | Position | Card Style | Visual Element | Purpose |
 |----------|-----------|----------------|---------|
-| 1 | Full dramatic | Gold left-border on body | Strong opening |
-| 2 | Visual accent | Abstract geometric (rings/orbs) | Visual break |
-| 3 | Contained card | Border + radius + watermark | Tactile variety |
+| 1 | Full dramatic | Accent left-border on body | Strong opening |
+| 2 | Visual accent | Abstract geometric or texture | Visual break |
+| 3 | Contained card | Border + radius + subtle bg | Tactile variety |
 | 4 | Centered manifesto | Minimal, text-only | Breathing room |
-| 5 | Pullquote | Gold-tinted quote block | Emphasis shift |
-| 6 | Finale | Elevated bg + geometric accent | Strong close |
+| 5 | Pullquote | Accent-tinted quote block | Emphasis shift |
+| 6 | Finale | Elevated bg + decorative accent | Strong close |
 
 **Never use the same card style twice consecutively.** Alternation creates page-turn energy.
 
 ## Dividers Between Sections
 
-Alternate between two styles:
-- **Vertical line:** 1px × 60px, gold gradient (fade to transparent at both ends)
-- **Dot:** 6px circle, gold at 30% opacity
+Alternate between two styles (use active direction's accent color):
+- **Vertical line:** 1px × 60px, accent gradient (fade to transparent at both ends)
+- **Dot:** 6px circle, accent at 30% opacity
 
 Total divider height including surrounding space: **120px** (5× base).
 
@@ -215,10 +215,10 @@ Total divider height including surrounding space: **120px** (5× base).
 - ❌ More than 2 hues in the same poster (direction controls the palette)
 
 **Typography:**
-- ❌ Inter used as display/headline font (Inter = body only; headlines use direction font)
+- ❌ Inter used as Chinese headline font (Inter is for English display/body; Chinese headlines use PingFang SC or STSongti)
 - ❌ All-caps Chinese text (CJK has no uppercase concept — looks broken)
 - ❌ Comic Sans, Papyrus, or any novelty fonts
-- ❌ Font size < 18px anywhere on poster (unreadable on phone)
+- ❌ Font size < 18px for body/headline text (eyebrow/caption labels at 12-14px are acceptable per Typography Scale)
 - ❌ More than 3 font families in one poster
 - ❌ Letter-spacing > 0.5px on Chinese text (destroys character rhythm)
 
@@ -237,6 +237,10 @@ Total divider height including surrounding space: **120px** (5× base).
 - ❌ Decorative elements competing with text for attention
 - ❌ Watermark/logo larger than 48px height
 - ❌ More than 6 sections per poster (information overload)
+- ❌ Isometric 3D illustrations (AI-generated aesthetic, dated)
+- ❌ Glassmorphism card stacked on gradient background (overused 2023 trend)
+- ❌ The exact purple gradient `linear-gradient(135deg, #667eea, #764ba2)` (LLM default #1)
+- ❌ Rounded avatar circles in testimonial layouts (AI cargo-cult pattern)
 
 ### Structural Ban List (BAN — always enforce)
 

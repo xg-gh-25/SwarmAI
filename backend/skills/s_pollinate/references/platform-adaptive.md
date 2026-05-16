@@ -22,7 +22,7 @@ The LLM generates content structure once. Platform rules control the visual outp
 | Dimensions | 1080 × 1440 | 3:4 official recommendation |
 | Max sections | 4 | Readable at thumb-scroll speed |
 | Text hero | 56px | Eye-catching in feed |
-| Text body | 26px | Readable without zoom |
+| Text body | 26px | +2px from base for feed thumbnail readability |
 | Section spacing | 72px (3× base) | Moderate density |
 | Edge padding | 60px | Safe from feed crop |
 | Content density | Medium | 3-4 key points visible |
@@ -57,7 +57,7 @@ The LLM generates content structure once. Platform rules control the visual outp
 | Dimensions | 1200 × 630 | Universal OG standard |
 | Max sections | 1 | Title + one statement ONLY |
 | Text hero | 64px | Maximum impact in tiny preview |
-| Text body | 28px | Readable at 300px rendered width |
+| Text body | 28px | +4px from base — OG renders at 300px width in feeds, needs extra size |
 | Section spacing | 48px (2× base) | Compact |
 | Edge padding | 80px | Extra safe — platforms crop unpredictably |
 | Content density | Very low | One thought per image |

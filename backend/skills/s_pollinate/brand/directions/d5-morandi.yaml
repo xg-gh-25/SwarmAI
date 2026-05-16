@@ -20,9 +20,7 @@ tokens:
   text-primary: "#3D3530"               # Warm dark brown
   text-secondary: "rgba(61,53,48,0.65)" # Muted brown
   text-muted: "rgba(61,53,48,0.4)"      # Faint brown
-
-# Extended tokens (direction-specific)
-accent-secondary: "#7B9E89"              # Sage green for variety
+  accent-secondary: "#7B9E89"            # Sage green for variety
 
 # ─── Morandi Gradient Cards (rotate, never repeat) ─────────
 palette_cards:

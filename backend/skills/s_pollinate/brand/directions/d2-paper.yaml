@@ -20,6 +20,7 @@ tokens:
   text-primary: "#1A1A1A"               # Near-black (never pure #000)
   text-secondary: "rgba(0,0,0,0.6)"     # Body text
   text-muted: "rgba(0,0,0,0.35)"        # Captions
+  accent-secondary: "#E17055"            # Same as accent (single-accent direction)
 
 # ─── Typography ────────────────────────────────────────────
 typography:
