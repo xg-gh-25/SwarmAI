@@ -1416,15 +1416,8 @@ Read `brand/content_principles.md` and run anti-pattern scan on poster text:
 
 **P2 Hero Framing Gate (BLOCKING — L2 mechanical enforcement):**
 ```bash
-# Extract visible text from HTML, then scan for hero framing
-python3 -c "
-from pathlib import Path
-import re, sys
-html = Path(sys.argv[1]).read_text()
-# Strip HTML tags to get visible text
-text = re.sub(r'<[^>]+>', '\n', html)
-print(text)
-" {html_file} | python3 scripts/p2_scan.py
+# Scan poster HTML for hero framing (script auto-strips HTML tags/style/script)
+python3 scripts/p2_scan.py {html_file}
 ```
 Exit 0 = clean. Exit 1 = FAIL — fix offending text before proceeding.
 Targets: "我造了/我做了/我们是最.../我们的X远超" hero claims.
@@ -1463,10 +1456,10 @@ truncated by 40-60% during D5 reskin).
 
 **Verification procedure (after reskin):**
 ```bash
-# Count sections in source HTML
-SOURCE_SECTIONS=$(grep -c '<section\|<div class="s\|<div class="card' {source_html})
+# Count sections in source HTML (grep -E for alternation on macOS BSD grep)
+SOURCE_SECTIONS=$(grep -Ec '<section|<div class="s|<div class="card' {source_html})
 # Count sections in output HTML
-OUTPUT_SECTIONS=$(grep -c '<section\|<div class="s\|<div class="card' {output_html})
+OUTPUT_SECTIONS=$(grep -Ec '<section|<div class="s|<div class="card' {output_html})
 # Calculate ratio
 RATIO=$(python3 -c "print(f'{$OUTPUT_SECTIONS / max($SOURCE_SECTIONS, 1) * 100:.0f}%')")
 echo "Delegation fidelity: $OUTPUT_SECTIONS / $SOURCE_SECTIONS sections = $RATIO"
