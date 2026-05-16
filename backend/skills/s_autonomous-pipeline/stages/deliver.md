@@ -236,6 +236,24 @@ git diff --name-only origin/main...HEAD 2>/dev/null || git diff --name-only HEAD
 
 **For bugfix profile:** Only dispatch Correctness + Security.
 
+**🚨 MECHANICAL OVERRIDE: diff > 100 lines = full tier, regardless of profile.**
+
+```bash
+DIFF_LINES=$(git diff --stat origin/main...HEAD 2>/dev/null | tail -1 | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+')
+DIFF_LINES=${DIFF_LINES:-0}
+if [ "$DIFF_LINES" -gt 100 ]; then
+  echo "TIER OVERRIDE: $DIFF_LINES insertions > 100 → forcing FULL adversarial (all specialists)"
+fi
+```
+
+If override triggers: dispatch ALL applicable specialists per the dispatch rules
+above, not just the profile's subset. A 382-line refactor in "bugfix" profile
+is not a "bugfix" in adversarial review terms — it's a cross-module migration
+with concurrency, import order, and dead-code risks that only full specialist
+coverage catches. This gate exists because run_12f19e0e (2026-05-16) used lite
+tier on a 382-line migration; PE review caught a HIGH (shell variable scope)
+that full adversarial would have found.
+
 Count the total changed lines. If < 50 lines, skip all specialists.
 Print dispatch summary:
 ```
