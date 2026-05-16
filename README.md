@@ -43,7 +43,7 @@ Most agent harnesses optimize one axis (code quality, memory, or autonomy). We'r
 | **Quality convergence** | 6-layer gate × max 3 iterations + adversarial review | Delivery meets a bar | Failures feed back as structural rules (never the same class twice) |
 | **Self-evolution** | Corrections → pattern detection → rule promotion | Agent improves over time | New rules harden gates → gates catch more → corrections get rarer |
 
-The compound test: remove any one component, and the others get measurably weaker. The trajectory is what's interesting, not the current position.
+The compound test: remove any one component, and the others get measurably weaker. The trajectory is what's interesting, not the current position. See **[CONVERGENCE.md](./docs/CONVERGENCE.md)** for timestamped data with git-verifiable evidence.
 
 **Five architectural bets worth noting:**
 - **Not one role — many roles, one knowledge base.** The same DDD docs drive code delivery (Pipeline), content production (Pollinate), and strategic decisions. Most harnesses optimize one axis. We're testing whether a single knowledge substrate can serve multiple delivery engines simultaneously.
@@ -347,7 +347,7 @@ Remove any one component and the others get weaker. That's the multiplication te
 | v1.6–v1.9 | ~1.0 | Catastrophic (OOM, app won't start) | Pre-adversarial review |
 | v1.10–v1.12 | ~0.3 | Edge case (race conditions, platform quirks) | Full pipeline + adversarial active |
 
-The thesis is testable: if quality converges as corrections compound, the system is self-sustaining. Early evidence says yes.
+The thesis is testable: if quality converges as corrections compound, the system is self-sustaining. Early evidence says yes. Full data: **[docs/CONVERGENCE.md](./docs/CONVERGENCE.md)**.
 
 ---
 
