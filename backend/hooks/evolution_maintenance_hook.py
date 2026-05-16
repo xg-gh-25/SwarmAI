@@ -61,9 +61,11 @@ _MANAGED_SECTIONS = [
     ("Competence Learned", "K"),
 ]
 
-# Regex to match entry headers: ### E001 | reactive | skill | 2026-03-07
+# Regex to match entry headers in both formats:
+#   Old: ### E001 | reactive | skill | 2026-03-07
+#   New: ### E001 | 2026-03-07
 _ENTRY_HEADER_RE = re.compile(
-    r"^###\s+([EOKCF]\d{3})\s*\|.*\|\s*(\d{4}-\d{2}-\d{2})\s*$",
+    r"^###\s+([EOKCF]\d{3})\s*\|.*?(\d{4}-\d{2}-\d{2})\s*$",
     re.MULTILINE,
 )
 
@@ -112,7 +114,10 @@ def _parse_entries(content: str, section_name: str) -> list[dict]:
         try:
             usage_count = int(usage_str)
         except ValueError:
-            usage_count = 0
+            # Non-numeric values like "Daily", "Weekly", "Occasional" mean
+            # the capability IS actively used — treat as high count to prevent
+            # accidental deprecation.
+            usage_count = 999 if usage_str.strip() else 0
 
         entries.append({
             "id": entry_id,
