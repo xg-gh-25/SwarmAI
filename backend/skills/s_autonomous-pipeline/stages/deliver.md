@@ -18,6 +18,26 @@
 5. Push-Ready Gate — binary final verdict
 ```
 
+### 🚨 CRITICAL: Adversarial Review is NON-NEGOTIABLE
+
+**STOP. Before you proceed past step 2, confirm:** Will you spawn adversarial
+sub-agents in step 3? If the answer is anything other than "yes, spawning now"
+— you are rationalizing. Read C011, C021, C025 below.
+
+**This gate has been skipped 5 times in 6 weeks.** Each time the agent said
+"tests pass, code is simple, I'm confident." Each time the feature was broken.
+
+| What you're thinking | Why it's wrong | Source |
+|-----|------|------|
+| "Tests pass, adversarial review is unnecessary" | C011: 57 tests green, 10/10 confidence → feature 100% non-functional | C011 |
+| "Code is simple, I already reviewed it" | C025: 3 files, 2 functions, "simple" → user caught it | C025 |
+| "Validator schema is strict, I'll force past it" | C021: bypassing the gate = bypassing the requirement | C021 |
+| "I'll do a quick self-review instead" | Self-review found 0 findings. Adversarial found 5 (2 HIGH). Same session, same code. | This session (run_bd42b58f) |
+
+**If you skip this step, the pipeline WILL be mechanically blocked** by Check 9
+(depth validation) which requires `adversarial_review.profile_tier == "full"` for
+full/bugfix profiles. There is no way to close the pipeline without it.
+
 ### Push-Ready Gate (Binary — Final Verdict)
 
 **Evaluated LAST, after all other checks complete.**

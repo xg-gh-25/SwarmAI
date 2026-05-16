@@ -1,5 +1,13 @@
 # REVIEW Stage
 
+### 🚨 CRITICAL: Self-Review ≠ Review
+
+You wrote this code. You cannot objectively review it. "I already looked at it
+during BUILD" is not a review — it's re-reading your own assumptions. REVIEW
+requires: integration trace (real wiring check), runtime patterns RP1-RP30
+(mechanical checklist), and for >3 files: parallel sub-agents with ISOLATED
+context. C011: builder rated 10/10, feature was 100% broken.
+
 ## Parallel Fan-Out Review
 
 **When the changeset touches >3 files OR >100 lines OR touches auth/data/infra
