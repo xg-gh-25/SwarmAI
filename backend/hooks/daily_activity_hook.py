@@ -233,6 +233,21 @@ class DailyActivityExtractionHook:
                 context.session_id,
                 path,
             )
+
+            # 3b. Emit DAILY_ACTIVITY event for DDD cultivation v2
+            try:
+                from core.cultivation_dispatcher import (
+                    EventType, emit_cultivation_event,
+                )
+                await emit_cultivation_event(
+                    EventType.DAILY_ACTIVITY,
+                    source="daily_activity_hook",
+                    payload={"path": str(path), "session_id": context.session_id},
+                    priority=2,
+                )
+            except Exception:
+                pass  # Non-blocking: cultivation emit never breaks extraction
+
         except Exception as exc:
             self._tracker.record_failure(context.session_id, str(exc))
             raise  # Re-raise so hook manager logs it

@@ -176,6 +176,28 @@ def detect_tech_drift(workspace_path: str, project: str = "SwarmAI") -> int:
     logger.info(
         "code_intel_feed: %d drift proposals for %s", proposals_count, project
     )
+
+    # Emit CODE_INTEL_INDEXED event for DDD cultivation v2
+    if proposals_count > 0:
+        try:
+            from core.cultivation_dispatcher import (
+                EventType, emit_cultivation_event,
+            )
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    emit_cultivation_event(
+                        EventType.CODE_INTEL_INDEXED,
+                        source="code_intel_feed",
+                        payload={"proposals": proposals_count, "project": project},
+                        priority=1,
+                    ),
+                    loop,
+                )
+        except Exception:
+            pass  # Non-blocking
+
     return proposals_count
 
 

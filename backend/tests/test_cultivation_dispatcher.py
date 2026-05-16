@@ -19,6 +19,8 @@ from core.cultivation_dispatcher import (
     CultivationEvent,
     EventDispatcher,
     EventType,
+    emit_cultivation_event,
+    get_dispatcher,
 )
 
 
@@ -296,3 +298,48 @@ class TestOrchestratorSubscriptions:
         # Only signal_ddd_bridge should respond to SIGNAL_DIGEST
         assert len(tasks) == 1
         assert tasks[0].name == "signal_ddd_bridge"
+
+
+# ── Singleton + Convenience API ────────────────────────────────────────────
+
+
+class TestSingletonDispatcher:
+    def setup_method(self):
+        """Reset module singleton between tests."""
+        import core.cultivation_dispatcher as mod
+        mod._dispatcher = None
+
+    def test_get_dispatcher_returns_same_instance(self):
+        d1 = get_dispatcher()
+        d2 = get_dispatcher()
+        assert d1 is d2
+
+    def test_get_dispatcher_has_correct_defaults(self):
+        d = get_dispatcher()
+        assert d.queue.maxsize == 50
+        assert d._dedup_window == 60.0
+
+    @pytest.mark.asyncio
+    async def test_emit_cultivation_event_convenience(self):
+        result = await emit_cultivation_event(
+            EventType.GIT_COMMIT,
+            source="test",
+            payload={"test": True},
+            priority=2,
+        )
+        assert result is True
+        # Verify it went into the singleton queue
+        d = get_dispatcher()
+        assert d.queue.qsize() == 1
+
+    @pytest.mark.asyncio
+    async def test_emit_convenience_dedup(self):
+        await emit_cultivation_event(EventType.TIMER_30MIN, source="test")
+        result = await emit_cultivation_event(EventType.TIMER_30MIN, source="test2")
+        assert result is False  # Deduped
+
+    @pytest.mark.asyncio
+    async def test_emit_different_types_not_deduped(self):
+        await emit_cultivation_event(EventType.GIT_COMMIT, source="a")
+        result = await emit_cultivation_event(EventType.DAILY_ACTIVITY, source="b")
+        assert result is True

@@ -245,6 +245,19 @@ class LifecycleManager:
                     # Radar ToDo sweep every 30th cycle (~30 min)
                     if cycle % 30 == 0 and cycle > 0:
                         await self._sweep_todos()
+                        # Emit TIMER_30MIN for DDD cultivation v2
+                        try:
+                            from core.cultivation_dispatcher import (
+                                EventType, emit_cultivation_event,
+                            )
+                            await emit_cultivation_event(
+                                EventType.TIMER_30MIN,
+                                source="lifecycle_manager",
+                                payload={"cycle": cycle},
+                                priority=3,
+                            )
+                        except Exception:
+                            pass  # Non-blocking
                     # Workspace backup check every 60th cycle (~60 min)
                     if cycle % 60 == 0 and cycle > 0:
                         await self._run_daily_backup()
