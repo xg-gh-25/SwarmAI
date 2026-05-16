@@ -41,43 +41,67 @@ Each approach: **Constraint** (which one), **What** (1-2 sentences), **Effort**
 **Fallback:** If constraints don't fit the problem (pure research, docs-only),
 revert to Minimal/Ideal/Creative.
 
-### Grill Protocol (T1)
+### Design Risk Probe (T1)
 
-**After research, before presenting alternatives**, run a structured grilling
-session to stress-test assumptions:
+**After research, before presenting alternatives**, stress-test each approach's
+riskiest assumptions. Unlike the old "grill protocol" (which asked the user and
+was almost always skipped), this is a **self-answering probe** — the agent
+identifies risks and resolves them by reading code or DDD docs.
 
-1. For each alternative, identify the **3 riskiest assumptions**
-2. Ask the user **ONE question at a time** about each critical assumption
-3. For each question, provide **YOUR recommended answer** (not open-ended)
-4. User can: accept the recommendation, override with their answer, or discuss
-5. Capture resolved decisions as they crystallize
+**Process:**
 
-**Grill rules:**
-- One question at a time. Wait for the answer before asking the next.
-- If a question can be answered by reading the codebase → read it, don't ask
-- If user says "just pick" or "skip" → accept all recommended answers, proceed
-- **Max 10 questions** per session (scarcity forces prioritization)
-- Focus on assumptions that, if wrong, would change the recommendation
+1. For each alternative, identify the **3 riskiest assumptions** — things that,
+   if wrong, would change the recommendation
+2. For each assumption, **try to verify or falsify it yourself:**
+   - Can you Read the codebase to confirm? → do it
+   - Can you check TECH.md/IMPROVEMENT.md? → do it
+   - Is it genuinely unknowable without user input? → mark as "unresolved"
+3. Present the probe results alongside alternatives
 
-**Output (appended to research artifact `grill_results` field):**
+**Output (in research artifact `risk_probe` field):**
 
 ```json
 {
-  "grill_results": [
+  "risk_probe": [
     {
-      "question": "Should we use regex or BeautifulSoup?",
-      "recommendation": "Regex — zero deps, structure is simple",
-      "resolution": "accepted",
-      "rationale": "User agreed — simplicity over robustness"
+      "approach": "A (SIMPLICITY)",
+      "assumption": "existing hook interface accepts new event type",
+      "verification": "Read hook_executor.py — confirmed: dispatches any event dict",
+      "status": "verified"
+    },
+    {
+      "approach": "B (QUALITY)",
+      "assumption": "sqlite-vec available in PyInstaller bundle",
+      "verification": "Checked verify_build.py — NOT in hidden imports list",
+      "status": "falsified — approach B not viable without build change"
+    },
+    {
+      "approach": "C (SPEED)",
+      "assumption": "user wants temporary solution replaced later",
+      "verification": "Cannot determine from codebase — user intent",
+      "status": "unresolved"
     }
   ]
 }
 ```
 
-**Skip when:**
-- Research shows only one viable approach (mechanical, not design)
+**Rules:**
+- Verified + falsified assumptions → update alternatives accordingly (remove
+  non-viable approaches, adjust effort estimates, change recommendation)
+- Unresolved assumptions → present to user as part of alternatives output:
+  "I couldn't verify X — my recommendation assumes Y, override if wrong."
+- If ALL assumptions are verified → skip user interaction, proceed with recommendation
+- **Max 3 assumptions per approach × 3 approaches = 9 probes max** (scarcity)
+
+**When to do a full grill instead (rare):**
+If >50% of probes are "unresolved" AND the choice is high-stakes (judgment-class
+decision), escalate to the interactive grill protocol: ask the user ONE question
+at a time, provide your recommended answer, wait for confirmation. Max 5 questions.
+
+**Skip entirely when:**
 - Scope is trivial (S effort, proven pattern)
 - User already specified the approach ("use pipeline", "just do it")
+- Only one viable approach exists (mechanical, no design choice)
 
 ### Artifact Publish
 
@@ -85,6 +109,6 @@ session to stress-test assumptions:
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
   --type research --producer s_autonomous-pipeline \
   --summary "3 alternatives for <topic>. Recommending: <approach>" --stage think \
-  --data '{"key_findings":[...],"alternatives":[...],"recommendation":"...","sources":[...]}'
+  --data '{"key_findings":[...],"alternatives":[...],"recommendation":"...","risk_probe":[...],"sources":[...]}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state plan
 ```
