@@ -640,10 +640,11 @@ def _check_depth(stage: str, artifact_data: dict, profile: str) -> list[str]:
                     "Depth: adversarial_review.profile_tier missing — "
                     "was the sub-agent actually spawned?"
                 )
-            elif tier == "skipped" and profile not in ("trivial", "research", "docs"):
+            elif tier in ("skipped", "lite") and profile in ("full", "bugfix"):
                 errors.append(
-                    f"Depth: adversarial_review.profile_tier='skipped' but profile='{profile}' "
-                    f"requires at minimum a PE review pass"
+                    f"Depth: adversarial_review.profile_tier='{tier}' but profile='{profile}' "
+                    f"requires full adversarial review (independent sub-agent). "
+                    f"Only docs/trivial/research profiles allow lite/skipped."
                 )
             elif tier != "skipped" and "findings" not in ar:
                 errors.append(

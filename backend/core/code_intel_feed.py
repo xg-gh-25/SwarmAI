@@ -64,9 +64,13 @@ def detect_tech_drift(workspace_path: str, project: str = "SwarmAI") -> int:
 
     # 1. Undocumented modules (>=5 functions, not mentioned in TECH.md)
     module_map = graph.get_module_map()
+    if not module_map:
+        return 0
     tech_lower = tech_content.lower()
 
     for mod_path, nodes in module_map.items():
+        if not nodes:
+            continue
         # Count functions/methods in this module
         fn_count = sum(
             1 for n in nodes
@@ -75,19 +79,19 @@ def detect_tech_drift(workspace_path: str, project: str = "SwarmAI") -> int:
         if fn_count < _MIN_FUNCTIONS_FOR_PROPOSAL:
             continue
 
-        # Check if module is mentioned in TECH.md
-        # Match on directory name or key file names
-        mod_name = mod_path.split("/")[-1] if "/" in mod_path else mod_path
-        if mod_name.lower() in tech_lower:
+        # H2 fix: check ALL path components (not just last) to avoid false negatives
+        mod_parts = [p for p in mod_path.split("/") if p]
+        if any(part.lower() in tech_lower for part in mod_parts):
             continue
 
         # Also check if any significant symbol names are mentioned
-        top_symbols = [n["name"] for n in nodes[:5] if n.get("name")]
+        # H1 fix: safe .get() access for "name" field
+        top_symbols = [n.get("name", "") for n in nodes[:5] if n.get("name")]
         if any(sym.lower() in tech_lower for sym in top_symbols):
             continue
 
-        # Generate proposal
-        symbol_names = [n["name"] for n in nodes if n.get("name")][:5]
+        # Generate proposal (H1 fix: safe access)
+        symbol_names = [n.get("name", "") for n in nodes if n.get("name")][:5]
         proposal = CultivationProposal(
             target_doc="TECH.md",
             target_section="Key Subsystems",
@@ -107,10 +111,14 @@ def detect_tech_drift(workspace_path: str, project: str = "SwarmAI") -> int:
     tech_symbols = _extract_backtick_symbols(tech_content)
     graph_symbols = _get_all_symbol_names(graph)
 
+    # M5 fix: separate cap for stale refs (don't let module proposals steal the budget)
+    stale_ref_count = 0
     for sym in tech_symbols:
         if sym not in graph_symbols and len(sym) > 3:
-            # Only flag if it looks like a real symbol (not a short word)
-            # and is in a code-relevant section
+            # M6 fix: only flag if it looks like a code symbol (contains _ or camelCase)
+            if not ("_" in sym or any(c.isupper() for c in sym[1:])):
+                continue  # Skip common English words like "data", "test", "main"
+
             proposal = CultivationProposal(
                 target_doc="TECH.md",
                 target_section="Key Subsystems",
@@ -124,9 +132,10 @@ def detect_tech_drift(workspace_path: str, project: str = "SwarmAI") -> int:
             )
             write_proposal(proposal, project_dir)
             proposals_count += 1
+            stale_ref_count += 1
 
-            # Cap stale ref proposals to avoid flooding
-            if proposals_count > 5:
+            # Cap stale ref proposals independently
+            if stale_ref_count >= 5:
                 break
 
     logger.info(
@@ -171,7 +180,7 @@ def get_code_coverage_for_health(
     ]
 
     if not significant_modules:
-        return 1.0  # No significant modules = fully covered (vacuously)
+        return None  # M7 fix: can't measure coverage without significant modules
 
     # Count how many are mentioned in TECH.md
     documented = 0
@@ -188,6 +197,10 @@ def get_test_coverage_for_maturity(
 ) -> dict[str, bool]:
     """Check which modules have test files for maturity evidence.
 
+    M8 fix: checks whether test files exist in the graph for each module,
+    by looking for nodes with file_path containing "test_<module_name>".
+    Does NOT check the module's own path — checks the test directory.
+
     Returns {module_path: has_tests} dict.
     Modules with tests can be promoted to "Growing" maturity faster.
     """
@@ -198,22 +211,30 @@ def get_test_coverage_for_maturity(
         return {}
 
     module_map = graph.get_module_map()
+    if not module_map:
+        return {}
+
+    # Build a set of all file paths that contain "test" (test files in the graph)
+    all_test_files: set[str] = set()
+    for nodes in module_map.values():
+        for n in nodes:
+            fp = (n.get("file_path") or "").lower()
+            if "test" in fp:
+                all_test_files.add(fp)
+
     result: dict[str, bool] = {}
 
     for mod_path, nodes in module_map.items():
-        # Check if any node in this module has a test caller
+        # Skip test modules themselves
+        if "test" in mod_path.lower():
+            continue
+
+        # M8 fix: check if a test file exists for this module's name
+        mod_name = mod_path.split("/")[-1] if "/" in mod_path else mod_path
         has_test = any(
-            "test" in (n.get("file_path") or "").lower()
-            for n in nodes
+            f"test_{mod_name}" in tf or f"test_{mod_name.replace('.py', '')}" in tf
+            for tf in all_test_files
         )
-        # Also check for dedicated test file
-        if not has_test:
-            mod_name = mod_path.split("/")[-1] if "/" in mod_path else mod_path
-            has_test = any(
-                f"test_{mod_name}" in (n.get("file_path") or "")
-                or f"test_{mod_name.replace('.py', '')}" in (n.get("file_path") or "")
-                for n in nodes
-            )
         result[mod_path] = has_test
 
     return result
@@ -249,9 +270,14 @@ def _extract_backtick_symbols(text: str) -> set[str]:
 def _get_all_symbol_names(graph) -> set[str]:
     """Get all symbol names from the code graph for existence checks."""
     module_map = graph.get_module_map()
+    if not module_map:
+        return set()
     names = set()
     for nodes in module_map.values():
+        if not nodes:
+            continue
         for n in nodes:
-            if n.get("name"):
-                names.add(n["name"])
+            name = n.get("name")
+            if name:
+                names.add(name)
     return names

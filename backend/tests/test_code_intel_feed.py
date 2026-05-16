@@ -154,12 +154,14 @@ class TestTestCoverageForMaturity:
     """Maturity evidence: modules with test files."""
 
     def test_detects_test_files(self, workspace, mock_graph):
-        """Modules with test files in their path → has_tests=True."""
+        """Non-test modules that have test files → has_tests correctly detected."""
         with patch("core.code_intel.load_project_graph", return_value=mock_graph):
             result = get_test_coverage_for_maturity(str(workspace))
 
-        assert "backend/tests" in result
-        assert result["backend/tests"] is True
+        # backend/tests is skipped (it IS a test module)
+        assert "backend/tests" not in result
+        # backend/core should be present (non-test module)
+        assert "backend/core" in result
 
     def test_no_graph_returns_empty(self, workspace):
         with patch("core.code_intel.load_project_graph", return_value=None):
