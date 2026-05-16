@@ -228,6 +228,18 @@ Stage 4 PACKAGE: PASS (user-built)
 
 ## Stage 5: SMOKE TEST (90s max)
 
+**🚨 PRE-CHECK: DMG must exist (unless user explicitly skipped Stage 4).**
+
+```bash
+DMG_PATH="desktop/src-tauri/target/release/bundle/dmg/SwarmAI_${NEW_VERSION}_aarch64.dmg"
+if [ ! -f "$DMG_PATH" ]; then
+  echo "FAIL: DMG not found at $DMG_PATH"
+  echo "Stage 4 PACKAGE was skipped or failed. Run: cd desktop && npm run tauri build"
+  exit 1
+fi
+echo "DMG verified: $(ls -lh $DMG_PATH | awk '{print $5}')"
+```
+
 Deploy new binary to daemon and verify health with correct version.
 
 **CRITICAL: SIGKILL + bootout + rsync + bootstrap.** Never use SIGTERM (SSE streams
