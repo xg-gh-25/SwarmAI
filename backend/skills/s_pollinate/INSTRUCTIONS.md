@@ -239,73 +239,80 @@ Message first, format follows.
 This is what the user takes away. Every DELIVER stage MUST output this block
 in the chat window. The user should be able to copy-paste directly to publish.
 
-**Format: Poster + Text deliverables (2-variant structured output):**
+**Format: Poster + Text deliverables (2-variant user-facing output):**
+
+The delivery output is designed for the USER, not for the developer. The user wants:
+1. See the posters immediately (hero content)
+2. Pick one with zero friction
+3. Get publish-ready copy text
+4. Know quality was verified (trust signal, not noise)
+
+**CRITICAL RULES:**
+- **Images are the hero.** Show them FIRST, large, inline (Read tool on .png)
+- **Quality gates are a one-line trust signal** — NOT a full table. User doesn't need L1-L8 detail unless something failed.
+- **Copy text is ready to paste** — zero formatting instructions, zero markdown
+- **Next steps are 2-3 obvious actions** — not a numbered menu of 5 developer commands
+- **No file paths visible** — user doesn't care about filesystem structure
 
 ```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🐝 **Pollinate** — "{topic}" ready for publish
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-## Direction A: {Direction Name} ({Chinese Name})
-> {Mood — one sentence from direction YAML}
-
-![Poster A](path-to-variant-a.png)
-
-## Direction B: {Direction Name} ({Chinese Name})
-> {Mood — one sentence from direction YAML}
-
-![Poster B](path-to-variant-b.png)
+🐝 **{topic}** — 两个方向，选一个发
 
 ---
 
-### ✅ Quality Gates (8/8 Pass)
+**A. {Direction Chinese Name}** — {mood, 4-6 chars}
 
-| Gate | Status | Detail |
-|------|--------|--------|
-| L1 Direction | ✅ | A={D_} B={D_} |
-| L2 Tokens | ✅ | 0 hardcoded hex |
-| L3 Spacing | ✅ | Max gap: {N}px (≤72) |
-| L4 Alignment | ✅ | 100% center |
-| L5 Anti-Slop | ✅ | 0/45 violations |
-| L6 Platform | ✅ | 1080×{H} ({format}) |
-| L7 Branding | ✅ | Watermark ✓ QR ✓ Footer ✓ |
-| L8 Variants | ✅ | 2 directions rendered |
+[INLINE POSTER IMAGE A — use Read tool to display the .png]
 
-── COPY (朋友圈) ───────────────────────
+**B. {Direction Chinese Name}** — {mood, 4-6 chars}
 
-{complete text, copy-paste ready}
+[INLINE POSTER IMAGE B — use Read tool to display the .png]
 
-── COPY (小红书) ───────────────────────
+---
 
-{title — ≤20 chars}
+✅ 质量验证通过 (8/8)
 
-{body text}
+---
+
+**朋友圈文案** (复制即发)
+
+{complete text — NO formatting, NO instructions, just the copy}
+
+**小红书文案** (复制即发)
+
+{title}
+
+{body}
 
 {hashtags}
 
-── FILES ───────────────────────────────
+---
 
-poster-a:  {path} ({size} KB)
-poster-b:  {path} ({size} KB)
-html:      {paths}
+**你想怎么做？**
+- "发 A" 或 "发 B" — 我帮你准备发布格式
+- "标题改成 XX" — 修改后重新生成
+- "再来一个方向" — 用不同风格重新出
 
-── NEXT ────────────────────────────────
-
-1. "发 A" — publish Direction A
-2. "发 B" — publish Direction B
-3. "调整 A 的 {element}" — modify specific element
-4. "换 D{N} 试试" — regenerate with different direction
-5. "出 {platform} 版本" — platform-specific crop
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-**Key rules for poster delivery:**
-1. **Images shown inline** — use Read tool on .png to display both variants
-2. **Quality gates always visible** — builds user trust in the system
-3. **Next steps are commands** — user types exactly what's shown
-4. **No taste decisions surface** — direction choice IS the taste gate (A/B selection)
-5. **If any gate failed and couldn't be auto-fixed:** show ⚠️ status + detail + "regenerate?" suggestion
+**Display Rules (binding — agent MUST follow):**
+
+1. **NEVER show the L1-L8 detail table unless a gate FAILED.** When all pass, one line: `✅ 质量验证通过 (8/8)`. Users don't read gate tables — they read posters.
+
+2. **NEVER show raw file paths.** No `Knowledge/Pollinate/posters/2026-05-16-xxx.png`. The image is shown inline — that's the "file delivery."
+
+3. **NEVER show numbered lists of 5+ options.** Max 3 actionable next steps. Pick the 3 most likely actions for THIS specific output.
+
+4. **ALWAYS show images inline.** Use the Read tool on the rendered .png files. The user must SEE the poster in the chat window — not a file path they have to click.
+
+5. **Copy text is NAKED.** No "以下是朋友圈文案：" preamble. No markdown formatting. Just the text the user selects and pastes. Separated by clear section headers.
+
+6. **If a gate FAILED and couldn't be auto-fixed**, show ONLY the failed gate:
+```
+⚠️ L4 对齐: section 1 标题偏左 — 正在修复...
+```
+Then fix it. User should almost never see failures (convergence loop handles them).
+
+7. **Poster choice is the ONLY user decision.** Everything else (direction scoring, gate verification, convergence iterations) happens invisibly. User experience = "我说一句话 → 看到两张海报 → 选一张 → 发".
 
 **Format: Video deliverables:**
 
@@ -1234,9 +1241,12 @@ The user receives only publish-ready output.
 **Verification methods:**
 
 L1: `grep "<!-- Direction:" {html_file}`
-L2: `grep -P '(?<!--)#[0-9a-fA-F]{3,8}' {style_body}` → 0 matches
+L2: After `</style>`, scan body for raw hex: `#[0-9a-fA-F]{3,8}` → 0 matches (exclude img src paths)
 L3: Check section padding values in CSS (all ≤ 72px for between-section gaps)
-L4: `grep "text-align" {html}` → all values are "center" (exception: code blocks)
+L4: **TWO checks required:**
+    (a) All section/container CSS classes (.s, .hero, .card, section) MUST have explicit `text-align:center` in their class definition — never rely on inheritance or browser default (which is left)
+    (b) `grep "text-align" {html}` → only "center" and "right" (watermark only). Any "left" or "justify" → FAIL
+    WHY BOTH: A class without text-align declaration inherits browser default (left). Grepping only for declared values misses this. The fix is to require explicit declaration on every container.
 L5: Scan against `poster_design_system.md` ban lists (32 visual + 13 structural)
 L6: Rendered PNG width = 1080px AND file size < 2MB
 L7: `grep "Made with SwarmAI Pollinate" {html}` + `grep "qr-github" {html}`
