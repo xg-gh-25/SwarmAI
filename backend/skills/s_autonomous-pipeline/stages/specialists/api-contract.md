@@ -1,7 +1,12 @@
 # API Contract Specialist Review
+<!-- version: 2026-05-16 | synced with: REVIEW_PATTERNS.md RP1-RP34 -->
 
 Scope: When changeset touches router files, endpoint handlers, Pydantic models,
 response schemas, or API-facing interfaces.
+
+**Cross-reference:** Also check patterns from `REVIEW_PATTERNS.md` in your domain:
+RP14 (cross-service parameter mismatch), RP24 (cross-language serialization format),
+RP33 (multi-shape function returns — different consumers assume different shapes).
 
 Output: JSON objects, one finding per line.
 

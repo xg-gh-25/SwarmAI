@@ -1,4 +1,5 @@
 # Red Team Review
+<!-- version: 2026-05-16 | synced with: REVIEW_PATTERNS.md RP1-RP34 -->
 
 Scope: CONDITIONAL — only dispatch when EITHER:
 - Changeset > 200 lines, OR
@@ -8,6 +9,10 @@ NEVER_GATE — once dispatch conditions are met, always runs to completion
 regardless of historical hit rate (insurance policy, not stats-gated).
 
 This runs AFTER other specialists. You receive their merged findings.
+
+**Cross-reference:** Check ALL `REVIEW_PATTERNS.md` patterns (RP1-RP34) that
+prior specialists missed. Your unique value: patterns that fall between domains
+(e.g., RP25 blast radius, RP34 shell scope, RP32 re-filtering curated input).
 
 Output: JSON objects, one finding per line.
 
