@@ -472,42 +472,47 @@ def _compute_engine_level(ws_path: Path) -> dict[str, Any]:
 
 
 def _collect_ddd_health(ws_path: Path) -> dict[str, Any]:
-    """Quick DDD health scan — per-project staleness."""
+    """DDD 5-dimensional health scoring — per-project, per-section.
+
+    Uses ddd_health.compute_section_health() for full scoring when available,
+    falls back to staleness-only scan on import error.
+    """
     projects_dir = ws_path / "Projects"
     if not projects_dir.is_dir():
         return {"projects": []}
 
-    projects: list[dict] = []
-    now = datetime.now()
+    try:
+        from core.ddd_health import compute_section_health
 
-    for project_dir in sorted(projects_dir.iterdir()):
-        if not project_dir.is_dir() or project_dir.name.startswith("."):
-            continue
-
-        docs: dict[str, dict] = {}
-        for doc_name in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
-            doc_path = project_dir / doc_name
-            if doc_path.exists():
-                mtime = datetime.fromtimestamp(doc_path.stat().st_mtime)
-                age_days = (now - mtime).days
-                docs[doc_name] = {
-                    "exists": True,
-                    "age_days": age_days,
-                    "stale": age_days > 14,
-                    "size_bytes": doc_path.stat().st_size,
-                }
-            else:
-                docs[doc_name] = {"exists": False}
-
-        projects.append({
-            "name": project_dir.name,
-            "docs": docs,
-            "overall_stale": any(
-                d.get("stale", False) for d in docs.values() if d.get("exists")
-            ),
-        })
-
-    return {"projects": projects}
+        projects: list[dict] = []
+        for project_dir in sorted(projects_dir.iterdir()):
+            if not project_dir.is_dir() or project_dir.name.startswith("."):
+                continue
+            result = compute_section_health(project_dir)
+            projects.append({
+                "name": project_dir.name,
+                "docs": result.get("docs", {}),
+                "computed_at": result.get("computed_at"),
+            })
+        return {"projects": projects, "scoring": "5-dimensional"}
+    except ImportError:
+        # Fallback: staleness-only (pre-T3 behavior)
+        projects = []
+        now = datetime.now()
+        for project_dir in sorted(projects_dir.iterdir()):
+            if not project_dir.is_dir() or project_dir.name.startswith("."):
+                continue
+            docs: dict[str, dict] = {}
+            for doc_name in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+                doc_path = project_dir / doc_name
+                if doc_path.exists():
+                    mtime = datetime.fromtimestamp(doc_path.stat().st_mtime)
+                    age_days = (now - mtime).days
+                    docs[doc_name] = {"exists": True, "age_days": age_days, "stale": age_days > 14}
+                else:
+                    docs[doc_name] = {"exists": False}
+            projects.append({"name": project_dir.name, "docs": docs})
+        return {"projects": projects, "scoring": "staleness-only"}
 
 
 _CHANNEL_PATTERN = re.compile(r"^\#\#\s+\d{2}:\d{2}\s+\|.*\[Channel:")

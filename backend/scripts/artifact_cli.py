@@ -1975,9 +1975,9 @@ def cmd_run_cultivate(args, reg: ArtifactRegistry) -> None:
     print(json.dumps(result, indent=2))
 
 
-def cmd_ddd_health(args, reg: ArtifactRegistry) -> None:
+def cmd_ddd_health(args, reg) -> None:
     """5-dimensional DDD health scoring per section."""
-    project_dir = reg.workspace / "Projects" / args.project
+    project_dir = _get_workspace() / "Projects" / args.project
     if not project_dir.is_dir():
         print(json.dumps({"error": f"Project '{args.project}' not found"}))
         return
