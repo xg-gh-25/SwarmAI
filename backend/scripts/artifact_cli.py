@@ -181,27 +181,37 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
     # and data contains a content_dir field, run the structural validator.
     # This is the mechanical enforcement that prevents skipping the validator.
     producer = getattr(args, "producer", "") or ""
-    if (
-        stage == "deliver"
-        and "pollinate" in producer
-        and data.get("content_dir")
-    ):
-        try:
-            sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "s_pollinate" / "scripts"))
-            from pollinate_validator import validate_delivery
-            vresult = validate_delivery(data["content_dir"])
-            if not vresult.get("valid", True):
-                print(json.dumps({
-                    "validation_failed": True,
-                    "stage": "deliver",
-                    "errors": [f"Pollinate validator: {e}" for e in vresult.get("errors", [])],
-                    "hint": "Run: python pollinate_validator.py <content_dir> --json",
-                }, indent=2), file=sys.stderr)
-                sys.exit(1)
-        except ImportError:
-            pass  # Validator not available — skip (non-blocking)
-        except Exception as exc:
-            logger.warning("Pollinate validator skipped: %s", exc)
+    if stage == "deliver" and "pollinate" in producer:
+        # Auto-discover content_dir: explicit in data > most recent content/*/ dir
+        content_dir = data.get("content_dir")
+        if not content_dir:
+            _pollinate_root = Path(reg._workspace) / "Knowledge" / "Pollinate"
+            if _pollinate_root.is_dir():
+                # Find most recently modified content directory
+                _candidates = [d for d in _pollinate_root.iterdir() if d.is_dir() and not d.name.startswith(".")]
+                if _candidates:
+                    content_dir = str(max(_candidates, key=lambda d: d.stat().st_mtime))
+        if content_dir:
+            try:
+                import importlib.util
+                _validator_path = Path(__file__).parent.parent / "skills" / "s_pollinate" / "scripts" / "pollinate_validator.py"
+                _spec = importlib.util.spec_from_file_location("pollinate_validator", _validator_path)
+                _mod = importlib.util.module_from_spec(_spec)
+                _spec.loader.exec_module(_mod)
+                validate_delivery = _mod.validate_delivery
+                vresult = validate_delivery(content_dir)
+                if not vresult.get("valid", True):
+                    print(json.dumps({
+                        "validation_failed": True,
+                        "stage": "deliver",
+                        "errors": [f"Pollinate validator: {e}" for e in vresult.get("errors", [])],
+                        "hint": "Run: python pollinate_validator.py <content_dir> --json",
+                    }, indent=2), file=sys.stderr)
+                    sys.exit(1)
+            except (ImportError, FileNotFoundError):
+                pass  # Validator not available — skip (non-blocking)
+            except Exception as exc:
+                logger.warning("Pollinate validator skipped: %s", exc)
 
     run_id = getattr(args, "run_id", None)
     try:
