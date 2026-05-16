@@ -105,7 +105,7 @@ class TestInjectMaturity:
             )
         }
         result = inject_maturity(content, states)
-        assert "<!-- maturity: growing | sources: 2 | verified: true | used: false | days: 10 | promoted: 2026-05-01 -->" in result
+        assert "<!-- maturity: growing | sources: 2 | verified: true | used: false | days: 10 | trust: high | promoted: 2026-05-01 -->" in result
         # Content preserved
         assert "Some content." in result
 

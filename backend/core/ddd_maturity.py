@@ -35,13 +35,14 @@ from typing import Optional
 # Valid maturity levels (ordered)
 LEVELS = ("sparse", "growing", "mature", "evergreen")
 
-# Regex for maturity HTML comment
+# Regex for maturity HTML comment (supports optional trust: field)
 _MATURITY_RE = re.compile(
     r"^<!--\s*maturity:\s*(\w+)\s*\|"
     r"\s*sources:\s*(\d+)\s*\|"
     r"\s*verified:\s*(true|false)\s*\|"
     r"\s*used:\s*(true|false)\s*\|"
     r"\s*days:\s*(\d+)\s*\|"
+    r"(?:\s*trust:\s*\w+\s*\|)?"  # Optional trust field (new)
     r"\s*promoted:\s*([\w\-]+)\s*-->$"
 )
 
@@ -71,12 +72,24 @@ class MaturityState:
             if self.last_promoted
             else "none"
         )
+        # Derive trust level from health score (if available)
+        trust = "unknown"
+        if self.source_count >= 3 and self.verified_by_production:
+            trust = "full"
+        elif self.source_count >= 2 or self.used_in_decision:
+            trust = "high"
+        elif self.source_count >= 1:
+            trust = "moderate"
+        else:
+            trust = "low"  # ⚠️ Agent should confirm before relying
+
         return (
             f"<!-- maturity: {self.level} | "
             f"sources: {self.source_count} | "
             f"verified: {'true' if self.verified_by_production else 'false'} | "
             f"used: {'true' if self.used_in_decision else 'false'} | "
             f"days: {self.days_at_level} | "
+            f"trust: {trust} | "
             f"promoted: {promoted_str} -->"
         )
 

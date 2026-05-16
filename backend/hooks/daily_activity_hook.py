@@ -215,6 +215,15 @@ class DailyActivityExtractionHook:
             self._capture_git_activity, context.session_start_time
         )
 
+        # 2c. Quality filter — skip noise entries that add no insight
+        # Prevents: pure "read file X" logs, empty summaries, trivial sessions
+        if self._is_noise_summary(summary):
+            logger.info(
+                "DailyActivity skipped for session %s — noise (no insight content)",
+                context.session_id,
+            )
+            return
+
         # 3. Write to DailyActivity file
         try:
             path = await write_daily_activity(summary, context)
@@ -227,6 +236,45 @@ class DailyActivityExtractionHook:
         except Exception as exc:
             self._tracker.record_failure(context.session_id, str(exc))
             raise  # Re-raise so hook manager logs it
+
+    @staticmethod
+    def _is_noise_summary(summary) -> bool:
+        """Check if a summary is pure noise with no insight value.
+
+        Returns True (skip) if:
+        - Summary text is too short (<30 chars of actual content)
+        - Summary is only file-read logs ("read X", "checked Y")
+        - No decisions, lessons, or actions recorded
+
+        Returns False (keep) if ANY substantive content exists.
+        """
+        # Get the meaningful text content
+        what_happened = getattr(summary, "what_happened", "") or ""
+        decisions = getattr(summary, "decisions", []) or []
+        next_steps = getattr(summary, "next_steps", "") or ""
+        files = getattr(summary, "files_touched", []) or []
+
+        # If there are decisions or lessons, always keep
+        if decisions:
+            return False
+
+        # If what_happened has substance, keep
+        text = what_happened.strip()
+        if len(text) < 30:
+            return True  # Too short to be useful
+
+        # Check for noise patterns (only file reads, no insight)
+        noise_patterns = [
+            "📸 Mid-session checkpoint",
+            "No significant activity",
+            "Session started and ended",
+        ]
+        if any(p in text for p in noise_patterns):
+            # But still keep if there are git commits or files
+            if not files and not next_steps:
+                return True
+
+        return False
 
     @staticmethod
     def _capture_git_activity(session_start_iso: str) -> list[str]:
