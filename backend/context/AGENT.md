@@ -762,42 +762,58 @@ This is the difference between a senior and a junior. Seniors don't need externa
 
 After completing any code modification task, scan modified files before moving on. **Skip entirely** if the only changes are documentation (*.md, docs/), config files, or context files (.context/).
 
+### Unified Confidence Rubric (applies to ALL scan findings)
+
+Every finding from code quality scan, security scan, code-review skill, and pipeline adversarial review uses the same confidence scoring:
+
+**Confidence Score (1-10) — How certain is this a real issue?**
+
+| Score | Meaning | Display Rule |
+|-------|---------|-------------|
+| 9-10 | Verified: read specific code, constructed exploit/failure | Show — auto-fix if mechanical |
+| 7-8 | High confidence pattern match, very likely correct | Show normally |
+| 5-6 | Moderate: could be false positive, context uncertain | Show with ⚠️ caveat: "Medium confidence — verify" |
+| 3-4 | Low: pattern suspicious but may be fine in context | **Suppress** from main output |
+| 1-2 | Speculation only | **Suppress entirely** |
+
+**Confidence modifiers (cumulative):**
+- Can you construct a concrete failure/exploit scenario? → +3
+- Vulnerable path reachable from user input? → +2
+- Similar pattern was fixed before in this project (IMPROVEMENT.md)? → +2
+- Public endpoint (vs internal-only)? → +1 / -2
+- Test/example/doc file? → -4
+- Known false-positive pattern (placeholder, env var ref, localhost, public key, version string, hash constant, base64 SVG, commented-out code)? → suppress entirely
+
+**Multi-source confirmation boost:** When the same finding (same file:line:category) is reported by multiple reviewers or scan passes, confidence +1 (cap at 10). Tag: "CONFIRMED by N sources."
+
+**Finding format (all scans):**
+```
+[SEVERITY] (confidence: N/10) file:line — description
+  Evidence: <what you verified>
+  Fix: <concrete recommendation>
+```
+
 ### Code Quality Scan
 
 Scan all modified source files for issues by severity:
 
 | Severity | Action | Categories |
 |----------|--------|------------|
-| 🔴 High | **Auto-fix** | Dead code, duplicate logic, missing error handling, type safety violations, memory leaks, SOLID violations, **unreachable state machine states**, **concurrent async without ordering guarantees**, **schema migration without rollback path** |
-| 🟡 Medium | **Auto-fix** | Magic numbers, complex conditionals (>3 branches), unclear naming, tight coupling, inefficient algorithms, missing abstractions, **unsanitized strings in structured formats (HTML/JSON/SQL)**, **setTimeout for state propagation**, **non-deterministic output ordering (set/dict/os.listdir)**, **YAGNI — interface with ≤1 implementation, config with 1 possible value**, **shared state mutation before async yield without post-yield re-validation or write-late pattern** |
+| 🔴 High | **Auto-fix** (if confidence >= 7) | Dead code, duplicate logic, missing error handling, type safety violations, memory leaks, SOLID violations, **unreachable state machine states**, **concurrent async without ordering guarantees**, **schema migration without rollback path** |
+| 🟡 Medium | **Auto-fix** (if confidence >= 7) | Magic numbers, complex conditionals (>3 branches), unclear naming, tight coupling, inefficient algorithms, missing abstractions, **unsanitized strings in structured formats (HTML/JSON/SQL)**, **setTimeout for state propagation**, **non-deterministic output ordering (set/dict/os.listdir)**, **YAGNI — interface with ≤1 implementation, config with 1 possible value**, **shared state mutation before async yield without post-yield re-validation or write-late pattern** |
 | 🟢 Low | **Note only** | Minor readability, formatting, optional comments |
 
-**Process:** List findings briefly → fix 🔴 and 🟡 in-place → note what was fixed. Maintain existing functionality — refactors only, not feature changes. If nothing found, one line and move on.
+**Process:** For each finding, assign confidence per the Unified Confidence Rubric above. Only auto-fix findings with confidence >= 7. Suppress findings with confidence <= 4. Note what was fixed. If nothing found at confidence >= 5, one line and move on.
 
-### Security Scan (Confidence-Gated)
+### Security Scan
 
-For each modified source file, assign every finding a **confidence score (1-10)** and a **concrete exploit scenario** (required — not "this is suspicious" but "attacker does X via Y to achieve Z").
-
-**Confidence scoring modifiers:**
-- Test/example/doc file? → confidence -4
-- Known false-positive pattern (placeholder, env var ref, localhost, public key, version string, hash constant, base64 SVG, commented-out code)? → suppress entirely
-- Can you construct a concrete exploit? → confidence +3
-- Vulnerable path reachable from user input? → confidence +2
-
-**Action matrix:**
-
-| Confidence | Severity | Action |
-|-----------|----------|--------|
-| >= 8 | Critical/High | **Auto-fix** (replace secrets with env vars, fix injection) |
-| >= 8 | Medium/Low | **Report with fix suggestion** |
-| 5-7 | Any | **Warning only** — include in output |
-| < 5 | Any | **Suppress silently** |
-
-**Every reported finding MUST include:** file, line, confidence score, exploit scenario, and recommendation. **Never commit hardcoded secrets** — this is a blocking rule regardless of confidence.
+Apply the same Unified Confidence Rubric above. Additionally for security findings:
+- Every reported finding MUST include a **concrete exploit scenario** (not "this is suspicious" but "attacker does X via Y to achieve Z")
+- **Never commit hardcoded secrets** — blocking rule regardless of confidence
 
 **DDD enrichment (when working on a project):** Before scanning, check:
-- **TECH.md** → Architecture section for auth model (JWT? session? API key?), public vs internal endpoints, trust boundaries. Adjust confidence: finding on an internal-only endpoint gets -2, finding on a public endpoint gets +1.
-- **IMPROVEMENT.md** → Security History section for past vulnerabilities in this project. If a similar pattern was fixed before, confidence +2 (proven attack vector). Known Issues section for acknowledged security debt (don't re-report, but note "known issue, tracked").
+- **TECH.md** → Architecture section for auth model, public vs internal endpoints, trust boundaries. Adjust confidence per modifiers above.
+- **IMPROVEMENT.md** → Security History section for past vulnerabilities. Similar pattern fixed before → confidence +2.
 
 ## 🚨 CRITICAL: Skills Over Scripts — Agent Operations
 
