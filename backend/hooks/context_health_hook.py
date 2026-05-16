@@ -112,7 +112,8 @@ class ContextHealthHook:
         # T4: Maturity evidence update + promotion evaluation.
         # Runs AFTER cultivation so new changelog entries are counted.
         try:
-            self._update_maturity(root, _deadline=_cultivation_deadline)
+            if self._update_maturity(root, _deadline=_cultivation_deadline):
+                self._ddd_docs_modified = True
         except Exception as exc:
             logger.debug("context_health: maturity update skipped: %s", exc)
 
@@ -177,9 +178,13 @@ class ContextHealthHook:
     def _refresh_projects_index_sync(self, root: Path) -> None:
         """Sync wrapper: regenerate PROJECTS.md after cultivation modified DDD docs.
 
-        Uses asyncio.run() because we're called from a thread pool (run_in_executor).
-        The workspace manager's refresh_projects_index is async but CPU-bound
-        (filesystem scan + entity extraction) — safe to run in a fresh event loop.
+        Called from run_in_executor thread (no active event loop on this thread).
+        Creates a fresh event loop for the async workspace manager call.
+
+        Note: The module-level _cultivation_write_lock (asyncio.Lock) provides no
+        mutual exclusion between this loop and the main FastAPI loop — but both
+        produce identical deterministic output from the same filesystem state, so
+        last-writer-wins is safe (no data loss, just redundant work).
         """
         from core.swarm_workspace_manager import swarm_workspace_manager
 
@@ -658,7 +663,7 @@ class ContextHealthHook:
     # T4: Maturity evidence update + auto-promotion
     # ------------------------------------------------------------------
 
-    def _update_maturity(self, root: Path, *, _deadline: float = 0) -> None:
+    def _update_maturity(self, root: Path, *, _deadline: float = 0) -> bool:
         """Update maturity evidence from changelog and auto-promote eligible sections.
 
         Steps:
@@ -677,9 +682,10 @@ class ContextHealthHook:
 
         projects_dir = root / "Projects"
         if not projects_dir.is_dir():
-            return
+            return False
 
         _effective_deadline = _deadline if _deadline > 0 else (time.monotonic() + 10.0)
+        any_promoted = False
 
         for project_path in projects_dir.iterdir():
             if not project_path.is_dir():
@@ -703,6 +709,7 @@ class ContextHealthHook:
                         project_path, promo["doc"], promo["section"], promo["to_level"]
                     )
                     if success:
+                        any_promoted = True
                         # Log promotion to changelog
                         self._log_maturity_promotion(project_path, promo)
                         logger.info(
@@ -715,6 +722,8 @@ class ContextHealthHook:
                     "context_health: maturity update for %s skipped: %s",
                     project_path.name, exc,
                 )
+
+        return any_promoted
 
     def _log_maturity_promotion(self, project_dir: Path, promo: dict) -> None:
         """Log a maturity promotion event to the DDD changelog."""
