@@ -51,6 +51,10 @@ class DddCultivationOrchestrator:
         (not re-raised). Returns all findings from all successful channels
         plus error notices from failed ones.
         """
+        # Fix F4: single shared hook instance across all channels
+        from hooks.context_health_hook import ContextHealthHook
+        self._hook = ContextHealthHook()
+
         all_findings: list[str] = []
 
         for name, channel_fn in self.channels:
@@ -74,40 +78,25 @@ class DddCultivationOrchestrator:
 
     def _ch_ddd_staleness(self, root: Path, ws_path: str) -> list[str]:
         """Channel 1: Check DDD document staleness."""
-        from hooks.context_health_hook import ContextHealthHook
-
-        hook = ContextHealthHook()
-        return hook._check_ddd_staleness(root, ws_path)
+        return self._hook._check_ddd_staleness(root, ws_path)
 
     def _ch_auto_apply(self, root: Path, ws_path: str) -> list[str]:
         """Channel 2: Auto-apply mechanical DDD refresh proposals."""
-        from hooks.context_health_hook import ContextHealthHook
-
-        hook = ContextHealthHook()
-        hook._auto_apply_ddd_proposals(root)
+        self._hook._auto_apply_ddd_proposals(root)
         return []  # Side-effect only, no findings
 
     def _ch_inject_knowledge(self, root: Path, ws_path: str) -> list[str]:
         """Channel 3: Inject Active Projects & DDD section into KNOWLEDGE.md."""
-        from hooks.context_health_hook import ContextHealthHook
-
-        hook = ContextHealthHook()
-        hook._inject_ddd_into_knowledge(root)
+        self._hook._inject_ddd_into_knowledge(root)
         return []  # Side-effect only, no findings
 
     def _ch_knowledge_staleness(self, root: Path, ws_path: str) -> list[str]:
         """Channel 4: Detect when backend code changed but KNOWLEDGE.md didn't."""
-        from hooks.context_health_hook import ContextHealthHook
-
-        hook = ContextHealthHook()
-        return hook._detect_knowledge_staleness(root, ws_path)
+        return self._hook._detect_knowledge_staleness(root, ws_path)
 
     def _ch_entity_index(self, root: Path, ws_path: str) -> list[str]:
         """Channel 5: Validate entity index stale references."""
-        from hooks.context_health_hook import ContextHealthHook
-
-        hook = ContextHealthHook()
-        return hook._validate_entity_index(root)
+        return self._hook._validate_entity_index(root)
 
     def _ch_signal_bridge(self, root: Path, ws_path: str) -> list[str]:
         """Channel 6: Signal→DDD bridge (high-relevance signals → proposals)."""

@@ -125,7 +125,7 @@ def validate_delivery(content_dir: str) -> dict:
     if variants_ok:
         checks_passed += 1
     else:
-        errors.append("MISSING: 2+ variant files — each track format needs at least 2 variants")
+        errors.append("MISSING: 2+ variant files — at least one track must have 2+ output variants")
 
     # ── Check 5: Output files have valid extensions ───────────────────────
     output_files = list(root.rglob("*"))

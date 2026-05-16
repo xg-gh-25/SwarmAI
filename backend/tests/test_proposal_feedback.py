@@ -112,11 +112,11 @@ class TestThresholdAdjustment:
         from core.proposal_feedback import ProposalFeedbackTracker
 
         tracker = ProposalFeedbackTracker()
-        # 30% precision (3 approved, 7 rejected)
-        stats = {"test_channel": {"generated": 10, "approved": 3, "rejected": 7}}
+        # 30% precision (3 approved, 7 rejected out of 10 decided)
+        stats = {"test_channel": {"generated": 12, "approved": 3, "rejected": 7}}
 
         threshold = tracker.get_adjusted_threshold("test_channel", 0.7, stats)
-        # Should increase by 0.15
+        # Should increase by 0.15 (precision = 3/10 = 30% < 40%)
         assert threshold == pytest.approx(0.85)
 
     def test_threshold_caps_at_095(self):

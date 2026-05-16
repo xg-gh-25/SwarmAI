@@ -104,12 +104,14 @@ class ProposalFeedbackTracker:
         if not channel_data:
             return threshold
 
-        generated = channel_data.get("generated", 0)
-        if generated == 0:
+        # Fix F7: compute precision over decided proposals only (not pending)
+        approved = channel_data.get("approved", 0)
+        rejected = channel_data.get("rejected", 0)
+        decided = approved + rejected
+        if decided == 0:
             return threshold
 
-        approved = channel_data.get("approved", 0)
-        precision = approved / generated
+        precision = approved / decided
 
         if precision < PRECISION_THRESHOLD:
             threshold += ADJUSTMENT_STEP
