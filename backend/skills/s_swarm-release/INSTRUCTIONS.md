@@ -183,6 +183,10 @@ Stage 3 BUILD: PASS (user-built)
 
 ## Stage 4: PACKAGE (3-5 min)
 
+**🚨 NON-SKIPPABLE unless user explicitly says "backend-only release" or
+"skip DMG" or "不用打包桌面".** Silent skip = incomplete release (v1.13.0 incident:
+backend built but DMG missing, user had to ask for it).
+
 Build the desktop application (Tauri → DMG on macOS).
 
 **🚨 MEMORY REQUIREMENT:** Tauri/Rust compilation needs ~2-3GB free RAM.
