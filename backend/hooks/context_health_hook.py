@@ -27,6 +27,14 @@ from core.session_hooks import HookContext
 
 logger = logging.getLogger(__name__)
 
+# Pipeline-internal decision prefixes to filter before DDD cultivation.
+# These are pipeline validator output, not user decisions.
+# Keep: "user override:", "standing rule:", architecture decisions.
+_DECISION_NOISE_PREFIXES = (
+    "→ Recommend:", "├─", "publish --validate",
+    "advance →", "run-", "0/", "1/", "2/", "3/", "4/", "5/",
+)
+
 
 class ContextHealthHook:
     """Unified context health harness.
@@ -475,16 +483,6 @@ class ContextHealthHook:
 
                 # Cultivate decisions (Ch5) — pre-filter pipeline-internal noise
                 if decisions:
-                    # Filter out pipeline-internal decisions that aren't DDD-worthy:
-                    # - "→ Recommend: X" (pipeline alternative recommendations)
-                    # - "advance → rejected" (validator output)
-                    # - "publish --validate" (artifact CLI feedback)
-                    # - "├─ Taste Gate:" (pipeline gate logs)
-                    # Keep: "user override:", "standing rule:", actual architecture decisions
-                    _DECISION_NOISE_PREFIXES = (
-                        "→ Recommend:", "├─", "advance", "publish --validate",
-                        "advance →", "run-", "0/", "1/", "2/", "3/", "4/", "5/",
-                    )
                     filtered_decisions = [
                         d for d in decisions
                         if isinstance(d, str)
