@@ -248,71 +248,123 @@ The delivery output is designed for the USER, not for the developer. The user wa
 4. Know quality was verified (trust signal, not noise)
 
 **CRITICAL RULES:**
-- **Images are the hero.** Show them FIRST, large, inline (Read tool on .png)
-- **Quality gates are a one-line trust signal** — NOT a full table. User doesn't need L1-L8 detail unless something failed.
-- **Copy text is ready to paste** — zero formatting instructions, zero markdown
-- **Next steps are 2-3 obvious actions** — not a numbered menu of 5 developer commands
-- **No file paths visible** — user doesn't care about filesystem structure
+- **Platform Matrix is the delivery.** User sees: each platform → its asset + its copy. Like a publishing dashboard.
+- **Quality gates are invisible when passing.** One-line trust signal, not a table.
+- **Copy is naked and ready to paste.** Zero preamble, zero markdown, zero instructions mixed in.
+- **Images shown inline.** Read tool on .png. User SEES the poster — no file paths.
+- **User picks direction FIRST, then gets the full platform matrix for that direction.**
+
+**Structure: Direction Selection → Platform Matrix**
+
+The output has two phases:
+1. **Phase 1: Pick Direction** — show both posters, user says "发 A" or "发 B"
+2. **Phase 2: Platform Matrix** — for the chosen direction, output the full publish-ready package per platform
+
+---
+
+**Phase 1 Template (Direction Selection):**
 
 ```
 🐝 **{topic}** — 两个方向，选一个发
 
----
+**A. {Chinese Name}** — {mood}
 
-**A. {Direction Chinese Name}** — {mood, 4-6 chars}
+[INLINE IMAGE A]
 
-[INLINE POSTER IMAGE A — use Read tool to display the .png]
+**B. {Chinese Name}** — {mood}
 
-**B. {Direction Chinese Name}** — {mood, 4-6 chars}
+[INLINE IMAGE B]
 
-[INLINE POSTER IMAGE B — use Read tool to display the .png]
+✅ 质量通过 (8/8) · "发 A" 或 "发 B"
+```
 
----
-
-✅ 质量验证通过 (8/8)
-
----
-
-**朋友圈文案** (复制即发)
-
-{complete text — NO formatting, NO instructions, just the copy}
-
-**小红书文案** (复制即发)
-
-{title}
-
-{body}
-
-{hashtags}
+Rules:
+- Images inline (Read tool on .png)
+- ONE line for quality + CTA combined
+- Nothing else. No file paths, no gate tables, no numbered menus.
+- Wait for user to pick.
 
 ---
 
-**你想怎么做？**
-- "发 A" 或 "发 B" — 我帮你准备发布格式
-- "标题改成 XX" — 修改后重新生成
-- "再来一个方向" — 用不同风格重新出
+**Phase 2 Template (Platform Matrix — after user picks):**
 
 ```
+🐝 **{topic}** — {chosen direction} · 发布就绪
+
+---
+
+### 📱 小红书
+
+**素材:** [INLINE IMAGE — 1080×1440 cropped if needed, or full long-form]
+
+**标题:**
+{title — ≤20 chars, punchy, with emoji}
+
+**正文:**
+{body text — XHS style, short paragraphs, emoji-friendly}
+
+**标签:**
+{#tag1 #tag2 #tag3 #tag4 #tag5}
+
+---
+
+### 💬 朋友圈
+
+**素材:** [SAME IMAGE — or square crop 1080×1080 if needed]
+
+**文案:**
+{complete text — one block, copy-paste directly to WeChat Moments}
+
+---
+
+### 🐦 Twitter / X
+
+**素材:** [1280×720 crop or OG version if available]
+
+**Tweet:**
+{English or bilingual, ≤280 chars, observation + opinion format}
+
+---
+
+### ✨ 你还可以
+
+- "出 Story 版本" — 竖屏 9:16
+- "调整文案语气" — 更正式/更轻松
+- "再出一个主题" — 下一张海报
+```
+
+---
 
 **Display Rules (binding — agent MUST follow):**
 
-1. **NEVER show the L1-L8 detail table unless a gate FAILED.** When all pass, one line: `✅ 质量验证通过 (8/8)`. Users don't read gate tables — they read posters.
+1. **Phase 1 is MINIMAL.** Two images + one line. Nothing else. User doesn't need context — they need to see and pick.
 
-2. **NEVER show raw file paths.** No `Knowledge/Pollinate/posters/2026-05-16-xxx.png`. The image is shown inline — that's the "file delivery."
+2. **Phase 2 is COMPLETE.** Every platform gets: asset + ALL copy fields. User reviews top-to-bottom, copies per platform. No jumping between sections.
 
-3. **NEVER show numbered lists of 5+ options.** Max 3 actionable next steps. Pick the 3 most likely actions for THIS specific output.
+3. **NEVER show raw file paths.** Images shown inline. If the user needs to download, they right-click the inline image.
 
-4. **ALWAYS show images inline.** Use the Read tool on the rendered .png files. The user must SEE the poster in the chat window — not a file path they have to click.
+4. **NEVER show L1-L8 table unless a gate FAILED.** When all pass: `✅ 质量通过 (8/8)` — 6 words, done.
 
-5. **Copy text is NAKED.** No "以下是朋友圈文案：" preamble. No markdown formatting. Just the text the user selects and pastes. Separated by clear section headers.
+5. **Platform sections are self-contained.** User can mentally "close" a platform after copying from it. No cross-references between platforms.
 
-6. **If a gate FAILED and couldn't be auto-fixed**, show ONLY the failed gate:
-```
-⚠️ L4 对齐: section 1 标题偏左 — 正在修复...
-```
-Then fix it. User should almost never see failures (convergence loop handles them).
+6. **Copy text is NAKED per platform.** Each platform's copy is styled for THAT platform:
+   - 小红书: short title + paragraphs + hashtags (separate fields)
+   - 朋友圈: one text block (no title, no hashtags — WeChat doesn't have them)
+   - Twitter: single tweet (≤280 chars, English-friendly)
 
-7. **Poster choice is the ONLY user decision.** Everything else (direction scoring, gate verification, convergence iterations) happens invisibly. User experience = "我说一句话 → 看到两张海报 → 选一张 → 发".
+7. **Asset per platform may differ.** Same content, but:
+   - 小红书: full long-form or 3:4 crop
+   - 朋友圈: same or 1:1 crop
+   - Twitter: 16:9 crop or OG card
+   If only one version was rendered (long-form), use it for all — note "长图" for XHS, "首图" for 朋友圈.
+
+8. **"你还可以" is max 3 items.** Contextual to THIS output. Not generic suggestions.
+
+9. **If gate FAILED during convergence:** user should almost never see this. If they do, show ONE line:
+   ```
+   ⚠️ 修复中: {specific issue} → 重新生成...
+   ```
+   Then fix silently and present the clean output. Don't show the failure as a "finding" — fix it.
 
 **Format: Video deliverables:**
 
