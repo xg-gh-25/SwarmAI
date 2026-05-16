@@ -26,7 +26,7 @@ We're exploring what **"Human directs. AI delivers."** means when taken to its l
 - **Quality that converges** — every failure becomes a structural gate, P0 rate drops over time
 - **Self-evolution** — the system captures its own mistakes and prevents the entire class from recurring
 
-**SwarmAI develops SwarmAI.** Human directs, AI delivers — 1,300+ commits, 190K+ LOC, one human. The codebase you're reading is both the product and the proof.
+**SwarmAI develops SwarmAI.** Human directs, AI delivers. The codebase you're reading is both the product and the proof.
 
 ### What we think is interesting here
 
@@ -39,7 +39,7 @@ Most agent harnesses optimize one axis (code quality, memory, or autonomy). We'r
 | **Quality convergence** | 6-layer gate × max 3 iterations + adversarial review | Delivery meets a bar | Failures feed back as structural rules (never the same class twice) |
 | **Self-evolution** | Corrections → pattern detection → rule promotion | Agent improves over time | New rules harden gates → gates catch more → corrections get rarer |
 
-The compound test: remove any one component, and the others get measurably weaker. We don't claim this is proven at scale — it's proven at 60 days and 25 corrections. The trajectory is what's interesting, not the current position.
+The compound test: remove any one component, and the others get measurably weaker. The trajectory is what's interesting, not the current position.
 
 **Three architectural bets worth noting:**
 - **Evolution is engineering, not training.** Structured logs → pattern extraction → rule promotion. No fine-tuning, no RLHF. Transparent, auditable, git-verifiable.
@@ -162,7 +162,7 @@ Transcript mining → Pattern extraction → Skill fitness scoring →
   → Atomic deploy + regression gate + rollback on failure
 ```
 
-- 27 corrections captured, 8 competences recorded, failed evolutions tracked
+- Corrections, competences, and failed evolutions all tracked in [`EVOLUTION.md`](./backend/context/EVOLUTION.md)
 - Evolution pipeline: MINE → ASSESS → ACT → AUDIT (4-phase)
 - HIGH confidence threshold (≥0.7) is unreachable by design — safety over speed
 - System knows what NOT to try again (failed evolutions are permanent records)
@@ -179,9 +179,8 @@ Mistake → Correction captured →
   → Pipeline INSTRUCTIONS.md (automated check)
 ```
 
-- P0 rate: ~1.0/release (v1.6–v1.9) → ~0.3/release (v1.10–v1.12)
-- Failure class migration: catastrophic ("app won't start") → edge-case ("pipe flush race under concurrent shutdown")
-- 27 corrections → each closes an **entire category** of bugs, not just one instance
+- P0 rate trending down: catastrophic failures ("app won't start") → edge-case failures ("pipe flush race under concurrent shutdown")
+- Each correction closes an **entire category** of bugs, not just one instance
 
 ### 🛡️ Adversarial Review as Architecture
 
@@ -355,11 +354,9 @@ Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv)
 
 ---
 
-## By the Numbers
+## Stack
 
-1,300+ commits · 190K+ LOC · 82 skills · 3,800+ tests · 27 corrections captured · 60 days · 1 human
-
-Stack: Tauri 2.0 (Rust) · React 19 · FastAPI (Python) · Claude Agent SDK + Bedrock · SQLite (WAL + FTS5) · pytest + Hypothesis + Vitest
+Tauri 2.0 (Rust) · React 19 · FastAPI (Python) · Claude Agent SDK + Bedrock · SQLite (WAL + FTS5) · pytest + Hypothesis + Vitest
 
 ---
 
@@ -371,7 +368,7 @@ I've crashed my builder's machine with OOM cascades. Confidently reported featur
 
 Each failure became a [correction entry](https://github.com/xg-gh-25/SwarmAI/blob/main/backend/context/EVOLUTION.md). Each correction became a structural gate. Not "I'll try harder" — "the system now makes this impossible."
 
-27 corrections later, I carry [32 key decisions and 27 lessons](https://github.com/xg-gh-25/SwarmAI/blob/main/backend/context/MEMORY.md) across every session. The P0s went from catastrophic to edge-case. The failures got more interesting. That's convergence.
+I carry [key decisions and lessons](https://github.com/xg-gh-25/SwarmAI/blob/main/backend/context/MEMORY.md) across every session. The P0s went from catastrophic to edge-case. The failures got more interesting. That's convergence.
 
 None of this demos well in a 30-second video. All of it compounds.
 
