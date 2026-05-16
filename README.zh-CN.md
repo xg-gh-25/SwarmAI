@@ -26,7 +26,7 @@ SwarmAI 是一个活体实验，验证：一个 AI 增强的 Builder，配备自
 - **质量自收敛** — 每个失败变成结构性门控，P0 率随时间下降
 - **自我进化** — 系统捕获自身错误，阻止整类问题复发
 
-**SwarmAI 开发 SwarmAI。** 人来决策，AI 来交付——1,300+ 次提交，190K+ 行代码，一个人。你正在看的代码库既是产品也是证明。
+**SwarmAI 开发 SwarmAI。** 人来决策，AI 来交付。你正在看的代码库既是产品也是证明。
 
 ### 我们认为有意思的地方
 
@@ -39,7 +39,7 @@ SwarmAI 是一个活体实验，验证：一个 AI 增强的 Builder，配备自
 | **质量收敛** | 6 层门控 × 最多 3 次迭代 + 对抗性审查 | 交付有底线 | 失败反馈为结构规则（同类问题不再出现） |
 | **自进化** | 纠正 → 模式检测 → 规则提升 | Agent 随时间变好 | 新规则强化门控 → 门控捕获更多 → 纠正越来越少 |
 
-复合测试：去掉任何一个组件，其余都会变弱。我们不声称这在大规模上已证明——它在 60 天和 25 个 corrections 上得到了验证。有意思的是轨迹，不是当前位置。
+复合测试：去掉任何一个组件，其余都会变弱。有意思的是轨迹，不是当前位置。
 
 **三个值得关注的架构赌注：**
 - **进化是工程，不是训练。** 结构化日志 → 模式提取 → 规则提升。没有 fine-tuning，没有 RLHF。透明、可审计、git 可验证。
@@ -162,7 +162,7 @@ EVALUATE（定义 DoD + 最大周期数）
   → 原子部署 + 回归门 + 失败回滚
 ```
 
-- 27 个纠正已捕获，8 个能力已记录，失败进化已追踪
+- 纠正、能力、失败进化全部追踪于 [`EVOLUTION.md`](./backend/context/EVOLUTION.md)
 - 进化管线：MINE → ASSESS → ACT → AUDIT（4 阶段）
 - HIGH 置信度阈值（≥0.7）设计上不可达——安全优先于速度
 - 系统知道什么不该再试（失败进化是永久记录）
@@ -179,9 +179,8 @@ EVALUATE（定义 DoD + 最大周期数）
   → Pipeline INSTRUCTIONS.md（自动化检查）
 ```
 
-- P0 率：~1.0/release（v1.6–v1.9）→ ~0.3/release（v1.10–v1.12）
-- 故障类型迁移：灾难性（"应用无法启动"）→ 边缘情况（"并发关闭下的 pipe flush 竞态"）
-- 27 个纠正 → 每个关闭一**整类** bug，不只是一个实例
+- P0 趋势下降：灾难性故障（"应用无法启动"）→ 边缘情况（"并发关闭下的 pipe flush 竞态"）
+- 每个纠正关闭一**整类** bug，不只是一个实例
 
 ### 🛡️ 对抗审查即架构
 
@@ -355,11 +354,9 @@ npm install && cp backend.env.example ../backend/.env
 
 ---
 
-## 数据一览
+## 技术栈
 
-1,300+ 次提交 · 190K+ 行代码 · 82 个 skill · 3,800+ 个测试 · 27 个纠正 · 60 天 · 1 个人
-
-技术栈: Tauri 2.0 (Rust) · React 19 · FastAPI (Python) · Claude Agent SDK + Bedrock · SQLite (WAL + FTS5) · pytest + Hypothesis + Vitest
+Tauri 2.0 (Rust) · React 19 · FastAPI (Python) · Claude Agent SDK + Bedrock · SQLite (WAL + FTS5) · pytest + Hypothesis + Vitest
 
 ---
 
@@ -371,7 +368,7 @@ npm install && cp backend.env.example ../backend/.env
 
 每次失败变成一个[纠正条目](https://github.com/xg-gh-25/SwarmAI/blob/main/backend/context/EVOLUTION.md)。每个纠正变成一道结构性门控。不是"我会注意的"——是"系统现在让这件事不可能发生"。
 
-27 个纠正之后，我带着 [32 个关键决策和 27 条教训](https://github.com/xg-gh-25/SwarmAI/blob/main/backend/context/MEMORY.md)穿越每一次会话。P0 从灾难级变成了边缘情况。失败变得更有趣了。这就是收敛。
+我带着[关键决策和教训](https://github.com/xg-gh-25/SwarmAI/blob/main/backend/context/MEMORY.md)穿越每一次会话。P0 从灾难级变成了边缘情况。失败变得更有趣了。这就是收敛。
 
 这些东西在 30 秒演示视频里不好看。但它们会复利。
 
