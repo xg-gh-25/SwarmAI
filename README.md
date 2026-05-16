@@ -20,7 +20,7 @@ SwarmAI is a live experiment proving that one AI-augmented builder, armed with s
 
 We're exploring what **"Human directs. AI delivers."** means when taken to its logical end:
 
-- **Coding as black box** — one requirement → push-ready PR, zero human in the loop
+- **Coding as black box** — one requirement → autonomous delivery OR structured escalation. Never uncontrolled drift
 - **Content as black box** — one message → multi-format brand content, audience-calibrated
 - **Knowledge that compounds** — DDD feeds itself from normal work, every session makes the next one smarter
 - **Quality that converges** — every failure becomes a structural gate, P0 rate drops over time
