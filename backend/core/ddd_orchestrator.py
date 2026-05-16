@@ -114,6 +114,20 @@ class DddCultivationOrchestrator:
                     f"CHANNEL_ERROR: {name} — {type(exc).__name__}: {exc}"
                 )
 
+        # Check gate promotions (v2) — evaluate eligibility after channels run
+        try:
+            from core.gate_promotion import GateManager
+            artifacts_dir = self._find_artifacts_dir(root)
+            if artifacts_dir:
+                gate_mgr = GateManager(artifacts_dir)
+                promoted = gate_mgr.check_promotions()
+                for gate_name in promoted:
+                    all_findings.append(
+                        f"GATE_PROMOTED: {gate_name} → hard enforcement"
+                    )
+        except Exception as exc:
+            logger.debug("ddd_orchestrator: gate promotion check skipped: %s", exc)
+
         return all_findings
 
     def get_tasks_for_event(
@@ -159,6 +173,19 @@ class DddCultivationOrchestrator:
             proposals = project_dir / ".artifacts" / "proposals"
             if proposals.is_dir() and any(proposals.glob("proposal_*.json")):
                 return proposals
+        return None
+
+    def _find_artifacts_dir(self, root: Path) -> Path | None:
+        """Locate the .artifacts directory for the active project."""
+        projects_dir = root / "Projects"
+        if not projects_dir.is_dir():
+            return None
+        for project_dir in projects_dir.iterdir():
+            if not project_dir.is_dir() or project_dir.name.startswith("."):
+                continue
+            artifacts = project_dir / ".artifacts"
+            if artifacts.is_dir():
+                return artifacts
         return None
 
     # ── Channel 1: DDD Staleness ───────────────────────────────────────────
