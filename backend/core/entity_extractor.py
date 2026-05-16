@@ -88,12 +88,14 @@ def extract_entities_from_ddd(projects_dir: Path) -> list[EntityRef]:
                 if line.startswith("## ") and not line.startswith("### "):
                     heading = line[3:].strip()
                     if heading:
+                        # M4 fix: escape pipe chars that would break markdown table
+                        safe_name = heading.replace("|", "\\|")
                         entities.append(
                             EntityRef(
-                                name=heading,
+                                name=safe_name,
                                 project=project_name,
                                 doc=doc_name,
-                                section=heading,
+                                section=heading,  # Keep raw section for ref lookup
                             )
                         )
 
@@ -138,8 +140,16 @@ def format_entity_index(entities: list[EntityRef]) -> list[str]:
 
     for name in sorted_names:
         refs = grouped[name]
+        # L1 fix: deduplicate by (project, doc) before capping
+        seen: set[tuple[str, str]] = set()
+        deduped: list[EntityRef] = []
+        for r in refs:
+            key = (r.project, r.doc)
+            if key not in seen:
+                seen.add(key)
+                deduped.append(r)
         # Cap at max refs
-        capped = refs[:_MAX_REFS_PER_ENTITY]
+        capped = deduped[:_MAX_REFS_PER_ENTITY]
         # Format references as Project/DOC#Section
         ref_strs = [f"{r.project}/{r.doc}#{r.section}" for r in capped]
         refs_display = ", ".join(ref_strs)
@@ -155,6 +165,7 @@ def prune_entity_index(
 
     Preserves header lines (## heading, table header, separator).
     Removes data rows from the bottom until within budget.
+    Budget accounts for newline join separators.
 
     Args:
         lines: Formatted markdown lines from format_entity_index.
@@ -162,12 +173,14 @@ def prune_entity_index(
 
     Returns:
         Pruned list of lines fitting within budget.
+        Empty list if even the header exceeds the budget.
     """
-    total = sum(len(l) for l in lines)
+    # H2 fix: account for \n join separators in budget calculation
+    total = sum(len(l) + 1 for l in lines) - 1 if lines else 0
     if total <= max_chars:
         return lines
 
-    # Separate header (first 6 lines: ## heading, blank, comment, blank, table header, separator)
+    # Separate header (lines up to and including |---|)
     # from data rows
     header_end = 0
     for i, line in enumerate(lines):
@@ -178,16 +191,24 @@ def prune_entity_index(
     header = lines[:header_end]
     data_rows = lines[header_end:]
 
-    # Remove rows from the end (least cross-project entities, since sorted desc)
-    header_chars = sum(len(l) for l in header)
-    remaining_budget = max_chars - header_chars
+    # M5 fix: if header alone exceeds budget, return empty (skip entirely)
+    header_chars = sum(len(l) + 1 for l in header) - 1 if header else 0
+    if header_chars >= max_chars:
+        return []
+
+    remaining_budget = max_chars - header_chars - 1  # -1 for join between header and first row
 
     kept_rows: list[str] = []
     current_chars = 0
     for row in data_rows:
-        if current_chars + len(row) > remaining_budget:
+        row_cost = len(row) + 1  # +1 for the \n join separator
+        if current_chars + row_cost > remaining_budget:
             break
         kept_rows.append(row)
-        current_chars += len(row)
+        current_chars += row_cost
+
+    # M5 fix: don't return header-only (empty table wastes tokens)
+    if not kept_rows:
+        return []
 
     return header + kept_rows

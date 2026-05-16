@@ -35,7 +35,16 @@ logger = logging.getLogger(__name__)
 
 # Write lock for PROJECTS.md / DDD file modifications.
 # Prevents interleaved writes from concurrent refresh triggers.
-_cultivation_write_lock = asyncio.Lock()
+# Lazily initialized to avoid binding to wrong event loop in tests.
+_cultivation_write_lock: asyncio.Lock | None = None
+
+
+def _get_cultivation_lock() -> asyncio.Lock:
+    """Get or create the cultivation write lock (lazy init)."""
+    global _cultivation_write_lock
+    if _cultivation_write_lock is None:
+        _cultivation_write_lock = asyncio.Lock()
+    return _cultivation_write_lock
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Module-level constants
@@ -1029,7 +1038,8 @@ class SwarmWorkspaceManager:
         ]
 
         # Inject Entity Index section (before Active Projects table)
-        if entity_index_lines:
+        # L5 fix: only inject if there are actual data rows (not just header)
+        if entity_index_lines and len(entity_index_lines) > 6:
             lines.extend(entity_index_lines)
             lines.append("")
             lines.append("---")
@@ -1098,7 +1108,7 @@ class SwarmWorkspaceManager:
 
         content = "\n".join(lines)
 
-        async with _cultivation_write_lock:
+        async with _get_cultivation_lock():
             def _write():
                 context_file.parent.mkdir(parents=True, exist_ok=True)
                 context_file.write_text(content, encoding="utf-8")
