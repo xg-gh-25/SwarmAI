@@ -156,3 +156,14 @@ python backend/scripts/artifact_cli.py run-report --project <PROJECT> \
 
    This is the final version of the report. Section 9 will now contain the
    actual lessons from step 7 above.
+
+---
+
+## Common Rationalizations
+
+| Rationalization | Reality | Source |
+|---|---|---|
+| "Nothing went wrong — no lessons to capture" | If nothing went wrong, capture WHY. What structural decisions prevented errors? Positive lessons compound: "vertical TDD eliminated all rework" is a lesson that reinforces the pattern. Empty reflect = missed compounding. | Pipeline design |
+| "Lessons are generic — 'be careful' isn't worth recording" | Generic = sign you haven't gone deep enough. Good lessons cite: file path, line number, exact mistake, structural fix, which future scenario it prevents. "Be careful with async" → bad. "asyncio.to_thread for subprocess in async context (LL17)" → good. | C024 |
+| "DDD docs are fine, no update needed" | Every pipeline run generates knowledge. If nothing in IMPROVEMENT.md changed, either: (1) the run was trivial (fine), or (2) you're not extracting insights (not fine). At minimum update PROJECT.md "Recent Decisions" with this run's key choices. | DDD Cultivation |
+| "I'll reflect later / next session" | Reflection quality degrades with time. In-context you have the full reasoning chain. Next session you have summaries. The difference between "I traced this specific code path and found X" vs "something about async was tricky" is the difference between useful and useless. | LL19 |

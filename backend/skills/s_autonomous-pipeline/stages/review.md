@@ -585,3 +585,15 @@ python backend/scripts/artifact_cli.py publish --project <PROJECT> \
   --data '{"approved":true,"findings_count":N,"findings":[...],"security_findings":[],"integration_trace":{"checked":N,"clean":true,"details":"..."},"runtime_patterns":{"checked":N,"violations":0,"patterns":[{"pattern":"name","status":"pass|N/A","detail":"what was checked (>10 chars)"}]},"ux_review":{"triggered":true/false,"checks":5,"findings":[...]},"wire_test":{"boundaries":N,"verified":M,"findings":[...]}}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state test
 ```
+
+---
+
+## Common Rationalizations
+
+| Rationalization | Reality | Source |
+|---|---|---|
+| "Code is straightforward, self-review is sufficient" | Single-person review has structural blind spots regardless of code simplicity. C011: builder + pipeline rated 10/10, feature was 100% broken. You cannot review your own assumptions — you'll validate them instead of challenging them. | C011 |
+| "Integration trace is redundant — unit tests cover wiring" | Unit tests mock boundaries. Integration trace verifies REAL wiring: does caller A actually reach callee B with correct params at runtime? C011: each unit worked perfectly; the data flowing between them was wrong. | C011 |
+| "Runtime patterns RP1-RP30 — most don't apply" | Check each and mark N/A explicitly. LL08: `asyncio.get_event_loop()` (deprecated, RP19) and `date('now')` UTC mismatch (RP18) both passed pipeline because "didn't seem to apply." They applied. | LL08 |
+| "Small changeset, fan-out review is overkill" | Fan-out threshold (>3 files OR >100 lines) is carefully calibrated. Below threshold, single-pass STILL runs all checks (integration trace, patterns, wire test). "Small" doesn't mean "skip checks" — it means "one reviewer does all checks." | Review design |
+| "Findings are low-confidence, I'll suppress them all" | Suppressing is valid for confidence ≤4. But suppressing ALL findings = you didn't try to confirm any. At least verify the top-3 by evidence. One confirmed finding > ten suppressed ones. | Unified Confidence Rubric |

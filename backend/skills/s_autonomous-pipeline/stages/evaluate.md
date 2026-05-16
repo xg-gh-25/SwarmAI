@@ -170,3 +170,14 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state think
 
 - **DEFER or REJECT** -- pipeline ends. Log reason and exit.
 - **ESCALATE** -- L2 BLOCK -- checkpoint. Human review required before pipeline can continue.
+
+---
+
+## Common Rationalizations
+
+| Rationalization | Reality | Source |
+|---|---|---|
+| "This is obviously a GO, skip the full scoring" | "Obvious" tasks have conflicted with non-goals (3x), duplicated prior failed work (2x), and been mis-scoped as trivial when they were standard. Full scoring takes 30 seconds. | Pipeline history |
+| "Scope is trivial — I know this pattern" | Scope determines profile (full/trivial/bugfix). Wrong scope = wrong quality gates applied downstream. A 3-file, 2-function change was called "trivial" → skipped adversarial review → shipped broken (C025). | C025 |
+| "The requirement is clear enough, skip clarification" | Vague requirements scored as GO produce under-specified acceptance criteria. The pipeline builds something that passes but misses the real need. 10 minutes clarifying saves 2 hours building wrong. | Pipeline design |
+| "DDD docs are stale, skip consistency check" | Stale DDD docs = stale constraints. If you skip the check, you may violate a non-goal or repeat a failed pattern. The check surfaces this; skipping hides it. | IMPROVEMENT.md |
