@@ -234,6 +234,72 @@ These projects optimize for one role. We're testing whether one system can compo
 
 ---
 
+## Design Philosophy — When Beliefs Become Enforcement
+
+> **If you only read the code and concluded "it's another AI wrapper" — you missed what's interesting.** The codebase is the mechanism. These posters are the reasoning behind those mechanisms.
+
+Philosophy isn't "what we believe." It's **"what mechanisms enforce what invariants."** Best practice is advice. Enforcement is physics. A good compiler doesn't help you write good code — it makes bad code impossible.
+
+### The Series (6 pieces, one thesis)
+
+| # | Topic | Core Question | Poster |
+|---|-------|--------------|--------|
+| 1 | **Compound Intelligence** | Why is 1+1+1+1 > 4? | [Poster](./docs/posters/compound-intel-d5.png) · [Deep Dive](./docs/posters/compound-intel-article-d5.png) |
+| 2 | **Agent Harness** | What does an AI need to have continuity? | [Poster](./docs/posters/agent-harness-d5.png) |
+| 3 | **DDD Cultivation** | How does domain knowledge grow from zero effort? | [Poster](./docs/posters/ddd-cultivation-d5.png) |
+| 4 | **Pipeline** | How does code quality converge instead of fluctuate? | [Poster](./docs/posters/pipeline-d5.png) |
+| 5 | **Pollinate** | How does one person produce team-grade content? | [Poster](./docs/posters/pollinate-d5.png) |
+
+### Three-Level Hardening (从信念到不变量)
+
+Every design philosophy goes through three levels of hardening:
+
+| Level | What it means | Equivalent |
+|-------|--------------|------------|
+| **L3: Structural Impossibility** | Violation doesn't compile. The wrong code path physically doesn't exist. | Type system |
+| **L2: Mechanical Gate** | Code intercepts. Hooks enforce. Mechanism runs, precision iterates. | Linter rule (warning → error) |
+| **L1: Directive** | Text rule. Relies on compliance. Honor system — will be skipped under pressure. | Code comment `// don't do X` |
+
+**Already at L3 (violation impossible):**
+- `Self-Context`: edit a system file → overwritten on next boot (code enforces ownership)
+- `Self-Memory`: 30d TTL → distillation → promotion (code drives every tier transition)
+- `Self-Evolution`: correction → pattern detection → rule promotion (automatic, zero human judgment)
+- `Prevention > Recovery`: timeout + Lock + intentional_shutdown flag (structurally impossible to hang)
+
+**At L2 (mechanism running, hardening in progress):**
+- `Self-Feedback`: hooks fire every session; signal/noise ratio is a tuning problem, not a structural one
+- `Self-Healing`: health scores computed; trust modification shifting from directive to gate
+- `Self-Monitoring`: post-task review rule exists; enforcement shifting from honor-system to hook gate
+
+Hardening is gradual. Level 2 is the pattern's intermediate state, not a defect. Self-Evolution proved the path works.
+
+### Compound Flywheel (why multiplication, not addition)
+
+<img src="./assets/platform-flywheel.svg" alt="Compound Flywheel — 4 systems feeding each other through DDD knowledge layer" width="700"/>
+
+Four systems feeding each other:
+
+```
+Pipeline reads DDD → domain-correct delivery → REFLECT writes lessons → DDD richer → next Pipeline smarter
+Pollinate reads DDD → brand-correct content → REFLECT writes insights → DDD richer → next content more precise
+Error anywhere → Correction → pattern recurs → auto-promotes to STEERING rule → bug class eliminated forever
+```
+
+Remove any one component and the others get weaker. That's the multiplication test.
+
+### Four Unique Structural Choices
+
+| Choice | Why it's different |
+|--------|-------------------|
+| **Ownership model** | 11 files × 3 owners (system/user/agent). Conflicts have deterministic behavior. Not "anyone can edit CLAUDE.md." |
+| **Evolution is engineering, not training** | Structured log → pattern extraction → rule promotion. Not fine-tuning, not RLHF, not embedding. Prompt engineering as behavior modification. |
+| **Memory sovereignty** | Never use platform memory (Claude/GPT/Gemini Memory). Own pipeline, own schema, own lifecycle. Moats don't belong on someone else's foundation. |
+| **Temporal symmetry** | Session end = 9 hooks working asynchronously. Next session start = all results ready. Sessions aren't islands — the gaps between them are when the system works hardest. |
+
+> 📖 Full design docs: [Platform Overview](./docs/DDD-Platform-Overview.md) · [Harness Design](./docs/Self-Evolution-Harness-Design.md) · [Pipeline Design](./docs/Autonomous-Pipeline-Design.md) · [DDD Engine](./docs/DDD-Cultivation-Engine-HLD.md) · [Pollinate Engine](./docs/Pollinate-Content-Engine.md)
+
+---
+
 ## Quality Convergence (Thesis Validation)
 
 | Version Range | P0/Release | Failure Class | Pipeline Status |

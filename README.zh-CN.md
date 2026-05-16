@@ -234,6 +234,72 @@ SwarmAI 基于 Claude Code SDK 构建，向每一个认真的项目学习。差�
 
 ---
 
+## 设计哲学 — 当信念变成编译器
+
+> **如果你用 AI 扫了一遍 README 就下结论"又一个 AI wrapper"——你漏了最有价值的部分。** 代码库就是机制。这些海报是机制背后的推理。
+
+哲学不是"相信什么"。是**"用什么机制 enforce 什么不变量"**。Best practice 是建议。Enforcement 是物理定律。好的编译器不是让你写出好代码 — 是让你不可能写出坏代码。
+
+### 系列（6 篇，一个论点）
+
+| # | 主题 | 核心问题 | 海报 |
+|---|------|---------|------|
+| 1 | **Compound Intelligence** | 为什么 1+1+1+1 > 4？ | [海报](./docs/posters/compound-intel-d5.png) · [长文](./docs/posters/compound-intel-article-d5.png) |
+| 2 | **Agent Harness** | AI 要有连续性需要什么设计条件？ | [海报](./docs/posters/agent-harness-d5.png) |
+| 3 | **DDD Cultivation** | 领域知识怎么零成本自生长？ | [海报](./docs/posters/ddd-cultivation-d5.png) |
+| 4 | **Pipeline** | 代码质量怎么收敛而不是波动？ | [海报](./docs/posters/pipeline-d5.png) |
+| 5 | **Pollinate** | 一个人怎么产出团队级别的内容？ | [海报](./docs/posters/pollinate-d5.png) |
+
+### 三级硬化（从信念到不变量）
+
+每条设计哲学经历三级硬化：
+
+| 级别 | 含义 | 等价物 |
+|------|------|--------|
+| **L3: 结构性不可能** | 违反不编译。错误的代码路径物理上不存在。 | 类型系统 |
+| **L2: 机械门禁** | 代码拦截。Hook enforce。机制在跑，精度在迭代。 | Linter rule (warning → error) |
+| **L1: 指令** | 文字规则。靠遵守。Honor system — 压力下会被跳过。 | 代码注释 `// don't do X` |
+
+**已到 L3（违反不可能）：**
+- `Self-Context`: 编辑 system 文件 → 下次启动被覆写（代码 enforce ownership）
+- `Self-Memory`: 30d TTL → distillation → promotion（每层代码驱动）
+- `Self-Evolution`: correction → pattern detection → rule promotion（自动闭环，零人工判断）
+- `Prevention > Recovery`: timeout + Lock + intentional_shutdown（structurally impossible to hang）
+
+**L2（机制在跑，hardening 中）：**
+- `Self-Feedback`: hook 每 session 运转；signal/noise 是 tuning 问题，不是结构问题
+- `Self-Healing`: health score 驱动信任度；从 directive 到 gate 是同一个 hardening pattern
+- `Self-Monitoring`: agent 审查自己的输出；独立 context = 消除 builder bias 的唯一方式
+
+Hardening 是渐进的。Level 2 是 pattern 的中间态。Self-Evolution 证明了路径可行。
+
+### 复利飞轮（为什么是乘法不是加法）
+
+<img src="./assets/platform-flywheel.svg" alt="复利飞轮 — 4 个系统通过 DDD 互相喂养" width="700"/>
+
+四个系统互相喂养：
+
+```
+Pipeline 读 DDD → domain-correct 交付 → REFLECT 写回 lessons → DDD 更丰富 → 下次更准
+Pollinate 读 DDD → brand-correct 内容 → REFLECT 写回 insights → DDD 更丰富 → 下次更贴合
+任何 session 犯错 → Correction → 重复出现 → 自动提升为 STEERING 规则 → 整个 class 消失
+```
+
+去掉任何一个组件，其他会变弱。这就是乘法的判断标准。
+
+### 四个独特结构选择
+
+| 选择 | 为什么不同 |
+|------|-----------|
+| **Ownership 模型** | 11 文件 × 3 种 owner（system/user/agent）。冲突有确定性行为。不是"谁都能编辑"。 |
+| **进化是工程不是训练** | Structured log → pattern extraction → rule promotion。不是 fine-tuning，不是 RLHF。Prompt engineering as behavior modification。 |
+| **记忆主权** | 永远不用平台 memory（Claude/GPT/Gemini Memory）。自己的 pipeline、schema、lifecycle。护城河不能建在别人地基上。 |
+| **时间对称性** | Session 结束 = 9 个 hooks 异步工作。下次 session 开始 = 所有结果已就位。Session 之间不是空白 — 是系统最忙的时候。 |
+
+> 📖 完整设计文档：[平台总览](./docs/DDD-Platform-Overview.md) · [Harness 设计](./docs/Self-Evolution-Harness-Design.md) · [Pipeline 设计](./docs/Autonomous-Pipeline-Design.md) · [DDD 引擎](./docs/DDD-Cultivation-Engine-HLD.md) · [Pollinate 引擎](./docs/Pollinate-Content-Engine.md)
+
+---
+
 ## 质量收敛（论点验证）
 
 | 版本范围 | P0/Release | 故障类型 | Pipeline 状态 |
