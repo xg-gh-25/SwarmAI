@@ -24,6 +24,8 @@ Every poster MUST map to exactly ONE named direction. Never mix directions.
 3. Thesis fallback: T1→D1, T2→D4, T3→D3, T4→D4, T5→D5, T6→D2
 4. Default: D1 (Obsidian) if unclear
 
+**Output rule: ALWAYS produce 2 direction variants.** Pick the 2 most fitting directions for the content. User selects which to publish. This gives creative choice without overwhelming options. Example: a philosophy piece → D3 (Ink) + D5 (Morandi) as choices.
+
 **How to apply:** Load the direction's `css_snippet` into the poster's `:root` block. ALL colors/fonts reference semantic tokens (`var(--accent)`, `var(--text-primary)`, etc.). Never hardcode hex values in poster HTML.
 
 **Quick LLM injection (paste into poster prompt):**
@@ -116,35 +118,45 @@ Based on heti CLReq + tailwindcss-typography. **All sizes computed for 1080px ca
 
 **Critical rule: ALL internal vertical spacing (section padding, heading gaps, card internals) must be multiples of 24px.** Edge padding and platform-specific overrides (per `references/platform-adaptive.md`) may use non-24px values for platform-safe-area compliance. Mixed INTERNAL spacing (48px here, 56px there) = visual chaos.
 
-## Section Spacing (Consistent)
+## Section Spacing (Tight — Mobile First)
 
-| Element | Top padding | Bottom padding | Derived from |
-|---------|-------------|----------------|-------------|
-| Hero header | 120px | 120px | 5× base |
-| Card section | 96px | 96px | 4× base |
-| Section divider | 48px | 48px | 2× base |
-| Tech grid section | 96px | 96px | 4× base |
-| Footer | 72px | 72px | 3× base |
-| Card internal (heading → body) | 48px | 0 | 2× base |
-| Eyebrow → heading | 24px | 0 | 1× base |
+> **Design for phone scroll.** A poster is viewed at 375px width. If the gap between sections fills the entire phone screen, the user thinks the content ended. Keep sections visually connected.
+
+| Element | Top padding | Bottom padding | Derived from | Note |
+|---------|-------------|----------------|-------------|------|
+| Hero header | 72px | 48px | 3× / 2× | First section has extra top breathing room |
+| Card section | 48px | 48px | 2× / 2× | Standard — keeps sections flowing |
+| Between sections | 0px | 0px | — | **NO extra divider space** — section padding IS the gap |
+| Footer | 48px | 48px | 2× / 2× | Same rhythm as content sections |
+| Card internal (heading → body) | 24px | 0 | 1× | Tight internal coupling |
+| Eyebrow → heading | 12px | 0 | 0.5× | Near-attached |
+
+**Critical rule: total visible gap between two content blocks ≤ 72px.** Anything larger = user loses scroll context on mobile. If you need visual separation, use background color changes or subtle borders — not whitespace.
+
+**Deleted pattern:** Explicit divider elements (vertical lines, dots) between sections are REMOVED in v2. They waste vertical space. Section transitions use **color contrast** instead:
+- Dark section → Light card = clear boundary without spacer
+- Same-bg sections → 1px border-top or subtle bg-surface strip (24px height max)
 
 ## Alignment System
 
-**One rule: CENTER everything for poster/social format.**
+**One rule: CENTER everything. No exceptions. No mixed alignment.**
 
-Long-form social posters are not editorial layouts. They're viewed on phones at 375px viewport width where the image is centered. Any left-bias creates dead space on the right.
+Long-form social posters are viewed on phones at 375px viewport width. Any left-bias creates dead space on the right. Mixed alignment (some sections centered, some left) looks chaotic.
 
 | Element | Alignment | Max-width |
 |---------|-----------|-----------|
 | Card container | Center (margin: 0 auto) | 100% of poster width |
 | Eyebrow | Center | — |
 | Headline | Center | 800px |
-| Body text | Center | 700px (42em at 24px) |
+| Body text | **Center** | 700px (42em at 24px) |
 | Highlight / pullquote | Center | 700px |
+| Lists / principles | Center | 700px |
 | Tech grid | Center | 920px (full - 80px×2) |
 | Footer | Center | 920px |
 
-**Exception: body text WITHIN its max-width block is LEFT-aligned** (reading direction). The block itself is centered in the poster.
+**v2 change: body text is CENTER-ALIGNED, not left-aligned.** The old exception ("body text within block is left-aligned") created visual inconsistency — headline centered, then body left, then next headline centered again. On a narrow poster this looks broken.
+
+**Exception:** Only code blocks and bullet lists MAY be left-aligned within their centered container. Everything else = center.
 
 ## Semantic Token System (Direction-Driven)
 
