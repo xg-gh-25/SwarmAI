@@ -608,7 +608,22 @@ enforced by the validator, not honor-system.
 
 After reflect stage:
 
-1. Update pipeline run status to "completed"
+1. Update pipeline run status to "completed":
+   ```bash
+   python backend/scripts/artifact_cli.py run-update \
+     --project <PROJECT> --run-id <RUN_ID> --status completed
+   ```
+
+   **⚠️ MECHANICAL GATE:** This command runs `pipeline_validator.py` on the
+   DELIVER stage artifact before allowing completion. It will **BLOCK** if:
+   - `adversarial_review.profile_tier` is `skipped`/`lite` for full/bugfix profiles
+   - Any HIGH severity finding is unresolved
+   - Deliver artifact can't be loaded (missing or corrupt)
+
+   **If blocked:** fix the issue (run adversarial review, resolve findings),
+   re-publish the deliver artifact, then retry `--status completed`.
+   You CANNOT bypass this gate — it is code-enforced, not prompt-enforced.
+
 2. Present the completion summary in chat:
 
 ```
