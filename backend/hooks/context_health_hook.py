@@ -1151,8 +1151,6 @@ class ContextHealthHook:
         from core.ddd_orchestrator import DddCultivationOrchestrator
         return DddCultivationOrchestrator()._ch_ddd_staleness(root, ws_path)
 
-    # Sections that are never auto-applied (require human judgment)
-    _SEMANTIC_SECTIONS = ("Non-Goals", "Vision", "Architecture")
 
     def _auto_apply_ddd_proposals(self, root: Path) -> None:
         """Delegate to DddCultivationOrchestrator (backward compat)."""
