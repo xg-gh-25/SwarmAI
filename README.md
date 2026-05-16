@@ -28,6 +28,26 @@ We're exploring what **"Human directs. AI delivers."** means when taken to its l
 
 **SwarmAI develops SwarmAI.** Human directs, AI delivers — 1,300+ commits, 190K+ LOC, one human. The codebase you're reading is both the product and the proof.
 
+### What we think is interesting here
+
+Most agent harnesses optimize one axis (code quality, memory, or autonomy). We're testing whether four things **compounding together** produce something qualitatively different:
+
+| Component | What it does | Why it matters alone | Why it matters together |
+|-----------|-------------|---------------------|----------------------|
+| **4-layer memory** | DailyActivity → MEMORY.md → DDD docs → EVOLUTION.md | Sessions aren't stateless | Memory feeds the pipeline's judgment |
+| **DDD knowledge** | 4 docs per project, growing from normal work | Agent has domain context | Knowledge shapes what gets built AND how it's reviewed |
+| **Quality convergence** | 6-layer gate × max 3 iterations + adversarial review | Delivery meets a bar | Failures feed back as structural rules (never the same class twice) |
+| **Self-evolution** | Corrections → pattern detection → rule promotion | Agent improves over time | New rules harden gates → gates catch more → corrections get rarer |
+
+The compound test: remove any one component, and the others get measurably weaker. We don't claim this is proven at scale — it's proven at 60 days and 25 corrections. The trajectory is what's interesting, not the current position.
+
+**Three architectural bets worth noting:**
+- **Evolution is engineering, not training.** Structured logs → pattern extraction → rule promotion. No fine-tuning, no RLHF. Transparent, auditable, git-verifiable.
+- **Three-level hardening (L1 → L2 → L3).** Text rule → code gate → structural impossibility. We track where each capability sits and what it takes to promote.
+- **Temporal symmetry.** The gap between sessions isn't idle — 9 hooks fire, knowledge distills, health scores update. Session N+1 starts with everything session N learned, already processed.
+
+These may turn out to be wrong bets. That's fine — the failures are tracked too. See [`EVOLUTION.md`](./backend/context/EVOLUTION.md) for the full correction history.
+
 Not by working harder. By building systems that remember, learn, and converge. The scope is intentional. The breadth is the experiment.
 
 ---
