@@ -101,21 +101,30 @@ def cmd_discover(args, reg: ArtifactRegistry) -> None:
 
 
 def _find_active_run(project: str, reg: ArtifactRegistry) -> dict | None:
-    """Find the most recent active (running/paused) pipeline run for a project."""
+    """Find the most recent active (running/paused) pipeline run for a project.
+
+    Sorts by created_at (ISO timestamp in run.json), not by directory name —
+    directory names are run_<8-char-uuid> which have no chronological order.
+    """
     runs_dir = Path(reg._workspace) / "Projects" / project / ".artifacts" / "runs"
     if not runs_dir.is_dir():
         return None
-    # Find most recent run.json with status=running
-    for run_dir in sorted(runs_dir.iterdir(), reverse=True):
+    # Collect all active runs with their timestamps
+    active_runs: list[tuple[str, dict]] = []
+    for run_dir in runs_dir.iterdir():
         run_file = run_dir / "run.json"
         if run_file.exists():
             try:
                 data = json.loads(run_file.read_text())
                 if data.get("status") in ("running", "paused"):
-                    return data
+                    active_runs.append((data.get("created_at", ""), data))
             except (json.JSONDecodeError, OSError):
                 continue
-    return None
+    if not active_runs:
+        return None
+    # Sort by created_at descending — most recent first
+    active_runs.sort(key=lambda x: x[0], reverse=True)
+    return active_runs[0][1]
 
 
 def _append_stage_to_run(
@@ -167,6 +176,33 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
             }, indent=2), file=sys.stderr)
             sys.exit(1)
 
+    # ── Pollinate delivery gate: mechanical validation ────────────────────
+    # When producer is s_pollinate/s_autonomous-pipeline AND stage is deliver,
+    # and data contains a content_dir field, run the structural validator.
+    # This is the mechanical enforcement that prevents skipping the validator.
+    producer = getattr(args, "producer", "") or ""
+    if (
+        stage == "deliver"
+        and "pollinate" in producer
+        and data.get("content_dir")
+    ):
+        try:
+            sys.path.insert(0, str(Path(__file__).parent.parent / "skills" / "s_pollinate" / "scripts"))
+            from pollinate_validator import validate_delivery
+            vresult = validate_delivery(data["content_dir"])
+            if not vresult.get("valid", True):
+                print(json.dumps({
+                    "validation_failed": True,
+                    "stage": "deliver",
+                    "errors": [f"Pollinate validator: {e}" for e in vresult.get("errors", [])],
+                    "hint": "Run: python pollinate_validator.py <content_dir> --json",
+                }, indent=2), file=sys.stderr)
+                sys.exit(1)
+        except ImportError:
+            pass  # Validator not available — skip (non-blocking)
+        except Exception as exc:
+            logger.warning("Pollinate validator skipped: %s", exc)
+
     run_id = getattr(args, "run_id", None)
     try:
         artifact_id = reg.publish(
@@ -183,12 +219,16 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
             result["run_id"] = run_id
 
         # ── Auto-record stage to run.json (eliminates separate run-update call) ──
-        # If --stage is provided AND an active run exists, append the stage record.
+        # If --stage is provided, append stage record to the target run.
+        # Priority: explicit --run-id > auto-discovered active run.
         if stage:
             try:
-                active_run = _find_active_run(args.project, reg)
-                if active_run:
-                    active_run_id = active_run.get("id", "")
+                target_run_id = run_id  # Explicit --run-id from caller
+                if not target_run_id:
+                    active_run = _find_active_run(args.project, reg)
+                    if active_run:
+                        target_run_id = active_run.get("id", "")
+                if target_run_id:
                     stage_record = {
                         "stage": stage,
                         "status": "completed",
@@ -196,9 +236,9 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
                         "token_cost": 0,  # Caller can update later if needed
                         "decisions": [],
                     }
-                    _append_stage_to_run(args.project, active_run_id, stage_record, reg)
+                    _append_stage_to_run(args.project, target_run_id, stage_record, reg)
                     result["auto_recorded"] = True
-                    result["run_id"] = active_run_id
+                    result["run_id"] = target_run_id
             except Exception:
                 pass  # Best-effort — don't fail publish if auto-record fails
 
