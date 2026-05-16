@@ -78,20 +78,46 @@ def check_adversarial_health(artifacts_dir: Path) -> dict:
         findings_total = 0
         files_changed = 0
 
-        # Check artifact file (try both in run_dir and parent artifacts dir)
-        for art_path in [
-            artifacts_dir / f"{art_id}.json",
-            run_dir / f"{art_id}.json",
-        ]:
-            if art_path.exists():
-                try:
-                    art_data = json.loads(art_path.read_text(encoding="utf-8"))
-                    ar = art_data.get("adversarial_review", {})
-                    findings_total = ar.get("findings_total", 0)
-                    files_changed = art_data.get("files_changed", 0)
+        # Fix F3: skip artifact lookup when art_id is empty
+        if art_id:
+            for art_path in [
+                artifacts_dir / f"{art_id}.json",
+                run_dir / f"{art_id}.json",
+            ]:
+                if art_path.exists():
+                    try:
+                        art_data = json.loads(art_path.read_text(encoding="utf-8"))
+                        ar = art_data.get("adversarial_review", {})
+                        findings_total = ar.get("findings_total", 0)
+                        # Fix F1: files_changed can be list (paths) or int
+                        fc = art_data.get("files_changed", 0)
+                        files_changed = len(fc) if isinstance(fc, list) else (
+                            fc if isinstance(fc, int) else 0
+                        )
+                        break
+                    except (json.JSONDecodeError, OSError):
+                        pass
+
+        # Also check build artifact for files_changed if deliver didn't have it
+        if files_changed == 0:
+            for stage in stages:
+                if isinstance(stage, dict) and stage.get("stage") == "build":
+                    build_art_id = stage.get("artifact_id", "")
+                    if build_art_id:
+                        for art_path in [
+                            artifacts_dir / f"{build_art_id}.json",
+                            run_dir / f"{build_art_id}.json",
+                        ]:
+                            if art_path.exists():
+                                try:
+                                    build_data = json.loads(art_path.read_text(encoding="utf-8"))
+                                    fc = build_data.get("files_changed", 0)
+                                    files_changed = len(fc) if isinstance(fc, list) else (
+                                        fc if isinstance(fc, int) else 0
+                                    )
+                                except (json.JSONDecodeError, OSError):
+                                    pass
                     break
-                except (json.JSONDecodeError, OSError):
-                    pass
 
         stats.append({
             "run_id": run_data.get("id", run_dir.name),
@@ -99,25 +125,25 @@ def check_adversarial_health(artifacts_dir: Path) -> dict:
             "files_changed": files_changed,
         })
 
-    # Detect degradation: 3+ consecutive runs with >50 lines and 0 findings
+    # Detect degradation: 3+ trailing consecutive runs with >50 lines and 0 findings
+    # Fix F2: use trailing count (current streak at end), not historical max
     consecutive_zero = 0
-    max_consecutive_zero = 0
 
     for entry in stats:
         if entry["files_changed"] > MIN_CHANGED_LINES and entry["findings_total"] == 0:
             consecutive_zero += 1
-            max_consecutive_zero = max(max_consecutive_zero, consecutive_zero)
         else:
             consecutive_zero = 0
 
-    degradation_warning = max_consecutive_zero >= CONSECUTIVE_THRESHOLD
+    # consecutive_zero now holds the trailing streak length
+    degradation_warning = consecutive_zero >= CONSECUTIVE_THRESHOLD
 
     if degradation_warning:
         logger.warning(
             "adversarial_meta: DEGRADATION WARNING — %d consecutive runs "
             "with >%d changed lines had 0 adversarial findings. "
             "Review prompt may need rotation.",
-            max_consecutive_zero,
+            consecutive_zero,
             MIN_CHANGED_LINES,
         )
 
@@ -125,7 +151,7 @@ def check_adversarial_health(artifacts_dir: Path) -> dict:
         "runs_analyzed": len(stats),
         "stats": stats,
         "degradation_warning": degradation_warning,
-        "consecutive_zero_count": max_consecutive_zero,
+        "consecutive_zero_count": consecutive_zero,
     }
 
     # Persist stats
