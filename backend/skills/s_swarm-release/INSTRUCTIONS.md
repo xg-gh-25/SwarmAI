@@ -89,6 +89,23 @@ Stage 1 PREFLIGHT: PASS
 
 ---
 
+## Stage 1.5: CONVERGENCE SNAPSHOT (5s, auto)
+
+Update `docs/CONVERGENCE.md` with current metrics before tagging.
+
+```bash
+cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai
+python backend/scripts/update_convergence.py
+```
+
+If output shows meaningful changes since last recorded row, append the new data to
+`docs/CONVERGENCE.md` and commit: `docs: update convergence metrics for <version>`.
+
+**Non-blocking:** If the script fails or data hasn't changed, skip and continue.
+This is a record-keeping step, not a quality gate.
+
+---
+
 ## Stage 2: VERSION BUMP (30s)
 
 Determine new version and update all 5 version files.
