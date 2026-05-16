@@ -820,6 +820,56 @@ Output formatting MUST NOT degrade pipeline execution quality.
 - If token budget is tight (run-budget > 70%), compress to status-only lines
 - Agent priority: execute → verify → THEN format output
 
+### Output Token Conservation (Mandatory)
+
+**Problem:** A full pipeline run (7-8 stages) in a single response can exceed the
+~16K output token limit, causing mid-response truncation. The pipeline stops
+silently between stages with no error message.
+
+**Rules — minimize output tokens WITHOUT reducing execution quality:**
+
+1. **Artifact CLI output: suppress JSON echo.** After `publish`, `run-update`,
+   `advance`, `run-budget` — do NOT paste the returned JSON into chat. One-line
+   confirmation only: `art_xxxx ✓` or `→ build`. The JSON is in `.artifacts/`,
+   not the chat window.
+
+2. **Tool output: tail only.** For pytest, use `| tail -5` (pass/fail summary).
+   For git diff, use `--stat` not full diff. For file reads needed for context,
+   read once and reference — don't re-read the same file across stages.
+
+3. **Stage preamble: omit SIGNAL/CHECK/FAIL for bugfix/trivial profiles.**
+   These are valuable for full/complex profiles where the stage definition isn't
+   obvious. For bugfix (well-understood scope), the 3-line preamble per stage
+   is ~150 tokens × 7 stages = ~1000 tokens wasted. Skip it.
+
+4. **Validator output: suppress when valid.** Only show validator output when
+   `valid: false`. A passing validator is expected — don't echo the success JSON.
+
+5. **DDD doc reads: batch before first stage, not per-stage.** Read TECH.md and
+   IMPROVEMENT.md once at pipeline start (during EVALUATE). Subsequent stages
+   reference what was already loaded — don't re-invoke Read tool.
+
+6. **No explanatory prose between stages.** The structured landmark (## ✦ line)
+   IS the stage output. Don't add paragraphs explaining what you're about to do
+   or what just happened. Execute → landmark → next stage.
+
+7. **Commit messages: use HEREDOC, no preview.** Don't echo the commit message
+   in chat before running it. Just commit. The git output confirms.
+
+**Token budget targets (approximate, per profile):**
+
+| Profile | Target output tokens | Stages | Strategy |
+|---------|---------------------|--------|----------|
+| bugfix | <8K | 7 | Suppress preambles, batch reads, tail-only tests |
+| trivial | <6K | 6 | Same as bugfix, even shorter landmarks |
+| full | <14K | 8 | Preambles allowed, but suppress CLI JSON |
+| research | <4K | 3 | Minimal — mostly internal reasoning |
+
+**If approaching limit:** Compress stage landmarks to single-line format:
+```
+✦ EVALUATE → GO 3.8 | ✦ PLAN → 4AC 1file | ✦ BUILD → 2R2G 28pass | ✦ REVIEW → clean | ✦ TEST → 48/0 | ✦ DELIVER → push-ready | ✦ REFLECT → 2 lessons
+```
+
 ### Format
 
 Show progress as structured landmarks after each stage completes. Each stage
@@ -1021,6 +1071,13 @@ For goal profile:
 
     **If context is exhausted:** CHECKPOINT with the next stage as resume point.
     Do not compress or skip stages to fit in the current session.
+
+20. **Conserve output tokens.** A full pipeline in one response can hit the
+    ~16K output token limit, causing silent mid-stage truncation. Follow the
+    "Output Token Conservation" rules in §Progress Display. Key: suppress CLI
+    JSON echo, tail-only test output, no explanatory prose between stages,
+    omit preambles for bugfix/trivial. The pipeline's value is in the CODE
+    committed, not the TEXT displayed.
 
 ---
 
