@@ -46,6 +46,7 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Add parent directory to path so we can import core modules
@@ -99,6 +100,45 @@ def cmd_discover(args, reg: ArtifactRegistry) -> None:
     print(json.dumps({"artifacts": result, "count": len(result)}, indent=2))
 
 
+def _find_active_run(project: str, reg: ArtifactRegistry) -> dict | None:
+    """Find the most recent active (running/paused) pipeline run for a project."""
+    runs_dir = Path(reg._workspace) / "Projects" / project / ".artifacts" / "runs"
+    if not runs_dir.is_dir():
+        return None
+    # Find most recent run.json with status=running
+    for run_dir in sorted(runs_dir.iterdir(), reverse=True):
+        run_file = run_dir / "run.json"
+        if run_file.exists():
+            try:
+                data = json.loads(run_file.read_text())
+                if data.get("status") in ("running", "paused"):
+                    return data
+            except (json.JSONDecodeError, OSError):
+                continue
+    return None
+
+
+def _append_stage_to_run(
+    project: str, run_id: str, stage_record: dict, reg: ArtifactRegistry
+) -> None:
+    """Append a stage record to run.json (same as run-update --stage-json)."""
+    run_file = (
+        Path(reg._workspace) / "Projects" / project
+        / ".artifacts" / "runs" / run_id / "run.json"
+    )
+    if not run_file.exists():
+        return
+    data = json.loads(run_file.read_text())
+    stages = data.get("stages", [])
+    # Don't duplicate if stage already recorded
+    if any(s.get("stage") == stage_record["stage"] for s in stages):
+        return
+    stages.append(stage_record)
+    data["stages"] = stages
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    run_file.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+
+
 def cmd_publish(args, reg: ArtifactRegistry) -> None:
     """Publish a new artifact. Validates schema when --stage is provided.
 
@@ -141,6 +181,27 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
         result = {"artifact_id": artifact_id, "project": args.project}
         if run_id:
             result["run_id"] = run_id
+
+        # ── Auto-record stage to run.json (eliminates separate run-update call) ──
+        # If --stage is provided AND an active run exists, append the stage record.
+        if stage:
+            try:
+                active_run = _find_active_run(args.project, reg)
+                if active_run:
+                    active_run_id = active_run.get("id", "")
+                    stage_record = {
+                        "stage": stage,
+                        "status": "completed",
+                        "artifact_id": artifact_id,
+                        "token_cost": 0,  # Caller can update later if needed
+                        "decisions": [],
+                    }
+                    _append_stage_to_run(args.project, active_run_id, stage_record, reg)
+                    result["auto_recorded"] = True
+                    result["run_id"] = active_run_id
+            except Exception:
+                pass  # Best-effort — don't fail publish if auto-record fails
+
         print(json.dumps(result))
     except (ValueError, FileNotFoundError) as e:
         print(json.dumps({"error": str(e)}), file=sys.stderr)
