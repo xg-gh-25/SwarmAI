@@ -6,6 +6,8 @@ Timestamped records of measurable system improvements. Each entry includes evide
 
 **How to verify any entry:** Every entry includes an `Evidence` field pointing to a git commit, file, or reproducible command. Run it yourself.
 
+**Data source:** Extracted from private operational memory (MEMORY.md, EVOLUTION.md, DailyActivity logs) which contain sensitive work context and are not published. What you see here are the measurable outcomes — independently verifiable via git history.
+
 ---
 
 ## Correction Trajectory
