@@ -49,17 +49,39 @@ RP-V12: ✅ Content width 88%
 | RP-P6 | **Direction cohesion** | Every poster | All visual elements belong to the declared direction — no accidental mixing (e.g., gold accent in Paper direction) |
 | RP-P7 | **Contrast & readability** | Every poster | Text:background contrast ≥ 4.5:1 (WCAG AA), no text cut off at edges, minimum 48px edge padding |
 
-### Poster Output Format
+### Poster Output Format (8-Layer Publish-Ready Gate)
+
+The 8-layer gate runs as a convergence loop (max 3 iterations) inside BUILD
+stage Step B.5. REVIEW verifies the gate passed cleanly — checking the
+`convergence-log.txt` output AND re-scanning the final rendered output.
 
 ```
-RP-P1: ✅ Direction: D5 (Morandi) — declared in HTML comment
-RP-P2: ✅ 0 hardcoded hex values in body (all use var(--token))
-RP-P3: ✅ 0 ban list violations (checked 28 visual + 13 structural rules)
-RP-P4: ✅ 1080×1440 matches XHS Card spec, 4 sections (within max)
-RP-P5: ✅ Chinese line-height 2.0, max-width 700px, Noto Sans SC in stack
-RP-P6: ✅ All colors from D5 palette — no foreign accent colors
-RP-P7: ✅ Contrast ratio 7.2:1 (text-primary on bg-deep), 60px edge padding
+── 8-LAYER PUBLISH-READY GATE ──────────
+
+L1 Direction:   ✅ A=D5 (Morandi), B=D4 (Neon) — both declared in HTML
+L2 Tokens:      ✅ 0 hardcoded hex in body CSS (both variants)
+L3 Spacing:     ✅ Max section gap: 48px (A), 48px (B) — within ≤72px limit
+L4 Alignment:   ✅ 100% center-aligned (both variants, 0 mixed elements)
+L5 Anti-Slop:   ✅ 0/45 violations — A: clean, B: clean
+L6 Platform:    ✅ A: 1080×3200 (XHS long), B: 1080×2800 (XHS long)
+L7 Branding:    ✅ Watermark ✓ QR ✓ Footer ✓ (both variants)
+L8 Variants:    ✅ 2 directions rendered (A + B)
+
+Convergence: passed in {N} iteration(s)
+Status: PUBLISH-READY
 ```
+
+**If any layer failed during convergence:**
+
+```
+L3 Spacing:     ⚠️ FIXED (iter 1: 96px gap → iter 2: 48px — auto-reduced padding)
+L5 Anti-Slop:   ❌ UNFIXED — "left-border accent card" in section 3 (direction D4 doesn't use borders)
+                 → Requires regeneration of section 3
+```
+
+**REVIEW responsibility:** Verify the convergence log is truthful — spot-check at
+least 2 layers by re-measuring the final output (not trusting the log alone).
+Specifically: re-check L3 (actual rendered gap) and L4 (actual text-align values).
 
 ---
 

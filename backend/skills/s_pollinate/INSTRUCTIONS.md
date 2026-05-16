@@ -239,20 +239,37 @@ Message first, format follows.
 This is what the user takes away. Every DELIVER stage MUST output this block
 in the chat window. The user should be able to copy-paste directly to publish.
 
-**Format: Poster + Text deliverables:**
+**Format: Poster + Text deliverables (2-variant structured output):**
 
 ```
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ 📦 POLLINATE DELIVERY — run_p_{id}     ┃
-┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🐝 **Pollinate** — "{topic}" ready for publish
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Topic: {topic}
-Format: {formats} | Confidence: {score}/10
-Platforms: {list}
+## Direction A: {Direction Name} ({Chinese Name})
+> {Mood — one sentence from direction YAML}
 
-── POSTER ──────────────────────────────
+![Poster A](path-to-variant-a.png)
 
-[inline image — rendered poster]
+## Direction B: {Direction Name} ({Chinese Name})
+> {Mood — one sentence from direction YAML}
+
+![Poster B](path-to-variant-b.png)
+
+---
+
+### ✅ Quality Gates (8/8 Pass)
+
+| Gate | Status | Detail |
+|------|--------|--------|
+| L1 Direction | ✅ | A={D_} B={D_} |
+| L2 Tokens | ✅ | 0 hardcoded hex |
+| L3 Spacing | ✅ | Max gap: {N}px (≤72) |
+| L4 Alignment | ✅ | 100% center |
+| L5 Anti-Slop | ✅ | 0/45 violations |
+| L6 Platform | ✅ | 1080×{H} ({format}) |
+| L7 Branding | ✅ | Watermark ✓ QR ✓ Footer ✓ |
+| L8 Variants | ✅ | 2 directions rendered |
 
 ── COPY (朋友圈) ───────────────────────
 
@@ -260,7 +277,7 @@ Platforms: {list}
 
 ── COPY (小红书) ───────────────────────
 
-{title}
+{title — ≤20 chars}
 
 {body text}
 
@@ -268,16 +285,27 @@ Platforms: {list}
 
 ── FILES ───────────────────────────────
 
-poster:  {relative path to .png}
-html:    {relative path to .html}
-report:  {relative path to REPORT.md}
+poster-a:  {path} ({size} KB)
+poster-b:  {path} ({size} KB)
+html:      {paths}
 
-── TASTE DECISIONS (if any) ────────────
+── NEXT ────────────────────────────────
 
-{numbered list of pending taste decisions}
+1. "发 A" — publish Direction A
+2. "发 B" — publish Direction B
+3. "调整 A 的 {element}" — modify specific element
+4. "换 D{N} 试试" — regenerate with different direction
+5. "出 {platform} 版本" — platform-specific crop
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
+
+**Key rules for poster delivery:**
+1. **Images shown inline** — use Read tool on .png to display both variants
+2. **Quality gates always visible** — builds user trust in the system
+3. **Next steps are commands** — user types exactly what's shown
+4. **No taste decisions surface** — direction choice IS the taste gate (A/B selection)
+5. **If any gate failed and couldn't be auto-fixed:** show ⚠️ status + detail + "regenerate?" suggestion
 
 **Format: Video deliverables:**
 
@@ -1115,32 +1143,40 @@ Read brand/poster_design_system.md
 This is MANDATORY before writing any poster HTML. Do not skip. The design system
 defines spacing tokens, typography scale, alignment rules, and anti-patterns.
 
-#### Step B.2: Author HTML
+#### Step B.2: Select Directions (ALWAYS 2 variants)
 
-Create `content/{name}/tracks/poster/{variant}.html`:
+**MANDATORY: Every poster run produces exactly 2 direction variants.**
 
-- Use design tokens from `poster_design_system.md` (spacing multiples of 24px base)
-- All content blocks centered (`margin: 0 auto` + `max-width`)
-- Body text left-aligned WITHIN its centered max-width block
-- Typography: headline 52px / body 24px / eyebrow 12px / tagline 20px
-- Card variety: NEVER same card style consecutively (see design system)
+Select 2 best-fit directions from the content:
+1. Read each direction's `content_triggers` in `brand/directions/d{N}-{name}.yaml`
+2. Score content against triggers (strong=3, moderate=2, weak=1)
+3. Top 2 scores → selected directions
+4. If user specified a direction → that's #1, auto-select #2 based on content contrast
+
+**Direction selection decision: Mechanical** (score-based from triggers).
+
+#### Step B.3: Author HTML (per direction)
+
+For EACH selected direction, create `content/{name}/tracks/poster/{topic}-{direction}.html`:
+
+- Load direction's `css_snippet` into `:root {}` block
+- Add `<!-- Direction: D{N} {name} -->` as first HTML comment
+- ALL colors via `var(--token)` — **ZERO hardcoded hex in body**
+- ALL text-align: center (no exceptions, no mixed alignment)
+- Section gaps ≤ 72px (no explicit dividers between sections)
+- Typography: headline 52px / body 22px / eyebrow 12px
+- Card variety: NEVER same style consecutively (per direction's `card_styles`)
 - Chinese body line-height: 2.0 minimum
 - Max text width: 700px
+- Include Default Branding (see `poster_design_system.md`):
+  - Footer section with 🐝 + SwarmAI + tagline + QR + github link
+  - Watermark: `🐝 Made with SwarmAI Pollinate` at bottom-right
 
-#### Step B.3: Generate QR Code (if needed)
+**QR code:** Use pre-rendered asset from `brand/assets/logo/`:
+- Light bg directions (D2/D3/D5): `qr-github-dark-on-light.png`
+- Dark bg directions (D1/D4): `qr-github-light-on-dark.png`
 
-```bash
-python3 -c "
-import qrcode
-qr = qrcode.QRCode(version=1, box_size=10, border=2)
-qr.add_data('{url}')
-qr.make(fit=True)
-img = qr.make_image(fill_color='#D4A853', back_color='#0A0A0B')
-img.save('content/{name}/tracks/poster/qr.png')
-"
-```
-
-#### Step B.4: Render to PNG
+#### Step B.4: Render to PNG (per direction)
 
 ```bash
 python3 -c "
@@ -1155,9 +1191,58 @@ with sync_playwright() as p:
 "
 ```
 
-Verify output: < 2MB, width exactly 1080px.
+#### Step B.5: 8-Layer Quality Convergence Loop (BLOCKING)
 
-#### Step B.5: Content Principles Check (external content only)
+> "Content as Black Box" — same principle as Pipeline's 6-Layer Push-Ready Gate.
+> Output must pass ALL 8 layers simultaneously before reaching the user.
+> A poster passing 7/8 is NOT publish-ready.
+
+**For EACH rendered variant, run all 8 layers:**
+
+| Layer | Gate | What to Verify | RP-P | Auto-fixable? |
+|-------|------|---------------|------|---------------|
+| L1 | Direction Declared | HTML has `<!-- Direction: D{N} -->` comment | RP-P1 | ✅ Inject comment |
+| L2 | Token Purity | Zero hardcoded hex values in `<style>` body (outside `:root`) | RP-P2 | ✅ Replace with var() |
+| L3 | Spacing Compliance | All section gaps ≤ 72px when rendered | RP-P3 | ⚠️ Reduce padding |
+| L4 | Alignment Unity | ALL text elements use text-align: center | RP-P4 | ✅ Force center |
+| L5 | Anti-Slop Clean | Zero violations against Visual + Structural Ban Lists | RP-P5 | ⚠️ Regenerate section |
+| L6 | Platform Fit | Output width = 1080px, file < 2MB | RP-P6 | ✅ Re-render viewport |
+| L7 | Brand Present | Watermark element + QR + footer section exist in DOM | RP-P7 | ✅ Append template |
+| L8 | 2-Variant Output | ≥ 2 direction PNGs rendered | — | ✅ Render second |
+
+**Convergence Loop:**
+
+```
+LOOP (max 3 iterations):
+  1. Run all 8 layers against rendered PNG + source HTML
+  2. IF all 8 PASS → exit loop, proceed to Content Principles Check
+  3. IF failures exist:
+     a. Auto-fixable (L1,L2,L4,L6,L7,L8): fix HTML in-place
+     b. Semi-fixable (L3,L5): adjust CSS values
+     c. Re-render via Playwright
+     d. Re-verify ALL 8 layers (fix may introduce new failures)
+  4. Increment iteration counter
+
+EXIT CONDITIONS:
+  - All 8 pass → PUBLISH-READY (proceed)
+  - 3 iterations without convergence → show best version + flag remaining issues
+
+CRITICAL: The loop runs BEFORE the user sees anything.
+The user receives only publish-ready output.
+```
+
+**Verification methods:**
+
+L1: `grep "<!-- Direction:" {html_file}`
+L2: `grep -P '(?<!--)#[0-9a-fA-F]{3,8}' {style_body}` → 0 matches
+L3: Check section padding values in CSS (all ≤ 72px for between-section gaps)
+L4: `grep "text-align" {html}` → all values are "center" (exception: code blocks)
+L5: Scan against `poster_design_system.md` ban lists (32 visual + 13 structural)
+L6: Rendered PNG width = 1080px AND file size < 2MB
+L7: `grep "Made with SwarmAI Pollinate" {html}` + `grep "qr-github" {html}`
+L8: Count `*-d*.png` files in output directory ≥ 2
+
+#### Step B.6: Content Principles Check (external content only)
 
 Read `brand/content_principles.md` and run anti-pattern scan on poster text:
 - No LOC/commit/天数 as value (P1)
@@ -1179,17 +1264,17 @@ Any match → FAIL → fix before proceeding.
 
 | Decision | Classification | Default |
 |----------|---------------|---------|
-| Card layout choice | Taste | From design system variety rules |
-| Spacing adjustments | Taste | Start with design system, adjust ±1 base unit |
-| Visual element style | Taste | Abstract geometric (rings, lines, gradients) |
-| QR code inclusion | Mechanical | Include if external-facing |
-| Color exactly matches tokens | Mechanical | Must match brand/identity.yaml |
+| Direction selection | Mechanical | Score-based from content_triggers |
+| Card layout choice | Taste | From direction's card_styles |
+| Visual element style | Taste | From direction's visual_elements |
+| QR code variant | Mechanical | Light/dark based on direction bg |
+| Color token usage | Mechanical | Must be var(--token), zero hardcoded |
 
-#### Poster Output Files
+#### Poster Output Files (per run)
 
-- `content/{name}/tracks/poster/{variant}.html` -- source
-- `content/{name}/tracks/poster/{variant}.png` -- rendered output
-- `content/{name}/tracks/poster/qr.png` -- QR code (if generated)
+- `content/{name}/tracks/poster/{topic}-d{N}-{name}.html` -- source (2 files)
+- `content/{name}/tracks/poster/{topic}-d{N}-{name}.png` -- rendered (2 files)
+- `content/{name}/tracks/poster/convergence-log.txt` -- gate results per iteration
 
 ---
 
