@@ -263,6 +263,14 @@ def create_file_tracker(
 
     async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
         tool = _extract_field(input_data, "tool_name", "")
+
+        # Detect test/scan execution (Self-Monitoring evidence)
+        if tool == "Bash":
+            tool_input = _extract_field(input_data, "tool_input", {})
+            command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
+            if "pytest" in command or "python -m pytest" in command:
+                ctx["_ran_tests"] = True
+
         if tool not in _TRACKED_TOOLS:
             return {}
 
@@ -422,6 +430,27 @@ def create_session_checkpoint(
             )
         except Exception:
             logger.debug("Failed to write mid-session checkpoint to DailyActivity", exc_info=True)
+
+        # ── Self-Monitoring gate: multi-file change without test evidence ──
+        # If agent has edited >1 source file but never ran pytest/test,
+        # inject a reminder via additionalContext (soft gate — warns, doesn't block).
+        edited_source_files = [
+            f for f in files
+            if any(f.endswith(ext) for ext in (".py", ".ts", ".tsx", ".rs"))
+            and "/tests/" not in f
+            and "/test_" not in f
+        ]
+        has_test_evidence = ctx.get("_ran_tests", False)
+
+        if len(edited_source_files) > 1 and not has_test_evidence:
+            return {
+                "additionalContext": (
+                    "[Self-Monitoring] You have edited "
+                    f"{len(edited_source_files)} source files without running "
+                    "tests or post-task scan. Before declaring done, run "
+                    "targeted tests: `pytest tests/test_<module>.py --timeout=60`"
+                )
+            }
 
         return {}
 
