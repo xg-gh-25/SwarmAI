@@ -217,6 +217,7 @@ class DddCultivationOrchestrator:
             return findings
 
         cutoff = datetime.now() - timedelta(days=14)
+        gate_mgr = self._get_gate_manager(root)  # Create once, reuse per-finding
 
         for project_dir in sorted(projects_dir.iterdir()):
             if not project_dir.is_dir():
@@ -246,7 +247,6 @@ class DddCultivationOrchestrator:
                             f"({days_stale}d old, {commit_count} recent commits)"
                         )
                         # Gate trigger: staleness detected = file_tracker gate fires
-                        gate_mgr = self._get_gate_manager(root)
                         if gate_mgr:
                             gate_mgr.record_trigger("file_tracker")
                 except (subprocess.TimeoutExpired, OSError):
