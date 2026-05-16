@@ -1069,6 +1069,10 @@ app.include_router(escalations_router, tags=["escalations"])
 app.include_router(voice_router, prefix="/api/voice", tags=["voice"])
 app.include_router(hive_router, prefix="/api/hive", tags=["hive"])
 
+# DDD Cultivation API (list/approve/reject proposals)
+from routers.cultivation import router as cultivation_router
+app.include_router(cultivation_router, tags=["cultivation"])
+
 # Memory compliance router (no prefix — router defines /api internally)
 from routers.memory import router as memory_router
 app.include_router(memory_router, tags=["memory"])
