@@ -263,6 +263,11 @@ Project: <PROJECT>
 Requirement: <requirement from run.json>
 Files changed: <list of all changed files>
 
+## Project-Specific Traps (from TECH.md)
+<paste "Runtime Environment Traps" or "Architecture Invariants" section from
+the project's TECH.md — these are proven footguns in THIS codebase that
+generic checklists don't cover. If TECH.md has no such section, omit this block.>
+
 ## Checklist
 <paste contents of the specialist's .md file>
 
