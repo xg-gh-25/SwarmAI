@@ -1,8 +1,9 @@
 # Security Specialist Review
 
 Scope: When changeset touches auth, user input handling, database queries, file paths,
-external API calls, or any endpoint/handler. NEVER_GATE — always dispatch regardless
-of historical hit rate (insurance policy).
+external API calls, or any endpoint/handler. NEVER_GATE — once dispatched (per
+deliver.md scope rules), always runs to completion regardless of historical hit rate.
+Dispatch decision is still scope-gated; NEVER_GATE means "don't skip based on stats."
 
 Output: JSON objects, one finding per line.
 

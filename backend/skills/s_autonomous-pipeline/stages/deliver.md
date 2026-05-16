@@ -13,7 +13,7 @@
 ```
 1. Fresh User Audit (P6) — if user-facing infra changed
 2. Completion Audit — AC → evidence verification
-3. Adversarial Review Gate — spawn sub-agent (code correctness)
+3. Adversarial Review Gate — spawn specialist sub-agents (multi-domain review)
 4. Meta-Review — spawn sub-agent (operational blind spots)
 5. Push-Ready Gate — binary final verdict
 ```
@@ -32,7 +32,7 @@ gradients — there is no meaningful difference between 7/10 and 8/10.
 
 ```
 □ All acceptance criteria have passing tests (no AC without evidence)
-□ Zero HIGH findings from adversarial review (or all fixed)
+□ Zero HIGH/MED findings (confidence >= 7) from adversarial review (or all fixed)
 □ Completion audit: all_green = true (deliverables match requirement)
 □ Zero regressions on existing tests
 □ Meta-review completed with no unaddressed HIGH risks
@@ -270,7 +270,7 @@ For each finding, output a JSON object on its own line:
 {"severity":"HIGH|MED|LOW","confidence":N,"path":"file","line":N,"category":"<domain>","summary":"description","fix":"recommended fix","fingerprint":"path:line:category","specialist":"<name>"}
 
 Required fields: severity, confidence, path, category, summary, specialist.
-Optional: line, fix, fingerprint, evidence.
+Optional: line, fix, fingerprint, evidence, exploit (required for security specialist).
 
 If no findings: output `NO FINDINGS` and nothing else.
 Do not output anything else — no preamble, no summary, no commentary.
@@ -554,18 +554,24 @@ Bugs caught in RED phase: <N> (<brief description of most significant>)
 | VALIDATOR | 6/6 checks |
 | Push-Ready | ✅ PUSH-READY / ❌ NOT-PUSH-READY (blockers: ...) |
 
-## 7.5 Adversarial Review
-| Pass | Findings | Fixed | Noted |
-|------|----------|-------|-------|
-| User-side | N | M | — |
-| PE-side | N | M | K |
+## 7.5 Adversarial Review (Multi-Specialist)
+| Specialist | Dispatched | Findings | Fixed | Noted |
+|-----------|-----------|----------|-------|-------|
+| Correctness | ✓/✗ | N | M | K |
+| Security | ✓/✗ | N | M | K |
+| Performance | ✓/✗ | N | M | K |
+| API Contract | ✓/✗ | N | M | K |
+| Red Team | ✓/✗ (conditional) | N | M | K |
 
-**Key findings (HIGH/MED only):**
-| ID | Finding | Why Invisible to Other Gates | Fix Applied |
-|----|---------|------------------------------|-------------|
-| <PE-1> | <specific issue> | <why BUILD/REVIEW/TEST couldn't catch this> | <fix> |
+**Confidence gating:** N total → M shown (K suppressed at confidence ≤4)
+**Multi-specialist confirmed:** N findings confirmed by 2+ specialists
 
-**Gate value:** <HIGH/MED/LOW — one sentence explaining what adversarial uniquely provided>
+**Key findings (HIGH/MED, confidence >= 7 only):**
+| ID | Specialist | Finding | Why Invisible to Other Gates | Fix Applied |
+|----|-----------|---------|------------------------------|-------------|
+| <S-1> | <specialist> | <specific issue> | <why BUILD/REVIEW/TEST couldn't catch this> | <fix> |
+
+**Gate value:** <HIGH/MED/LOW — one sentence explaining what specialist review uniquely provided>
 
 ## 7.6 Meta-Review (Pipeline Blind Spot Analysis)
 | Category | Verdict | Detail |
