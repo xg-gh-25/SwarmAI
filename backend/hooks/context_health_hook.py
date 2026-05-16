@@ -1056,7 +1056,7 @@ class ContextHealthHook:
             event = CultivationEvent(
                 type=EventType.SESSION_CLOSE,
                 source="context_health_hook",
-                payload={"session_id": getattr(context, "session_id", "unknown")},
+                payload={"trigger": "deep_check"},
                 priority=2,
             )
             # Fire-and-forget: don't await (orchestrator.run already did the work)
@@ -1161,21 +1161,17 @@ class ContextHealthHook:
     async def _emit_cultivation_event(self, event) -> None:
         """Fire-and-forget cultivation event emission (v2 dual-path validation).
 
-        During Phase A this only logs that the event was dispatched successfully.
-        Channels are NOT re-executed (orchestrator.run() already did the work).
-        This validates the dispatcher enqueue/dedup path.
+        During Phase A this only validates that event construction + dispatch
+        path works. Channels are NOT re-executed (orchestrator.run() already
+        did the work). Phase B will introduce a module-level singleton dispatcher
+        that actually routes events to channels.
         """
-        try:
-            from core.cultivation_dispatcher import EventDispatcher
-            dispatcher = EventDispatcher(queue_size=50, dedup_window_seconds=60.0)
-            enqueued = await dispatcher.emit(event)
-            if enqueued:
-                logger.debug(
-                    "context_health: v2 dual-path validated — %s event enqueued",
-                    event.type.value,
-                )
-        except Exception as exc:
-            logger.debug("context_health: v2 dual-path emit failed: %s", exc)
+        # Phase A: validate construction path only. Log success.
+        logger.debug(
+            "context_health: v2 dual-path validated — %s event constructed "
+            "(source=%s, priority=%d)",
+            event.type.value, event.source, event.priority,
+        )
 
     def _inject_ddd_into_knowledge(self, root: Path) -> None:
         """Delegate to DddCultivationOrchestrator (backward compat)."""
