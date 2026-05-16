@@ -4,7 +4,8 @@ Scope: CONDITIONAL — only dispatch when EITHER:
 - Changeset > 200 lines, OR
 - Any specialist produced a HIGH severity finding
 
-NEVER_GATE — when dispatched, always runs regardless of historical hit rate.
+NEVER_GATE — once dispatch conditions are met, always runs to completion
+regardless of historical hit rate (insurance policy, not stats-gated).
 
 This runs AFTER other specialists. You receive their merged findings.
 
