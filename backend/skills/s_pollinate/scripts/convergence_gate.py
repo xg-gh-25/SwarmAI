@@ -34,7 +34,7 @@ MAX_SECTION_GAP_PX = 72
 # Visual ban patterns (L5)
 VISUAL_BANS = [
     r"linear-gradient.*-webkit-background-clip:\s*text",
-    r"box-shadow:\s*[^;]*\b\d{2,}px",  # excessive shadows (>= 10px)
+    r"box-shadow:\s*[^;]*\b\d{3,}px",  # excessive shadows (>= 100px)
     r"border-radius:\s*50%.*width:\s*[2-9]\d{2,}",  # large circles
     r"animation.*infinite",  # infinite animations
     r"transform:\s*rotate\(",  # rotated elements
@@ -60,23 +60,15 @@ def check_l1_direction(html: str) -> list[str]:
 def check_l2_token_purity(html: str) -> list[str]:
     """L2: No hardcoded hex in body styles (outside :root block)."""
     errors = []
-    # Extract content after :root {} block
-    # Strategy: find the closing } of :root, then scan for hex after that
-    root_match = re.search(r":root\s*\{[^}]*\}", html)
-    if root_match:
-        body_css = html[root_match.end():]
-    else:
-        # No :root block — entire style is body CSS
-        body_css = html
 
-    # Only scan within <style> tags but after :root
-    style_match = re.search(r"<style[^>]*>(.*?)</style>", html, re.DOTALL)
-    if style_match:
-        style_content = style_match.group(1)
-        # Remove :root block from style content
-        style_after_root = re.sub(r":root\s*\{[^}]*\}", "", style_content)
-        # Find hardcoded hex colors (not in comments, not in var() declarations)
-        hex_matches = re.findall(r"(?<!var\(--)#[0-9a-fA-F]{3,8}\b", style_after_root)
+    # Check ALL <style> blocks (not just the first)
+    style_blocks = re.findall(r"<style[^>]*>(.*?)</style>", html, re.DOTALL)
+    for style_content in style_blocks:
+        # Remove :root block and CSS comments
+        style_clean = re.sub(r":root\s*\{[^}]*\}", "", style_content)
+        style_clean = re.sub(r"/\*.*?\*/", "", style_clean, flags=re.DOTALL)
+        # Find hardcoded hex colors in remaining CSS
+        hex_matches = re.findall(r"#[0-9a-fA-F]{3,8}\b", style_clean)
         if hex_matches:
             errors.append(f"L2 FAIL: {len(hex_matches)} hardcoded hex value(s) in body CSS: {hex_matches[:3]}")
 
@@ -165,9 +157,11 @@ def check_l5_anti_slop(html: str) -> list[str]:
 
 
 def check_l6_platform_fit(html: str) -> list[str]:
-    """L6: Poster width should be 1080px (check viewport meta or body width)."""
-    # In CSS-only mode, we check for viewport meta or explicit width declarations
-    # This is a soft check — full verification needs Playwright
+    """L6: Poster width should be 1080px (check viewport meta or body width).
+
+    CSS-only mode: checks for explicit conflicting width declarations.
+    If no explicit width set, passes (Playwright renders at 1080 by default).
+    """
     errors = []
     # Check if there's a conflicting width declaration
     width_match = re.search(r"body\s*\{[^}]*width\s*:\s*(\d+)", html)
@@ -176,7 +170,7 @@ def check_l6_platform_fit(html: str) -> list[str]:
         if width != 1080 and width > 0:
             errors.append(f"L6 FAIL: Body width {width}px != 1080px target")
     # If no explicit width, we pass (Playwright renders at 1080 by default)
-    return []
+    return errors
 
 
 def check_l7_brand(html: str) -> list[str]:

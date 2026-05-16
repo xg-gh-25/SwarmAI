@@ -260,8 +260,9 @@ def score_ai_crawlability(text: str, lines: list[str]) -> dict:
     if has_fenced_code:
         score += 25
 
-    # No placeholder text
-    placeholders = re.findall(r"\[TODO\]|\[TBD\]|\[INSERT\]|\{.*?\}", text)
+    # No placeholder text (exclude fenced code blocks first)
+    text_no_code = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
+    placeholders = re.findall(r"\[TODO\]|\[TBD\]|\[INSERT\]|\{[A-Z_]+\}", text_no_code)
     no_placeholders = len(placeholders) == 0
     details["no_placeholders"] = no_placeholders
     if no_placeholders:
