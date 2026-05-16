@@ -1074,6 +1074,15 @@ class ContextHealthHook:
         except Exception as exc:
             logger.warning("context_health: signal DDD bridge failed (non-blocking): %s", exc)
 
+        # 3g. Code Intelligence → DDD bridge (Channel 7: code drift → TECH.md proposals)
+        try:
+            from core.code_intel_feed import detect_tech_drift
+            drift_count = detect_tech_drift(ws_path)
+            if drift_count > 0:
+                logger.info("context_health: code intel drift generated %d DDD proposals", drift_count)
+        except Exception as exc:
+            logger.warning("context_health: code intel feed failed (non-blocking): %s", exc)
+
         # 4. DailyActivity — today's file should exist if we're running
         da_dir = root / "Knowledge" / "DailyActivity"
         today_file = da_dir / f"{date.today().isoformat()}.md"
