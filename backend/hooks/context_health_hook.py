@@ -52,6 +52,9 @@ class ContextHealthHook:
         self._last_deep_date: Optional[str] = None
         # Track last refresh git rev to skip no-op refreshes
         self._last_refresh_rev: Optional[str] = None
+        # Dirty flag: set by _light_refresh when cultivation writes to DDD docs.
+        # Consumed by execute() to conditionally refresh PROJECTS.md (async).
+        self._ddd_docs_modified: bool = False
 
     async def execute(self, context: HookContext) -> None:
         ws_path = initialization_manager.get_cached_workspace_path()
@@ -87,17 +90,22 @@ class ContextHealthHook:
         # BackgroundHookExecutor has 30s timeout — 25s leaves 5s headroom.
         _cultivation_deadline = time.monotonic() + 25.0
 
+        # Reset dirty flag — will be set if any cultivation writes to DDD docs.
+        self._ddd_docs_modified = False
+
         # Auto-cultivate pipeline lessons — promote REFLECT output into DDD docs
         # without requiring the agent to remember to run `run-cultivate` manually.
         try:
-            self._auto_cultivate_pipeline_lessons(root, _deadline=_cultivation_deadline)
+            if self._auto_cultivate_pipeline_lessons(root, _deadline=_cultivation_deadline):
+                self._ddd_docs_modified = True
         except Exception as exc:
             logger.debug("context_health: auto-cultivation skipped: %s", exc)
 
         # Auto-cultivate session signals — promote corrections (Ch6) and
         # decisions (Ch5) from DailyActivity JSONL into DDD docs.
         try:
-            self._auto_cultivate_session_signals(root, _deadline=_cultivation_deadline)
+            if self._auto_cultivate_session_signals(root, _deadline=_cultivation_deadline):
+                self._ddd_docs_modified = True
         except Exception as exc:
             logger.debug("context_health: session signal cultivation skipped: %s", exc)
 
@@ -157,6 +165,32 @@ class ContextHealthHook:
             self._refresh_code_intel(root)
         except Exception as exc:
             logger.debug("context_health: code_intel refresh skipped: %s", exc)
+
+        # Refresh PROJECTS.md section TOC if cultivation modified DDD docs.
+        # This keeps line numbers in sync so progressive loading works correctly.
+        if self._ddd_docs_modified:
+            try:
+                self._refresh_projects_index_sync(root)
+            except Exception as exc:
+                logger.debug("context_health: PROJECTS.md refresh skipped: %s", exc)
+
+    def _refresh_projects_index_sync(self, root: Path) -> None:
+        """Sync wrapper: regenerate PROJECTS.md after cultivation modified DDD docs.
+
+        Uses asyncio.run() because we're called from a thread pool (run_in_executor).
+        The workspace manager's refresh_projects_index is async but CPU-bound
+        (filesystem scan + entity extraction) — safe to run in a fresh event loop.
+        """
+        from core.swarm_workspace_manager import swarm_workspace_manager
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(
+                swarm_workspace_manager.refresh_projects_index(str(root))
+            )
+            logger.info("context_health: PROJECTS.md refreshed after cultivation")
+        finally:
+            loop.close()
 
     def _refresh_code_intel(self, root: Path) -> None:
         """Refresh code_intel.db if the indexed commit is behind HEAD."""
@@ -228,7 +262,7 @@ class ContextHealthHook:
     # Auto-cultivation — promote REFLECT lessons into DDD docs
     # ------------------------------------------------------------------
 
-    def _auto_cultivate_pipeline_lessons(self, root: Path, *, _deadline: float = 0) -> None:
+    def _auto_cultivate_pipeline_lessons(self, root: Path, *, _deadline: float = 0) -> bool:
         """Auto-cultivate uncultivated pipeline REFLECT lessons into DDD docs.
 
         Scans all Projects/*/.artifacts/runs/*/run.json for completed pipeline
@@ -246,10 +280,13 @@ class ContextHealthHook:
         early so the hook finishes cleanly within the executor's window.
 
         Remaining uncultivated runs are processed in subsequent sessions.
+
+        Returns:
+            True if any DDD docs were modified (applied > 0), False otherwise.
         """
         projects_dir = root / "Projects"
         if not projects_dir.is_dir():
-            return
+            return False
 
         from core.ddd_cultivation import cultivate_from_reflect
 
@@ -257,6 +294,7 @@ class ContextHealthHook:
         # PE-4: use shared deadline from _light_refresh (25s total for all cultivation)
         _effective_deadline = _deadline if _deadline > 0 else (time.monotonic() + 25.0)
         cultivated_count = 0
+        any_applied = False  # Track if any DDD docs were actually modified
 
         for project_dir in sorted(projects_dir.iterdir()):
             if not project_dir.is_dir():
@@ -341,6 +379,9 @@ class ContextHealthHook:
                     os.replace(tmp_file, run_file)
                     cultivated_count += 1
 
+                    if result.get("applied", 0) > 0:
+                        any_applied = True
+
                     logger.info(
                         "context_health: auto-cultivated %s/%s — "
                         "applied=%d, escalated=%d, rejected=%d",
@@ -365,6 +406,8 @@ class ContextHealthHook:
                 "context_health: auto-cultivated %d pipeline run(s)", cultivated_count
             )
 
+        return any_applied
+
     # ------------------------------------------------------------------
     # Auto-cultivation — promote session corrections + decisions into DDD
     # ------------------------------------------------------------------
@@ -372,7 +415,7 @@ class ContextHealthHook:
     # State file: tracks which JSONL session records have been cultivated
     _SESSION_CULTIVATED_STATE = ".context/.session_cultivated.json"
 
-    def _auto_cultivate_session_signals(self, root: Path, *, _deadline: float = 0) -> None:
+    def _auto_cultivate_session_signals(self, root: Path, *, _deadline: float = 0) -> bool:
         """Auto-cultivate corrections and decisions from DailyActivity JSONL into DDD docs.
 
         Reads recent DailyActivity JSONL sidecars (last 7 days), extracts
@@ -384,10 +427,13 @@ class ContextHealthHook:
 
         Capped at 10 sessions per invocation, sharing the same cooperative time
         budget mindset as pipeline cultivation.
+
+        Returns:
+            True if any DDD docs were modified (total_applied > 0), False otherwise.
         """
         da_dir = root / "Knowledge" / "DailyActivity"
         if not da_dir.is_dir():
-            return
+            return False
 
         from core.ddd_cultivation import cultivate_from_corrections, cultivate_from_decisions
 
@@ -420,7 +466,7 @@ class ContextHealthHook:
                 continue
 
         if not recent_jsonls:
-            return
+            return False
 
         # Determine project directory for cultivation target.
         # Default to SwarmAI (the workspace project — corrections about the
@@ -430,7 +476,7 @@ class ContextHealthHook:
         default_project = "SwarmAI"
         default_project_dir = projects_dir / default_project
         if not default_project_dir.is_dir():
-            return
+            return False
 
         _MAX_SESSIONS = 10
         # PE-4: use shared deadline from _light_refresh (25s total for all cultivation)
@@ -532,6 +578,8 @@ class ContextHealthHook:
                 "processed=%d, applied=%d, escalated=%d",
                 processed, total_applied, total_escalated,
             )
+
+        return total_applied > 0
 
     # High-volume dirs get compact summary instead of per-file table (saves ~1500 tokens)
     _COMPACT_INDEX_DIRS = {"DailyActivity", "JobResults", "Signals"}
