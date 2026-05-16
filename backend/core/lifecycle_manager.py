@@ -242,6 +242,9 @@ class LifecycleManager:
                         await self._purge_stale_cold()
                         await self._cleanup_stale_channel_sessions()
                         await self._cleanup_expired_messages()
+                    # Radar ToDo sweep every 30th cycle (~30 min)
+                    if cycle % 30 == 0 and cycle > 0:
+                        await self._sweep_todos()
                     # Workspace backup check every 60th cycle (~60 min)
                     if cycle % 60 == 0 and cycle > 0:
                         await self._run_daily_backup()
@@ -610,6 +613,98 @@ class LifecycleManager:
                 )
         except Exception as exc:
             logger.warning("lifecycle_manager.ttl_cleanup failed: %s", exc)
+
+    # ── Radar ToDo sweep ─────────────────────────────────────────────
+
+    async def _sweep_todos(self) -> None:
+        """Periodic sweep: mark overdue todos + handle completed pipeline todos.
+
+        Non-fatal — failures are logged and skipped. Called from
+        maintenance loop every 30th cycle (~30 min).
+
+        Three sweep actions:
+        1. check_overdue() — pending todos past due_date → overdue
+        2. Pipeline-bound todos — if run.json shows completed → handled
+        3. Evolution proposals — unchanged >30 days → expired
+        """
+        try:
+            from core.todo_manager import todo_manager
+            from database import db
+
+            # 1. Mark overdue todos
+            overdue_count = await todo_manager.check_overdue()
+
+            # 2. Pipeline-bound todos: check if linked pipeline run completed
+            handled_count = 0
+            try:
+                pending = await db.todos.list_by_status("pending")
+                for todo in pending:
+                    metadata = todo.get("metadata")
+                    if isinstance(metadata, str):
+                        import json
+                        try:
+                            metadata = json.loads(metadata)
+                        except (json.JSONDecodeError, TypeError):
+                            metadata = {}
+                    if not isinstance(metadata, dict):
+                        continue
+
+                    run_id = metadata.get("pipeline_run_id") or metadata.get("run_id")
+                    if not run_id:
+                        continue
+
+                    # Check if the pipeline run is completed
+                    project = metadata.get("project", "SwarmAI")
+                    from config import get_app_data_dir
+                    import json as _json
+                    run_path = (
+                        get_app_data_dir() / "SwarmWS" / "Projects" / project
+                        / ".artifacts" / "runs" / run_id / "run.json"
+                    )
+                    if run_path.exists():
+                        try:
+                            run_data = _json.loads(run_path.read_text())
+                            if run_data.get("status") == "completed":
+                                await db.todos.update(todo["id"], {"status": "handled"})
+                                handled_count += 1
+                        except (OSError, _json.JSONDecodeError):
+                            pass
+            except Exception as exc:
+                logger.debug("todo_sweep: pipeline check error: %s", exc)
+
+            # 3. Evolution proposals >30 days → expire
+            expired_count = 0
+            try:
+                from datetime import datetime, timezone, timedelta
+                now = datetime.now(timezone.utc)
+                cutoff = now - timedelta(days=30)
+                pending = await db.todos.list_by_status("pending")
+                for todo in pending:
+                    title = todo.get("title", "")
+                    if "Evolution proposal" not in title:
+                        continue
+                    created_str = todo.get("created_at", "")
+                    try:
+                        created = datetime.fromisoformat(
+                            created_str.replace("Z", "+00:00")
+                        )
+                        if created < cutoff:
+                            await db.todos.update(todo["id"], {"status": "expired"})
+                            expired_count += 1
+                    except (ValueError, TypeError):
+                        pass
+            except Exception as exc:
+                logger.debug("todo_sweep: evolution expire error: %s", exc)
+
+            total = overdue_count + handled_count + expired_count
+            if total > 0:
+                logger.info(
+                    "lifecycle_manager.todo_sweep: %d transitions "
+                    "(overdue=%d, pipeline_handled=%d, expired=%d)",
+                    total, overdue_count, handled_count, expired_count,
+                )
+        except Exception as exc:
+            logger.warning("lifecycle_manager.todo_sweep failed: %s", exc)
 
     # ── Workspace backup ────────────────────────────────────────────
 
