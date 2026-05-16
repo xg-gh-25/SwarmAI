@@ -241,38 +241,43 @@ class DailyActivityExtractionHook:
     def _is_noise_summary(summary) -> bool:
         """Check if a summary is pure noise with no insight value.
 
+        Handles StructuredSummary dataclass (has .decisions, .topics, etc).
+
         Returns True (skip) if:
-        - Summary text is too short (<30 chars of actual content)
-        - Summary is only file-read logs ("read X", "checked Y")
-        - No decisions, lessons, or actions recorded
+        - No decisions, lessons, or deliverables recorded
+        - Topics are empty or single-item trivial
+        - Files modified is empty (no actual work)
 
         Returns False (keep) if ANY substantive content exists.
         """
-        # Get the meaningful text content
-        what_happened = getattr(summary, "what_happened", "") or ""
-        decisions = getattr(summary, "decisions", []) or []
-        next_steps = getattr(summary, "next_steps", "") or ""
-        files = getattr(summary, "files_touched", []) or []
+        # PE-2 fix: access actual StructuredSummary fields safely
+        decisions = getattr(summary, "decisions", None) or []
+        lessons = getattr(summary, "lessons", None) or []
+        deliverables = getattr(summary, "deliverables", None) or []
+        topics = getattr(summary, "topics", None) or []
+        files_modified = getattr(summary, "files_modified", None) or []
+        open_questions = getattr(summary, "open_questions", None) or []
 
-        # If there are decisions or lessons, always keep
-        if decisions:
+        # If there are decisions, lessons, or deliverables — always keep
+        if decisions or lessons or deliverables:
             return False
 
-        # If what_happened has substance, keep
-        text = what_happened.strip()
-        if len(text) < 30:
-            return True  # Too short to be useful
+        # If there are open questions — keep (continuity value)
+        if open_questions:
+            return False
 
-        # Check for noise patterns (only file reads, no insight)
-        noise_patterns = [
-            "📸 Mid-session checkpoint",
-            "No significant activity",
-            "Session started and ended",
-        ]
-        if any(p in text for p in noise_patterns):
-            # But still keep if there are git commits or files
-            if not files and not next_steps:
-                return True
+        # If files were modified — keep (work evidence)
+        if files_modified:
+            return False
+
+        # Check topics for substance
+        if not topics:
+            return True  # Nothing happened
+
+        # Single trivial topic with no other content = noise
+        total_topic_chars = sum(len(t) for t in topics)
+        if total_topic_chars < 30:
+            return True
 
         return False
 
