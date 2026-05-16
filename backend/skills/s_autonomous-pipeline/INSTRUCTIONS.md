@@ -251,22 +251,51 @@ relevant to THIS stage's task using `offset/limit` with the line ranges shown
 in PROJECTS.md. Example: BUILD stage working on session code → read TECH.md
 `Key Subsystems` section (L118-L958), not the full 1223-line file.
 
-**Upstream artifacts:**
+**Upstream artifacts (Output Routing — BLOCKING):**
+
+Each stage has declared inputs it MUST consume. The validator (Check 13) enforces
+this — if `consumed_artifacts` is present in the stage record but doesn't include
+a declared input type, the stage is BLOCKED.
 
 ```bash
 python backend/scripts/artifact_cli.py discover --project <PROJECT> --types <comma-separated> --full
 ```
 
-| Stage | Upstream Artifacts |
-|-------|--------------------|
-| evaluate | (none, or prior research) |
-| think | evaluation |
-| plan | evaluation, research |
-| build | design_doc |
-| review | changeset |
-| test | changeset, design_doc, review |
-| deliver | changeset, review, test_report |
-| reflect | test_report, delivery |
+| Stage | Must Consume (STAGE_ROUTING) | Must Produce |
+|-------|------------------------------|--------------|
+| evaluate | — | evaluation |
+| think | evaluation | research |
+| plan | evaluation, research | design_doc |
+| build | design_doc | changeset |
+| review | changeset | review |
+| test | changeset, design_doc, review | test_report |
+| deliver | changeset, review, test_report | delivery |
+| reflect | test_report, delivery | — |
+
+**CRITICAL: Record consumed artifacts in stage record.**
+
+After loading each upstream artifact via `discover`, record it in the stage record's
+`consumed_artifacts` field. This enables routing enforcement (Check 13) and freshness
+tracking. Format:
+
+```json
+{
+  "stage": "review",
+  "consumed_artifacts": [
+    {"type": "changeset", "id": "art_abc123", "created_at": "2026-05-17T..."}
+  ]
+}
+```
+
+Pass this via `--stage-json` when recording stage completion:
+```bash
+python backend/scripts/artifact_cli.py run-update --project <PROJECT> --run-id <RUN_ID> \
+  --stage-json '{"stage":"<STAGE>","status":"completed",...,"consumed_artifacts":[{"type":"<TYPE>","id":"<ART_ID>"}]}'
+```
+
+If an upstream artifact is **stale** (DDD docs changed since it was created, or
+age > 7 days), the validator will WARN. You may still proceed — staleness is a
+signal, not a blocker — but acknowledge it in your stage notes.
 
 ### 3c. Execute Stage Behavior
 
