@@ -383,3 +383,15 @@ python backend/scripts/artifact_cli.py publish --project <PROJECT> \
   --data '{"branch":"...","commits":[...],"files_changed":[...],"diff_summary":"...","tdd":{"acceptance_criteria_count":N,"tests_generated":M,"red_failures":K,"green_pass":true,"regressions":0,"smoke_tests":S,"smoke_crashes_caught":C,"user_path_traces":T,"user_path_bugs_found":B,"probes":P,"probe_bugs_found":Q}}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state review
 ```
+
+---
+
+## Common Rationalizations
+
+| Rationalization | Reality | Source |
+|---|---|---|
+| "Tests pass, implementation is complete" | C011: 57 tests green, 10/10 pipeline confidence, feature 100% non-functional. Tests verify what you WROTE works, not what you MISSED. State machine had 6 declared states but only 4 wired. Tests only exercised the 4. | C011 |
+| "TDD is overkill for this simple change" | C009: "simple" pytest hook took 5 iterations because tests came after code. Each iteration the user challenged the approach. Final solution was 55 lines; first attempt 130+ with 3 bugs. TDD catches wrong assumptions BEFORE they compound. | C009 |
+| "I'll write tests after — I need to explore first" | Tests written after validate IMPLEMENTATION, not BEHAVIOR. They pass by construction (you match the test to the code), catching nothing. TDD forces you to define behavior before you know the implementation — that's the entire point. | Osmani TDD |
+| "This is a refactor — behavior doesn't change, no new tests needed" | STEERING.md: "Extract ≠ Extend" (C020). If you extracted a function AND added a new caller, the new calling context has different invariants. At minimum: verify existing tests still exercise the extracted function. | C020 |
+| "Smoke tests are redundant with unit tests" | Unit tests verify logic. Smoke tests verify WIRING (does the function get called from the real entry point with real data?). C011: all units green, but the real entry point never triggered the code path. | C011 |

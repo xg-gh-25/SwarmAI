@@ -8,17 +8,16 @@
 
 ## Pipeline-Specific Behavior
 
-### Anti-Rationalization Gate
+### Common Rationalizations
 
-Reject these shortcuts before starting:
-
-| Agent Shortcut | Required Response |
-|---|---|
-| "Tests pass, no need for scoped re-run" | Run changed + related test files. Pass in isolation != pass together. |
-| "This fix is simple, skip the WTF score" | Score every fix. Simple fixes that touch 4 files are not simple. |
-| "I'll adjust the test expectation to match the new behavior" | Fix the CODE. Changing tests = changing the spec = go back to PLAN. |
-| "Pre-existing failure, not our problem" | Log it in IMPROVEMENT.md. Never silently pass over a red test. |
-| "19 fixes done, just one more to clean up" | 20 is the hard cap. Checkpoint. Report. Quality > completion. |
+| Rationalization | Reality | Source |
+|---|---|---|
+| "Tests pass, no need for scoped re-run" | Run changed + related test files. Pass in isolation ≠ pass together. LL13: mock-based tests all passed but real DB had zero matching rows — function returned empty string in production. | LL13 |
+| "This fix is simple, skip the WTF score" | Score every fix. "Simple" fixes that touch 4 files are not simple. C009: 5 iterations on a "simple" hook because each fix revealed new scope. | C009 |
+| "I'll adjust the test expectation to match the new behavior" | Fix the CODE, not the test. Changing test expectations = changing the spec = go back to PLAN. Tests define CORRECT behavior; code must conform to them. | TDD principle |
+| "Pre-existing failure, not our problem" | Log it in IMPROVEMENT.md "Known Issues." Never silently pass over a red test — it erodes the signal. Today's "pre-existing" is tomorrow's "we thought it was fine." | Pipeline design |
+| "19 fixes done, just one more to clean up" | 20 is the hard cap. Checkpoint. Report. Quality > completion. The 21st fix historically introduces more bugs than it solves (WTF score data). | WTF Gate |
+| "Tests are flaky, re-run until green" | Flaky = non-deterministic = real bug (race condition, shared state, time dependency). Fix the flake, don't re-roll the dice. A test that passes 9/10 times FAILS. | STEERING.md |
 
 ### WTF Gate
 

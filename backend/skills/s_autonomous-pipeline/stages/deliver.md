@@ -739,3 +739,16 @@ python backend/scripts/artifact_cli.py publish --project <PROJECT> \
   --data '{"title":"...","quality":{"tests_pass":true,"regressions":0,"smoke_pass":true},"adversarial_review":{"spawned":true,"profile_tier":"full","findings_total":N,"findings_fixed":N,"findings_remaining":0,"findings":[{"severity":"HIGH|MEDIUM","resolved":true,"finding":"path/file.py func() line N: issue. Fixed: how."}]},"completion_audit":{"all_green":true,"requirements_met":N,"requirements_total":N,"evidence":"..."},"meta_review":"...","report_path":"runs/<RUN_ID>/REPORT.md"}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state reflect
 ```
+
+---
+
+## Common Rationalizations
+
+| Rationalization | Reality | Source |
+|---|---|---|
+| "Tests pass, adversarial review is unnecessary" | C011: 57 tests green, 10/10 confidence → feature 100% non-functional. C021: skipped adversarial when validator was strict. Pipeline confidence measures PROCESS compliance, not CODE correctness. Adversarial review from fresh context catches what self-review structurally cannot. | C011, C021 |
+| "Validator schema is strict — I'll force past it" | Strictness IS the quality gate working as designed. Bypassing the validator = bypassing the requirement, not fixing a bug. C021: forced past validator → shipped incomplete. | C021 |
+| "Code is simple, 1-2 files, no new API surface" | C025: "simple" task (3 files, 2 new functions) skipped pipeline entirely. Agent said "I know this code well, tests pass." User caught it. Subjective complexity estimates are unreliable — that's why we have mechanical gates. | C025 |
+| "I already reviewed this multiple times during BUILD" | Repetition ≠ fresh perspective. You validated your own assumptions N times. Adversarial review spawns a NEW agent with ZERO builder bias. That agent reads the code cold and asks "what's wrong?" — you can't do that to your own work. | LL09 |
+| "Convergence loop passed quickly — we're good" | Fast convergence (1 iteration) may mean the gates are too easy OR the agent is rationalizing green across all 6 layers. Quick convergence on a non-trivial change deserves extra scrutiny, not less. | Pipeline design |
+| "Meta-review is redundant after adversarial" | Adversarial reviews CODE. Meta-review reviews PROCESS ("what did the pipeline miss?"). They catch different classes: adversarial catches bugs in what was built; meta catches gaps in what WASN'T built. | Pipeline design |
