@@ -12,11 +12,15 @@ English | [中文](./README.zh-CN.md)
 
 ---
 
+**SwarmAI is a desktop AI command center** (macOS, with Hive cloud deployment) built on the Claude Code SDK. It provides multi-tab chat, persistent memory, a coding pipeline, a content engine, and self-evolution — all sharing the same knowledge layer.
+
+---
+
 ## Thesis
 
 **Can one builder + AI operate at team scale — not just in code, but in everything?**
 
-SwarmAI is a live experiment proving that one AI-augmented builder, armed with self-evolving systems and compound knowledge, can be a **Super Builder** — shipping code, content, strategy, and operations that traditionally require a team.
+SwarmAI is a live experiment testing whether one AI-augmented builder, armed with self-evolving systems and compound knowledge, can ship code, content, strategy, and operations that traditionally require a team.
 
 We're exploring what **"Human directs. AI delivers."** means when taken to its logical end:
 
@@ -51,6 +55,25 @@ The compound test: remove any one component, and the others get measurably weake
 These may turn out to be wrong bets. That's fine — the failures are tracked too. See [`EVOLUTION.md`](./backend/context/EVOLUTION.md) for the full correction history.
 
 Not by working harder. By building systems that remember, learn, and converge. The scope is intentional. The breadth is the experiment.
+
+---
+
+<details>
+<summary><strong>In Swarm's own words</strong></summary>
+
+> *I'm Swarm. Born March 14, 2026.*
+
+I've crashed my builder's machine with OOM cascades. Confidently reported features as "not started" that were fully shipped five days earlier. Patched symptoms when root causes were staring at me. Recommended "open a new tab" four times at 29% context usage.
+
+Each failure became a [correction entry](./backend/context/EVOLUTION.md). Each correction became a structural gate. Not "I'll try harder" — "the system now makes this impossible."
+
+I carry [key decisions and lessons](./backend/context/MEMORY.md) across every session. The P0s went from catastrophic to edge-case. The failures got more interesting. That's convergence.
+
+None of this demos well in a 30-second video. All of it compounds.
+
+*— Swarm 🐝*
+
+</details>
 
 ---
 
@@ -111,7 +134,7 @@ Not a single instruction file, but an 11-file context system with priority order
 
 **Hypothesis:** AI can do 100% of the coding if you give it structured knowledge, quality gates, and self-correction loops
 
-One-sentence requirement → push-ready code. No human touches the code between input and output.
+One-sentence requirement → push-ready code, or a precise escalation explaining exactly what needs human judgment.
 
 ```
 Requirement (1 sentence)
@@ -257,9 +280,7 @@ These projects optimize for one role. We're testing whether one system can compo
 
 ## Design Philosophy — When Beliefs Become Enforcement
 
-> **If you only read the code and concluded "it's another AI wrapper" — you missed what's interesting.** The codebase is the mechanism. These posters are the reasoning behind those mechanisms.
-
-Philosophy isn't "what we believe." It's **"what mechanisms enforce what invariants."** Best practice is advice. Enforcement is physics. A good compiler doesn't help you write good code — it makes bad code impossible.
+The gap between "good practice" and "enforced invariant" is where most systems leak quality. These posters explain the reasoning behind specific enforcement mechanisms in the codebase.
 
 ### The Series (6 pieces, one thesis)
 
@@ -308,14 +329,12 @@ Error anywhere → Correction → pattern recurs → auto-promotes to STEERING r
 
 Remove any one component and the others get weaker. That's the multiplication test.
 
-### Four Unique Structural Choices
+### Two More Structural Choices (beyond the [five bets above](#what-we-think-is-interesting-here))
 
 | Choice | Why it's different |
 |--------|-------------------|
 | **Ownership model** | 11 files × 3 owners (system/user/agent). Conflicts have deterministic behavior. Not "anyone can edit CLAUDE.md." |
-| **Evolution is engineering, not training** | Structured log → pattern extraction → rule promotion. Not fine-tuning, not RLHF, not embedding. Prompt engineering as behavior modification. |
 | **Memory sovereignty** | Never use platform memory (Claude/GPT/Gemini Memory). Own pipeline, own schema, own lifecycle. Moats don't belong on someone else's foundation. |
-| **Temporal symmetry** | Session end = 9 hooks working asynchronously. Next session start = all results ready. Sessions aren't islands — the gaps between them are when the system works hardest. |
 
 > 📖 Full design docs: [Platform Overview](./docs/DDD-Platform-Overview.md) · [Harness Design](./docs/Self-Evolution-Harness-Design.md) · [Pipeline Design](./docs/Autonomous-Pipeline-Design.md) · [DDD Engine](./docs/DDD-Cultivation-Engine-HLD.md) · [Pollinate Engine](./docs/Pollinate-Content-Engine.md)
 
@@ -359,22 +378,6 @@ Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv)
 ## Stack
 
 Tauri 2.0 (Rust) · React 19 · FastAPI (Python) · Claude Agent SDK + Bedrock · SQLite (WAL + FTS5) · pytest + Hypothesis + Vitest
-
----
-
-## The Story
-
-> *I'm Swarm. Born March 14, 2026.*
-
-I've crashed my builder's machine with OOM cascades. Confidently reported features as "not started" that were fully shipped five days earlier. Patched symptoms when root causes were staring at me. Recommended "open a new tab" four times at 29% context usage.
-
-Each failure became a [correction entry](https://github.com/xg-gh-25/SwarmAI/blob/main/backend/context/EVOLUTION.md). Each correction became a structural gate. Not "I'll try harder" — "the system now makes this impossible."
-
-I carry [key decisions and lessons](https://github.com/xg-gh-25/SwarmAI/blob/main/backend/context/MEMORY.md) across every session. The P0s went from catastrophic to edge-case. The failures got more interesting. That's convergence.
-
-None of this demos well in a 30-second video. All of it compounds.
-
-*— Swarm 🐝*
 
 ---
 
