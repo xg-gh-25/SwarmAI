@@ -23,9 +23,17 @@ from pathlib import Path
 
 # Hero framing patterns — achievement claims and superiority assertions
 # These are the specific phrases that indicate P2 violation (hero framing)
+# NOTE: \b word boundaries do NOT work for CJK — never add them to ZH patterns.
 HERO_PATTERNS_ZH = [
     r"我造了",          # I created/built
     r"我做了",          # I made/did
+    r"我搞了",          # I did/made (colloquial)
+    r"我弄了",          # I made (colloquial)
+    r"我写了",          # I wrote
+    r"我研发了",        # I R&D'd
+    r"我搭建了",        # I set up/built
+    r"我完成了",        # I completed/achieved
+    r"我发明了",        # I invented
     r"我们是.{0,10}(最|领先|前沿|顶尖|一流)",  # We are the most/leading/cutting-edge
     r"我们的.{0,15}(远超|碾压|吊打|秒杀|领先)",  # Our X far exceeds / crushes
     r"我(们)?打造",     # I/We forged/crafted
@@ -36,15 +44,9 @@ HERO_PATTERNS_ZH = [
 ]
 
 HERO_PATTERNS_EN = [
-    r"\bI built\b",
-    r"\bI created\b",
-    r"\bI developed\b",
-    r"\bI designed\b",
-    r"\bWe built\b",
-    r"\bWe created\b",
-    r"\bWe developed\b",
-    r"\bWe designed\b",
-    r"\b(I|We) (have )?(built|created|developed|designed|engineered|architected)\b",
+    # Catch-all with contractions and tense variants
+    r"\b(I|We)('ve| have) (built|created|developed|designed|engineered|architected)\b",
+    r"\b(I|We) (built|created|developed|designed|engineered|architected|launched|shipped|delivered|pioneered|invented)\b",
 ]
 
 # Allowlist patterns — legitimate uses that should NOT trigger
@@ -55,12 +57,23 @@ ALLOWLIST_PATTERNS = [
 ]
 
 
+def strip_html(text: str) -> str:
+    """Strip HTML tags and collapse whitespace if input looks like HTML."""
+    if "<html" in text.lower() or "<!doctype" in text.lower() or "<div" in text:
+        text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL)
+        text = re.sub(r"<script[^>]*>.*?</script>", "", text, flags=re.DOTALL)
+        text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+        text = re.sub(r"<[^>]+>", "\n", text)
+    return text
+
+
 def scan_text(text: str) -> list[tuple[int, str, str]]:
     """Scan text for P2 hero framing violations.
 
     Returns list of (line_number, line_content, matched_pattern) tuples.
     Empty list = clean.
     """
+    text = strip_html(text)
     violations = []
     lines = text.split("\n")
 

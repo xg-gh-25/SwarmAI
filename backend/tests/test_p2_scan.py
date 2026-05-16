@@ -51,6 +51,19 @@ class TestP2ScanDetectsHeroFraming:
         result = run_scan("We created the most advanced pipeline")
         assert result.returncode == 1
 
+    def test_detects_english_contraction(self):
+        result = run_scan("I've built a cutting-edge framework")
+        assert result.returncode == 1
+
+    def test_detects_chinese_colloquial(self):
+        result = run_scan("我搞了一个全新的平台")
+        assert result.returncode == 1
+
+    def test_detects_html_embedded_hero(self):
+        html = '<div class="card"><p>我造了一个伟大的系统</p></div>'
+        result = run_scan(html)
+        assert result.returncode == 1
+
     def test_reports_offending_lines(self):
         text = "这是正常内容\n我造了一个系统\n更多正常内容"
         result = run_scan(text)
