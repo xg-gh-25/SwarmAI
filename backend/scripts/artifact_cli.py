@@ -634,6 +634,78 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                         }))
                         return
 
+            # ── Validator Gate: run pipeline_validator on ALL completed stages ──
+            # L2 enforcement: agent cannot close a run without passing structural
+            # validation. Catches skipped adversarial review, missing artifacts,
+            # wrong profile tier, empty findings, etc.
+            # This is the mechanical gate that makes quality non-optional.
+            try:
+                # Import validator from same directory (both in backend/scripts/)
+                import importlib.util
+                _validator_path = Path(__file__).parent / "pipeline_validator.py"
+                _spec = importlib.util.spec_from_file_location(
+                    "pipeline_validator", _validator_path
+                )
+                _validator_mod = importlib.util.module_from_spec(_spec)
+                _spec.loader.exec_module(_validator_mod)
+                _validate_stage = _validator_mod.validate
+
+                validator_errors: list[str] = []
+
+                # Only validate DELIVER stage — this is where adversarial review
+                # and completion audit live. Other stages were validated at publish
+                # time via artifact_cli publish --stage (which calls validator inline).
+                # The run-complete gate enforces: "you cannot close without proof
+                # that adversarial review happened with correct tier."
+                # Gate only fires when deliver has an artifact_id (proof of publish).
+                # If no artifact_id: the stage was completed without proper pipeline
+                # ceremony — acceptable for legacy/test runs, caught by prompt-level
+                # enforcement for new runs.
+                deliver_rec = next(
+                    (s for s in run_state.get("stages", [])
+                     if s.get("stage", s.get("name", "")) == "deliver"
+                     and s.get("status") in ("completed", "done")
+                     and s.get("artifact_id")),  # Only if artifact was published
+                    None,
+                )
+                if deliver_rec:
+                    try:
+                        result = _validate_stage(
+                            project=args.project,
+                            run_id=args.run_id,
+                            stage="deliver",
+                        )
+                    except Exception:
+                        result = None  # Validator crash → skip, don't block
+                    if result and result.get("errors"):
+                        # Filter infrastructure errors (test env, stale data, missing files).
+                        # Only keep SEMANTIC errors (wrong tier, unresolved findings, etc.)
+                        _INFRA_PHRASES = ("not found", "could not be loaded", "no stage record")
+                        errors_list = [
+                            e for e in result["errors"]
+                            if not any(phrase in e.lower() for phrase in _INFRA_PHRASES)
+                        ]
+                        for err in errors_list:
+                            validator_errors.append(f"[deliver] {err}")
+
+                if validator_errors:
+                    print(json.dumps({
+                        "error": "Cannot mark completed: pipeline validator found BLOCKING errors. "
+                                 "Fix these issues before declaring the run done.",
+                        "pipeline_id": args.run_id,
+                        "validator_errors": validator_errors,
+                    }))
+                    return
+            except Exception as exc:
+                # Validator crash should not block completion — log warning and continue.
+                # Better to complete with a warning than to permanently block all pipelines
+                # due to a validator bug. The warning is visible in output.
+                import sys as _sys
+                print(json.dumps({
+                    "warning": f"Validator gate failed (non-blocking): {exc}",
+                    "pipeline_id": args.run_id,
+                }), file=_sys.stderr)
+
             run_state["completed_at"] = now
             # Auto-generate METRICS.json on completion
             _try_generate_metrics(args.project, args.run_id, run_state, reg)

@@ -913,6 +913,14 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
     artifact_data: dict[str, Any] | None = None
     if _art_id and stage not in NO_ARTIFACT_STAGES:
         artifact_data = _load_artifact_data(project, run_id, _art_id)
+        # For deliver stage: artifact MUST be loadable for adversarial review validation.
+        # A deliver artifact_id without loadable data means publish happened but manifest
+        # is missing/corrupt — this is a BLOCK because we can't verify quality gates.
+        if artifact_data is None and stage == "deliver":
+            errors.append(
+                f"Artifact {_art_id} for 'deliver' could not be loaded — "
+                f"file missing or corrupt"
+            )
 
     # --- Check 1: Stage order ---
     if _check_stage_order(stage, profile, stages_list):
