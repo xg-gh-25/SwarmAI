@@ -1037,30 +1037,46 @@ class ContextHealthHook:
         # 2. Git health
         findings += self._check_git_health(root, ws_path)
 
-        # 3. DDD Cultivation — delegated to orchestrator (extracted from PE-7 God Object)
-        #    V2 dual-path: orchestrator.run() (legacy) + dispatcher.emit(SESSION_CLOSE)
-        try:
-            from core.ddd_orchestrator import DddCultivationOrchestrator
-            orchestrator = DddCultivationOrchestrator()
-            findings += orchestrator.run(root, ws_path)
-        except Exception as exc:
-            logger.warning("context_health: DDD orchestrator failed (non-blocking): %s", exc)
-
-        # V2 dual-path: also emit SESSION_CLOSE via the singleton dispatcher.
-        # _deep_check runs in ThreadPoolExecutor → use threadsafe API.
-        # Phase E will remove orchestrator.run() above once dispatcher is validated.
+        # 3. DDD Cultivation — event-driven (v2).
+        #    Emits SESSION_CLOSE event via dispatcher. Channels subscribed to
+        #    SESSION_CLOSE fire via the event-driven path. orchestrator.run()
+        #    is retained as fallback if dispatcher isn't warmed up yet.
         try:
             from core.cultivation_dispatcher import (
-                EventType, emit_cultivation_event_threadsafe,
+                EventType, emit_cultivation_event_threadsafe, get_dispatcher,
             )
-            emit_cultivation_event_threadsafe(
-                EventType.SESSION_CLOSE,
-                source="context_health_hook",
-                payload={"trigger": "deep_check"},
-                priority=2,
-            )
+            dispatcher = get_dispatcher()
+            if dispatcher.loop is not None:
+                # Dispatcher is warmed up — use event-driven path only
+                emit_cultivation_event_threadsafe(
+                    EventType.SESSION_CLOSE,
+                    source="context_health_hook",
+                    payload={"trigger": "deep_check"},
+                    priority=2,
+                )
+            else:
+                # Dispatcher not yet warmed (first session) — fallback to legacy
+                from core.ddd_orchestrator import DddCultivationOrchestrator
+                orchestrator = DddCultivationOrchestrator()
+                findings += orchestrator.run(root, ws_path)
+                # Also emit to warm up the dispatcher for next session
+                emit_cultivation_event_threadsafe(
+                    EventType.SESSION_CLOSE,
+                    source="context_health_hook",
+                    payload={"trigger": "deep_check_warmup"},
+                    priority=2,
+                )
         except Exception as exc:
-            logger.debug("context_health: v2 dispatcher emit skipped: %s", exc)
+            # Ultimate fallback: if dispatcher fails entirely, run legacy
+            try:
+                from core.ddd_orchestrator import DddCultivationOrchestrator
+                orchestrator = DddCultivationOrchestrator()
+                findings += orchestrator.run(root, ws_path)
+            except Exception as inner_exc:
+                logger.warning(
+                    "context_health: DDD cultivation failed (non-blocking): %s / %s",
+                    exc, inner_exc,
+                )
 
         # 3h. Adversarial meta-monitoring — surface degradation in session briefing
         try:
@@ -1154,23 +1170,22 @@ class ContextHealthHook:
         return findings
 
     def _inject_ddd_into_knowledge(self, root: Path) -> None:
-        """Delegate to DddCultivationOrchestrator (backward compat)."""
+        """Thin wrapper for individual channel invocation (used by tests)."""
         from core.ddd_orchestrator import DddCultivationOrchestrator
         DddCultivationOrchestrator()._ch_inject_knowledge(root, str(root))
 
     def _detect_knowledge_staleness(self, root: Path, ws_path: str) -> list[str]:
-        """Delegate to DddCultivationOrchestrator (backward compat)."""
+        """Thin wrapper for individual channel invocation (used by tests)."""
         from core.ddd_orchestrator import DddCultivationOrchestrator
         return DddCultivationOrchestrator()._ch_knowledge_staleness(root, ws_path)
 
     def _check_ddd_staleness(self, root: Path, ws_path: str) -> list[str]:
-        """Delegate to DddCultivationOrchestrator (backward compat)."""
+        """Thin wrapper for individual channel invocation (used by tests)."""
         from core.ddd_orchestrator import DddCultivationOrchestrator
         return DddCultivationOrchestrator()._ch_ddd_staleness(root, ws_path)
 
-
     def _auto_apply_ddd_proposals(self, root: Path) -> None:
-        """Delegate to DddCultivationOrchestrator (backward compat)."""
+        """Thin wrapper for individual channel invocation (used by tests)."""
         from core.ddd_orchestrator import DddCultivationOrchestrator
         DddCultivationOrchestrator()._auto_apply_ddd_proposals(root)
 
@@ -1574,6 +1589,6 @@ class ContextHealthHook:
         return None
 
     def _validate_entity_index(self, root: Path) -> list[str]:
-        """Delegate to DddCultivationOrchestrator (backward compat)."""
+        """Thin wrapper for individual channel invocation (used by tests)."""
         from core.ddd_orchestrator import DddCultivationOrchestrator
         return DddCultivationOrchestrator()._ch_entity_index(root, str(root))
