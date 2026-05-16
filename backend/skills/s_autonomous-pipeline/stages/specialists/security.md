@@ -1,9 +1,14 @@
 # Security Specialist Review
+<!-- version: 2026-05-16 | synced with: REVIEW_PATTERNS.md RP1-RP34 -->
 
 Scope: When changeset touches auth, user input handling, database queries, file paths,
 external API calls, or any endpoint/handler. NEVER_GATE — once dispatched (per
 deliver.md scope rules), always runs to completion regardless of historical hit rate.
 Dispatch decision is still scope-gated; NEVER_GATE means "don't skip based on stats."
+
+**Cross-reference:** Also check patterns from `REVIEW_PATTERNS.md` in your domain:
+RP17 (unsanitized strings in HTML/JSON/SQL), RP24 (cross-language serialization),
+RP28 (schema migration without rollback). These are proven vulnerability patterns.
 
 Output: JSON objects, one finding per line.
 

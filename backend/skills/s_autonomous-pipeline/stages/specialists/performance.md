@@ -1,7 +1,11 @@
 # Performance Specialist Review
+<!-- version: 2026-05-16 | synced with: REVIEW_PATTERNS.md RP1-RP34 -->
 
 Scope: When changeset touches backend endpoints, database queries, loops over
 collections, or frontend rendering paths.
+
+**Cross-reference:** Also check patterns from `REVIEW_PATTERNS.md` in your domain:
+RP30 (hook no-op path scaling — O(n) in steady state). These are proven perf patterns.
 
 Output: JSON objects, one finding per line.
 

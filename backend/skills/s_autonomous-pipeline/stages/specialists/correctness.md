@@ -1,6 +1,13 @@
 # Correctness Specialist Review
+<!-- version: 2026-05-16 | synced with: REVIEW_PATTERNS.md RP1-RP34 -->
 
 Scope: Always dispatched when changeset > 50 lines.
+
+**Cross-reference:** Also check patterns from `REVIEW_PATTERNS.md` that fall
+in your domain: RP13 (state machine), RP15 (setTimeout), RP16 (concurrent async),
+RP27 (non-deterministic ordering), RP33 (multi-shape returns), RP34 (shell variable
+scope across Bash calls). These are proven bug patterns with concrete examples.
+
 Output: JSON objects, one finding per line.
 
 ```json
