@@ -87,6 +87,15 @@ class LifecycleManager:
         if self._started:
             return
         self._started = True
+        # PE-3: Warm up cultivation dispatcher with event loop reference
+        # so threadsafe emitters (auto_commit, code_intel) work from session 1.
+        try:
+            from core.cultivation_dispatcher import get_dispatcher
+            dispatcher = get_dispatcher()
+            if dispatcher.loop is None:
+                dispatcher.loop = asyncio.get_running_loop()
+        except Exception:
+            pass
         # Defer reaping to background — never block startup
         asyncio.create_task(self._startup_background_tasks())
         self._loop_task = asyncio.create_task(
@@ -258,6 +267,8 @@ class LifecycleManager:
                             )
                         except Exception:
                             pass  # Non-blocking
+                        # Process queued cultivation events (PE-1 fix)
+                        await self._process_cultivation_events()
                     # Workspace backup check every 60th cycle (~60 min)
                     if cycle % 60 == 0 and cycle > 0:
                         await self._run_daily_backup()
@@ -729,6 +740,68 @@ class LifecycleManager:
                 )
         except Exception as exc:
             logger.warning("lifecycle_manager.todo_sweep failed: %s", exc)
+
+    # ── Cultivation event consumer (PE-1) ────────────────────────────
+
+    async def _process_cultivation_events(self) -> None:
+        """Drain queued cultivation events and execute subscribed channels.
+
+        This is the CONSUMER side of the event-driven pipeline. Events are
+        produced by hooks (auto_commit, daily_activity, etc.) and queued in
+        the singleton dispatcher. This method drains the queue every 30 min
+        (maintenance cycle), maps events to channel tasks, and executes them
+        via ChannelExecutor with priority + budget enforcement.
+
+        Also handles SESSION_CLOSE events that accumulated between ticks.
+        """
+        try:
+            from core.cultivation_dispatcher import (
+                ChannelExecutor, get_dispatcher,
+            )
+            from core.ddd_orchestrator import DddCultivationOrchestrator
+
+            dispatcher = get_dispatcher()
+            events = await dispatcher.drain()
+            if not events:
+                return
+
+            ws_path = initialization_manager.get_cached_workspace_path()
+            if not ws_path:
+                return
+
+            from pathlib import Path
+            root = Path(ws_path)
+            orch = DddCultivationOrchestrator()
+            executor = ChannelExecutor(total_budget=10.0)
+
+            # Collect tasks from all events, deduplicate by channel name
+            all_tasks = []
+            seen_channels: set[str] = set()
+            for event in events:
+                tasks = orch.get_tasks_for_event(event.type, root, ws_path)
+                for task in tasks:
+                    if task.name not in seen_channels:
+                        seen_channels.add(task.name)
+                        all_tasks.append(task)
+
+            if not all_tasks:
+                return
+
+            findings = await executor.execute_batch(all_tasks)
+
+            if findings:
+                logger.info(
+                    "lifecycle_manager.cultivation_events: processed %d events → "
+                    "%d channels → %d findings",
+                    len(events), len(all_tasks), len(findings),
+                )
+                # Log non-trivial findings
+                for f in findings:
+                    if "CHANNEL_ERROR" in f or "CHANNEL_TIMEOUT" in f:
+                        logger.warning("cultivation: %s", f)
+
+        except Exception as exc:
+            logger.debug("lifecycle_manager.cultivation_events failed: %s", exc)
 
     # ── Workspace backup ────────────────────────────────────────────
 

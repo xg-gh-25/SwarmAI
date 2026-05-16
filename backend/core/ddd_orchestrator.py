@@ -175,12 +175,22 @@ class DddCultivationOrchestrator:
                 return proposals
         return None
 
-    def _find_artifacts_dir(self, root: Path) -> Path | None:
-        """Locate the .artifacts directory for the active project."""
+    def _find_artifacts_dir(self, root: Path, project: str = "SwarmAI") -> Path | None:
+        """Locate the .artifacts directory for the specified project.
+
+        Args:
+            root: Workspace root path
+            project: Project name (default SwarmAI — the primary project)
+        """
+        # Prefer explicit project
+        explicit = root / "Projects" / project / ".artifacts"
+        if explicit.is_dir():
+            return explicit
+        # Fallback: first project with .artifacts/
         projects_dir = root / "Projects"
         if not projects_dir.is_dir():
             return None
-        for project_dir in projects_dir.iterdir():
+        for project_dir in sorted(projects_dir.iterdir()):
             if not project_dir.is_dir() or project_dir.name.startswith("."):
                 continue
             artifacts = project_dir / ".artifacts"
@@ -321,6 +331,15 @@ class DddCultivationOrchestrator:
                         )
 
                         if not is_mechanical or targets_semantic:
+                            # PE-2: record gate trigger when skipping
+                            if targets_semantic:
+                                try:
+                                    from core.gate_promotion import GateManager
+                                    artifacts = self._find_artifacts_dir(root)
+                                    if artifacts:
+                                        GateManager(artifacts).record_trigger("trust_annotation")
+                                except Exception:
+                                    pass
                             continue
 
                         from utils.file_lock import flock_exclusive, flock_unlock
