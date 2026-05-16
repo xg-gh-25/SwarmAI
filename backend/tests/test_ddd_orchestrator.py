@@ -134,13 +134,24 @@ class TestDeepCheckDelegation:
 
         hook = ContextHealthHook()
 
-        with patch("core.ddd_orchestrator.DddCultivationOrchestrator") as MockOrch:
-            mock_instance = MagicMock()
-            mock_instance.run.return_value = ["test_finding"]
-            MockOrch.return_value = mock_instance
+        # Phase E: _deep_check uses event-driven path when dispatcher.loop is set,
+        # fallback to legacy orchestrator.run() only when loop is None.
+        # Force legacy path by ensuring dispatcher singleton has loop=None.
+        from core.cultivation_dispatcher import get_dispatcher
+        dispatcher = get_dispatcher()
+        original_loop = dispatcher.loop
+        dispatcher.loop = None  # Force legacy fallback
 
-            hook._deep_check(tmp_path, str(tmp_path))
+        try:
+            with patch("core.ddd_orchestrator.DddCultivationOrchestrator") as MockOrch:
+                mock_instance = MagicMock()
+                mock_instance.run.return_value = ["test_finding"]
+                MockOrch.return_value = mock_instance
 
-            # Verify orchestrator was called
-            MockOrch.assert_called_once()
-            mock_instance.run.assert_called_once_with(tmp_path, str(tmp_path))
+                hook._deep_check(tmp_path, str(tmp_path))
+
+                # Verify orchestrator was called via legacy path
+                MockOrch.assert_called_once()
+                mock_instance.run.assert_called_once_with(tmp_path, str(tmp_path))
+        finally:
+            dispatcher.loop = original_loop
