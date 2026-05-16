@@ -254,7 +254,8 @@ has fresh context — no prior review bias.
 
 ```
 You are a specialist code reviewer focused exclusively on <DOMAIN>.
-Read the checklist below, then read every changed file listed.
+Read the checklist below, then use the Read tool to read EVERY changed
+file listed. Do not skip any file — review all of them.
 Apply the checklist against the code.
 
 ## Context
@@ -308,7 +309,10 @@ After all specialist sub-agents complete:
 
 ---
 
-#### Step 4: Red Team (Conditional)
+#### Step 4: Red Team (Conditional, Sequential)
+
+**Runs AFTER specialists complete** (needs their findings as input — intentionally
+not parallel). Adds ~30s wall-clock time when triggered.
 
 **Dispatch Red Team ONLY IF:**
 - Total changeset > 200 lines, OR
@@ -327,7 +331,7 @@ Red Team findings merge into the unified list with same dedup/gating rules.
 
 #### Step 5: Fix Findings
 
-**For all findings that survived confidence gating (>= 5):**
+**For all findings that survived confidence gating (Step 3c — confidence >= 5):**
 - HIGH severity: fix immediately (auto-fix)
 - MED severity: fix if confidence >= 7, otherwise note with recommendation
 - LOW severity: note in pipeline report only
