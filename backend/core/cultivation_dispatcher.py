@@ -98,12 +98,22 @@ class EventDispatcher:
         self._dedup_window = dedup_window_seconds
         self._last_emit: dict[str, float] = {}  # event_type.value → timestamp
         self.dropped_count: int = 0
+        # Store event loop reference for thread-safe emission.
+        # Captured lazily on first async emit (when we know a loop is running).
+        self.loop: asyncio.AbstractEventLoop | None = None
 
     async def emit(self, event: CultivationEvent) -> bool:
         """Enqueue an event for processing.
 
         Returns True if enqueued, False if deduplicated or dropped (overflow).
         """
+        # Lazily capture event loop on first async emit
+        if self.loop is None:
+            try:
+                self.loop = asyncio.get_running_loop()
+            except RuntimeError:
+                pass
+
         # Dedup check: same event type within window
         now = time.monotonic()
         dedup_key = event.type.value
@@ -262,10 +272,11 @@ async def emit_cultivation_event(
     payload: dict[str, Any] | None = None,
     priority: int = 2,
 ) -> bool:
-    """Convenience function to emit a cultivation event.
+    """Convenience function to emit a cultivation event (async context).
 
-    This is the primary API for event sources (hooks, lifecycle, etc.).
-    Handles dispatcher singleton + event construction in one call.
+    Use this from async code (hooks running in the event loop directly).
+    For code running in threads (to_thread, ThreadPoolExecutor), use
+    emit_cultivation_event_threadsafe() instead.
 
     Returns True if enqueued, False if deduped/dropped.
     """
@@ -277,3 +288,43 @@ async def emit_cultivation_event(
         priority=priority,
     )
     return await dispatcher.emit(event)
+
+
+def emit_cultivation_event_threadsafe(
+    event_type: EventType,
+    source: str,
+    payload: dict[str, Any] | None = None,
+    priority: int = 2,
+) -> None:
+    """Emit a cultivation event from a thread context (non-async).
+
+    Safe to call from within asyncio.to_thread(), ThreadPoolExecutor, or
+    any non-async function. Uses the stored event loop reference on the
+    singleton dispatcher to schedule the emit coroutine.
+
+    Note: Fire-and-forget. Does not return whether the event was enqueued.
+    Failures are logged at debug level.
+    """
+    dispatcher = get_dispatcher()
+    loop = dispatcher.loop
+    if loop is None or loop.is_closed():
+        logger.debug(
+            "cultivation_dispatcher: threadsafe emit skipped — no loop (event=%s)",
+            event_type.value,
+        )
+        return
+
+    event = CultivationEvent(
+        type=event_type,
+        source=source,
+        payload=payload or {},
+        priority=priority,
+    )
+    try:
+        asyncio.run_coroutine_threadsafe(dispatcher.emit(event), loop)
+    except RuntimeError:
+        # Loop is closed or not running
+        logger.debug(
+            "cultivation_dispatcher: threadsafe emit failed — loop not running (event=%s)",
+            event_type.value,
+        )

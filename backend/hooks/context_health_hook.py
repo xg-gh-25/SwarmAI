@@ -1047,19 +1047,18 @@ class ContextHealthHook:
             logger.warning("context_health: DDD orchestrator failed (non-blocking): %s", exc)
 
         # V2 dual-path: also emit SESSION_CLOSE via the singleton dispatcher.
+        # _deep_check runs in ThreadPoolExecutor → use threadsafe API.
         # Phase E will remove orchestrator.run() above once dispatcher is validated.
         try:
-            from core.cultivation_dispatcher import EventType, emit_cultivation_event
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(
-                    emit_cultivation_event(
-                        EventType.SESSION_CLOSE,
-                        source="context_health_hook",
-                        payload={"trigger": "deep_check"},
-                        priority=2,
-                    )
-                )
+            from core.cultivation_dispatcher import (
+                EventType, emit_cultivation_event_threadsafe,
+            )
+            emit_cultivation_event_threadsafe(
+                EventType.SESSION_CLOSE,
+                source="context_health_hook",
+                payload={"trigger": "deep_check"},
+                priority=2,
+            )
         except Exception as exc:
             logger.debug("context_health: v2 dispatcher emit skipped: %s", exc)
 
