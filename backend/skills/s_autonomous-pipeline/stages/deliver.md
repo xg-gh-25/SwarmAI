@@ -183,26 +183,24 @@ COMPLETION AUDIT — Verify before declaring done.
 - `gaps > 0` (not fixed) → NOT-PUSH-READY (blocker)
 - `unfixable_gaps > 0` → WARNING (note in report, user decides)
 
-### Adversarial Review Gate (BLOCKING)
+### Adversarial Review Gate (BLOCKING) — Multi-Specialist Review Army
 
 **After Completion Audit, BEFORE generating the report or committing.**
 
-Independent sub-agent review that breaks builder context bias. The builder
-agent is too close to the code to catch its own blind spots — a fresh agent
-reading the diff cold finds different classes of bugs.
+Independent sub-agent reviews that break builder context bias. Multiple domain
+specialists review in parallel — each with isolated context and focused expertise.
+A generalist misses domain-specific bugs; specialists find what generalists can't.
 
-**Why sub-agent, not inline:** The same model in the same context can't
-"pretend" to be a different reviewer — cognitive bias doesn't vanish from
-a "perspective shift" prompt. A sub-agent starts with zero builder context:
-no memory of design decisions, no emotional attachment to the approach. This
-is the closest we get to a real second pair of eyes. (Inspired by gstack's
-cross-model triangulation pattern.)
+**Why multi-specialist:** A single reviewer simultaneously checking Security +
+Performance + Correctness + API Contract suffers attention dilution. Each domain
+requires a different mindset (attacker vs scaling vs logic vs contract). Parallel
+specialists with isolated context produce deeper, more confident findings.
+(Adopted from gstack's Review Army pattern — verified in production.)
 
-**Why mandatory:** 12+ pipeline runs in IMPROVEMENT.md show PE/user reviews
-find critical bugs AFTER 10/10 confidence: regex too greedy (this session),
-voice input 100% non-functional (C011), 3 CRITICAL subprocess bugs
-(run_c2881d2f). Mechanical REVIEW checks verify process; adversarial review
-verifies reality.
+**Why mandatory:** 12+ pipeline runs in IMPROVEMENT.md show reviews find critical
+bugs AFTER confidence was high: voice input 100% non-functional (C011), 3 CRITICAL
+subprocess bugs (run_c2881d2f), 4 hallucinated false-positive criticals (IMPROVEMENT.md).
+Confidence gating solves false positives; specialists solve false negatives.
 
 ---
 
@@ -210,102 +208,147 @@ verifies reality.
 
 | Profile | What runs | Rationale |
 |---------|-----------|-----------|
-| **full, standard** | Both passes (User-Side + PE) | New capability = highest risk |
-| **bugfix** | PE pass only | Bug fixes have narrow scope, user-side trace is low ROI |
+| **full, standard** | All specialists (scope-gated) + Red Team (conditional) | New capability = highest risk |
+| **bugfix** | Correctness + Security only | Narrow scope, skip performance/API |
 | **trivial** | Skip entirely | One-line fix, tests pass, not worth the token cost |
 | **research, docs** | Skip entirely | No code changes |
 
 ---
 
-#### Execution: Spawn Sub-Agent
+#### Step 1: Scope Detection
 
-**BLOCKING: Use the Agent tool to spawn an independent reviewer.** Do NOT
-run this inline — the whole point is context isolation.
+Analyze the changeset to determine which specialists to dispatch:
 
-```
-Agent({
-  description: "Adversarial review of pipeline changeset",
-  prompt: <see template below>
-  // Use default model (opus). Adversarial review needs the strongest
-  // code reasoning — subtle bugs (regex anchoring, status code misuse,
-  // config injection) require deep understanding of surrounding context.
-  // Sonnet saves 30s but risks missing the exact findings this gate exists to catch.
-})
+```bash
+# Get changed files
+git diff --name-only origin/main...HEAD 2>/dev/null || git diff --name-only HEAD~1
 ```
 
-**Sub-agent prompt template:**
+**Dispatch rules:**
+
+| Specialist | Dispatch When | Checklist |
+|-----------|---------------|-----------|
+| **Correctness** | Always (if changeset > 50 lines) | `stages/specialists/correctness.md` |
+| **Security** | Files touch: routers/, handlers, auth, database queries, user input, file paths | `stages/specialists/security.md` |
+| **Performance** | Files touch: endpoints, database, loops over collections, hooks, background tasks | `stages/specialists/performance.md` |
+| **API Contract** | Files touch: routers/, schemas/, models, response types, frontend services | `stages/specialists/api-contract.md` |
+| **Red Team** | CONDITIONAL: changeset > 200 lines OR any specialist found HIGH severity | `stages/specialists/red-team.md` |
+
+**For bugfix profile:** Only dispatch Correctness + Security.
+
+Count the total changed lines. If < 50 lines, skip all specialists.
+Print dispatch summary:
+```
+Dispatching N specialists: [names]. Skipped: [names] (scope not detected).
+```
+
+---
+
+#### Step 2: Parallel Specialist Dispatch
+
+**BLOCKING: Use the Agent tool to spawn ALL selected specialists in a SINGLE
+message** (multiple Agent tool calls) so they run in parallel. Each sub-agent
+has fresh context — no prior review bias.
+
+**Sub-agent prompt template (per specialist):**
 
 ```
-You are a paranoid staff engineer reviewing code you didn't write. Your job
-is to find what the builder missed. You have no context about why decisions
-were made — judge the code on its own merits.
+You are a specialist code reviewer focused exclusively on <DOMAIN>.
+Read the checklist below, then read every changed file listed.
+Apply the checklist against the code.
 
 ## Context
 Project: <PROJECT>
 Requirement: <requirement from run.json>
-Acceptance criteria: <list from evaluation artifact>
-Profile: <full|bugfix>
-Files changed: <list>
+Files changed: <list of all changed files>
 
-## Your Task
+## Checklist
+<paste contents of the specialist's .md file>
 
-Read every changed file listed above. For each file, run two passes:
+## Output
+For each finding, output a JSON object on its own line:
+{"severity":"HIGH|MED|LOW","confidence":N,"path":"file","line":N,"category":"<domain>","summary":"description","fix":"recommended fix","fingerprint":"path:line:category","specialist":"<name>"}
 
-### Pass 1: User-Side Functional Review (SKIP if profile=bugfix)
-For every changed function:
-1. What user action triggers this? Trace from user → code, not code → user.
-2. Walk the happy path through REAL code (not tests). Does data arrive in
-   the right format at each boundary?
-3. Walk 3 failure paths: concurrent execution, partial failure, missing
-   prerequisite. What breaks?
-4. Read 5 lines above and below. Stale code? Duplicate logic? Same bug?
+Required fields: severity, confidence, path, category, summary, specialist.
+Optional: line, fix, fingerprint, evidence.
 
-### Pass 2: PE (Production Engineering) Review
-For every changed line:
-1. Correctness — does this do what the comment says? Edge cases handled?
-   Regex/query/format correct for ALL inputs (not just test inputs)?
-2. Robustness — empty/None/wrong-type input? Unexpected external response?
-   File locked? DB missing?
-3. Security — user input sanitized before shell/SQL/config/HTML/JSON?
-4. Consistency — same error handling, naming, HTTP status codes as adjacent code?
-5. Dead code — unused imports? Stale comments? Duplicate headers? Debug leftovers?
+If no findings: output `NO FINDINGS` and nothing else.
+Do not output anything else — no preamble, no summary, no commentary.
 
-## Output Format
-```json
-{
-  "user_side": [
-    {"id": "U1", "severity": "HIGH|MED|LOW", "finding": "...", "fix": "..."}
-  ],
-  "pe_side": [
-    {"id": "PE-1", "severity": "HIGH|MED|LOW", "finding": "...", "fix": "..."}
-  ],
-  "summary": "N user findings, M PE findings, K HIGH"
-}
+Be specific. Every finding needs: file, line (or function), what's wrong,
+and how to fix it. Vague findings ("could be improved") are rejected.
 ```
 
-Be specific. "Regex might be wrong" is useless. "Regex `\\s+admin\\s+\\S+`
-matches any word after 'admin' including comments — anchoring to bcrypt
-format `\\$2[ab]\\$` prevents false match" is actionable.
-```
+**Sub-agent configuration:**
+- Use default model (opus) — adversarial review needs strongest reasoning
+- Do NOT use `run_in_background` — all specialists must complete before merge
+- If any specialist fails or times out, log the failure and continue with
+  results from successful ones. Partial results > no results.
 
-**After sub-agent returns:**
+---
 
-1. Fix all HIGH and MED findings immediately
-2. Note LOW findings in the pipeline report
-3. Re-run affected tests if any code changed
-4. Record results in run.json
+#### Step 3: Collect, Merge, and Deduplicate
+
+After all specialist sub-agents complete:
+
+**3a. Parse findings:**
+- "NO FINDINGS" → skip (specialist found nothing)
+- Otherwise: parse each JSON line, collect into unified list
+
+**3b. Fingerprint and deduplicate:**
+- Fingerprint: `{path}:{line}:{category}` (or `{path}:{category}` if no line)
+- Same fingerprint from multiple specialists → keep highest confidence, tag:
+  "MULTI-SPECIALIST CONFIRMED (specialist1 + specialist2)", boost confidence +1 (cap 10)
+
+**3c. Apply confidence gates (Unified Confidence Rubric):**
+- Confidence 7+: show normally in findings output
+- Confidence 5-6: show with caveat "⚠️ Medium confidence — verify"
+- Confidence 3-4: suppress from main findings (appendix only)
+- Confidence 1-2: suppress entirely
+
+---
+
+#### Step 4: Red Team (Conditional)
+
+**Dispatch Red Team ONLY IF:**
+- Total changeset > 200 lines, OR
+- Any specialist produced a HIGH severity finding
+
+If neither condition met, skip Red Team.
+
+**Red Team sub-agent receives:**
+1. The red-team checklist from `stages/specialists/red-team.md`
+2. The merged specialist findings (so it knows what was already caught)
+3. The list of changed files
+
+Red Team findings merge into the unified list with same dedup/gating rules.
+
+---
+
+#### Step 5: Fix Findings
+
+**For all findings that survived confidence gating (>= 5):**
+- HIGH severity: fix immediately (auto-fix)
+- MED severity: fix if confidence >= 7, otherwise note with recommendation
+- LOW severity: note in pipeline report only
+
+Re-run affected tests after any code fix.
 
 ---
 
 #### Gate Outcome
 
 ```
-Adversarial Review Gate:
-  User-side: N findings, M fixed (or "skipped — bugfix profile")
-  PE-side:   N findings, M fixed, K noted
+Adversarial Review Gate (Multi-Specialist):
+  Specialists dispatched: N (correctness, security, performance, api-contract)
+  Red Team: dispatched / skipped (reason)
+  Total findings: N (X HIGH, Y MED, Z LOW)
+  After confidence gating: M shown (K suppressed)
+  Fixed: F | Noted: N
+  Multi-specialist confirmed: C findings
 
   PASS → enter Quality Convergence Loop (INSTRUCTIONS.md Step 4c)
-  FAIL → loop back: fix → re-test → re-review (max 1 loop)
+  FAIL → loop back: fix → re-test (max 1 loop)
 ```
 
 **After adversarial review passes:** Enter the Quality Convergence Loop
@@ -318,12 +361,16 @@ to Pipeline Report.
 ```json
 {
   "adversarial_review": {
-    "profile_tier": "full|pe_only|skipped",
-    "user_findings": 3,
-    "user_fixed": 3,
-    "pe_findings": 6,
-    "pe_fixed": 5,
-    "pe_noted": 1
+    "profile_tier": "full|bugfix|skipped",
+    "specialists_dispatched": ["correctness", "security", "performance"],
+    "red_team_dispatched": true,
+    "total_findings": 8,
+    "after_confidence_gate": 5,
+    "suppressed": 3,
+    "high_fixed": 2,
+    "med_fixed": 1,
+    "low_noted": 2,
+    "multi_confirmed": 1
   }
 }
 ```

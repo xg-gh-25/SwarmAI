@@ -114,12 +114,33 @@ Review every changed line against these categories:
 | Memory | Large allocations in hot paths, growing without bounds |
 | Unnecessary work | Redundant computation, extra network calls |
 
-### Step 5: Generate Report
+### Step 5: Assign Confidence & Generate Report
 
-For every finding, record with precise location:
+For every finding, assign a **confidence score (1-10)** using the Unified Confidence Rubric:
+
+| Score | Meaning | Display Rule |
+|-------|---------|-------------|
+| 9-10 | Verified by reading specific code, concrete bug/exploit | Show normally |
+| 7-8 | High confidence pattern match, very likely correct | Show normally |
+| 5-6 | Moderate — could be false positive | Show with ⚠️ caveat |
+| 3-4 | Low — suspicious but may be fine in context | **Suppress** from report |
+| 1-2 | Speculation | **Suppress entirely** |
+
+**Confidence modifiers:**
+- +3: Constructed concrete failure/exploit scenario
+- +2: Path reachable from user input
+- +2: Similar bug was fixed before in this codebase
+- -2: Internal-only endpoint or private module
+- -4: Test/example/doc file
+- Suppress entirely: Known false-positive patterns (placeholder, env var ref, version string)
+
+**Multi-file confirmation:** If the same issue pattern appears in multiple files,
+boost confidence +1 and tag "CONFIRMED across N files."
+
+Record each finding with confidence:
 
 ```
-{file}:{line} [{severity}] {category} -- {description}
+{file}:{line} [{severity}] (confidence: N/10) {category} -- {description}
 ```
 
 Severity:
@@ -127,6 +148,10 @@ Severity:
 - **WARNING** -- Code smell, maintainability risk, or potential future bug. Should fix.
 - **NIT** -- Style, naming, or minor improvement. Nice to have.
 - **QUESTION** -- Not sure if intentional. Needs author clarification.
+
+**Display gating:** Only include findings with confidence >= 5 in the main report.
+Findings with confidence 3-4 go in an optional "Low Confidence (verify)" appendix.
+Findings with confidence 1-2 are not shown at all.
 
 Present the report:
 
