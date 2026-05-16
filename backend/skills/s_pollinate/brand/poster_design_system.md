@@ -1,7 +1,40 @@
 # Poster Design System — Long-Form Social Cards
 
-> Source: Research from heti (6.7K★), open-props (5.4K★), XHS-BLOG, palxiao/poster-design (4.7K★), typo.css (4.5K★), tailwindcss-typography (6.4K★)
+> Source: Research from heti (6.7K★), open-props (5.4K★), XHS-BLOG, palxiao/poster-design (4.7K★), typo.css (4.5K★), tailwindcss-typography (6.4K★), html-anything (2.2K★), huashu-design (~2.7K★), catppuccin (19.2K★), Radix Colors (1.6K★)
 > Last updated: 2026-05-16
+> Version: 2.0 — Multi-direction + Anti-Slop + Semantic Tokens
+
+## Design Directions (Choose ONE Per Poster)
+
+Every poster MUST map to exactly ONE named direction. Never mix directions.
+
+| ID | Name | Mood | Use When |
+|----|------|------|----------|
+| **D1** | Obsidian (黑曜石) | 专业冷峻 | Technical, architecture, code, data |
+| **D2** | Paper (纸质) | Apple 极简 | Business insight, methodology, few high-impact points |
+| **D3** | Ink (水墨) | 东方意境 | Philosophy, personal values, quotes, ceremony |
+| **D4** | Neon (霓虹) | 赛博朋克 | AI/frontier, provocative opinions, tech manifestos |
+| **D5** | Morandi (莫兰迪) | 柔和叙事 | Narrative, stories, human interest, warmth |
+
+**Token files:** Each direction has a complete token set in `brand/directions/d{N}-{name}.yaml`
+
+**How to select:**
+1. User override wins ("用 Neon 风格" → D4)
+2. Content-type heuristic (see each file's `content_triggers`)
+3. Thesis fallback: T1→D1, T2→D4, T3→D3, T4→D4, T5→D5, T6→D2
+4. Default: D1 (Obsidian) if unclear
+
+**How to apply:** Load the direction's `css_snippet` into the poster's `:root` block. ALL colors/fonts reference semantic tokens (`var(--accent)`, `var(--text-primary)`, etc.). Never hardcode hex values in poster HTML.
+
+**Quick LLM injection (paste into poster prompt):**
+```
+DIRECTION: D{N} {name}
+TOKENS: [paste css_snippet from the direction file]
+MOOD: {mood}
+VISUAL RULES: [paste visual_elements from the direction file]
+```
+
+---
 
 ## Platform Dimensions
 
@@ -35,6 +68,38 @@ Based on heti CLReq + tailwindcss-typography. **All sizes computed for 1080px ca
 - Max reading width: 42em (~700px at 24px base) — never stretch text full-width
 - Paragraph indent: 0 (modern style, use spacing instead)
 - Auto-spacing between CJK/Latin (pangu.js principle): add 0.25em conceptual gap
+
+### CJK-First Font Stack (Mandatory)
+
+```css
+/* Chinese body (default for all directions) */
+--font-body-cjk: "Noto Sans SC", "Source Han Sans SC", "PingFang SC",
+                 "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+
+/* Chinese display (headlines — override per direction) */
+--font-display-cjk: "PingFang SC", "Noto Sans SC", "Source Han Sans SC", sans-serif;
+
+/* Chinese serif (D3 Ink direction only) */
+--font-serif-cjk: "STSongti-SC", "Noto Serif SC", "Source Han Serif SC",
+                  "SimSun", serif;
+
+/* English display */
+--font-display-en: "Inter", "Manrope", "SF Pro Display", system-ui, sans-serif;
+
+/* English serif (D3 Ink direction only) */
+--font-serif-en: "Playfair Display", "Source Serif 4", "Georgia", serif;
+
+/* Code (all directions) */
+--font-code: "SF Mono", "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+```
+
+### CJK Typography Rules (from Heti 赫蹏 CLReq)
+
+1. **CJK-Latin spacing:** Add ~0.25em between Chinese and English/numbers (CSS `word-spacing` or post-processing)
+2. **Punctuation compression:** `font-feature-settings: "halt" 1` — CJK punctuation occupies half-width
+3. **Chinese paragraph justify:** `text-align: justify; text-justify: inter-ideograph` for body blocks
+4. **Reading width limit:** `max-width: 42em` (~700px at 24px) — mandatory, no exceptions
+5. **Line-height rules:** CJK body ≥ 2.0, Latin body ≥ 1.75, Headlines = 1.3
 
 ## Vertical Rhythm
 
@@ -81,20 +146,26 @@ Long-form social posters are not editorial layouts. They're viewed on phones at 
 
 **Exception: body text WITHIN its max-width block is LEFT-aligned** (reading direction). The block itself is centered in the poster.
 
-## Color System (Dark Mode)
+## Semantic Token System (Direction-Driven)
 
-| Token | Value | Use |
-|-------|-------|-----|
-| --bg-deep | #0A0A0B | Page background (near-OLED black) |
-| --bg-elevated | #111113 | Elevated cards, footer |
-| --surface | rgba(255,255,255, 0.03) | Card background |
-| --border | rgba(255,255,255, 0.06) | Card borders, dividers |
-| --gold | #D4A853 | Accent, tagline, labels, highlights |
-| --gold-dim | rgba(212,168,83, 0.15) | Subtle gold backgrounds |
-| --gold-glow | rgba(212,168,83, 0.06) | Background radial glow |
-| --text-primary | #FFFFFF | Headlines |
-| --text-secondary | rgba(255,255,255, 0.7) | Body text |
-| --text-muted | rgba(255,255,255, 0.4) | Captions, labels |
+All posters use **semantic token names** (not hardcoded colors). The active direction populates the values.
+
+| Token | Purpose | Example (D1 Obsidian) |
+|-------|---------|----------------------|
+| `--bg-deep` | Canvas/page background | #0A0A0B |
+| `--bg-elevated` | Card/container surface | #111113 |
+| `--bg-surface` | Subtle surface tint | rgba(255,255,255,0.03) |
+| `--border` | Dividers, card borders | rgba(255,255,255,0.06) |
+| `--accent` | Primary highlight, tags, CTAs | #D4A853 |
+| `--accent-dim` | Accent at low opacity (backgrounds) | rgba(212,168,83,0.15) |
+| `--accent-glow` | Glow/shadow using accent color | rgba(212,168,83,0.06) |
+| `--text-primary` | Headlines, emphasis | #FFFFFF |
+| `--text-secondary` | Body text | rgba(255,255,255,0.7) |
+| `--text-muted` | Captions, metadata | rgba(255,255,255,0.4) |
+
+**Rule:** NEVER use raw hex values in poster HTML. Always reference `var(--token-name)`. This ensures direction switching is zero-cost (change the `:root` block, everything follows).
+
+**Legacy compatibility:** The D1 (Obsidian) token set produces identical output to the previous `--gold` / `--bg-deep` system. Existing templates continue to work unchanged.
 
 ## Visual Rhythm (Card Variety)
 
@@ -128,13 +199,64 @@ Total divider height including surrounding space: **120px** (5× base).
 
 **Retina rule:** If final poster > 4000px tall, render at 1x (1080px wide). If < 4000px, can render at 2x for sharpness.
 
-## Anti-Patterns
+## Anti-Slop Quality Gate
 
-- ❌ Mixed alignment (some left, some center) in the same poster
-- ❌ Spacing that isn't a multiple of 24px
-- ❌ Text running full 1080px width (no max-width constraint)
-- ❌ Same card style repeated consecutively
-- ❌ Body line-height < 2.0 for Chinese
+> "What you ban matters more than what you allow." — huashu-design philosophy
+> "Hard constraints stop the model from freestyling." — html-anything
+
+### Visual Ban List (BAN — regenerate if detected)
+
+**Colors:**
+- ❌ Purple gradient backgrounds (AI's #1 default aesthetic — always ban)
+- ❌ Rainbow gradient text
+- ❌ Pure `#000000` background (use direction's `--bg-deep` instead)
+- ❌ Pure `#FFFFFF` text on pure black (use direction's `--text-primary`)
+- ❌ Saturated neon colors on white background (eye-straining)
+- ❌ More than 2 hues in the same poster (direction controls the palette)
+
+**Typography:**
+- ❌ Inter used as display/headline font (Inter = body only; headlines use direction font)
+- ❌ All-caps Chinese text (CJK has no uppercase concept — looks broken)
+- ❌ Comic Sans, Papyrus, or any novelty fonts
+- ❌ Font size < 18px anywhere on poster (unreadable on phone)
+- ❌ More than 3 font families in one poster
+- ❌ Letter-spacing > 0.5px on Chinese text (destroys character rhythm)
+
+**Layout:**
+- ❌ Left-border accent cards as primary repeating pattern (overused in AI output)
+- ❌ Centered emoji used as section icons (emoji is not iconography)
+- ❌ Generic SVG human illustrations (Undraw/Storyset style)
+- ❌ Drop shadow blur > 20px (dated "2018 card UI" aesthetic)
+- ❌ Mixed border-radius (some rounded, some square in same poster)
+- ❌ Cards touching poster edges without padding (minimum 48px margin)
+
+**Content:**
+- ❌ Stock photo backgrounds (never use photos as poster base)
+- ❌ QR code larger than 120px (QR should not dominate visual hierarchy)
+- ❌ More than 2 decorative elements per section
+- ❌ Decorative elements competing with text for attention
+- ❌ Watermark/logo larger than 48px height
+- ❌ More than 6 sections per poster (information overload)
+
+### Structural Ban List (BAN — always enforce)
+
+- ❌ Spacing that isn't a multiple of 24px (base unit rule)
+- ❌ Text running full canvas width without max-width constraint
+- ❌ Same card style used consecutively (must alternate)
+- ❌ Body line-height < 2.0 for Chinese (CJK readability minimum)
+- ❌ Section with > 3 key points (each screen = one core idea)
+- ❌ Headline longer than 12 Chinese characters (poster titles are SHORT)
+- ❌ English and Chinese mixed in same line without visual spacing
+- ❌ Gradient direction inconsistent across cards in same poster (pick one angle)
+- ❌ Text directly on gradient without surface/card container
+- ❌ Mixed alignment (some left, some center) in same poster
 - ❌ Headline > 56px (overwhelming on phone)
-- ❌ More than 3 opacity levels for text (stick to 100% / 70% / 40%)
-- ❌ Decorative elements that compete with text (text is always hero)
+- ❌ More than 3 opacity levels for text (100% / 70% / 40% only)
+- ❌ Direction mixing — using tokens from two different directions in one poster
+
+### Quality Gate Execution
+
+```
+PRE-RENDER: Parse HTML/CSS → check against both ban lists → regenerate if violation found (max 2 retries)
+POST-RENDER: Verify dimensions match platform, file < 2MB, text readable (contrast ≥ 4.5:1), no text cutoff (min 48px edge padding)
+```
