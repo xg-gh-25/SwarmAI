@@ -1045,6 +1045,22 @@ class ContextHealthHook:
         except Exception as exc:
             logger.warning("context_health: DDD orchestrator failed (non-blocking): %s", exc)
 
+        # 3h. Adversarial meta-monitoring — surface degradation in session briefing
+        try:
+            from core.adversarial_meta import check_adversarial_health
+            artifacts_dir = root / "Projects" / "SwarmAI" / ".artifacts"
+            if artifacts_dir.is_dir():
+                health = check_adversarial_health(artifacts_dir)
+                if health.get("degradation_warning"):
+                    findings.append(
+                        f"[gap/high] Adversarial review may be degraded — "
+                        f"{health['consecutive_zero_count']} consecutive pipeline runs "
+                        f"with >50 changed lines had 0 findings. Consider rotating "
+                        f"adversarial prompt."
+                    )
+        except Exception as exc:
+            logger.debug("context_health: adversarial meta-check skipped: %s", exc)
+
         # 4. DailyActivity — today's file should exist if we're running
         da_dir = root / "Knowledge" / "DailyActivity"
         today_file = da_dir / f"{date.today().isoformat()}.md"
