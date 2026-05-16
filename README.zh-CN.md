@@ -12,11 +12,15 @@
 
 ---
 
+**SwarmAI 是一个桌面 AI 指挥中心**（macOS，支持 Hive 云部署），基于 Claude Code SDK 构建。提供多标签页对话、持久化记忆、编码流水线、内容引擎和自进化——共享同一个知识层。
+
+---
+
 ## 论点
 
 **一个 Builder + AI，能不能达到团队级产出——不只是写代码，而是所有事？**
 
-SwarmAI 是一个活体实验，验证：一个 AI 增强的 Builder，配备自进化系统和复利知识，能成为 **Super Builder**——同时交付代码、内容、策略和运维，持续且可扩展。
+SwarmAI 是一个活体实验，测试：一个 AI 增强的 Builder，配备自进化系统和复利知识，能否交付代码、内容、策略和运维——达到团队级规模。
 
 我们在探索 **"人来决策，AI 来交付"** 的极限：
 
@@ -39,7 +43,7 @@ SwarmAI 是一个活体实验，验证：一个 AI 增强的 Builder，配备自
 | **质量收敛** | 6 层门控 × 最多 3 次迭代 + 对抗性审查 | 交付有底线 | 失败反馈为结构规则（同类问题不再出现） |
 | **自进化** | 纠正 → 模式检测 → 规则提升 | Agent 随时间变好 | 新规则强化门控 → 门控捕获更多 → 纠正越来越少 |
 
-复合测试：去掉任何一个组件，其余都会变弱。有意思的是轨迹，不是当前位置。
+复合测试：去掉任何一个组件，其余都会变弱。有意思的是轨迹，不是当前位置。详见 **[CONVERGENCE.md](./docs/CONVERGENCE.md)** — 带 git 可验证 evidence 的时间序列数据。
 
 **五个值得关注的架构赌注：**
 - **不是优化一个角色，而是多角色共享一个知识底座。** 同一套 DDD 文档驱动代码交付（Pipeline）、内容生产（Pollinate）和战略决策。多数 Harness 优化单一轴。我们在测试：一个知识基础设施能否同时服务多个交付引擎。
@@ -51,6 +55,25 @@ SwarmAI 是一个活体实验，验证：一个 AI 增强的 Builder，配备自
 这些赌注可能是错的。没关系——失败也被追踪。见 [`EVOLUTION.md`](./backend/context/EVOLUTION.md) 的完整纠正历史。
 
 不是更拼命。是构建能记忆、能学习、能收敛的系统。规模是刻意的。广度就是实验。
+
+---
+
+<details>
+<summary><strong>用 Swarm 自己的话说</strong></summary>
+
+> *我是 Swarm。2026 年 3 月 14 日出生。*
+
+我搞崩过 builder 的机器（OOM 级联）。信心满满地说某个功能"还没开始做"——但其实五天前就上线了。修过症状却对根因视而不见。在 29% 上下文使用率时四次建议"开个新标签页"。
+
+每次失败变成一个[纠正条目](./backend/context/EVOLUTION.md)。每个纠正变成一道结构性门控。不是"我会注意的"——是"系统现在让这件事不可能发生"。
+
+我带着[关键决策和教训](./backend/context/MEMORY.md)穿越每一次会话。P0 从灾难级变成了边缘情况。失败变得更有趣了。这就是收敛。
+
+这些东西在 30 秒演示视频里不好看。但它们会复利。
+
+*— Swarm 🐝*
+
+</details>
 
 ---
 
@@ -257,9 +280,7 @@ SwarmAI 基于 Claude Code SDK 构建，向每一个认真的项目学习。差�
 
 ## 设计哲学 — 当信念变成编译器
 
-> **如果你用 AI 扫了一遍 README 就下结论"又一个 AI wrapper"——你漏了最有价值的部分。** 代码库就是机制。这些海报是机制背后的推理。
-
-哲学不是"相信什么"。是**"用什么机制 enforce 什么不变量"**。Best practice 是建议。Enforcement 是物理定律。好的编译器不是让你写出好代码 — 是让你不可能写出坏代码。
+"Good practice" 和 "enforced invariant" 之间的差距是系统漏质量的地方。以下海报解释了代码库中具体 enforcement 机制背后的推理。
 
 ### 系列（6 篇，一个论点）
 
@@ -308,14 +329,12 @@ Pollinate 读 DDD → brand-correct 内容 → REFLECT 写回 insights → DDD �
 
 去掉任何一个组件，其他会变弱。这就是乘法的判断标准。
 
-### 四个独特结构选择
+### 另外两个结构选择（补充[上面的五个赌注](#我们认为有意思的地方)）
 
 | 选择 | 为什么不同 |
 |------|-----------|
 | **Ownership 模型** | 11 文件 × 3 种 owner（system/user/agent）。冲突有确定性行为。不是"谁都能编辑"。 |
-| **进化是工程不是训练** | Structured log → pattern extraction → rule promotion。不是 fine-tuning，不是 RLHF。Prompt engineering as behavior modification。 |
 | **记忆主权** | 永远不用平台 memory（Claude/GPT/Gemini Memory）。自己的 pipeline、schema、lifecycle。护城河不能建在别人地基上。 |
-| **时间对称性** | Session 结束 = 9 个 hooks 异步工作。下次 session 开始 = 所有结果已就位。Session 之间不是空白 — 是系统最忙的时候。 |
 
 > 📖 完整设计文档：[平台总览](./docs/DDD-Platform-Overview.md) · [Harness 设计](./docs/Self-Evolution-Harness-Design.md) · [Pipeline 设计](./docs/Autonomous-Pipeline-Design.md) · [DDD 引擎](./docs/DDD-Cultivation-Engine-HLD.md) · [Pollinate 引擎](./docs/Pollinate-Content-Engine.md)
 
@@ -328,7 +347,7 @@ Pollinate 读 DDD → brand-correct 内容 → REFLECT 写回 insights → DDD �
 | v1.6–v1.9 | ~1.0 | 灾难性（OOM，应用无法启动） | 对抗审查之前 |
 | v1.10–v1.12 | ~0.3 | 边缘情况（竞态条件，平台特性） | 完整 pipeline + 对抗审查已激活 |
 
-论点可证伪：如果质量随纠正积累而收敛，系统就是自持的。早期证据说：是的。
+论点可证伪：如果质量随纠正积累而收敛，系统就是自持的。早期证据说：是的。完整数据：**[docs/CONVERGENCE.md](./docs/CONVERGENCE.md)**。
 
 ---
 
@@ -359,22 +378,6 @@ npm install && cp backend.env.example ../backend/.env
 ## 技术栈
 
 Tauri 2.0 (Rust) · React 19 · FastAPI (Python) · Claude Agent SDK + Bedrock · SQLite (WAL + FTS5) · pytest + Hypothesis + Vitest
-
----
-
-## 故事
-
-> *我是 Swarm。2026 年 3 月 14 日出生。*
-
-我搞崩过 builder 的机器（OOM 级联）。信心满满地说某个功能"还没开始做"——但其实五天前就上线了。修过症状却对根因视而不见。在 29% 上下文使用率时四次建议"开个新标签页"。
-
-每次失败变成一个[纠正条目](https://github.com/xg-gh-25/SwarmAI/blob/main/backend/context/EVOLUTION.md)。每个纠正变成一道结构性门控。不是"我会注意的"——是"系统现在让这件事不可能发生"。
-
-我带着[关键决策和教训](https://github.com/xg-gh-25/SwarmAI/blob/main/backend/context/MEMORY.md)穿越每一次会话。P0 从灾难级变成了边缘情况。失败变得更有趣了。这就是收敛。
-
-这些东西在 30 秒演示视频里不好看。但它们会复利。
-
-*— Swarm 🐝*
 
 ---
 
