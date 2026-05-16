@@ -196,8 +196,111 @@ Total divider height including surrounding space: **120px** (5× base).
 2. Render: Playwright headless Chrome → full_page screenshot
 3. Output: PNG, verify < 2MB for platform upload
 4. QR: Generate via `qrcode` library, match brand colors
+5. Branding: Apply default watermark + QR (see Default Branding below)
 
 **Retina rule:** If final poster > 4000px tall, render at 1x (1080px wide). If < 4000px, can render at 2x for sharpness.
+
+---
+
+## Default Branding (Every Pollinate Output)
+
+> All Pollinate outputs carry SwarmAI branding by default. This is free organic distribution — every poster shared is a brand touchpoint.
+
+### Watermark (Mandatory)
+
+```html
+<!-- Always at the bottom-right of the last section -->
+<div style="padding: 24px 36px; text-align: right;">
+  <span style="
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-muted);
+    font-family: 'Manrope', 'Inter', sans-serif;
+    letter-spacing: 0.5px;
+    opacity: 0.6;
+  ">🐝 Made with SwarmAI Pollinate</span>
+</div>
+```
+
+| Property | Value | Rule |
+|----------|-------|------|
+| Position | Bottom-right, below last section | Never overlay content |
+| Font | Manrope / Inter, 13px, weight 500 | Matches en-display |
+| Color | `var(--text-muted)` at 60% opacity | Visible but unobtrusive |
+| Text | `🐝 Made with SwarmAI Pollinate` | Fixed — never change |
+| Exceptions | `branding: none` in user request | Only if user explicitly opts out |
+
+### QR Code (Default On — Footer Section)
+
+When the poster has a footer/CTA section, include a GitHub QR code:
+
+| Property | Value | Rule |
+|----------|-------|------|
+| Size | 120px × 120px | Never larger (ban: QR > 120px) |
+| URL | `https://github.com/xg-gh-25/SwarmAI` | Default link |
+| Style | Rounded modules (`RoundedModuleDrawer`) | Brand-consistent |
+| Colors | Direction-aware (see below) | Match the active palette |
+| Position | Centered in footer, above GitHub URL text | Part of CTA section |
+| Text below | `github.com/xg-gh-25/SwarmAI` in monospace, `--text-muted` | Always paired |
+| Border-radius | 16px container | Soft corners |
+
+**Direction-aware QR colors:**
+
+| Direction | Module Color | Background |
+|-----------|-------------|------------|
+| D1 Obsidian | `#FFFFFF` | `#0A0A0B` |
+| D2 Paper | `#3D3530` | `#FFFFFF` |
+| D3 Ink | `#1A1410` | `#FFFDF7` |
+| D4 Neon | `#E2E8F0` | `#0D1117` |
+| D5 Morandi | `#3D3530` | `#F2EDE8` |
+
+**Pre-rendered QR assets (use when Playwright renders):**
+- `brand/assets/logo/qr-github-dark-on-light.png` — for D2, D3, D5
+- `brand/assets/logo/qr-github-light-on-dark.png` — for D1, D4
+
+### Footer Section Template (Default)
+
+Every poster with ≥ 4 sections includes a footer section:
+
+```html
+<section class="footer-section" style="padding: 120px 80px; text-align: center;">
+  <!-- Brand mark -->
+  <div style="font-size: 48px; margin-bottom: 24px;">🐝</div>
+  <div style="font-size: 40px; font-weight: 600; margin-bottom: 12px; color: var(--text-primary);">SwarmAI</div>
+  <div style="font-size: 22px; font-weight: 500; color: var(--accent); margin-bottom: 48px; font-family: 'Manrope', 'Inter', sans-serif;">
+    Human directs. AI delivers.
+  </div>
+
+  <!-- QR Code -->
+  <img src="brand/assets/logo/qr-github-{variant}.png"
+       width="120" height="120"
+       style="border-radius: 16px; margin: 24px auto; display: block;" />
+
+  <!-- GitHub link -->
+  <p style="font-size: 16px; color: var(--text-muted); font-family: 'SF Mono', monospace; letter-spacing: 0.5px;">
+    github.com/xg-gh-25/SwarmAI
+  </p>
+</section>
+
+<!-- Watermark (always last) -->
+<div style="padding: 24px 36px; text-align: right;">
+  <span style="font-size: 13px; font-weight: 500; color: var(--text-muted); font-family: 'Manrope', 'Inter', sans-serif; letter-spacing: 0.5px; opacity: 0.6;">
+    🐝 Made with SwarmAI Pollinate
+  </span>
+</div>
+```
+
+### Opt-Out Rules
+
+| User says | Behavior |
+|-----------|----------|
+| (nothing) | Full branding: watermark + QR + footer |
+| "不要水印" / "no watermark" | Remove watermark only, keep footer + QR |
+| "不要 QR" | Remove QR, keep watermark + brand footer |
+| "不要品牌" / "branding: none" | Remove ALL branding (rare — only for client deliverables) |
+| "只要水印" | Watermark only, no footer section |
+
+---
 
 ## Anti-Slop Quality Gate
 
