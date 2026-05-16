@@ -578,3 +578,67 @@ class TestAutoSessionSignalCultivation:
 
         # Should not raise
         hook._auto_cultivate_session_signals(workspace)
+
+
+# --------------------------------------------------------------------------
+# PROJECTS.md refresh after cultivation (line number drift fix)
+# --------------------------------------------------------------------------
+
+
+class TestProjectsRefreshAfterCultivation:
+    """Verify PROJECTS.md is refreshed when cultivation modifies DDD docs."""
+
+    @pytest.mark.asyncio
+    async def test_refresh_called_when_cultivation_writes(self, hook, workspace):
+        """When cultivation applies content to DDD docs, refresh_projects_index is called."""
+        # Setup: project with DDD docs (needs TECH.md with Conventions section
+        # because the lesson contains TECH_KEYWORDS like "nc -z")
+        proj = workspace / "Projects" / "SwarmAI"
+        proj.mkdir(parents=True, exist_ok=True)
+        (proj / "IMPROVEMENT.md").write_text(
+            "# Lessons\n\n## What Worked\n\n- seed\n\n## What Failed\n\n- seed\n"
+        )
+        (proj / "TECH.md").write_text(
+            "# Tech\n\n## Conventions\n\n- seed\n\n## Runtime Traps\n\n- seed\n"
+        )
+
+        # Create a run with uncultivated lessons
+        runs_dir = proj / ".artifacts" / "runs" / "run_drift001"
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        run_data = {
+            "id": "run_drift001",
+            "project": "SwarmAI",
+            "status": "completed",
+            "stages": [{"stage": "reflect", "status": "completed",
+                        "lessons": ["Pattern: use nc -z instead of lsof for port checks"]}],
+        }
+        (runs_dir / "run.json").write_text(json.dumps(run_data), encoding="utf-8")
+
+        # Mock refresh_projects_index to track if it's called
+        with patch(
+            "hooks.context_health_hook.ContextHealthHook._refresh_projects_index_sync"
+        ) as mock_refresh:
+            hook._light_refresh(workspace, str(workspace))
+
+            # Cultivation should have written to DDD docs and set dirty flag
+            assert hook._ddd_docs_modified is True
+            mock_refresh.assert_called_once_with(workspace)
+
+    @pytest.mark.asyncio
+    async def test_refresh_not_called_when_no_cultivation(self, hook, workspace):
+        """When cultivation has nothing to apply, refresh is NOT called."""
+        # Setup: project with DDD docs but no uncultivated runs
+        proj = workspace / "Projects" / "SwarmAI"
+        proj.mkdir(parents=True, exist_ok=True)
+        (proj / "IMPROVEMENT.md").write_text(
+            "# Lessons\n\n## What Worked\n\n- seed\n\n## What Failed\n\n- seed\n"
+        )
+
+        with patch(
+            "hooks.context_health_hook.ContextHealthHook._refresh_projects_index_sync"
+        ) as mock_refresh:
+            hook._light_refresh(workspace, str(workspace))
+
+            # No cultivation happened — flag should be False, no refresh
+            assert hook._ddd_docs_modified is False
+            mock_refresh.assert_not_called()
