@@ -123,10 +123,13 @@ def format_entity_index(entities: list[EntityRef]) -> list[str]:
     for e in entities:
         grouped.setdefault(e.name, []).append(e)
 
-    # Sort by number of references (most cross-project first), then alphabetically
+    # PE-3 fix: sort by UNIQUE project count (post-dedup), not raw ref count
+    def _unique_project_count(name: str) -> int:
+        return len(set((r.project, r.doc) for r in grouped[name]))
+
     sorted_names = sorted(
         grouped.keys(),
-        key=lambda n: (-len(grouped[n]), n),
+        key=lambda n: (-_unique_project_count(n), n),
     )
 
     lines = [

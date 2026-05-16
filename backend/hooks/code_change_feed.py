@@ -30,9 +30,11 @@ from core.initialization_manager import initialization_manager
 logger = logging.getLogger(__name__)
 
 # Paths that never produce proposals (content, not architecture)
+# PE-6 fix: include common test paths for both SwarmWS and swarmai codebases
 _SKIP_PREFIXES = (
     "tests/",
     "test_",
+    "backend/tests/",  # swarmai codebase test path
     ".context/",
     "Knowledge/",
     ".artifacts/",

@@ -1037,7 +1037,8 @@ class ContextHealthHook:
         # 2. Git health
         findings += self._check_git_health(root, ws_path)
 
-        # 3. DDD staleness (per project)
+        # 3. DDD checks (staleness, auto-apply, injection, knowledge, entity, signal, code_intel)
+        # PE-7: These are 7 sub-steps (3a-3g). Future cleanup: extract to _run_ddd_checks(root, ws_path)
         findings += self._check_ddd_staleness(root, ws_path)
 
         # 3b. Auto-apply mechanical DDD refresh proposals (non-blocking)

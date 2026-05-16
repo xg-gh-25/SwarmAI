@@ -135,11 +135,8 @@ def bridge_learned_content_to_ddd(
     if not project_dir.exists():
         return False
 
-    # Score relevance
-    text = f"{title} {summary}".lower()
-    product_hits = sum(1 for kw in _PRODUCT_KEYWORDS if kw in text)
-    tech_hits = sum(1 for kw in _TECH_KEYWORDS if kw in text)
-
+    # Score relevance (PE-5: reuse shared helper)
+    product_hits, tech_hits = _score_keywords(title, summary)
     total_hits = product_hits + tech_hits
     if total_hits < 2:
         # Not relevant enough for DDD
@@ -172,15 +169,25 @@ def bridge_learned_content_to_ddd(
     return True
 
 
+def _score_keywords(title: str, summary: str) -> tuple[int, int]:
+    """Score text against PRODUCT and TECH keyword sets.
+
+    PE-5 fix: single helper for keyword scoring (DRY).
+    Returns (product_hits, tech_hits).
+    """
+    text = f"{title} {summary}".lower()
+    product_hits = sum(1 for kw in _PRODUCT_KEYWORDS if kw in text)
+    tech_hits = sum(1 for kw in _TECH_KEYWORDS if kw in text)
+    return product_hits, tech_hits
+
+
 def _classify_signal(title: str, summary: str) -> tuple[str, str]:
     """Classify a signal into target_doc + target_section.
 
     Returns (target_doc, target_section).
     """
     text = f"{title} {summary}".lower()
-
-    product_hits = sum(1 for kw in _PRODUCT_KEYWORDS if kw in text)
-    tech_hits = sum(1 for kw in _TECH_KEYWORDS if kw in text)
+    product_hits, tech_hits = _score_keywords(title, summary)
 
     if tech_hits > product_hits:
         # Technical content → TECH.md

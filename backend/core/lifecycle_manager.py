@@ -635,40 +635,51 @@ class LifecycleManager:
             overdue_count = await todo_manager.check_overdue()
 
             # 2. Pipeline-bound todos: check if linked pipeline run completed
+            # PE-1 fix: file I/O in thread to avoid blocking event loop
             handled_count = 0
             try:
+                import json as _json
+                from config import get_app_data_dir
+
                 pending = await db.todos.list_by_status("pending")
-                for todo in pending:
-                    metadata = todo.get("metadata")
-                    if isinstance(metadata, str):
-                        import json
-                        try:
-                            metadata = json.loads(metadata)
-                        except (json.JSONDecodeError, TypeError):
-                            metadata = {}
-                    if not isinstance(metadata, dict):
-                        continue
+                todo_ids_to_handle: list[str] = []
 
-                    run_id = metadata.get("pipeline_run_id") or metadata.get("run_id")
-                    if not run_id:
-                        continue
+                def _check_pipeline_todos(todos_list):
+                    """Sync file I/O — runs in thread pool."""
+                    completed_ids = []
+                    for todo in todos_list:
+                        metadata = todo.get("metadata")
+                        if isinstance(metadata, str):
+                            try:
+                                metadata = _json.loads(metadata)
+                            except (_json.JSONDecodeError, TypeError):
+                                metadata = {}
+                        if not isinstance(metadata, dict):
+                            continue
+                        run_id = metadata.get("pipeline_run_id") or metadata.get("run_id")
+                        if not run_id:
+                            continue
+                        project = metadata.get("project", "SwarmAI")
+                        run_path = (
+                            get_app_data_dir() / "SwarmWS" / "Projects" / project
+                            / ".artifacts" / "runs" / run_id / "run.json"
+                        )
+                        if run_path.exists():
+                            try:
+                                run_data = _json.loads(run_path.read_text())
+                                if run_data.get("status") == "completed":
+                                    completed_ids.append(todo["id"])
+                            except (OSError, _json.JSONDecodeError):
+                                pass
+                    return completed_ids
 
-                    # Check if the pipeline run is completed
-                    project = metadata.get("project", "SwarmAI")
-                    from config import get_app_data_dir
-                    import json as _json
-                    run_path = (
-                        get_app_data_dir() / "SwarmWS" / "Projects" / project
-                        / ".artifacts" / "runs" / run_id / "run.json"
-                    )
-                    if run_path.exists():
-                        try:
-                            run_data = _json.loads(run_path.read_text())
-                            if run_data.get("status") == "completed":
-                                await db.todos.update(todo["id"], {"status": "handled"})
-                                handled_count += 1
-                        except (OSError, _json.JSONDecodeError):
-                            pass
+                import asyncio
+                todo_ids_to_handle = await asyncio.to_thread(
+                    _check_pipeline_todos, pending
+                )
+                for tid in todo_ids_to_handle:
+                    await db.todos.update(tid, {"status": "handled"})
+                    handled_count += 1
             except Exception as exc:
                 logger.debug("todo_sweep: pipeline check error: %s", exc)
 

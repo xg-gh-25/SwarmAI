@@ -52,7 +52,14 @@ _SECTION_RE = re.compile(r"^##\s+(.+)$")
 
 @dataclass
 class MaturityState:
-    """Per-section maturity evidence state."""
+    """Per-section maturity evidence state.
+
+    The ``trust`` field in the annotation output is derived at write-time
+    from source_count + verified_by_production. It may become stale if
+    these values change between annotation writes. This is acceptable
+    because annotations are recomputed on each health hook run (daily).
+    PE-8: staleness window = max 24 hours between health hook cycles.
+    """
 
     level: str = "sparse"
     source_count: int = 0
