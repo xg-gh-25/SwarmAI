@@ -1406,13 +1406,29 @@ Adversarial Brand Review:
 
 Read `brand/content_principles.md` and run anti-pattern scan on poster text:
 - No LOC/commit/天数 as value (P1)
-- No first-person hero framing (P2)
+- No first-person hero framing (P2) — **MECHANICAL GATE: run `scripts/p2_scan.py`**
 - Thesis-driven, not feature-driven (P3)
 - Effects over mechanisms (P4)
 - English only where stronger than Chinese (P5)
 - Each piece standalone (P6)
 - No internal术语 in body text (P7)
 - Positioning hierarchy respected (P8)
+
+**P2 Hero Framing Gate (BLOCKING — L2 mechanical enforcement):**
+```bash
+# Extract visible text from HTML, then scan for hero framing
+python3 -c "
+from pathlib import Path
+import re, sys
+html = Path(sys.argv[1]).read_text()
+# Strip HTML tags to get visible text
+text = re.sub(r'<[^>]+>', '\n', html)
+print(text)
+" {html_file} | python3 scripts/p2_scan.py
+```
+Exit 0 = clean. Exit 1 = FAIL — fix offending text before proceeding.
+Targets: "我造了/我做了/我们是最.../我们的X远超" hero claims.
+Does NOT flag: section headers ("## 我们的设计哲学"), technical discussion, thesis statements.
 
 **Legacy term blocklist (mechanical check):**
 ```
@@ -1435,6 +1451,42 @@ Any match → FAIL → fix before proceeding.
 - `content/{name}/tracks/poster/{topic}-d{N}-{name}.html` -- source (2 files)
 - `content/{name}/tracks/poster/{topic}-d{N}-{name}.png` -- rendered (2 files)
 - `content/{name}/tracks/poster/convergence-log.txt` -- gate results per iteration
+
+#### Step B.7: Delegation Fidelity Check (Reskin/Restyle Operations)
+
+**BLOCKING — applies whenever a poster is reskinned from one direction to another.**
+
+When restyling existing content (e.g., "reskin D2 → D5"), the output MUST preserve
+≥90% of the source content's structural sections. Content truncation during style
+changes is the #1 delegation failure mode (C024, 2026-05-16: all 4 posters were
+truncated by 40-60% during D5 reskin).
+
+**Verification procedure (after reskin):**
+```bash
+# Count sections in source HTML
+SOURCE_SECTIONS=$(grep -c '<section\|<div class="s\|<div class="card' {source_html})
+# Count sections in output HTML
+OUTPUT_SECTIONS=$(grep -c '<section\|<div class="s\|<div class="card' {output_html})
+# Calculate ratio
+RATIO=$(python3 -c "print(f'{$OUTPUT_SECTIONS / max($SOURCE_SECTIONS, 1) * 100:.0f}%')")
+echo "Delegation fidelity: $OUTPUT_SECTIONS / $SOURCE_SECTIONS sections = $RATIO"
+```
+
+**Gate:**
+- Ratio ≥ 90% → PASS (minor structural simplification is acceptable)
+- Ratio < 90% → **FAIL** — content was truncated. Regenerate from source, preserving
+  ALL section content. Only change: CSS tokens, colors, typography.
+- Ratio > 110% → WARN — content was added (may be intentional for enrichment)
+
+**When this fires:**
+- "Reskin to D5 style" / "switch direction" / "restyle"
+- Any operation that takes existing HTML as input and produces restyled output
+- Sub-agent delegation for reskin tasks
+
+**Why this exists:** Agent delegation (sub-agent or same-agent multi-pass) systematically
+truncates content when given a style-change task. The agent optimizes for visual
+coherence in the new style and unconsciously drops sections that feel "redundant"
+in the new layout. This gate makes truncation mechanically detectable.
 
 ---
 
