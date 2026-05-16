@@ -14,7 +14,7 @@ Returns JSON:
 Errors (BLOCK) prevent stage advancement. Warnings are informational —
 they surface in the delivery report but don't block progress.
 
-The 8 invariant checks:
+The 13 invariant checks:
     1. Stage order     — current stage follows the last completed stage per profile
     2. Artifact exists — stage published an artifact (except reflect)
     3. Artifact schema — required fields present in artifact JSON
@@ -26,14 +26,16 @@ The 8 invariant checks:
                           (WARN only, evaluate stage)
     8. Quality gate    — stage-specific structural enforcement:
                           8a. BUILD: smoke_tests > 0 when files_changed > 1
-                              (BLOCK — catches AttributeError hidden by mocks)
                           8b. REVIEW: integration_trace.checked > 0
-                              (BLOCK — ensures wiring verification was done)
                           8c. REVIEW: ux_review when frontend files in changeset
-                              (WARN — ensures UX checklist on UI changes)
                           8d. REVIEW: findings_count required for large changesets
-                              (BLOCK — prevents skipped/empty reviews on >3 code
-                              files or >10 tests. Review must report findings.)
+    9. Depth (L2)     — field values indicate real work (not just structure)
+   10. Push-ready (L3)— binary verdict gate for deliver stage
+   11. Semantic (L2.5)— content quality heuristics (WARN)
+   12. Anti-rational.  — skips require structured justification; counter-arguments
+                          block the skip (earned truths from EVOLUTION.md)
+   13. Output routing  — stages must consume declared upstream artifacts;
+                          freshness check warns on stale consumed artifacts
 
 Public symbols:
 - ``main``              — CLI entry point
@@ -244,6 +246,57 @@ def validate_artifact_data(stage: str, data: dict) -> list[str]:
                 )
 
     return errors
+
+
+# ---------------------------------------------------------------------------
+# Stage routing — explicit I/O contracts per stage (Check 12/13)
+# ---------------------------------------------------------------------------
+
+STAGE_ROUTING: dict[str, dict[str, list[str]]] = {
+    "evaluate": {
+        "consumes": [],
+        "produces": ["evaluation"],
+        "optional_produces": [],
+    },
+    "think": {
+        "consumes": ["evaluation"],
+        "produces": ["research"],
+        "optional_produces": ["alternatives"],
+    },
+    "plan": {
+        "consumes": ["evaluation", "research"],
+        "produces": ["design_doc"],
+        "optional_produces": [],
+    },
+    "build": {
+        "consumes": ["design_doc"],
+        "produces": ["changeset"],
+        "optional_produces": [],
+    },
+    "review": {
+        "consumes": ["changeset"],
+        "produces": ["review"],
+        "optional_produces": ["security_review"],
+    },
+    "test": {
+        "consumes": ["changeset", "design_doc", "review"],
+        "produces": ["test_report"],
+        "optional_produces": [],
+    },
+    "deliver": {
+        "consumes": ["changeset", "review", "test_report"],
+        "produces": ["delivery"],
+        "optional_produces": ["report"],
+    },
+    "reflect": {
+        "consumes": ["test_report", "delivery"],
+        "produces": [],
+        "optional_produces": [],
+    },
+}
+
+# Default TTL for artifact freshness (hours) — 7 days
+_DEFAULT_TTL_HOURS = 168
 
 
 # Stages that never require an artifact (regardless of profile)
@@ -853,6 +906,225 @@ def _check_semantic_depth(
 
 
 # ---------------------------------------------------------------------------
+# Check 12: Anti-rationalization gate — skips require structured justification
+# ---------------------------------------------------------------------------
+
+def _check_skip_justification(stage_record: dict) -> list[str]:
+    """Check 12: Anti-rationalization — skips require structured justification.
+
+    When a stage is skipped, the agent must fill a 4-field justification:
+      - step_skipped: what is being skipped
+      - reason: why the agent thinks it's safe
+      - evidence_skip_safe: concrete evidence supporting the skip
+      - counter_argument_check: must be null/empty to proceed
+
+    THE KEY RULE: if counter_argument_check is non-empty, the skip is BLOCKED.
+    This prevents the agent from rationalizing past its own corrections.
+
+    Returns list of BLOCK-level error strings.
+    """
+    errors: list[str] = []
+    status = stage_record.get("status")
+    if status != "skipped":
+        return errors
+
+    # Allow skip_reason alone (legacy/simple skips like "profile does not include")
+    skip_reason = stage_record.get("skip_reason", "")
+    justification = stage_record.get("skip_justification")
+
+    # If no justification object but has skip_reason, that's the legacy path — allow
+    if not justification:
+        if not skip_reason or not skip_reason.strip():
+            errors.append(
+                "BLOCK: Stage skipped without skip_reason or skip_justification. "
+                "Provide at minimum a skip_reason, or a full skip_justification "
+                "with step_skipped, reason, evidence_skip_safe, counter_argument_check."
+            )
+        return errors
+
+    # Full justification provided — validate structure
+    if not isinstance(justification, dict):
+        errors.append("BLOCK: skip_justification must be a dict with 4 fields")
+        return errors
+
+    required_fields = ["step_skipped", "reason", "evidence_skip_safe"]
+    for field in required_fields:
+        val = justification.get(field)
+        if not val or (isinstance(val, str) and not val.strip()):
+            errors.append(f"BLOCK: skip_justification.{field} is empty or missing")
+
+    # THE KEY RULE: if counter-argument exists, skip is blocked
+    counter = justification.get("counter_argument_check")
+    if counter and isinstance(counter, str) and counter.strip():
+        errors.append(
+            f"BLOCK: Anti-rationalization triggered — counter-argument exists: "
+            f"'{counter[:120]}'. Cannot skip when a valid counter-argument is present. "
+            f"Either address the counter-argument or execute the stage."
+        )
+
+    return errors
+
+
+# ---------------------------------------------------------------------------
+# Check 13: Output routing — stages must consume declared inputs
+# ---------------------------------------------------------------------------
+
+def _check_output_routing(
+    stage: str, stage_record: dict, run: dict, project: str
+) -> tuple[list[str], list[str]]:
+    """Check 13: Explicit output routing enforcement.
+
+    Verifies that a stage:
+      - Consumed all declared upstream artifacts (BLOCK if not)
+      - Produced the declared output artifact type (WARN — Check 2 handles existence)
+
+    The consumed_artifacts field in stage records tracks what was actually read.
+    Format: [{"type": "evaluation", "id": "art_xxx"}, ...]
+
+    Returns (errors, warnings) tuple.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    routing = STAGE_ROUTING.get(stage)
+    if not routing:
+        return errors, warnings
+
+    # Skip routing check for skipped stages
+    if stage_record.get("status") == "skipped":
+        return errors, warnings
+
+    # --- Consume check ---
+    consumed = stage_record.get("consumed_artifacts")
+    has_consumed_field = consumed is not None
+    if not isinstance(consumed, list):
+        consumed = []
+
+    consumed_types = {
+        c.get("type") for c in consumed if isinstance(c, dict) and c.get("type")
+    }
+
+    for required_type in routing.get("consumes", []):
+        if required_type not in consumed_types:
+            # Check if a prior stage even produced this type
+            stages_list = run.get("stages", [])
+            prior_produced = False
+            for s in stages_list:
+                if s.get("stage", s.get("name")) == stage:
+                    break
+                s_routing = STAGE_ROUTING.get(s.get("stage", s.get("name", "")), {})
+                if required_type in s_routing.get("produces", []):
+                    if s.get("status") in ("completed", "done"):
+                        prior_produced = True
+                        break
+
+            if prior_produced and has_consumed_field:
+                # consumed_artifacts field exists but doesn't include this type → BLOCK
+                errors.append(
+                    f"BLOCK: Stage '{stage}' must consume '{required_type}' artifact "
+                    f"but didn't reference it in consumed_artifacts. "
+                    f"Run `discover --types {required_type} --full` and record consumption."
+                )
+            elif prior_produced:
+                # consumed_artifacts field missing entirely → WARN (backward compat)
+                warnings.append(
+                    f"WARN: Stage '{stage}' should consume '{required_type}' artifact. "
+                    f"Add consumed_artifacts field to stage record for routing enforcement."
+                )
+            else:
+                # Upstream didn't produce it — warn (might be skipped stage)
+                warnings.append(
+                    f"WARN: Stage '{stage}' should consume '{required_type}' "
+                    f"but no prior stage produced it (may have been skipped)."
+                )
+
+    return errors, warnings
+
+
+# ---------------------------------------------------------------------------
+# Artifact freshness — content-hash staleness detection
+# ---------------------------------------------------------------------------
+
+def check_artifact_freshness(
+    artifact_meta: dict, project: str
+) -> dict[str, Any]:
+    """Evaluate whether an artifact's conclusions are still valid.
+
+    Checks:
+      1. DDD dependency drift — checksums at creation vs current
+      2. TTL advisory — age exceeds configured threshold
+
+    Args:
+        artifact_meta: Artifact metadata dict (from manifest or stage record)
+                       Must include 'created_at'. Optional: 'freshness' with
+                       'depends_on' and 'ttl_advisory_hours'.
+        project: Project name for DDD doc lookup.
+
+    Returns:
+        {"fresh": bool, "stale_reason": str | None, "age_hours": float}
+    """
+    from datetime import datetime, timezone
+
+    created_str = artifact_meta.get("created_at", "")
+    if not created_str:
+        return {"fresh": True, "stale_reason": None, "age_hours": 0}
+
+    try:
+        # Handle both Z suffix and +00:00 formats
+        created_str_clean = created_str.replace("Z", "+00:00")
+        created = datetime.fromisoformat(created_str_clean)
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        age_hours = (now - created).total_seconds() / 3600
+    except (ValueError, TypeError):
+        return {"fresh": True, "stale_reason": None, "age_hours": 0}
+
+    freshness = artifact_meta.get("freshness", {})
+    if not isinstance(freshness, dict):
+        freshness = {}
+
+    depends_on = freshness.get("depends_on", {})
+    if not isinstance(depends_on, dict):
+        depends_on = {}
+
+    # Check 1: DDD dependency drift
+    ddd_checksums = depends_on.get("ddd_checksums", {})
+    if ddd_checksums:
+        ws = _get_workspace()
+        project_dir = ws / "Projects" / project
+        for doc_name, expected_hash in ddd_checksums.items():
+            doc_path = project_dir / doc_name
+            if doc_path.exists():
+                try:
+                    content = doc_path.read_text()
+                    current_hash = _compute_doc_checksum(content)
+                    if current_hash != expected_hash:
+                        return {
+                            "fresh": False,
+                            "stale_reason": (
+                                f"DDD doc {doc_name} changed since artifact was created"
+                            ),
+                            "age_hours": age_hours,
+                        }
+                except OSError:
+                    pass
+
+    # Check 2: TTL advisory (soft)
+    ttl = freshness.get("ttl_advisory_hours", _DEFAULT_TTL_HOURS)
+    if not isinstance(ttl, (int, float)):
+        ttl = _DEFAULT_TTL_HOURS
+    if age_hours > ttl:
+        return {
+            "fresh": False,
+            "stale_reason": f"Age {age_hours:.0f}h exceeds advisory TTL {ttl}h",
+            "age_hours": age_hours,
+        }
+
+    return {"fresh": True, "stale_reason": None, "age_hours": age_hours}
+
+
+# ---------------------------------------------------------------------------
 # Core validation
 # ---------------------------------------------------------------------------
 
@@ -861,8 +1133,10 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
 
     Checks 1-8: structural invariants (BLOCK on violations)
     Check 9: depth validation L2 (BLOCK on hollow artifacts)
-    Check 10: confidence gate L3 (BLOCK on score < 7)
+    Check 10: confidence/push-ready gate L3 (BLOCK on not-push-ready)
     Check 11: semantic depth L2.5 (WARN on content-lazy artifacts)
+    Check 12: anti-rationalization gate (BLOCK on skips with counter-arguments)
+    Check 13: output routing (BLOCK on missing consumed_artifacts) + freshness (WARN)
 
     Returns a result dict with:
         valid: bool — False if any BLOCK errors
@@ -1192,6 +1466,41 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
     if artifact_data and stage in ("review", "deliver"):
         sem_warnings = _check_semantic_depth(stage, artifact_data, run, project, run_id)
         warnings.extend(sem_warnings)
+
+    # --- Check 12: Anti-rationalization gate (skipped stages) ---
+    if stage_record.get("status") == "skipped":
+        checks_total += 1
+        skip_errors = _check_skip_justification(stage_record)
+        errors.extend(skip_errors)
+        if not skip_errors:
+            checks_passed += 1
+
+    # --- Check 13: Output routing — consume/produce enforcement ---
+    if stage in STAGE_ROUTING and stage_record.get("status") != "skipped":
+        checks_total += 1
+        routing_errors, routing_warnings = _check_output_routing(
+            stage, stage_record, run, project
+        )
+        errors.extend(routing_errors)
+        warnings.extend(routing_warnings)
+        if not routing_errors:
+            checks_passed += 1
+
+        # Freshness sub-check: warn on stale consumed artifacts
+        consumed = stage_record.get("consumed_artifacts", [])
+        if isinstance(consumed, list):
+            for c in consumed:
+                if not isinstance(c, dict):
+                    continue
+                freshness_result = check_artifact_freshness(c, project)
+                if not freshness_result["fresh"]:
+                    warnings.append(
+                        f"STALE: Stage '{stage}' consuming stale artifact "
+                        f"'{c.get('id', '?')}' (type: {c.get('type', '?')}, "
+                        f"age: {freshness_result['age_hours']:.0f}h, "
+                        f"reason: {freshness_result['stale_reason']}). "
+                        f"Consider re-running the producing stage."
+                    )
 
     return {
         "valid": len(errors) == 0,

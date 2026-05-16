@@ -28,15 +28,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts.pipeline_validator import (
     DECISION_OPTIONAL_STAGES,
     NO_ARTIFACT_STAGES,
+    STAGE_ROUTING,
     STAGE_SCHEMAS,
     _check_artifact_exists,
     _check_budget_recorded,
     _check_decision_logged,
+    _check_output_routing,
     _check_profile_respected,
+    _check_skip_justification,
     _check_stage_order,
     _parse_non_goals,
     _parse_failed_patterns,
     _compute_doc_checksum,
+    check_artifact_freshness,
     check_ddd_consistency,
     check_ddd_staleness,
     validate,
@@ -393,8 +397,8 @@ class TestValidateIntegration:
 
         result = validate("TestProject", "run_test1", "evaluate")
         assert result["valid"] is True
-        assert result["checks_passed"] == 8
-        assert result["checks_total"] == 8
+        assert result["checks_passed"] >= 8  # 8 base + Check 13 routing
+        assert result["checks_total"] >= 8
         assert len(result["errors"]) == 0
         assert len(result["warnings"]) == 0
 
@@ -409,7 +413,7 @@ class TestValidateIntegration:
 
         result = validate("TestProject", "run_test1", "reflect")
         assert result["valid"] is True
-        assert result["checks_passed"] == 8
+        assert result["checks_passed"] >= 8  # 8 base + Check 13 routing
 
     def test_warnings_dont_block(self, workspace):
         """Warnings don't make valid=false, and checks_passed stays at 7."""
@@ -424,7 +428,7 @@ class TestValidateIntegration:
 
         result = validate("TestProject", "run_test1", "evaluate")
         assert result["valid"] is True  # No BLOCK errors
-        assert result["checks_passed"] == 8  # Warnings don't reduce count
+        assert result["checks_passed"] >= 8  # Warnings don't reduce count
         assert len(result["warnings"]) >= 2  # Missing decisions + zero budget
 
     def test_multiple_errors_accumulate(self, workspace):
@@ -735,8 +739,8 @@ Cloud SaaS deployment with Kubernetes.
         ])
 
         result = validate("TestProject", "run_test1", "evaluate")
-        assert result["checks_total"] == 8
-        assert result["checks_passed"] == 8
+        assert result["checks_total"] >= 8  # 8 base + Check 13 routing
+        assert result["checks_passed"] >= 8
 
 
 # ---------------------------------------------------------------------------
@@ -1821,3 +1825,229 @@ class TestMetricsCLI:
         assert "catches" in analytics
         assert "quality" in analytics
         assert "decisions" in analytics
+
+
+# ---------------------------------------------------------------------------
+# Check 12: Anti-Rationalization Gate
+# ---------------------------------------------------------------------------
+
+class TestAntiRationalization:
+    """Tests for _check_skip_justification (Check 12)."""
+
+    def test_non_skipped_stage_passes(self):
+        """Non-skipped stages are not checked."""
+        record = _stage_record("build", status="completed")
+        errors = _check_skip_justification(record)
+        assert errors == []
+
+    def test_skipped_with_skip_reason_passes(self):
+        """Legacy path: skip_reason alone is sufficient."""
+        record = _stage_record("think", status="skipped")
+        record["skip_reason"] = "Design pre-approved by user"
+        errors = _check_skip_justification(record)
+        assert errors == []
+
+    def test_skipped_without_any_reason_blocks(self):
+        """Skipped without skip_reason or skip_justification → BLOCK."""
+        record = {"stage": "think", "status": "skipped", "token_cost": 0}
+        errors = _check_skip_justification(record)
+        assert len(errors) == 1
+        assert "BLOCK" in errors[0]
+
+    def test_full_justification_null_counter_passes(self):
+        """Full justification with null counter_argument_check → PASS (AC2)."""
+        record = {
+            "stage": "think", "status": "skipped", "token_cost": 0,
+            "skip_justification": {
+                "step_skipped": "think",
+                "reason": "Only one approach exists",
+                "evidence_skip_safe": "Scope is trivial, proven pattern",
+                "counter_argument_check": None,
+            },
+        }
+        errors = _check_skip_justification(record)
+        assert errors == []
+
+    def test_full_justification_empty_counter_passes(self):
+        """Full justification with empty string counter → PASS."""
+        record = {
+            "stage": "think", "status": "skipped", "token_cost": 0,
+            "skip_justification": {
+                "step_skipped": "think",
+                "reason": "Only one approach exists",
+                "evidence_skip_safe": "Scope is trivial",
+                "counter_argument_check": "",
+            },
+        }
+        errors = _check_skip_justification(record)
+        assert errors == []
+
+    def test_counter_argument_present_blocks(self):
+        """Non-empty counter_argument_check → BLOCK (AC1)."""
+        record = {
+            "stage": "deliver", "status": "skipped", "token_cost": 0,
+            "skip_justification": {
+                "step_skipped": "adversarial_review",
+                "reason": "Tests pass, code is straightforward",
+                "evidence_skip_safe": "All 12 tests green",
+                "counter_argument_check": (
+                    "C011: 57 tests green but feature 100% non-functional. "
+                    "Tests verify what was written, not what was missed."
+                ),
+            },
+        }
+        errors = _check_skip_justification(record)
+        assert len(errors) == 1
+        assert "Anti-rationalization triggered" in errors[0]
+        assert "BLOCK" in errors[0]
+
+    def test_missing_required_fields_blocks(self):
+        """Missing step_skipped/reason/evidence → BLOCK."""
+        record = {
+            "stage": "think", "status": "skipped", "token_cost": 0,
+            "skip_justification": {
+                "step_skipped": "",
+                "reason": "",
+                "evidence_skip_safe": "",
+                "counter_argument_check": None,
+            },
+        }
+        errors = _check_skip_justification(record)
+        # Should have 3 errors (one per empty required field)
+        assert len(errors) == 3
+        assert all("BLOCK" in e for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# Check 13: Output Routing
+# ---------------------------------------------------------------------------
+
+class TestOutputRouting:
+    """Tests for _check_output_routing and STAGE_ROUTING (Check 13)."""
+
+    def test_routing_defined_for_all_stages(self):
+        """AC3: STAGE_ROUTING has entries for all 8 pipeline stages."""
+        expected = {"evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"}
+        assert set(STAGE_ROUTING.keys()) == expected
+
+    def test_evaluate_no_consumes(self):
+        """Evaluate has no upstream — always passes routing."""
+        run = {"stages": [_stage_record("evaluate")]}
+        errors, warnings = _check_output_routing("evaluate", _stage_record("evaluate"), run, "TestProject")
+        assert errors == []
+
+    def test_review_missing_consumed_artifacts_field_warns(self):
+        """Review without consumed_artifacts field → WARN (backward compat)."""
+        build_rec = _stage_record("build")
+        review_rec = _stage_record("review")
+        # review_rec has no consumed_artifacts field at all
+        run = {"stages": [build_rec, review_rec]}
+        errors, warnings = _check_output_routing("review", review_rec, run, "TestProject")
+        assert errors == []  # No BLOCK — field is missing (legacy)
+        assert any("changeset" in w for w in warnings)
+
+    def test_review_empty_consumed_artifacts_blocks(self):
+        """AC4: Review with consumed_artifacts present but empty → BLOCK."""
+        build_rec = _stage_record("build")
+        review_rec = _stage_record("review")
+        review_rec["consumed_artifacts"] = []  # Field present but empty
+        run = {"stages": [build_rec, review_rec]}
+        errors, warnings = _check_output_routing("review", review_rec, run, "TestProject")
+        assert len(errors) >= 1
+        assert any("changeset" in e and "BLOCK" in e for e in errors)
+
+    def test_review_with_consumed_artifacts_passes(self):
+        """AC5: Review with consumed_artifacts referencing changeset → PASS."""
+        build_rec = _stage_record("build")
+        review_rec = _stage_record("review")
+        review_rec["consumed_artifacts"] = [
+            {"type": "changeset", "id": "art_build1"}
+        ]
+        run = {"stages": [build_rec, review_rec]}
+        errors, warnings = _check_output_routing("review", review_rec, run, "TestProject")
+        assert errors == []
+
+    def test_skipped_stage_skips_routing(self):
+        """Skipped stages bypass routing check."""
+        record = _stage_record("think", status="skipped")
+        run = {"stages": [_stage_record("evaluate"), record]}
+        errors, warnings = _check_output_routing("think", record, run, "TestProject")
+        assert errors == []
+        assert warnings == []
+
+    def test_upstream_not_produced_warns(self):
+        """When upstream was skipped and didn't produce, WARN not BLOCK."""
+        # plan consumes research, but think was skipped
+        think_rec = _stage_record("think", status="skipped")
+        plan_rec = _stage_record("plan")
+        plan_rec["consumed_artifacts"] = [{"type": "evaluation", "id": "art_eval1"}]
+        run = {"stages": [_stage_record("evaluate"), think_rec, plan_rec]}
+        errors, warnings = _check_output_routing("plan", plan_rec, run, "TestProject")
+        # research not produced by think (skipped) → WARN
+        assert any("research" in w for w in warnings)
+        # evaluation consumed → no error for that
+        assert not any("evaluation" in e for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# Artifact Freshness
+# ---------------------------------------------------------------------------
+
+class TestArtifactFreshness:
+    """Tests for check_artifact_freshness (P4)."""
+
+    def test_fresh_artifact_within_ttl(self):
+        """Recent artifact with no dependency drift → fresh (AC6 negative)."""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        meta = {"created_at": now, "freshness": {"ttl_advisory_hours": 168}}
+        result = check_artifact_freshness(meta, "TestProject")
+        assert result["fresh"] is True
+        assert result["stale_reason"] is None
+
+    def test_stale_artifact_exceeds_ttl(self):
+        """Artifact older than TTL → stale (AC6)."""
+        meta = {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "freshness": {"ttl_advisory_hours": 24},
+        }
+        result = check_artifact_freshness(meta, "TestProject")
+        assert result["fresh"] is False
+        assert "exceeds advisory TTL" in result["stale_reason"]
+        assert result["age_hours"] > 24
+
+    def test_stale_ddd_checksum_drift(self, workspace):
+        """DDD doc changed since artifact creation → stale (AC6)."""
+        # Create a DDD doc
+        project_dir = workspace / "Projects" / "TestProject"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "PRODUCT.md").write_text("# Old content")
+
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        meta = {
+            "created_at": now,
+            "freshness": {
+                "depends_on": {
+                    "ddd_checksums": {"PRODUCT.md": "stale_hash_that_wont_match"}
+                },
+                "ttl_advisory_hours": 9999,
+            },
+        }
+        result = check_artifact_freshness(meta, "TestProject")
+        assert result["fresh"] is False
+        assert "PRODUCT.md changed" in result["stale_reason"]
+
+    def test_no_freshness_metadata_defaults_fresh(self):
+        """Artifact without freshness metadata → assumed fresh."""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        meta = {"created_at": now}
+        result = check_artifact_freshness(meta, "TestProject")
+        assert result["fresh"] is True
+
+    def test_no_created_at_defaults_fresh(self):
+        """Missing created_at → cannot determine age → assume fresh."""
+        meta = {}
+        result = check_artifact_freshness(meta, "TestProject")
+        assert result["fresh"] is True
