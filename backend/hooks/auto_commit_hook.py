@@ -165,20 +165,14 @@ class WorkspaceAutoCommitHook:
             if commit_result.returncode == 0:
                 try:
                     from core.cultivation_dispatcher import (
-                        EventType, emit_cultivation_event,
+                        EventType, emit_cultivation_event_threadsafe,
                     )
-                    import asyncio
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        asyncio.run_coroutine_threadsafe(
-                            emit_cultivation_event(
-                                EventType.GIT_COMMIT,
-                                source="auto_commit_hook",
-                                payload={"files": changed_files, "message": message},
-                                priority=2,
-                            ),
-                            loop,
-                        )
+                    emit_cultivation_event_threadsafe(
+                        EventType.GIT_COMMIT,
+                        source="auto_commit_hook",
+                        payload={"files": changed_files, "message": message},
+                        priority=2,
+                    )
                 except Exception:
                     pass  # Non-blocking: cultivation emit failure never breaks commit
 

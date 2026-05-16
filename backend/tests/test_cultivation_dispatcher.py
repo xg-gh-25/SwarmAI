@@ -20,6 +20,7 @@ from core.cultivation_dispatcher import (
     EventDispatcher,
     EventType,
     emit_cultivation_event,
+    emit_cultivation_event_threadsafe,
     get_dispatcher,
 )
 
@@ -343,3 +344,32 @@ class TestSingletonDispatcher:
         await emit_cultivation_event(EventType.GIT_COMMIT, source="a")
         result = await emit_cultivation_event(EventType.DAILY_ACTIVITY, source="b")
         assert result is True
+
+    @pytest.mark.asyncio
+    async def test_emit_captures_loop_on_first_call(self):
+        d = get_dispatcher()
+        assert d.loop is None  # Not yet captured
+        await emit_cultivation_event(EventType.SIGNAL_DIGEST, source="test")
+        assert d.loop is not None  # Now captured
+
+    @pytest.mark.asyncio
+    async def test_threadsafe_emit_from_thread(self):
+        """emit_cultivation_event_threadsafe works from a background thread."""
+        import asyncio
+        # First, warm up the dispatcher so it has a loop reference
+        await emit_cultivation_event(EventType.PROPOSAL_DECIDED, source="warmup")
+        d = get_dispatcher()
+        initial_size = d.queue.qsize()
+
+        # Now emit from a thread (simulating to_thread context)
+        def thread_fn():
+            emit_cultivation_event_threadsafe(
+                EventType.CODE_INTEL_INDEXED,
+                source="thread_test",
+                payload={"test": True},
+            )
+
+        await asyncio.to_thread(thread_fn)
+        # Give the event loop a chance to process the scheduled coroutine
+        await asyncio.sleep(0.1)
+        assert d.queue.qsize() > initial_size

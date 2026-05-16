@@ -181,20 +181,14 @@ def detect_tech_drift(workspace_path: str, project: str = "SwarmAI") -> int:
     if proposals_count > 0:
         try:
             from core.cultivation_dispatcher import (
-                EventType, emit_cultivation_event,
+                EventType, emit_cultivation_event_threadsafe,
             )
-            import asyncio
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                asyncio.run_coroutine_threadsafe(
-                    emit_cultivation_event(
-                        EventType.CODE_INTEL_INDEXED,
-                        source="code_intel_feed",
-                        payload={"proposals": proposals_count, "project": project},
-                        priority=1,
-                    ),
-                    loop,
-                )
+            emit_cultivation_event_threadsafe(
+                EventType.CODE_INTEL_INDEXED,
+                source="code_intel_feed",
+                payload={"proposals": proposals_count, "project": project},
+                priority=1,
+            )
         except Exception:
             pass  # Non-blocking
 
