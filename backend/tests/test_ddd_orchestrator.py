@@ -64,10 +64,11 @@ class TestChannelIsolation:
                 return []
             return channel_fn
 
+        from core.cultivation_dispatcher import EventType
         orch.channels = [
-            ("ch_raises", make_channel("ch_raises", should_raise=True)),
-            ("ch_ok_1", make_channel("ch_ok_1")),
-            ("ch_ok_2", make_channel("ch_ok_2")),
+            ("ch_raises", make_channel("ch_raises", should_raise=True), {EventType.SESSION_CLOSE}),
+            ("ch_ok_1", make_channel("ch_ok_1"), {EventType.SESSION_CLOSE}),
+            ("ch_ok_2", make_channel("ch_ok_2"), {EventType.SESSION_CLOSE}),
         ]
 
         findings = orch.run(tmp_path, str(tmp_path))
@@ -88,7 +89,8 @@ class TestChannelIsolation:
         def exploding_channel(root, ws_path):
             raise ValueError("boom")
 
-        orch.channels = [("exploder", exploding_channel)]
+        from core.cultivation_dispatcher import EventType
+        orch.channels = [("exploder", exploding_channel, {EventType.SESSION_CLOSE})]
 
         findings = orch.run(tmp_path, str(tmp_path))
         # Error should be captured, not swallowed silently
@@ -109,7 +111,8 @@ class TestChannelIsolation:
         def channel_b(root, ws_path):
             return ["finding_B"]
 
-        orch.channels = [("a", channel_a), ("b", channel_b)]
+        from core.cultivation_dispatcher import EventType
+        orch.channels = [("a", channel_a, {EventType.SESSION_CLOSE}), ("b", channel_b, {EventType.SESSION_CLOSE})]
 
         findings = orch.run(tmp_path, str(tmp_path))
         assert "finding_A" in findings

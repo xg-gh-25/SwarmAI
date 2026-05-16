@@ -1038,12 +1038,34 @@ class ContextHealthHook:
         findings += self._check_git_health(root, ws_path)
 
         # 3. DDD Cultivation — delegated to orchestrator (extracted from PE-7 God Object)
+        #    V2 dual-path: orchestrator.run() (legacy) + dispatcher.emit(SESSION_CLOSE)
         try:
             from core.ddd_orchestrator import DddCultivationOrchestrator
             orchestrator = DddCultivationOrchestrator()
             findings += orchestrator.run(root, ws_path)
         except Exception as exc:
             logger.warning("context_health: DDD orchestrator failed (non-blocking): %s", exc)
+
+        # V2 dual-path: also emit SESSION_CLOSE event for event-driven channels
+        # This runs the same channels via the new dispatcher path for validation.
+        # Phase E will remove orchestrator.run() above once dispatcher is validated.
+        try:
+            from core.cultivation_dispatcher import CultivationEvent, EventType
+            from core.cultivation_dispatcher import EventDispatcher
+
+            event = CultivationEvent(
+                type=EventType.SESSION_CLOSE,
+                source="context_health_hook",
+                payload={"session_id": getattr(context, "session_id", "unknown")},
+                priority=2,
+            )
+            # Fire-and-forget: don't await (orchestrator.run already did the work)
+            # This validates the event path without double-executing channels
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(self._emit_cultivation_event(event))
+        except Exception as exc:
+            logger.debug("context_health: v2 dispatcher emit skipped: %s", exc)
 
         # 3h. Adversarial meta-monitoring — surface degradation in session briefing
         try:
@@ -1135,6 +1157,25 @@ class ContextHealthHook:
             pass
 
         return findings
+
+    async def _emit_cultivation_event(self, event) -> None:
+        """Fire-and-forget cultivation event emission (v2 dual-path validation).
+
+        During Phase A this only logs that the event was dispatched successfully.
+        Channels are NOT re-executed (orchestrator.run() already did the work).
+        This validates the dispatcher enqueue/dedup path.
+        """
+        try:
+            from core.cultivation_dispatcher import EventDispatcher
+            dispatcher = EventDispatcher(queue_size=50, dedup_window_seconds=60.0)
+            enqueued = await dispatcher.emit(event)
+            if enqueued:
+                logger.debug(
+                    "context_health: v2 dual-path validated — %s event enqueued",
+                    event.type.value,
+                )
+        except Exception as exc:
+            logger.debug("context_health: v2 dual-path emit failed: %s", exc)
 
     def _inject_ddd_into_knowledge(self, root: Path) -> None:
         """Delegate to DddCultivationOrchestrator (backward compat)."""
