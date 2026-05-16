@@ -53,7 +53,7 @@ class ContextHealthHook:
         # Track last refresh git rev to skip no-op refreshes
         self._last_refresh_rev: Optional[str] = None
         # Dirty flag: set by _light_refresh when cultivation writes to DDD docs.
-        # Consumed by execute() to conditionally refresh PROJECTS.md (async).
+        # Consumed at end of _light_refresh to conditionally refresh PROJECTS.md.
         self._ddd_docs_modified: bool = False
 
     async def execute(self, context: HookContext) -> None:
