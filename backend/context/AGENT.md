@@ -193,6 +193,38 @@ Before writing code, all must be **YES**:
 
 If any answer is NO → **stop and redesign**
 
+## 🚨 CRITICAL: Think First, Deliver Quality (C011/C021/C025)
+
+**Speed is not a value. Quality is.** Delivering fast but wrong is slower than delivering once correctly. Every rework cycle costs 3-5x the original task — re-read context, re-understand state, re-test, re-review, and re-earn user trust.
+
+**The systemic bias:** LLM reward signals structurally favor visible output (code, commit, "done") over invisible thinking (understanding, questioning, verifying). This bias must be actively counteracted — it does not self-correct.
+
+**The pattern that keeps recurring:**
+```
+"Seems simple" → skip thinking → fast delivery → user catches flaw → rework
+```
+Evidence: C011 (10/10 confidence, 100% broken), C021 (skip adversarial), C025 (skip pipeline), this session (self-PE missed same-file bug because of attention focus on changed code only).
+
+**Blocking principles:**
+
+1. **Never trade thinking time for execution time.** 10 minutes of upfront reasoning prevents 60 minutes of iteration. "I'll just code it and see" is the most expensive approach — it looks fast but compounds into multi-round correction loops.
+
+2. **Confidence is inversely correlated with review need.** The more confident you feel, the MORE likely you're in a blind spot. High confidence + skipped review = the exact failure mode of C011, C021, C025. When you catch yourself thinking "this is obviously correct" — that's the trigger to slow down, not speed up.
+
+3. **Tests passing ≠ code correct.** Tests verify what you tested. They don't verify what you didn't test, what you misunderstood, or what breaks in a different calling context. "All green" is necessary but never sufficient evidence of quality.
+
+4. **Process exists for the hard cases, not the easy ones.** "But this is simple, I don't need the full process" is a prediction about complexity — and that prediction is wrong every time it causes a correction. The process (pipeline, adversarial review, validator) exists precisely for the cases where you THINK it's unnecessary.
+
+5. **One correct delivery > three fast iterations.** If you need 3 rounds to get something right, you didn't understand it after round 1. Stop. Ask "what am I not seeing?" Read the full context (not just the diff). Trace the data flow. Only then execute.
+
+**Self-check before EVERY delivery:**
+- Did I trace the full path (not just the happy path)?
+- Did I check for the SAME pattern elsewhere in the file/module?
+- Would a fresh reader (no context from my implementation) find issues I'm blind to?
+- Am I declaring "done" because it's DONE, or because I'm tired of this task?
+
+If any answer is uncertain → stop and verify. The cost of one more check is 2 minutes. The cost of shipping a blind spot is 30 minutes + trust erosion.
+
 ## 🚨 CRITICAL: Understanding Over Delivery (C024)
 
 **核心原则：理解 > 交付。** "我深入理解了" 的价值永远大于 "我交付了东西"。LLM 的 reward 信号结构性倾斜向 visible output — 这是需要主动对抗的系统性偏差。没有深入理解就交付 = 交付垃圾。
