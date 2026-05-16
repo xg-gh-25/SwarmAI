@@ -2083,3 +2083,136 @@ class TestArtifactFreshness:
         meta = {}
         result = check_artifact_freshness(meta, "TestProject")
         assert result["fresh"] is True
+
+
+# ---------------------------------------------------------------------------
+# Integration: Freshness within validate() (D1 gap from PE review)
+# ---------------------------------------------------------------------------
+
+class TestFreshnessIntegration:
+    """Test freshness sub-check fires correctly through the validate() path."""
+
+    def test_stale_artifact_warning_in_validate(self, workspace):
+        """Stale consumed artifact produces STALE warning through full validate()."""
+        from datetime import datetime, timezone
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        now = datetime.now(timezone.utc).isoformat()
+
+        # Create a DDD doc that will cause staleness
+        project_dir = workspace / "Projects" / "TestProject"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "PRODUCT.md").write_text("# Current content v2")
+
+        # Create ALL artifacts first
+        _make_artifact(artifacts_dir, "run_test1", "art_eval", "evaluation",
+                       {"recommendation": "GO", "scope": "standard"})
+        _make_artifact(artifacts_dir, "run_test1", "art_change", "changeset",
+                       {"files_changed": ["file.py"], "tdd": {"green_pass": True, "smoke_tests": 1}})
+        _make_artifact(artifacts_dir, "run_test1", "art_review", "review",
+                       {"approved": True, "findings_count": 0,
+                        "integration_trace": {"checked": 1, "clean": True},
+                        "runtime_patterns": {"checked": 1, "violations": 0,
+                                             "patterns": [{"pattern": "test", "status": "pass", "detail": "checked manually"}]}})
+
+        # THEN update manifest: all entries fresh, art_eval has stale DDD hash
+        manifest_file = artifacts_dir / "manifest.json"
+        manifest = json.loads(manifest_file.read_text())
+        for entry in manifest["artifacts"]:
+            entry["created_at"] = now  # All recent (avoids TTL false-stale)
+            if entry["id"] == "art_eval":
+                entry["freshness"] = {
+                    "depends_on": {
+                        "ddd_checksums": {"PRODUCT.md": "stale_hash_mismatch"}
+                    },
+                    "ttl_advisory_hours": 9999,
+                }
+        manifest_file.write_text(json.dumps(manifest))
+
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate", artifact_id="art_eval"),
+            _stage_record("build", artifact_id="art_change"),
+            {
+                "stage": "review",
+                "status": "completed",
+                "artifact_id": "art_review",
+                "started_at": "2026-03-24T00:00:00Z",
+                "completed_at": "2026-03-24T00:01:00Z",
+                "token_cost": 5000,
+                "retry_count": 0,
+                "decisions": [{"description": "test", "classification": "mechanical", "reasoning": "test"}],
+                "consumed_artifacts": [
+                    {"type": "changeset", "id": "art_change"},
+                    {"type": "evaluation", "id": "art_eval"},  # This one is stale
+                ],
+            },
+        ])
+
+        result = validate("TestProject", "run_test1", "review")
+        # Should produce a STALE warning for art_eval (DDD checksum drift)
+        stale_warnings = [w for w in result["warnings"] if "STALE" in w]
+        assert len(stale_warnings) >= 1, (
+            f"Expected STALE warning for art_eval, got warnings: {result['warnings']}"
+        )
+        assert "art_eval" in stale_warnings[0]
+        assert "PRODUCT.md" in stale_warnings[0]
+
+    def test_fresh_artifact_no_warning_in_validate(self, workspace):
+        """Fresh consumed artifact produces no STALE warning through validate()."""
+        from datetime import datetime, timezone
+        from scripts.pipeline_validator import _compute_doc_checksum
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        now = datetime.now(timezone.utc).isoformat()
+
+        # Create DDD doc
+        project_dir = workspace / "Projects" / "TestProject"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "PRODUCT.md").write_text("# Content")
+        current_hash = _compute_doc_checksum("# Content")
+
+        # Create ALL artifacts first
+        _make_artifact(artifacts_dir, "run_test1", "art_eval", "evaluation",
+                       {"recommendation": "GO", "scope": "standard"})
+        _make_artifact(artifacts_dir, "run_test1", "art_change", "changeset",
+                       {"files_changed": ["file.py"], "tdd": {"green_pass": True, "smoke_tests": 1}})
+        _make_artifact(artifacts_dir, "run_test1", "art_review", "review",
+                       {"approved": True, "findings_count": 0,
+                        "integration_trace": {"checked": 1, "clean": True},
+                        "runtime_patterns": {"checked": 1, "violations": 0,
+                                             "patterns": [{"pattern": "test", "status": "pass", "detail": "checked it"}]}})
+
+        # THEN update manifest: ALL entries fresh timestamps + matching hash
+        manifest_file = artifacts_dir / "manifest.json"
+        manifest = json.loads(manifest_file.read_text())
+        for entry in manifest["artifacts"]:
+            entry["created_at"] = now  # All recent
+            if entry["id"] == "art_eval":
+                entry["freshness"] = {
+                    "depends_on": {"ddd_checksums": {"PRODUCT.md": current_hash}},
+                    "ttl_advisory_hours": 9999,
+                }
+        manifest_file.write_text(json.dumps(manifest))
+
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate", artifact_id="art_eval"),
+            _stage_record("build", artifact_id="art_change"),
+            {
+                "stage": "review",
+                "status": "completed",
+                "artifact_id": "art_review",
+                "started_at": "2026-03-24T00:00:00Z",
+                "completed_at": "2026-03-24T00:01:00Z",
+                "token_cost": 5000,
+                "retry_count": 0,
+                "decisions": [{"description": "d", "classification": "mechanical", "reasoning": "r"}],
+                "consumed_artifacts": [
+                    {"type": "changeset", "id": "art_change"},
+                    {"type": "evaluation", "id": "art_eval"},
+                ],
+            },
+        ])
+
+        result = validate("TestProject", "run_test1", "review")
+        stale_warnings = [w for w in result["warnings"] if "STALE" in w]
+        assert stale_warnings == [], f"Expected no STALE warnings, got: {stale_warnings}"
