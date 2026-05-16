@@ -158,9 +158,13 @@ class ChannelExecutor:
 
     Properties:
         - Channels execute in priority order (0 first)
-        - Per-channel timeout via asyncio.timeout
+        - Per-channel timeout via asyncio.wait_for wrapping to_thread
         - Total budget cap stops execution when exceeded
         - Exceptions captured as findings (never propagate)
+
+    Note: max_concurrent is accepted for API stability but execution is
+    currently sequential (Phase A). Phase B adds asyncio.Semaphore for
+    true bounded concurrency when event volume justifies it.
     """
 
     def __init__(
@@ -179,6 +183,11 @@ class ChannelExecutor:
 
         Returns:
             Merged findings from all channels (including timeout/error notices)
+
+        Note: asyncio.wait_for + to_thread does NOT kill the underlying thread
+        on timeout (CPython limitation). Timed-out channels continue in background
+        until they return naturally. All channel functions should respect their own
+        budget via internal timeouts (e.g., subprocess timeout=N).
         """
         # Sort: lowest priority number first (0=critical)
         tasks.sort(key=lambda t: t.priority)

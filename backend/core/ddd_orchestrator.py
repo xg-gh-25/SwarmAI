@@ -302,8 +302,14 @@ class DddCultivationOrchestrator:
                             if not ddd_path.exists():
                                 continue
                             lock_path = ddd_path.with_suffix(ddd_path.suffix + ".lock")
-                            lock_file = open(lock_path, "w")
-                            flock_exclusive(lock_file)
+                            lock_file = None
+                            try:
+                                lock_file = open(lock_path, "w")
+                                flock_exclusive(lock_file)
+                            except OSError:
+                                if lock_file:
+                                    lock_file.close()
+                                continue
                             try:
                                 ddd_content = ddd_path.read_text(encoding="utf-8")
                                 if current_block in ddd_content:
