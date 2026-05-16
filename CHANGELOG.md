@@ -5,6 +5,31 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.1] - 2026-05-17
+
+### Added
+
+- **L2 Run-Complete Gate** — `artifact_cli.py run-update --status completed` now validates the DELIVER artifact via `pipeline_validator.py`. Blocks completion if adversarial review tier is wrong (skipped/lite for full/bugfix profiles), HIGH findings are unresolved, or deliver artifact is missing/corrupt. Mechanical enforcement — agent cannot bypass.
+- **Anti-Rationalization Tables** — All 8 pipeline stage docs now have `## Common Rationalizations` sections with 38 rationalization × reality pairs sourced from real corrections (C011, C021, C025, C009, C020, C024). Passive inoculation layer.
+- **AGENT.md "Think First, Deliver Quality" Principle** — 5 blocking principles counteracting speed-over-quality bias. Core insight: confidence inversely correlates with review need.
+- **Pipeline Validator Check 12** — Anti-rationalization gate enforcement.
+- **Pipeline Validator Check 13** — Output routing + freshness checks.
+
+### Fixed
+
+- **Gate triggers wired to real detection paths** — `file_tracker` fires on DDD staleness, `noise_filter` on low-confidence proposal rejection, `trust_annotation` on semantic section skip. Previously dead code.
+- **gate_promotion_data.json auto-init** — GateManager now persists to disk on first creation (was memory-only, never written).
+- **Decision cultivation noise filter** — Pipeline-internal decisions ("→ Recommend:", "├─ Taste Gate:") filtered before DDD keyword classification. Only real signals (user overrides, architecture decisions) cultivated.
+- **Gate manager per-iteration I/O** — Moved creation outside loops in `_ch_ddd_staleness` and `_auto_apply_ddd_proposals` (was N×read+write per finding).
+- **PROJECTS.md line number refresh** — Refreshes after cultivation writes so progressive loading stays accurate.
+- **DDD maturity dirty flag** — Promotions now trigger PROJECTS.md refresh.
+
+### Changed
+
+- **Pipeline INSTRUCTIONS.md** — Step 6 COMPLETE now documents the mechanical validator gate and its blocking behavior.
+- **deliver.md** — "MECHANICALLY ENFORCED" callout added to Adversarial Review section.
+- **Output token conservation rules** added to pipeline routing docs.
+
 ## [1.14.0] - 2026-05-17
 
 ### Added
