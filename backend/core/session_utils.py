@@ -314,6 +314,10 @@ def _is_retriable_error(raw_error: str, tb_str: str = "") -> bool:
         # with --resume restores conversation and re-sends the query.
         r"decompressing data",
         r"incorrect header check",
+        # API returned valid ResultMessage but with zero content — transient
+        # failure where Bedrock/Anthropic accepted the request but returned
+        # nothing (429 converted to empty response, connection drop, etc.)
+        r"API returned empty response",
     ]
     for pattern in retriable_patterns:
         if re.search(pattern, raw_error, re.IGNORECASE):

@@ -2137,6 +2137,36 @@ class SessionUnit:
                         f"content (session_id={self.session_id})"
                     )
 
+                # ── API empty response detection (any duration) ───────
+                # Catches: Bedrock 429/503/timeout that returns a
+                # ResultMessage with output_tokens=0 and no content
+                # emitted.  The fast-empty guard above catches subprocess
+                # corruption (<2s).  This catches API-level failures that
+                # take longer (e.g. connection held open then dropped).
+                # Raising triggers the existing retry loop in send().
+                output_tok = (usage.get("output_tokens") or 0) if usage else 0
+                if (
+                    not self._content_emitted
+                    and not is_error
+                    and not self._interrupted
+                    and output_tok == 0
+                    and not subtype  # empty subtype = API didn't respond
+                ):
+                    logger.warning(
+                        "session_unit.api_empty_response session_id=%s "
+                        "duration=%.1fs output_tokens=0 subtype='%s' — "
+                        "raising for retry",
+                        self.session_id,
+                        streaming_dur or 0,
+                        subtype,
+                    )
+                    raise RuntimeError(
+                        f"API returned empty response (output_tokens=0, "
+                        f"duration={(streaming_dur or 0):.1f}s) — likely "
+                        f"transient 429/503/timeout "
+                        f"(session_id={self.session_id})"
+                    )
+
                 self._transition(SessionState.IDLE)
                 self.last_used = time.time()
                 self._retry_count = 0
