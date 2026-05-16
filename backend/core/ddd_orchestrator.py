@@ -27,6 +27,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
+from core.cultivation_dispatcher import ChannelTask, EventType
+
 logger = logging.getLogger(__name__)
 
 # Type alias for channel functions
@@ -47,27 +49,57 @@ class DddCultivationOrchestrator:
     logged and captured as a finding — other channels continue unaffected.
     """
 
+    # Per-channel budget (seconds) for event-driven execution
+    _CHANNEL_BUDGETS: dict[str, float] = {
+        "ddd_staleness": 2.0,
+        "auto_apply_proposals": 3.0,
+        "ddd_knowledge_injection": 1.0,
+        "knowledge_staleness": 1.0,
+        "entity_index_validation": 2.0,
+        "signal_ddd_bridge": 3.0,
+        "code_intel_drift": 5.0,
+    }
+
     def __init__(self) -> None:
-        self.channels: list[tuple[str, ChannelFn]] = [
-            ("ddd_staleness", self._ch_ddd_staleness),
-            ("auto_apply_proposals", self._ch_auto_apply),
-            ("ddd_knowledge_injection", self._ch_inject_knowledge),
-            ("knowledge_staleness", self._ch_knowledge_staleness),
-            ("entity_index_validation", self._ch_entity_index),
-            ("signal_ddd_bridge", self._ch_signal_bridge),
-            ("code_intel_drift", self._ch_code_intel),
+        # Each channel: (name, callable, set of subscribed EventTypes)
+        self.channels: list[tuple[str, ChannelFn, set[EventType]]] = [
+            ("ddd_staleness", self._ch_ddd_staleness, {
+                EventType.GIT_COMMIT, EventType.TIMER_30MIN,
+            }),
+            ("auto_apply_proposals", self._ch_auto_apply, {
+                EventType.PROPOSAL_DECIDED, EventType.SESSION_CLOSE,
+            }),
+            ("ddd_knowledge_injection", self._ch_inject_knowledge, {
+                EventType.SESSION_CLOSE, EventType.GIT_COMMIT,
+            }),
+            ("knowledge_staleness", self._ch_knowledge_staleness, {
+                EventType.GIT_COMMIT, EventType.TIMER_30MIN,
+            }),
+            ("entity_index_validation", self._ch_entity_index, {
+                EventType.SESSION_CLOSE,
+            }),
+            ("signal_ddd_bridge", self._ch_signal_bridge, {
+                EventType.SIGNAL_DIGEST,
+            }),
+            ("code_intel_drift", self._ch_code_intel, {
+                EventType.CODE_INTEL_INDEXED,
+            }),
         ]
 
     def run(self, root: Path, ws_path: str) -> list[str]:
-        """Execute all channels, return merged findings.
+        """Execute all channels (legacy batch mode), return merged findings.
 
         Each channel runs independently. Failures are captured as findings
         (not re-raised). Returns all findings from all successful channels
         plus error notices from failed ones.
+
+        Note: In v2, prefer get_tasks_for_event() + ChannelExecutor for
+        event-driven execution. This method is kept for backward compat
+        and manual health-check triggers.
         """
         all_findings: list[str] = []
 
-        for name, channel_fn in self.channels:
+        for name, channel_fn, _events in self.channels:
             try:
                 findings = channel_fn(root, ws_path)
                 if findings:
@@ -83,6 +115,36 @@ class DddCultivationOrchestrator:
                 )
 
         return all_findings
+
+    def get_tasks_for_event(
+        self, event_type: EventType, root: Path, ws_path: str
+    ) -> list[ChannelTask]:
+        """Return ChannelTasks for channels subscribed to this event type.
+
+        Used by EventDispatcher to build the execution batch for a specific
+        event. Only channels whose subscription set includes event_type are
+        returned.
+        """
+        tasks: list[ChannelTask] = []
+        for name, channel_fn, subscribed_events in self.channels:
+            if event_type in subscribed_events:
+                budget = self._CHANNEL_BUDGETS.get(name, 3.0)
+                # Priority mapping: signal/code_intel/auto_apply = 1, staleness/inject = 2, entity/knowledge = 3
+                if name in ("auto_apply_proposals", "signal_ddd_bridge", "code_intel_drift"):
+                    priority = 1
+                elif name in ("ddd_staleness", "ddd_knowledge_injection"):
+                    priority = 2
+                else:
+                    priority = 3
+                tasks.append(ChannelTask(
+                    name=name,
+                    priority=priority,
+                    budget=budget,
+                    fn=channel_fn,
+                    root=root,
+                    ws_path=ws_path,
+                ))
+        return tasks
 
     # ── Helper ─────────────────────────────────────────────────────────────
 
