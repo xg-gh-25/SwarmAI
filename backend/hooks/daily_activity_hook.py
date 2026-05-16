@@ -222,6 +222,18 @@ class DailyActivityExtractionHook:
                 "DailyActivity skipped for session %s — noise (no insight content)",
                 context.session_id,
             )
+            # PE-2: record gate trigger for noise_filter
+            try:
+                from core.gate_promotion import GateManager
+                from core.initialization_manager import initialization_manager
+                ws = initialization_manager.get_cached_workspace_path()
+                if ws:
+                    from pathlib import Path
+                    artifacts = Path(ws) / "Projects" / "SwarmAI" / ".artifacts"
+                    if artifacts.is_dir():
+                        GateManager(artifacts).record_trigger("noise_filter")
+            except Exception:
+                pass
             return
 
         # 3. Write to DailyActivity file

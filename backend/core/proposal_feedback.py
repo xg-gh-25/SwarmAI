@@ -251,8 +251,12 @@ class ProposalFeedbackTracker:
         created_at = proposal_data.get("created_at", "")
         if created_at:
             try:
+                from datetime import timezone
                 created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-                if datetime.now(created.tzinfo) - created > timedelta(days=7):
+                # Normalize to UTC for comparison (PE-5: avoids naive/aware mismatch)
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) - created > timedelta(days=7):
                     return RejectionReason.STALE_CONTEXT.value
             except (ValueError, TypeError):
                 pass
