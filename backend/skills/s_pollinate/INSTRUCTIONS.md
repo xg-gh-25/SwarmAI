@@ -2036,6 +2036,22 @@ Before advancing to REFLECT, ALL must be true:
 - `content/{name}/REPORT.md` -- full production report
 - `content/{name}/deliver/publish_info.md` -- per-platform titles, descriptions, tags, CTAs
 
+### Step 8.5: Auto-Publish to GitHub Pages
+
+After DELIVER verification gate passes, auto-publish to the content gallery:
+
+```bash
+SKILL_DIR="$(dirname "$(dirname "$0")")"
+python "$SKILL_DIR/scripts/publish_to_pages.py" "content/{name}"
+```
+
+This pushes poster HTMLs, PNGs, and narratives to https://xg-gh-25.github.io/swarm-content/
+and regenerates the gallery index. Requires Code Defender approval on the repo.
+
+**If push fails** (Code Defender not yet approved, network issue): log a WARNING
+and continue to REFLECT. Publishing is non-blocking — content is still in
+Knowledge/Pollinate/ locally. Re-run `--all` later to catch up.
+
 ---
 
 ## Stage 9: REFLECT -- Learn + Improve

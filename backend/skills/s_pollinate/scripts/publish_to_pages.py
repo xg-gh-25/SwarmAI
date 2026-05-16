@@ -1,0 +1,379 @@
+#!/usr/bin/env python3
+"""
+Publish Pollinate outputs to GitHub Pages (xg-gh-25/swarm-content).
+
+Usage:
+    python publish_to_pages.py [--all]           # publish all unpublished outputs
+    python publish_to_pages.py <dir>             # publish a specific Pollinate output dir
+    python publish_to_pages.py --rebuild-index   # only regenerate index.html
+
+Requires: git, gh CLI authenticated.
+Repo: https://github.com/xg-gh-25/swarm-content
+Pages URL: https://xg-gh-25.github.io/swarm-content/
+
+Architecture:
+    Knowledge/Pollinate/{date-slug}/ → swarm-content/content/{date-slug}/
+    Auto-generates index.html (gallery page) on every publish.
+"""
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+
+# --- Constants ---
+REPO_NAME = "xg-gh-25/swarm-content"
+REPO_URL = "https://github.com/xg-gh-25/swarm-content.git"
+PAGES_URL = "https://xg-gh-25.github.io/swarm-content"
+POLLINATE_DIR = Path.home() / ".swarm-ai" / "SwarmWS" / "Knowledge" / "Pollinate"
+CLONE_DIR = Path.home() / ".swarm-ai" / "swarm-content-repo"
+PUBLISHED_MANIFEST = CLONE_DIR / ".published.json"
+
+
+def run(cmd: list[str], cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess:
+    """Run a subprocess command."""
+    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=check)
+
+
+def ensure_repo() -> Path:
+    """Ensure local clone exists and is up to date."""
+    if CLONE_DIR.exists():
+        run(["git", "pull", "--rebase"], cwd=CLONE_DIR, check=False)
+    else:
+        CLONE_DIR.parent.mkdir(parents=True, exist_ok=True)
+        run(["git", "clone", REPO_URL, str(CLONE_DIR)])
+    return CLONE_DIR
+
+
+def load_manifest() -> dict:
+    """Load the published manifest tracking what's already published."""
+    if PUBLISHED_MANIFEST.exists():
+        return json.loads(PUBLISHED_MANIFEST.read_text())
+    return {"published": [], "last_updated": None}
+
+
+def save_manifest(manifest: dict):
+    """Save the published manifest."""
+    manifest["last_updated"] = datetime.now().isoformat()
+    PUBLISHED_MANIFEST.write_text(json.dumps(manifest, indent=2))
+
+
+def find_publishable_content(source_dir: Path) -> list[dict]:
+    """Find HTML and PNG files worth publishing from a Pollinate output dir."""
+    items = []
+    for f in sorted(source_dir.rglob("*")):
+        if f.suffix in (".html", ".png", ".md") and not f.name.startswith("."):
+            # Skip internal files
+            if f.name in ("REPORT.md", "publish_dashboard.html", "review_results.md"):
+                continue
+            rel = f.relative_to(source_dir)
+            items.append({
+                "source": str(f),
+                "relative": str(rel),
+                "type": f.suffix[1:],
+                "size": f.stat().st_size,
+            })
+    return items
+
+
+def copy_content(source_dir: Path, dest_dir: Path) -> int:
+    """Copy publishable content from source to destination."""
+    items = find_publishable_content(source_dir)
+    copied = 0
+    for item in items:
+        src = Path(item["source"])
+        dst = dest_dir / item["relative"]
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        copied += 1
+    return copied
+
+
+def generate_index(repo_dir: Path):
+    """Generate index.html gallery page."""
+    content_dir = repo_dir / "content"
+    if not content_dir.exists():
+        content_dir.mkdir(parents=True)
+
+    # Collect all content dirs sorted by date (newest first)
+    dirs = sorted(
+        [d for d in content_dir.iterdir() if d.is_dir()],
+        key=lambda d: d.name,
+        reverse=True,
+    )
+
+    # Build gallery cards
+    cards_html = ""
+    for d in dirs:
+        slug = d.name
+        # Find poster HTMLs in this dir
+        htmls = sorted(d.rglob("*.html"))
+        pngs = sorted(d.rglob("*.png"))
+
+        # Extract date and title from slug (YYYY-MM-DD-title-here)
+        parts = slug.split("-", 3)
+        date_str = "-".join(parts[:3]) if len(parts) >= 3 else slug
+        title = parts[3].replace("-", " ").title() if len(parts) > 3 else slug
+
+        # Build file links
+        links = ""
+        for h in htmls[:6]:  # max 6 links per card
+            rel = h.relative_to(content_dir)
+            name = h.stem.replace("-", " ").replace("_", " ")
+            links += f'        <a href="{rel}" class="file-link">{name}</a>\n'
+
+        img_preview = ""
+        if pngs:
+            first_png = pngs[0].relative_to(content_dir)
+            img_preview = f'      <img src="{first_png}" class="preview" loading="lazy" />\n'
+
+        cards_html += f"""    <article class="card">
+      <div class="card-header">
+        <span class="date">{date_str}</span>
+        <h2>{title}</h2>
+      </div>
+{img_preview}      <div class="links">
+{links}      </div>
+      <div class="meta">{len(htmls)} HTML, {len(pngs)} PNG</div>
+    </article>
+"""
+
+    index_html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SwarmAI Content Gallery</title>
+    <meta name="description" content="Auto-published content from SwarmAI's Pollinate engine. Posters, articles, and media packages.">
+    <style>
+        :root {{
+            --bg: #0a0a0f;
+            --surface: #14141f;
+            --border: #2a2a3a;
+            --text: #e4e4ef;
+            --muted: #8888aa;
+            --accent: #c8a832;
+            --accent-dim: #8a7420;
+        }}
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            padding: 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+        }}
+        header {{
+            text-align: center;
+            padding: 3rem 0 2rem;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 2rem;
+        }}
+        header h1 {{
+            font-size: 2rem;
+            font-weight: 300;
+            letter-spacing: 0.05em;
+            color: var(--accent);
+        }}
+        header p {{
+            color: var(--muted);
+            margin-top: 0.5rem;
+            font-size: 0.9rem;
+        }}
+        .gallery {{
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 1.5rem;
+        }}
+        .card {{
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 1.5rem;
+            transition: border-color 0.2s;
+        }}
+        .card:hover {{ border-color: var(--accent-dim); }}
+        .card-header {{ margin-bottom: 1rem; }}
+        .card-header .date {{
+            font-size: 0.75rem;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }}
+        .card-header h2 {{
+            font-size: 1.1rem;
+            font-weight: 500;
+            margin-top: 0.25rem;
+        }}
+        .preview {{
+            width: 100%;
+            max-height: 200px;
+            object-fit: cover;
+            border-radius: 4px;
+            margin-bottom: 1rem;
+        }}
+        .links {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-bottom: 0.75rem;
+        }}
+        .file-link {{
+            font-size: 0.8rem;
+            color: var(--accent);
+            text-decoration: none;
+            padding: 0.25rem 0.5rem;
+            background: rgba(200, 168, 50, 0.1);
+            border-radius: 4px;
+            border: 1px solid var(--accent-dim);
+        }}
+        .file-link:hover {{
+            background: rgba(200, 168, 50, 0.2);
+        }}
+        .meta {{
+            font-size: 0.75rem;
+            color: var(--muted);
+        }}
+        footer {{
+            text-align: center;
+            padding: 3rem 0 1rem;
+            color: var(--muted);
+            font-size: 0.8rem;
+            border-top: 1px solid var(--border);
+            margin-top: 2rem;
+        }}
+        footer a {{ color: var(--accent); text-decoration: none; }}
+    </style>
+</head>
+<body>
+    <header>
+        <h1>SwarmAI Content Gallery</h1>
+        <p>Auto-published by Pollinate — Message First, Format Follows</p>
+        <p style="margin-top: 0.25rem; font-size: 0.8rem;">{len(dirs)} collections • Updated {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+    </header>
+    <div class="gallery">
+{cards_html}    </div>
+    <footer>
+        <p>Generated by <a href="https://github.com/xg-gh-25/SwarmAI">SwarmAI</a> Pollinate Engine</p>
+    </footer>
+</body>
+</html>"""
+
+    (repo_dir / "index.html").write_text(index_html)
+
+
+def publish_dir(source_dir: Path, repo_dir: Path, manifest: dict) -> bool:
+    """Publish a single Pollinate output directory."""
+    slug = source_dir.name
+
+    if slug in manifest["published"]:
+        print(f"  SKIP {slug} (already published)")
+        return False
+
+    dest = repo_dir / "content" / slug
+    dest.mkdir(parents=True, exist_ok=True)
+
+    copied = copy_content(source_dir, dest)
+    if copied == 0:
+        print(f"  SKIP {slug} (no publishable content)")
+        return False
+
+    manifest["published"].append(slug)
+    print(f"  PUBLISH {slug} ({copied} files)")
+    return True
+
+
+def publish_all(repo_dir: Path):
+    """Publish all unpublished Pollinate outputs."""
+    manifest = load_manifest()
+    published_count = 0
+
+    for d in sorted(POLLINATE_DIR.iterdir()):
+        if not d.is_dir():
+            continue
+        if publish_dir(d, repo_dir, manifest):
+            published_count += 1
+
+    if published_count > 0:
+        generate_index(repo_dir)
+        save_manifest(manifest)
+        git_commit_and_push(repo_dir, f"publish: {published_count} new collections")
+    else:
+        print("Nothing new to publish.")
+
+    return published_count
+
+
+def publish_single(dir_path: Path, repo_dir: Path):
+    """Publish a specific directory."""
+    manifest = load_manifest()
+
+    if not dir_path.exists():
+        print(f"ERROR: {dir_path} does not exist")
+        sys.exit(1)
+
+    # Force re-publish (remove from manifest if exists)
+    slug = dir_path.name
+    if slug in manifest["published"]:
+        manifest["published"].remove(slug)
+
+    if publish_dir(dir_path, repo_dir, manifest):
+        generate_index(repo_dir)
+        save_manifest(manifest)
+        git_commit_and_push(repo_dir, f"publish: {slug}")
+
+
+def git_commit_and_push(repo_dir: Path, message: str):
+    """Commit and push changes."""
+    run(["git", "add", "-A"], cwd=repo_dir)
+
+    # Check if there are changes to commit
+    result = run(["git", "status", "--porcelain"], cwd=repo_dir)
+    if not result.stdout.strip():
+        print("No changes to commit.")
+        return
+
+    run(["git", "commit", "-m", message], cwd=repo_dir)
+    result = run(["git", "push", "origin", "main"], cwd=repo_dir, check=False)
+
+    if result.returncode != 0:
+        # Try pushing to master if main doesn't exist
+        run(["git", "push", "origin", "master"], cwd=repo_dir, check=False)
+
+    print(f"  PUSHED: {message}")
+    print(f"  URL: {PAGES_URL}/")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Publish Pollinate outputs to GitHub Pages")
+    parser.add_argument("dir", nargs="?", help="Specific Pollinate dir to publish")
+    parser.add_argument("--all", action="store_true", help="Publish all unpublished outputs")
+    parser.add_argument("--rebuild-index", action="store_true", help="Only regenerate index.html")
+    args = parser.parse_args()
+
+    repo_dir = ensure_repo()
+
+    if args.rebuild_index:
+        generate_index(repo_dir)
+        git_commit_and_push(repo_dir, "chore: rebuild index")
+    elif args.dir:
+        source = Path(args.dir)
+        if not source.is_absolute():
+            source = POLLINATE_DIR / args.dir
+        publish_single(source, repo_dir)
+    elif args.all:
+        count = publish_all(repo_dir)
+        print(f"\nDone. {count} collections published to {PAGES_URL}/")
+    else:
+        # Default: publish all
+        count = publish_all(repo_dir)
+        print(f"\nDone. {count} collections published to {PAGES_URL}/")
+
+
+if __name__ == "__main__":
+    main()
