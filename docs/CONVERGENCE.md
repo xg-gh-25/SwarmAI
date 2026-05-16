@@ -128,3 +128,11 @@ How much context does a cold-resumed session start with?
 ---
 
 _Last updated: 2026-05-16. Updated on meaningful milestones, not on schedule._
+
+---
+
+## Snapshot History
+
+| Date | Version | Corrections | DDD Sections | Tests | Source |
+|------|---------|-------------|-------------|-------|--------|
+| 2026-05-16 | v1.13.0 | 23 | 33 | 3906+ | auto (release) |
