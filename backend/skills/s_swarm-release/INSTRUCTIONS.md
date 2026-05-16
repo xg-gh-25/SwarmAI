@@ -231,6 +231,8 @@ Stage 4 PACKAGE: PASS (user-built)
 **🚨 PRE-CHECK: DMG must exist (unless user explicitly skipped Stage 4).**
 
 ```bash
+cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai
+NEW_VERSION=$(cat VERSION)
 DMG_PATH="desktop/src-tauri/target/release/bundle/dmg/SwarmAI_${NEW_VERSION}_aarch64.dmg"
 if [ ! -f "$DMG_PATH" ]; then
   echo "FAIL: DMG not found at $DMG_PATH"
