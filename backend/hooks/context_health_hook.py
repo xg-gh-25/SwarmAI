@@ -1037,52 +1037,13 @@ class ContextHealthHook:
         # 2. Git health
         findings += self._check_git_health(root, ws_path)
 
-        # 3. DDD checks (staleness, auto-apply, injection, knowledge, entity, signal, code_intel)
-        # PE-7: These are 7 sub-steps (3a-3g). Future cleanup: extract to _run_ddd_checks(root, ws_path)
-        findings += self._check_ddd_staleness(root, ws_path)
-
-        # 3b. Auto-apply mechanical DDD refresh proposals (non-blocking)
+        # 3. DDD Cultivation — delegated to orchestrator (extracted from PE-7 God Object)
         try:
-            self._auto_apply_ddd_proposals(root)
+            from core.ddd_orchestrator import DddCultivationOrchestrator
+            orchestrator = DddCultivationOrchestrator()
+            findings += orchestrator.run(root, ws_path)
         except Exception as exc:
-            logger.warning("context_health: DDD auto-apply failed (non-blocking): %s", exc)
-
-        # 3c. Inject Active Projects & DDD section into KNOWLEDGE.md
-        try:
-            self._inject_ddd_into_knowledge(root)
-        except Exception as exc:
-            logger.warning("context_health: DDD injection failed (non-blocking): %s", exc)
-
-        # 3d. Knowledge auto-refresh detection — flag when backend code changed
-        # but KNOWLEDGE.md architecture section hasn't been updated.
-        try:
-            findings += self._detect_knowledge_staleness(root, ws_path)
-        except Exception as exc:
-            logger.warning("context_health: knowledge staleness check failed: %s", exc)
-
-        # 3e. Entity Index stale reference validation
-        try:
-            findings += self._validate_entity_index(root)
-        except Exception as exc:
-            logger.warning("context_health: entity index validation failed: %s", exc)
-
-        # 3f. Signal → DDD bridge (Channel 4: high-relevance signals → PRODUCT.md proposals)
-        try:
-            from hooks.signal_ddd_bridge import bridge_signals_to_ddd
-            proposal_count = bridge_signals_to_ddd(ws_path)
-            if proposal_count > 0:
-                logger.info("context_health: signal bridge generated %d DDD proposals", proposal_count)
-        except Exception as exc:
-            logger.warning("context_health: signal DDD bridge failed (non-blocking): %s", exc)
-
-        # 3g. Code Intelligence → DDD bridge (Channel 7: code drift → TECH.md proposals)
-        try:
-            from core.code_intel_feed import detect_tech_drift
-            drift_count = detect_tech_drift(ws_path)
-            if drift_count > 0:
-                logger.info("context_health: code intel drift generated %d DDD proposals", drift_count)
-        except Exception as exc:
-            logger.warning("context_health: code intel feed failed (non-blocking): %s", exc)
+            logger.warning("context_health: DDD orchestrator failed (non-blocking): %s", exc)
 
         # 4. DailyActivity — today's file should exist if we're running
         da_dir = root / "Knowledge" / "DailyActivity"
