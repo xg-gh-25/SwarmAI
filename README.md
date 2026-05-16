@@ -41,7 +41,9 @@ Most agent harnesses optimize one axis (code quality, memory, or autonomy). We'r
 
 The compound test: remove any one component, and the others get measurably weaker. The trajectory is what's interesting, not the current position.
 
-**Three architectural bets worth noting:**
+**Five architectural bets worth noting:**
+- **Not one role — many roles, one knowledge base.** The same DDD docs drive code delivery (Pipeline), content production (Pollinate), and strategic decisions. Most harnesses optimize one axis. We're testing whether a single knowledge substrate can serve multiple delivery engines simultaneously.
+- **Knowledge is structured infrastructure, not RAG post-processing.** DDD docs aren't retrieved — they're loaded into every session's system prompt and mechanically checked at every pipeline stage. The agent doesn't "search for relevant context" — it always has it.
 - **Evolution is engineering, not training.** Structured logs → pattern extraction → rule promotion. No fine-tuning, no RLHF. Transparent, auditable, git-verifiable.
 - **Three-level hardening (L1 → L2 → L3).** Text rule → code gate → structural impossibility. We track where each capability sits and what it takes to promote.
 - **Temporal symmetry.** The gap between sessions isn't idle — 9 hooks fire, knowledge distills, health scores update. Session N+1 starts with everything session N learned, already processed.
