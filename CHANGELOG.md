@@ -5,6 +5,35 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.13.0] - 2026-05-16
+
+### Added
+
+- **DDD Cultivation Orchestrator** — God Object extraction: 7 channel feeds run independently with fault isolation. One channel crash never kills others. `context_health_hook.py` DDD section reduced from 45 lines to 4 lines.
+- **Proposal Quality Feedback Loop** — Per-channel precision tracking (channel_stats.json). Auto-tightens confidence threshold when precision < 40%. Channels self-correct over time.
+- **Adversarial Meta-Monitoring** — Tracks per-run adversarial findings count. Warns when 3+ consecutive runs with >50 changed lines have 0 findings (review quality degradation). Surfaces in session briefing.
+- **Pollinate Structural Validator** — 6 mechanical delivery invariant checks (platform matrix, QR code, GitHub link, 2+ variants, valid extensions, directory structure). Enforced as BLOCKING pre-delivery gate.
+- **Pollinate Poster Track** — Full BUILD track (Track B) with design system, RP-P1~P7 review patterns, and legacy term blocklist. Poster elevated from video-afterthought to first-class output.
+- **Pollinate Design System** — `brand/poster_design_system.md` with 24px base rhythm, max-widths, alignment rules for consistent visual output.
+- **Pipeline Philosophy Enforcement** — 3 mechanical gates for self-evolution principles (feedback loop, adversarial brand review, content-as-black-box convergence).
+- **Radar Periodic Sweep** — Todo sweep every 30 minutes in LifecycleManager for stale item cleanup.
+
+### Fixed
+
+- **Pipeline: adversarial review enforcement** — Validator now BLOCKS lite/skipped for full/bugfix profiles. Honor system → mechanical gate (C021 fix).
+- **Pipeline: 8 PE review findings** — All addressed in commit 673847c3 (zero tail).
+- **DDD: code_intel false positives** — Symbol extraction now filters filenames and common noise.
+- **DDD: signal bridge** — Reads `relevance_score` field from production schema (not hardcoded).
+- **Pollinate: delivery output** — Platform matrix format (publish-ready per channel), not raw file list.
+- **Pollinate: GitHub QR enforcement** — Mandatory on ALL poster outputs regardless of topic.
+- **Pollinate: spacing consistency** — Tight spacing + center-only alignment + 2-variant output rule.
+
+### Changed
+
+- **DDD Cultivation Architecture** — 3-layer: Interface (4 DDD docs) → Intelligence (health scores, maturity, code graph) → Orchestration (8 feed channels, approval gate).
+- **Feedback actuator wired** — code_intel_feed reads adjusted threshold from channel_stats.json. Feedback loop is fully closed (sensor + actuator).
+- **Meta-monitoring routed** — Adversarial degradation warning surfaces in health_findings.json → session briefing. No longer hidden in script output.
+
 ## [1.12.2] - 2026-05-14
 
 ### Added
