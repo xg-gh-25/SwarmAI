@@ -242,9 +242,9 @@ Total divider height including surrounding space: **120px** (5× base).
 | Text | `🐝 Made with SwarmAI Pollinate` | Fixed — never change |
 | Exceptions | `branding: none` in user request | Only if user explicitly opts out |
 
-### QR Code (Default On — Footer Section)
+### QR Code + GitHub Link (MANDATORY — Every Poster, No Exceptions)
 
-When the poster has a footer/CTA section, include a GitHub QR code:
+**BLOCKING RULE:** Every Pollinate poster output MUST include the SwarmAI GitHub QR code and link. This is non-negotiable regardless of poster length, direction, or format. The L7 quality gate enforces this mechanically — posters without QR fail the 8-Layer Gate and cannot reach the user.
 
 | Property | Value | Rule |
 |----------|-------|------|

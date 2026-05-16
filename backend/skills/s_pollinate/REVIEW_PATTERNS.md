@@ -66,7 +66,7 @@ L3 Spacing:     ✅ Max section gap: 48px (A), 48px (B) — within ≤72px limit
 L4 Alignment:   ✅ 100% center-aligned (both variants, 0 mixed elements)
 L5 Anti-Slop:   ✅ 0/45 violations — A: clean, B: clean
 L6 Platform:    ✅ A: 1080×3200 (XHS long), B: 1080×2800 (XHS long)
-L7 Branding:    ✅ Watermark ✓ QR ✓ Footer ✓ (both variants)
+L7 Branding:    ✅ Watermark ✓ QR (github.com/xg-gh-25/SwarmAI) ✓ GitHub URL text ✓ (MANDATORY — both variants)
 L8 Variants:    ✅ 2 directions rendered (A + B)
 
 Convergence: passed in {N} iteration(s)

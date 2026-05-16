@@ -1266,7 +1266,7 @@ with sync_playwright() as p:
 | L4 | Alignment Unity | ALL text elements use text-align: center | RP-P4 | ✅ Force center |
 | L5 | Anti-Slop Clean | Zero violations against Visual + Structural Ban Lists | RP-P5 | ⚠️ Regenerate section |
 | L6 | Platform Fit | Output width = 1080px, file < 2MB | RP-P6 | ✅ Re-render viewport |
-| L7 | Brand Present | Watermark element + QR + footer section exist in DOM | RP-P7 | ✅ Append template |
+| L7 | Brand Present (MANDATORY) | Watermark `🐝 Made with SwarmAI Pollinate` + QR code linking to `github.com/xg-gh-25/SwarmAI` + GitHub URL text — ALL must exist in DOM. **No exceptions.** | RP-P7 | ✅ Append template |
 | L8 | 2-Variant Output | ≥ 2 direction PNGs rendered | — | ✅ Render second |
 
 **Convergence Loop:**

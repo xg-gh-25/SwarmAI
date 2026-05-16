@@ -110,6 +110,16 @@ Ability:  DDD / Pipeline / Memory / Evolution / Quality (能力锚)
 | PRODUCE | Apply P6 (each piece self-sufficient) + P4 (效果 > 机制) |
 | QUALITY | Gate check: scan for anti-patterns below |
 
+## Mandatory Branding (Non-Negotiable)
+
+**Every visual output (poster, card, thumbnail) MUST include:**
+
+1. **SwarmAI GitHub link:** `github.com/xg-gh-25/SwarmAI` — visible as text
+2. **QR code:** links to `https://github.com/xg-gh-25/SwarmAI` — 120×120px, direction-aware colors
+3. **Watermark:** `🐝 Made with SwarmAI Pollinate` — bottom of poster
+
+This is enforced by L7 in the 8-Layer Gate. Missing any of these = gate FAIL = poster never reaches the user. No exceptions, no "poster is too short", no "QR doesn't fit the design."
+
 ## Anti-Pattern Checklist (Quality Gate)
 
 Before delivering any external content, verify NONE of these appear:
@@ -121,5 +131,6 @@ Before delivering any external content, verify NONE of these appear:
 - [ ] Feature pitch without thesis backing (P3)
 - [ ] Piece requires reading other pieces to make sense (P6)
 - [ ] Briefing/intro lists internal module names instead of user value (P7)
+- [ ] **Missing GitHub QR code or link in visual output (BLOCKING)**
 
 Any checkbox triggered → fix before delivery.
