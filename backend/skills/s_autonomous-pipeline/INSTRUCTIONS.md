@@ -268,7 +268,7 @@ python backend/scripts/artifact_cli.py discover --project <PROJECT> --types <com
 | plan | evaluation, research | design_doc |
 | build | design_doc | changeset |
 | review | changeset | review |
-| test | changeset, design_doc, review | test_report |
+| test | changeset, review | test_report |
 | deliver | changeset, review, test_report | delivery |
 | reflect | test_report, delivery | — |
 
