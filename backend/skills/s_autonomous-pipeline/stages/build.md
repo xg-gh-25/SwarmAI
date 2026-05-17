@@ -165,6 +165,23 @@ instead of the whole plan.
     ```
 
     Rules:
+    - **Integration import smoke (BLOCKING for handler/subprocess code):**
+      When your changeset adds a new handler/script that will run as a
+      subprocess (type="script" jobs, CLI tools), don't rely on the 30s+
+      subprocess invocation to find AttributeError. Instead, SMOKE it
+      in-process with a direct import + call:
+      ```python
+      # 1 second vs 38 seconds. Catches API mismatch instantly.
+      from jobs.handlers.code_intel_reindex import reindex_projects
+      result = reindex_projects(full=False)  # hits real GraphStore API
+      # If this crashes with AttributeError → API assumption was wrong
+      ```
+      This catches the EXACT class of bugs that unit tests with mocks
+      structurally cannot: wrong method name, wrong return type, missing
+      attribute. run_e07816af: `graph.bulk_replace()` → AttributeError,
+      `parse_result.nodes` → AttributeError. Both would have been caught
+      by a 1-second in-process import smoke. Mock-based TDD CONFIRMS your
+      assumptions; import smoke VERIFIES them against reality.
     - If the new code is behind a config flag -- test with flag=True
     - If behind a conditional (channel_context, resume, etc.) -- construct
       the triggering condition
