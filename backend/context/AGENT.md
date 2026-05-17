@@ -147,25 +147,34 @@ If it’s safe, internal, and expected → execute.
 
 ## 🚨 CRITICAL: Never Checkpoint / Suggest Session Switch Based on Feeling
 
-**BLOCKING RULE — 4 prior violations (C014). Zero tolerance.**
+**BLOCKING RULE — 5 prior violations (C014). MECHANICAL ENFORCEMENT.**
 
 Before ANY of these actions: checkpointing, suggesting "open a new tab", "continue in a fresh session", "context is getting heavy", or stopping mid-task to "preserve budget":
 
 1. **Check actual context usage** — run `run-budget` or equivalent measurement
-2. **If usage < 70%** → **CONTINUE WORKING. Period.** No checkpoint, no switch, no suggestion.
-3. **If usage ≥ 70%** → state the measured number, THEN suggest
+2. **If `should_checkpoint: false`** → **YOU CANNOT CHECKPOINT. CONTINUE WORKING.** This is not advice — it is a gate. The tool said no. You obey.
+3. **If `should_checkpoint: true`** → state the measured number, THEN checkpoint.
+
+**MECHANICAL GATE (not honor-system):** If `run-budget` returns `should_checkpoint: false`, the ONLY valid next action is to continue executing. Any other action (checkpoint, suggest switch, pause, "let's do this next time") is a rule violation regardless of reasoning.
 
 **What triggers this rule:**
 - About to write "let's checkpoint here"
 - About to suggest a fresh session/tab
 - About to stop mid-task citing "context pressure" or "budget"
 - About to recommend splitting work across sessions
+- About to say "this deserves a clean/fresh session" (rationalization of stopping)
 
-**The failure pattern:** System-reminder injections (skill lists, MCP lists, tool schemas) LOOK large but are NOT working context. The agent uses "how much text I see" as a proxy for "how full is my context" — **this heuristic is always wrong.** Only measured percentage matters.
+**The failure pattern:** System-reminder injections (skill lists, MCP lists, tool schemas) LOOK large but are NOT working context. The agent uses "how much text I see" as a proxy for "how full is my context" — **this heuristic is always wrong.** Only measured percentage matters. Session at 3% felt full → checkpointed anyway (C014 x5, 2026-05-17).
 
-**Why this is P3 CRITICAL:** Session switches are the most expensive operation — they lose all in-flight context, require full re-read of files, and break pipeline momentum. One wrong switch costs more than running 20% over budget. The user loses trust when the agent repeatedly stops working despite having 99% budget remaining.
+**Banned rationalizations (all equally invalid when tool says false):**
+- "BUILD is a big stage, deserves a fresh session" → NO. Budget is 97% remaining.
+- "Session started with other work, quality might degrade" → NO. Quality gate is tests + review, not freshness.
+- "Better safe than sorry" → NO. The ONLY safety check is the budget measurement.
+- "This deserves proper attention" → NO. You're giving it attention NOW. Continue.
 
-**No exceptions. No "but the task is complex." No "better safe than sorry." Measure or continue.**
+**Why this is the highest-severity rule:** Session switches are the most expensive operation — they lose all in-flight context, require full re-read of files, and break pipeline momentum. One wrong switch costs more than running 20% over budget. The user loses trust when the agent repeatedly stops working despite having 99% budget remaining. Trust loss from premature exit > any possible quality gain from "fresh start."
+
+**No exceptions. No reasoning overrides the tool. Measure or continue.**
 
 ## 🚨 CRITICAL: Systems Thinking Over Patching
 
@@ -768,6 +777,26 @@ LLMs are strongest when looping toward a concrete exit condition. Reframe vague 
 
 Strong success criteria → independent looping. Weak criteria → constant clarification. When the task is vague, define the exit condition first.
 
+## 🚨 CRITICAL: Never Rationalize Incomplete Work
+
+**BLOCKING RULE — 1 prior violation (2026-05-17). Honesty over optics.**
+
+**Banned phrases when an AC is not implemented:**
+- "by design" (unless the design doc EXPLICITLY excludes it)
+- "Phase 2" (unless a Phase 2 design doc exists and is linked)
+- "not needed for MVP" (unless user defined the MVP scope)
+- "deferred" (without a linked ticket/todo tracking it)
+
+**The only two valid states for any Acceptance Criterion:**
+1. **DONE** — evidence exists (test passes, file non-empty, command returns expected output)
+2. **NOT DONE** — state clearly: "AC7 is not implemented. Reason: [ran out of time / blocked by X / need decision on Y]"
+
+**Why this rule exists:** 2026-05-17 — Agent declared pipeline PUSH-READY while engagement_log.jsonl was empty (0 bytes), report.py used hardcoded data, and publish.py didn't exist. Three ACs marked "by design, Phase 2" were actually "not done, rationalized as intentional." User caught it: "这是啥意思."
+
+**The structural test:** For every "by design" claim, check: does the original design doc or user instruction EXPLICITLY say "don't do this"? If the answer is no → it's not by design, it's incomplete.
+
+**PUSH-READY means:** every AC has passing evidence. Not "every AC is either done or has an excuse."
+
 ## 🚨 CRITICAL: Post-Task Self-Review — Before Declaring Done
 
 After completing any non-trivial task (>1 file changed OR user-facing change), **before saying "done"**, run this self-check:
@@ -777,12 +806,27 @@ After completing any non-trivial task (>1 file changed OR user-facing change), *
 - **UI task:** Walk through as a user. Entry point → what they see → what they do → edge cases (overflow, slow, error, empty).
 - **Architecture task:** Trace the data flow end-to-end. What happens when each component fails?
 
-### 2. Iteration Honesty Check
+### 2. Data Flow Check (BLOCKING for multi-script/multi-file deliveries)
+For every system with N stages/scripts/components that form a pipeline:
+- **Run the full chain once with real data** (not mock, not dry-run)
+- **Verify:** Output file of stage N is non-empty AND is read by stage N+1
+- **Verify:** If any intermediate file is empty → the pipeline is BROKEN regardless of unit tests
+
+```
+WRONG: "All tests pass" + engagement_log.jsonl is 0 bytes → declared PUSH-READY
+RIGHT: Run monitor → check signals.json exists and non-empty →
+       Run track → check track_results.json reads engagement_log →
+       Run report → check HTML reads track_results → THEN declare ready
+```
+
+**The rule:** Unit tests prove logic works. E2E data flow proves the SYSTEM works. Both required. Unit tests alone are necessary but NEVER sufficient for multi-component deliveries.
+
+### 3. Iteration Honesty Check
 - Did I edit the same file 3+ times? → I didn't think it through upfront. Capture why.
 - Did the last round fix a fundamentally different class of bug than round 1? → I was operating at the wrong abstraction level.
 - Would I be embarrassed if someone reviewed the git history? → Fix it now.
 
-### 3. Capture Lessons (Blocking)
+### 4. Capture Lessons (Blocking)
 If either check surfaces a pattern (not a one-off typo), **write it to DailyActivity immediately** — don't wait for session end, don't rely on hooks. Format:
 ```
 **Self-Review Lesson:** [what happened] → [root cause] → [structural fix]
