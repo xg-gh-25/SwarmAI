@@ -59,18 +59,22 @@ def reindex_projects(full: bool = False) -> dict:
             continue
 
         if full or freshness.suggest_full_rebuild:
-            # Full reindex: re-parse entire repo
+            # Full reindex: clear + re-parse entire repo
             from core.code_intel.parser import parse_repo
-            parse_result = parse_repo(repo_root)
-            if parse_result.nodes:
-                graph.bulk_replace(parse_result.nodes, parse_result.edges)
-                graph.rebuild_fts()
+            parse_results = parse_repo(repo_root)
+            if parse_results:
+                graph.clear()
+                graph.bulk_insert(parse_results)
+                # bulk_insert already rebuilds FTS + resolves cross-file
                 if freshness.current_head:
                     graph.set_meta("last_indexed_commit", freshness.current_head)
+                # Preserve repo_root metadata
+                graph.set_meta("repo_root", str(repo_root))
+            total_nodes = sum(len(pr.nodes) for pr in parse_results)
             results.append({
                 "project": project_name,
                 "status": "full_reindex",
-                "nodes": len(parse_result.nodes),
+                "nodes": total_nodes,
             })
         else:
             # Incremental: only changed files
