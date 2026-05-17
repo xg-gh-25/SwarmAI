@@ -1,4 +1,23 @@
 # Changelog
+## [1.15.0] - 2026-05-17
+
+### Added
+- **GitHub Community Engine** — s_github_community skill: autonomous learning flywheel for GitHub AI communities
+  - 7-stage pipeline: MONITOR → MATCH → DRAFT → PUBLISH → TRACK → CULTIVATE → REPORT
+  - 3 independent matrices: Source Matrix (14 repos), Hot Topics (8 categories), Our Topics (11 positions)
+  - Admission gates: Source Matrix (4 conditions), Topic Matrix (3 conditions)
+  - Quality gate: 4 blocking conditions before any publish
+  - Job system integration (FeedType.GITHUB_COMMUNITY + adapter)
+  - 7-tab HTML weekly report with live data + clickable links
+  - 20 tests (scoring, admission gates, publish quality gate)
+- **AGENT.md** — 3 critical rules strengthened:
+  - Checkpoint: mechanical gate (tool returns false = cannot stop)
+  - No Rationalization: "by design" banned for incomplete ACs
+  - Data Flow Check: multi-script deliveries must verify E2E data flow
+
+### Fixed
+- datetime.utcnow() deprecation warnings in 4 scripts (→ datetime.now(timezone.utc))
+
 
 All notable changes to SwarmAI will be documented in this file.
 
