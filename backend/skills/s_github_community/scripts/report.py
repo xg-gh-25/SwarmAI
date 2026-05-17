@@ -24,12 +24,19 @@ def generate_report_html(
     learnings: list[dict],
     ddd_health: dict,
     actions: list[dict],
+    comments_list: list[dict] | None = None,
+    discussions_list: list[dict] | None = None,
     week_label: str = "",
 ) -> str:
-    """Generate 6-tab HTML weekly report."""
+    """Generate 7-tab HTML weekly report."""
 
     if not week_label:
         week_label = datetime.utcnow().strftime("W%W-%Y")
+
+    if comments_list is None:
+        comments_list = []
+    if discussions_list is None:
+        discussions_list = []
 
     # Source Matrix table rows
     source_rows = ""
@@ -69,6 +76,36 @@ def generate_report_html(
     actions_html = ""
     for a in actions:
         actions_html += f"""<li class="action-{a.get('priority', 'low')}">{a.get('description', '?')}</li>"""
+
+    # Comments list (with links)
+    comments_rows = ""
+    for c in comments_list:
+        repo = c.get("repo", "?")
+        issue_num = c.get("issue_number", "?")
+        topic = c.get("topic", "?")
+        replies = c.get("reply_count", 0)
+        url = c.get("comment_url") or f"https://github.com/{repo}/issues/{issue_num}"
+        title = c.get("title", f"#{issue_num}")
+        reply_badge = f'<span style="color:#38a169;font-weight:600">{replies}💬</span>' if replies > 0 else '0'
+        comments_rows += f"""<tr>
+            <td>{repo}</td>
+            <td>{title}</td>
+            <td><span class="pill">{topic}</span></td>
+            <td>{reply_badge}</td>
+            <td><a href="{url}" target="_blank">Open ↗</a></td>
+        </tr>"""
+
+    # Discussions list (with links)
+    discussions_rows = ""
+    for d in discussions_list:
+        num = d.get("number", "?")
+        title = d.get("title", "?")
+        url = f"https://github.com/xg-gh-25/swarm-content/discussions/{num}"
+        discussions_rows += f"""<tr>
+            <td>#{num}</td>
+            <td>{title}</td>
+            <td><a href="{url}" target="_blank">Open ↗</a></td>
+        </tr>"""
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -110,10 +147,11 @@ li {{ margin: 8px 0; line-height: 1.5; }}
 <div class="tabs">
     <div class="tab active" onclick="showTab(0)">Source Matrix</div>
     <div class="tab" onclick="showTab(1)">Topic Matrix</div>
-    <div class="tab" onclick="showTab(2)">Activity</div>
-    <div class="tab" onclick="showTab(3)">Learnings</div>
-    <div class="tab" onclick="showTab(4)">DDD Health</div>
-    <div class="tab" onclick="showTab(5)">Actions</div>
+    <div class="tab" onclick="showTab(2)">Comments</div>
+    <div class="tab" onclick="showTab(3)">Discussions</div>
+    <div class="tab" onclick="showTab(4)">Learnings</div>
+    <div class="tab" onclick="showTab(5)">DDD Health</div>
+    <div class="tab" onclick="showTab(6)">Actions</div>
 </div>
 
 <div class="panel active" id="panel-0">
@@ -133,21 +171,33 @@ li {{ margin: 8px 0; line-height: 1.5; }}
 </div>
 
 <div class="panel" id="panel-2">
-    <h2>This Week's Activity</h2>
+    <h2>Comments Posted ({comments_posted})</h2>
     <div style="margin: 16px 0;">
-        <div class="metric"><div class="metric-value">{comments_posted}</div><div class="metric-label">Comments Posted</div></div>
-        <div class="metric"><div class="metric-value">{replies_received}</div><div class="metric-label">Replies Received</div></div>
+        <div class="metric"><div class="metric-value">{comments_posted}</div><div class="metric-label">Posted</div></div>
+        <div class="metric"><div class="metric-value">{replies_received}</div><div class="metric-label">Replies</div></div>
         <div class="metric"><div class="metric-value">{reply_rate}</div><div class="metric-label">Reply Rate</div></div>
-        <div class="metric"><div class="metric-value">{activity.get('maintainer_replies', 0)}</div><div class="metric-label">Maintainer Replies</div></div>
+        <div class="metric"><div class="metric-value">{activity.get('maintainer_replies', 0)}</div><div class="metric-label">Maintainer</div></div>
     </div>
+    <table>
+        <tr><th>Repo</th><th>Issue</th><th>Topic</th><th>Replies</th><th>Link</th></tr>
+        {comments_rows}
+    </table>
 </div>
 
 <div class="panel" id="panel-3">
+    <h2>Our Discussions (swarm-content)</h2>
+    <table>
+        <tr><th>#</th><th>Topic</th><th>Link</th></tr>
+        {discussions_rows}
+    </table>
+</div>
+
+<div class="panel" id="panel-4">
     <h2>Key Learnings & DDD Updates</h2>
     <ul>{learnings_html if learnings_html else '<li>No new learnings this week (too early or no replies yet)</li>'}</ul>
 </div>
 
-<div class="panel" id="panel-4">
+<div class="panel" id="panel-5">
     <h2>DDD Health</h2>
     <table>
         <tr><th>Document</th><th>Last Updated</th><th>Completeness</th><th>Status</th></tr>
@@ -162,7 +212,7 @@ li {{ margin: 8px 0; line-height: 1.5; }}
     <div class="metric"><div class="metric-value">{ddd_health.get('patterns_count', 0)}</div><div class="metric-label">Patterns in IMPROVEMENT</div></div>
 </div>
 
-<div class="panel" id="panel-5">
+<div class="panel" id="panel-6">
     <h2>Follow-up Actions</h2>
     <ul>{actions_html if actions_html else '<li>No pending actions</li>'}</ul>
 </div>
@@ -326,13 +376,45 @@ def generate_weekly_report(dry_run: bool = False, output_path: str | None = None
     }
 
     actions = [
-        {"description": "Engage mattpocock/skills (Tier 2, not yet touched)", "priority": "medium"},
-        {"description": "Engage forrestchang/andrej-karpathy-skills (Tier 2, not yet touched)", "priority": "medium"},
         {"description": "Check replies after 48h (first batch posted 2026-05-17)", "priority": "high"},
         {"description": "Track inbound comments on swarm-content Discussions", "priority": "high"},
+        {"description": "Engage forrestchang/andrej-karpathy-skills — DEMOTED (no engagement surface)", "priority": "low"},
     ]
 
-    html = generate_report_html(source_matrix, topic_matrix, activity, learnings, ddd_health, actions)
+    # Build comments list from engagement log (with reply counts from track)
+    reply_map = {(s["repo"], s["issue"]): s.get("reply_count", 0) for s in track_results.get("scores", [])}
+    comments_list = []
+    for entry in engagement_log:
+        repo = entry.get("repo", "")
+        issue_num = entry.get("issue_number", 0)
+        comments_list.append({
+            "repo": repo,
+            "issue_number": issue_num,
+            "title": f"#{issue_num}",
+            "topic": entry.get("topic", "?"),
+            "comment_url": entry.get("comment_url"),
+            "reply_count": reply_map.get((repo, issue_num), 0),
+        })
+
+    # Our swarm-content Discussions
+    discussions_list = [
+        {"number": 1, "title": "Welcome — What is this gallery?"},
+        {"number": 2, "title": "没有记忆就没有理解 — Memory as Moat"},
+        {"number": 3, "title": "Coding as Black Box"},
+        {"number": 4, "title": "Content as Black Box"},
+        {"number": 5, "title": "Agent 当人来培养 — Cultivation > Config"},
+        {"number": 6, "title": "越用越聪明 — How AI compounds"},
+        {"number": 7, "title": "Six Self-X Properties"},
+        {"number": 8, "title": "DDD Cultivation"},
+        {"number": 9, "title": "Compound Agent Intelligence"},
+        {"number": 10, "title": "S×T Tension Matrix"},
+        {"number": 11, "title": "Multi-Agent is a coordination tax"},
+    ]
+
+    html = generate_report_html(
+        source_matrix, topic_matrix, activity, learnings, ddd_health, actions,
+        comments_list=comments_list, discussions_list=discussions_list,
+    )
 
     if dry_run:
         print(f"[DRY RUN] Generated report: {len(html)} bytes, 6 tabs")
