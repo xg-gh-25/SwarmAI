@@ -41,6 +41,7 @@ class FeedType(str, Enum):
     HACKER_NEWS = "hacker-news"
     TRENDING = "trending"
     GITHUB_TRENDING = "github-trending"
+    GITHUB_COMMUNITY = "github-community"
 
 
 class TierType(str, Enum):
@@ -152,14 +153,6 @@ class JobState(BaseModel):
     consecutive_failures: int = 0
     total_runs: int = 0
     total_tokens: int = 0
-
-
-class PendingEvent(BaseModel):
-    """A pending event waiting to trigger event-driven jobs."""
-    event_id: str
-    event_name: str
-    emitted_at: str  # ISO timestamp
-    data: dict[str, Any] = {}
 
 
 class SchedulerState(BaseModel):

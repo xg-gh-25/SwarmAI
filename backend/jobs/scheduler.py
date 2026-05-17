@@ -186,17 +186,29 @@ def load_user_context() -> str:
     return "\n\n".join(parts) if parts else ""
 
 
+_MAX_PENDING_EVENTS = 50  # Cap to prevent unbounded queue growth
+
+
 def emit_event(state: SchedulerState, event_name: str, data: dict | None = None) -> str:
     """Emit an event into the scheduler's pending event queue.
 
     Events are consumed by jobs with schedule "on:<event_name>".
     Returns the event_id for tracking.
 
-    Thread-safe: can be called from hooks running in background threads.
-    The event is persisted on next save_state() call.
+    NOTE: Caller must handle load_state/save_state atomicity.
+    The append itself is safe (Python GIL), but the full
+    load→emit→save cycle is NOT atomic across processes/threads.
+    Hooks serialize via BackgroundHookExecutor, so in practice
+    concurrent corruption is unlikely but not impossible.
     """
     import uuid
     event_id = str(uuid.uuid4())
+
+    # Cap queue size: evict oldest events when at capacity
+    if len(state.pending_events) >= _MAX_PENDING_EVENTS:
+        state.pending_events = state.pending_events[-(_MAX_PENDING_EVENTS // 2):]
+        logger.warning("Event queue at capacity — evicted oldest events")
+
     state.pending_events.append({
         "event_id": event_id,
         "event_name": event_name,
@@ -430,8 +442,10 @@ def run_scheduler(dry_run: bool = False, force_job: str | None = None) -> None:
                 result = execute_job(job, state, feeds, user_context, defaults, all_job_ids)
                 results.append(result)
                 logger.info(f"  {job.id}: {result.status} — {result.summary}")
-                # Consume the events that triggered this job (dedup)
-                consume_events_for_job(state, job.schedule)
+                # Only consume events on success — failed jobs should retry
+                # on next tick (circuit breaker handles repeated failures)
+                if result.status in ("success", "partial", "skipped"):
+                    consume_events_for_job(state, job.schedule)
 
     if not results:
         logger.info("No jobs due")

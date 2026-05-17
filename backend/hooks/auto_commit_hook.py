@@ -179,14 +179,14 @@ class WorkspaceAutoCommitHook:
                 # 5c. Emit git_commit event for job scheduler (code_intel reindex)
                 try:
                     from jobs.scheduler import emit_event, load_state, save_state
-                    state = load_state()
-                    emit_event(state, "git_commit", data={
+                    sched_state = load_state()
+                    emit_event(sched_state, "git_commit", data={
                         "files": changed_files,
                         "message": message,
                     })
-                    save_state(state)
-                except Exception:
-                    pass  # Non-blocking: scheduler emit failure never breaks commit
+                    save_state(sched_state)
+                except Exception as e:
+                    logger.debug("Failed to emit git_commit event: %s", e)
 
         except subprocess.TimeoutExpired:
             logger.warning(
