@@ -216,6 +216,41 @@ SYSTEM_JOBS: list[Job] = [
         },
         safety=JobSafety(max_budget_usd=0, timeout_seconds=300),
     ),
+
+    # --- Code Intelligence Reindex (event-driven) ---
+    # Triggered by git_commit events emitted from auto_commit_hook.
+    # Runs incremental reindex on projects with code_intel.db.
+    # Also triggered by code_intel_full_reindex for >50 stale files.
+    Job(
+        id="code-intel-reindex",
+        name="Code Intelligence Reindex",
+        type="script",
+        schedule="on:git_commit",
+        enabled=True,
+        category="system",
+        config={
+            "command": "python -m backend.jobs.handlers.code_intel_reindex",
+            "cwd": _SWARMAI_ROOT,
+        },
+        safety=JobSafety(max_budget_usd=0, timeout_seconds=60),
+    ),
+
+    # --- Code Intelligence Full Reindex (event-driven) ---
+    # Triggered when context_health_hook detects >50 stale files.
+    # Does a full rebuild rather than incremental.
+    Job(
+        id="code-intel-full-reindex",
+        name="Code Intelligence Full Reindex",
+        type="script",
+        schedule="on:code_intel_full_reindex",
+        enabled=True,
+        category="system",
+        config={
+            "command": "python -m backend.jobs.handlers.code_intel_reindex --full",
+            "cwd": _SWARMAI_ROOT,
+        },
+        safety=JobSafety(max_budget_usd=0, timeout_seconds=120),
+    ),
 ]
 
 SYSTEM_JOB_IDS: set[str] = {j.id for j in SYSTEM_JOBS}

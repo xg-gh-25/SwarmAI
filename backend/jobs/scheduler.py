@@ -186,8 +186,49 @@ def load_user_context() -> str:
     return "\n\n".join(parts) if parts else ""
 
 
+def emit_event(state: SchedulerState, event_name: str, data: dict | None = None) -> str:
+    """Emit an event into the scheduler's pending event queue.
+
+    Events are consumed by jobs with schedule "on:<event_name>".
+    Returns the event_id for tracking.
+
+    Thread-safe: can be called from hooks running in background threads.
+    The event is persisted on next save_state() call.
+    """
+    import uuid
+    event_id = str(uuid.uuid4())
+    state.pending_events.append({
+        "event_id": event_id,
+        "event_name": event_name,
+        "emitted_at": datetime.now(timezone.utc).isoformat(),
+        "data": data or {},
+    })
+    logger.info(f"Event emitted: {event_name} (id={event_id[:8]})")
+    return event_id
+
+
+def consume_events_for_job(state: SchedulerState, schedule: str) -> None:
+    """Remove pending events that match a job's on:<event> schedule.
+
+    Called after the job executes successfully. Removes all pending
+    events for that event type so the job doesn't re-fire next tick.
+    """
+    if not schedule.startswith("on:"):
+        return
+    event_name = schedule[3:]
+    state.pending_events = [
+        e for e in state.pending_events
+        if e.get("event_name") != event_name
+    ]
+
+
 def is_job_due(job: Job, state: SchedulerState) -> bool:
-    """Check if a job should run now based on its cron schedule.
+    """Check if a job should run now based on its schedule.
+
+    Supports three schedule types:
+    - Cron expressions (5-field): time-based evaluation
+    - "after:<job-id>": dependency-based, runs after parent completes
+    - "on:<event_name>": event-driven, runs when matching event is pending
 
     For dependency-based scheduling (after:X), runs once per dependency
     execution — regardless of whether the dependency succeeded or failed.
@@ -212,6 +253,14 @@ def is_job_due(job: Job, state: SchedulerState) -> bool:
         and job_state.last_run.date() == datetime.now(timezone.utc).date()
     ):
         return True
+
+    # Handle event-driven scheduling (on:<event_name>)
+    if job.schedule.startswith("on:"):
+        event_name = job.schedule[3:]
+        return any(
+            e.get("event_name") == event_name
+            for e in state.pending_events
+        )
 
     # Handle dependency-based scheduling (after:job-id)
     if job.schedule.startswith("after:"):
@@ -312,15 +361,19 @@ def run_scheduler(dry_run: bool = False, force_job: str | None = None) -> None:
             logger.info(f"[DRY RUN] Would execute: {job.id} ({job.type})")
         return
 
-    # Separate time-based jobs from dependency-based (after:X) jobs.
-    # Time-based jobs are evaluated and executed first, then after:X jobs
-    # are evaluated against the UPDATED state — fixing the race where
-    # dependent jobs missed their parent's execution in the same cycle.
+    # Separate jobs into three categories by schedule type.
+    # Execution order: time-based → dependency-based → event-triggered.
+    # This ensures: (1) cron jobs update state for after:X deps,
+    # (2) after:X jobs fire in same cycle as parent,
+    # (3) event-triggered jobs consume pending events last.
     time_based_jobs: list[Job] = []
     dep_based_jobs: list[Job] = []
+    event_based_jobs: list[Job] = []
     for job in jobs:
         if job.schedule.startswith("after:"):
             dep_based_jobs.append(job)
+        elif job.schedule.startswith("on:"):
+            event_based_jobs.append(job)
         else:
             time_based_jobs.append(job)
 
@@ -362,6 +415,23 @@ def run_scheduler(dry_run: bool = False, force_job: str | None = None) -> None:
             result = execute_job(job, state, feeds, user_context, defaults, all_job_ids)
             results.append(result)
             logger.info(f"  {job.id}: {result.status} — {result.summary}")
+
+    # Phase 3: Evaluate and execute event-triggered (on:<event>) jobs.
+    # These consume pending events from state.pending_events.
+    if event_based_jobs and state.pending_events:
+        due_events: list[Job] = []
+        for job in event_based_jobs:
+            if is_job_due(job, state) and check_circuit_breaker(job, state):
+                due_events.append(job)
+
+        if due_events:
+            logger.info(f"{len(due_events)} event jobs triggered: {[j.id for j in due_events]}")
+            for job in due_events:
+                result = execute_job(job, state, feeds, user_context, defaults, all_job_ids)
+                results.append(result)
+                logger.info(f"  {job.id}: {result.status} — {result.summary}")
+                # Consume the events that triggered this job (dedup)
+                consume_events_for_job(state, job.schedule)
 
     if not results:
         logger.info("No jobs due")

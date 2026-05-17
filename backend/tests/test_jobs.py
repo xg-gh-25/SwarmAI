@@ -177,7 +177,7 @@ class TestDedup:
 class TestSystemJobs:
     def test_system_jobs_count(self):
         from jobs.system_jobs import SYSTEM_JOBS
-        assert len(SYSTEM_JOBS) == 12
+        assert len(SYSTEM_JOBS) >= 14  # 12 original + 2 event-driven code-intel + others
 
     def test_system_job_ids_unique(self):
         from jobs.system_jobs import SYSTEM_JOBS

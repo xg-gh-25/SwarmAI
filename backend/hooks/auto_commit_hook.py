@@ -176,6 +176,18 @@ class WorkspaceAutoCommitHook:
                 except Exception:
                     pass  # Non-blocking: cultivation emit failure never breaks commit
 
+                # 5c. Emit git_commit event for job scheduler (code_intel reindex)
+                try:
+                    from jobs.scheduler import emit_event, load_state, save_state
+                    state = load_state()
+                    emit_event(state, "git_commit", data={
+                        "files": changed_files,
+                        "message": message,
+                    })
+                    save_state(state)
+                except Exception:
+                    pass  # Non-blocking: scheduler emit failure never breaks commit
+
         except subprocess.TimeoutExpired:
             logger.warning(
                 "Git operation timed out after %ds (likely index.lock contention) — "
