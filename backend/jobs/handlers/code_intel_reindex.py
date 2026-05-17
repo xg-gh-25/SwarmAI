@@ -116,3 +116,4 @@ if __name__ == "__main__":
     full_mode = "--full" in sys.argv
     summary = reindex_projects(full=full_mode)
     logger.info("Code intel reindex complete: %s", summary)
+# Incremental test marker
