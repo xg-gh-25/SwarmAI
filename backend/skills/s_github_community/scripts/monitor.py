@@ -124,11 +124,108 @@ def scan_repos(repos: list[str], tier: int, since_hours: int = 24) -> list[dict]
     return signals
 
 
-def monitor(dry_run: bool = False, output_path: str | None = None) -> list[dict]:
-    """Run full monitor cycle — scan all tiers, output signals."""
+# --- Hot Topics Tracking ---
+
+# GitHub Hot Topics keywords — tracks what the COMMUNITY is discussing (demand side)
+# Independent from TOPIC_KEYWORDS (our supply side)
+HOT_TOPIC_KEYWORDS = {
+    "HT-PROD-OPS": ["production", "monitoring", "observability", "debugging", "cost management", "runtime"],
+    "HT-MEMORY": ["memory", "persist", "recall", "forget", "RAG", "retrieval", "embedding"],
+    "HT-COORDINATION": ["multi-agent", "shared state", "coordination", "consensus", "handoff", "flow"],
+    "HT-SKILL-ARCH": ["skill", "hierarchy", "DRY", "governance", "discovery", "registry"],
+    "HT-AUTONOMY": ["autonomy", "pause", "resume", "approve", "human-in-loop", "guardrail"],
+    "HT-CHUNKING": ["chunking", "chunk", "split", "retrieval strategy", "vector", "graph"],
+    "HT-STREAMING": ["streaming", "SSE", "websocket", "real-time", "flow-to-user"],
+    "HT-API-COST": ["cost", "budget", "token usage", "rate limit", "model routing", "pricing"],
+}
+
+
+def fetch_hot_discussions(repos: list[str], limit: int = 10) -> list[dict]:
+    """Fetch recent discussions from repos to track Hot Topics engagement."""
+    hot_data = []
+    for repo in repos:
+        owner, name = repo.split("/")
+        query = """query($owner: String!, $name: String!) {
+          repository(owner: $owner, name: $name) {
+            discussions(first: 10, orderBy: {field: UPDATED_AT, direction: DESC}) {
+              nodes { number title body comments { totalCount } updatedAt category { name } }
+            }
+          }
+        }"""
+        cmd = [
+            "gh", "api", "graphql",
+            "-f", f"owner={owner}",
+            "-f", f"name={name}",
+            "-f", f"query={query}",
+            "--jq", ".data.repository.discussions.nodes // []",
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode == 0 and result.stdout.strip():
+                discussions = json.loads(result.stdout)
+                for d in discussions:
+                    hot_data.append({
+                        "repo": repo,
+                        "number": d.get("number"),
+                        "title": d.get("title", ""),
+                        "comments": d.get("comments", {}).get("totalCount", 0),
+                        "updated_at": d.get("updatedAt", ""),
+                        "category": d.get("category", {}).get("name", ""),
+                    })
+        except (subprocess.TimeoutExpired, json.JSONDecodeError):
+            continue
+    return hot_data
+
+
+def compute_hot_topics(discussions: list[dict]) -> list[dict]:
+    """Compute Hot Topics rankings from discussion engagement data."""
+    topic_scores: dict[str, dict[str, Any]] = {}
+
+    for ht_id, keywords in HOT_TOPIC_KEYWORDS.items():
+        topic_scores[ht_id] = {
+            "id": ht_id,
+            "total_comments": 0,
+            "thread_count": 0,
+            "top_thread": None,
+            "repos": set(),
+        }
+
+    for disc in discussions:
+        text = (disc.get("title", "") + " " + disc.get("category", "")).lower()
+        for ht_id, keywords in HOT_TOPIC_KEYWORDS.items():
+            if any(kw.lower() in text for kw in keywords):
+                topic_scores[ht_id]["total_comments"] += disc.get("comments", 0)
+                topic_scores[ht_id]["thread_count"] += 1
+                topic_scores[ht_id]["repos"].add(disc.get("repo", ""))
+                # Track top thread by comments
+                if (
+                    not topic_scores[ht_id]["top_thread"]
+                    or disc.get("comments", 0) > topic_scores[ht_id]["top_thread"].get("comments", 0)
+                ):
+                    topic_scores[ht_id]["top_thread"] = disc
+
+    # Rank by total engagement
+    ranked = sorted(
+        topic_scores.values(),
+        key=lambda t: t["total_comments"],
+        reverse=True,
+    )
+
+    # Convert sets to lists for JSON serialization
+    for t in ranked:
+        t["repos"] = list(t["repos"])
+
+    return ranked
+
+
+# --- Main Monitor ---
+
+
+def monitor(dry_run: bool = False, output_path: str | None = None) -> dict:
+    """Run full monitor cycle — scan signals + track hot topics."""
     all_signals = []
 
-    # Tier 1: full scan
+    # Tier 1: full scan (signals for engagement)
     all_signals.extend(scan_repos(TIER1_REPOS, tier=1))
 
     # Tier 2: daily scan
@@ -137,11 +234,29 @@ def monitor(dry_run: bool = False, output_path: str | None = None) -> list[dict]
     # Sort by recency
     all_signals.sort(key=lambda s: s.get("updated_at", ""), reverse=True)
 
+    # Hot Topics: scan discussions for demand-side tracking
+    discussion_repos = [r for r in TIER1_REPOS + TIER2_REPOS]
+    hot_discussions = fetch_hot_discussions(discussion_repos)
+    hot_topics = compute_hot_topics(hot_discussions)
+
+    output_data = {
+        "scanned_at": datetime.now().isoformat(),
+        "signals": all_signals,
+        "hot_topics": hot_topics,
+        "hot_discussions_scanned": len(hot_discussions),
+    }
+
     if dry_run:
         print(f"[DRY RUN] Found {len(all_signals)} signals")
         for s in all_signals[:5]:
             print(f"  {s['repo']}#{s['issue_number']}: {s['title']} ({s['matched_topics']})")
-        return all_signals
+        print(f"\n[HOT TOPICS] Ranked by community engagement:")
+        for ht in hot_topics[:5]:
+            if ht["total_comments"] > 0:
+                top = ht.get("top_thread")
+                top_info = f" (top: {top['repo']}#{top['number']} {top['comments']}💬)" if top else ""
+                print(f"  {ht['id']}: {ht['total_comments']}💬 across {ht['thread_count']} threads{top_info}")
+        return output_data
 
     # Write output
     if output_path:
@@ -149,9 +264,9 @@ def monitor(dry_run: bool = False, output_path: str | None = None) -> list[dict]
     else:
         out = Path.home() / ".swarm-ai" / "SwarmWS" / "Projects" / "GitHub_Community" / ".artifacts" / "signals.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(all_signals, indent=2, default=str))
-    print(f"Wrote {len(all_signals)} signals to {out}")
-    return all_signals
+    out.write_text(json.dumps(output_data, indent=2, default=str))
+    print(f"Wrote {len(all_signals)} signals + {len(hot_topics)} hot topics to {out}")
+    return output_data
 
 
 if __name__ == "__main__":
