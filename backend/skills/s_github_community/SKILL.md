@@ -1,5 +1,5 @@
 ---
-name: github-community
+name: github_community
 description: "Autonomous GitHub community learning engine — monitor, engage, track, cultivate, report."
 tier: lazy
 input_type: command
