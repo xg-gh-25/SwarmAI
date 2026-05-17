@@ -9,7 +9,7 @@ Usage:
 
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 DDD_DIR = Path.home() / ".swarm-ai" / "SwarmWS" / "Projects" / "GitHub_Community"
@@ -31,7 +31,7 @@ def generate_report_html(
     """Generate 7-tab HTML weekly report."""
 
     if not week_label:
-        week_label = datetime.utcnow().strftime("W%W-%Y")
+        week_label = datetime.now(timezone.utc).strftime("W%W-%Y")
 
     if comments_list is None:
         comments_list = []
@@ -142,7 +142,7 @@ li {{ margin: 8px 0; line-height: 1.5; }}
 </head>
 <body>
 <h1>GitHub Community Engine — Weekly Report</h1>
-<p class="subtitle">{week_label} | Generated {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}</p>
+<p class="subtitle">{week_label} | Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}</p>
 
 <div class="tabs">
     <div class="tab active" onclick="showTab(0)">Source Matrix</div>
@@ -422,12 +422,12 @@ def generate_weekly_report(dry_run: bool = False, output_path: str | None = None
 
     # Write report
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
-    week_label = datetime.utcnow().strftime("W%W-%Y")
+    week_label = datetime.now(timezone.utc).strftime("W%W-%Y")
 
     if output_path:
         out = Path(output_path)
     else:
-        out = REPORT_DIR / f"{datetime.utcnow().strftime('%Y-%m-%d')}-weekly.html"
+        out = REPORT_DIR / f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}-weekly.html"
 
     out.write_text(html)
     print(f"Report written to: {out}")

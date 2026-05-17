@@ -10,7 +10,7 @@ Usage:
 import json
 import subprocess
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -119,7 +119,7 @@ def scan_repos(repos: list[str], tier: int, since_hours: int = 24) -> list[dict]
                     "created_at": issue.get("created_at", ""),
                     "updated_at": issue.get("updated_at", ""),
                     "matched_topics": topics,
-                    "scanned_at": datetime.utcnow().isoformat(),
+                    "scanned_at": datetime.now(timezone.utc).isoformat(),
                 })
     return signals
 

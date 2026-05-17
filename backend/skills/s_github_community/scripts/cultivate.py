@@ -9,7 +9,7 @@ Usage:
 
 import json
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -48,7 +48,7 @@ def extract_insights(replies: list[dict]) -> list[dict]:
                 "type": "maintainer_validation",
                 "repo": reply.get("source_repo"),
                 "body_preview": reply.get("body", "")[:200],
-                "extracted_at": datetime.utcnow().isoformat(),
+                "extracted_at": datetime.now(timezone.utc).isoformat(),
                 "action": "Update TECH.md with their confirmed approach",
             })
         # Long substantive replies (>100 chars) indicate genuine engagement
@@ -57,7 +57,7 @@ def extract_insights(replies: list[dict]) -> list[dict]:
                 "type": "community_engagement",
                 "repo": reply.get("source_repo"),
                 "body_preview": reply.get("body", "")[:200],
-                "extracted_at": datetime.utcnow().isoformat(),
+                "extracted_at": datetime.now(timezone.utc).isoformat(),
                 "action": "Consider for IMPROVEMENT.md pattern",
             })
     return insights
@@ -98,7 +98,7 @@ def cultivate(dry_run: bool = False) -> dict:
     temperatures = compute_topic_temperatures(track_results)
 
     result = {
-        "cultivated_at": datetime.utcnow().isoformat(),
+        "cultivated_at": datetime.now(timezone.utc).isoformat(),
         "replies_processed": len(replies),
         "insights_extracted": len(insights),
         "topic_temperatures": temperatures,
