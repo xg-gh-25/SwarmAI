@@ -256,3 +256,43 @@ class TestQualityGate:
         # Here we just verify the threshold constant
         from skills.s_github_community.scripts.match import AUTO_PUBLISH_THRESHOLD
         assert AUTO_PUBLISH_THRESHOLD == 8
+
+
+# --- Publish Gate Tests ---
+
+
+class TestPublishGate:
+    """Quality gate enforces 4 conditions + anti-spam."""
+
+    def test_low_confidence_blocked(self):
+        from skills.s_github_community.scripts.publish import quality_gate
+        passed, reason = quality_gate(confidence=5, repo="test/repo", body="x" * 200 + "```code```\n---\n*[SwarmAI](link)*")
+        assert not passed
+        assert "confidence" in reason
+
+    def test_high_confidence_passes(self):
+        from skills.s_github_community.scripts.publish import quality_gate
+        body = "Here's our approach with 5000:1 cache ratio:\n```python\ntools = sorted(tools)\n```\nThis gives 42% improvement.\n\n---\n*[SwarmAI](https://github.com/xg-gh-25/SwarmAI)*"
+        passed, reason = quality_gate(confidence=9, repo="test/repo", body=body)
+        assert passed
+        assert reason == "passed"
+
+    def test_no_substance_blocked(self):
+        from skills.s_github_community.scripts.publish import quality_gate
+        body = "I agree with this approach, it makes a lot of sense for the use case described above and I think many people would benefit from it.\n\n---\n*[SwarmAI](link)*"
+        passed, reason = quality_gate(confidence=9, repo="test/repo", body=body)
+        assert not passed
+        assert "no_substance" in reason
+
+    def test_no_footer_blocked(self):
+        from skills.s_github_community.scripts.publish import quality_gate
+        body = "Here's our production approach with code:\n```python\ntools = sorted(tools, key=lambda t: t['name'])\n```\nThis gives us a 5000:1 cache hit ratio. The key insight is deterministic ordering."
+        passed, reason = quality_gate(confidence=9, repo="test/repo", body=body)
+        assert not passed
+        assert "no_footer" in reason
+
+    def test_too_short_blocked(self):
+        from skills.s_github_community.scripts.publish import quality_gate
+        passed, reason = quality_gate(confidence=9, repo="test/repo", body="short")
+        assert not passed
+        assert "too_short" in reason
