@@ -180,40 +180,136 @@ function showTab(idx) {{
     return html
 
 
-def generate_weekly_report(dry_run: bool = False, output_path: str | None = None) -> str:
-    """Generate the weekly report from current DDD + engagement data."""
+def _load_engagement_log() -> list[dict]:
+    """Load engagement log entries."""
+    log_path = ARTIFACTS_DIR / "engagement_log.jsonl"
+    if not log_path.exists():
+        return []
+    entries = []
+    with open(log_path) as f:
+        for line in f:
+            try:
+                entries.append(json.loads(line.strip()))
+            except json.JSONDecodeError:
+                continue
+    return entries
 
-    # Load data sources
-    source_matrix = [
-        {"name": "NousResearch/hermes-agent", "tier": 1, "stars": 154000, "last_engaged": "2026-05-17", "reply_rate": "—", "engagement_score": "—"},
-        {"name": "anthropics/skills", "tier": 1, "stars": 136000, "last_engaged": "2026-05-17", "reply_rate": "—", "engagement_score": "—"},
-        {"name": "garrytan/gstack", "tier": 1, "stars": 98000, "last_engaged": "2026-05-17", "reply_rate": "—", "engagement_score": "—"},
-        {"name": "mattpocock/skills", "tier": 2, "stars": 88000, "last_engaged": "—", "reply_rate": "—", "engagement_score": "—"},
-        {"name": "bytedance/deer-flow", "tier": 2, "stars": 68000, "last_engaged": "2026-05-17", "reply_rate": "—", "engagement_score": "—"},
-        {"name": "MemPalace/mempalace", "tier": 1, "stars": 52000, "last_engaged": "2026-05-17", "reply_rate": "—", "engagement_score": "—"},
-        {"name": "crewAIInc/crewAI", "tier": 2, "stars": 52000, "last_engaged": "2026-05-17", "reply_rate": "—", "engagement_score": "—"},
-        {"name": "volcengine/OpenViking", "tier": 2, "stars": 24000, "last_engaged": "2026-05-17", "reply_rate": "—", "engagement_score": "—"},
-        {"name": "kayba-ai/agentic-context-engine", "tier": 3, "stars": 2200, "last_engaged": "2026-05-17", "reply_rate": "—", "engagement_score": "—"},
-    ]
 
-    topic_matrix = [
-        {"id": "T-MEM", "name": "Memory is the Moat", "temperature": "🔥🔥🔥", "status": "ACTIVE", "best_repo": "MemPalace", "total_engagement": 3},
-        {"id": "T-MvS", "name": "Multi-Skill > Multi-Agent", "temperature": "🔥🔥🔥", "status": "ACTIVE", "best_repo": "crewAI", "total_engagement": 1},
-        {"id": "T-SxT", "name": "S×T Tension Matrix", "temperature": "🔥🔥🔥", "status": "CANDIDATE", "best_repo": "gstack", "total_engagement": 0},
-        {"id": "T-CUL", "name": "Cultivation > Config", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "hermes", "total_engagement": 1},
-        {"id": "T-CBB", "name": "Coding as Black Box", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "gstack", "total_engagement": 1},
-        {"id": "T-DDD", "name": "DDD Cultivation", "temperature": "🔥", "status": "ACTIVE", "best_repo": "skills", "total_engagement": 0},
-        {"id": "T-6SX", "name": "Six Self-X", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "hermes", "total_engagement": 0},
-        {"id": "T-CMP", "name": "Compound Intelligence", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "hermes", "total_engagement": 0},
-    ]
+def _load_track_results() -> dict:
+    """Load latest track results."""
+    track_path = ARTIFACTS_DIR / "track_results.json"
+    if not track_path.exists():
+        return {"threads_checked": 0, "replies_found": 0, "maintainer_replies": 0, "scores": []}
+    return json.loads(track_path.read_text())
 
-    activity = {
-        "comments_posted": 10,
-        "replies_received": 0,
-        "maintainer_replies": 0,
+
+def _load_cultivate_results() -> dict:
+    """Load latest cultivate results."""
+    cult_path = ARTIFACTS_DIR / "cultivate_results.json"
+    if not cult_path.exists():
+        return {"insights_extracted": 0, "proposed_updates": []}
+    return json.loads(cult_path.read_text())
+
+
+def _compute_live_source_matrix(engagement_log: list[dict], track_results: dict) -> list[dict]:
+    """Compute Source Matrix from live engagement data."""
+    from collections import defaultdict
+
+    # Count comments per repo
+    repo_comments = defaultdict(int)
+    repo_last_engaged = {}
+    for entry in engagement_log:
+        repo = entry.get("repo", "")
+        repo_comments[repo] += 1
+        posted = entry.get("posted_at", "")
+        if posted:
+            repo_last_engaged[repo] = posted[:10]  # YYYY-MM-DD
+
+    # Count replies per repo
+    repo_replies = defaultdict(int)
+    for score in track_results.get("scores", []):
+        if score.get("reply_count", 0) > 0:
+            repo_replies[score["repo"]] += score["reply_count"]
+
+    # Static repo info (from TECH.md — would be parsed in production)
+    REPO_INFO = {
+        "NousResearch/hermes-agent": {"tier": 1, "stars": 154000},
+        "anthropics/skills": {"tier": 1, "stars": 136000},
+        "forrestchang/andrej-karpathy-skills": {"tier": 3, "stars": 133000},
+        "anthropics/claude-code": {"tier": 2, "stars": 124000},
+        "garrytan/gstack": {"tier": 1, "stars": 98000},
+        "mattpocock/skills": {"tier": 2, "stars": 88000},
+        "bytedance/deer-flow": {"tier": 2, "stars": 68000},
+        "MemPalace/mempalace": {"tier": 1, "stars": 52000},
+        "crewAIInc/crewAI": {"tier": 2, "stars": 52000},
+        "volcengine/OpenViking": {"tier": 2, "stars": 24000},
+        "addyosmani/agent-skills": {"tier": 3, "stars": 43000},
+        "tirth8205/code-review-graph": {"tier": 3, "stars": 17000},
+        "kayba-ai/agentic-context-engine": {"tier": 3, "stars": 2200},
+        "Agents365-ai/video-podcast-maker": {"tier": 3, "stars": 1000},
     }
 
-    learnings = []  # Populated after first week of tracking
+    matrix = []
+    for repo, info in sorted(REPO_INFO.items(), key=lambda x: x[1]["stars"], reverse=True):
+        comments = repo_comments.get(repo, 0)
+        replies = repo_replies.get(repo, 0)
+        reply_rate = f"{(replies / max(comments, 1)) * 100:.0f}%" if comments > 0 else "—"
+        matrix.append({
+            "name": repo,
+            "tier": info["tier"],
+            "stars": info["stars"],
+            "last_engaged": repo_last_engaged.get(repo, "—"),
+            "reply_rate": reply_rate,
+            "engagement_score": f"{comments}c/{replies}r",
+        })
+    return matrix
+
+
+def generate_weekly_report(dry_run: bool = False, output_path: str | None = None) -> str:
+    """Generate the weekly report from LIVE engagement data (not hardcoded)."""
+
+    # Load live data
+    engagement_log = _load_engagement_log()
+    track_results = _load_track_results()
+    cultivate_results = _load_cultivate_results()
+
+    # Compute source matrix from live data
+    source_matrix = _compute_live_source_matrix(engagement_log, track_results)
+
+    # Compute topic engagement from log
+    from collections import defaultdict
+    topic_engagement = defaultdict(int)
+    for entry in engagement_log:
+        topic = entry.get("topic", "")
+        if topic:
+            topic_engagement[topic] += 1
+
+    topic_matrix = [
+        {"id": "T-MEM", "name": "Memory is the Moat", "temperature": "🔥🔥🔥", "status": "ACTIVE", "best_repo": "MemPalace", "total_engagement": topic_engagement.get("T-MEM", 0)},
+        {"id": "T-MvS", "name": "Multi-Skill > Multi-Agent", "temperature": "🔥🔥🔥", "status": "ACTIVE", "best_repo": "crewAI", "total_engagement": topic_engagement.get("T-MvS", 0)},
+        {"id": "T-CBB", "name": "Coding as Black Box", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "gstack+crewAI", "total_engagement": topic_engagement.get("T-CBB", 0)},
+        {"id": "T-CUL", "name": "Cultivation > Config", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "hermes+deer-flow", "total_engagement": topic_engagement.get("T-CUL", 0)},
+        {"id": "T-6SX", "name": "Six Self-X Properties", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "claude-code+matt", "total_engagement": topic_engagement.get("T-6SX", 0)},
+        {"id": "T-DDD", "name": "DDD Cultivation", "temperature": "🔥", "status": "ACTIVE", "best_repo": "anthropics/skills", "total_engagement": topic_engagement.get("T-DDD", 0)},
+        {"id": "T-CMP", "name": "Compound Intelligence", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "mattpocock", "total_engagement": topic_engagement.get("T-CMP", 0)},
+        {"id": "T-SOV", "name": "Memory Sovereignty", "temperature": "🔥🔥", "status": "CANDIDATE", "best_repo": "MemPalace", "total_engagement": topic_engagement.get("T-SOV", 0)},
+        {"id": "T-SxT", "name": "S×T Tension Matrix", "temperature": "🔥🔥🔥", "status": "CANDIDATE", "best_repo": "gstack", "total_engagement": topic_engagement.get("T-SxT", 0)},
+    ]
+
+    # Compute activity from live data
+    activity = {
+        "comments_posted": len(engagement_log),
+        "replies_received": track_results.get("replies_found", 0),
+        "maintainer_replies": track_results.get("maintainer_replies", 0),
+    }
+
+    # Compute learnings from cultivate results
+    learnings = []
+    for update in cultivate_results.get("proposed_updates", []):
+        learnings.append({
+            "source": update.get("action", "unknown")[:40],
+            "insight": update.get("content_preview", "")[:100] or "Pattern detected from engagement data",
+        })
 
     ddd_health = {
         "product_updated": "2026-05-17",
