@@ -47,6 +47,32 @@ RIGHT (vertical tracer bullet):
 5. Write minimal code to make that ONE test pass
 6. Commit: this is your tracer bullet — proof the path works
 
+## Step 1.5: API Existence Check (BLOCKING for handler/integration code)
+
+**Before writing any code that calls functions from another module:**
+
+For each external function call in your plan (the Change Spec):
+1. **Read** the target module file (not from memory)
+2. **Confirm** the function exists with the expected name
+3. **Verify** the return type matches your destructuring
+4. **Verify** the argument signature matches your planned call
+
+Format:
+```
+API CHECK:
+- parse_repo(repo_root) → returns list[ParseResult] (NOT single ParseResult)
+- GraphStore.bulk_insert(parse_results) → exists ✓
+- GraphStore.bulk_replace() → DOES NOT EXIST ✗ (use clear() + bulk_insert())
+```
+
+**Why this is blocking:** run_e07816af shipped with `parse_result.nodes` (AttributeError)
+and `graph.bulk_replace()` (doesn't exist) — both would have been caught by a 10-second
+Read. Unit tests mocked the boundary and passed. E2E force-run failed. The class of bugs
+where "I assumed the API shape from memory" is structurally undetectable by unit tests
+that mock the very API being called wrong.
+
+**Skip when:** all calls target code YOU wrote in the same session (you know the API).
+
 ## Step 2: Incremental RED→GREEN Loop
 
 **Follow the Change Spec order** (from PLAN artifact). Process sub-changes
@@ -58,6 +84,13 @@ in dependency order — don't skip ahead. For each sub-change's AC:
 10. **Don't anticipate future tests** — only enough code for the current test
 11. **Completeness bias:** when the complete implementation costs minutes more
     than the shortcut, do the complete thing. Cover edge cases, handle errors.
+12. **Failure-path test for every success-path test** — for each "X works when Y"
+    test, write a companion "X handles failure gracefully when Z." Specifically:
+    if a function consumes a resource (event, message, token), test what happens
+    when the consumer FAILS — is the resource preserved for retry or permanently
+    lost? This run: `consume_events_for_job` was unconditional (events lost on
+    failure) — caught by adversarial review, not TDD. The failure test would have
+    forced the design decision BEFORE implementation.
 
 ### Micro-Replan Trigger (Automatic)
 
@@ -283,6 +316,25 @@ timeout." Test the resource, not the happy path around it.
     The most fatal bug was the cheapest to catch.
 
 ## Pre-Change Checks
+
+### When splitting a variable into multiple categories
+
+**BLOCKING: grep ALL references to the original variable/path.**
+
+When you split one list/path into multiple (e.g., `jobs` → `time_based_jobs` +
+`dep_based_jobs` + `event_based_jobs`), grep for EVERY code path that consumed
+the original. Each must now handle all categories.
+
+```bash
+grep -n "due_jobs\|time_based\|dep_based" backend/jobs/scheduler.py
+```
+
+Common misses: dry-run/display paths, error handlers, logging, metrics,
+serialization. The execute path is obvious; the PARALLEL paths (display,
+dry-run, logging, status) are where splits cause drift.
+
+This run: 3-phase split was correct in execute path but dry-run only showed 2
+of 3 categories. PE review caught it.
 
 ### Before adding validation/constraints to existing functions
 
