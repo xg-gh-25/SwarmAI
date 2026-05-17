@@ -154,11 +154,20 @@ class JobState(BaseModel):
     total_tokens: int = 0
 
 
+class PendingEvent(BaseModel):
+    """A pending event waiting to trigger event-driven jobs."""
+    event_id: str
+    event_name: str
+    emitted_at: str  # ISO timestamp
+    data: dict[str, Any] = {}
+
+
 class SchedulerState(BaseModel):
     """Full scheduler runtime state, persisted to state.json."""
     jobs: dict[str, JobState] = {}
     raw_signals: list[RawSignal] = []  # buffer between fetch and digest
     dedup_cache: list[str] = []        # recent URLs for dedup (7-day window)
+    pending_events: list[dict[str, Any]] = []  # event queue for on:<event> jobs
     last_scheduler_run: datetime | None = None
     monthly_tokens_used: int = 0       # legacy, kept for backwards compat
     monthly_spend_usd: float = 0.0     # cumulative monthly spend in dollars
