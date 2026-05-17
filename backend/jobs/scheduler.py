@@ -405,6 +405,10 @@ def run_scheduler(dry_run: bool = False, force_job: str | None = None) -> None:
         for job in dep_based_jobs:
             if is_job_due(job, state) and check_circuit_breaker(job, state):
                 logger.info(f"[DRY RUN] Would execute (dep): {job.id} ({job.type})")
+        # Check event-triggered jobs for dry-run visibility
+        for job in event_based_jobs:
+            if is_job_due(job, state) and check_circuit_breaker(job, state):
+                logger.info(f"[DRY RUN] Would execute (event): {job.id} ({job.type})")
         return
 
     results = []
