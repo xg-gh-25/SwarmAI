@@ -18,6 +18,7 @@ from ..adapters.hacker_news import fetch_hacker_news
 from ..adapters.web_search import fetch_web_search
 from ..adapters.trending import fetch_trending
 from ..adapters.github_trending import fetch_github_trending
+from ..adapters.github_community import fetch_github_community
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,7 @@ ADAPTER_MAP = {
     FeedType.WEB_SEARCH: fetch_web_search,
     FeedType.TRENDING: fetch_trending,
     FeedType.GITHUB_TRENDING: fetch_github_trending,
+    FeedType.GITHUB_COMMUNITY: fetch_github_community,
 }
 
 
