@@ -75,7 +75,23 @@ Generate comment text with confidence score.
 - **Hook:** Acknowledge their specific problem (prove we read it)
 - **Body:** Our concrete experience (code, data, or architecture)
 - **Value:** Actionable suggestion they can use immediately
-- **Bridge:** Max 1 natural cross-link (only if genuinely helpful, at end)
+- **Footer (MANDATORY):** Separator `---` + italicized one-liner with SwarmAI link + relevant Discussion link
+
+**Footer format (always include):**
+```markdown
+
+---
+*<one line connecting our experience to the comment> [SwarmAI](https://github.com/xg-gh-25/SwarmAI). Discussion: [<topic>](https://github.com/xg-gh-25/swarm-content/discussions/<N>)*
+```
+
+**Footer rules:**
+- ALWAYS at the very end (never first paragraph — that's spammy)
+- One line max — the comment body IS the value, the footer is just attribution
+- Link to the most relevant swarm-content Discussion (not always the same one)
+- The text before the link should connect naturally to the comment content, e.g.:
+  - "Session lifecycle architecture from..." (after discussing session bugs)
+  - "This is how we handle memory lifecycle in..." (after discussing memory)
+  - "Built and running in production:..." (after sharing production data)
 
 **Confidence scoring (1-10):**
 - Did we actually solve this exact problem? (+3)
