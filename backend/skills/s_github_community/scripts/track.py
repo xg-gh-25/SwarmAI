@@ -10,7 +10,7 @@ Usage:
 import json
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -77,7 +77,7 @@ def track(dry_run: bool = False) -> dict:
     """Run full track cycle — check all active threads for replies."""
     threads = load_active_threads()
     results = {
-        "tracked_at": datetime.utcnow().isoformat(),
+        "tracked_at": datetime.now(timezone.utc).isoformat(),
         "threads_checked": len(threads),
         "replies_found": 0,
         "maintainer_replies": 0,
@@ -103,7 +103,7 @@ def track(dry_run: bool = False) -> dict:
                 for reply in replies:
                     reply["source_repo"] = repo
                     reply["source_issue"] = issue_number
-                    reply["tracked_at"] = datetime.utcnow().isoformat()
+                    reply["tracked_at"] = datetime.now(timezone.utc).isoformat()
                     log_reply(reply)
 
         score = score_engagement(thread, replies)
