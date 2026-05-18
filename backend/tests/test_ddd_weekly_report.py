@@ -53,7 +53,7 @@ def workspace(tmp_path):
     (proposals / "esc1_20260513.json").write_text(json.dumps(esc))
 
     # Project 2: CMHK — empty (no changelog, no escalations)
-    p2 = projects / "CMHK_BIZ"
+    p2 = projects / "CMHK_SalesIntel"
     p2.mkdir()
     (p2 / "PRODUCT.md").write_text("# CMHK Product\n")
     (p2 / "TECH.md").write_text("# CMHK Tech\n")
@@ -85,7 +85,7 @@ class TestDDDWeeklyReport:
         assert "## DDD Health Dashboard" in report
         assert "## Next Week" in report
         assert "SwarmAI" in report
-        assert "CMHK_BIZ" in report
+        assert "CMHK_SalesIntel" in report
 
     def test_report_contains_applied_entries(self, workspace):
         from jobs.handlers.ddd_weekly_report import run_ddd_weekly_report
@@ -119,7 +119,7 @@ class TestDDDWeeklyReport:
         report = Path(result["output_path"]).read_text()
         # Health table has project rows
         assert "**SwarmAI**" in report
-        assert "**CMHK_BIZ**" in report
+        assert "**CMHK_SalesIntel**" in report
         # Shows line counts
         assert "L" in report  # e.g., "5L"
 

@@ -184,8 +184,25 @@ class ProjectionLayer:
                         folder_name, exc,
                     )
 
+        # Project _shared/ utilities (used by skill generators for path resolution)
+        import sys as _sys
+        if hasattr(_sys, "_MEIPASS"):
+            shared_source = Path(_sys._MEIPASS) / "skills" / "_shared"
+        else:
+            shared_source = Path(__file__).resolve().parent.parent / "skills" / "_shared"
+        if shared_source.is_dir():
+            shared_dest = skills_dir / "_shared"
+            if shared_dest.exists():
+                shutil.rmtree(shared_dest)
+            try:
+                shutil.copytree(str(shared_source), str(shared_dest))
+            except OSError as exc:
+                logger.warning("Failed to project _shared/: %s", exc)
+
         # Clean up stale entries (both legacy symlinks and real directories)
-        self._cleanup_stale_entries(skills_dir, set(target_skills.keys()))
+        self._cleanup_stale_entries(
+            skills_dir, set(target_skills.keys()) | {"_shared"},
+        )
 
     def _cleanup_stale_entries(
         self,
