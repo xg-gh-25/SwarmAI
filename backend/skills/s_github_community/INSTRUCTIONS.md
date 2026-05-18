@@ -148,6 +148,28 @@ gh api graphql -f query='{ repository(owner:"xg-gh-25", name:"SwarmAI") {
 }}'
 ```
 
+## Stage 5b: FOLLOW-UP (triggered by TRACK results)
+
+When TRACK finds substantive replies (score >= 2), follow up within 48h.
+
+**Follow-up decision tree:**
+
+| Reply type | Action |
+|-----------|--------|
+| Maintainer validates our approach | Thank briefly, link to Discussion for deeper dive. Log to IMPROVEMENT.md as "What Worked." |
+| Maintainer disagrees or offers alternative | Engage substantively — ask clarifying questions. Update THESIS.md if it challenges our position. |
+| Community member implements our suggestion | Celebrate: "Excited to see this in action." Offer to review if relevant. |
+| Community member asks follow-up question | Answer directly. This is the highest-value engagement (proves depth). |
+| Negative/hostile | Disengage. No reply. Log to IMPROVEMENT.md "What Failed" (what triggered it). |
+
+**Follow-up format:**
+- Short (3-5 sentences max)
+- Never repeat original comment's content
+- Add NEW value (clarification, additional context, or link to related resource)
+- No footer needed on follow-ups (already established attribution)
+
+**Anti-pattern:** "Thanks for the reply!" with nothing else. If you have nothing new to add, silence is better.
+
 ## Stage 6: CULTIVATE
 
 Update DDD from engagement data. **This is the flywheel's power source.**

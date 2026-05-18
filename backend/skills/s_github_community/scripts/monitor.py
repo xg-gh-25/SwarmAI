@@ -100,10 +100,53 @@ def match_topics(title: str, body: str = "") -> list[str]:
     return matched
 
 
+def fetch_recent_discussions(repo: str, since_hours: int = 24) -> list[dict]:
+    """Fetch discussions updated in the last N hours via GraphQL."""
+    owner, name = repo.split("/", 1) if "/" in repo else ("", repo)
+    query = """query($owner: String!, $name: String!) {
+      repository(owner: $owner, name: $name) {
+        discussions(first: 15, orderBy: {field: UPDATED_AT, direction: DESC}) {
+          nodes { number title body comments { totalCount } updatedAt url
+                  author { login } }
+        }
+      }
+    }"""
+    cmd = [
+        "gh", "api", "graphql",
+        "-f", f"owner={owner}", "-f", f"name={name}",
+        "-f", f"query={query}",
+        "--jq", ".data.repository.discussions.nodes // []",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            return []
+        discussions = json.loads(result.stdout) if result.stdout.strip() else []
+        # Filter by recency
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=since_hours)
+        recent = []
+        for d in discussions:
+            updated = d.get("updatedAt", "")
+            if updated and updated > cutoff.isoformat():
+                recent.append({
+                    "number": d.get("number"),
+                    "title": d.get("title", ""),
+                    "user": d.get("author", {}).get("login", "unknown") if d.get("author") else "unknown",
+                    "comments": d.get("comments", {}).get("totalCount", 0),
+                    "updated_at": updated,
+                    "html_url": d.get("url", ""),
+                    "type": "discussion",
+                })
+        return recent
+    except (subprocess.TimeoutExpired, json.JSONDecodeError):
+        return []
+
+
 def scan_repos(repos: list[str], tier: int, since_hours: int = 24) -> list[dict]:
-    """Scan a list of repos for new signals."""
+    """Scan a list of repos for new signals (Issues + Discussions)."""
     signals = []
     for repo in repos:
+        # Scan Issues
         issues = fetch_recent_issues(repo, since_hours)
         for issue in issues:
             topics = match_topics(issue.get("title", ""))
@@ -119,6 +162,27 @@ def scan_repos(repos: list[str], tier: int, since_hours: int = 24) -> list[dict]
                     "created_at": issue.get("created_at", ""),
                     "updated_at": issue.get("updated_at", ""),
                     "matched_topics": topics,
+                    "signal_type": "issue",
+                    "scanned_at": datetime.now(timezone.utc).isoformat(),
+                })
+
+        # Scan Discussions (where most community activity happens)
+        discussions = fetch_recent_discussions(repo, since_hours)
+        for disc in discussions:
+            topics = match_topics(disc.get("title", ""))
+            if topics:
+                signals.append({
+                    "repo": repo,
+                    "tier": tier,
+                    "issue_number": disc["number"],
+                    "title": disc["title"],
+                    "url": disc.get("html_url", ""),
+                    "author": disc.get("user", "unknown"),
+                    "existing_comments": disc.get("comments", 0),
+                    "created_at": "",
+                    "updated_at": disc.get("updated_at", ""),
+                    "matched_topics": topics,
+                    "signal_type": "discussion",
                     "scanned_at": datetime.now(timezone.utc).isoformat(),
                 })
     return signals

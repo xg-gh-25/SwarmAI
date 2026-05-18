@@ -139,6 +139,64 @@ def cultivate(dry_run: bool = False) -> dict:
         cult_log = ARTIFACTS_DIR / "cultivate_results.json"
         cult_log.write_text(json.dumps(result, indent=2, default=str))
 
+        # Actually apply DDD updates (append to relevant docs with [auto] tag)
+        _apply_ddd_updates(result["proposed_updates"])
+
+    return result
+
+
+def _apply_ddd_updates(updates: list[dict]):
+    """Append auto-generated insights to DDD docs.
+
+    Each update is appended under the relevant section with an [auto] tag
+    and timestamp. Human can review/prune during weekly report review.
+    """
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    for update in updates:
+        target_file = DDD_DIR / update["target"]
+        if not target_file.exists():
+            continue
+
+        section = update["section"]
+        action = update["action"]
+        preview = update.get("content_preview", "")[:150]
+
+        # Format the auto-entry
+        entry = f"\n- [auto {today}] {action}"
+        if preview:
+            entry += f" — _{preview}_"
+
+        content = target_file.read_text()
+
+        # Find the section header and append after existing content
+        section_marker = f"## {section}"
+        if section_marker in content:
+            # Insert after the section's existing content (before next ## or EOF)
+            lines = content.split("\n")
+            insert_idx = None
+            in_section = False
+            for i, line in enumerate(lines):
+                if section_marker in line:
+                    in_section = True
+                    continue
+                if in_section and line.startswith("## "):
+                    insert_idx = i
+                    break
+            if insert_idx is None and in_section:
+                # Section goes to EOF — append at end
+                lines.append(entry)
+            elif insert_idx:
+                lines.insert(insert_idx, entry)
+            else:
+                # Section not found properly, append at end of file
+                lines.append(entry)
+            target_file.write_text("\n".join(lines))
+        else:
+            # Section doesn't exist — append at end of file
+            with open(target_file, "a") as f:
+                f.write(f"\n\n{section_marker}\n{entry}\n")
+
     return result
 
 

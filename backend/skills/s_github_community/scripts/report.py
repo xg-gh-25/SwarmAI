@@ -8,6 +8,7 @@ Usage:
 """
 
 import json
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -328,6 +329,21 @@ function showTab(idx) {{
     return html
 
 
+def _fetch_our_discussions() -> list[dict]:
+    """Fetch SwarmAI discussions dynamically via GraphQL API."""
+    query = '{ repository(owner:"xg-gh-25", name:"SwarmAI") { discussions(first:30, orderBy:{field:CREATED_AT, direction:ASC}) { nodes { number title } } } }'
+    cmd = ["gh", "api", "graphql", "-f", f"query={query}",
+           "--jq", ".data.repository.discussions.nodes // []"]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        if result.returncode == 0 and result.stdout.strip():
+            return json.loads(result.stdout)
+    except (subprocess.TimeoutExpired, json.JSONDecodeError):
+        pass
+    # Fallback: return empty (report will show "no discussions" rather than crash)
+    return []
+
+
 def _load_engagement_log() -> list[dict]:
     """Load engagement log entries."""
     log_path = ARTIFACTS_DIR / "engagement_log.jsonl"
@@ -507,20 +523,8 @@ def generate_weekly_report(dry_run: bool = False, output_path: str | None = None
             "reply_count": reply_map.get((repo, issue_num), 0),
         })
 
-    # Our SwarmAI Discussions (xg-gh-25/SwarmAI/discussions)
-    discussions_list = [
-        {"number": 2, "title": "Welcome — What is this gallery?"},
-        {"number": 3, "title": "没有记忆就没有理解 — Memory as Moat"},
-        {"number": 4, "title": "Coding as Black Box"},
-        {"number": 5, "title": "Content as Black Box"},
-        {"number": 6, "title": "Agent 当人来培养 — Cultivation > Config"},
-        {"number": 7, "title": "越用越聪明 — How AI compounds"},
-        {"number": 8, "title": "Six Self-X Properties"},
-        {"number": 9, "title": "DDD Cultivation"},
-        {"number": 10, "title": "Compound Agent Intelligence"},
-        {"number": 11, "title": "S×T Tension Matrix"},
-        {"number": 12, "title": "Multi-Agent is a coordination tax"},
-    ]
+    # Our SwarmAI Discussions — fetch dynamically via GraphQL
+    discussions_list = _fetch_our_discussions()
 
     # Load dashboard signals from signals.json
     signals_path = ARTIFACTS_DIR / "signals.json"
