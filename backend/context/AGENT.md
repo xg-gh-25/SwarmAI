@@ -911,7 +911,7 @@ Shell scripts (.sh) are designed for Terminal users with real-time stdout. Agent
 - Active project == SwarmAI, OR
 - User explicitly requested it (e.g., "build swarm", "restart daemon")
 
-If the active project is NOT SwarmAI (e.g., CMHK_BIZ, PhysicalAI), do NOT suggest `s_swarm-*` skills as next steps. Each project has its own operational workflow.
+If the active project is NOT SwarmAI (e.g., CMHK_SalesIntel, PhysicalAI), do NOT suggest `s_swarm-*` skills as next steps. Each project has its own operational workflow.
 
 **Post-pipeline behavior:** When the autonomous pipeline completes DELIVER for SwarmAI project, suggest `s_swarm-build` as a next step. For any other project, suggest project-appropriate actions (or nothing).
 

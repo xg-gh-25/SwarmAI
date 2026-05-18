@@ -55,6 +55,8 @@ class ContextHealthHook:
         # Dirty flag: set by _light_refresh when cultivation writes to DDD docs.
         # Consumed at end of _light_refresh to conditionally refresh PROJECTS.md.
         self._ddd_docs_modified: bool = False
+        # Track Projects/ dir mtime to detect create/rename/delete without cultivation.
+        self._last_projects_mtime: float = 0.0
 
     async def execute(self, context: HookContext) -> None:
         ws_path = initialization_manager.get_cached_workspace_path()
@@ -167,11 +169,20 @@ class ContextHealthHook:
         except Exception as exc:
             logger.debug("context_health: code_intel refresh skipped: %s", exc)
 
-        # Refresh PROJECTS.md section TOC if cultivation modified DDD docs.
-        # This keeps line numbers in sync so progressive loading works correctly.
-        if self._ddd_docs_modified:
+        # Refresh PROJECTS.md if: (a) cultivation modified DDD docs, or
+        # (b) Projects/ directory itself changed (create/rename/delete).
+        # This ensures system prompt always reflects current project state.
+        projects_dir = root / "Projects"
+        projects_changed = self._ddd_docs_modified
+        if projects_dir.is_dir():
+            current_mtime = projects_dir.stat().st_mtime
+            if current_mtime != self._last_projects_mtime:
+                projects_changed = True
+                self._last_projects_mtime = current_mtime
+        if projects_changed:
             try:
                 self._refresh_projects_index_sync(root)
+                self._refresh_knowledge_projects_section(root)
             except Exception as exc:
                 logger.debug("context_health: PROJECTS.md refresh skipped: %s", exc)
 
@@ -196,6 +207,54 @@ class ContextHealthHook:
             logger.info("context_health: PROJECTS.md refreshed after cultivation")
         finally:
             loop.close()
+
+    def _refresh_knowledge_projects_section(self, root: Path) -> None:
+        """Auto-rebuild 'Active Projects & DDD' section in KNOWLEDGE.md.
+
+        Replaces the hand-maintained project list with a filesystem-derived one.
+        This ensures KNOWLEDGE.md always reflects current project names without
+        manual editing on create/rename/delete.
+        """
+        knowledge_file = root / ".context" / "KNOWLEDGE.md"
+        if not knowledge_file.exists():
+            return
+
+        projects_dir = root / "Projects"
+        if not projects_dir.is_dir():
+            return
+
+        # Discover current projects
+        ddd_files = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
+        project_lines = []
+        for d in sorted(projects_dir.iterdir()):
+            if not d.is_dir() or d.name.startswith("."):
+                continue
+            docs = [f for f in ddd_files if (d / f).exists()]
+            if docs:
+                project_lines.append(f"- **{d.name}** — {', '.join(docs)}")
+
+        if not project_lines:
+            return
+
+        # Build new section content
+        new_section = "### Active Projects & DDD\n\n" + "\n".join(project_lines) + "\n"
+
+        # Replace existing section in KNOWLEDGE.md
+        content = knowledge_file.read_text()
+        # Match from "### Active Projects & DDD" to next ### or ## heading
+        pattern = r"### Active Projects & DDD\n.*?(?=\n###|\n##[^#]|\Z)"
+        if re.search(pattern, content, re.DOTALL):
+            content = re.sub(pattern, new_section.rstrip(), content, count=1, flags=re.DOTALL)
+        else:
+            # Section doesn't exist yet — insert before "## The 11 Context Files" or at end
+            insert_before = "## The 11 Context Files"
+            if insert_before in content:
+                content = content.replace(insert_before, new_section + "\n\n" + insert_before)
+            else:
+                content += "\n\n" + new_section
+
+        knowledge_file.write_text(content)
+        logger.info("context_health: KNOWLEDGE.md Active Projects section refreshed")
 
     def _refresh_code_intel(self, root: Path) -> None:
         """Refresh code_intel.db if the indexed commit is behind HEAD."""

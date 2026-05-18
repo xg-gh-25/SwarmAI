@@ -1,11 +1,11 @@
 ---
 name: project-manager
 description: >
-  Create, list, edit, and delete projects with DDD (Domain-Driven Design)
+  Create, list, edit, rename, and delete projects with DDD (Domain-Driven Design)
   structure. Each project gets 4 knowledge documents (PRODUCT.md, TECH.md,
   IMPROVEMENT.md, PROJECT.md) and an .artifacts/ directory for pipeline outputs.
-  TRIGGER: "add project", "new project", "create project", "remove project",
-  "delete project", "list projects", "my projects", "update project".
+  TRIGGER: "add project", "new project", "create project", "rename project",
+  "remove project", "delete project", "list projects", "my projects", "update project".
   DO NOT USE: for task/todo management within a project (use radar-todo).
   SIBLINGS: save-memory = permanent facts -> MEMORY.md | save-context = handoff docs.
 tier: always
@@ -187,7 +187,11 @@ ls "{codebase_path}/package.json" "{codebase_path}/pyproject.toml" "{codebase_pa
 
 Update TECH.md with detected stack info (language, framework, test runner).
 
-#### Step 5: Confirm
+#### Step 5: Trigger context refresh
+
+The `context_health_hook` will auto-detect the new project on next session start via Projects/ mtime change. No manual action needed — PROJECTS.md and KNOWLEDGE.md "Active Projects" section will auto-update.
+
+#### Step 6: Confirm
 
 > "Created project **{ProjectName}** with DDD structure. You can start by filling in PRODUCT.md (your vision and priorities) and TECH.md (your stack and codebase location). See `Projects/README.md` for a full guide."
 
@@ -228,6 +232,51 @@ User says: "Update MyApp priorities", "Add a lesson to ClientApp"
 3. Confirm what was changed
 
 DDD documents are plain markdown — any edit is valid.
+
+---
+
+### Rename a Project
+
+User says: "Rename project CMHK_BIZ to CMHK_SalesIntel", "Rename project X to Y"
+
+#### Rules:
+- **SwarmAI project CANNOT be renamed.** It's the default project.
+- **Always confirm before renaming:**
+  > "This will rename **OldName** to **NewName** across the workspace. Proceed?"
+
+#### Step 1: Validate new name
+```bash
+# Check no collision
+test -e "Projects/NewName" && echo "COLLISION" || echo "AVAILABLE"
+```
+
+#### Step 2: Rename directory
+```bash
+mv "Projects/OldName" "Projects/NewName"
+```
+
+#### Step 3: Update DDD doc titles
+Edit the `# OldName` heading in each of PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md to use the new name.
+
+#### Step 4: Update manifest
+Edit `.artifacts/manifest.json` — change `"project": "OldName"` to `"project": "NewName"`.
+
+#### Step 5: Update shared path constant (if applicable)
+If the project is referenced in `backend/skills/_shared/project_paths.py` (e.g., `CMHK_PROJECT`), update that constant. Also update `backend/core/project_registry.py` if it has a named constant for this project.
+
+#### Step 6: Trigger refresh
+```python
+# The context_health_hook will auto-detect Projects/ mtime change on next session.
+# For immediate effect in current session, manually refresh:
+from core.swarm_workspace_manager import swarm_workspace_manager
+import asyncio
+asyncio.run(swarm_workspace_manager.refresh_projects_index(str(root)))
+```
+
+#### Step 7: Confirm
+> "Renamed **OldName** → **NewName**. DDD docs updated, manifest updated. PROJECTS.md and KNOWLEDGE.md will auto-refresh on next session (or call refresh manually)."
+
+**Note:** Historical references in DailyActivity, Signals, Reports, and .artifacts/runs/ are NOT updated (they record what the name was at that time).
 
 ---
 

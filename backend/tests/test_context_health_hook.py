@@ -85,11 +85,13 @@ class TestLightRefresh:
         rev = hook._git_rev(str(workspace))
         hook._last_refresh_rev = rev  # Pretend we already refreshed
 
-        # Should skip — verify by checking no write to KNOWLEDGE.md
+        # Should skip git-gated work — verify by checking no write to KNOWLEDGE.md
+        # (except Active Projects section which is always refreshed on Projects/ mtime change)
         original = (workspace / ".context" / "KNOWLEDGE.md").read_text()
         # Stub out Bedrock-dependent methods — they hang in sandbox (no network)
         with patch.object(hook, "_sync_knowledge_library"), \
-             patch.object(hook, "_sync_transcript_index"):
+             patch.object(hook, "_sync_transcript_index"), \
+             patch.object(hook, "_refresh_knowledge_projects_section"):
             hook._light_refresh(workspace, str(workspace))
         assert (workspace / ".context" / "KNOWLEDGE.md").read_text() == original
 
@@ -634,11 +636,16 @@ class TestProjectsRefreshAfterCultivation:
             "# Lessons\n\n## What Worked\n\n- seed\n\n## What Failed\n\n- seed\n"
         )
 
+        # Pre-set Projects/ mtime so no filesystem change is detected
+        projects_dir = workspace / "Projects"
+        if projects_dir.is_dir():
+            hook._last_projects_mtime = projects_dir.stat().st_mtime
+
         with patch(
             "hooks.context_health_hook.ContextHealthHook._refresh_projects_index_sync"
         ) as mock_refresh:
             hook._light_refresh(workspace, str(workspace))
 
-            # No cultivation happened — flag should be False, no refresh
+            # No cultivation happened AND no Projects/ mtime change — no refresh
             assert hook._ddd_docs_modified is False
             mock_refresh.assert_not_called()
