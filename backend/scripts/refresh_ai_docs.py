@@ -91,7 +91,7 @@ def collect_metrics() -> dict:
     # Key engines (detect existence)
     engines = []
     engine_checks = {
-        "DDD Cultivation Engine": "backend/core/ddd_cultivation.py",
+        "DDD Cultivation Engine (event-driven v2)": "backend/core/cultivation_dispatcher.py",
         "Autonomous Pipeline (9-stage)": "backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md",
         "Pollinate Content Engine": "backend/skills/s_pollinate/INSTRUCTIONS.md",
         "GitHub Community Engine": "backend/skills/s_github_community/scripts/monitor.py",
@@ -102,6 +102,7 @@ def collect_metrics() -> dict:
         "Slack Channel Adapter": "backend/channels/adapters/slack.py",
         "Background Job System": "backend/jobs/scheduler.py",
         "Star Attribution Tracking": "backend/skills/s_github_community/scripts/track.py",
+        "AI Docs Auto-Refresh": "backend/scripts/refresh_ai_docs.py",
     }
     for name, path in engine_checks.items():
         if (REPO_ROOT / path).exists():
@@ -139,7 +140,7 @@ def _generate_capabilities_block(metrics: dict) -> str:
     """Generate the capabilities/engines replacement block."""
     lines = ["| Engine | Path | What It Does |", "|--------|------|-------------|"]
     engine_details = {
-        "DDD Cultivation Engine": ("backend/core/ddd_cultivation.py", "Event-driven domain knowledge growth from normal work — auto-promotes lessons into project DDD docs"),
+        "DDD Cultivation Engine (event-driven v2)": ("backend/core/cultivation_dispatcher.py", "Event-driven domain knowledge growth — 6 event sources, gate-based promotion, maturity tracking"),
         "Autonomous Pipeline (9-stage)": ("backend/skills/s_autonomous-pipeline/", "EVALUATE→THINK→PLAN→BUILD(TDD)→REVIEW→TEST→DELIVER→REFLECT with adversarial review gate"),
         "Pollinate Content Engine": ("backend/skills/s_pollinate/", "Message-first media delivery — transforms ideas into posters, videos, narratives, README"),
         "GitHub Community Engine": ("backend/skills/s_github_community/", "Autonomous learning flywheel — monitor, match, draft, track, cultivate, report across GitHub"),
@@ -150,6 +151,7 @@ def _generate_capabilities_block(metrics: dict) -> str:
         "Slack Channel Adapter": ("backend/channels/adapters/slack.py", "24/7 Socket Mode bot — responds as XG's AI assistant to allowlisted users"),
         "Background Job System": ("backend/jobs/", "Cron + event-triggered headless Claude CLI tasks — signal pipeline, monitoring, reports"),
         "Star Attribution Tracking": ("backend/skills/s_github_community/scripts/track.py", "Tracks stargazers with timestamps, attributes to engagement activity via shared discussions"),
+        "AI Docs Auto-Refresh": ("backend/scripts/refresh_ai_docs.py", "Self-maintaining documentation — scans codebase metrics and capabilities daily, updates AI_CONTEXT.md + AGENTS.md"),
     }
     for engine in metrics.get("engines", []):
         path, desc = engine_details.get(engine, ("", ""))

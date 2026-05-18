@@ -60,10 +60,10 @@ The codebase is both the product AND the evidence. The interesting parts are not
 <!-- METRICS_START -->
 | Metric | Value | How to Verify |
 |--------|-------|---------------|
-| Total commits | 1533+ | `git log --oneline | wc -l` |
+| Total commits | 1534+ | `git log --oneline | wc -l` |
 | Duration | ~85 days | First commit to latest (1 human contributor) |
 | Backend core modules | 109 Python files, 49897 LOC | `find backend/core -name "*.py" | wc -l` |
-| Total backend LOC | 223569 | `find backend -name "*.py" | xargs wc -l | tail -1` |
+| Total backend LOC | 223571 | `find backend -name "*.py" | xargs wc -l | tail -1` |
 | Test files | 220 | `find backend/tests -name "*.py" | wc -l` |
 | Skills (agent capabilities) | 83 | `ls -d backend/skills/s_* | wc -l` |
 | Post-session hooks | 13 | `ls backend/hooks/*.py | wc -l` |
@@ -94,7 +94,7 @@ Most agent harnesses optimize for **one session**. SwarmAI optimizes for **compo
 <!-- CAPABILITIES_START -->
 | Engine | Path | What It Does |
 |--------|------|-------------|
-| DDD Cultivation Engine | `backend/core/ddd_cultivation.py` | Event-driven domain knowledge growth from normal work — auto-promotes lessons into project DDD docs |
+| DDD Cultivation Engine (event-driven v2) | `backend/core/cultivation_dispatcher.py` | Event-driven domain knowledge growth — 6 event sources, gate-based promotion, maturity tracking |
 | Autonomous Pipeline (9-stage) | `backend/skills/s_autonomous-pipeline/` | EVALUATE→THINK→PLAN→BUILD(TDD)→REVIEW→TEST→DELIVER→REFLECT with adversarial review gate |
 | Pollinate Content Engine | `backend/skills/s_pollinate/` | Message-first media delivery — transforms ideas into posters, videos, narratives, README |
 | GitHub Community Engine | `backend/skills/s_github_community/` | Autonomous learning flywheel — monitor, match, draft, track, cultivate, report across GitHub |
@@ -105,6 +105,7 @@ Most agent harnesses optimize for **one session**. SwarmAI optimizes for **compo
 | Slack Channel Adapter | `backend/channels/adapters/slack.py` | 24/7 Socket Mode bot — responds as XG's AI assistant to allowlisted users |
 | Background Job System | `backend/jobs/` | Cron + event-triggered headless Claude CLI tasks — signal pipeline, monitoring, reports |
 | Star Attribution Tracking | `backend/skills/s_github_community/scripts/track.py` | Tracks stargazers with timestamps, attributes to engagement activity via shared discussions |
+| AI Docs Auto-Refresh | `backend/scripts/refresh_ai_docs.py` | Self-maintaining documentation — scans codebase metrics and capabilities daily, updates AI_CONTEXT.md + AGENTS.md |
 <!-- CAPABILITIES_END -->
 
 ## Evaluation Framework (if you want to do this properly)
