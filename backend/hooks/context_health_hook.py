@@ -223,15 +223,27 @@ class ContextHealthHook:
         if not projects_dir.is_dir():
             return
 
-        # Discover current projects
+        # Discover current projects with freshness info
         ddd_files = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
         project_lines = []
+        now = time.time()
         for d in sorted(projects_dir.iterdir()):
             if not d.is_dir() or d.name.startswith("."):
                 continue
             docs = [f for f in ddd_files if (d / f).exists()]
             if docs:
-                project_lines.append(f"- **{d.name}** — {', '.join(docs)}")
+                # Compute freshness from most recent DDD doc mtime
+                mtimes = [(d / f).stat().st_mtime for f in docs if (d / f).exists()]
+                days_ago = int((now - max(mtimes)) / 86400) if mtimes else 999
+                if days_ago == 0:
+                    freshness = "today"
+                elif days_ago <= 7:
+                    freshness = f"{days_ago}d ago"
+                else:
+                    freshness = f"**{days_ago}d stale**"
+                project_lines.append(
+                    f"- **{d.name}** — {', '.join(docs)} (updated {freshness})"
+                )
 
         if not project_lines:
             return
