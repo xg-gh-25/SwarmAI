@@ -513,6 +513,15 @@ with open('$DESKTOP_DIR/src-tauri/tauri.conf.json') as f:
     # Binary staleness
     _check_daemon_version 2>/dev/null || true
 
+    # AI docs freshness
+    _log "Refreshing AI_CONTEXT.md + AGENTS.md..."
+    cd "$PROJECT_ROOT"
+    if python backend/scripts/refresh_ai_docs.py 2>&1 | grep -q "Updated:"; then
+        _ok "AI docs refreshed (commit the changes before release)"
+    else
+        _ok "AI docs already up to date"
+    fi
+
     # Tests
     _log "Running backend tests..."
     cd "$BACKEND_DIR"
