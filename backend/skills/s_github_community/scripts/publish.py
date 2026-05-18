@@ -71,7 +71,7 @@ def quality_gate(confidence: int, repo: str, body: str) -> tuple[bool, str]:
         return False, "no_substance: missing code snippet or measured data"
 
     # Must have footer link
-    if "SwarmAI" not in body and "swarm-content" not in body:
+    if "SwarmAI" not in body:
         return False, "no_footer: missing SwarmAI attribution link"
 
     return True, "passed"
