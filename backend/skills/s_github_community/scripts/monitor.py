@@ -218,11 +218,105 @@ def compute_hot_topics(discussions: list[dict]) -> list[dict]:
     return ranked
 
 
+# --- Dashboard Feed ---
+
+
+def fetch_dashboard_feed() -> list[dict]:
+    """Fetch GitHub dashboard feed (received_events) for dynamic signal discovery.
+
+    The dashboard feed surfaces activity in repos you star/watch/follow —
+    a natural high-relevance signal source that complements the static Source Matrix.
+
+    Filters for engagement-worthy events:
+    - IssuesEvent (opened) — new issues to jump on (first-responder bonus)
+    - IssueCommentEvent — active discussions happening now
+    - DiscussionEvent — new discussions opened
+    - DiscussionCommentEvent — active discussion threads
+    """
+    all_events = []
+    for page in range(1, 4):  # 3 pages × 30 = up to 90 events
+        cmd = [
+            "gh", "api", f"/users/xg-gh-25/received_events?per_page=30&page={page}",
+            "--jq", '[.[] | select('
+            '.type == "IssuesEvent" or '
+            '.type == "IssueCommentEvent" or '
+            '.type == "DiscussionEvent" or '
+            '.type == "DiscussionCommentEvent"'
+            ') | {'
+            'type: .type, '
+            'repo: .repo.name, '
+            'action: (.payload.action // ""), '
+            'number: (.payload.issue.number // .payload.discussion.number // 0), '
+            'title: (.payload.issue.title // .payload.discussion.title // ""), '
+            'author: (.payload.issue.user.login // .payload.discussion.user.login // .payload.comment.user.login // ""), '
+            'comments: (.payload.issue.comments // 0), '
+            'url: (.payload.issue.html_url // .payload.discussion.html_url // ""), '
+            'created: .created_at'
+            '}]',
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode == 0 and result.stdout.strip():
+                events = json.loads(result.stdout)
+                all_events.extend(events)
+        except (subprocess.TimeoutExpired, json.JSONDecodeError):
+            continue
+
+    # Deduplicate by (repo, number)
+    seen = set()
+    unique = []
+    for e in all_events:
+        key = (e.get("repo"), e.get("number"))
+        if key not in seen and e.get("number", 0) > 0:
+            seen.add(key)
+            unique.append(e)
+
+    return unique
+
+
+def dashboard_to_signals(events: list[dict], known_repos: set[str]) -> list[dict]:
+    """Convert dashboard events to signals, separating known vs discovery.
+
+    - Events from Source Matrix repos → merged as regular signals (tagged source=dashboard)
+    - Events from NEW repos → tagged as "discovery" signals (potential new Source Matrix entries)
+    """
+    signals = []
+    for event in events:
+        repo = event.get("repo", "")
+        title = event.get("title", "")
+        topics = match_topics(title)
+
+        # Only keep events that match our topics OR are from unknown repos (discovery)
+        is_new_repo = repo not in known_repos
+        if not topics and not is_new_repo:
+            continue
+
+        signal = {
+            "repo": repo,
+            "tier": 0 if is_new_repo else None,  # tier 0 = discovery
+            "issue_number": event.get("number", 0),
+            "title": title,
+            "url": event.get("url", ""),
+            "author": event.get("author", "unknown"),
+            "existing_comments": event.get("comments", 0),
+            "created_at": event.get("created", ""),
+            "updated_at": event.get("created", ""),
+            "matched_topics": topics,
+            "source": "dashboard",
+            "event_type": event.get("type", ""),
+            "is_discovery": is_new_repo,
+            "scanned_at": datetime.now(timezone.utc).isoformat(),
+        }
+        signals.append(signal)
+
+    return signals
+
+
 # --- Main Monitor ---
 
 
 def monitor(dry_run: bool = False, output_path: str | None = None) -> dict:
-    """Run full monitor cycle — scan signals + track hot topics."""
+    """Run full monitor cycle — scan signals + track hot topics + dashboard feed."""
     all_signals = []
 
     # Tier 1: full scan (signals for engagement)
@@ -230,6 +324,16 @@ def monitor(dry_run: bool = False, output_path: str | None = None) -> dict:
 
     # Tier 2: daily scan
     all_signals.extend(scan_repos(TIER2_REPOS, tier=2, since_hours=24))
+
+    # Dashboard feed: dynamic signals from GitHub activity feed
+    known_repos = set(TIER1_REPOS + TIER2_REPOS)
+    dashboard_events = fetch_dashboard_feed()
+    dashboard_signals = dashboard_to_signals(dashboard_events, known_repos)
+
+    # Deduplicate dashboard signals against matrix-sourced ones
+    existing_keys = {(s["repo"], s["issue_number"]) for s in all_signals}
+    new_dashboard = [s for s in dashboard_signals if (s["repo"], s["issue_number"]) not in existing_keys]
+    all_signals.extend(new_dashboard)
 
     # Sort by recency
     all_signals.sort(key=lambda s: s.get("updated_at", ""), reverse=True)
@@ -242,14 +346,25 @@ def monitor(dry_run: bool = False, output_path: str | None = None) -> dict:
     output_data = {
         "scanned_at": datetime.now().isoformat(),
         "signals": all_signals,
+        "dashboard_signals": new_dashboard,
         "hot_topics": hot_topics,
         "hot_discussions_scanned": len(hot_discussions),
+        "dashboard_events_fetched": len(dashboard_events),
     }
 
     if dry_run:
-        print(f"[DRY RUN] Found {len(all_signals)} signals")
+        print(f"[DRY RUN] Found {len(all_signals)} signals "
+              f"({len(all_signals) - len(new_dashboard)} from matrix, {len(new_dashboard)} from dashboard)")
         for s in all_signals[:5]:
-            print(f"  {s['repo']}#{s['issue_number']}: {s['title']} ({s['matched_topics']})")
+            src = s.get("source", "matrix")
+            disc = " 🆕" if s.get("is_discovery") else ""
+            print(f"  [{src}{disc}] {s['repo']}#{s['issue_number']}: {s['title'][:60]} ({s['matched_topics']})")
+        if new_dashboard:
+            discoveries = [s for s in new_dashboard if s.get("is_discovery")]
+            if discoveries:
+                print(f"\n[DISCOVERY] {len(discoveries)} signals from repos NOT in Source Matrix:")
+                for s in discoveries[:5]:
+                    print(f"  🆕 {s['repo']}#{s['issue_number']}: {s['title'][:60]}")
         print(f"\n[HOT TOPICS] Ranked by community engagement:")
         for ht in hot_topics[:5]:
             if ht["total_comments"] > 0:
@@ -265,7 +380,8 @@ def monitor(dry_run: bool = False, output_path: str | None = None) -> dict:
         out = Path.home() / ".swarm-ai" / "SwarmWS" / "Projects" / "GitHub_Community" / ".artifacts" / "signals.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(output_data, indent=2, default=str))
-    print(f"Wrote {len(all_signals)} signals + {len(hot_topics)} hot topics to {out}")
+    print(f"Wrote {len(all_signals)} signals ({len(new_dashboard)} from dashboard) + "
+          f"{len(hot_topics)} hot topics to {out}")
     return output_data
 
 
