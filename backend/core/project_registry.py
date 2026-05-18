@@ -22,17 +22,14 @@ from pathlib import Path
 
 _DDD_FILES = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
 
-# Project name constants — single place to update on rename
-CMHK_SALESINTEL = "CMHK_SalesIntel"
-BMS_BIZ = "BMS_BIZ"
-SWARMAI = "SwarmAI"
-AIDLC = "AIDLC"
-GITHUB_COMMUNITY = "GitHub_Community"
-PHYSICAL_AI = "PhysicalAI"
-QUICK_FOR_BIZ = "Quick_For_Biz"
+# Well-known project names — used as defaults/fallbacks only.
+# The authoritative source is always filesystem discovery (list_projects()).
+# On rename: just `mv` the directory. These constants are convenience aliases
+# that auto-resolve on next import if the prefix pattern still matches.
+SWARMAI = "SwarmAI"  # never renamed (protected)
 
 
-# ─── Core Functions ──────────────────────────────────────────────────────────
+# ─── Core Functions (must be defined before alias discovery) ─────────────────
 
 def get_swarmws() -> Path:
     """Resolve SwarmWS root path. Respects SWARMWS env var override."""
@@ -115,3 +112,27 @@ def list_project_names() -> list[str]:
 def project_exists(name: str) -> bool:
     """Check if a project exists by name."""
     return (get_projects_dir() / name).is_dir()
+
+
+# ─── Auto-Discovered Aliases ─────────────────────────────────────────────────
+# These resolve from filesystem at import time. On project rename, just `mv`
+# the directory — next import auto-discovers the new name. Zero manual updates.
+
+def _discover_by_prefix(prefix: str, fallback: str) -> str:
+    """Discover a project by name prefix from filesystem. Returns first match."""
+    projects_dir = get_projects_dir()
+    if projects_dir.is_dir():
+        for d in sorted(projects_dir.iterdir()):
+            if d.is_dir() and d.name.startswith(prefix) and any(
+                (d / f).exists() for f in _DDD_FILES
+            ):
+                return d.name
+    return fallback
+
+
+CMHK_SALESINTEL: str = _discover_by_prefix("CMHK_", "CMHK_SalesIntel")
+BMS_BIZ: str = _discover_by_prefix("BMS_", "BMS_BIZ")
+AIDLC: str = _discover_by_prefix("AIDLC", "AIDLC")
+GITHUB_COMMUNITY: str = _discover_by_prefix("GitHub_", "GitHub_Community")
+PHYSICAL_AI: str = _discover_by_prefix("Physical", "PhysicalAI")
+QUICK_FOR_BIZ: str = _discover_by_prefix("Quick_", "Quick_For_Biz")
