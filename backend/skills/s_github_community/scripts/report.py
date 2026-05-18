@@ -27,9 +27,10 @@ def generate_report_html(
     comments_list: list[dict] | None = None,
     discussions_list: list[dict] | None = None,
     stars_data: dict | None = None,
+    dashboard_signals: list[dict] | None = None,
     week_label: str = "",
 ) -> str:
-    """Generate 8-tab HTML weekly report."""
+    """Generate 9-tab HTML weekly report."""
 
     if not week_label:
         week_label = datetime.now(timezone.utc).strftime("W%W-%Y")
@@ -40,6 +41,8 @@ def generate_report_html(
         discussions_list = []
     if stars_data is None:
         stars_data = {"total": 0, "new_this_week": 0, "attributed": []}
+    if dashboard_signals is None:
+        dashboard_signals = []
 
     # Source Matrix table rows
     source_rows = ""
@@ -137,6 +140,26 @@ def generate_report_html(
     high_conf = sum(1 for a in attributed_list if a.get("confidence") == "high")
     low_conf = sum(1 for a in attributed_list if a.get("confidence") == "low")
 
+    # Dashboard feed rows
+    dashboard_rows = ""
+    discoveries = [s for s in dashboard_signals if s.get("is_discovery")]
+    known_feed = [s for s in dashboard_signals if not s.get("is_discovery")]
+    for s in dashboard_signals:
+        repo = s.get("repo", "?")
+        number = s.get("issue_number", "?")
+        title = s.get("title", "?")[:70]
+        url = s.get("url") or f"https://github.com/{repo}/issues/{number}"
+        topics = ", ".join(s.get("matched_topics", [])) or "—"
+        is_new = "🆕" if s.get("is_discovery") else ""
+        event = s.get("event_type", "?").replace("Event", "")
+        dashboard_rows += f"""<tr>
+            <td>{is_new} <a href="https://github.com/{repo}" target="_blank">{repo}</a></td>
+            <td><a href="{url}" target="_blank">{title}</a></td>
+            <td>{event}</td>
+            <td>{topics}</td>
+            <td>{s.get('existing_comments', 0)}</td>
+        </tr>"""
+
     stars_rows = ""
     for a in attributed_list:
         conf = a.get("confidence", "?")
@@ -190,13 +213,14 @@ li {{ margin: 8px 0; line-height: 1.5; }}
 
 <div class="tabs">
     <div class="tab active" onclick="showTab(0)">Source Matrix</div>
-    <div class="tab" onclick="showTab(1)">Topic Matrix</div>
-    <div class="tab" onclick="showTab(2)">Comments</div>
-    <div class="tab" onclick="showTab(3)">Discussions</div>
-    <div class="tab" onclick="showTab(4)">⭐ Stars</div>
-    <div class="tab" onclick="showTab(5)">Learnings</div>
-    <div class="tab" onclick="showTab(6)">DDD Health</div>
-    <div class="tab" onclick="showTab(7)">Actions</div>
+    <div class="tab" onclick="showTab(1)">📡 Dashboard Feed</div>
+    <div class="tab" onclick="showTab(2)">Topic Matrix</div>
+    <div class="tab" onclick="showTab(3)">Comments</div>
+    <div class="tab" onclick="showTab(4)">Discussions</div>
+    <div class="tab" onclick="showTab(5)">⭐ Stars</div>
+    <div class="tab" onclick="showTab(6)">Learnings</div>
+    <div class="tab" onclick="showTab(7)">DDD Health</div>
+    <div class="tab" onclick="showTab(8)">Actions</div>
 </div>
 
 <div class="panel active" id="panel-0">
@@ -208,6 +232,20 @@ li {{ margin: 8px 0; line-height: 1.5; }}
 </div>
 
 <div class="panel" id="panel-1">
+    <h2>📡 Dashboard Feed — Dynamic Signals</h2>
+    <div style="margin: 16px 0;">
+        <div class="metric"><div class="metric-value">{len(dashboard_signals)}</div><div class="metric-label">Feed Signals</div></div>
+        <div class="metric"><div class="metric-value">{len(discoveries)}</div><div class="metric-label">🆕 New Repos</div></div>
+        <div class="metric"><div class="metric-value">{len(known_feed)}</div><div class="metric-label">Source Matrix Hits</div></div>
+    </div>
+    <table>
+        <tr><th>Repo</th><th>Title</th><th>Event</th><th>Topics</th><th>Comments</th></tr>
+        {dashboard_rows if dashboard_rows else '<tr><td colspan="5" style="color:#718096;">No matching signals in feed (run monitor to refresh)</td></tr>'}
+    </table>
+    <p style="margin-top:12px;font-size:12px;color:#718096;">Source: GitHub received_events API (your stars/watches/follows). 🆕 = repo not in Source Matrix (potential addition).</p>
+</div>
+
+<div class="panel" id="panel-2">
     <h2>Topic Matrix — Our Positions</h2>
     <table>
         <tr><th>ID</th><th>Topic</th><th>Temp</th><th>Status</th><th>Best Repo</th><th>Engagement</th></tr>
@@ -215,7 +253,7 @@ li {{ margin: 8px 0; line-height: 1.5; }}
     </table>
 </div>
 
-<div class="panel" id="panel-2">
+<div class="panel" id="panel-3">
     <h2>Comments Posted ({comments_posted})</h2>
     <div style="margin: 16px 0;">
         <div class="metric"><div class="metric-value">{comments_posted}</div><div class="metric-label">Posted</div></div>
@@ -229,7 +267,7 @@ li {{ margin: 8px 0; line-height: 1.5; }}
     </table>
 </div>
 
-<div class="panel" id="panel-3">
+<div class="panel" id="panel-4">
     <h2>Our Discussions (swarm-content)</h2>
     <table>
         <tr><th>#</th><th>Topic</th><th>Link</th></tr>
@@ -237,7 +275,7 @@ li {{ margin: 8px 0; line-height: 1.5; }}
     </table>
 </div>
 
-<div class="panel" id="panel-4">
+<div class="panel" id="panel-5">
     <h2>⭐ Star Attribution</h2>
     <div style="margin: 16px 0;">
         <div class="metric"><div class="metric-value">{total_stars}</div><div class="metric-label">Total Stars</div></div>
@@ -252,12 +290,12 @@ li {{ margin: 8px 0; line-height: 1.5; }}
     <p style="margin-top:12px;font-size:12px;color:#718096;">Attribution: 🟢 high = user active in same discussion we commented on | 🟡 medium = user starred repos in our Source Matrix | 🔵 low = post-engagement but no direct link | ⚪ organic = pre-engagement</p>
 </div>
 
-<div class="panel" id="panel-5">
+<div class="panel" id="panel-6">
     <h2>Key Learnings & DDD Updates</h2>
     <ul>{learnings_html if learnings_html else '<li>No new learnings this week (too early or no replies yet)</li>'}</ul>
 </div>
 
-<div class="panel" id="panel-6">
+<div class="panel" id="panel-7">
     <h2>DDD Health</h2>
     <table>
         <tr><th>Document</th><th>Last Updated</th><th>Completeness</th><th>Status</th></tr>
@@ -272,7 +310,7 @@ li {{ margin: 8px 0; line-height: 1.5; }}
     <div class="metric"><div class="metric-value">{ddd_health.get('patterns_count', 0)}</div><div class="metric-label">Patterns in IMPROVEMENT</div></div>
 </div>
 
-<div class="panel" id="panel-7">
+<div class="panel" id="panel-8">
     <h2>Follow-up Actions</h2>
     <ul>{actions_html if actions_html else '<li>No pending actions</li>'}</ul>
 </div>
@@ -484,6 +522,13 @@ def generate_weekly_report(dry_run: bool = False, output_path: str | None = None
         {"number": 11, "title": "Multi-Agent is a coordination tax"},
     ]
 
+    # Load dashboard signals from signals.json
+    signals_path = ARTIFACTS_DIR / "signals.json"
+    dashboard_signals = []
+    if signals_path.exists():
+        signals_data = json.loads(signals_path.read_text())
+        dashboard_signals = signals_data.get("dashboard_signals", [])
+
     # Load star attribution data
     star_log_path = ARTIFACTS_DIR / "star_log.jsonl"
     star_entries = []
@@ -506,7 +551,7 @@ def generate_weekly_report(dry_run: bool = False, output_path: str | None = None
     html = generate_report_html(
         source_matrix, topic_matrix, activity, learnings, ddd_health, actions,
         comments_list=comments_list, discussions_list=discussions_list,
-        stars_data=stars_data,
+        stars_data=stars_data, dashboard_signals=dashboard_signals,
     )
 
     if dry_run:
