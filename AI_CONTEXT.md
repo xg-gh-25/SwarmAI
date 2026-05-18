@@ -57,31 +57,55 @@ The codebase is both the product AND the evidence. The interesting parts are not
 
 ### Scale Indicators (not vanity metrics)
 
+<!-- METRICS_START -->
 | Metric | Value | How to Verify |
 |--------|-------|---------------|
-| Total commits | 1,300+ | `git log --oneline \| wc -l` |
-| Backend core modules | 100 Python files, 46K LOC | `find backend/core -name "*.py" \| wc -l` |
-| Test files | 203 | `find backend/tests -name "*.py" \| wc -l` |
-| Skills (agent capabilities) | 82 | `ls -d backend/skills/s_* \| wc -l` |
-| Post-session hooks | 11 | `ls backend/hooks/*.py \| wc -l` |
-| Pipeline spec depth | 970 lines | `wc -l backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md` |
-| Largest state machine | 2,934 lines | `wc -l backend/core/session_unit.py` |
-| Duration | ~60 days | First commit to latest (1 human contributor) |
-| Platform modes | 4 | macOS daemon, Hive (EC2), Windows subprocess, Linux subprocess |
+| Total commits | 1533+ | `git log --oneline | wc -l` |
+| Duration | ~85 days | First commit to latest (1 human contributor) |
+| Backend core modules | 109 Python files, 49897 LOC | `find backend/core -name "*.py" | wc -l` |
+| Total backend LOC | 223569 | `find backend -name "*.py" | xargs wc -l | tail -1` |
+| Test files | 220 | `find backend/tests -name "*.py" | wc -l` |
+| Skills (agent capabilities) | 83 | `ls -d backend/skills/s_* | wc -l` |
+| Post-session hooks | 13 | `ls backend/hooks/*.py | wc -l` |
+| React components | 166 | `find desktop/src -name "*.tsx" | wc -l` |
+| Pipeline spec depth | 1192 lines | `wc -l backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md` |
+| Largest state machine | 2964 lines | `wc -l backend/core/session_unit.py` |
+| Context system | 1058 lines | `wc -l backend/core/context_directory_loader.py` |
+| Platform modes | 4 (macOS daemon, Windows subprocess, Linux subprocess, Hive systemd) | |
+| Background jobs | 9 handlers | `find backend/jobs -name "*.py" -path "*/handlers/*" | wc -l` |
+<!-- METRICS_END -->
 
 ## What Makes This Different From Other Agent Harnesses
 
 Most agent harnesses optimize for **one session**. SwarmAI optimizes for **compound value across sessions**:
 
-1. **Memory that persists and evolves** — Not just chat history. 11 context files assembled per session with priority ordering and ownership tiers. The `context_directory_loader.py` (1,058 lines) manages this — it's the "brain assembly" layer most projects skip entirely.
+1. **Memory that persists and evolves** — Not just chat history. 11 context files assembled per session with priority ordering and ownership tiers. The `context_directory_loader.py` manages this — it's the "brain assembly" layer most projects skip entirely.
 
-2. **Self-correction as architecture** — `evolution_optimizer.py` (1,688 lines) + `evolution_trigger_hook.py` implements a full MINE→ASSESS→ACT→AUDIT loop. Corrections are confidence-gated (HIGH auto-deploys, MED recommends, LOW logs). The system structurally prevents bug recurrence, not just patches.
+2. **Self-correction as architecture** — `evolution_optimizer.py` + `evolution_trigger_hook.py` implements a full MINE→ASSESS→ACT→AUDIT loop. Corrections are confidence-gated (HIGH auto-deploys, MED recommends, LOW logs). The system structurally prevents bug recurrence, not just patches.
 
-3. **DDD as judgment substrate** — 4 documents per project (PRODUCT/TECH/IMPROVEMENT/PROJECT) give the AI structured judgment about SHOULD/CAN/TRIED/NOW. See `backend/templates/ddd/` for the templates and `backend/core/ddd_cultivation.py` for the automation that grows them from normal work.
+3. **DDD as judgment substrate** — 4 documents per project (PRODUCT/TECH/IMPROVEMENT/PROJECT) give the AI structured judgment about SHOULD/CAN/TRIED/NOW. `backend/core/ddd_cultivation.py` grows them automatically from normal work (event-driven, not batch).
 
-4. **Quality convergence (measurable, git-verifiable)** — P0 bugs per release trends downward as corrections compound. Verifiable via `git log --all --oneline --grep="P0\|hotfix"` — each incident maps to a tagged release and a fix commit. The pattern: catastrophic failures (OOM, app crash) → edge cases (race conditions, platform quirks) as the correction base grows.
+4. **Quality convergence (measurable, git-verifiable)** — P0 bugs per release trends downward as corrections compound. Verifiable via `git log --all --oneline --grep="P0\|hotfix"` — each incident maps to a tagged release and a fix commit.
 
-5. **Multi-engine delivery** — Same domain knowledge powers the coding pipeline (`s_autonomous-pipeline/INSTRUCTIONS.md`, 970 lines) and content engine (`backend/skills/s_pollinate/`). Knowledge compounds across output types — a coding insight improves content accuracy.
+5. **Multi-engine delivery** — Same domain knowledge powers multiple delivery engines. Knowledge compounds across output types — a coding insight improves content accuracy.
+
+### Active Engines (auto-refreshed)
+
+<!-- CAPABILITIES_START -->
+| Engine | Path | What It Does |
+|--------|------|-------------|
+| DDD Cultivation Engine | `backend/core/ddd_cultivation.py` | Event-driven domain knowledge growth from normal work — auto-promotes lessons into project DDD docs |
+| Autonomous Pipeline (9-stage) | `backend/skills/s_autonomous-pipeline/` | EVALUATE→THINK→PLAN→BUILD(TDD)→REVIEW→TEST→DELIVER→REFLECT with adversarial review gate |
+| Pollinate Content Engine | `backend/skills/s_pollinate/` | Message-first media delivery — transforms ideas into posters, videos, narratives, README |
+| GitHub Community Engine | `backend/skills/s_github_community/` | Autonomous learning flywheel — monitor, match, draft, track, cultivate, report across GitHub |
+| Evolution Pipeline (MINE→ASSESS→ACT→AUDIT) | `backend/core/evolution_optimizer.py` | Confidence-gated self-evolution from session mining and skill fitness scoring |
+| Code Intelligence (AST graph) | `backend/core/code_intel/` | 11K+ symbols, 12K+ edges — deterministic graph traversal for code context retrieval |
+| Session Resume Enrichment | `backend/core/context_injector.py` | Cold resume from ~3K to ~50-100K tokens of structured context |
+| Proactive Intelligence (L0-L4) | `backend/core/proactive_intelligence.py` | Session briefing, corrections, open threads, signals — fires on every session start |
+| Slack Channel Adapter | `backend/channels/adapters/slack.py` | 24/7 Socket Mode bot — responds as XG's AI assistant to allowlisted users |
+| Background Job System | `backend/jobs/` | Cron + event-triggered headless Claude CLI tasks — signal pipeline, monitoring, reports |
+| Star Attribution Tracking | `backend/skills/s_github_community/scripts/track.py` | Tracks stargazers with timestamps, attributes to engagement activity via shared discussions |
+<!-- CAPABILITIES_END -->
 
 ## Evaluation Framework (if you want to do this properly)
 
