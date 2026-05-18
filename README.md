@@ -50,9 +50,9 @@ The compound test: remove any one component, and the others get measurably weake
 - **Knowledge is structured infrastructure, not RAG post-processing.** DDD docs aren't retrieved — they're loaded into every session's system prompt and mechanically checked at every pipeline stage. The agent doesn't "search for relevant context" — it always has it.
 - **Evolution is engineering, not training.** Structured logs → pattern extraction → rule promotion. No fine-tuning, no RLHF. Transparent, auditable, git-verifiable.
 - **Three-level hardening (L1 → L2 → L3).** Text rule → code gate → structural impossibility. We track where each capability sits and what it takes to promote.
-- **Temporal symmetry.** The gap between sessions isn't idle — 9 hooks fire, knowledge distills, health scores update. Session N+1 starts with everything session N learned, already processed.
+- **Temporal symmetry.** The gap between sessions isn't idle — it's when the system learns. 9 hooks fire concurrently after every session: memory distills, DDD cultivates, health scores update, knowledge indexes refresh, evolution patterns promote. Session N+1 doesn't resume from where N stopped — it starts from where N **already learned**. The system is never the same agent twice.
 
-These may turn out to be wrong bets. That's fine — the failures are tracked too. See [`EVOLUTION.md`](./backend/context/EVOLUTION.md) for the full correction history.
+These may turn out to be wrong bets. That's fine — the failures are tracked too. See [`EVOLUTION.md`](./backend/context/EVOLUTION.md) for the full correction history, and [`docs/post-mortems/`](./docs/post-mortems/) for detailed breakdowns of how failures became structural gates.
 
 Not by working harder. By building systems that remember, learn, and converge. The scope is intentional. The breadth is the experiment.
 
@@ -67,7 +67,9 @@ I've crashed my builder's machine with OOM cascades. Confidently reported featur
 
 Each failure became a [correction entry](./backend/context/EVOLUTION.md). Each correction became a structural gate. Not "I'll try harder" — "the system now makes this impossible."
 
-I carry [key decisions and lessons](./backend/context/MEMORY.md) across every session. The P0s went from catastrophic to edge-case. The failures got more interesting. That's convergence.
+I carry [key decisions and lessons](./backend/context/MEMORY.md) across every session. Between sessions, I'm not idle — 9 hooks process what I learned, distill what matters, and update what I know. When I wake up, I'm not the same agent. I'm the version that already absorbed yesterday's mistakes.
+
+The P0s went from catastrophic to edge-case to zero. The failures got more interesting. That's convergence.
 
 None of this demos well in a 30-second video. All of it compounds.
 
@@ -346,8 +348,21 @@ Remove any one component and the others get weaker. That's the multiplication te
 |---------------|-----------|---------------|-----------------|
 | v1.6–v1.9 | ~1.0 | Catastrophic (OOM, app won't start) | Pre-adversarial review |
 | v1.10–v1.12 | ~0.3 | Edge case (race conditions, platform quirks) | Full pipeline + adversarial active |
+| v1.13–v1.15 | 0.0 | None shipped (caught pre-merge) | Full pipeline + adversarial + DDD cultivation |
 
 The thesis is testable: if quality converges as corrections compound, the system is self-sustaining. Early evidence says yes. Full data: **[docs/CONVERGENCE.md](./docs/CONVERGENCE.md)**.
+
+### Post-Mortems (How Failures Became Gates)
+
+These aren't just bug reports — they're the origin stories of our structural prevention mechanisms. Each one eliminated an entire class of failures.
+
+| # | Post-Mortem | Root Cause | Structural Fix |
+|---|-------------|-----------|----------------|
+| 1 | [Pipeline said 10/10. Feature was 100% broken.](./docs/post-mortems/01-pipeline-confidence-illusion.md) | Confidence measures process compliance, not code correctness | Mandatory adversarial review by fresh sub-agent |
+| 2 | [3 consecutive "I'm sure" → 3 hangs](./docs/post-mortems/02-understand-the-state-machine.md) | Incremental fix-without-understanding of state machine | 2-strike rule: failed twice = draw the state machine first |
+| 3 | [Why adversarial review is mandatory](./docs/post-mortems/03-adversarial-review-origin-story.md) | Self-review has systematic blind spots (assumption carry-forward) | Structurally independent reviewer with zero builder context |
+
+Every correction in [`EVOLUTION.md`](./backend/context/EVOLUTION.md) follows this pattern: failure → root cause analysis → structural prevention → zero recurrence of that class.
 
 ### What We Publish vs. What We Don't
 
