@@ -306,9 +306,23 @@ class TestOrchestratorSubscriptions:
 
 class TestSingletonDispatcher:
     def setup_method(self):
-        """Reset module singleton between tests."""
+        """Reset module singleton between tests.
+
+        Must also clear the dedup state to ensure independent tests.
+        """
         import core.cultivation_dispatcher as mod
         mod._dispatcher = None
+
+    def _ensure_dispatcher_in_loop(self):
+        """Force dispatcher creation within the running async loop context.
+
+        On Python 3.11, asyncio.Queue() must be created while the event loop
+        is running. Calling get_dispatcher() from a sync setup_method creates
+        the Queue outside the loop context — put() then silently fails on CI.
+        """
+        import core.cultivation_dispatcher as mod
+        if mod._dispatcher is None:
+            mod._dispatcher = EventDispatcher(queue_size=50, dedup_window_seconds=60.0)
 
     def test_get_dispatcher_returns_same_instance(self):
         d1 = get_dispatcher()
@@ -322,6 +336,7 @@ class TestSingletonDispatcher:
 
     @pytest.mark.asyncio
     async def test_emit_cultivation_event_convenience(self):
+        self._ensure_dispatcher_in_loop()
         result = await emit_cultivation_event(
             EventType.GIT_COMMIT,
             source="test",
@@ -335,18 +350,21 @@ class TestSingletonDispatcher:
 
     @pytest.mark.asyncio
     async def test_emit_convenience_dedup(self):
+        self._ensure_dispatcher_in_loop()
         await emit_cultivation_event(EventType.TIMER_30MIN, source="test")
         result = await emit_cultivation_event(EventType.TIMER_30MIN, source="test2")
         assert result is False  # Deduped
 
     @pytest.mark.asyncio
     async def test_emit_different_types_not_deduped(self):
+        self._ensure_dispatcher_in_loop()
         await emit_cultivation_event(EventType.GIT_COMMIT, source="a")
         result = await emit_cultivation_event(EventType.DAILY_ACTIVITY, source="b")
         assert result is True
 
     @pytest.mark.asyncio
     async def test_emit_captures_loop_on_first_call(self):
+        self._ensure_dispatcher_in_loop()
         d = get_dispatcher()
         assert d.loop is None  # Not yet captured
         await emit_cultivation_event(EventType.SIGNAL_DIGEST, source="test")
@@ -356,6 +374,7 @@ class TestSingletonDispatcher:
     async def test_threadsafe_emit_from_thread(self):
         """emit_cultivation_event_threadsafe works from a background thread."""
         import asyncio
+        self._ensure_dispatcher_in_loop()
         # First, warm up the dispatcher so it has a loop reference
         await emit_cultivation_event(EventType.PROPOSAL_DECIDED, source="warmup")
         d = get_dispatcher()
