@@ -170,6 +170,44 @@ Two consumers, two formats. **Never cross the streams.**
 
 See `Projects/SwarmAI/TECH.md` → "Output Format Protocol" for full spec.
 
+## Active Engines (auto-refreshed)
+
+<!-- CAPABILITIES_START -->
+| Engine | Path | What It Does |
+|--------|------|-------------|
+| DDD Cultivation Engine | `backend/core/ddd_cultivation.py` | Event-driven domain knowledge growth from normal work — auto-promotes lessons into project DDD docs |
+| Autonomous Pipeline (9-stage) | `backend/skills/s_autonomous-pipeline/` | EVALUATE→THINK→PLAN→BUILD(TDD)→REVIEW→TEST→DELIVER→REFLECT with adversarial review gate |
+| Pollinate Content Engine | `backend/skills/s_pollinate/` | Message-first media delivery — transforms ideas into posters, videos, narratives, README |
+| GitHub Community Engine | `backend/skills/s_github_community/` | Autonomous learning flywheel — monitor, match, draft, track, cultivate, report across GitHub |
+| Evolution Pipeline (MINE→ASSESS→ACT→AUDIT) | `backend/core/evolution_optimizer.py` | Confidence-gated self-evolution from session mining and skill fitness scoring |
+| Code Intelligence (AST graph) | `backend/core/code_intel/` | 11K+ symbols, 12K+ edges — deterministic graph traversal for code context retrieval |
+| Session Resume Enrichment | `backend/core/context_injector.py` | Cold resume from ~3K to ~50-100K tokens of structured context |
+| Proactive Intelligence (L0-L4) | `backend/core/proactive_intelligence.py` | Session briefing, corrections, open threads, signals — fires on every session start |
+| Slack Channel Adapter | `backend/channels/adapters/slack.py` | 24/7 Socket Mode bot — responds as XG's AI assistant to allowlisted users |
+| Background Job System | `backend/jobs/` | Cron + event-triggered headless Claude CLI tasks — signal pipeline, monitoring, reports |
+| Star Attribution Tracking | `backend/skills/s_github_community/scripts/track.py` | Tracks stargazers with timestamps, attributes to engagement activity via shared discussions |
+<!-- CAPABILITIES_END -->
+
+## Codebase Metrics (auto-refreshed)
+
+<!-- METRICS_START -->
+| Metric | Value | How to Verify |
+|--------|-------|---------------|
+| Total commits | 1533+ | `git log --oneline | wc -l` |
+| Duration | ~85 days | First commit to latest (1 human contributor) |
+| Backend core modules | 109 Python files, 49897 LOC | `find backend/core -name "*.py" | wc -l` |
+| Total backend LOC | 223569 | `find backend -name "*.py" | xargs wc -l | tail -1` |
+| Test files | 220 | `find backend/tests -name "*.py" | wc -l` |
+| Skills (agent capabilities) | 83 | `ls -d backend/skills/s_* | wc -l` |
+| Post-session hooks | 13 | `ls backend/hooks/*.py | wc -l` |
+| React components | 166 | `find desktop/src -name "*.tsx" | wc -l` |
+| Pipeline spec depth | 1192 lines | `wc -l backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md` |
+| Largest state machine | 2964 lines | `wc -l backend/core/session_unit.py` |
+| Context system | 1058 lines | `wc -l backend/core/context_directory_loader.py` |
+| Platform modes | 4 (macOS daemon, Windows subprocess, Linux subprocess, Hive systemd) | |
+| Background jobs | 9 handlers | `find backend/jobs -name "*.py" -path "*/handlers/*" | wc -l` |
+<!-- METRICS_END -->
+
 ## Key Design Decisions
 
 1. **Single agent with role-switching** > multi-agent orchestration (zero context transfer cost)

@@ -1209,6 +1209,18 @@ class ContextHealthHook:
         except Exception as exc:
             logger.warning("context_health: retention policy enforcement failed: %s", exc)
 
+        # 9. Auto-refresh AI_CONTEXT.md + AGENTS.md metrics (codebase root)
+        try:
+            from scripts.refresh_ai_docs import refresh as refresh_ai_docs
+            result = refresh_ai_docs()
+            if result.get("files_updated"):
+                logger.info(
+                    "context_health: refreshed %s",
+                    ", ".join(result["files_updated"]),
+                )
+        except Exception as exc:
+            logger.debug("context_health: AI docs refresh skipped: %s", exc)
+
         # Persist findings for session briefing
         self._persist_findings(root, findings)
 
