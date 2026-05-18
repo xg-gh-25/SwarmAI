@@ -39,9 +39,16 @@ def extract_insights(replies: list[dict]) -> list[dict]:
     """Extract actionable insights from replies.
 
     An insight is: something we didn't know before that changes how we engage.
+    Deduplicates by reply ID to prevent repeated processing.
     """
     insights = []
+    seen_ids = set()
     for reply in replies:
+        reply_id = reply.get("id", 0)
+        if reply_id in seen_ids:
+            continue
+        seen_ids.add(reply_id)
+
         # Maintainer replies are highest value
         if reply.get("is_maintainer"):
             insights.append({

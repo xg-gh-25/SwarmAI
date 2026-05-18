@@ -57,11 +57,29 @@ def log_engagement(entry: dict):
         f.write(json.dumps(entry, default=str) + "\n")
 
 
-def log_reply(reply: dict):
-    """Append a reply to the archive."""
+def _load_known_reply_ids() -> set[int]:
+    """Load reply IDs already in the archive to prevent duplicates."""
+    if not REPLY_ARCHIVE.exists():
+        return set()
+    ids = set()
+    with open(REPLY_ARCHIVE) as f:
+        for line in f:
+            try:
+                entry = json.loads(line.strip())
+                ids.add(entry.get("id", 0))
+            except json.JSONDecodeError:
+                continue
+    return ids
+
+
+def log_reply(reply: dict, known_ids: set[int] | None = None):
+    """Append a reply to the archive (skips duplicates)."""
+    if known_ids is not None and reply.get("id") in known_ids:
+        return False
     ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
     with open(REPLY_ARCHIVE, "a") as f:
         f.write(json.dumps(reply, default=str) + "\n")
+    return True
 
 
 def score_engagement(entry: dict, replies: list[dict]) -> int:
@@ -227,10 +245,12 @@ def track_stars(engagement_log: list[dict], dry_run: bool = False) -> dict:
 def track(dry_run: bool = False) -> dict:
     """Run full track cycle — check all active threads for replies + star attribution."""
     threads = load_active_threads()
+    known_reply_ids = _load_known_reply_ids()
     results = {
         "tracked_at": datetime.now(timezone.utc).isoformat(),
         "threads_checked": len(threads),
         "replies_found": 0,
+        "new_replies": 0,
         "maintainer_replies": 0,
         "scores": [],
         "stars": {},
@@ -256,7 +276,9 @@ def track(dry_run: bool = False) -> dict:
                     reply["source_repo"] = repo
                     reply["source_issue"] = issue_number
                     reply["tracked_at"] = datetime.now(timezone.utc).isoformat()
-                    log_reply(reply)
+                    if log_reply(reply, known_ids=known_reply_ids):
+                        results["new_replies"] += 1
+                        known_reply_ids.add(reply.get("id", 0))
 
         score = score_engagement(thread, replies)
         results["scores"].append({
