@@ -21,15 +21,30 @@ STAR_LOG = ARTIFACTS_DIR / "star_log.jsonl"
 
 
 def load_active_threads() -> list[dict]:
-    """Load active threads from PROJECT.md (parsed) or engagement log."""
+    """Load all published threads from engagement log.
+
+    Tracks any entry that has a comment_id (was actually posted),
+    regardless of status field. This ensures manual posts (via gh api
+    directly) are also tracked for replies.
+    """
     if not ENGAGEMENT_LOG.exists():
         return []
     threads = []
+    seen = set()  # Dedup by (repo, issue_number)
     with open(ENGAGEMENT_LOG) as f:
         for line in f:
-            entry = json.loads(line.strip())
-            if entry.get("status") == "active":
-                threads.append(entry)
+            try:
+                entry = json.loads(line.strip())
+            except json.JSONDecodeError:
+                continue
+            # Track anything with a comment_id (proves it was posted)
+            if not entry.get("comment_id"):
+                continue
+            key = (entry.get("repo"), entry.get("issue_number"))
+            if key in seen:
+                continue
+            seen.add(key)
+            threads.append(entry)
     return threads
 
 
@@ -242,8 +257,42 @@ def track_stars(engagement_log: list[dict], dry_run: bool = False) -> dict:
     return star_results
 
 
+def _normalize_engagement_log():
+    """Ensure all entries have standard fields (backfills manual posts)."""
+    if not ENGAGEMENT_LOG.exists():
+        return
+    lines = ENGAGEMENT_LOG.read_text().strip().split("\n")
+    normalized = []
+    changed = False
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            normalized.append(line)
+            continue
+        # Backfill missing standard fields
+        if "status" not in entry or entry["status"] is None:
+            entry["status"] = "active" if entry.get("comment_id") else "blocked"
+            changed = True
+        if "confidence" not in entry:
+            entry["confidence"] = None
+            changed = True
+        if "gate_passed" not in entry:
+            entry["gate_passed"] = bool(entry.get("comment_id"))
+            changed = True
+        if "published" not in entry:
+            entry["published"] = bool(entry.get("comment_id"))
+            changed = True
+        normalized.append(json.dumps(entry, default=str))
+    if changed:
+        ENGAGEMENT_LOG.write_text("\n".join(normalized) + "\n")
+
+
 def track(dry_run: bool = False) -> dict:
     """Run full track cycle — check all active threads for replies + star attribution."""
+    _normalize_engagement_log()
     threads = load_active_threads()
     known_reply_ids = _load_known_reply_ids()
     results = {
