@@ -81,13 +81,13 @@ Generate comment text with confidence score.
 ```markdown
 
 ---
-*<one line connecting our experience to the comment> [SwarmAI](https://github.com/xg-gh-25/SwarmAI). Discussion: [<topic>](https://github.com/xg-gh-25/swarm-content/discussions/<N>)*
+*<one line connecting our experience to the comment> [SwarmAI](https://github.com/xg-gh-25/SwarmAI). Discussion: [<topic>](https://github.com/xg-gh-25/SwarmAI/discussions/<N>)*
 ```
 
 **Footer rules:**
 - ALWAYS at the very end (never first paragraph — that's spammy)
 - One line max — the comment body IS the value, the footer is just attribution
-- Link to the most relevant swarm-content Discussion (not always the same one)
+- Link to the most relevant SwarmAI Discussion (not always the same one)
 - The text before the link should connect naturally to the comment content, e.g.:
   - "Session lifecycle architecture from..." (after discussing session bugs)
   - "This is how we handle memory lifecycle in..." (after discussing memory)
@@ -141,9 +141,9 @@ cd backend && .venv/bin/python -m skills.s_github_community.scripts.track --dry-
 3. Score engagement: 0=ignored, 1=upvoted, 2=replied, 3=maintainer responded
 4. Log replies to `reply_archive.jsonl`
 
-**Also track:** swarm-content Discussions (inbound comments)
+**Also track:** SwarmAI Discussions (inbound comments)
 ```bash
-gh api graphql -f query='{ repository(owner:"xg-gh-25", name:"swarm-content") {
+gh api graphql -f query='{ repository(owner:"xg-gh-25", name:"SwarmAI") {
   discussions(first:20) { nodes { number comments { totalCount } } }
 }}'
 ```

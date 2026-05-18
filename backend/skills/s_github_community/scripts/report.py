@@ -60,9 +60,9 @@ def generate_report_html(
     topic_rows = ""
     for topic in topic_matrix:
         topic_id = topic.get('id', '?')
-        # Link topic ID to our swarm-content discussion if mapped
+        # Link topic ID to our SwarmAI discussion if mapped
         disc_num = topic.get('discussion_num')
-        topic_id_cell = f'<a href="https://github.com/xg-gh-25/swarm-content/discussions/{disc_num}" target="_blank">{topic_id}</a>' if disc_num else topic_id
+        topic_id_cell = f'<a href="https://github.com/xg-gh-25/SwarmAI/discussions/{disc_num}" target="_blank">{topic_id}</a>' if disc_num else topic_id
         # Link best_repo to GitHub
         best_repo = topic.get('best_repo', '—')
         if best_repo and best_repo != '—' and '/' in best_repo:
@@ -126,7 +126,7 @@ def generate_report_html(
     for d in discussions_list:
         num = d.get("number", "?")
         title = d.get("title", "?")
-        url = f"https://github.com/xg-gh-25/swarm-content/discussions/{num}"
+        url = f"https://github.com/xg-gh-25/SwarmAI/discussions/{num}"
         discussions_rows += f"""<tr>
             <td>#{num}</td>
             <td>{title}</td>
@@ -268,7 +268,7 @@ li {{ margin: 8px 0; line-height: 1.5; }}
 </div>
 
 <div class="panel" id="panel-4">
-    <h2>Our Discussions (swarm-content)</h2>
+    <h2>Our Discussions (SwarmAI)</h2>
     <table>
         <tr><th>#</th><th>Topic</th><th>Link</th></tr>
         {discussions_rows}
@@ -433,15 +433,15 @@ def generate_weekly_report(dry_run: bool = False, output_path: str | None = None
             topic_engagement[topic] += 1
 
     topic_matrix = [
-        {"id": "T-MEM", "name": "Memory is the Moat", "temperature": "🔥🔥🔥", "status": "ACTIVE", "best_repo": "MemPalace/mempalace", "discussion_num": 2, "hot_thread_url": "https://github.com/MemPalace/mempalace/discussions/1056", "total_engagement": topic_engagement.get("T-MEM", 0)},
-        {"id": "T-MvS", "name": "Multi-Skill > Multi-Agent", "temperature": "🔥🔥🔥", "status": "ACTIVE", "best_repo": "crewAIInc/crewAI", "discussion_num": 11, "hot_thread_url": "https://github.com/crewAIInc/crewAI/discussions/4232", "total_engagement": topic_engagement.get("T-MvS", 0)},
-        {"id": "T-CBB", "name": "Coding as Black Box", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "crewAIInc/crewAI", "discussion_num": 3, "hot_thread_url": "https://github.com/crewAIInc/crewAI/discussions/4232", "total_engagement": topic_engagement.get("T-CBB", 0)},
-        {"id": "T-CUL", "name": "Cultivation > Config", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "bytedance/deer-flow", "discussion_num": 5, "hot_thread_url": "https://github.com/bytedance/deer-flow/issues/3011", "total_engagement": topic_engagement.get("T-CUL", 0)},
-        {"id": "T-6SX", "name": "Six Self-X Properties", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "anthropics/claude-code", "discussion_num": 7, "hot_thread_url": "https://github.com/anthropics/claude-code/issues/16288", "total_engagement": topic_engagement.get("T-6SX", 0)},
-        {"id": "T-DDD", "name": "DDD Cultivation", "temperature": "🔥", "status": "ACTIVE", "best_repo": "anthropics/skills", "discussion_num": 8, "hot_thread_url": "https://github.com/anthropics/skills/discussions/380", "total_engagement": topic_engagement.get("T-DDD", 0)},
-        {"id": "T-CMP", "name": "Compound Intelligence", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "MemPalace/mempalace", "discussion_num": 9, "hot_thread_url": "https://github.com/MemPalace/mempalace/discussions/1384", "total_engagement": topic_engagement.get("T-CMP", 0)},
+        {"id": "T-MEM", "name": "Memory is the Moat", "temperature": "🔥🔥🔥", "status": "ACTIVE", "best_repo": "MemPalace/mempalace", "discussion_num": 3, "hot_thread_url": "https://github.com/MemPalace/mempalace/discussions/1056", "total_engagement": topic_engagement.get("T-MEM", 0)},
+        {"id": "T-MvS", "name": "Multi-Skill > Multi-Agent", "temperature": "🔥🔥🔥", "status": "ACTIVE", "best_repo": "crewAIInc/crewAI", "discussion_num": 12, "hot_thread_url": "https://github.com/crewAIInc/crewAI/discussions/4232", "total_engagement": topic_engagement.get("T-MvS", 0)},
+        {"id": "T-CBB", "name": "Coding as Black Box", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "crewAIInc/crewAI", "discussion_num": 4, "hot_thread_url": "https://github.com/crewAIInc/crewAI/discussions/4232", "total_engagement": topic_engagement.get("T-CBB", 0)},
+        {"id": "T-CUL", "name": "Cultivation > Config", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "bytedance/deer-flow", "discussion_num": 6, "hot_thread_url": "https://github.com/bytedance/deer-flow/issues/3011", "total_engagement": topic_engagement.get("T-CUL", 0)},
+        {"id": "T-6SX", "name": "Six Self-X Properties", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "anthropics/claude-code", "discussion_num": 8, "hot_thread_url": "https://github.com/anthropics/claude-code/issues/16288", "total_engagement": topic_engagement.get("T-6SX", 0)},
+        {"id": "T-DDD", "name": "DDD Cultivation", "temperature": "🔥", "status": "ACTIVE", "best_repo": "anthropics/skills", "discussion_num": 9, "hot_thread_url": "https://github.com/anthropics/skills/discussions/380", "total_engagement": topic_engagement.get("T-DDD", 0)},
+        {"id": "T-CMP", "name": "Compound Intelligence", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "MemPalace/mempalace", "discussion_num": 10, "hot_thread_url": "https://github.com/MemPalace/mempalace/discussions/1384", "total_engagement": topic_engagement.get("T-CMP", 0)},
         {"id": "T-SOV", "name": "Memory Sovereignty", "temperature": "🔥🔥", "status": "CANDIDATE", "best_repo": "MemPalace/mempalace", "discussion_num": None, "hot_thread_url": "https://github.com/MemPalace/mempalace/discussions/759", "total_engagement": topic_engagement.get("T-SOV", 0)},
-        {"id": "T-SxT", "name": "S×T Tension Matrix", "temperature": "🔥🔥🔥", "status": "CANDIDATE", "best_repo": "garrytan/gstack", "discussion_num": 10, "hot_thread_url": "", "total_engagement": topic_engagement.get("T-SxT", 0)},
+        {"id": "T-SxT", "name": "S×T Tension Matrix", "temperature": "🔥🔥🔥", "status": "CANDIDATE", "best_repo": "garrytan/gstack", "discussion_num": 11, "hot_thread_url": "", "total_engagement": topic_engagement.get("T-SxT", 0)},
     ]
 
     # Compute activity from live data
@@ -488,7 +488,7 @@ def generate_weekly_report(dry_run: bool = False, output_path: str | None = None
 
     actions = [
         {"description": "Check replies after 48h (first batch posted 2026-05-17)", "priority": "high"},
-        {"description": "Track inbound comments on swarm-content Discussions", "priority": "high"},
+        {"description": "Track inbound comments on SwarmAI Discussions", "priority": "high"},
         {"description": "Engage forrestchang/andrej-karpathy-skills — DEMOTED (no engagement surface)", "priority": "low"},
     ]
 
@@ -507,19 +507,19 @@ def generate_weekly_report(dry_run: bool = False, output_path: str | None = None
             "reply_count": reply_map.get((repo, issue_num), 0),
         })
 
-    # Our swarm-content Discussions
+    # Our SwarmAI Discussions (xg-gh-25/SwarmAI/discussions)
     discussions_list = [
-        {"number": 1, "title": "Welcome — What is this gallery?"},
-        {"number": 2, "title": "没有记忆就没有理解 — Memory as Moat"},
-        {"number": 3, "title": "Coding as Black Box"},
-        {"number": 4, "title": "Content as Black Box"},
-        {"number": 5, "title": "Agent 当人来培养 — Cultivation > Config"},
-        {"number": 6, "title": "越用越聪明 — How AI compounds"},
-        {"number": 7, "title": "Six Self-X Properties"},
-        {"number": 8, "title": "DDD Cultivation"},
-        {"number": 9, "title": "Compound Agent Intelligence"},
-        {"number": 10, "title": "S×T Tension Matrix"},
-        {"number": 11, "title": "Multi-Agent is a coordination tax"},
+        {"number": 2, "title": "Welcome — What is this gallery?"},
+        {"number": 3, "title": "没有记忆就没有理解 — Memory as Moat"},
+        {"number": 4, "title": "Coding as Black Box"},
+        {"number": 5, "title": "Content as Black Box"},
+        {"number": 6, "title": "Agent 当人来培养 — Cultivation > Config"},
+        {"number": 7, "title": "越用越聪明 — How AI compounds"},
+        {"number": 8, "title": "Six Self-X Properties"},
+        {"number": 9, "title": "DDD Cultivation"},
+        {"number": 10, "title": "Compound Agent Intelligence"},
+        {"number": 11, "title": "S×T Tension Matrix"},
+        {"number": 12, "title": "Multi-Agent is a coordination tax"},
     ]
 
     # Load dashboard signals from signals.json
