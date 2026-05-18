@@ -26,9 +26,10 @@ def generate_report_html(
     actions: list[dict],
     comments_list: list[dict] | None = None,
     discussions_list: list[dict] | None = None,
+    stars_data: dict | None = None,
     week_label: str = "",
 ) -> str:
-    """Generate 7-tab HTML weekly report."""
+    """Generate 8-tab HTML weekly report."""
 
     if not week_label:
         week_label = datetime.now(timezone.utc).strftime("W%W-%Y")
@@ -37,6 +38,8 @@ def generate_report_html(
         comments_list = []
     if discussions_list is None:
         discussions_list = []
+    if stars_data is None:
+        stars_data = {"total": 0, "new_this_week": 0, "attributed": []}
 
     # Source Matrix table rows
     source_rows = ""
@@ -53,13 +56,30 @@ def generate_report_html(
     # Topic Matrix table rows
     topic_rows = ""
     for topic in topic_matrix:
+        topic_id = topic.get('id', '?')
+        # Link topic ID to our swarm-content discussion if mapped
+        disc_num = topic.get('discussion_num')
+        topic_id_cell = f'<a href="https://github.com/xg-gh-25/swarm-content/discussions/{disc_num}" target="_blank">{topic_id}</a>' if disc_num else topic_id
+        # Link best_repo to GitHub
+        best_repo = topic.get('best_repo', '—')
+        if best_repo and best_repo != '—' and '/' in best_repo:
+            best_repo_cell = f'<a href="https://github.com/{best_repo}" target="_blank">{best_repo}</a>'
+        elif best_repo and best_repo != '—':
+            # Multiple repos or short names — link first one if parseable
+            best_repo_cell = best_repo
+        else:
+            best_repo_cell = '—'
+        # Link hot topic thread if available
+        hot_thread = topic.get('hot_thread_url', '')
+        engagement = topic.get('total_engagement', 0)
+        engagement_cell = f'<a href="{hot_thread}" target="_blank">{engagement}</a>' if hot_thread else str(engagement)
         topic_rows += f"""<tr>
-            <td>{topic.get('id', '?')}</td>
+            <td>{topic_id_cell}</td>
             <td>{topic.get('name', '?')}</td>
             <td>{topic.get('temperature', '?')}</td>
             <td>{topic.get('status', '?')}</td>
-            <td>{topic.get('best_repo', '—')}</td>
-            <td>{topic.get('total_engagement', 0)}</td>
+            <td>{best_repo_cell}</td>
+            <td>{engagement_cell}</td>
         </tr>"""
 
     # Activity summary
@@ -70,7 +90,10 @@ def generate_report_html(
     # Learnings list
     learnings_html = ""
     for l in learnings:
-        learnings_html += f"""<li><strong>{l.get('source', '?')}</strong>: {l.get('insight', '?')}</li>"""
+        source_text = l.get('source', '?')
+        source_url = l.get('url', '')
+        source_link = f'<a href="{source_url}" target="_blank">{source_text}</a>' if source_url else f'<strong>{source_text}</strong>'
+        learnings_html += f"""<li>{source_link}: {l.get('insight', '?')}</li>"""
 
     # Actions list
     actions_html = ""
@@ -105,6 +128,27 @@ def generate_report_html(
             <td>#{num}</td>
             <td>{title}</td>
             <td><a href="{url}" target="_blank">Open ↗</a></td>
+        </tr>"""
+
+    # Stars attribution table
+    total_stars = stars_data.get("total", 0)
+    new_stars = stars_data.get("new_this_week", 0)
+    attributed_list = stars_data.get("attributed", [])
+    high_conf = sum(1 for a in attributed_list if a.get("confidence") == "high")
+    low_conf = sum(1 for a in attributed_list if a.get("confidence") == "low")
+
+    stars_rows = ""
+    for a in attributed_list:
+        conf = a.get("confidence", "?")
+        conf_badge = {"high": "🟢 high", "medium": "🟡 medium", "low": "🔵 low", "organic": "⚪ organic"}.get(conf, conf)
+        source_url = a.get("source_url", "")
+        source_text = a.get("source", "—")
+        source_cell = f'<a href="{source_url}" target="_blank">{source_text}</a>' if source_url else source_text
+        stars_rows += f"""<tr>
+            <td><a href="https://github.com/{a.get('user', '')}" target="_blank">{a.get('user', '?')}</a></td>
+            <td>{a.get('starred_at', '?')[:10]}</td>
+            <td>{conf_badge}</td>
+            <td>{source_cell}</td>
         </tr>"""
 
     html = f"""<!DOCTYPE html>
@@ -149,9 +193,10 @@ li {{ margin: 8px 0; line-height: 1.5; }}
     <div class="tab" onclick="showTab(1)">Topic Matrix</div>
     <div class="tab" onclick="showTab(2)">Comments</div>
     <div class="tab" onclick="showTab(3)">Discussions</div>
-    <div class="tab" onclick="showTab(4)">Learnings</div>
-    <div class="tab" onclick="showTab(5)">DDD Health</div>
-    <div class="tab" onclick="showTab(6)">Actions</div>
+    <div class="tab" onclick="showTab(4)">⭐ Stars</div>
+    <div class="tab" onclick="showTab(5)">Learnings</div>
+    <div class="tab" onclick="showTab(6)">DDD Health</div>
+    <div class="tab" onclick="showTab(7)">Actions</div>
 </div>
 
 <div class="panel active" id="panel-0">
@@ -193,11 +238,26 @@ li {{ margin: 8px 0; line-height: 1.5; }}
 </div>
 
 <div class="panel" id="panel-4">
+    <h2>⭐ Star Attribution</h2>
+    <div style="margin: 16px 0;">
+        <div class="metric"><div class="metric-value">{total_stars}</div><div class="metric-label">Total Stars</div></div>
+        <div class="metric"><div class="metric-value">{new_stars}</div><div class="metric-label">New This Week</div></div>
+        <div class="metric"><div class="metric-value">{high_conf}</div><div class="metric-label">High Confidence</div></div>
+        <div class="metric"><div class="metric-value">{low_conf}</div><div class="metric-label">Low / Unknown</div></div>
+    </div>
+    <table>
+        <tr><th>User</th><th>Starred</th><th>Confidence</th><th>Attribution Source</th></tr>
+        {stars_rows if stars_rows else '<tr><td colspan="4" style="color:#718096;">No new stars this week</td></tr>'}
+    </table>
+    <p style="margin-top:12px;font-size:12px;color:#718096;">Attribution: 🟢 high = user active in same discussion we commented on | 🟡 medium = user starred repos in our Source Matrix | 🔵 low = post-engagement but no direct link | ⚪ organic = pre-engagement</p>
+</div>
+
+<div class="panel" id="panel-5">
     <h2>Key Learnings & DDD Updates</h2>
     <ul>{learnings_html if learnings_html else '<li>No new learnings this week (too early or no replies yet)</li>'}</ul>
 </div>
 
-<div class="panel" id="panel-5">
+<div class="panel" id="panel-6">
     <h2>DDD Health</h2>
     <table>
         <tr><th>Document</th><th>Last Updated</th><th>Completeness</th><th>Status</th></tr>
@@ -212,7 +272,7 @@ li {{ margin: 8px 0; line-height: 1.5; }}
     <div class="metric"><div class="metric-value">{ddd_health.get('patterns_count', 0)}</div><div class="metric-label">Patterns in IMPROVEMENT</div></div>
 </div>
 
-<div class="panel" id="panel-6">
+<div class="panel" id="panel-7">
     <h2>Follow-up Actions</h2>
     <ul>{actions_html if actions_html else '<li>No pending actions</li>'}</ul>
 </div>
@@ -335,15 +395,15 @@ def generate_weekly_report(dry_run: bool = False, output_path: str | None = None
             topic_engagement[topic] += 1
 
     topic_matrix = [
-        {"id": "T-MEM", "name": "Memory is the Moat", "temperature": "🔥🔥🔥", "status": "ACTIVE", "best_repo": "MemPalace", "total_engagement": topic_engagement.get("T-MEM", 0)},
-        {"id": "T-MvS", "name": "Multi-Skill > Multi-Agent", "temperature": "🔥🔥🔥", "status": "ACTIVE", "best_repo": "crewAI", "total_engagement": topic_engagement.get("T-MvS", 0)},
-        {"id": "T-CBB", "name": "Coding as Black Box", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "gstack+crewAI", "total_engagement": topic_engagement.get("T-CBB", 0)},
-        {"id": "T-CUL", "name": "Cultivation > Config", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "hermes+deer-flow", "total_engagement": topic_engagement.get("T-CUL", 0)},
-        {"id": "T-6SX", "name": "Six Self-X Properties", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "claude-code+matt", "total_engagement": topic_engagement.get("T-6SX", 0)},
-        {"id": "T-DDD", "name": "DDD Cultivation", "temperature": "🔥", "status": "ACTIVE", "best_repo": "anthropics/skills", "total_engagement": topic_engagement.get("T-DDD", 0)},
-        {"id": "T-CMP", "name": "Compound Intelligence", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "mattpocock", "total_engagement": topic_engagement.get("T-CMP", 0)},
-        {"id": "T-SOV", "name": "Memory Sovereignty", "temperature": "🔥🔥", "status": "CANDIDATE", "best_repo": "MemPalace", "total_engagement": topic_engagement.get("T-SOV", 0)},
-        {"id": "T-SxT", "name": "S×T Tension Matrix", "temperature": "🔥🔥🔥", "status": "CANDIDATE", "best_repo": "gstack", "total_engagement": topic_engagement.get("T-SxT", 0)},
+        {"id": "T-MEM", "name": "Memory is the Moat", "temperature": "🔥🔥🔥", "status": "ACTIVE", "best_repo": "MemPalace/mempalace", "discussion_num": 2, "hot_thread_url": "https://github.com/MemPalace/mempalace/discussions/1056", "total_engagement": topic_engagement.get("T-MEM", 0)},
+        {"id": "T-MvS", "name": "Multi-Skill > Multi-Agent", "temperature": "🔥🔥🔥", "status": "ACTIVE", "best_repo": "crewAIInc/crewAI", "discussion_num": 11, "hot_thread_url": "https://github.com/crewAIInc/crewAI/discussions/4232", "total_engagement": topic_engagement.get("T-MvS", 0)},
+        {"id": "T-CBB", "name": "Coding as Black Box", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "crewAIInc/crewAI", "discussion_num": 3, "hot_thread_url": "https://github.com/crewAIInc/crewAI/discussions/4232", "total_engagement": topic_engagement.get("T-CBB", 0)},
+        {"id": "T-CUL", "name": "Cultivation > Config", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "bytedance/deer-flow", "discussion_num": 5, "hot_thread_url": "https://github.com/bytedance/deer-flow/issues/3011", "total_engagement": topic_engagement.get("T-CUL", 0)},
+        {"id": "T-6SX", "name": "Six Self-X Properties", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "anthropics/claude-code", "discussion_num": 7, "hot_thread_url": "https://github.com/anthropics/claude-code/issues/16288", "total_engagement": topic_engagement.get("T-6SX", 0)},
+        {"id": "T-DDD", "name": "DDD Cultivation", "temperature": "🔥", "status": "ACTIVE", "best_repo": "anthropics/skills", "discussion_num": 8, "hot_thread_url": "https://github.com/anthropics/skills/discussions/380", "total_engagement": topic_engagement.get("T-DDD", 0)},
+        {"id": "T-CMP", "name": "Compound Intelligence", "temperature": "🔥🔥", "status": "ACTIVE", "best_repo": "MemPalace/mempalace", "discussion_num": 9, "hot_thread_url": "https://github.com/MemPalace/mempalace/discussions/1384", "total_engagement": topic_engagement.get("T-CMP", 0)},
+        {"id": "T-SOV", "name": "Memory Sovereignty", "temperature": "🔥🔥", "status": "CANDIDATE", "best_repo": "MemPalace/mempalace", "discussion_num": None, "hot_thread_url": "https://github.com/MemPalace/mempalace/discussions/759", "total_engagement": topic_engagement.get("T-SOV", 0)},
+        {"id": "T-SxT", "name": "S×T Tension Matrix", "temperature": "🔥🔥🔥", "status": "CANDIDATE", "best_repo": "garrytan/gstack", "discussion_num": 10, "hot_thread_url": "", "total_engagement": topic_engagement.get("T-SxT", 0)},
     ]
 
     # Compute activity from live data
@@ -353,12 +413,25 @@ def generate_weekly_report(dry_run: bool = False, output_path: str | None = None
         "maintainer_replies": track_results.get("maintainer_replies", 0),
     }
 
-    # Compute learnings from cultivate results
+    # Compute learnings from cultivate results (deduplicated by repo)
+    seen_repos = set()
     learnings = []
     for update in cultivate_results.get("proposed_updates", []):
+        action = update.get("action", "unknown")
+        # Extract repo from action string like "New engagement pattern from bytedance/deer-flow"
+        repo = ""
+        for word in action.split():
+            if "/" in word and not word.startswith("http"):
+                repo = word
+                break
+        if repo in seen_repos:
+            continue
+        seen_repos.add(repo)
+        url = f"https://github.com/{repo}" if repo else ""
         learnings.append({
-            "source": update.get("action", "unknown")[:40],
-            "insight": update.get("content_preview", "")[:100] or "Pattern detected from engagement data",
+            "source": action[:50],
+            "insight": update.get("content_preview", "")[:120] or "Pattern detected from engagement data",
+            "url": url,
         })
 
     ddd_health = {
@@ -411,9 +484,29 @@ def generate_weekly_report(dry_run: bool = False, output_path: str | None = None
         {"number": 11, "title": "Multi-Agent is a coordination tax"},
     ]
 
+    # Load star attribution data
+    star_log_path = ARTIFACTS_DIR / "star_log.jsonl"
+    star_entries = []
+    if star_log_path.exists():
+        with open(star_log_path) as f:
+            for line in f:
+                try:
+                    star_entries.append(json.loads(line.strip()))
+                except json.JSONDecodeError:
+                    continue
+
+    # Filter to this week's new stars (post-engagement only)
+    new_week_stars = [s for s in star_entries if s.get("confidence") != "organic"]
+    stars_data = {
+        "total": track_results.get("stars", {}).get("total_stars", len(star_entries)),
+        "new_this_week": len(new_week_stars),
+        "attributed": new_week_stars,
+    }
+
     html = generate_report_html(
         source_matrix, topic_matrix, activity, learnings, ddd_health, actions,
         comments_list=comments_list, discussions_list=discussions_list,
+        stars_data=stars_data,
     )
 
     if dry_run:

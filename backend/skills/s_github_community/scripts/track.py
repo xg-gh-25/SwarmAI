@@ -17,6 +17,7 @@ from pathlib import Path
 ARTIFACTS_DIR = Path.home() / ".swarm-ai" / "SwarmWS" / "Projects" / "GitHub_Community" / ".artifacts"
 ENGAGEMENT_LOG = ARTIFACTS_DIR / "engagement_log.jsonl"
 REPLY_ARCHIVE = ARTIFACTS_DIR / "reply_archive.jsonl"
+STAR_LOG = ARTIFACTS_DIR / "star_log.jsonl"
 
 
 def load_active_threads() -> list[dict]:
@@ -73,8 +74,158 @@ def score_engagement(entry: dict, replies: list[dict]) -> int:
     return 2  # Has replies but no maintainer
 
 
+def _load_known_stargazers() -> set[str]:
+    """Load stargazers we've already logged."""
+    if not STAR_LOG.exists():
+        return set()
+    known = set()
+    with open(STAR_LOG) as f:
+        for line in f:
+            try:
+                entry = json.loads(line.strip())
+                known.add(entry.get("user", ""))
+            except json.JSONDecodeError:
+                continue
+    return known
+
+
+def _fetch_stargazers() -> list[dict]:
+    """Fetch SwarmAI stargazers with timestamps."""
+    cmd = [
+        "gh", "api", "repos/xg-gh-25/SwarmAI/stargazers?per_page=100",
+        "-H", "Accept: application/vnd.github.v3.star+json",
+        "--jq", '[.[] | {user: .user.login, starred_at: .starred_at}]',
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            return []
+        return json.loads(result.stdout) if result.stdout.strip() else []
+    except (subprocess.TimeoutExpired, json.JSONDecodeError):
+        return []
+
+
+def _check_user_in_discussions(user: str, repos: list[str]) -> list[str]:
+    """Check if a stargazer participates in discussions/issues we've engaged with.
+
+    Checks both issues/comments AND discussion comments (separate GitHub APIs).
+    """
+    found_in = []
+    for repo in repos[:5]:  # Limit API calls
+        # Check issues/comments
+        cmd = [
+            "gh", "api", f"repos/{repo}/issues/comments",
+            "--jq", f'[.[] | select(.user.login=="{user}")] | length',
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            if result.returncode == 0 and result.stdout.strip() not in ("0", "", "[]"):
+                count = int(result.stdout.strip())
+                if count > 0:
+                    found_in.append(repo)
+                    continue
+        except (subprocess.TimeoutExpired, ValueError):
+            pass
+
+        # Check discussion comments via GraphQL
+        owner, name = repo.split("/", 1) if "/" in repo else ("", repo)
+        query = (
+            '{ repository(owner:"%s", name:"%s") { '
+            'discussionComments(last:100) { nodes { author { login } } } } }' % (owner, name)
+        )
+        cmd_gql = ["gh", "api", "graphql", "-f", f"query={query}",
+                   "--jq", f'[.data.repository.discussionComments.nodes[] | select(.author.login=="{user}")] | length']
+        try:
+            result = subprocess.run(cmd_gql, capture_output=True, text=True, timeout=15)
+            if result.returncode == 0 and result.stdout.strip() not in ("0", "", "[]"):
+                count = int(result.stdout.strip())
+                if count > 0:
+                    found_in.append(repo)
+        except (subprocess.TimeoutExpired, ValueError):
+            continue
+    return found_in
+
+
+def track_stars(engagement_log: list[dict], dry_run: bool = False) -> dict:
+    """Track new stars and attribute them to engagement activity.
+
+    Attribution logic:
+    - HIGH: starrer participates in same discussion we commented on
+    - MEDIUM: star came after our comment + starrer has starred repos in our Source Matrix
+    - LOW: star came after we started engaging but no direct connection found
+    - ORGANIC: star before our first engagement (2026-05-17)
+    """
+    ENGAGEMENT_START = "2026-05-17T00:00:00Z"  # First day we posted comments
+
+    known = _load_known_stargazers()
+    stargazers = _fetch_stargazers()
+    new_stars = [s for s in stargazers if s["user"] not in known]
+
+    # Repos we've engaged with (for attribution check)
+    engaged_repos = list({e.get("repo", "") for e in engagement_log if e.get("repo")})
+
+    star_results = {
+        "total_stars": len(stargazers),
+        "new_stars": len(new_stars),
+        "attributed": [],
+    }
+
+    for star in new_stars:
+        user = star["user"]
+        starred_at = star["starred_at"]
+
+        # Determine attribution confidence
+        if starred_at < ENGAGEMENT_START:
+            confidence = "organic"
+            source = "pre-engagement"
+            source_url = ""
+        else:
+            # Check if user is active in repos we commented on
+            overlap = _check_user_in_discussions(user, engaged_repos)
+            if overlap:
+                confidence = "high"
+                source = f"active in {', '.join(overlap)}"
+                # Link to the discussion/issue where we both participated
+                repo = overlap[0]
+                # Find our comment in that repo from engagement log
+                our_issue = None
+                for e in engagement_log:
+                    if e.get("repo") == repo:
+                        our_issue = e.get("issue_number")
+                        break
+                if our_issue:
+                    source_url = f"https://github.com/{repo}/issues/{our_issue}"
+                else:
+                    source_url = f"https://github.com/{repo}"
+            else:
+                confidence = "low"
+                source = "post-engagement, no direct link found"
+                source_url = ""
+
+        attribution = {
+            "user": user,
+            "starred_at": starred_at,
+            "confidence": confidence,
+            "source": source,
+            "source_url": source_url,
+            "tracked_at": datetime.now(timezone.utc).isoformat(),
+        }
+        star_results["attributed"].append(attribution)
+
+        if not dry_run:
+            with open(STAR_LOG, "a") as f:
+                f.write(json.dumps(attribution, default=str) + "\n")
+
+    if dry_run and new_stars:
+        print(f"[DRY RUN] Stars: {len(stargazers)} total, {len(new_stars)} new")
+        for a in star_results["attributed"]:
+            print(f"  ⭐ {a['user']} ({a['confidence']}) — {a['source']}")
+
+    return star_results
+
+
 def track(dry_run: bool = False) -> dict:
-    """Run full track cycle — check all active threads for replies."""
+    """Run full track cycle — check all active threads for replies + star attribution."""
     threads = load_active_threads()
     results = {
         "tracked_at": datetime.now(timezone.utc).isoformat(),
@@ -82,6 +233,7 @@ def track(dry_run: bool = False) -> dict:
         "replies_found": 0,
         "maintainer_replies": 0,
         "scores": [],
+        "stars": {},
     }
 
     for thread in threads:
@@ -114,10 +266,25 @@ def track(dry_run: bool = False) -> dict:
             "reply_count": len(replies),
         })
 
+    # Star attribution
+    engagement_log = []
+    if ENGAGEMENT_LOG.exists():
+        with open(ENGAGEMENT_LOG) as f:
+            for line in f:
+                try:
+                    engagement_log.append(json.loads(line.strip()))
+                except json.JSONDecodeError:
+                    continue
+
+    star_results = track_stars(engagement_log, dry_run=dry_run)
+    results["stars"] = star_results
+
     if dry_run:
         print(f"[DRY RUN] Tracked {results['threads_checked']} threads, "
               f"found {results['replies_found']} replies "
               f"({results['maintainer_replies']} from maintainers)")
+        print(f"[DRY RUN] Stars: {star_results.get('total_stars', 0)} total, "
+              f"{star_results.get('new_stars', 0)} new")
     else:
         # Save tracking results
         track_log = ARTIFACTS_DIR / "track_results.json"
