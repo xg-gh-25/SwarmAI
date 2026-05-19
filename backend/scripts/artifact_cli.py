@@ -657,18 +657,28 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                 # time via artifact_cli publish --stage (which calls validator inline).
                 # The run-complete gate enforces: "you cannot close without proof
                 # that adversarial review happened with correct tier."
-                # Gate only fires when deliver has an artifact_id (proof of publish).
-                # If no artifact_id: the stage was completed without proper pipeline
-                # ceremony — acceptable for legacy/test runs, caught by prompt-level
-                # enforcement for new runs.
+                # Gate fires when deliver stage exists as completed.
+                # If no artifact_id: that itself is a violation — proper pipeline
+                # ceremony REQUIRES publish. Missing artifact_id = skipped ceremony
+                # = BLOCK (unless profile is trivial/research/docs).
                 deliver_rec = next(
                     (s for s in run_state.get("stages", [])
                      if s.get("stage", s.get("name", "")) == "deliver"
-                     and s.get("status") in ("completed", "done")
-                     and s.get("artifact_id")),  # Only if artifact was published
+                     and s.get("status") in ("completed", "done")),
                     None,
                 )
-                if deliver_rec:
+                # Block if deliver stage completed WITHOUT artifact_id
+                # (trivial/research/docs profiles are exempt)
+                _profile = run_state.get("profile", "full")
+                if deliver_rec and not deliver_rec.get("artifact_id"):
+                    if _profile in ("full", "bugfix", "standard"):
+                        validator_errors.append(
+                            "[deliver] Stage completed without artifact_id. "
+                            "Pipeline ceremony requires: publish deliver artifact "
+                            "with adversarial_review.profile_tier field BEFORE "
+                            "marking deliver complete."
+                        )
+                if deliver_rec and deliver_rec.get("artifact_id"):
                     try:
                         result = _validate_stage(
                             project=args.project,
