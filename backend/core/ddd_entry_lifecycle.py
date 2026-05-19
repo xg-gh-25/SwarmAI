@@ -46,18 +46,23 @@ HIGH_REF_THRESHOLD = 10
 HIGH_REF_MULTIPLIER = 2
 
 # Type classification signal words (order matters — first match wins)
+# NOTE: Signals must be distinctive. Common words like "→", "pipeline", "step"
+# appear in ALL entry types and shouldn't trigger classification alone.
 _TYPE_SIGNALS: dict[str, list[str]] = {
     "pitfall": ["bug", "broke", "break", "failed", "failure", "regression",
-                "race condition", "silent", "crash", "hang", "corrupt"],
-    "decision": ["chose", "chosen", "selected", "over", "instead of",
-                 "approach", "vs", "trade-off", "tradeoff"],
-    "process": ["step", "flow", "pipeline", "→", "then", "sequence",
-                "phase", "stage", "lifecycle"],
-    "model": ["entity", "schema", "field", "relationship", "structure",
-              "data model", "table"],
-    # guideline is the fallback — detected last or as default
+                "race condition", "silent", "crash", "hang", "corrupt",
+                "anti-pattern", "wrong", "mistake"],
+    "decision": ["chose", "chosen", "selected", "instead of",
+                 "approach:", "vs ", "trade-off", "tradeoff",
+                 "we decided", "architecture decision"],
+    "process": ["workflow:", "state machine:", "lifecycle:",
+                "sequence of steps", "procedure:", "protocol:"],
+    "model": ["entity", "schema", "field", "relationship", "data structure",
+              "data model", "table schema"],
+    # guideline is the fallback — most entries are lessons/recommendations
     "guideline": ["pattern:", "rule:", "lesson:", "should", "prefer",
-                  "always", "never", "must", "principle"],
+                  "always", "never", "must", "principle", "best practice",
+                  "roi", "saves", "prevents", "eliminates", "tip:"],
 }
 
 # Regex for entry bullet with optional type prefix
@@ -124,22 +129,40 @@ class DecayTransition:
 def classify_entry_type(text: str) -> str:
     """Classify a knowledge entry's type from its text content.
 
-    Uses signal word matching. First matching type wins.
-    Ambiguous entries default to 'guideline'.
+    Uses signal word matching with priority ordering:
+    1. pitfall (strongest signals — bug/failure language)
+    2. decision (chose/selected language)
+    3. guideline (pattern/rule/lesson — most common)
+    4. model/process (rare, very specific signals)
+    5. Default: guideline (safe for ambiguous cases)
+
+    Ambiguous entries default to 'guideline' since most lessons are
+    recommendations/best practices.
     """
     text_lower = text.lower()
 
-    # Check non-default types first (pitfall, decision, process, model)
-    for entry_type in ("pitfall", "decision", "process", "model"):
-        signals = _TYPE_SIGNALS[entry_type]
-        for signal in signals:
-            if signal in text_lower:
-                return entry_type
+    # Priority 1: pitfall signals are strong and unambiguous
+    for signal in _TYPE_SIGNALS["pitfall"]:
+        if signal in text_lower:
+            return "pitfall"
 
-    # Check guideline signals
+    # Priority 2: decision signals
+    for signal in _TYPE_SIGNALS["decision"]:
+        if signal in text_lower:
+            return "decision"
+
+    # Priority 3: guideline (most common — lessons, patterns, rules)
     for signal in _TYPE_SIGNALS["guideline"]:
         if signal in text_lower:
             return "guideline"
+
+    # Priority 4: process and model (rare, need very specific signals)
+    for signal in _TYPE_SIGNALS["process"]:
+        if signal in text_lower:
+            return "process"
+    for signal in _TYPE_SIGNALS["model"]:
+        if signal in text_lower:
+            return "model"
 
     return DEFAULT_TYPE
 
@@ -254,12 +277,28 @@ def inject_entry_metadata(content: str, entries: list[EntryMetadata]) -> str:
 
     lines = content.splitlines()
     result_lines: list[str] = []
-    entry_map = {e.title: e for e in entries}
+    # Key by (title, section) to handle duplicate titles across sections
+    entry_map: dict[tuple[str, str], EntryMetadata] = {}
+    for e in entries:
+        entry_map[(e.title, e.section)] = e
+    # Also build title-only fallback for entries without section context
+    title_map: dict[str, EntryMetadata] = {}
+    for e in entries:
+        if e.title not in title_map:
+            title_map[e.title] = e
     skip_next_meta = False
+    current_section = ""
     i = 0
 
     while i < len(lines):
         line = lines[i]
+
+        # Track section headers for section-aware lookup
+        if line.startswith("## ") and not line.startswith("### "):
+            current_section = line[3:].strip()
+            result_lines.append(line)
+            i += 1
+            continue
 
         if skip_next_meta:
             # Check if this line is an old metadata comment to skip
@@ -275,8 +314,9 @@ def inject_entry_metadata(content: str, entries: list[EntryMetadata]) -> str:
             title = m.group(2)
             result_lines.append(line)
 
-            if title in entry_map:
-                entry = entry_map[title]
+            # Lookup: prefer (title, section), fall back to title-only
+            entry = entry_map.get((title, current_section)) or title_map.get(title)
+            if entry:
                 # Collect continuation lines (indented, non-metadata, non-entry)
                 i += 1
                 while i < len(lines):
@@ -326,14 +366,20 @@ def bump_references(
 ) -> int:
     """Bump reference count for entries whose titles appear in text.
 
-    Uses case-insensitive exact title match. Returns count of bumped entries.
+    Uses case-insensitive title match with minimum length guard (15 chars)
+    to prevent false positives on short titles like "Build" or "API".
     Mutates entries in-place.
     """
     text_lower = text.lower()
     bumped = 0
 
+    # Minimum title length to prevent false positives from common short words
+    _MIN_TITLE_LEN = 15
+
     for entry in entries:
         title_lower = entry.title.lower()
+        if len(title_lower) < _MIN_TITLE_LEN:
+            continue  # Skip short titles — too many false positives
         if title_lower in text_lower:
             entry.ref_count += 1
             entry.last_referenced = today
@@ -345,20 +391,29 @@ def bump_references(
 
 
 def assess_decay(
-    entries: list[EntryMetadata], today: date
+    entries: list[EntryMetadata],
+    today: date,
+    evergreen_sections: set[str] | None = None,
 ) -> list[DecayTransition]:
     """Assess decay state for all entries. Returns transitions to apply.
 
     Decay rules:
+    - Evergreen sections: entries within are immune (never decay)
     - Grace period: entries < 30 days old are immune
     - active → dormant: 90 days since last_referenced (180 if ref >= 10)
     - dormant → archived: 90 more days (180 total / 360 for high-ref)
     - Entries already archived are skipped
+    - Entries with no date info are treated as infinitely old (decay immediately)
     """
     transitions: list[DecayTransition] = []
+    _evergreen = evergreen_sections or set()
 
     for entry in entries:
         if entry.decay_state == "archived":
+            continue
+
+        # Evergreen section immunity
+        if entry.section in _evergreen:
             continue
 
         # Grace period for new entries
@@ -380,8 +435,8 @@ def assess_decay(
         elif entry.created_date:
             days_since_ref = (today - entry.created_date).days
         else:
-            # No reference date and no created date — can't assess
-            continue
+            # No date info — treat as infinitely old (triggers decay)
+            days_since_ref = archived_threshold + 1
 
         # Check transitions
         if entry.decay_state == "active":

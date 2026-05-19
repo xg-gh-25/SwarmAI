@@ -182,6 +182,16 @@ class TestBumpReferences:
         bumped = bump_references(entries, text, date(2026, 5, 19))
         assert bumped == 2
 
+    def test_short_titles_are_skipped(self):
+        """Titles < 15 chars should not match to prevent false positives."""
+        entries = parse_entries(SAMPLE_CONTENT)
+        # Override one entry to have a short title
+        entries[0].title = "Build"  # 5 chars — too short
+        text = "We need to Build the entire system from scratch."
+        bumped = bump_references(entries, text, date(2026, 5, 19))
+        # "Build" should NOT match (too short)
+        assert entries[0].ref_count == 3  # unchanged from original
+
 
 # ── AC5: assess_decay transitions correctly ──────────────────────────────────
 
