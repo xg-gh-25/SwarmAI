@@ -281,3 +281,109 @@ class TestEvaluateDemotion:
                              days_at_level=999)
         result = evaluate_demotion(state, health_score=5)
         assert result is None
+
+
+# ── AC1/AC2: archive_entries moves dormant entries to archive file ────────────
+
+class TestArchiveEntries:
+    def test_archives_dormant_entries(self, tmp_path):
+        from core.ddd_entry_lifecycle import archive_entries
+
+        # Create a source file with one dormant entry
+        src = tmp_path / "IMPROVEMENT.md"
+        src.write_text("""\
+## What Worked
+<!-- maturity: sparse | sources: 1 | verified: false | used: false | days: 0 | trust: moderate | promoted: none -->
+
+- [guideline] **Good entry still active** — stays. (2026-05-01, run_x)
+  <!-- ref:5 | last:2026-05-18 | decay:active -->
+
+- [pitfall] **Old dormant entry** — should be archived. (2025-01-01, run_old)
+  <!-- ref:0 | last:none | decay:dormant -->
+""")
+
+        entries = parse_entries(src.read_text())
+        # Mark the dormant one for archival
+        dormant_entries = [e for e in entries if e.decay_state == "dormant"]
+        assert len(dormant_entries) == 1
+
+        archived_count = archive_entries(tmp_path, dormant_entries)
+        assert archived_count == 1
+
+        # Archive file should exist with the entry
+        archive_path = tmp_path / "IMPROVEMENT-archive.md"
+        assert archive_path.exists()
+        archive_content = archive_path.read_text()
+        assert "Old dormant entry" in archive_content
+        assert "<!-- ref:0" in archive_content
+
+    def test_archive_appends_to_existing_archive(self, tmp_path):
+        from core.ddd_entry_lifecycle import archive_entries, EntryMetadata
+
+        # Create existing archive
+        archive_path = tmp_path / "IMPROVEMENT-archive.md"
+        archive_path.write_text("# Archived Knowledge Entries\n\n- [guideline] **Previous** — old. (2024-01-01)\n  <!-- ref:0 | last:none | decay:archived -->\n")
+
+        entry = EntryMetadata(
+            title="New archived entry",
+            entry_type="pitfall",
+            ref_count=0,
+            decay_state="dormant",
+            raw_text="- [pitfall] **New archived entry** — something. (2025-06-01, run_y)",
+            created_date=date(2025, 6, 1),
+        )
+        archived_count = archive_entries(tmp_path, [entry])
+        assert archived_count == 1
+
+        content = archive_path.read_text()
+        assert "Previous" in content  # Existing preserved
+        assert "New archived entry" in content  # New appended
+
+
+# ── AC3/AC4/AC5: get_stage_knowledge ─────────────────────────────────────────
+
+class TestGetStageKnowledge:
+    def test_returns_filtered_by_type_and_stage(self):
+        from core.ddd_entry_lifecycle import get_stage_knowledge
+
+        entries = parse_entries(SAMPLE_CONTENT)
+        # BUILD stage should get guideline + pitfall entries
+        result = get_stage_knowledge(entries, "build")
+        types_returned = {e.entry_type for e in result}
+        # BUILD affinity: guideline(7) + pitfall(5) + decision(2)
+        assert "guideline" in types_returned or "pitfall" in types_returned
+
+    def test_respects_max_per_type(self):
+        from core.ddd_entry_lifecycle import get_stage_knowledge
+
+        entries = parse_entries(SAMPLE_CONTENT)
+        result = get_stage_knowledge(entries, "build")
+        # Should not exceed total budget (guideline:7 + pitfall:5 + decision:2 = 14 max)
+        assert len(result) <= 14
+
+    def test_excludes_dormant_entries(self):
+        from core.ddd_entry_lifecycle import get_stage_knowledge
+
+        entries = parse_entries(SAMPLE_CONTENT)
+        # Mark one as dormant
+        entries[0].decay_state = "dormant"
+        result = get_stage_knowledge(entries, "build")
+        dormant_in_result = [e for e in result if e.decay_state == "dormant"]
+        assert len(dormant_in_result) == 0
+
+    def test_sorts_by_ref_count_descending(self):
+        from core.ddd_entry_lifecycle import get_stage_knowledge
+
+        entries = parse_entries(SAMPLE_CONTENT)
+        result = get_stage_knowledge(entries, "review")
+        if len(result) >= 2:
+            # Higher ref_count should come first
+            for i in range(len(result) - 1):
+                assert result[i].ref_count >= result[i + 1].ref_count
+
+    def test_unknown_stage_returns_empty(self):
+        from core.ddd_entry_lifecycle import get_stage_knowledge
+
+        entries = parse_entries(SAMPLE_CONTENT)
+        result = get_stage_knowledge(entries, "nonexistent_stage")
+        assert result == []
