@@ -167,7 +167,7 @@ R13. **Environment** — `nc -z` for port checks (never `lsof`). `asyncio.to_thr
 
 R14. **Deploy scope = rollback scope** — 1:1. One format + multiple writers = unify immediately. (P1)
 
-R15. **Read external API before coding against it.** Never code from memory. (P1)
+R15. **Read external API before coding against it.** Never code from memory. Symmetric: verify callers exist for new public functions (0 callers = dead code). (P1)
 
 ## Rules — Communication (P1, P3)
 

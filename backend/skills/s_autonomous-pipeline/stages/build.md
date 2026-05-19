@@ -148,6 +148,30 @@ instead of the whole plan.
 12. If existing tests break -- fix production code, NOT the existing tests
 13. Track all files changed and test results
 
+## Step 3.5: CALLER VERIFICATION (for new public functions)
+
+**After tests pass, before SMOKE:** verify that new public symbols are wired.
+
+For each NEW public function, class, or hook created in this changeset:
+
+```bash
+# Check: does anyone call this in production code?
+grep -rn "function_name" <project_root> --include="*.py" | grep -v "def function_name" | grep -v "test_"
+```
+
+| Result | Action |
+|--------|--------|
+| 0 callers (excluding tests + definition) | **WARN** — dead code unless wired. Add the caller NOW or document why it's deferred. |
+| 1+ callers | Verify: caller's arguments match function signature. Caller handles return type. |
+
+**Why this exists:** PE review (2026-05-19) found `create_governance_file_gate()` had
+full test coverage, passed adversarial review, but zero callers in production — dead
+code. The function was never registered in `hook_builder.py`. This check catches
+"correct but disconnected" code at BUILD time, before it reaches adversarial review.
+
+**Skip when:** changeset is pure refactoring (existing callers unchanged) or
+changeset modifies only private/internal functions (leading underscore).
+
 ## Step 4: SMOKE -- exercise new code paths (catch runtime crashes)
 
 14. For each modified file that has new branches (if/else, try/except,
