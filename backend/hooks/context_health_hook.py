@@ -1295,6 +1295,10 @@ class ContextHealthHook:
         # 10. Governance budget enforcement (Three-Layer Governance)
         findings += self._check_governance_budgets(root, context_dir)
 
+        # 11. Context token budget measurement
+        if context_dir.is_dir():
+            findings += self._check_token_budget(context_dir)
+
         # Persist findings for session briefing
         self._persist_findings(root, findings)
 
@@ -1475,6 +1479,65 @@ class ContextHealthHook:
                 except OSError:
                     findings.append(f"STALE-CACHE: L1 cache older than {source.name}")
                 break  # Only need to invalidate once
+
+    # ── Context Token Budget Measurement ─────────────────────────────
+
+    # The 9 context files that compose the system prompt (assembly order)
+    _CONTEXT_FILES = (
+        "SOUL.md", "AGENT.md", "USER.md", "STEERING.md", "TOOLS.md",
+        "MEMORY.md", "EVOLUTION.md", "KNOWLEDGE.md", "PROJECTS.md",
+    )
+    _WARNING_THRESHOLD = 75_000
+    _EMERGENCY_THRESHOLD = 85_000
+
+    def _check_token_budget(self, context_dir: Path) -> list[str]:
+        """Measure total token consumption across all 9 context files.
+
+        Uses a CJK-aware heuristic: CJK chars ≈ 1.5 tokens, ASCII ≈ 1/3.5 tokens.
+        Emits WARNING/EMERGENCY finding when over threshold.
+        Persists measurement to self._token_measurement for session briefing.
+        """
+        findings: list[str] = []
+        total_tokens = 0
+        file_tokens: dict[str, int] = {}
+
+        for fname in self._CONTEXT_FILES:
+            path = context_dir / fname
+            if not path.exists():
+                continue
+            content = path.read_text(encoding="utf-8")
+            # CJK-aware estimation
+            cjk_chars = sum(1 for c in content if '一' <= c <= '鿿')
+            ascii_chars = len(content) - cjk_chars
+            tokens = int(cjk_chars * 1.5 + ascii_chars / 3.5)
+            file_tokens[fname] = tokens
+            total_tokens += tokens
+
+        # Store measurement for external consumers (session briefing, optimizer job)
+        self._token_measurement = {
+            "total_tokens": total_tokens,
+            "per_file": file_tokens,
+            "warning_threshold": self._WARNING_THRESHOLD,
+            "emergency_threshold": self._EMERGENCY_THRESHOLD,
+            "over_budget": total_tokens > self._WARNING_THRESHOLD,
+        }
+
+        if total_tokens > self._EMERGENCY_THRESHOLD:
+            sorted_files = sorted(file_tokens.items(), key=lambda x: -x[1])
+            top3 = ", ".join(f"{f}({t})" for f, t in sorted_files[:3])
+            findings.append(
+                f"[context/budget] EMERGENCY: {total_tokens}/{self._EMERGENCY_THRESHOLD} "
+                f"tokens. Top: {top3}. Auto-triggering Phase 1 compression."
+            )
+        elif total_tokens > self._WARNING_THRESHOLD:
+            sorted_files = sorted(file_tokens.items(), key=lambda x: -x[1])
+            top3 = ", ".join(f"{f}({t})" for f, t in sorted_files[:3])
+            findings.append(
+                f"[context/budget] WARNING: {total_tokens}/{self._WARNING_THRESHOLD} "
+                f"tokens. Top: {top3}. Plan compression before next weekly run."
+            )
+
+        return findings
 
     def _check_governance_budgets(self, root: Path, context_dir: Path) -> list[str]:
         """Enforce Three-Layer Governance budget limits.

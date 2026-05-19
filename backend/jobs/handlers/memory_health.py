@@ -590,6 +590,138 @@ def _apply_report(report: dict, memory_md: str, evolution_md: str) -> list[str]:
     return actions
 
 
+# ── Phase 1 Rule 1: EVOLUTION Auto-Compression ───────────────────────
+
+
+def _compress_evolution_entries(
+    evo_path: Path,
+    active_bias_classes: set[str],
+    recent_da_refs: set[str],
+    dry_run: bool = False,
+    max_compressions: int = 5,
+) -> dict:
+    """Compress resolved/mitigated EVOLUTION corrections to 1-line summaries.
+
+    Value-based compression:
+    - RETAIN if status is "active" (never compress active)
+    - RETAIN if bias class has any active correction (PROTECTIVE)
+    - RETAIN if referenced in recent DailyActivity (ACTIVE)
+    - COMPRESS if resolved/mitigated + dormant + non-protective
+
+    Args:
+        evo_path: Path to EVOLUTION.md
+        active_bias_classes: Set of bias classes (e.g. {"A", "D"}) that have
+            at least one active correction — entries in these classes stay full.
+        recent_da_refs: Set of correction IDs referenced in last 60 days of
+            DailyActivity (e.g. {"C011", "C025"}).
+        dry_run: If True, report what would compress without writing.
+        max_compressions: Safety cap per run (default 5).
+
+    Returns:
+        Dict with "compressed" (list of IDs compressed) or "would_compress" (dry_run).
+    """
+    if not evo_path.exists():
+        return {"compressed": [], "would_compress": []}
+
+    content = evo_path.read_text(encoding="utf-8")
+    lines = content.split("\n")
+
+    # Parse correction blocks: ### C{N} | {date} [Bias X]
+    correction_pattern = re.compile(
+        r"^### (C\d+) \| (\d{4}-\d{2}-\d{2}) (?:\[Bias ([A-Z])\])?"
+    )
+    status_pattern = re.compile(r"- \*\*Status\*\*:\s*(\w+)")
+
+    # Identify blocks to compress
+    blocks: list[dict] = []
+    current_block: dict | None = None
+
+    for i, line in enumerate(lines):
+        m = correction_pattern.match(line)
+        if m:
+            if current_block:
+                current_block["end"] = i
+                blocks.append(current_block)
+            current_block = {
+                "id": m.group(1),
+                "date": m.group(2),
+                "bias": m.group(3) or "",
+                "start": i,
+                "end": len(lines),
+                "status": "unknown",
+                "summary_line": "",
+            }
+        elif current_block:
+            sm = status_pattern.search(line)
+            if sm:
+                current_block["status"] = sm.group(1).lower()
+            # Next section header ends the block
+            if line.startswith("## ") and not line.startswith("### "):
+                current_block["end"] = i
+                blocks.append(current_block)
+                current_block = None
+            elif line.startswith("### ") and not correction_pattern.match(line):
+                current_block["end"] = i
+                blocks.append(current_block)
+                current_block = None
+
+    if current_block:
+        current_block["end"] = len(lines)
+        blocks.append(current_block)
+
+    # Decide which to compress
+    to_compress: list[dict] = []
+    for block in blocks:
+        # Only compress resolved/mitigated
+        if block["status"] not in ("resolved", "mitigated"):
+            continue
+        # PROTECTIVE: bias class has active corrections
+        if block["bias"] and block["bias"] in active_bias_classes:
+            continue
+        # ACTIVE: referenced in recent DailyActivity
+        if block["id"] in recent_da_refs:
+            continue
+        to_compress.append(block)
+
+    # Cap at max_compressions
+    to_compress = to_compress[:max_compressions]
+
+    if dry_run:
+        return {"would_compress": [b["id"] for b in to_compress], "compressed": []}
+
+    if not to_compress:
+        return {"compressed": [], "would_compress": []}
+
+    # Create backup
+    backup_name = f"EVOLUTION.md.pre-compress-{datetime.now(timezone.utc).strftime('%Y%m%d')}"
+    backup_path = evo_path.parent / backup_name
+    backup_path.write_text(content, encoding="utf-8")
+
+    # Apply compressions (process in reverse order to maintain line indices)
+    compressed_ids: list[str] = []
+    for block in sorted(to_compress, key=lambda b: b["start"], reverse=True):
+        # Build 1-line summary
+        status_upper = block["status"].upper()
+        # Extract first line of correction text for summary
+        correction_text = ""
+        for line in lines[block["start"] + 1:block["end"]]:
+            if line.strip().startswith("- **Correction**:"):
+                correction_text = line.strip().replace("- **Correction**: ", "")[:80]
+                break
+        one_liner = f"### {block['id']} | {block['date']} — {status_upper}: {correction_text}"
+
+        # Replace block with 1-liner
+        lines[block["start"]:block["end"]] = [one_liner, ""]
+        compressed_ids.append(block["id"])
+
+    # Write
+    evo_path.write_text("\n".join(lines), encoding="utf-8")
+    logger.info("EVOLUTION auto-compress: %d entries compressed: %s",
+                len(compressed_ids), compressed_ids)
+
+    return {"compressed": compressed_ids, "would_compress": []}
+
+
 def _normalize_prefix(prefix: str) -> str:
     """Strip index formatting so LLM prefixes match file content.
 
