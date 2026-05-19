@@ -199,9 +199,20 @@ def validate_artifact_data(stage: str, data: dict) -> list[str]:
             errors.append(f"Missing required field '{field}' for stage '{stage}'")
 
     # Depth: nested required fields
+    # Absent parent field = depth requirement FAILED (not silently skipped)
     for parent_field, child_fields in STAGE_DEPTH.get(stage, {}).items():
         parent_val = data.get(parent_field)
-        if isinstance(parent_val, dict):
+        if parent_val is None:
+            # Parent field entirely absent — this IS the violation
+            # Exception: trivial/research/docs profiles can skip adversarial
+            _skip_profiles = ("trivial", "research", "docs")
+            if profile not in _skip_profiles:
+                errors.append(
+                    f"Missing required field '{parent_field}' — "
+                    f"depth validation requires this for {stage} stage "
+                    f"(profile={profile}). Was the step actually executed?"
+                )
+        elif isinstance(parent_val, dict):
             for child in child_fields:
                 if child not in parent_val:
                     errors.append(
@@ -689,9 +700,17 @@ def _check_depth(stage: str, artifact_data: dict, profile: str) -> list[str]:
                 )
 
     if stage == "deliver":
-        # adversarial_review: must be dict with profile_tier
+        # adversarial_review: MUST exist as dict with profile_tier for full/bugfix
         ar = artifact_data.get("adversarial_review")
-        if ar is not None and not isinstance(ar, dict):
+        if ar is None:
+            # Absent field = adversarial review was never run
+            if profile in ("full", "bugfix", "standard", ""):
+                errors.append(
+                    "Depth: adversarial_review field MISSING from deliver artifact — "
+                    "adversarial sub-agent was never spawned. This is MANDATORY for "
+                    "full/bugfix profiles. Spawn specialist sub-agents before publishing."
+                )
+        elif not isinstance(ar, dict):
             errors.append(
                 f"Depth: adversarial_review must be a dict, got {type(ar).__name__}"
             )
@@ -724,9 +743,15 @@ def _check_depth(stage: str, artifact_data: dict, profile: str) -> list[str]:
                         f"unresolved HIGH finding(s) — fix before delivery"
                     )
 
-        # completion_audit: must have explicit all_green + evidence quality
+        # completion_audit: MUST exist for full/bugfix profiles
         ca = artifact_data.get("completion_audit")
-        if isinstance(ca, dict):
+        if ca is None and profile in ("full", "bugfix", "standard", ""):
+            errors.append(
+                "Depth: completion_audit field MISSING from deliver artifact — "
+                "was the Completion Audit (AC → evidence verification) actually run? "
+                "This is MANDATORY. Run the audit before publishing."
+            )
+        elif isinstance(ca, dict):
             if "all_green" not in ca:
                 errors.append(
                     "Depth: completion_audit.all_green missing — "
