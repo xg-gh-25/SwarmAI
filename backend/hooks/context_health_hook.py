@@ -1292,6 +1292,9 @@ class ContextHealthHook:
         except Exception as exc:
             logger.debug("context_health: AI docs refresh skipped: %s", exc)
 
+        # 10. Governance budget enforcement (Three-Layer Governance)
+        findings += self._check_governance_budgets(root, context_dir)
+
         # Persist findings for session briefing
         self._persist_findings(root, findings)
 
@@ -1472,6 +1475,79 @@ class ContextHealthHook:
                 except OSError:
                     findings.append(f"STALE-CACHE: L1 cache older than {source.name}")
                 break  # Only need to invalidate once
+
+    def _check_governance_budgets(self, root: Path, context_dir: Path) -> list[str]:
+        """Enforce Three-Layer Governance budget limits.
+
+        Counts principles in SOUL.md, rules in AGENT.md, and standing rules
+        in STEERING.md. Warns if any exceed their hard cap.
+
+        Budget caps (from design):
+          - SOUL.md principles: ≤5
+          - AGENT.md rules: ≤25
+          - STEERING.md standing rules: ≤15
+        """
+        findings: list[str] = []
+
+        # Check SOUL.md principle count (### P\d+:)
+        soul_path = context_dir / "SOUL.md"
+        if soul_path.exists():
+            try:
+                content = soul_path.read_text(encoding="utf-8")
+                principles = len(re.findall(r"^### P\d+", content, re.MULTILINE))
+                if principles > 5:
+                    findings.append(
+                        f"[governance/budget] SOUL.md principles OVER BUDGET: "
+                        f"{principles}/5"
+                    )
+            except OSError:
+                pass
+
+        # Check AGENT.md rule count (R\d+\. at start of line)
+        # Also check backend source (canonical)
+        agent_paths = [
+            context_dir / "AGENT.md",
+            root.parent / "swarmai" / "backend" / "context" / "AGENT.md",
+        ]
+        for agent_path in agent_paths:
+            if agent_path.exists():
+                try:
+                    content = agent_path.read_text(encoding="utf-8")
+                    rules = len(re.findall(r"^R\d+\.", content, re.MULTILINE))
+                    if rules > 25:
+                        findings.append(
+                            f"[governance/budget] AGENT.md rules OVER BUDGET: "
+                            f"{rules}/25 ({agent_path.name})"
+                        )
+                except OSError:
+                    pass
+                break  # Only check one copy
+
+        # Check STEERING.md standing rules (### headings under ## Standing Rules)
+        steering_path = context_dir / "STEERING.md"
+        if steering_path.exists():
+            try:
+                content = steering_path.read_text(encoding="utf-8")
+                # Count ### sections under "## Standing Rules"
+                in_standing = False
+                rule_count = 0
+                for line in content.splitlines():
+                    if line.startswith("## Standing Rules"):
+                        in_standing = True
+                        continue
+                    if in_standing and line.startswith("## ") and not line.startswith("## Standing"):
+                        break
+                    if in_standing and line.startswith("### "):
+                        rule_count += 1
+                if rule_count > 15:
+                    findings.append(
+                        f"[governance/budget] STEERING.md rules OVER BUDGET: "
+                        f"{rule_count}/15"
+                    )
+            except OSError:
+                pass
+
+        return findings
 
     def _persist_findings(self, root: Path, findings: list[str]) -> None:
         """Write findings to health_findings.json for session briefing.
