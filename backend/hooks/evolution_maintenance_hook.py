@@ -538,7 +538,17 @@ class EvolutionMaintenanceHook:
         Uses direct line scanning (not _parse_entries) because correction
         headers contain [Bias X] after the date — the $-anchored
         _ENTRY_HEADER_RE won't match them.
+
+        Gracefully handles missing/empty EVOLUTION.md or missing
+        Corrections section (first-run safety — OPS-3 fix).
         """
+        # Guard: if no content or no Corrections section, no-op
+        if "## Corrections Captured" not in content:
+            logger.debug(
+                "Governance threshold: no 'Corrections Captured' section, skipping"
+            )
+            return
+
         # Count active corrections per bias class via direct line scanning
         bias_counts: dict[str, int] = {"A": 0, "B": 0, "C": 0, "D": 0}
 
