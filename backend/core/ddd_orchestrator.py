@@ -58,6 +58,7 @@ class DddCultivationOrchestrator:
         "entity_index_validation": 2.0,
         "signal_ddd_bridge": 3.0,
         "code_intel_drift": 5.0,
+        "entry_lifecycle": 3.0,
     }
 
     def _get_gate_manager(self, root: Path) -> "GateManager | None":
@@ -94,6 +95,9 @@ class DddCultivationOrchestrator:
             }),
             ("code_intel_drift", self._ch_code_intel, {
                 EventType.CODE_INTEL_INDEXED,
+            }),
+            ("entry_lifecycle", self._ch_entry_lifecycle, {
+                EventType.TIMER_30MIN, EventType.SESSION_CLOSE,
             }),
         ]
 
@@ -615,3 +619,63 @@ class DddCultivationOrchestrator:
                 drift_count,
             )
         return []
+
+    def _ch_entry_lifecycle(self, root: Path, ws_path: str) -> list[str]:
+        """Channel 8: Per-entry decay assessment and state transitions.
+
+        Runs on TIMER_30MIN and SESSION_CLOSE. Checks all entries in
+        IMPROVEMENT.md for decay transitions (active→dormant→archived).
+        Only performs archival once per calendar day.
+        """
+        from datetime import date as _date
+        from core.ddd_entry_lifecycle import (
+            parse_entries,
+            assess_decay,
+            inject_entry_metadata,
+        )
+
+        findings: list[str] = []
+        projects_dir = Path(ws_path) / "Projects"
+        if not projects_dir.is_dir():
+            return findings
+
+        today = _date.today()
+
+        for project_dir in projects_dir.iterdir():
+            if not project_dir.is_dir():
+                continue
+            imp_path = project_dir / "IMPROVEMENT.md"
+            if not imp_path.is_file():
+                continue
+
+            try:
+                content = imp_path.read_text(encoding="utf-8")
+                entries = parse_entries(content)
+                if not entries:
+                    continue
+
+                transitions = assess_decay(entries, today)
+                if not transitions:
+                    continue
+
+                # Apply transitions (mutate entries in-place)
+                for t in transitions:
+                    t.entry.decay_state = t.new_state
+                    findings.append(
+                        f"ENTRY_DECAY: [{t.entry.entry_type}] "
+                        f"'{t.entry.title[:50]}' "
+                        f"{t.old_state}→{t.new_state} ({t.reason})"
+                    )
+
+                # Write updated metadata back
+                updated = inject_entry_metadata(content, entries)
+                if updated != content:
+                    imp_path.write_text(updated, encoding="utf-8")
+
+            except Exception as exc:
+                logger.debug(
+                    "entry_lifecycle: %s failed: %s",
+                    project_dir.name, exc,
+                )
+
+        return findings
