@@ -32,12 +32,12 @@ class TestOrchestratorExists:
         findings = orch.run(tmp_path, str(tmp_path))
         assert isinstance(findings, list)
 
-    def test_orchestrator_has_7_channels(self):
+    def test_orchestrator_has_8_channels(self):
         from core.ddd_orchestrator import DddCultivationOrchestrator
 
         orch = DddCultivationOrchestrator()
         assert hasattr(orch, "channels")
-        assert len(orch.channels) == 7
+        assert len(orch.channels) == 8
 
 
 class TestChannelIsolation:
