@@ -642,16 +642,24 @@ class DddCultivationOrchestrator:
             return findings
 
         today = _date.today()
+        resolved_projects = projects_dir.resolve()
 
         for project_dir in projects_dir.iterdir():
             if not project_dir.is_dir():
+                continue
+            # S1/S3 fix: skip symlinks and validate containment
+            if project_dir.is_symlink():
+                continue
+            if not project_dir.resolve().is_relative_to(resolved_projects):
                 continue
             imp_path = project_dir / "IMPROVEMENT.md"
             if not imp_path.is_file():
                 continue
 
+            lock_fd = None
             try:
                 # Advisory file lock to prevent concurrent writes (F5 fix)
+                # C1 fix: use try/finally around entire open+lock sequence
                 lock_path = project_dir / ".IMPROVEMENT.md.lock"
                 lock_fd = open(lock_path, "w")
                 try:
@@ -659,47 +667,53 @@ class DddCultivationOrchestrator:
                 except (OSError, IOError):
                     # Another process holds the lock — skip this project
                     lock_fd.close()
+                    lock_fd = None
                     continue
 
-                try:
-                    content = imp_path.read_text(encoding="utf-8")
-                    entries = parse_entries(content)
-                    if not entries:
-                        continue
-
+                content = imp_path.read_text(encoding="utf-8")
+                entries = parse_entries(content)
+                if not entries:
+                    # C2 fix: don't use continue — fall through to finally
+                    pass
+                else:
                     transitions = assess_decay(entries, today)
-                    if not transitions:
-                        continue
+                    if transitions:
+                        # Separate archival transitions from dormant transitions
+                        to_archive = []
+                        for t in transitions:
+                            t.entry.decay_state = t.new_state
+                            findings.append(
+                                f"ENTRY_DECAY: [{t.entry.entry_type}] "
+                                f"'{t.entry.title[:50]}' "
+                                f"{t.old_state}→{t.new_state} ({t.reason})"
+                            )
+                            if t.new_state == "archived":
+                                to_archive.append(t.entry)
 
-                    # Separate archival transitions from dormant transitions
-                    to_archive = []
-                    for t in transitions:
-                        t.entry.decay_state = t.new_state
-                        findings.append(
-                            f"ENTRY_DECAY: [{t.entry.entry_type}] "
-                            f"'{t.entry.title[:50]}' "
-                            f"{t.old_state}→{t.new_state} ({t.reason})"
-                        )
-                        if t.new_state == "archived":
-                            to_archive.append(t.entry)
+                        # Archive entries that transitioned to archived state
+                        if to_archive:
+                            archive_entries(project_dir, to_archive)
 
-                    # Archive entries that transitioned to archived state
-                    if to_archive:
-                        archive_entries(project_dir, to_archive)
+                        # C6 fix: filter out archived entries before injecting metadata
+                        active_entries = [e for e in entries if e.decay_state != "archived"]
 
-                    # Write updated metadata back
-                    updated = inject_entry_metadata(content, entries)
-                    if updated != content:
-                        imp_path.write_text(updated, encoding="utf-8")
-
-                finally:
-                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
-                    lock_fd.close()
+                        # Write updated metadata back (only for non-archived entries)
+                        updated = inject_entry_metadata(content, active_entries)
+                        if updated != content:
+                            imp_path.write_text(updated, encoding="utf-8")
 
             except Exception as exc:
                 logger.debug(
                     "entry_lifecycle: %s failed: %s",
-                    project_dir.name, exc,
+                    project_dir.name, type(exc).__name__,
                 )
+            finally:
+                # C1/C2 fix: always release lock regardless of path taken
+                if lock_fd is not None:
+                    try:
+                        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    except (OSError, IOError):
+                        pass
+                    lock_fd.close()
 
         return findings

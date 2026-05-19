@@ -183,7 +183,7 @@ class TestBumpReferences:
         assert bumped == 2
 
     def test_short_titles_are_skipped(self):
-        """Titles < 15 chars should not match to prevent false positives."""
+        """Titles < 8 chars should not match to prevent false positives."""
         entries = parse_entries(SAMPLE_CONTENT)
         # Override one entry to have a short title
         entries[0].title = "Build"  # 5 chars — too short
