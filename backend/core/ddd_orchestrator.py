@@ -625,13 +625,15 @@ class DddCultivationOrchestrator:
 
         Runs on TIMER_30MIN and SESSION_CLOSE. Checks all entries in
         IMPROVEMENT.md for decay transitions (active→dormant→archived).
-        Only performs archival once per calendar day.
+        Uses fcntl advisory lock to prevent concurrent read-modify-write.
         """
+        import fcntl
         from datetime import date as _date
         from core.ddd_entry_lifecycle import (
-            parse_entries,
+            archive_entries,
             assess_decay,
             inject_entry_metadata,
+            parse_entries,
         )
 
         findings: list[str] = []
@@ -649,28 +651,50 @@ class DddCultivationOrchestrator:
                 continue
 
             try:
-                content = imp_path.read_text(encoding="utf-8")
-                entries = parse_entries(content)
-                if not entries:
+                # Advisory file lock to prevent concurrent writes (F5 fix)
+                lock_path = project_dir / ".IMPROVEMENT.md.lock"
+                lock_fd = open(lock_path, "w")
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except (OSError, IOError):
+                    # Another process holds the lock — skip this project
+                    lock_fd.close()
                     continue
 
-                transitions = assess_decay(entries, today)
-                if not transitions:
-                    continue
+                try:
+                    content = imp_path.read_text(encoding="utf-8")
+                    entries = parse_entries(content)
+                    if not entries:
+                        continue
 
-                # Apply transitions (mutate entries in-place)
-                for t in transitions:
-                    t.entry.decay_state = t.new_state
-                    findings.append(
-                        f"ENTRY_DECAY: [{t.entry.entry_type}] "
-                        f"'{t.entry.title[:50]}' "
-                        f"{t.old_state}→{t.new_state} ({t.reason})"
-                    )
+                    transitions = assess_decay(entries, today)
+                    if not transitions:
+                        continue
 
-                # Write updated metadata back
-                updated = inject_entry_metadata(content, entries)
-                if updated != content:
-                    imp_path.write_text(updated, encoding="utf-8")
+                    # Separate archival transitions from dormant transitions
+                    to_archive = []
+                    for t in transitions:
+                        t.entry.decay_state = t.new_state
+                        findings.append(
+                            f"ENTRY_DECAY: [{t.entry.entry_type}] "
+                            f"'{t.entry.title[:50]}' "
+                            f"{t.old_state}→{t.new_state} ({t.reason})"
+                        )
+                        if t.new_state == "archived":
+                            to_archive.append(t.entry)
+
+                    # Archive entries that transitioned to archived state
+                    if to_archive:
+                        archive_entries(project_dir, to_archive)
+
+                    # Write updated metadata back
+                    updated = inject_entry_metadata(content, entries)
+                    if updated != content:
+                        imp_path.write_text(updated, encoding="utf-8")
+
+                finally:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    lock_fd.close()
 
             except Exception as exc:
                 logger.debug(

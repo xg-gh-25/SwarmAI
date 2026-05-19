@@ -459,6 +459,114 @@ def assess_decay(
     return transitions
 
 
+def archive_entries(
+    project_dir: "Path", entries: list[EntryMetadata]
+) -> int:
+    """Move entries to IMPROVEMENT-archive.md and return count archived.
+
+    Creates archive file if it doesn't exist. Appends entries with their
+    full raw_text + metadata comment. Marks entries as 'archived' in-place.
+
+    Args:
+        project_dir: Path to the project directory (e.g., Projects/SwarmAI/)
+        entries: Entries to archive (should be dormant or otherwise marked)
+
+    Returns:
+        Number of entries successfully archived.
+    """
+    from pathlib import Path as _Path
+
+    if not entries:
+        return 0
+
+    archive_path = _Path(project_dir) / "IMPROVEMENT-archive.md"
+
+    # Build archive content to append
+    archive_lines: list[str] = []
+    for entry in entries:
+        # Use raw_text if available, otherwise reconstruct
+        if entry.raw_text:
+            archive_lines.append(entry.raw_text)
+        else:
+            archive_lines.append(
+                f"- [{entry.entry_type}] **{entry.title}** — (archived)"
+            )
+        # Add metadata with archived state
+        entry.decay_state = "archived"
+        archive_lines.append(entry.to_comment())
+        archive_lines.append("")  # Blank separator
+
+    new_content = "\n".join(archive_lines)
+
+    # Write to archive file (create or append)
+    if archive_path.exists():
+        existing = archive_path.read_text(encoding="utf-8")
+        if not existing.endswith("\n"):
+            existing += "\n"
+        archive_path.write_text(
+            existing + "\n" + new_content, encoding="utf-8"
+        )
+    else:
+        header = "# Archived Knowledge Entries\n\n"
+        header += "_Entries archived by the Knowledge Lifecycle decay engine. "
+        header += "These entries had no references for 180+ days._\n\n"
+        archive_path.write_text(
+            header + new_content, encoding="utf-8"
+        )
+
+    return len(entries)
+
+
+# ── Stage Knowledge Injection ─────────────────────────────────────────────────
+
+# Pipeline stages get type-filtered knowledge sorted by relevance (ref count).
+# Each stage has an affinity map: {type: max_entries_of_that_type}
+STAGE_KNOWLEDGE_AFFINITY: dict[str, dict[str, int]] = {
+    "evaluate": {"decision": 5, "model": 3, "process": 2},
+    "think":    {"decision": 5, "guideline": 3, "pitfall": 2},
+    "plan":     {"decision": 3, "model": 3, "process": 5},
+    "build":    {"guideline": 7, "pitfall": 5, "decision": 2},
+    "review":   {"pitfall": 7, "guideline": 5},
+    "test":     {"pitfall": 5, "guideline": 3},
+    "deliver":  {"process": 3, "guideline": 2},
+    "reflect":  {"guideline": 3, "pitfall": 2},
+}
+
+
+def get_stage_knowledge(
+    entries: list[EntryMetadata], stage: str
+) -> list[EntryMetadata]:
+    """Get type-filtered, relevance-sorted entries for a pipeline stage.
+
+    Returns entries matching the stage's type affinity, sorted by ref_count
+    descending (most-referenced first). Excludes dormant and archived entries.
+
+    Args:
+        entries: All parsed entries from IMPROVEMENT.md
+        stage: Pipeline stage name (lowercase: evaluate, think, plan, build, etc.)
+
+    Returns:
+        Filtered + sorted list of entries for injection into the stage context.
+    """
+    affinity = STAGE_KNOWLEDGE_AFFINITY.get(stage.lower())
+    if not affinity:
+        return []
+
+    # Filter: only active entries
+    active = [e for e in entries if e.decay_state == "active"]
+
+    # Group by type, sort each group by ref_count descending
+    result: list[EntryMetadata] = []
+    for entry_type, max_count in affinity.items():
+        typed = [e for e in active if e.entry_type == entry_type]
+        typed.sort(key=lambda e: e.ref_count, reverse=True)
+        result.extend(typed[:max_count])
+
+    # Final sort: highest ref_count first across all types
+    result.sort(key=lambda e: e.ref_count, reverse=True)
+    return result
+
+
 # ── Private Helpers ───────────────────────────────────────────────────────────
 
 
