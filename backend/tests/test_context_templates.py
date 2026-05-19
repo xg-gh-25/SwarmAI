@@ -102,31 +102,32 @@ class TestIdentityTemplate:
 # ---------------------------------------------------------------------------
 
 class TestAgentTemplate:
-    """Verify AGENT.md has write-it-down directive, safety rules, and channel behavior."""
+    """Verify AGENT.md has core governance structure, safety rules, and principles."""
 
-    def test_write_it_down_directive(self):
+    def test_files_over_brain_directive(self):
         content = _read_template("AGENT.md")
-        assert "Write it down" in content
+        assert "Files > Brain" in content
 
     def test_trash_over_rm_rule(self):
         content = _read_template("AGENT.md")
         assert "trash > rm" in content
 
-    def test_channel_behavior_section(self):
+    def test_has_rules_section(self):
         content = _read_template("AGENT.md")
-        assert "## Channel Behavior" in content
+        # Three-Layer Governance: rules tagged with parent principle
+        assert "## Rules" in content
 
-    def test_channel_slack(self):
+    def test_has_intake_gate(self):
         content = _read_template("AGENT.md")
-        assert "Slack" in content
+        assert "Intake Gate" in content
 
-    def test_channel_cli(self):
+    def test_has_coding_rules(self):
         content = _read_template("AGENT.md")
-        assert "CLI" in content
+        assert "Coding" in content
 
-    def test_channel_web(self):
+    def test_has_safety_section(self):
         content = _read_template("AGENT.md")
-        assert "Web" in content
+        assert "Safety" in content
 
     def test_memory_writing_rules(self):
         content = _read_template("AGENT.md")
@@ -179,22 +180,23 @@ class TestSteeringTemplate:
         assert "distill" in content.lower() or "MEMORY.md" in content
 
     def test_updated_directory_structure(self):
-        """Directory structure lives in AGENT.md."""
+        """Session start references key files."""
         content = _read_template("AGENT.md")
-        assert "TOOLS.md" in content
-        assert "Library/" in content or "Library" in content
-        assert "DailyActivity/" in content or "DailyActivity" in content
-        assert "Archives/" in content or "Archives" in content
+        # New AGENT.md references DailyActivity in Session Start
+        assert "DailyActivity" in content
+        assert "MEMORY.md" in content
+        assert "STEERING.md" in content
 
     def test_no_knowledge_base_reference(self):
         content = _read_template("STEERING.md")
         assert "Knowledge Base/" not in content
 
     def test_file_saving_rules(self):
-        """File routing rules live in AGENT.md Workspace Layout section."""
+        """AGENT.md references Knowledge directory via DDD enrichment."""
         content = _read_template("AGENT.md")
-        assert "Workspace Layout" in content
-        assert "Knowledge/" in content
+        # New AGENT.md references Knowledge in DDD enrichment and self-enhancement
+        assert "Knowledge" in content
+        assert "KNOWLEDGE.md" in content
 
 
 # ---------------------------------------------------------------------------
@@ -275,13 +277,13 @@ class TestSessionStartOpenThreads:
     """Verify AGENT.md and STEERING.md use session-start Open Threads review."""
 
     def test_agent_md_session_start_open_threads(self):
-        """Req 5.2: AGENT.md contains 'At session start' directive for Open Threads."""
+        """Req 5.2: AGENT.md contains Session Start section referencing open threads."""
         content = _read_template("AGENT.md")
-        assert "At session start" in content, (
-            "AGENT.md missing 'At session start' directive"
+        assert "Session Start" in content, (
+            "AGENT.md missing 'Session Start' section"
         )
-        assert "Open Threads" in content, (
-            "AGENT.md missing 'Open Threads' reference"
+        assert "open threads" in content.lower(), (
+            "AGENT.md missing open threads reference"
         )
 
     def test_agent_md_no_session_end_open_threads(self):
