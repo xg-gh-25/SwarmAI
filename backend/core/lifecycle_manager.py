@@ -452,13 +452,20 @@ class LifecycleManager:
             stall = unit.streaming_stall_seconds
             if stall is None:
                 continue
-            if stall > self.STREAMING_TIMEOUT_SECONDS:
+            # Use adaptive timeout from the unit (context-aware) if available,
+            # otherwise fall back to static threshold.
+            effective_timeout = (
+                unit._compute_message_timeout()
+                if hasattr(unit, "_compute_message_timeout")
+                else self.STREAMING_TIMEOUT_SECONDS
+            )
+            if stall > effective_timeout:
                 logger.warning(
                     "lifecycle_manager.streaming_timeout session_id=%s "
                     "stall=%.0fs > timeout=%.0fs — forcing unstick",
                     unit.session_id,
                     stall,
-                    self.STREAMING_TIMEOUT_SECONDS,
+                    effective_timeout,
                 )
                 await unit.force_unstick_streaming()
 

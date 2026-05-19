@@ -67,6 +67,46 @@ _OOM_COOLDOWN_CAP: float = 120.0  # max backoff cap for OOM retries
 AUTO_RECOVER_STALL_THRESHOLD: float = 180.0
 
 
+# ── Streaming timeout resilience (2026-05-19) ────────────────────
+# Circuit breaker for high-context timeout dead loops.
+# See: Knowledge/Designs/2026-05-19-streaming-timeout-resilience-design.md
+
+CIRCUIT_BREAKER_CONTEXT_THRESHOLD: int = 800_000  # tokens
+
+
+def should_circuit_break_timeout(
+    consecutive_timeouts: int,
+    context_tokens: int,
+) -> bool:
+    """Return True if retry is structurally doomed (should stop retrying).
+
+    High context (>800K tokens) + 2 consecutive timeouts = model inference
+    time exceeds timeout cap. Retrying will produce the same result.
+    """
+    return (
+        consecutive_timeouts >= 2
+        and context_tokens > CIRCUIT_BREAKER_CONTEXT_THRESHOLD
+    )
+
+
+def build_context_too_large_event(
+    context_tokens: int,
+    consecutive_timeouts: int,
+) -> dict:
+    """Build SSE error event for CONTEXT_TOO_LARGE condition."""
+    return {
+        "type": "error",
+        "code": "CONTEXT_TOO_LARGE",
+        "message": (
+            f"Session context is very large ({context_tokens // 1000}K tokens). "
+            f"Model inference timed out {consecutive_timeouts}x. "
+            f"Recommendation: start a new tab for fresh context, "
+            f"or send a shorter follow-up message."
+        ),
+        "recoverable": True,
+    }
+
+
 def _get_children(pid: int) -> list[int]:
     """Get direct child PIDs via ``pgrep -P``. Best-effort."""
     try:
@@ -568,7 +608,26 @@ class SessionUnit:
 
     MAX_RETRY_ATTEMPTS: int = 3
     RETRY_BACKOFF_SECONDS: float = 5.0
-    STREAMING_TIMEOUT_SECONDS: float = 300.0  # 5 min with no SDK events → stuck
+    STREAMING_TIMEOUT_SECONDS: float = 300.0  # 5 min base (adaptive via _compute_message_timeout)
+
+    # ── Adaptive timeout ─────────────────────────────────────────
+
+    def _compute_message_timeout(self) -> float:
+        """Timeout that scales with context size.
+
+        Empirical: Opus 4.6 TTFT scales roughly with context tokens.
+        At 2M tokens, inference can take 400-600s — a fixed 300s guarantees
+        timeout → retry → timeout dead loops.
+
+        Formula: max(300, context_tokens / 3000), capped at 900s.
+        """
+        BASE_TIMEOUT = 300.0
+        MAX_TIMEOUT = 900.0
+        TOKENS_PER_SECOND = 3000  # Conservative model throughput estimate
+
+        estimated_context = getattr(self, "_last_known_context_tokens", 0) or 0
+        computed = max(BASE_TIMEOUT, estimated_context / TOKENS_PER_SECOND)
+        return min(computed, MAX_TIMEOUT)
 
     # ── Subprocess lifecycle ─────────────────────────────────────
 
@@ -1125,6 +1184,21 @@ class SessionUnit:
             else:
                 _consecutive_timeouts = 0
 
+            # ── Circuit breaker: stop retrying if structurally doomed ──
+            # High context + repeated timeouts = model inference time exceeds
+            # our timeout cap. Retrying produces the same result every time.
+            context_tokens = getattr(self, "_last_known_context_tokens", 0) or 0
+            if should_circuit_break_timeout(_consecutive_timeouts, context_tokens):
+                logger.warning(
+                    "session_unit.circuit_breaker session_id=%s "
+                    "context=%d tokens, consecutive_timeouts=%d — "
+                    "stopping retry (structurally doomed)",
+                    self.session_id, context_tokens, _consecutive_timeouts,
+                )
+                yield build_context_too_large_event(context_tokens, _consecutive_timeouts)
+                # Exit retry loop — let session go IDLE, user sees the error
+                break
+
             # After 2 consecutive timeouts with --resume, the resume target
             # is likely broken.  Abandon resume and start fresh.
             if _consecutive_timeouts >= 2 and resume_session_id:
@@ -1333,6 +1407,9 @@ class SessionUnit:
             input_tokens = (total // turns) if total > 0 else None
         else:
             input_tokens = None
+        # Track context size for adaptive timeout (L1 resilience)
+        if input_tokens and input_tokens > 0:
+            self._last_known_context_tokens = input_tokens
         logger.info(
             "session_unit.context_ring_debug session_id=%s "
             "usage_keys=%s raw_total=%s per_turn_est=%s "
@@ -1714,7 +1791,7 @@ class SessionUnit:
         # 180s accommodates cross-region Bedrock + --resume session restore.
         # Single timeout for both fresh and resume — simpler, fewer states.
         INIT_TIMEOUT = 180.0    # First message: 180s (cross-region Bedrock)
-        MESSAGE_TIMEOUT = self.STREAMING_TIMEOUT_SECONDS  # 5 min between messages
+        MESSAGE_TIMEOUT = self._compute_message_timeout()  # Adaptive: scales with context
 
         is_resume = self._sdk_session_id is not None
         is_first_message = True
