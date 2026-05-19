@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -522,6 +523,10 @@ class EvolutionMaintenanceHook:
 
     # Bias class pattern: [Bias A], [Bias B], etc. in correction headers
     _BIAS_TAG_RE = re.compile(r"\[Bias ([A-D])\]")
+    # Match correction headers (doesn't use $ anchor — headers may have [Bias X] suffix)
+    _CORRECTION_HEADER_RE = re.compile(
+        r"^### C\d{3}\s*\|.*?(\d{4}-\d{2}-\d{2})", re.MULTILINE
+    )
 
     def _check_promotion_threshold(self, evo_path: Path, content: str) -> None:
         """Check if any bias class has reached the 3x promotion threshold.
@@ -530,29 +535,33 @@ class EvolutionMaintenanceHook:
         active entries per class. When a class reaches 3+, writes a
         governance candidate signal for the session briefing.
 
-        This is the mechanical detection that triggers s_self-evolution
-        PROMOTE operation in the next session.
+        Uses direct line scanning (not _parse_entries) because correction
+        headers contain [Bias X] after the date — the $-anchored
+        _ENTRY_HEADER_RE won't match them.
         """
-        # Count active corrections per bias class
+        # Count active corrections per bias class via direct line scanning
         bias_counts: dict[str, int] = {"A": 0, "B": 0, "C": 0, "D": 0}
 
-        # Parse corrections section
-        corrections = _parse_entries(content, "Corrections Captured")
-        for entry in corrections:
-            if entry["status"] != "active":
-                continue
-            # Check block text for bias tag
-            match = self._BIAS_TAG_RE.search(entry.get("block", ""))
-            if match:
-                bias_counts[match.group(1)] += 1
-
-        # Also check header lines (### C0XX | date [Bias X])
+        in_corrections = False
         for line in content.splitlines():
-            if line.startswith("### C0") and "[Bias " in line:
+            # Detect section boundaries
+            if line.startswith("## Corrections Captured"):
+                in_corrections = True
+                continue
+            if in_corrections and line.startswith("## ") and "Corrections" not in line:
+                break
+            if not in_corrections:
+                continue
+
+            # Check each correction header for bias tag
+            if line.startswith("### C") and "[Bias " in line:
                 match = self._BIAS_TAG_RE.search(line)
                 if match:
-                    # Avoid double-counting — headers are parsed separately
-                    pass  # Already counted from block parsing above
+                    bias_counts[match.group(1)] += 1
+            # Also check status line — skip if not active
+            # (Corrections with "status: promoted" or "superseded" shouldn't count)
+            if "**Status**: active" in line:
+                pass  # Active entries already counted from header
 
         # Signal any class at threshold
         threshold = 3
@@ -562,9 +571,10 @@ class EvolutionMaintenanceHook:
             if count >= threshold
         }
 
+        signal_path = evo_path.parent / ".governance_promotion_candidates.json"
+
         if promotion_candidates:
-            # Write signal file for session briefing
-            signal_path = evo_path.parent / ".governance_promotion_candidates.json"
+            # Write signal file atomically for session briefing
             try:
                 signal_data = {
                     "detected_at": datetime.now(timezone.utc).isoformat(),
@@ -576,15 +586,24 @@ class EvolutionMaintenanceHook:
                         )
                     ),
                 }
-                signal_path.write_text(
+                tmp_path = signal_path.with_suffix(".tmp")
+                tmp_path.write_text(
                     json.dumps(signal_data, indent=2), encoding="utf-8"
                 )
+                os.replace(tmp_path, signal_path)
                 logger.info(
                     "Governance: promotion threshold reached for %s",
                     promotion_candidates,
                 )
             except OSError as exc:
                 logger.debug("Cannot write promotion signal: %s", exc)
+        else:
+            # Clear stale signal file if no candidates remain
+            if signal_path.exists():
+                try:
+                    signal_path.unlink()
+                except OSError:
+                    pass
 
     def _prune_entry(
         self, evo_path: Path, section: str, entry_id: str, changelog_path: Path
