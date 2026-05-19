@@ -165,7 +165,15 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
     stage = getattr(args, "stage", None)
     if stage:
         from pipeline_validator import validate_artifact_data, get_stage_schema
-        errors = validate_artifact_data(stage, data)
+        # Determine profile from active pipeline run (default: "full" = strictest)
+        _pub_profile = "full"
+        try:
+            _active_runs = reg.list_runs(status="running")
+            if _active_runs:
+                _pub_profile = _active_runs[0].get("profile", "full") or "full"
+        except Exception:
+            pass  # Default to "full" if can't determine profile
+        errors = validate_artifact_data(stage, data, profile=_pub_profile)
         if errors:
             schema_info = get_stage_schema(stage)
             print(json.dumps({
