@@ -19,6 +19,7 @@ Public API:
     VALID_PREDICATES  — set of allowed predicate names
 """
 
+import re
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -316,6 +317,56 @@ def query_related_entries(
 
     # Remove the input entities themselves from results
     return [e for e in related if e.lower() not in entities_lower]
+
+
+# ── Backfill & Auto-Extraction ────────────────────────────────────────────────
+
+# Pattern to detect file/module mentions in entry text
+# Matches: word.py, word.ts, word.md, word.sh, word.rs, word.yaml, word.json
+# Minimum 5 chars total (e.g., "main.py") to avoid false positives
+_FILE_PATTERN = re.compile(
+    r'\b([\w\-/]+\.(?:py|ts|tsx|rs|sh|md|yaml|yml|json|toml))\b'
+)
+
+# Minimum file name length to avoid noise like "a.py" or "io.py"
+_MIN_FILE_NAME_LEN = 6
+
+
+def backfill_from_entries(entries: list, graph_path: Path) -> int:
+    """Scan entry raw_text for file/module mentions and generate relations.
+
+    For each entry, extracts file patterns (*.py, *.ts, etc.) from raw_text
+    and creates `applies_to` relations. Skips very short filenames.
+    Uses add_relation's built-in dedup to avoid duplicates.
+
+    Args:
+        entries: List of EntryMetadata objects (from ddd_entry_lifecycle.parse_entries)
+        graph_path: Path to .knowledge-graph.yaml
+
+    Returns:
+        Number of new relations created.
+    """
+    created = 0
+    for entry in entries:
+        raw = entry.raw_text or entry.title
+        files_found = _FILE_PATTERN.findall(raw)
+        for fname in files_found:
+            # Skip very short file names (false positives)
+            if len(fname) < _MIN_FILE_NAME_LEN:
+                continue
+            # Use basename only (strip path prefixes)
+            basename = fname.split("/")[-1] if "/" in fname else fname
+            if len(basename) < _MIN_FILE_NAME_LEN:
+                continue
+            # Use first 60 chars of title as subject (keep YAML readable)
+            subject = entry.title[:60]
+            try:
+                rel = add_relation(graph_path, subject, "applies_to", basename)
+                if rel.created == date.today():  # Newly created (not dedup'd)
+                    created += 1
+            except ValueError:
+                continue  # Invalid predicate (shouldn't happen for "applies_to")
+    return created
 
 
 # ── Locking ──────────────────────────────────────────────────────────────────

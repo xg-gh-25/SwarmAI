@@ -363,7 +363,11 @@ def inject_entry_metadata(content: str, entries: list[EntryMetadata]) -> str:
 
 
 def bump_references(
-    entries: list[EntryMetadata], text: str, today: date
+    entries: list[EntryMetadata],
+    text: str,
+    today: date,
+    context_files: list[str] | None = None,
+    graph_path: "Path | None" = None,
 ) -> int:
     """Bump reference count for entries whose titles appear in text.
 
@@ -371,9 +375,16 @@ def bump_references(
     (e.g., "Build", "API"). Titles 8-20 chars use word-boundary matching to
     reduce false positives. Titles > 20 chars use substring containment.
     Mutates entries in-place.
+
+    Auto-extraction (G1 compound loop):
+        When context_files and graph_path are provided, for each bumped entry
+        whose raw_text mentions a context file, auto-creates an `applies_to`
+        relation in the knowledge graph. This grows the graph organically from
+        normal pipeline usage.
     """
     text_lower = text.lower()
     bumped = 0
+    bumped_entries: list[EntryMetadata] = []
 
     for entry in entries:
         title_lower = entry.title.lower()
@@ -401,6 +412,24 @@ def bump_references(
             if entry.decay_state == "dormant":
                 entry.decay_state = "active"  # Revive
             bumped += 1
+            bumped_entries.append(entry)
+
+    # G1: Auto-extraction — grow knowledge graph from pipeline usage
+    if context_files and graph_path and bumped_entries:
+        try:
+            from core.knowledge_graph import add_relation
+            for entry in bumped_entries:
+                entry_text_lower = (entry.raw_text or entry.title).lower()
+                for cf in context_files:
+                    if len(cf) >= 4 and cf.lower() in entry_text_lower:
+                        add_relation(
+                            graph_path,
+                            entry.title[:60],
+                            "applies_to",
+                            cf,
+                        )
+        except Exception:
+            pass  # Auto-extraction is best-effort, never blocks bump
 
     return bumped
 
