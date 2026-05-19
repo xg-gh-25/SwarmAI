@@ -654,10 +654,12 @@ class SessionUnit:
         """Poll subprocess PID until death or cancellation.
 
         On death detection:
-        - Logs the event
-        - Transitions to DEAD (triggers cleanup)
-        - The streaming timeout in _read_formatted_response will
-          also fire (belt + suspenders), but watchdog is faster.
+        - Logs the event with structured key for monitoring
+        - Transitions to DEAD (fast signal — 5s detection)
+        - Full cleanup (wrapper, client, COLD) happens through the
+          existing error path: streaming timeout fires → RuntimeError →
+          send() catches → _crash_to_cold_async(). The watchdog is the
+          SIGNAL; the streaming error handler is the CLEANUP.
         """
         try:
             while True:
