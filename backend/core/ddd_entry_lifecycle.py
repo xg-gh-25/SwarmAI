@@ -367,21 +367,35 @@ def bump_references(
 ) -> int:
     """Bump reference count for entries whose titles appear in text.
 
-    Uses case-insensitive title match with minimum length guard (15 chars)
-    to prevent false positives on short titles like "Build" or "API".
+    Uses case-insensitive title match. Titles < 8 chars are skipped entirely
+    (e.g., "Build", "API"). Titles 8-20 chars use word-boundary matching to
+    reduce false positives. Titles > 20 chars use substring containment.
     Mutates entries in-place.
     """
     text_lower = text.lower()
     bumped = 0
 
-    # Minimum title length to prevent false positives from common short words
-    _MIN_TITLE_LEN = 15
-
     for entry in entries:
         title_lower = entry.title.lower()
-        if len(title_lower) < _MIN_TITLE_LEN:
-            continue  # Skip short titles — too many false positives
-        if title_lower in text_lower:
+        title_len = len(title_lower)
+
+        # Skip very short titles (too many false positives)
+        if title_len < 8:
+            continue
+
+        matched = False
+        if title_len <= 20:
+            # Medium titles: use word-boundary regex to avoid partial matches
+            try:
+                pattern = r'\b' + re.escape(title_lower) + r'\b'
+                matched = bool(re.search(pattern, text_lower))
+            except re.error:
+                matched = title_lower in text_lower
+        else:
+            # Long titles (>20 chars): substring is safe enough
+            matched = title_lower in text_lower
+
+        if matched:
             entry.ref_count += 1
             entry.last_referenced = today
             if entry.decay_state == "dormant":
