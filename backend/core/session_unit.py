@@ -483,6 +483,12 @@ class SessionUnit:
         self._consecutive_oom_kills: int = 0
         self._OOM_KILL_LIMIT: int = 3  # After 3 consecutive OOMs, stop retrying
 
+        # ── PID Watchdog (out-of-band subprocess death detection) ──
+        # Polls os.kill(pid, 0) while STREAMING/WAITING_INPUT.
+        # Detects external kills (jetsam, OOM) that pipe can't detect.
+        self._pid_watchdog_task: Optional[asyncio.Task] = None
+        self._PID_WATCHDOG_INTERVAL: float = 5.0  # seconds between polls
+
     # ── Properties ────────────────────────────────────────────────
 
     @property
@@ -570,11 +576,20 @@ class SessionUnit:
             self._hooks_enqueued = False
             self._streaming_start_time = time.time()
             self._last_event_time = time.time()
+            # Start PID watchdog for out-of-band death detection
+            self._start_pid_watchdog()
 
         # Clear streaming timestamps when leaving STREAMING
         if old_state == SessionState.STREAMING and new_state != SessionState.STREAMING:
             self._streaming_start_time = None
             self._last_event_time = None
+
+        # Stop PID watchdog when leaving any watchable state to a non-watchable one.
+        # Watchable = STREAMING, WAITING_INPUT. Non-watchable = IDLE, COLD, DEAD.
+        # Note: STREAMING → WAITING_INPUT does NOT stop the watchdog (still watchable).
+        _watchable = (SessionState.STREAMING, SessionState.WAITING_INPUT)
+        if old_state in _watchable and new_state not in _watchable:
+            self._stop_pid_watchdog()
 
         logger.info(
             "session_unit.transition session_id=%s from=%s to=%s pid=%s",
@@ -603,6 +618,72 @@ class SessionUnit:
             f"state={self.state.value!r}, "
             f"pid={self.pid})"
         )
+
+    # ── PID Watchdog ─────────────────────────────────────────────
+
+    def _start_pid_watchdog(self) -> None:
+        """Start background task that polls subprocess liveness.
+
+        Only starts if a PID is available (subprocess spawned).
+        The watchdog polls os.kill(pid, 0) every _PID_WATCHDOG_INTERVAL
+        seconds. If the process is gone (ProcessLookupError), it
+        transitions the session to DEAD — enabling auto-recovery.
+
+        This is the out-of-band detection mechanism: when the pipe
+        hangs (jetsam kill, OOM), the stream reader blocks forever.
+        The watchdog detects death independently.
+        """
+        pid = self.pid
+        if pid is None:
+            return  # No subprocess to watch
+
+        # Cancel existing watchdog if any (shouldn't happen, but defensive)
+        self._stop_pid_watchdog()
+
+        self._pid_watchdog_task = asyncio.ensure_future(
+            self._pid_watchdog_loop(pid)
+        )
+
+    def _stop_pid_watchdog(self) -> None:
+        """Cancel the PID watchdog task if running."""
+        if self._pid_watchdog_task is not None:
+            self._pid_watchdog_task.cancel()
+            self._pid_watchdog_task = None
+
+    async def _pid_watchdog_loop(self, pid: int) -> None:
+        """Poll subprocess PID until death or cancellation.
+
+        On death detection:
+        - Logs the event
+        - Transitions to DEAD (triggers cleanup)
+        - The streaming timeout in _read_formatted_response will
+          also fire (belt + suspenders), but watchdog is faster.
+        """
+        try:
+            while True:
+                await asyncio.sleep(self._PID_WATCHDOG_INTERVAL)
+                try:
+                    os.kill(pid, 0)
+                    # Process is alive — continue watching
+                except PermissionError:
+                    # Process exists but we can't signal it — treat as alive
+                    pass
+                except ProcessLookupError:
+                    # Process is GONE — external kill (jetsam, OOM, manual)
+                    logger.warning(
+                        "session_unit.pid_watchdog_death session_id=%s pid=%d "
+                        "— subprocess externally killed, transitioning to DEAD",
+                        self.session_id, pid,
+                    )
+                    # Only transition if still in a watchable state
+                    if self.state in (
+                        SessionState.STREAMING,
+                        SessionState.WAITING_INPUT,
+                    ):
+                        self._transition(SessionState.DEAD)
+                    return
+        except asyncio.CancelledError:
+            return  # Normal shutdown
 
     # ── Constants ─────────────────────────────────────────────────
 
