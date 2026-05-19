@@ -1,4 +1,35 @@
 # Changelog
+## [1.16.0] - 2026-05-19
+
+### Added
+- **Three-Layer Governance OS** — complete cognitive architecture rewrite
+  - SOUL.md: 4 cognitive principles (P1-P4) as the kernel
+  - AGENT.md: compressed 978→246 lines, rules reference principles
+  - Pipeline validator: mechanical gates block delivery without adversarial review
+  - Governance lifecycle: CLASSIFY → CAPTURE → PROMOTE → REFINE → RETIRE → COMPRESS
+- **DDD Knowledge Graph** — per-entry lifecycle tracking + cross-entry relations
+  - Entry lifecycle: reference counting, type tags, staleness decay
+  - Knowledge relations (方案B): cross-entry links with evidence
+  - Archive engine + fcntl file locking for concurrent access
+  - Cultivation Channel 8: entry_lifecycle event source
+- **Context Budget Optimizer** — automated token measurement + EVOLUTION auto-compression
+- **AI Docs Auto-Refresh** — AI_CONTEXT.md + AGENTS.md regenerated from codebase metrics
+- **GitHub Community Engine enhancements** — discussions migration, dashboard feed, star attribution tracking, 9-tab report
+- **Pipeline integrity** — integration + operational adversarial specialists, caller verification, artifact_id enforcement
+
+### Fixed
+- **Streaming resilience** — adaptive timeout + circuit breaker for high-context dead loops
+- **Session race condition** — await pipe_flush cancellation before new send prevents "Connection interrupted"
+- **Channel context continuity** — inject thread history into Slack messages for follow-up questions
+- **Channel session protection** — protect channel sessions from TTL eviction
+- **Circuit breaker threshold** — raised to 1M tokens (was triggering on normal long conversations)
+- **Community dedup** — reply dedup in track + cultivate prevents duplicate processing
+- CI: asyncio.Queue creation must be inside running loop (Python 3.11 compat)
+
+### Changed
+- Project registry: structural auto-refresh + DDD freshness indicators + zero-constant rename
+- Pipeline: DELIVER stage is indivisible (all 5 steps or FAIL), completion gate blocks on missing artifact_id
+
 ## [1.15.0] - 2026-05-17
 
 ### Added

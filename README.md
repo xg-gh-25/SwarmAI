@@ -381,7 +381,7 @@ Every correction in [`EVOLUTION.md`](./backend/context/EVOLUTION.md) follows thi
 
 ## Quick Start
 
-> **Full guide**: [QUICK_START.md](./QUICK_START.md)
+> **Full guide**: [QUICK_START.md](./QUICK_START.md) · **Contributing**: [CONTRIBUTING.md](./CONTRIBUTING.md)
 
 ### Install
 
@@ -389,17 +389,26 @@ Every correction in [`EVOLUTION.md`](./backend/context/EVOLUTION.md) follows thi
 
 **Prerequisites:** [Claude Code CLI](https://github.com/anthropics/claude-code) + AWS Bedrock or Anthropic API key.
 
-### Build from Source
+### Build from Source (5 minutes)
 
 ```bash
-git clone https://github.com/xg-gh-25/SwarmAI.git
-cd SwarmAI/desktop
-npm install && cp backend.env.example ../backend/.env
-# Edit ../backend/.env with your API provider
-./dev.sh start
+git clone https://github.com/xg-gh-25/SwarmAI.git && cd SwarmAI
+cd backend && uv sync && cp .env.example .env   # edit .env with API key
+cd ../desktop && npm install && npm run tauri:dev
 ```
 
 Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv)
+
+### Codebase Map (170K LOC — don't panic)
+
+| Layer | Size | What | Start here? |
+|-------|------|------|-------------|
+| **Core** | ~11K | Session state machine + context assembly + streaming | Yes — 5 files explain the whole system |
+| **Extensions** | ~90K | 68 skills, 11 hooks, job system, channels, DDD engine | Only what you're working on |
+| **Frontend** | ~67K | React UI, chat interface, workspace explorer | Only if touching UI |
+| **Tests** | ~76K | Full coverage (pytest + Vitest) | Read when modifying core |
+
+**New contributor?** Read [`CONTRIBUTING.md`](./CONTRIBUTING.md) — it has the architecture diagram, the 5 core files to read first, and good-first-issue guidance. Skills are the easiest entry point (self-contained, no core knowledge needed).
 
 ---
 
