@@ -61,6 +61,36 @@ npm install
 echo ""
 echo "Step 3/3: Building Tauri application..."
 echo "----------------------------------------"
+
+# Pre-flight: detach any stale DMG mounts from previous failed builds.
+# Tauri's bundle_dmg.sh has no cleanup trap — if it fails mid-way, the temp RW DMG
+# stays mounted and blocks future builds (hdiutil can't convert while mounted).
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    echo "Checking for stale DMG mounts..."
+    stale_devs=$(hdiutil info 2>/dev/null | awk -v pat="rw\\..*SwarmAI" '
+        /^===/ { in_section=0 }
+        $0 ~ pat { in_section=1 }
+        in_section && /^\/dev\/disk/ { print $1 }
+    ' | sed 's/s[0-9]*$//' | sort -u || true)
+    if [[ -n "$stale_devs" ]]; then
+        echo "Found stale mount(s) from previous builds, detaching..."
+        while IFS= read -r dev; do
+            echo "  Detaching $dev..."
+            hdiutil detach "$dev" -force 2>/dev/null || true
+        done <<< "$stale_devs"
+        sleep 1
+    fi
+    # Also clean up orphaned temp RW DMG files
+    rw_files=$(find "$PROJECT_ROOT/src-tauri/target/release/bundle" -name "rw.*.dmg" 2>/dev/null || true)
+    if [[ -n "$rw_files" ]]; then
+        echo "Cleaning orphaned temp DMG files..."
+        echo "$rw_files" | while read -r f; do
+            echo "  Removing $f"
+            rm -f "$f"
+        done
+    fi
+fi
+
 npm run tauri build
 
 echo ""

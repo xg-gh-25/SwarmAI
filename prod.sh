@@ -210,6 +210,27 @@ cmd_release() {
 
     # 2d. Tauri → DMG
     _log "Step 4/4: Tauri build → DMG..."
+
+    # Pre-flight: detach stale DMG mounts from previous failed builds.
+    # Tauri's bundle_dmg.sh lacks a cleanup trap — failed builds leave RW DMGs mounted,
+    # blocking future hdiutil convert operations.
+    _log "  Checking for stale DMG mounts..."
+    local stale_devs
+    stale_devs=$(hdiutil info 2>/dev/null | awk -v pat="rw\\..*SwarmAI" '
+        /^===/ { in_section=0 }
+        $0 ~ pat { in_section=1 }
+        in_section && /^\/dev\/disk/ { print $1 }
+    ' | sed 's/s[0-9]*$//' | sort -u || true)
+    if [[ -n "$stale_devs" ]]; then
+        _warn "Found stale DMG mount(s), force-detaching..."
+        while IFS= read -r dev; do
+            hdiutil detach "$dev" -force 2>/dev/null || true
+        done <<< "$stale_devs"
+        sleep 1
+    fi
+    # Clean orphaned temp RW DMG files
+    find "$DESKTOP_DIR/src-tauri/target/release/bundle" -name "rw.*.dmg" -delete 2>/dev/null || true
+
     npm run tauri build
 
     # 2e. Inject backend bundle into .app (onedir — no PyInstaller extraction at runtime)
