@@ -272,6 +272,36 @@ def evaluate_promotion(state: MaturityState) -> Optional[str]:
     return None
 
 
+def evaluate_demotion(state: MaturityState, health_score: int = 50) -> Optional[str]:
+    """Evaluate if a section should be demoted due to staleness.
+
+    Demotion is the inverse of promotion — triggered by declining health
+    and absence of new evidence. Evergreen sections are immune.
+
+    Args:
+        state: Current maturity state of the section
+        health_score: Composite health score (0-100) from ddd_health.py
+
+    Returns:
+        New (lower) level string, or None if no demotion needed.
+    """
+    if state.level == "evergreen":
+        return None  # Immune — manually curated eternal truths
+
+    if state.level == "mature":
+        # Mature → Growing: 180 days without new sources + declining health
+        if state.days_at_level > 180 and health_score < 40:
+            return "growing"
+
+    elif state.level == "growing":
+        # Growing → Sparse: 90 days without sources + poor health
+        if state.days_at_level > 90 and health_score < 30:
+            return "sparse"
+
+    # sparse: already bottom, can't demote
+    return None
+
+
 def promote_section(
     project_dir: Path, doc_name: str, section_name: str, new_level: str
 ) -> bool:
