@@ -12,6 +12,9 @@ Public symbols
 - ``create_dangerous_command_gate``          — single PreToolUse gate for Bash commands
 - ``create_file_access_permission_handler``  — workspace file-path sandbox
 - ``create_skill_access_checker``            — skill allow-list enforcement
+- ``create_governance_file_gate``            — Three-Layer Governance file write interception
+- ``GOVERNANCE_TIER1_PATTERNS``              — Tier 1 (Constitutional) file patterns
+- ``GOVERNANCE_TIER2_PATTERNS``              — Tier 2 (Statutory) file patterns
 """
 
 import fnmatch
@@ -207,6 +210,90 @@ def create_dangerous_command_gate(
         }
 
     return dangerous_command_gate
+
+
+# ---------------------------------------------------------------------------
+# Governance file gate — Three-Layer Governance enforcement
+# ---------------------------------------------------------------------------
+
+# Tier 1: Constitutional (hard gate — require classification before write)
+GOVERNANCE_TIER1_PATTERNS: list[str] = [
+    "backend/context/SOUL.md",
+    "backend/context/AGENT.md",
+    "*/.context/SOUL.md",
+    "*/.context/AGENT.md",
+]
+
+# Tier 2: Statutory (soft gate — advise, don't block)
+GOVERNANCE_TIER2_PATTERNS: list[str] = [
+    "*/.context/STEERING.md",
+    "backend/context/STEERING.md",
+    "*/s_autonomous-pipeline/stages/*.md",
+]
+
+
+def _match_governance_tier(file_path: str) -> int:
+    """Return governance tier (1, 2, or 0 for non-governance) for a file path."""
+    if not file_path:
+        return 0
+    # Normalize path for matching
+    norm = file_path.replace("\\", "/")
+    for pattern in GOVERNANCE_TIER1_PATTERNS:
+        if fnmatch.fnmatch(norm, pattern) or norm.endswith(pattern.lstrip("*/")):
+            return 1
+    for pattern in GOVERNANCE_TIER2_PATTERNS:
+        if fnmatch.fnmatch(norm, pattern) or norm.endswith(pattern.lstrip("*/")):
+            return 2
+    return 0
+
+
+def create_governance_file_gate() -> Callable[..., Any]:
+    """Factory: returns an async PreToolUse hook that intercepts governance file edits.
+
+    Tier 1 (SOUL/AGENT): Outputs classification reminder — ADVISE mode.
+    Tier 2 (STEERING/pipeline docs): Outputs soft reminder.
+
+    Note: Initially advisory (soft gate). Phase 4 will upgrade Tier 1 to BLOCK.
+    """
+
+    async def governance_file_gate(
+        input_data: dict[str, Any],
+        tool_use_id: str | None,
+        context: Any,
+    ) -> dict[str, Any]:
+        tool_name = input_data.get("tool_name", "")
+        if tool_name not in ("Edit", "Write"):
+            return {"decision": "approve"}
+
+        tool_input = input_data.get("tool_input", {})
+        file_path = tool_input.get("file_path", "")
+        tier = _match_governance_tier(file_path)
+
+        if tier == 0:
+            return {"decision": "approve"}
+
+        tier_label = "CONSTITUTIONAL (Tier 1)" if tier == 1 else "STATUTORY (Tier 2)"
+        reminder = (
+            f"⚠️ GOVERNANCE GATE [{tier_label}]: Modifying governance file.\n"
+            f"Before proceeding, ensure:\n"
+            f"  1. Classify: Principle / Rule / Gate?\n"
+            f"  2. Parent: P1-P4?\n"
+            f"  3. Conflict/Duplicate check done?\n"
+            f"  4. Budget: SOUL ≤5 principles, AGENT ≤25 rules, STEERING ≤15"
+        )
+
+        logger.info(
+            "[GOVERNANCE] Tier %d gate fired for %s (tool=%s)",
+            tier, file_path, tool_name,
+        )
+
+        # Advisory mode: approve but include reminder in additionalContext
+        return {
+            "decision": "approve",
+            "additionalContext": reminder,
+        }
+
+    return governance_file_gate
 
 
 def create_file_access_permission_handler(allowed_directories: list[str]) -> Callable[..., Any]:

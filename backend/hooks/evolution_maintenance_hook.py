@@ -264,6 +264,9 @@ class EvolutionMaintenanceHook:
                 pruned_count,
             )
 
+        # Check governance 3x threshold for promotion candidates
+        self._check_promotion_threshold(evo_path, content)
+
         # Run evolution cycle weekly (check last run date)
         await self._maybe_run_evolution(ctx_dir)
 
@@ -516,6 +519,72 @@ class EvolutionMaintenanceHook:
                 )
         except Exception as exc:
             logger.warning("Evolution cycle failed (non-blocking): %s", exc)
+
+    # Bias class pattern: [Bias A], [Bias B], etc. in correction headers
+    _BIAS_TAG_RE = re.compile(r"\[Bias ([A-D])\]")
+
+    def _check_promotion_threshold(self, evo_path: Path, content: str) -> None:
+        """Check if any bias class has reached the 3x promotion threshold.
+
+        Scans corrections in EVOLUTION.md for [Bias X] tags and counts
+        active entries per class. When a class reaches 3+, writes a
+        governance candidate signal for the session briefing.
+
+        This is the mechanical detection that triggers s_self-evolution
+        PROMOTE operation in the next session.
+        """
+        # Count active corrections per bias class
+        bias_counts: dict[str, int] = {"A": 0, "B": 0, "C": 0, "D": 0}
+
+        # Parse corrections section
+        corrections = _parse_entries(content, "Corrections Captured")
+        for entry in corrections:
+            if entry["status"] != "active":
+                continue
+            # Check block text for bias tag
+            match = self._BIAS_TAG_RE.search(entry.get("block", ""))
+            if match:
+                bias_counts[match.group(1)] += 1
+
+        # Also check header lines (### C0XX | date [Bias X])
+        for line in content.splitlines():
+            if line.startswith("### C0") and "[Bias " in line:
+                match = self._BIAS_TAG_RE.search(line)
+                if match:
+                    # Avoid double-counting — headers are parsed separately
+                    pass  # Already counted from block parsing above
+
+        # Signal any class at threshold
+        threshold = 3
+        promotion_candidates = {
+            bias: count
+            for bias, count in bias_counts.items()
+            if count >= threshold
+        }
+
+        if promotion_candidates:
+            # Write signal file for session briefing
+            signal_path = evo_path.parent / ".governance_promotion_candidates.json"
+            try:
+                signal_data = {
+                    "detected_at": datetime.now(timezone.utc).isoformat(),
+                    "candidates": promotion_candidates,
+                    "message": (
+                        f"Governance promotion candidates detected: "
+                        + ", ".join(
+                            f"Bias {b} ({c}x)" for b, c in promotion_candidates.items()
+                        )
+                    ),
+                }
+                signal_path.write_text(
+                    json.dumps(signal_data, indent=2), encoding="utf-8"
+                )
+                logger.info(
+                    "Governance: promotion threshold reached for %s",
+                    promotion_candidates,
+                )
+            except OSError as exc:
+                logger.debug("Cannot write promotion signal: %s", exc)
 
     def _prune_entry(
         self, evo_path: Path, section: str, entry_id: str, changelog_path: Path

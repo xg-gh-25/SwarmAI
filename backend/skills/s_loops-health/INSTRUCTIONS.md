@@ -30,7 +30,7 @@ The script outputs JSON with:
 - `fixes_applied`: what was auto-fixed
 - `pending`: what needs human decision
 
-## 7 Dimensions (29 Checks)
+## 8 Dimensions (35 Checks)
 
 | Dim | Name | Checks | What It Covers |
 |-----|------|--------|----------------|
@@ -41,6 +41,7 @@ The script outputs JSON with:
 | 5 | Cross-Loop | 3 | Memory→Knowledge, Memory→Evolution, DA→Memory flow |
 | 6 | Brain Safety | 4 | Remote exists, push recency, push health, critical files committed |
 | 7 | Infrastructure | 5 | Hook proof, DA generation, token budget, growth rate, stale locks |
+| 8 | Governance | 6 | Budget counts, idle rules, correction recurrence, gate fires |
 
 ## After Running
 
@@ -79,6 +80,43 @@ The script outputs JSON with:
 - Rebuild KNOWLEDGE index
 - Remove dead file references from MEMORY
 
+## Dimension 8: Governance Health (Three-Layer Governance)
+
+| # | Check | Pass | Warn | Fail | Auto-Fix |
+|---|-------|------|------|------|----------|
+| 8a | AGENT.md rule count | ≤22 | 23-25 | >25 | No (COMPRESS needed) |
+| 8b | SOUL.md principle count | ≤4 | 5 | >5 | No (human decision) |
+| 8c | STEERING.md rule count | ≤12 | 13-15 | >15 | No (RETIRE needed) |
+| 8d | Per-rule last-triggered date | All <30d | Any 30-60d | Any >60d | Surface candidates |
+| 8e | Same-class correction recurrence | 0 after promote | 1 after promote | 2+ after promote | Suggest REFINE |
+| 8f | Gate fire count (30d) | Any fires | — | 0 fires on all | Suggest GRADUATE |
+
+**Scoring:**
+- 100: All within budget, no idle rules, no recurring corrections post-promote
+- 75: Budget pressure (at cap) OR 1 idle rule
+- 50: Over budget OR 2+ idle rules OR correction recurrence
+- 25: Structural violation (principle count > 5)
+
+**How to check 8d (rule last-triggered):**
+```bash
+# Count corrections per bias class in last 30 days
+grep -c "\[Bias" .context/EVOLUTION.md
+# Check dates of most recent corrections per class
+grep "### C0" .context/EVOLUTION.md | tail -5
+```
+
+**How to check 8e (recurrence after promote):**
+```bash
+# Find promoted corrections
+grep "promoted" .context/EVOLUTION.md
+# Check if same bias class has NEW entries after the promote date
+```
+
+**Auto-fix actions for Dimension 8:**
+- Surface retirement candidates in report (rules >30d idle)
+- Surface compression candidates (3+ rules same parent principle)
+- CANNOT auto-fix: budget violations require COMPRESS/RETIRE (judgment call)
+
 ## Scripts & Entry Points
 
 | Script | Purpose |
@@ -89,6 +127,6 @@ The script outputs JSON with:
 
 - [ ] Script ran without errors
 - [ ] Score reported (0-100)
-- [ ] All 7 dimensions checked
+- [ ] All 8 dimensions checked
 - [ ] Auto-fixes applied where safe
 - [ ] Pending items presented with options
