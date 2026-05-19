@@ -547,16 +547,26 @@ STAGE_KNOWLEDGE_AFFINITY: dict[str, dict[str, int]] = {
 
 
 def get_stage_knowledge(
-    entries: list[EntryMetadata], stage: str
+    entries: list[EntryMetadata],
+    stage: str,
+    context_entities: list[str] | None = None,
+    relations: list | None = None,
 ) -> list[EntryMetadata]:
     """Get type-filtered, relevance-sorted entries for a pipeline stage.
 
     Returns entries matching the stage's type affinity, sorted by ref_count
     descending (most-referenced first). Excludes dormant and archived entries.
 
+    When context_entities and relations are provided, entries that are
+    relation-connected to the context get a transient boost (+5 to sort key),
+    making contextually relevant entries rank higher than unrelated ones
+    with the same ref_count.
+
     Args:
         entries: All parsed entries from IMPROVEMENT.md
         stage: Pipeline stage name (lowercase: evaluate, think, plan, build, etc.)
+        context_entities: Optional list of file/module/entry names for context
+        relations: Optional list of Relation objects for contextual boosting
 
     Returns:
         Filtered + sorted list of entries for injection into the stage context.
@@ -568,15 +578,28 @@ def get_stage_knowledge(
     # Filter: only active entries
     active = [e for e in entries if e.decay_state == "active"]
 
-    # Group by type, sort each group by ref_count descending
+    # Relation-based contextual boost (transient — never persisted)
+    # F4 fix: use case-insensitive comparison
+    # F8 fix: compute boost BEFORE per-type truncation so boosted entries survive cutoff
+    _RELATION_BOOST = 5
+    related_titles_lower: set[str] = set()
+    if context_entities and relations:
+        from core.knowledge_graph import query_related_entries as _qre
+        related_titles_lower = {t.lower() for t in _qre(relations, context_entities)}
+
+    def _sort_key(e: EntryMetadata) -> int:
+        boost = _RELATION_BOOST if e.title.lower() in related_titles_lower else 0
+        return e.ref_count + boost
+
+    # Group by type, sort each group by boosted score, THEN truncate
     result: list[EntryMetadata] = []
     for entry_type, max_count in affinity.items():
         typed = [e for e in active if e.entry_type == entry_type]
-        typed.sort(key=lambda e: e.ref_count, reverse=True)
+        typed.sort(key=_sort_key, reverse=True)
         result.extend(typed[:max_count])
 
-    # Final sort: highest ref_count first across all types
-    result.sort(key=lambda e: e.ref_count, reverse=True)
+    # Final sort across all types by boosted score
+    result.sort(key=_sort_key, reverse=True)
     return result
 
 
