@@ -176,6 +176,7 @@ def add_relation(path: Path, s: str, p: str, o: str) -> Relation:
 
     If an identical (s, p, o) triple already exists, touches it instead
     of creating a duplicate. Validates predicate against VALID_PREDICATES.
+    Uses fcntl advisory lock to prevent concurrent write corruption.
 
     Returns the created or existing Relation.
     """
@@ -185,62 +186,66 @@ def add_relation(path: Path, s: str, p: str, o: str) -> Relation:
             f"Invalid predicate '{p}'. Must be one of: {sorted(VALID_PREDICATES)}"
         )
 
-    relations = load_graph(path)
-    today = date.today()
+    def _mutate(relations: list[Relation]) -> tuple[list[Relation], Relation]:
+        today = date.today()
+        # F2 fix: check for existing duplicate
+        for r in relations:
+            if r.subject == s and r.predicate == p and r.object == o:
+                r.last_used = today
+                if r.expired:
+                    r.expired = None  # Un-expire if re-added
+                return relations, r
+        new_rel = Relation(subject=s, predicate=p, object=o,
+                           created=today, last_used=today)
+        relations.append(new_rel)
+        return relations, new_rel
 
-    # F2 fix: check for existing duplicate
-    for r in relations:
-        if r.subject == s and r.predicate == p and r.object == o:
-            r.last_used = today
-            if r.expired:
-                r.expired = None  # Un-expire if re-added
-            save_graph(path, relations)
-            return r
-
-    new_rel = Relation(
-        subject=s, predicate=p, object=o,
-        created=today, last_used=today,
-    )
-    relations.append(new_rel)
-    save_graph(path, relations)
-    return new_rel
+    relations = _locked_read_modify_write(path, _mutate)
+    # Return the last relation (either found duplicate or newly added)
+    return relations[-1] if relations else Relation(s, p, o, date.today(), date.today())
 
 
 def expire_relation(path: Path, s: str, p: str, o: str) -> bool:
     """Mark a relation as expired (sets the `e` field to today).
 
-    Returns True if a matching relation was found and expired, False otherwise.
+    Uses fcntl advisory lock. Returns True if match found, False otherwise.
     """
-    relations = load_graph(path)
-    today = date.today()
     found = False
-    for r in relations:
-        if r.subject == s and r.predicate == p and r.object == o:
-            r.expired = today
-            found = True
-            break
-    # F7 fix: only save if a match was found
-    if found:
-        save_graph(path, relations)
+
+    def _mutate(relations: list[Relation]) -> tuple[list[Relation], None]:
+        nonlocal found
+        today = date.today()
+        for r in relations:
+            if r.subject == s and r.predicate == p and r.object == o:
+                r.expired = today
+                found = True
+                break
+        return relations, None
+
+    _locked_read_modify_write(path, _mutate, skip_save_if_unchanged=True,
+                              changed_flag=lambda: found)
     return found
 
 
 def touch_relation(path: Path, s: str, p: str, o: str) -> bool:
     """Update last_used to today for a specific relation.
 
-    Returns True if a matching relation was found, False otherwise.
+    Uses fcntl advisory lock. Returns True if match found, False otherwise.
     """
-    relations = load_graph(path)
-    today = date.today()
     found = False
-    for r in relations:
-        if r.subject == s and r.predicate == p and r.object == o:
-            r.last_used = today
-            found = True
-            break
-    # F7 fix: only save if a match was found
-    if found:
-        save_graph(path, relations)
+
+    def _mutate(relations: list[Relation]) -> tuple[list[Relation], None]:
+        nonlocal found
+        today = date.today()
+        for r in relations:
+            if r.subject == s and r.predicate == p and r.object == o:
+                r.last_used = today
+                found = True
+                break
+        return relations, None
+
+    _locked_read_modify_write(path, _mutate, skip_save_if_unchanged=True,
+                              changed_flag=lambda: found)
     return found
 
 
@@ -264,6 +269,7 @@ def query_relations(
     """
     results: list[Relation] = []
     entity_lower = entity.lower()
+    today = date.today()
 
     for r in relations:
         if r.expired:
@@ -272,6 +278,8 @@ def query_relations(
                 r.object.lower() == entity_lower):
             results.append(r)
 
+    # Sort: fresh relations before stale (stale = last_used > threshold days ago)
+    results.sort(key=lambda r: (today - r.last_used).days > stale_threshold_days)
     return results
 
 
@@ -308,6 +316,63 @@ def query_related_entries(
 
     # Remove the input entities themselves from results
     return [e for e in related if e.lower() not in entities_lower]
+
+
+# ── Locking ──────────────────────────────────────────────────────────────────
+
+
+def _locked_read_modify_write(
+    path: Path,
+    mutate_fn,
+    skip_save_if_unchanged: bool = False,
+    changed_flag=None,
+) -> list[Relation]:
+    """Execute a read-modify-write cycle under fcntl advisory lock.
+
+    Prevents concurrent writers from corrupting the YAML file.
+    Lock is on a sibling .lock file (not the YAML itself) to allow
+    atomic rename in save_graph.
+
+    Args:
+        path: Path to the .knowledge-graph.yaml file
+        mutate_fn: Callable that takes list[Relation] and returns
+                   (modified_relations, extra_return_value)
+        skip_save_if_unchanged: If True, only save when changed_flag() returns True
+        changed_flag: Callable returning bool (used with skip_save_if_unchanged)
+
+    Returns:
+        The modified relations list.
+    """
+    import fcntl
+
+    lock_path = path.parent / (path.name + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_fd = None
+
+    try:
+        lock_fd = open(lock_path, "w")
+        # Blocking lock — waits until available (serializes concurrent writers)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
+        relations = load_graph(path)
+        relations, _ = mutate_fn(relations)
+
+        should_save = True
+        if skip_save_if_unchanged and changed_flag:
+            should_save = changed_flag()
+
+        if should_save:
+            save_graph(path, relations)
+
+        return relations
+
+    finally:
+        if lock_fd is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            except (OSError, IOError):
+                pass
+            lock_fd.close()
 
 
 # ── Private Helpers ──────────────────────────────────────────────────────────

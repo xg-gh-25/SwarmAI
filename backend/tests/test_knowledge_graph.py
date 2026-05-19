@@ -191,6 +191,62 @@ class TestQuery:
         # Stale relations should still appear but be identifiable
         assert results[0].is_stale(threshold_days=180, today=date(2026, 5, 19))
 
+    def test_stale_threshold_sorts_fresh_before_stale(self):
+        """AC1: stale_threshold_days param sorts fresh before stale."""
+        # Explicitly put stale relation FIRST to prove sorting reorders
+        rels = [
+            Relation("STALE", "applies_to", "target.py",
+                     date(2025, 1, 1), date(2025, 1, 1)),  # old
+            Relation("FRESH", "applies_to", "target.py",
+                     date(2026, 5, 1), date(2026, 5, 18)),  # recent
+        ]
+        results = query_relations(rels, "target.py", stale_threshold_days=90)
+        assert len(results) == 2
+        # Fresh should be sorted before stale
+        assert results[0].subject == "FRESH"
+        assert results[1].subject == "STALE"
+
+
+# ── AC2+AC3: Concurrent writes + locking ────────────────────────────────────
+
+class TestConcurrency:
+    def test_concurrent_add_no_data_loss(self, tmp_path):
+        """AC2: two sequential writes both persist (simulates lock serialization)."""
+        f = tmp_path / ".knowledge-graph.yaml"
+        add_relation(f, "A", "extends", "B")
+        add_relation(f, "C", "extends", "D")
+        relations = load_graph(f)
+        assert len(relations) == 2
+        subjects = {r.subject for r in relations}
+        assert "A" in subjects
+        assert "C" in subjects
+
+    def test_lock_contention_no_crash(self, tmp_path):
+        """AC3: lock serializes access — second writer sees first writer's data."""
+        import threading
+        f = tmp_path / ".knowledge-graph.yaml"
+
+        results = []
+
+        def writer(subject):
+            add_relation(f, subject, "extends", "TARGET")
+            results.append(subject)
+
+        # Run two writers in parallel threads — lock serializes them
+        t1 = threading.Thread(target=writer, args=("FIRST",))
+        t2 = threading.Thread(target=writer, args=("SECOND",))
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        # Both should succeed (serialized by lock)
+        relations = load_graph(f)
+        subjects = {r.subject for r in relations}
+        assert "FIRST" in subjects
+        assert "SECOND" in subjects
+        assert len(relations) == 2
+
 
 # ── AC3: get_stage_knowledge boost integration ───────────────────────────────
 
