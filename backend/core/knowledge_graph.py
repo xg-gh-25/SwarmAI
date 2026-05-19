@@ -5,7 +5,7 @@ EVOLUTION, Knowledge/) enabling 2-hop semantic retrieval. Replaces "global
 popularity" injection with "contextual relevance" in pipeline stages.
 
 Storage: .context/.knowledge-graph.yaml (YAML sidecar, agent-owned)
-Scale: ~30-200 relations (hand-curated, no auto-extraction in v1)
+Scale: ~100-500 relations (auto-extracted from pipeline usage + backfill)
 
 Public API:
     Relation          — dataclass for a single edge
@@ -187,7 +187,9 @@ def add_relation(path: Path, s: str, p: str, o: str) -> Relation:
             f"Invalid predicate '{p}'. Must be one of: {sorted(VALID_PREDICATES)}"
         )
 
-    def _mutate(relations: list[Relation]) -> tuple[list[Relation], Relation]:
+    _result_rel: list[Relation] = []  # Capture the result from inside closure
+
+    def _mutate(relations: list[Relation]) -> tuple[list[Relation], None]:
         today = date.today()
         # F2 fix: check for existing duplicate
         for r in relations:
@@ -195,15 +197,16 @@ def add_relation(path: Path, s: str, p: str, o: str) -> Relation:
                 r.last_used = today
                 if r.expired:
                     r.expired = None  # Un-expire if re-added
-                return relations, r
+                _result_rel.append(r)
+                return relations, None
         new_rel = Relation(subject=s, predicate=p, object=o,
                            created=today, last_used=today)
         relations.append(new_rel)
-        return relations, new_rel
+        _result_rel.append(new_rel)
+        return relations, None
 
-    relations = _locked_read_modify_write(path, _mutate)
-    # Return the last relation (either found duplicate or newly added)
-    return relations[-1] if relations else Relation(s, p, o, date.today(), date.today())
+    _locked_read_modify_write(path, _mutate)
+    return _result_rel[0] if _result_rel else Relation(s, p, o, date.today(), date.today())
 
 
 def expire_relation(path: Path, s: str, p: str, o: str) -> bool:
