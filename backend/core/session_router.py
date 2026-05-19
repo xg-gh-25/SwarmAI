@@ -144,6 +144,12 @@ def _recall_for_query(query: str, max_tokens: int) -> str:
     Thin wrapper around existing RecallEngine infrastructure.
     Uses ``open_vec_db()`` context manager for thread-safe connection
     (this runs in ``asyncio.to_thread``).
+
+    Graph enrichment: extracts entities from query, queries knowledge graph
+    for related entry IDs/titles, appends them to enrich the recall context.
+    This ensures graph-connected knowledge surfaces even when keyword/vector
+    match is weak.
+
     Returns formatted recalled content or empty string.
     """
     try:
@@ -171,9 +177,65 @@ def _recall_for_query(query: str, max_tokens: int) -> str:
 
             embed_fn = _get_cached_embed_fn()
 
-            return engine.recall_knowledge(query, embed_fn=embed_fn, max_tokens=max_tokens)
+            recalled = engine.recall_knowledge(query, embed_fn=embed_fn, max_tokens=max_tokens)
+
+            # Graph enrichment: append related entry context
+            graph_context = _graph_enrich_recall(query)
+            if graph_context and recalled:
+                recalled = recalled + "\n\n" + graph_context
+            elif graph_context:
+                recalled = graph_context
+
+            return recalled
     except Exception as exc:
         logger.debug("_recall_for_query failed: %s", exc)
+        return ""
+
+
+def _graph_enrich_recall(query: str) -> str:
+    """Extract entities from query, find graph-connected knowledge entries.
+
+    Returns a short context block of related entry IDs or empty string.
+    Best-effort: any failure returns empty (never blocks recall).
+    """
+    try:
+        import re as _re
+        from pathlib import Path as _Path
+        from .knowledge_graph import load_graph, query_related_entries
+
+        graph_path = _Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / ".knowledge-graph.yaml"
+        if not graph_path.exists():
+            return ""
+
+        # Extract entities from query
+        entities: list[str] = []
+        # File patterns
+        files = _re.findall(r'\b([\w\-/]+\.(?:py|ts|tsx|rs|sh|md|yaml|json))\b', query)
+        entities.extend(f for f in files if len(f) >= 6)
+        # MEMORY entry IDs
+        ids = _re.findall(r'\b(COE\d+|KD\d+|LL\d+|RC\d+|C\d{3,}|E\d{3,})\b', query)
+        entities.extend(ids)
+        # Module names (snake_case, ≥8 chars)
+        modules = _re.findall(r'\b([\w_]{8,})\b', query)
+        entities.extend(m for m in modules if "_" in m and not m.startswith("__"))
+
+        if not entities:
+            return ""
+
+        rels = load_graph(graph_path)
+        if not rels:
+            return ""
+
+        related = query_related_entries(rels, entities)
+        if not related:
+            return ""
+
+        # Format as a brief context hint (not full content — just IDs for awareness)
+        lines = ["## Graph-Connected Knowledge"]
+        lines.append(f"Entities in query: {', '.join(entities[:5])}")
+        lines.append(f"Related via knowledge graph: {', '.join(related[:10])}")
+        return "\n".join(lines)
+    except Exception:
         return ""
 
 
