@@ -1253,3 +1253,77 @@ class TestChannelModelOverride:
             result = pb.resolve_model(agent_config)
 
             assert "opus" in result, f"Expected opus in result, got: {result}"
+
+
+# ===================================================================
+# Thread history injection
+# ===================================================================
+
+class TestThreadHistoryInjection:
+    """Verify _inject_thread_history provides conversation context."""
+
+    @pytest.mark.asyncio
+    async def test_no_prior_messages_returns_unchanged(self, gateway, mock_db):
+        """First message in thread — no history to inject."""
+        mock_db.channel_messages.list_by_session = AsyncMock(return_value=[])
+        result = await gateway._inject_thread_history("sess-1", "hello", "ts-1")
+        assert result == "hello"
+
+    @pytest.mark.asyncio
+    async def test_single_prior_exchange_injected(self, gateway, mock_db):
+        """One prior Q&A pair is prepended as thread_history."""
+        mock_db.channel_messages.list_by_session = AsyncMock(return_value=[
+            {"direction": "inbound", "content": "What is X?", "external_message_id": "ts-1"},
+            {"direction": "outbound", "content": "X is a thing.", "external_message_id": "ts-2"},
+        ])
+        result = await gateway._inject_thread_history("sess-1", "Tell me more", "ts-3")
+        assert "<thread_history>" in result
+        assert "[User]: What is X?" in result
+        assert "[Assistant]: X is a thing." in result
+        assert result.endswith("Tell me more")
+
+    @pytest.mark.asyncio
+    async def test_current_message_excluded(self, gateway, mock_db):
+        """The current message (already logged) is not duplicated in history."""
+        mock_db.channel_messages.list_by_session = AsyncMock(return_value=[
+            {"direction": "inbound", "content": "prior question", "external_message_id": "ts-1"},
+            {"direction": "outbound", "content": "prior answer", "external_message_id": "ts-2"},
+            {"direction": "inbound", "content": "current msg", "external_message_id": "ts-3"},
+        ])
+        result = await gateway._inject_thread_history("sess-1", "current msg", "ts-3")
+        # Current message should NOT appear in the history block
+        assert result.count("current msg") == 1  # only the actual message, not in history
+
+    @pytest.mark.asyncio
+    async def test_long_messages_truncated(self, gateway, mock_db):
+        """Messages longer than 1500 chars are truncated with ellipsis."""
+        long_content = "A" * 3000
+        mock_db.channel_messages.list_by_session = AsyncMock(return_value=[
+            {"direction": "inbound", "content": long_content, "external_message_id": "ts-1"},
+        ])
+        result = await gateway._inject_thread_history("sess-1", "follow up", "ts-2")
+        assert "..." in result
+        # Should not contain the full 3000-char string
+        assert long_content not in result
+
+    @pytest.mark.asyncio
+    async def test_limit_respected(self, gateway, mock_db):
+        """Only the last N messages are injected, not unlimited history."""
+        messages = [
+            {"direction": "inbound", "content": f"msg-{i}", "external_message_id": f"ts-{i}"}
+            for i in range(20)
+        ]
+        mock_db.channel_messages.list_by_session = AsyncMock(return_value=messages)
+        result = await gateway._inject_thread_history("sess-1", "latest", "ts-99")
+        # Only the last 10 should appear (gateway._THREAD_HISTORY_LIMIT)
+        assert "msg-10" in result
+        assert "msg-0" not in result  # oldest should be trimmed
+
+    @pytest.mark.asyncio
+    async def test_db_failure_returns_original(self, gateway, mock_db):
+        """DB errors are swallowed — agent still gets the current message."""
+        mock_db.channel_messages.list_by_session = AsyncMock(
+            side_effect=Exception("DB connection lost")
+        )
+        result = await gateway._inject_thread_history("sess-1", "hello", "ts-1")
+        assert result == "hello"
