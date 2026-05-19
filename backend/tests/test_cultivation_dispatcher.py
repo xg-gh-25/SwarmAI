@@ -314,15 +314,17 @@ class TestSingletonDispatcher:
         mod._dispatcher = None
 
     def _ensure_dispatcher_in_loop(self):
-        """Force dispatcher creation within the running async loop context.
+        """Force dispatcher re-creation within the running async loop context.
 
         On Python 3.11, asyncio.Queue() must be created while the event loop
         is running. Calling get_dispatcher() from a sync setup_method creates
         the Queue outside the loop context — put() then silently fails on CI.
+
+        We unconditionally re-create the dispatcher here so the Queue is
+        always bound to the current running loop (works on both 3.11 and 3.12).
         """
         import core.cultivation_dispatcher as mod
-        if mod._dispatcher is None:
-            mod._dispatcher = EventDispatcher(queue_size=50, dedup_window_seconds=60.0)
+        mod._dispatcher = EventDispatcher(queue_size=50, dedup_window_seconds=60.0)
 
     def test_get_dispatcher_returns_same_instance(self):
         d1 = get_dispatcher()
