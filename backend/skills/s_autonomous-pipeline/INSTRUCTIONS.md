@@ -598,14 +598,13 @@ After the convergence loop declares push-ready:
      }
    }
    ```
-4. Auto PR (full/bugfix profiles only):
-   ```bash
-   python backend/skills/s_autonomous-pipeline/scripts/pipeline_pr.py \
-     --run-dir <run_dir>
-   ```
-   Record PR URL in run.json under `pr_result` field if successful.
-   If profile is not full/bugfix → skip silently. If gh auth fails → warn, don't block.
-5. Advance pipeline state to next stage (reflect)
+4. Advance pipeline state to next stage (reflect)
+
+**Pipeline boundary:** PUSH-READY = pipeline's quality guarantee is complete.
+Push to remote + CI verification + PR creation are **user-initiated post-pipeline
+actions**, not pipeline steps. The pipeline MUST be completable without network.
+After COMPLETE, suggest "push to remote + verify CI" but do NOT execute.
+STEERING.md "Post-Push CI Ownership" governs the push→CI→green flow separately.
 
 ---
 
