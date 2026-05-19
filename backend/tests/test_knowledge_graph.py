@@ -195,26 +195,28 @@ class TestQuery:
 # ── AC3: get_stage_knowledge boost integration ───────────────────────────────
 
 class TestStageKnowledgeBoost:
-    def test_boost_related_entries_higher(self):
+    def test_boost_via_title_match(self):
+        """Boost works when relation subject matches entry title directly."""
         from core.ddd_entry_lifecycle import EntryMetadata, get_stage_knowledge
 
-        # Two guideline entries with SAME ref_count
         entries = [
             EntryMetadata(
                 title="Subprocess in async must use to_thread",
                 entry_type="guideline", ref_count=2,
                 last_referenced=date(2026, 5, 2), decay_state="active",
                 section="What Worked",
+                raw_text="- **Subprocess in async must use to_thread** — details",
             ),
             EntryMetadata(
                 title="Unrelated lesson about CSS",
                 entry_type="guideline", ref_count=2,
                 last_referenced=date(2026, 5, 2), decay_state="active",
                 section="What Worked",
+                raw_text="- **Unrelated lesson about CSS** — flexbox stuff",
             ),
         ]
 
-        # Relations: first entry applies_to session_unit.py
+        # Relation uses exact title as subject
         relations = [
             Relation(
                 "Subprocess in async must use to_thread",
@@ -228,6 +230,54 @@ class TestStageKnowledgeBoost:
             context_entities=["session_unit.py"],
             relations=relations,
         )
-        # Related entry should come first due to boost
         assert len(result) >= 1
         assert result[0].title == "Subprocess in async must use to_thread"
+
+    def test_boost_via_raw_text_content_match(self):
+        """Boost works via content match — entry raw_text mentions context_entity."""
+        from core.ddd_entry_lifecycle import EntryMetadata, get_stage_knowledge
+
+        # Entry mentions "session_unit.py" in raw_text but graph uses MEMORY ID
+        entries = [
+            EntryMetadata(
+                title="Subprocess in async must use to_thread",
+                entry_type="guideline", ref_count=2, decay_state="active",
+                section="What Worked",
+                raw_text="- **Subprocess in async...** — session_unit.py blocked (2026-05-02)",
+            ),
+            EntryMetadata(
+                title="Unrelated lesson about CSS",
+                entry_type="guideline", ref_count=5, decay_state="active",
+                section="What Worked",
+                raw_text="- **Unrelated lesson about CSS** — frontend (2026-04-01)",
+            ),
+        ]
+
+        # Graph uses MEMORY IDs — LL19 applies_to session_unit.py
+        relations = [
+            Relation("LL19", "applies_to", "session_unit.py",
+                     date(2026, 5, 2), date(2026, 5, 2)),
+        ]
+
+        result = get_stage_knowledge(
+            entries, "build",
+            context_entities=["session_unit.py"],
+            relations=relations,
+        )
+        # Subprocess entry mentions session_unit.py in raw_text → boosted above CSS
+        assert len(result) >= 2
+        assert result[0].title == "Subprocess in async must use to_thread"
+
+    def test_no_boost_without_relations(self):
+        """Backward compat — no relations param means no boost."""
+        from core.ddd_entry_lifecycle import EntryMetadata, get_stage_knowledge
+
+        entries = [
+            EntryMetadata(title="Low ref", entry_type="guideline", ref_count=1,
+                         decay_state="active", section="What Worked"),
+            EntryMetadata(title="High ref", entry_type="guideline", ref_count=5,
+                         decay_state="active", section="What Worked"),
+        ]
+
+        result = get_stage_knowledge(entries, "build")
+        assert result[0].title == "High ref"
