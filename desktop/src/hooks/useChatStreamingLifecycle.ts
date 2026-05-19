@@ -1462,6 +1462,29 @@ export function useChatStreamingLifecycle(
             return;
           }
 
+          // CONTEXT_TOO_LARGE: Backend circuit breaker triggered — session context
+          // too large for reliable inference within timeout. Stop streaming, show
+          // persistent warning with "New Tab" guidance. Not a transient error.
+          if (event.code === 'CONTEXT_TOO_LARGE') {
+            console.log('[StreamHandler] CONTEXT_TOO_LARGE — circuit breaker activated', { capturedTabId });
+            setIsStreaming(false, capturedTabId ?? undefined);
+            incrementStreamGen();
+            if (capturedTabId) updateTabStatus(capturedTabId, 'idle');
+            // Surface as a persistent context warning (reuses existing banner infra)
+            const warningForTooLarge: ContextWarning = {
+              level: 'critical',
+              pct: 100,
+              tokensEst: 0,
+              message: event.message ?? 'Session context too large. Start a new tab for fresh context.',
+            };
+            const tabState = capturedTabId ? tabMapRef.current.get(capturedTabId) : undefined;
+            if (tabState) tabState.contextWarning = warningForTooLarge;
+            if (!capturedTabId || capturedTabId === activeTabIdRef.current) {
+              setContextWarning(warningForTooLarge);
+            }
+            return;
+          }
+
           // SESSION_BUSY: Backend rejected our send because the session is
           // still actively streaming (SSE disconnect caused a race).
           // Backend deletes the orphaned user message from DB on SESSION_BUSY,
