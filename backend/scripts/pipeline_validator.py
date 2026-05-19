@@ -263,6 +263,46 @@ def validate_artifact_data(stage: str, data: dict, profile: str = "full") -> lis
                             f"set 'resolved': true after fixing each"
                         )
 
+        # --- Three-Layer Governance: Full deliver ceremony enforcement ---
+        # For full/bugfix profiles, ALL deliver sub-steps must have evidence.
+        # This prevents the C028 pattern: running adversarial but skipping
+        # completion audit, meta-review, and convergence loop.
+        if profile in ("full", "bugfix", "standard", ""):
+            # Check: completion_audit must exist and be all_green
+            ca = data.get("completion_audit")
+            if not isinstance(ca, dict):
+                errors.append(
+                    "completion_audit missing from deliver artifact. "
+                    "Run Completion Audit (AC → evidence verification) before declaring done."
+                )
+            elif not ca.get("all_green"):
+                gaps = ca.get("gaps", "unknown")
+                errors.append(
+                    f"completion_audit.all_green=false (gaps={gaps}). "
+                    f"Fix gaps before declaring push-ready."
+                )
+
+            # Check: meta_review must exist (verdict CLEAR or risks addressed)
+            mr = data.get("meta_review")
+            if not mr and not data.get("meta_review_verdict"):
+                errors.append(
+                    "meta_review missing from deliver artifact. "
+                    "Run Meta-Review (pipeline blind spot analysis) before declaring done."
+                )
+
+            # Check: convergence evidence (iterations + all_pass)
+            conv = data.get("convergence")
+            if not isinstance(conv, dict):
+                errors.append(
+                    "convergence missing from deliver artifact. "
+                    "Run Quality Convergence Loop (6-layer gate) before declaring done."
+                )
+            elif not conv.get("all_pass") and conv.get("final_status") != "push-ready":
+                errors.append(
+                    f"convergence.all_pass=false — Quality Convergence Loop did not pass. "
+                    f"Iterations: {conv.get('iterations', '?')}"
+                )
+
     if stage == "build":
         tdd = data.get("tdd")
         if isinstance(tdd, dict):
