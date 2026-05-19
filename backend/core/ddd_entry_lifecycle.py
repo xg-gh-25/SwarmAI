@@ -581,11 +581,39 @@ def get_stage_knowledge(
     # Relation-based contextual boost (transient — never persisted)
     # F4 fix: use case-insensitive comparison
     # F8 fix: compute boost BEFORE per-type truncation so boosted entries survive cutoff
+    #
+    # Namespace bridge: the knowledge graph stores relations using MEMORY IDs
+    # (e.g., "LL19") as subjects, while IMPROVEMENT.md entries have prose titles.
+    # To match: query returns graph IDs → check if entry title OR raw_text contains
+    # any returned ID. This handles both ID-titled entries and prose-titled entries
+    # that reference graph IDs in their body text.
     _RELATION_BOOST = 5
     related_titles_lower: set[str] = set()
     if context_entities and relations:
         from core.knowledge_graph import query_related_entries as _qre
-        related_titles_lower = {t.lower() for t in _qre(relations, context_entities)}
+        graph_ids_lower = {t.lower() for t in _qre(relations, context_entities)}
+
+        if graph_ids_lower:
+            for e in active:
+                title_lower = e.title.lower()
+                # Direct match: entry title IS a graph ID (e.g., title="LL19")
+                if title_lower in graph_ids_lower:
+                    related_titles_lower.add(title_lower)
+                    continue
+                # Content match: entry's raw_text mentions a related graph ID
+                # (e.g., raw_text contains "session_unit.py" or "LL19")
+                entry_text_lower = (e.raw_text or title_lower).lower()
+                for gid in graph_ids_lower:
+                    if len(gid) >= 3 and gid in entry_text_lower:
+                        related_titles_lower.add(title_lower)
+                        break
+                # Also check: if ANY context_entity appears in the entry text
+                # (direct content match bypassing the graph)
+                if title_lower not in related_titles_lower:
+                    for ce in context_entities:
+                        if len(ce) >= 4 and ce.lower() in entry_text_lower:
+                            related_titles_lower.add(title_lower)
+                            break
 
     def _sort_key(e: EntryMetadata) -> int:
         boost = _RELATION_BOOST if e.title.lower() in related_titles_lower else 0
