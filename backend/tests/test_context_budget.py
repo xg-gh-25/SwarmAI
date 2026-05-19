@@ -77,11 +77,11 @@ class TestTokenBudgetMeasurement:
         assert "EMERGENCY" in findings[0]
 
     def test_cjk_aware_token_counting(self, tmp_path):
-        """CJK characters count as ~1.5 tokens each."""
+        """CJK characters count as ~1.5 tokens each (widened range)."""
         from hooks.context_health_hook import ContextHealthHook
 
         hook = ContextHealthHook()
-        # 1000 CJK chars × 1.5 = 1500 tokens
+        # 1000 CJK chars (U+4E00 block) × 1.5 = 1500 tokens
         # 1000 ASCII chars × (1/3.5) ≈ 286 tokens
         ctx = self._make_context_dir(tmp_path, {
             "MEMORY.md": "中" * 1000 + "x" * 1000,
@@ -90,6 +90,23 @@ class TestTokenBudgetMeasurement:
         measurement = hook._token_measurement
         # CJK: 1000 × 1.5 = 1500, ASCII: 1000 / 3.5 ≈ 286 → total ~1786
         assert 1700 < measurement["per_file"]["MEMORY.md"] < 1900
+
+    def test_cjk_fullwidth_counted(self, tmp_path):
+        """Fullwidth punctuation and CJK Symbols also count as CJK-like."""
+        from hooks.context_health_hook import ContextHealthHook
+
+        hook = ContextHealthHook()
+        # 100 fullwidth chars (U+FF01-U+FF64, within 0xFF00-0xFFEF)
+        # 50 CJK symbols (U+3001-U+3032, within 0x3000-0x303F)
+        fullwidth = "".join(chr(c) for c in range(0xFF01, 0xFF01 + 100))
+        cjk_symbols = "".join(chr(c) for c in range(0x3001, 0x3001 + 50))
+        ctx = self._make_context_dir(tmp_path, {
+            "MEMORY.md": fullwidth + cjk_symbols,
+        })
+        findings = hook._check_token_budget(ctx)
+        measurement = hook._token_measurement
+        # 150 CJK-like chars × 1.5 = 225 tokens
+        assert 220 < measurement["per_file"]["MEMORY.md"] < 230
 
     def test_ignores_non_context_files(self, tmp_path):
         """Files not in the 9 context file list are ignored."""
@@ -189,13 +206,8 @@ class TestEvolutionAutoCompress:
         """If bias class has any active correction, ALL of that class stay full."""
         from jobs.handlers.memory_health import _compress_evolution_entries
 
-        # Make C013 Bias D, and add an "active" Bias D entry to the set
-        evo_content = self.SAMPLE_EVOLUTION.replace(
-            "### C013 | 2025-11-15 [Bias D]",
-            "### C013 | 2025-11-15 [Bias D]",
-        )
         evo_path = tmp_path / "EVOLUTION.md"
-        evo_path.write_text(evo_content, encoding="utf-8")
+        evo_path.write_text(self.SAMPLE_EVOLUTION, encoding="utf-8")
 
         result = _compress_evolution_entries(
             evo_path,

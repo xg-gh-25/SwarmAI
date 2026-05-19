@@ -27,6 +27,23 @@ from core.session_hooks import HookContext
 
 logger = logging.getLogger(__name__)
 
+def _is_cjk_like(c: str) -> bool:
+    """Check if character is CJK-like (tokenized at ~1.5 tokens by BPE).
+
+    Covers: CJK Unified Ideographs, Extension A, Compatibility, Fullwidth
+    forms, CJK Symbols/Punctuation, and Hangul Syllables.
+    """
+    cp = ord(c)
+    return (
+        0x3400 <= cp <= 0x9FFF       # CJK Unified + Extension A
+        or 0xF900 <= cp <= 0xFAFF    # Compatibility Ideographs
+        or 0x20000 <= cp <= 0x323AF  # Extensions B-I (rare but valid)
+        or 0x3000 <= cp <= 0x303F    # CJK Symbols and Punctuation
+        or 0xFF00 <= cp <= 0xFFEF    # Fullwidth Forms
+        or 0xAC00 <= cp <= 0xD7AF    # Hangul Syllables
+    )
+
+
 # Pipeline-internal decision prefixes to filter before DDD cultivation.
 # These are pipeline validator output, not user decisions.
 # Keep: "user override:", "standing rule:", architecture decisions.
@@ -57,6 +74,8 @@ class ContextHealthHook:
         self._ddd_docs_modified: bool = False
         # Track Projects/ dir mtime to detect create/rename/delete without cultivation.
         self._last_projects_mtime: float = 0.0
+        # Token budget measurement (populated by _check_token_budget in deep check)
+        self._token_measurement: dict = {}
 
     async def execute(self, context: HookContext) -> None:
         ws_path = initialization_manager.get_cached_workspace_path()
@@ -1506,8 +1525,9 @@ class ContextHealthHook:
             if not path.exists():
                 continue
             content = path.read_text(encoding="utf-8")
-            # CJK-aware estimation
-            cjk_chars = sum(1 for c in content if '一' <= c <= '鿿')
+            # CJK-aware estimation (covers CJK Unified + Extension A +
+            # Compatibility + Fullwidth + CJK Symbols + Hangul)
+            cjk_chars = sum(1 for c in content if _is_cjk_like(c))
             ascii_chars = len(content) - cjk_chars
             tokens = int(cjk_chars * 1.5 + ascii_chars / 3.5)
             file_tokens[fname] = tokens
