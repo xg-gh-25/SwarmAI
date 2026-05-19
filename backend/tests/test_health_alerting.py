@@ -155,3 +155,90 @@ class TestMemoryHealthInBriefing:
 
         highlights = _get_health_highlights(str(tmp_path))
         assert any("maintenance" in h.lower() or "memory" in h.lower() for h in highlights)
+
+
+# ── AC5: Governance promotion signal in briefing ───────────────────────
+
+class TestGovernancePromotionInBriefing:
+    def test_governance_signal_surfaces_in_briefing(self, tmp_path):
+        """When .governance_promotion_candidates.json exists, alert appears."""
+        from core.proactive_intelligence import _get_health_highlights
+
+        ctx_dir = tmp_path / ".context"
+        ctx_dir.mkdir()
+        (ctx_dir / ".governance_promotion_candidates.json").write_text(json.dumps({
+            "detected_at": "2026-05-19T10:00:00Z",
+            "candidates": {"A": 6, "C": 3},
+            "message": "Governance promotion candidates detected: Bias A (6x), Bias C (3x)",
+        }))
+
+        # Also need health_findings.json for the function to not short-circuit
+        findings_dir = tmp_path / "Services" / "swarm-jobs"
+        findings_dir.mkdir(parents=True)
+        (findings_dir / "health_findings.json").write_text(json.dumps({
+            "timestamp": "2026-05-19T10:00:00Z",
+            "findings": [],
+        }))
+
+        highlights = _get_health_highlights(str(tmp_path))
+        governance_alerts = [h for h in highlights if "governance" in h.lower()]
+        assert len(governance_alerts) == 1, f"Expected 1 governance alert, got: {highlights}"
+        assert "Bias A (6x)" in governance_alerts[0]
+        assert "Bias C (3x)" in governance_alerts[0]
+        assert "PROMOTE" in governance_alerts[0]
+
+    def test_no_governance_signal_no_alert(self, tmp_path):
+        """When signal file doesn't exist, no governance alert."""
+        from core.proactive_intelligence import _get_health_highlights
+
+        findings_dir = tmp_path / "Services" / "swarm-jobs"
+        findings_dir.mkdir(parents=True)
+        (findings_dir / "health_findings.json").write_text(json.dumps({
+            "timestamp": "2026-05-19T10:00:00Z",
+            "findings": [],
+        }))
+
+        highlights = _get_health_highlights(str(tmp_path))
+        governance_alerts = [h for h in highlights if "governance" in h.lower()]
+        assert len(governance_alerts) == 0
+
+    def test_governance_signal_corrupt_json_graceful(self, tmp_path):
+        """Corrupt signal file doesn't crash, just ignored."""
+        from core.proactive_intelligence import _get_health_highlights
+
+        ctx_dir = tmp_path / ".context"
+        ctx_dir.mkdir()
+        (ctx_dir / ".governance_promotion_candidates.json").write_text("broken{{{")
+
+        findings_dir = tmp_path / "Services" / "swarm-jobs"
+        findings_dir.mkdir(parents=True)
+        (findings_dir / "health_findings.json").write_text(json.dumps({
+            "timestamp": "2026-05-19T10:00:00Z",
+            "findings": [],
+        }))
+
+        highlights = _get_health_highlights(str(tmp_path))
+        governance_alerts = [h for h in highlights if "governance" in h.lower()]
+        assert len(governance_alerts) == 0  # Graceful — no crash
+
+    def test_governance_signal_empty_candidates_no_alert(self, tmp_path):
+        """Signal file exists but candidates dict is empty → no alert."""
+        from core.proactive_intelligence import _get_health_highlights
+
+        ctx_dir = tmp_path / ".context"
+        ctx_dir.mkdir()
+        (ctx_dir / ".governance_promotion_candidates.json").write_text(json.dumps({
+            "detected_at": "2026-05-19T10:00:00Z",
+            "candidates": {},
+        }))
+
+        findings_dir = tmp_path / "Services" / "swarm-jobs"
+        findings_dir.mkdir(parents=True)
+        (findings_dir / "health_findings.json").write_text(json.dumps({
+            "timestamp": "2026-05-19T10:00:00Z",
+            "findings": [],
+        }))
+
+        highlights = _get_health_highlights(str(tmp_path))
+        governance_alerts = [h for h in highlights if "governance" in h.lower()]
+        assert len(governance_alerts) == 0

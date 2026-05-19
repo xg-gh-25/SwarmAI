@@ -875,6 +875,24 @@ def _get_health_highlights(working_directory: str) -> list[str]:
                     except (OSError, json.JSONDecodeError):
                         continue
 
+    # L4.2: Governance promotion candidates (Three-Layer Governance)
+    # Signal file written by evolution_maintenance_hook when bias class reaches 3x
+    governance_signal = (
+        Path(working_directory) / ".context" / ".governance_promotion_candidates.json"
+    )
+    if governance_signal.exists():
+        try:
+            sig_data = json.loads(governance_signal.read_text(encoding="utf-8"))
+            candidates = sig_data.get("candidates", {})
+            if candidates:
+                parts = [f"Bias {b} ({c}x)" for b, c in candidates.items()]
+                lines.append(
+                    f"  - [governance/promote] Promotion threshold reached: "
+                    f"{', '.join(parts)} — run s_self-evolution PROMOTE"
+                )
+        except (json.JSONDecodeError, OSError):
+            pass  # Graceful — malformed signal is not critical
+
     return lines
 
 
