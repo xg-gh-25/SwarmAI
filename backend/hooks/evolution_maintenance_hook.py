@@ -523,10 +523,6 @@ class EvolutionMaintenanceHook:
 
     # Bias class pattern: [Bias A], [Bias B], etc. in correction headers
     _BIAS_TAG_RE = re.compile(r"\[Bias ([A-D])\]")
-    # Match correction headers (doesn't use $ anchor — headers may have [Bias X] suffix)
-    _CORRECTION_HEADER_RE = re.compile(
-        r"^### C\d{3}\s*\|.*?(\d{4}-\d{2}-\d{2})", re.MULTILINE
-    )
 
     def _check_promotion_threshold(self, evo_path: Path, content: str) -> None:
         """Check if any bias class has reached the 3x promotion threshold.
@@ -549,10 +545,13 @@ class EvolutionMaintenanceHook:
             )
             return
 
-        # Count active corrections per bias class via direct line scanning
+        # Count ACTIVE corrections per bias class via direct line scanning.
+        # Only count entries whose **Status** is 'active' — skip mitigated,
+        # promoted, superseded, resolved (PE Finding #2 fix).
         bias_counts: dict[str, int] = {"A": 0, "B": 0, "C": 0, "D": 0}
 
         in_corrections = False
+        current_bias: str | None = None  # Bias from most recent header
         for line in content.splitlines():
             # Detect section boundaries
             if line.startswith("## Corrections Captured"):
@@ -563,15 +562,17 @@ class EvolutionMaintenanceHook:
             if not in_corrections:
                 continue
 
-            # Check each correction header for bias tag
+            # Track bias tag from header (but don't count yet)
             if line.startswith("### C") and "[Bias " in line:
                 match = self._BIAS_TAG_RE.search(line)
-                if match:
-                    bias_counts[match.group(1)] += 1
-            # Also check status line — skip if not active
-            # (Corrections with "status: promoted" or "superseded" shouldn't count)
-            if "**Status**: active" in line:
-                pass  # Active entries already counted from header
+                current_bias = match.group(1) if match else None
+                continue
+
+            # Only count when we confirm the entry is active
+            if current_bias and "**Status**:" in line:
+                if "active" in line and "mitigated" not in line:
+                    bias_counts[current_bias] += 1
+                current_bias = None  # Reset — status consumed
 
         # Signal any class at threshold
         threshold = 3

@@ -24,6 +24,7 @@ from claude_agent_sdk import HookMatcher
 from .security_hooks import (
     pre_tool_logger,
     create_dangerous_command_gate,
+    create_governance_file_gate,
     create_skill_access_checker,
 )
 from .agent_defaults import expand_allowed_skills_with_plugins
@@ -188,6 +189,11 @@ async def build_hooks(
     )
     registry.register("PreToolUse", gate, "dangerous_command_gate", matcher="Bash")
     logger.info(f"Dangerous command gate attached for session_key: {session_key}")
+
+    # ── PreToolUse: governance file gate (Edit/Write-scoped) ──
+    governance_gate = create_governance_file_gate()
+    registry.register("PreToolUse", governance_gate, "governance_file_gate")
+    logger.debug("Governance file gate attached (advisory mode)")
 
     # ── Skill access control ─────────────────────────────────
     allowed_skills = agent_config.get("allowed_skills", [])
