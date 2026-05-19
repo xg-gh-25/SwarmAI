@@ -194,15 +194,15 @@ See `Projects/SwarmAI/TECH.md` → "Output Format Protocol" for full spec.
 <!-- METRICS_START -->
 | Metric | Value | How to Verify |
 |--------|-------|---------------|
-| Total commits | 1534+ | `git log --oneline | wc -l` |
-| Duration | ~85 days | First commit to latest (1 human contributor) |
-| Backend core modules | 109 Python files, 49897 LOC | `find backend/core -name "*.py" | wc -l` |
-| Total backend LOC | 223571 | `find backend -name "*.py" | xargs wc -l | tail -1` |
-| Test files | 220 | `find backend/tests -name "*.py" | wc -l` |
-| Skills (agent capabilities) | 83 | `ls -d backend/skills/s_* | wc -l` |
+| Total commits | 1554+ | `git log --oneline | wc -l` |
+| Duration | ~86 days | First commit to latest (1 human contributor) |
+| Backend core modules | 112 Python files, 51238 LOC | `find backend/core -name "*.py" | wc -l` |
+| Total backend LOC | 227286 | `find backend -name "*.py" | xargs wc -l | tail -1` |
+| Test files | 222 | `find backend/tests -name "*.py" | wc -l` |
+| Skills (agent capabilities) | 84 | `ls -d backend/skills/s_* | wc -l` |
 | Post-session hooks | 13 | `ls backend/hooks/*.py | wc -l` |
 | React components | 166 | `find desktop/src -name "*.tsx" | wc -l` |
-| Pipeline spec depth | 1192 lines | `wc -l backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md` |
+| Pipeline spec depth | 1195 lines | `wc -l backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md` |
 | Largest state machine | 2964 lines | `wc -l backend/core/session_unit.py` |
 | Context system | 1058 lines | `wc -l backend/core/context_directory_loader.py` |
 | Platform modes | 4 (macOS daemon, Windows subprocess, Linux subprocess, Hive systemd) | |

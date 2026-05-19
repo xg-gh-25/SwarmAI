@@ -186,6 +186,15 @@ Before ANY of these actions: checkpointing, suggesting "open a new tab", "contin
 - **Purpose first, not symptom first** — When something is wrong, first ask "what is this component's PURPOSE?" and derive what it SHOULD do. Never start from "what shouldn't appear" — that's an unbounded blocklist that drifts. The purpose gives you a bounded allowlist.
 - **Match fix scope to problem scope** — A UI section problem needs a UI section fix. A rendering filter problem needs a rendering filter fix. If your fix touches a layer below where the problem lives, you're over-scoping. Wider scope = wider blast radius = more test failures = more iterations.
 
+### Debugging Rule (Blocking)
+
+**Same problem fails twice → you don't understand the system. Stop coding.**
+
+- 1st fix fails → acceptable. You had an incomplete model.
+- 2nd fix fails → **STOP**. Your mental model is wrong, not the code.
+- Before a 3rd attempt: draw the complete state machine — every state, every transition, every actor that touches shared state. The 3rd attempt must start from a new mental model, not patch the 2nd attempt.
+- "I think I know what's wrong" after two failures = the most dangerous sentence in debugging. (C023, F003 — both burned 3 rounds because "this should fix it" was the mental model for each attempt.)
+
 ### Allowed Exception (P0 Only)
 
 - Active user impact → ship a **temporary patch**
