@@ -65,23 +65,23 @@ class TestCircuitBreaker:
     """AC2 + AC3: Circuit breaker stops retry and emits event."""
 
     def test_high_context_2x_timeout_breaks(self):
-        """AC2: >800K + 2 consecutive timeouts → should break retry."""
+        """AC2: >1M + 2 consecutive timeouts → should break retry."""
         from core.session_unit import should_circuit_break_timeout
 
         # 2 consecutive timeouts, high context
         result = should_circuit_break_timeout(
             consecutive_timeouts=2,
-            context_tokens=1_000_000,
+            context_tokens=1_500_000,
         )
         assert result is True
 
     def test_low_context_2x_timeout_continues(self):
-        """AC5: <800K + 2 timeouts → should NOT break (normal retry behavior)."""
+        """AC5: <1M + 2 timeouts → should NOT break (normal retry behavior)."""
         from core.session_unit import should_circuit_break_timeout
 
         result = should_circuit_break_timeout(
             consecutive_timeouts=2,
-            context_tokens=300_000,
+            context_tokens=800_000,
         )
         assert result is False
 
