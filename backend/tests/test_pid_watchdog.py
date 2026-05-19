@@ -24,7 +24,7 @@ from core.session_unit import SessionState, SessionUnit
 
 
 @pytest.fixture
-def unit():
+async def unit():
     """Create a minimal SessionUnit for testing."""
     u = SessionUnit(session_id="test-watchdog-001", agent_id="default")
     u._wrapper = MagicMock()
@@ -32,7 +32,9 @@ def unit():
     u._client = MagicMock()
     # Use short interval for tests (default is 5s)
     u._PID_WATCHDOG_INTERVAL = 0.05
-    return u
+    yield u
+    # Cleanup: ensure watchdog task is cancelled
+    u._stop_pid_watchdog()
 
 
 class TestPidWatchdogDetection:
