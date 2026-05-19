@@ -26,6 +26,7 @@ Public API:
 import re
 from dataclasses import dataclass, field
 from datetime import date
+from pathlib import Path
 from typing import Optional
 
 
@@ -460,7 +461,7 @@ def assess_decay(
 
 
 def archive_entries(
-    project_dir: "Path", entries: list[EntryMetadata]
+    project_dir: Path, entries: list[EntryMetadata]
 ) -> int:
     """Move entries to IMPROVEMENT-archive.md and return count archived.
 
@@ -474,12 +475,10 @@ def archive_entries(
     Returns:
         Number of entries successfully archived.
     """
-    from pathlib import Path as _Path
-
     if not entries:
         return 0
 
-    archive_path = _Path(project_dir) / "IMPROVEMENT-archive.md"
+    archive_path = Path(project_dir) / "IMPROVEMENT-archive.md"
 
     # Build archive content to append
     archive_lines: list[str] = []
