@@ -263,14 +263,22 @@ def run_memory_health(dry_run: bool = False) -> dict:
     evo_path = CONTEXT_DIR / "EVOLUTION.md"
     compression_result: dict = {"compressed": []}
     if evo_path.exists() and not dry_run:
-        # Derive active bias classes from EVOLUTION.md itself
+        # Derive active bias classes: find entries with both [Bias X] and status=active
+        # Parse per-block to avoid cross-entry regex matching
         evo_content = evo_path.read_text(encoding="utf-8")
-        active_biases = set(
-            m.group(1) for m in re.finditer(
-                r"### C\d+ \|.*?\[Bias ([A-Z])\].*?Status\*\*:\s*active",
-                evo_content, re.DOTALL,
-            )
-        )
+        active_biases: set[str] = set()
+        _header_re = re.compile(r"^### C\d+ \| \d{4}-\d{2}-\d{2} \[Bias ([A-Z])\]")
+        _status_re = re.compile(r"- \*\*Status\*\*:\s*active")
+        _current_bias: str | None = None
+        for line in evo_content.splitlines():
+            hm = _header_re.match(line)
+            if hm:
+                _current_bias = hm.group(1)
+            elif _current_bias and _status_re.search(line):
+                active_biases.add(_current_bias)
+                _current_bias = None
+            elif line.startswith("### ") or line.startswith("## "):
+                _current_bias = None
         # Derive recent DailyActivity references (last 60 days)
         recent_refs: set[str] = set()
         if DAILY_DIR.exists():
