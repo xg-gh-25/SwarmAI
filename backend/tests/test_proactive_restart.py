@@ -368,3 +368,55 @@ class TestLifecycleProactiveRestart:
 
         unit.compact.assert_not_awaited()
         unit.kill.assert_not_awaited()
+
+
+# ===================================================================
+# Channel session TTL exemption
+# ===================================================================
+
+
+class TestChannelSessionTTLExemption:
+    """Channel sessions must NEVER be killed by TTL — they live as long as daemon."""
+
+    @pytest.mark.asyncio
+    async def test_channel_session_survives_ttl(self):
+        """A channel session idle > TTL must NOT be killed by _check_ttl."""
+        from core.lifecycle_manager import LifecycleManager
+
+        unit = _make_unit(session_id="channel-slack-1")
+        _set_idle_with_pid(unit)
+        unit.is_channel_session = True
+        # Idle for 2x TTL
+        unit.last_used = time.time() - (LifecycleManager.TTL_SECONDS * 2)
+        unit.kill = AsyncMock()
+
+        router = MagicMock()
+        router.list_units.return_value = [unit]
+
+        mgr = LifecycleManager(router=router)
+        await mgr._check_ttl()
+
+        # Channel session must NOT be killed
+        unit.kill.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_chat_session_still_killed_by_ttl(self):
+        """Regular chat sessions are still killed after TTL (no regression)."""
+        from core.lifecycle_manager import LifecycleManager
+
+        unit = _make_unit(session_id="chat-tab-1")
+        _set_idle_with_pid(unit)
+        unit.is_channel_session = False
+        # Idle for 2x TTL
+        unit.last_used = time.time() - (LifecycleManager.TTL_SECONDS * 2)
+        unit.kill = AsyncMock()
+        unit._hooks_enqueued = True  # Skip hook firing for simplicity
+
+        router = MagicMock()
+        router.list_units.return_value = [unit]
+
+        mgr = LifecycleManager(router=router)
+        await mgr._check_ttl()
+
+        # Regular session MUST be killed
+        unit.kill.assert_awaited_once()

@@ -503,10 +503,21 @@ class LifecycleManager:
                 unit._hooks_enqueued = True
 
     async def _check_ttl(self) -> None:
-        """Kill SessionUnits that have been IDLE longer than TTL."""
+        """Kill SessionUnits that have been IDLE longer than TTL.
+
+        Channel sessions (is_channel_session=True) are exempt — they live
+        as long as the daemon.  Their context continuity depends on the
+        subprocess staying alive; TTL-killing them causes context loss on
+        follow-up messages.
+        """
         now = time.time()
         for unit in self._router.list_units():
             if unit.state == SessionState.IDLE:
+                # Channel sessions are never TTL-killed — they persist
+                # for the lifetime of the daemon.  Context continuity
+                # is maintained by the long-lived subprocess + --resume.
+                if unit.is_channel_session:
+                    continue
                 idle_seconds = now - unit.last_used
                 if idle_seconds > self.TTL_SECONDS:
                     logger.info(

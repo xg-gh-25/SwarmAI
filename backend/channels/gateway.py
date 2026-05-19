@@ -1099,16 +1099,6 @@ class ChannelGateway:
             msg, agent_id, sender_identity,
         )
 
-        # ── Inject thread history for context continuity ──────────────
-        # When a user sends a follow-up in a Slack thread, the CLI
-        # subprocess may have been evicted/restarted and lost conversation
-        # context.  We always prepend recent history from our own DB so
-        # the agent can see prior Q&A regardless of subprocess state.
-        # This is idempotent: if the subprocess is alive and remembers,
-        # the injected history is redundant but harmless.
-        final_text = await self._inject_thread_history(
-            channel_session_id, final_text, msg.external_message_id,
-        )
 
         # Build streaming context — all mutable state in a dataclass
         adapter = self._adapters.get(channel_id)
@@ -1608,69 +1598,6 @@ class ChannelGateway:
     # Thread history injection
     # ------------------------------------------------------------------
 
-    # Maximum number of prior messages to inject as thread context.
-    # Each pair (Q + A) ≈ 200-400 tokens.  10 messages ≈ 2-4K tokens.
-    _THREAD_HISTORY_LIMIT = 10
-
-    async def _inject_thread_history(
-        self,
-        channel_session_id: str,
-        current_text: str,
-        current_message_id: Optional[str] = None,
-    ) -> str:
-        """Prepend recent thread history to the user's message.
-
-        Fetches the last N messages (both inbound and outbound) from
-        ``channel_messages`` for this session and formats them as a
-        conversation transcript.  This ensures the agent always has
-        prior context even after subprocess eviction or session rotation.
-
-        If there are no prior messages (first message in thread), returns
-        ``current_text`` unchanged.
-        """
-        try:
-            messages = await db.channel_messages.list_by_session(channel_session_id)
-            if not messages:
-                return current_text
-
-            # Exclude the current message (already logged before this call)
-            prior = [
-                m for m in messages
-                if m.get("external_message_id") != current_message_id
-            ]
-            if not prior:
-                return current_text
-
-            # Take only the most recent N messages
-            prior = prior[-self._THREAD_HISTORY_LIMIT:]
-
-            # Format as a compact conversation transcript
-            lines: list[str] = []
-            for m in prior:
-                direction = m.get("direction", "")
-                content = (m.get("content") or "").strip()
-                if not content or content == "[Attachment message]":
-                    continue
-                # Truncate very long messages to keep injection reasonable
-                if len(content) > 1500:
-                    content = content[:1500] + "..."
-                role = "User" if direction == "inbound" else "Assistant"
-                lines.append(f"[{role}]: {content}")
-
-            if not lines:
-                return current_text
-
-            history_block = (
-                "<thread_history>\n"
-                "Below is the recent conversation in this thread for context:\n\n"
-                + "\n\n".join(lines)
-                + "\n</thread_history>\n\n"
-            )
-            return history_block + current_text
-
-        except Exception:
-            logger.exception("Failed to inject thread history for session %s", channel_session_id)
-            return current_text
 
     # ------------------------------------------------------------------
     # Session resolution
