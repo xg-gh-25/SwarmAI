@@ -98,10 +98,11 @@ STAGE_SCHEMAS: dict[str, dict[str, list[str]]] = {
         "required": [
             "title",
             "quality",             # V2: binary push_ready gate (replaces confidence_score)
-            "adversarial_review",  # V1.10.0: independent sub-agent review
+            # adversarial_review + completion_audit enforced by STAGE_DEPTH (profile-aware).
+            # DEPTH blocks full/bugfix if absent, exempts trivial/research/docs.
         ],
         "recommended": ["decisions", "attention_flags", "report_path",
-                         "meta_review", "completion_audit"],
+                         "meta_review"],
     },
     # reflect has no artifact — skip schema check
 }
@@ -160,7 +161,10 @@ STAGE_TEMPLATES: dict[str, dict] = {
 STAGE_DEPTH: dict[str, dict[str, list[str]]] = {
     "build": {"tdd": ["green_pass", "smoke_tests"]},
     "review": {"runtime_patterns": ["checked", "patterns"], "integration_trace": ["checked"]},
-    "deliver": {"adversarial_review": ["profile_tier", "findings"]},
+    "deliver": {
+        "adversarial_review": ["profile_tier", "findings"],
+        "completion_audit": ["all_green"],
+    },
 }
 
 
@@ -181,12 +185,19 @@ def get_stage_schema(stage: str) -> dict:
     }
 
 
-def validate_artifact_data(stage: str, data: dict) -> list[str]:
+def validate_artifact_data(stage: str, data: dict, profile: str = "full") -> list[str]:
     """Public API: validate artifact data against stage schema.
 
     Returns list of error strings. Empty list = valid.
     Checks: required fields, depth nested fields, stage-specific invariants.
     Used by artifact_cli at publish time for fail-fast validation.
+
+    Args:
+        stage: Pipeline stage name (evaluate, think, plan, build, review, test, deliver)
+        data: Artifact data dict to validate
+        profile: Pipeline profile (full, bugfix, trivial, research, docs). Defaults to
+                 "full" which is the strictest — trivial/research/docs exempt from
+                 adversarial review requirements.
     """
     errors: list[str] = []
     schema = STAGE_SCHEMAS.get(stage)
@@ -234,7 +245,14 @@ def validate_artifact_data(stage: str, data: dict) -> list[str]:
         ar = data.get("adversarial_review")
         if isinstance(ar, dict):
             tier = ar.get("profile_tier", "")
-            if tier and tier != "skipped":
+            # Tier=skipped on full/bugfix → BLOCK (C026 fix)
+            _strict_profiles = ("full", "bugfix", "standard", "")
+            if tier in ("skipped", "lite") and profile in _strict_profiles:
+                errors.append(
+                    f"adversarial_review.profile_tier='{tier}' but profile='{profile}' "
+                    f"requires full adversarial review. Only trivial/research/docs exempt."
+                )
+            elif tier and tier != "skipped":
                 findings = ar.get("findings", [])
                 if isinstance(findings, list):
                     unresolved = [f for f in findings if isinstance(f, dict)
