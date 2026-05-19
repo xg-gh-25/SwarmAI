@@ -335,12 +335,65 @@ _FILE_PATTERN = re.compile(
 _MIN_FILE_NAME_LEN = 6
 
 
+def batch_add_relations(
+    path: Path, triples: list[tuple[str, str, str]]
+) -> int:
+    """Add multiple relations in a single locked IO cycle.
+
+    Each triple is (subject, predicate, object). Validates predicates,
+    deduplicates against existing relations. Much more efficient than
+    calling add_relation() N times (1 lock + 1 save vs N locks + N saves).
+
+    Returns number of newly created relations (excludes dedup touches).
+    """
+    # Validate all predicates upfront (fail-fast before acquiring lock)
+    for s, p, o in triples:
+        if p not in VALID_PREDICATES:
+            raise ValueError(
+                f"Invalid predicate '{p}' in triple ({s}, {p}, {o}). "
+                f"Must be one of: {sorted(VALID_PREDICATES)}"
+            )
+
+    created = 0
+    today = date.today()
+
+    def _mutate(relations: list[Relation]) -> tuple[list[Relation], None]:
+        nonlocal created
+        # Build index for O(1) dedup lookup
+        existing: set[tuple[str, str, str]] = set()
+        for r in relations:
+            existing.add((r.subject, r.predicate, r.object))
+
+        for s, p, o in triples:
+            key = (s, p, o)
+            if key in existing:
+                # Touch existing (update last_used)
+                for r in relations:
+                    if r.subject == s and r.predicate == p and r.object == o:
+                        r.last_used = today
+                        if r.expired:
+                            r.expired = None
+                        break
+            else:
+                relations.append(Relation(
+                    subject=s, predicate=p, object=o,
+                    created=today, last_used=today,
+                ))
+                existing.add(key)
+                created += 1
+
+        return relations, None
+
+    _locked_read_modify_write(path, _mutate)
+    return created
+
+
 def backfill_from_entries(entries: list, graph_path: Path) -> int:
     """Scan entry raw_text for file/module mentions and generate relations.
 
     For each entry, extracts file patterns (*.py, *.ts, etc.) from raw_text
     and creates `applies_to` relations. Skips very short filenames.
-    Uses add_relation's built-in dedup to avoid duplicates.
+    Uses batch_add_relations for single-IO-cycle efficiency.
 
     Args:
         entries: List of EntryMetadata objects (from ddd_entry_lifecycle.parse_entries)
@@ -349,27 +402,23 @@ def backfill_from_entries(entries: list, graph_path: Path) -> int:
     Returns:
         Number of new relations created.
     """
-    created = 0
+    triples: list[tuple[str, str, str]] = []
+
     for entry in entries:
         raw = entry.raw_text or entry.title
         files_found = _FILE_PATTERN.findall(raw)
         for fname in files_found:
-            # Skip very short file names (false positives)
             if len(fname) < _MIN_FILE_NAME_LEN:
                 continue
-            # Use basename only (strip path prefixes)
             basename = fname.split("/")[-1] if "/" in fname else fname
             if len(basename) < _MIN_FILE_NAME_LEN:
                 continue
-            # Use first 60 chars of title as subject (keep YAML readable)
             subject = entry.title[:60]
-            try:
-                rel = add_relation(graph_path, subject, "applies_to", basename)
-                if rel.created == date.today():  # Newly created (not dedup'd)
-                    created += 1
-            except ValueError:
-                continue  # Invalid predicate (shouldn't happen for "applies_to")
-    return created
+            triples.append((subject, "applies_to", basename))
+
+    if not triples:
+        return 0
+    return batch_add_relations(graph_path, triples)
 
 
 # ── Locking ──────────────────────────────────────────────────────────────────

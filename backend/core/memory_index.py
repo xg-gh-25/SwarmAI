@@ -651,33 +651,10 @@ def _keyword_section_scores(
 
     Entries marked as superseded (via P2 temporal validity) score at
     0.1x weight, preventing stale decisions from dominating section selection.
-
-    G2 integration: entries connected via knowledge graph to entities mentioned
-    in the user message get a +0.3 boost to their section's score.
     """
     index_entries = _parse_index_entries(index_block)
     matched: dict[str, float] = {}
     _superseded = superseded_keys or set()
-
-    # G2: Load knowledge graph for relation-based section boosting
-    graph_connected_keys: set[str] = set()
-    try:
-        from pathlib import Path as _Path
-        graph_path = _Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / ".knowledge-graph.yaml"
-        if graph_path.exists():
-            from core.knowledge_graph import load_graph, query_related_entries
-            rels = load_graph(graph_path)
-            if rels:
-                # Extract potential entity references from user message
-                # (file names, module names, entry IDs like COE04, LL19)
-                msg_entities = _extract_entities_from_message(user_message)
-                if msg_entities:
-                    related = query_related_entries(rels, msg_entities)
-                    graph_connected_keys = {r.lower() for r in related}
-    except Exception:
-        pass  # Graph boost is best-effort, never blocks recall
-
-    _GRAPH_BOOST = 0.3
 
     for entry in index_entries:
         score = keyword_relevance(
@@ -686,40 +663,12 @@ def _keyword_section_scores(
         # Apply temporal weight: superseded entries get 0.1x.
         if entry["key"] in _superseded:
             score *= SUPERSEDED_WEIGHT
-        # G2: boost score if this entry is graph-connected to user's query entities
-        if entry["key"].lower() in graph_connected_keys:
-            score = max(score, KEYWORD_THRESHOLD) + _GRAPH_BOOST
         if score >= KEYWORD_THRESHOLD:
             sec_name = _key_to_section(entry["key"])
             if sec_name and (sec_name not in matched or score > matched[sec_name]):
                 matched[sec_name] = score
 
     return matched
-
-
-def _extract_entities_from_message(message: str) -> list[str]:
-    """Extract potential knowledge graph entities from a user message.
-
-    Looks for: file names (*.py, *.ts), module names, MEMORY entry IDs (COE04, LL19).
-    Conservative: only returns high-confidence matches.
-    """
-    import re as _re
-    entities: list[str] = []
-
-    # File patterns (*.py, *.ts, etc.)
-    files = _re.findall(r'\b([\w\-/]+\.(?:py|ts|tsx|rs|sh|md|yaml|json))\b', message)
-    entities.extend(f for f in files if len(f) >= 6)
-
-    # MEMORY entry IDs (COE01, KD16, LL19, RC04, C011, E007)
-    ids = _re.findall(r'\b(COE\d+|KD\d+|LL\d+|RC\d+|C\d{3,}|E\d{3,})\b', message)
-    entities.extend(ids)
-
-    # Known module names (without extension) — only if ≥8 chars to avoid noise
-    modules = _re.findall(r'\b([\w_]{8,})\b', message)
-    # Only keep module-like names (snake_case with underscore)
-    entities.extend(m for m in modules if "_" in m and not m.startswith("__"))
-
-    return entities
 
 
 def _hybrid_section_scores(user_message: str) -> dict[str, float]:
