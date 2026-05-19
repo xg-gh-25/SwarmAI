@@ -16,15 +16,19 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import warnings
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from core.session_unit import SessionState, SessionUnit
 
+# Suppress "Task was destroyed" warnings from xdist worker teardown
+pytestmark = pytest.mark.filterwarnings("ignore::RuntimeWarning")
+
 
 @pytest.fixture
-async def unit():
+def unit():
     """Create a minimal SessionUnit for testing."""
     u = SessionUnit(session_id="test-watchdog-001", agent_id="default")
     u._wrapper = MagicMock()
@@ -32,9 +36,7 @@ async def unit():
     u._client = MagicMock()
     # Use short interval for tests (default is 5s)
     u._PID_WATCHDOG_INTERVAL = 0.05
-    yield u
-    # Cleanup: ensure watchdog task is cancelled
-    u._stop_pid_watchdog()
+    return u
 
 
 class TestPidWatchdogDetection:
@@ -43,12 +45,9 @@ class TestPidWatchdogDetection:
     @pytest.mark.asyncio
     async def test_watchdog_detects_dead_pid(self, unit):
         """When subprocess PID is gone, watchdog transitions to DEAD."""
-        # Put unit in STREAMING state
+        # _transition to STREAMING auto-starts watchdog
         unit.state = SessionState.IDLE
         unit._transition(SessionState.STREAMING)
-
-        # Start watchdog
-        unit._start_pid_watchdog()
         assert unit._pid_watchdog_task is not None
 
         # Simulate PID death: os.kill raises ProcessLookupError
@@ -64,7 +63,6 @@ class TestPidWatchdogDetection:
         """When PID is alive, watchdog does nothing."""
         unit.state = SessionState.IDLE
         unit._transition(SessionState.STREAMING)
-        unit._start_pid_watchdog()
 
         # os.kill(pid, 0) succeeds = process alive (no exception)
         with patch("os.kill", return_value=None):
@@ -73,22 +71,17 @@ class TestPidWatchdogDetection:
         # Should still be STREAMING
         assert unit.state == SessionState.STREAMING
 
-        # Cleanup
-        unit._stop_pid_watchdog()
-
     @pytest.mark.asyncio
     async def test_watchdog_handles_permission_error_as_alive(self, unit):
         """PermissionError from os.kill means process exists but not ours."""
         unit.state = SessionState.IDLE
         unit._transition(SessionState.STREAMING)
-        unit._start_pid_watchdog()
 
         with patch("os.kill", side_effect=PermissionError("Operation not permitted")):
             await asyncio.sleep(0.2)
 
         # PermissionError = process exists, just can't signal it
         assert unit.state == SessionState.STREAMING
-        unit._stop_pid_watchdog()
 
 
 class TestPidWatchdogLifecycle:
@@ -136,6 +129,35 @@ class TestPidWatchdogLifecycle:
 
         unit._transition(SessionState.DEAD)
         assert unit._pid_watchdog_task is None or unit._pid_watchdog_task.cancelled()
+
+
+    @pytest.mark.asyncio
+    async def test_watchdog_persists_through_waiting_input(self, unit):
+        """Watchdog continues running during STREAMING → WAITING_INPUT."""
+        unit.state = SessionState.IDLE
+        unit._transition(SessionState.STREAMING)
+        original_task = unit._pid_watchdog_task
+        assert original_task is not None
+
+        # Transition to WAITING_INPUT (permission prompt)
+        unit._transition(SessionState.WAITING_INPUT)
+
+        # Same watchdog task should still be running
+        assert unit._pid_watchdog_task is original_task
+        assert not original_task.done()
+
+    @pytest.mark.asyncio
+    async def test_watchdog_detects_death_in_waiting_input(self, unit):
+        """Watchdog detects PID death even in WAITING_INPUT state."""
+        unit.state = SessionState.IDLE
+        unit._transition(SessionState.STREAMING)
+        unit._transition(SessionState.WAITING_INPUT)
+        assert unit._pid_watchdog_task is not None
+
+        with patch("os.kill", side_effect=ProcessLookupError("No such process")):
+            await asyncio.sleep(0.2)
+
+        assert unit.state == SessionState.DEAD
 
 
 class TestChannelEvictionProtection:
