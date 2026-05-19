@@ -259,6 +259,42 @@ def run_memory_health(dry_run: bool = False) -> dict:
     else:
         logger.info("Phase 1: all checks passed (%d warnings)", len(warnings))
 
+    # ── Phase 1b: EVOLUTION auto-compression (deterministic, $0) ──────
+    evo_path = CONTEXT_DIR / "EVOLUTION.md"
+    compression_result: dict = {"compressed": []}
+    if evo_path.exists() and not dry_run:
+        # Derive active bias classes from EVOLUTION.md itself
+        evo_content = evo_path.read_text(encoding="utf-8")
+        active_biases = set(
+            m.group(1) for m in re.finditer(
+                r"### C\d+ \|.*?\[Bias ([A-Z])\].*?Status\*\*:\s*active",
+                evo_content, re.DOTALL,
+            )
+        )
+        # Derive recent DailyActivity references (last 60 days)
+        recent_refs: set[str] = set()
+        if DAILY_DIR.exists():
+            cutoff = datetime.now(timezone.utc) - timedelta(days=60)
+            for da_file in DAILY_DIR.glob("*.md"):
+                try:
+                    file_date = datetime.strptime(da_file.stem, "%Y-%m-%d").replace(
+                        tzinfo=timezone.utc
+                    )
+                    if file_date >= cutoff:
+                        da_text = da_file.read_text(encoding="utf-8")
+                        recent_refs.update(
+                            m.group(0) for m in re.finditer(r"C\d{3}", da_text)
+                        )
+                except (ValueError, OSError):
+                    continue
+
+        compression_result = _compress_evolution_entries(
+            evo_path,
+            active_bias_classes=active_biases,
+            recent_da_refs=recent_refs,
+            dry_run=False,
+        )
+
     # ── Phase 2: LLM-powered maintenance ───────────────────────────
 
     memory_md = full_memory[:8000]  # Cap for LLM prompt
@@ -624,6 +660,12 @@ def _compress_evolution_entries(
         return {"compressed": [], "would_compress": []}
 
     content = evo_path.read_text(encoding="utf-8")
+
+    # Guard: no corrections section → nothing to compress
+    if "## Corrections Captured" not in content:
+        logger.debug("_compress_evolution_entries: no Corrections section found")
+        return {"compressed": [], "would_compress": []}
+
     lines = content.split("\n")
 
     # Parse correction blocks: ### C{N} | {date} [Bias X]
@@ -655,12 +697,16 @@ def _compress_evolution_entries(
             sm = status_pattern.search(line)
             if sm:
                 current_block["status"] = sm.group(1).lower()
-            # Next section header ends the block
+            # Next section header or thematic break ends the block
             if line.startswith("## ") and not line.startswith("### "):
                 current_block["end"] = i
                 blocks.append(current_block)
                 current_block = None
             elif line.startswith("### ") and not correction_pattern.match(line):
+                current_block["end"] = i
+                blocks.append(current_block)
+                current_block = None
+            elif line.strip() == "---":
                 current_block["end"] = i
                 blocks.append(current_block)
                 current_block = None
@@ -692,34 +738,90 @@ def _compress_evolution_entries(
     if not to_compress:
         return {"compressed": [], "would_compress": []}
 
-    # Create backup
-    backup_name = f"EVOLUTION.md.pre-compress-{datetime.now(timezone.utc).strftime('%Y%m%d')}"
-    backup_path = evo_path.parent / backup_name
-    backup_path.write_text(content, encoding="utf-8")
+    # File lock to prevent race with concurrent writers (context_health_hook,
+    # _remove_evolution_entry, DDD cultivation)
+    from utils.file_lock import flock_exclusive
 
-    # Apply compressions (process in reverse order to maintain line indices)
-    compressed_ids: list[str] = []
-    for block in sorted(to_compress, key=lambda b: b["start"], reverse=True):
-        # Build 1-line summary
-        status_upper = block["status"].upper()
-        # Extract first line of correction text for summary
-        correction_text = ""
-        for line in lines[block["start"] + 1:block["end"]]:
-            if line.strip().startswith("- **Correction**:"):
-                correction_text = line.strip().replace("- **Correction**: ", "")[:80]
-                break
-        one_liner = f"### {block['id']} | {block['date']} — {status_upper}: {correction_text}"
+    lock_path = evo_path.with_suffix(".md.lock")
+    fd = None
+    try:
+        fd = open(lock_path, "w")  # noqa: SIM115
+        flock_exclusive(fd)
 
-        # Replace block with 1-liner
-        lines[block["start"]:block["end"]] = [one_liner, ""]
-        compressed_ids.append(block["id"])
+        # Re-read under lock (content may have changed since initial read)
+        content = evo_path.read_text(encoding="utf-8")
+        lines = content.split("\n")
 
-    # Write
-    evo_path.write_text("\n".join(lines), encoding="utf-8")
-    logger.info("EVOLUTION auto-compress: %d entries compressed: %s",
-                len(compressed_ids), compressed_ids)
+        # Create backup (include time to avoid same-day collision)
+        backup_name = f"EVOLUTION.md.pre-compress-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+        backup_path = evo_path.parent / backup_name
+        backup_path.write_text(content, encoding="utf-8")
 
-    return {"compressed": compressed_ids, "would_compress": []}
+        # Re-parse blocks under lock (file may have changed)
+        blocks_locked: list[dict] = []
+        current: dict | None = None
+        for i, line in enumerate(lines):
+            m = correction_pattern.match(line)
+            if m:
+                if current:
+                    current["end"] = i
+                    blocks_locked.append(current)
+                current = {
+                    "id": m.group(1), "date": m.group(2),
+                    "bias": m.group(3) or "", "start": i,
+                    "end": len(lines), "status": "unknown",
+                }
+            elif current:
+                sm = status_pattern.search(line)
+                if sm:
+                    current["status"] = sm.group(1).lower()
+                if (line.startswith("## ") and not line.startswith("### ")
+                        or line.strip() == "---"):
+                    current["end"] = i
+                    blocks_locked.append(current)
+                    current = None
+                elif line.startswith("### ") and not correction_pattern.match(line):
+                    current["end"] = i
+                    blocks_locked.append(current)
+                    current = None
+        if current:
+            current["end"] = len(lines)
+            blocks_locked.append(current)
+
+        # Re-filter eligible blocks
+        eligible = [
+            b for b in blocks_locked
+            if b["status"] in ("resolved", "mitigated")
+            and not (b["bias"] and b["bias"] in active_bias_classes)
+            and b["id"] not in recent_da_refs
+        ][:max_compressions]
+
+        # Apply compressions (reverse order to maintain indices)
+        compressed_ids: list[str] = []
+        for block in sorted(eligible, key=lambda b: b["start"], reverse=True):
+            status_upper = block["status"].upper()
+            correction_text = ""
+            for line in lines[block["start"] + 1:block["end"]]:
+                if line.strip().startswith("- **Correction**:"):
+                    correction_text = line.strip().replace("- **Correction**: ", "")[:80]
+                    break
+            one_liner = f"### {block['id']} | {block['date']} — {status_upper}: {correction_text}"
+            lines[block["start"]:block["end"]] = [one_liner, ""]
+            compressed_ids.append(block["id"])
+
+        # Write
+        if compressed_ids:
+            evo_path.write_text("\n".join(lines), encoding="utf-8")
+            logger.info("EVOLUTION auto-compress: %d entries compressed: %s",
+                        len(compressed_ids), compressed_ids)
+
+        return {"compressed": compressed_ids, "would_compress": []}
+    except Exception as exc:
+        logger.warning("EVOLUTION auto-compress failed: %s", exc)
+        return {"compressed": [], "would_compress": []}
+    finally:
+        if fd:
+            fd.close()
 
 
 def _normalize_prefix(prefix: str) -> str:
