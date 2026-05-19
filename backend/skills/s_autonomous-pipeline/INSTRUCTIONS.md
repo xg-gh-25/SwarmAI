@@ -1115,6 +1115,10 @@ python backend/scripts/artifact_cli.py run-create --project <PROJECT> \
   --requirement "<requirement text>" [--profile full|trivial|research|docs|bugfix]
 
 # Update pipeline run (add stage, taste decision, change status/profile)
+# ⚠️ CRITICAL: stage-json for full/bugfix DELIVER MUST include artifact_id from publish.
+#    Without it, the completion gate will BLOCK the pipeline (see artifact_cli.py L660-680).
+#    Pattern: ART_ID=$(publish ... | python -c "import sys,json; print(json.load(sys.stdin)['artifact_id'])")
+#             run-update --stage-json '{"stage":"deliver","status":"completed","artifact_id":"'$ART_ID'"}'
 python backend/scripts/artifact_cli.py run-update --project <PROJECT> --run-id <RUN_ID> \
   [--stage-json '<json>'] [--taste-decision '<json>'] [--status <status>] [--profile <profile>]
 
