@@ -71,7 +71,7 @@ AUTO_RECOVER_STALL_THRESHOLD: float = 180.0
 # Circuit breaker for high-context timeout dead loops.
 # See: Knowledge/Designs/2026-05-19-streaming-timeout-resilience-design.md
 
-CIRCUIT_BREAKER_CONTEXT_THRESHOLD: int = 800_000  # tokens
+CIRCUIT_BREAKER_CONTEXT_THRESHOLD: int = 1_000_000  # tokens (must be above adaptive timeout kick-in at 900K)
 
 
 def should_circuit_break_timeout(
