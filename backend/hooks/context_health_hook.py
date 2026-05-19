@@ -1489,12 +1489,12 @@ class ContextHealthHook:
         """
         findings: list[str] = []
 
-        # Check SOUL.md principle count (### P\d+:)
+        # Check SOUL.md principle count (### P\d+: — require colon to avoid false matches)
         soul_path = context_dir / "SOUL.md"
         if soul_path.exists():
             try:
                 content = soul_path.read_text(encoding="utf-8")
-                principles = len(re.findall(r"^### P\d+", content, re.MULTILINE))
+                principles = len(re.findall(r"^### P\d+:", content, re.MULTILINE))
                 if principles > 5:
                     findings.append(
                         f"[governance/budget] SOUL.md principles OVER BUDGET: "
@@ -1504,24 +1504,19 @@ class ContextHealthHook:
                 pass
 
         # Check AGENT.md rule count (R\d+\. at start of line)
-        # Also check backend source (canonical)
-        agent_paths = [
-            context_dir / "AGENT.md",
-            root.parent / "swarmai" / "backend" / "context" / "AGENT.md",
-        ]
-        for agent_path in agent_paths:
-            if agent_path.exists():
-                try:
-                    content = agent_path.read_text(encoding="utf-8")
-                    rules = len(re.findall(r"^R\d+\.", content, re.MULTILINE))
-                    if rules > 25:
-                        findings.append(
-                            f"[governance/budget] AGENT.md rules OVER BUDGET: "
-                            f"{rules}/25 ({agent_path.name})"
-                        )
-                except OSError:
-                    pass
-                break  # Only check one copy
+        # Check workspace copy (the one agent uses at runtime)
+        agent_path = context_dir / "AGENT.md"
+        if agent_path.exists():
+            try:
+                content = agent_path.read_text(encoding="utf-8")
+                rules = len(re.findall(r"^R\d+\.", content, re.MULTILINE))
+                if rules > 25:
+                    findings.append(
+                        f"[governance/budget] AGENT.md rules OVER BUDGET: "
+                        f"{rules}/25"
+                    )
+            except OSError:
+                pass
 
         # Check STEERING.md standing rules (### headings under ## Standing Rules)
         steering_path = context_dir / "STEERING.md"

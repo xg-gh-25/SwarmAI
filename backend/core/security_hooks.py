@@ -233,16 +233,30 @@ GOVERNANCE_TIER2_PATTERNS: list[str] = [
 
 
 def _match_governance_tier(file_path: str) -> int:
-    """Return governance tier (1, 2, or 0 for non-governance) for a file path."""
+    """Return governance tier (1, 2, or 0 for non-governance) for a file path.
+
+    Checks both exact matches and backup/temp file variants (.bak, ~, .tmp)
+    to prevent bypass via intermediate files.
+    """
     if not file_path:
         return 0
-    # Normalize path for matching
+    # Normalize path for matching — strip common backup suffixes
     norm = file_path.replace("\\", "/")
+    # Strip backup/temp suffixes to catch .bak, ~, .tmp, .swp variants
+    base_norm = re.sub(r"(\.bak|\.tmp|\.swp|~)$", "", norm)
+
     for pattern in GOVERNANCE_TIER1_PATTERNS:
-        if fnmatch.fnmatch(norm, pattern) or norm.endswith(pattern.lstrip("*/")):
+        suffix = pattern.lstrip("*/")
+        if fnmatch.fnmatch(norm, pattern) or norm.endswith(suffix):
+            return 1
+        # Also check base (stripped) path
+        if base_norm != norm and (fnmatch.fnmatch(base_norm, pattern) or base_norm.endswith(suffix)):
             return 1
     for pattern in GOVERNANCE_TIER2_PATTERNS:
-        if fnmatch.fnmatch(norm, pattern) or norm.endswith(pattern.lstrip("*/")):
+        suffix = pattern.lstrip("*/")
+        if fnmatch.fnmatch(norm, pattern) or norm.endswith(suffix):
+            return 2
+        if base_norm != norm and (fnmatch.fnmatch(base_norm, pattern) or base_norm.endswith(suffix)):
             return 2
     return 0
 
