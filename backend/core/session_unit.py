@@ -711,19 +711,26 @@ class SessionUnit:
         self._interrupted = False
 
         # Cancel any in-flight pipe flush from a prior SSE disconnect.
-        # The flush calls _client.interrupt() which would kill OUR new
-        # stream if it fires after we transition to STREAMING.
+        # The flush sends a JSON "interrupt" control request to the CLI
+        # subprocess (NOT an OS signal).  If the flush times out (3s), it
+        # kills the subprocess → transitions to DEAD → COLD.
         #
-        # Note: task.cancel() is a request, not immediate — the task stops
-        # at its next await point (CancelledError into asyncio.wait_for).
-        # We don't need to await cancellation because: (1) asyncio is
-        # single-threaded — no code runs between our cancel() and the next
-        # line here, (2) flush's CancelledError handler only logs + returns,
-        # never touches _client or state, (3) even if flush resumes before
-        # our STREAMING transition, the generation guard inside flush will
-        # detect the mismatch and bail.
+        # We must await the task completion to prevent two races:
+        # (1) flush timeout → kill() → unit in DEAD state when our send()
+        #     checks state at line 775 → RuntimeError "Cannot send() in
+        #     state dead" → frontend shows "Connection interrupted".
+        # (2) flush's interrupt is in-flight → subprocess receives both
+        #     the old interrupt AND our new send_message → confused state.
+        #
+        # Awaiting costs <1ms when flush already completed (common path),
+        # and at most 3s when flush is mid-timeout (rare, but prevents
+        # user-visible error that forces resend).
         if self._pipe_flush_task and not self._pipe_flush_task.done():
             self._pipe_flush_task.cancel()
+            try:
+                await self._pipe_flush_task
+            except (asyncio.CancelledError, Exception):
+                pass  # Expected — cancel or flush timeout
             self._pipe_flush_task = None
 
         # If a previous request got stuck (SDK never sent ResultMessage),
