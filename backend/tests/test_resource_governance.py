@@ -137,11 +137,12 @@ class TestSpawnCostRecording:
         from core.lifecycle_manager import LifecycleManager
         manager = LifecycleManager(router=mock_router)
 
-        with patch("core.lifecycle_manager.asyncio.to_thread", return_value=500_000_000):
-            with patch("core.resource_monitor.resource_monitor.record_spawn_cost") as mock_record:
-                await manager._sample_process_memory()
-                # Should be called at least for the first sample (peak was 0)
-                mock_record.assert_called()
+        with patch("core.resource_monitor.resource_monitor.process_tree_rss", return_value=500_000_000):
+            with patch("core.resource_monitor.resource_monitor.process_rss", return_value=400_000_000):
+                with patch("core.resource_monitor.resource_monitor.record_spawn_cost") as mock_record:
+                    await manager._sample_process_memory()
+                    # Should be called at least for the first sample (peak was 0)
+                    mock_record.assert_called()
 
 
 # ── G6: read_owner_pid deduplicated ──────────────────────────────────

@@ -81,7 +81,7 @@ class TestIsOwnedOrphan:
             # Mock ps to return our PID as parent (not reparented)
             mock_ps = MagicMock()
             mock_ps.stdout = f"  {os.getpid()}"
-            with patch("core.lifecycle_manager.asyncio.to_thread",
+            with patch("core.lifecycle_manager.subprocess.run",
                        return_value=mock_ps):
                 result = await manager._is_owned_orphan(99999)
                 assert result is False
@@ -111,7 +111,7 @@ class TestIsOwnedOrphan:
             # Mock ps to return ppid=1 (reparented to launchd)
             mock_ps = MagicMock()
             mock_ps.stdout = "  1"
-            with patch("core.lifecycle_manager.asyncio.to_thread",
+            with patch("core.lifecycle_manager.subprocess.run",
                        return_value=mock_ps):
                 result = await manager._is_owned_orphan(99999)
                 assert result is True
