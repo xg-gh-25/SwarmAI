@@ -96,6 +96,7 @@ Key behaviors:
 - DailyActivity: today + yesterday loaded ephemerally (2K token cap per file, disk never modified)
 - `locked_write.py`: fcntl.flock for safe MEMORY.md modification by skills
 - Auto-commit: git add -A + commit after every conversation turn (non-blocking background thread)
+- **Co-Authored-By: ALL commits MUST use `Co-Authored-By: Swarm <swarm@swarmai.dev>` — NEVER use Claude/Anthropic identity. This is the project's AI identity.**
 
 ## Tab State Architecture
 

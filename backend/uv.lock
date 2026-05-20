@@ -1601,7 +1601,7 @@ wheels = [
 
 [[package]]
 name = "swarmai-backend"
-version = "1.11.0"
+version = "1.16.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },

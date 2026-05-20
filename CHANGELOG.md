@@ -1,4 +1,26 @@
 # Changelog
+## [1.16.1] - 2026-05-20
+
+### Added
+- **Slack Human Experience** — zero-streaming architecture for Slack delivery
+  - MessageQueue with FIFO merge semantics (supplements add context, redirects cancel)
+  - HeartbeatManager with in-place status progression
+  - HumanResponseFormatter splits at natural boundaries
+- **Output liveness watchdog** — detects hung CLI subprocesses (430s silence → force kill)
+- **PID watchdog** — detects out-of-band subprocess death without polling
+- **Pipeline enhancements** — Interface Seam Verification, User Path Latency Trace, deep adversarial analysis
+
+### Fixed
+- **Thread pool exhaustion** — dedicated executors for subprocess ops and job scheduler prevent priority inversion with health endpoint (regression from b812e9e2 job path fix)
+- **Build process** — detach from session process tree to survive session death (exit 137)
+- **Job executor** — resolve 4 systematic failures in daemon context (_SWARMAI_ROOT path, circuit breaker reset)
+- **Channel gateway** — prevent silent supplement drop, fix ack posting custom text, remove 2s latency
+- **Evolution pipeline** — write PID on retry path after stale lock break
+- **Resource management** — TOCTOU guard, pressure threshold fix, non-blocking kill, streaming RSS kill
+
+### Changed
+- Health endpoint DB check wrapped in 2s timeout — returns `db_healthy: "timeout"` on thread pressure instead of hanging
+
 ## [1.16.0] - 2026-05-19
 
 ### Added

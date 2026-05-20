@@ -73,7 +73,7 @@ Add explorer improvement plan and update memory
 - Created comprehensive explorer improvement plan (Phase 1-4)
 - Updated MEMORY.md with session decisions
 
-Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+Co-Authored-By: Swarm <swarm@swarmai.dev>
 EOF
 )"
 ```
