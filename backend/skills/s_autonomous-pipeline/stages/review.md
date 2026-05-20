@@ -105,6 +105,7 @@ organized into tiers:
 - 11: Inverse Operation Check (only when new state transitions added)
 - 12: Cross-File Consistency (only when modified file has known siblings)
 - 13: Neighborhood Review (only when modifying functions in files with >5 functions)
+- 16: Platform Matrix Verification (only when path resolution, env vars, or filesystem ops changed)
 
 ---
 
@@ -581,6 +582,46 @@ Confirm each before publishing:
 - [ ] Inverse operations checked (or "no state transitions, N/A" stated)
 - [ ] Cross-file consistency checked (or "no related files found, N/A" stated)
 - [ ] Neighborhood review done (or "single-function change, N/A" stated)
+
+---
+
+### 16. Platform Matrix Verification
+
+**Trigger:** Changeset touches path resolution, env var usage, filesystem
+operations, process lifecycle, or any code that could behave differently across
+deployment targets.
+
+**Process:** Read TECH.md for the declared platform list. For each platform,
+verify the changeset works:
+
+```
+TECH.md declares platforms: daemon (macOS), subprocess (Win/Linux), hive (EC2 Linux), dev
+This change touches: path resolution
+
+Platform verification:
+  - macOS daemon:     ~/Desktop/SwarmAI-Workspace/swarmai → ✓ (candidate list)
+  - Hive (Linux EC2): ~/swarmai or /opt/swarmai → ✓ (candidate list)  
+  - Windows subprocess: N/A (script jobs don't run on Windows)
+  - Dev mode:         __file__ fallback → ✓ (works from source tree)
+```
+
+**What to check per platform:**
+- Does the path/env var exist on that platform?
+- Is the fallback behavior correct when it doesn't exist?
+- Does the code silently return a wrong value (vs raising an error)?
+
+**Finding severity:**
+- Platform with 0 working resolution paths = **HIGH** (guaranteed failure)
+- Platform requires undocumented env var setup = **MEDIUM** (works but fragile)
+- Platform covered by fallback that's less optimal = **LOW** (acceptable)
+
+**Why this exists:** run_edcfd0e5 hardcoded `~/Desktop/SwarmAI-Workspace/swarmai`
+as the only canonical path. On Hive (EC2 Linux), this path doesn't exist. The code
+fell through to the `__file__`-based fallback — which is the EXACT path that's wrong
+in daemon context (the bug we were trying to fix). TECH.md explicitly listed 4
+platforms — the information was available, but BUILD didn't cross-reference it.
+
+**Skip when:** changeset is purely logic/algorithm with no platform-dependent behavior.
 
 ---
 
