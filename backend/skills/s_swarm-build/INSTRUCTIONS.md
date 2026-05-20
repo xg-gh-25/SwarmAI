@@ -34,17 +34,25 @@ Therefore:
 - Do NOT issue any further Bash commands, tool calls, or text after the curl.
 - Health verification happens on cold resume (breadcrumb-driven).
 
-### Detached Build (Session-Death Resilient)
+### Daemon TaskRunner (Session-Death Resilient)
 
 Build takes 2-5 minutes. Claude sessions can crash/evict during this time, killing
 all child processes (exit 137 = SIGKILL from parent death, NOT OOM).
 
-**Solution:** Launch build detached from session process tree via `nohup`, poll log
-file for completion. If session dies mid-build, the build continues. On resume,
-check the log file.
+**Solution:** Submit build as a **script task** to the daemon's TaskRunner API.
+The subprocess is owned by the daemon process tree — it survives session death.
 
-**Never** pipe through `| tail` or `| head` — causes stdout buffering.
-**Never** use `run_in_background` — its notifications are unreliable for long tasks.
+```
+POST /api/tasks/  →  202 (task_id)
+GET /api/tasks/{id}  →  status, exit_code, pid
+GET /api/tasks/{id}/logs  →  stdout content
+DELETE /api/tasks/{id}  →  cancel (SIGTERM)
+```
+
+**Never** use direct `bash build-backend.sh` in session — that's a session child.
+**Never** use `nohup` / `disown` — those are shell workarounds for the wrong tree.
+**Never** pipe through `| tail` — causes stdout buffering.
+The daemon already provides process isolation; USE it.
 
 ---
 
@@ -94,41 +102,39 @@ CHECK:  Exit code + "checks passed" in stdout
 FAIL:   Non-zero exit. Exit 137 = process killed (session death or OOM).
 ```
 
-### Step 1: Launch detached build
+### Step 1: Submit build to TaskRunner
 
 ```bash
-BUILD_LOG="/tmp/swarm-build-$(date +%s).log"
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop/scripts && \
-  nohup bash build-backend.sh > "$BUILD_LOG" 2>&1 &
-BUILD_PID=$!
-echo "Build PID: $BUILD_PID, Log: $BUILD_LOG"
-sleep 3
-kill -0 $BUILD_PID 2>/dev/null && echo "Build running..." || { echo "Build died immediately"; tail -20 "$BUILD_LOG"; exit 1; }
+curl -s -X POST http://127.0.0.1:18321/api/tasks/ \
+  -H "Content-Type: application/json" \
+  -d '{"type":"script","command":"bash desktop/scripts/build-backend.sh","cwd":"/Users/gawan/Desktop/SwarmAI-Workspace/swarmai","timeout":600,"description":"PyInstaller build"}'
 ```
+
+Extract `task_id` from the 200 response JSON.
 
 ### Step 2: Poll for completion (every 30s)
 
 ```bash
-# Repeat this block until build finishes:
-if kill -0 $BUILD_PID 2>/dev/null; then
-  echo "Still running... $(wc -l < "$BUILD_LOG") lines"
-  tail -3 "$BUILD_LOG"
-else
-  wait $BUILD_PID 2>/dev/null
-  EXIT_CODE=$?
-  echo "Build finished with exit $EXIT_CODE"
-  tail -20 "$BUILD_LOG"
-fi
+curl -s http://127.0.0.1:18321/api/tasks/TASK_ID
 ```
 
-Use `timeout: 45000` (45s) per poll. Poll until process ends (~5-8 iterations).
-Do NOT use `timeout: 600000` on a single foreground command — session death kills it.
+Check `status` field:
+- `"wip"` → still building, poll again
+- `"completed"` → success, check `exit_code`
+- `"blocked"` → failed, check `error`
 
-### Step 3: Verify exit code
+If session dies mid-poll, on resume: re-poll the same task_id. Task continues
+regardless of session state.
 
-After build completes, check:
+### Step 3: Check logs and exit code
+
 ```bash
-grep -q "checks passed" "$BUILD_LOG" && echo "PASS" || echo "FAIL"
+curl -s http://127.0.0.1:18321/api/tasks/TASK_ID/logs | tail -20
+```
+
+Verify:
+```bash
+curl -s http://127.0.0.1:18321/api/tasks/TASK_ID | python3 -c "import sys,json; t=json.load(sys.stdin); print('PASS' if t.get('exit_code')==0 else 'FAIL: exit '+str(t.get('exit_code')))"
 ```
 
 **Report:**

@@ -16,8 +16,8 @@ background agent execution system.  Key public symbols:
 """
 from datetime import datetime
 from enum import Enum
-from typing import Optional
-from pydantic import BaseModel
+from typing import Literal, Optional
+from pydantic import BaseModel, Field
 
 
 class TaskStatus(str, Enum):
@@ -36,8 +36,17 @@ class TaskStatus(str, Enum):
 
 
 class TaskCreate(BaseModel):
-    """Request to create a new task."""
-    agent_id: str
+    """Request to create a new task.
+
+    Supports two types:
+    - ``agent`` (default): runs a Claude agent conversation in the background
+    - ``script``: runs a shell command as a subprocess owned by the daemon
+    """
+    # Task type: "agent" (Claude conversation) or "script" (shell subprocess)
+    type: Literal["agent", "script"] = "agent"
+
+    # Agent task fields
+    agent_id: Optional[str] = None  # Required for type="agent"
     message: Optional[str] = None
     content: Optional[list[dict]] = None
     enable_skills: bool = False
@@ -48,6 +57,11 @@ class TaskCreate(BaseModel):
     description: Optional[str] = None
     required_skills: Optional[list[str]] = None
     required_mcps: Optional[list[str]] = None
+
+    # Script task fields
+    command: Optional[str] = None  # Required for type="script"
+    cwd: Optional[str] = None  # Working directory (defaults to HOME)
+    timeout: int = Field(default=600, ge=1, le=3600)  # 1s to 1h max
 
 
 class TaskResponse(BaseModel):
@@ -60,10 +74,11 @@ class TaskResponse(BaseModel):
     still deserialize correctly.
     """
     id: str
-    agent_id: str
+    agent_id: Optional[str] = None
     session_id: Optional[str] = None
     status: TaskStatus
     title: str
+    type: str = "agent"
     description: Optional[str] = None
     priority: Optional[str] = "none"
     workspace_id: Optional[str] = None
@@ -77,6 +92,10 @@ class TaskResponse(BaseModel):
     work_dir: Optional[str] = None
     review_required: bool = False
     review_risk_level: Optional[str] = None
+    # Script task fields
+    pid: Optional[int] = None
+    exit_code: Optional[int] = None
+    log_path: Optional[str] = None
 
 
 class TaskMessageRequest(BaseModel):

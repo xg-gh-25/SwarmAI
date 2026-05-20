@@ -1,11 +1,17 @@
-"""Tasks API endpoints for background agent task management."""
+"""Tasks API endpoints for background agent task management.
+
+Supports two task types:
+- ``agent``: Claude conversation tasks (existing)
+- ``script``: Shell subprocess tasks owned by daemon (new, solves C031)
+"""
 import asyncio
 import json
 import logging
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 from schemas.task import TaskCreate, TaskResponse, TaskMessageRequest, RunningTaskCount
 from core.task_manager import task_manager
@@ -60,11 +66,33 @@ async def get_task(task_id: str):
 async def create_task(request: TaskCreate):
     """Create and start a new background task.
 
+    Supports type="agent" (Claude conversation) and type="script" (shell subprocess).
+    Script tasks run in the daemon process tree and survive session death.
+
     Validates workspace policy before execution. If required skills or MCPs
     are disabled in the workspace, returns 409 Conflict with policy_violations.
 
     Requirements: 26.1-26.7, 34.1-34.7
     """
+    # ─── Script task path ───
+    if request.type == "script":
+        if not request.command:
+            raise HTTPException(status_code=400, detail="'command' is required for script tasks")
+        try:
+            task = await task_manager.create_script_task(
+                command=request.command,
+                cwd=request.cwd,
+                timeout=request.timeout,
+                description=request.description,
+            )
+            return TaskResponse(**task)
+        except ValueError as e:
+            raise HTTPException(status_code=429, detail=str(e))
+
+    # ─── Agent task path (existing) ───
+    if not request.agent_id:
+        raise HTTPException(status_code=400, detail="'agent_id' is required for agent tasks")
+
     # --- Policy enforcement: check required_skills / required_mcps ---
     if request.required_skills or request.required_mcps:
         violations = []
@@ -158,6 +186,27 @@ async def send_message(task_id: str, request: TaskMessageRequest):
     if not success:
         raise HTTPException(status_code=400, detail=f"Task {task_id} is not running or not accepting messages")
     return {"status": "sent", "task_id": task_id}
+
+
+@router.get("/{task_id}/logs")
+async def get_task_logs(task_id: str):
+    """Get log output for a script task.
+
+    Returns the contents of the task's log file as plain text.
+    Only available for type='script' tasks.
+    """
+    task = await task_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    if task.get("type") != "script":
+        raise HTTPException(status_code=400, detail="Logs only available for script tasks")
+
+    log_path = task.get("log_path")
+    if not log_path or not Path(log_path).exists():
+        return PlainTextResponse("", media_type="text/plain")
+
+    content = Path(log_path).read_text(errors="replace")
+    return PlainTextResponse(content, media_type="text/plain")
 
 
 @router.get("/{task_id}/stream")
