@@ -1169,10 +1169,49 @@ class ChannelGateway:
         if human_mode and adapter:
             complexity = estimate_complexity(final_text)
             ack_text = pick_ack(complexity)
+
+            # Build adapter-specific callables for heartbeat
+            _chat_id = msg.external_chat_id
+            _thread_ts = msg.external_thread_id
+
+            async def _post_ack(channel: str, text: str) -> Optional[str]:
+                """Post a plain text ack message to Slack, return ts."""
+                # Use OutboundMessage for custom ack text (not the generic
+                # "Thinking..." typing indicator).
+                out = OutboundMessage(
+                    channel_id=channel_id,
+                    external_chat_id=channel,
+                    external_thread_id=_thread_ts,
+                    text=text,
+                )
+                return await adapter.send_message(out)
+
+            async def _update_ack(channel: str, ts: str, text: str) -> None:
+                """Update ack message text in-place (not final, no Block Kit)."""
+                await adapter.update_message(
+                    external_chat_id=channel,
+                    message_id=ts,
+                    text=text,
+                    is_final=False,
+                )
+
+            async def _delete_ack(channel: str, ts: str) -> None:
+                """Delete the ack message via Slack API."""
+                if hasattr(adapter, '_slack_client') and adapter._slack_client:
+                    loop = asyncio.get_running_loop()
+                    await loop.run_in_executor(
+                        None,
+                        lambda: adapter._slack_client.chat_delete(
+                            channel=channel, ts=ts,
+                        ),
+                    )
+
             heartbeat_mgr = HeartbeatManager(
-                sender=adapter,
-                channel=msg.external_chat_id,
-                thread_ts=msg.external_thread_id,
+                post_fn=_post_ack,
+                update_fn=_update_ack,
+                delete_fn=_delete_ack,
+                channel=_chat_id,
+                thread_ts=_thread_ts,
             )
             await heartbeat_mgr.post_ack(ack_text)
             heartbeat_task = asyncio.create_task(heartbeat_mgr.run())
@@ -1234,13 +1273,12 @@ class ChannelGateway:
 
         reply_text = ""
         error_occurred = False
-        # ── Human Mode: mark queue as processing + merge supplements ──
+        # ── Human Mode: mark queue as processing + drain any early supplements ──
         conv_key = (channel_id, msg.external_chat_id)
         queue: Optional[ChannelMessageQueue] = self._message_queues.get(conv_key)
         if human_mode and queue:
             queue.processing = True
-            # Brief merge window: wait 2s for follow-up messages
-            await asyncio.sleep(2.0)
+            # Drain supplements that arrived between enqueue and here (rapid-fire)
             supplements = queue.drain_supplements()
             if supplements:
                 final_text += f"\n\n{supplements}"
