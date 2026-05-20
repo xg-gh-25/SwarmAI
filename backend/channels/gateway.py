@@ -1691,13 +1691,18 @@ class ChannelGateway:
                 # G3: Kill the old SessionUnit subprocess to prevent zombie leak.
                 # Without this, old units remain alive with is_channel_session=True
                 # and TTL-immune — accumulating as resource leaks.
+                # Fire-and-forget: kill() can block up to 13s (SIGKILL + wrapper
+                # exit), which would hold the conv_lock and block incoming messages.
                 try:
                     from core.session_registry import session_router
                     if session_router:
-                        await session_router.kill_rotated_channel_session(old_session_id)
+                        asyncio.create_task(
+                            session_router.kill_rotated_channel_session(old_session_id)
+                        )
                 except Exception as exc:
                     logger.debug(
-                        "Failed to kill rotated session %s: %s", old_session_id, exc
+                        "Failed to schedule kill for rotated session %s: %s",
+                        old_session_id, exc,
                     )
                 return new_session_id, existing["id"], True, old_session_id
             else:

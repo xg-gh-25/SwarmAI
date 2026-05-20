@@ -468,6 +468,10 @@ class LifecycleManager:
             # Trigger 1: Per-session threshold (3GB)
             for unit, rss in rss_map.items():
                 if rss > SessionUnit.STREAMING_RSS_KILL_THRESHOLD:
+                    # Re-check state: session may have completed between
+                    # RSS sampling and now (TOCTOU mitigation).
+                    if unit.state != SessionState.STREAMING:
+                        continue
                     logger.warning(
                         "lifecycle.streaming_rss_kill session=%s "
                         "rss=%dMB > threshold=%dMB — killing bloated STREAMING session",
@@ -478,14 +482,19 @@ class LifecycleManager:
                     await unit.kill()
                     return  # One kill per cycle to avoid cascade
 
-            # Trigger 2: System pressure > 85% → kill heaviest
-            if mem.percent_used > 85.0 and rss_map:
+            # Trigger 2: System pressure > MEMORY_EVICT_PCT → kill heaviest
+            # Only fires AFTER IDLE eviction threshold (90% default).
+            # This ensures IDLE sessions are evicted first; STREAMING kill
+            # is the LAST resort when IDLE eviction wasn't enough.
+            if mem.percent_used > self.MEMORY_EVICT_PCT and rss_map:
                 heaviest = max(rss_map, key=rss_map.get)
                 logger.warning(
                     "lifecycle.streaming_pressure_kill session=%s "
-                    "system_used=%.1f%% rss=%dMB — killing heaviest STREAMING session",
+                    "system_used=%.1f%% > evict_pct=%.0f%% rss=%dMB "
+                    "— killing heaviest STREAMING session (last resort)",
                     heaviest.session_id[:8],
                     mem.percent_used,
+                    self.MEMORY_EVICT_PCT,
                     rss_map[heaviest] // (1024 * 1024),
                 )
                 await heaviest.kill()
