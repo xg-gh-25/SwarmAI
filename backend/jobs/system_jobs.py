@@ -10,12 +10,46 @@ Dependency format: "after:<job-id>" — runs after dependency completes (success
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from .models import Job, JobSafety
 
+
+def _get_swarmai_root() -> str:
+    """Resolve the swarmai source tree root for script job cwd.
+
+    Works in both contexts:
+    - Dev: __file__ is inside swarmai/backend/jobs/ → parents[2] works
+    - Daemon binary: __file__ resolves to daemon/_internal/ → parents[2] is WRONG
+
+    Resolution order:
+    1. SWARMAI_SOURCE env var (explicit override, used by loops_health_check.py too)
+    2. Path.home() / "Desktop/SwarmAI-Workspace/swarmai" (canonical dev location)
+    3. __file__-based fallback (only correct in dev, kept for compatibility)
+    """
+    # 1. Env var (highest priority — works in all contexts)
+    env_source = os.environ.get("SWARMAI_SOURCE")
+    if env_source and Path(env_source).is_dir():
+        return env_source
+
+    # 2. Canonical locations (platform-aware)
+    candidates = [
+        Path.home() / "Desktop" / "SwarmAI-Workspace" / "swarmai",  # macOS dev
+        Path.home() / "swarmai",                                      # Hive EC2
+        Path("/opt/swarmai"),                                         # Hive alternate
+    ]
+    for candidate in candidates:
+        if candidate.is_dir():
+            return str(candidate)
+
+    # 3. __file__-based (only correct in dev, but better than nothing)
+    file_based = str(Path(__file__).resolve().parents[2])
+    return file_based
+
+
 # swarmai/ root — used as cwd for script jobs that need `python -m backend.jobs.*`
-_SWARMAI_ROOT = str(Path(__file__).resolve().parents[2])
+_SWARMAI_ROOT = _get_swarmai_root()
 
 # All times in UTC
 SYSTEM_JOBS: list[Job] = [

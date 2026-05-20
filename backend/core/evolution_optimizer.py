@@ -983,6 +983,55 @@ class EvolutionOptimizer:
     # _write_cycle_changelog() which has proper fcntl locking.
 
 
+def _break_stale_lock(lock_path: Path, max_age_seconds: int = 3600) -> bool:
+    """Break a stale lock file if holder process is dead AND lock is old.
+
+    Two-factor check prevents race condition:
+    1. Lock file mtime > max_age_seconds (time-based staleness)
+    2. PID written in lock file is no longer alive (process-based staleness)
+
+    Both must be true to break. This avoids the unlink-while-held race:
+    flock is inode-based, so unlinking a locked file doesn't release the lock
+    on the original fd — a new file at the same path gets a new inode, allowing
+    two processes to both "hold the lock" on different inodes.
+
+    Returns True if the lock was broken (deleted), False otherwise.
+    """
+    import time
+
+    if not lock_path.exists():
+        return False
+
+    try:
+        mtime = lock_path.stat().st_mtime
+        age = time.time() - mtime
+        if age <= max_age_seconds:
+            return False  # Too young — holder might still be running
+
+        # Check if holder process is alive (PID written at lock acquire)
+        content = lock_path.read_text().strip()
+        if content.isdigit():
+            pid = int(content)
+            try:
+                os.kill(pid, 0)  # Signal 0 = check existence only
+                return False  # Process alive — lock is valid despite age
+            except ProcessLookupError:
+                pass  # Process dead — safe to break
+            except PermissionError:
+                return False  # Process exists but different user — don't break
+
+        # Lock is old AND holder process is dead (or no PID recorded)
+        lock_path.unlink(missing_ok=True)
+        logger.warning(
+            "Broke stale evolution lock: %s (age: %.0fs, holder PID %s dead)",
+            lock_path, age, content or "unknown",
+        )
+        return True
+    except OSError:
+        pass
+    return False
+
+
 def run_evolution_cycle(
     skills_dir: Path,
     transcripts_dir: Path,
@@ -1016,17 +1065,42 @@ def run_evolution_cycle(
     try:
         lock_fd = open(lock_path, "w")
         flock_exclusive_nb(lock_fd)
+        # Write PID for stale lock detection by future processes
+        lock_fd.write(str(os.getpid()))
+        lock_fd.flush()
     except (OSError, BlockingIOError):
-        logger.info("Evolution cycle already running -- skipping")
-        if lock_fd is not None:
-            lock_fd.close()
-        return CycleReport(
-            cycle_id=cycle_id,
-            skills_checked=0,
-            eligible=0,
-            dry_run=dry_run,
-            errors=["Concurrent cycle in progress -- lock held"],
-        )
+        # Check for stale lock: if lock file is older than 1 hour,
+        # the holding process likely crashed without releasing.
+        if _break_stale_lock(lock_path, max_age_seconds=3600):
+            logger.warning("Broke stale evolution lock (>1hr old) — retrying acquire")
+            if lock_fd is not None:
+                lock_fd.close()
+            # Retry after breaking stale lock
+            try:
+                lock_fd = open(lock_path, "w")
+                flock_exclusive_nb(lock_fd)
+            except (OSError, BlockingIOError):
+                logger.info("Evolution cycle already running -- skipping (retry failed)")
+                if lock_fd is not None:
+                    lock_fd.close()
+                return CycleReport(
+                    cycle_id=cycle_id,
+                    skills_checked=0,
+                    eligible=0,
+                    dry_run=dry_run,
+                    errors=["Concurrent cycle in progress -- lock held"],
+                )
+        else:
+            logger.info("Evolution cycle already running -- skipping")
+            if lock_fd is not None:
+                lock_fd.close()
+            return CycleReport(
+                cycle_id=cycle_id,
+                skills_checked=0,
+                eligible=0,
+                dry_run=dry_run,
+                errors=["Concurrent cycle in progress -- lock held"],
+            )
 
     try:
         return _run_evolution_cycle_locked(skills_dir, transcripts_dir, evals_dir, cycle_id, dry_run=dry_run)
