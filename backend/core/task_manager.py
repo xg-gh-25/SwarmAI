@@ -3,11 +3,20 @@
 Increments the context snapshot cache ``task_version`` counter whenever
 tasks are created, updated (status change), or deleted so that the
 context assembly cache is properly invalidated (Requirement 34.2).
+
+Supports two task types:
+- ``agent``: Claude conversation in asyncio background task
+- ``script``: Shell subprocess owned by daemon process tree (survives session death)
 """
 import asyncio
 import logging
+import os
+import signal
+import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import aclosing
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional, AsyncIterator
 from uuid import uuid4
 
@@ -28,6 +37,15 @@ _LEGACY_STATUS_MAP = {
 
 # All valid new statuses
 _VALID_STATUSES = {"draft", "wip", "blocked", "completed", "cancelled"}
+
+# Script task configuration
+_MAX_CONCURRENT_SCRIPTS = 2
+_TASKS_DIR = Path.home() / ".swarm-ai" / "tasks"
+_script_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_SCRIPTS)
+
+# Dedicated executor for script tasks — reuses same pool sizing as _job_executor
+# in main.py but kept separate to avoid coupling lifecycle
+_script_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="script-task")
 
 
 class TaskManager:
@@ -51,6 +69,8 @@ class TaskManager:
         self._subscribers: dict[str, list[asyncio.Queue]] = {}
         # Message queues for sending messages to tasks: task_id -> asyncio.Queue
         self._message_queues: dict[str, asyncio.Queue] = {}
+        # Script task PIDs: task_id -> subprocess PID (for cancel/cleanup)
+        self._script_pids: dict[str, int] = {}
         # Max events to buffer per task
         self._max_buffer_size = 100
         # Buffer retention time after task completion (seconds)
@@ -442,7 +462,20 @@ class TaskManager:
         return True
 
     async def cancel_task(self, task_id: str) -> bool:
-        """Cancel a running task."""
+        """Cancel a running task.
+
+        For script tasks, sends SIGTERM to the subprocess before cancelling
+        the asyncio wrapper task.
+        """
+        # For script tasks, kill the subprocess directly using in-memory PID
+        # (avoids PID recycling risk from stale DB records)
+        pid = self._script_pids.get(task_id)
+        if pid:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass  # Already dead
+
         asyncio_task = self._running_tasks.get(task_id)
         if not asyncio_task:
             return False
@@ -454,6 +487,188 @@ class TaskManager:
             pass
 
         return True
+
+    # ─── Script Task Support ───────────────────────────────────────────────
+
+    async def create_script_task(
+        self,
+        command: str,
+        cwd: Optional[str] = None,
+        timeout: int = 600,
+        description: Optional[str] = None,
+    ) -> dict:
+        """Create and start a script task (daemon-owned subprocess).
+
+        The subprocess runs in the daemon process tree, surviving session
+        eviction. Stdout/stderr are captured to a log file.
+
+        Args:
+            command: Shell command to execute
+            cwd: Working directory (defaults to user home)
+            timeout: Seconds before SIGTERM (default 600)
+            description: Human-readable description
+
+        Returns:
+            Task record dict
+
+        Raises:
+            ValueError: If max concurrent script tasks exceeded
+        """
+        # Enforce max concurrent via semaphore (prevents TOCTOU race)
+        if _script_semaphore.locked():
+            # All slots taken — check actual count to give precise error
+            running_scripts = sum(
+                1 for tid in self._running_tasks
+                if self._script_pids.get(tid) is not None
+            )
+            if running_scripts >= _MAX_CONCURRENT_SCRIPTS:
+                raise ValueError(
+                    f"Max concurrent script tasks ({_MAX_CONCURRENT_SCRIPTS}) reached. "
+                    f"Wait for a running task to complete or cancel one."
+                )
+
+        # Ensure tasks directory exists
+        _TASKS_DIR.mkdir(parents=True, exist_ok=True)
+
+        task_id = f"task_{uuid4().hex[:12]}"
+        log_path = str(_TASKS_DIR / f"{task_id}.log")
+
+        task = {
+            "id": task_id,
+            "type": "script",
+            "agent_id": None,
+            "session_id": None,
+            "status": "draft",
+            "title": (description or command)[:50],
+            "description": description,
+            "priority": "none",
+            "workspace_id": None,
+            "source_todo_id": None,
+            "blocked_reason": None,
+            "model": None,
+            "pid": None,
+            "exit_code": None,
+            "log_path": log_path,
+            "command": command,
+            "cwd": cwd,
+            "timeout": timeout,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "started_at": None,
+            "completed_at": None,
+            "error": None,
+        }
+        await db.tasks.put(task)
+
+        # Start background execution
+        asyncio_task = asyncio.create_task(
+            self._run_script_task(task_id, command, cwd, timeout, log_path)
+        )
+        self._running_tasks[task_id] = asyncio_task
+
+        logger.info(f"Created script task {task_id}: {command[:80]}")
+        return task
+
+    async def _run_script_task(
+        self,
+        task_id: str,
+        command: str,
+        cwd: Optional[str],
+        timeout: int,
+        log_path: str,
+    ) -> None:
+        """Execute a script task as a subprocess.
+
+        Runs in daemon process tree via _script_executor. Subprocess stdout/stderr
+        are written to log_path. On completion, exit_code is persisted.
+        Uses _script_semaphore for atomic slot management.
+        """
+        proc = None
+        await _script_semaphore.acquire()
+        try:
+            # Transition to wip
+            await db.tasks.update(task_id, {
+                "status": "wip",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            })
+
+            # Run subprocess in thread pool (blocking I/O)
+            loop = asyncio.get_running_loop()
+
+            def _execute():
+                nonlocal proc
+                work_dir = cwd or str(Path.home())
+                with open(log_path, "w") as log_file:
+                    proc = subprocess.Popen(
+                        command,
+                        shell=True,
+                        cwd=work_dir,
+                        stdout=log_file,
+                        stderr=subprocess.STDOUT,
+                        start_new_session=True,  # Detach from session process group
+                    )
+                    # Store PID immediately
+                    return proc
+
+            proc = await loop.run_in_executor(_script_executor, _execute)
+
+            # Persist PID
+            self._script_pids[task_id] = proc.pid
+            await db.tasks.update(task_id, {"pid": proc.pid})
+
+            # Wait for completion with timeout (in thread to not block event loop)
+            def _wait():
+                try:
+                    return proc.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait()
+                    return -1  # Timeout sentinel
+
+            exit_code = await loop.run_in_executor(_script_executor, _wait)
+
+            # Persist result
+            status = "completed" if exit_code == 0 else "blocked"
+            error_msg = None if exit_code == 0 else f"Exit code: {exit_code}"
+            await db.tasks.update(task_id, {
+                "status": status,
+                "exit_code": exit_code,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "error": error_msg,
+                "blocked_reason": error_msg,
+            })
+
+        except asyncio.CancelledError:
+            # Cancel = SIGTERM was already sent in cancel_task
+            if proc and proc.poll() is None:
+                proc.terminate()
+                # Non-blocking wait via executor (never block event loop)
+                try:
+                    await asyncio.wait_for(
+                        loop.run_in_executor(_script_executor, proc.wait, 3),
+                        timeout=5,
+                    )
+                except (subprocess.TimeoutExpired, asyncio.TimeoutError):
+                    proc.kill()
+            await db.tasks.update(task_id, {
+                "status": "cancelled",
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception as e:
+            logger.error(f"Script task {task_id} failed: {e}")
+            await db.tasks.update(task_id, {
+                "status": "blocked",
+                "blocked_reason": str(e),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "error": str(e),
+            })
+        finally:
+            self._running_tasks.pop(task_id, None)
+            self._script_pids.pop(task_id, None)
+            _script_semaphore.release()
 
     async def get_task(self, task_id: str) -> Optional[dict]:
         """Get task by ID, with legacy status mapping.
