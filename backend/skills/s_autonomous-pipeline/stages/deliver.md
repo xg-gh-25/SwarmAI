@@ -541,6 +541,22 @@ Where this code runs: <hook/endpoint/cron/startup/CLI — infer from file path>
    - Could first-run side effects be different from steady-state?
    - Is the first-run behavior safe (won't corrupt, won't flood)?
 
+5. ARCHITECTURAL INTEGRITY (No-Patch Gate)
+   - Does this fix ADD net complexity (lines, files, /tmp coordination,
+     new guard clauses, new state to manage)? If yes → likely a patch.
+   - Is the problem being fixed at the layer where it OCCURS (symptom)
+     or the layer where it ORIGINATES (root cause)?
+   - Does this solution re-implement capability that already exists
+     elsewhere in the system? (e.g., process isolation in shell when
+     the daemon already provides it; retry logic in caller when the
+     framework already retries)
+   - The test: "If I removed this code in 6 months, would the system
+     still work correctly because the RIGHT layer handles it?" If no →
+     this is the right layer. If yes → this is a patch on the wrong layer.
+   - RED FLAG: any solution that requires N callers to "remember" to do
+     something (nohup, special flags, coordination files) instead of
+     providing a single correct interface.
+
 ## Output
 ```json
 {
