@@ -20,6 +20,7 @@ Design reference:
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import os
@@ -29,7 +30,7 @@ import time
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
-from .session_unit import SessionState, _subprocess_executor
+from .session_unit import SessionState, subprocess_executor as _subprocess_executor
 
 if TYPE_CHECKING:
     from .session_router import SessionRouter
@@ -380,6 +381,7 @@ class LifecycleManager:
             from .resource_monitor import resource_monitor
             from .session_unit import SessionUnit
 
+            loop = asyncio.get_running_loop()
             for unit in self._router.list_units():
                 if unit.state != SessionState.IDLE:
                     continue
@@ -391,7 +393,6 @@ class LifecycleManager:
                 ):
                     continue
 
-                loop = asyncio.get_running_loop()
                 tree_rss = await loop.run_in_executor(
                     _subprocess_executor,
                     resource_monitor.process_tree_rss, unit.pid,
@@ -1171,7 +1172,8 @@ class LifecycleManager:
                     loop = asyncio.get_running_loop()
                     ppid_result = await loop.run_in_executor(
                         _subprocess_executor,
-                        lambda: subprocess.run(
+                        functools.partial(
+                            subprocess.run,
                             ["ps", "-o", "ppid=", "-p", str(pid)],
                             capture_output=True, text=True, timeout=5,
                         ),
@@ -1226,7 +1228,8 @@ class LifecycleManager:
         loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(
             _subprocess_executor,
-            lambda: subprocess.run(
+            functools.partial(
+                subprocess.run,
                 ["pgrep", "-f", pattern],
                 capture_output=True, text=True, timeout=5,
             ),
