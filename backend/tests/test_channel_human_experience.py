@@ -50,8 +50,18 @@ class TestRedirectDetection:
     def test_extract_post_redirect(self):
         assert extract_post_redirect("算了，看下 CI") == "看下 CI"
         assert extract_post_redirect("forget it, check the deploy") == "check the deploy"
-        # If only redirect word with no follow-up, returns original
-        assert extract_post_redirect("算了") == "算了"
+        # Bare cancel with no follow-up returns empty string
+        assert extract_post_redirect("算了") == ""
+        assert extract_post_redirect("cancel") == ""
+
+    def test_no_false_positive_on_substrings(self):
+        """English keywords require word boundaries — no mid-word match."""
+        assert is_redirect("nonstop service") is False
+        assert is_redirect("the cancellation policy") is False
+        assert is_redirect("stopwatch timer") is False
+        # But exact words still match
+        assert is_redirect("please stop") is True
+        assert is_redirect("cancel that") is True
 
 
 class TestMessageQueue:
