@@ -29,7 +29,7 @@ import time
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
-from .session_unit import SessionState
+from .session_unit import SessionState, _subprocess_executor
 
 if TYPE_CHECKING:
     from .session_router import SessionRouter
@@ -311,8 +311,10 @@ class LifecycleManager:
             total_tree_rss = 0
             entries = []
 
+            loop = asyncio.get_running_loop()
             for unit in alive_units:
-                tree_rss = await asyncio.to_thread(
+                tree_rss = await loop.run_in_executor(
+                    _subprocess_executor,
                     resource_monitor.process_tree_rss, unit.pid,
                 )
                 if tree_rss <= 0:
@@ -326,7 +328,8 @@ class LifecycleManager:
                 # incremental cost of one more session (~300-500MB).
                 prev_peak = unit._peak_tree_rss_bytes
                 if prev_peak == 0 and tree_rss > 0:
-                    main_rss = await asyncio.to_thread(
+                    main_rss = await loop.run_in_executor(
+                        _subprocess_executor,
                         resource_monitor.process_rss, unit.pid,
                     )
                     if main_rss > 0:
@@ -388,7 +391,9 @@ class LifecycleManager:
                 ):
                     continue
 
-                tree_rss = await asyncio.to_thread(
+                loop = asyncio.get_running_loop()
+                tree_rss = await loop.run_in_executor(
+                    _subprocess_executor,
                     resource_monitor.process_tree_rss, unit.pid,
                 )
                 if tree_rss <= SessionUnit.PROACTIVE_RSS_THRESHOLD:
@@ -455,11 +460,13 @@ class LifecycleManager:
                 return
 
             mem = resource_monitor.system_memory()
+            loop = asyncio.get_running_loop()
 
             # Collect RSS for each streaming session
             rss_map: dict = {}  # unit → rss_bytes
             for unit in streaming_units:
-                tree_rss = await asyncio.to_thread(
+                tree_rss = await loop.run_in_executor(
+                    _subprocess_executor,
                     resource_monitor.process_tree_rss, unit.pid,
                 )
                 if tree_rss > 0:
@@ -1161,10 +1168,13 @@ class LifecycleManager:
                 # session within THIS instance.  But we only kill it if its
                 # parent is dead (reparented to launchd).
                 try:
-                    ppid_result = await asyncio.to_thread(
-                        subprocess.run,
-                        ["ps", "-o", "ppid=", "-p", str(pid)],
-                        capture_output=True, text=True, timeout=5,
+                    loop = asyncio.get_running_loop()
+                    ppid_result = await loop.run_in_executor(
+                        _subprocess_executor,
+                        lambda: subprocess.run(
+                            ["ps", "-o", "ppid=", "-p", str(pid)],
+                            capture_output=True, text=True, timeout=5,
+                        ),
                     )
                     ppid = int(ppid_result.stdout.strip())
                     return ppid == 1  # Reparented to launchd = orphan
@@ -1187,10 +1197,11 @@ class LifecycleManager:
         """Read SWARMAI_OWNER_PID from a process's environment.
 
         Delegates to ``session_utils.read_owner_pid()`` (single source
-        of truth) via ``asyncio.to_thread`` for non-blocking I/O.
+        of truth) via dedicated subprocess executor for non-blocking I/O.
         """
         from .session_utils import read_owner_pid
-        return await asyncio.to_thread(read_owner_pid, pid)
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(_subprocess_executor, read_owner_pid, pid)
 
     async def _reap_by_pattern(
         self,
@@ -1212,10 +1223,13 @@ class LifecycleManager:
         Returns:
             Number of processes killed.
         """
-        result = await asyncio.to_thread(
-            subprocess.run,
-            ["pgrep", "-f", pattern],
-            capture_output=True, text=True, timeout=5,
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            _subprocess_executor,
+            lambda: subprocess.run(
+                ["pgrep", "-f", pattern],
+                capture_output=True, text=True, timeout=5,
+            ),
         )
         if result.returncode != 0:
             return 0

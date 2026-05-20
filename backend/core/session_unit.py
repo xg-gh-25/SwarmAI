@@ -2810,7 +2810,9 @@ class SessionUnit:
 
         try:
             from .resource_monitor import resource_monitor
-            tree_rss = await asyncio.to_thread(
+            loop = asyncio.get_running_loop()
+            tree_rss = await loop.run_in_executor(
+                _subprocess_executor,
                 resource_monitor.process_tree_rss, pid,
             )
         except Exception:
