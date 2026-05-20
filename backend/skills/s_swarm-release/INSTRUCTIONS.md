@@ -394,7 +394,7 @@ cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai
 git add -A
 git commit -m "release: v${NEW_VERSION}
 
-Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>"
+Co-Authored-By: Swarm <swarm@swarmai.dev>"
 
 # 2. Push to main
 git push origin main
