@@ -176,14 +176,22 @@ if nc -z 127.0.0.1 18321 2>/dev/null; then
 fi
 
 # 4. Wait for KeepAlive to restart daemon (ThrottleInterval=10s + cold start)
+RESTART_HEALTHY=0
 for i in $(seq 1 45); do
   HEALTH=$(curl -sf http://127.0.0.1:18321/health 2>/dev/null)
   if echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='healthy'" 2>/dev/null; then
+    RESTART_HEALTHY=1
     echo "$HEALTH" | python3 -m json.tool
     break
   fi
   sleep 2
 done
+
+if [ "$RESTART_HEALTHY" -eq 0 ]; then
+  echo "FAIL: Daemon not healthy after 90s. KeepAlive may have failed."
+  tail -20 ~/.swarm-ai/logs/daemon.log 2>/dev/null
+  exit 1
+fi
 ```
 
 **Report:**
@@ -367,7 +375,7 @@ DAEMON HEALTH
 | Port 18321 in use but daemon not loaded | Orphan process | `launchctl kill SIGKILL gui/$(id -u)/com.swarmai.backend` then `start` |
 | "service already loaded" on bootstrap | Double-load | `launchctl bootout` first, then `bootstrap` |
 | Health returns HTML not JSON | Caddy proxy issue (Hive) | N/A for desktop daemon |
-| Version mismatch | Old binary loaded | `deploy` (kill + rsync + KeepAlive restart) |
+| Version mismatch | Old binary loaded | `deploy` (SIGKILL + bootout + rsync + bootstrap) |
 | Repeated crashes | Check logs | `logs` → fix code → `s_swarm-build` |
 | "Operation not permitted" | launchd I/O error | Wait 5s, retry. If persistent: `launchctl bootout` + `bootstrap` |
 | Daemon dead after dev.sh build | bootout killed registration | `start` (re-bootstraps from plist) |
