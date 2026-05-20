@@ -82,3 +82,70 @@ Modifiers: +3 concrete failure demo, +2 reachable from user action, -4 test file
 - Boolean logic errors in conditional returns
 - Missing return statements in conditional branches
 - Return value ignored by caller when it shouldn't be
+
+---
+
+## Deep Adversarial Analysis (Mandatory for HIGH confidence findings)
+
+The categories above are WHAT to look for. This section defines HOW to analyze
+— the methodology that separates a mechanical checklist from a PE review.
+
+### 1. TOCTOU Analysis (Time-of-Check to Time-of-Use)
+
+For every "check then act" pattern found:
+- Identify the CHECK (condition evaluation) and ACT (mutation/decision)
+- Determine: is there an `await` between CHECK and ACT?
+- If NO await: safe under asyncio cooperative scheduling (single-threaded)
+- If YES await: another coroutine can interleave → potential race
+- Evidence: trace the exact yield point, identify what could change
+
+### 2. Concurrent Path Exhaustion
+
+For every state/resource mutation:
+- List ALL coroutines that can reach this mutation point
+- For each pair: what happens if BOTH fire "simultaneously" (interleave at await)?
+- Specific checks:
+  - Double-transition: is same-state transition a no-op? (should be)
+  - Double-cleanup: is cleanup idempotent? (ProcessLookupError, AttributeError on None)
+  - Stale reference: can a local variable reference something already cleaned up?
+
+### 3. Self-Cancellation Analysis
+
+For any asyncio task that modifies its own lifecycle:
+- Can the task cancel itself? (calling stop/cancel on its own task reference)
+- Does it null the reference BEFORE the operation that triggers cancellation?
+- What happens if CancelledError is raised at each await point in the task?
+
+### 4. Resource Lifecycle Completeness
+
+For every resource acquired (task, subprocess, file handle, connection):
+- Trace ALL exit paths (normal return, exception, cancellation)
+- Verify the resource is released on EVERY path
+- Special attention to: tasks created but never awaited/cancelled,
+  subprocesses that outlive their parent coroutine
+
+### 5. Timeout Semantics
+
+For every timeout mechanism:
+- What CAN it cancel? (asyncio.wait_for cannot cancel native I/O)
+- What ACTUALLY happens when timeout fires? (CancelledError? TimeoutError? Nothing?)
+- Is there a secondary mechanism for what the primary timeout can't handle?
+- What's the maximum legitimate wait? (tool execution, high context TTFT)
+
+### 6. Idempotency Verification
+
+For every operation that could be called twice:
+- Call it twice: does state remain consistent?
+- Call it with stale data: does it crash or gracefully no-op?
+- Specific patterns to verify:
+  - `_transition(DEAD)` when already DEAD → must be no-op
+  - `_force_kill(pid)` when process already gone → ProcessLookupError caught
+  - `_stop_watchdog()` when task already None → no-op
+
+### 7. Mock-Production Mismatch Audit (for test reviews)
+
+When reviewing tests alongside production code:
+- Does the mock HIDE a real behavior? (mock returns success, production raises)
+- Does the test setup match production state? (missing fields, wrong defaults)
+- Would the test pass even if the feature is broken? (tautological test)
+- Are leaked resources (tasks, files) cleaned up between tests?

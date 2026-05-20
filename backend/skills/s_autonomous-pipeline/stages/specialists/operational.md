@@ -116,6 +116,47 @@ Most hooks/jobs run frequently but only act rarely:
 - Python → Shell: quoting, escaping, newlines in values
 - Different JSON libraries: spacing (`{"k": "v"}` vs `{"k":"v"}`)
 
+### 7. Asyncio Task Lifecycle (Background Tasks, Watchdogs, Timers)
+
+**For every `asyncio.create_task()` or `asyncio.ensure_future()`:**
+
+- **Creation:** Is the task reference stored? (unreferenced tasks get GC'd silently)
+- **Cancellation:** Is there a cleanup path that cancels the task? On EVERY exit?
+- **Self-cancellation:** Can the task trigger its own cancellation? (e.g., modifying
+  the reference that a cancel loop reads). If yes: does it null the reference first?
+- **Exception propagation:** If the task raises (not CancelledError), who sees it?
+  (Answer: nobody, unless the task is awaited. Log or handle.)
+- **Double-start:** Can the same task be started twice? (Create without checking
+  if one already exists → leaked duplicate)
+
+**Pattern to look for:**
+```python
+# WRONG: leaked task
+asyncio.create_task(self._background_thing())  # No reference stored
+
+# RIGHT: controlled lifecycle
+self._task = asyncio.create_task(self._background_thing())
+# ... later:
+self._task.cancel()
+```
+
+### 8. Timeout vs Kill Semantics
+
+**For every timeout mechanism (asyncio.wait_for, signal.alarm, custom timers):**
+
+- **What can it cancel?**
+  - `asyncio.wait_for` CAN cancel Python-level coroutines
+  - `asyncio.wait_for` CANNOT cancel native I/O blocked in subprocess pipes
+  - `signal.alarm` only fires in main thread
+- **What's the fallback?** If primary timeout can't cancel, is there a secondary
+  out-of-band mechanism? (PID watchdog, output liveness check, heartbeat monitor)
+- **Maximum legitimate duration?** Document what the longest acceptable wait is:
+  - Tool execution: 0-600s (build, test suite)
+  - TTFT at high context: 60-300s (1M+ tokens → model thinking time)
+  - Network I/O: 30-120s (API call, file download)
+- **False kill risk:** Is the timeout shorter than any legitimate operation?
+  If yes: what protects against false kills? (state guard, grace period, adaptive)
+
 ---
 
 ## What This Specialist Does NOT Check
