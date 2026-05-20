@@ -167,42 +167,35 @@ class TestResultMessageNoUsagePreservation:
 
     @pytest.mark.asyncio
     async def test_result_message_usage_none(self):
-        """ResultMessage with usage=None yields result event, transitions STREAMING→IDLE.
+        """ResultMessage with usage=None raises RuntimeError (empty response guard).
 
-        When usage is None, ``input_tokens`` is None, so the ``if input_tokens``
-        check is False — the context warning bridge is skipped entirely.
+        When usage is None and no content was emitted during the stream,
+        the empty-response guard detects this as a likely transient failure
+        (429/503/timeout) and raises RuntimeError for the retry loop.
+        This is correct behavior — an API call that produces zero tokens
+        with no content should not silently succeed.
         """
         unit = _make_unit()
         _set_mock_client(unit, [_make_result_message(usage=None)])
 
         with _patch_sdk_modules():
-            events = await _collect_events(unit)
-
-        result_events = [e for e in events if e.get("type") == "result"]
-        assert len(result_events) == 1
-        assert result_events[0]["usage"] is None
-        assert unit.state == SessionState.IDLE
+            with pytest.raises(RuntimeError, match="API returned empty response"):
+                await _collect_events(unit)
 
     @pytest.mark.asyncio
     async def test_result_message_usage_empty_dict(self):
-        """ResultMessage with usage={} yields result event, transitions STREAMING→IDLE.
+        """ResultMessage with usage={} raises RuntimeError (empty response guard).
 
-        When usage is {}, the code does ``getattr(msg, "usage", None) or {}``
-        which gives {}.  Then ``if usage`` is False (empty dict is falsy),
-        so the result event has ``usage: None``.  The context warning bridge
-        is also skipped because ``input_tokens`` is None.
+        When usage is {}, output_tokens evaluates to 0 and no content was
+        emitted. The empty-response guard correctly identifies this as a
+        transient API failure and raises for retry.
         """
         unit = _make_unit()
         _set_mock_client(unit, [_make_result_message(usage={})])
 
         with _patch_sdk_modules():
-            events = await _collect_events(unit)
-
-        result_events = [e for e in events if e.get("type") == "result"]
-        assert len(result_events) == 1
-        # Empty dict is falsy → ``if usage else None`` yields None
-        assert result_events[0]["usage"] is None
-        assert unit.state == SessionState.IDLE
+            with pytest.raises(RuntimeError, match="API returned empty response"):
+                await _collect_events(unit)
 
     @pytest.mark.asyncio
     async def test_result_message_input_tokens_zero(self):
