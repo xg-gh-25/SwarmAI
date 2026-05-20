@@ -179,6 +179,9 @@ class ChannelGateway:
         self._prewarm_task: Optional[asyncio.Task] = None
         # Message counter for lazy rate-limiter eviction (G8/PE6)
         self._msg_counter: int = 0
+        # Per-conversation message queues for human mode (Slack channels).
+        # Key: (channel_id, external_chat_id) — same as conv_locks.
+        self._message_queues: dict[tuple[str, str], ChannelMessageQueue] = {}
         # Per-channel message counter for status reporting
         self._channel_msg_counts: dict[str, int] = {}
         # Per-channel start time (Unix timestamp) for uptime calculation
@@ -998,6 +1001,30 @@ class ChannelGateway:
         if conv_key not in self._conv_locks:
             self._conv_locks[conv_key] = asyncio.Lock()
 
+        # ── Human Mode queue: merge/redirect if agent is busy ──
+        is_slack = channel.get("channel_type") == "slack"
+        if is_slack:
+            if conv_key not in self._message_queues:
+                self._message_queues[conv_key] = ChannelMessageQueue(
+                    session_id=f"{channel_id}:{msg.external_chat_id}",
+                )
+            queue = self._message_queues[conv_key]
+            result = await queue.enqueue(QueuedMessage(
+                text=msg.text or "",
+                external_message_id=msg.external_message_id,
+                external_sender_id=msg.external_sender_id,
+                timestamp=time.time(),
+            ))
+            if result == "merged":
+                # Message merged as supplement — don't process, just return
+                return
+            if result == "redirect":
+                # Current processing will be cancelled via queue.cancelled flag.
+                # The new request is in the queue and will be picked up after
+                # the current task exits. Don't start a new task here.
+                return
+            # result == "queued" — proceed to handle normally
+
         async with self._conv_locks[conv_key]:
             return await self._handle_conversation(
                 msg=msg,
@@ -1207,6 +1234,17 @@ class ChannelGateway:
 
         reply_text = ""
         error_occurred = False
+        # ── Human Mode: mark queue as processing + merge supplements ──
+        conv_key = (channel_id, msg.external_chat_id)
+        queue: Optional[ChannelMessageQueue] = self._message_queues.get(conv_key)
+        if human_mode and queue:
+            queue.processing = True
+            # Brief merge window: wait 2s for follow-up messages
+            await asyncio.sleep(2.0)
+            supplements = queue.drain_supplements()
+            if supplements:
+                final_text += f"\n\n{supplements}"
+
         _ttft_start = time.monotonic()
         _ttft_logged = False
         try:
@@ -1457,6 +1495,9 @@ class ChannelGateway:
                     await heartbeat_task
                 except (asyncio.CancelledError, Exception):
                     pass
+            # Release queue processing state
+            if human_mode and queue:
+                queue.processing = False
 
         if ctx.stream_flushed:
             reply_text = ctx.stream_flushed
@@ -1474,32 +1515,41 @@ class ChannelGateway:
 
         # ── Human Mode: delete ack, post complete response as segments ──
         if human_mode and adapter and heartbeat_mgr:
-            # Delete the ack message
-            await heartbeat_mgr.delete_ack()
+            # Check if cancelled (user sent "stop" during processing)
+            if queue and queue.cancelled:
+                await heartbeat_mgr.update_final("好的，停了。有什么新问题随时说。")
+                logger.info("Channel %s: response cancelled by user", channel_id)
+                # Skip response posting — go to message logging
+                external_message_id = heartbeat_mgr.ack_ts
+                # Jump past all response posting logic
+                reply_text = "(Cancelled by user)"
+            else:
+                # Delete the ack message
+                await heartbeat_mgr.delete_ack()
 
-            # Format and post response as human-like segments
-            formatter = HumanResponseFormatter()
-            segments = formatter.format(reply_text)
-            for i, segment in enumerate(segments):
-                outbound = OutboundMessage(
-                    channel_id=channel_id,
-                    external_chat_id=msg.external_chat_id,
-                    external_thread_id=msg.external_thread_id,
-                    reply_to_message_id=msg.external_message_id if i == 0 else None,
-                    text=segment,
-                )
-                try:
-                    seg_id = await adapter.send_message(outbound)
-                    if i == 0:
-                        external_message_id = seg_id
-                except Exception:
-                    logger.exception(
-                        "Failed to send human-mode segment %d on channel %s",
-                        i, channel_id,
+                # Format and post response as human-like segments
+                formatter = HumanResponseFormatter()
+                segments = formatter.format(reply_text)
+                for i, segment in enumerate(segments):
+                    outbound = OutboundMessage(
+                        channel_id=channel_id,
+                        external_chat_id=msg.external_chat_id,
+                        external_thread_id=msg.external_thread_id,
+                        reply_to_message_id=msg.external_message_id if i == 0 else None,
+                        text=segment,
                     )
-                # Human-like pacing between segments
-                if i < len(segments) - 1:
-                    await asyncio.sleep(1.0)
+                    try:
+                        seg_id = await adapter.send_message(outbound)
+                        if i == 0:
+                            external_message_id = seg_id
+                    except Exception:
+                        logger.exception(
+                            "Failed to send human-mode segment %d on channel %s",
+                            i, channel_id,
+                        )
+                    # Human-like pacing between segments
+                    if i < len(segments) - 1:
+                        await asyncio.sleep(1.0)
 
         elif ctx.streaming and ctx.streaming_msg_id and ctx.native_streaming:
             # Native streaming: finalize via stop_stream.  The adapter
