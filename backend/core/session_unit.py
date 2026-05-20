@@ -47,10 +47,14 @@ logger = logging.getLogger(__name__)
 # blocking waitpid/subprocess.run calls can NEVER starve health checks,
 # aiosqlite, or other IO tasks that share the default executor.
 # 8 workers = generous ceiling (max 4 sessions × 1 snapshot each + margin).
+# Exported (not private) — lifecycle_manager.py imports this for same-pool
+# usage in RSS monitoring and orphan reaping.
 from concurrent.futures import ThreadPoolExecutor
-_subprocess_executor = ThreadPoolExecutor(
+subprocess_executor = ThreadPoolExecutor(
     max_workers=8, thread_name_prefix="subprocess"
 )
+# Legacy alias for internal callers
+_subprocess_executor = subprocess_executor
 
 # Module-level lock that serializes subprocess spawn operations.
 # Held during _configure_claude_environment + wrapper.__aenter__() to
