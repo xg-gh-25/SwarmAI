@@ -1079,6 +1079,8 @@ def run_evolution_cycle(
             try:
                 lock_fd = open(lock_path, "w")
                 flock_exclusive_nb(lock_fd)
+                lock_fd.write(str(os.getpid()))
+                lock_fd.flush()
             except (OSError, BlockingIOError):
                 logger.info("Evolution cycle already running -- skipping (retry failed)")
                 if lock_fd is not None:
