@@ -1533,9 +1533,26 @@ class ChannelGateway:
                     await heartbeat_task
                 except (asyncio.CancelledError, Exception):
                     pass
-            # Release queue processing state
+            # Release queue processing state.
+            # IMPORTANT: Any supplements that arrived DURING SDK processing
+            # couldn't be injected mid-stream. Re-queue them as the next
+            # message so they get processed. Without this, they're silently
+            # dropped when processing=False clears _pending_supplements.
             if human_mode and queue:
-                queue.processing = False
+                late_supplements = queue._pending_supplements.copy()
+                queue.processing = False  # clears _pending_supplements
+                if late_supplements and not queue.cancelled:
+                    combined = " ".join(late_supplements)
+                    await queue._queue.put(QueuedMessage(
+                        text=combined,
+                        external_message_id=None,
+                        external_sender_id=msg.external_sender_id,
+                        timestamp=time.time(),
+                    ))
+                    logger.info(
+                        "Re-queued %d late supplement(s) for session %s",
+                        len(late_supplements), session_id,
+                    )
 
         if ctx.stream_flushed:
             reply_text = ctx.stream_flushed
