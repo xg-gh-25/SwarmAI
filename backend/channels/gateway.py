@@ -1688,6 +1688,17 @@ class ChannelGateway:
                 # G2: Clean up conversation lock for the rotated session.
                 # The old key is stale — a new lock will be created on next use.
                 self._conv_locks.pop((channel_id, external_chat_id), None)
+                # G3: Kill the old SessionUnit subprocess to prevent zombie leak.
+                # Without this, old units remain alive with is_channel_session=True
+                # and TTL-immune — accumulating as resource leaks.
+                try:
+                    from core.session_registry import session_router
+                    if session_router:
+                        await session_router.kill_rotated_channel_session(old_session_id)
+                except Exception as exc:
+                    logger.debug(
+                        "Failed to kill rotated session %s: %s", old_session_id, exc
+                    )
                 return new_session_id, existing["id"], True, old_session_id
             else:
                 is_new = (existing.get("message_count", 0) or 0) == 0

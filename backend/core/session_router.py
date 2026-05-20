@@ -1403,6 +1403,28 @@ class SessionRouter:
         except RuntimeError as exc:
             return {"success": False, "message": str(exc)}
 
+    async def kill_rotated_channel_session(self, old_session_id: str) -> None:
+        """Kill a channel SessionUnit that was rotated out by the gateway.
+
+        Called by ChannelGateway._resolve_session() after TTL rotation creates
+        a new session.  The old SessionUnit is no longer referenced by any
+        channel_session row, but remains in-memory with is_channel_session=True
+        — making it TTL-immune and potentially a zombie resource leak.
+
+        No-op if the session doesn't exist or is already COLD/DEAD.
+        """
+        unit = self._units.get(old_session_id)
+        if unit is None:
+            return  # Not in router — already cleaned up
+        if not unit.is_alive:
+            return  # Already COLD/DEAD — no subprocess to kill
+        logger.info(
+            "session_router.kill_rotated_channel session_id=%s state=%s — "
+            "cleaning up rotated channel session",
+            old_session_id, unit.state.value,
+        )
+        await unit.kill()
+
     async def disconnect_all(self) -> None:
         """Kill all alive SessionUnits. Called at shutdown.
 

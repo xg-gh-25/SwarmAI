@@ -2733,6 +2733,10 @@ class SessionUnit:
     # causing every session to be proactively killed after each response.
     PROACTIVE_RSS_THRESHOLD: int = 1_800_000_000  # 1.8GB
     PROACTIVE_COOLDOWN: float = 180.0  # 3 minutes
+    # STREAMING RSS kill threshold: if a STREAMING session exceeds this,
+    # lifecycle_manager kills it immediately.  Closes the adaptive timeout
+    # blind spot (up to 900s) where proactive_rss_restart can't act.
+    STREAMING_RSS_KILL_THRESHOLD: int = 3_000_000_000  # 3GB
 
     async def _check_rss_and_proactive_restart(self) -> None:
         """Proactive restart: if tree RSS > threshold, compact → kill.

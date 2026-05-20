@@ -237,6 +237,7 @@ class LifecycleManager:
                     await self._health_check_all()
                     await self._sample_process_memory()
                     await self._proactive_rss_restart()
+                    await self._streaming_rss_check()
                     await self._check_streaming_timeout()
                     await self._fire_idle_hooks()
                     await self._check_ttl()
@@ -428,6 +429,69 @@ class LifecycleManager:
                 unit._last_proactive_restart = time.monotonic()
         except Exception as exc:
             logger.debug("_proactive_rss_restart failed (non-fatal): %s", exc)
+
+    async def _streaming_rss_check(self) -> None:
+        """Kill STREAMING sessions with dangerously high RSS or under system pressure.
+
+        Closes the blind spot where adaptive timeout (up to 900s) lets a
+        bloating STREAMING subprocess grow unchecked — proactive_rss_restart
+        only touches IDLE sessions.
+
+        Two triggers (either one fires):
+        - Per-session: tree RSS > STREAMING_RSS_KILL_THRESHOLD (3GB)
+        - System-wide: memory pressure > 85% → kill heaviest STREAMING session
+
+        Non-fatal — failures logged and skipped.
+        """
+        try:
+            from .resource_monitor import resource_monitor
+            from .session_unit import SessionUnit
+
+            streaming_units = [
+                u for u in self._router.list_units()
+                if u.state == SessionState.STREAMING and u.pid
+            ]
+            if not streaming_units:
+                return
+
+            mem = resource_monitor.system_memory()
+
+            # Collect RSS for each streaming session
+            rss_map: dict = {}  # unit → rss_bytes
+            for unit in streaming_units:
+                tree_rss = await asyncio.to_thread(
+                    resource_monitor.process_tree_rss, unit.pid,
+                )
+                if tree_rss > 0:
+                    rss_map[unit] = tree_rss
+
+            # Trigger 1: Per-session threshold (3GB)
+            for unit, rss in rss_map.items():
+                if rss > SessionUnit.STREAMING_RSS_KILL_THRESHOLD:
+                    logger.warning(
+                        "lifecycle.streaming_rss_kill session=%s "
+                        "rss=%dMB > threshold=%dMB — killing bloated STREAMING session",
+                        unit.session_id[:8],
+                        rss // (1024 * 1024),
+                        SessionUnit.STREAMING_RSS_KILL_THRESHOLD // (1024 * 1024),
+                    )
+                    await unit.kill()
+                    return  # One kill per cycle to avoid cascade
+
+            # Trigger 2: System pressure > 85% → kill heaviest
+            if mem.percent_used > 85.0 and rss_map:
+                heaviest = max(rss_map, key=rss_map.get)
+                logger.warning(
+                    "lifecycle.streaming_pressure_kill session=%s "
+                    "system_used=%.1f%% rss=%dMB — killing heaviest STREAMING session",
+                    heaviest.session_id[:8],
+                    mem.percent_used,
+                    rss_map[heaviest] // (1024 * 1024),
+                )
+                await heaviest.kill()
+
+        except Exception as exc:
+            logger.debug("_streaming_rss_check failed (non-fatal): %s", exc)
 
     async def _check_streaming_timeout(self) -> None:
         """Force-unstick sessions that have been STREAMING with no SDK
