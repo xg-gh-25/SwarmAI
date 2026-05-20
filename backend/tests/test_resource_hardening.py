@@ -92,8 +92,8 @@ class TestStreamingRSSKill:
         unit.kill.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_system_pressure_above_85_kills_heaviest_streaming(self):
-        """AC2: System memory > 85% kills the heaviest STREAMING session."""
+    async def test_system_pressure_above_evict_pct_kills_heaviest_streaming(self):
+        """AC2: System memory > MEMORY_EVICT_PCT (90%) kills heaviest STREAMING."""
         import core.resource_monitor as rm_mod
         from core.lifecycle_manager import LifecycleManager
 
@@ -114,7 +114,7 @@ class TestStreamingRSSKill:
 
         mock_rm = MagicMock()
         mock_rm.process_tree_rss.side_effect = lambda pid: rss_by_pid.get(pid, 0)
-        mock_rm.system_memory.return_value = MagicMock(percent_used=87.0)
+        mock_rm.system_memory.return_value = MagicMock(percent_used=92.0)  # > MEMORY_EVICT_PCT (90%)
 
         # Direct module attribute swap — ensures from-import inside method
         # resolves to our mock regardless of thread context.
