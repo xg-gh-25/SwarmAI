@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 import os
@@ -524,6 +525,9 @@ async def _deferred_refresh_defaults(label: str) -> None:
 _SCHEDULER_INTERVAL_SECONDS = 3600  # 1 hour — same as the old launchd StartCalendarInterval
 
 
+_job_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="job-executor")
+
+
 async def _run_inprocess_scheduler() -> None:
     """In-process job scheduler loop (daemon/hive only).
 
@@ -545,8 +549,11 @@ async def _run_inprocess_scheduler() -> None:
         t0 = time.monotonic()
         try:
             logger.info("In-process scheduler: running cycle")
-            # run_scheduler is synchronous — run in thread pool
-            await asyncio.to_thread(_run_scheduler_safe)
+            # run_scheduler is synchronous and long-running (agent tasks up
+            # to 480s). Uses dedicated _job_executor to avoid blocking default
+            # thread pool (which health endpoint's aiosqlite needs).
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(_job_executor, _run_scheduler_safe)
             logger.info("In-process scheduler: cycle complete")
         except asyncio.CancelledError:
             raise
@@ -1111,14 +1118,25 @@ async def health_check():
     )
 
     # F6: Verify DB is actually reachable — prevents "false healthy"
+    # L1 fix: wrap in wait_for to prevent thread pool exhaustion from
+    # blocking health endpoint indefinitely (aiosqlite uses run_in_executor).
+    # If DB check can't complete in 2s, return healthy with degraded DB
+    # rather than hanging → Tauri "not responding" cascade.
     db_healthy = True
     try:
         from database import db
-        db_healthy = await db.health_check()
+        db_healthy = await asyncio.wait_for(db.health_check(), timeout=2.0)
+    except asyncio.TimeoutError:
+        db_healthy = "timeout"
+        logger.warning("health_check: DB check timed out (thread pool pressure)")
     except Exception:
         db_healthy = False
 
-    status = "healthy" if db_healthy else "degraded"
+    # Keep status="healthy" even on DB timeout — the process is alive and
+    # serving requests. Frontend startup overlay only checks status field;
+    # returning "degraded" on transient thread pool pressure would trigger
+    # false "backend not ready" UX.
+    status = "healthy" if db_healthy is not False else "degraded"
 
     # P3: Expose channel gateway state so monitoring can detect
     # "healthy but Slack is down" (silent failure of deferred startup)

@@ -42,6 +42,16 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Dedicated executor for subprocess operations (process tree snapshots,
+# pgrep, ps). Isolated from the default asyncio thread pool so that
+# blocking waitpid/subprocess.run calls can NEVER starve health checks,
+# aiosqlite, or other IO tasks that share the default executor.
+# 8 workers = generous ceiling (max 4 sessions × 1 snapshot each + margin).
+from concurrent.futures import ThreadPoolExecutor
+_subprocess_executor = ThreadPoolExecutor(
+    max_workers=8, thread_name_prefix="subprocess"
+)
+
 # Module-level lock that serializes subprocess spawn operations.
 # Held during _configure_claude_environment + wrapper.__aenter__() to
 # prevent concurrent sessions from racing on os.environ mutations.
@@ -2957,6 +2967,12 @@ class SessionUnit:
         The Claude SDK subprocess inherits the parent's pgid unless
         spawned with ``start_new_session=True``, so this guard is
         critical.
+
+        L2 FIX: Tree snapshot and kill sweep use subprocess.run / os.kill
+        (blocking I/O).  Previously ran directly in this async method,
+        starving health checks and aiosqlite on the default thread pool.
+        Now runs on _subprocess_executor (dedicated pool) to prevent
+        priority inversion with the default executor.
         """
         pid = self.pid
         if pid:
@@ -2976,8 +2992,20 @@ class SessionUnit:
                     # then kill bottom-up in one sweep + kill parent last.
                     # This prevents the reparenting race where killing a
                     # middle node (zsh) orphans its children (pytest/workers).
-                    tree = _snapshot_descendant_tree(pid)
-                    tree_killed = _kill_pids(tree)
+                    #
+                    # Offload to dedicated subprocess executor:
+                    # _snapshot_descendant_tree calls subprocess.run which
+                    # blocks. Using _subprocess_executor (not default pool)
+                    # prevents priority inversion with health/aiosqlite.
+                    loop = asyncio.get_running_loop()
+                    tree = await loop.run_in_executor(
+                        _subprocess_executor, _snapshot_descendant_tree, pid
+                    )
+                    # Offload kill sweep to same executor — 17× os.kill can
+                    # take non-trivial time under process pressure.
+                    tree_killed = await loop.run_in_executor(
+                        _subprocess_executor, _kill_pids, tree
+                    )
                     # Kill parent last (after all children are dead)
                     os.kill(pid, signal.SIGKILL)
                     logger.info(
