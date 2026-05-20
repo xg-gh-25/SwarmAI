@@ -1,10 +1,10 @@
 # Operational Pattern Checklist (OP1-OP8)
 
-Architectural invariants that every subsystem must satisfy. Unlike RP1-RP29
+Architectural invariants that every subsystem must satisfy. Unlike RP1-RP37
 (code-level bug patterns), these are **system-level patterns** — they apply
 regardless of what code you're writing.
 
-REVIEW stage checks these alongside RP1-RP29 for any changeset that adds or
+REVIEW stage checks these alongside RP1-RP37 for any changeset that adds or
 modifies a subsystem's lifecycle operations (CRUD, deploy, update, etc.).
 
 ## Patterns
