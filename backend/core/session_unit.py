@@ -653,20 +653,28 @@ class SessionUnit:
     async def _pid_watchdog_loop(self, pid: int) -> None:
         """Poll subprocess PID until death or cancellation.
 
-        On death detection:
-        - Logs the event with structured key for monitoring
+        Two detection mechanisms:
+        1. Process existence: os.kill(pid, 0) — detects external kills
+           (jetsam, OOM, manual SIGKILL).
+        2. Output liveness: _last_event_time staleness — detects API hangs
+           where the subprocess is alive but blocked on network I/O (the
+           asyncio.wait_for timeout cannot cancel native pipe reads).
+
+        On detection:
         - Transitions to DEAD (fast signal — 5s detection)
-        - Full cleanup (wrapper, client, COLD) happens through the
-          existing error path: streaming timeout fires → RuntimeError →
-          send() catches → _crash_to_cold_async(). The watchdog is the
-          SIGNAL; the streaming error handler is the CLEANUP.
+        - Full cleanup happens through the existing error path:
+          streaming timeout fires → RuntimeError → send() catches →
+          _crash_to_cold_async(). The watchdog is the SIGNAL; the
+          streaming error handler is the CLEANUP.
         """
         try:
             while True:
                 await asyncio.sleep(self._PID_WATCHDOG_INTERVAL)
+
+                # ── Check 1: Process existence ────────────────────────
                 try:
                     os.kill(pid, 0)
-                    # Process is alive — continue watching
+                    # Process is alive — continue to liveness check
                 except PermissionError:
                     # Process exists but we can't signal it — treat as alive
                     pass
@@ -684,6 +692,35 @@ class SessionUnit:
                     ):
                         self._transition(SessionState.DEAD)
                     return
+
+                # ── Check 2: Output liveness ──────────────────────────
+                # Only applies when STREAMING and _last_event_time is set
+                # (set to time.time() on STREAMING entry, updated on each
+                # SDK event). Acts as a backstop if the stream reader's
+                # asyncio.wait_for timeout cannot cancel the native pipe
+                # read. WAITING_INPUT is excluded because the user may
+                # take arbitrarily long to respond.
+                if self.state == SessionState.STREAMING:
+                    last_event = self._last_event_time
+                    if last_event is not None:
+                        silence = time.time() - last_event
+                        timeout = self._compute_message_timeout()
+                        if silence > timeout:
+                            logger.error(
+                                "session_unit.output_liveness_timeout "
+                                "session_id=%s pid=%d silence=%.0fs "
+                                "timeout=%.0fs — killing subprocess",
+                                self.session_id, pid, silence, timeout,
+                            )
+                            # Prevent self-cancellation: _transition(DEAD)
+                            # calls _stop_pid_watchdog() which would cancel
+                            # THIS task before _force_kill() completes.
+                            # Nulling the reference makes the stop a no-op.
+                            self._pid_watchdog_task = None
+                            self._transition(SessionState.DEAD)
+                            await self._force_kill()
+                            return
+
         except asyncio.CancelledError:
             return  # Normal shutdown
 
