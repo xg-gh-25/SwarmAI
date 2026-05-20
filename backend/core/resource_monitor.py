@@ -169,6 +169,7 @@ class ResourceMonitor:
         self._cached_memory: Optional[SystemMemory] = None
         self._cache_time: float = 0.0
         self._spawn_cost_samples: list[float] = []  # MB values
+        self._last_max_tabs_result: Optional[int] = None  # For log-level optimization
 
     # ── System memory ───────────────────────────────────────────
 
@@ -397,12 +398,24 @@ class ResourceMonitor:
         # Minimum 2: guarantees 1 chat slot + 1 dedicated channel slot.
         # Without this, channel messages could starve when memory is tight.
         result = max(2, min(raw, self._MAX_TABS_CEILING))
-        logger.info(
+        # Log at INFO only when result changes or headroom is low (<3GB).
+        # Avoids 3000+ INFO lines/day when system is stable.
+        _LOW_HEADROOM_MB = 3072.0
+        changed = (self._last_max_tabs_result is not None
+                   and result != self._last_max_tabs_result)
+        try:
+            low_headroom = float(headroom_mb) < _LOW_HEADROOM_MB
+        except (TypeError, ValueError):
+            low_headroom = True  # Conservative: if we can't tell, log it
+        log_fn = logger.info if (changed or low_headroom
+                                 or self._last_max_tabs_result is None) else logger.debug
+        log_fn(
             "compute_max_tabs: used=%.0fMB/%.0fMB (%.1f%%) headroom_to_90%%=%.0fMB "
             "cost=%.0fMB raw=%d result=%d pressure=%s",
             used_mb, total_mb, mem.percent_used,
             headroom_mb, cost_mb, raw, result, mem.pressure_level,
         )
+        self._last_max_tabs_result = result
         return result
 
     # ── Process metrics ─────────────────────────────────────────
