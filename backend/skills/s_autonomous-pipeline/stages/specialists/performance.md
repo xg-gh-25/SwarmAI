@@ -1,11 +1,11 @@
 # Performance Specialist Review
-<!-- version: 2026-05-16 | synced with: REVIEW_PATTERNS.md RP1-RP34 -->
+<!-- version: 2026-05-20 | synced with: REVIEW_PATTERNS.md RP1-RP37 -->
 
 Scope: When changeset touches backend endpoints, database queries, loops over
 collections, or frontend rendering paths.
 
 **Cross-reference:** Also check patterns from `REVIEW_PATTERNS.md` in your domain:
-RP30 (hook no-op path scaling — O(n) in steady state). These are proven perf patterns.
+RP30 (hook no-op path scaling — O(n) in steady state), RP35 (shared executor/pool contention — blocking >5s on shared pool starves latency-sensitive consumers), RP36 (fix-removes-failure-mode regression — newly-successful path consumes shared resources). These are proven perf patterns.
 
 Output: JSON objects, one finding per line.
 
