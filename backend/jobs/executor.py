@@ -571,6 +571,9 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
         "--no-session-persistence",
         "--model", "sonnet",
         "--max-budget-usd", str(safety.max_budget_usd),
+        # Jobs run headless — bypass permission prompts for allowed tools.
+        # Safety is enforced by --allowedTools (only listed tools are available).
+        "--permission-mode", "bypassPermissions",
     ]
 
     # MCP config: load from SwarmWS .claude/mcps/ (same merge as chat sessions)
@@ -779,7 +782,14 @@ def _handle_script(job: Job, state: SchedulerState) -> JobResult:
 
     # Script jobs run from the swarm-jobs directory (where venv and scripts live),
     # not from SwarmWS root. Use config.cwd to override if needed.
-    raw_cwd = job.config.get("cwd") or str(Path(__file__).parent)
+    # In daemon binary, Path(__file__).parent resolves inside _internal/ which
+    # doesn't have the expected directory structure. Use swarmai source tree instead.
+    raw_cwd = job.config.get("cwd")
+    if not raw_cwd:
+        # Prefer swarmai source tree (works in daemon); fallback to __file__ parent
+        from .system_jobs import _get_swarmai_root
+        _candidate = _get_swarmai_root()
+        raw_cwd = _candidate if Path(_candidate).is_dir() else str(Path(__file__).parent)
     if "HOME" not in os.environ:
         script_cwd = raw_cwd.replace("${HOME}", home).replace("$HOME", home)
     else:
@@ -1410,6 +1420,7 @@ def _send_slack_dm(message: str) -> bool:
             "--no-session-persistence",
             "--model", "sonnet",
             "--max-budget-usd", "1.00",
+            "--permission-mode", "bypassPermissions",
             "--mcp-config", mcp_config_file.name,
             "--strict-mcp-config",
             "--allowedTools", "mcp__slack-mcp__post_message,mcp__slack-mcp__open_dm_channel",
