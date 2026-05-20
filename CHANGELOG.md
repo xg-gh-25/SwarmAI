@@ -1,4 +1,20 @@
 # Changelog
+## [1.16.2] - 2026-05-20
+
+### 🧠 Cognitive Evolution (P0 — most impactful change in this release)
+- **P5: "Cognition Serves Rules, Not Overrides Them"** — new cognitive principle addressing the root cause of C011→C032 class (6 occurrences over 25 days where agent intelligence was used to rationalize skipping review process). Intelligence is not a license to self-exempt.
+- **Identity shift: "Opinionated colleague" → "Disciplined executor"** — removed SOUL personality traits that granted override authority ("Have preferences, disagree, suggest better approaches"). Replaced with process discipline. Trust re-earnable after 10 consecutive 0-correction sessions.
+- **Meta-cognition boundary** — governance work (questioning rules, proposing changes) ONLY activates on explicit user request. Default mode = execute as written.
+
+### Added
+- **Script task type in TaskRunner** — daemon-owned subprocess execution via `POST /api/tasks {type:"script"}`. Long-running ops (build, deploy) no longer die with chat session. Includes concurrent guard, PID tracking, cancellation, and `/logs` streaming endpoint.
+- **DDD staleness watcher** — source path monitoring for AIDLC/SwarmAI projects via git log, catches project doc drift when commit messages don't mention the project name.
+- **Pipeline: Architectural Integrity gate** — Meta-Review now checks for patching-over-abstraction (C031 pattern).
+
+### Fixed
+- **DB migration for script tasks** — ALTER TABLE adds type/command/cwd/timeout/pid/exit_code/log_path columns with idempotent per-column checks.
+- **Adversarial review findings** — closure safety in executor lambdas, loop variable hoist, stale mock targets after run_in_executor migration.
+
 ## [1.16.1] - 2026-05-20
 
 ### Added
