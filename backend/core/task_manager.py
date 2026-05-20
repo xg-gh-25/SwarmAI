@@ -536,7 +536,7 @@ class TaskManager:
         task = {
             "id": task_id,
             "type": "script",
-            "agent_id": None,
+            "agent_id": "__script__",
             "session_id": None,
             "status": "draft",
             "title": (description or command)[:50],

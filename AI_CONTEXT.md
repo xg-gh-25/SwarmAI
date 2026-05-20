@@ -60,16 +60,16 @@ The codebase is both the product AND the evidence. The interesting parts are not
 <!-- METRICS_START -->
 | Metric | Value | How to Verify |
 |--------|-------|---------------|
-| Total commits | 1584+ | `git log --oneline | wc -l` |
+| Total commits | 1612+ | `git log --oneline | wc -l` |
 | Duration | ~87 days | First commit to latest (1 human contributor) |
-| Backend core modules | 112 Python files, 51834 LOC | `find backend/core -name "*.py" | wc -l` |
-| Total backend LOC |  | `find backend -name "*.py" | xargs wc -l | tail -1` |
-| Test files | 226 | `find backend/tests -name "*.py" | wc -l` |
+| Backend core modules | 112 Python files, 52107 LOC | `find backend/core -name "*.py" | wc -l` |
+| Total backend LOC | 231742 | `find backend -name "*.py" | xargs wc -l | tail -1` |
+| Test files | 229 | `find backend/tests -name "*.py" | wc -l` |
 | Skills (agent capabilities) | 84 | `ls -d backend/skills/s_* | wc -l` |
 | Post-session hooks | 13 | `ls backend/hooks/*.py | wc -l` |
 | React components | 166 | `find desktop/src -name "*.tsx" | wc -l` |
 | Pipeline spec depth | 1195 lines | `wc -l backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md` |
-| Largest state machine | 3135 lines | `wc -l backend/core/session_unit.py` |
+| Largest state machine | 3206 lines | `wc -l backend/core/session_unit.py` |
 | Context system | 1058 lines | `wc -l backend/core/context_directory_loader.py` |
 | Platform modes | 4 (macOS daemon, Windows subprocess, Linux subprocess, Hive systemd) | |
 | Background jobs | 9 handlers | `find backend/jobs -name "*.py" -path "*/handlers/*" | wc -l` |

@@ -2499,6 +2499,33 @@ class SQLiteDatabase(BaseDatabase):
             await conn.commit()
             logger.info("Migration complete: user_key column added to channel_sessions")
 
+        # Migration: Add script task columns to tasks table (added 2026-05-20)
+        # Required for TaskRunner script execution (daemon-owned subprocesses)
+        cursor = await conn.execute("PRAGMA table_info(tasks)")
+        tasks_columns = await cursor.fetchall()
+        tasks_column_names = [col[1] for col in tasks_columns]
+        script_task_cols = {"type", "command", "cwd", "timeout", "pid", "exit_code", "log_path"}
+        missing_cols = script_task_cols - set(tasks_column_names)
+        if missing_cols:
+            logger.info(f"Running migration: Adding script task columns to tasks table (missing: {missing_cols})")
+            if "type" not in tasks_column_names:
+                await conn.execute("ALTER TABLE tasks ADD COLUMN type TEXT DEFAULT 'agent'")
+            if "command" not in tasks_column_names:
+                await conn.execute("ALTER TABLE tasks ADD COLUMN command TEXT")
+            if "cwd" not in tasks_column_names:
+                await conn.execute("ALTER TABLE tasks ADD COLUMN cwd TEXT")
+            if "timeout" not in tasks_column_names:
+                await conn.execute("ALTER TABLE tasks ADD COLUMN timeout INTEGER DEFAULT 600")
+            if "pid" not in tasks_column_names:
+                await conn.execute("ALTER TABLE tasks ADD COLUMN pid INTEGER")
+            if "exit_code" not in tasks_column_names:
+                await conn.execute("ALTER TABLE tasks ADD COLUMN exit_code INTEGER")
+            if "log_path" not in tasks_column_names:
+                await conn.execute("ALTER TABLE tasks ADD COLUMN log_path TEXT")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_type ON tasks(type)")
+            await conn.commit()
+            logger.info("Migration complete: script task columns added to tasks table")
+
     @property
     def agents(self) -> SQLiteTable:
         """Get the agents table."""
