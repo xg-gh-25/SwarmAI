@@ -205,9 +205,9 @@ Use when binary already exists (e.g., after s_swarm-build Stage 2-3).
 SIDECAR="/Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin"
 DAEMON_BIN="${HOME}/.swarm-ai/daemon/python-backend"
 
-# Check source exists
-if [ ! -f "$SIDECAR" ]; then
-  echo "ERROR: No backend binary. Run s_swarm-build first."
+# Check source exists (onedir = directory, not single file)
+if [ ! -d "$SIDECAR" ]; then
+  echo "ERROR: No backend binary directory. Run s_swarm-build first."
   exit 1
 fi
 
@@ -219,7 +219,7 @@ for i in $(seq 1 15); do
 done
 
 # Deploy via rsync (fast incremental, handles onedir _internal/)
-rsync -a --delete "$BUNDLE_DIR/" "${HOME}/.swarm-ai/daemon/"
+rsync -a --delete "$SIDECAR/" "${HOME}/.swarm-ai/daemon/"
 chmod +x "$DAEMON_BIN"
 
 # Version marker
