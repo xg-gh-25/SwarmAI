@@ -40,6 +40,52 @@ _GIT_TIMEOUT = 10
 # Sections that are never auto-applied (require human judgment)
 _SEMANTIC_SECTIONS = ("Non-Goals", "Vision", "Architecture")
 
+# Source paths that should trigger DDD staleness for specific projects.
+# Key: project name (case-sensitive, matches Projects/<name>/)
+# Value: list of paths (relative to swarmai repo root) to watch via git log.
+# When these paths have recent commits AND the DDD doc is old, flag as stale.
+# This catches cases where commit messages don't mention the project name
+# (e.g., pipeline commits say "pipeline:" not "AIDLC").
+# NOTE: paths are checked against the SWARMAI repo (not SwarmWS).
+_SOURCE_WATCH_PATHS: dict[str, list[str]] = {
+    "AIDLC": [
+        "backend/skills/s_autonomous-pipeline/",
+        "backend/core/ddd/",
+        "backend/skills/s_deliver/",
+        "backend/skills/s_pollinate/",
+    ],
+    "SwarmAI": [
+        "backend/core/session_unit.py",
+        "backend/core/session_router.py",
+        "backend/core/context_directory_loader.py",
+        "backend/channels/gateway.py",
+        "backend/channels/adapters/",
+        "backend/main.py",
+    ],
+}
+
+
+def _find_swarmai_root() -> "Path | None":
+    """Find the swarmai source repo root (NOT SwarmWS).
+
+    Resolution order:
+    1. SWARMAI_ROOT env var
+    2. Relative to this file (core/ → backend/ → swarmai/)
+    3. Sibling of workspace path (legacy layout)
+    """
+    env_root = os.environ.get("SWARMAI_ROOT")
+    if env_root:
+        p = Path(env_root)
+        if (p / "backend").is_dir():
+            return p
+
+    # This file: core/ddd_orchestrator.py → core/ → backend/ → swarmai/
+    source_root = Path(__file__).resolve().parents[2]
+    if (source_root / "backend").is_dir():
+        return source_root
+
+    return None
+
 
 class DddCultivationOrchestrator:
     """Orchestrates DDD Cultivation feed channels with fault isolation.
@@ -237,14 +283,34 @@ class DddCultivationOrchestrator:
                     continue
 
                 try:
+                    # Strategy 1: grep commit messages for project name
                     result = subprocess.run(
                         ["git", "log", "--oneline", "--since=14 days ago",
                          "--grep", project_dir.name, "--", "."],
                         cwd=ws_path, capture_output=True, text=True,
                         timeout=_GIT_TIMEOUT,
                     )
-                    if result.stdout.strip():
-                        commit_count = len(result.stdout.strip().splitlines())
+                    commit_count = len(result.stdout.strip().splitlines()) if result.stdout.strip() else 0
+
+                    # Strategy 2: check watched source paths (catches commits
+                    # that don't mention the project name in commit message).
+                    # NOTE: runs against SWARMAI repo, not SwarmWS.
+                    if commit_count == 0 and project_dir.name in _SOURCE_WATCH_PATHS:
+                        swarmai_root = _find_swarmai_root()
+                        if swarmai_root:
+                            for watch_path in _SOURCE_WATCH_PATHS[project_dir.name]:
+                                path_result = subprocess.run(
+                                    ["git", "log", "--oneline", "--since=14 days ago",
+                                     "--", watch_path],
+                                    cwd=str(swarmai_root),
+                                    capture_output=True, text=True,
+                                    timeout=_GIT_TIMEOUT,
+                                )
+                                if path_result.stdout.strip():
+                                    commit_count = len(path_result.stdout.strip().splitlines())
+                                    break  # One matching path is enough
+
+                    if commit_count > 0:
                         days_stale = (datetime.now() - mtime).days
                         findings.append(
                             f"DDD-STALE: {project_dir.name}/{ddd_name} "
