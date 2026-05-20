@@ -38,6 +38,27 @@ or UX — other agents handle those.
 }
 ```
 
+## Mechanism Assumption Attack (Priority Check)
+
+**If the changeset contains MECHANISM declarations** (from BUILD Step 1.7),
+treat each ASSUMPTION as a primary attack surface:
+
+For each declared assumption:
+1. Is this actually how the system works? (Read docs, verify empirically)
+2. Are there edge cases where the assumption breaks? (signals, concurrency, crash)
+3. Does the code handle the case where the assumption is WRONG?
+
+If NO mechanism declarations exist but the code uses system APIs (flock, signals,
+subprocess, file ops), flag as MEDIUM: "No mechanism declarations for system API
+usage — assumptions are implicit and unverified."
+
+**Common false assumptions (attack these first):**
+- "Deleting a locked file releases the lock" (WRONG: flock is inode-based)
+- "Environment variables are always available" (WRONG: daemon context strips them)
+- "File write is atomic" (WRONG: only rename is atomic on most filesystems)
+- "Process exit releases all resources" (WRONG: child processes may orphan)
+- "Path exists check + path use is safe" (WRONG: TOCTOU race)
+
 ## Anti-Rationalization
 
 | Agent Shortcut | Required Response |

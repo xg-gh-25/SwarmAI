@@ -73,6 +73,38 @@ that mock the very API being called wrong.
 
 **Skip when:** all calls target code YOU wrote in the same session (you know the API).
 
+## Step 1.7: Mechanism Declaration (BLOCKING for system API usage)
+
+**When code depends on an OS/system mechanism** (flock, signals, atomicity,
+file ordering, process lifecycle, env var inheritance), declare it explicitly:
+
+```
+MECHANISM: <what system behavior you rely on>
+ASSUMPTION: <what you believe is true about that mechanism>
+VERIFY: <how you confirmed — man page, empirical test, or citation>
+```
+
+**Examples of mechanisms that need declaration:**
+- File locking (flock, fcntl, lockf) — inode vs path semantics
+- Signal delivery (SIGTERM, SIGKILL) — timing, child propagation
+- Environment inheritance — what launchd/systemd/cron pass to children
+- File atomicity — rename vs write, O_CREAT|O_EXCL
+- Process death detection — PID reuse window, waitpid vs kill(0)
+
+**Why this exists:** run_edcfd0e5 (this session) used `lock_path.unlink()` to
+"break" a stale flock. The ASSUMPTION was "delete file = release lock." WRONG:
+flock is bound to the inode/fd, not the path. Deleting the path creates a new
+inode — two processes can then both hold "the lock" on different inodes. A
+one-line declaration would have forced verification BEFORE coding. The adversarial
+reviewer caught it because it was a known pitfall — but a fresh reviewer might not.
+
+**This becomes the adversarial reviewer's attack surface list.** Instead of
+reviewing the entire diff cold, the reviewer can focus on each ASSUMPTION and
+ask "is this actually true?" — turning probabilistic review into targeted verification.
+
+**Skip when:** code only uses standard library functions with well-understood
+behavior (dict, list, pathlib basic ops, string formatting).
+
 ## Step 2: Incremental RED→GREEN Loop
 
 **Follow the Change Spec order** (from PLAN artifact). Process sub-changes
@@ -118,6 +150,45 @@ same broken approach indefinitely (wasting cycles) or checkpoint-exits to the
 user (wasting their time on what might be a simple approach mismatch).
 AutoGPT's "replanning on failure" pattern — but scoped to micro-level (one AC)
 instead of the whole plan.
+
+## Step 2.5: Path Symmetry Check (after each GREEN)
+
+**After implementing any stateful operation** (lock acquire, file write, state
+transition, resource allocation), enumerate ALL code paths that reach the same
+logical end state:
+
+```
+PATH SYMMETRY for: <operation, e.g., "acquire evolution lock">
+  ✓ Happy path (line 1066-1070): flock succeeds → write PID → flush
+  ? Retry path (line 1080-1082): flock succeeds after stale break → ???
+  ? Error recovery path: ???
+  
+  Postconditions that MUST hold on ALL paths:
+  - PID is written to lock file
+  - lock_fd is open and held
+  
+  MISSING: Retry path doesn't write PID ← FIX NOW
+```
+
+**Mechanical process:**
+1. Identify all `if/else/except` branches that reach the same "success" state
+2. List the postconditions the happy path establishes
+3. For each alternate path: does it establish the SAME postconditions?
+4. Missing postcondition on any path = write a test + fix NOW
+
+**Trigger:** Any code that has:
+- `try: ... except: ... # retry` — the retry path often misses setup steps
+- `if stale: break_and_retry` — the retry re-acquires but skips initialization
+- Multiple `return success` points — earlier returns skip later cleanup/setup
+- Fallback paths — the fallback achieves the goal differently but may skip side effects
+
+**Why this exists:** run_edcfd0e5 had two `flock_exclusive_nb()` calls reaching the
+same "lock acquired" state. The first wrote the PID. The second (retry after stale
+lock break) didn't. PE review caught it — TDD didn't because the test only exercised
+the stale-break path's existence check, not its postconditions.
+
+**This is mechanical, not judgment.** Count paths. List postconditions. Check each.
+It takes 30 seconds and catches the #1 class of "works on happy path, breaks on retry."
 
 ## Step 3: VERIFY -- Targeted tests, zero regressions
 
