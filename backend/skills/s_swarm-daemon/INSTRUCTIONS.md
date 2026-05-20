@@ -203,7 +203,9 @@ Use when binary already exists (e.g., after s_swarm-build Stage 2-3).
 
 ```bash
 SIDECAR="/Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin"
-DAEMON_BIN="${HOME}/.swarm-ai/daemon/python-backend"
+DAEMON_DIR="${HOME}/.swarm-ai/daemon"
+GUI_TARGET="gui/$(id -u)/com.swarmai.backend"
+PLIST_DST="${HOME}/Library/LaunchAgents/com.swarmai.backend.plist"
 
 # Check source exists (onedir = directory, not single file)
 if [ ! -d "$SIDECAR" ]; then
@@ -211,31 +213,72 @@ if [ ! -d "$SIDECAR" ]; then
   exit 1
 fi
 
-# Kill BEFORE deploy to avoid onedir zlib corruption (rsync over running binary)
-launchctl kill SIGTERM gui/$(id -u)/com.swarmai.backend 2>/dev/null || true
-for i in $(seq 1 15); do
-  nc -z 127.0.0.1 18321 2>/dev/null || break
-  sleep 1
-done
+# Step 1: SIGKILL (instant death — SSE streams block SIGTERM indefinitely)
+launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
+sleep 1
 
-# Deploy via rsync (fast incremental, handles onedir _internal/)
-rsync -a --delete "$SIDECAR/" "${HOME}/.swarm-ai/daemon/"
-chmod +x "$DAEMON_BIN"
+# Step 2: bootout (deregister — disables KeepAlive so nothing restarts during rsync)
+launchctl bootout "$GUI_TARGET" 2>/dev/null || true
+sleep 1
 
-# Version marker
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai
-APP_VER=$(grep -m1 '"version"' desktop/src-tauri/tauri.conf.json | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
-echo "${APP_VER} $(git rev-parse --short HEAD) $(date '+%Y-%m-%d %H:%M:%S')" > "${HOME}/.swarm-ai/daemon/.version"
-
-# KeepAlive auto-restarts with new binary — wait for healthy
-for i in $(seq 1 45); do
-  HEALTH=$(curl -sf http://127.0.0.1:18321/health 2>/dev/null)
-  if echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='healthy'" 2>/dev/null; then
-    echo "$HEALTH" | python3 -m json.tool
-    break
+# Step 3: Confirm port is free
+if nc -z 127.0.0.1 18321 2>/dev/null; then
+  echo "WARN: Port still held after SIGKILL+bootout. Waiting 5s..."
+  sleep 5
+  if nc -z 127.0.0.1 18321 2>/dev/null; then
+    echo "FAIL: Port 18321 still held. Orphan process. Debug manually."
+    exit 1
   fi
+fi
+
+# Step 4: Deploy (safe — no live process, no KeepAlive)
+rsync -a --delete "$SIDECAR/" "$DAEMON_DIR/"
+chmod +x "$DAEMON_DIR/python-backend"
+
+# Step 5: Version marker (use VERSION file — single source of truth)
+cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai
+APP_VER=$(cat VERSION)
+echo "${APP_VER} $(git rev-parse --short HEAD) $(date '+%Y-%m-%d %H:%M:%S')" > "$DAEMON_DIR/.version"
+echo "Deployed: $(cat $DAEMON_DIR/.version)"
+
+# Step 6: Verify plist exists (deploy assumes plist already installed by s_swarm-build)
+if [ ! -f "$PLIST_DST" ]; then
+  echo "FAIL: No plist at $PLIST_DST. Run s_swarm-build or s_swarm-release first."
+  exit 1
+fi
+
+# Step 7: Bootstrap with retry (re-register + start new binary)
+BOOTSTRAP_OK=0
+for attempt in 1 2 3; do
+  launchctl bootstrap "gui/$(id -u)" "$PLIST_DST" 2>/dev/null && { BOOTSTRAP_OK=1; break; }
+  echo "Bootstrap attempt $attempt failed, retrying in 2s..."
   sleep 2
 done
+
+if [ "$BOOTSTRAP_OK" -eq 0 ]; then
+  echo "FAIL: bootstrap failed 3x. Service not registered."
+  echo "Manual fix: launchctl bootstrap gui/$(id -u) $PLIST_DST"
+  exit 1
+fi
+
+# Step 8: Health check (hard 40s timeout)
+echo "Waiting for daemon startup (max 40s)..."
+DEPLOY_HEALTHY=0
+for i in $(seq 1 20); do
+  HEALTH=$(curl -sf http://127.0.0.1:18321/health 2>/dev/null) && {
+    DEPLOY_HEALTHY=1
+    echo "=== Daemon HEALTHY after $((i*2))s ==="
+    echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'  Status: {d[\"status\"]}\n  Version: {d.get(\"version\",\"?\")}')"
+    break
+  }
+  sleep 2
+done
+
+if [ "$DEPLOY_HEALTHY" -eq 0 ]; then
+  echo "FAIL: Daemon not healthy after 40s."
+  tail -20 ~/.swarm-ai/logs/daemon.log 2>/dev/null
+  exit 1
+fi
 ```
 
 **Report:**
@@ -329,7 +372,11 @@ DAEMON HEALTH
 | "Operation not permitted" | launchd I/O error | Wait 5s, retry. If persistent: `launchctl bootout` + `bootstrap` |
 | Daemon dead after dev.sh build | bootout killed registration | `start` (re-bootstraps from plist) |
 
-**Critical rule:** Use `launchctl kill SIGTERM` for restart (keeps service registered). Use `launchctl bootout` ONLY for permanent stop. Never use `lsof` for port checks — use `nc -z 127.0.0.1 18321`.
+**Critical rules:**
+- **Restart:** `SIGTERM` (service stays registered, KeepAlive auto-restarts). Fallback to SIGKILL after 5s if SSE blocks.
+- **Deploy:** `SIGKILL` + `bootout` + rsync + `bootstrap` (must disable KeepAlive during rsync to prevent stale binary restart).
+- **Stop (permanent):** `bootout` only.
+- **Port checks:** Always `nc -z 127.0.0.1 18321`. Never `lsof`.
 
 ---
 
