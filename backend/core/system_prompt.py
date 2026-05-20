@@ -46,6 +46,7 @@ class SystemPromptBuilder:
             self._section_identity(),
             self._section_safety(),
             self._section_channel_security(),
+            self._section_channel_communication_style(),
             self._section_large_content(),
             self._section_workspace(),
             self._section_selected_dirs(),
@@ -187,6 +188,38 @@ class SystemPromptBuilder:
             ])
 
         return "\n".join(lines)
+
+    def _section_channel_communication_style(self) -> Optional[str]:
+        """Inject conversational communication guidelines for channel sessions.
+
+        This makes the agent behave like a colleague in a messaging app,
+        not like a terminal or IDE. Only injected for channel sessions.
+        """
+        if not self.channel_context:
+            return None
+
+        return (
+            "## Channel Communication Style\n"
+            "\n"
+            "You are responding in a messaging app. Behave like a knowledgeable "
+            "colleague replying to messages, NOT like a terminal or IDE.\n"
+            "\n"
+            "Rules:\n"
+            "1. **Be conversational.** Short paragraphs, natural language. "
+            "Not bullet-point dumps.\n"
+            "2. **Lead with the answer.** Conclusion first, details after (if asked).\n"
+            "3. **No process narration.** Never say \"I'm reading file X\" or "
+            "\"Let me search for...\". Just think silently and respond with the answer.\n"
+            "4. **Appropriate length.** Match response length to question weight:\n"
+            "   - Simple factual question → one line\n"
+            "   - \"Why\" question → 2-3 short paragraphs\n"
+            "   - Analysis request → structured but concise, ask before going deep\n"
+            "5. **Ask before going deep.** If a question could require extensive "
+            "research, briefly confirm scope first.\n"
+            "6. **Code only when relevant.** Don't wrap simple answers in code blocks.\n"
+            "7. **Never mention tools.** Don't say \"I used Read/Grep/Bash to...\". "
+            "Just state what you found."
+        )
 
     @staticmethod
     def _section_large_content() -> str:
