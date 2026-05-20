@@ -128,21 +128,21 @@ class TestMessageQueue:
 # Heartbeat tests
 # ===========================================================================
 
-class MockSender:
-    """Mock adapter for heartbeat testing."""
+class MockHeartbeatFns:
+    """Mock callables for heartbeat testing."""
 
     def __init__(self):
         self.messages: list[tuple[str, str]] = []  # (action, text)
         self.deleted: list[str] = []
 
-    async def send_message_raw(self, channel, text, thread_ts=None):
+    async def post(self, channel: str, text: str):
         self.messages.append(("post", text))
         return "ack_ts_123"
 
-    async def update_message_raw(self, channel, ts, text):
+    async def update(self, channel: str, ts: str, text: str):
         self.messages.append(("update", text))
 
-    async def delete_message_raw(self, channel, ts):
+    async def delete(self, channel: str, ts: str):
         self.deleted.append(ts)
 
 
@@ -151,29 +151,38 @@ class TestHeartbeatManager:
 
     @pytest.mark.asyncio
     async def test_post_ack(self):
-        sender = MockSender()
-        hb = HeartbeatManager(sender=sender, channel="C123")
+        fns = MockHeartbeatFns()
+        hb = HeartbeatManager(
+            post_fn=fns.post, update_fn=fns.update,
+            delete_fn=fns.delete, channel="C123",
+        )
         ts = await hb.post_ack("看一下")
         assert ts == "ack_ts_123"
         assert hb.ack_ts == "ack_ts_123"
-        assert sender.messages[0] == ("post", "看一下")
+        assert fns.messages[0] == ("post", "看一下")
 
     @pytest.mark.asyncio
     async def test_delete_ack(self):
-        sender = MockSender()
-        hb = HeartbeatManager(sender=sender, channel="C123")
+        fns = MockHeartbeatFns()
+        hb = HeartbeatManager(
+            post_fn=fns.post, update_fn=fns.update,
+            delete_fn=fns.delete, channel="C123",
+        )
         await hb.post_ack("看一下")
         await hb.delete_ack()
-        assert "ack_ts_123" in sender.deleted
+        assert "ack_ts_123" in fns.deleted
         assert hb.ack_ts is None
 
     @pytest.mark.asyncio
     async def test_update_final(self):
-        sender = MockSender()
-        hb = HeartbeatManager(sender=sender, channel="C123")
+        fns = MockHeartbeatFns()
+        hb = HeartbeatManager(
+            post_fn=fns.post, update_fn=fns.update,
+            delete_fn=fns.delete, channel="C123",
+        )
         await hb.post_ack("看一下")
         await hb.update_final("好的，停了。")
-        assert ("update", "好的，停了。") in sender.messages
+        assert ("update", "好的，停了。") in fns.messages
 
 
 class TestComplexityEstimation:

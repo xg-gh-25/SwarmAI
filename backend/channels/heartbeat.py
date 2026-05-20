@@ -15,35 +15,23 @@ import logging
 import random
 import time
 from dataclasses import dataclass, field
-from typing import Optional, Protocol
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Adapter protocol (duck-typed — works with any adapter that has these methods)
+# Callable type aliases for adapter operations
 # ---------------------------------------------------------------------------
 
-class MessageSender(Protocol):
-    """Minimal interface for sending/updating/deleting messages."""
+# These are passed at construction so HeartbeatManager doesn't depend on
+# any specific adapter interface. The gateway constructs lambdas/partials
+# that match the adapter's actual methods.
+from typing import Callable, Awaitable
 
-    async def send_message_raw(
-        self, channel: str, text: str, thread_ts: Optional[str] = None,
-    ) -> Optional[str]:
-        """Post a message, return its timestamp/ID."""
-        ...
-
-    async def update_message_raw(
-        self, channel: str, ts: str, text: str,
-    ) -> None:
-        """Update an existing message in-place."""
-        ...
-
-    async def delete_message_raw(
-        self, channel: str, ts: str,
-    ) -> None:
-        """Delete a message."""
-        ...
+PostFn = Callable[[str, str], Awaitable[Optional[str]]]  # (channel, text) -> ts
+UpdateFn = Callable[[str, str, str], Awaitable[None]]    # (channel, ts, text) -> None
+DeleteFn = Callable[[str, str], Awaitable[None]]         # (channel, ts) -> None
 
 
 # ---------------------------------------------------------------------------
@@ -128,15 +116,26 @@ def pick_ack(complexity: str) -> str:
 class HeartbeatManager:
     """Manages the ack message lifecycle: post → heartbeat updates → cleanup.
 
+    Takes callable functions for post/update/delete so it doesn't depend
+    on any specific adapter interface. The gateway passes adapter-specific
+    lambdas at construction time.
+
     Usage:
-        hb = HeartbeatManager(sender=adapter, channel="C123", thread_ts="...")
-        ack_ts = await hb.post_ack("看一下")
+        hb = HeartbeatManager(
+            post_fn=lambda ch, txt: adapter.post_raw(ch, txt),
+            update_fn=lambda ch, ts, txt: adapter.update_raw(ch, ts, txt),
+            delete_fn=lambda ch, ts: adapter.delete_raw(ch, ts),
+            channel="C123",
+        )
+        await hb.post_ack("看一下")
         task = asyncio.create_task(hb.run())
         ...
         task.cancel()
-        await hb.delete_ack()  # or hb.update_final("好的，停了。")
+        await hb.delete_ack()
     """
-    sender: MessageSender
+    post_fn: PostFn
+    update_fn: UpdateFn
+    delete_fn: DeleteFn
     channel: str
     thread_ts: Optional[str] = None
     ack_ts: Optional[str] = None
@@ -146,9 +145,7 @@ class HeartbeatManager:
     async def post_ack(self, text: str) -> Optional[str]:
         """Post the initial ack message. Returns its timestamp."""
         try:
-            self.ack_ts = await self.sender.send_message_raw(
-                self.channel, text, self.thread_ts,
-            )
+            self.ack_ts = await self.post_fn(self.channel, text)
             self._start_time = time.monotonic()
             return self.ack_ts
         except Exception:
@@ -175,9 +172,7 @@ class HeartbeatManager:
             if elapsed >= jittered:
                 text = random.choice(messages)
                 try:
-                    await self.sender.update_message_raw(
-                        self.channel, self.ack_ts, text,
-                    )
+                    await self.update_fn(self.channel, self.ack_ts, text)
                 except Exception:
                     logger.debug("Failed to update heartbeat", exc_info=True)
                 self._phase_idx += 1
@@ -187,7 +182,7 @@ class HeartbeatManager:
         if not self.ack_ts:
             return
         try:
-            await self.sender.delete_message_raw(self.channel, self.ack_ts)
+            await self.delete_fn(self.channel, self.ack_ts)
         except Exception:
             logger.debug("Failed to delete ack message", exc_info=True)
         self.ack_ts = None
@@ -197,8 +192,6 @@ class HeartbeatManager:
         if not self.ack_ts:
             return
         try:
-            await self.sender.update_message_raw(
-                self.channel, self.ack_ts, text,
-            )
+            await self.update_fn(self.channel, self.ack_ts, text)
         except Exception:
             logger.debug("Failed to update ack to final", exc_info=True)
