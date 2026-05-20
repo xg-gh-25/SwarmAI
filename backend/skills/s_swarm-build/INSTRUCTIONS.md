@@ -34,14 +34,17 @@ Therefore:
 - Do NOT issue any further Bash commands, tool calls, or text after the curl.
 - Health verification happens on cold resume (breadcrumb-driven).
 
-### Foreground Execution
+### Detached Build (Session-Death Resilient)
 
-Run `build-backend.sh` in foreground with `timeout: 600000` (10 min).
-**Never** use `run_in_background` — PyInstaller builds can be OOM-killed silently,
-and background task notifications are unreliable for killed processes.
+Build takes 2-5 minutes. Claude sessions can crash/evict during this time, killing
+all child processes (exit 137 = SIGKILL from parent death, NOT OOM).
 
-**Never** pipe through `| tail` or `| head` — causes stdout buffering that makes
-the command appear hung for the entire 2-5 min build duration.
+**Solution:** Launch build detached from session process tree via `nohup`, poll log
+file for completion. If session dies mid-build, the build continues. On resume,
+check the log file.
+
+**Never** pipe through `| tail` or `| head` — causes stdout buffering.
+**Never** use `run_in_background` — its notifications are unreliable for long tasks.
 
 ---
 
@@ -88,14 +91,45 @@ Stage 1 PREFLIGHT: PASS
 ```
 SIGNAL: build-backend.sh exits 0, verify checks pass
 CHECK:  Exit code + "checks passed" in stdout
-FAIL:   Non-zero exit. Exit 137 = OOM kill. Any other = build error.
+FAIL:   Non-zero exit. Exit 137 = process killed (session death or OOM).
 ```
+
+### Step 1: Launch detached build
 
 ```bash
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop/scripts && bash build-backend.sh
+BUILD_LOG="/tmp/swarm-build-$(date +%s).log"
+cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop/scripts && \
+  nohup bash build-backend.sh > "$BUILD_LOG" 2>&1 &
+BUILD_PID=$!
+echo "Build PID: $BUILD_PID, Log: $BUILD_LOG"
+sleep 3
+kill -0 $BUILD_PID 2>/dev/null && echo "Build running..." || { echo "Build died immediately"; tail -20 "$BUILD_LOG"; exit 1; }
 ```
 
-Use `timeout: 600000` (10 min). Foreground. No pipes.
+### Step 2: Poll for completion (every 30s)
+
+```bash
+# Repeat this block until build finishes:
+if kill -0 $BUILD_PID 2>/dev/null; then
+  echo "Still running... $(wc -l < "$BUILD_LOG") lines"
+  tail -3 "$BUILD_LOG"
+else
+  wait $BUILD_PID 2>/dev/null
+  EXIT_CODE=$?
+  echo "Build finished with exit $EXIT_CODE"
+  tail -20 "$BUILD_LOG"
+fi
+```
+
+Use `timeout: 45000` (45s) per poll. Poll until process ends (~5-8 iterations).
+Do NOT use `timeout: 600000` on a single foreground command — session death kills it.
+
+### Step 3: Verify exit code
+
+After build completes, check:
+```bash
+grep -q "checks passed" "$BUILD_LOG" && echo "PASS" || echo "FAIL"
+```
 
 **Report:**
 ```
@@ -106,8 +140,8 @@ Stage 2 BUILD: PASS
 ```
 
 **On failure:**
-- Exit 137: "OOM killed by macOS. Close memory-heavy apps, retry."
-- Other: report last 20 lines of output, STOP.
+- Exit 137 (in log): Session death killed it before detach worked, OR true OOM. Retry.
+- Other: report last 20 lines of build log, STOP.
 
 ---
 
@@ -288,7 +322,7 @@ BUILD COMPLETE ✅
 |-------|----------|---------|----------------|
 | 0 Guard | instant | Yes (abort) | None |
 | 1 Preflight | 5s | Warn only | None |
-| 2 Build | 2-5 min | Yes | None (foreground wait) |
+| 2 Build | 2-5 min | Poll (30s intervals) | Detached — survives session death |
 | 3 Verify | 10s | Yes | None |
 | 4 Deploy | 5s | **Session dies** | Last action in session |
 | 5 Health | 5-40s | Yes | First action on resume |
@@ -299,7 +333,9 @@ BUILD COMPLETE ✅
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| Exit 137 | macOS OOM kill during PyInstaller | Close apps, retry |
+| Exit 137 (foreground) | Session crash/evict killed child process | Use detached build (nohup). This is the #1 failure mode. |
+| Exit 137 (detached) | True macOS OOM kill | Close memory-heavy apps (Chrome, Teams), retry |
+| Build PID gone + no log | Session died before nohup launched | Retry — the 3s sleep check catches this |
 | 403 on upgrade | Not in daemon mode | Use manual fallback |
 | 409 on upgrade | Prior upgrade still in progress | Wait 60s or restart daemon manually |
 | Health timeout | Binary crashes on import | Check stderr log, fix hiddenimports |

@@ -232,8 +232,28 @@ hiddenimports += collect_submodules('anyio')
 hiddenimports += collect_submodules('slowapi')
 hiddenimports += collect_submodules('limits')  # slowapi dependency — imports redis/memcached at class level
 hiddenimports += collect_submodules('claude_agent_sdk')
+# boto3/botocore: only include the services we actually use.
+# collect_submodules('botocore') pulls ALL 424 AWS services into PyInstaller's
+# Analysis graph, causing 4-6GB peak RAM usage → OOM kill (exit 137) on 36GB
+# machines with other processes running. We only use 6 services at runtime.
 hiddenimports += collect_submodules('boto3')
-hiddenimports += collect_submodules('botocore')
+hiddenimports += [
+    'botocore', 'botocore.args', 'botocore.auth', 'botocore.awsrequest',
+    'botocore.client', 'botocore.compress', 'botocore.config', 'botocore.configloader',
+    'botocore.configprovider', 'botocore.credentials', 'botocore.discovery',
+    'botocore.endpoint', 'botocore.endpoint_provider', 'botocore.errorfactory',
+    'botocore.eventstream', 'botocore.exceptions', 'botocore.handlers',
+    'botocore.hooks', 'botocore.httpchecksum', 'botocore.httpsession',
+    'botocore.loaders', 'botocore.model', 'botocore.monitoring',
+    'botocore.paginate', 'botocore.parsers', 'botocore.regions',
+    'botocore.response', 'botocore.retries', 'botocore.retries.adaptive',
+    'botocore.retries.base', 'botocore.retries.bucket', 'botocore.retries.quota',
+    'botocore.retries.special', 'botocore.retries.standard', 'botocore.retries.throttling',
+    'botocore.retryhandler', 'botocore.serialize', 'botocore.session',
+    'botocore.signers', 'botocore.stub', 'botocore.tokens',
+    'botocore.translate', 'botocore.useragent', 'botocore.utils',
+    'botocore.validate', 'botocore.waiter',
+]
 hiddenimports += ['psutil']
 hiddenimports += collect_submodules('slack_bolt')
 hiddenimports += collect_submodules('slack_sdk')
@@ -250,6 +270,10 @@ datas += collect_data_files('certifi')
 datas += collect_data_files('sqlite_vec')  # vec0.dylib native extension for vector search
 datas += collect_data_files('awscrt')  # AWS CRT native libraries (.dylib/.so)
 datas += collect_data_files('limits')  # Lua scripts for redis rate limiting (loaded at import time)
+# botocore: include ALL data files (JSON service models loaded at runtime via botocore.loaders).
+# We only list botocore Python modules above (not collect_submodules) to save ~3GB build RAM,
+# but the data/ directory with service JSON is needed at runtime for any boto3.client() call.
+datas += collect_data_files('botocore')
 # Include built-in context files and skills for agent workspace initialization
 datas += [('context', 'context')]
 # Include skills but EXCLUDE node_modules — Remotion's alone is 609MB/15K+ files
