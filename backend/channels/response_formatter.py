@@ -94,6 +94,7 @@ class HumanResponseFormatter:
 
         for sp in split_points:
             chunk = text[current_start:sp].strip()
+            current_start = sp  # Always advance to prevent duplication
             if not chunk:
                 continue
 
@@ -102,7 +103,6 @@ class HumanResponseFormatter:
                 segments[-1] += "\n\n" + chunk
             else:
                 segments.append(chunk)
-            current_start = sp
 
         # Don't forget the tail
         tail = text[current_start:].strip()

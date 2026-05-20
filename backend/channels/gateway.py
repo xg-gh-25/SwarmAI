@@ -1534,7 +1534,7 @@ class ChannelGateway:
                 logger.exception("Failed to send final streaming update; falling back")
                 ctx.streaming = False
 
-        if not ctx.streaming or not ctx.streaming_msg_id:
+        if not human_mode and (not ctx.streaming or not ctx.streaming_msg_id):
             outbound = OutboundMessage(
                 channel_id=channel_id,
                 external_chat_id=msg.external_chat_id,
