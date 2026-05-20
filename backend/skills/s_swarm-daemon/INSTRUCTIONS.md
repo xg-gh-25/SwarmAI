@@ -29,10 +29,10 @@ Check:
 ```bash
 DAEMON_LABEL="com.swarmai.backend"
 DAEMON_PORT=18321
-DAEMON_BINARY="${HOME}/.swarm-ai/daemon/python-backend"
-PLIST_PATH="${HOME}/Library/LaunchAgents/com.swarmai.backend.plist"
+DAEMON_DIR="${HOME}/.swarm-ai/daemon"
+GUI_TARGET="gui/$(id -u)/com.swarmai.backend"
+PLIST_DST="${HOME}/Library/LaunchAgents/com.swarmai.backend.plist"
 DAEMON_LOG="${HOME}/.swarm-ai/logs/daemon.log"
-VERSION_FILE="${HOME}/.swarm-ai/daemon/.version"
 ```
 
 ---
@@ -55,7 +55,7 @@ launchctl print gui/$(id -u)/com.swarmai.backend 2>/dev/null | grep -E "state|pi
 cat ~/.swarm-ai/daemon/.version 2>/dev/null || echo "No version file"
 
 # 3. Is it healthy?
-curl -s http://localhost:18321/health 2>/dev/null || echo "Unreachable"
+curl -s http://127.0.0.1:18321/health 2>/dev/null || echo "Unreachable"
 
 # 4. Binary age
 ls -la ~/.swarm-ai/daemon/python-backend | awk '{print $6, $7, $8}'
@@ -127,15 +127,23 @@ fi
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.swarmai.backend.plist
 
 # Wait for healthy (max 30s)
+START_HEALTHY=0
 for i in $(seq 1 15); do
-  HEALTH=$(curl -s http://localhost:18321/health 2>/dev/null)
+  HEALTH=$(curl -sf http://127.0.0.1:18321/health 2>/dev/null)
   if echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d['status']=='healthy'" 2>/dev/null; then
+    START_HEALTHY=1
     echo "Daemon healthy"
     echo "$HEALTH" | python3 -c "import sys,json; print(json.dumps(json.load(sys.stdin), indent=2))"
     break
   fi
   sleep 2
 done
+
+if [ "$START_HEALTHY" -eq 0 ]; then
+  echo "FAIL: Daemon not healthy after 30s."
+  tail -20 ~/.swarm-ai/logs/daemon.log 2>/dev/null
+  exit 1
+fi
 ```
 
 **Report:**
@@ -328,7 +336,7 @@ Deep health check: liveness + semantic correctness (version match).
 
 ```bash
 # 1. Liveness
-HEALTH=$(curl -s http://localhost:18321/health)
+HEALTH=$(curl -s http://127.0.0.1:18321/health)
 echo "Health response: $HEALTH"
 
 # 2. Version match (deployed vs running)
