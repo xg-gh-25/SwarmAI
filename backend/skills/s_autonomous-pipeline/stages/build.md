@@ -172,6 +172,61 @@ code. The function was never registered in `hook_builder.py`. This check catches
 **Skip when:** changeset is pure refactoring (existing callers unchanged) or
 changeset modifies only private/internal functions (leading underscore).
 
+## Step 3.6: INTERFACE SEAM VERIFICATION (for cross-module wiring)
+
+**After caller verification, before SMOKE.** Only when changeset introduces
+a new interface boundary (Protocol, ABC, duck-typed contract, callback/callable).
+
+For each new interface/protocol/callback pattern in the changeset:
+
+1. **Identify the contract:** What methods/signatures does the consumer expect?
+2. **Identify the satisfier:** What concrete class/function will be passed at runtime?
+3. **Verify method-by-method:** Open the satisfier's source file. For EACH method
+   the contract expects, verify it EXISTS with a COMPATIBLE signature.
+
+```bash
+# Example: HeartbeatManager expects sender.send_message_raw(channel, text)
+# Satisfier at runtime: SlackChannelAdapter
+grep -n "def send_message_raw" backend/channels/adapters/slack.py
+# Result: NOT FOUND → BLOCK — AttributeError guaranteed at runtime
+```
+
+**For callable/lambda parameters:**
+When code passes `lambda: adapter.some_method(...)` as a callback:
+- Read the lambda body
+- Verify `adapter.some_method` EXISTS on the real adapter class
+- Verify the arguments the lambda passes match the method's signature
+
+**For Protocol classes (typing.Protocol):**
+```python
+# Verify at build time, not runtime:
+from typing import runtime_checkable
+assert isinstance(concrete_instance, TheProtocol)
+# Or just grep for each method name in the satisfier's file
+```
+
+| Result | Action |
+|--------|--------|
+| Method missing on satisfier | **BLOCK** — fix now. Will crash at runtime. |
+| Method exists but signature differs | **BLOCK** — e.g., expects `(self, channel, text)` but real method is `(self, external_chat_id, text, *, is_final)` |
+| Method exists, signature compatible | ✓ Pass |
+
+**Also verify parameter semantics (not just existence):**
+If your contract says `post(channel, text)` → posts `text` to `channel`, but
+the real method ignores `text` and always posts a hardcoded string — that's a
+semantic mismatch. Read the implementation body, not just the signature.
+
+**Why this exists:** PE review (2026-05-20) found HeartbeatManager defined a
+Protocol with `send_message_raw`, `update_message_raw`, `delete_message_raw`.
+The Slack adapter has NONE of these methods. 24 unit tests passed (mocks).
+Adversarial review said "Protocol looks fine." Would have crashed with
+AttributeError on first real Slack message. Same review found `_post_ack`
+called `send_typing_indicator` which ignores the `text` parameter — method
+exists but semantic contract broken (always posts "Thinking..." not the ack).
+
+**Skip when:** changeset only modifies internal implementation within one
+module (no cross-module boundaries changed).
+
 ## Step 4: SMOKE -- exercise new code paths (catch runtime crashes)
 
 14. For each modified file that has new branches (if/else, try/except,

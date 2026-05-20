@@ -99,6 +99,50 @@ looked valid, npm blocking EC2 startup, auth_password in list response, no
 permission pre-check. All invisible to automated tests because tests run in
 the developer's environment. (2026-04-29 + 2026-05-03)
 
+### User Path Latency Trace (P6.5)
+
+**After Fresh User Audit, before Completion Audit. Applies to ALL profiles
+(full, bugfix, trivial) when the changeset touches a user-facing path.**
+
+Pick 2-3 representative user scenarios. For each, walk the **exact runtime
+code path** from user action to visible response, asking at every step:
+
+1. **What does the user SEE at this moment?** (Loading? Nothing? Stale content?)
+2. **What does the user WAIT for?** (Network? Sleep? Lock? Background task?)
+3. **Is there unnecessary latency?** (Sleep with no data dependency? Sequential
+   calls that could be parallel? Lock held across I/O?)
+4. **Is there invisible silent failure?** (Method called but return value ignored?
+   Parameter passed but implementation ignores it? Fallback that looks like success?)
+
+**Format each trace as a numbered path:**
+```
+Scenario: User sends "hi" in Slack DM
+1. Slack Socket Mode → adapter._handle_event() → gateway.handle_inbound()
+2. human_mode=True → HeartbeatManager constructed
+3. heartbeat_mgr.post_ack("让我查查") → adapter.send_message() → user sees ack ✓
+4. queue.processing = True → SDK call starts
+5. SDK returns in 3s → heartbeat cancelled → ack deleted → response posted
+Total user-visible latency: ~4s ← ACCEPTABLE for "hi"
+```
+
+**Red flags to look for:**
+- `asyncio.sleep(N)` where N > 0 on a user-facing path without clear justification
+- Method parameter ignored by callee (e.g., `text` passed but callee uses hardcoded string)
+- `try/except: pass` on a path that determines what user sees
+- Redundant API calls (post → immediately update → post again = flicker)
+
+**If any red flag found:** Fix it NOW in this delivery iteration. Do NOT log
+it as "known limitation" or "future work" if the fix is < 30 minutes.
+
+**Why this exists:** PE review (2026-05-20, Slack Human Experience) found 2
+bugs that passed TDD (24 tests green), adversarial review (11 findings handled),
+and CI (green): (1) `_post_ack` called `send_typing_indicator` which hardcodes
+"Thinking..." — ignoring the human-like ack text parameter. Tests used mocks
+that accept any call. (2) `asyncio.sleep(2.0)` added 2s latency to EVERY Slack
+message including instant answers like "hi". Both are only visible by walking
+the actual user path through real production code, not by reading tests or
+reviewing isolated files.
+
 ### Completion Audit
 
 **After the push-ready gate, before generating the report,** run the Completion
