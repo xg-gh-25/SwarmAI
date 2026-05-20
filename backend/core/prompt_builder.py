@@ -1208,11 +1208,12 @@ class PromptBuilder:
         # that cause truncation.  Agent config default is 100 but the SDK
         # default (None = unlimited) is fine for chat tabs where the user
         # can interrupt.  Channel sessions run unattended — a runaway loop
-        # burns cost and hits output limits.  20 turns is enough for any
-        # single Slack question (most complete in 1-3 turns).
+        # burns cost and hits output limits.  15 turns is the safety cap;
+        # most channel questions complete in 1-5 turns.  Reduced from 30
+        # after 905K token blowup incident (15 turns consumed 830K).
         max_turns = agent_config.get("max_turns") or None
-        if channel_context and (max_turns is None or max_turns > 30):
-            max_turns = 30
+        if channel_context and (max_turns is None or max_turns > 15):
+            max_turns = 15
 
         return ClaudeAgentOptions(
             system_prompt=system_prompt_config,
