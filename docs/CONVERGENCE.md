@@ -141,3 +141,4 @@ _Last updated: 2026-05-16. Updated on meaningful milestones, not on schedule._
 | 2026-05-17 | v1.14.0 | 23 | 33 | 3932+ | auto (release) |
 | 2026-05-17 | v1.14.1 | 21 | 33 | 3988+ | auto (release) |
 | 2026-05-19 | v1.15.0 | 24 | 33 | 4087+ | auto (release) |
+| 2026-05-20 | v1.16.0 | 26 | 33 | 4161+ | auto (release) |
