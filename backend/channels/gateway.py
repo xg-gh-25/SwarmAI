@@ -46,6 +46,16 @@ from channels.streaming import (
     set_reaction,
     set_reaction_final,
 )
+from channels.heartbeat import (
+    HeartbeatManager,
+    estimate_complexity,
+    pick_ack,
+)
+from channels.message_queue import (
+    ChannelMessageQueue,
+    QueuedMessage,
+)
+from channels.response_formatter import HumanResponseFormatter
 from core import session_registry
 from core.session_manager import session_manager
 from core.initialization_manager import initialization_manager
@@ -1106,17 +1116,41 @@ class ChannelGateway:
             adapter is not None
             and adapter.supports_native_streaming
         )
+
+        # ── Human Mode: Slack channels suppress all streaming/emoji ──
+        # Instead of streaming tokens + tool emojis, we collect the
+        # complete response and post it as a single message (like a
+        # colleague replying on WeChat, not a terminal).
+        human_mode = channel.get("channel_type") == "slack"
+
         ctx = StreamContext(
             adapter=adapter,
             external_chat_id=msg.external_chat_id,
             inbound_ts=msg.external_message_id,
             sender_user_id=msg.external_sender_id,
-            streaming=adapter is not None and adapter.supports_streaming,
+            # In human mode, disable ALL streaming — no reactions, no
+            # progressive updates, no tool emojis.  The event loop still
+            # runs but streaming guards (if ctx.streaming) skip everything.
+            streaming=False if human_mode else (adapter is not None and adapter.supports_streaming),
             stream_thread_ts=msg.external_thread_id or msg.external_message_id,
-            native_streaming=use_native,
+            native_streaming=False if human_mode else use_native,
         )
 
-        # Ack immediately — user sees 👀 before any processing
+        # ── Human Mode: post ack message via heartbeat ──
+        heartbeat_task: Optional[asyncio.Task] = None
+        heartbeat_mgr: Optional[HeartbeatManager] = None
+        if human_mode and adapter:
+            complexity = estimate_complexity(final_text)
+            ack_text = pick_ack(complexity)
+            heartbeat_mgr = HeartbeatManager(
+                sender=adapter,
+                channel=msg.external_chat_id,
+                thread_ts=msg.external_thread_id,
+            )
+            await heartbeat_mgr.post_ack(ack_text)
+            heartbeat_task = asyncio.create_task(heartbeat_mgr.run())
+
+        # Ack immediately — user sees 👀 before any processing (legacy mode only)
         if ctx.streaming:
             set_reaction(ctx, EMOJI_ACK, immediate=True)
 
@@ -1416,6 +1450,13 @@ class ChannelGateway:
             error_occurred = True
         finally:
             await cleanup_stream(ctx)
+            # Cancel heartbeat if running
+            if heartbeat_task and not heartbeat_task.done():
+                heartbeat_task.cancel()
+                try:
+                    await heartbeat_task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
         if ctx.stream_flushed:
             reply_text = ctx.stream_flushed
@@ -1431,7 +1472,36 @@ class ChannelGateway:
         # 6. Send outbound reply --------------------------------------------------
         external_message_id: Optional[str] = None
 
-        if ctx.streaming and ctx.streaming_msg_id and ctx.native_streaming:
+        # ── Human Mode: delete ack, post complete response as segments ──
+        if human_mode and adapter and heartbeat_mgr:
+            # Delete the ack message
+            await heartbeat_mgr.delete_ack()
+
+            # Format and post response as human-like segments
+            formatter = HumanResponseFormatter()
+            segments = formatter.format(reply_text)
+            for i, segment in enumerate(segments):
+                outbound = OutboundMessage(
+                    channel_id=channel_id,
+                    external_chat_id=msg.external_chat_id,
+                    external_thread_id=msg.external_thread_id,
+                    reply_to_message_id=msg.external_message_id if i == 0 else None,
+                    text=segment,
+                )
+                try:
+                    seg_id = await adapter.send_message(outbound)
+                    if i == 0:
+                        external_message_id = seg_id
+                except Exception:
+                    logger.exception(
+                        "Failed to send human-mode segment %d on channel %s",
+                        i, channel_id,
+                    )
+                # Human-like pacing between segments
+                if i < len(segments) - 1:
+                    await asyncio.sleep(1.0)
+
+        elif ctx.streaming and ctx.streaming_msg_id and ctx.native_streaming:
             # Native streaming: finalize via stop_stream.  The adapter
             # is responsible for converting text → Block Kit internally.
             try:
