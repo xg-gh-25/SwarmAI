@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" font-family="'PingFang SC', 'Microsoft YaHei', Inter, sans-serif">
+  <defs>
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.08"/>
+    </filter>
+  </defs>
+
+  <!-- Title -->
+  <text x="450" y="35" text-anchor="middle" font-size="20" font-weight="700" fill="#1a1a2e">Memory Cognitive Stack — 5 Layers of Agent Intelligence</text>
+  <text x="450" y="55" text-anchor="middle" font-size="11" fill="#666">From ephemeral recall to permanent cognitive principles — each layer has different lifecycle and loading strategy</text>
+
+  <!-- L4: Principles -->
+  <g filter="url(#shadow)">
+    <rect x="80" y="75" width="740" height="72" rx="10" fill="#fdf2f8" stroke="#ec4899" stroke-width="2"/>
+    <text x="100" y="100" font-size="14" font-weight="700" fill="#be185d">L4: Cognitive Principles (SOUL.md)</text>
+    <text x="100" y="118" font-size="11" fill="#444">"Verify, Don't Infer" | "Done = tried to break it and failed" | "Understanding before output"</text>
+    <text x="100" y="136" font-size="10" fill="#888">Count: 3-5 | Lifecycle: permanent | Growth: never | Loading: always (P2, non-truncatable)</text>
+  </g>
+  <text x="840" y="105" font-size="24" fill="#ec4899">🧠</text>
+  <text x="840" y="130" font-size="9" fill="#888" text-anchor="middle">Judgment</text>
+
+  <!-- L3: Rules -->
+  <g filter="url(#shadow)">
+    <rect x="80" y="160" width="740" height="72" rx="10" fill="#ede9fe" stroke="#7c3aed" stroke-width="2"/>
+    <text x="100" y="185" font-size="14" font-weight="700" fill="#5b21b6">L3: Behavioral Rules (AGENT.md / STEERING.md)</text>
+    <text x="100" y="203" font-size="11" fill="#444">"Pipeline mandatory for all coding" | "Adversarial review non-negotiable" | Budget: ≤25 rules</text>
+    <text x="100" y="221" font-size="10" fill="#888">Count: bounded (25) | Lifecycle: expirable | Growth: add one = retire one | Loading: always (P3/P5)</text>
+  </g>
+  <text x="840" y="190" font-size="24" fill="#7c3aed">📋</text>
+  <text x="840" y="215" font-size="9" fill="#888" text-anchor="middle">Discipline</text>
+
+  <!-- L2: Domain Knowledge -->
+  <g filter="url(#shadow)">
+    <rect x="80" y="245" width="740" height="72" rx="10" fill="#ecfdf5" stroke="#16a34a" stroke-width="2"/>
+    <text x="100" y="270" font-size="14" font-weight="700" fill="#166534">L2: Domain Knowledge (DDD / KNOWLEDGE.md)</text>
+    <text x="100" y="288" font-size="11" fill="#444">Per-project: PRODUCT.md / TECH.md / IMPROVEMENT.md / PROJECT.md | Cross-project: KNOWLEDGE index</text>
+    <text x="100" y="306" font-size="10" fill="#888">Count: unbounded | Lifecycle: Darwinian (use→strengthen, no-use→decay→archive) | Loading: full + DDD on-demand</text>
+  </g>
+  <text x="840" y="275" font-size="24" fill="#16a34a">📚</text>
+  <text x="840" y="300" font-size="9" fill="#888" text-anchor="middle">Expertise</text>
+
+  <!-- L1: Working Memory -->
+  <g filter="url(#shadow)">
+    <rect x="80" y="330" width="740" height="72" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="2"/>
+    <text x="100" y="355" font-size="14" font-weight="700" fill="#1d4ed8">L1: Working Memory (Resume / DailyActivity)</text>
+    <text x="100" y="373" font-size="11" fill="#444">Session Resume (5-layer, 50-100K) | DailyActivity logs | Crash checkpoints | Uncommitted git state</text>
+    <text x="100" y="391" font-size="10" fill="#888">Count: per-session | Lifecycle: auto-distilled to L2-L4 | Growth: captured every session close | Loading: session start</text>
+  </g>
+  <text x="840" y="360" font-size="24" fill="#2563eb">💭</text>
+  <text x="840" y="385" font-size="9" fill="#888" text-anchor="middle">Context</text>
+
+  <!-- L0: Episodic Recall -->
+  <g filter="url(#shadow)">
+    <rect x="80" y="415" width="740" height="72" rx="10" fill="#fefce8" stroke="#ca8a04" stroke-width="2"/>
+    <text x="100" y="440" font-size="14" font-weight="700" fill="#854d0e">L0: Episodic Recall (Session RAG / Knowledge RAG)</text>
+    <text x="100" y="458" font-size="11" fill="#444">SessionRecall (FTS5 messages_fts) | KnowledgeStore (FTS5 + vec) | TranscriptStore | Graph enrichment</text>
+    <text x="100" y="476" font-size="10" fill="#888">Count: unbounded | Lifecycle: permanent (raw data) | Growth: auto-indexed | Loading: on first message, 150ms budget</text>
+  </g>
+  <text x="840" y="445" font-size="24" fill="#ca8a04">🔍</text>
+  <text x="840" y="470" font-size="9" fill="#888" text-anchor="middle">Recall</text>
+
+  <!-- Distillation arrows on right side -->
+  <line x1="830" y1="470" x2="830" y2="390" stroke="#64748b" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <line x1="830" y1="390" x2="830" y2="305" stroke="#64748b" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <line x1="830" y1="305" x2="830" y2="220" stroke="#64748b" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <line x1="830" y1="220" x2="830" y2="135" stroke="#64748b" stroke-width="1.5" stroke-dasharray="4,3"/>
+  <text x="860" y="310" font-size="10" fill="#64748b" writing-mode="tb">Distillation ↑</text>
+
+  <!-- Bottom summary -->
+  <rect x="80" y="500" width="740" height="15" rx="4" fill="#f8fafc"/>
+  <text x="450" y="511" text-anchor="middle" font-size="10" fill="#64748b">↑ Higher = more abstract, longer-lived, harder to change | Lower = more concrete, ephemeral, auto-managed ↓</text>
+</svg>

@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 500" font-family="'PingFang SC', 'Microsoft YaHei', Inter, sans-serif">
+  <defs>
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.08"/>
+    </filter>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#667eea"/>
+    </marker>
+    <marker id="arrR" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#e11d48"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="500" y="35" text-anchor="middle" font-size="18" font-weight="700" fill="#1a1a2e">Three-Layer Governance: Memory × Self-Evolution</text>
+  <text x="500" y="55" text-anchor="middle" font-size="11" fill="#666">Rules accumulation is a dead end. Evolution moves toward distillation (fewer rules, sharper principles).</text>
+
+  <!-- Three layers -->
+  <g filter="url(#shadow)">
+    <rect x="60" y="75" width="280" height="130" rx="10" fill="#fdf2f8" stroke="#ec4899" stroke-width="1.5"/>
+    <text x="200" y="100" text-anchor="middle" font-size="13" font-weight="700" fill="#be185d">Layer 3: Principles</text>
+    <text x="200" y="120" text-anchor="middle" font-size="11" fill="#444">SOUL.md — 3-5 orientations</text>
+    <text x="200" y="140" text-anchor="middle" font-size="10" fill="#666">Handles novel situations</text>
+    <text x="200" y="158" text-anchor="middle" font-size="10" fill="#666">~70-80% compliance</text>
+    <text x="200" y="178" text-anchor="middle" font-size="9" fill="#888">Example: "Done = tried to break it"</text>
+    <text x="200" y="195" text-anchor="middle" font-size="10" fill="#ec4899" font-weight="600">Never grows. Only sharpens.</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="360" y="75" width="280" height="130" rx="10" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+    <text x="500" y="100" text-anchor="middle" font-size="13" font-weight="700" fill="#5b21b6">Layer 2: Rules</text>
+    <text x="500" y="120" text-anchor="middle" font-size="11" fill="#444">AGENT.md — bounded (≤25)</text>
+    <text x="500" y="140" text-anchor="middle" font-size="10" fill="#666">Known situations guidance</text>
+    <text x="500" y="158" text-anchor="middle" font-size="10" fill="#666">Traceable + Expirable</text>
+    <text x="500" y="178" text-anchor="middle" font-size="9" fill="#888">Example: "Pipeline mandatory"</text>
+    <text x="500" y="195" text-anchor="middle" font-size="10" fill="#7c3aed" font-weight="600">Add one = retire one.</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="660" y="75" width="280" height="130" rx="10" fill="#fef2f2" stroke="#e11d48" stroke-width="1.5"/>
+    <text x="800" y="100" text-anchor="middle" font-size="13" font-weight="700" fill="#9f1239">Layer 1: Gates</text>
+    <text x="800" y="120" text-anchor="middle" font-size="11" fill="#444">Code-level enforcement</text>
+    <text x="800" y="140" text-anchor="middle" font-size="10" fill="#666">Proven-stubborn failures only</text>
+    <text x="800" y="158" text-anchor="middle" font-size="10" fill="#666">Mechanical, no bypass</text>
+    <text x="800" y="178" text-anchor="middle" font-size="9" fill="#888">Example: "artifact_id blocks push"</text>
+    <text x="800" y="195" text-anchor="middle" font-size="10" fill="#e11d48" font-weight="600">Last resort. High cost.</text>
+  </g>
+
+  <!-- Evolution flow -->
+  <rect x="60" y="230" width="880" height="255" rx="10" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="80" y="253" font-size="13" font-weight="700" fill="#334155">Evolution Loop (real data: 32 corrections → 5 principles + 23 rules + gates)</text>
+
+  <!-- Flow boxes -->
+  <g filter="url(#shadow)">
+    <rect x="90" y="270" width="150" height="55" rx="8" fill="white" stroke="#667eea" stroke-width="1.2"/>
+    <text x="165" y="293" text-anchor="middle" font-size="11" font-weight="600" fill="#333">User Correction</text>
+    <text x="165" y="312" text-anchor="middle" font-size="9" fill="#666">"You skipped review"</text>
+  </g>
+  <line x1="240" y1="298" x2="275" y2="298" stroke="#667eea" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="280" y="270" width="150" height="55" rx="8" fill="white" stroke="#667eea" stroke-width="1.2"/>
+    <text x="355" y="293" text-anchor="middle" font-size="11" font-weight="600" fill="#333">Capture</text>
+    <text x="355" y="312" text-anchor="middle" font-size="9" fill="#666">→ EVOLUTION.md</text>
+  </g>
+  <line x1="430" y1="298" x2="465" y2="298" stroke="#667eea" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="470" y="270" width="150" height="55" rx="8" fill="white" stroke="#667eea" stroke-width="1.2"/>
+    <text x="545" y="293" text-anchor="middle" font-size="11" font-weight="600" fill="#333">Classify</text>
+    <text x="545" y="312" text-anchor="middle" font-size="9" fill="#666">CLASS A / B / C</text>
+  </g>
+
+  <!-- Branch: 3+ times -->
+  <line x1="545" y1="325" x2="545" y2="355" stroke="#e11d48" stroke-width="1.5" marker-end="url(#arrR)"/>
+  <text x="555" y="345" font-size="9" fill="#e11d48">Same class 3+ times</text>
+
+  <g filter="url(#shadow)">
+    <rect x="470" y="360" width="150" height="55" rx="8" fill="#fff1f2" stroke="#e11d48" stroke-width="1.5"/>
+    <text x="545" y="383" text-anchor="middle" font-size="11" font-weight="700" fill="#9f1239">Promote</text>
+    <text x="545" y="402" text-anchor="middle" font-size="9" fill="#666">→ Rule or Principle</text>
+  </g>
+
+  <!-- Branch: still fails -->
+  <line x1="620" y1="388" x2="665" y2="388" stroke="#e11d48" stroke-width="1.5" marker-end="url(#arrR)"/>
+  <text x="643" y="380" font-size="9" fill="#e11d48">Still fails</text>
+
+  <g filter="url(#shadow)">
+    <rect x="670" y="360" width="150" height="55" rx="8" fill="#fef2f2" stroke="#e11d48" stroke-width="2"/>
+    <text x="745" y="383" text-anchor="middle" font-size="11" font-weight="700" fill="#9f1239">Escalate to Gate</text>
+    <text x="745" y="402" text-anchor="middle" font-size="9" fill="#666">Code-level block</text>
+  </g>
+
+  <!-- Branch: single occurrence -->
+  <line x1="620" y1="298" x2="665" y2="298" stroke="#667eea" stroke-width="1.5" marker-end="url(#arr)"/>
+  <text x="643" y="290" font-size="9" fill="#667eea">Single</text>
+
+  <g filter="url(#shadow)">
+    <rect x="670" y="270" width="150" height="55" rx="8" fill="white" stroke="#667eea" stroke-width="1"/>
+    <text x="745" y="293" text-anchor="middle" font-size="11" font-weight="600" fill="#333">Log + Observe</text>
+    <text x="745" y="312" text-anchor="middle" font-size="9" fill="#666">May decay if no recur</text>
+  </g>
+
+  <!-- Real case -->
+  <rect x="90" y="435" width="850" height="38" rx="6" fill="#fffbeb" stroke="#f59e0b" stroke-width="1"/>
+  <text x="110" y="452" font-size="10" fill="#92400e" font-weight="600">Real case — "Skip quality review" bias:</text>
+  <text x="380" y="452" font-size="10" fill="#444">C011 → rule (failed) → C021 → stricter (failed) → C025 → stricter (failed) → C026 → <tspan font-weight="700" fill="#e11d48">gate (worked)</tspan> → C027 → principle upgrade</text>
+  <text x="110" y="466" font-size="9" fill="#888">4 occurrences of the same cognitive bias before structural fix. This is why all 3 layers are necessary.</text>
+</svg>

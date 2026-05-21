@@ -1,0 +1,244 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1050" font-family="'PingFang SC', 'Microsoft YaHei', Inter, sans-serif">
+  <defs>
+    <linearGradient id="layer4bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#f093fb;stop-opacity:0.10"/>
+      <stop offset="100%" style="stop-color:#f093fb;stop-opacity:0.03"/>
+    </linearGradient>
+    <linearGradient id="layer3bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:0.10"/>
+      <stop offset="100%" style="stop-color:#667eea;stop-opacity:0.03"/>
+    </linearGradient>
+    <linearGradient id="layer2bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#4facfe;stop-opacity:0.10"/>
+      <stop offset="100%" style="stop-color:#4facfe;stop-opacity:0.03"/>
+    </linearGradient>
+    <linearGradient id="layer1bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#43e97b;stop-opacity:0.10"/>
+      <stop offset="100%" style="stop-color:#43e97b;stop-opacity:0.03"/>
+    </linearGradient>
+    <linearGradient id="writebg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#fa709a;stop-opacity:0.08"/>
+      <stop offset="100%" style="stop-color:#fa709a;stop-opacity:0.02"/>
+    </linearGradient>
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.08"/>
+    </filter>
+  </defs>
+
+  <!-- Title -->
+  <text x="600" y="38" text-anchor="middle" font-size="22" font-weight="700" fill="#1a1a2e">Agent Memory — 4-Layer Progressive Architecture</text>
+  <text x="600" y="60" text-anchor="middle" font-size="12" fill="#666">Read Path (Session Start + First Message) → Write Path (Session Close)</text>
+
+  <!-- ==================== Layer 4: Knowledge RAG ==================== -->
+  <rect x="40" y="75" width="1120" height="200" rx="12" fill="url(#layer4bg)" stroke="#f093fb" stroke-width="1.5" stroke-opacity="0.5"/>
+  <text x="60" y="98" font-size="14" font-weight="700" fill="#c471ed">Layer 4: Knowledge RAG Engine</text>
+  <text x="350" y="98" font-size="11" fill="#888">Triggered: first user message | Budget: 150ms | Hybrid: 0.6 vector + 0.4 keyword</text>
+
+  <!-- Store boxes -->
+  <g filter="url(#shadow)">
+    <rect x="80" y="112" width="220" height="70" rx="8" fill="white" stroke="#c471ed" stroke-width="1"/>
+    <text x="190" y="135" text-anchor="middle" font-size="12" font-weight="600" fill="#333">KnowledgeStore</text>
+    <text x="190" y="153" text-anchor="middle" font-size="10" fill="#666">FTS5 + sqlite-vec (1024-dim)</text>
+    <text x="190" y="170" text-anchor="middle" font-size="10" fill="#888">Knowledge/ directory chunks</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="320" y="112" width="220" height="70" rx="8" fill="white" stroke="#c471ed" stroke-width="1"/>
+    <text x="430" y="135" text-anchor="middle" font-size="12" font-weight="600" fill="#333">TranscriptStore</text>
+    <text x="430" y="153" text-anchor="middle" font-size="10" fill="#666">FTS5 + sqlite-vec (1024-dim)</text>
+    <text x="430" y="170" text-anchor="middle" font-size="10" fill="#888">Past session JSONL pairs</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="560" y="112" width="220" height="70" rx="8" fill="white" stroke="#c471ed" stroke-width="1"/>
+    <text x="670" y="135" text-anchor="middle" font-size="12" font-weight="600" fill="#333">MemoryEmbeddings</text>
+    <text x="670" y="153" text-anchor="middle" font-size="10" fill="#666">sqlite-vec (1024-dim Titan v2)</text>
+    <text x="670" y="170" text-anchor="middle" font-size="10" fill="#888">MEMORY.md entry vectors</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="800" y="112" width="220" height="70" rx="8" fill="white" stroke="#c471ed" stroke-width="1"/>
+    <text x="910" y="135" text-anchor="middle" font-size="12" font-weight="600" fill="#333">Knowledge Graph</text>
+    <text x="910" y="153" text-anchor="middle" font-size="10" fill="#666">.knowledge-graph.yaml</text>
+    <text x="910" y="170" text-anchor="middle" font-size="10" fill="#888">Entity → Entity 1-hop expansion</text>
+  </g>
+
+  <!-- RecallEngine box -->
+  <g filter="url(#shadow)">
+    <rect x="300" y="200" width="400" height="50" rx="8" fill="#f8f0ff" stroke="#c471ed" stroke-width="1.5"/>
+    <text x="500" y="222" text-anchor="middle" font-size="13" font-weight="600" fill="#7c3aed">RecallEngine</text>
+    <text x="500" y="240" text-anchor="middle" font-size="10" fill="#666">recall_engine.py — Hybrid merge + graph enrichment → "## Recalled Knowledge"</text>
+  </g>
+
+  <!-- Arrows from stores to engine -->
+  <line x1="190" y1="182" x2="380" y2="200" stroke="#c471ed" stroke-width="1.2" stroke-opacity="0.5"/>
+  <line x1="430" y1="182" x2="450" y2="200" stroke="#c471ed" stroke-width="1.2" stroke-opacity="0.5"/>
+  <line x1="670" y1="182" x2="550" y2="200" stroke="#c471ed" stroke-width="1.2" stroke-opacity="0.5"/>
+  <line x1="910" y1="182" x2="620" y2="200" stroke="#c471ed" stroke-width="1.2" stroke-opacity="0.5"/>
+
+  <!-- Arrow L4 → L3 -->
+  <line x1="500" y1="260" x2="500" y2="285" stroke="#667eea" stroke-width="2" stroke-dasharray="4,2"/>
+  <polygon points="494,282 500,292 506,282" fill="#667eea"/>
+
+  <!-- ==================== Layer 3: Session Recall ==================== -->
+  <rect x="40" y="295" width="1120" height="155" rx="12" fill="url(#layer3bg)" stroke="#667eea" stroke-width="1.5" stroke-opacity="0.5"/>
+  <text x="60" y="318" font-size="14" font-weight="700" fill="#667eea">Layer 3: Session Recall (FTS5 over Past Conversations)</text>
+  <text x="530" y="318" font-size="11" fill="#888">Triggered: first user message | ~100ms | ±10 msg context window</text>
+
+  <g filter="url(#shadow)">
+    <rect x="80" y="332" width="1050" height="95" rx="8" fill="white" stroke="#667eea" stroke-width="1"/>
+    <text x="100" y="355" font-size="12" font-weight="600" fill="#333">SessionRecall (session_recall.py)</text>
+    <text x="100" y="375" font-size="11" fill="#444">• FTS5 virtual table: messages_fts (auto-synced via INSERT/UPDATE/DELETE triggers on all messages)</text>
+    <text x="100" y="393" font-size="11" fill="#444">• Relevance: score = density × 0.4 + recency × 0.35 + richness × 0.25</text>
+    <text x="100" y="411" font-size="11" fill="#444">• 90-day decay (1.0 today → 0.1 at 90d) | Max 2 session snippets | Returns ±10 message context window</text>
+  </g>
+
+  <!-- Arrow L3 → L2 -->
+  <line x1="500" y1="450" x2="500" y2="470" stroke="#4facfe" stroke-width="2" stroke-dasharray="4,2"/>
+  <polygon points="494,467 500,477 506,467" fill="#4facfe"/>
+
+  <!-- ==================== Layer 2: Progressive Index ==================== -->
+  <rect x="40" y="480" width="1120" height="195" rx="12" fill="url(#layer2bg)" stroke="#4facfe" stroke-width="1.5" stroke-opacity="0.5"/>
+  <text x="60" y="503" font-size="14" font-weight="700" fill="#4facfe">Layer 2: Progressive Memory Index (Smart Selective Injection)</text>
+  <text x="530" y="503" font-size="11" fill="#888">Triggered: session start | Mode auto-selected by MEMORY.md size</text>
+
+  <!-- Three sub-layers -->
+  <g filter="url(#shadow)">
+    <rect x="80" y="515" width="340" height="70" rx="8" fill="#f0f9ff" stroke="#4facfe" stroke-width="1.2"/>
+    <text x="250" y="537" text-anchor="middle" font-size="12" font-weight="700" fill="#0369a1">L0: Compact Index</text>
+    <text x="250" y="555" text-anchor="middle" font-size="10" fill="#444">ALWAYS injected (~500 tokens)</text>
+    <text x="250" y="572" text-anchor="middle" font-size="10" fill="#666">Machine-generated TOC + keyword aliases</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="440" y="515" width="340" height="70" rx="8" fill="#f0f9ff" stroke="#4facfe" stroke-width="1.2"/>
+    <text x="610" y="537" text-anchor="middle" font-size="12" font-weight="700" fill="#0369a1">L1: Section Selection</text>
+    <text x="610" y="555" text-anchor="middle" font-size="10" fill="#444">CONDITIONAL (if MEMORY > 30K tokens)</text>
+    <text x="610" y="572" text-anchor="middle" font-size="10" fill="#666">Hybrid keyword + vector + cross-ref expansion</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="800" y="515" width="330" height="70" rx="8" fill="#f0f9ff" stroke="#4facfe" stroke-width="1.2"/>
+    <text x="965" y="537" text-anchor="middle" font-size="12" font-weight="700" fill="#0369a1">L2: On-Demand</text>
+    <text x="965" y="555" text-anchor="middle" font-size="10" fill="#444">Agent uses Read tool when needed</text>
+    <text x="965" y="572" text-anchor="middle" font-size="10" fill="#666">Behavioral directive, no code</text>
+  </g>
+
+  <!-- Threshold indicator -->
+  <rect x="80" y="600" width="1050" height="52" rx="6" fill="white" stroke="#4facfe" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="100" y="620" font-size="11" fill="#0369a1" font-weight="600">Auto-scaling:</text>
+  <text x="200" y="620" font-size="11" fill="#444">MEMORY &lt; 30K → Full injection (current state) | MEMORY ≥ 30K → Progressive L0→L1→L2 activates</text>
+  <text x="100" y="638" font-size="11" fill="#0369a1" font-weight="600">CJK support:</text>
+  <text x="200" y="638" font-size="11" fill="#444">Bidirectional substring + shared prefix matching | Alias hits weighted 1.5x | Superseded entries 0.1x</text>
+
+  <!-- Arrow L2 → L1 -->
+  <line x1="500" y1="675" x2="500" y2="695" stroke="#43e97b" stroke-width="2" stroke-dasharray="4,2"/>
+  <polygon points="494,692 500,702 506,692" fill="#43e97b"/>
+
+  <!-- ==================== Layer 1: Context Directory ==================== -->
+  <rect x="40" y="705" width="1120" height="165" rx="12" fill="url(#layer1bg)" stroke="#43e97b" stroke-width="1.5" stroke-opacity="0.5"/>
+  <text x="60" y="728" font-size="14" font-weight="700" fill="#16a34a">Layer 1: Context Directory (11-File System Prompt)</text>
+  <text x="430" y="728" font-size="11" fill="#888">Triggered: session start | L1 cache (git-based, 15s TTL) | Budget: 100K tokens (1M model)</text>
+
+  <!-- File boxes - row 1 -->
+  <g filter="url(#shadow)">
+    <rect x="80" y="742" width="90" height="46" rx="6" fill="#ecfdf5" stroke="#16a34a" stroke-width="1"/>
+    <text x="125" y="761" text-anchor="middle" font-size="10" font-weight="600" fill="#166534">SOUL</text>
+    <text x="125" y="778" text-anchor="middle" font-size="9" fill="#666">P2 | System</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="180" y="742" width="90" height="46" rx="6" fill="#ecfdf5" stroke="#16a34a" stroke-width="1"/>
+    <text x="225" y="761" text-anchor="middle" font-size="10" font-weight="600" fill="#166534">AGENT</text>
+    <text x="225" y="778" text-anchor="middle" font-size="9" fill="#666">P3 | System</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="280" y="742" width="90" height="46" rx="6" fill="#fefce8" stroke="#ca8a04" stroke-width="1"/>
+    <text x="325" y="761" text-anchor="middle" font-size="10" font-weight="600" fill="#854d0e">USER</text>
+    <text x="325" y="778" text-anchor="middle" font-size="9" fill="#666">P4 | User</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="380" y="742" width="90" height="46" rx="6" fill="#fefce8" stroke="#ca8a04" stroke-width="1"/>
+    <text x="425" y="761" text-anchor="middle" font-size="10" font-weight="600" fill="#854d0e">STEERING</text>
+    <text x="425" y="778" text-anchor="middle" font-size="9" fill="#666">P5 | User</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="480" y="742" width="100" height="46" rx="6" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.2"/>
+    <text x="530" y="761" text-anchor="middle" font-size="10" font-weight="700" fill="#5b21b6">MEMORY</text>
+    <text x="530" y="778" text-anchor="middle" font-size="9" fill="#666">P7 | Agent 🔒</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="590" y="742" width="100" height="46" rx="6" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.2"/>
+    <text x="640" y="761" text-anchor="middle" font-size="10" font-weight="700" fill="#5b21b6">EVOLUTION</text>
+    <text x="640" y="778" text-anchor="middle" font-size="9" fill="#666">P8 | Agent 🔒</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="700" y="742" width="100" height="46" rx="6" fill="#f1f5f9" stroke="#64748b" stroke-width="1"/>
+    <text x="750" y="761" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">KNOWLEDGE</text>
+    <text x="750" y="778" text-anchor="middle" font-size="9" fill="#666">P9 | Auto</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="810" y="742" width="100" height="46" rx="6" fill="#f1f5f9" stroke="#64748b" stroke-width="1"/>
+    <text x="860" y="761" text-anchor="middle" font-size="10" font-weight="600" fill="#334155">PROJECTS</text>
+    <text x="860" y="778" text-anchor="middle" font-size="9" fill="#666">P10 | Auto</text>
+  </g>
+
+  <!-- Ephemeral section -->
+  <rect x="80" y="800" width="1050" height="50" rx="6" fill="white" stroke="#43e97b" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="100" y="818" font-size="11" fill="#16a34a" font-weight="600">+ Ephemeral (appended after context files):</text>
+  <text x="100" y="836" font-size="10" fill="#444">DailyActivity (2K cap) | Proactive Briefing | Session Resume (5-layer, 50-100K) | Editor Context | Sibling Sessions | Deferred MCPs</text>
+
+  <!-- Ownership legend -->
+  <rect x="940" y="742" width="190" height="108" rx="6" fill="#fafafa" stroke="#e5e5e5" stroke-width="1"/>
+  <text x="960" y="762" font-size="10" font-weight="600" fill="#333">Ownership Model:</text>
+  <rect x="960" y="772" width="12" height="12" rx="2" fill="#ecfdf5" stroke="#16a34a" stroke-width="0.8"/>
+  <text x="978" y="782" font-size="9" fill="#444">System (readonly 0o444)</text>
+  <rect x="960" y="792" width="12" height="12" rx="2" fill="#fefce8" stroke="#ca8a04" stroke-width="0.8"/>
+  <text x="978" y="802" font-size="9" fill="#444">User (editable)</text>
+  <rect x="960" y="812" width="12" height="12" rx="2" fill="#ede9fe" stroke="#7c3aed" stroke-width="0.8"/>
+  <text x="978" y="822" font-size="9" fill="#444">Agent (locked_write only)</text>
+  <rect x="960" y="832" width="12" height="12" rx="2" fill="#f1f5f9" stroke="#64748b" stroke-width="0.8"/>
+  <text x="978" y="842" font-size="9" fill="#444">Auto-generated</text>
+
+  <!-- ==================== Write Path ==================== -->
+  <rect x="40" y="885" width="1120" height="155" rx="12" fill="url(#writebg)" stroke="#fa709a" stroke-width="1.5" stroke-opacity="0.5"/>
+  <text x="60" y="908" font-size="14" font-weight="700" fill="#e11d48">Write Path: Capture → Distill → Evolve (Session Close)</text>
+
+  <!-- Write path flow -->
+  <g filter="url(#shadow)">
+    <rect x="80" y="920" width="160" height="50" rx="8" fill="white" stroke="#e11d48" stroke-width="1"/>
+    <text x="160" y="942" text-anchor="middle" font-size="11" font-weight="600" fill="#333">Summarization</text>
+    <text x="160" y="958" text-anchor="middle" font-size="9" fill="#666">Rule-based or LLM</text>
+  </g>
+  <line x1="240" y1="945" x2="270" y2="945" stroke="#e11d48" stroke-width="1.5"/>
+  <polygon points="267,941 277,945 267,949" fill="#e11d48"/>
+
+  <g filter="url(#shadow)">
+    <rect x="280" y="920" width="160" height="50" rx="8" fill="white" stroke="#e11d48" stroke-width="1"/>
+    <text x="360" y="942" text-anchor="middle" font-size="11" font-weight="600" fill="#333">DailyActivity</text>
+    <text x="360" y="958" text-anchor="middle" font-size="9" fill="#666">.md + .jsonl sidecar</text>
+  </g>
+  <line x1="440" y1="945" x2="470" y2="945" stroke="#e11d48" stroke-width="1.5"/>
+  <polygon points="467,941 477,945 467,949" fill="#e11d48"/>
+
+  <g filter="url(#shadow)">
+    <rect x="480" y="920" width="160" height="50" rx="8" fill="#fff5f7" stroke="#e11d48" stroke-width="1.5"/>
+    <text x="560" y="942" text-anchor="middle" font-size="11" font-weight="700" fill="#9f1239">Distillation</text>
+    <text x="560" y="958" text-anchor="middle" font-size="9" fill="#666">Git-verify → MEMORY.md</text>
+  </g>
+  <line x1="640" y1="945" x2="670" y2="945" stroke="#e11d48" stroke-width="1.5"/>
+  <polygon points="667,941 677,945 667,949" fill="#e11d48"/>
+
+  <g filter="url(#shadow)">
+    <rect x="680" y="920" width="160" height="50" rx="8" fill="white" stroke="#e11d48" stroke-width="1"/>
+    <text x="760" y="942" text-anchor="middle" font-size="11" font-weight="600" fill="#333">Embedding Sync</text>
+    <text x="760" y="958" text-anchor="middle" font-size="9" fill="#666">Delta (content_hash)</text>
+  </g>
+  <line x1="840" y1="945" x2="870" y2="945" stroke="#e11d48" stroke-width="1.5"/>
+  <polygon points="867,941 877,945 867,949" fill="#e11d48"/>
+
+  <g filter="url(#shadow)">
+    <rect x="880" y="920" width="160" height="50" rx="8" fill="white" stroke="#e11d48" stroke-width="1"/>
+    <text x="960" y="942" text-anchor="middle" font-size="11" font-weight="600" fill="#333">DDD Cultivation</text>
+    <text x="960" y="958" text-anchor="middle" font-size="9" fill="#666">Event-driven channels</text>
+  </g>
+
+  <!-- Write protection note -->
+  <rect x="80" y="985" width="1050" height="40" rx="6" fill="white" stroke="#e11d48" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="100" y="1005" font-size="10" fill="#e11d48" font-weight="600">Write Protection:</text>
+  <text x="225" y="1005" font-size="10" fill="#444">MemoryGuard (5 scan categories: secrets/injection/hijack/exfiltration/invisible) → locked_write (fcntl.flock, 5s timeout) → atomic read-modify-write</text>
+</svg>
