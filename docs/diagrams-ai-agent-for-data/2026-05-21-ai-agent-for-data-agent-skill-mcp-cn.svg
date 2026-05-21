@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 620" font-family="'PingFang SC', 'Microsoft YaHei', Inter, sans-serif">
+  <defs>
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-opacity="0.1"/>
+    </filter>
+  </defs>
+
+  <!-- Title -->
+  <text x="500" y="32" text-anchor="middle" font-size="20" font-weight="700" fill="#1a1a2e">Agent / Skill / MCP — 三者如何协作</text>
+  <text x="500" y="54" text-anchor="middle" font-size="12" fill="#666">大脑决策，手来编排，腿去执行</text>
+
+  <!-- User -->
+  <circle cx="500" cy="95" r="24" fill="#f8f9fa" stroke="#333" stroke-width="1.5"/>
+  <text x="500" y="92" text-anchor="middle" font-size="16">👤</text>
+  <text x="500" y="107" text-anchor="middle" font-size="8" fill="#333">用户</text>
+  <text x="500" y="132" text-anchor="middle" font-size="10" fill="#555" font-style="italic">"帮我看看上周 GenAI 收入情况，重点客户有哪些变化"</text>
+
+  <!-- Arrow user → agent -->
+  <line x1="500" y1="143" x2="500" y2="163" stroke="#555" stroke-width="1.5"/>
+  <polygon points="496,160 500,170 504,160" fill="#555"/>
+
+  <!-- Agent (Brain) -->
+  <rect x="280" y="175" width="440" height="110" rx="16" fill="#eef2ff" stroke="#667eea" stroke-width="2" filter="url(#shadow)"/>
+  <text x="300" y="200" font-size="15" font-weight="700" fill="#667eea">🧠 Agent（大脑）</text>
+  <text x="300" y="222" font-size="10" fill="#555">职责：理解用户说了什么，决定该做什么</text>
+  <text x="300" y="240" font-size="10" fill="#555">• 自然语言理解、意图识别、多轮对话</text>
+  <text x="300" y="256" font-size="10" fill="#555">• 选择合适的 Skill → 交给它执行</text>
+  <text x="300" y="272" font-size="10" fill="#555">• 最后综合结果，用自然语言呈现给用户</text>
+  <text x="300" y="282" font-size="9" fill="#888" font-style="italic">不写 SQL、不管安全 — 只管"问什么"和"怎么说"</text>
+
+  <!-- Arrow agent → skill -->
+  <line x1="500" y1="285" x2="500" y2="310" stroke="#555" stroke-width="1.5"/>
+  <polygon points="496,307 500,317 504,307" fill="#555"/>
+  <text x="520" y="302" font-size="9" fill="#555">委托任务</text>
+
+  <!-- Skill (Hands) -->
+  <rect x="230" y="320" width="540" height="120" rx="16" fill="#fff5f5" stroke="#e53e3e" stroke-width="2" filter="url(#shadow)"/>
+  <text x="250" y="345" font-size="15" font-weight="700" fill="#e53e3e">🤲 Skill（手）</text>
+  <text x="250" y="367" font-size="10" fill="#555">职责：知道完成一个业务任务需要哪些步骤，编排多个 MCP 调用</text>
+  <text x="260" y="387" font-size="10" fill="#555">Step 1: 调 MCP → "genai_revenue_wow"           （查收入汇总）</text>
+  <text x="260" y="403" font-size="10" fill="#555">Step 2: 调 MCP → "revenue_movers"              （查 top 客户变动）</text>
+  <text x="260" y="419" font-size="10" fill="#555">Step 3: 调 MCP → "account_6w_trend"            （查 6 周趋势）</text>
+  <text x="260" y="435" font-size="9" fill="#888" font-style="italic">决定并行还是串行、合并结果、计算 WoW% — 可复用、可版本化、可跨 Agent 共享</text>
+
+  <!-- Arrows skill → MCP (3 parallel) -->
+  <line x1="370" y1="440" x2="370" y2="475" stroke="#4facfe" stroke-width="1.5"/>
+  <polygon points="366,472 370,482 374,472" fill="#4facfe"/>
+  <line x1="500" y1="440" x2="500" y2="475" stroke="#4facfe" stroke-width="1.5"/>
+  <polygon points="496,472 500,482 504,472" fill="#4facfe"/>
+  <line x1="630" y1="440" x2="630" y2="475" stroke="#4facfe" stroke-width="1.5"/>
+  <polygon points="626,472 630,482 634,472" fill="#4facfe"/>
+  <text x="500" y="464" text-anchor="middle" font-size="9" fill="#4facfe">并行调用 MCP 工具</text>
+
+  <!-- MCP (Legs) -->
+  <rect x="180" y="485" width="640" height="105" rx="16" fill="#f0f9ff" stroke="#4facfe" stroke-width="2" filter="url(#shadow)"/>
+  <text x="200" y="510" font-size="15" font-weight="700" fill="#4facfe">🦿 MCP（腿）</text>
+  <text x="200" y="532" font-size="10" fill="#555">职责：执行单个原子操作，不懂业务上下文。每次只做一件事。</text>
+  <text x="200" y="552" font-size="10" fill="#555">• 从语义目录解析认证模式 → SQL | 注入 RLS 权限过滤 | 执行 Athena 查询 | 写审计日志</text>
+  <text x="200" y="572" font-size="10" fill="#555">• 强制安全策略（RLS、权限、审计）— Agent 无法绕过</text>
+  <text x="200" y="585" font-size="9" fill="#888" font-style="italic">无状态 — 不知道上一步做了什么、下一步要做什么。安全在这里强制执行，不在 Agent 端。</text>
+
+  <!-- Key insight box -->
+  <rect x="180" y="598" width="640" height="18" rx="4" fill="#667eea" fill-opacity="0.06"/>
+  <text x="500" y="612" text-anchor="middle" font-size="10" font-weight="600" fill="#667eea">换 Agent（GPT→Claude）？Skill + MCP 不用动。准确性不依赖模型智商。</text>
+</svg>

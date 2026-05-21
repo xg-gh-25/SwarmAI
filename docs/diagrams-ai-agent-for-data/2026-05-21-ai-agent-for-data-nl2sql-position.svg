@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 360" font-family="Inter, -apple-system, sans-serif">
+  <defs>
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.08"/>
+    </filter>
+  </defs>
+
+  <!-- Title -->
+  <text x="400" y="30" text-anchor="middle" font-size="18" font-weight="700" fill="#1a1a2e">NL2SQL 的位置：不是敌人，是受控的工具</text>
+
+  <!-- Three levels -->
+  <!-- Level 1 -->
+  <rect x="50" y="55" width="700" height="70" rx="10" fill="#f0fdf4" stroke="#22c55e" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="75" y="78" font-size="12" font-weight="700" fill="#16a34a">第一层：认证模式（100% 准确）</text>
+  <text x="75" y="98" font-size="10" fill="#555">预写好的 SQL 模板，Agent 选择模式 + 填参数</text>
+  <text x="75" y="113" font-size="10" fill="#888">适用：领导层报表、定时推送、合规数据</text>
+  <rect x="580" y="65" width="150" height="24" rx="12" fill="#dcfce7" stroke="#22c55e" stroke-width="0.5"/>
+  <text x="655" y="82" text-anchor="middle" font-size="9" font-weight="600" fill="#16a34a">不需要 NL2SQL</text>
+
+  <!-- Level 2 -->
+  <rect x="50" y="140" width="700" height="70" rx="10" fill="#fefce8" stroke="#eab308" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="75" y="163" font-size="12" font-weight="700" fill="#ca8a04">第二层：受约束生成（~95% 准确）</text>
+  <text x="75" y="183" font-size="10" fill="#555">NL2SQL + Semantic Catalog 约束（表/列白名单 + 必填 filter + JOIN 规则）</text>
+  <text x="75" y="198" font-size="10" fill="#888">适用：临时分析、自助探索、Ad-hoc 提问</text>
+  <rect x="580" y="150" width="150" height="24" rx="12" fill="#fef9c3" stroke="#eab308" stroke-width="0.5"/>
+  <text x="655" y="167" text-anchor="middle" font-size="9" font-weight="600" fill="#ca8a04">NL2SQL 在这里 ←</text>
+
+  <!-- Level 3 -->
+  <rect x="50" y="225" width="700" height="70" rx="10" fill="#fef2f2" stroke="#ef4444" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="75" y="248" font-size="12" font-weight="700" fill="#dc2626">第三层：无约束 NL2SQL（60-70% 准确）</text>
+  <text x="75" y="268" font-size="10" fill="#555">Agent 自由生成 SQL，无任何校验 — 大多数 AI+数据演示停在这里</text>
+  <text x="75" y="283" font-size="10" fill="#888">生产环境禁用 — 信任崩塌的起点</text>
+  <rect x="580" y="235" width="150" height="24" rx="12" fill="#fee2e2" stroke="#ef4444" stroke-width="0.5"/>
+  <text x="655" y="252" text-anchor="middle" font-size="9" font-weight="600" fill="#dc2626">❌ 已禁用</text>
+
+  <!-- Key insight box -->
+  <rect x="50" y="310" width="700" height="40" rx="8" fill="#f8fafc" stroke="#94a3b8" stroke-width="1"/>
+  <text x="400" y="330" text-anchor="middle" font-size="11" fill="#334155">区别：裸 NL2SQL = 60-70%  vs  NL2SQL + Catalog 约束 = ~95%</text>
+  <text x="400" y="345" text-anchor="middle" font-size="10" font-weight="600" fill="#6366f1">Semantic Catalog 是让 NL2SQL 从"不可靠"变成"基本可靠"的关键</text>
+</svg>

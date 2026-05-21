@@ -1,0 +1,202 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 980" font-family="'PingFang SC', 'Microsoft YaHei', Inter, sans-serif">
+  <defs>
+    <linearGradient id="layer4bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:0.10"/>
+      <stop offset="100%" style="stop-color:#667eea;stop-opacity:0.03"/>
+    </linearGradient>
+    <linearGradient id="layer3bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#c471ed;stop-opacity:0.10"/>
+      <stop offset="100%" style="stop-color:#c471ed;stop-opacity:0.03"/>
+    </linearGradient>
+    <linearGradient id="layer2bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#4facfe;stop-opacity:0.10"/>
+      <stop offset="100%" style="stop-color:#4facfe;stop-opacity:0.03"/>
+    </linearGradient>
+    <linearGradient id="layer1bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#43e97b;stop-opacity:0.10"/>
+      <stop offset="100%" style="stop-color:#43e97b;stop-opacity:0.03"/>
+    </linearGradient>
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.08"/>
+    </filter>
+  </defs>
+
+  <!-- Title -->
+  <text x="600" y="38" text-anchor="middle" font-size="22" font-weight="700" fill="#1a1a2e">AI Agent for Data — 参考架构</text>
+
+  <!-- ==================== Layer 4 ==================== -->
+  <rect x="40" y="55" width="1120" height="230" rx="12" fill="url(#layer4bg)" stroke="#667eea" stroke-width="1.5" stroke-opacity="0.5"/>
+  <text x="60" y="78" font-size="14" font-weight="700" fill="#667eea">第四层：消费层（AI Agent + Skills）</text>
+
+  <!-- Agent boxes row - larger text -->
+  <g filter="url(#shadow)">
+    <rect x="80" y="92" width="155" height="52" rx="8" fill="white" stroke="#667eea" stroke-width="1"/>
+    <text x="157" y="114" text-anchor="middle" font-size="13" font-weight="600" fill="#333">Agent Portal</text>
+    <text x="157" y="132" text-anchor="middle" font-size="10" fill="#666">Rocky / Q Business</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="255" y="92" width="155" height="52" rx="8" fill="white" stroke="#667eea" stroke-width="1"/>
+    <text x="332" y="114" text-anchor="middle" font-size="13" font-weight="600" fill="#333">自助服务</text>
+    <text x="332" y="132" text-anchor="middle" font-size="10" fill="#666">Quick For Biz</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="430" y="92" width="155" height="52" rx="8" fill="white" stroke="#667eea" stroke-width="1"/>
+    <text x="507" y="114" text-anchor="middle" font-size="13" font-weight="600" fill="#333">运维 Agent</text>
+    <text x="507" y="132" text-anchor="middle" font-size="10" fill="#666">定时推送 / 调度</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="605" y="92" width="155" height="52" rx="8" fill="white" stroke="#667eea" stroke-width="1"/>
+    <text x="682" y="114" text-anchor="middle" font-size="13" font-weight="600" fill="#333">开发 CLI</text>
+    <text x="682" y="132" text-anchor="middle" font-size="10" fill="#666">Q-CLI / Terminal</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="780" y="92" width="155" height="52" rx="8" fill="white" stroke="#667eea" stroke-width="1"/>
+    <text x="857" y="114" text-anchor="middle" font-size="13" font-weight="600" fill="#333">自定义 Agent</text>
+    <text x="857" y="132" text-anchor="middle" font-size="10" fill="#666">企业自建应用</text>
+  </g>
+
+  <!-- Skills box -->
+  <rect x="80" y="162" width="855" height="105" rx="8" fill="white" stroke="#667eea" stroke-width="1.2" stroke-dasharray="5,3" filter="url(#shadow)"/>
+  <text x="100" y="184" font-size="13" font-weight="700" fill="#667eea">Skills（可复用的能力模块）</text>
+  <text x="100" y="205" font-size="11" fill="#444">周报生成  |  客户 360  |  Pipeline 分析  |  CRM 更新  |  预测 Gap  |  ...</text>
+  <line x1="100" y1="215" x2="910" y2="215" stroke="#eee" stroke-width="1"/>
+  <text x="100" y="234" font-size="10" fill="#555">每个 Skill = 一段业务流程编排</text>
+  <text x="100" y="250" font-size="10" fill="#555">Skill 决定"调哪些 MCP 工具、按什么顺序、怎么组合结果"</text>
+  <text x="100" y="262" font-size="10" fill="#888" font-style="italic">Skill 不嵌入数据知识 — 从第三层的语义目录获取</text>
+
+  <!-- Arrow L4 → L3 -->
+  <line x1="500" y1="285" x2="500" y2="308" stroke="#667eea" stroke-width="2"/>
+  <polygon points="494,305 500,315 506,305" fill="#667eea"/>
+  <text x="520" y="303" font-size="10" fill="#667eea">调用 MCP + 消费 Catalog</text>
+
+  <!-- ==================== Layer 3 ==================== -->
+  <rect x="40" y="320" width="1120" height="320" rx="12" fill="url(#layer3bg)" stroke="#c471ed" stroke-width="1.5" stroke-opacity="0.5"/>
+  <text x="60" y="343" font-size="14" font-weight="700" fill="#c471ed">第三层：语义契约层（The Missing Middle）</text>
+
+  <!-- Main catalog content box -->
+  <rect x="60" y="355" width="820" height="260" rx="8" fill="white" stroke="#c471ed" stroke-width="1.2" filter="url(#shadow)"/>
+  <text x="80" y="378" font-size="13" font-weight="700" fill="#333">数据知识中枢（版本化、机器可读、会进化的）</text>
+
+  <!-- Semantic Catalog -->
+  <text x="80" y="402" font-size="12" font-weight="600" fill="#c471ed">📋 语义目录</text>
+  <text x="95" y="420" font-size="10" fill="#555">• 表清单：{名称, 数据库, 描述, Owner, SLA}</text>
+  <text x="95" y="437" font-size="10" fill="#555">• 列语义：{名称, 类型, 业务含义, 敏感度}</text>
+  <text x="95" y="454" font-size="10" fill="#555">• 领域规则：{必填 filter, 分区逻辑, 枚举值}</text>
+  <text x="95" y="471" font-size="10" fill="#555">• 关联关系：{表A.列 → 表B.列, 基数}</text>
+
+  <!-- Certified Patterns -->
+  <text x="400" y="402" font-size="12" font-weight="600" fill="#c471ed">📐 认证查询模式（越用越多）</text>
+  <text x="415" y="420" font-size="10" fill="#555">• 命名模式："weekly_revenue_by_segment"</text>
+  <text x="415" y="437" font-size="10" fill="#555">• 可组合片段：可复用的 WHERE/SELECT 代码块</text>
+  <text x="415" y="454" font-size="10" fill="#555">• 校验规则：强制 filter 自动注入</text>
+
+  <!-- Access Policies -->
+  <text x="80" y="495" font-size="12" font-weight="600" fill="#c471ed">🔒 访问策略（声明式）</text>
+  <text x="95" y="513" font-size="10" fill="#555">• 按表：{策略ID, 过滤模板, 权限数据源}</text>
+  <text x="95" y="530" font-size="10" fill="#555">• 按身份：{服务账号, 委托身份, 终端用户}</text>
+  <text x="95" y="547" font-size="10" fill="#555">• 按应用：{app_id → 策略集}</text>
+
+  <!-- Data Quality -->
+  <text x="400" y="495" font-size="12" font-weight="600" fill="#c471ed">📊 数据质量信号</text>
+  <text x="415" y="513" font-size="10" fill="#555">• 新鲜度：{表, 最后更新, 更新频率}</text>
+  <text x="415" y="530" font-size="10" fill="#555">• 已知约束："必须加分区 filter"</text>
+  <text x="415" y="547" font-size="10" fill="#555">• 废弃通知："old_table → 请迁移 new_table"</text>
+
+  <!-- Version badge -->
+  <line x1="80" y1="560" x2="855" y2="560" stroke="#eee" stroke-width="1"/>
+  <text x="80" y="580" font-size="10" font-weight="600" fill="#c471ed">契约 = 版本化产物（semver），越用越丰富</text>
+  <text x="80" y="597" font-size="10" fill="#888">消费者锁定版本 → 不会被突然的 breaking change 影响</text>
+
+  <!-- Evolution Loop (right side panel) -->
+  <rect x="900" y="355" width="240" height="260" rx="8" fill="#fdf2ff" stroke="#c471ed" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="1020" y="378" text-anchor="middle" font-size="13" font-weight="700" fill="#c471ed">🔄 进化循环</text>
+
+  <!-- Loop steps -->
+  <circle cx="925" cy="405" r="7" fill="#c471ed" fill-opacity="0.15" stroke="#c471ed" stroke-width="1"/>
+  <text x="940" y="409" font-size="10" fill="#555">使用产生信号</text>
+
+  <line x1="925" y1="414" x2="925" y2="432" stroke="#c471ed" stroke-width="1" stroke-dasharray="2,2"/>
+  <circle cx="925" cy="440" r="7" fill="#c471ed" fill-opacity="0.15" stroke="#c471ed" stroke-width="1"/>
+  <text x="940" y="444" font-size="10" fill="#555">发现新 pattern</text>
+
+  <line x1="925" y1="449" x2="925" y2="467" stroke="#c471ed" stroke-width="1" stroke-dasharray="2,2"/>
+  <circle cx="925" cy="475" r="7" fill="#c471ed" fill-opacity="0.15" stroke="#c471ed" stroke-width="1"/>
+  <text x="940" y="479" font-size="10" fill="#555">审核 → 沉淀</text>
+
+  <line x1="925" y1="484" x2="925" y2="502" stroke="#c471ed" stroke-width="1" stroke-dasharray="2,2"/>
+  <circle cx="925" cy="510" r="7" fill="#c471ed" fill-opacity="0.15" stroke="#c471ed" stroke-width="1"/>
+  <text x="940" y="514" font-size="10" fill="#555">发布新版本</text>
+
+  <line x1="925" y1="519" x2="925" y2="537" stroke="#c471ed" stroke-width="1" stroke-dasharray="2,2"/>
+  <circle cx="925" cy="545" r="8" fill="#c471ed" fill-opacity="0.25" stroke="#c471ed" stroke-width="1.5"/>
+  <text x="940" y="549" font-size="10" font-weight="600" fill="#c471ed">下次直接命中</text>
+  <text x="940" y="565" font-size="10" font-weight="600" fill="#c471ed">→ 更快更准</text>
+
+  <!-- Curved arrow back -->
+  <path d="M 913 545 C 896 545, 896 405, 913 405" fill="none" stroke="#c471ed" stroke-width="1.5" stroke-dasharray="3,2"/>
+  <polygon points="911,408 918,405 911,402" fill="#c471ed"/>
+
+  <!-- Coverage -->
+  <text x="920" y="590" font-size="9" fill="#888">覆盖率: Day1:70% → M3:93%</text>
+
+  <!-- Arrow L3 → L2 -->
+  <line x1="500" y1="640" x2="500" y2="663" stroke="#c471ed" stroke-width="2"/>
+  <polygon points="494,660 500,670 506,660" fill="#c471ed"/>
+  <text x="520" y="658" font-size="10" fill="#4facfe">被消费 + 返回审计信号</text>
+
+  <!-- ==================== Layer 2 ==================== -->
+  <rect x="40" y="675" width="1120" height="150" rx="12" fill="url(#layer2bg)" stroke="#4facfe" stroke-width="1.5" stroke-opacity="0.5"/>
+  <text x="60" y="698" font-size="14" font-weight="700" fill="#4facfe">第二层：执行层（Data MCP — 无状态, 策略强制执行）</text>
+
+  <!-- MCP content box -->
+  <rect x="60" y="712" width="1080" height="93" rx="8" fill="white" stroke="#4facfe" stroke-width="1.2" filter="url(#shadow)"/>
+  <text x="80" y="734" font-size="12" font-weight="600" fill="#333">统一数据 MCP 服务</text>
+
+  <!-- Tools -->
+  <text x="80" y="754" font-size="10" fill="#555">• execute_certified_query(模式名, 参数, 身份)</text>
+  <text x="80" y="771" font-size="10" fill="#555">• execute_sql(SQL, 身份) — 自动 RLS</text>
+  <text x="80" y="788" font-size="10" fill="#555">• validate_sql(SQL) — 对照领域规则校验</text>
+
+  <text x="450" y="754" font-size="10" fill="#555">• get_schema(表) — 从语义目录读取</text>
+  <text x="450" y="771" font-size="10" fill="#555">• explain_access(身份, 表) — 权限透明化</text>
+
+  <!-- Middleware pipeline -->
+  <rect x="780" y="738" width="340" height="48" rx="6" fill="#4facfe" fill-opacity="0.06" stroke="#4facfe" stroke-width="0.5"/>
+  <text x="950" y="758" text-anchor="middle" font-size="10" font-weight="600" fill="#4facfe">中间件流水线</text>
+  <text x="950" y="776" text-anchor="middle" font-size="10" fill="#555">认证 → 身份解析 → RLS 改写 → 执行 → 审计</text>
+
+  <!-- Arrow L2 → L1 -->
+  <line x1="500" y1="825" x2="500" y2="848" stroke="#4facfe" stroke-width="2"/>
+  <polygon points="494,845 500,855 506,845" fill="#4facfe"/>
+
+  <!-- ==================== Layer 1 ==================== -->
+  <rect x="40" y="860" width="1120" height="112" rx="12" fill="url(#layer1bg)" stroke="#43e97b" stroke-width="1.5" stroke-opacity="0.5"/>
+  <text x="60" y="885" font-size="14" font-weight="700" fill="#2d9c5a">第一层：数据基础设施（现有的, 无需改动）</text>
+
+  <!-- Data source boxes - bigger text -->
+  <g filter="url(#shadow)">
+    <rect x="80" y="900" width="175" height="54" rx="8" fill="white" stroke="#43e97b" stroke-width="1"/>
+    <text x="167" y="923" text-anchor="middle" font-size="13" font-weight="600" fill="#333">Athena</text>
+    <text x="167" y="941" text-anchor="middle" font-size="10" fill="#666">OLAP / 数据湖查询</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="275" y="900" width="175" height="54" rx="8" fill="white" stroke="#43e97b" stroke-width="1"/>
+    <text x="362" y="923" text-anchor="middle" font-size="13" font-weight="600" fill="#333">Redshift</text>
+    <text x="362" y="941" text-anchor="middle" font-size="10" fill="#666">数据仓库 (DW)</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="470" y="900" width="175" height="54" rx="8" fill="white" stroke="#43e97b" stroke-width="1"/>
+    <text x="557" y="923" text-anchor="middle" font-size="13" font-weight="600" fill="#333">S3</text>
+    <text x="557" y="941" text-anchor="middle" font-size="10" fill="#666">数据湖存储</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="665" y="900" width="175" height="54" rx="8" fill="white" stroke="#43e97b" stroke-width="1"/>
+    <text x="752" y="923" text-anchor="middle" font-size="13" font-weight="600" fill="#333">CRM</text>
+    <text x="752" y="941" text-anchor="middle" font-size="10" fill="#666">客���关系管理</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="860" y="900" width="175" height="54" rx="8" fill="white" stroke="#43e97b" stroke-width="1"/>
+    <text x="947" y="923" text-anchor="middle" font-size="13" font-weight="600" fill="#333">NoSQL</text>
+    <text x="947" y="941" text-anchor="middle" font-size="10" fill="#666">运营数据 (DynamoDB)</text>
+  </g>
+</svg>

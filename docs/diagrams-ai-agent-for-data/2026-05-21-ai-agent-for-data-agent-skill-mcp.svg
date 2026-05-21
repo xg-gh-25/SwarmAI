@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600" font-family="Inter, -apple-system, sans-serif">
+  <defs>
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-opacity="0.1"/>
+    </filter>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#555"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 Z" fill="#4facfe"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="500" y="35" text-anchor="middle" font-size="20" font-weight="700" fill="#1a1a2e">Agent / Skill / MCP — How They Work Together</text>
+  <text x="500" y="55" text-anchor="middle" font-size="12" fill="#666">Brain decides, Hands orchestrate, Legs execute</text>
+
+  <!-- User -->
+  <circle cx="500" cy="100" r="25" fill="#f8f9fa" stroke="#333" stroke-width="1.5"/>
+  <text x="500" y="95" text-anchor="middle" font-size="16">👤</text>
+  <text x="500" y="112" text-anchor="middle" font-size="8" fill="#333">User</text>
+  <text x="500" y="140" text-anchor="middle" font-size="10" fill="#555" font-style="italic">"Show me GenAI revenue trends and key movers"</text>
+
+  <!-- Arrow user → agent -->
+  <line x1="500" y1="150" x2="500" y2="175" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Agent (Brain) -->
+  <rect x="300" y="180" width="400" height="100" rx="16" fill="#eef2ff" stroke="#667eea" stroke-width="2" filter="url(#shadow)"/>
+  <text x="320" y="205" font-size="14" font-weight="700" fill="#667eea">Agent (Brain)</text>
+  <text x="690" y="205" text-anchor="end" font-size="20">🧠</text>
+  <text x="320" y="225" font-size="10" fill="#555">Understands intent: revenue_query + genai_filter + trend</text>
+  <text x="320" y="242" font-size="10" fill="#555">Selects Skill: "weekly_genai_analysis"</text>
+  <text x="320" y="259" font-size="10" fill="#555">Synthesizes final answer in natural language</text>
+  <text x="320" y="273" font-size="9" fill="#888" font-style="italic">Does NOT write SQL. Does NOT manage security.</text>
+
+  <!-- Arrow agent → skill -->
+  <line x1="500" y1="280" x2="500" y2="310" stroke="#555" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="515" y="300" font-size="9" fill="#555">delegates task</text>
+
+  <!-- Skill (Hands) -->
+  <rect x="250" y="315" width="500" height="110" rx="16" fill="#fff5f5" stroke="#f56565" stroke-width="2" filter="url(#shadow)"/>
+  <text x="270" y="340" font-size="14" font-weight="700" fill="#e53e3e">Skill (Hands)</text>
+  <text x="740" y="340" text-anchor="end" font-size="20">🤲</text>
+  <text x="270" y="362" font-size="10" fill="#555">Orchestrates business workflow:</text>
+  <text x="280" y="380" font-size="9" fill="#555">Step 1: Call MCP → "genai_revenue_wow"          (revenue summary)</text>
+  <text x="280" y="395" font-size="9" fill="#555">Step 2: Call MCP → "revenue_movers"             (top accounts)</text>
+  <text x="280" y="410" font-size="9" fill="#555">Step 3: Call MCP → "account_6w_trend"           (sparkline data)</text>
+  <text x="280" y="420" font-size="9" fill="#888" font-style="italic">Decides parallel vs sequential. Merges results. Computes WoW%.</text>
+
+  <!-- Arrows skill → MCP (3 parallel) -->
+  <line x1="380" y1="425" x2="380" y2="470" stroke="#4facfe" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+  <line x1="500" y1="425" x2="500" y2="470" stroke="#4facfe" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+  <line x1="620" y1="425" x2="620" y2="470" stroke="#4facfe" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+  <text x="500" y="455" text-anchor="middle" font-size="9" fill="#4facfe">parallel MCP calls</text>
+
+  <!-- MCP (Legs) -->
+  <rect x="200" y="475" width="600" height="100" rx="16" fill="#f0f9ff" stroke="#4facfe" stroke-width="2" filter="url(#shadow)"/>
+  <text x="220" y="500" font-size="14" font-weight="700" fill="#4facfe">MCP (Legs)</text>
+  <text x="790" y="500" text-anchor="end" font-size="20">🦿</text>
+  <text x="220" y="520" font-size="10" fill="#555">Executes ONE atomic operation per call. No business context.</text>
+  <text x="220" y="540" font-size="10" fill="#555">Resolves certified pattern → SQL | Injects RLS filter | Executes on Athena | Writes audit log</text>
+  <text x="220" y="560" font-size="9" fill="#888" font-style="italic">Stateless. Doesn't know prior step or next step. Security enforced HERE, not in Agent.</text>
+
+  <!-- Key insight box -->
+  <rect x="200" y="585" width="600" height="15" rx="4" fill="#667eea" fill-opacity="0.06"/>
+  <text x="500" y="596" text-anchor="middle" font-size="9" font-weight="600" fill="#667eea">Switch Agent (GPT→Claude)? Skills + MCP untouched. Accuracy doesn't depend on model intelligence.</text>
+</svg>

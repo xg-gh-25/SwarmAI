@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 580" font-family="'PingFang SC', 'Microsoft YaHei', Inter, sans-serif">
+  <defs>
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.08"/>
+    </filter>
+  </defs>
+
+  <!-- Title -->
+  <text x="450" y="32" text-anchor="middle" font-size="20" font-weight="700" fill="#1a1a2e">第三层进化循环 — 越用越强</text>
+  <text x="450" y="54" text-anchor="middle" font-size="11" fill="#666">语义目录不是你维护的文档，是你培养的系统。用得越多，它就越聪明。</text>
+
+  <!-- Phase 1: Observe (top) -->
+  <rect x="310" y="80" width="280" height="80" rx="12" fill="#fdf2ff" stroke="#c471ed" stroke-width="2" filter="url(#shadow)"/>
+  <text x="330" y="103" font-size="11" font-weight="700" fill="#c471ed">阶段 1：观测（自动）</text>
+  <text x="330" y="121" font-size="9" fill="#555">每次 Level 2 查询自动记录：</text>
+  <text x="330" y="135" font-size="9" fill="#555">• 用户原始问题 • Agent 生成的 SQL</text>
+  <text x="330" y="149" font-size="9" fill="#555">• 涉及的表/列 • 执行成功否 • 用户是否满意</text>
+  <text x="575" y="150" font-size="16">👁️</text>
+
+  <!-- Phase 2: Discover (right) -->
+  <rect x="580" y="215" width="280" height="80" rx="12" fill="#fdf2ff" stroke="#c471ed" stroke-width="2" filter="url(#shadow)"/>
+  <text x="600" y="238" font-size="11" font-weight="700" fill="#c471ed">阶段 2：模式识别（半自动）</text>
+  <text x="600" y="256" font-size="9" fill="#555">相似 SQL 自动聚类 → 提取可参数化模板</text>
+  <text x="600" y="270" font-size="9" fill="#555">标记为"候选认证模式"</text>
+  <text x="600" y="284" font-size="9" fill="#555">推送给领域专家审核</text>
+  <text x="845" y="285" font-size="16">🔍</text>
+
+  <!-- Phase 3: Crystallize (bottom) -->
+  <rect x="310" y="350" width="280" height="80" rx="12" fill="#fdf2ff" stroke="#c471ed" stroke-width="2" filter="url(#shadow)"/>
+  <text x="330" y="373" font-size="11" font-weight="700" fill="#c471ed">阶段 3：沉淀（人工审核 + 一键发布）</text>
+  <text x="330" y="391" font-size="9" fill="#555">领域专家审核：SQL 逻辑对吗？参数化合理吗？</text>
+  <text x="330" y="405" font-size="9" fill="#555">审核通过 → 发布为认证模式</text>
+  <text x="330" y="419" font-size="9" fill="#555">Catalog 版本递增 v2.4 → v2.5</text>
+  <text x="575" y="420" font-size="16">💎</text>
+
+  <!-- Phase 4: Accelerate (left) -->
+  <rect x="40" y="215" width="280" height="80" rx="12" fill="#fdf2ff" stroke="#c471ed" stroke-width="2" filter="url(#shadow)"/>
+  <text x="60" y="238" font-size="11" font-weight="700" fill="#c471ed">阶段 4：加速（自动）</text>
+  <text x="60" y="256" font-size="9" fill="#555">下次相同意图的问题</text>
+  <text x="60" y="270" font-size="9" fill="#555">→ Agent 直接匹配到认证模式</text>
+  <text x="60" y="284" font-size="9" fill="#555">→ 走第一层 → 更快、更准、确定性</text>
+  <text x="305" y="285" font-size="16">⚡</text>
+
+  <!-- Connecting arrows (clockwise) -->
+  <!-- 1 → 2 (top-right) -->
+  <path d="M 590 130 Q 650 130, 660 215" fill="none" stroke="#c471ed" stroke-width="2"/>
+  <polygon points="656,212 660,222 664,212" fill="#c471ed"/>
+
+  <!-- 2 → 3 (right-bottom) -->
+  <path d="M 680 295 Q 680 330, 590 360" fill="none" stroke="#c471ed" stroke-width="2"/>
+  <polygon points="593,356 586,362 593,367" fill="#c471ed"/>
+
+  <!-- 3 → 4 (bottom-left) -->
+  <path d="M 310 400 Q 250 400, 240 295" fill="none" stroke="#c471ed" stroke-width="2"/>
+  <polygon points="236,298 240,288 244,298" fill="#c471ed"/>
+
+  <!-- 4 → 1 (left-top) -->
+  <path d="M 220 215 Q 220 170, 310 120" fill="none" stroke="#c471ed" stroke-width="2"/>
+  <polygon points="307,124 314,117 307,113" fill="#c471ed"/>
+
+  <!-- Center label -->
+  <text x="450" y="252" text-anchor="middle" font-size="12" font-weight="700" fill="#c471ed">自增强</text>
+  <text x="450" y="270" text-anchor="middle" font-size="12" font-weight="700" fill="#c471ed">循环</text>
+
+  <!-- Example callout -->
+  <rect x="100" y="445" width="700" height="45" rx="6" fill="#f8f9fa" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="120" y="465" font-size="9" fill="#555">例：3 周内 5 个不同 GM 都问了"我的 BU top decelerators"</text>
+  <text x="120" y="480" font-size="9" fill="#c471ed">→ 系统识别共同模式："revenue_movers_by_bu(bu_name, period, direction)" → 推荐创建认证模式</text>
+
+  <!-- Timeline bar -->
+  <rect x="100" y="505" width="700" height="65" rx="8" fill="white" stroke="#e2e8f0" stroke-width="1" filter="url(#shadow)"/>
+  <text x="120" y="525" font-size="10" font-weight="600" fill="#333">认证模式覆盖率随时间增长</text>
+
+  <!-- Timeline -->
+  <line x1="140" y1="545" x2="760" y2="545" stroke="#e2e8f0" stroke-width="1"/>
+
+  <!-- Progress segments -->
+  <rect x="140" y="538" width="120" height="14" rx="7" fill="#c471ed" fill-opacity="0.7"/>
+  <rect x="140" y="538" width="300" height="14" rx="7" fill="#c471ed" fill-opacity="0.4"/>
+  <rect x="140" y="538" width="480" height="14" rx="7" fill="#c471ed" fill-opacity="0.2"/>
+  <rect x="140" y="538" width="580" height="14" rx="7" fill="#c471ed" fill-opacity="0.1"/>
+
+  <!-- Labels -->
+  <text x="140" y="567" font-size="8" fill="#888">Day 1</text>
+  <text x="200" y="567" font-size="8" font-weight="600" fill="#c471ed">70%</text>
+  <text x="330" y="567" font-size="8" fill="#888">Month 1</text>
+  <text x="400" y="567" font-size="8" font-weight="600" fill="#c471ed">85%</text>
+  <text x="500" y="567" font-size="8" fill="#888">Month 3</text>
+  <text x="570" y="567" font-size="8" font-weight="600" fill="#c471ed">93%</text>
+  <text x="680" y="567" font-size="8" fill="#888">Month 6+</text>
+  <text x="730" y="567" font-size="8" font-weight="600" fill="#c471ed">95%+</text>
+</svg>
