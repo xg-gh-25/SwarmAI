@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 420" font-family="Inter, -apple-system, sans-serif">
+  <defs>
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.08"/>
+    </filter>
+    <marker id="arrowGreen" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#22c55e"/>
+    </marker>
+    <marker id="arrowGray" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#94a3b8"/>
+    </marker>
+    <marker id="arrowRed" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#ef4444"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="400" y="30" text-anchor="middle" font-size="18" font-weight="700" fill="#1a1a2e">三层 Fallback：Skill 是快速通道，不是围墙</text>
+  <text x="400" y="50" text-anchor="middle" font-size="11" fill="#666">Agent 处理"没见过的问题"的决策路径</text>
+
+  <!-- User question -->
+  <rect x="280" y="65" width="240" height="35" rx="18" fill="#f1f5f9" stroke="#64748b" stroke-width="1" filter="url(#shadow)"/>
+  <text x="400" y="87" text-anchor="middle" font-size="11" fill="#334155">用户提问</text>
+
+  <!-- Arrow down -->
+  <line x1="400" y1="100" x2="400" y2="125" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrowGray)"/>
+
+  <!-- Decision 1: Skill -->
+  <rect x="260" y="130" width="280" height="40" rx="8" fill="white" stroke="#6366f1" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="280" y="150" font-size="10" fill="#333">① 有现成的 Skill 覆盖？</text>
+  <text x="280" y="163" font-size="9" fill="#888">检查 skill 列表是否有匹配的业务流程</text>
+
+  <!-- YES branch to right -->
+  <line x1="540" y1="150" x2="620" y2="150" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+  <text x="570" y="143" font-size="9" font-weight="600" fill="#22c55e">YES</text>
+  <rect x="625" y="133" width="150" height="34" rx="6" fill="#f0fdf4" stroke="#22c55e" stroke-width="1"/>
+  <text x="700" y="150" text-anchor="middle" font-size="9" font-weight="600" fill="#16a34a">认证模式执行</text>
+  <text x="700" y="162" text-anchor="middle" font-size="8" fill="#16a34a">100% 准确 | 最快</text>
+
+  <!-- NO branch down -->
+  <line x1="400" y1="170" x2="400" y2="200" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrowGray)"/>
+  <text x="415" y="188" font-size="9" fill="#94a3b8">NO</text>
+
+  <!-- Decision 2: Pattern combine -->
+  <rect x="260" y="205" width="280" height="40" rx="8" fill="white" stroke="#6366f1" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="280" y="225" font-size="10" fill="#333">② 能组合已有的认证模式？</text>
+  <text x="280" y="238" font-size="9" fill="#888">多个 pattern 拼接能否覆盖这个问题</text>
+
+  <!-- YES branch to right -->
+  <line x1="540" y1="225" x2="620" y2="225" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+  <text x="570" y="218" font-size="9" font-weight="600" fill="#22c55e">YES</text>
+  <rect x="625" y="208" width="150" height="34" rx="6" fill="#f0fdf4" stroke="#22c55e" stroke-width="1"/>
+  <text x="700" y="225" text-anchor="middle" font-size="9" font-weight="600" fill="#16a34a">多模式组合</text>
+  <text x="700" y="237" text-anchor="middle" font-size="8" fill="#16a34a">~98% 准确</text>
+
+  <!-- NO branch down -->
+  <line x1="400" y1="245" x2="400" y2="275" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrowGray)"/>
+  <text x="415" y="263" font-size="9" fill="#94a3b8">NO</text>
+
+  <!-- Decision 3: Constrained NL2SQL -->
+  <rect x="260" y="280" width="280" height="50" rx="8" fill="white" stroke="#eab308" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="280" y="300" font-size="10" fill="#333">③ 受约束 NL2SQL + Catalog</text>
+  <text x="280" y="315" font-size="9" fill="#888">Agent 生成 SQL，但只能用 Catalog 里的表/列</text>
+  <text x="280" y="327" font-size="9" fill="#888">MCP validate_sql() 校验后执行</text>
+
+  <!-- Result to right -->
+  <line x1="540" y1="305" x2="620" y2="305" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+  <text x="565" y="298" font-size="9" font-weight="600" fill="#ca8a04">PASS</text>
+  <rect x="625" y="288" width="150" height="34" rx="6" fill="#fefce8" stroke="#eab308" stroke-width="1"/>
+  <text x="700" y="305" text-anchor="middle" font-size="9" font-weight="600" fill="#ca8a04">受约束执行</text>
+  <text x="700" y="317" text-anchor="middle" font-size="8" fill="#ca8a04">~95% 准确 | RLS 自动注入</text>
+
+  <!-- Reject branch down -->
+  <line x1="400" y1="330" x2="400" y2="360" stroke="#ef4444" stroke-width="1.5" marker-end="url(#arrowRed)"/>
+  <text x="415" y="348" font-size="9" fill="#ef4444">REJECT</text>
+
+  <!-- Reject outcome -->
+  <rect x="260" y="365" width="280" height="40" rx="8" fill="#fef2f2" stroke="#ef4444" stroke-width="1" filter="url(#shadow)"/>
+  <text x="280" y="383" font-size="9" fill="#dc2626">MCP 拒绝：引用了未知表/列或无权访问</text>
+  <text x="280" y="397" font-size="9" fill="#dc2626">→ 告知用户，不会静默返回错误数据</text>
+
+  <!-- Key message -->
+  <text x="400" y="415" text-anchor="middle" font-size="9" font-weight="600" fill="#6366f1">所有路径都安全 — 有答案就给，没把握就拒绝，永远不猜</text>
+</svg>

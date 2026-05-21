@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 400" font-family="Inter, -apple-system, sans-serif">
+  <defs>
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.08"/>
+    </filter>
+  </defs>
+
+  <!-- Title -->
+  <text x="450" y="30" text-anchor="middle" font-size="18" font-weight="700" fill="#1a1a2e">从 N×M 到 Hub &amp; Spoke</text>
+
+  <!-- LEFT: Before (N×M) -->
+  <rect x="30" y="50" width="400" height="330" rx="12" fill="#fef2f2" stroke="#fca5a5" stroke-width="1"/>
+  <text x="230" y="75" text-anchor="middle" font-size="14" font-weight="700" fill="#dc2626">今天（N×M 意大利面条）</text>
+
+  <!-- Agents left column -->
+  <rect x="60" y="100" width="100" height="30" rx="6" fill="white" stroke="#94a3b8" stroke-width="1" filter="url(#shadow)"/>
+  <text x="110" y="119" text-anchor="middle" font-size="10" fill="#333">Agent A</text>
+  <rect x="60" y="145" width="100" height="30" rx="6" fill="white" stroke="#94a3b8" stroke-width="1" filter="url(#shadow)"/>
+  <text x="110" y="164" text-anchor="middle" font-size="10" fill="#333">Agent B</text>
+  <rect x="60" y="190" width="100" height="30" rx="6" fill="white" stroke="#94a3b8" stroke-width="1" filter="url(#shadow)"/>
+  <text x="110" y="209" text-anchor="middle" font-size="10" fill="#333">Agent C</text>
+  <rect x="60" y="235" width="100" height="30" rx="6" fill="white" stroke="#94a3b8" stroke-width="1" filter="url(#shadow)"/>
+  <text x="110" y="254" text-anchor="middle" font-size="10" fill="#333">Agent D</text>
+
+  <!-- Data sources left -->
+  <rect x="290" y="120" width="110" height="30" rx="6" fill="white" stroke="#94a3b8" stroke-width="1" filter="url(#shadow)"/>
+  <text x="345" y="139" text-anchor="middle" font-size="10" fill="#333">数据源 1</text>
+  <rect x="290" y="180" width="110" height="30" rx="6" fill="white" stroke="#94a3b8" stroke-width="1" filter="url(#shadow)"/>
+  <text x="345" y="199" text-anchor="middle" font-size="10" fill="#333">数据源 2</text>
+  <rect x="290" y="240" width="110" height="30" rx="6" fill="white" stroke="#94a3b8" stroke-width="1" filter="url(#shadow)"/>
+  <text x="345" y="259" text-anchor="middle" font-size="10" fill="#333">数据源 3</text>
+
+  <!-- Spaghetti lines (N×M connections) -->
+  <line x1="160" y1="115" x2="290" y2="135" stroke="#ef4444" stroke-width="1" stroke-opacity="0.5"/>
+  <line x1="160" y1="115" x2="290" y2="195" stroke="#ef4444" stroke-width="1" stroke-opacity="0.5"/>
+  <line x1="160" y1="115" x2="290" y2="255" stroke="#ef4444" stroke-width="1" stroke-opacity="0.5"/>
+  <line x1="160" y1="160" x2="290" y2="135" stroke="#ef4444" stroke-width="1" stroke-opacity="0.5"/>
+  <line x1="160" y1="160" x2="290" y2="195" stroke="#ef4444" stroke-width="1" stroke-opacity="0.5"/>
+  <line x1="160" y1="160" x2="290" y2="255" stroke="#ef4444" stroke-width="1" stroke-opacity="0.5"/>
+  <line x1="160" y1="205" x2="290" y2="135" stroke="#ef4444" stroke-width="1" stroke-opacity="0.5"/>
+  <line x1="160" y1="205" x2="290" y2="195" stroke="#ef4444" stroke-width="1" stroke-opacity="0.5"/>
+  <line x1="160" y1="205" x2="290" y2="255" stroke="#ef4444" stroke-width="1" stroke-opacity="0.5"/>
+  <line x1="160" y1="250" x2="290" y2="135" stroke="#ef4444" stroke-width="1" stroke-opacity="0.5"/>
+  <line x1="160" y1="250" x2="290" y2="195" stroke="#ef4444" stroke-width="1" stroke-opacity="0.5"/>
+  <line x1="160" y1="250" x2="290" y2="255" stroke="#ef4444" stroke-width="1" stroke-opacity="0.5"/>
+
+  <!-- Problems list -->
+  <text x="60" y="295" font-size="9" fill="#dc2626">✗ 12 个集成点（4 agents × 3 sources）</text>
+  <text x="60" y="310" font-size="9" fill="#dc2626">✗ 12 个可能坏的地方</text>
+  <text x="60" y="325" font-size="9" fill="#dc2626">✗ 4 份数据知识副本（必然 drift）</text>
+  <text x="60" y="340" font-size="9" fill="#dc2626">✗ 4 套安全规则（不一致）</text>
+  <text x="60" y="355" font-size="9" fill="#dc2626">✗ 准确性取决于每个 Agent 的智商</text>
+  <text x="60" y="370" font-size="9" fill="#dc2626">✗ 新增 1 个 Agent = +3 个集成</text>
+
+  <!-- RIGHT: After (Hub & Spoke) -->
+  <rect x="470" y="50" width="400" height="330" rx="12" fill="#f0fdf4" stroke="#86efac" stroke-width="1"/>
+  <text x="670" y="75" text-anchor="middle" font-size="14" font-weight="700" fill="#16a34a">未来（中心辐射型）</text>
+
+  <!-- Agents right column -->
+  <rect x="500" y="100" width="100" height="30" rx="6" fill="white" stroke="#94a3b8" stroke-width="1" filter="url(#shadow)"/>
+  <text x="550" y="119" text-anchor="middle" font-size="10" fill="#333">Agent A</text>
+  <rect x="500" y="145" width="100" height="30" rx="6" fill="white" stroke="#94a3b8" stroke-width="1" filter="url(#shadow)"/>
+  <text x="550" y="164" text-anchor="middle" font-size="10" fill="#333">Agent B</text>
+  <rect x="500" y="190" width="100" height="30" rx="6" fill="white" stroke="#94a3b8" stroke-width="1" filter="url(#shadow)"/>
+  <text x="550" y="209" text-anchor="middle" font-size="10" fill="#333">Agent C</text>
+  <rect x="500" y="235" width="100" height="30" rx="6" fill="white" stroke="#94a3b8" stroke-width="1" filter="url(#shadow)"/>
+  <text x="550" y="254" text-anchor="middle" font-size="10" fill="#333">Agent D</text>
+
+  <!-- Central hub -->
+  <rect x="640" y="150" width="100" height="70" rx="10" fill="#c471ed" fill-opacity="0.15" stroke="#c471ed" stroke-width="2" filter="url(#shadow)"/>
+  <text x="690" y="178" text-anchor="middle" font-size="9" font-weight="700" fill="#9333ea">语义契约</text>
+  <text x="690" y="193" text-anchor="middle" font-size="8" fill="#9333ea">(一个地方)</text>
+  <text x="690" y="208" text-anchor="middle" font-size="8" fill="#9333ea">v2.4.0</text>
+
+  <!-- Data sources right -->
+  <rect x="780" y="120" width="75" height="30" rx="6" fill="white" stroke="#94a3b8" stroke-width="1" filter="url(#shadow)"/>
+  <text x="817" y="139" text-anchor="middle" font-size="9" fill="#333">数据源 1</text>
+  <rect x="780" y="170" width="75" height="30" rx="6" fill="white" stroke="#94a3b8" stroke-width="1" filter="url(#shadow)"/>
+  <text x="817" y="189" text-anchor="middle" font-size="9" fill="#333">数据源 2</text>
+  <rect x="780" y="220" width="75" height="30" rx="6" fill="white" stroke="#94a3b8" stroke-width="1" filter="url(#shadow)"/>
+  <text x="817" y="239" text-anchor="middle" font-size="9" fill="#333">数据源 3</text>
+
+  <!-- Clean lines: agents → hub -->
+  <line x1="600" y1="115" x2="640" y2="175" stroke="#22c55e" stroke-width="1.5"/>
+  <line x1="600" y1="160" x2="640" y2="180" stroke="#22c55e" stroke-width="1.5"/>
+  <line x1="600" y1="205" x2="640" y2="190" stroke="#22c55e" stroke-width="1.5"/>
+  <line x1="600" y1="250" x2="640" y2="195" stroke="#22c55e" stroke-width="1.5"/>
+
+  <!-- Clean lines: hub → data sources -->
+  <line x1="740" y1="175" x2="780" y2="135" stroke="#22c55e" stroke-width="1.5"/>
+  <line x1="740" y1="185" x2="780" y2="185" stroke="#22c55e" stroke-width="1.5"/>
+  <line x1="740" y1="195" x2="780" y2="235" stroke="#22c55e" stroke-width="1.5"/>
+
+  <!-- Benefits list -->
+  <text x="500" y="295" font-size="9" fill="#16a34a">✓ 7 个集成点（4+3，不是 4×3）</text>
+  <text x="500" y="310" font-size="9" fill="#16a34a">✓ 1 个地方变更，所有人自动适配</text>
+  <text x="500" y="325" font-size="9" fill="#16a34a">✓ 1 份数据真相（版本化）</text>
+  <text x="500" y="340" font-size="9" fill="#16a34a">✓ 1 套安全规则（强制执行）</text>
+  <text x="500" y="355" font-size="9" fill="#16a34a">✓ 准确性由平台架构保证</text>
+  <text x="500" y="370" font-size="9" fill="#16a34a">✓ 新增 1 个 Agent = +1 个集成</text>
+
+  <!-- Bottom quote -->
+  <text x="450" y="395" text-anchor="middle" font-size="10" fill="#64748b" font-style="italic">你不会让 5 个部门各自接银行做转账 — 为什么让 5 个 AI Agent 各自解读你的数据？</text>
+</svg>

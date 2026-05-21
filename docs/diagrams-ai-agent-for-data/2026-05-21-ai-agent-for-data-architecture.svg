@@ -1,0 +1,195 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900" font-family="Inter, -apple-system, sans-serif">
+  <defs>
+    <linearGradient id="layer4" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:0.12"/>
+      <stop offset="100%" style="stop-color:#667eea;stop-opacity:0.04"/>
+    </linearGradient>
+    <linearGradient id="layer3" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#f093fb;stop-opacity:0.12"/>
+      <stop offset="100%" style="stop-color:#f093fb;stop-opacity:0.04"/>
+    </linearGradient>
+    <linearGradient id="layer2" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#4facfe;stop-opacity:0.12"/>
+      <stop offset="100%" style="stop-color:#4facfe;stop-opacity:0.04"/>
+    </linearGradient>
+    <linearGradient id="layer1" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#43e97b;stop-opacity:0.12"/>
+      <stop offset="100%" style="stop-color:#43e97b;stop-opacity:0.04"/>
+    </linearGradient>
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.08"/>
+    </filter>
+  </defs>
+
+  <!-- Title -->
+  <text x="600" y="40" text-anchor="middle" font-size="22" font-weight="700" fill="#1a1a2e">AI Agent for Data — Reference Architecture</text>
+
+  <!-- Layer 4: Consumption -->
+  <rect x="40" y="60" width="1120" height="200" rx="12" fill="url(#layer4)" stroke="#667eea" stroke-width="1.5" stroke-opacity="0.4"/>
+  <text x="60" y="85" font-size="13" font-weight="600" fill="#667eea">Layer 4: CONSUMPTION (AI Agents + Skills)</text>
+
+  <!-- Agent boxes -->
+  <g filter="url(#shadow)">
+    <rect x="80" y="100" width="140" height="50" rx="8" fill="white" stroke="#667eea" stroke-width="1"/>
+    <text x="150" y="122" text-anchor="middle" font-size="11" font-weight="600" fill="#333">Agent Portal</text>
+    <text x="150" y="138" text-anchor="middle" font-size="9" fill="#666">Rocky / Q Business</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="240" y="100" width="140" height="50" rx="8" fill="white" stroke="#667eea" stroke-width="1"/>
+    <text x="310" y="122" text-anchor="middle" font-size="11" font-weight="600" fill="#333">Self-Service</text>
+    <text x="310" y="138" text-anchor="middle" font-size="9" fill="#666">Quick For Biz</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="400" y="100" width="140" height="50" rx="8" fill="white" stroke="#667eea" stroke-width="1"/>
+    <text x="470" y="122" text-anchor="middle" font-size="11" font-weight="600" fill="#333">Ops Agent</text>
+    <text x="470" y="138" text-anchor="middle" font-size="9" fill="#666">Push / Scheduled</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="560" y="100" width="140" height="50" rx="8" fill="white" stroke="#667eea" stroke-width="1"/>
+    <text x="630" y="122" text-anchor="middle" font-size="11" font-weight="600" fill="#333">Dev CLI</text>
+    <text x="630" y="138" text-anchor="middle" font-size="9" fill="#666">Q-CLI / Terminal</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="720" y="100" width="140" height="50" rx="8" fill="white" stroke="#667eea" stroke-width="1"/>
+    <text x="790" y="122" text-anchor="middle" font-size="11" font-weight="600" fill="#333">Custom Agent</text>
+    <text x="790" y="138" text-anchor="middle" font-size="9" fill="#666">Your Application</text>
+  </g>
+
+  <!-- Skills bar -->
+  <rect x="80" y="170" width="780" height="70" rx="8" fill="white" stroke="#667eea" stroke-width="1" stroke-dasharray="4,3" filter="url(#shadow)"/>
+  <text x="100" y="192" font-size="12" font-weight="600" fill="#667eea">Skills (Reusable Workflow Modules)</text>
+  <text x="100" y="210" font-size="10" fill="#555">Weekly Report   |   Customer 360   |   Pipeline Analysis   |   CRM Update   |   Forecast Gap   |   ...</text>
+  <text x="100" y="228" font-size="9" fill="#888" font-style="italic">Each Skill = business workflow orchestration. Decides which MCP tools, in what order, how to combine results.</text>
+
+  <!-- Arrow L4 → L3 -->
+  <line x1="470" y1="260" x2="470" y2="280" stroke="#667eea" stroke-width="2" marker-end="url(#arrowPurple)"/>
+  <text x="530" y="275" font-size="9" fill="#667eea">Call MCP + Consume Catalog</text>
+
+  <!-- Layer 3: Semantic Contract -->
+  <rect x="40" y="285" width="1120" height="280" rx="12" fill="url(#layer3)" stroke="#c471ed" stroke-width="1.5" stroke-opacity="0.4"/>
+  <text x="60" y="310" font-size="13" font-weight="600" fill="#c471ed">Layer 3: SEMANTIC CONTRACT (The Missing Middle)</text>
+
+  <!-- Main catalog box -->
+  <rect x="80" y="320" width="780" height="220" rx="8" fill="white" stroke="#c471ed" stroke-width="1" filter="url(#shadow)"/>
+  <text x="100" y="345" font-size="12" font-weight="600" fill="#333">Data Knowledge Hub (versioned, machine-readable, evolving)</text>
+
+  <!-- Catalog content columns -->
+  <text x="100" y="370" font-size="11" font-weight="600" fill="#c471ed">Semantic Catalog</text>
+  <text x="100" y="387" font-size="9" fill="#555">Tables + Columns + Meanings</text>
+  <text x="100" y="402" font-size="9" fill="#555">Domain Rules + Relationships</text>
+  <text x="100" y="417" font-size="9" fill="#555">Mandatory Filters + Enums</text>
+
+  <text x="320" y="370" font-size="11" font-weight="600" fill="#c471ed">Certified Patterns</text>
+  <text x="320" y="387" font-size="9" fill="#555">Named SQL templates (parameterized)</text>
+  <text x="320" y="402" font-size="9" fill="#555">Composable fragments</text>
+  <text x="320" y="417" font-size="9" fill="#555">Validation rules (auto-enforced)</text>
+
+  <text x="560" y="370" font-size="11" font-weight="600" fill="#c471ed">Access Policies</text>
+  <text x="560" y="387" font-size="9" fill="#555">Per-table RLS definitions</text>
+  <text x="560" y="402" font-size="9" fill="#555">Per-identity (service/user/delegated)</text>
+  <text x="560" y="417" font-size="9" fill="#555">Per-application isolation</text>
+
+  <!-- Data Quality row -->
+  <line x1="100" y1="430" x2="840" y2="430" stroke="#eee" stroke-width="1"/>
+  <text x="100" y="450" font-size="11" font-weight="600" fill="#c471ed">Data Quality Signals</text>
+  <text x="100" y="467" font-size="9" fill="#555">Freshness probes  |  Known constraints  |  Deprecation notices</text>
+
+  <!-- Version badge -->
+  <rect x="100" y="485" width="180" height="24" rx="12" fill="#c471ed" fill-opacity="0.1" stroke="#c471ed" stroke-width="0.5"/>
+  <text x="190" y="501" text-anchor="middle" font-size="9" font-weight="600" fill="#c471ed">Contract = Versioned Artifact (semver)</text>
+
+  <!-- Evolution Loop (right side) -->
+  <rect x="890" y="320" width="240" height="220" rx="8" fill="#fdf2ff" stroke="#c471ed" stroke-width="1" filter="url(#shadow)"/>
+  <text x="1010" y="345" text-anchor="middle" font-size="11" font-weight="700" fill="#c471ed">Evolution Loop</text>
+
+  <!-- Loop steps -->
+  <circle cx="920" cy="370" r="8" fill="#c471ed" fill-opacity="0.2" stroke="#c471ed" stroke-width="1"/>
+  <text x="935" y="374" font-size="9" fill="#555">Usage generates signals</text>
+
+  <line x1="920" y1="380" x2="920" y2="395" stroke="#c471ed" stroke-width="1" stroke-dasharray="2,2"/>
+  <circle cx="920" cy="405" r="8" fill="#c471ed" fill-opacity="0.2" stroke="#c471ed" stroke-width="1"/>
+  <text x="935" y="409" font-size="9" fill="#555">Discover new patterns</text>
+
+  <line x1="920" y1="415" x2="920" y2="430" stroke="#c471ed" stroke-width="1" stroke-dasharray="2,2"/>
+  <circle cx="920" cy="440" r="8" fill="#c471ed" fill-opacity="0.2" stroke="#c471ed" stroke-width="1"/>
+  <text x="935" y="444" font-size="9" fill="#555">Expert review + crystallize</text>
+
+  <line x1="920" y1="450" x2="920" y2="465" stroke="#c471ed" stroke-width="1" stroke-dasharray="2,2"/>
+  <circle cx="920" cy="475" r="8" fill="#c471ed" fill-opacity="0.2" stroke="#c471ed" stroke-width="1"/>
+  <text x="935" y="479" font-size="9" fill="#555">Publish new version</text>
+
+  <line x1="920" y1="485" x2="920" y2="500" stroke="#c471ed" stroke-width="1" stroke-dasharray="2,2"/>
+  <circle cx="920" cy="510" r="8" fill="#c471ed" fill-opacity="0.3" stroke="#c471ed" stroke-width="1.5"/>
+  <text x="935" y="514" font-size="9" font-weight="600" fill="#c471ed">Next time → Level 1 hit</text>
+
+  <!-- Curved arrow back to top -->
+  <path d="M 908 510 C 880 510, 880 370, 908 370" fill="none" stroke="#c471ed" stroke-width="1.5" stroke-dasharray="3,2" marker-end="url(#arrowMagenta)"/>
+
+  <!-- Arrow L3 → L2 -->
+  <line x1="470" y1="565" x2="470" y2="590" stroke="#c471ed" stroke-width="2"/>
+  <text x="530" y="583" font-size="9" fill="#4facfe">Consumed by + Audit signals return</text>
+
+  <!-- Layer 2: Execution -->
+  <rect x="40" y="595" width="1120" height="150" rx="12" fill="url(#layer2)" stroke="#4facfe" stroke-width="1.5" stroke-opacity="0.4"/>
+  <text x="60" y="620" font-size="13" font-weight="600" fill="#4facfe">Layer 2: EXECUTION (Data MCP — Stateless, Policy-Enforced)</text>
+
+  <!-- MCP box -->
+  <rect x="80" y="635" width="1050" height="90" rx="8" fill="white" stroke="#4facfe" stroke-width="1" filter="url(#shadow)"/>
+  <text x="100" y="658" font-size="11" font-weight="600" fill="#333">Unified Data MCP Server</text>
+
+  <text x="100" y="680" font-size="9" fill="#555">execute_certified_query(pattern, params, identity)</text>
+  <text x="100" y="695" font-size="9" fill="#555">execute_sql(sql, identity) — with automatic RLS</text>
+  <text x="100" y="710" font-size="9" fill="#555">validate_sql(sql) — against domain rules</text>
+
+  <text x="500" y="680" font-size="9" fill="#555">get_schema(table) — from Semantic Catalog</text>
+  <text x="500" y="695" font-size="9" fill="#555">explain_access(identity, table) — permission transparency</text>
+
+  <!-- Middleware pipeline -->
+  <rect x="830" y="660" width="280" height="45" rx="6" fill="#4facfe" fill-opacity="0.08" stroke="#4facfe" stroke-width="0.5"/>
+  <text x="970" y="677" text-anchor="middle" font-size="9" font-weight="600" fill="#4facfe">Middleware Pipeline</text>
+  <text x="970" y="694" text-anchor="middle" font-size="9" fill="#555">Auth → Identity → RLS Rewrite → Execute → Audit</text>
+
+  <!-- Arrow L2 → L1 -->
+  <line x1="470" y1="745" x2="470" y2="770" stroke="#4facfe" stroke-width="2"/>
+
+  <!-- Layer 1: Data Infrastructure -->
+  <rect x="40" y="775" width="1120" height="110" rx="12" fill="url(#layer1)" stroke="#43e97b" stroke-width="1.5" stroke-opacity="0.4"/>
+  <text x="60" y="800" font-size="13" font-weight="600" fill="#2d9c5a">Layer 1: DATA INFRASTRUCTURE (Existing, Unchanged)</text>
+
+  <!-- Data source boxes -->
+  <g filter="url(#shadow)">
+    <rect x="100" y="815" width="150" height="50" rx="8" fill="white" stroke="#43e97b" stroke-width="1"/>
+    <text x="175" y="838" text-anchor="middle" font-size="11" font-weight="500" fill="#333">Athena</text>
+    <text x="175" y="854" text-anchor="middle" font-size="9" fill="#666">OLAP / Data Lake</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="280" y="815" width="150" height="50" rx="8" fill="white" stroke="#43e97b" stroke-width="1"/>
+    <text x="355" y="838" text-anchor="middle" font-size="11" font-weight="500" fill="#333">Redshift</text>
+    <text x="355" y="854" text-anchor="middle" font-size="9" fill="#666">Data Warehouse</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="460" y="815" width="150" height="50" rx="8" fill="white" stroke="#43e97b" stroke-width="1"/>
+    <text x="535" y="838" text-anchor="middle" font-size="11" font-weight="500" fill="#333">S3</text>
+    <text x="535" y="854" text-anchor="middle" font-size="9" fill="#666">Data Lake Storage</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="640" y="815" width="150" height="50" rx="8" fill="white" stroke="#43e97b" stroke-width="1"/>
+    <text x="715" y="838" text-anchor="middle" font-size="11" font-weight="500" fill="#333">CRM</text>
+    <text x="715" y="854" text-anchor="middle" font-size="9" fill="#666">Salesforce / HubSpot</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="820" y="815" width="150" height="50" rx="8" fill="white" stroke="#43e97b" stroke-width="1"/>
+    <text x="895" y="838" text-anchor="middle" font-size="11" font-weight="500" fill="#333">NoSQL</text>
+    <text x="895" y="854" text-anchor="middle" font-size="9" fill="#666">DynamoDB / Ops</text>
+  </g>
+
+  <!-- Arrow markers -->
+  <defs>
+    <marker id="arrowPurple" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#667eea"/>
+    </marker>
+    <marker id="arrowMagenta" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#c471ed"/>
+    </marker>
+  </defs>
+</svg>
