@@ -94,6 +94,20 @@ All diagrams live in [`diagrams/`](diagrams/) as PNG files with dark backgrounds
 | `05-decision-classification` | Mechanical / Taste / Judgment with escalation levels |
 | `06-skill-lifecycle` | Skill creation, tiering, self-improvement, and guard system |
 
+## Discussions (Thought Leadership)
+
+All 33+ discussion articles are mirrored in [`discussions/`](discussions/) for DeepWiki indexing and offline reading.
+
+| Theme | Key Articles |
+|-------|-------------|
+| **Agent Architecture** | Agent Harness Autonomy Levels (#33), Multi-Skill vs Multi-Agent (#12), Compound Intelligence (#10) |
+| **Memory & Knowledge** | Memory as Moat (#3), 4-Layer Memory (#37), No Neo4j (#19/#20), DDD Cultivation (#9) |
+| **Quality & Governance** | Three-Layer Governance (#21/#22), Adversarial Review (#29/#30), Personality Trap (#31/#32) |
+| **Autonomous Delivery** | Coding as Black Box (#4), Content as Black Box (#5), AI for Data (#36) |
+| **AI Strategy** | S×T Tension Matrix (#11), Flat vs Compound (#13), Startup Stages (#16) |
+
+**Reading paths:** [Builder / Architect / Leader guide](discussions/35-reading-matrix-3-paths-through-34-discussions-builder-archit.md)
+
 ## Other Documentation
 
 | Document | Description |
@@ -104,4 +118,4 @@ All diagrams live in [`diagrams/`](diagrams/) as PNG files with dark backgrounds
 
 ---
 
-*Last updated: May 14, 2026 --- v3.0*
+*Last updated: May 21, 2026 --- v3.1*
