@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 920" font-family="'PingFang SC', 'Microsoft YaHei', Inter, sans-serif">
+  <defs>
+    <linearGradient id="timebg" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:0.05"/>
+      <stop offset="100%" style="stop-color:#f093fb;stop-opacity:0.05"/>
+    </linearGradient>
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.08"/>
+    </filter>
+    <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#667eea"/>
+    </marker>
+    <marker id="arrowred" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#e11d48"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="600" y="35" text-anchor="middle" font-size="20" font-weight="700" fill="#1a1a2e">E2E Case: One Prompt Traversing All 4 Memory Layers</text>
+  <text x="600" y="56" text-anchor="middle" font-size="12" fill="#666">User asks: "昨天 forecast gap 的结论是什么？哪几个 BU 风险最大？"</text>
+
+  <!-- Timeline backbone -->
+  <rect x="60" y="75" width="1080" height="830" rx="12" fill="url(#timebg)"/>
+
+  <!-- ===== YESTERDAY (Write Path) ===== -->
+  <rect x="80" y="85" width="1040" height="140" rx="8" fill="white" stroke="#e11d48" stroke-width="1.2" filter="url(#shadow)"/>
+  <text x="100" y="108" font-size="13" font-weight="700" fill="#e11d48">Yesterday — Session Close (Write Path)</text>
+  <text x="950" y="108" font-size="11" fill="#888">T-1</text>
+
+  <!-- Yesterday flow boxes -->
+  <rect x="100" y="118" width="200" height="40" rx="6" fill="#fff5f7" stroke="#fda4af" stroke-width="1"/>
+  <text x="200" y="135" text-anchor="middle" font-size="10" font-weight="600" fill="#9f1239">SummarizationPipeline</text>
+  <text x="200" y="150" text-anchor="middle" font-size="9" fill="#666">"MEAGS -12%, RFHC +3%"</text>
+
+  <line x1="300" y1="138" x2="325" y2="138" stroke="#e11d48" stroke-width="1.2" marker-end="url(#arrowred)"/>
+
+  <rect x="330" y="118" width="180" height="40" rx="6" fill="#fff5f7" stroke="#fda4af" stroke-width="1"/>
+  <text x="420" y="135" text-anchor="middle" font-size="10" font-weight="600" fill="#9f1239">DailyActivity</text>
+  <text x="420" y="150" text-anchor="middle" font-size="9" fill="#666">2026-05-20.md written</text>
+
+  <line x1="510" y1="138" x2="535" y2="138" stroke="#e11d48" stroke-width="1.2" marker-end="url(#arrowred)"/>
+
+  <rect x="540" y="118" width="200" height="40" rx="6" fill="#fff1f2" stroke="#e11d48" stroke-width="1.5"/>
+  <text x="640" y="135" text-anchor="middle" font-size="10" font-weight="700" fill="#9f1239">Distillation → MEMORY.md</text>
+  <text x="640" y="150" text-anchor="middle" font-size="9" fill="#666">[KD30] created + git-verified</text>
+
+  <line x1="740" y1="138" x2="765" y2="138" stroke="#e11d48" stroke-width="1.2" marker-end="url(#arrowred)"/>
+
+  <rect x="770" y="118" width="180" height="40" rx="6" fill="#fff5f7" stroke="#fda4af" stroke-width="1"/>
+  <text x="860" y="135" text-anchor="middle" font-size="10" font-weight="600" fill="#9f1239">Embedding Sync</text>
+  <text x="860" y="150" text-anchor="middle" font-size="9" fill="#666">KD30 → 1024-dim vector</text>
+
+  <!-- DDD cultivation -->
+  <rect x="100" y="168" width="850" height="35" rx="6" fill="#fef2f2" stroke="#fda4af" stroke-width="0.8" stroke-dasharray="4,2"/>
+  <text x="120" y="189" font-size="10" fill="#9f1239">+ DDD Cultivation: CMHK_SalesIntel/IMPROVEMENT.md ← "MEAGS large deal slip is recurring signal"</text>
+
+  <!-- ===== TODAY: Layer 1 ===== -->
+  <rect x="80" y="240" width="1040" height="125" rx="8" fill="white" stroke="#43e97b" stroke-width="1.2" filter="url(#shadow)"/>
+  <rect x="80" y="240" width="6" height="125" rx="3" fill="#43e97b"/>
+  <text x="100" y="263" font-size="13" font-weight="700" fill="#16a34a">Today — Layer 1: Context Directory</text>
+  <text x="950" y="263" font-size="11" fill="#888">0ms (cached)</text>
+
+  <text x="100" y="285" font-size="11" fill="#333">PromptBuilder.build_system_prompt() → load 11 files</text>
+  <text x="100" y="305" font-size="11" fill="#333">MEMORY.md (~25K tokens &lt; 30K threshold) → <tspan font-weight="700" fill="#16a34a">FULL INJECTION</tspan></text>
+  <text x="100" y="325" font-size="11" fill="#333">[KD30] "CMHK forecast gap — MEAGS -12% (3单slip), RFHC +3%, ISV flat" <tspan font-weight="700" fill="#16a34a">✓ already in system prompt</tspan></text>
+  <text x="100" y="350" font-size="10" fill="#666">+ PROJECTS.md → CMHK_SalesIntel DDD pointer | + DailyActivity (today's jobs) | + Proactive Briefing</text>
+
+  <!-- ===== TODAY: Layer 2 ===== -->
+  <rect x="80" y="380" width="1040" height="145" rx="8" fill="white" stroke="#4facfe" stroke-width="1.2" filter="url(#shadow)"/>
+  <rect x="80" y="380" width="6" height="145" rx="3" fill="#4facfe"/>
+  <text x="100" y="403" font-size="13" font-weight="700" fill="#0369a1">Today — Layer 2: Progressive Index (if MEMORY > 30K)</text>
+  <text x="950" y="403" font-size="11" fill="#888">~50ms</text>
+
+  <text x="100" y="425" font-size="11" fill="#333">select_memory_sections() — keyword + vector hybrid scoring:</text>
+
+  <rect x="120" y="435" width="960" height="75" rx="6" fill="#f0f9ff" stroke="#bae6fd" stroke-width="1"/>
+  <text x="140" y="455" font-size="10" fill="#0369a1" font-weight="600">Tokenize:</text>
+  <text x="220" y="455" font-size="10" fill="#444">"forecast", "gap", "结论", "BU", "风险"</text>
+  <text x="140" y="473" font-size="10" fill="#0369a1" font-weight="600">Keyword match:</text>
+  <text x="250" y="473" font-size="10" fill="#444">[KD30] "forecast" + "gap" → keyword_score = 0.82 | [RC04] "BU" → 0.31</text>
+  <text x="140" y="491" font-size="10" fill="#0369a1" font-weight="600">Hybrid score:</text>
+  <text x="250" y="491" font-size="10" fill="#444">0.6 × vector(0.89) + 0.4 × keyword(0.82) = <tspan font-weight="700" fill="#0369a1">0.862</tspan> (threshold: 0.15) → Cross-ref expansion: +RC04, +KD06</text>
+  <text x="140" y="505" font-size="9" fill="#888">Note: Currently full injection mode (MEMORY &lt; 30K). This scoring activates when MEMORY grows beyond threshold.</text>
+
+  <!-- ===== TODAY: Layer 3 ===== -->
+  <rect x="80" y="540" width="1040" height="130" rx="8" fill="white" stroke="#667eea" stroke-width="1.2" filter="url(#shadow)"/>
+  <rect x="80" y="540" width="6" height="130" rx="3" fill="#667eea"/>
+  <text x="100" y="563" font-size="13" font-weight="700" fill="#667eea">Today — Layer 3: Session Recall (FTS5)</text>
+  <text x="950" y="563" font-size="11" fill="#888">~100ms</text>
+
+  <text x="100" y="585" font-size="11" fill="#333">SessionRecall.recall_about("forecast gap 结论 BU 风险") → FTS5 on messages_fts</text>
+
+  <rect x="120" y="595" width="960" height="60" rx="6" fill="#eef2ff" stroke="#c7d2fe" stroke-width="1"/>
+  <text x="140" y="613" font-size="10" fill="#4338ca" font-weight="600">Hits from yesterday's session:</text>
+  <text x="140" y="630" font-size="10" fill="#444">msg#4582: "MEAGS forecast gap -12%，三笔大单..." | msg#4585: "BU 排风险：MEAGS > ISV > DNBP..."</text>
+  <text x="140" y="645" font-size="10" fill="#444">Score: density(0.12) + recency(0.35, 1d ago) + richness(0.09) = <tspan font-weight="700" fill="#4338ca">0.56</tspan> → Load ±10 msg context window (~800 tokens)</text>
+
+  <!-- ===== TODAY: Layer 4 ===== -->
+  <rect x="80" y="685" width="1040" height="130" rx="8" fill="white" stroke="#c471ed" stroke-width="1.2" filter="url(#shadow)"/>
+  <rect x="80" y="685" width="6" height="130" rx="3" fill="#c471ed"/>
+  <text x="100" y="708" font-size="13" font-weight="700" fill="#7c3aed">Today — Layer 4: Knowledge RAG</text>
+  <text x="950" y="708" font-size="11" fill="#888">~150ms</text>
+
+  <text x="100" y="730" font-size="11" fill="#333">RecallEngine.recall_knowledge("forecast gap 结论 BU 风险") → FTS5 + sqlite-vec</text>
+
+  <rect x="120" y="740" width="960" height="60" rx="6" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1"/>
+  <text x="140" y="758" font-size="10" fill="#7c3aed" font-weight="600">KnowledgeStore:</text>
+  <text x="280" y="758" font-size="10" fill="#444">CMHK_SalesIntel/TECH.md "Hierarchy Scope Model" (cosine 0.78)</text>
+  <text x="140" y="775" font-size="10" fill="#7c3aed" font-weight="600">TranscriptStore:</text>
+  <text x="280" y="775" font-size="10" fill="#444">Yesterday session turn 7: detailed MEAGS breakdown (cosine 0.71)</text>
+  <text x="140" y="792" font-size="10" fill="#7c3aed" font-weight="600">Graph enrichment:</text>
+  <text x="280" y="792" font-size="10" fill="#444">Entity "MEAGS" → 1-hop: [RFHC, ISV, forecast_table] (~2,500 tokens total)</text>
+
+  <!-- ===== RESULT ===== -->
+  <rect x="80" y="830" width="1040" height="65" rx="8" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="100" y="853" font-size="13" font-weight="700" fill="#16a34a">Agent Response (综合 4 层)</text>
+  <text x="100" y="873" font-size="11" fill="#333">"MEAGS 风险最大 (-12%)，3 笔大单 slip: [A] ¥2.1M 预算冻结, [B] ¥1.5M POC延期, [C] ¥0.8M 竞对介入。建议本周重点跟进。"</text>
+  <text x="100" y="890" font-size="10" fill="#666">Without memory: "我不知道你昨天做了什么，请再描述一次。" | Total latency overhead: &lt; 200ms | Token enrichment: ~4,000 tokens</text>
+</svg>
