@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 580" font-family="'PingFang SC', 'Microsoft YaHei', Inter, sans-serif">
+  <defs>
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.08"/>
+    </filter>
+    <marker id="arrowRed" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#ef4444"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#3b82f6"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#22c55e"/>
+    </marker>
+    <marker id="arrowGray" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="500" y="30" text-anchor="middle" font-size="18" font-weight="700" fill="#1a1a2e">合规数据流向 — 数据不出境，结果可控制</text>
+
+  <!-- Legend -->
+  <rect x="620" y="42" width="360" height="50" rx="6" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"/>
+  <line x1="640" y1="60" x2="680" y2="60" stroke="#ef4444" stroke-width="3"/>
+  <text x="688" y="64" font-size="9" fill="#555">原始数据（不出境）</text>
+  <line x1="640" y1="78" x2="680" y2="78" stroke="#3b82f6" stroke-width="3"/>
+  <text x="688" y="82" font-size="9" fill="#555">查询请求 / 模型调用</text>
+  <line x1="808" y1="60" x2="848" y2="60" stroke="#22c55e" stroke-width="3"/>
+  <text x="856" y="64" font-size="9" fill="#555">聚合结果（经 RLS 过滤）</text>
+  <line x1="808" y1="78" x2="848" y2="78" stroke="#94a3b8" stroke-width="3" stroke-dasharray="4,3"/>
+  <text x="856" y="82" font-size="9" fill="#555">元数据 / Schema（无业务数据）</text>
+
+  <!-- Boundary box: 客户区域内 -->
+  <rect x="40" y="100" width="620" height="440" rx="12" fill="#fef2f2" fill-opacity="0.3" stroke="#ef4444" stroke-width="2" stroke-dasharray="8,4"/>
+  <text x="60" y="122" font-size="12" font-weight="700" fill="#dc2626">🔒 客户区域内（cn-north-1 / cn-northwest-1）</text>
+  <text x="60" y="138" font-size="9" fill="#dc2626">数据主权边界 — 原始数据不离开此区域</text>
+
+  <!-- Layer 1: Data -->
+  <rect x="70" y="420" width="560" height="100" rx="8" fill="white" stroke="#43e97b" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="90" y="445" font-size="11" font-weight="700" fill="#2d9c5a">第一层：数据基础设施</text>
+  <rect x="90" y="455" width="100" height="45" rx="6" fill="#f0fdf4" stroke="#43e97b" stroke-width="1"/>
+  <text x="140" y="476" text-anchor="middle" font-size="10" font-weight="500" fill="#333">Athena</text>
+  <text x="140" y="491" text-anchor="middle" font-size="8" fill="#888">100M+ 行</text>
+  <rect x="210" y="455" width="100" height="45" rx="6" fill="#f0fdf4" stroke="#43e97b" stroke-width="1"/>
+  <text x="260" y="476" text-anchor="middle" font-size="10" font-weight="500" fill="#333">Redshift</text>
+  <text x="260" y="491" text-anchor="middle" font-size="8" fill="#888">226 张表</text>
+  <rect x="330" y="455" width="100" height="45" rx="6" fill="#f0fdf4" stroke="#43e97b" stroke-width="1"/>
+  <text x="380" y="476" text-anchor="middle" font-size="10" font-weight="500" fill="#333">S3</text>
+  <text x="380" y="491" text-anchor="middle" font-size="8" fill="#888">数据湖</text>
+  <rect x="450" y="455" width="100" height="45" rx="6" fill="#f0fdf4" stroke="#43e97b" stroke-width="1"/>
+  <text x="500" y="476" text-anchor="middle" font-size="10" font-weight="500" fill="#333">CRM</text>
+  <text x="500" y="491" text-anchor="middle" font-size="8" fill="#888">客户数据</text>
+
+  <!-- Layer 2: MCP -->
+  <rect x="70" y="290" width="560" height="105" rx="8" fill="white" stroke="#4facfe" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="90" y="313" font-size="11" font-weight="700" fill="#4facfe">第二层：MCP 执行层（境内部署）</text>
+  <text x="90" y="333" font-size="9" fill="#555">SQL 在这里执行 → RLS 在这里注入 → 审计在这里记录</text>
+  <text x="90" y="350" font-size="9" fill="#555">原始数据从第一层上来，在这里聚合/过滤后变成结果</text>
+  <rect x="90" y="360" width="180" height="22" rx="4" fill="#4facfe" fill-opacity="0.08" stroke="#4facfe" stroke-width="0.5"/>
+  <text x="180" y="375" text-anchor="middle" font-size="8" fill="#4facfe">RLS: WHERE territory IN (...)</text>
+  <rect x="290" y="360" width="120" height="22" rx="4" fill="#4facfe" fill-opacity="0.08" stroke="#4facfe" stroke-width="0.5"/>
+  <text x="350" y="375" text-anchor="middle" font-size="8" fill="#4facfe">审计日志 → DDB</text>
+  <rect x="430" y="360" width="120" height="22" rx="4" fill="#4facfe" fill-opacity="0.08" stroke="#4facfe" stroke-width="0.5"/>
+  <text x="490" y="375" text-anchor="middle" font-size="8" fill="#4facfe">validate_sql()</text>
+
+  <!-- Layer 3: Catalog (straddles boundary - metadata only) -->
+  <rect x="70" y="210" width="560" height="60" rx="8" fill="white" stroke="#c471ed" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="90" y="233" font-size="11" font-weight="700" fill="#c471ed">第三层：语义目录（可跨境共享 — 仅 Schema 描述，无业务数据）</text>
+  <text x="90" y="253" font-size="9" fill="#555">catalog.yaml / patterns/ / policies/ — 表名、列名、规则、SQL 模板。不含任何一行真实业务数据。</text>
+
+  <!-- Layer 4: Agent / LLM (outside boundary if needed) -->
+  <rect x="700" y="170" width="270" height="200" rx="12" fill="#f8fafc" stroke="#667eea" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="720" y="195" font-size="11" font-weight="700" fill="#667eea">第四层：Agent + LLM</text>
+  <text x="720" y="215" font-size="9" fill="#555">可部署在境内（零出境）</text>
+  <text x="720" y="230" font-size="9" fill="#555">或海外（仅收到聚合结果）</text>
+
+  <rect x="720" y="245" width="230" height="50" rx="6" fill="#eef2ff" stroke="#667eea" stroke-width="1"/>
+  <text x="835" y="266" text-anchor="middle" font-size="10" font-weight="500" fill="#333">LLM (Bedrock / Claude)</text>
+  <text x="835" y="282" text-anchor="middle" font-size="8" fill="#888">理解意图 + 综合呈现</text>
+
+  <rect x="720" y="310" width="230" height="40" rx="6" fill="#eef2ff" stroke="#667eea" stroke-width="1"/>
+  <text x="835" y="335" text-anchor="middle" font-size="10" font-weight="500" fill="#333">Agent 收到的内容：</text>
+
+  <!-- What Agent sees -->
+  <text x="720" y="360" font-size="9" fill="#22c55e">✓ 聚合数字："收入 $3.2M, +8.1%"</text>
+  <text x="720" y="375" font-size="9" fill="#94a3b8">✓ Schema 描述（列名/类型）</text>
+
+  <!-- What Agent does NOT see -->
+  <text x="720" y="395" font-size="9" fill="#ef4444">✗ 原始行数据</text>
+  <text x="720" y="410" font-size="9" fill="#ef4444">✗ 客户姓名/联系方式</text>
+  <text x="720" y="425" font-size="9" fill="#ef4444">✗ 未经 RLS 过滤的全量数据</text>
+
+  <!-- User -->
+  <rect x="740" y="440" width="210" height="35" rx="18" fill="white" stroke="#333" stroke-width="1" filter="url(#shadow)"/>
+  <text x="845" y="462" text-anchor="middle" font-size="11" fill="#333">👤 用户（提问 + 看结果）</text>
+
+  <!-- ===== DATA FLOW ARROWS ===== -->
+
+  <!-- Red: Raw data stays inside (Layer 1 → Layer 2, inside boundary) -->
+  <line x1="350" y1="455" x2="350" y2="398" stroke="#ef4444" stroke-width="2.5" marker-end="url(#arrowRed)"/>
+  <text x="360" y="430" font-size="8" font-weight="600" fill="#ef4444">原始数据</text>
+  <text x="360" y="440" font-size="8" fill="#ef4444">（不出境）</text>
+
+  <!-- Blue: Query request from Agent → MCP (crosses boundary inward) -->
+  <path d="M 700 300 L 635 330" fill="none" stroke="#3b82f6" stroke-width="2.5" marker-end="url(#arrowBlue)"/>
+  <text x="640" y="300" font-size="8" font-weight="600" fill="#3b82f6">查询请求</text>
+  <text x="640" y="310" font-size="8" fill="#3b82f6">(pattern + 参数)</text>
+
+  <!-- Green: Aggregated result from MCP → Agent (crosses boundary outward) -->
+  <path d="M 635 310 L 700 275" fill="none" stroke="#22c55e" stroke-width="2.5" marker-end="url(#arrowGreen)"/>
+  <text x="640" y="275" font-size="8" font-weight="600" fill="#22c55e">聚合结果</text>
+  <text x="640" y="285" font-size="8" fill="#22c55e">(经 RLS 过滤)</text>
+
+  <!-- Gray dashed: Catalog metadata (shared) -->
+  <path d="M 635 240 L 700 225" fill="none" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrowGray)"/>
+  <text x="640" y="230" font-size="8" fill="#94a3b8">Schema/规则</text>
+
+  <!-- Blue: User question → Agent -->
+  <path d="M 845 440 L 845 375" fill="none" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrowBlue)"/>
+
+  <!-- Green: Result → User -->
+  <path d="M 860 375 L 860 440" fill="none" stroke="#22c55e" stroke-width="1.5" marker-end="url(#arrowGreen)"/>
+
+  <!-- Key insight box at bottom -->
+  <rect x="40" y="550" width="920" height="25" rx="4" fill="#667eea" fill-opacity="0.06"/>
+  <text x="500" y="567" text-anchor="middle" font-size="10" font-weight="600" fill="#667eea">核心原则：数据永远不离开客户基础设施。出境的只是聚合后的数字（经 RLS 过滤）和 Schema 描述（无业务数据）。</text>
+</svg>
