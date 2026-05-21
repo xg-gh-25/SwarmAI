@@ -2,348 +2,189 @@
 
 Build, verify, deploy, and confirm health of the SwarmAI backend binary.
 
-## Core Loop
+## Co-Pilot Model
+
+This skill uses **human-in-the-loop** for steps that are slow (>60s) or kill
+the session. Agent handles fast checks; user runs long builds in their terminal.
 
 ```
-PREFLIGHT → BUILD → VERIFY → DEPLOY → [session dies] → HEALTH (on resume)
+Agent: PREFLIGHT → USER: BUILD → Agent: VERIFY → USER: DEPLOY → Agent: HEALTH
 ```
-
-Each stage: emit SIGNAL/CHECK/FAIL preamble → execute → report pass/fail → advance.
 
 ---
 
 ## Execution Rules
 
+### Handoff Format
+
+When handing off to user, ALWAYS use this exact format:
+
+```
+⏸️ YOUR TURN — 请在终端跑:
+┌─────────────────────────────────────────────────────
+│ <command>
+└─────────────────────────────────────────────────────
+完成后说 "好了" 或贴最后几行 output。
+```
+
 ### Momentum
 
-Once user says "build", execute ALL stages without pausing. Only stop on:
-- Stage FAILS (exit non-zero, check fails)
-- User explicitly interrupts
+- Agent stages: execute immediately, no pause between them.
+- User stages: hand off with clear command, then WAIT for user response.
+- When user says "好了" / "done" / "跑完了": proceed to next agent stage immediately.
+- Do NOT ask "ready?" or offer options. Just hand off or execute.
 
-Mid-flow observations (dirty tree, disk space, etc.): note inline and CONTINUE.
+### What NOT to Do
 
-### Session Death at Deploy
-
-**Deploy kills the daemon = kills your session.** This is structural, not a bug.
-The agent SDK subprocess is a child of the daemon process. SIGKILL on daemon →
-all children get SIGHUP → your SSE stream dies → session ends.
-
-Therefore:
-- Deploy is the **last action** in this session. Period.
-- After `curl /api/system/upgrade` returns 202, emit the deploy report and STOP.
-- Do NOT issue any further Bash commands, tool calls, or text after the curl.
-- Health verification happens on cold resume (breadcrumb-driven).
-
-### Daemon TaskRunner (Session-Death Resilient)
-
-Build takes 2-5 minutes. Claude sessions can crash/evict during this time, killing
-all child processes (exit 137 = SIGKILL from parent death, NOT OOM).
-
-**Solution:** Submit build as a **script task** to the daemon's TaskRunner API.
-The subprocess is owned by the daemon process tree — it survives session death.
-
-```
-POST /api/tasks/  →  202 (task_id)
-GET /api/tasks/{id}  →  status, exit_code, pid
-GET /api/tasks/{id}/logs  →  stdout content
-DELETE /api/tasks/{id}  →  cancel (SIGTERM)
-```
-
-**Never** use direct `bash build-backend.sh` in session — that's a session child.
-**Never** use `nohup` / `disown` — those are shell workarounds for the wrong tree.
-**Never** pipe through `| tail` — causes stdout buffering.
-The daemon already provides process isolation; USE it.
+- ❌ Run `build-backend.sh` directly (exit 137 from session death)
+- ❌ Run `npm run tauri build` directly (same problem)
+- ❌ Run upgrade/deploy endpoint (session dies)
+- ❌ Use `nohup`, `run_in_background`, or TaskRunner for builds
+- ❌ Retry a failed build without user intervention
 
 ---
 
 ## Stage 0: GUARD
 
 ```
-SIGNAL: Active project is SwarmAI
-CHECK:  File paths, user context, or explicit mention
-FAIL:   Project is not SwarmAI → ABORT
-```
-
-If project != SwarmAI:
-```
-ABORT: s_swarm-build is SwarmAI-only. Project '{project}' has its own deploy workflow.
+CHECK: Active project == SwarmAI
+FAIL:  ABORT with "s_swarm-build is SwarmAI-only."
 ```
 
 ---
 
-## Stage 1: PREFLIGHT
-
-```
-SIGNAL: VERSION exists, python3 + uv available, daemon reachable
-CHECK:  cat VERSION, python3 --version, uv --version, nc -z 127.0.0.1 18321
-FAIL:   VERSION missing or python3/uv not found (daemon down = WARN only)
-```
+## Stage 1: PREFLIGHT (Agent, 5s)
 
 ```bash
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai && cat VERSION && python3 --version && uv --version && nc -z 127.0.0.1 18321 2>/dev/null && echo "Daemon: UP" || echo "Daemon: DOWN (will deploy anyway)"
-git status --porcelain | head -5
+cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai && \
+  echo "Version: $(cat VERSION)" && \
+  echo "Tree: $(git status --porcelain | wc -l | tr -d ' ') uncommitted" && \
+  nc -z 127.0.0.1 18321 2>/dev/null && echo "Daemon: UP" || echo "Daemon: DOWN"
 ```
 
 **Report:**
 ```
 Stage 1 PREFLIGHT: PASS
-  Version: 1.12.2
-  Tree: clean | N uncommitted (building anyway)
+  Version: 1.16.2
+  Tree: clean | N uncommitted
   Daemon: UP | DOWN
 ```
 
----
-
-## Stage 2: BUILD (2-5 min)
-
-```
-SIGNAL: build-backend.sh exits 0, verify checks pass
-CHECK:  Exit code + "checks passed" in stdout
-FAIL:   Non-zero exit. Exit 137 = process killed (session death or OOM).
-```
-
-### Step 1: Submit build to TaskRunner
-
-```bash
-curl -s -X POST http://127.0.0.1:18321/api/tasks/ \
-  -H "Content-Type: application/json" \
-  -d '{"type":"script","command":"bash desktop/scripts/build-backend.sh","cwd":"/Users/gawan/Desktop/SwarmAI-Workspace/swarmai","timeout":600,"description":"PyInstaller build"}'
-```
-
-Extract `task_id` from the 200 response JSON.
-
-### Step 2: Poll for completion (every 30s)
-
-```bash
-curl -s http://127.0.0.1:18321/api/tasks/TASK_ID
-```
-
-Check `status` field:
-- `"wip"` → still building, poll again
-- `"completed"` → success, check `exit_code`
-- `"blocked"` → failed, check `error`
-
-If session dies mid-poll, on resume: re-poll the same task_id. Task continues
-regardless of session state.
-
-### Step 3: Check logs and exit code
-
-```bash
-curl -s http://127.0.0.1:18321/api/tasks/TASK_ID/logs | tail -20
-```
-
-Verify:
-```bash
-curl -s http://127.0.0.1:18321/api/tasks/TASK_ID | python3 -c "import sys,json; t=json.load(sys.stdin); print('PASS' if t.get('exit_code')==0 else 'FAIL: exit '+str(t.get('exit_code')))"
-```
-
-**Report:**
-```
-Stage 2 BUILD: PASS
-  Binary: python-backend-aarch64-apple-darwin/ (onedir)
-  Verify: XX/XX checks passed
-  Duration: ~Xm Xs
-```
-
-**On failure:**
-- Exit 137 (in log): Session death killed it before detach worked, OR true OOM. Retry.
-- Other: report last 20 lines of build log, STOP.
+Then immediately hand off to user for build.
 
 ---
 
-## Stage 3: VERIFY
+## Stage 2: BUILD (User, 2-5 min)
+
+Hand off to user:
 
 ```
-SIGNAL: verify_build.py exits 0
-CHECK:  "X/X checks passed" in output
-FAIL:   Any check fails
+⏸️ YOUR TURN — 请在终端跑:
+┌─────────────────────────────────────────────────────
+│ cd ~/Desktop/SwarmAI-Workspace/swarmai && bash desktop/scripts/build-backend.sh
+└─────────────────────────────────────────────────────
+完成后说 "好了" 或贴最后几行 output。
 ```
 
-Skip if build-backend.sh already ran verify (check output for "checks passed").
-Otherwise:
+Wait for user confirmation before proceeding.
+
+---
+
+## Stage 3: VERIFY (Agent, 10s)
 
 ```bash
 cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai && python3 desktop/scripts/verify_build.py
 ```
+
+**Pass criteria:** All checks pass (currently 46/46).
 
 **Report:**
 ```
 Stage 3 VERIFY: PASS (46/46)
 ```
 
----
-
-## Stage 4: DEPLOY
-
-```
-SIGNAL: Upgrade endpoint returns 202 + "initiated"
-CHECK:  HTTP status code = 202 in response
-FAIL:   Non-202 response (403 = wrong mode, 409 = already upgrading, 400 = no binary)
-```
-
-**This is the LAST action in this session.**
-
-### Step 1: Write breadcrumb (for resume)
-
-```bash
-cat > /tmp/swarm-build-pending.json << 'EOF'
-{"stage": "health", "deployed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)", "project_root": "/Users/gawan/Desktop/SwarmAI-Workspace/swarmai"}
-EOF
-```
-
-### Step 2: Trigger upgrade
-
-```bash
-RESPONSE=$(curl -s -X POST http://127.0.0.1:18321/api/system/upgrade)
-echo "$RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(json.dumps(d, indent=2))"
-```
-
-### Step 3: Emit final report and STOP
-
-**Report:**
-```
-Stage 4 DEPLOY: INITIATED
-  Upgrade ID: <from response>
-  What happens next:
-    1. Detached upgrader: SIGKILL daemon → bootout → rsync → bootstrap (~10s)
-    2. This session will disconnect (daemon death = session death)
-    3. On reconnect: Stage 5 HEALTH runs automatically (breadcrumb at /tmp/swarm-build-pending.json)
-
-BUILD STAGES 1-4 COMPLETE. Awaiting daemon restart...
-```
-
-**After emitting this report: DO NOTHING ELSE.** No more tool calls. No "let me
-check if it worked." The session will die within seconds. That's correct behavior.
-
-### Fallback: Daemon not reachable
-
-If daemon is DOWN (preflight detected it, or curl fails with connection refused),
-use the manual deploy path:
-
-```bash
-DAEMON_DIR="${HOME}/.swarm-ai/daemon"
-SIDECAR="/Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin"
-GUI_TARGET="gui/$(id -u)/com.swarmai.backend"
-PLIST_SRC="/Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/channels/com.swarmai.backend.plist"
-PLIST_DST="${HOME}/Library/LaunchAgents/com.swarmai.backend.plist"
-
-# Kill + deregister (safe even if already dead)
-launchctl kill SIGKILL "$GUI_TARGET" 2>/dev/null || true
-sleep 1
-launchctl bootout "$GUI_TARGET" 2>/dev/null || true
-sleep 1
-
-# Deploy
-rsync -a --delete "${SIDECAR}/" "${DAEMON_DIR}/"
-chmod +x "${DAEMON_DIR}/python-backend"
-VERSION_LINE="$(cat /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/VERSION) $(git -C /Users/gawan/Desktop/SwarmAI-Workspace/swarmai rev-parse --short HEAD) $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-echo "$VERSION_LINE" > "${DAEMON_DIR}/.version"
-
-# Deploy plist template
-if [ -f "$PLIST_SRC" ]; then
-  sed -e "s|__HOME__|$HOME|g" -e "s|__WRAPPER_PATH__|$HOME/.swarm-ai/swarmai_backend.sh|g" -e "s|__LOG_DIR__|$HOME/.swarm-ai/logs|g" "$PLIST_SRC" > "$PLIST_DST"
-fi
-
-# Bootstrap with retry
-for attempt in 1 2 3; do
-  launchctl bootstrap "gui/$(id -u)" "$PLIST_DST" 2>/dev/null && break
-  sleep 2
-done
-
-# Write breadcrumb
-echo "{\"stage\":\"health\",\"deployed_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > /tmp/swarm-build-pending.json
-echo "Manual deploy complete. Session will reconnect when daemon starts."
-```
-
-Same rule: after this completes, emit report and STOP.
+If verify fails: report which checks failed, STOP. Do not proceed to deploy.
 
 ---
 
-## Stage 5: HEALTH (on cold resume)
+## Stage 4: DEPLOY (User)
 
+Hand off to user with appropriate command based on daemon status:
+
+**If daemon is UP (most common):**
 ```
-SIGNAL: /health returns 200 + version matches deployed hash
-CHECK:  curl + version comparison
-FAIL:   40s timeout or version mismatch
+⏸️ YOUR TURN — 请在终端跑:
+┌─────────────────────────────────────────────────────
+│ curl -X POST http://127.0.0.1:18321/api/system/upgrade
+└─────────────────────────────────────────────────────
+等 10-15 秒 daemon 重启完成后说 "好了"。
 ```
 
-**Trigger:** On session resume (cold start), check for breadcrumb:
+**If daemon is DOWN:**
+```
+⏸️ YOUR TURN — 请在终端跑:
+┌─────────────────────────────────────────────────────
+│ DAEMON_DIR="$HOME/.swarm-ai/daemon" && \
+│ SIDECAR="$HOME/Desktop/SwarmAI-Workspace/swarmai/desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin" && \
+│ rsync -a --delete "$SIDECAR/" "$DAEMON_DIR/" && \
+│ chmod +x "$DAEMON_DIR/python-backend" && \
+│ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.swarmai.backend.plist
+└─────────────────────────────────────────────────────
+等 daemon 启动后说 "好了"。
+```
+
+Wait for user confirmation.
+
+---
+
+## Stage 5: HEALTH (Agent, 5-40s)
+
 ```bash
-cat /tmp/swarm-build-pending.json 2>/dev/null
+HEALTH=$(curl -sf http://127.0.0.1:18321/health) && \
+  echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Status: {d[\"status\"]}\nVersion: {d.get(\"version\",\"?\")}')" || \
+  echo "FAIL: daemon not responding"
 ```
 
-If breadcrumb exists → execute health verification → delete breadcrumb.
-If no breadcrumb → skip (not a post-deploy resume).
-
-### Health verification
-
-```bash
-echo "Verifying daemon health after deploy..."
-HEALTHY=0
-for i in $(seq 1 20); do
-  HEALTH=$(curl -sf http://127.0.0.1:18321/health 2>/dev/null) && {
-    HEALTHY=1
-    echo "Daemon HEALTHY after $((i*2))s"
-    echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'  Status: {d[\"status\"]}\n  Version: {d.get(\"version\",\"?\")}')"
-    break
-  }
-  sleep 2
-done
-
-if [ "$HEALTHY" -eq 0 ]; then
-  echo "FAIL: Daemon not healthy after 40s"
-  tail -10 ~/.swarm-ai/logs/backend-stderr.log 2>/dev/null
-  exit 1
-fi
-
-# Semantic correctness: version match
-EXPECTED_HASH=$(awk '{print $2}' ~/.swarm-ai/daemon/.version 2>/dev/null)
-ACTUAL_VERSION=$(echo "$HEALTH" | python3 -c "import sys,json; print(json.load(sys.stdin).get('version','?'))" 2>/dev/null)
-echo "Expected: $EXPECTED_HASH"
-echo "Actual:   $ACTUAL_VERSION"
-
-# Clean up breadcrumb
-rm -f /tmp/swarm-build-pending.json
-```
+**Pass criteria:**
+- Returns JSON (not HTML)
+- `status: healthy`
+- Version matches what we just built
 
 **Report:**
 ```
 Stage 5 HEALTH: PASS
   Status: healthy
-  Version: 1.12.2 abc1234 (matches deployed)
-  Latency: Xs after deploy
+  Version: 1.16.2
 
 BUILD COMPLETE ✅
 ```
 
 **On failure:**
-- Timeout: `tail -30 ~/.swarm-ai/logs/backend-stderr.log` for import errors
-- Version mismatch: rsync didn't complete or stale binary. Re-run Stage 4.
+- Not responding: "Daemon didn't start. Check `tail -20 ~/.swarm-ai/logs/backend-stderr.log`"
+- Version mismatch: "Stale binary. Re-run deploy step."
 
 ---
 
 ## Quick Reference
 
-| Stage | Duration | Blocks? | Session Impact |
-|-------|----------|---------|----------------|
-| 0 Guard | instant | Yes (abort) | None |
-| 1 Preflight | 5s | Warn only | None |
-| 2 Build | 2-5 min | Poll (30s intervals) | Detached — survives session death |
-| 3 Verify | 10s | Yes | None |
-| 4 Deploy | 5s | **Session dies** | Last action in session |
-| 5 Health | 5-40s | Yes | First action on resume |
+| Stage | Who | Duration | Can fail? |
+|-------|-----|----------|-----------|
+| 0 Guard | Agent | instant | Abort if wrong project |
+| 1 Preflight | Agent | 5s | Warn only |
+| 2 Build | **User** | 2-5 min | Yes — user fixes |
+| 3 Verify | Agent | 10s | Yes — blocks deploy |
+| 4 Deploy | **User** | 10-15s | Yes — user fixes |
+| 5 Health | Agent | 5-40s | Yes — retry deploy |
 
 ---
 
 ## Error Recovery
 
-| Error | Cause | Fix |
-|-------|-------|-----|
-| Exit 137 (foreground) | Session crash/evict killed child process | Use detached build (nohup). This is the #1 failure mode. |
-| Exit 137 (detached) | True macOS OOM kill | Close memory-heavy apps (Chrome, Teams), retry |
-| Build PID gone + no log | Session died before nohup launched | Retry — the 3s sleep check catches this |
-| 403 on upgrade | Not in daemon mode | Use manual fallback |
-| 409 on upgrade | Prior upgrade still in progress | Wait 60s or restart daemon manually |
-| Health timeout | Binary crashes on import | Check stderr log, fix hiddenimports |
-| Version mismatch | rsync raced or failed | Re-run Stage 4 |
-| Breadcrumb stale | Deploy happened but session never resumed | Delete breadcrumb, verify manually |
+| Error | Who Fixes | How |
+|-------|-----------|-----|
+| Build exit 137 | User | Close memory-heavy apps, retry |
+| Verify fails | Agent reports | Identify which checks failed |
+| Deploy 403 | User | Not in daemon mode — use manual path |
+| Deploy 409 | User | Wait 60s or `launchctl kill SIGKILL gui/$(id -u)/com.swarmai.backend` |
+| Health timeout | User | Check `~/.swarm-ai/logs/backend-stderr.log` |
+| Version mismatch | User | Re-run deploy |
