@@ -362,6 +362,19 @@ Pollinate 读 DDD → brand-correct 内容 → REFLECT 写回 insights → DDD �
 
 **外部可验证的内容：** 纠正数量（grep EVOLUTION.md 模板）、测试数量（`pytest --co`）、commit 历史（`git log`）、P0 率（release notes）。如果 CONVERGENCE.md 中的数字有误，git 能证明。
 
+### 深度讨论 & 思想输出
+
+34 篇讨论，5 大主题。不是文档 — 是带生产证据的观点输出。
+
+| 主题 | 核心文章 |
+|------|---------|
+| **基础概念** | [Agent Harness 自治五级](https://github.com/xg-gh-25/SwarmAI/discussions/34) · [没有记忆就没有理解](https://github.com/xg-gh-25/SwarmAI/discussions/3) · [越用越聪明](https://github.com/xg-gh-25/SwarmAI/discussions/7) |
+| **架构** | [Multi-Skill > Multi-Agent](https://github.com/xg-gh-25/SwarmAI/discussions/12) · [Coding as Black Box](https://github.com/xg-gh-25/SwarmAI/discussions/4) · [DDD Cultivation](https://github.com/xg-gh-25/SwarmAI/discussions/9) |
+| **治理** | [三层治理模型](https://github.com/xg-gh-25/SwarmAI/discussions/27) · [人格陷阱](https://github.com/xg-gh-25/SwarmAI/discussions/32) · [多专家对抗性审查](https://github.com/xg-gh-25/SwarmAI/discussions/30) |
+| **战略** | [S×T 张力矩阵](https://github.com/xg-gh-25/SwarmAI/discussions/11) · [同一模式在每个尺度重复](https://github.com/xg-gh-25/SwarmAI/discussions/28) |
+
+**新读者？** 从 [Agent Harness 自治五级](https://github.com/xg-gh-25/SwarmAI/discussions/34) 开始 — 它解释了一切的底层心智模型。然后在 [阅读矩阵](https://github.com/xg-gh-25/SwarmAI/discussions/35) 里选路径：Builder（45 分钟）· Architect（60 分钟）· Leader（30 分钟）。
+
 ---
 
 ## 快速开始

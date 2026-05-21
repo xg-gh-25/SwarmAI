@@ -377,6 +377,19 @@ Every correction in [`EVOLUTION.md`](./backend/context/EVOLUTION.md) follows thi
 
 **What you can verify externally:** Correction count (grep EVOLUTION.md template), test count (`pytest --co`), commit history (`git log`), P0 rate (release notes). If a number in CONVERGENCE.md is wrong, git proves it.
 
+### Discussions — Deep Dives & Thought Leadership
+
+34 discussions across 5 themes. Not documentation — opinionated takes with production evidence.
+
+| Theme | Key Discussions |
+|-------|----------------|
+| **Foundations** | [Agent Harness Autonomy Levels (L1-L5)](https://github.com/xg-gh-25/SwarmAI/discussions/33) · [Memory as Moat](https://github.com/xg-gh-25/SwarmAI/discussions/3) · [Compound Intelligence](https://github.com/xg-gh-25/SwarmAI/discussions/7) |
+| **Architecture** | [Multi-Skill > Multi-Agent](https://github.com/xg-gh-25/SwarmAI/discussions/12) · [Coding as Black Box](https://github.com/xg-gh-25/SwarmAI/discussions/4) · [DDD Cultivation](https://github.com/xg-gh-25/SwarmAI/discussions/9) |
+| **Governance** | [Three-Layer Governance](https://github.com/xg-gh-25/SwarmAI/discussions/26) · [The Personality Trap](https://github.com/xg-gh-25/SwarmAI/discussions/31) · [Adversarial Review](https://github.com/xg-gh-25/SwarmAI/discussions/29) |
+| **Strategy** | [S×T Tension Matrix](https://github.com/xg-gh-25/SwarmAI/discussions/11) · [Same Pattern at Every Scale](https://github.com/xg-gh-25/SwarmAI/discussions/28) |
+
+**New here?** Start with [Agent Harness Autonomy Levels](https://github.com/xg-gh-25/SwarmAI/discussions/33) — it explains the mental model behind everything else. Then pick a path in the [Reading Matrix](https://github.com/xg-gh-25/SwarmAI/discussions/35): Builder (45 min) · Architect (60 min) · Leader (30 min).
+
 ---
 
 ## Quick Start
