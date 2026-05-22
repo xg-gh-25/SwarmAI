@@ -49,6 +49,8 @@
 | 39 | [SwarmAI 设计哲学 — 自改进系统的六根支柱](39-swarmai-设计哲学-自改进系统的六根支柱.md) | General | 2026-05-22 |
 | 40 | [DDD Cultivation — The Full Story: Decisions, Failures, and Evidence](40-ddd-cultivation-the-full-story-decisions-failures-and-evidence.md) | Show and tell | 2026-05-22 |
 | 41 | [DDD Cultivation — 完整故事：决策、失败与证据](41-ddd-cultivation-完整故事决策失败与证据.md) | Show and tell | 2026-05-22 |
+| 42 | [100 ⭐ — Thank You (and What's Next)](42-100-star-thank-you-and-whats-next.md) | Announcements | 2026-05-22 |
+| 41 | [DDD Cultivation — 完整故事：决策、失败与证据](41-ddd-cultivation-完整故事决策失败与证据.md) | Show and tell | 2026-05-22 |
 
 ---
 
