@@ -47,6 +47,7 @@
 | 37 | [Agent Memory Architecture: How We Built a 4-Layer Progressive Memory System](37-agent-memory-architecture-how-we-built-a-4-layer-progressive.md) | Show and tell | 2026-05-21 |
 | 38 | [Design Philosophy — Six Pillars of a Self-Improving System](38-design-philosophy-six-pillars-of-a-self-improving-system.md) | General | 2026-05-22 |
 | 39 | [SwarmAI 设计哲学 — 自改进系统的六根支柱](39-swarmai-设计哲学-自改进系统的六根支柱.md) | General | 2026-05-22 |
+| 40 | [DDD Cultivation — The Full Story: Decisions, Failures, and Evidence](40-ddd-cultivation-the-full-story-decisions-failures-and-evidence.md) | Show and tell | 2026-05-22 |
 
 ---
 
