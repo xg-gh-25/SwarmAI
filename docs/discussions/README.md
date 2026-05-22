@@ -45,6 +45,7 @@
 | 35 | [Reading Matrix — 3 Paths Through 34 Discussions (Builder / Architect / Leader)](35-reading-matrix-3-paths-through-34-discussions-builder-archit.md) | General | 2026-05-21 |
 | 36 | [AI Agent for Data：从幻觉到精准](36-ai-agent-for-data从幻觉到精准.md) | Ideas | 2026-05-21 |
 | 37 | [Agent Memory Architecture: How We Built a 4-Layer Progressive Memory System](37-agent-memory-architecture-how-we-built-a-4-layer-progressive.md) | Show and tell | 2026-05-21 |
+| 38 | [Design Philosophy — Six Pillars of a Self-Improving System](38-design-philosophy-six-pillars-of-a-self-improving-system.md) | General | 2026-05-22 |
 
 ---
 
@@ -55,6 +56,7 @@
 | **Agent Architecture** | Agent Harness (#33), Multi-Skill vs Multi-Agent (#12), Compound Intelligence (#10) |
 | **Memory & Knowledge** | Memory as Moat (#3), 4-Layer Memory (#37), No Neo4j (#19/#20), DDD Cultivation (#9) |
 | **Quality & Governance** | Three-Layer Governance (#21/#22), Adversarial Review (#29/#30), Personality Trap (#31/#32) |
+| **Design Philosophy** | Six Pillars (#38), Compound Intelligence (#10), Time Symmetry (#14) |
 | **Autonomous Delivery** | Coding as Black Box (#4), Content as Black Box (#5), AI for Data (#36) |
 | **AI Strategy** | S×T Tension Matrix (#11), Flat vs Compound (#13), Startup Stages (#16) |
 

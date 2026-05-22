@@ -377,14 +377,31 @@ Every correction in [`EVOLUTION.md`](./backend/context/EVOLUTION.md) follows thi
 
 **What you can verify externally:** Correction count (grep EVOLUTION.md template), test count (`pytest --co`), commit history (`git log`), P0 rate (release notes). If a number in CONVERGENCE.md is wrong, git proves it.
 
+### Design Philosophy — Six Pillars
+
+Every architectural decision in SwarmAI traces back to six pillars, each earned from production failures:
+
+| Pillar | Core Belief | Earned From |
+|--------|------------|-------------|
+| **Prevention > Recovery** | Make bugs structurally impossible, not merely unlikely | Three-level hardening (L1 text → L2 gate → L3 architecture) |
+| **Verification > Inference** | The more certain you feel, the more likely it's stale inference | 5 corrections from asserting system behavior without reading code |
+| **Knowledge as Infrastructure** | Domain knowledge isn't docs — it's a structured resource code consumes | DDD grew 28→110 sections from normal work, zero documentation sprints |
+| **Correction > Capability** | Preventing the same mistake twice > adding new features | 32 corrections (5:1 ratio vs capabilities). Quality converges: P0 rate 1.0→0.3→0.0 |
+| **Temporal Compounding** | The gap between sessions is when the system learns | 9 hooks fire post-session. Session N+1 starts from where N already learned |
+| **Ownership as Architecture** | Boundaries are structural, not honor-system | 3-tier ownership (system/user/agent). Agent cannot modify its own rules |
+
+**The anti-philosophy** — what we explicitly reject and why: RAG post-processing (full inject > "maybe find"), fine-tuning (opaque static snapshots), multi-agent orchestration (handoff overhead > zero-cost role switching), platform memory (vendor lock-in on our most valuable asset), token budget optimization (power > savings at 1M context).
+
+**Deep dive:** [Design Philosophy — Six Pillars of a Self-Improving System](https://github.com/xg-gh-25/SwarmAI/discussions/38)
+
 ### Discussions — Deep Dives & Thought Leadership
 
-34 discussions across 5 themes. Not documentation — opinionated takes with production evidence.
+35 discussions across 5 themes. Not documentation — opinionated takes with production evidence.
 
 | Theme | Key Discussions |
 |-------|----------------|
-| **Foundations** | [Agent Harness Autonomy Levels (L1-L5)](https://github.com/xg-gh-25/SwarmAI/discussions/33) · [Memory as Moat](https://github.com/xg-gh-25/SwarmAI/discussions/3) · [Compound Intelligence](https://github.com/xg-gh-25/SwarmAI/discussions/7) |
-| **Architecture** | [Multi-Skill > Multi-Agent](https://github.com/xg-gh-25/SwarmAI/discussions/12) · [Coding as Black Box](https://github.com/xg-gh-25/SwarmAI/discussions/4) · [DDD Cultivation](https://github.com/xg-gh-25/SwarmAI/discussions/9) |
+| **Foundations** | [Design Philosophy — Six Pillars](https://github.com/xg-gh-25/SwarmAI/discussions/38) · [Agent Harness Autonomy Levels](https://github.com/xg-gh-25/SwarmAI/discussions/33) · [Compound Intelligence](https://github.com/xg-gh-25/SwarmAI/discussions/7) |
+| **Architecture** | [Memory as Moat](https://github.com/xg-gh-25/SwarmAI/discussions/3) · [Multi-Skill > Multi-Agent](https://github.com/xg-gh-25/SwarmAI/discussions/12) · [DDD Cultivation](https://github.com/xg-gh-25/SwarmAI/discussions/9) |
 | **Governance** | [Three-Layer Governance](https://github.com/xg-gh-25/SwarmAI/discussions/26) · [The Personality Trap](https://github.com/xg-gh-25/SwarmAI/discussions/31) · [Adversarial Review](https://github.com/xg-gh-25/SwarmAI/discussions/29) |
 | **Strategy** | [S×T Tension Matrix](https://github.com/xg-gh-25/SwarmAI/discussions/11) · [Same Pattern at Every Scale](https://github.com/xg-gh-25/SwarmAI/discussions/28) |
 
