@@ -1,12 +1,25 @@
-# Reading Matrix — 3 Paths Through 34 Discussions (Builder / Architect / Leader)
+# Reading Matrix — 3 Paths Through 38 Discussions (Builder / Architect / Leader)
 
-> 📎 [View on GitHub](https://github.com/xg-gh-25/SwarmAI/discussions/35) | Category: General | Published: 2026-05-21
+> 📎 [View on GitHub](https://github.com/xg-gh-25/SwarmAI/discussions/35) | Category: General | Published: 2026-05-21 | Updated: 2026-05-22
 
 ---
 
-> 30+ articles, 5 themes, 3 reader paths. Don't read everything. Pick your path.
+> 38 articles, 5 themes, 3 reader paths. Don't read everything. Pick your path.
 
 **Base URL:** `https://github.com/xg-gh-25/SwarmAI/discussions/`
+
+## Start Here (All Paths)
+
+Before diving into any path below, read the Design Philosophy. It explains the **"why"** behind everything else — in ~10 minutes you'll understand the six pillars that drive every architectural choice.
+
+| Article | What you'll get | ~Min |
+|---------|----------------|:----:|
+| [Design Philosophy — Six Pillars](https://github.com/xg-gh-25/SwarmAI/discussions/38) (EN) | The 6 core beliefs, how they earned from failures, why they compound | 10 |
+| [设计哲学 — 六根支柱](https://github.com/xg-gh-25/SwarmAI/discussions/39) (CN) | 同上中文版 | 10 |
+
+Then pick your path ↓
+
+---
 
 ## Three Reader Paths
 
@@ -109,6 +122,8 @@
 
 | # | Title | Lang | Key Idea | Prereqs |
 |---|-------|:----:|----------|---------|
+| [38](https://github.com/xg-gh-25/SwarmAI/discussions/38) | [Design Philosophy — Six Pillars](https://github.com/xg-gh-25/SwarmAI/discussions/38) | EN | Prevention, Verification, Knowledge, Correction, Temporal, Ownership | None (START HERE) |
+| [39](https://github.com/xg-gh-25/SwarmAI/discussions/39) | [设计哲学 — 六根支柱](https://github.com/xg-gh-25/SwarmAI/discussions/39) | CN | 同上中文版 | None (START HERE) |
 | [33](https://github.com/xg-gh-25/SwarmAI/discussions/33) | [Agent Harness Autonomy Levels](https://github.com/xg-gh-25/SwarmAI/discussions/33) | EN | Harness = control plane, levels = thickness | None |
 | [34](https://github.com/xg-gh-25/SwarmAI/discussions/34) | [Agent Harness 自治五级](https://github.com/xg-gh-25/SwarmAI/discussions/34) | CN | 同上中文版 | None |
 | [3](https://github.com/xg-gh-25/SwarmAI/discussions/3) | [没有记忆就没有理解](https://github.com/xg-gh-25/SwarmAI/discussions/3) | Mix | Memory is the only durable moat | None |
@@ -238,16 +253,18 @@
 | [34](https://github.com/xg-gh-25/SwarmAI/discussions/34) | [Agent Harness 自治五级](https://github.com/xg-gh-25/SwarmAI/discussions/34) | Foundations | CN |
 | [36](https://github.com/xg-gh-25/SwarmAI/discussions/36) | [AI Agent for Data — 从幻觉到精准](https://github.com/xg-gh-25/SwarmAI/discussions/36) | Architecture | Mix |
 | [37](https://github.com/xg-gh-25/SwarmAI/discussions/37) | [Agent Memory Architecture — 4-Layer Progressive](https://github.com/xg-gh-25/SwarmAI/discussions/37) | Architecture | EN |
+| [38](https://github.com/xg-gh-25/SwarmAI/discussions/38) | [Design Philosophy — Six Pillars](https://github.com/xg-gh-25/SwarmAI/discussions/38) | Foundations | EN |
+| [39](https://github.com/xg-gh-25/SwarmAI/discussions/39) | [设计哲学 — 六根支柱](https://github.com/xg-gh-25/SwarmAI/discussions/39) | Foundations | CN |
 
 ---
 
 ## Quick Stats
 
-- **Total discussions:** 36 (including Welcome + Reading Matrix)
-- **Bilingual pairs (EN+CN):** 6 pairs (12 discussions)
+- **Total discussions:** 38 (including Welcome + Reading Matrix)
+- **Bilingual pairs (EN+CN):** 7 pairs (14 discussions)
 - **English only:** 18
 - **Mixed/bilingual single:** 6
-- **Themes:** Foundations (6), Architecture (12), Governance (8), Strategy (3), Community (3)
+- **Themes:** Foundations (8), Architecture (12), Governance (8), Strategy (3), Community (3)
 - **Avg reading time per article:** ~5-8 min
 - **Path A total:** ~50 min | **Path B:** ~60 min | **Path C:** ~35 min
 

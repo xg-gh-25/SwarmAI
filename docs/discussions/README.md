@@ -46,6 +46,7 @@
 | 36 | [AI Agent for Data：从幻觉到精准](36-ai-agent-for-data从幻觉到精准.md) | Ideas | 2026-05-21 |
 | 37 | [Agent Memory Architecture: How We Built a 4-Layer Progressive Memory System](37-agent-memory-architecture-how-we-built-a-4-layer-progressive.md) | Show and tell | 2026-05-21 |
 | 38 | [Design Philosophy — Six Pillars of a Self-Improving System](38-design-philosophy-six-pillars-of-a-self-improving-system.md) | General | 2026-05-22 |
+| 39 | [SwarmAI 设计哲学 — 自改进系统的六根支柱](39-swarmai-设计哲学-自改进系统的六根支柱.md) | General | 2026-05-22 |
 
 ---
 
