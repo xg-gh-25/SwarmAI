@@ -1,10 +1,10 @@
-# Reading Matrix — 3 Paths Through 38 Discussions (Builder / Architect / Leader)
+# Reading Matrix — 3 Paths Through 40 Discussions (Builder / Architect / Leader)
 
 > 📎 [View on GitHub](https://github.com/xg-gh-25/SwarmAI/discussions/35) | Category: General | Published: 2026-05-21 | Updated: 2026-05-22
 
 ---
 
-> 38 articles, 5 themes, 3 reader paths. Don't read everything. Pick your path.
+> 40 articles, 5 themes, 3 reader paths. Don't read everything. Pick your path.
 
 **Base URL:** `https://github.com/xg-gh-25/SwarmAI/discussions/`
 
@@ -46,7 +46,7 @@ Then pick your path ↓
 | 7 | [Show your setup — what does context look like on disk?](https://github.com/xg-gh-25/SwarmAI/discussions/18) | See a real implementation | 5 |
 
 **Optional deep dives:**
-- [DDD Cultivation — domain knowledge that grows from work](https://github.com/xg-gh-25/SwarmAI/discussions/9) (if you want domain-aware agents)
+- [DDD Cultivation — domain knowledge that grows from work](https://github.com/xg-gh-25/SwarmAI/discussions/9) (intro) → [DDD Full Story — decisions, failures, evidence](https://github.com/xg-gh-25/SwarmAI/discussions/40) (deep dive) / [中文版](https://github.com/xg-gh-25/SwarmAI/discussions/41)
 - [Time Symmetry — session boundaries as learning boundaries](https://github.com/xg-gh-25/SwarmAI/discussions/14) (if you want smarter session lifecycle)
 - [Memory Architecture Poll — what's your pattern?](https://github.com/xg-gh-25/SwarmAI/discussions/17) (if you're choosing an approach)
 
@@ -75,6 +75,7 @@ Then pick your path ↓
 **Optional deep dives:**
 - [Agent Memory Architecture — 4-Layer Progressive System](https://github.com/xg-gh-25/SwarmAI/discussions/37) (if you're designing the memory subsystem — FTS5, vectors, distillation)
 - [AI Agent for Data — from hallucination to precision](https://github.com/xg-gh-25/SwarmAI/discussions/36) (if you're connecting agents to business data — semantic contracts, certified queries)
+- [DDD Cultivation Full Story — decisions, failures, evidence](https://github.com/xg-gh-25/SwarmAI/discussions/40) (if you're building domain-aware agents — 3-layer engine, 7 channels, 4 real failures) / [中文版](https://github.com/xg-gh-25/SwarmAI/discussions/41)
 - [No Neo4j — Lightweight Ontology in Practice](https://github.com/xg-gh-25/SwarmAI/discussions/20) (if you're choosing knowledge representation)
 - [Content as Black Box — message in, media out](https://github.com/xg-gh-25/SwarmAI/discussions/5) (if you want multi-engine delivery)
 - [Time Symmetry — session = learning boundary](https://github.com/xg-gh-25/SwarmAI/discussions/14) (if you're designing session lifecycle)
@@ -147,6 +148,8 @@ Then pick your path ↓
 | [19](https://github.com/xg-gh-25/SwarmAI/discussions/19) | [AI Agent 不需要 Neo4j](https://github.com/xg-gh-25/SwarmAI/discussions/19) | CN | 同上中文版 | → [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9) |
 | [36](https://github.com/xg-gh-25/SwarmAI/discussions/36) | [AI Agent for Data — 从幻觉到精准](https://github.com/xg-gh-25/SwarmAI/discussions/36) | Mix | Semantic contracts + certified queries for data agents | ~ [#4](https://github.com/xg-gh-25/SwarmAI/discussions/4), ~ [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9) |
 | [37](https://github.com/xg-gh-25/SwarmAI/discussions/37) | [Agent Memory Architecture — 4-Layer Progressive](https://github.com/xg-gh-25/SwarmAI/discussions/37) | EN | Full memory implementation: injection → progressive → FTS5 → RAG | → [#3](https://github.com/xg-gh-25/SwarmAI/discussions/3), ~ [#20](https://github.com/xg-gh-25/SwarmAI/discussions/20) |
+| [40](https://github.com/xg-gh-25/SwarmAI/discussions/40) | [DDD Cultivation — Full Story](https://github.com/xg-gh-25/SwarmAI/discussions/40) | EN | 3-layer engine, 7 channels, 4 failures, real metrics | → [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9), ~ [#20](https://github.com/xg-gh-25/SwarmAI/discussions/20) |
+| [41](https://github.com/xg-gh-25/SwarmAI/discussions/41) | [DDD Cultivation — 完整故事](https://github.com/xg-gh-25/SwarmAI/discussions/41) | CN | 同上中文版 | → [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9), ~ [#19](https://github.com/xg-gh-25/SwarmAI/discussions/19) |
 
 ### Theme 3: Governance — "How do you keep it safe?"
 
@@ -255,16 +258,18 @@ Then pick your path ↓
 | [37](https://github.com/xg-gh-25/SwarmAI/discussions/37) | [Agent Memory Architecture — 4-Layer Progressive](https://github.com/xg-gh-25/SwarmAI/discussions/37) | Architecture | EN |
 | [38](https://github.com/xg-gh-25/SwarmAI/discussions/38) | [Design Philosophy — Six Pillars](https://github.com/xg-gh-25/SwarmAI/discussions/38) | Foundations | EN |
 | [39](https://github.com/xg-gh-25/SwarmAI/discussions/39) | [设计哲学 — 六根支柱](https://github.com/xg-gh-25/SwarmAI/discussions/39) | Foundations | CN |
+| [40](https://github.com/xg-gh-25/SwarmAI/discussions/40) | [DDD Cultivation — Full Story](https://github.com/xg-gh-25/SwarmAI/discussions/40) | Architecture | EN |
+| [41](https://github.com/xg-gh-25/SwarmAI/discussions/41) | [DDD Cultivation — 完整故事](https://github.com/xg-gh-25/SwarmAI/discussions/41) | Architecture | CN |
 
 ---
 
 ## Quick Stats
 
-- **Total discussions:** 38 (including Welcome + Reading Matrix)
-- **Bilingual pairs (EN+CN):** 7 pairs (14 discussions)
+- **Total discussions:** 40 (including Welcome + Reading Matrix)
+- **Bilingual pairs (EN+CN):** 8 pairs (16 discussions)
 - **English only:** 18
 - **Mixed/bilingual single:** 6
-- **Themes:** Foundations (8), Architecture (12), Governance (8), Strategy (3), Community (3)
+- **Themes:** Foundations (8), Architecture (14), Governance (8), Strategy (3), Community (3)
 - **Avg reading time per article:** ~5-8 min
 - **Path A total:** ~50 min | **Path B:** ~60 min | **Path C:** ~35 min
 
