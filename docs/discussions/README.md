@@ -48,6 +48,7 @@
 | 38 | [Design Philosophy — Six Pillars of a Self-Improving System](38-design-philosophy-six-pillars-of-a-self-improving-system.md) | General | 2026-05-22 |
 | 39 | [SwarmAI 设计哲学 — 自改进系统的六根支柱](39-swarmai-设计哲学-自改进系统的六根支柱.md) | General | 2026-05-22 |
 | 40 | [DDD Cultivation — The Full Story: Decisions, Failures, and Evidence](40-ddd-cultivation-the-full-story-decisions-failures-and-evidence.md) | Show and tell | 2026-05-22 |
+| 41 | [DDD Cultivation — 完整故事：决策、失败与证据](41-ddd-cultivation-完整故事决策失败与证据.md) | Show and tell | 2026-05-22 |
 
 ---
 
@@ -56,7 +57,7 @@
 | Theme | Key Articles |
 |-------|-------------|
 | **Agent Architecture** | Agent Harness (#33), Multi-Skill vs Multi-Agent (#12), Compound Intelligence (#10) |
-| **Memory & Knowledge** | Memory as Moat (#3), 4-Layer Memory (#37), No Neo4j (#19/#20), DDD Cultivation (#9) |
+| **Memory & Knowledge** | Memory as Moat (#3), 4-Layer Memory (#37), No Neo4j (#19/#20), DDD Cultivation (#9/#40/#41) |
 | **Quality & Governance** | Three-Layer Governance (#21/#22), Adversarial Review (#29/#30), Personality Trap (#31/#32) |
 | **Design Philosophy** | Six Pillars (#38), Compound Intelligence (#10), Time Symmetry (#14) |
 | **Autonomous Delivery** | Coding as Black Box (#4), Content as Black Box (#5), AI for Data (#36) |
