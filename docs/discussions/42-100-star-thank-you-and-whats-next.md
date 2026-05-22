@@ -4,8 +4,6 @@
 
 Five days ago we published our first batch of discussions. Today: **108 stars, 10 forks, and a growing community asking real questions.**
 
-We didn't run ads. We didn't ask anyone to star. We just wrote what we learned — honestly, with evidence, including the failures.
-
 ---
 
 ## The Numbers
@@ -75,8 +73,6 @@ Keep the questions coming. Every comment in our discussions makes the next post 
 ---
 
 五天前发了第一批文章。今天：108 星，10 fork，社区开始提真问题。
-
-没投广告，没求 star。只是把学到的东西老实写出来——包括翻车的部分。
 
 接下来会继续 build in public：Code Intelligence UI、Pipeline v3、更多 "完整故事" 系列。
 
