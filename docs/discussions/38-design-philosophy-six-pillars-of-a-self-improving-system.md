@@ -6,6 +6,21 @@
 
 Most AI systems optimize for **"works now."** SwarmAI optimizes for **"cannot fail the same way twice."**
 
+## TL;DR — The Six Pillars at a Glance
+
+| # | Pillar | One-Liner |
+|:-:|--------|-----------|
+| 1 | **Prevention > Recovery** | Make bugs structurally impossible (L1 text → L2 gate → L3 architecture) |
+| 2 | **Verification > Inference** | The more certain you feel, the more you need to read the code |
+| 3 | **Knowledge as Infrastructure** | DDD isn't docs — it's a living substrate that every engine consumes |
+| 4 | **Correction > Capability** | One correction prevents an entire class forever; one feature adds value once |
+| 5 | **Temporal Compounding** | 9 hooks fire post-session — the system is never the same agent twice |
+| 6 | **Ownership as Architecture** | Agent cannot modify its own rules — boundaries are structural, not honor-system |
+
+**Plus:** what we [explicitly reject](#the-anti-philosophy--what-we-explicitly-reject) (RAG, fine-tuning, multi-agent, platform memory) and why.
+
+---
+
 This isn't a manifesto. It's an engineering report — derived from 32 corrections, 9 COEs, 75+ days of production operation, and a system that develops itself. Every claim below is traceable to a specific commit, a specific failure, or a specific architectural decision.
 
 ---
