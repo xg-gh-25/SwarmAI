@@ -51,6 +51,7 @@
 | 41 | [DDD Cultivation — 完整故事：决策、失败与证据](41-ddd-cultivation-完整故事决策失败与证据.md) | Show and tell | 2026-05-22 |
 | 42 | [100 ⭐ — Thank You (and What's Next)](42-100-star-thank-you-and-whats-next.md) | Announcements | 2026-05-22 |
 | 43 | [Why We Chose Single-Agent (And Multi-Agent Frameworks Are Proving Us Right)](43-why-we-chose-single-agent.md) | General | 2026-05-23 |
+| 45 | ["Dreaming" Is Just Note-Taking — The Real Evolution Happens Elsewhere](45-dreaming-is-just-note-taking.md) | General | 2026-05-23 |
 
 ---
 
