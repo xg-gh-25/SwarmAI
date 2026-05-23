@@ -38,17 +38,22 @@ The pipeline (called **Pollinate**):
 
 If you fix typography and break color, then fix color and break layout — you're playing whack-a-mole. The convergence gate requires ALL dimensions to pass in the same render. This eliminates the most common AI content failure: "looks good on one axis, broken on another."
 
-## The deeper principle
+## What makes content harder than code
 
-> 越用越聪明，不是越用越多。
+Code has a natural "test suite" — it either compiles and passes or doesn't. Content has no equivalent. A poster can be technically correct (right dimensions, readable text, valid colors) and still be *bad* — wrong tone, wrong hierarchy of attention, wrong emotional register.
 
-Both black boxes share a meta-principle: **the system improves itself.**
+Pollinate solves this by **decomposing taste into measurable proxies:**
 
-- Pipeline: REFLECT stage captures lessons → next run avoids previous mistakes
-- Pollinate: design rules accumulate → content gets better without changing the prompt
-- Memory: corrections compound → structural errors become impossible to repeat
+| Human judgment | Machine proxy | Gate |
+|---------------|---------------|------|
+| "Looks clean" | Whitespace ratio ≥ 30%, max 3 font sizes | Typography |
+| "Colors work" | WCAG AA contrast, ≤ 4 palette colors, no adjacent warm-warm | Color |
+| "Feels balanced" | Visual weight centroid within 15% of geometric center | Layout |
+| "Sounds authoritative" | Citation density, structured claims, no hedging language | GEO |
 
-This is the difference between "AI as tool" (static capability) and "AI as colleague" (growing capability). Tools deprecate. Colleagues compound.
+None of these individually capture "good content." But ALL passing simultaneously is a strong proxy — stronger than any single human reviewer's gut check, because humans satisfice on 1-2 dimensions and miss the rest.
+
+This is the unique insight: **you can't test content the way you test code, but you can decompose quality into orthogonal dimensions and gate on convergence.**
 
 ## The human role shifts
 
