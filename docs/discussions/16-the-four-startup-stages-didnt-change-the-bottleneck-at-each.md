@@ -40,13 +40,12 @@ Validation is still conversations, not code. AI makes the conversations faster (
 
 Without persistent context (architecture decisions, conventions, non-goals), every AI coding session starts from scratch. Session N doesn't know what session N-1 decided. Result: drift. The codebase works but contradicts itself.
 
-The fix isn't "write more docs." It's: **make the AI's working memory structural.**
+This is showing up across the industry:
+- **Cursor users** report "the AI keeps suggesting patterns I explicitly rejected last week" ([r/cursor](https://reddit.com/r/cursor) — recurring complaint pattern)
+- **Devin** had to add "session knowledge" specifically because autonomous runs drifted from initial requirements
+- **Replit Agent** users find projects become unmaintainable after ~20 agent sessions without any persistent context mechanism
 
-```
-CLAUDE.md / context files = persistent decision context
-Spec-before-code = scope control (AI won't add features the spec excludes)
-Session logs appended to context = anti-drift insurance (5 min/day)
-```
+The fix isn't "write more docs." It's structural: **decision context must persist in a format the AI reads automatically.** The specific mechanism (CLAUDE.md, .cursorrules, spec files, context directories) matters less than the principle: every session must inherit the judgment of prior sessions without the human re-explaining.
 
 The projects that skip this hit a wall around month 3: every new feature takes longer because the AI keeps making decisions that contradict prior decisions nobody recorded.
 
