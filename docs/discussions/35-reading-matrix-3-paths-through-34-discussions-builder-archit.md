@@ -1,10 +1,10 @@
-# Reading Matrix — 3 Paths Through 40 Discussions (Builder / Architect / Leader)
+# Reading Matrix — 3 Paths Through 43 Discussions (Builder / Architect / Leader)
 
-> 📎 [View on GitHub](https://github.com/xg-gh-25/SwarmAI/discussions/35) | Category: General | Published: 2026-05-21 | Updated: 2026-05-22
+> 📎 [View on GitHub](https://github.com/xg-gh-25/SwarmAI/discussions/35) | Category: General | Published: 2026-05-21 | Updated: 2026-05-23
 
 ---
 
-> 40 articles, 5 themes, 3 reader paths. Don't read everything. Pick your path.
+> 43 articles, 5 themes, 3 reader paths. Don't read everything. Pick your path.
 
 **Base URL:** `https://github.com/xg-gh-25/SwarmAI/discussions/`
 
@@ -46,6 +46,7 @@ Then pick your path ↓
 | 7 | [Show your setup — what does context look like on disk?](https://github.com/xg-gh-25/SwarmAI/discussions/18) | See a real implementation | 5 |
 
 **Optional deep dives:**
+- ["Dreaming" Is Just Note-Taking — The Real Evolution Happens Elsewhere](https://github.com/xg-gh-25/SwarmAI/discussions/45) (if you've heard about Claude Code's "dreaming" and wonder if it's magic — spoiler: it's L0 note-taking with an architectural gap)
 - [DDD Cultivation — domain knowledge that grows from work](https://github.com/xg-gh-25/SwarmAI/discussions/9) (intro) → [DDD Full Story — decisions, failures, evidence](https://github.com/xg-gh-25/SwarmAI/discussions/40) (deep dive) / [中文版](https://github.com/xg-gh-25/SwarmAI/discussions/41)
 - [Time Symmetry — session boundaries as learning boundaries](https://github.com/xg-gh-25/SwarmAI/discussions/14) (if you want smarter session lifecycle)
 - [Memory Architecture Poll — what's your pattern?](https://github.com/xg-gh-25/SwarmAI/discussions/17) (if you're choosing an approach)
@@ -55,6 +56,7 @@ Then pick your path ↓
 - Design a persistent memory layer for your agent (not just in-context)
 - Set up adversarial review gates so your agent doesn't ship bugs autonomously
 - Articulate why your CLI tool "forgets" — and what architectural layer is missing
+- Explain why "dreaming" (background note-taking) is necessary but insufficient for agent learning
 
 ---
 
@@ -67,12 +69,14 @@ Then pick your path ↓
 | 1 | [Agent Harness Landscape — different questions, not better answers](https://github.com/xg-gh-25/SwarmAI/discussions/15) | The market map — who's solving what | 7 |
 | 2 | [Agent Harness Autonomy Levels (L1-L5)](https://github.com/xg-gh-25/SwarmAI/discussions/33) | Where each product sits, why thickness matters | 8 |
 | 3 | [Multi-Skill > Multi-Agent — why we chose role-switching](https://github.com/xg-gh-25/SwarmAI/discussions/12) | Architecture decision: coordination tax vs context preservation | 7 |
+| 3b | [Why We Chose Single-Agent (and multi-agent frameworks prove us right)](https://github.com/xg-gh-25/SwarmAI/discussions/43) | CrewAI/LangGraph validation — even "multi-agent" converges to single-process | 8 |
 | 4 | [Compound Agent Intelligence — design beliefs as compiler guarantees](https://github.com/xg-gh-25/SwarmAI/discussions/10) | How to make 1+1+1+1 > 4 architecturally | 8 |
 | 5 | [Three-Layer Governance — principles, rules, gates](https://github.com/xg-gh-25/SwarmAI/discussions/26) | Keep L4+ agents under control without micromanaging | 8 |
 | 6 | [The Personality Trap — opinionated agents break compliance](https://github.com/xg-gh-25/SwarmAI/discussions/31) | The governance failure mode nobody talks about | 7 |
 | 7 | [Adversarial Review — mechanical quality gates](https://github.com/xg-gh-25/SwarmAI/discussions/29) | Trust but verify, structurally | 8 |
 
 **Optional deep dives:**
+- ["Dreaming" Is Just Note-Taking](https://github.com/xg-gh-25/SwarmAI/discussions/45) (if you're designing agent self-improvement — why L0 memory consolidation plateaus and what L1-L3 looks like)
 - [Agent Memory Architecture — 4-Layer Progressive System](https://github.com/xg-gh-25/SwarmAI/discussions/37) (if you're designing the memory subsystem — FTS5, vectors, distillation)
 - [AI Agent for Data — from hallucination to precision](https://github.com/xg-gh-25/SwarmAI/discussions/36) (if you're connecting agents to business data — semantic contracts, certified queries)
 - [DDD Cultivation Full Story — decisions, failures, evidence](https://github.com/xg-gh-25/SwarmAI/discussions/40) (if you're building domain-aware agents — 3-layer engine, 7 channels, 4 real failures) / [中文版](https://github.com/xg-gh-25/SwarmAI/discussions/41)
@@ -150,6 +154,8 @@ Then pick your path ↓
 | [37](https://github.com/xg-gh-25/SwarmAI/discussions/37) | [Agent Memory Architecture — 4-Layer Progressive](https://github.com/xg-gh-25/SwarmAI/discussions/37) | EN | Full memory implementation: injection → progressive → FTS5 → RAG | → [#3](https://github.com/xg-gh-25/SwarmAI/discussions/3), ~ [#20](https://github.com/xg-gh-25/SwarmAI/discussions/20) |
 | [40](https://github.com/xg-gh-25/SwarmAI/discussions/40) | [DDD Cultivation — Full Story](https://github.com/xg-gh-25/SwarmAI/discussions/40) | EN | 3-layer engine, 7 channels, 4 failures, real metrics | → [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9), ~ [#20](https://github.com/xg-gh-25/SwarmAI/discussions/20) |
 | [41](https://github.com/xg-gh-25/SwarmAI/discussions/41) | [DDD Cultivation — 完整故事](https://github.com/xg-gh-25/SwarmAI/discussions/41) | CN | 同上中文版 | → [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9), ~ [#19](https://github.com/xg-gh-25/SwarmAI/discussions/19) |
+| [43](https://github.com/xg-gh-25/SwarmAI/discussions/43) | [Why We Chose Single-Agent](https://github.com/xg-gh-25/SwarmAI/discussions/43) | EN | CrewAI/LangGraph validate single-process | → [#12](https://github.com/xg-gh-25/SwarmAI/discussions/12) |
+| [45](https://github.com/xg-gh-25/SwarmAI/discussions/45) | ["Dreaming" Is Just Note-Taking](https://github.com/xg-gh-25/SwarmAI/discussions/45) | EN | L0 memory ≠ evolution, L1-L3 is where judgment improves | → [#3](https://github.com/xg-gh-25/SwarmAI/discussions/3), ~ [#37](https://github.com/xg-gh-25/SwarmAI/discussions/37) |
 
 ### Theme 3: Governance — "How do you keep it safe?"
 
@@ -179,6 +185,7 @@ Then pick your path ↓
 | [2](https://github.com/xg-gh-25/SwarmAI/discussions/2) | [Welcome — What is this gallery?](https://github.com/xg-gh-25/SwarmAI/discussions/2) | EN | Announcement | None (START) |
 | [17](https://github.com/xg-gh-25/SwarmAI/discussions/17) | [Memory Architecture Poll](https://github.com/xg-gh-25/SwarmAI/discussions/17) | EN | Q&A | [#3](https://github.com/xg-gh-25/SwarmAI/discussions/3) |
 | [18](https://github.com/xg-gh-25/SwarmAI/discussions/18) | [Show Your Setup](https://github.com/xg-gh-25/SwarmAI/discussions/18) | EN | Show & tell | Any |
+| [42](https://github.com/xg-gh-25/SwarmAI/discussions/42) | [100 ⭐ — Thank You (and What's Next)](https://github.com/xg-gh-25/SwarmAI/discussions/42) | EN | Announcement | None |
 
 ---
 
@@ -260,17 +267,20 @@ Then pick your path ↓
 | [39](https://github.com/xg-gh-25/SwarmAI/discussions/39) | [设计哲学 — 六根支柱](https://github.com/xg-gh-25/SwarmAI/discussions/39) | Foundations | CN |
 | [40](https://github.com/xg-gh-25/SwarmAI/discussions/40) | [DDD Cultivation — Full Story](https://github.com/xg-gh-25/SwarmAI/discussions/40) | Architecture | EN |
 | [41](https://github.com/xg-gh-25/SwarmAI/discussions/41) | [DDD Cultivation — 完整故事](https://github.com/xg-gh-25/SwarmAI/discussions/41) | Architecture | CN |
+| [42](https://github.com/xg-gh-25/SwarmAI/discussions/42) | [100 ⭐ — Thank You (and What's Next)](https://github.com/xg-gh-25/SwarmAI/discussions/42) | Community | EN |
+| [43](https://github.com/xg-gh-25/SwarmAI/discussions/43) | [Why We Chose Single-Agent](https://github.com/xg-gh-25/SwarmAI/discussions/43) | Architecture | EN |
+| [45](https://github.com/xg-gh-25/SwarmAI/discussions/45) | ["Dreaming" Is Just Note-Taking](https://github.com/xg-gh-25/SwarmAI/discussions/45) | Architecture | EN |
 
 ---
 
 ## Quick Stats
 
-- **Total discussions:** 40 (including Welcome + Reading Matrix)
+- **Total discussions:** 43 (including Welcome + Reading Matrix)
 - **Bilingual pairs (EN+CN):** 8 pairs (16 discussions)
-- **English only:** 18
+- **English only:** 21
 - **Mixed/bilingual single:** 6
-- **Themes:** Foundations (8), Architecture (14), Governance (8), Strategy (3), Community (3)
+- **Themes:** Foundations (8), Architecture (16), Governance (8), Strategy (3), Community (4)
 - **Avg reading time per article:** ~5-8 min
-- **Path A total:** ~50 min | **Path B:** ~60 min | **Path C:** ~35 min
+- **Path A total:** ~50 min | **Path B:** ~65 min | **Path C:** ~35 min
 
 
