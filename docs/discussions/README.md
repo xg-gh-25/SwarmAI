@@ -50,7 +50,7 @@
 | 40 | [DDD Cultivation — The Full Story: Decisions, Failures, and Evidence](40-ddd-cultivation-the-full-story-decisions-failures-and-evidence.md) | Show and tell | 2026-05-22 |
 | 41 | [DDD Cultivation — 完整故事：决策、失败与证据](41-ddd-cultivation-完整故事决策失败与证据.md) | Show and tell | 2026-05-22 |
 | 42 | [100 ⭐ — Thank You (and What's Next)](42-100-star-thank-you-and-whats-next.md) | Announcements | 2026-05-22 |
-| 41 | [DDD Cultivation — 完整故事：决策、失败与证据](41-ddd-cultivation-完整故事决策失败与证据.md) | Show and tell | 2026-05-22 |
+| 43 | [Why We Chose Single-Agent (And Multi-Agent Frameworks Are Proving Us Right)](43-why-we-chose-single-agent.md) | General | 2026-05-23 |
 
 ---
 
@@ -58,7 +58,7 @@
 
 | Theme | Key Articles |
 |-------|-------------|
-| **Agent Architecture** | Agent Harness (#33), Multi-Skill vs Multi-Agent (#12), Compound Intelligence (#10) |
+| **Agent Architecture** | Agent Harness (#33), Single-Agent vs Multi-Agent (#43), Multi-Skill vs Multi-Agent (#12), Compound Intelligence (#10) |
 | **Memory & Knowledge** | Memory as Moat (#3), 4-Layer Memory (#37), No Neo4j (#19/#20), DDD Cultivation (#9/#40/#41) |
 | **Quality & Governance** | Three-Layer Governance (#21/#22), Adversarial Review (#29/#30), Personality Trap (#31/#32) |
 | **Design Philosophy** | Six Pillars (#38), Compound Intelligence (#10), Time Symmetry (#14) |
