@@ -197,6 +197,30 @@ For every new function, parameter, config key, or `.get("key")` call in the chan
 
 Include integration trace results in the review artifact under `"integration_trace"`.
 
+### 3b. Input Boundary Analysis (for modified functions)
+
+**When a function's behavior changes (not just refactored):** trace all callers and
+check what the **most extreme valid input** is.
+
+For each modified function:
+
+1. `grep -rn "function_name(" --include="*.py" | grep -v "def \|test_"` → list callers
+2. For each caller: what input values does it pass? What's the minimum/maximum?
+3. Run the function mentally (or literally) with the extreme input. Is the result
+   appropriate for the use case?
+
+| Finding | Action |
+|---------|--------|
+| Extreme-but-valid input produces unexpected tier/category jump | Add a guard or document as intentional |
+| Caller hardcodes a specific value that bypasses intended logic | Flag as design tension |
+
+**Example (2026-05-25):** `compute_confidence()` need_signal raised to 0.3. Caller
+filters eligible skills with `min_examples=3` for priority skills. Result: 1 correction
+in 3 examples + high density (33%) → confidence 0.18 (HIGH tier). This was an
+inappropriate promotion for thin evidence — fixed by adding `n_corrections >= 2`
+guard in the deploy path. Input boundary analysis would have caught this at REVIEW,
+not requiring adversarial review.
+
 ---
 
 ### 4. Replace/Move Parity Check

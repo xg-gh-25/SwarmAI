@@ -187,8 +187,8 @@ def compute_confidence(
         1 (0.3), 2 (0.5), 3 (0.6), 5 (0.8), 10 (1.0).
       correction_density: correction_rate = n_corrections / n_examples.
         Bands: >5% (0.2), >15% (0.4), >30% (0.6), >50% (0.9).
-      need_signal: how low is the fitness score?
-        <0.3 → 1.0, <0.5 → 0.7, <0.7 → 0.4, else 0.1.
+      need_signal: how much improvement does the skill need?
+        fitness ≤0.3 → 1.0, ≤0.5 → 0.7, ≤0.7 → 0.5, else 0.3 (v2.4 floor).
 
     Two additive boosts (v2.2):
       recency_boost: +0.05 per correction within 7 days, capped at +0.15.
@@ -233,10 +233,17 @@ def compute_confidence(
         density_boost = 0.0
 
     # Need signal (how low is fitness?)
+    # v2.4 (2026-05-25): raised floor from 0.1 to 0.3 for high-fitness skills.
+    # Rationale: if corrections exist (n_corrections > 0, enforced by early return L203),
+    # the skill IS producing errors even at high fitness. Old floor (0.1) made
+    # it structurally impossible for 1-2 correction skills to reach MED (0.08)
+    # threshold — evidence × max(density, 0.1) = 0.3 × 0.1 = 0.03. This kept
+    # the evolution pipeline permanently frozen despite real correction evidence.
+    # New floor (0.3) allows: 0.3 × 0.3 = 0.09 ≥ MED (0.08) → proposals surface.
     if avg_fitness > 0.7:
-        need = 0.1
+        need = 0.3
     elif avg_fitness > 0.5:
-        need = 0.4
+        need = 0.5
     elif avg_fitness > 0.3:
         need = 0.7
     else:
@@ -1433,6 +1440,13 @@ def _run_evolution_cycle_locked(
 
     # 3b. Deploy new optimizations (or log proposed changes in dry-run mode)
     for skill_name, confidence, avg_score, examples, opt_result in skill_assessments:
+        # v2.4: Minimum 2 corrections required for HIGH-confidence proposal path.
+        # Single corrections are too thin (could be typo/preference) — surface as
+        # MED recommendation only. Prevents proposal flooding from priority skills
+        # with 3 examples and 1 correction reaching HIGH via density boost.
+        n_corr = sum(1 for ex in examples if ex.user_correction)
+        if confidence >= high_threshold and n_corr < 2:
+            confidence = med_threshold  # Demote to recommend tier
         if confidence >= high_threshold and opt_result and opt_result.accepted and opt_result.changes:
             # v2.3: Generate and append anti-patterns as an additional TextChange
             precomputed = optimizer._extract_corrections(examples)
@@ -1485,12 +1499,32 @@ def _run_evolution_cycle_locked(
             # surfaced as a Radar todo. The next cycle (or manual approval)
             # deploys them. This closes the "evolution observes but never acts"
             # gap while keeping human in the loop.
+
+            # ── Freshness check (LL02): re-read current file and filter out
+            # changes already present. The target file may have been updated
+            # since the MINE phase ran (same session or manual edit).
+            current_text = optimizer._read_skill_text(skill_name) or ""
+            current_lower = current_text.lower()
+            novel_changes = [
+                c for c in opt_result.changes
+                if c.replacement.strip()
+                and c.replacement.strip().lower() not in current_lower
+            ]
+            if not novel_changes:
+                logger.info(
+                    "Evolution cycle: all proposed changes for %s already present "
+                    "in current file — skipping proposal.",
+                    skill_name,
+                )
+                miner.save_evals(skill_name, examples)
+                continue
+
             proposal = {
                 "skill_name": skill_name,
                 "confidence": round(confidence, 3),
                 "score_before": round(opt_result.original_score, 3),
                 "score_after": round(opt_result.optimized_score, 3),
-                "changes": [{"reason": c.reason, "preview": c.replacement[:200]} for c in opt_result.changes],
+                "changes": [{"reason": c.reason, "preview": c.replacement[:200]} for c in novel_changes],
                 "proposed_at": datetime.now(timezone.utc).isoformat(),
             }
             _write_evolution_proposal(evals_dir.parent, proposal)
@@ -1498,10 +1532,12 @@ def _run_evolution_cycle_locked(
             miner.save_evals(skill_name, examples)
             logger.info(
                 "Evolution cycle: PROPOSED %s for approval (confidence=%.2f, "
-                "score %.2f → %.2f, %d changes). Radar todo created.",
+                "score %.2f → %.2f, %d changes, %d filtered as already-present). "
+                "Radar todo created.",
                 skill_name, confidence,
                 opt_result.original_score, opt_result.optimized_score,
-                len(opt_result.changes),
+                len(novel_changes),
+                len(opt_result.changes) - len(novel_changes),
             )
         elif confidence >= med_threshold:
             # MED: recommendation surfaced in skill_health.json
