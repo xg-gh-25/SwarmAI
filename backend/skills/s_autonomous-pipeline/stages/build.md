@@ -298,6 +298,45 @@ exists but semantic contract broken (always posts "Thinking..." not the ack).
 **Skip when:** changeset only modifies internal implementation within one
 module (no cross-module boundaries changed).
 
+## Step 3.8: PROXIMITY SCAN (for changed function bodies)
+
+**After all code changes pass tests, before SMOKE.** Applies whenever a function
+body is modified (not just added/deleted).
+
+For EACH function whose body was changed in this changeset:
+
+1. **Read ±50 lines around the change** — specifically look for:
+   - Docstring describing the changed logic with **specific values or behavior**
+   - Adjacent comments referencing the old behavior
+   - Nearby test comments that explain the expected math/flow
+
+2. **For each found doc/comment that describes the changed behavior:**
+   - Does it still match? If it says `need=0.1` but code now says `need=0.3` → update it.
+   - If it uses specific numbers, formulas, or step descriptions → verify they match current code.
+
+3. **Input boundary analysis:** For each function modified:
+   - Who calls this function? (grep callers)
+   - What's the **smallest valid input** the caller can send?
+   - Does that smallest input produce a reasonable output with the new logic?
+   - Example: `compute_confidence(1, 3, 1.0)` — is the result appropriate for
+     a single correction on a 3-example skill?
+
+| Finding | Action |
+|---------|--------|
+| Docstring/comment has stale values | **FIX** — update to match code |
+| Caller can send extreme-but-valid input that produces unexpected result | **FIX** — add guard or adjust formula |
+| Comment references wrong line/function | **FIX** — correct the reference |
+
+**Why this exists (2026-05-25, adversarial review run_6d052913):** 4 findings in a
+constants-only change — docstring still showed old formula (L190 vs code L235),
+test comment referenced old value, priority skill with 1 correction reached HIGH
+threshold (caller sends min_examples=3). Builder's momentum bias ("I know what I
+changed") structurally prevents seeing stale surrounding context. This check takes
+30 seconds per function and catches the #1 source of adversarial findings.
+
+**Skip when:** Change is pure deletion, or function has no docstring/comments
+within ±50 lines, or change is adding a new function (nothing pre-existing to go stale).
+
 ## Step 4: SMOKE -- exercise new code paths (catch runtime crashes)
 
 14. For each modified file that has new branches (if/else, try/except,
