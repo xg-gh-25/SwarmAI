@@ -1138,27 +1138,49 @@ export function useChatStreamingLifecycle(
             });
           }
         } else if (event.type === 'session_cleared' && event.newSessionId) {
+          // SDK compaction: session ID changed but conversation continues.
+          // CRITICAL: Do NOT clear messages — the user already sees streamed
+          // content (pipeline stages, tool results, text). Clearing here
+          // destroys 5-30 min of visible work if a disconnect follows.
+          // Only update session tracking and ensure the assistant placeholder
+          // exists for subsequent text_delta/assistant events.
           if (tabState) {
             tabState.sessionId = event.newSessionId;
-            // Re-inject the assistant placeholder after clearing so subsequent
-            // 'assistant' events can find assistantMessageId via updateMessages().
-            // Without this, session_cleared wipes the placeholder synced by
-            // handleSendMessage, and all post-clear streaming content is dropped.
-            tabState.messages = [{
-              id: assistantMessageId,
-              role: 'assistant' as const,
-              content: [],
-              timestamp: new Date().toISOString(),
-            }];
+            // Ensure assistantMessageId placeholder exists for post-compaction
+            // streaming. Append only if not already present — preserves all
+            // previously rendered content.
+            const hasPlaceholder = tabState.messages.some(
+              (m) => m.id === assistantMessageId,
+            );
+            if (!hasPlaceholder) {
+              tabState.messages = [
+                ...tabState.messages,
+                {
+                  id: assistantMessageId,
+                  role: 'assistant' as const,
+                  content: [],
+                  timestamp: new Date().toISOString(),
+                },
+              ];
+            }
           }
           if (isActiveTab) {
             setSessionId(event.newSessionId);
-            setMessages([{
-              id: assistantMessageId,
-              role: 'assistant' as const,
-              content: [],
-              timestamp: new Date().toISOString(),
-            }]);
+            setMessages((prev) => {
+              const hasPlaceholder = prev.some(
+                (m) => m.id === assistantMessageId,
+              );
+              if (hasPlaceholder) return prev; // No change needed — keep existing content
+              return [
+                ...prev,
+                {
+                  id: assistantMessageId,
+                  role: 'assistant' as const,
+                  content: [],
+                  timestamp: new Date().toISOString(),
+                },
+              ];
+            });
             queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
           }
         } else if (event.type === 'text_delta' && event.text) {
