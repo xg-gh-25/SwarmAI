@@ -13,7 +13,7 @@ dependencies = [
     "pydantic>=2.10.0",
     "pydantic-settings>=2.6.0",
     # Claude Agent SDK
-    "claude-agent-sdk>=0.1.57",
+    "claude-agent-sdk>=0.2.87,<0.3.0",
     # SQLite
     "aiosqlite>=0.20.0",
     # Authentication
@@ -50,7 +50,7 @@ dependencies = [
     # "mcp>=1.0.0,<2.0.0",
     # Code Intelligence — tree-sitter AST parsing (falls back to regex if unavailable)
     "tree-sitter>=0.24.0",
-    "tree-sitter-language-pack>=0.5.0",
+    "tree-sitter-language-pack>=0.5.0,!=1.6.3",
 ]
 
 [project.optional-dependencies]

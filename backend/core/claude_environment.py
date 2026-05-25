@@ -74,9 +74,11 @@ class _ClaudeClientWrapper:
 
         Tries multiple paths through the SDK internals since the internal
         structure may vary across SDK versions:
-        1. client -> _query -> _transport -> _process -> pid (original)
-        2. client -> _process -> pid (direct)
-        3. client -> _transport -> _process -> pid (skip _query)
+        1. client -> _transport -> _process -> pid (v0.2.x primary path)
+        2. client -> _query -> transport -> _process -> pid (v0.2.x query.transport is public)
+        3. client -> _query -> _transport -> _process -> pid (v0.1.x legacy path)
+        4. client -> _process -> pid (direct, future-proofing)
+        5. Walk all attributes (last resort)
 
         Returns None if all paths fail.
         """
@@ -84,8 +86,30 @@ class _ClaudeClientWrapper:
             if self.client is None:
                 return None
 
-            # Path 1: client -> _query -> _transport -> _process -> pid
+            # Path 1: client -> _transport -> _process -> pid
+            # Primary path for SDK v0.2.x: client stores transport directly
+            transport = getattr(self.client, "_transport", None)
+            if transport is not None:
+                process = getattr(transport, "_process", None)
+                if process is not None:
+                    pid = getattr(process, "pid", None)
+                    if pid is not None:
+                        return pid
+
+            # Path 2: client -> _query -> transport -> _process -> pid
+            # SDK v0.2.x: Query uses public 'transport' attribute (not '_transport')
             query = getattr(self.client, "_query", None)
+            if query is not None:
+                transport = getattr(query, "transport", None)
+                if transport is not None:
+                    process = getattr(transport, "_process", None)
+                    if process is not None:
+                        pid = getattr(process, "pid", None)
+                        if pid is not None:
+                            return pid
+
+            # Path 3: client -> _query -> _transport -> _process -> pid
+            # Legacy path for SDK v0.1.x (Query used private _transport)
             if query is not None:
                 transport = getattr(query, "_transport", None)
                 if transport is not None:
@@ -95,23 +119,14 @@ class _ClaudeClientWrapper:
                         if pid is not None:
                             return pid
 
-            # Path 2: client -> _process -> pid (direct)
+            # Path 4: client -> _process -> pid (direct)
             process = getattr(self.client, "_process", None)
             if process is not None:
                 pid = getattr(process, "pid", None)
                 if pid is not None:
                     return pid
 
-            # Path 3: client -> _transport -> _process -> pid
-            transport = getattr(self.client, "_transport", None)
-            if transport is not None:
-                process = getattr(transport, "_process", None)
-                if process is not None:
-                    pid = getattr(process, "pid", None)
-                    if pid is not None:
-                        return pid
-
-            # Path 4: Walk all attributes looking for a process-like object with pid
+            # Path 5: Walk all attributes looking for a process-like object with pid
             for attr_name in dir(self.client):
                 if attr_name.startswith("__"):
                     continue
@@ -217,7 +232,16 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
     # Set to 180s to match our session_unit.INIT_TIMEOUT.
     os.environ.setdefault("CLAUDE_CODE_STREAM_CLOSE_TIMEOUT", "180000")
 
-    # 6. Pre-flight auth validation
+    # 6. MCP connection mode — SDK v0.2.82+ connects MCP servers in the
+    # background by default (non-blocking). This means MCPs report
+    # status="pending" until ready. Set to "0" to restore blocking behavior
+    # where the session waits up to 5s for each MCP before the first query.
+    # Safety net: ensures all MCPs are ready when the first message arrives.
+    # TODO(2026-06): Remove after validating background MCP init works
+    # reliably with our get_mcp_status() health checks.
+    os.environ.setdefault("MCP_CONNECTION_NONBLOCKING", "0")
+
+    # 7. Pre-flight auth validation
     # AWS credentials are NOT checked here — the SDK resolves them via the
     # standard credential chain at query time. Auth errors from expired
     # credentials are caught by session_unit's retry logic.
