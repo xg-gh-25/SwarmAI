@@ -265,7 +265,7 @@ def recommend(
 
 # Tracks that BUILD stage currently has instructions for.
 # format_recommend.py will move unsupported tracks to deferred_tracks automatically.
-SUPPORTED_TRACKS = {"poster", "video", "narrative", "shorts", "deck", "one_pager", "full_pdf", "data_report", "document"}
+SUPPORTED_TRACKS = {"poster", "video", "narrative", "shorts", "deck", "one_pager", "full_pdf", "data_report", "document", "ai_image", "interactive_report", "podcast"}
 
 
 def _is_negated(user_lower: str, signal: str, match_pos: int) -> bool:
@@ -312,6 +312,8 @@ def detect_fast_path(user_message: str) -> list[str] | None:
         "data_report": ["数据报告", "data report", "excel", "xlsx", "报表"],
         "document": ["文档", "document", "docx", "六页纸", "six-pager", "白皮书", "white paper"],
         "podcast": ["播客", "podcast", "音频", "audio"],
+        "ai_image": ["hero image", "ai image", "generate image", "illustration", "生成图", "配图", "ai图"],
+        "interactive_report": ["dashboard", "interactive", "仪表盘", "scorecard", "交互报告"],
     }
 
     user_lower = user_message.lower()

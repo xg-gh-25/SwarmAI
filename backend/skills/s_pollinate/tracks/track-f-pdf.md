@@ -25,6 +25,12 @@ This track executes during BUILD stage when `"one_pager"` or `"full_pdf"` is in
 Both modes share the same directory (`tracks/pdf/`) and the same Track F file.
 The mode is determined by which track name appears in `confirmed_tracks`.
 
+**If BOTH are in confirmed_tracks:** produce two files with distinct names:
+- `{topic}-onepager.pdf` (single page, scannable)
+- `{topic}-full.pdf` (multi-page, comprehensive)
+
+Never overwrite one with the other.
+
 ---
 
 ## Production Flow
