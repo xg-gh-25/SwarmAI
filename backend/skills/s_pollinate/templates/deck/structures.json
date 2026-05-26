@@ -1,0 +1,67 @@
+{
+  "_doc": "Deck structure templates for Pollinate Track E. These are REFERENCE PATTERNS — slide count is content-driven, not capped by template.",
+  "templates": {
+    "pitch": {
+      "name": "Internal Pitch",
+      "audience": "leadership",
+      "outcome": "alignment",
+      "description": "Structured argument for getting buy-in on a direction",
+      "flow": [
+        {"type": "title", "purpose": "headline + context framing", "animations": false},
+        {"type": "problem", "purpose": "why this matters / what's broken", "animations": false},
+        {"type": "solution", "purpose": "core approach in one sentence", "animations": false},
+        {"type": "evidence", "purpose": "proof point with data", "animations": true, "repeat": "N = key_points count"},
+        {"type": "demo", "purpose": "live example or screenshot walkthrough", "animations": true, "optional": true},
+        {"type": "ask", "purpose": "specific next step / decision requested", "animations": false},
+        {"type": "backup", "purpose": "additional data for anticipated Q&A", "animations": true, "optional": true}
+      ],
+      "notes": "Evidence slides repeat — one per key point. Never compress multiple points into one slide."
+    },
+    "conference": {
+      "name": "Conference Talk",
+      "audience": "developer_community",
+      "outcome": "education",
+      "description": "Knowledge sharing with progressive insight building",
+      "flow": [
+        {"type": "title", "purpose": "talk title + speaker context", "animations": false},
+        {"type": "hook", "purpose": "surprising claim or contradiction to grab attention", "animations": false},
+        {"type": "context", "purpose": "frame the problem / why audience should care", "animations": true},
+        {"type": "insight", "purpose": "one key insight with evidence", "animations": true, "repeat": "N = key_points count"},
+        {"type": "implications", "purpose": "what this means for the audience's work", "animations": true},
+        {"type": "cta", "purpose": "what to try / where to learn more", "animations": false}
+      ],
+      "notes": "Insight slides are the core. Each builds on the previous. Never rush through them."
+    },
+    "mbr": {
+      "name": "MBR / Business Review",
+      "audience": "leadership",
+      "outcome": "data_decision",
+      "description": "Data-driven review with metrics, trends, and action items",
+      "flow": [
+        {"type": "title", "purpose": "review period + scope", "animations": false},
+        {"type": "exec_summary", "purpose": "top 3-5 KPIs with traffic light status", "animations": true},
+        {"type": "metrics", "purpose": "detailed chart + one insight sentence", "animations": true, "repeat": "N = metrics count"},
+        {"type": "deep_dive", "purpose": "drill into anomaly or key trend", "animations": true, "optional": true},
+        {"type": "actions", "purpose": "committed next steps with owners and dates", "animations": true},
+        {"type": "next", "purpose": "what to watch for next period", "animations": false}
+      ],
+      "notes": "Data slides: chart dominates, insight sentence is one line max. Never 5 bullets explaining a chart."
+    },
+    "proposal": {
+      "name": "Customer Proposal",
+      "audience": "customer",
+      "outcome": "action",
+      "description": "Persuasive pitch for customer action (buy/try/partner)",
+      "flow": [
+        {"type": "title", "purpose": "value proposition headline", "animations": false},
+        {"type": "pain", "purpose": "customer's problem stated in their language", "animations": false},
+        {"type": "vision", "purpose": "what the world looks like after the solution", "animations": false},
+        {"type": "how", "purpose": "mechanism — how the solution works (3 steps max)", "animations": true},
+        {"type": "proof", "purpose": "case study / data / testimonial", "animations": true, "repeat": "N = proof_points count"},
+        {"type": "pricing", "purpose": "investment + ROI framing", "animations": false, "optional": true},
+        {"type": "next_steps", "purpose": "exact CTA — what to do right now", "animations": false}
+      ],
+      "notes": "Proof slides: concrete numbers, named customers (if allowed), specific outcomes. Never generic 'customers love it'."
+    }
+  }
+}
