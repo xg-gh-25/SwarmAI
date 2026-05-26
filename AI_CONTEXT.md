@@ -60,11 +60,11 @@ The codebase is both the product AND the evidence. The interesting parts are not
 <!-- METRICS_START -->
 | Metric | Value | How to Verify |
 |--------|-------|---------------|
-| Total commits | 1646+ | `git log --oneline | wc -l` |
+| Total commits | 1648+ | `git log --oneline | wc -l` |
 | Duration | ~93 days | First commit to latest (1 human contributor) |
-| Backend core modules | 114 Python files, 52756 LOC | `find backend/core -name "*.py" -exec cat {} + | wc -l` |
+| Backend core modules | 116 Python files, 53128 LOC | `find backend/core -name "*.py" -exec cat {} + | wc -l` |
 | Total backend LOC |  | `find backend -name "*.py" -not -path "*/.*" -not -path "*/__pycache__/*" | xargs cat | wc -l` |
-| Test files | 232 | `find backend/tests -name "*.py" | wc -l` |
+| Test files | 233 | `find backend/tests -name "*.py" | wc -l` |
 | Skills (agent capabilities) | 85 | `ls -d backend/skills/s_* | wc -l` |
 | Post-session hooks | 13 | `ls backend/hooks/*.py | wc -l` |
 | React components | 166 | `find desktop/src -name "*.tsx" | wc -l` |
@@ -99,7 +99,7 @@ Most agent harnesses optimize for **one session**. SwarmAI optimizes for **compo
 | Pollinate Content Engine | `backend/skills/s_pollinate/INSTRUCTIONS.md` | Message-first media delivery — transforms ideas into posters, videos, narratives, README |
 | GitHub Community Engine | `backend/skills/s_github_community/scripts/monitor.py` | Autonomous learning flywheel — monitor, match, draft, track, cultivate, report across GitHub |
 | Evolution Pipeline (MINE→ASSESS→ACT→AUDIT) | `backend/core/evolution_optimizer.py` | Confidence-gated self-evolution from session mining and skill fitness scoring |
-| Code Intelligence (AST graph) | `backend/core/code_intel/__init__.py` | 11,612 symbols, 14,431 edges — deterministic graph traversal for code context retrieval |
+| Code Intelligence (AST graph) | `backend/core/code_intel/__init__.py` | 11,686 symbols, 14,901 edges — deterministic graph traversal for code context retrieval |
 | Session Resume Enrichment | `backend/core/context_injector.py` | Cold resume from ~3K to ~50-100K tokens of structured context |
 | Proactive Intelligence (L0-L4) | `backend/core/proactive_intelligence.py` | Session briefing, corrections, open threads, signals — fires on every session start |
 | Slack Channel Adapter | `backend/channels/adapters/slack.py` | 24/7 Socket Mode bot — responds as XG's AI assistant to allowlisted users |

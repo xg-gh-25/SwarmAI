@@ -29,6 +29,7 @@ SOURCE_REPOS = [
     "crewAIInc/crewAI",
     "mattpocock/skills",
     "volcengine/OpenViking",
+    "nexu-io/open-design",
 ]
 
 # Topic keywords for signal matching (our supply + community demand)
