@@ -1,4 +1,7 @@
-# Pollinate -- Content Production Pipeline
+# Pollinate -- Personal Content Delivery Engine
+
+> One message → all professional formats → all audiences → quality guaranteed.
+> **搞清楚再动手。** DISCOVER first, produce only what's confirmed.
 
 Drive the full content lifecycle from topic to published deliverables. You ARE
 the orchestrator -- execute each stage's behavior inline within this session,
@@ -9,6 +12,8 @@ don't invoke separate skills.
 For every pipeline run, follow this loop:
 
 ```
+0. DISCOVER -- ask what user needs: who, what outcome, what context, how many formats
+              → user confirms scope → only confirmed tracks proceed
 1. INIT     -- parse topic, detect domain, load or create pipeline run
 2. STAGE    -- for each stage in the pipeline:
                a. Gate check (budget, retries, escalations)
@@ -23,28 +28,206 @@ For every pipeline run, follow this loop:
 
 ---
 
+## Step 0: DISCOVER — "搞清楚再动手"
+
+> The highest-ROI activity is clarifying what to produce.
+> One good discovery saves 4 wasted tracks.
+
+DISCOVER happens BEFORE everything else. It is the ONLY mandatory human interaction
+point — all other stages can auto-proceed with taste decisions batched at delivery.
+
+### Fast Path Detection (check FIRST)
+
+Before asking any questions, scan the user's trigger message for explicit format mentions:
+
+```bash
+python "$SKILL_DIR/scripts/format_recommend.py" --message "{user_message}" --json
+```
+
+If `mode: "fast_path"` → formats detected in message. Confirm and skip questions:
+
+```
+Got it. {detected_formats}. Proceeding with:
+  {track list}
+
+(Say "加 X" to add more, or "只做 Y" to narrow.)
+```
+
+→ Save discovery.json with fast-path results → Skip to INIT.
+
+**Fast-path discovery.json** (audiences/outcomes/contexts are inferred or set to "unspecified"):
+```json
+{
+  "message": "{extracted topic from user message}",
+  "audiences": ["inferred"],
+  "outcomes": ["inferred"],
+  "contexts": ["inferred"],
+  "scope": "explicit",
+  "confirmed_tracks": ["{detected formats}"],
+  "deferred_tracks": [],
+  "rationale": "Fast-path: user explicitly named formats.",
+  "fast_path": true,
+  "created_at": "{ISO timestamp}"
+}
+```
+Note: `"inferred"` values are acceptable for fast-path. EVALUATE and THINK stages
+still work — they use `confirmed_tracks` for scope, not audiences/outcomes/contexts.
+
+### Full Discovery (when fast-path not detected)
+
+Ask the user these questions. You may ask them conversationally (not as a rigid form)
+and extract answers from natural language. The goal is clarity, not interrogation.
+
+**Q1: MESSAGE** — "你想说什么？一句话 thesis。"
+  Extract: the core claim / insight / message to communicate.
+
+**Q2: AUDIENCE** — "谁需要看到这个？"
+  Canonical values: `leadership`, `customer`, `team`, `developer_community`, `social_followers`
+  (User may say "给 Rob 看" → leadership. "发到社区" → developer_community.)
+
+**Q3: OUTCOME** — "他们看完后你希望发生什么？"
+  Canonical values: `awareness`, `alignment`, `action`, `data_decision`, `education`
+  (User may say "让他同意" → alignment. "让人知道这件事" → awareness.)
+
+**Q4: CONTEXT** — "他们在什么场景看到？"
+  Canonical values: `meeting`, `email`, `social_media`, `search_learn`, `commute`, `analysis`
+  (User may say "周四开会用" → meeting. "发朋友圈" → social_media.)
+
+**Q5: SCOPE** — "现在需要多少？"
+  Canonical values: `single`, `focused` (2-3), `full` (all matching), `recommend`
+  (User may say "先出最核心的" → single. "全套" → full.)
+
+### Generate Recommendation
+
+After collecting answers, run the recommendation engine:
+
+```bash
+python "$SKILL_DIR/scripts/format_recommend.py" \
+  --audiences {audience1} {audience2} \
+  --outcomes {outcome1} {outcome2} \
+  --contexts {context1} {context2} \
+  --scope {scope} \
+  --json
+```
+
+### Present Recommendation (BLOCKING — wait for confirmation)
+
+```
+Based on your answers:
+  Audience: {audience_labels}
+  Outcome: {outcome_labels}
+  Context: {context_labels}
+
+Recommended formats:
+  P0: {track} — {rationale}
+  P1: {track} — {rationale}
+  [P2: {track} — {rationale}]
+
+  [Deferred: {track} — can add later from same content_package]
+
+Confirm? Or adjust:
+  - "只做 {P0}" → narrow to P0 only
+  - "加 {format}" → add a track
+  - "全做" → include deferred tracks too
+```
+
+**BLOCKING:** Do NOT proceed to INIT until user confirms. A simple "ok", "好", "go",
+"proceed", "确认" is sufficient confirmation.
+
+### Save discovery.json
+
+After confirmation, save to `content/{name}/discovery.json`:
+
+```json
+{
+  "message": "{user's thesis}",
+  "audiences": ["{canonical values}"],
+  "outcomes": ["{canonical values}"],
+  "contexts": ["{canonical values}"],
+  "scope": "{single|focused|full|recommend}",
+  "confirmed_tracks": ["{track names user confirmed}"],
+  "deferred_tracks": ["{tracks that matched but user deferred}"],
+  "rationale": "{why these tracks for these audiences}",
+  "fast_path": false,
+  "created_at": "{ISO timestamp}"
+}
+```
+
+### Incremental Resume (adding tracks to existing content)
+
+When user says "再出个 narrative" or "加个 deck" for an EXISTING content directory:
+
+1. Find existing `content/{name}/discovery.json` and `content_package.md`
+2. Add the new track to `confirmed_tracks`
+3. **Skip EVALUATE and THINK** (upstream work already done)
+4. Jump directly to PLAN for the new track only
+5. Execute BUILD → REVIEW → DELIVER for the new track
+
+This is the key benefit of layered architecture: content_package persists, new tracks
+are additive, upstream work is never repeated.
+
+### Downstream Impact of DISCOVER
+
+| Stage | What changes |
+|-------|-------------|
+| INIT | Creates directories only for `confirmed_tracks` (not all 11) |
+| EVALUATE | Evaluates ROI against confirmed scope (poster-only needs less readiness than full-suite) |
+| THINK | Research depth calibrated: single-track = lighter, full = deeper competitive analysis |
+| STRATEGIZE | `production_tracks` in strategy.json MUST equal `confirmed_tracks` from discovery.json. STRATEGIZE cannot add or remove tracks without user re-confirmation. If channel_matrix analysis suggests a track NOT in confirmed_tracks, log it as "suggested but not confirmed" — do NOT silently add it. |
+| PLAN | Only populates content_package layers needed by confirmed_tracks |
+| BUILD | Only executes confirmed_tracks — zero wasted production |
+| REFLECT | Records what user chose (demand signal for future recommendations) |
+
+### Authority Rule (CRITICAL)
+
+**discovery.json `confirmed_tracks` is the single source of truth for scope.**
+No downstream stage can override it. STRATEGIZE, EVALUATE, and PLAN are advisory —
+they can WARN ("asset readiness is low for this track") but cannot REMOVE a track
+the user confirmed. Only the user can change scope (via explicit message like "去掉
+video" or "只做 poster").
+
+---
+
 ## Step 1: INIT
 
 ### Starting a New Pipeline
 
-Parse the user's message to extract:
-- **Topic:** what the content is about
+**Prerequisites:** DISCOVER stage completed. `discovery.json` exists with `confirmed_tracks`.
+
+**Backward compatibility:** If discovery.json does NOT exist (user triggered pipeline
+without going through DISCOVER — e.g., legacy "make content about X" pattern):
+1. Run fast-path detection on the user's message
+2. If formats detected → auto-generate discovery.json with `fast_path: true`
+3. If NO formats detected → trigger DISCOVER (ask the 5 questions). Do NOT crash.
+4. Never block INIT solely on file absence — trigger the prerequisite stage if missing.
+
+Parse from discovery.json + user's message:
+- **Topic:** the thesis/message from discovery
 - **Domain:** which knowledge area (AIDLC, AI Architecture, Industry Insights, etc.)
-- **Formats:** default video; user may request article/poster (Phase 2)
-- **Platforms:** default all 5; user may specify subset
+- **Confirmed Tracks:** from discovery.json `confirmed_tracks` array
+- **Platforms:** inferred from tracks (poster → XHS/朋友圈, video → B站/YouTube, deck → N/A)
 
 Create the content directory under `Knowledge/Pollinate/` (visible in Explorer,
 git-tracked, part of the knowledge system — NOT Services/ which is hidden).
-**CRITICAL: Always prefix with `YYYY-MM-DD-` for discoverability and maintenance:**
+**CRITICAL: Always prefix with `YYYY-MM-DD-` for discoverability and maintenance.**
+
+**Only create directories for confirmed tracks:**
 ```bash
 SKILL_DIR="$(cd "$(dirname "$0")" && pwd)"
 TODAY=$(date +%Y-%m-%d)
 CONTENT_DIR="$HOME/.swarm-ai/SwarmWS/Knowledge/Pollinate/${TODAY}-{name}"
-mkdir -p "$CONTENT_DIR/tracks/video"
-mkdir -p "$CONTENT_DIR/tracks/narrative"
-mkdir -p "$CONTENT_DIR/tracks/poster"
-mkdir -p "$CONTENT_DIR/tracks/shorts"
 mkdir -p "$CONTENT_DIR/deliver"
+
+# Create track directories ONLY for confirmed tracks from discovery.json
+# Examples — only include tracks that appear in confirmed_tracks:
+# mkdir -p "$CONTENT_DIR/tracks/video"      # if "video" in confirmed_tracks
+# mkdir -p "$CONTENT_DIR/tracks/narrative"   # if "narrative" in confirmed_tracks
+# mkdir -p "$CONTENT_DIR/tracks/poster"      # if "poster" in confirmed_tracks
+# mkdir -p "$CONTENT_DIR/tracks/shorts"      # if "shorts" in confirmed_tracks
+# mkdir -p "$CONTENT_DIR/tracks/deck"        # if "deck" in confirmed_tracks
+# mkdir -p "$CONTENT_DIR/tracks/pdf"         # if "one_pager" or "full_pdf" in confirmed_tracks
+# mkdir -p "$CONTENT_DIR/tracks/data-report" # if "data_report" in confirmed_tracks
+# mkdir -p "$CONTENT_DIR/tracks/document"    # if "document" in confirmed_tracks
 ```
 
 Create `content/{name}/run.json`:
@@ -54,11 +237,12 @@ Create `content/{name}/run.json`:
   "type": "pollinate",
   "topic": "...",
   "domain": "...",
-  "formats": ["video"],
-  "platforms": ["bilibili", "youtube", "xiaohongshu", "douyin", "weixin_video"],
+  "confirmed_tracks": ["poster", "deck"],
+  "platforms": ["xiaohongshu", "pengyouquan"],
   "status": "running",
   "stages": [],
   "taste_decisions": [],
+  "discovery_ref": "discovery.json",
   "created_at": "<ISO timestamp>",
   "updated_at": "<ISO timestamp>"
 }
@@ -67,8 +251,9 @@ Create `content/{name}/run.json`:
 Announce:
 ```
 Pollinate started: "{topic}" (run_p_{id})
-Domain: {domain} | Formats: Video
-Platforms: B站, YouTube, 小红书, 抖音, 视频号
+Domain: {domain}
+Tracks: {confirmed_tracks list}
+Platforms: {relevant platforms}
 ```
 
 ### Resuming a Pipeline
@@ -83,6 +268,23 @@ When the user says "resume pollinate" or drags a Radar todo:
 Pollinate RESUMED: "{topic}" (run_p_{id})
 Completed: evaluate, think, plan
 Resuming from: build
+```
+
+### Adding a Track to Existing Content (Incremental)
+
+When user says "再出个 narrative" or "加个 deck" for existing content:
+
+1. Find existing `content/{name}/` directory
+2. Read `discovery.json` — add new track to `confirmed_tracks`
+3. Read `content_package.md` — already populated from prior run
+4. Create the new track directory: `mkdir -p "$CONTENT_DIR/tracks/{new_track}"`
+5. **Skip EVALUATE and THINK** — upstream work persists
+6. Jump to PLAN for the new track, then BUILD → REVIEW → DELIVER
+7. Announce:
+```
+Pollinate INCREMENT: adding "{track}" to "{topic}" (run_p_{id})
+Reusing: content_package.md, research.md (from prior run)
+Building: {new_track} only
 ```
 
 ---
@@ -539,6 +741,10 @@ After exhaustion -> checkpoint with all failure details.
 
 ## Stage 1: EVALUATE -- Is this topic worth producing?
 
+**Context from DISCOVER:** Read `discovery.json` for `confirmed_tracks` and `audiences`.
+The ROI evaluation is scoped to the confirmed formats — a poster-only run needs less
+asset readiness than a full 5-track run.
+
 ### Procedure
 
 1. **Parse topic intent:** what claim, for whom, why now?
@@ -579,15 +785,14 @@ After exhaustion -> checkpoint with all failure details.
    - **DEFER** (2.0-2.9) -- log reason, pipeline ends
    - **REJECT** (< 2.0) -- log reason, pipeline ends
 
-7. **Recommend format combination:**
-
-   | Content Type | Recommended Formats |
-   |-------------|-------------------|
-   | Deep technical teardown | Video (B站, horizontal) + Article |
-   | Industry trend / opinion | Video + Poster |
-   | Quick knowledge point | Poster only |
-   | Breaking news / hot take | Poster first, Video later if traction |
-   | Framework / methodology | Video + Article + Poster (全格式) |
+7. **Validate against confirmed_tracks (from DISCOVER):**
+   - Do the confirmed tracks make sense given the ROI scores?
+   - If Asset Readiness is low (1-2) and confirmed_tracks include video → WARN user
+     ("asset readiness is low for video — may require more research in THINK stage")
+   - If topic is trivial (ROI < 3.0) but user explicitly confirmed → still GO
+     (DISCOVER gives user final authority on scope; EVALUATE is advisory, not blocking,
+     when user has explicitly confirmed in DISCOVER)
+   - **EVALUATE can still REJECT** (ROI < 2.0) — this overrides DISCOVER. Bad topic = bad topic.
 
 8. **Save** `content/{name}/evaluation.json`
 
@@ -1039,8 +1244,74 @@ Before advancing to BUILD, ALL must be true:
 
 ### Track Selection
 
-BUILD executes per-track. Check `strategy.json → production_tracks` and run the
-applicable track(s) below.
+BUILD executes per-track. Check `discovery.json → confirmed_tracks` (authoritative)
+and run the applicable track(s) below.
+
+**IMPORTANT:** `confirmed_tracks` from discovery.json is the SINGLE SOURCE OF TRUTH
+for which tracks to build. Never build a track not in confirmed_tracks.
+
+**NOTE:** Legacy tracks (A-D) may reference `production_tracks` from strategy.json.
+These MUST equal `confirmed_tracks` — STRATEGIZE copies confirmed_tracks into
+strategy.json.production_tracks for backward compatibility. If they ever diverge,
+discovery.json wins.
+
+### Direction Selection (applies to ALL brand-aware tracks)
+
+Before building any track that uses brand colors (deck, PDF, data-report, document,
+poster), determine the active design direction:
+
+1. If poster was already built in this run → inherit its direction (consistency)
+2. If no poster → score content against `brand/directions/d{N}-*.yaml` content_triggers:
+   - strong match = 3, moderate = 2, weak = 1
+   - Highest score = selected direction
+3. Load the selected direction YAML for token extraction
+
+**Default if no clear match:** D1 Obsidian (professional, technical — safest default)
+
+The selected direction provides:
+- Color tokens for CSS (Track F PDF), openpyxl charts (Track G), python-docx headings (Track H)
+- PptxGenJS colors (Track E deck)
+- Visual identity across all tracks in this run
+
+### Track E: Deck (if "deck" in confirmed_tracks)
+
+**Read the full track instructions:** `tracks/track-e-deck.md`
+
+Produces leadership-ready PPTX with speaker notes and progressive reveal.
+Combined model: PptxGenJS native elements + Playwright PNG for complex diagrams.
+Visual QA subagent mandatory before delivery.
+
+---
+
+### Track F: PDF (if "one_pager" or "full_pdf" in confirmed_tracks)
+
+**Read the full track instructions:** `tracks/track-f-pdf.md`
+
+Two modes: one-pager (single A4, scannable) or full PDF (content-driven, no page limit).
+HTML → Playwright PDF render with branded CSS from direction tokens.
+Preview via s_pdf/scripts/convert_pdf_to_images.py.
+
+---
+
+### Track G: Data Report (if "data_report" in confirmed_tracks)
+
+**Read the full track instructions:** `tracks/track-g-data-report.md`
+
+openpyxl workbook with branded charts (via brand_chart.py), "so what" insight rows,
+formulas over hardcoded values. Validated by s_xlsx/recalc.py.
+Sheet count = data dimension count.
+
+---
+
+### Track H: Document (if "document" in confirmed_tracks)
+
+**Read the full track instructions:** `tracks/track-h-document.md`
+
+python-docx with branded styling, heading hierarchy, executive summary, TOC.
+Content completeness: document length = what content needs. Appendix encouraged.
+Tracked changes available via s_docx/scripts/document.py.
+
+---
 
 ### Track A: Video (if "video" in production_tracks)
 
