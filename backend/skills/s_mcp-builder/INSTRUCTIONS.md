@@ -49,6 +49,10 @@ When uncertain, prioritize coverage.
 
 #### 2.1 Project Structure
 
+**Read the appropriate language guide NOW:**
+- Python: [reference/python_mcp_server.md](reference/python_mcp_server.md)
+- TypeScript: [reference/node_mcp_server.md](reference/node_mcp_server.md)
+
 **Python:**
 ```
 {service}_mcp/
