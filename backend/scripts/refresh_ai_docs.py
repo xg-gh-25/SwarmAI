@@ -2,40 +2,181 @@
 
 Scans the repo for quantitative data (commit count, LOC, skill count, etc.)
 and updates marker-delimited sections in both files. Prose outside markers
-is NEVER touched.
+is NEVER touched — but staleness warnings are emitted when key code patterns
+diverge from documented expectations.
 
 Markers:
   <!-- METRICS_START --> ... <!-- METRICS_END -->
   <!-- CAPABILITIES_START --> ... <!-- CAPABILITIES_END -->
 
 Usage:
-  python backend/scripts/refresh_ai_docs.py [--dry-run]
+  python backend/scripts/refresh_ai_docs.py [--dry-run] [--check-staleness]
 
 Integration:
   Called by context_health_hook on startup (daily gate) and by release preflight.
 """
 
 import re
+import shlex
+import sqlite3
 import subprocess
 import sys
+import time
 from pathlib import Path
+
+try:
+    import yaml
+except ImportError:
+    yaml = None  # Fallback to manual parsing if PyYAML not available
+
+# Global deadline — script must complete within this budget (seconds)
+_SCRIPT_DEADLINE: float = 0.0  # Set at entry point
+_SCRIPT_TIMEOUT: float = 8.0  # Leave 2s margin for caller
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 AI_CONTEXT = REPO_ROOT / "AI_CONTEXT.md"
 AGENTS_MD = REPO_ROOT / "AGENTS.md"
+ENGINES_YAML = Path(__file__).resolve().parent / "engines.yaml"
+
+# Code Intelligence DB locations (checked in order)
+CODE_INTEL_DB_PATHS = [
+    Path.home() / ".swarm-ai" / "SwarmWS" / "Projects" / "SwarmAI" / "code_intel.db",
+    Path.home() / ".swarm-ai" / "SwarmWS" / "Projects" / "SwarmAI" / ".code_intel" / "code_intel.db",
+]
+
+# Prose staleness checks — patterns expected in AGENTS.md prose.
+# If any check fails, a [STALE] warning is emitted (never auto-fixed).
+STALENESS_CHECKS = [
+    {
+        "name": "SSE event types",
+        "description": "SSE Streaming Events section lists event types",
+        "prose_file": "AGENTS.md",
+        "prose_pattern": r'"type": "session_start"',
+        "code_file": "backend/core/session_unit.py",
+        "code_pattern": r'"type": "session_start"',
+    },
+    {
+        "name": "SSE result event",
+        "description": "SSE section documents 'result' event",
+        "prose_file": "AGENTS.md",
+        "prose_pattern": r'"type": "result"',
+        "code_file": "backend/core/session_unit.py",
+        "code_pattern": r'"type": "result"',
+    },
+    {
+        "name": "Security hooks",
+        "description": "Security Architecture mentions 4-layer chain",
+        "prose_file": "AGENTS.md",
+        "prose_pattern": r"Four-layer PreToolUse",
+        "code_file": "backend/core/security_hooks.py",
+        "code_pattern": r"pre_tool_logger|dangerous_command|skill_access",
+    },
+    {
+        "name": "Session states",
+        "description": "Session unit 5-state machine documented",
+        "prose_file": "AGENTS.md",
+        "prose_pattern": r"COLD.*IDLE.*STREAMING.*WAITING_INPUT.*DEAD",
+        "code_file": "backend/core/session_unit.py",
+        "code_pattern": r"class SessionState",
+    },
+    {
+        "name": "Context files count",
+        "description": "11 context files documented",
+        "prose_file": "AGENTS.md",
+        "prose_pattern": r"11 source files",
+        "code_file": "backend/core/context_directory_loader.py",
+        "code_pattern": r"All 11 context source files",
+    },
+    {
+        "name": "Token budget tiers",
+        "description": "Token budget tiers match code",
+        "prose_file": "AGENTS.md",
+        "prose_pattern": r"100K for .{0,5}500K",
+        "code_file": "backend/core/context_directory_loader.py",
+        "code_pattern": r"500_000",
+    },
+]
 
 
 def _run(cmd: str, cwd: Path | None = None) -> str:
-    """Run shell command, return stdout stripped. Empty string on failure."""
+    """Run shell command, return stdout stripped. Empty string on failure.
+
+    Respects global deadline — returns empty string if budget exhausted.
+    """
+    global _SCRIPT_DEADLINE
+    if _SCRIPT_DEADLINE and time.monotonic() > _SCRIPT_DEADLINE:
+        return ""  # Budget exhausted
     try:
+        remaining = max(1.0, _SCRIPT_DEADLINE - time.monotonic()) if _SCRIPT_DEADLINE else 3.0
         result = subprocess.run(
             cmd, shell=True, capture_output=True, text=True,
-            timeout=10, cwd=cwd or REPO_ROOT,
+            timeout=min(3.0, remaining), cwd=cwd or REPO_ROOT,
         )
         return result.stdout.strip() if result.returncode == 0 else ""
     except subprocess.TimeoutExpired:
         return ""
+
+
+def _count_pattern_in_dir(directory: Path, pattern: str) -> int:
+    """Count files matching a grep pattern in a directory."""
+    if not directory.exists():
+        return 0
+    result = _run(f"grep -rl {shlex.quote(pattern)} {shlex.quote(str(directory))} 2>/dev/null | wc -l")
+    return int(result.strip()) if result.strip().isdigit() else 0
+
+
+def _load_engines() -> list[dict]:
+    """Load engine registry from engines.yaml."""
+    if not ENGINES_YAML.exists():
+        return []
+
+    content = ENGINES_YAML.read_text(encoding="utf-8")
+
+    if yaml:
+        data = yaml.safe_load(content)
+        return data.get("engines", []) if data else []
+
+    # Fallback: simple line-based parsing for when PyYAML isn't available
+    engines = []
+    current = {}
+    for line in content.split("\n"):
+        line = line.strip()
+        if line.startswith("- name:"):
+            if current:
+                engines.append(current)
+            current = {"name": line.split(":", 1)[1].strip().strip('"')}
+        elif line.startswith("path:") and current:
+            current["path"] = line.split(":", 1)[1].strip().strip('"')
+        elif line.startswith("description:") and current:
+            current["description"] = line.split(":", 1)[1].strip().strip('"')
+    if current:
+        engines.append(current)
+    return engines
+
+
+def _get_code_intel_stats() -> tuple[int, int]:
+    """Get symbol and edge counts from code_intel.db. Returns (0, 0) if unavailable."""
+    for db_path in CODE_INTEL_DB_PATHS:
+        if db_path.exists():
+            try:
+                conn = sqlite3.connect(
+                    f"file:{db_path}?mode=ro", uri=True, timeout=3,
+                )
+                try:
+                    # Try both possible table names
+                    for node_table, edge_table in [("code_nodes", "code_edges"), ("symbols", "edges")]:
+                        try:
+                            nodes = conn.execute(f"SELECT COUNT(*) FROM {node_table}").fetchone()[0]
+                            edges = conn.execute(f"SELECT COUNT(*) FROM {edge_table}").fetchone()[0]
+                            return nodes, edges
+                        except sqlite3.OperationalError:
+                            continue
+                finally:
+                    conn.close()
+            except Exception:
+                continue
+    return 0, 0
 
 
 def collect_metrics() -> dict:
@@ -47,7 +188,6 @@ def collect_metrics() -> dict:
     m["duration_days"] = _run(
         "echo $(( ($(date +%s) - $(git log --reverse --format='%at' | head -1)) / 86400 ))"
     )
-    m["contributors"] = _run("git log --format='%aN' | sort -u | wc -l").strip()
 
     # Backend metrics
     m["core_modules"] = _run("find backend/core -name '*.py' | wc -l").strip()
@@ -62,15 +202,10 @@ def collect_metrics() -> dict:
 
     # Skills
     m["skill_count"] = _run("ls -d backend/skills/s_* | wc -l").strip()
-    skills_raw = _run("ls -d backend/skills/s_* | xargs -I{} basename {}")
-    m["skill_names"] = [s.replace("s_", "") for s in skills_raw.split("\n") if s]
 
     # Frontend
     m["react_components"] = _run(
         "find desktop/src -name '*.tsx' | wc -l"
-    ).strip()
-    m["frontend_loc"] = _run(
-        "find desktop/src -name '*.ts' -o -name '*.tsx' | xargs wc -l | tail -1 | awk '{print $1}'"
     ).strip()
 
     # Platform
@@ -88,43 +223,36 @@ def collect_metrics() -> dict:
     context_loader = REPO_ROOT / "backend/core/context_directory_loader.py"
     m["context_loader_lines"] = _run(f"wc -l < {context_loader}").strip()
 
-    # Key engines (detect existence)
-    engines = []
-    engine_checks = {
-        "DDD Cultivation Engine (event-driven v2)": "backend/core/cultivation_dispatcher.py",
-        "Autonomous Pipeline (9-stage)": "backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md",
-        "Pollinate Content Engine": "backend/skills/s_pollinate/INSTRUCTIONS.md",
-        "GitHub Community Engine": "backend/skills/s_github_community/scripts/monitor.py",
-        "Evolution Pipeline (MINE→ASSESS→ACT→AUDIT)": "backend/core/evolution_optimizer.py",
-        "Code Intelligence (AST graph)": "backend/core/code_intel/__init__.py",
-        "Session Resume Enrichment": "backend/core/context_injector.py",
-        "Proactive Intelligence (L0-L4)": "backend/core/proactive_intelligence.py",
-        "Slack Channel Adapter": "backend/channels/adapters/slack.py",
-        "Background Job System": "backend/jobs/scheduler.py",
-        "Star Attribution Tracking": "backend/skills/s_github_community/scripts/track.py",
-        "AI Docs Auto-Refresh": "backend/scripts/refresh_ai_docs.py",
-    }
-    for name, path in engine_checks.items():
-        if (REPO_ROOT / path).exists():
-            engines.append(name)
-    m["engines"] = engines
-
     # Jobs
     m["job_count"] = _run(
         "find backend/jobs -name '*.py' -path '*/handlers/*' | wc -l"
     ).strip()
+
+    # Code Intelligence stats (measured from DB)
+    symbols, edges = _get_code_intel_stats()
+    m["code_intel_symbols"] = symbols
+    m["code_intel_edges"] = edges
+
+    # Engines (discovery-based from engines.yaml)
+    engines = []
+    for entry in _load_engines():
+        path = entry.get("path", "")
+        if (REPO_ROOT / path).exists():
+            engines.append(entry)
+    m["engines"] = engines
 
     return m
 
 
 def _generate_metrics_block(metrics: dict) -> str:
     """Generate the metrics replacement block."""
+    # Commands in "How to Verify" match what the script actually runs
     return f"""| Metric | Value | How to Verify |
 |--------|-------|---------------|
 | Total commits | {metrics['commit_count']}+ | `git log --oneline | wc -l` |
 | Duration | ~{metrics['duration_days']} days | First commit to latest (1 human contributor) |
-| Backend core modules | {metrics['core_modules']} Python files, {metrics['core_loc']} LOC | `find backend/core -name "*.py" | wc -l` |
-| Total backend LOC | {metrics['total_backend_loc']} | `find backend -name "*.py" | xargs wc -l | tail -1` |
+| Backend core modules | {metrics['core_modules']} Python files, {metrics['core_loc']} LOC | `find backend/core -name "*.py" -exec cat {{}} + | wc -l` |
+| Total backend LOC | {metrics['total_backend_loc']} | `find backend -name "*.py" -not -path "*/.*" -not -path "*/__pycache__/*" | xargs cat | wc -l` |
 | Test files | {metrics['test_files']} | `find backend/tests -name "*.py" | wc -l` |
 | Skills (agent capabilities) | {metrics['skill_count']} | `ls -d backend/skills/s_* | wc -l` |
 | Post-session hooks | {metrics['hooks_count']} | `ls backend/hooks/*.py | wc -l` |
@@ -139,23 +267,19 @@ def _generate_metrics_block(metrics: dict) -> str:
 def _generate_capabilities_block(metrics: dict) -> str:
     """Generate the capabilities/engines replacement block."""
     lines = ["| Engine | Path | What It Does |", "|--------|------|-------------|"]
-    engine_details = {
-        "DDD Cultivation Engine (event-driven v2)": ("backend/core/cultivation_dispatcher.py", "Event-driven domain knowledge growth — 6 event sources, gate-based promotion, maturity tracking"),
-        "Autonomous Pipeline (9-stage)": ("backend/skills/s_autonomous-pipeline/", "EVALUATE→THINK→PLAN→BUILD(TDD)→REVIEW→TEST→DELIVER→REFLECT with adversarial review gate"),
-        "Pollinate Content Engine": ("backend/skills/s_pollinate/", "Message-first media delivery — transforms ideas into posters, videos, narratives, README"),
-        "GitHub Community Engine": ("backend/skills/s_github_community/", "Autonomous learning flywheel — monitor, match, draft, track, cultivate, report across GitHub"),
-        "Evolution Pipeline (MINE→ASSESS→ACT→AUDIT)": ("backend/core/evolution_optimizer.py", "Confidence-gated self-evolution from session mining and skill fitness scoring"),
-        "Code Intelligence (AST graph)": ("backend/core/code_intel/", "11K+ symbols, 12K+ edges — deterministic graph traversal for code context retrieval"),
-        "Session Resume Enrichment": ("backend/core/context_injector.py", "Cold resume from ~3K to ~50-100K tokens of structured context"),
-        "Proactive Intelligence (L0-L4)": ("backend/core/proactive_intelligence.py", "Session briefing, corrections, open threads, signals — fires on every session start"),
-        "Slack Channel Adapter": ("backend/channels/adapters/slack.py", "24/7 Socket Mode bot — responds as XG's AI assistant to allowlisted users"),
-        "Background Job System": ("backend/jobs/", "Cron + event-triggered headless Claude CLI tasks — signal pipeline, monitoring, reports"),
-        "Star Attribution Tracking": ("backend/skills/s_github_community/scripts/track.py", "Tracks stargazers with timestamps, attributes to engagement activity via shared discussions"),
-        "AI Docs Auto-Refresh": ("backend/scripts/refresh_ai_docs.py", "Self-maintaining documentation — scans codebase metrics and capabilities daily, updates AI_CONTEXT.md + AGENTS.md"),
-    }
+
     for engine in metrics.get("engines", []):
-        path, desc = engine_details.get(engine, ("", ""))
-        lines.append(f"| {engine} | `{path}` | {desc} |")
+        name = engine.get("name", "")
+        path = engine.get("path", "")
+        desc = engine.get("description", "")
+
+        # Enrich Code Intelligence description with measured stats
+        if "Code Intelligence" in name and metrics.get("code_intel_symbols"):
+            symbols = metrics["code_intel_symbols"]
+            edges = metrics["code_intel_edges"]
+            desc = f"{symbols:,} symbols, {edges:,} edges — deterministic graph traversal for code context retrieval"
+
+        lines.append(f"| {name} | `{path}` | {desc} |")
     return "\n".join(lines)
 
 
@@ -170,19 +294,97 @@ def _replace_section(content: str, start_marker: str, end_marker: str, new_block
     return pattern.sub(rf"\g<1>{new_block}\n\g<3>", content)
 
 
-def refresh(dry_run: bool = False) -> dict:
+def check_staleness() -> list[dict]:
+    """Check prose sections against code patterns. Returns list of stale findings."""
+    warnings = []
+
+    for check in STALENESS_CHECKS:
+        prose_path = REPO_ROOT / check["prose_file"]
+        code_path = REPO_ROOT / check["code_file"]
+
+        if not prose_path.exists():
+            continue
+
+        prose_content = prose_path.read_text(encoding="utf-8")
+
+        # Check prose pattern exists (documentation present)
+        prose_match = re.search(check["prose_pattern"], prose_content)
+        if not prose_match:
+            warnings.append({
+                "check": check["name"],
+                "severity": "STALE",
+                "message": f"Prose pattern not found in {check['prose_file']}: {check['prose_pattern']!r}",
+                "description": check["description"],
+            })
+            continue
+
+        # Check code pattern exists (implementation present)
+        if code_path.is_dir():
+            # For directories, check if pattern exists in any file
+            if "count_check" in check:
+                count = _count_pattern_in_dir(code_path, check["code_pattern"])
+                if count < check["count_check"]:
+                    warnings.append({
+                        "check": check["name"],
+                        "severity": "STALE",
+                        "message": (
+                            f"Expected {check['count_check']} matches for "
+                            f"'{check['code_pattern']}' in {check['code_file']}, "
+                            f"found {count}"
+                        ),
+                        "description": check["description"],
+                    })
+        elif code_path.exists():
+            code_content = code_path.read_text(encoding="utf-8")
+            if not re.search(check["code_pattern"], code_content):
+                warnings.append({
+                    "check": check["name"],
+                    "severity": "STALE",
+                    "message": (
+                        f"Code pattern '{check['code_pattern']}' not found in "
+                        f"{check['code_file']} — prose may be outdated"
+                    ),
+                    "description": check["description"],
+                })
+        else:
+            warnings.append({
+                "check": check["name"],
+                "severity": "MISSING",
+                "message": f"Code file {check['code_file']} not found",
+                "description": check["description"],
+            })
+
+    return warnings
+
+
+def refresh(dry_run: bool = False, staleness_only: bool = False) -> dict:
     """Main entry point — refresh both AI_CONTEXT.md and AGENTS.md."""
+    global _SCRIPT_DEADLINE
+    if not _SCRIPT_DEADLINE:
+        _SCRIPT_DEADLINE = time.monotonic() + _SCRIPT_TIMEOUT
+
+    results = {"files_updated": [], "staleness_warnings": []}
+
+    # Always run staleness checks
+    staleness = check_staleness()
+    results["staleness_warnings"] = staleness
+    if staleness:
+        for w in staleness:
+            print(f"  [{w['severity']}] {w['check']}: {w['message']}")
+
+    if staleness_only:
+        return results
+
     metrics = collect_metrics()
     metrics_block = _generate_metrics_block(metrics)
     capabilities_block = _generate_capabilities_block(metrics)
-
-    results = {"files_updated": [], "metrics": metrics}
+    results["metrics"] = metrics
 
     for filepath in [AI_CONTEXT, AGENTS_MD]:
         if not filepath.exists():
             continue
 
-        original = filepath.read_text()
+        original = filepath.read_text(encoding="utf-8")
         updated = original
 
         # Replace metrics section
@@ -205,7 +407,7 @@ def refresh(dry_run: bool = False) -> dict:
             if dry_run:
                 print(f"[DRY RUN] Would update: {filepath.name}")
             else:
-                filepath.write_text(updated)
+                filepath.write_text(updated, encoding="utf-8")
                 print(f"Updated: {filepath.name}")
             results["files_updated"].append(filepath.name)
         else:
@@ -215,12 +417,27 @@ def refresh(dry_run: bool = False) -> dict:
 
 
 if __name__ == "__main__":
+    _SCRIPT_DEADLINE = time.monotonic() + _SCRIPT_TIMEOUT
+
     dry_run = "--dry-run" in sys.argv
-    result = refresh(dry_run=dry_run)
+    staleness_only = "--check-staleness" in sys.argv
+
+    result = refresh(dry_run=dry_run, staleness_only=staleness_only)
+
+    if staleness_only:
+        n = len(result["staleness_warnings"])
+        print(f"\nStaleness check: {n} warning(s)")
+        sys.exit(1 if n > 0 else 0)
+
     if result["files_updated"]:
+        m = result.get("metrics", {})
         print(f"\nRefreshed {len(result['files_updated'])} file(s)")
-        print(f"Skills: {result['metrics']['skill_count']}, "
-              f"Commits: {result['metrics']['commit_count']}, "
-              f"Engines: {len(result['metrics']['engines'])}")
+        print(f"Skills: {m.get('skill_count', '?')}, "
+              f"Commits: {m.get('commit_count', '?')}, "
+              f"Engines: {len(m.get('engines', []))}")
+
+    n = len(result["staleness_warnings"])
+    if n > 0:
+        print(f"\n⚠️  {n} staleness warning(s) — prose sections may need manual update")
     else:
         print("\nNo updates needed (markers not found or content unchanged)")
