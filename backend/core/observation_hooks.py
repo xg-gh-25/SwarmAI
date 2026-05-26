@@ -143,9 +143,7 @@ def _maybe_emit_ddd_event_sync(obs, session_context: dict) -> None:
                         payload={"files": obs.files, "intent": obs.intent},
                         priority=2,
                     )
-                    dispatcher.queue.put_nowait(event)
-                except asyncio.QueueFull:
-                    logger.debug("observation: DDD event dropped (queue full)")
+                    dispatcher.emit_nowait(event)  # Dedup + non-yielding
                 except Exception:
                     pass
                 break
@@ -159,12 +157,25 @@ def _maybe_emit_ddd_event_sync(obs, session_context: dict) -> None:
                 payload={"type": "correction", "intent": obs.intent},
                 priority=1,
             )
-            dispatcher.queue.put_nowait(event)
-        except asyncio.QueueFull:
-            logger.debug("observation: correction event dropped (queue full)")
+            dispatcher.emit_nowait(event)  # Dedup + non-yielding
         except Exception:
             pass
         session_context["_correction_just_detected"] = False
+
+
+# Module-level ring registry — allows daily_activity_hook to access session rings
+# Keyed by session_id, cleaned on session end.
+_session_rings: dict[str, "ObservationRing"] = {}
+
+
+def get_session_ring(session_id: str):
+    """Get the ObservationRing for a session (used by daily_activity_hook)."""
+    return _session_rings.get(session_id)
+
+
+def _cleanup_session_ring(session_id: str) -> None:
+    """Remove ring for a closed session (prevents memory leak)."""
+    _session_rings.pop(session_id, None)
 
 
 def register_observation_hooks(registry, session_context: dict) -> None:
@@ -176,7 +187,12 @@ def register_observation_hooks(registry, session_context: dict) -> None:
 
     # Initialize ring in session context (one per session)
     if "_observations" not in session_context:
-        session_context["_observations"] = ObservationRing()
+        ring = ObservationRing()
+        session_context["_observations"] = ring
+        # Register in module-level dict for cross-hook access
+        sid = session_context.get("sdk_session_id", "")
+        if sid:
+            _session_rings[sid] = ring
 
     registry.register(
         "PreToolUse",

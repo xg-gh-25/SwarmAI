@@ -141,6 +141,35 @@ class EventDispatcher:
         logger.debug("cultivation_dispatcher: enqueued %s (priority=%d)", dedup_key, event.priority)
         return True
 
+    def emit_nowait(self, event: CultivationEvent) -> bool:
+        """Non-yielding enqueue with dedup. Safe to call from sync or async context.
+
+        Same dedup + overflow logic as emit(), but uses put_nowait instead of
+        await put. Returns True if enqueued, False if deduped/dropped.
+        """
+        now = time.monotonic()
+        dedup_key = event.type.value
+        last_time = self._last_emit.get(dedup_key, 0.0)
+        if (now - last_time) < self._dedup_window:
+            return False
+
+        if self.queue.full():
+            self.dropped_count += 1
+            logger.warning(
+                "cultivation_dispatcher: queue full (%d), dropped %s event "
+                "(total dropped: %d)",
+                self.queue.maxsize, dedup_key, self.dropped_count,
+            )
+            return False
+
+        try:
+            self.queue.put_nowait(event)
+            self._last_emit[dedup_key] = now
+            return True
+        except asyncio.QueueFull:
+            self.dropped_count += 1
+            return False
+
     async def drain(self) -> list[CultivationEvent]:
         """Drain all queued events, return sorted by priority (0 first).
 

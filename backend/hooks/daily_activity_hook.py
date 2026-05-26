@@ -236,23 +236,22 @@ class DailyActivityExtractionHook:
                 pass
             return
 
-        # 2d. Mine observation patterns (if ring available in session context)
+        # 2d. Mine observation patterns (if ring available for this session)
         try:
             from core.observation_miner import ObservationMiner, write_patterns
-            # Access ring from session_context via initialization_manager
-            from core.initialization_manager import initialization_manager
-            session_ctx = initialization_manager.get_session_context(context.session_id)
-            if session_ctx:
-                ring = session_ctx.get("_observations")
-                if ring is not None:
-                    miner = ObservationMiner()
-                    patterns = miner.mine(ring.all_completed())
-                    if patterns:
-                        write_patterns(patterns, context.session_id)
-                        logger.debug(
-                            "ObservationMiner: %d patterns extracted for session %s",
-                            len(patterns), context.session_id,
-                        )
+            from core.observation_hooks import get_session_ring, _cleanup_session_ring
+            ring = get_session_ring(context.session_id)
+            if ring is not None:
+                miner = ObservationMiner()
+                patterns = miner.mine(ring.all_completed())
+                if patterns:
+                    write_patterns(patterns, context.session_id)
+                    logger.debug(
+                        "ObservationMiner: %d patterns extracted for session %s",
+                        len(patterns), context.session_id,
+                    )
+                # Clean up ring from module registry (prevent memory leak)
+                _cleanup_session_ring(context.session_id)
         except Exception:
             pass  # Pattern mining is best-effort, never blocks DA extraction
 

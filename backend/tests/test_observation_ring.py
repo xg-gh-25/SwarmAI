@@ -307,12 +307,10 @@ class TestDDDEventEmission:
         return {"sdk_session_id": "test-123"}
 
     def _setup_dispatcher_mock(self):
-        """Helper: create mock dispatcher and patch module globals."""
-        mock_queue = MagicMock()
-        mock_queue.put_nowait = MagicMock()
+        """Helper: create mock dispatcher."""
         mock_dispatcher = MagicMock()
-        mock_dispatcher.queue = mock_queue
-        return mock_dispatcher, mock_queue
+        mock_dispatcher.emit_nowait = MagicMock(return_value=True)
+        return mock_dispatcher
 
     def test_ddd_event_emitted_on_project_edit(self, session_context):
         """Edit on a project file puts GIT_COMMIT event into dispatcher queue."""
@@ -324,7 +322,7 @@ class TestDDDEventEmission:
         ring.record_pre("t1", "Edit", {"file_path": "/Users/x/Projects/SwarmAI/foo.py"})
         session_context["_observations"] = ring
 
-        mock_dispatcher, mock_queue = self._setup_dispatcher_mock()
+        mock_dispatcher = self._setup_dispatcher_mock()
 
         # Ensure imports are cached so _CultivationEvent/_EventType are set
         obs_mod._ensure_cultivation_imports()
@@ -334,7 +332,7 @@ class TestDDDEventEmission:
             asyncio.run(
                 hook({"tool_name": "Edit", "tool_input": {"file_path": "/Users/x/Projects/SwarmAI/foo.py"}, "error": None}, "t1", None)
             )
-        mock_queue.put_nowait.assert_called_once()
+        mock_dispatcher.emit_nowait.assert_called_once()
 
     def test_ddd_event_not_emitted_non_project(self, session_context):
         """Edit on non-project file does NOT emit DDD event."""
@@ -346,7 +344,7 @@ class TestDDDEventEmission:
         ring.record_pre("t1", "Edit", {"file_path": "/tmp/scratch.py"})
         session_context["_observations"] = ring
 
-        mock_dispatcher, mock_queue = self._setup_dispatcher_mock()
+        mock_dispatcher = self._setup_dispatcher_mock()
         obs_mod._ensure_cultivation_imports()
 
         hook = create_observation_completer(session_context)
@@ -354,7 +352,7 @@ class TestDDDEventEmission:
             asyncio.run(
                 hook({"tool_name": "Edit", "tool_input": {"file_path": "/tmp/scratch.py"}, "error": None}, "t1", None)
             )
-        mock_queue.put_nowait.assert_not_called()
+        mock_dispatcher.emit_nowait.assert_not_called()
 
     def test_correction_event_emitted(self, session_context):
         """When _correction_just_detected is True, puts DAILY_ACTIVITY event into queue."""
@@ -367,7 +365,7 @@ class TestDDDEventEmission:
         session_context["_observations"] = ring
         session_context["_correction_just_detected"] = True
 
-        mock_dispatcher, mock_queue = self._setup_dispatcher_mock()
+        mock_dispatcher = self._setup_dispatcher_mock()
         obs_mod._ensure_cultivation_imports()
 
         hook = create_observation_completer(session_context)
@@ -375,6 +373,6 @@ class TestDDDEventEmission:
             asyncio.run(
                 hook({"tool_name": "Bash", "tool_input": {"command": "echo fix"}, "error": None}, "t1", None)
             )
-        mock_queue.put_nowait.assert_called_once()
+        mock_dispatcher.emit_nowait.assert_called_once()
         # Flag should be cleared
         assert session_context["_correction_just_detected"] is False
