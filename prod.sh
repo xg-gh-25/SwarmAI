@@ -543,6 +543,15 @@ with open('$DESKTOP_DIR/src-tauri/tauri.conf.json') as f:
         _ok "AI docs already up to date"
     fi
 
+    # Prose staleness detection
+    _log "Checking AGENTS.md prose staleness..."
+    if python backend/scripts/refresh_ai_docs.py --check-staleness 2>&1 | grep -q "STALE"; then
+        _err "AGENTS.md has stale prose sections — fix before release"
+        all_ok=false
+    else
+        _ok "AGENTS.md prose is current"
+    fi
+
     # Tests
     _log "Running backend tests..."
     cd "$BACKEND_DIR"
