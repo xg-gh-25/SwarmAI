@@ -187,6 +187,19 @@ When creating a new PowerPoint presentation from scratch, use the **html2pptx** 
 - Edge-to-edge color bands
 - Negative space as a design element
 
+### Design Anti-Patterns (Avoid — These Mark Slides as AI-Generated)
+
+- **NEVER use accent lines under titles** — this is the #1 hallmark of AI-generated slides. Use whitespace or background color instead.
+- **Don't repeat the same layout** across all slides — vary columns, cards, and callouts. Monotony = lazy AI output.
+- **Don't center body text** — left-align paragraphs and lists. Center only titles and short callouts.
+- **Don't skimp on size contrast** — titles need 36pt+ to stand out from 14-16pt body. Equal sizing = flat hierarchy.
+- **Don't default to blue** — pick colors that reflect the specific topic, audience, and mood.
+- **Don't mix spacing randomly** — choose 0.3" or 0.5" gaps and use consistently throughout.
+- **Don't create text-only slides** — every slide needs a visual element (image, chart, icon, or shape). Text-only slides are forgettable.
+- **Don't forget text box `margin: 0`** — when aligning text with shapes/lines/icons, default margin creates misalignment.
+- **Don't use low-contrast elements** — icons AND text need strong contrast against backgrounds. Light text on light bg = invisible.
+- **Don't style one slide and leave the rest plain** — commit fully across the entire deck or keep it consistently simple.
+
 ### Layout Tips
 **When creating slides with charts or tables:**
 - **Two-column layout (PREFERRED)**: Use a header spanning the full width, then two columns below - text/bullets in one column and the featured content in the other. This provides better balance and makes charts/tables more readable. Use flexbox with unequal column widths (e.g., 40%/60% split) to optimize space for each content type.
@@ -204,15 +217,145 @@ When creating a new PowerPoint presentation from scratch, use the **html2pptx** 
    - Use the `html2pptx()` function to process each HTML file
    - Add charts and tables to placeholder areas using PptxGenJS API
    - Save the presentation using `pptx.writeFile()`
-4. **Visual validation**: Generate thumbnails and inspect for layout issues
-   - Create thumbnail grid: `python scripts/thumbnail.py output.pptx workspace/thumbnails --cols 4`
-   - Read and carefully examine the thumbnail image for:
-     - **Text cutoff**: Text being cut off by header bars, shapes, or slide edges
-     - **Text overlap**: Text overlapping with other text or shapes
-     - **Positioning issues**: Content too close to slide boundaries or other elements
-     - **Contrast issues**: Insufficient contrast between text and backgrounds
-   - If issues found, adjust HTML margins/spacing/colors and regenerate the presentation
-   - Repeat until all slides are visually correct
+4. **Visual QA (MANDATORY — use subagents)**
+
+   **Assume there are problems. Your job is to find them.** Your first render is almost never correct. Approach QA as a bug hunt, not a confirmation step.
+
+   **Step A — Convert to images for inspection:**
+   ```bash
+   python scripts/thumbnail.py output.pptx workspace/thumbnails --cols 4
+   # For detailed per-slide inspection:
+   soffice --headless --convert-to pdf output.pptx
+   pdftoppm -jpeg -r 150 output.pdf slide
+   ```
+
+   **Step B — Spawn a subagent for visual inspection** (even for 2-3 slides). You've been staring at the code and will see what you expect, not what's there. Subagents have fresh eyes. Use this prompt:
+   ```
+   Visually inspect these slides. Assume there are issues — find them.
+
+   Look for:
+   - Overlapping elements (text through shapes, lines through words)
+   - Text overflow or cut off at edges/box boundaries
+   - Decorative lines positioned for single-line text but title wrapped to two lines
+   - Source citations or footers colliding with content above
+   - Elements too close (< 0.3" gaps) or cards/sections nearly touching
+   - Uneven gaps (large empty area in one place, cramped in another)
+   - Insufficient margin from slide edges (< 0.5")
+   - Columns or similar elements not aligned consistently
+   - Low-contrast text or icons against backgrounds
+   - Text boxes too narrow causing excessive wrapping
+   - Leftover placeholder content ("xxxx", "lorem", "ipsum")
+
+   Report ALL issues found, including minor ones.
+   ```
+
+   **Step C — Verification loop (at least one cycle required):**
+   1. Generate slides → Convert to images → Inspect (subagent)
+   2. List issues found (if none found on first pass, look again more critically)
+   3. Fix issues in HTML/code
+   4. **Re-verify affected slides** — one fix often creates another problem
+   5. Repeat until a full pass reveals no new issues
+
+   **Do not declare success until you've completed at least one fix-and-verify cycle.**
+
+## PptxGenJS Common Pitfalls
+
+⚠️ These issues cause **file corruption**, visual bugs, or broken output. Memorize them.
+
+1. **NEVER use "#" with hex colors** — corrupts the .pptx file
+   ```javascript
+   color: "FF0000"      // ✅ CORRECT
+   color: "#FF0000"     // ❌ CORRUPTS FILE
+   ```
+
+2. **NEVER encode opacity in hex color strings** — 8-char colors (e.g., `"00000020"`) corrupt the file. Use the `opacity` property instead.
+   ```javascript
+   shadow: { color: "00000020" }                    // ❌ CORRUPTS FILE
+   shadow: { color: "000000", opacity: 0.12 }       // ✅ CORRECT
+   ```
+
+3. **Use `bullet: true`** — NEVER unicode symbols like "•" (creates double bullets)
+
+4. **Use `breakLine: true`** between text array items or text runs together on one line
+
+5. **Avoid `lineSpacing` with bullets** — causes excessive gaps. Use `paraSpaceAfter` instead.
+
+6. **Each presentation needs a fresh `pptxgen()` instance** — never reuse across files
+
+7. **NEVER reuse option objects across calls** — PptxGenJS mutates objects in-place (e.g., converting shadow values to EMU). Sharing one object between multiple `addShape`/`addText` calls corrupts the second element.
+   ```javascript
+   // ❌ WRONG — second call gets already-converted values
+   const shadow = { type: "outer", blur: 6, offset: 2, color: "000000", opacity: 0.15 };
+   slide.addShape(pres.shapes.RECTANGLE, { shadow, ... });
+   slide.addShape(pres.shapes.RECTANGLE, { shadow, ... });
+
+   // ✅ CORRECT — factory function creates fresh object each time
+   const makeShadow = () => ({ type: "outer", blur: 6, offset: 2, color: "000000", opacity: 0.15 });
+   slide.addShape(pres.shapes.RECTANGLE, { shadow: makeShadow(), ... });
+   slide.addShape(pres.shapes.RECTANGLE, { shadow: makeShadow(), ... });
+   ```
+
+8. **Don't use `ROUNDED_RECTANGLE` with accent borders** — rectangular overlay bars won't cover rounded corners. Use `RECTANGLE` instead when pairing with left-side accent strips.
+
+---
+
+## Shadow & Chart Styling
+
+### Shadow Properties
+
+| Property | Type | Range | Notes |
+|----------|------|-------|-------|
+| `type` | string | `"outer"`, `"inner"` | |
+| `color` | string | 6-char hex (e.g. `"000000"`) | No `#` prefix, no 8-char hex |
+| `blur` | number | 0-100 pt | |
+| `offset` | number | 0-200 pt | **Must be non-negative** — negative values corrupt the file |
+| `angle` | number | 0-359 degrees | Direction shadow falls (135 = bottom-right) |
+| `opacity` | number | 0.0-1.0 | Use this for transparency, never encode in color string |
+
+**Upward shadow** (e.g., on a footer bar): use `angle: 270` with a positive offset — do NOT use a negative offset.
+
+**Gradient fills** are not natively supported in PptxGenJS. Use a gradient image as background instead.
+
+### Better-Looking Charts
+
+Default PptxGenJS charts look dated. Apply these for a modern, clean appearance:
+
+```javascript
+slide.addChart(pres.charts.BAR, chartData, {
+  x: 0.5, y: 1, w: 9, h: 4, barDir: "col",
+
+  // Custom colors (match your presentation palette)
+  chartColors: ["0D9488", "14B8A6", "5EEAD4"],
+
+  // Clean background
+  chartArea: { fill: { color: "FFFFFF" }, roundedCorners: true },
+
+  // Muted axis labels
+  catAxisLabelColor: "64748B",
+  valAxisLabelColor: "64748B",
+
+  // Subtle grid (value axis only)
+  valGridLine: { color: "E2E8F0", size: 0.5 },
+  catGridLine: { style: "none" },
+
+  // Data labels on bars
+  showValue: true,
+  dataLabelPosition: "outEnd",
+  dataLabelColor: "1E293B",
+
+  // Hide legend for single series
+  showLegend: false,
+});
+```
+
+**Key styling options:**
+- `chartColors: [...]` — hex colors for series/segments (no `#` prefix)
+- `chartArea: { fill, border, roundedCorners }` — chart background
+- `catGridLine/valGridLine: { color, style, size }` — grid lines (`style: "none"` to hide)
+- `lineSmooth: true` — curved lines (line charts only)
+- `legendPos: "r"` — legend position: `"b"`, `"t"`, `"l"`, `"r"`, `"tr"`
+
+---
 
 ## Extracting Style from an Existing Presentation
 
