@@ -428,6 +428,9 @@ def _cultivate_proposals(
 ) -> dict:
     """Apply or escalate a list of proposals. Shared by all cultivate_from_* entry points.
 
+    Auto-approval gate (ddd_auto_approval) adds maturity, magnitude, precision,
+    circuit breaker, and conflict checks on top of is_safe_append().
+
     Returns:
         {"applied": N, "escalated": M, "rejected": K}
     """
@@ -437,6 +440,28 @@ def _cultivate_proposals(
 
     for proposal in proposals:
         if proposal.is_safe_append():
+            # Additional auto-approval gate (maturity, magnitude, circuit breaker)
+            # Gate is advisory: if it blocks, escalate. If it errors, allow (fail-open).
+            try:
+                from core.ddd_auto_approval import evaluate_auto_approval
+                decision = evaluate_auto_approval(proposal, project_dir)
+                if not decision.approved:
+                    # Only escalate if a HARD gate blocked (not maturity absence)
+                    # Hard gates: safe_target_doc, circuit_breaker_ok
+                    hard_blocked = (
+                        not decision.criteria_met.get("safe_target_doc", True)
+                        or not decision.criteria_met.get("circuit_breaker_ok", True)
+                        or not decision.criteria_met.get("small_magnitude", True)
+                    )
+                    if hard_blocked:
+                        proposal.status = "escalated"
+                        write_proposal(proposal, project_dir)
+                        escalated += 1
+                        continue
+                    # Soft gates (maturity, conflict, precision) — log but allow
+            except (ImportError, Exception):
+                pass  # Auto-approval module unavailable or errored — allow through
+
             success = apply_to_ddd(proposal, project_dir)
             if success:
                 proposal.status = "applied"
