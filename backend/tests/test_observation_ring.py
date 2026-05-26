@@ -211,7 +211,7 @@ class TestObservationHooks:
         from core.observation_hooks import create_observation_recorder
 
         hook = create_observation_recorder(session_context)
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             hook({"tool_name": "Bash", "tool_input": {"command": "ls"}}, "tid1", None)
         )
         assert result.get("decision", "approve") == "approve"
@@ -222,7 +222,7 @@ class TestObservationHooks:
 
         hook = create_observation_completer(session_context)
         # Should not crash even without _observations in context
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             hook({"tool_name": "Bash", "tool_input": {}}, "tid1", None)
         )
         assert result == {} or result.get("decision") != "block"
@@ -234,7 +234,7 @@ class TestObservationHooks:
 
         session_context["_observations"] = ObservationRing()
         hook = create_observation_recorder(session_context)
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             hook({"tool_name": "Edit", "tool_input": {"file_path": "/x.py"}}, "tid1", None)
         )
         ring = session_context["_observations"]
@@ -248,14 +248,14 @@ class TestObservationHooks:
 
         session_context["_observations"] = ObservationRing()
         hook = create_observation_recorder(session_context)
-        loop = asyncio.get_event_loop()
 
-        start = time.perf_counter()
-        for i in range(1000):
-            loop.run_until_complete(
-                hook({"tool_name": "Bash", "tool_input": {"command": f"echo {i}"}}, f"t{i}", None)
-            )
-        elapsed = time.perf_counter() - start
+        async def _run_batch():
+            start = time.perf_counter()
+            for i in range(1000):
+                await hook({"tool_name": "Bash", "tool_input": {"command": f"echo {i}"}}, f"t{i}", None)
+            return time.perf_counter() - start
+
+        elapsed = asyncio.run(_run_batch())
         assert elapsed < 1.0, f"1000 hooks took {elapsed:.3f}s (expected <1s)"
 
 
@@ -331,7 +331,7 @@ class TestDDDEventEmission:
 
         hook = create_observation_completer(session_context)
         with patch.object(obs_mod, "get_dispatcher", return_value=mock_dispatcher):
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 hook({"tool_name": "Edit", "tool_input": {"file_path": "/Users/x/Projects/SwarmAI/foo.py"}, "error": None}, "t1", None)
             )
         mock_queue.put_nowait.assert_called_once()
@@ -351,7 +351,7 @@ class TestDDDEventEmission:
 
         hook = create_observation_completer(session_context)
         with patch.object(obs_mod, "get_dispatcher", return_value=mock_dispatcher):
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 hook({"tool_name": "Edit", "tool_input": {"file_path": "/tmp/scratch.py"}, "error": None}, "t1", None)
             )
         mock_queue.put_nowait.assert_not_called()
@@ -372,7 +372,7 @@ class TestDDDEventEmission:
 
         hook = create_observation_completer(session_context)
         with patch.object(obs_mod, "get_dispatcher", return_value=mock_dispatcher):
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 hook({"tool_name": "Bash", "tool_input": {"command": "echo fix"}, "error": None}, "t1", None)
             )
         mock_queue.put_nowait.assert_called_once()
