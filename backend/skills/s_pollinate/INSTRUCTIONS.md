@@ -655,6 +655,107 @@ First publish: #{which} — {reason}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
+**Format: Document tracks (deck/pdf/data-report/document/image/interactive-report/podcast):**
+
+```
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ 📦 POLLINATE DELIVERY — {topic}        ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+Tracks: {confirmed_tracks list} | Direction: {D#} {name}
+Thesis: "{one sentence from content_package}"
+
+── TRACK E: DECK ──────────────────────
+
+📊 {topic}.pptx — {N} slides, speaker notes ✓
+   Audience: {from discovery.json}
+   Key slides: {slide 1 title} → {slide N title}
+   
+   File: content/{name}/tracks/deck/{topic}.pptx
+
+── TRACK F: PDF ───────────────────────
+
+📄 {topic}-onepager.pdf — 1 page, scannable
+   Sections: {header} / {proof points} / {CTA}
+   
+   [INLINE: first page preview PNG if available]
+   
+   File: content/{name}/tracks/pdf/{topic}-onepager.pdf
+
+── TRACK G: DATA REPORT ───────────────
+
+📈 {topic}.xlsx — {N} sheets, {M} charts
+   Sheets: {Overview} | {Detail} | {Comparison}
+   Key metric: {hero number with context}
+   
+   File: content/{name}/tracks/data-report/{topic}.xlsx
+
+── TRACK H: DOCUMENT ──────────────────
+
+📝 {topic}.docx — {N} pages, TOC ✓
+   Structure: Executive Summary → {sections} → Appendix
+   
+   File: content/{name}/tracks/document/{topic}.docx
+
+── TRACK I: AI IMAGE ──────────────────
+
+🎨 {topic}-hero.png — {WxH}, {style}
+   Purpose: {deck illustration / article hero / social thumbnail}
+   
+   [INLINE IMAGE if generated]
+   
+   Prompt: content/{name}/tracks/image/prompt.json
+   File: content/{name}/tracks/image/{topic}-hero.png
+
+── TRACK J: INTERACTIVE REPORT ────────
+
+📊 {topic}-report.html — {mode: dashboard/scorecard/comparison}
+   Sections: {tab1} | {tab2} | {tab3}
+   Interactive: tabs ✓, expand ✓, traffic lights ✓
+   
+   Open: content/{name}/tracks/interactive-report/{topic}-report.html
+
+── TRACK K: PODCAST ───────────────────
+
+🎙️ {topic}-podcast.mp3 — {duration}, {language}
+   Hosts: {Host A} & {Host B}
+   Key points: {3-5 bullet summary of dialogue}
+   
+   Audio: content/{name}/tracks/podcast/{topic}-podcast.mp3
+   Transcript: content/{name}/tracks/podcast/transcript.md
+   Show notes: content/{name}/tracks/podcast/show_notes.md
+
+── QUALITY ─────────────────────────────
+
+✅ Per-track RP: {E: 8/8} | {F: 7/7} | {G: 6/6} | ...
+✅ Cross-format (RP-X): {5/5 pass}
+Direction: {D# name} applied consistently
+
+── FILES (all outputs) ────────────────
+
+{one line per produced file, grouped by track}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+**Display rules for document tracks:**
+
+1. **Only show sections for confirmed tracks.** If run only produced deck + pdf, omit tracks G/H/I/J/K sections entirely.
+
+2. **Inline images where possible.** Track I hero image, Track F preview PNG — show them inline via Read tool. User SEES the result.
+
+3. **File paths are actionable.** Each track section ends with the output file path — user can open directly.
+
+4. **Quality is one section, not per-track noise.** Aggregate RP pass rates into a single trust line. Only expand if something FAILED.
+
+5. **Podcast shows key points.** User wants to know what the hosts discuss without listening to the whole thing. 3-5 bullet summary from show_notes.
+
+6. **Interactive report gets "Open:" not "File:"** — because the user should open it in a browser, not download it.
+
+7. **Multi-track runs use this template.** Even if one of the tracks is poster/video — those get their Platform Matrix treatment ABOVE this block, and document tracks get this treatment BELOW.
+
+---
+
 ### Completion Summary (shown once at end, after REFLECT)
 
 ```
@@ -1273,6 +1374,24 @@ The selected direction provides:
 - PptxGenJS colors (Track E deck)
 - Visual identity across all tracks in this run
 
+### Inline Pre-Verification (Before Each Track)
+
+**Before producing ANY track output, verify these 4 preconditions:**
+
+| # | Check | How to Verify | Fail Action |
+|---|-------|---------------|-------------|
+| PV-1 | **Content package exists and has required layer** | Read `content_package.md`, confirm the layer this track needs is populated (Visual for image/deck, Data for data-report, Narrative for podcast/video). **Note:** Track J (interactive_report) can build qualitative dashboard from Core Layer alone — Data Layer optional. | Stop — fill the missing layer before building (except Track J qualitative mode) |
+| PV-2 | **Direction is selected** | `direction_selected` variable or file exists from Direction Selection above | Stop — run Direction Selection first |
+| PV-3 | **Output directory created** | `mkdir -p content/{name}/tracks/{track-dir}/` | Create it |
+| PV-4 | **No stale output from prior run** | Check if track output already exists in target dir | Ask user: overwrite or skip? |
+
+**Why this exists:** Phase 1-3 production runs revealed that skipping direction
+selection or building against an empty Data Layer produces outputs that pass
+individual RP checks but fail RP-X cross-format consistency. Pre-verification
+catches these structural misses BEFORE wasting tokens on production.
+
+---
+
 ### Track E: Deck (if "deck" in confirmed_tracks)
 
 **Read the full track instructions:** `tracks/track-e-deck.md`
@@ -1310,6 +1429,37 @@ Sheet count = data dimension count.
 python-docx with branded styling, heading hierarchy, executive summary, TOC.
 Content completeness: document length = what content needs. Appendix encouraged.
 Tracked changes available via s_docx/scripts/document.py.
+
+---
+
+### Track I: AI Image (if "ai_image" in confirmed_tracks)
+
+**Read the full track instructions:** `tracks/track-i-image.md`
+
+Structured prompt generation for hero visuals. Tool-agnostic — detects DALL-E,
+Stable Diffusion, or MCP image server at runtime. Falls back to prompt.json
+export if no tool available. Used as supplier for other tracks (deck illustrations,
+article headers, social thumbnails).
+
+---
+
+### Track J: Interactive Report (if "interactive_report" in confirmed_tracks)
+
+**Read the full track instructions:** `tracks/track-j-interactive-report.md`
+
+Single-file branded HTML with interactivity (tabs, expandable sections, traffic lights).
+Built on s_html-artifact templates (base.css + report/scorecard/comparison). Direction
+tokens override base palette. Three modes: Dashboard, Scorecard, Comparison.
+
+---
+
+### Track K: Podcast (if "podcast" in confirmed_tracks)
+
+**Read the full track instructions:** `tracks/track-k-podcast.md`
+
+Two-host dialogue script + optional MP3 audio via TTS. Detects edge-tts, OpenAI TTS,
+or Amazon Polly at runtime. Falls back to script.json + transcript.md if no TTS.
+Key principle: spoken ≠ written — short sentences, reactions, Host B challenges.
 
 ---
 
@@ -1935,6 +2085,33 @@ Before advancing to TEST, ALL must be true:
 - [ ] (Poster) Legacy term blocklist passes (zero matches)
 - [ ] (Poster) Content principles anti-pattern checklist passes
 - [ ] Audience Simulation results logged in review_results.md (or skipped: `"internal": true` / empty channel_matrix)
+
+### RP-X: Cross-Format Consistency (Multi-Track Runs Only)
+
+**When to run:** Only if `confirmed_tracks` has 2+ entries in discovery.json.
+**When to skip:** Single-track runs (no cross-format to check).
+
+Run the cross-format consistency checker:
+
+```bash
+python "$SKILL_DIR/scripts/cross_format_check.py" "content/{name}/" --json
+```
+
+This verifies 5 RP-X patterns:
+
+| # | Pattern | What it catches |
+|---|---------|-----------------|
+| RP-X1 | **Brand token consistency** | Different direction YAML applied to different tracks |
+| RP-X2 | **Message alignment** | Thesis drift — one track strayed from core message |
+| RP-X3 | **Data integrity** | Same metric shows different values across formats |
+| RP-X4 | **Naming conventions** | Spaces in filenames, inconsistent casing |
+| RP-X5 | **Visual coherence** | Completely different color palettes across visual formats |
+
+**Result handling:**
+- FAIL → fix immediately (same treatment as RP-V/RP-P FAIL)
+- WARN → log as taste decision, surface at Delivery Gate
+- SKIP → expected for non-applicable checks (e.g., no HTML outputs)
+- PASS → no action needed
 
 ### Anti-Rationalization
 
