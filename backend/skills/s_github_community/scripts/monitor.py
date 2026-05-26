@@ -31,6 +31,7 @@ TIER2_REPOS = [
     "forrestchang/andrej-karpathy-skills",
     "crewAIInc/crewAI",
     "volcengine/OpenViking",
+    "nexu-io/open-design",
 ]
 
 # Topic keywords for signal matching

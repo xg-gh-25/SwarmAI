@@ -45,7 +45,9 @@ They also report:
 - "Too many abstraction layers stacked on top of each other... debugging nightmares"
 - Top bug: agents **hallucinate tool execution** instead of actually calling tools — a failure mode that compounds with more agents
 
-**DeerFlow (69K stars, ByteDance)** added `subagent_enabled: false` as a config option and offers "flash mode" (no sub-agents) for tasks that don't need the overhead. Their SWE-bench scores are actually **lower** via multi-agent than direct model calls — the orchestration overhead eats the turn budget before the actual work happens.
+*Important caveat:* CrewAI serves a different persona than ours — primarily low-code teams who need to orchestrate multi-step flows without deep engineering. Their "14x reduction" is about reducing orchestration complexity for *that* audience. What's significant isn't the number — it's that their own team concluded multi-agent coordination overhead is their primary source of user failure, regardless of user sophistication.
+
+**DeerFlow (69K stars, ByteDance)** added `subagent_enabled: false` as a config option and offers "flash mode" (no sub-agents) for tasks that don't need the overhead. Their SWE-bench scores are actually **lower** via multi-agent than direct model calls — though this could reflect implementation quality rather than an inherent architectural flaw. The more interesting signal: a framework built *for* multi-agent now offers a first-class escape hatch.
 
 ---
 
@@ -73,6 +75,20 @@ We're not dogmatic. Multi-agent has genuine value for:
 2. **Heterogeneous model routing** — cheap model for classification, expensive for composition (but this is model routing, not agent architecture)
 3. **Audit/compliance** — named agent = named responsibility (but named pipeline stages achieve the same)
 4. **Enterprise sales** — "AI team" maps to how executives think about automation
+
+---
+
+## Known Limits & Persona
+
+**Who this works for:** This architecture optimizes for a specific persona — an experienced full-stack builder (comfortable across frontend, backend, data, and infrastructure) who works on one deep project at a time. The "one builder + AI = one team" claim is about what's possible at the *ceiling*, not the floor. A junior developer using the same architecture won't get team-scale output — the AI amplifies existing judgment, it doesn't replace it.
+
+**Where single-agent hits its scaling boundary:**
+
+- **Context window is finite.** We use a 1M token context window with ~77K tokens of system prompt. This is generous for a single project but won't cover a portfolio of unrelated codebases simultaneously. For N independent projects that each need full context, you need N sessions — which is concurrent execution, not multi-agent.
+- **Attention degrades with distance.** Even within a 1M window, information at position 800K gets less attention than information at position 5K. Our DDD system mitigates this with structured injection (highest-value knowledge first), but it's a mitigation, not a cure.
+- **Token cost scales linearly with context size.** A 77K system prompt on every turn isn't free. We chose depth over breadth — one agent that knows everything about this project vs. many agents that know a little about many projects.
+
+**When you might genuinely need multi-agent:** If your problem requires sustained reasoning across 5+ independent domains with different tool access and trust boundaries — and these domains need real-time cross-pollination (not just sequential handoff) — multi-agent may be the right architecture. Our claim is narrower than "multi-agent is always wrong." It's: **for single-project autonomous development, the overhead isn't worth it.**
 
 ---
 
@@ -131,4 +147,4 @@ vs. Multi-agent (what we avoided):
 
 ---
 
-*Built with [SwarmAI](https://github.com/xg-gh-25/SwarmAI) — one builder + AI operating at team scale.*
+*Built with [SwarmAI](https://github.com/xg-gh-25/SwarmAI) — one experienced builder + AI operating at team scale.*

@@ -1,10 +1,10 @@
-# Reading Matrix — 3 Paths Through 43 Discussions (Builder / Architect / Leader)
+# Reading Matrix — 3 Paths Through 44 Discussions (Builder / Architect / Leader)
 
 > 📎 [View on GitHub](https://github.com/xg-gh-25/SwarmAI/discussions/35) | Category: General | Published: 2026-05-21 | Updated: 2026-05-23
 
 ---
 
-> 43 articles, 5 themes, 3 reader paths. Don't read everything. Pick your path.
+> 44 articles, 5 themes, 3 reader paths. Don't read everything. Pick your path.
 
 **Base URL:** `https://github.com/xg-gh-25/SwarmAI/discussions/`
 
@@ -105,6 +105,7 @@ Then pick your path ↓
 | 4 | [S×T Tension Matrix — friction = mismatch, not tool quality](https://github.com/xg-gh-25/SwarmAI/discussions/11) | Why adoption fails even with good tools | 6 |
 | 5 | [Four Startup Stages — same stages, different bottlenecks](https://github.com/xg-gh-25/SwarmAI/discussions/16) | Where AI changes the game at each phase | 5 |
 | 6 | [Same Pattern at Every Scale — AI replaces routing, not people](https://github.com/xg-gh-25/SwarmAI/discussions/28) | The org design implication | 5 |
+| 7 | [Stop Selling, Start Showing — "Live Demo of Yourself" > pitch deck](https://github.com/xg-gh-25/SwarmAI/discussions/46) | How to actually communicate AI transformation to CXOs | 6 |
 
 **Optional:**
 - [AI Agent for Data — from hallucination to precision](https://github.com/xg-gh-25/SwarmAI/discussions/36) (if your team is connecting AI to business data — the accuracy/security/scalability tradeoffs)
@@ -116,6 +117,7 @@ Then pick your path ↓
 - Diagnose adoption friction using the S×T matrix (is it a supply problem or a tool problem?)
 - Make a build-vs-buy decision on agent infrastructure with clear criteria
 - Explain to your team why "AI replaces routing, not people" — and what that means for org design
+- Pitch AI transformation to CXOs without a deck — using your own experience as proof
 
 ---
 
@@ -177,6 +179,7 @@ Then pick your path ↓
 | [11](https://github.com/xg-gh-25/SwarmAI/discussions/11) | [S×T Tension Matrix](https://github.com/xg-gh-25/SwarmAI/discussions/11) | EN | Friction = Supply × Tool mismatch, not tool quality | None |
 | [16](https://github.com/xg-gh-25/SwarmAI/discussions/16) | [Four Startup Stages](https://github.com/xg-gh-25/SwarmAI/discussions/16) | EN | Same stages, AI shifts the bottleneck | None |
 | [28](https://github.com/xg-gh-25/SwarmAI/discussions/28) | [Same Pattern at Every Scale](https://github.com/xg-gh-25/SwarmAI/discussions/28) | EN | AI replaces routing, not people | ~ [#11](https://github.com/xg-gh-25/SwarmAI/discussions/11) |
+| [46](https://github.com/xg-gh-25/SwarmAI/discussions/46) | [Stop Selling, Start Showing](https://github.com/xg-gh-25/SwarmAI/discussions/46) | EN | "Live Demo of Yourself" > pitch deck | ~ [#28](https://github.com/xg-gh-25/SwarmAI/discussions/28) |
 
 ### Theme 5: Community / Interactive
 
@@ -270,17 +273,18 @@ Then pick your path ↓
 | [42](https://github.com/xg-gh-25/SwarmAI/discussions/42) | [100 ⭐ — Thank You (and What's Next)](https://github.com/xg-gh-25/SwarmAI/discussions/42) | Community | EN |
 | [43](https://github.com/xg-gh-25/SwarmAI/discussions/43) | [Why We Chose Single-Agent](https://github.com/xg-gh-25/SwarmAI/discussions/43) | Architecture | EN |
 | [45](https://github.com/xg-gh-25/SwarmAI/discussions/45) | ["Dreaming" Is Just Note-Taking](https://github.com/xg-gh-25/SwarmAI/discussions/45) | Architecture | EN |
+| [46](https://github.com/xg-gh-25/SwarmAI/discussions/46) | [Stop Selling, Start Showing](https://github.com/xg-gh-25/SwarmAI/discussions/46) | Strategy | EN |
 
 ---
 
 ## Quick Stats
 
-- **Total discussions:** 43 (including Welcome + Reading Matrix)
+- **Total discussions:** 44 (including Welcome + Reading Matrix)
 - **Bilingual pairs (EN+CN):** 8 pairs (16 discussions)
-- **English only:** 21
+- **English only:** 22
 - **Mixed/bilingual single:** 6
-- **Themes:** Foundations (8), Architecture (16), Governance (8), Strategy (3), Community (4)
+- **Themes:** Foundations (8), Architecture (16), Governance (8), Strategy (4), Community (4)
 - **Avg reading time per article:** ~5-8 min
-- **Path A total:** ~50 min | **Path B:** ~65 min | **Path C:** ~35 min
+- **Path A total:** ~50 min | **Path B:** ~65 min | **Path C:** ~41 min
 
 

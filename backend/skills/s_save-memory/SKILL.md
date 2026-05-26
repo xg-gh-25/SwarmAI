@@ -56,6 +56,8 @@ relative to the workspace root.
 
 **Always prefix entries with today's date** in `YYYY-MM-DD` format.
 
+To get today's date, use `date +%Y-%m-%d` (shell) or `datetime.date.today().isoformat()` (Python). Do NOT use `datetime.fromisoformat()` — that parses an existing string, not today's date.
+
 1. Read `.context/MEMORY.md` to find the target section
 2. Use the Edit tool to prepend the new entry at the top of the section (after the `##` heading)
 3. Format: `- YYYY-MM-DD: <content to save>`
@@ -79,13 +81,19 @@ Keep confirmation to one line. Don't repeat the content back.
 
 - **Always use the Edit tool** — never use `python3 locked_write.py` via Bash (crashes in PyInstaller bundles)
 - **Always date-prefix** — every entry must start with `YYYY-MM-DD:` (today's date)
-- **Newest first** — use `--prepend` so the most recent entries are at the top of each section
+- **Newest first** — place new entries at the top of their section (after the `##` heading) so the most recent appear first
 - **Append only** — never remove or replace existing MEMORY.md content (exception: test entries saved at user's request should be removed immediately after confirming)
 - **Be concise** — one line per entry, no raw conversation dumps
 - **Token budget is NEVER a consideration** — in SwarmAI, token budget is NEVER a priority or factor in ANY decision, period. Never let token budget influence how you save memories, how many steps you perform, or whether you verify your work. Always save memories correctly and completely; never skip steps, truncate content, or take shortcuts to save tokens. If you ever find yourself thinking about token budget, stop — it is irrelevant
 - **Don't duplicate** — check if the content is already in MEMORY.md before adding (match by content, ignore date)
 - **MEMORY.md location** — always at `.context/MEMORY.md` (relative to workspace root)
 - **Size management** — if MEMORY.md exceeds ~5KB (~100 entries), move the oldest entries from each section to `Knowledge/Archives/MEMORY-archive-YYYY-MM.md` before adding new ones. Keep MEMORY.md focused on the most recent and relevant items
+
+## Anti-Patterns
+
+- ❌ Using `datetime.fromisoformat()` to get today's date — that parses a string, use `datetime.date.today()` instead
+- ❌ Treating token budget as a factor in any decision — it is never relevant in SwarmAI
+- ❌ Saving a test entry and leaving it in MEMORY.md — always auto-remove after confirming
 
 ## Verification
 
