@@ -237,6 +237,7 @@ def create_user_correction_detector(
             }
             _append_correction(path, entry)
             ctx["_corrections_count"] = ctx.get("_corrections_count", 0) + 1
+            ctx["_correction_just_detected"] = True  # Signal for observation DDD event
 
         return {}
 
