@@ -1607,33 +1607,38 @@ Sentence #1 in AI answers is worth ~5x sentence #20 (exponential decay).
    - Fix if clearly wrong; log as taste decision if borderline
    - Document reasoning
 
-5. **Audience Simulation (spawn subagent)**
+5. **Audience Simulation (spawn subagent — advisory, single-pass)**
 
-   After technical QA passes, test whether the content WORKS — not just whether it's correct.
+   After technical QA passes, test whether the content captures attention — not just whether it's correct.
 
-   Spawn a sub-agent with ONLY the final deliverable (poster image, caption text, or narrative). Give it this prompt:
+   **When to run:** Always, unless `strategy.json` has `"internal": true` or `channel_matrix` is empty.
+
+   **Persona source:** Construct from `research.md` Target Audience Profile + the platform being reviewed from `channel_matrix`. Run ONCE per primary platform (not per variant).
+
+   **Mechanism:** Use the Agent tool. Do NOT run in background. Send ONLY the rendered asset (PNG for posters, caption text for social, narrative text for articles — never send source HTML/code). Record results in `content/{name}/review_results.md` under "Audience Simulation" heading.
+
+   **Prompt:**
    ```
-   You are [TARGET AUDIENCE PERSONA — e.g., "a tech lead scrolling LinkedIn at 8am",
-   "a Chinese enterprise CTO browsing 小红书", "an AWS SA reading Slack"].
+   You are [PERSONA from research.md — e.g., "a tech lead scrolling LinkedIn at 8am"].
 
-   You see this content for 3 seconds in your feed.
+   Based on the visual hierarchy and information density, assess whether the
+   primary message is extractable in under 3 seconds of viewing.
 
    Report:
-   1. Would you stop scrolling? Why or why not?
-   2. What's the ONE takeaway you got in those 3 seconds?
-   3. Did anything feel generic, AI-generated, or "seen this before"?
+   1. Would this stop your scroll? Why or why not?
+   2. What's the ONE takeaway from the visual/text hierarchy?
+   3. Does anything feel generic, AI-generated, or "seen this before"?
    4. What would make you share this with a colleague?
 
    Be brutally honest. "It's fine" is not useful feedback.
    ```
 
-   **How to use results:**
-   - If #1 is "no" → the hook/visual needs rework (most common failure)
-   - If #2 is wrong → message hierarchy is broken (headline/visual not aligned)
-   - If #3 flags generic → revisit design choices (likely hit an anti-pattern)
-   - If #4 gets no answer → content lacks shareability trigger
+   **How to use results (ADVISORY ONLY — do NOT rework based on this alone):**
+   - All results logged as **taste decisions** for the Delivery Gate
+   - If #1 AND #3 both flag negative → escalate as HIGH taste decision (user decides at gate)
+   - Otherwise → log observation, proceed to Verification Gate
 
-   **This is NOT blocking** — it's a quality signal. Fix obvious failures; log borderline results as taste decisions for the Delivery Gate. Skip only if the deliverable is internal-only (not published to a feed).
+   **Run exactly ONCE.** Do not re-simulate after any fixes. This is a signal, not a loop.
 
 ### Decisions
 
@@ -1643,6 +1648,8 @@ Sentence #1 in AI answers is worth ~5x sentence #20 (exponential decay).
 | Fix WARN findings | Taste | Fix unless borderline |
 | "Information density is 4 points but they're related" | Taste | Split if possible |
 | "Brand color is #FF6C36, close to #FF6B35" | Mechanical | Must match exactly |
+| Act on Audience Simulation feedback | Taste | Surface at Delivery Gate; fix only if #1 AND #3 both negative |
+| "Audience is too niche for simulation" | Mechanical | If channel_matrix has platforms → run it |
 
 ### Verification Gate
 
@@ -1656,12 +1663,15 @@ Before advancing to TEST, ALL must be true:
 - [ ] (Poster) Alignment is consistent — no mixed left/center
 - [ ] (Poster) Legacy term blocklist passes (zero matches)
 - [ ] (Poster) Content principles anti-pattern checklist passes
+- [ ] Audience Simulation results logged in review_results.md (or skipped: `"internal": true` / empty channel_matrix)
 
 ### Anti-Rationalization
 
 | Shortcut | Required Response |
 |----------|-------------------|
 | "Script is short, skip polyphone check" | Short scripts have higher per-word impact. Check every term. |
+| "This is internal, skip Audience Simulation" | If channel_matrix has platforms, it's external. Run simulation. |
+| "Audience is too niche for simulation to work" | Niche audiences are EASIER to simulate precisely. Run it. |
 | "Brand colors are close enough" | Brand consistency is binary. Match identity.yaml hex values or fix. |
 | "Duration is 12:30, close enough to 12min" | 12:00 is the max. Trim the script. |
 | "It looked fine in Studio, skip review" | Studio preview is not quality audit. Check every RP pattern. |
