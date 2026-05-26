@@ -1607,6 +1607,34 @@ Sentence #1 in AI answers is worth ~5x sentence #20 (exponential decay).
    - Fix if clearly wrong; log as taste decision if borderline
    - Document reasoning
 
+5. **Audience Simulation (spawn subagent)**
+
+   After technical QA passes, test whether the content WORKS — not just whether it's correct.
+
+   Spawn a sub-agent with ONLY the final deliverable (poster image, caption text, or narrative). Give it this prompt:
+   ```
+   You are [TARGET AUDIENCE PERSONA — e.g., "a tech lead scrolling LinkedIn at 8am",
+   "a Chinese enterprise CTO browsing 小红书", "an AWS SA reading Slack"].
+
+   You see this content for 3 seconds in your feed.
+
+   Report:
+   1. Would you stop scrolling? Why or why not?
+   2. What's the ONE takeaway you got in those 3 seconds?
+   3. Did anything feel generic, AI-generated, or "seen this before"?
+   4. What would make you share this with a colleague?
+
+   Be brutally honest. "It's fine" is not useful feedback.
+   ```
+
+   **How to use results:**
+   - If #1 is "no" → the hook/visual needs rework (most common failure)
+   - If #2 is wrong → message hierarchy is broken (headline/visual not aligned)
+   - If #3 flags generic → revisit design choices (likely hit an anti-pattern)
+   - If #4 gets no answer → content lacks shareability trigger
+
+   **This is NOT blocking** — it's a quality signal. Fix obvious failures; log borderline results as taste decisions for the Delivery Gate. Skip only if the deliverable is internal-only (not published to a feed).
+
 ### Decisions
 
 | Decision | Classification | Default |
