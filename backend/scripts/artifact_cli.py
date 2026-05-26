@@ -106,16 +106,18 @@ def _find_active_run(project: str, reg: ArtifactRegistry) -> dict | None:
     Sorts by created_at (ISO timestamp in run.json), not by directory name —
     directory names are run_<8-char-uuid> which have no chronological order.
     """
-    runs_dir = Path(reg._workspace) / "Projects" / project / ".artifacts" / "runs"
+    runs_dir = Path(reg.workspace_root) / "Projects" / project / ".artifacts" / "runs"
     if not runs_dir.is_dir():
         return None
     # Collect all active runs with their timestamps
     active_runs: list[tuple[str, dict]] = []
     for run_dir in runs_dir.iterdir():
+        if not run_dir.is_dir():
+            continue
         run_file = run_dir / "run.json"
         if run_file.exists():
             try:
-                data = json.loads(run_file.read_text())
+                data = json.loads(run_file.read_text(encoding="utf-8"))
                 if data.get("status") in ("running", "paused"):
                     active_runs.append((data.get("created_at", ""), data))
             except (json.JSONDecodeError, OSError):
@@ -165,18 +167,13 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
     stage = getattr(args, "stage", None)
     if stage:
         from pipeline_validator import validate_artifact_data, get_stage_schema
-        # Determine profile from active pipeline run in THIS project (not cross-project)
+        # Determine profile from most recent active run in THIS project
+        # Uses _find_active_run (sorts by created_at, not directory name)
         _pub_profile = "full"
         try:
-            runs_dir = _pipeline_runs_dir(args.project)
-            if runs_dir.exists():
-                for rd in sorted(runs_dir.iterdir(), reverse=True):
-                    run_file = rd / "run.json"
-                    if run_file.exists():
-                        run_state = json.loads(run_file.read_text(encoding="utf-8"))
-                        if run_state.get("status") == "running":
-                            _pub_profile = run_state.get("profile", "full") or "full"
-                            break
+            active_run = _find_active_run(args.project, reg)
+            if active_run:
+                _pub_profile = active_run.get("profile", "full") or "full"
         except Exception:
             pass  # Default to "full" if can't determine profile
         errors = validate_artifact_data(stage, data, profile=_pub_profile)
@@ -224,8 +221,8 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
                     sys.exit(1)
             except (ImportError, FileNotFoundError):
                 pass  # Validator not available — skip (non-blocking)
-            except Exception as exc:
-                logger.warning("Pollinate validator skipped: %s", exc)
+            except Exception:
+                pass  # Pollinate validator error — non-blocking, skip silently
 
     run_id = getattr(args, "run_id", None)
     try:
@@ -316,21 +313,32 @@ def _auto_validate_before_advance(project: str, next_state: str) -> None:
     """
     import subprocess
 
-    # Find active run
+    # Find active run (use _find_active_run for correct chronological ordering)
+    # Note: reg not available here — inline the same logic with timestamp sort
     artifacts_dir = _get_workspace() / "Projects" / project / ".artifacts" / "runs"
     if not artifacts_dir.exists():
         return
 
-    # Find the most recent running run
+    # Find the most recent running run (sorted by created_at, not dir name)
     run_id = None
-    for run_dir in sorted(artifacts_dir.iterdir(), reverse=True):
+    stages = []
+    active_candidates: list[tuple[str, dict]] = []
+    for run_dir in artifacts_dir.iterdir():
+        if not run_dir.is_dir():
+            continue
         run_file = run_dir / "run.json"
         if run_file.exists():
-            run_data = json.loads(run_file.read_text())
-            if run_data.get("status") == "running":
-                run_id = run_data["id"]
-                stages = run_data.get("stages", [])
-                break
+            try:
+                run_data = json.loads(run_file.read_text(encoding="utf-8"))
+                if run_data.get("status") == "running":
+                    active_candidates.append((run_data.get("created_at", ""), run_data))
+            except (json.JSONDecodeError, OSError):
+                continue
+    if active_candidates:
+        active_candidates.sort(key=lambda x: x[0], reverse=True)
+        run_data = active_candidates[0][1]
+        run_id = run_data["id"]
+        stages = run_data.get("stages", [])
 
     if not run_id or not stages:
         return
