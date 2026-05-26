@@ -377,14 +377,18 @@ Remember to parallelize solving tasks to avoid running out of context, then accu
 
 # Running Evaluations
 
-After creating your evaluation file, you can use the provided evaluation harness to test your MCP server.
+After creating your evaluation file, you can use the evaluation harness from the Anthropic skills repo to test your MCP server.
+
+> **NOTE:** The evaluation scripts (`evaluation.py`, `connections.py`) are from
+> `https://github.com/anthropics/skills/tree/main/skills/mcp-builder/scripts`.
+> Clone or copy them into your project's `scripts/` directory before running.
 
 ## Setup
 
 1. **Install Dependencies**
 
    ```bash
-   pip install -r scripts/requirements.txt
+   pip install anthropic mcp
    ```
 
    Or install manually:
@@ -446,9 +450,10 @@ python scripts/evaluation.py \
   evaluation.xml
 ```
 
-### 2. Server-Sent Events (SSE)
+### 2. Server-Sent Events (SSE) — DEPRECATED
 
-For SSE-based MCP servers (you must start the server first):
+> **Note:** SSE transport is deprecated. Use Streamable HTTP (option 3) for new servers.
+> SSE option retained only for testing legacy servers.
 
 ```bash
 python scripts/evaluation.py \
@@ -459,7 +464,7 @@ python scripts/evaluation.py \
   evaluation.xml
 ```
 
-### 3. HTTP (Streamable HTTP)
+### 3. HTTP (Streamable HTTP) — RECOMMENDED
 
 For HTTP-based MCP servers (you must start the server first):
 
@@ -485,7 +490,7 @@ positional arguments:
 optional arguments:
   -h, --help            Show help message
   -t, --transport       Transport type: stdio, sse, or http (default: stdio)
-  -m, --model           Claude model to use (default: claude-3-7-sonnet-20250219)
+  -m, --model           Claude model to use (default: claude-sonnet-4-20250514)
   -o, --output          Output file for report (default: print to stdout)
 
 stdio options:
@@ -596,7 +601,7 @@ If many evaluations fail:
 ### Timeout Issues
 
 If tasks are timing out:
-- Use a more capable model (e.g., `claude-3-7-sonnet-20250219`)
+- Use a more capable model (e.g., `claude-sonnet-4-20250514`)
 - Check if tools are returning too much data
 - Verify pagination is working correctly
 - Consider simplifying complex questions

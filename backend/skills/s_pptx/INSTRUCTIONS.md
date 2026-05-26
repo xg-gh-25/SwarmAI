@@ -209,6 +209,7 @@ When creating a new PowerPoint presentation from scratch, use the **html2pptx** 
 ### Workflow
 1. **MANDATORY - READ ENTIRE FILE**: Read [`html2pptx.md`](html2pptx.md) completely from start to finish. **NEVER set any range limits when reading this file.** Read the full file content for detailed syntax, critical formatting rules, and best practices before proceeding with presentation creation.
 2. Create an HTML file for each slide with proper dimensions (e.g., 720pt × 405pt for 16:9)
+   - **CHECK**: Review "Design Anti-Patterns" section above — verify your design avoids all listed patterns
    - Use `<p>`, `<h1>`-`<h6>`, `<ul>`, `<ol>` for all text content
    - Use `class="placeholder"` for areas where charts/tables will be added (render with gray background for visibility)
    - **CRITICAL**: Rasterize gradients and icons as PNG images FIRST using Sharp, then reference in HTML
@@ -223,10 +224,12 @@ When creating a new PowerPoint presentation from scratch, use the **html2pptx** 
 
    **Step A — Convert to images for inspection:**
    ```bash
+   # Primary method (always available):
    python scripts/thumbnail.py output.pptx workspace/thumbnails --cols 4
-   # For detailed per-slide inspection:
-   soffice --headless --convert-to pdf output.pptx
-   pdftoppm -jpeg -r 150 output.pdf slide
+
+   # For detailed per-slide inspection (requires LibreOffice + Poppler):
+   # Skip if soffice/pdftoppm not installed — thumbnail.py is sufficient
+   soffice --headless --convert-to pdf output.pptx && pdftoppm -jpeg -r 150 output.pdf slide
    ```
 
    **Step B — Spawn a subagent for visual inspection** (even for 2-3 slides). You've been staring at the code and will see what you expect, not what's there. Subagents have fresh eyes. Use this prompt:
@@ -648,6 +651,8 @@ When you need to create a presentation that follows an existing template's desig
    ERROR: Replacement text made overflow worse in these shapes:
      - slide-0/shape-2: overflow worsened by 1.25" (was 0.00", now 1.25")
    ```
+
+8. **Visual QA** — After replacement, run the Visual QA process described in "Creating without a template" step 4 above. Generate thumbnails, inspect for overflow/layout issues from the replacements.
 
 ## Creating Thumbnail Grids
 
