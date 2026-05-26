@@ -1,0 +1,56 @@
+# Engine Registry for refresh_ai_docs.py
+# Add new engines here — they'll appear in AGENTS.md automatically.
+# Format: name, path (relative to repo root), description.
+#
+# Discovery: refresh_ai_docs.py reads this file. If the path exists,
+# the engine is included in the CAPABILITIES section.
+
+engines:
+  - name: "DDD Cultivation Engine (event-driven v2)"
+    path: "backend/core/cultivation_dispatcher.py"
+    description: "Event-driven domain knowledge growth — 6 event sources, gate-based promotion, maturity tracking"
+
+  - name: "Autonomous Pipeline (9-stage)"
+    path: "backend/skills/s_autonomous-pipeline/INSTRUCTIONS.md"
+    description: "EVALUATE→THINK→PLAN→BUILD(TDD)→REVIEW→TEST→DELIVER→REFLECT with adversarial review gate"
+
+  - name: "Pollinate Content Engine"
+    path: "backend/skills/s_pollinate/INSTRUCTIONS.md"
+    description: "Message-first media delivery — transforms ideas into posters, videos, narratives, README"
+
+  - name: "GitHub Community Engine"
+    path: "backend/skills/s_github_community/scripts/monitor.py"
+    description: "Autonomous learning flywheel — monitor, match, draft, track, cultivate, report across GitHub"
+
+  - name: "Evolution Pipeline (MINE→ASSESS→ACT→AUDIT)"
+    path: "backend/core/evolution_optimizer.py"
+    description: "Confidence-gated self-evolution from session mining and skill fitness scoring"
+
+  - name: "Code Intelligence (AST graph)"
+    path: "backend/core/code_intel/__init__.py"
+    description: "Deterministic graph traversal for code context retrieval"
+
+  - name: "Session Resume Enrichment"
+    path: "backend/core/context_injector.py"
+    description: "Cold resume from ~3K to ~50-100K tokens of structured context"
+
+  - name: "Proactive Intelligence (L0-L4)"
+    path: "backend/core/proactive_intelligence.py"
+    description: "Session briefing, corrections, open threads, signals — fires on every session start"
+
+  - name: "Slack Channel Adapter"
+    path: "backend/channels/adapters/slack.py"
+    description: "24/7 Socket Mode bot — responds as XG's AI assistant to allowlisted users"
+
+  - name: "Background Job System"
+    path: "backend/jobs/scheduler.py"
+    description: "Cron + event-triggered headless Claude CLI tasks — signal pipeline, monitoring, reports"
+
+  - name: "Star Attribution Tracking"
+    path: "backend/skills/s_github_community/scripts/track.py"
+    description: "Tracks stargazers with timestamps, attributes to engagement activity via shared discussions"
+
+  - name: "AI Docs Auto-Refresh"
+    path: "backend/scripts/refresh_ai_docs.py"
+    description: "Self-maintaining documentation — scans codebase metrics and capabilities daily, updates AI_CONTEXT.md + AGENTS.md"
+
