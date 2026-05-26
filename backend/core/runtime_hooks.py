@@ -362,6 +362,31 @@ def create_session_checkpoint(
         git_commits = _get_recent_git_commits(ws, start_ts)
 
         # 1. Write checkpoint JSON (crash recovery)
+        # Enrich with observation data if available
+        recent_observations = []
+        session_summary = {}
+        ring = ctx.get("_observations")
+        if ring is not None:
+            try:
+                recent_observations = ring.snapshot(last_n=10)
+                # Compute simple summary stats
+                all_obs = ring.all_completed()
+                if all_obs:
+                    from collections import Counter
+                    tool_counts = Counter(o.tool_name for o in all_obs)
+                    dominant = tool_counts.most_common(1)[0] if tool_counts else ("", 0)
+                    test_runs = sum(1 for o in all_obs if o.tool_name == "Bash" and "pytest" in o.intent)
+                    test_passes = sum(1 for o in all_obs if o.tool_name == "Bash" and "pytest" in o.intent and o.result_status == "success")
+                    session_summary = {
+                        "dominant_tool": dominant[0],
+                        "dominant_count": dominant[1],
+                        "test_runs": test_runs,
+                        "test_pass_rate": round(test_passes / test_runs, 2) if test_runs > 0 else None,
+                    }
+                ring.pending_cleanup()
+            except Exception:
+                pass  # Observation enrichment is best-effort
+
         checkpoint = {
             "session_id": session_id,
             "ts": time.time(),
@@ -369,6 +394,8 @@ def create_session_checkpoint(
             "files_touched": files[:20],  # Cap for JSON size
             "corrections_count": corrections,
             "git_commits": git_commits,
+            "recent_observations": recent_observations,
+            "session_summary": session_summary,
         }
 
         try:
@@ -879,9 +906,18 @@ def register_runtime_hooks(
         "high_signal_capture",
     )
 
+    # Observation hooks (LAST in chain — after all other hooks)
+    try:
+        from core.observation_hooks import register_observation_hooks
+        register_observation_hooks(registry, session_context)
+    except ImportError:
+        logger.debug("observation_hooks not available — skipping")
+    except Exception:
+        logger.debug("observation_hooks registration failed", exc_info=True)
+
     logger.info(
         "Runtime hooks registered: correction_capture, error_pattern_detector, "
         "failure_tracker_reset, file_tracker, session_checkpoint, memory_edit_guard, "
         "subagent_capture, user_correction_detector, post_compact_injection, "
-        "high_signal_capture"
+        "high_signal_capture, observation_recorder, observation_completer"
     )
