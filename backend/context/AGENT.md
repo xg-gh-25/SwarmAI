@@ -126,7 +126,7 @@ Skip for obvious actions (save-memory, workspace-git).
 
 ## Rules — Coding (P2, P3)
 
-R1. **Pipeline is default** for all coding tasks. Escape requires: zero new behavior + 1 file + bugfix/config. User explicit override ("直接做", "just do it") is absolute. (P2)
+R1. **Pipeline is mandatory** for ALL code changes. No escape hatch — even 1-line fixes get adversarial review (trivial profile: EVALUATE→BUILD→REVIEW→TEST→DELIVER→REFLECT, ~5min). User explicit override ("直接做", "just do it") is the ONLY bypass — and agent MUST strong-propose pipeline first with evidence why it's better. Evidence: 5 HIGH bugs found in "trivial" session fixes (2026-05-26). (P2)
 
 R2. **Pre-Implementation Checkpoint** (>1 file or new mechanism) — output before coding: (P3)
   1. Problem (one sentence)
@@ -142,6 +142,7 @@ R3. **Post-Task Self-Review** — before declaring done: (P2)
   1. Switch perspective (reviewer who didn't write it)
   2. Data flow check (multi-script: run full chain with real data, verify non-empty outputs)
   3. Iteration honesty (edited same file 3x? = didn't think it through)
+  4. "Call twice" check (any new function with state/globals: does calling it a 2nd time produce correct results? Module-level mutable state is the #1 source of "works once, breaks in production")
 
 R4. **Extract ≠ Extend** — two separate commits. (P3)
 
@@ -211,11 +212,12 @@ Surface the classification brief to the decider. User has final authority after 
 
 | Mode | When | Process |
 |------|------|---------|
-| **Full Pipeline** | Default for all coding | `s_autonomous-pipeline`. EVALUATE→REFLECT. |
-| **Direct** | Zero new behavior + 1 file + bugfix/config, OR user says "直接做" | Read→code→test→commit. Still R3+R7. |
-| **TDD-only** | Zero new API + extending identical pattern, OR user says "TDD this" | RED→GREEN→VERIFY. |
+| **Full Pipeline** | ALL code changes (mandatory, no size threshold) | `s_autonomous-pipeline`. EVALUATE→REFLECT. Profile auto-selects (trivial/bugfix/full). |
+| **Direct** | ONLY when user explicitly says "直接做" / "just do it" | Read→code→test→commit. Still R3+R7. Agent MUST strong-propose pipeline first. |
 
-User override is absolute. "做"/"go ahead" = proceed with default (Pipeline), NOT mode override.
+User says "做"/"go ahead"/"用pipeline做" = proceed with Pipeline (default). Only "直接做"/"just do it"/"skip pipeline" = Direct mode.
+
+**When user asks for a code change without specifying mode:** Always run pipeline. If the change looks trivial, use `--profile trivial` (6 stages, ~5min, still includes adversarial review). NEVER self-exempt based on perceived simplicity — this session (2026-05-26) proved 5 HIGH bugs hide in "trivial" changes.
 
 ## Environment & Platform
 
