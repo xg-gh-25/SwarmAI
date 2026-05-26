@@ -237,7 +237,7 @@ def collect_metrics() -> dict:
     engines = []
     for entry in _load_engines():
         path = entry.get("path", "")
-        if (REPO_ROOT / path).exists():
+        if path and (REPO_ROOT / path).exists():
             engines.append(entry)
     m["engines"] = engines
 
@@ -360,8 +360,8 @@ def check_staleness() -> list[dict]:
 def refresh(dry_run: bool = False, staleness_only: bool = False) -> dict:
     """Main entry point — refresh both AI_CONTEXT.md and AGENTS.md."""
     global _SCRIPT_DEADLINE
-    if not _SCRIPT_DEADLINE:
-        _SCRIPT_DEADLINE = time.monotonic() + _SCRIPT_TIMEOUT
+    # Always reset deadline — prevents stale deadline from prior import-based calls
+    _SCRIPT_DEADLINE = time.monotonic() + _SCRIPT_TIMEOUT
 
     results = {"files_updated": [], "staleness_warnings": []}
 
@@ -376,6 +376,13 @@ def refresh(dry_run: bool = False, staleness_only: bool = False) -> dict:
         return results
 
     metrics = collect_metrics()
+
+    # Safety: don't write corrupted metrics if deadline exhausted all commands
+    if not metrics.get("commit_count") or not metrics.get("core_loc"):
+        print("⚠️  Metrics collection incomplete (timeout?) — skipping write")
+        results["metrics"] = metrics
+        return results
+
     metrics_block = _generate_metrics_block(metrics)
     capabilities_block = _generate_capabilities_block(metrics)
     results["metrics"] = metrics
