@@ -75,7 +75,23 @@ When encountering:
    - Documents **MUST** use minimum 10pt body text
    - Documents **MUST** maintain high contrast for accessibility
    
-5. **Final review:**
+5. **Reader Testing (spawn cold agent):**
+   - After completing all sections, spawn a sub-agent with ZERO context about the writing process
+   - Give it ONLY the finished document and this prompt:
+     ```
+     Read this document cold. You have no context about why it was written or what preceded it.
+
+     Report:
+     1. What is this document asking me to decide/approve/understand? (If unclear = problem)
+     2. Which sections confused you or required re-reading?
+     3. What questions remain unanswered after reading?
+     4. Which claims lack supporting evidence?
+     5. Where does the document assume knowledge the reader might not have?
+     ```
+   - Fix any issues the reader test reveals (especially #1 and #2 — if the purpose is unclear or sections confuse a fresh reader, the document fails its primary job)
+   - This step catches the #1 document failure mode: **author assumes shared context that doesn't exist for the reader**
+
+6. **Final review:**
    - You **MUST** verify six-page limit (appendices excluded)
    - You **MUST** check for weasel words using `scripts/check-weasel-words.sh`
    - You **SHOULD** have peer review before submission

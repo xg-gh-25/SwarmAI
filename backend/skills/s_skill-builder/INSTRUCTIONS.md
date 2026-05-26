@@ -399,7 +399,46 @@ Work systematically:
 4. Create supporting files as needed
 5. Add quality sections (Troubleshooting, Quick Start)
 
-### Step 9: Verify Final Score
+### Step 9: Run Eval Loop (Trigger Accuracy Test)
+
+> [!IMPORTANT]
+> **A skill that scores 100 on paper but doesn't trigger correctly is useless.** Before declaring done, verify that the skill ACTIVATES on real user phrases and DOESN'T activate on phrases meant for sibling skills.
+
+**Process:**
+
+1. **Generate 5 test prompts** — phrases a real user would say that SHOULD trigger this skill:
+   ```
+   Positive triggers (should activate):
+   1. "<realistic user phrase 1>"
+   2. "<realistic user phrase 2>"
+   3. "<edge case phrase that's ambiguous but should still trigger>"
+   4. "<phrase using alternative terminology>"
+   5. "<phrase that's wordy but clearly means this skill>"
+   ```
+
+2. **Generate 3 negative test prompts** — phrases that are SIMILAR but should trigger a DIFFERENT skill:
+   ```
+   Negative triggers (should NOT activate):
+   1. "<phrase meant for sibling skill A>" → expected: sibling-skill-a
+   2. "<phrase that's related but out of scope>" → expected: different-skill
+   3. "<ambiguous phrase that should go elsewhere>" → expected: other-skill
+   ```
+
+3. **Mental walkthrough** — for each test prompt, trace the routing logic:
+   - Does the `description` field contain words/patterns that match?
+   - Would the `TRIGGER:` phrases catch it?
+   - Would the `DO NOT USE:` boundary correctly reject negatives?
+
+4. **Score trigger accuracy:**
+   - 8/8 correct = PASS
+   - 6-7/8 = improve description wording, re-test
+   - <6/8 = major rewording needed
+
+5. **If accuracy < 8/8:** adjust the description's trigger phrases and DO NOT USE boundary, then re-run the mental walkthrough. Iterate until 8/8.
+
+**Why this matters:** The description field is the ONLY thing the agent sees at routing time (in system-reminder). A beautiful skill with wrong trigger words = never invoked. This step catches: (a) missing synonyms, (b) overly broad triggers that steal from siblings, (c) DO NOT USE boundaries that are too narrow.
+
+### Step 10: Verify Final Score
 
 1. Re-read all skill files
 2. Re-score against both rubrics
