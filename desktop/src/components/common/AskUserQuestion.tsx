@@ -10,11 +10,15 @@ interface AskUserQuestionProps {
 }
 
 export default function AskUserQuestion({
-  questions,
+  questions: rawQuestions,
   toolUseId,
   onSubmit,
   disabled = false,
 }: AskUserQuestionProps) {
+  // Defensive: questions may arrive as undefined/non-array from malformed
+  // DB history or SSE events — guard to prevent crash (t.every is not a function).
+  const questions = Array.isArray(rawQuestions) ? rawQuestions : [];
+
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [customInputs, setCustomInputs] = useState<Record<string, string>>({});
   const [showCustom, setShowCustom] = useState<Record<string, boolean>>({});
@@ -80,6 +84,10 @@ export default function AskUserQuestion({
     return (answers[q.question] || []).length > 0;
   });
 
+  // Nothing to render — don't show empty shell with a Submit button.
+  // (Placed after hooks to comply with Rules of Hooks.)
+  if (questions.length === 0) return null;
+
   return (
     <div className="bg-[var(--color-card)] border border-primary/30 rounded-lg p-4 my-3">
       <div className="flex items-center gap-2 mb-4">
@@ -100,7 +108,7 @@ export default function AskUserQuestion({
           <p className="text-[var(--color-text)] text-sm mb-3">{q.question}</p>
 
           <div className="space-y-2">
-            {q.options.map((option, optIndex) => {
+            {(q.options || []).map((option, optIndex) => {
               const isSelected = (answers[q.question] || []).includes(option.label);
               const isDisabledByCustom = showCustom[q.question];
 
