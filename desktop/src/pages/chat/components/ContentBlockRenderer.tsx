@@ -87,6 +87,11 @@ export function ContentBlockRenderer({
   }
 
   if (block.type === 'ask_user_question') {
+    // Guard: skip rendering if questions payload is missing/malformed
+    // (prevents crash when DB returns incomplete ask_user_question blocks)
+    if (!block.questions || !Array.isArray(block.questions) || block.questions.length === 0) {
+      return null;
+    }
     const isPending = pendingToolUseId === block.toolUseId;
     const isAnswered = !isPending && !isStreaming;
 

@@ -907,11 +907,16 @@ class SessionUnit:
             # After force_unstick, state is COLD — fall through to spawn
 
         if self.state == SessionState.WAITING_INPUT:
-            raise RuntimeError(
-                f"Cannot send() in state {self.state.value} — "
-                f"a permission prompt is pending "
-                f"(session_id={self.session_id})"
+            # Frontend crashed or user abandoned the question — auto-recover.
+            # Kill subprocess and transition to COLD so we can resume.
+            logger.warning(
+                "session_unit.auto_recover_waiting_input session_id=%s "
+                "— frontend sent new message while WAITING_INPUT, "
+                "forcing COLD for recovery (abandoned ask_user_question)",
+                self.session_id,
             )
+            await self.force_unstick_waiting_input()
+            # After force_unstick, state is COLD — fall through to spawn
 
         if self.state not in (SessionState.COLD, SessionState.IDLE):
             raise RuntimeError(
@@ -3194,6 +3199,27 @@ class SessionUnit:
             self.session_id,
             self.pid,
             self.streaming_stall_seconds or 0,
+        )
+        await self._crash_to_cold_async(clear_identity=False)
+
+    async def force_unstick_waiting_input(self) -> None:
+        """Force a stuck WAITING_INPUT session back to COLD.
+
+        When the frontend crashes after receiving an ask_user_question
+        event, the user can never submit the answer. The session stays
+        stuck in WAITING_INPUT forever, blocking all subsequent sends.
+
+        This method kills the subprocess and transitions to COLD,
+        preserving ``_sdk_session_id`` so the next ``send()`` resumes
+        the conversation via ``--resume``.
+        """
+        if self.state != SessionState.WAITING_INPUT:
+            return
+        logger.warning(
+            "session_unit.force_unstick_waiting_input session_id=%s pid=%s "
+            "— frontend never answered, forcing COLD for recovery",
+            self.session_id,
+            self.pid,
         )
         await self._crash_to_cold_async(clear_identity=False)
 
