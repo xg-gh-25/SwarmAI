@@ -15,7 +15,8 @@
 2. Completion Audit — AC → evidence verification
 3. Adversarial Review Gate — spawn specialist sub-agents (multi-domain review)
 4. Meta-Review — spawn sub-agent (operational blind spots)
-5. Push-Ready Gate — binary final verdict
+5. Doc Sync Check — non-blocking warning (surfaces doc gaps as todos)
+6. Push-Ready Gate — binary final verdict
 ```
 
 ### 🚨 CRITICAL: Adversarial Review is NON-NEGOTIABLE
@@ -588,6 +589,64 @@ If verdict is RISKS_IDENTIFIED: list each risk with concrete mitigation.
 
 ---
 
+### Doc Sync Check (Non-Blocking Warning)
+
+**After meta-review, before generating report.** Verifies that shipped code
+has corresponding documentation updates. Catches "code shipped, docs forgot"
+drift that accumulates silently.
+
+**Run these checks against the changeset:**
+
+```bash
+# 1. New files in backend/core/ → must have TECH.md Key Subsystems entry
+NEW_CORE_FILES=$(git diff --name-only --diff-filter=A origin/main...HEAD 2>/dev/null | grep '^backend/core/' | grep -v '__pycache__\|test')
+
+# 2. Feat commits → docs/ should have been touched in last 7 days
+FEAT_COMMITS=$(git log --oneline origin/main...HEAD | grep -i "^[a-f0-9]* feat")
+DOCS_RECENT=$(git log --since="7 days ago" --oneline -- docs/ | wc -l)
+
+# 3. COE/P0 fix → docs/post-mortems/ should have new file
+COE_FIX=$(git log --oneline origin/main...HEAD | grep -iE "COE|P0|bilateral|deadlock|crash.*all")
+PM_COUNT=$(git diff --name-only --diff-filter=A origin/main...HEAD | grep '^docs/post-mortems/' | wc -l)
+```
+
+**Evaluation rules:**
+
+| Condition | Check | Gap? |
+|-----------|-------|:---:|
+| New `.py` in `backend/core/` (not test) | `grep` for filename stem in `Projects/<PROJECT>/TECH.md` | If not found → GAP |
+| Any `feat(` commit in changeset | `docs/` has ≥1 file modified in last 7 days | If 0 → GAP |
+| Commit message mentions COE/P0/crash | `docs/post-mortems/` has new file in changeset | If 0 → GAP |
+| New skill created (`backend/skills/s_*`) | Skill appears in `docs/README.md` or relevant design doc | If not → GAP |
+
+**Output:**
+
+```
+DOC SYNC CHECK:
+  ✅ No new core/ files (or all documented in TECH.md)
+  ⚠️ GAP: feat commits present but docs/ not updated in 7 days
+  ✅ No COE/P0 fixes (or post-mortem exists)
+
+  Gaps found: 1
+  Recommendation: Update docs/README.md or create a design doc for the new feature.
+```
+
+**Impact on push-ready:** Doc gaps are **WARNING, not BLOCKING.** The pipeline
+can still declare push-ready with doc gaps — but gaps are:
+1. Surfaced in the Pipeline Report (§10 Known Gaps)
+2. Auto-created as Radar Todo (priority MED, source: pipeline-doc-check)
+3. Picked up by the weekly `docs-freshness-audit` job if not addressed
+
+**Why non-blocking:** Blocking on docs would create incentive to write low-quality
+docs just to unblock. Better: ship the code, surface the gap, let the weekly
+audit enforce. The pipeline's job is quality CODE. Docs are a lagging indicator.
+
+**Why still valuable in pipeline:** Catching the gap AT delivery time means the
+author still has context. A week later (when the audit job catches it), context
+is gone and the doc will be worse.
+
+---
+
 ### Pipeline Report
 
 Generate pipeline report as markdown in the project's artifacts directory.
@@ -706,6 +765,15 @@ Bugs caught in RED phase: <N> (<brief description of most significant>)
 | 2 | ... | [gap: not implemented] | ❌ |
 
 **Gaps found:** N | **Gaps fixed:** M | **Attention flags:** K
+
+## 7.8 Doc Sync Check
+| Check | Result | Gap |
+|-------|--------|-----|
+| New core/ files documented | ✅ / ⚠️ | <detail if gap> |
+| Feat commits + docs updated | ✅ / ⚠️ | <detail if gap> |
+| COE/P0 + post-mortem exists | ✅ / N/A | <detail if gap> |
+
+**Gaps:** N | **Todos created:** M
 
 ## 8. Files Changed
 - `path/to/file.py` (created, N lines)
