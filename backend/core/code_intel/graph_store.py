@@ -560,6 +560,68 @@ class GraphStore:
             "last_indexed": last_indexed,
         }
 
+    # ── graph visualization ────────────────────────────────────────────────
+
+    def get_graph_data(self, limit: int = 300) -> dict:
+        """Return top-N most-connected nodes + their edges for visualization.
+
+        Nodes are ranked by edge count (PageRank proxy). Only edges between
+        included nodes are returned (no dangling references).
+
+        Returns:
+            {"nodes": [{id, name, type, module, file_path}],
+             "edges": [{source, target, type}]}
+        """
+        # Get top nodes by connectivity (sum of inbound + outbound edges)
+        node_rows = self._conn.execute(
+            "SELECT n.id, n.name, n.node_type, n.file_path, "
+            "  (SELECT COUNT(*) FROM code_edges WHERE source_id = n.id OR target_id = n.id) AS degree "
+            "FROM code_nodes n "
+            "ORDER BY degree DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+
+        node_ids = set()
+        nodes = []
+        for r in node_rows:
+            node_id, name, node_type, file_path = r[0], r[1], r[2], r[3]
+            node_ids.add(node_id)
+            # Derive module from file_path (2-level prefix)
+            parts = file_path.split("/") if file_path else []
+            module = "/".join(parts[:2]) if len(parts) > 2 else parts[0] if parts else ""
+            nodes.append({
+                "id": node_id,
+                "name": name,
+                "type": node_type,
+                "module": module,
+                "file_path": file_path,
+            })
+
+        # Get edges where BOTH source and target are in our node set
+        if not node_ids:
+            return {"nodes": [], "edges": []}
+
+        # Batch query edges (node_ids can be large)
+        all_edges = []
+        id_list = list(node_ids)
+        for start in range(0, len(id_list), 500):
+            batch = id_list[start:start + 500]
+            placeholders = ",".join("?" * len(batch))
+            edge_rows = self._conn.execute(
+                f"SELECT source_id, target_id, edge_type FROM code_edges "
+                f"WHERE source_id IN ({placeholders}) AND target_id IN ({placeholders})",
+                batch + batch,
+            ).fetchall()
+            all_edges.extend(edge_rows)
+
+        edges = [
+            {"source": r[0], "target": r[1], "type": r[2]}
+            for r in all_edges
+            if r[0] in node_ids and r[1] in node_ids  # double-check membership
+        ]
+
+        return {"nodes": nodes, "edges": edges}
+
     # ── file queries ─────────────────────────────────────────────────────
 
     def get_nodes_by_file(self, file_path: str) -> list[dict]:
