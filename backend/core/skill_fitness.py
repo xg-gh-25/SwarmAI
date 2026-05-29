@@ -268,7 +268,11 @@ class LLMJudge:
                 modelId=self.MODEL_ID,
                 messages=[{"role": "user", "content": [{"text": prompt}]}],
                 system=[{"text": _JUDGE_SYSTEM_PROMPT}],
-                inferenceConfig={"maxTokens": 200, "temperature": 0.1},
+                inferenceConfig={
+                    "maxTokens": 200,
+                    # Note: temperature not set — Opus 4.8 rejects temperature != 1
+                    # when thinking is adaptive. Judge precision via system prompt.
+                },
                 additionalModelRequestFields={
                     "thinking": {"type": "adaptive"},
                     "output_config": {"effort": self.EFFORT},

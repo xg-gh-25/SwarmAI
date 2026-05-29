@@ -61,7 +61,7 @@ beforeEach(() => {
   mockGetAPIConfiguration.mockResolvedValue({ awsRegion: 'us-east-1' });
   mockUpdateAPIConfiguration.mockResolvedValue({});
   mockChannelsList.mockResolvedValue([]);
-  mockVerifyAuth.mockResolvedValue({ success: true, model: 'claude-opus-4-6', latency_ms: 200 });
+  mockVerifyAuth.mockResolvedValue({ success: true, model: 'claude-opus-4-8', latency_ms: 200 });
   mockSetOnboardingComplete.mockResolvedValue(undefined);
 });
 

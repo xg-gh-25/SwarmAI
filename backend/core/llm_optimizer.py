@@ -249,7 +249,9 @@ def _call_bedrock_opus(prompt: str, system: str = _SYSTEM_PROMPT) -> tuple[str, 
         system=[{"text": system}],
         inferenceConfig={
             "maxTokens": 2000,
-            "temperature": 0.3,  # Low temp for precise, structured output
+            # Note: temperature not set — Opus 4.8 rejects temperature != 1
+            # when thinking is enabled/adaptive. Structured output quality
+            # is controlled via effort level + system prompt instead.
         },
         additionalModelRequestFields={
             "thinking": {"type": "adaptive"},
