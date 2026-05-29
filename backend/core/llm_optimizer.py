@@ -264,7 +264,7 @@ def _call_bedrock_opus(prompt: str, system: str = _SYSTEM_PROMPT) -> tuple[str, 
         output_tokens=usage_data.get("outputTokens", 0),
     )
 
-    # Extract text from response
+    # Extract text from response (skip reasoningContent blocks from adaptive thinking)
     output = response.get("output", {})
     message = output.get("message", {})
     content_blocks = message.get("content", [])
@@ -272,6 +272,11 @@ def _call_bedrock_opus(prompt: str, system: str = _SYSTEM_PROMPT) -> tuple[str, 
         if "text" in block:
             return block["text"], usage
 
+    if content_blocks:
+        logger.warning(
+            "Bedrock response had %d blocks but no text block (may be thinking-only)",
+            len(content_blocks),
+        )
     return "", usage
 
 
