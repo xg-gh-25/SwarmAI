@@ -115,7 +115,7 @@ class PromptBuilder:
     # resolve_model
     # ------------------------------------------------------------------
 
-    # 4.6 models that get 1M context — the CLI uses [1m] suffix as a signal.
+    # Models that get 1M context — the CLI uses [1m] suffix as a signal.
     _1M_MODELS = {"claude-opus-4-8", "claude-opus-4-6", "claude-sonnet-4-6"}
 
     def resolve_model(self, agent_config: dict) -> Optional[str]:
@@ -153,7 +153,7 @@ class PromptBuilder:
             model = get_bedrock_model_id(model, config_map=config_map)
             logger.info(f"Using Bedrock model: {model}")
 
-        # Append [1m] for 4.6 models so the CLI uses 1M context window.
+        # Append [1m] for 1M-capable models so the CLI uses full context window.
         # The CLI strips [1m] before sending to the API — Bedrock never sees it.
         if model and not model.endswith("[1m]"):
             base = model.replace("us.anthropic.", "").rstrip(":0")
