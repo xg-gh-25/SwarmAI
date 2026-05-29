@@ -747,6 +747,30 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         # Normalize: accept both "name" and "stage" as the stage identifier
         if "name" in stage_record and "stage" not in stage_record:
             stage_record["stage"] = stage_record.pop("name")
+
+        # ── MECHANICAL GATE: stage_doc_consumed ──────────────────────────────
+        # Pipeline stages MUST read their stage doc before completing.
+        # This gate prevents the pattern of "running pipeline as bookkeeping"
+        # without actually executing stage behavior. (C011→C032 Class A fix)
+        _STAGES_REQUIRING_DOC = {"evaluate", "build", "review", "test", "deliver", "reflect"}
+        stage_name = stage_record.get("stage", "")
+        stage_status = stage_record.get("status", "")
+        if (
+            stage_name in _STAGES_REQUIRING_DOC
+            and stage_status == "completed"
+            and not stage_record.get("stage_doc_consumed")
+        ):
+            print(json.dumps({
+                "error": (
+                    f"BLOCKED: stage '{stage_name}' requires 'stage_doc_consumed: true' in stage-json. "
+                    f"You MUST Read stages/{stage_name}.md BEFORE marking this stage complete. "
+                    f"This is a mechanical gate — no bypass."
+                ),
+                "pipeline_id": args.run_id,
+            }))
+            sys.exit(1)
+        # ─────────────────────────────────────────────────────────────────────
+
         # Replace existing stage record or append
         existing_idx = next(
             (i for i, s in enumerate(run_state["stages"])
