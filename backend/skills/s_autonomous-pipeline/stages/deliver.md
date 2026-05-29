@@ -595,27 +595,40 @@ If verdict is RISKS_IDENTIFIED: list each risk with concrete mitigation.
 has corresponding documentation updates. Catches "code shipped, docs forgot"
 drift that accumulates silently.
 
+**Pre-flight: verify origin/main exists.**
+If `git rev-parse origin/main >/dev/null 2>&1` fails, skip doc-sync check
+entirely and note "WARN: origin/main not available, doc-sync check skipped"
+in the report. This handles fresh clones and shallow checkouts.
+
 **Run these checks against the changeset:**
 
 ```bash
-# 1. New files in backend/core/ → must have TECH.md Key Subsystems entry
-NEW_CORE_FILES=$(git diff --name-only --diff-filter=A origin/main...HEAD 2>/dev/null | grep '^backend/core/' | grep -v '__pycache__\|test')
+# 0. Pre-flight
+git rev-parse origin/main >/dev/null 2>&1 || { echo "WARN: origin/main unavailable"; exit 0; }
 
-# 2. Feat commits → docs/ should have been touched in last 7 days
-FEAT_COMMITS=$(git log --oneline origin/main...HEAD | grep -i "^[a-f0-9]* feat")
-DOCS_RECENT=$(git log --since="7 days ago" --oneline -- docs/ | wc -l)
+# 1. New files in backend/core/ → must have TECH.md Key Subsystems entry
+NEW_CORE_FILES=$(git diff --name-only --diff-filter=A origin/main...HEAD | grep '^backend/core/' | grep -v '__pycache__\|test')
+
+# 2. Feat commits → docs/ should have been updated in this branch
+FEAT_COMMITS=$(git log --oneline origin/main...HEAD | grep -iE "^[a-f0-9]+ feat")
+DOCS_IN_BRANCH=$(git diff --name-only origin/main...HEAD -- docs/ | wc -l)
 
 # 3. COE/P0 fix → docs/post-mortems/ should have new file
 COE_FIX=$(git log --oneline origin/main...HEAD | grep -iE "COE|P0|bilateral|deadlock|crash.*all")
 PM_COUNT=$(git diff --name-only --diff-filter=A origin/main...HEAD | grep '^docs/post-mortems/' | wc -l)
 ```
 
+**TECH.md location note:** TECH.md is in the SwarmWS workspace, NOT in the
+swarmai repo. Use an absolute path Read:
+`~/.swarm-ai/SwarmWS/Projects/<PROJECT>/TECH.md`
+Do NOT use git grep — use the Read tool to search for the filename stem.
+
 **Evaluation rules:**
 
 | Condition | Check | Gap? |
 |-----------|-------|:---:|
-| New `.py` in `backend/core/` (not test) | `grep` for filename stem in `Projects/<PROJECT>/TECH.md` | If not found → GAP |
-| Any `feat(` commit in changeset | `docs/` has ≥1 file modified in last 7 days | If 0 → GAP |
+| New `.py` in `backend/core/` (not test) | Read `~/.swarm-ai/SwarmWS/Projects/<PROJECT>/TECH.md`, search for filename stem | If not found → GAP |
+| Any `feat` commit in changeset | `docs/` has ≥1 file changed in branch (`git diff ... -- docs/`) | If 0 → GAP |
 | Commit message mentions COE/P0/crash | `docs/post-mortems/` has new file in changeset | If 0 → GAP |
 | New skill created (`backend/skills/s_*`) | Skill appears in `docs/README.md` or relevant design doc | If not → GAP |
 
