@@ -39,40 +39,30 @@ Parse the user's message to extract:
 If no project detected, confirm with the user. Pipeline needs a project for
 artifact storage (L1+).
 
-**Create the pipeline run file:**
+**Create the pipeline run:**
 
 ```bash
-# Check current state
+# Check current state + existing paused pipelines
 python backend/scripts/artifact_cli.py state --project <PROJECT>
-
-# Check for existing paused pipeline
 python backend/scripts/artifact_cli.py discover --project <PROJECT> --types checkpoint --full
 ```
 
 If a paused pipeline exists for this project, ask: "Resume the existing pipeline
 or start a new one?"
 
-**Pipeline run state** is tracked in a JSON file:
-```
-Projects/<project>/.artifacts/runs/<id>/run.json
+**Use `run-create` to initialize** (NEVER write run.json manually):
+
+```bash
+python backend/scripts/artifact_cli.py run-create \
+  --project <PROJECT> \
+  --requirement "<parsed requirement>"
 ```
 
-Create the initial run state:
-```json
-{
-  "id": "run_<8-char-uuid>",
-  "project": "<PROJECT>",
-  "requirement": "<parsed requirement>",
-  "profile": null,
-  "status": "running",
-  "stages": [],
-  "taste_decisions": [],
-  "created_at": "<ISO timestamp>",
-  "updated_at": "<ISO timestamp>"
-}
-```
+This creates `Projects/<project>/.artifacts/runs/<run_id>/run.json` with proper
+defaults, sets status=running, auto-abandons stale same-project runs (>2h), and
+returns the run_id. Profile is set later after EVALUATE classifies scope.
 
-Write this file to `.artifacts/` and announce:
+Announce:
 ```
 Pipeline started: <requirement> (run_<id>)
 Project: <PROJECT>
