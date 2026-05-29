@@ -50,6 +50,13 @@ Trace the full user path one level downstream:
 }
 ```
 
+## Focus: User-Visible Bugs (Not Hypothetical Misuse)
+
+Find bugs that a **real user** would encounter — broken interactions, missing states,
+unresponsive elements, test gaps that hide behavioral failures. Do not enumerate ways
+the builder could theoretically game test coverage. Focus on: "if I were using this
+feature right now, what would break?"
+
 ## Anti-Rationalization
 
 | Agent Shortcut | Required Response |

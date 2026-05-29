@@ -459,7 +459,8 @@ class TestSummary:
         _make_artifact(artifacts_dir, "run_test1", "art_eval", "evaluation",
                        {"recommendation": "GO", "scope": "standard"})
         _make_artifact(artifacts_dir, "run_test1", "art_build", "changeset",
-                       {"files_changed": ["a.py"], "tdd": {"green_pass": True}})
+                       {"files_changed": ["a.py"], "tdd": {"green_pass": True, "smoke_tests": 0},
+                        "ac_coverage": [{"ac": "AC1: test", "impl": "a.py::f()", "test": "test_a.py::test_f", "verified": True}]})
 
         _make_run(runs_dir, profile="trivial", stages=[
             _stage_record("evaluate", artifact_id="art_eval"),
@@ -2216,3 +2217,481 @@ class TestFreshnessIntegration:
         result = validate("TestProject", "run_test1", "review")
         stale_warnings = [w for w in result["warnings"] if "STALE" in w]
         assert stale_warnings == [], f"Expected no STALE warnings, got: {stale_warnings}"
+
+
+# ---------------------------------------------------------------------------
+# Check 8e: Litmus Gate Enforcement Tests
+# ---------------------------------------------------------------------------
+
+class TestLitmusGate:
+    """Tests for Check 8e — litmus pre-gate validation in REVIEW stage."""
+
+    def _valid_litmus(self) -> dict:
+        """Minimal valid litmus_gate artifact data."""
+        return {
+            "verdict": "PASS",
+            "hf_checked": [True, True, True, True],
+            "soft_signal_count": 0,
+            "weak_areas": [],
+            "evidence": "HF1: 4 conditionals with domain logic. HF2: 5/5 ACs mapped. "
+                        "HF3: no contradictions. HF4: all DB queries wrapped.",
+        }
+
+    def _valid_review_artifact(self, litmus: dict | None = None) -> dict:
+        """Complete valid review artifact with litmus gate."""
+        return {
+            "approved": True,
+            "litmus_gate": litmus or self._valid_litmus(),
+            "findings_count": 0,
+            "integration_trace": {"checked": 3, "clean": True},
+            "runtime_patterns": {
+                "checked": 5, "violations": 0,
+                "patterns": [{"pattern": "RP1", "status": "pass", "detail": "no blocking async calls"}],
+            },
+        }
+
+    def test_litmus_pass_valid(self, workspace):
+        """Valid PASS litmus gate produces no errors."""
+        runs_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_test1"
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+
+        _make_artifact(artifacts_dir, "run_test1", "art_review", "review",
+                       self._valid_review_artifact())
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate"),
+            _stage_record("build", artifact_id="art_build"),
+            _stage_record("review", artifact_id="art_review"),
+        ])
+
+        result = validate("TestProject", "run_test1", "review")
+        litmus_errors = [e for e in result["errors"] if "Litmus" in e or "litmus" in e]
+        assert litmus_errors == [], f"Unexpected litmus errors: {litmus_errors}"
+
+    def test_litmus_missing_blocked(self, workspace):
+        """Missing litmus_gate field triggers schema required-field error."""
+        runs_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_test1"
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+
+        data = self._valid_review_artifact()
+        del data["litmus_gate"]
+        _make_artifact(artifacts_dir, "run_test1", "art_review", "review", data)
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate"),
+            _stage_record("build", artifact_id="art_build"),
+            _stage_record("review", artifact_id="art_review"),
+        ])
+
+        result = validate("TestProject", "run_test1", "review")
+        assert any("litmus_gate" in e.lower() for e in result["errors"])
+
+    def test_litmus_invalid_verdict(self, workspace):
+        """Invalid verdict string triggers error."""
+        runs_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_test1"
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+
+        litmus = self._valid_litmus()
+        litmus["verdict"] = "MAYBE"
+        _make_artifact(artifacts_dir, "run_test1", "art_review", "review",
+                       self._valid_review_artifact(litmus))
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate"),
+            _stage_record("build", artifact_id="art_build"),
+            _stage_record("review", artifact_id="art_review"),
+        ])
+
+        result = validate("TestProject", "run_test1", "review")
+        assert any("invalid verdict" in e.lower() for e in result["errors"])
+
+    def test_litmus_partial_hf_checked(self, workspace):
+        """hf_checked with wrong count triggers error."""
+        runs_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_test1"
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+
+        litmus = self._valid_litmus()
+        litmus["hf_checked"] = [True, True]  # Only 2, need 4
+        _make_artifact(artifacts_dir, "run_test1", "art_review", "review",
+                       self._valid_review_artifact(litmus))
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate"),
+            _stage_record("build", artifact_id="art_build"),
+            _stage_record("review", artifact_id="art_review"),
+        ])
+
+        result = validate("TestProject", "run_test1", "review")
+        assert any("4 booleans" in e for e in result["errors"])
+
+    def test_litmus_hf_checked_non_bool(self, workspace):
+        """hf_checked with non-boolean elements triggers error."""
+        runs_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_test1"
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+
+        litmus = self._valid_litmus()
+        litmus["hf_checked"] = [True, True, True, "yes"]
+        _make_artifact(artifacts_dir, "run_test1", "art_review", "review",
+                       self._valid_review_artifact(litmus))
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate"),
+            _stage_record("build", artifact_id="art_build"),
+            _stage_record("review", artifact_id="art_review"),
+        ])
+
+        result = validate("TestProject", "run_test1", "review")
+        assert any("booleans" in e for e in result["errors"])
+
+    def test_litmus_fail_with_approved_true_blocked(self, workspace):
+        """FAIL verdict + approved=true is a contradiction — must error."""
+        runs_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_test1"
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+
+        litmus = self._valid_litmus()
+        litmus["verdict"] = "FAIL"
+        litmus["hf_checked"] = [False, True, True, True]  # HF1 failed
+        litmus["evidence"] = "HF1: majority scaffold code. HF2: ACs covered. HF3: ok. HF4: ok."
+        data = self._valid_review_artifact(litmus)
+        data["approved"] = True  # Contradiction!
+        _make_artifact(artifacts_dir, "run_test1", "art_review", "review", data)
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate"),
+            _stage_record("build", artifact_id="art_build"),
+            _stage_record("review", artifact_id="art_review"),
+        ])
+
+        result = validate("TestProject", "run_test1", "review")
+        assert any("contradicts" in e.lower() for e in result["errors"])
+
+    def test_litmus_fail_all_hf_true_contradiction(self, workspace):
+        """FAIL verdict with all hf_checked=True is illogical — must error."""
+        runs_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_test1"
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+
+        litmus = self._valid_litmus()
+        litmus["verdict"] = "FAIL"
+        # All True but verdict is FAIL — doesn't make sense
+        litmus["hf_checked"] = [True, True, True, True]
+        litmus["evidence"] = "HF1: fine. HF2: fine. HF3: fine. HF4: fine but FAIL anyway."
+        data = self._valid_review_artifact(litmus)
+        data["approved"] = False
+        _make_artifact(artifacts_dir, "run_test1", "art_review", "review", data)
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate"),
+            _stage_record("build", artifact_id="art_build"),
+            _stage_record("review", artifact_id="art_review"),
+        ])
+
+        result = validate("TestProject", "run_test1", "review")
+        assert any("contradiction" in e.lower() for e in result["errors"])
+
+    def test_litmus_borderline_empty_weak_areas_blocked(self, workspace):
+        """BORDERLINE verdict with empty weak_areas is blocked."""
+        runs_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_test1"
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+
+        litmus = self._valid_litmus()
+        litmus["verdict"] = "BORDERLINE"
+        litmus["soft_signal_count"] = 3
+        litmus["weak_areas"] = []  # Empty — should error
+        litmus["evidence"] = "HF1: ok. HF2: ok. HF3: ok. HF4: ok. But 3 soft signals."
+        _make_artifact(artifacts_dir, "run_test1", "art_review", "review",
+                       self._valid_review_artifact(litmus))
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate"),
+            _stage_record("build", artifact_id="art_build"),
+            _stage_record("review", artifact_id="art_review"),
+        ])
+
+        result = validate("TestProject", "run_test1", "review")
+        assert any("weak_areas" in e for e in result["errors"])
+
+    def test_litmus_generic_evidence_blocked(self, workspace):
+        """Evidence without HF references is blocked (anti-rubber-stamp)."""
+        runs_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_test1"
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+
+        litmus = self._valid_litmus()
+        litmus["evidence"] = "All criteria checked and passed without issues found in the code."
+        _make_artifact(artifacts_dir, "run_test1", "art_review", "review",
+                       self._valid_review_artifact(litmus))
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate"),
+            _stage_record("build", artifact_id="art_build"),
+            _stage_record("review", artifact_id="art_review"),
+        ])
+
+        result = validate("TestProject", "run_test1", "review")
+        assert any("HF1" in e or "per-criterion" in e for e in result["errors"])
+
+    def test_litmus_garbage_evidence_blocked(self, workspace):
+        """Garbage string as evidence is blocked (needs HF references)."""
+        runs_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_test1"
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+
+        litmus = self._valid_litmus()
+        litmus["evidence"] = "x" * 30  # >20 chars but no HF refs
+        _make_artifact(artifacts_dir, "run_test1", "art_review", "review",
+                       self._valid_review_artifact(litmus))
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate"),
+            _stage_record("build", artifact_id="art_build"),
+            _stage_record("review", artifact_id="art_review"),
+        ])
+
+        result = validate("TestProject", "run_test1", "review")
+        assert any("HF1" in e or "references" in e for e in result["errors"])
+
+    def test_litmus_borderline_with_weak_areas_passes(self, workspace):
+        """Valid BORDERLINE with proper weak_areas passes."""
+        runs_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_test1"
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+
+        litmus = self._valid_litmus()
+        litmus["verdict"] = "BORDERLINE"
+        litmus["soft_signal_count"] = 3
+        litmus["weak_areas"] = ["happy-path only tests", "magic numbers in timeout", "generic exception handler"]
+        litmus["evidence"] = "HF1: real logic. HF2: ACs covered. HF3: consistent. HF4: wrapped. But 3 soft signals."
+        _make_artifact(artifacts_dir, "run_test1", "art_review", "review",
+                       self._valid_review_artifact(litmus))
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate"),
+            _stage_record("build", artifact_id="art_build"),
+            _stage_record("review", artifact_id="art_review"),
+        ])
+
+        result = validate("TestProject", "run_test1", "review")
+        litmus_errors = [e for e in result["errors"] if "litmus" in e.lower() or "Litmus" in e]
+        assert litmus_errors == [], f"Unexpected litmus errors: {litmus_errors}"
+
+
+# ---------------------------------------------------------------------------
+# Check 8f: BUILD AC Coverage Matrix Tests
+# ---------------------------------------------------------------------------
+
+class TestBuildAcCoverage:
+    """Tests for Check 8f — AC coverage matrix enforcement in BUILD stage."""
+
+    def _valid_ac_coverage(self) -> list:
+        """Minimal valid ac_coverage list."""
+        return [
+            {"ac": "AC1: Feature works", "impl": "feature.py::do_thing()", "test": "test_feature.py::test_do_thing", "verified": True},
+            {"ac": "AC2: Error handled", "impl": "feature.py::handle_error()", "test": "test_feature.py::test_handle_error", "verified": True},
+        ]
+
+    def _valid_build_artifact(self, ac_coverage: list | None = None) -> dict:
+        """Complete valid build artifact with ac_coverage."""
+        return {
+            "files_changed": ["feature.py", "test_feature.py"],
+            "tdd": {"green_pass": True, "smoke_tests": 2, "red_count": 4, "green_count": 4},
+            "ac_coverage": ac_coverage if ac_coverage is not None else self._valid_ac_coverage(),
+            "commits": ["abc1234"],
+        }
+
+    def _plan_artifact(self, acs: list | None = None) -> dict:
+        """Plan artifact with acceptance_criteria."""
+        return {
+            "acceptance_criteria": acs or ["AC1: Feature works", "AC2: Error handled"],
+            "approach": "Standard implementation",
+        }
+
+    def test_valid_ac_coverage_passes(self, workspace):
+        """Valid BUILD with complete ac_coverage produces no errors."""
+        runs_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_test1"
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+
+        _make_artifact(artifacts_dir, "run_test1", "art_plan", "plan", self._plan_artifact())
+        _make_artifact(artifacts_dir, "run_test1", "art_build", "changeset",
+                       self._valid_build_artifact())
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate"),
+            _stage_record("plan", artifact_id="art_plan"),
+            _stage_record("build", artifact_id="art_build"),
+        ])
+
+        result = validate("TestProject", "run_test1", "build")
+        ac_errors = [e for e in result["errors"] if "ac_coverage" in e.lower() or "AC" in e]
+        assert ac_errors == [], f"Unexpected AC errors: {ac_errors}"
+
+    def test_missing_ac_coverage_blocked(self, workspace):
+        """BUILD without ac_coverage field triggers schema required-field error."""
+        runs_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_test1"
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+
+        data = self._valid_build_artifact()
+        del data["ac_coverage"]
+        _make_artifact(artifacts_dir, "run_test1", "art_build", "changeset", data)
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate"),
+            _stage_record("build", artifact_id="art_build"),
+        ])
+
+        result = validate("TestProject", "run_test1", "build")
+        assert any("ac_coverage" in e.lower() for e in result["errors"])
+
+    def test_empty_ac_coverage_blocked(self, workspace):
+        """Empty ac_coverage list triggers error."""
+        runs_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_test1"
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+
+        _make_artifact(artifacts_dir, "run_test1", "art_build", "changeset",
+                       self._valid_build_artifact(ac_coverage=[]))
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate"),
+            _stage_record("build", artifact_id="art_build"),
+        ])
+
+        result = validate("TestProject", "run_test1", "build")
+        assert any("empty" in e.lower() for e in result["errors"])
+
+    def test_missing_impl_blocked(self, workspace):
+        """AC entry without impl field triggers error."""
+        runs_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_test1"
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+
+        ac = [{"ac": "AC1: Feature", "impl": "", "test": "test_f.py::test_x", "verified": True}]
+        _make_artifact(artifacts_dir, "run_test1", "art_build", "changeset",
+                       self._valid_build_artifact(ac_coverage=ac))
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate"),
+            _stage_record("build", artifact_id="art_build"),
+        ])
+
+        result = validate("TestProject", "run_test1", "build")
+        assert any("impl" in e.lower() for e in result["errors"])
+
+    def test_missing_test_blocked(self, workspace):
+        """AC entry without test field triggers error."""
+        runs_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_test1"
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+
+        ac = [{"ac": "AC1: Feature", "impl": "f.py::do()", "test": "", "verified": True}]
+        _make_artifact(artifacts_dir, "run_test1", "art_build", "changeset",
+                       self._valid_build_artifact(ac_coverage=ac))
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate"),
+            _stage_record("build", artifact_id="art_build"),
+        ])
+
+        result = validate("TestProject", "run_test1", "build")
+        assert any("test" in e.lower() for e in result["errors"])
+
+    def test_unverified_entry_blocked(self, workspace):
+        """AC entry with verified=false triggers error."""
+        runs_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_test1"
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+
+        ac = [{"ac": "AC1: Feature", "impl": "f.py::do()", "test": "t.py::test_do", "verified": False}]
+        _make_artifact(artifacts_dir, "run_test1", "art_build", "changeset",
+                       self._valid_build_artifact(ac_coverage=ac))
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate"),
+            _stage_record("build", artifact_id="art_build"),
+        ])
+
+        result = validate("TestProject", "run_test1", "build")
+        assert any("verified" in e.lower() for e in result["errors"])
+
+    def test_plan_ac_not_covered_blocked(self, workspace):
+        """PLAN has AC that doesn't appear in BUILD ac_coverage → BLOCK."""
+        runs_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_test1"
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+
+        # Plan has 3 ACs, build only covers 2
+        plan_acs = ["AC1: Feature works", "AC2: Error handled", "AC3: Rate limit enforced"]
+        _make_artifact(artifacts_dir, "run_test1", "art_plan", "plan",
+                       self._plan_artifact(acs=plan_acs))
+        _make_artifact(artifacts_dir, "run_test1", "art_build", "changeset",
+                       self._valid_build_artifact())  # Only AC1 + AC2
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate"),
+            _stage_record("plan", artifact_id="art_plan"),
+            _stage_record("build", artifact_id="art_build"),
+        ])
+
+        result = validate("TestProject", "run_test1", "build")
+        assert any("AC3" in e or "not covered" in e.lower() for e in result["errors"])
+
+    def test_no_plan_artifact_graceful_skip(self, workspace):
+        """When no PLAN artifact exists, ac_coverage structural checks still run but cross-ref skips."""
+        runs_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_test1"
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+
+        _make_artifact(artifacts_dir, "run_test1", "art_build", "changeset",
+                       self._valid_build_artifact())
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate"),
+            # No plan stage — e.g., bugfix profile skips think/plan sometimes
+            _stage_record("build", artifact_id="art_build"),
+        ])
+
+        result = validate("TestProject", "run_test1", "build")
+        # Should pass structural checks (ac_coverage valid) — no cross-ref errors
+        ac_errors = [e for e in result["errors"]
+                     if "ac_coverage" in e.lower() or "not covered" in e.lower()]
+        assert ac_errors == [], f"Unexpected errors when no plan artifact: {ac_errors}"
+
+    def test_all_plan_acs_covered_passes(self, workspace):
+        """When all PLAN ACs are covered in BUILD, no cross-ref errors."""
+        runs_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_test1"
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+
+        plan_acs = ["AC1: Feature works", "AC2: Error handled"]
+        _make_artifact(artifacts_dir, "run_test1", "art_plan", "plan",
+                       self._plan_artifact(acs=plan_acs))
+        _make_artifact(artifacts_dir, "run_test1", "art_build", "changeset",
+                       self._valid_build_artifact())
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate"),
+            _stage_record("plan", artifact_id="art_plan"),
+            _stage_record("build", artifact_id="art_build"),
+        ])
+
+        result = validate("TestProject", "run_test1", "build")
+        ac_errors = [e for e in result["errors"]
+                     if "not covered" in e.lower() or "AC" in e]
+        assert ac_errors == [], f"Unexpected cross-ref errors: {ac_errors}"
+
+    def test_checks_passed_never_exceeds_total(self, workspace):
+        """Invariant: checks_passed <= checks_total in all results."""
+        runs_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_test1"
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+
+        _make_artifact(artifacts_dir, "run_test1", "art_plan", "plan", self._plan_artifact())
+        _make_artifact(artifacts_dir, "run_test1", "art_build", "changeset",
+                       self._valid_build_artifact())
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate"),
+            _stage_record("plan", artifact_id="art_plan"),
+            _stage_record("build", artifact_id="art_build"),
+        ])
+
+        result = validate("TestProject", "run_test1", "build")
+        assert result["checks_passed"] <= result["checks_total"], \
+            f"checks_passed ({result['checks_passed']}) > checks_total ({result['checks_total']})"
+
+    def test_similar_acs_not_false_matched(self, workspace):
+        """Two PLAN ACs with similar prefix — one covered, one not — must detect the gap."""
+        runs_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_test1"
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+
+        # Two ACs that share a long common prefix
+        plan_acs = [
+            "AC1: User can login with email credentials",
+            "AC1: User can login with SSO provider",
+        ]
+        # Only cover the first one
+        ac_coverage = [
+            {"ac": "AC1: User can login with email credentials",
+             "impl": "auth.py::login_email()", "test": "test_auth.py::test_login_email", "verified": True},
+        ]
+        _make_artifact(artifacts_dir, "run_test1", "art_plan", "plan",
+                       self._plan_artifact(acs=plan_acs))
+        _make_artifact(artifacts_dir, "run_test1", "art_build", "changeset",
+                       self._valid_build_artifact(ac_coverage=ac_coverage))
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate"),
+            _stage_record("plan", artifact_id="art_plan"),
+            _stage_record("build", artifact_id="art_build"),
+        ])
+
+        result = validate("TestProject", "run_test1", "build")
+        # The SSO AC should NOT be matched by the email AC
+        assert any("SSO" in e for e in result["errors"]), \
+            f"Expected 'SSO' AC not-covered error, got: {result['errors']}"

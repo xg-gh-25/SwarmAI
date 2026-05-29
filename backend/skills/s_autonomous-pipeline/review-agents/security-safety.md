@@ -41,6 +41,14 @@ radius analysis. Do NOT review code quality or UX — other agents handle those.
 }
 ```
 
+## Focus: Real Vulnerabilities (Not Theoretical Attacks)
+
+Find **exploitable** security issues — paths where untrusted input reaches sensitive
+operations without validation. Every finding must include a concrete exploit scenario
+("attacker sends X, system does Y"). Do not flag theoretical attack vectors that require
+the builder to have adversarial intent against their own system. The builder is an AI
+agent that makes mistakes through inattention, not malice.
+
 ## Anti-Rationalization
 
 | Agent Shortcut | Required Response |

@@ -8,6 +8,72 @@ requires: integration trace (real wiring check), runtime patterns RP1-RP37
 (mechanical checklist), and for >3 files: parallel sub-agents with ISOLATED
 context. C011: builder rated 10/10, feature was 100% broken.
 
+## Litmus Pre-Gate (< 2 min, no tools, no sub-agent)
+
+**Before** spawning expensive adversarial sub-agents, run a quick structural
+sanity check on BUILD output. This is a 30-second read, not a deep review.
+
+### Input
+
+Read the BUILD stage artifacts:
+1. Code diff (from git or inline in run context)
+2. Acceptance Criteria from PLAN stage (`run.json` → stages → plan → acceptance_criteria)
+
+### Verdict: PASS / BORDERLINE / FAIL
+
+**Hard failures (any one → FAIL, rework to BUILD):**
+
+| # | Criterion | How to check |
+|---|-----------|-------------|
+| HF1 | Majority of new code is scaffold/boilerplate with no domain logic | Skim the diff: are there real conditionals, error handling for THIS system's failure modes, domain-specific decisions? Or just empty class stubs, pass-through functions, TODO comments? |
+| HF2 | Acceptance Criteria obviously incomplete | Scan the AC list from PLAN. For each AC, can you name the function/file that implements it within 5 seconds? If you cannot identify coverage for >30% of ACs on a quick pass, FAIL. (Don't rigorously verify — just test recall.) |
+| HF3 | Internal contradiction — code behavior contradicts its own docstring/comments | Spot check: do function names match what they do? Do comments describe a different algorithm than what's implemented? |
+| HF4 | Missing error handling on external boundaries | Any new HTTP call, file I/O, subprocess, or DB query without try/except or explicit error path = not production-ready |
+
+**Soft signals (3+ present → BORDERLINE):**
+
+| Signal | Ownership (good) | Abdication (bad) |
+|--------|-----------------|-----------------|
+| Error handling | Handles THIS system's known failure modes | Generic `try: ... except Exception: pass` |
+| Test coverage | Tests exercise boundary conditions + sad paths | Only happy-path tests |
+| Style consistency | Matches existing codebase naming/structure conventions | Noticeably different patterns imported |
+| Constants/limits | Specific values with justification or reference | Magic numbers without comments |
+| Complexity match | Code volume proportional to problem complexity | Over-engineered OR suspiciously minimal |
+
+### Outcome routing
+
+| Verdict | Action |
+|---------|--------|
+| **PASS** | Proceed to Parallel Fan-Out Review (or single-pass). No modifications. |
+| **BORDERLINE** | Proceed to review, BUT inject into adversarial prompt: `"Builder flagged weak areas: {litmus_weak_signals}. ALSO examine areas NOT flagged — builder has known self-review bias and may have directed you away from real issues."` |
+| **FAIL** | Do NOT spawn sub-agents. Return to BUILD with specific rework instructions: which HF failed, what specifically needs fixing. Max 2 litmus failures per pipeline run (tracked in `run.json`). On 3rd fail → escalate to full REVIEW with ALL sub-agents regardless of changeset size, plus penalty signal: `"Code failed litmus 3 times. Apply maximum scrutiny — builder may be cycling rather than fixing."` |
+
+### Retry accounting
+
+- Litmus failures count against the REVIEW stage retry budget (not BUILD's).
+- The "2 failure max" is per pipeline run (persisted in `run.json` under
+  `stages.review.litmus_fail_count`). Counter does NOT reset between attempts.
+- After escalation (3rd fail → full review), if adversarial BLOCKs, that uses
+  the same REVIEW retry pool. Standard retry limit applies.
+
+### Anti-gaming
+
+- Litmus is NOT a substitute for adversarial review. PASS ≠ "code is good."
+  PASS = "code is worth spending 30K tokens to deep-review."
+- The builder (you) ran litmus on your own code. Bias applies. When uncertain
+  about a SPECIFIC criterion, mark it uncertain and PASS overall. But uncertainty
+  on 2+ hard-failure criteria simultaneously = BORDERLINE, not PASS.
+- Never self-grant PASS to avoid rework. The rework is cheaper than a wasted
+  adversarial cycle that finds 10+ issues.
+- **Code enforcement:** `pipeline_validator.py` Check 8e validates litmus_gate
+  artifact: verdict must be PASS/BORDERLINE/FAIL, hf_checked must be 4 booleans,
+  evidence must be >20 chars. Missing or invalid litmus = BLOCK.
+- Litmus PASS on HF3/HF4 does NOT substitute for full security scan (Check 2) or
+  runtime pattern check (Check 6). Adversarial must re-examine error handling and
+  code/comment consistency at full depth regardless of litmus verdict.
+
+---
+
 ## Parallel Fan-Out Review
 
 **When the changeset touches >3 files OR >100 lines OR touches auth/data/infra
