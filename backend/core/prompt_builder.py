@@ -934,7 +934,7 @@ class PromptBuilder:
         """Resolve the ``effort`` level for thinking depth.
 
         Reads ``thinking_effort`` from config.json.  Valid values:
-        ``"low"``, ``"medium"``, ``"high"`` (default), ``"max"``.
+        ``"low"``, ``"medium"``, ``"high"`` (default), ``"xhigh"``, ``"max"``.
 
         Returns the effort string, or ``None`` if thinking is disabled
         (effort is meaningless without thinking).

@@ -275,7 +275,7 @@ class LLMJudge:
                 },
             )
 
-            # Extract text
+            # Extract text (skip reasoningContent blocks from adaptive thinking)
             content_blocks = response.get("output", {}).get("message", {}).get("content", [])
             text = ""
             for block in content_blocks:
@@ -284,6 +284,11 @@ class LLMJudge:
                     break
 
             if not text:
+                if content_blocks:
+                    logger.warning(
+                        "LLMJudge: %d blocks but no text (thinking-only response)",
+                        len(content_blocks),
+                    )
                 return None
 
             # Parse JSON response
