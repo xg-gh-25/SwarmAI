@@ -125,14 +125,19 @@ export function BottomBar() {
     return () => { cancelled = true; clearInterval(interval); };
   }, []);
 
-  // Close graph on ESC key
+  // Close graph on ESC key (stopPropagation prevents conflicts with other ESC handlers)
   useEffect(() => {
     if (!showGraph) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setShowGraph(false);
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        e.preventDefault();
+        setShowGraph(false);
+      }
     };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
+    // Use capture phase to fire BEFORE other ESC handlers
+    document.addEventListener('keydown', handler, true);
+    return () => document.removeEventListener('keydown', handler, true);
   }, [showGraph]);
 
   // Close popover on outside click
