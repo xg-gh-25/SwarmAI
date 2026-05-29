@@ -814,6 +814,7 @@ async def lifespan(app: FastAPI):
     from core.summarization import SummarizationPipeline
     from core.compliance import ComplianceTracker
     from hooks.daily_activity_hook import DailyActivityExtractionHook
+    from hooks.knowledge_backflow_hook import KnowledgeBackflowHook
     from hooks.auto_commit_hook import WorkspaceAutoCommitHook
     from hooks.code_change_feed import CodeChangeFeed
     from hooks.context_health_hook import ContextHealthHook
@@ -834,12 +835,15 @@ async def lifespan(app: FastAPI):
     # Create fire-and-forget executor — hooks never block the chat path
     hook_executor = BackgroundHookExecutor(hook_manager)
 
-    # Order matters: extraction → commit → distillation → health → evolution → improvement
+    # Order matters: extraction → backflow → commit → distillation → health → evolution → improvement
     # Distillation BEFORE health so embeddings capture freshly-distilled entries.
     hook_manager.register(DailyActivityExtractionHook(
         summarization_pipeline=summarization_pipeline,
         compliance_tracker=compliance_tracker,
     ))
+    # Knowledge Backflow: capture high-value analysis outputs as Knowledge/Notes/ pages.
+    # After DailyActivity (shares message read) but before auto-commit (file gets committed).
+    hook_manager.register(KnowledgeBackflowHook())
     # Pass shared git lock to auto-commit hook to prevent .git/index.lock contention
     hook_manager.register(WorkspaceAutoCommitHook(git_lock=hook_executor.git_lock))
     # Code Change Feed: analyze post-commit diff → propose TECH.md updates (Channel 1)
