@@ -120,9 +120,10 @@ function LeftSidebar() {
     window.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: '.context/MEMORY.md' } }));
   };
 
-  // Navigate explorer to Knowledge/Signals directory
+  // Open today's signal digest (falls back to most recent signal file)
   const handleSignalsClick = () => {
-    window.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: 'Knowledge/Signals' } }));
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    window.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: `Knowledge/Signals/${today}-digest.md` } }));
   };
 
   // Tools group nav items
