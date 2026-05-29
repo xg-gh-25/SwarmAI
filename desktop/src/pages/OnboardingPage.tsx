@@ -414,7 +414,7 @@ function Step4Ready({ onStart }: { onStart: () => void }) {
         <div className="grid grid-cols-2 gap-4 text-sm">
           <div>
             <span className="text-[var(--color-text-muted)]">Model</span>
-            <p className="text-[var(--color-text)] font-mono">claude-opus-4-6</p>
+            <p className="text-[var(--color-text)] font-mono">claude-opus-4-8</p>
           </div>
           <div>
             <span className="text-[var(--color-text-muted)]">Region</span>

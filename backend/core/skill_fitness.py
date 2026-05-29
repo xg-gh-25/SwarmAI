@@ -210,7 +210,7 @@ class LLMJudge:
     """
 
     # Same Opus model as llm_optimizer.py — one model, zero complexity (KD28).
-    MODEL_ID = "us.anthropic.claude-opus-4-6-v1"
+    MODEL_ID = "us.anthropic.claude-opus-4-8"
     TIMEOUT_SECONDS = 30
 
     def __init__(self):
