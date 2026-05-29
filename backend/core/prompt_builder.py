@@ -98,6 +98,7 @@ class PromptBuilder:
     # ── Model context window sizes (tokens) for L0/L1 selection ───
     # Claude 4.6: 1M context GA on Bedrock (no beta header needed)
     _MODEL_CONTEXT_WINDOWS: dict[str, int] = {
+        "claude-opus-4-8": 1_000_000,
         "claude-opus-4-6": 1_000_000,
         "claude-sonnet-4-6": 1_000_000,
     }
@@ -115,7 +116,7 @@ class PromptBuilder:
     # ------------------------------------------------------------------
 
     # 4.6 models that get 1M context — the CLI uses [1m] suffix as a signal.
-    _1M_MODELS = {"claude-opus-4-6", "claude-sonnet-4-6"}
+    _1M_MODELS = {"claude-opus-4-8", "claude-opus-4-6", "claude-sonnet-4-6"}
 
     def resolve_model(self, agent_config: dict) -> Optional[str]:
         """Resolve the model identifier, respecting per-session overrides.
