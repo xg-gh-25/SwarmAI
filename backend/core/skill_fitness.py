@@ -211,6 +211,7 @@ class LLMJudge:
 
     # Same Opus model as llm_optimizer.py — one model, zero complexity (KD28).
     MODEL_ID = "us.anthropic.claude-opus-4-8"
+    EFFORT = "low"  # Internal judge — structured eval, no deep reasoning needed
     TIMEOUT_SECONDS = 30
 
     def __init__(self):
@@ -268,6 +269,10 @@ class LLMJudge:
                 messages=[{"role": "user", "content": [{"text": prompt}]}],
                 system=[{"text": _JUDGE_SYSTEM_PROMPT}],
                 inferenceConfig={"maxTokens": 200, "temperature": 0.1},
+                additionalModelRequestFields={
+                    "thinking": {"type": "adaptive"},
+                    "output_config": {"effort": self.EFFORT},
+                },
             )
 
             # Extract text

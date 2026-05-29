@@ -73,6 +73,30 @@ class TestDefaultConfig:
         assert DEFAULT_CONFIG["bedrock_model_map"]["claude-opus-4-8"] == "us.anthropic.claude-opus-4-8"
 
 
+class TestEffortControl:
+    """Tests for effort level configuration."""
+
+    def test_valid_effort_levels_includes_xhigh(self):
+        """xhigh is a valid effort level (CLI supports it)."""
+        assert "xhigh" in PromptBuilder._VALID_EFFORT_LEVELS
+
+    def test_all_cli_effort_levels_valid(self):
+        """All CLI-supported effort levels are in valid set."""
+        expected = {"low", "medium", "high", "xhigh", "max"}
+        assert expected == PromptBuilder._VALID_EFFORT_LEVELS
+
+    def test_llm_optimizer_effort_constant(self):
+        """llm_optimizer defines BEDROCK_EFFORT constant for direct API calls."""
+        from core.llm_optimizer import BEDROCK_EFFORT
+        assert BEDROCK_EFFORT == "low"
+
+    def test_skill_fitness_uses_low_effort(self):
+        """skill_fitness LLMJudge uses low effort for cost efficiency."""
+        from core.skill_fitness import LLMJudge
+        assert hasattr(LLMJudge, "EFFORT")
+        assert LLMJudge.EFFORT == "low"
+
+
 class TestPromptBuilderModelResolution:
     """Tests for PromptBuilder 1M model detection."""
 
