@@ -927,7 +927,11 @@ class PromptBuilder:
 
         Returns a ThinkingConfig dict or None (which lets the SDK decide).
         """
-        if not self._config:
+        # Defensive: config is contractually an AppConfigManager (always
+        # truthy), so this only fires if a caller passes None. Using `is None`
+        # (not falsy) avoids masking a real None as "empty config" and keeps
+        # an empty-dict test config falling through to the .get() defaults.
+        if self._config is None:
             return {"type": "adaptive"}
 
         mode = self._config.get("thinking_mode", "adaptive")
@@ -963,7 +967,9 @@ class PromptBuilder:
         mode yields ``None`` — and that short-circuit fires for desktop and
         channel alike, since disabled is a hard kill the channel cannot undo.
         """
-        if not self._config:
+        # Defensive: see _build_thinking_config — `is None`, not falsy, so an
+        # empty-dict test config falls through to the .get() default.
+        if self._config is None:
             return "high"
 
         # If thinking is disabled, effort is irrelevant — for ALL session types.
