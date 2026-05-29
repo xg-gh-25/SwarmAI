@@ -290,7 +290,7 @@ tracking. Format:
 Pass this via `--stage-json` when recording stage completion:
 ```bash
 python backend/scripts/artifact_cli.py run-update --project <PROJECT> --run-id <RUN_ID> \
-  --stage-json '{"stage":"<STAGE>","status":"completed",...,"consumed_artifacts":[{"type":"<TYPE>","id":"<ART_ID>"}]}'
+  --stage-json '{"stage":"<STAGE>","status":"completed","stage_doc_consumed":true,...,"consumed_artifacts":[{"type":"<TYPE>","id":"<ART_ID>"}]}'
 ```
 
 If an upstream artifact is **stale** (DDD docs changed since it was created, or
@@ -1117,7 +1117,7 @@ python backend/scripts/artifact_cli.py run-create --project <PROJECT> \
 # ⚠️ CRITICAL: stage-json for full/bugfix DELIVER MUST include artifact_id from publish.
 #    Without it, the completion gate will BLOCK the pipeline (see artifact_cli.py L660-680).
 #    Pattern: ART_ID=$(publish ... | python -c "import sys,json; print(json.load(sys.stdin)['artifact_id'])")
-#             run-update --stage-json '{"stage":"deliver","status":"completed","artifact_id":"'$ART_ID'"}'
+#             run-update --stage-json '{"stage":"deliver","status":"completed","stage_doc_consumed":true,"artifact_id":"'$ART_ID'"}'
 python backend/scripts/artifact_cli.py run-update --project <PROJECT> --run-id <RUN_ID> \
   [--stage-json '<json>'] [--taste-decision '<json>'] [--status <status>] [--profile <profile>]
 
