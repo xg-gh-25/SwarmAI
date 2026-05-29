@@ -115,3 +115,55 @@ class TestPromptBuilderModelResolution:
     def test_sonnet_4_6_still_in_1m_models(self):
         """claude-sonnet-4-6 still recognized as 1M."""
         assert "claude-sonnet-4-6" in PromptBuilder._1M_MODELS
+
+
+class TestSessionAwareThinking:
+    """Tests for session-type-aware thinking config.
+
+    Desktop sessions (channel_context=None) use global config as-is.
+    Channel sessions (channel_context set) force adaptive thinking,
+    because channels run unattended and should let the model skip
+    thinking on simple questions (cost/latency). A globally *disabled*
+    mode is a hard kill that channel override must NOT resurrect.
+    """
+
+    def test_desktop_enabled_returns_enabled(self):
+        """AC1: desktop session + global enabled → enabled config."""
+        pb = PromptBuilder({"thinking_mode": "enabled", "thinking_budget_tokens": 12000})
+        cfg = pb._build_thinking_config(channel_context=None)
+        assert cfg == {"type": "enabled", "budget_tokens": 12000}
+
+    def test_channel_enabled_forces_adaptive(self):
+        """AC2: channel session + global enabled → adaptive override."""
+        pb = PromptBuilder({"thinking_mode": "enabled", "thinking_budget_tokens": 12000})
+        cfg = pb._build_thinking_config(channel_context={"is_owner": True})
+        assert cfg == {"type": "adaptive"}
+
+    def test_channel_disabled_stays_disabled(self):
+        """AC3: channel override never resurrects a globally disabled mode."""
+        pb = PromptBuilder({"thinking_mode": "disabled"})
+        cfg = pb._build_thinking_config(channel_context={"is_owner": True})
+        assert cfg == {"type": "disabled"}
+
+    def test_channel_adaptive_effort_not_none(self):
+        """AC4: channel (forced adaptive) still yields a valid effort string."""
+        pb = PromptBuilder({"thinking_mode": "enabled", "thinking_effort": "high"})
+        effort = pb._build_effort(channel_context={"is_owner": True})
+        assert effort == "high"
+
+    def test_desktop_disabled_effort_none(self):
+        """AC5: desktop disabled-mode short-circuit preserved — effort is None."""
+        pb = PromptBuilder({"thinking_mode": "disabled", "thinking_effort": "max"})
+        effort = pb._build_effort(channel_context=None)
+        assert effort is None
+
+    def test_channel_disabled_effort_none(self):
+        """AC3+AC5: channel + globally disabled → effort still None (no resurrect)."""
+        pb = PromptBuilder({"thinking_mode": "disabled", "thinking_effort": "max"})
+        effort = pb._build_effort(channel_context={"is_owner": True})
+        assert effort is None
+
+    def test_desktop_default_adaptive_unchanged(self):
+        """Regression: desktop with no thinking_mode set stays adaptive."""
+        pb = PromptBuilder({"thinking_effort": "max"})
+        assert pb._build_thinking_config(channel_context=None) == {"type": "adaptive"}

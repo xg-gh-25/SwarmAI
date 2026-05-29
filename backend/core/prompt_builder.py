@@ -908,7 +908,7 @@ class PromptBuilder:
     # Valid effort levels accepted by the Claude SDK / CLI.
     _VALID_EFFORT_LEVELS = frozenset({"low", "medium", "high", "xhigh", "max"})
 
-    def _build_thinking_config(self) -> dict | None:
+    def _build_thinking_config(self, channel_context: dict | None = None) -> dict | None:
         """Build thinking configuration from app config.
 
         Reads ``thinking_mode`` from config.json:
@@ -916,6 +916,14 @@ class PromptBuilder:
         - ``"adaptive"`` (default) — let the model decide when to think
         - ``"enabled"``  — always think, with optional ``thinking_budget_tokens``
         - ``"disabled"`` — never use extended thinking
+
+        **Session-type awareness:** The global ``thinking_mode`` is the
+        *desktop-facing* source of truth. Channel sessions (``channel_context``
+        not None) run unattended and are cost/latency sensitive, so they force
+        ``adaptive`` regardless of the global value — letting the model skip
+        thinking on simple questions. The one exception is a globally
+        ``disabled`` mode: that is a hard kill (the operator explicitly turned
+        thinking off) and the channel override must NOT resurrect it.
 
         Returns a ThinkingConfig dict or None (which lets the SDK decide).
         """
@@ -926,14 +934,20 @@ class PromptBuilder:
 
         if mode == "disabled":
             return {"type": "disabled"}
-        elif mode == "enabled":
+
+        # Channel sessions force adaptive (cost-efficient, model self-decides).
+        # disabled was already handled above, so it is never overridden here.
+        if channel_context is not None:
+            return {"type": "adaptive"}
+
+        if mode == "enabled":
             budget = self._config.get("thinking_budget_tokens", 10000)
             return {"type": "enabled", "budget_tokens": int(budget)}
         else:
             # Default: adaptive — model decides when thinking is useful
             return {"type": "adaptive"}
 
-    def _build_effort(self) -> str | None:
+    def _build_effort(self, channel_context: dict | None = None) -> str | None:
         """Resolve the ``effort`` level for thinking depth.
 
         Reads ``thinking_effort`` from config.json.  Valid values:
@@ -941,11 +955,20 @@ class PromptBuilder:
 
         Returns the effort string, or ``None`` if thinking is disabled
         (effort is meaningless without thinking).
+
+        ``channel_context`` is accepted for call-site symmetry with
+        :meth:`_build_thinking_config`. Effort stays meaningful for channel
+        sessions: they force *adaptive* (not disabled), so thinking can still
+        occur and a depth level still applies. Only a globally ``disabled``
+        mode yields ``None`` — and that short-circuit fires for desktop and
+        channel alike, since disabled is a hard kill the channel cannot undo.
         """
         if not self._config:
             return "high"
 
-        # If thinking is disabled, effort is irrelevant.
+        # If thinking is disabled, effort is irrelevant — for ALL session types.
+        # (Channel forces adaptive, never disabled, so this only trips when the
+        # operator globally disabled thinking.)
         if self._config.get("thinking_mode") == "disabled":
             return None
 
@@ -1205,8 +1228,8 @@ class PromptBuilder:
 
         # Build thinking configuration from app config.
         # Supports: "adaptive" (default), "enabled" (with budget), "disabled"
-        thinking_config = self._build_thinking_config()
-        effort = self._build_effort()
+        thinking_config = self._build_thinking_config(channel_context=channel_context)
+        effort = self._build_effort(channel_context=channel_context)
 
         # Channel sessions: cap max_turns to prevent unbounded tool loops
         # that cause truncation.  Agent config default is 100 but the SDK
