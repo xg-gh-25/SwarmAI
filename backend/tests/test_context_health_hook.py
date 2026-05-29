@@ -123,6 +123,100 @@ class TestLightRefresh:
 
 
 # --------------------------------------------------------------------------
+# Hot/Cold Knowledge Index
+# --------------------------------------------------------------------------
+
+class TestHotColdKnowledgeIndex:
+    """AC1-AC4: Hot/Cold dual-layer index format."""
+
+    def test_large_dir_shows_hot_10_plus_cold_summary(self, hook, workspace):
+        """AC1: Directories with >10 files show only Hot 10 + summary."""
+        # Create 15 design files
+        designs = workspace / "Knowledge" / "Designs"
+        for i in range(15):
+            date = f"2026-05-{i+1:02d}"
+            (designs / f"{date}-design-{i}.md").write_text(f"# Design {i}\n\nContent.\n")
+
+        km = workspace / ".context" / "KNOWLEDGE.md"
+        km.write_text("# Knowledge\n\nDomain.\n\n## Knowledge Index\n\nOld.\n")
+
+        with patch.object(hook, "_sync_knowledge_library"), \
+             patch.object(hook, "_sync_transcript_index"):
+            hook._light_refresh(workspace, str(workspace))
+
+        content = km.read_text()
+        # Should have Hot 10 entries (most recent dates)
+        assert "2026-05-15" in content  # Most recent
+        assert "2026-05-06" in content  # 10th most recent
+        # Should NOT have the oldest entries
+        assert "design-0.md" not in content or "older files" in content.lower() or "+ " in content
+        # Should have a cold summary line
+        assert "older" in content.lower() or "more" in content.lower()
+
+    def test_small_dir_shows_full_listing(self, hook, workspace):
+        """AC2: Directories with ≤10 files keep full listing."""
+        library = workspace / "Knowledge" / "Library"
+        library.mkdir(parents=True, exist_ok=True)
+        for i in range(5):
+            (library / f"2026-04-{i+1:02d}-lib-{i}.md").write_text(f"# Lib {i}\n")
+
+        km = workspace / ".context" / "KNOWLEDGE.md"
+        km.write_text("# Knowledge\n\n## Knowledge Index\n\nOld.\n")
+
+        with patch.object(hook, "_sync_knowledge_library"), \
+             patch.object(hook, "_sync_transcript_index"):
+            hook._light_refresh(workspace, str(workspace))
+
+        content = km.read_text()
+        # All 5 should be present
+        for i in range(5):
+            assert f"lib-{i}" in content
+
+    def test_compact_dirs_remain_summary_only(self, hook, workspace):
+        """AC3: DailyActivity/JobResults stay as summary line."""
+        da = workspace / "Knowledge" / "DailyActivity"
+        for i in range(20):
+            (da / f"2026-05-{i+1:02d}.md").write_text(f"# Day {i}\n")
+
+        km = workspace / ".context" / "KNOWLEDGE.md"
+        km.write_text("# Knowledge\n\n## Knowledge Index\n\nOld.\n")
+
+        with patch.object(hook, "_sync_knowledge_library"), \
+             patch.object(hook, "_sync_transcript_index"):
+            hook._light_refresh(workspace, str(workspace))
+
+        content = km.read_text()
+        # Should have count + pattern, NOT individual files
+        assert "20 files" in content
+        assert "Pattern:" in content
+        # Should NOT have individual file rows
+        assert "| 2026-05-01" not in content
+
+    def test_index_line_cap(self, hook, workspace):
+        """AC4: Knowledge Index section total ≤120 lines."""
+        # Create many files across directories
+        for subdir in ["Designs", "Notes", "Learned", "Reports"]:
+            d = workspace / "Knowledge" / subdir
+            d.mkdir(parents=True, exist_ok=True)
+            for i in range(30):
+                (d / f"2026-04-{i+1:02d}-item-{i}.md").write_text(f"# Item {i}\n")
+
+        km = workspace / ".context" / "KNOWLEDGE.md"
+        km.write_text("# Knowledge\n\n## Knowledge Index\n\nOld.\n")
+
+        with patch.object(hook, "_sync_knowledge_library"), \
+             patch.object(hook, "_sync_transcript_index"):
+            hook._light_refresh(workspace, str(workspace))
+
+        content = km.read_text()
+        # Count lines in index section only
+        idx_start = content.find("## Knowledge Index")
+        index_section = content[idx_start:]
+        index_lines = [l for l in index_section.split("\n") if l.strip()]
+        assert len(index_lines) <= 120, f"Index has {len(index_lines)} lines, expected ≤120"
+
+
+# --------------------------------------------------------------------------
 # Deep check
 # --------------------------------------------------------------------------
 

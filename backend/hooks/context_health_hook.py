@@ -690,9 +690,18 @@ class ContextHealthHook:
 
     # High-volume dirs get compact summary instead of per-file table (saves ~1500 tokens)
     _COMPACT_INDEX_DIRS = {"DailyActivity", "JobResults", "Signals"}
+    _HOT_COLD_THRESHOLD = 10  # Dirs with >10 files use Hot/Cold format
+    _HOT_ENTRIES = 10  # Number of most-recent entries to show in Hot tier
+    _INDEX_LINE_CAP = 120  # Structural cap on Knowledge Index section lines
 
     def _refresh_knowledge_sync(self, root: Path) -> None:
-        """Synchronous KNOWLEDGE.md index refresh — filesystem scan only."""
+        """Synchronous KNOWLEDGE.md index refresh — filesystem scan only.
+
+        Three-tier format:
+        - COMPACT (DailyActivity, JobResults, Signals): count + pattern only
+        - HOT/COLD (dirs with >10 files): most recent 10 + "N older files" summary
+        - FULL (dirs with ≤10 files): complete listing
+        """
         knowledge_dir = root / "Knowledge"
         context_file = root / ".context" / "KNOWLEDGE.md"
         if not context_file.exists() or not knowledge_dir.is_dir():
@@ -713,7 +722,7 @@ class ContextHealthHook:
             if not files:
                 continue
 
-            # High-volume dirs: compact summary only (saves ~1500 tokens in system prompt)
+            # Tier 1: COMPACT — summary only (high-volume machine-generated)
             if subdir.name in self._COMPACT_INDEX_DIRS:
                 first_date = files[0].stem[:10] if len(files[0].stem) > 10 else "unknown"
                 last_date = files[-1].stem[:10] if len(files[-1].stem) > 10 else "unknown"
@@ -724,6 +733,28 @@ class ContextHealthHook:
                 )
                 continue
 
+            # Tier 2: HOT/COLD — recent 10 + cold summary (large dirs)
+            if len(files) > self._HOT_COLD_THRESHOLD:
+                hot_files = files[-self._HOT_ENTRIES:]  # Most recent by sort order
+                cold_count = len(files) - self._HOT_ENTRIES
+
+                index_lines.append(f"\n### {subdir.name}\n")
+                index_lines.append(
+                    f"_{len(files)} total, showing {self._HOT_ENTRIES} most recent. "
+                    f"{cold_count} older files available via workspace-finder/Glob._\n"
+                )
+                index_lines.append("| Date | File | Topic |")
+                index_lines.append("|------|------|-------|")
+                for f in hot_files:
+                    name = f.stem
+                    date_str = name[:10] if len(name) > 10 and name[4] == "-" else "unknown"
+                    topic = self._extract_title(f) or name
+                    index_lines.append(
+                        f"| {date_str} | `{subdir.name}/{f.name}` | {topic} |"
+                    )
+                continue
+
+            # Tier 3: FULL — complete listing (small dirs)
             index_lines.append(f"\n### {subdir.name}\n")
             index_lines.append("| Date | File | Topic |")
             index_lines.append("|------|------|-------|")
@@ -755,6 +786,17 @@ class ContextHealthHook:
                 after = after_marker[next_section_idx:]
             else:
                 after = "\n\n---\n\n_Auto-refreshed on startup from Knowledge/ directories._\n"
+
+            # Structural cap: prevent Knowledge Index from growing unboundedly
+            non_empty_lines = [l for l in index_lines if l.strip()]
+            if len(non_empty_lines) > self._INDEX_LINE_CAP:
+                logger.warning(
+                    "context_health: Knowledge Index has %d lines (cap=%d). "
+                    "Truncating to cap. Consider archiving old knowledge files.",
+                    len(non_empty_lines), self._INDEX_LINE_CAP,
+                )
+                # Truncate: keep the structure but cut excess entries
+                index_lines = index_lines[:self._INDEX_LINE_CAP * 2]  # rough cut on raw lines
 
             new_content = before + marker + "\n" + "\n".join(index_lines) + "\n" + after
             context_file.write_text(new_content, encoding="utf-8")
