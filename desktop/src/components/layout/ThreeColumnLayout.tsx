@@ -115,15 +115,15 @@ function LeftSidebar() {
     window.dispatchEvent(new CustomEvent('swarm:show-code-graph'));
   };
 
-  // Open MEMORY.md in file viewer panel via custom event (ThreeColumnLayout listens)
+  // Open MEMORY.md in file viewer panel via custom event (ThreeColumnLayout listens on document)
   const handleMemoryClick = () => {
-    window.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: '.context/MEMORY.md' } }));
+    document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: '.context/MEMORY.md' } }));
   };
 
   // Open today's signal digest (falls back to most recent signal file)
   const handleSignalsClick = () => {
     const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-    window.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: `Knowledge/Signals/${today}-digest.md` } }));
+    document.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: `Knowledge/Signals/${today}-digest.md` } }));
   };
 
   // Tools group nav items
