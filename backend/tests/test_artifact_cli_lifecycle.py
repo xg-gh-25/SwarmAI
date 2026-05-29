@@ -275,6 +275,43 @@ class TestAutoRecordStage:
         # The failure must surface SOMEWHERE visible — not be swallowed silently.
         assert "auto-record" in captured.err.lower() or "simulated append failure" in captured.err.lower()
 
+    def test_auto_record_stub_does_not_bypass_completion_gate(self, workspace, capsys, monkeypatch):
+        """The auto-recorded stub must mark status='recorded', NOT 'completed',
+        so it cannot silently satisfy the completion gate (stage_doc_consumed
+        bypass). The agent must still run-update to properly complete the stage."""
+        import sys
+        from pathlib import Path as _P
+        _scripts_dir = str(_P(__file__).resolve().parent.parent / "scripts")
+        if _scripts_dir not in sys.path:
+            sys.path.insert(0, _scripts_dir)
+        import scripts.artifact_cli as cli
+        from core.artifact_registry import ArtifactRegistry
+        import pipeline_validator
+
+        _create_run(workspace, "TestProject", "run_stub", "running", stages=[])
+        reg = ArtifactRegistry(workspace)
+        monkeypatch.setattr(pipeline_validator, "validate_artifact_data", lambda *a, **k: [])
+
+        class _Args:
+            project = "TestProject"
+            type = "changeset"
+            data = '{"branch":"x","commits":["abc1234"],"files_changed":["f.py"]}'
+            producer = "s_autonomous-pipeline"
+            summary = "test"
+            topic = ""
+            stage = "build"
+            run_id = "run_stub"
+
+        cli.cmd_publish(_Args(), reg)
+        run_file = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_stub" / "run.json"
+        data = _read_run(run_file)
+        build = next(s for s in data["stages"] if s["stage"] == "build")
+        # Stub captures the artifact link but is NOT 'completed' and has no
+        # stage_doc_consumed — so the completion gate still requires run-update.
+        assert build["status"] == "recorded"
+        assert build.get("artifact_id")  # link preserved (the safety-net value)
+        assert "stage_doc_consumed" not in build
+
 
 class TestAdvanceDriftGuard:
     """AC4: advancing past a completed stage with no artifact_id warns."""

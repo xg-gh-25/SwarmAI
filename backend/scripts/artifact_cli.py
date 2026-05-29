@@ -147,7 +147,11 @@ def _append_stage_to_run(
     stages.append(stage_record)
     data["stages"] = stages
     data["updated_at"] = datetime.now(timezone.utc).isoformat()
-    run_file.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    # Match the formatting of every other run.json writer (cmd_run_update,
+    # cmd_run_create, etc.): indent=2, default ensure_ascii, utf-8. Avoids the
+    # same file flipping between raw-UTF8 and \uXXXX escapes depending on which
+    # command wrote last (noisy diffs in .artifacts/runs/*/run.json).
+    run_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 def cmd_publish(args, reg: ArtifactRegistry) -> None:
@@ -250,12 +254,23 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
                     if active_run:
                         target_run_id = active_run.get("id", "")
                 if target_run_id:
+                    # Auto-record is a SAFETY NET, not a substitute for run-update.
+                    # It captures the artifact_id so a forgotten run-update never
+                    # loses the stage→artifact link. But it deliberately marks the
+                    # stage "recorded" (NOT "completed") and omits stage_doc_consumed:
+                    #   - The completion gate (run-update --status completed) only
+                    #     accepts "completed"/"done", so a stub alone can't close
+                    #     the pipeline — the agent must still run-update to mark the
+                    #     stage properly complete with stage_doc_consumed + token_cost.
+                    #   - This preserves the stage_doc_consumed mechanical gate: the
+                    #     stub can't bypass it, because "recorded" != "completed".
+                    # run-update REPLACES (not skips) an existing record, so the
+                    # later enrichment correctly upgrades the stub.
                     stage_record = {
                         "stage": stage,
-                        "status": "completed",
+                        "status": "recorded",
                         "artifact_id": artifact_id,
-                        "token_cost": 0,  # Caller can update later if needed
-                        "decisions": [],
+                        "auto_recorded": True,
                     }
                     _append_stage_to_run(args.project, target_run_id, stage_record, reg)
                     result["auto_recorded"] = True
