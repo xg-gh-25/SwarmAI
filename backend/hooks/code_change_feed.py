@@ -30,6 +30,14 @@ from core.initialization_manager import initialization_manager
 
 logger = logging.getLogger(__name__)
 
+# Lazy-safe imports for code_intel (may not be available in all environments)
+try:
+    from core.code_intel import load_project_graph
+    from core.code_intel.parser import parse_file
+    _CODE_INTEL_AVAILABLE = True
+except ImportError:
+    _CODE_INTEL_AVAILABLE = False
+
 # Paths that never produce proposals (content, not architecture)
 # PE-6 fix: include common test paths for both SwarmWS and swarmai codebases
 _SKIP_PREFIXES = (
@@ -301,6 +309,10 @@ class CodeChangeFeed:
             # raises, we retry on next invocation rather than losing the commit.
             self._persist_last_commit(state_file, commit_hash)
 
+            # P3: Re-index changed code files into code_intel graph (best-effort).
+            # Runs AFTER persist — reindex is non-critical, must not block state tracking.
+            _reindex_changed_files(file_changes, codebase_path)
+
             logger.info(
                 "code_change_feed: codebase commit %s analyzed — %d arch changes detected",
                 commit_hash[:8], len(arch_changes),
@@ -374,3 +386,80 @@ class CodeChangeFeed:
                 max_confidence,
                 commit_hash[:8],
             )
+
+
+# ── P3: Code Intelligence Graph Auto-Rebuild ──────────────────────────
+
+
+# Extensions to re-index into code_intel (subset of _CODE_EXTENSIONS)
+_REINDEX_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx"}
+
+
+def _reindex_changed_files(
+    file_changes: list[tuple[str, str]],
+    repo_root: str,
+) -> int:
+    """Re-index changed code files into the project's code_intel graph.
+
+    Called after architecture analysis. Non-blocking — all errors caught.
+    Only fires if the project has an existing code_intel.db.
+
+    Args:
+        file_changes: List of (status, path) from git name-status.
+        repo_root: Absolute path to the repo root directory.
+
+    Returns:
+        Number of files successfully re-indexed.
+    """
+    try:
+        if not _CODE_INTEL_AVAILABLE:
+            return 0
+
+        graph = load_project_graph("SwarmAI")
+        if graph is None:
+            return 0
+
+        root = Path(repo_root)
+        parse_results = []
+
+        for status, rel_path in file_changes:
+            # Skip deletions (can't parse a deleted file)
+            # Note: renames (R) re-index at new path but don't clean old path nodes.
+            # Known limitation — old nodes become orphans until next full rebuild.
+            if status == "D":
+                continue
+
+            # Skip non-code files
+            if Path(rel_path).suffix not in _REINDEX_EXTENSIONS:
+                continue
+
+            # Skip test files (not part of the architecture graph)
+            if any(rel_path.startswith(p) for p in _SKIP_PREFIXES):
+                continue
+
+            # File must exist on disk to parse
+            abs_path = root / rel_path
+            if not abs_path.is_file():
+                continue
+
+            # Parse the file
+            try:
+                result = parse_file(abs_path, root)
+                if result.nodes:
+                    parse_results.append(result)
+            except Exception as exc:
+                logger.debug("code_change_feed: reindex parse failed for %s: %s", rel_path, exc)
+                continue
+
+        if parse_results:
+            graph.bulk_insert(parse_results)
+            logger.info(
+                "code_change_feed: re-indexed %d file(s) into code_intel",
+                len(parse_results),
+            )
+
+        return len(parse_results)
+
+    except Exception as exc:
+        logger.debug("code_change_feed: reindex failed: %s", exc)
+        return 0

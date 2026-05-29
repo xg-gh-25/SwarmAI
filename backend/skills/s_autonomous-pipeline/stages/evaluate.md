@@ -86,6 +86,59 @@ Adjust **Feasibility** score:
 
 **Skip** when no `code_intel.db` exists or requirement is research-only.
 
+### Anti-Repetition Check (BLOCKING)
+
+**Before producing the final GO/DEFER recommendation, cross-reference
+IMPROVEMENT.md "What Failed" for structurally similar approaches.**
+
+This prevents the system from re-attempting approaches that previously
+failed — the ΩmegaWiki "anti-repetition memory" pattern. Failed experiments
+aren't just archived; they actively prevent dead-end exploration.
+
+**Process:**
+1. Read the project's IMPROVEMENT.md "What Failed" section
+2. For each `[pitfall]` entry, check: does the current requirement's
+   proposed approach structurally resemble this failed approach?
+   - Same module/subsystem targeted
+   - Same technique (e.g., "big-bang refactor", "shared mutex", "brute-force replay")
+   - Same architectural pattern (e.g., "multi-writer", "polling loop", "silent fallback")
+3. If a match is found:
+   a. **Cite the specific failed entry** (date + first line)
+   b. **Explain why this attempt is structurally different** — what changed
+      since the failure? Different constraints? Different scope? New capabilities?
+   c. If you CANNOT articulate a structural difference → **REJECT** with:
+      `"REJECT: structurally similar to failed approach [date]: [summary]"`
+
+**Output format (include in evaluation artifact):**
+```json
+{
+  "anti_repetition_check": {
+    "entries_scanned": 12,
+    "matches_found": 1,
+    "matches": [
+      {
+        "entry": "2026-04-01: pytest-xdist — 12 commits, 8 days, 970 lines...",
+        "similarity": "shared conftest approach for test isolation",
+        "verdict": "PROCEED — different scope: this adds a hook, not conftest rewrite",
+        "structural_difference": "Pure additive hook vs modifying shared infrastructure"
+      }
+    ]
+  }
+}
+```
+
+**When 0 matches found:** Still output the check result with `entries_scanned`
+count — proves the check ran, not that it was skipped.
+
+**When IMPROVEMENT.md is missing or has no "What Failed" section:**
+Output `entries_scanned: 0, matches_found: 0` and proceed. The check is
+satisfied (nothing to match against). Do NOT skip or error.
+
+**Why this exists:** IMPROVEMENT.md accumulated 40+ failure entries over 3 months.
+Without active cross-referencing, the same patterns recur (COE03: big-bang refactor,
+C023: 3x daemon hang from same root cause). The check costs 30 seconds of reading;
+re-discovering a failure costs hours.
+
 ### Goal Mode Detection
 
 If the requirement describes an open-ended improvement (not a bounded feature),
