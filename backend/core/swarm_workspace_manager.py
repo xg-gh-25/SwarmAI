@@ -1203,21 +1203,32 @@ class SwarmWorkspaceManager:
             return sorted(entries, key=lambda e: e["date"])
 
         def _build_index() -> str:
-            """Build the Knowledge Index section content."""
+            """Build the Knowledge Index section content.
+
+            Three-tier format:
+            - COMPACT: DailyActivity, JobResults, Signals → count + pattern only
+            - HOT/COLD: dirs with >10 files → recent 10 + cold summary
+            - FULL: dirs with ≤10 files → complete listing
+            """
             knowledge_dir = root / "Knowledge"
 
+            _COMPACT_DIRS = {"DailyActivity", "JobResults", "Signals"}
+            _HOT_COLD_THRESHOLD = 10
+            _HOT_ENTRIES = 10
+
             # Define sections to scan: (display name, directory, path prefix)
-            # Excludes: DailyActivity (ephemeral), Archives (auto-pruned),
-            #           Signals/JobResults (machine-generated, high-volume),
-            #           Pollinate (nested media packages, not flat .md files)
             sections = [
+                ("DailyActivity", knowledge_dir / "DailyActivity", "Knowledge/DailyActivity/"),
+                ("DailyBriefs", knowledge_dir / "DailyBriefs", "Knowledge/DailyBriefs/"),
                 ("Designs", knowledge_dir / "Designs", "Knowledge/Designs/"),
+                ("Handoffs", knowledge_dir / "Handoffs", "Knowledge/Handoffs/"),
+                ("JobResults", knowledge_dir / "JobResults", "Knowledge/JobResults/"),
+                ("Learned", knowledge_dir / "Learned", "Knowledge/Learned/"),
+                ("Library", knowledge_dir / "Library", "Knowledge/Library/"),
+                ("Meetings", knowledge_dir / "Meetings", "Knowledge/Meetings/"),
                 ("Notes", knowledge_dir / "Notes", "Knowledge/Notes/"),
                 ("Reports", knowledge_dir / "Reports", "Knowledge/Reports/"),
-                ("Meetings", knowledge_dir / "Meetings", "Knowledge/Meetings/"),
-                ("Library", knowledge_dir / "Library", "Knowledge/Library/"),
-                ("Handoffs", knowledge_dir / "Handoffs", "Knowledge/Handoffs/"),
-                ("Learned", knowledge_dir / "Learned", "Knowledge/Learned/"),
+                ("Signals", knowledge_dir / "Signals", "Knowledge/Signals/"),
             ]
 
             lines = [INDEX_MARKER, ""]
@@ -1228,6 +1239,39 @@ class SwarmWorkspaceManager:
                 if not entries:
                     continue
                 total_files += len(entries)
+
+                # Tier 1: COMPACT — summary only
+                if section_name in _COMPACT_DIRS:
+                    first_date = entries[0]["date"]
+                    last_date = entries[-1]["date"]
+                    lines.append(f"### {section_name}")
+                    lines.append("")
+                    lines.append(
+                        f"{len(entries)} files from {first_date} to {last_date}. "
+                        f"Pattern: `{path_prefix}YYYY-MM-DD-*.md`. Read on demand."
+                    )
+                    lines.append("")
+                    continue
+
+                # Tier 2: HOT/COLD — recent 10 + cold summary
+                if len(entries) > _HOT_COLD_THRESHOLD:
+                    hot_entries = entries[-_HOT_ENTRIES:]
+                    cold_count = len(entries) - _HOT_ENTRIES
+                    lines.append(f"### {section_name}")
+                    lines.append("")
+                    lines.append(
+                        f"_{len(entries)} total, showing {_HOT_ENTRIES} most recent. "
+                        f"{cold_count} older files available via workspace-finder/Glob._"
+                    )
+                    lines.append("")
+                    lines.append("| Date | File | Topic |")
+                    lines.append("|------|------|-------|")
+                    for e in hot_entries:
+                        lines.append(f"| {e['date']} | {e['file']} | {e['topic']} |")
+                    lines.append("")
+                    continue
+
+                # Tier 3: FULL — complete listing
                 lines.append(f"### {section_name}")
                 lines.append("")
                 lines.append("| Date | File | Topic |")
