@@ -394,14 +394,23 @@ Every architectural decision in SwarmAI traces back to six pillars, each earned 
 
 **Deep dive:** [Design Philosophy — Six Pillars of a Self-Improving System](https://github.com/xg-gh-25/SwarmAI/discussions/38)
 
+### 📘 The AI Agent Pitfall Guide (Ebook)
+
+23 pitfalls across architecture, memory, governance, delivery, and organizational cognition — distilled from 300+ sessions of running an autonomous AI system in production.
+
+| Version | Format | Link |
+|---------|--------|------|
+| English | PDF (59 pages) | [`docs/ai-agent-pitfall-guide-en.pdf`](./docs/ai-agent-pitfall-guide-en.pdf) |
+| 中文 | PDF (59 pages) | [`docs/ai-agent-pitfall-guide.pdf`](./docs/ai-agent-pitfall-guide.pdf) |
+
 ### Discussions — Deep Dives & Thought Leadership
 
-35 discussions across 5 themes. Not documentation — opinionated takes with production evidence.
+49 discussions across 5 themes. Not documentation — opinionated takes with production evidence.
 
 | Theme | Key Discussions |
 |-------|----------------|
 | **Foundations** | [Design Philosophy — Six Pillars](https://github.com/xg-gh-25/SwarmAI/discussions/38) · [Agent Harness Autonomy Levels](https://github.com/xg-gh-25/SwarmAI/discussions/33) · [Compound Intelligence](https://github.com/xg-gh-25/SwarmAI/discussions/7) |
-| **Architecture** | [Memory as Moat](https://github.com/xg-gh-25/SwarmAI/discussions/3) · [Multi-Skill > Multi-Agent](https://github.com/xg-gh-25/SwarmAI/discussions/12) · [DDD Cultivation](https://github.com/xg-gh-25/SwarmAI/discussions/9) |
+| **Architecture** | [Memory as Moat](https://github.com/xg-gh-25/SwarmAI/discussions/3) · [Single-Agent vs Multi-Agent](https://github.com/xg-gh-25/SwarmAI/discussions/43) · [DDD Cultivation](https://github.com/xg-gh-25/SwarmAI/discussions/9) · [Karpathy's LLM Wiki](https://github.com/xg-gh-25/SwarmAI/discussions/53) |
 | **Governance** | [Three-Layer Governance](https://github.com/xg-gh-25/SwarmAI/discussions/26) · [The Personality Trap](https://github.com/xg-gh-25/SwarmAI/discussions/31) · [Adversarial Review](https://github.com/xg-gh-25/SwarmAI/discussions/29) |
 | **Strategy** | [S×T Tension Matrix](https://github.com/xg-gh-25/SwarmAI/discussions/11) · [Same Pattern at Every Scale](https://github.com/xg-gh-25/SwarmAI/discussions/28) |
 
