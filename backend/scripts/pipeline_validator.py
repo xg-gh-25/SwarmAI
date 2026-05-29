@@ -76,13 +76,15 @@ STAGE_SCHEMAS: dict[str, dict[str, list[str]]] = {
         "recommended": ["approach", "data_model", "boundaries", "success_criteria"],
     },
     "build": {
-        "required": ["files_changed", "tdd"],  # V1.10.0: tdd metadata required
+        "required": ["files_changed", "tdd", "ac_coverage"],  # V1.17.0: ac_coverage required
         "recommended": ["commits", "diff_summary"],
         # tdd.smoke_tests must be > 0 when files_changed > 1 (Check 8)
+        # ac_coverage must map every PLAN AC to impl+test (Check 8f)
     },
     "review": {
         "required": [
             "approved",
+            "litmus_gate",        # V1.17.0: pre-gate verdict before adversarial
             "integration_trace",
             "runtime_patterns",   # V1.10.0: RP1-RP29 checklist evidence
             "findings_count",     # V1.10.0: explicit count (even if 0)
@@ -91,8 +93,8 @@ STAGE_SCHEMAS: dict[str, dict[str, list[str]]] = {
                          "operational_patterns", "wire_test"],
     },
     "test": {
-        "required": ["passed"],
-        "recommended": ["failed", "fixed", "coverage"],
+        "required": ["passed", "layers"],  # V1.17.0: layers required (3-layer test strategy)
+        "recommended": ["failed", "fixed", "coverage", "regressions"],
     },
     "deliver": {
         "required": [
@@ -129,10 +131,23 @@ STAGE_TEMPLATES: dict[str, dict] = {
     "build": {
         "files_changed": ["path/to/file.py"],
         "tdd": {"green_pass": True, "smoke_tests": 3, "red_count": 5, "green_count": 5},
+        "ac_coverage": [
+            {"ac": "AC1: User can login with email", "impl": "auth.py::login()",
+             "test": "test_auth.py::test_login_email", "verified": True},
+        ],
         "commits": ["abc1234"],
     },
     "review": {
         "approved": True,
+        "litmus_gate": {
+            "verdict": "PASS|BORDERLINE|FAIL",
+            "hf_checked": [True, True, True, True],  # exactly 4 bools, one per HF criterion
+            "soft_signal_count": 0,  # BORDERLINE when >= 3
+            "weak_areas": [],  # required non-empty when verdict=BORDERLINE
+            "evidence": "HF1: domain logic present (3 conditionals, 2 error handlers). "
+                        "HF2: 5/5 ACs identifiable (auth_middleware→AC1, rate_limiter→AC2...). "
+                        "HF3: no contradictions found. HF4: all 2 HTTP calls + 1 DB query wrapped.",
+        },
         "findings_count": 2,
         "integration_trace": {"checked": 5, "clean": True, "details": "symbol A → caller B verified"},
         "runtime_patterns": {
@@ -143,6 +158,11 @@ STAGE_TEMPLATES: dict[str, dict] = {
     "test": {
         "passed": True,
         "tests_new": 10, "tests_total": 50, "regressions": 0,
+        "layers": {
+            "ac_driven": {"run": True, "pass": 5},
+            "dependency_scoped": {"run": True, "tests": 12, "pass": 12},
+            "import_smoke": {"run": True, "modules": 3, "pass": 3},
+        },
     },
     "deliver": {
         "title": "Feature Name",
@@ -159,11 +179,14 @@ STAGE_TEMPLATES: dict[str, dict] = {
 
 # Depth requirements: nested fields that must exist for depth validation to pass
 STAGE_DEPTH: dict[str, dict[str, list[str]]] = {
-    "build": {"tdd": ["green_pass", "smoke_tests"]},
-    "review": {"runtime_patterns": ["checked", "patterns"], "integration_trace": ["checked"]},
+    "build": {"tdd": ["green_pass", "smoke_tests"], "ac_coverage": []},  # ac_coverage: list presence check (depth validates non-empty via Check 8f)
+    "test": {"layers": ["ac_driven"]},  # V1.17.0: layers.ac_driven must exist
+    "review": {"runtime_patterns": ["checked", "patterns"], "integration_trace": ["checked"],
+               "litmus_gate": ["verdict", "hf_checked", "evidence"]},
     "deliver": {
         "adversarial_review": ["profile_tier", "findings"],
         "completion_audit": ["all_green"],
+        "ac_verification": ["status"],  # F8: enforce AC verification step was recorded
     },
 }
 
@@ -1431,6 +1454,160 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
                 )
         if smoke_ok:
             checks_passed += 1
+
+        # Check 8f: AC Coverage Matrix — every PLAN AC must have impl+test in BUILD
+        checks_total += 1
+        ac_ok = True
+        if artifact_data:
+            ac_coverage = artifact_data.get("ac_coverage", [])
+            files_changed = artifact_data.get("files_changed", [])
+
+            # Structural: ac_coverage must be a non-empty list
+            if not isinstance(ac_coverage, list) or len(ac_coverage) == 0:
+                ac_ok = False
+                errors.append(
+                    "BUILD ac_coverage missing or empty: must map every PLAN acceptance "
+                    "criterion to its implementation file and test file. Publish ac_coverage "
+                    "as [{ac, impl, test, verified}] before advancing to REVIEW."
+                )
+            else:
+                # Validate each entry has required fields
+                for i, entry in enumerate(ac_coverage):
+                    if not isinstance(entry, dict):
+                        ac_ok = False
+                        errors.append(f"ac_coverage[{i}] must be a dict, got {type(entry).__name__}")
+                        continue
+                    ac_name = entry.get("ac", "")
+                    impl = entry.get("impl", "")
+                    test = entry.get("test", "")
+                    verified = entry.get("verified")
+
+                    if not ac_name:
+                        ac_ok = False
+                        errors.append(f"ac_coverage[{i}] missing 'ac' field (criterion text)")
+                    if not impl:
+                        ac_ok = False
+                        errors.append(
+                            f"ac_coverage[{i}] ('{ac_name[:50]}') missing 'impl' — "
+                            f"must reference implementation file::function"
+                        )
+                    if not test:
+                        ac_ok = False
+                        errors.append(
+                            f"ac_coverage[{i}] ('{ac_name[:50]}') missing 'test' — "
+                            f"must reference test file::test_function"
+                        )
+                    if verified is not True:
+                        ac_ok = False
+                        errors.append(
+                            f"ac_coverage[{i}] ('{ac_name[:50]}') not verified — "
+                            f"'verified' must be boolean true (test must pass before publish)"
+                        )
+
+                    # Cross-check impl file against files_changed (anti-fabrication)
+                    if impl and files_changed:
+                        impl_file = impl.split("::")[0].strip()
+                        if impl_file and not any(
+                            impl_file in fc or fc.endswith(impl_file)
+                            for fc in files_changed
+                        ):
+                            warnings.append(
+                                f"ac_coverage[{i}] impl '{impl_file}' not found in "
+                                f"files_changed — verify the reference is correct."
+                            )
+
+                # Cross-reference: load PLAN artifact ACs and check coverage
+                plan_stage = next(
+                    (s for s in stages_list if s.get("stage", s.get("name")) == "plan"),
+                    None,
+                )
+                if plan_stage and plan_stage.get("artifact_id"):
+                    plan_data = _load_artifact_data(project, run_id, plan_stage["artifact_id"])
+                    if plan_data:
+                        plan_acs = plan_data.get("acceptance_criteria", [])
+                        if plan_acs:
+                            # Build lookup: support both plan_ac_ref (identifier-based)
+                            # and text matching (substring-based)
+                            covered_refs = {
+                                entry.get("plan_ac_ref", "").strip()
+                                for entry in ac_coverage if entry.get("plan_ac_ref")
+                            }
+                            covered_texts = {entry.get("ac", "").strip() for entry in ac_coverage}
+
+                            for i, pac in enumerate(plan_acs):
+                                pac_str = pac.strip() if isinstance(pac, str) else str(pac).strip()
+
+                                # Strategy 1: identifier match (AC1, AC2, etc.)
+                                # Extract "ACN:" prefix from plan AC
+                                ac_id_match = re.match(r"^(AC\d+)", pac_str)
+                                ac_id = ac_id_match.group(1) if ac_id_match else None
+
+                                matched = False
+                                # Check by plan_ac_ref first (preferred, unambiguous)
+                                if ac_id and ac_id in covered_refs:
+                                    matched = True
+                                # Fallback: text matching (exact or substring)
+                                if not matched:
+                                    matched = any(
+                                        pac_str == cac or pac_str in cac
+                                        for cac in covered_texts
+                                    )
+
+                                if not matched:
+                                    ac_ok = False
+                                    errors.append(
+                                        f"AC not covered in BUILD: '{pac_str[:80]}' — "
+                                        f"appears in PLAN but has no ac_coverage entry. "
+                                        f"Every PLAN AC must be implemented and tested. "
+                                        f"Tip: add 'plan_ac_ref': '{ac_id or f'AC{i+1}'}' "
+                                        f"to the coverage entry for unambiguous matching."
+                                    )
+                            # F7: Reverse check — warn on scope creep
+                            # Pre-extract plan AC identifiers for efficient lookup
+                            plan_ac_ids = set()
+                            plan_ac_texts = set()
+                            for p in plan_acs:
+                                p_str = p.strip() if isinstance(p, str) else str(p).strip()
+                                plan_ac_texts.add(p_str)
+                                m = re.match(r"^(AC\d+)", p_str)
+                                if m:
+                                    plan_ac_ids.add(m.group(1))
+
+                            for entry in ac_coverage:
+                                entry_ac = entry.get("ac", "").strip()
+                                entry_ref = entry.get("plan_ac_ref", "").strip()
+                                reverse_matched = False
+                                # Match by plan_ac_ref identifier
+                                if entry_ref and entry_ref in plan_ac_ids:
+                                    reverse_matched = True
+                                # Fallback: text matching
+                                if not reverse_matched:
+                                    reverse_matched = any(
+                                        p in entry_ac or entry_ac in p
+                                        for p in plan_ac_texts
+                                    )
+                                if not reverse_matched and entry_ac:
+                                    warnings.append(
+                                        f"Scope creep: ac_coverage entry '{entry_ac[:60]}' "
+                                        f"has no matching PLAN AC. BUILD may have added "
+                                        f"scope beyond what was planned."
+                                    )
+                    else:
+                        # Plan artifact exists but couldn't be loaded
+                        warnings.append(
+                            "Could not load PLAN artifact for AC cross-reference — "
+                            "structural checks passed but completeness not verified."
+                        )
+        else:
+            # artifact_data is None but artifact_id exists — corrupt/missing file
+            if _art_id:
+                ac_ok = False
+                errors.append(
+                    "BUILD artifact data could not be loaded — ac_coverage check failed. "
+                    "Verify the artifact file exists and contains valid JSON."
+                )
+        if ac_ok:
+            checks_passed += 1
     elif stage == "review":
         # Check 8b: Integration trace must be present in review artifact
         # Use pre-loaded artifact_data (F1/F2 fix)
@@ -1508,12 +1685,141 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
                         f"Review completeness: build touched {len(code_files)} code files "
                         f"but REVIEW stage has no artifact_id. The review was skipped entirely."
                     )
+
+        # Check 8e: Litmus gate must be present, structurally valid, and semantically consistent
+        checks_total += 1
+        litmus_ok = True
+        if artifact_data:
+            litmus = artifact_data.get("litmus_gate", {})
+            if not isinstance(litmus, dict):
+                litmus_ok = False
+                errors.append(
+                    "Litmus gate missing: review artifact must include 'litmus_gate' with "
+                    "verdict (PASS/BORDERLINE/FAIL), hf_checked (4 booleans), and evidence."
+                )
+            else:
+                verdict = litmus.get("verdict", "")
+                hf_checked = litmus.get("hf_checked", [])
+                evidence = litmus.get("evidence", "")
+                weak_areas = litmus.get("weak_areas", [])
+
+                # --- Structural checks ---
+                if verdict not in ("PASS", "BORDERLINE", "FAIL"):
+                    litmus_ok = False
+                    errors.append(
+                        f"Litmus gate invalid verdict: '{verdict}'. Must be PASS, BORDERLINE, or FAIL."
+                    )
+                if not isinstance(hf_checked, list) or len(hf_checked) != 4:
+                    litmus_ok = False
+                    errors.append(
+                        f"Litmus gate hf_checked must be a list of exactly 4 booleans "
+                        f"(HF1-HF4). Got: {hf_checked!r}"
+                    )
+                elif not all(isinstance(x, bool) for x in hf_checked):
+                    litmus_ok = False
+                    errors.append(
+                        f"Litmus gate hf_checked elements must all be booleans. "
+                        f"Got: {hf_checked!r}"
+                    )
+                if not evidence or len(str(evidence)) < 20:
+                    litmus_ok = False
+                    errors.append(
+                        "Litmus gate evidence too short: must provide per-criterion "
+                        "reasoning (>20 chars). Empty verdicts are not auditable."
+                    )
+
+                # --- Semantic consistency checks ---
+                # FAIL verdict must not coexist with approved=true
+                if verdict == "FAIL" and artifact_data.get("approved", False):
+                    litmus_ok = False
+                    errors.append(
+                        "Litmus FAIL verdict contradicts approved=true. Cannot approve "
+                        "review when litmus gate failed — must return to BUILD for rework."
+                    )
+                # FAIL verdict must have at least one hf_checked=False
+                if verdict == "FAIL" and isinstance(hf_checked, list) and len(hf_checked) == 4:
+                    if all(hf_checked):
+                        litmus_ok = False
+                        errors.append(
+                            "Litmus FAIL verdict but all hf_checked are True — contradiction. "
+                            "A FAIL must identify which hard-failure criterion triggered it."
+                        )
+                # BORDERLINE verdict must have non-empty weak_areas
+                if verdict == "BORDERLINE":
+                    if not isinstance(weak_areas, list) or len(weak_areas) == 0:
+                        litmus_ok = False
+                        errors.append(
+                            "Litmus BORDERLINE verdict requires non-empty 'weak_areas' list "
+                            "for adversarial focus injection. Cannot declare BORDERLINE without "
+                            "identifying which soft signals triggered it."
+                        )
+                # Evidence must reference at least 2 of HF1-HF4 by name (anti-generic)
+                if evidence and verdict in ("PASS", "BORDERLINE", "FAIL"):
+                    hf_refs = sum(1 for tag in ("HF1", "HF2", "HF3", "HF4") if tag in str(evidence))
+                    if hf_refs < 2:
+                        litmus_ok = False
+                        errors.append(
+                            f"Litmus evidence must reference at least 2 of HF1/HF2/HF3/HF4 "
+                            f"by name to demonstrate per-criterion analysis. Found {hf_refs} "
+                            f"references. Generic evidence is not auditable."
+                        )
+        if litmus_ok:
+            checks_passed += 1
+    elif stage == "test":
+        # Check 8g: TEST layers must have ac_driven.run=true for non-trivial profiles
+        checks_total += 1
+        test_layers_ok = True
+        _skip_profiles = ("trivial", "research", "docs")
+        _block_profiles = ("full", "bugfix")  # F11: BLOCK not WARN for quality profiles
+        if artifact_data and profile not in _skip_profiles:
+            layers = artifact_data.get("layers", {})
+            if not isinstance(layers, dict) or not layers:
+                test_layers_ok = False
+                msg = ("TEST artifact missing 'layers' — 3-layer test strategy "
+                       "(ac_driven, dependency_scoped, import_smoke) not evidenced. "
+                       "Run AC-driven tests from BUILD ac_coverage before advancing.")
+                if profile in _block_profiles:
+                    errors.append(msg)
+                else:
+                    warnings.append(msg)
+            else:
+                ac_driven = layers.get("ac_driven", {})
+                if not isinstance(ac_driven, dict) or not ac_driven.get("run"):
+                    test_layers_ok = False
+                    msg = ("TEST layers.ac_driven.run is not true — AC-driven verification "
+                           "did not execute. BUILD's ac_coverage claims are unverified.")
+                    if profile in _block_profiles:
+                        errors.append(msg)
+                    else:
+                        warnings.append(msg)
+
+                # F5: Cross-verify ac_driven.pass count against BUILD ac_coverage count
+                if ac_driven.get("run"):
+                    ac_pass_count = ac_driven.get("pass", 0)
+                    # Load BUILD artifact to get ac_coverage count
+                    build_stage = next(
+                        (s for s in stages_list if s.get("stage", s.get("name")) == "build"),
+                        None,
+                    )
+                    if build_stage and build_stage.get("artifact_id"):
+                        build_data = _load_artifact_data(project, run_id, build_stage["artifact_id"])
+                        if build_data:
+                            ac_count = len(build_data.get("ac_coverage", []))
+                            if ac_count > 0 and ac_pass_count < ac_count:
+                                test_layers_ok = False
+                                errors.append(
+                                    f"TEST ac_driven.pass ({ac_pass_count}) < BUILD ac_coverage "
+                                    f"count ({ac_count}). Not all AC tests passed — "
+                                    f"BUILD's coverage claims are not fully verified."
+                                )
+        if test_layers_ok:
+            checks_passed += 1
     else:
         checks_passed += 1  # Auto-pass for other stages
 
     # --- Check 9: Depth validation (L2) — field values indicate real work ---
     # Only runs when artifact data is available (L0/L1 catch missing data)
-    if artifact_data and stage in ("review", "deliver", "build"):
+    if artifact_data and stage in ("review", "deliver", "build", "test"):
         depth_errors = _check_depth(stage, artifact_data, profile)
         errors.extend(depth_errors)
         if not depth_errors:
@@ -1527,6 +1833,15 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
         quality = artifact_data.get("quality", {})
         conf = artifact_data.get("confidence_score", {})
         has_override = run.get("human_override", False)
+
+        # F12: human_override must have audit trail
+        if has_override:
+            override_reason = run.get("override_reason", "")
+            if not override_reason or len(str(override_reason)) < 20:
+                warnings.append(
+                    "human_override is set but 'override_reason' is missing or too short "
+                    "(< 20 chars). Override should include justification for audit trail."
+                )
 
         if isinstance(quality, dict) and "push_ready" in quality:
             # V2 path: explicit binary gate

@@ -640,13 +640,62 @@ SDD CHECK:
 and `date('now')` UTC mismatch — both passed pipeline because no check verified
 against current docs. Training data goes stale; official docs don't.
 
+## Self-Verification: AC Coverage Matrix (MANDATORY before publish)
+
+**After all TDD cycles complete, before publishing the artifact:**
+
+Walk through every Acceptance Criterion from the PLAN stage and produce a coverage
+matrix. This is your "exam check before handing in" — you verify completeness, not
+the reviewer.
+
+### Procedure
+
+1. Read the PLAN artifact's `acceptance_criteria` list
+2. For each AC, identify:
+   - `impl`: the file + function/class that implements it (e.g., `auth.py::login()`)
+   - `test`: the test file + test function that verifies it (e.g., `test_auth.py::test_login_email`)
+   - `verified`: did the test pass? (must be `true`)
+3. If you cannot identify impl or test for an AC → you are NOT DONE. Go back and implement/test it.
+4. Include the matrix in the artifact as `ac_coverage`
+
+### Format
+
+```json
+"ac_coverage": [
+  {"ac": "AC1: User can login with email", "impl": "auth.py::login()", "test": "test_auth.py::test_login_email", "verified": true},
+  {"ac": "AC2: Invalid email returns 400", "impl": "auth.py::login()", "test": "test_auth.py::test_login_invalid_email", "verified": true},
+  {"ac": "AC3: Rate limit after 5 attempts", "impl": "auth.py::_check_rate_limit()", "test": "test_auth.py::test_rate_limit", "verified": true}
+]
+```
+
+### Rules
+
+- **Every** PLAN AC must appear. Missing = you didn't finish.
+- `impl` must be specific (`file::symbol`), not vague ("somewhere in auth module")
+  - Python: `auth.py::login()` | TypeScript: `Auth.tsx::useAuth()` | Rust: `auth.rs::login`
+- `test` must be specific (`test_file::test_function`), not "tests exist"
+- `verified` must be `true`. If test doesn't pass, fix it before publishing.
+- `plan_ac_ref` (optional but recommended): the AC identifier (e.g., "AC1", "AC2")
+  for unambiguous cross-reference with PLAN. If omitted, validator uses text matching.
+- **Validator enforcement:** Check 8f will BLOCK if ac_coverage is missing, incomplete,
+  or doesn't cover all PLAN ACs. You cannot advance to REVIEW without it.
+
+### Why this exists
+
+12 pipeline runs shipped with "passed" status but features broken in production.
+Root cause: BUILD could skip ACs without detection — validator only checked
+`tdd.green_pass` (tests that WERE written pass) but not "all required tests exist."
+This matrix forces explicit mapping: AC → code → test → verified.
+
+---
+
 ## Artifact Publish
 
 ```bash
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
   --type changeset --producer s_autonomous-pipeline \
   --summary "<N> files changed, <M> commits, TDD: <red>/<green>/<verify>" --stage build \
-  --data '{"branch":"...","commits":[...],"files_changed":[...],"diff_summary":"...","tdd":{"acceptance_criteria_count":N,"tests_generated":M,"red_failures":K,"green_pass":true,"regressions":0,"smoke_tests":S,"smoke_crashes_caught":C,"user_path_traces":T,"user_path_bugs_found":B,"probes":P,"probe_bugs_found":Q}}'
+  --data '{"branch":"...","commits":[...],"files_changed":[...],"diff_summary":"...","tdd":{"acceptance_criteria_count":N,"tests_generated":M,"red_failures":K,"green_pass":true,"regressions":0,"smoke_tests":S,"smoke_crashes_caught":C,"user_path_traces":T,"user_path_bugs_found":B,"probes":P,"probe_bugs_found":Q},"ac_coverage":[{"ac":"AC1: ...","impl":"file.py::func()","test":"test_file.py::test_func","verified":true}]}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state review
 ```
 

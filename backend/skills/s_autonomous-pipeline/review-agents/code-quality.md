@@ -59,6 +59,17 @@ usage — assumptions are implicit and unverified."
 - "Process exit releases all resources" (WRONG: child processes may orphan)
 - "Path exists check + path use is safe" (WRONG: TOCTOU race)
 
+## Focus: Bugs and Logic Holes (Not Gaming Vectors)
+
+Your job is to find **real bugs** — logic errors, wiring failures, missing edge cases,
+incorrect assumptions. The builder's failure mode is inattention and incomplete recall,
+NOT adversarial intent. Do not enumerate theoretical ways the builder could "game" the
+system. If you identify ONE critical gaming vector that is likely in practice, flag it
+as a secondary note — but never at the expense of finding real bugs.
+
+Note: The Mechanism Assumption Attack check above remains mandatory — it tests whether
+code handles reality correctly, not whether the builder has adversarial intent.
+
 ## Anti-Rationalization
 
 | Agent Shortcut | Required Response |

@@ -165,6 +165,11 @@ COMPLETION AUDIT — Verify before declaring done.
    | 2 | AC text...          | [no evidence found]           | ❌ |
 
 2.5. INDEPENDENT AC VERIFICATION (Pre-flight for Adversarial)
+   NOTE: TEST stage confirmed tests PASS (execution). This step confirms tests
+   VERIFY THE RIGHT THING (code review). Passing ≠ correct verification —
+   a test can pass while testing the wrong behavior (C011: 57 green tests,
+   feature 100% broken because tests validated implementation, not spec).
+
    For each AC → test mapping claimed in Step 2:
 
    a. READ the test file and function body (fresh read, not from memory)
@@ -286,6 +291,18 @@ to write `status: completed` until the validator passes.
 | **research, docs** | Skip entirely | No code changes |
 
 ---
+
+#### Step 0.5: Inherit REVIEW Context
+
+Before dispatching specialists, check REVIEW's litmus verdict:
+
+```bash
+python backend/scripts/artifact_cli.py discover --project <PROJECT> --types review --full
+```
+
+If REVIEW litmus was BORDERLINE, extract `weak_areas` and inject into ALL
+specialist prompts as priority focus: `"REVIEW litmus flagged weak areas:
+{weak_areas}. Prioritize these in your analysis."`
 
 #### Step 1: Scope Detection
 
