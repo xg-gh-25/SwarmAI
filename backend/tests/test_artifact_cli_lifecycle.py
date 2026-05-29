@@ -311,3 +311,18 @@ class TestAdvanceDriftGuard:
         cli._auto_validate_before_advance("TestProject", "complete")
         captured = capsys.readouterr()
         assert "no artifact_id" not in captured.err
+
+    def test_advance_no_warn_for_goal_cycle(self, workspace, capsys, monkeypatch):
+        """goal_cycle commits incrementally and has no artifact — no drift warning."""
+        import scripts.artifact_cli as cli
+
+        _create_run(workspace, "TestProject", "run_goal", "running",
+                    stages=[{"stage": "goal_cycle", "status": "completed"}])
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        import subprocess as _sp
+        monkeypatch.setattr(_sp, "run",
+                            lambda *a, **k: type("R", (), {"stdout": '{"valid": true, "warnings": []}', "returncode": 0})())
+
+        cli._auto_validate_before_advance("TestProject", "complete")
+        captured = capsys.readouterr()
+        assert "no artifact_id" not in captured.err

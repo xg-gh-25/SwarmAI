@@ -370,10 +370,12 @@ def _auto_validate_before_advance(project: str, next_state: str) -> None:
     # Drift guard: a completed stage that produced NO artifact usually means a
     # silently-failed publish (the exact failure this tooling has hit before —
     # publish returns an error to stderr but advance proceeds anyway, leaving
-    # state ahead of reality). Warn, don't block: `reflect` legitimately has no
-    # artifact, and some recovery flows record stages manually.
+    # state ahead of reality). Warn, don't block. Some stages legitimately
+    # produce no artifact (reflect closes the loop; goal_cycle commits
+    # incrementally) — exempt them to avoid false-positive noise.
+    _ARTIFACTLESS_STAGES = {"reflect", "goal_cycle"}
     if current_record is not None and not current_record.get("artifact_id") \
-            and current_stage != "reflect":
+            and current_stage not in _ARTIFACTLESS_STAGES:
         print(json.dumps({
             "warning": f"stage '{current_stage}' is marked completed but has no "
                        f"artifact_id — its publish may have failed silently. "
