@@ -58,7 +58,7 @@ class TestLoad:
         assert tmp_config.exists()
         assert result["use_bedrock"] is True
         assert result["aws_region"] == "us-east-1"
-        assert result["default_model"] == "claude-opus-4-6"
+        assert result["default_model"] == "claude-opus-4-8"
 
     def test_load_falls_back_on_empty_file(self, mgr, tmp_config):
         """Empty config file → defaults."""

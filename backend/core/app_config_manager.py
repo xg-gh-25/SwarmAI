@@ -54,12 +54,14 @@ SECRET_KEYS: frozenset[str] = frozenset({
 DEFAULT_CONFIG: dict[str, Any] = {
     "use_bedrock": True,
     "aws_region": "us-east-1",
-    "default_model": "claude-opus-4-6",
+    "default_model": "claude-opus-4-8",
     "available_models": [
+        "claude-opus-4-8",
         "claude-opus-4-6",
         "claude-sonnet-4-6",
     ],
     "bedrock_model_map": {
+        "claude-opus-4-8": "us.anthropic.claude-opus-4-8",
         "claude-opus-4-6": "us.anthropic.claude-opus-4-6-v1",
         "claude-sonnet-4-6": "us.anthropic.claude-sonnet-4-6",
     },

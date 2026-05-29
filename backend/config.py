@@ -55,6 +55,7 @@ def get_app_data_dir() -> Path:
 # Format: us.anthropic.<model>-v1 (cross-region inference profile)
 # See: https://docs.anthropic.com/en/docs/claude-code/model-config
 ANTHROPIC_TO_BEDROCK_MODEL_MAP: dict[str, str] = {
+    "claude-opus-4-8": "us.anthropic.claude-opus-4-8",
     "claude-opus-4-6": "us.anthropic.claude-opus-4-6-v1",
     "claude-sonnet-4-6": "us.anthropic.claude-sonnet-4-6",
 }
