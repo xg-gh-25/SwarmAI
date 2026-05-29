@@ -167,3 +167,21 @@ class TestSessionAwareThinking:
         """Regression: desktop with no thinking_mode set stays adaptive."""
         pb = PromptBuilder({"thinking_effort": "max"})
         assert pb._build_thinking_config(channel_context=None) == {"type": "adaptive"}
+
+    def test_with_real_app_config_manager(self):
+        """Production semantics: PromptBuilder uses an AppConfigManager (always
+        truthy, no __bool__/__len__), not a plain dict. Verify channel override
+        works against the real config object the rest of the tests stub with a
+        dict — guards against the `not self._config` vs `is None` distinction."""
+        from core.app_config_manager import AppConfigManager
+
+        mgr = AppConfigManager()
+        mgr._cache = dict(mgr.load())
+        mgr._cache["thinking_mode"] = "enabled"
+        mgr._cache["thinking_effort"] = "high"
+        pb = PromptBuilder(mgr)
+        # Desktop honors the global enabled mode.
+        assert pb._build_thinking_config(channel_context=None)["type"] == "enabled"
+        # Channel forces adaptive even with the real (always-truthy) manager.
+        assert pb._build_thinking_config(channel_context={"is_owner": True}) == {"type": "adaptive"}
+        assert pb._build_effort(channel_context={"is_owner": True}) == "high"
