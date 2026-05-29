@@ -112,6 +112,26 @@ async def get_code_intel_summary(project: str):
     )
 
 
+@router.get("/{project}/graph")
+async def get_code_intel_graph(project: str, limit: int = 300):
+    """Return top-N nodes + edges for force-directed graph visualization.
+
+    Nodes ranked by connectivity (most-connected first).
+    Only edges between included nodes are returned.
+    """
+    if not _SAFE_PROJECT_RE.match(project):
+        raise HTTPException(status_code=400, detail="Invalid project name")
+    graph = load_project_graph(project)
+    if graph is None:
+        raise HTTPException(status_code=404, detail=f"Code intelligence not found for project '{project}'")
+
+    # Cap limit to prevent full-graph dump (min 1 for testing, max 1000)
+    limit = min(max(limit, 1), 1000)
+
+    data = await asyncio.to_thread(graph.get_graph_data, limit)
+    return data
+
+
 @router.post("/{project}/reindex", response_model=ReindexResponse, status_code=202)
 async def trigger_reindex(project: str, background_tasks: BackgroundTasks):
     """Trigger a background re-index for the given project.

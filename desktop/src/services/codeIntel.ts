@@ -65,3 +65,41 @@ export async function getCodeIntelSummary(project: string): Promise<CodeIntelSum
 export async function triggerReindex(project: string): Promise<void> {
   await api.post(`/api/code-intel/${encodeURIComponent(project)}/reindex`);
 }
+
+// ── Graph Visualization Data ─────────────────────────────────────────────────
+
+export interface GraphNode {
+  id: string;
+  name: string;
+  type: string;     // "function" | "class" | "method" | "variable"
+  module: string;   // 2-level dir prefix
+  file_path: string;
+}
+
+export interface GraphEdge {
+  source: string;
+  target: string;
+  type: string;     // "calls" | "imports" | "instantiates" etc.
+}
+
+export interface GraphData {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+/**
+ * Fetch graph visualization data (top-N most-connected nodes + their edges).
+ * Returns null if the project has no code_intel.db.
+ */
+export async function getCodeIntelGraph(project: string, limit: number = 300): Promise<GraphData | null> {
+  try {
+    const resp = await api.get<GraphData>(
+      `/api/code-intel/${encodeURIComponent(project)}/graph`,
+      { params: { limit } }
+    );
+    return resp.data;
+  } catch (err: any) {
+    if (err?.response?.status === 404) return null;
+    throw err;
+  }
+}

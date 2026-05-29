@@ -14,13 +14,15 @@ import { HealthContext } from '../../contexts/HealthContext';
 import { useSessionMeta } from '../../contexts/LayoutContext';
 import { isDesktop } from '../../services/tauri';
 import { getCodeIntelSummary, triggerReindex, type CodeIntelSummary } from '../../services/codeIntel';
+import { CodeGraph } from '../code-intel/CodeGraph';
 
 // ── Code Intel Popover ───────────────────────────────────────────────────────
 
-function CodeIntelPopover({ summary, onReindex, isReindexing }: {
+function CodeIntelPopover({ summary, onReindex, isReindexing, onViewGraph }: {
   summary: CodeIntelSummary;
   onReindex: () => void;
   isReindexing: boolean;
+  onViewGraph: () => void;
 }) {
   const topLang = Object.entries(summary.languages)
     .sort((a, b) => b[1] - a[1])
@@ -45,13 +47,21 @@ function CodeIntelPopover({ summary, onReindex, isReindexing }: {
           <tr><td className="text-[var(--color-text-muted)]">Last Indexed</td><td className="text-right">{summary.lastIndexedAt ? _formatAge(summary.lastIndexedAt) : '—'}</td></tr>
         </tbody>
       </table>
-      <button
-        onClick={onReindex}
-        disabled={isReindexing}
-        className="mt-2.5 w-full text-center py-1 px-2 rounded border border-[var(--color-border)] hover:bg-[var(--color-hover)] disabled:opacity-50 disabled:cursor-not-allowed text-[10px]"
-      >
-        {isReindexing ? 'Indexing...' : 'Re-index Now'}
-      </button>
+      <div className="mt-2.5 flex gap-1.5">
+        <button
+          onClick={onViewGraph}
+          className="flex-1 text-center py-1 px-2 rounded border border-indigo-500/50 hover:bg-indigo-500/20 text-[10px] text-indigo-300"
+        >
+          View Graph
+        </button>
+        <button
+          onClick={onReindex}
+          disabled={isReindexing}
+          className="flex-1 text-center py-1 px-2 rounded border border-[var(--color-border)] hover:bg-[var(--color-hover)] disabled:opacity-50 disabled:cursor-not-allowed text-[10px]"
+        >
+          {isReindexing ? 'Indexing...' : 'Re-index'}
+        </button>
+      </div>
     </div>
   );
 }
@@ -98,6 +108,7 @@ export function BottomBar() {
   // Code Intel state
   const [codeIntel, setCodeIntel] = useState<CodeIntelSummary | null>(null);
   const [showPopover, setShowPopover] = useState(false);
+  const [showGraph, setShowGraph] = useState(false);
   const [isReindexing, setIsReindexing] = useState(false);
   const popoverRef = useRef<HTMLDivElement>(null);
 
@@ -113,6 +124,16 @@ export function BottomBar() {
     const interval = setInterval(fetchSummary, 60_000);
     return () => { cancelled = true; clearInterval(interval); };
   }, []);
+
+  // Close graph on ESC key
+  useEffect(() => {
+    if (!showGraph) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowGraph(false);
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [showGraph]);
 
   // Close popover on outside click
   useEffect(() => {
@@ -189,6 +210,7 @@ export function BottomBar() {
                 summary={codeIntel}
                 onReindex={handleReindex}
                 isReindexing={isReindexing}
+                onViewGraph={() => { setShowGraph(true); setShowPopover(false); }}
               />
             )}
           </div>
@@ -197,6 +219,11 @@ export function BottomBar() {
 
       {/* Spacer */}
       <div className="flex-1" />
+
+      {/* Code Intelligence Graph (full-screen overlay) */}
+      {showGraph && (
+        <CodeGraph project="SwarmAI" onClose={() => setShowGraph(false)} />
+      )}
 
       {/* Right: keyboard hints with badge-style kbd */}
       <div className="flex items-center gap-3 font-mono text-[9px]">
