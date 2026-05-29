@@ -181,3 +181,133 @@ class TestOneTimeCleanup:
 
         data = _read_run(failed_file)
         assert data["status"] == "failed"  # NOT changed
+
+
+class TestAutoRecordStage:
+    """Regression: publish --stage must auto-record into run.json.
+
+    Root cause: _append_stage_to_run referenced reg._workspace (does not
+    exist — ArtifactRegistry has .workspace_root), raising AttributeError
+    that was swallowed by a bare `except: pass` in cmd_publish. Result:
+    publish returned a valid artifact_id but run.json stages stayed empty,
+    silently breaking the completion gate.
+    """
+
+    def test_append_stage_to_run_uses_workspace_root(self, workspace):
+        """_append_stage_to_run writes a stage record without AttributeError."""
+        from core.artifact_registry import ArtifactRegistry
+        from scripts.artifact_cli import _append_stage_to_run
+
+        _create_run(workspace, "TestProject", "run_ar1", "running", stages=[])
+        reg = ArtifactRegistry(workspace)
+
+        _append_stage_to_run(
+            "TestProject", "run_ar1",
+            {"stage": "build", "status": "completed", "artifact_id": "art_x"},
+            reg,
+        )
+
+        run_file = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_ar1" / "run.json"
+        data = _read_run(run_file)
+        assert [s["stage"] for s in data["stages"]] == ["build"]
+
+    def test_append_stage_no_duplicate(self, workspace):
+        """Re-appending the same stage is a no-op (idempotent)."""
+        from core.artifact_registry import ArtifactRegistry
+        from scripts.artifact_cli import _append_stage_to_run
+
+        _create_run(workspace, "TestProject", "run_ar2", "running",
+                    stages=[{"stage": "build", "status": "completed"}])
+        reg = ArtifactRegistry(workspace)
+
+        _append_stage_to_run(
+            "TestProject", "run_ar2",
+            {"stage": "build", "status": "completed", "artifact_id": "art_y"},
+            reg,
+        )
+        run_file = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_ar2" / "run.json"
+        data = _read_run(run_file)
+        assert len([s for s in data["stages"] if s["stage"] == "build"]) == 1
+
+    def test_auto_record_failure_is_not_silent(self, workspace, capsys, monkeypatch):
+        """When auto-record raises, cmd_publish emits a stderr warning (not silent pass)."""
+        import sys
+        from pathlib import Path as _P
+        # cmd_publish does `from pipeline_validator import ...` assuming its own
+        # dir (backend/scripts) is on sys.path — true when run as a script,
+        # not when imported as scripts.artifact_cli in pytest. Mirror the CLI.
+        _scripts_dir = str(_P(__file__).resolve().parent.parent / "scripts")
+        if _scripts_dir not in sys.path:
+            sys.path.insert(0, _scripts_dir)
+        import scripts.artifact_cli as cli
+        from core.artifact_registry import ArtifactRegistry
+
+        _create_run(workspace, "TestProject", "run_ar3", "running", stages=[])
+        reg = ArtifactRegistry(workspace)
+
+        # Force the auto-record helper to raise.
+        def _boom(*a, **k):
+            raise RuntimeError("simulated append failure")
+        monkeypatch.setattr(cli, "_append_stage_to_run", _boom)
+
+        # This test isolates the auto-record failure path. Schema validation is
+        # a separate concern (tested elsewhere), so stub it to pass — we need
+        # execution to reach the auto-record block, not to re-test the schema.
+        import pipeline_validator
+        monkeypatch.setattr(pipeline_validator, "validate_artifact_data",
+                            lambda *a, **k: [])
+
+        class _Args:
+            project = "TestProject"
+            type = "changeset"
+            data = '{"branch":"x","commits":["abc1234"],"files_changed":["f.py"]}'
+            producer = "s_autonomous-pipeline"
+            summary = "test"
+            topic = ""
+            stage = "build"
+            run_id = "run_ar3"
+
+        try:
+            cli.cmd_publish(_Args(), reg)
+        except SystemExit:
+            pass
+        captured = capsys.readouterr()
+        # The failure must surface SOMEWHERE visible — not be swallowed silently.
+        assert "auto-record" in captured.err.lower() or "simulated append failure" in captured.err.lower()
+
+
+class TestAdvanceDriftGuard:
+    """AC4: advancing past a completed stage with no artifact_id warns."""
+
+    def test_advance_warns_on_missing_artifact(self, workspace, capsys, monkeypatch):
+        """A completed stage lacking artifact_id (likely silent publish failure)
+        triggers a stderr warning when advancing."""
+        import scripts.artifact_cli as cli
+
+        # build stage marked completed but NO artifact_id = silent publish failure
+        _create_run(workspace, "TestProject", "run_drift", "running",
+                    stages=[{"stage": "build", "status": "completed"}])
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        # Stub the validator subprocess so the test isolates the drift-guard.
+        import subprocess as _sp
+        monkeypatch.setattr(_sp, "run",
+                            lambda *a, **k: type("R", (), {"stdout": '{"valid": true, "warnings": []}', "returncode": 0})())
+
+        cli._auto_validate_before_advance("TestProject", "test")
+        captured = capsys.readouterr()
+        assert "no artifact_id" in captured.err or "failed silently" in captured.err
+
+    def test_advance_no_warn_for_reflect(self, workspace, capsys, monkeypatch):
+        """reflect legitimately has no artifact — no drift warning."""
+        import scripts.artifact_cli as cli
+
+        _create_run(workspace, "TestProject", "run_reflect", "running",
+                    stages=[{"stage": "reflect", "status": "completed"}])
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        import subprocess as _sp
+        monkeypatch.setattr(_sp, "run",
+                            lambda *a, **k: type("R", (), {"stdout": '{"valid": true, "warnings": []}', "returncode": 0})())
+
+        cli._auto_validate_before_advance("TestProject", "complete")
+        captured = capsys.readouterr()
+        assert "no artifact_id" not in captured.err
