@@ -125,6 +125,13 @@ export function BottomBar() {
     return () => { cancelled = true; clearInterval(interval); };
   }, []);
 
+  // Listen for 'swarm:show-code-graph' event from LeftSidebar nav icon
+  useEffect(() => {
+    const handler = () => setShowGraph(true);
+    window.addEventListener('swarm:show-code-graph', handler);
+    return () => window.removeEventListener('swarm:show-code-graph', handler);
+  }, []);
+
   // Close graph on ESC key (stopPropagation prevents conflicts with other ESC handlers)
   useEffect(() => {
     if (!showGraph) return;

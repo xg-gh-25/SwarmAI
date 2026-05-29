@@ -104,14 +104,29 @@ function LeftSidebar() {
   const { activeModal, openModal, settingsTab, setSettingsTab, workspaceExplorerCollapsed, setWorkspaceExplorerCollapsed } = useLayout();
 
   // Skills and MCP now open Settings with the corresponding tab pre-selected
-  const handleNavClick = (target: 'skills' | 'mcp') => {
-    const tabMap = { skills: 'skills', mcp: 'mcp-servers' };
+  const handleNavClick = (target: 'skills' | 'mcp' | 'engine') => {
+    const tabMap = { skills: 'skills', mcp: 'mcp-servers', engine: 'engine' };
     setSettingsTab(tabMap[target]);
     openModal('settings');
   };
 
-  // Nav items with SVG icon identifiers (AC6: no emoji icons)
-  const navItems: { icon: string; label: string; target: 'skills' | 'mcp' }[] = [
+  // Open Code Intelligence graph overlay via custom event (BottomBar listens)
+  const handleCodeIntelClick = () => {
+    window.dispatchEvent(new CustomEvent('swarm:show-code-graph'));
+  };
+
+  // Open MEMORY.md in file viewer panel via custom event (ThreeColumnLayout listens)
+  const handleMemoryClick = () => {
+    window.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: '.context/MEMORY.md' } }));
+  };
+
+  // Navigate explorer to Knowledge/Signals directory
+  const handleSignalsClick = () => {
+    window.dispatchEvent(new CustomEvent('swarm:open-file', { detail: { path: 'Knowledge/Signals' } }));
+  };
+
+  // Tools group nav items
+  const toolItems: { icon: string; label: string; target: 'skills' | 'mcp' }[] = [
     { icon: 'lightning', label: 'Skills', target: 'skills' },
     { icon: 'server', label: 'MCP Servers', target: 'mcp' },
   ];
@@ -135,7 +150,8 @@ function LeftSidebar() {
 
       {/* Navigation icons */}
       <nav className="flex-1 pt-2 pb-1 space-y-1 overflow-y-auto flex flex-col items-center" data-testid="nav-icons">
-        {navItems.map((item) => (
+        {/* Tools group */}
+        {toolItems.map((item) => (
           <NavIconButton
             key={item.target}
             icon={item.icon}
@@ -145,6 +161,36 @@ function LeftSidebar() {
             data-testid={`nav-${item.target}`}
           />
         ))}
+
+        {/* Separator */}
+        <div className="w-5 border-t border-[var(--color-border)] my-1.5" />
+
+        {/* Insights group */}
+        <NavIconButton
+          icon="graph"
+          label="Code Intelligence"
+          onClick={handleCodeIntelClick}
+          data-testid="nav-code-intel"
+        />
+        <NavIconButton
+          icon="activity"
+          label="Engine Metrics"
+          isActive={activeModal === 'settings' && settingsTab === 'engine'}
+          onClick={() => handleNavClick('engine')}
+          data-testid="nav-engine"
+        />
+        <NavIconButton
+          icon="book"
+          label="Memory"
+          onClick={handleMemoryClick}
+          data-testid="nav-memory"
+        />
+        <NavIconButton
+          icon="radio"
+          label="Signals"
+          onClick={handleSignalsClick}
+          data-testid="nav-signals"
+        />
       </nav>
 
       {/* Bottom section - Settings and GitHub */}
@@ -222,6 +268,47 @@ function NavSvgIcon({ name }: { name: string }) {
           <rect x="2" y="14" width="20" height="8" rx="2" ry="2" />
           <line x1="6" y1="6" x2="6.01" y2="6" />
           <line x1="6" y1="18" x2="6.01" y2="18" />
+        </svg>
+      );
+    case 'graph':
+      // Network/nodes icon for Code Intelligence
+      return (
+        <svg {...svgProps} aria-hidden="true">
+          <circle cx="6" cy="6" r="2" />
+          <circle cx="18" cy="6" r="2" />
+          <circle cx="6" cy="18" r="2" />
+          <circle cx="18" cy="18" r="2" />
+          <circle cx="12" cy="12" r="2" />
+          <line x1="7.5" y1="7.5" x2="10.5" y2="10.5" />
+          <line x1="13.5" y1="10.5" x2="16.5" y2="7.5" />
+          <line x1="7.5" y1="16.5" x2="10.5" y2="13.5" />
+          <line x1="13.5" y1="13.5" x2="16.5" y2="16.5" />
+        </svg>
+      );
+    case 'activity':
+      // Pulse/heartbeat icon for Engine Metrics
+      return (
+        <svg {...svgProps} aria-hidden="true">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+        </svg>
+      );
+    case 'book':
+      // Book icon for Memory
+      return (
+        <svg {...svgProps} aria-hidden="true">
+          <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+          <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+        </svg>
+      );
+    case 'radio':
+      // Radio/antenna icon for Signals
+      return (
+        <svg {...svgProps} aria-hidden="true">
+          <circle cx="12" cy="12" r="2" />
+          <path d="M16.24 7.76a6 6 0 0 1 0 8.49" />
+          <path d="M7.76 16.24a6 6 0 0 1 0-8.49" />
+          <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+          <path d="M4.93 19.07a10 10 0 0 1 0-14.14" />
         </svg>
       );
     case 'tune':

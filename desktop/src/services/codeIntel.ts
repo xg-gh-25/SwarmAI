@@ -51,7 +51,7 @@ function toCamelCase(raw: RawCodeIntelSummary): CodeIntelSummary {
  */
 export async function getCodeIntelSummary(project: string): Promise<CodeIntelSummary | null> {
   try {
-    const resp = await api.get<RawCodeIntelSummary>(`/api/code-intel/${encodeURIComponent(project)}/summary`);
+    const resp = await api.get<RawCodeIntelSummary>(`/code-intel/${encodeURIComponent(project)}/summary`);
     return toCamelCase(resp.data);
   } catch (err: any) {
     if (err?.response?.status === 404) return null;
@@ -63,7 +63,7 @@ export async function getCodeIntelSummary(project: string): Promise<CodeIntelSum
  * Trigger a re-index for a project. Returns immediately (202 Accepted).
  */
 export async function triggerReindex(project: string): Promise<void> {
-  await api.post(`/api/code-intel/${encodeURIComponent(project)}/reindex`);
+  await api.post(`/code-intel/${encodeURIComponent(project)}/reindex`);
 }
 
 // ── Graph Visualization Data ─────────────────────────────────────────────────
@@ -94,7 +94,7 @@ export interface GraphData {
 export async function getCodeIntelGraph(project: string, limit: number = 300): Promise<GraphData | null> {
   try {
     const resp = await api.get<GraphData>(
-      `/api/code-intel/${encodeURIComponent(project)}/graph`,
+      `/code-intel/${encodeURIComponent(project)}/graph`,
       { params: { limit } }
     );
     return resp.data;
