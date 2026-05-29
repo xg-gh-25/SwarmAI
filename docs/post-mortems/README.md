@@ -15,6 +15,7 @@ These aren't historical curiosities. They're the origin stories of mechanisms th
 | 1 | [Pipeline Confidence Illusion](./01-pipeline-confidence-illusion.md) | Features that pass tests but don't work | Adversarial Review gate |
 | 2 | [Understand the State Machine](./02-understand-the-state-machine.md) | Incremental fix-without-understanding | 2-strike rule + state machine audit |
 | 3 | [Adversarial Review Origin Story](./03-adversarial-review-origin-story.md) | Self-review assumption blindness | Fresh-context mandatory reviewer |
+| 4 | [Bilateral Deadlock](./04-bilateral-deadlock.md) | Frontend + backend simultaneous stuck | State machine recovery symmetry + serialization validation |
 
 ## The Pattern
 
