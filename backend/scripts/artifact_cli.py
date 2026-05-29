@@ -134,7 +134,7 @@ def _append_stage_to_run(
 ) -> None:
     """Append a stage record to run.json (same as run-update --stage-json)."""
     run_file = (
-        Path(reg._workspace) / "Projects" / project
+        Path(reg.workspace_root) / "Projects" / project
         / ".artifacts" / "runs" / run_id / "run.json"
     )
     if not run_file.exists():
@@ -196,7 +196,7 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
         # Auto-discover content_dir: explicit in data > most recent content/*/ dir
         content_dir = data.get("content_dir")
         if not content_dir:
-            _pollinate_root = Path(reg._workspace) / "Knowledge" / "Pollinate"
+            _pollinate_root = Path(reg.workspace_root) / "Knowledge" / "Pollinate"
             if _pollinate_root.is_dir():
                 # Find most recently modified content directory
                 _candidates = [d for d in _pollinate_root.iterdir() if d.is_dir() and not d.name.startswith(".")]
@@ -260,8 +260,19 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
                     _append_stage_to_run(args.project, target_run_id, stage_record, reg)
                     result["auto_recorded"] = True
                     result["run_id"] = target_run_id
-            except Exception:
-                pass  # Best-effort — don't fail publish if auto-record fails
+            except Exception as e:
+                # Best-effort — don't fail the publish itself. But NEVER fail
+                # silently: a swallowed auto-record leaves run.json stages empty
+                # and the completion gate blocks with no explanation (the exact
+                # failure this fix addresses). Surface it on stderr so the
+                # orchestrator sees the signal and can fall back to run-update.
+                result["auto_recorded"] = False
+                print(json.dumps({
+                    "warning": "auto-record stage failed; run.json not updated. "
+                               "Record manually via run-update --stage-json.",
+                    "stage": stage,
+                    "detail": str(e),
+                }), file=sys.stderr)
 
         print(json.dumps(result))
     except (ValueError, FileNotFoundError) as e:
@@ -345,14 +356,29 @@ def _auto_validate_before_advance(project: str, next_state: str) -> None:
 
     # Determine current stage (last completed)
     current_stage = None
+    current_record = None
     for s in reversed(stages):
         status = s.get("status", "")
         if status in ("done", "completed"):
             current_stage = s.get("stage", s.get("name"))
+            current_record = s
             break
 
     if not current_stage:
         return
+
+    # Drift guard: a completed stage that produced NO artifact usually means a
+    # silently-failed publish (the exact failure this tooling has hit before —
+    # publish returns an error to stderr but advance proceeds anyway, leaving
+    # state ahead of reality). Warn, don't block: `reflect` legitimately has no
+    # artifact, and some recovery flows record stages manually.
+    if current_record is not None and not current_record.get("artifact_id") \
+            and current_stage != "reflect":
+        print(json.dumps({
+            "warning": f"stage '{current_stage}' is marked completed but has no "
+                       f"artifact_id — its publish may have failed silently. "
+                       f"Verify before advancing to '{next_state}'.",
+        }), file=sys.stderr)
 
     # Run validator
     try:
