@@ -1526,13 +1526,30 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
                     if plan_data:
                         plan_acs = plan_data.get("acceptance_criteria", [])
                         if plan_acs:
-                            # Build lookup: support both plan_ac_ref (identifier-based)
-                            # and text matching (substring-based)
+                            # Build lookup: support plan_ac_ref (explicit), AC ID
+                            # (extracted prefix if unique), and text matching (substring fallback)
                             covered_refs = {
                                 entry.get("plan_ac_ref", "").strip()
                                 for entry in ac_coverage if entry.get("plan_ac_ref")
                             }
+                            # Extract AC IDs from BUILD ac_coverage "ac" field text
+                            covered_ac_ids = set()
+                            for entry in ac_coverage:
+                                entry_ac = entry.get("ac", "").strip()
+                                m = re.match(r"^(AC\d+)", entry_ac)
+                                if m:
+                                    covered_ac_ids.add(m.group(1))
                             covered_texts = {entry.get("ac", "").strip() for entry in ac_coverage}
+
+                            # Detect duplicate AC IDs in PLAN (AC ID match unsafe if dupes)
+                            plan_id_counts: dict[str, int] = {}
+                            for p in plan_acs:
+                                p_str = p.strip() if isinstance(p, str) else str(p).strip()
+                                m = re.match(r"^(AC\d+)", p_str)
+                                if m:
+                                    plan_id_counts[m.group(1)] = plan_id_counts.get(m.group(1), 0) + 1
+                            # AC IDs that appear exactly once in PLAN (safe for ID-based match)
+                            unique_plan_ids = {k for k, v in plan_id_counts.items() if v == 1}
 
                             for i, pac in enumerate(plan_acs):
                                 pac_str = pac.strip() if isinstance(pac, str) else str(pac).strip()
@@ -1546,10 +1563,14 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
                                 # Check by plan_ac_ref first (preferred, unambiguous)
                                 if ac_id and ac_id in covered_refs:
                                     matched = True
-                                # Fallback: text matching (exact or substring)
+                                # Check by extracted AC ID — only if ID is unique in PLAN
+                                # (duplicate IDs like "AC1: X" and "AC1: Y" require text match)
+                                if not matched and ac_id and ac_id in unique_plan_ids and ac_id in covered_ac_ids:
+                                    matched = True
+                                # Fallback: text matching (exact, or bidirectional substring)
                                 if not matched:
                                     matched = any(
-                                        pac_str == cac or pac_str in cac
+                                        pac_str == cac or pac_str in cac or cac in pac_str
                                         for cac in covered_texts
                                     )
 
@@ -1580,7 +1601,12 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
                                 # Match by plan_ac_ref identifier
                                 if entry_ref and entry_ref in plan_ac_ids:
                                     reverse_matched = True
-                                # Fallback: text matching
+                                # Match by extracted AC ID from BUILD entry text
+                                if not reverse_matched:
+                                    entry_id_match = re.match(r"^(AC\d+)", entry_ac)
+                                    if entry_id_match and entry_id_match.group(1) in plan_ac_ids:
+                                        reverse_matched = True
+                                # Fallback: bidirectional text matching
                                 if not reverse_matched:
                                     reverse_matched = any(
                                         p in entry_ac or entry_ac in p

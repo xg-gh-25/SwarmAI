@@ -473,6 +473,130 @@ def _gen_run_id() -> str:
     return f"run_{uuid.uuid4().hex[:8]}"
 
 
+def _auto_abandon_stale_runs(project: str, new_run_id: str, threshold_hours: float = 2.0) -> int:
+    """Mark stale same-project 'running' runs as abandoned when a new run starts.
+
+    Scans all runs for the given project. If status='running' and updated_at
+    is older than threshold_hours, marks it 'abandoned' with a reason.
+
+    Returns number of runs abandoned.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    ws = _get_workspace()
+    runs_dir = ws / "Projects" / project / ".artifacts" / "runs"
+    if not runs_dir.exists():
+        return 0
+
+    threshold = datetime.now(timezone.utc) - timedelta(hours=threshold_hours)
+    abandoned_count = 0
+
+    for rd in runs_dir.iterdir():
+        if not rd.is_dir():
+            continue
+        run_file = rd / "run.json"
+        if not run_file.exists():
+            continue
+
+        try:
+            data = json.loads(run_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        # Skip self and non-running
+        if data.get("id") == new_run_id:
+            continue
+        if data.get("status") != "running":
+            continue
+
+        # Check age
+        updated_str = data.get("updated_at", data.get("created_at", ""))
+        if not updated_str:
+            continue
+        try:
+            updated_at = datetime.fromisoformat(updated_str.replace("Z", "+00:00"))
+            if updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            continue
+
+        if updated_at < threshold:
+            data["status"] = "abandoned"
+            data["abandon_reason"] = f"superseded_by_{new_run_id}"
+            data["abandoned_at"] = datetime.now(timezone.utc).isoformat()
+            run_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+            abandoned_count += 1
+
+    return abandoned_count
+
+
+def cleanup_orphans(threshold_hours: float = 2.0) -> dict:
+    """Mark all stale 'running' runs across ALL projects as abandoned.
+
+    Used as a batch cleanup subcommand. Returns summary dict.
+    """
+    from datetime import datetime, timezone, timedelta
+
+    ws = _get_workspace()
+    projects_dir = ws / "Projects"
+    if not projects_dir.exists():
+        return {"abandoned_count": 0, "projects_scanned": 0}
+
+    threshold = datetime.now(timezone.utc) - timedelta(hours=threshold_hours)
+    abandoned_count = 0
+    projects_scanned = 0
+
+    for project_dir in projects_dir.iterdir():
+        if not project_dir.is_dir():
+            continue
+        runs_dir = project_dir / ".artifacts" / "runs"
+        if not runs_dir.exists():
+            continue
+        projects_scanned += 1
+
+        for rd in runs_dir.iterdir():
+            if not rd.is_dir():
+                continue
+            run_file = rd / "run.json"
+            if not run_file.exists():
+                continue
+
+            try:
+                data = json.loads(run_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+
+            if data.get("status") != "running":
+                continue
+
+            updated_str = data.get("updated_at", data.get("created_at", ""))
+            if not updated_str:
+                continue
+            try:
+                updated_at = datetime.fromisoformat(updated_str.replace("Z", "+00:00"))
+                if updated_at.tzinfo is None:
+                    updated_at = updated_at.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                continue
+
+            if updated_at < threshold:
+                data["status"] = "abandoned"
+                data["abandon_reason"] = "stale_orphan"
+                data["abandoned_at"] = datetime.now(timezone.utc).isoformat()
+                run_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+                abandoned_count += 1
+
+    return {"abandoned_count": abandoned_count, "projects_scanned": projects_scanned}
+
+
+def cmd_cleanup_orphans(args, reg: ArtifactRegistry) -> None:
+    """CLI handler for cleanup-orphans subcommand."""
+    threshold = getattr(args, "threshold", None)
+    threshold = float(threshold) if threshold is not None else 2.0
+    result = cleanup_orphans(threshold_hours=threshold)
+    print(json.dumps(result))
+
+
 def _load_completed_runs(project: str, limit: int = 10) -> list[dict]:
     """Load completed pipeline runs for historical calibration.
 
@@ -573,7 +697,13 @@ def cmd_run_create(args, reg: ArtifactRegistry) -> None:
     run_file = rd / "run.json"
     run_file.write_text(json.dumps(run_state, indent=2), encoding="utf-8")
 
-    print(json.dumps({"pipeline_id": run_id, "project": args.project, "file": str(run_file)}))
+    # Auto-abandon stale same-project runs (lifecycle management)
+    abandoned = _auto_abandon_stale_runs(args.project, run_id)
+
+    result = {"pipeline_id": run_id, "project": args.project, "file": str(run_file)}
+    if abandoned > 0:
+        result["auto_abandoned"] = abandoned
+    print(json.dumps(result))
 
 
 def cmd_run_update(args, reg: ArtifactRegistry) -> None:
@@ -586,6 +716,15 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
 
     if args.status:
         run_state["status"] = args.status
+        if args.status == "running":
+            # ── Lifecycle: auto-abandon stale same-project running runs ──
+            abandoned = _auto_abandon_stale_runs(args.project, args.run_id)
+            if abandoned > 0:
+                import sys as _sys
+                print(
+                    json.dumps({"auto_abandoned": abandoned, "project": args.project}),
+                    file=_sys.stderr,
+                )
         if args.status == "completed":
             # ── Completion Gate: ALL profile stages must be done or explicitly skipped ──
             # Every stage in the DDD+pipeline loop has purpose. No silent skips.
@@ -2339,6 +2478,10 @@ def main() -> None:
     p_run_cultivate.add_argument("--project", required=True)
     p_run_cultivate.add_argument("--run-id", required=True, help="Pipeline run ID (reads lessons from reflect stage)")
 
+    # cleanup-orphans
+    p_cleanup = sub.add_parser("cleanup-orphans", help="Mark stale 'running' pipeline runs as abandoned")
+    p_cleanup.add_argument("--threshold", type=float, default=2.0, help="Hours threshold (default 2.0)")
+
     # ddd-health
     p_ddd_health = sub.add_parser("ddd-health", help="5-dimensional DDD health scoring per section")
     p_ddd_health.add_argument("--project", required=True)
@@ -2365,6 +2508,7 @@ def main() -> None:
         "run-metrics": cmd_run_metrics,
         "run-analytics": cmd_run_analytics,
         "run-cultivate": cmd_run_cultivate,
+        "cleanup-orphans": cmd_cleanup_orphans,
         "ddd-health": cmd_ddd_health,
     }
     handlers[args.command](args, reg)
