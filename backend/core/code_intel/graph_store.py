@@ -566,61 +566,86 @@ class GraphStore:
         """Return top-N most-connected nodes + their edges for visualization.
 
         Nodes are ranked by edge count (PageRank proxy). Only edges between
-        included nodes are returned (no dangling references).
+        included nodes are returned (no dangling references). Self-loops excluded.
+
+        Thread-safe: uses a dedicated connection (not shared self._conn).
 
         Returns:
             {"nodes": [{id, name, type, module, file_path}],
              "edges": [{source, target, type}]}
         """
-        # Get top nodes by connectivity (sum of inbound + outbound edges)
-        node_rows = self._conn.execute(
-            "SELECT n.id, n.name, n.node_type, n.file_path, "
-            "  (SELECT COUNT(*) FROM code_edges WHERE source_id = n.id OR target_id = n.id) AS degree "
-            "FROM code_nodes n "
-            "ORDER BY degree DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+        # Thread safety: create a fresh read-only connection for this query.
+        # GraphStore._conn is shared across threads via the module cache —
+        # concurrent .execute() on a shared connection = undefined behavior.
+        import sqlite3 as _sqlite3
+        conn = _sqlite3.connect(str(self._db_path), check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
 
-        node_ids = set()
-        nodes = []
-        for r in node_rows:
-            node_id, name, node_type, file_path = r[0], r[1], r[2], r[3]
-            node_ids.add(node_id)
-            # Derive module from file_path (2-level prefix)
-            parts = file_path.split("/") if file_path else []
-            module = "/".join(parts[:2]) if len(parts) > 2 else parts[0] if parts else ""
-            nodes.append({
-                "id": node_id,
-                "name": name,
-                "type": node_type,
-                "module": module,
-                "file_path": file_path,
-            })
-
-        # Get edges where BOTH source and target are in our node set
-        if not node_ids:
-            return {"nodes": [], "edges": []}
-
-        # Batch query edges (node_ids can be large)
-        all_edges = []
-        id_list = list(node_ids)
-        for start in range(0, len(id_list), 500):
-            batch = id_list[start:start + 500]
-            placeholders = ",".join("?" * len(batch))
-            edge_rows = self._conn.execute(
-                f"SELECT source_id, target_id, edge_type FROM code_edges "
-                f"WHERE source_id IN ({placeholders}) AND target_id IN ({placeholders})",
-                batch + batch,
+        try:
+            # CTE approach: pre-compute degree in one pass (faster than correlated subquery)
+            # Handles limit <= 0 safely (SQLite LIMIT -1 = unlimited, which we don't want)
+            safe_limit = max(limit, 1)
+            node_rows = conn.execute(
+                "WITH degree AS ("
+                "  SELECT id, "
+                "    (SELECT COUNT(*) FROM code_edges WHERE source_id = id) + "
+                "    (SELECT COUNT(*) FROM code_edges WHERE target_id = id) AS deg "
+                "  FROM code_nodes"
+                ") "
+                "SELECT n.id, n.name, n.node_type, n.file_path, d.deg "
+                "FROM code_nodes n JOIN degree d ON d.id = n.id "
+                "ORDER BY d.deg DESC LIMIT ?",
+                (safe_limit,),
             ).fetchall()
-            all_edges.extend(edge_rows)
 
-        edges = [
-            {"source": r[0], "target": r[1], "type": r[2]}
-            for r in all_edges
-            if r[0] in node_ids and r[1] in node_ids  # double-check membership
-        ]
+            node_ids = set()
+            nodes = []
+            for r in node_rows:
+                node_id, name, node_type, file_path = r[0], r[1], r[2], r[3]
+                node_ids.add(node_id)
+                # Derive module from file_path (2-level prefix)
+                parts = file_path.split("/") if file_path else []
+                module = "/".join(parts[:2]) if len(parts) > 2 else parts[0] if parts else ""
+                nodes.append({
+                    "id": node_id,
+                    "name": name,
+                    "type": node_type,
+                    "module": module,
+                    "file_path": file_path,
+                })
 
-        return {"nodes": nodes, "edges": edges}
+            if not node_ids:
+                return {"nodes": [], "edges": []}
+
+            # Fix cross-batch edge loss: query ALL edges where source is in node_ids,
+            # then filter target membership in Python. Single query, no batching needed
+            # for the source side (SQLite handles IN(...) up to SQLITE_MAX_VARIABLE_NUMBER=999).
+            # For limit > 999, batch the source query but filter target in Python.
+            all_edges: list[tuple] = []
+            id_list = list(node_ids)
+            for start in range(0, len(id_list), 900):
+                batch = id_list[start:start + 900]
+                placeholders = ",".join("?" * len(batch))
+                # DISTINCT eliminates duplicate edges from different line_numbers
+                edge_rows = conn.execute(
+                    f"SELECT DISTINCT source_id, target_id, edge_type FROM code_edges "
+                    f"WHERE source_id IN ({placeholders})",
+                    batch,
+                ).fetchall()
+                all_edges.extend(edge_rows)
+
+            # Filter: target must be in node_ids AND exclude self-loops
+            edges = [
+                {"source": r[0], "target": r[1], "type": r[2]}
+                for r in all_edges
+                if r[1] in node_ids and r[0] != r[1]
+            ]
+
+            return {"nodes": nodes, "edges": edges}
+
+        finally:
+            conn.close()
 
     # ── file queries ─────────────────────────────────────────────────────
 

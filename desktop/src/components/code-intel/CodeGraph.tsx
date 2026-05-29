@@ -188,7 +188,14 @@ export function CodeGraph({ project, limit = 300, onClose }: CodeGraphProps) {
     );
   }
 
-  if (!graphData) return null;
+  if (!graphData || graphData.nodes.length === 0) {
+    return (
+      <div className="fixed inset-0 z-50 bg-[#0d1117] flex items-center justify-center">
+        <div className="text-gray-400 text-sm">No code symbols indexed yet. Run a re-index first.</div>
+        {onClose && <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-white text-sm">Close</button>}
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 bg-[#0d1117]" ref={containerRef}>
