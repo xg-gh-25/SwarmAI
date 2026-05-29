@@ -237,7 +237,7 @@ def _call_bedrock_opus(prompt: str, system: str = _SYSTEM_PROMPT) -> tuple[str, 
     client = _get_bedrock_client()
 
     response = client.converse(
-        modelId="us.anthropic.claude-opus-4-6-v1",
+        modelId="us.anthropic.claude-opus-4-8",
         messages=[{"role": "user", "content": [{"text": prompt}]}],
         system=[{"text": system}],
         inferenceConfig={

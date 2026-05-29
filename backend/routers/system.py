@@ -291,7 +291,7 @@ def _get_auth_config() -> dict:
         return {
             "use_bedrock": config.get("use_bedrock", False),
             "aws_region": config.get("aws_region", "us-east-1"),
-            "default_model": config.get("default_model", "claude-opus-4-6"),
+            "default_model": config.get("default_model", "claude-opus-4-8"),
             "bedrock_model_map": config.get("bedrock_model_map"),
             "anthropic_base_url": config.get("anthropic_base_url"),
         }
@@ -300,7 +300,7 @@ def _get_auth_config() -> dict:
         return {
             "use_bedrock": True,
             "aws_region": "us-east-1",
-            "default_model": "claude-opus-4-6",
+            "default_model": "claude-opus-4-8",
             "bedrock_model_map": None,
             "anthropic_base_url": None,
         }
@@ -338,7 +338,7 @@ async def verify_auth():
 def _verify_bedrock(config: dict) -> dict:
     """Verify Bedrock auth with a minimal invoke."""
     region = config.get("aws_region", "us-east-1")
-    model = config.get("default_model", "claude-opus-4-6")
+    model = config.get("default_model", "claude-opus-4-8")
     bedrock_model = get_bedrock_model_id(model, config.get("bedrock_model_map"))
 
     start = time.monotonic()
@@ -399,7 +399,7 @@ async def _verify_anthropic_api(config: dict) -> dict:
         )
 
     base_url = config.get("anthropic_base_url") or "https://api.anthropic.com"
-    model = config.get("default_model", "claude-opus-4-6")
+    model = config.get("default_model", "claude-opus-4-8")
     start = time.monotonic()
 
     try:
