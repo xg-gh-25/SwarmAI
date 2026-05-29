@@ -505,6 +505,9 @@ class PromptBuilder:
         base = model.replace("us.anthropic.", "").rstrip(":0")
         if base.endswith("-v1"):
             base = base[:-3]
+        # Strip [1m] suffix appended by resolve_model() for CLI context signal
+        if base.endswith("[1m]"):
+            base = base[:-4]
         return cls._MODEL_CONTEXT_WINDOWS.get(base, cls._DEFAULT_CONTEXT_WINDOW)
 
     # ------------------------------------------------------------------
