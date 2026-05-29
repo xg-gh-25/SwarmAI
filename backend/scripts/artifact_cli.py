@@ -757,7 +757,7 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         stage_status = stage_record.get("status", "")
         if (
             stage_name in _STAGES_REQUIRING_DOC
-            and stage_status == "completed"
+            and stage_status in ("completed", "done")
             and not stage_record.get("stage_doc_consumed")
         ):
             print(json.dumps({
