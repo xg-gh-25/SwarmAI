@@ -24,7 +24,8 @@
 | [DDD Platform Overview](DDD-Platform-Overview.md) | — | One knowledge layer powering multiple delivery engines. Platform thesis, 3-layer architecture, 8 feed channels. |
 | [Autonomous Pipeline Design](Autonomous-Pipeline-Design.md) | — | 9-stage pipeline + Quality Convergence Loop. Push-ready delivery guarantee. |
 | [Goal Loop Design](Goal-Loop-Design.md) | — | Iterative convergence for open-ended objectives. Inline + scheduled modes, DoD-driven cycles, velocity tracking. |
-| [Pollinate Content Engine](Pollinate-Content-Engine.md) | — | Content delivery engine. 8-stage pipeline + 5-gate brand conformance. Same DDD, different output type. |
+| [Pollinate v3 Content Engine](Pollinate-Content-Engine.md) | — | Personal content delivery engine. DISCOVER stage + 11 production tracks (A–K) + audience simulation + cross-format consistency. |
+| [Session Observation Layer](Session-Observation-Layer-Design.md) | — | Real-time tool-call recording. ObservationRing + DDD event emission + crash recovery enrichment. |
 | [DDD Cultivation Engine](DDD-Cultivation-Engine-HLD.md) | — | How DDD self-grows from normal work. 8 feed channels, health scoring, cross-project routing. |
 
 ## Markdown Sources
@@ -96,7 +97,7 @@ All diagrams live in [`diagrams/`](diagrams/) as PNG files with dark backgrounds
 
 ## Discussions (Thought Leadership)
 
-All 33+ discussion articles are mirrored in [`discussions/`](discussions/) for DeepWiki indexing and offline reading.
+All 43+ discussion articles are mirrored in [`discussions/`](discussions/) for DeepWiki indexing and offline reading.
 
 | Theme | Key Articles |
 |-------|-------------|
@@ -118,4 +119,4 @@ All 33+ discussion articles are mirrored in [`discussions/`](discussions/) for D
 
 ---
 
-*Last updated: May 21, 2026 --- v3.1*
+*Last updated: May 29, 2026 --- v3.2*

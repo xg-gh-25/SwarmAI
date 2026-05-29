@@ -1,24 +1,37 @@
 ---
-title: "Pollinate — Message First, Format Follows"
-date: 2026-05-12
-tags: [architecture, pollinate, content-engine, ddd-integration, brand-delivery]
+title: "Pollinate v3 — Personal Content Delivery Engine"
+date: 2026-05-26
+tags: [architecture, pollinate, content-engine, ddd-integration, brand-delivery, discover]
 project: SwarmAI
-status: PE-review
+status: shipped
+supersedes: "Pollinate v2 (2026-05-12)"
 ---
 
-# Pollinate — Message First, Format Follows
+# Pollinate v3 — Personal Content Delivery Engine
+
+> One message → all professional formats → all audiences → quality guaranteed.
 
 ## 1. Executive Summary
 
-Pollinate is the content delivery engine for SwarmAI. It takes a one-sentence message and produces brand-correct, audience-correct content across multiple formats — poster, video, narrative essay, social shorts, README, and presentation — without ever drifting off-brand, making false claims, or repeating stale messaging angles.
+Pollinate is SwarmAI's content delivery engine. Give it a topic and it runs a complete production line — first clarifying the message, then helping the user select formats based on audience and context, then natively producing each confirmed format, and finally delivering a publish-ready package.
 
-The core insight: **the same DDD (Domain-Driven Design) knowledge layer that makes Pipeline produce domain-correct code makes Pollinate produce brand-correct content.** Both engines read from and write back to the same four documents. Both engines use a similar stage-based structure with quality convergence (Pipeline: 9 stages, Pollinate: 8 stages). The difference is the domain — code delivery vs. content delivery — not the architecture.
+**v3 fundamental shift (from v2):** Discovery Before Production. User decides WHAT to produce (DISCOVER stage). Agent decides HOW to produce it well. Never the reverse.
 
-**Architecture in one sentence:** Pollinate reads brand knowledge from DDD, selects the optimal format(s) for message and audience, produces content through a quality-convergence loop, and writes messaging learnings back to DDD for cross-engine benefit.
+**Architecture in one sentence:** DISCOVER (who/what/where) → content_package (shared semantic substrate) → per-track native production (only confirmed formats) → quality convergence + adversarial review → deliver.
 
-![8-Stage Pipeline Overview](diagrams-pollinate/01-eight-stages.svg)
+The core insight remains: **the same DDD knowledge layer that makes Pipeline produce domain-correct code makes Pollinate produce brand-correct content.** Both engines read from and write back to the same four DDD documents. Both use stage-based structure with quality convergence. The difference is the domain — code delivery vs. content delivery — not the architecture.
 
-**Why this matters for the platform story:** If DDD only powered code delivery, it would be a developer tool. Because DDD powers both code and content delivery through identical architectural patterns, it becomes a **knowledge platform** — a persistent, structured intelligence layer that compounds across every type of creative output the organization produces.
+![9-Stage Pipeline Overview](diagrams-pollinate/01-nine-stages.svg)
+
+**What's new in v3:**
+- **DISCOVER stage** — human-in-the-loop scope clarification before any production (5 questions: message, audience, outcome, context, scope)
+- **11 production tracks** (A–K) — Video, Poster, Narrative, Shorts, Deck, PDF, Data Report, Document, AI Image, Interactive Report, Podcast
+- **Format-aware content_package layers** — Core/Narrative/Data/Visual/Evidence layers populated based on confirmed tracks
+- **Audience Simulation** — REVIEW stage spawns sub-agent simulating target reader before delivery
+- **Cross-format consistency (RP-X)** — adversarial check that all formats tell the same story
+- **Direction Gate** — user picks visual direction between PLAN and BUILD (saves 50% wasted renders)
+
+**Positioning:** Personal Content Delivery Engine for builders with expertise but no production team. Not a design tool (Canva/Claude Design). Not a repurpose tool (Castmagic). A delivery engine — one message in, N native productions out.
 
 ---
 
