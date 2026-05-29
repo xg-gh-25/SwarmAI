@@ -228,11 +228,18 @@ def _parse_llm_response(response: str) -> list[TextChange]:
     return changes
 
 
+# Effort level for direct Bedrock API calls (internal LLM-as-judge utilities).
+# "low" = skip extended thinking, fast + cheap. These are structured eval tasks
+# that don't benefit from deep reasoning chains.
+BEDROCK_EFFORT = "low"
+
+
 def _call_bedrock_opus(prompt: str, system: str = _SYSTEM_PROMPT) -> tuple[str, LLMUsage]:
     """Invoke Bedrock Opus and return (response_text, usage).
 
     Sync call — boto3.converse() is a sync API.
     Max tokens: 2000 (changes are small).
+    Uses ``BEDROCK_EFFORT`` to control thinking depth (default: low).
     """
     client = _get_bedrock_client()
 
@@ -243,6 +250,10 @@ def _call_bedrock_opus(prompt: str, system: str = _SYSTEM_PROMPT) -> tuple[str, 
         inferenceConfig={
             "maxTokens": 2000,
             "temperature": 0.3,  # Low temp for precise, structured output
+        },
+        additionalModelRequestFields={
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": BEDROCK_EFFORT},
         },
     )
 

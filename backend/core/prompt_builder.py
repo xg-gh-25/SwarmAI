@@ -903,7 +903,7 @@ class PromptBuilder:
     # ------------------------------------------------------------------
 
     # Valid effort levels accepted by the Claude SDK / CLI.
-    _VALID_EFFORT_LEVELS = frozenset({"low", "medium", "high", "max"})
+    _VALID_EFFORT_LEVELS = frozenset({"low", "medium", "high", "xhigh", "max"})
 
     def _build_thinking_config(self) -> dict | None:
         """Build thinking configuration from app config.
