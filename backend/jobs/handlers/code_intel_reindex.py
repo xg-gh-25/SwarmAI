@@ -60,7 +60,8 @@ def reindex_projects(full: bool = False) -> dict:
 
         if full or freshness.suggest_full_rebuild:
             # Full reindex: clear + re-parse entire repo
-            from core.code_intel.parser import parse_repo
+            from core.code_intel.parser import parse_repo, LANGUAGE_MAP
+            from core.code_intel import extract_and_store_routes
             parse_results = parse_repo(repo_root)
             if parse_results:
                 graph.clear()
@@ -70,6 +71,18 @@ def reindex_projects(full: bool = False) -> dict:
                     graph.set_meta("last_indexed_commit", freshness.current_head)
                 # Preserve repo_root metadata
                 graph.set_meta("repo_root", str(repo_root))
+                # Extract routes from all parsed files
+                for pr in parse_results:
+                    fp = pr.file_path if hasattr(pr, "file_path") else pr.get("file_path", "")
+                    if fp:
+                        full_fp = repo_root / fp
+                        if full_fp.exists():
+                            try:
+                                lang = LANGUAGE_MAP.get(full_fp.suffix, "unknown")
+                                content = full_fp.read_text(encoding="utf-8", errors="replace")
+                                extract_and_store_routes(graph, fp, content, lang)
+                            except Exception:
+                                pass
             total_nodes = sum(len(pr.nodes) for pr in parse_results)
             results.append({
                 "project": project_name,
@@ -78,7 +91,8 @@ def reindex_projects(full: bool = False) -> dict:
             })
         else:
             # Incremental: only changed files
-            from core.code_intel.parser import parse_file
+            from core.code_intel.parser import parse_file, LANGUAGE_MAP
+            from core.code_intel import extract_and_store_routes
 
             refreshed = 0
             for rel_path in freshness.changed_files[:200]:  # generous cap
@@ -91,6 +105,10 @@ def reindex_projects(full: bool = False) -> dict:
                             graph.store_file_nodes_edges(
                                 rel_path, result.nodes, result.edges, file_hash
                             )
+                            # Extract routes from the same file content
+                            lang = LANGUAGE_MAP.get(full_path.suffix, "unknown")
+                            content = full_path.read_text(encoding="utf-8", errors="replace")
+                            extract_and_store_routes(graph, rel_path, content, lang)
                             refreshed += 1
                     except Exception:
                         pass

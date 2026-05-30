@@ -108,6 +108,35 @@ def invalidate_cache(project_name: str | None = None):
             _cache_initialized = False
 
 
+def extract_and_store_routes(graph: GraphStore, file_path: str, content: str, language: str) -> int:
+    """Extract routes from a file and store them in the graph database.
+
+    Called after parse_file() produces nodes — extracts HTTP routes and
+    persists them via graph_store.insert_routes().
+
+    Args:
+        graph: The GraphStore instance to store routes in.
+        file_path: Relative file path.
+        content: File content as string.
+        language: Language identifier.
+
+    Returns:
+        Number of routes extracted and stored.
+    """
+    try:
+        from .route_parser import extract_routes
+        # Clear stale routes for this file before inserting fresh ones.
+        # Without this, removed decorators would leave phantom routes.
+        graph.delete_routes_for_file(file_path)
+        routes = extract_routes(file_path, content, language)
+        if routes:
+            graph.insert_routes(routes)
+            return len(routes)
+    except Exception as e:
+        logger.debug(f"Route extraction failed for {file_path}: {e}")
+    return 0
+
+
 def _build_project_path_cache():
     """Scan Projects/*/TECH.md for repo_path fields."""
     from jobs.paths import PROJECTS_DIR

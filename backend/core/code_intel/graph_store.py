@@ -74,6 +74,21 @@ CREATE VIRTUAL TABLE IF NOT EXISTS code_fts USING fts5(
     tokenize='porter unicode61'
 );
 
+CREATE TABLE IF NOT EXISTS code_routes (
+    id TEXT PRIMARY KEY,
+    method TEXT NOT NULL,
+    path TEXT NOT NULL,
+    handler_node_id TEXT NOT NULL,
+    framework TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    line_number INTEGER,
+    middleware TEXT,
+    FOREIGN KEY (handler_node_id) REFERENCES code_nodes(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_routes_path ON code_routes(path);
+CREATE INDEX IF NOT EXISTS idx_routes_handler ON code_routes(handler_node_id);
+
 CREATE TABLE IF NOT EXISTS graph_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -996,3 +1011,111 @@ class GraphStore:
             "DELETE FROM code_nodes WHERE file_path = ?", (file_path,)
         )
         self._conn.commit()
+
+    # ── route CRUD ──────────────────────────────────────────────────────────
+
+    def delete_routes_for_file(self, file_path: str) -> int:
+        """Delete all routes belonging to a specific file.
+
+        Called before re-inserting routes to prevent stale phantom routes
+        from persisting when decorators are removed from source code.
+        """
+        cur = self._conn.execute(
+            "DELETE FROM code_routes WHERE file_path = ?", (file_path,)
+        )
+        self._conn.commit()
+        return cur.rowcount
+
+    def insert_routes(self, routes: list) -> int:
+        """Batch insert routes into code_routes table.
+
+        Each element must be a dict or dataclass with fields matching the
+        ``code_routes`` table columns. Existing routes with same ID are replaced.
+
+        Returns count of rows inserted.
+        """
+        sql = """
+            INSERT OR REPLACE INTO code_routes
+                (id, method, path, handler_node_id, framework, file_path,
+                 line_number, middleware)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        count = 0
+        for start in range(0, len(routes), _BATCH_SIZE):
+            batch = routes[start : start + _BATCH_SIZE]
+            rows = []
+            for r in batch:
+                d = r if isinstance(r, dict) else r.__dict__
+                middleware = d.get("middleware")
+                if isinstance(middleware, list):
+                    middleware = ",".join(middleware)
+                rows.append((
+                    d["id"],
+                    d["method"],
+                    d["path"],
+                    d["handler_node_id"],
+                    d["framework"],
+                    d["file_path"],
+                    d.get("line_number"),
+                    middleware,
+                ))
+            self._conn.executemany(sql, rows)
+            count += len(rows)
+        self._conn.commit()
+        return count
+
+    def get_routes(self, file_path: str | None = None) -> list[dict]:
+        """Return routes, optionally filtered by file_path.
+
+        Returns:
+            List of dicts with keys: id, method, path, handler_node_id,
+            framework, file_path, line_number, middleware.
+        """
+        if file_path:
+            rows = self._conn.execute(
+                "SELECT id, method, path, handler_node_id, framework, "
+                "file_path, line_number, middleware "
+                "FROM code_routes WHERE file_path = ? ORDER BY path",
+                (file_path,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT id, method, path, handler_node_id, framework, "
+                "file_path, line_number, middleware "
+                "FROM code_routes ORDER BY path",
+            ).fetchall()
+
+        return [
+            {
+                "id": r[0], "method": r[1], "path": r[2],
+                "handler_node_id": r[3], "framework": r[4],
+                "file_path": r[5], "line_number": r[6],
+                "middleware": r[7],
+            }
+            for r in rows
+        ]
+
+    def get_routes_for_handler(self, node_id: str) -> list[dict]:
+        """Return all routes associated with a handler node.
+
+        Args:
+            node_id: The handler_node_id to look up.
+
+        Returns:
+            List of route dicts matching the handler.
+        """
+        rows = self._conn.execute(
+            "SELECT id, method, path, handler_node_id, framework, "
+            "file_path, line_number, middleware "
+            "FROM code_routes WHERE handler_node_id = ? ORDER BY path",
+            (node_id,),
+        ).fetchall()
+        return [
+            {
+                "id": r[0], "method": r[1], "path": r[2],
+                "handler_node_id": r[3], "framework": r[4],
+                "file_path": r[5], "line_number": r[6],
+                "middleware": r[7],
+            }
+            for r in rows
+        ]
