@@ -133,6 +133,29 @@ Max 20 fixes per session. After 20, checkpoint and report regardless of remainin
 6. Re-run failed tests after fixes (confirm green)
 ```
 
+### Single-Platform Compile Trap (BLOCKING for cross-platform changes)
+
+**Trigger:** the changeset adds a `#[cfg(...)]` / `#ifdef` / platform-conditional
+symbol, OR touches code that compiles per-target (Rust, C/C++, Go build tags,
+platform-specific imports).
+
+**The trap:** a compile check on ONE platform (`cargo check` on the dev Mac)
+passes while another target FAILS — e.g. a `#[cfg(target_os="macos")]` function
+referenced by an un-gated caller breaks the Windows build (E0425). The green
+local check hides it. This run (run_8a9de435) hit exactly this; adversarial
+review caught the Windows break a macOS `cargo check` reported as clean (RP40).
+
+**Rule:** a single-platform compile success may NOT be reported as a fully-green
+TEST result for a cross-platform changeset. Either:
+1. Run the cross-target check locally if the toolchain exists
+   (`cargo check --target <other>`), OR
+2. Mark the result explicitly: `"platform_verified": ["macos"],
+   "platform_pending_ci": ["windows", "linux"]` and surface it as a known gap
+   in DELIVER — the CI matrix is the definitive check, not the local build.
+
+Never write `all_pass: true` / "compiles" unqualified when only one of N targets
+was actually checked.
+
 ### Exit Evidence Checklist
 
 Confirm each before publishing:
@@ -144,6 +167,7 @@ Confirm each before publishing:
 - [ ] Remaining unfixed issues documented with diagnosis
 - [ ] No test expectation modifications (only code fixes)
 - [ ] Regressions vs new failures vs pre-existing clearly separated
+- [ ] Cross-platform changeset: single-platform compile NOT reported as fully-green (Single-Platform Compile Trap above)
 
 ### Artifact Publish
 
