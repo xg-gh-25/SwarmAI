@@ -966,6 +966,87 @@ def _detect_active_project(workspace: Path) -> str | None:
     return None
 
 
+def _detect_active_coding_project(workspace: Path) -> str | None:
+    """Detect if the current session context suggests coding work.
+
+    Only returns a project name if there's evidence this session involves code:
+    1. Recent DailyActivity (today/yesterday) mentions code files (.py, .ts, .rs, etc.)
+    2. There's an active pipeline run (status=running) for a project with code_intel.db
+    3. The most recent session's git activity shows uncommitted changes
+
+    Returns None for non-coding sessions — saves ~300 tokens of route/risk briefing.
+    """
+    import time
+
+    projects_dir = workspace / "Projects"
+    if not projects_dir.is_dir():
+        return None
+
+    # Signal 1: Active pipeline run → definitely coding
+    for proj_dir in projects_dir.iterdir():
+        if not proj_dir.is_dir():
+            continue
+        runs_dir = proj_dir / ".artifacts" / "runs"
+        if not runs_dir.is_dir():
+            continue
+        # Check for any running pipeline (recently modified run.json)
+        for run_dir in sorted(runs_dir.iterdir(), reverse=True)[:3]:
+            run_json = run_dir / "run.json"
+            if run_json.exists():
+                try:
+                    import json
+                    data = json.loads(run_json.read_text())
+                    if data.get("status") == "running":
+                        if (proj_dir / "code_intel.db").exists():
+                            return proj_dir.name
+                except Exception:
+                    continue
+
+    # Signal 2: Today's DailyActivity mentions code-related files
+    daily_dir = workspace / "Knowledge" / "DailyActivity"
+    if daily_dir.is_dir():
+        today = time.strftime("%Y-%m-%d")
+        code_extensions = {".py", ".ts", ".tsx", ".js", ".rs", ".go", ".java"}
+        for da_file in sorted(daily_dir.iterdir(), reverse=True)[:2]:
+            if today in da_file.name:
+                try:
+                    content = da_file.read_text(errors="replace")[:5000]
+                    # Check for code file mentions or git activity
+                    if any(ext in content for ext in code_extensions) or "git" in content.lower():
+                        return _detect_active_project(workspace)
+                except Exception:
+                    continue
+
+    # Signal 3: Uncommitted changes in any indexed project
+    for name in ["SwarmAI"] + sorted(
+        d.name for d in projects_dir.iterdir()
+        if d.is_dir() and d.name != "SwarmAI"
+    ):
+        if not (projects_dir / name / "code_intel.db").exists():
+            continue
+        # Read repo_root from code_intel.db meta (cheap — single row query)
+        try:
+            import sqlite3
+            db_path = projects_dir / name / "code_intel.db"
+            conn = sqlite3.connect(str(db_path), timeout=1)
+            row = conn.execute("SELECT value FROM graph_meta WHERE key='repo_root'").fetchone()
+            conn.close()
+            if row:
+                repo_root = Path(row[0])
+                git_dir = repo_root / ".git"
+                if git_dir.is_dir():
+                    # Check for any staged/modified files (cheap: just check index mtime)
+                    index_file = git_dir / "index"
+                    if index_file.exists():
+                        age = time.time() - index_file.stat().st_mtime
+                        if age < 3600:  # git index touched in last hour → active coding
+                            return name
+        except Exception:
+            continue
+
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Briefing builder — main entry point
 # ---------------------------------------------------------------------------
@@ -1088,10 +1169,13 @@ def build_session_briefing(
             sections.append("**Skill health:**\n" + "\n".join(f"  - {line}" for line in skill_health_lines))
 
         # L5: Codebase intelligence from code_intel.db
+        # Only inject when the session is likely code-related:
+        # - Session has a bound project with code_intel.db, OR
+        # - Recent DailyActivity mentions code files
+        # Skip for non-coding sessions (chat, research, reports) to save ~300 tokens.
         try:
             from core.code_intel.codebase_map import generate_codebase_map
-            # Detect active project from recent DailyActivity or default to SwarmAI
-            active_project = _detect_active_project(workspace)
+            active_project = _detect_active_coding_project(workspace)
             if active_project:
                 codebase_ctx = generate_codebase_map(active_project)
                 if codebase_ctx:
