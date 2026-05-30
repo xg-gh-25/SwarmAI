@@ -1,9 +1,7 @@
 ---
 name: summarize
-description: >
-  Quickly summarize articles, documents, URLs, long text, or multi-source content into concise key points.
-  TRIGGER: "summarize", "summary", "tl;dr", "key points", "what's this about", "give me the gist", "condense".
-  DO NOT USE: for deep multi-source research (use deep-research), consulting-grade analysis (use consulting-report), or full document writing (use narrative-writing).
+description: "Quickly summarize articles, documents, URLs, long text, or multi-source content into concise key points.\n  TRIGGER: \"summarize\", \"summary\", \"tl;dr\", \"key points\".\n  NOT FOR: deep-research,\
+  \ consulting-report, narrative-writing use cases."
 tier: always
 ---
 # Summarize

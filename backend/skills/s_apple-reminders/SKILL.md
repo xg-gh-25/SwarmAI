@@ -1,9 +1,7 @@
 ---
 name: apple-reminders
-description: >
-  Create, manage, and query Apple Reminders from the terminal. Syncs to iPhone/iPad/Mac.
-  TRIGGER: "remind me", "add reminder", "create reminder", "my reminders", "to-do", "todo list", "what's due", "reminders".
-  DO NOT USE: for calendar events (use Outlook Assistant), project management, or non-Apple reminder systems.
+description: "Create, manage, and query Apple Reminders from the terminal. Syncs to iPhone/iPad/Mac.\n  TRIGGER: \"remind me\", \"add reminder\", \"create reminder\", \"my reminders\".\n  NOT FOR: for calendar\
+  \ events (use Outlook Assistant), project management, or non-Apple reminder systems."
 tier: lazy
 platform: macos
 ---

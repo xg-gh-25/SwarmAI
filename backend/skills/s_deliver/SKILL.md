@@ -1,14 +1,16 @@
 ---
 name: deliver
-description: >
-  Package pipeline outputs into structured deliverables: artifact bundles,
-  PR descriptions, decision logs, attention flags, and delivery reports.
-  Bridges .artifacts/ (working memory) to Knowledge/ (long-term memory).
-  TRIGGER: "deliver this", "package for review", "create delivery report",
-  "wrap up this feature", "prepare for handoff", "what did we build".
-  DO NOT USE: for ongoing work (just keep building), or for shipping/deploying
-  code (future ship skill).
-consumes_artifacts: [evaluation, research, alternatives, design_doc, changeset, review, test_report]
+description: "Package pipeline outputs into structured deliverables: artifact bundles, PR descriptions, decision logs, attention flags, and delivery reports. Bridges .artifacts/ (working memory) to Knowledge/\
+  \ (long-term memory).\n  TRIGGER: \"deliver this\", \"package for review\", \"create delivery report\", \"wrap up this feature\".\n  NOT FOR: for ongoing work (just keep building), or for shipping/deploying\
+  \ code (future ship skill)."
+consumes_artifacts:
+- evaluation
+- research
+- alternatives
+- design_doc
+- changeset
+- review
+- test_report
 produces_artifact: delivery
 tier: always
 ---

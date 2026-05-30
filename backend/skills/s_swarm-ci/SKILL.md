@@ -1,13 +1,7 @@
 ---
 name: swarm-ci
-description: >
-  Check SwarmAI GitHub Actions CI status: list recent runs, diagnose failures,
-  and summarize health. Replaces ad-hoc gh run commands with structured output.
-  TRIGGER: "CI status", "check CI", "is CI green", "CI failures", "why did CI fail",
-  "GitHub Actions", "build status", "CI 状态".
-  DO NOT USE: for running tests locally (use pytest directly), for Hive CI
-  (Hive has no CI), for non-SwarmAI repos.
-  SIBLINGS: s_swarm-build = local build | s_swarm-release = full release cycle.
+description: "Check SwarmAI GitHub Actions CI status: list recent runs, diagnose failures, and summarize health. Replaces ad-hoc gh run commands with structured output.\n  TRIGGER: \"CI status\", \"check\
+  \ CI\", \"is CI green\", \"CI failures\".\n  NOT FOR: pytest use cases."
 tier: lazy
 platform: desktop
 project_scope: SwarmAI

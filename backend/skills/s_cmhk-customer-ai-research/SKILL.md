@@ -1,10 +1,7 @@
 ---
 name: cmhk-customer-ai-research
-description: >
-  Research customer AI Agent scenarios via web search. Outputs structured JSON/Markdown
-  with each customer's AI products, Agent capabilities, and competitive positioning.
-  TRIGGER: "research AI scenarios", "客户AI调研", "research [company] AI capabilities".
-  DO NOT USE: for revenue data (use s_industry-gtm-analysis) or weekly reports (use s_cmhk-weekly-report).
+description: "Research customer AI Agent scenarios via web search. Outputs structured JSON/Markdown with each customer's AI products, Agent capabilities, and competitive positioning.\n  TRIGGER: \"research\
+  \ AI scenarios\", \"客户AI调研\", \"research [company] AI capabilities\".\n  NOT FOR: s_industry-gtm-analysis, s_cmhk-weekly-report use cases."
 tier: lazy
 ---
 # customer-ai-research

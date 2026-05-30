@@ -1,13 +1,7 @@
 ---
 name: swarm-daemon
-description: >
-  Manage the SwarmAI launchd daemon: status, stop, start, restart, deploy,
-  logs, and health verification. Replaces manual launchctl and dev.sh daemon
-  commands with structured per-step execution.
-  TRIGGER: "daemon status", "restart daemon", "daemon logs", "stop daemon",
-  "start daemon", "daemon health", "deploy daemon", "守护进程".
-  DO NOT USE: for building the binary (use s_swarm-build first), for Hive
-  instances (use s_swarm-hive), for non-SwarmAI services.
+description: "Manage the SwarmAI launchd daemon: status, stop, start, restart, deploy, logs, and health verification. Replaces manual launchctl and dev.sh daemon commands with structured per-step execution.\n\
+  \  TRIGGER: \"daemon status\", \"restart daemon\", \"daemon logs\", \"stop daemon\".\n  NOT FOR: s_swarm-build, s_swarm-hive use cases."
 tier: lazy
 platform: desktop
 project_scope: SwarmAI

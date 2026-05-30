@@ -1,12 +1,8 @@
 ---
 name: deep-research
-description: >
-  Thorough multi-source research with citations, analysis, and synthesis.
-  TRIGGER: "research", "deep dive", "investigate", "find out about", "comprehensive analysis".
-  DO NOT USE: for quick factual lookups (just use WebFetch directly).
-  For GitHub repos use github-research. For consulting-grade reports use consulting-report.
-  Saves output to Knowledge/Notes/ by default.
-version: "2.0.0"
+description: "Thorough multi-source research with citations, analysis, and synthesis.\n  TRIGGER: \"research\", \"deep dive\", \"investigate\", \"find out about\".\n  NOT FOR: github-research, consulting-report\
+  \ use cases."
+version: 2.0.0
 produces_artifact: research
 tier: always
 ---

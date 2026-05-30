@@ -1,11 +1,8 @@
 ---
 name: wireframe
-description: >
-  Generate interactive wireframes as Excalidraw scenes from natural language descriptions.
-  Outputs a self-contained HTML file that opens in Excalidraw with the wireframe pre-loaded.
-  TRIGGER: "wireframe", "wireframe a page", "sketch a UI", "quick mockup", "layout sketch", "draw a screen", "wireframe this".
-  DO NOT USE: for pixel-perfect designs (use frontend-design), existing UI review (use web-design-review), or browser automation (use browser-agent).
-version: "1.0.0"
+description: "Generate interactive wireframes as Excalidraw scenes from natural language descriptions. Outputs a self-contained HTML file that opens in Excalidraw with the wireframe pre-loaded.\n  TRIGGER:\
+  \ \"wireframe\", \"wireframe a page\", \"sketch a UI\", \"quick mockup\".\n  NOT FOR: frontend-design, web-design-review, browser-agent use cases."
+version: 1.0.0
 tier: lazy
 ---
 # Wireframe

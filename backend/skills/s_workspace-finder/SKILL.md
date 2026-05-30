@@ -1,11 +1,7 @@
 ---
 name: workspace-finder
-description: >
-  Natural language file and content search within SwarmWS workspace. Find files by name, content, modification time,
-  size, type, or git status. Returns structured results the agent can reference or act on.
-  TRIGGER: "find files", "search workspace", "where is", "find all", "what changed", "show me files", "find TODOs",
-  "files modified today", "large files", "find duplicates".
-  DO NOT USE: for web search (use tavily-search), GitHub repo research (use github-research), or reading a known file (use Read tool).
+description: "Natural language file and content search within SwarmWS workspace. Find files by name, content, modification time, size, type, or git status. Returns structured results the agent can reference\
+  \ or act on.\n  TRIGGER: \"find files\", \"search workspace\", \"where is\", \"find all\".\n  NOT FOR: tavily-search, github-research use cases."
 tier: always
 ---
 # Workspace Finder

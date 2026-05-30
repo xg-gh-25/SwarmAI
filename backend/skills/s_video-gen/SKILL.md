@@ -1,10 +1,8 @@
 ---
 name: video-gen
-description: >
-  Create videos using structured prompts, storyboards, and AI generation tools.
-  TRIGGER: "generate video", "create video", "make a video", "video content", "short video", "video clip", "social video", "Reels", "TikTok video".
-  DO NOT USE: for video editing of existing footage (use ffmpeg directly) or for static images (use image-gen).
-version: "1.0.0"
+description: "Create videos using structured prompts, storyboards, and AI generation tools.\n  TRIGGER: \"generate video\", \"create video\", \"make a video\", \"video content\".\n  NOT FOR: ffmpeg, image-gen\
+  \ use cases."
+version: 1.0.0
 tier: lazy
 platform: desktop
 ---

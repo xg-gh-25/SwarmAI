@@ -1,11 +1,7 @@
 ---
 name: save-activity
-description: >
-  Extract key points from the current conversation into today's DailyActivity log.
-  TRIGGER: "save activity", "save daily activity", "log today's activity".
-  DO NOT USE: for persistent facts (use save-memory) or session handoffs (use save-context).
-  On-demand counterpart to the automatic post-session extraction hook.
-  SIBLINGS: save-memory = permanent facts/decisions -> MEMORY.md | save-activity = session log -> DailyActivity/ | save-context = handoff doc for next session.
+description: "Extract key points from the current conversation into today's DailyActivity log.\n  TRIGGER: \"save activity\", \"save daily activity\", \"log today's activity\".\n  NOT FOR: save-memory,\
+  \ save-context use cases."
 tier: always
 ---
 # Save Activity
