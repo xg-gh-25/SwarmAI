@@ -378,7 +378,7 @@ class ChannelGateway:
 
         Best-effort — failures are logged but don't block startup/shutdown.
         """
-        for adapter in self._adapters.values():
+        for adapter in list(self._adapters.values()):
             if hasattr(adapter, "set_presence") and adapter.channel_type == "slack":
                 try:
                     await adapter.set_presence(presence)
