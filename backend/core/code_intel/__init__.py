@@ -138,13 +138,23 @@ def extract_and_store_routes(graph: GraphStore, file_path: str, content: str, la
 
 
 def _build_project_path_cache():
-    """Scan Projects/*/TECH.md for repo_path fields."""
+    """Scan Projects/*/TECH.md for repo_path fields.
+
+    Supports multiple formats found in the wild:
+    - **Repo Path:** `/path/to/repo`
+    - **Local:** `/path/to/repo`
+    - **Codebase Location** section with backtick-wrapped paths
+    """
     from jobs.paths import PROJECTS_DIR
     projects_dir = PROJECTS_DIR
     if not projects_dir.is_dir():
         return
 
-    repo_path_pattern = re.compile(r"\*\*Repo Path:\*\*\s*`([^`]+)`")
+    # Match any bold label followed by a backtick-wrapped absolute path
+    path_patterns = [
+        re.compile(r"\*\*(?:Repo Path|Local|Codebase).*?:\*\*\s*`([^`]+)`"),
+        re.compile(r"`(/[^`]+)`\s*$", re.MULTILINE),  # bare backtick path on a line
+    ]
 
     for project_dir in projects_dir.iterdir():
         if not project_dir.is_dir():
@@ -154,9 +164,13 @@ def _build_project_path_cache():
             continue
         try:
             content = tech_md.read_text(encoding="utf-8")
-            match = repo_path_pattern.search(content)
-            if match:
-                repo_path = str(Path(match.group(1)).resolve())
-                _project_path_cache[repo_path] = project_dir.name
+            for pattern in path_patterns:
+                match = pattern.search(content)
+                if match:
+                    candidate = match.group(1).rstrip("/")
+                    resolved = str(Path(candidate).resolve())
+                    if Path(resolved).is_dir():
+                        _project_path_cache[resolved] = project_dir.name
+                        break
         except Exception:
             continue

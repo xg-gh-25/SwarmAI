@@ -53,10 +53,12 @@ def reindex_projects(full: bool = False) -> dict:
             results.append({"project": project_name, "status": "fresh"})
             continue
 
-        repo_root = Path(graph.get_meta("repo_root") or "")
+        repo_root = Path(graph.get_meta("repo_root") or "").resolve()
         if not repo_root.is_dir():
             results.append({"project": project_name, "status": "no_repo"})
             continue
+        # Ensure repo_root is stored as absolute (fixes '.' from early indexing)
+        graph.set_meta("repo_root", str(repo_root))
 
         if full or freshness.suggest_full_rebuild:
             # Full reindex: clear + re-parse entire repo
