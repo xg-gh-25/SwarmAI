@@ -108,7 +108,7 @@ class CodeIntelWatcher:
         return p.suffix in _WATCHED_EXTENSIONS
 
     async def _trigger_incremental(self, changed_files: list[Path]):
-        """Run incremental reindex in thread pool (SQLite ops are blocking)."""
+        """Run incremental reindex + route extraction in thread pool."""
         try:
             relative_files = []
             for f in changed_files:
@@ -119,9 +119,9 @@ class CodeIntelWatcher:
 
             if relative_files:
                 await asyncio.to_thread(
-                    self._graph.incremental_update,
-                    self._root,
+                    self._incremental_with_routes,
                     relative_files,
+                    changed_files,
                 )
                 logger.debug(
                     f"CodeIntelWatcher: incremental reindex for {self._project_name} "
@@ -129,6 +129,24 @@ class CodeIntelWatcher:
                 )
         except Exception as e:
             logger.warning(f"CodeIntelWatcher incremental reindex failed: {e}")
+
+    def _incremental_with_routes(self, relative_files: list[str], abs_files: list[Path]):
+        """Incremental update + re-extract routes for changed files (runs in thread)."""
+        from . import extract_and_store_routes
+        from .parser import LANGUAGE_MAP
+
+        # Step 1: normal incremental (nodes + edges)
+        self._graph.incremental_update(self._root, relative_files)
+
+        # Step 2: re-extract routes for changed files
+        for abs_path, rel_path in zip(abs_files, relative_files):
+            if abs_path.suffix in LANGUAGE_MAP and abs_path.exists():
+                try:
+                    content = abs_path.read_text(errors="replace")
+                    language = LANGUAGE_MAP[abs_path.suffix]
+                    extract_and_store_routes(self._graph, rel_path, content, language)
+                except Exception:
+                    pass  # Route extraction is best-effort
 
 
 # ── Module-level watcher registry ──────────────────────────────────────

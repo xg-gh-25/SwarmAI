@@ -77,6 +77,17 @@ def _format_briefing(project_name: str, summary: dict) -> str | None:
             hot_parts.append(f"{name}({callers})")
         lines.append(f"Most connected: {', '.join(hot_parts)}")
 
+    # Routes (top 10 — lets agent find handlers without grep)
+    routes = summary.get("routes", [])
+    if routes:
+        route_parts = []
+        for r in routes[:10]:
+            handler = r.get("handler_node_id", "").split("::")[-1] if "::" in r.get("handler_node_id", "") else r.get("handler_node_id", "?")
+            route_parts.append(f"{r['method']} {r['path']} → {handler}")
+        lines.append(f"Routes ({len(routes)} total): {', '.join(route_parts[:5])}")
+        if len(routes) > 5:
+            lines.append(f"  + {', '.join(route_parts[5:10])}")
+
     # Entry points and dead code
     entry_count = summary.get("entry_point_count", 0)
     dead_count = summary.get("dead_code_count", 0)

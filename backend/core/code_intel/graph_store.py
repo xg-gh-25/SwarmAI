@@ -562,6 +562,12 @@ class GraphStore:
         # Last indexed timestamp
         last_indexed = self.get_meta("last_full_index") or self.get_meta("last_incremental_update")
 
+        # Routes (for session-start briefing)
+        try:
+            routes = self.get_routes()
+        except Exception:
+            routes = []  # Table may not exist in older DBs
+
         return {
             "languages": {r[0]: r[1] for r in lang_rows},
             "total_nodes": node_count,
@@ -572,6 +578,7 @@ class GraphStore:
             "top_connected": top_connected,
             "entry_point_count": entry_count,
             "dead_code_count": dead_count,
+            "routes": routes,
             "last_indexed": last_indexed,
         }
 
