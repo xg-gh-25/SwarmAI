@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -73,6 +74,7 @@ def run_swarmai_monthly_report(config: dict | None = None) -> dict:
         "pollinate": _collect_pollinate_metrics(month_start, month_end),
         "sessions": _collect_session_metrics(month_start, month_end),
         "git": _collect_git_metrics(month_start, month_end),
+        "prior_month": _collect_prior_month_metrics(month_start),
     }
 
     # Generate report
@@ -135,7 +137,7 @@ def _collect_context_metrics() -> dict:
     if CONTEXT_DIR.exists():
         for f in CONTEXT_DIR.glob("*.md"):
             size = len(f.read_text(encoding="utf-8"))
-            tokens = size // 4  # rough estimate
+            tokens = int(size / 3.6)  # Measured: CJK-mixed markdown ≈ 3.6-3.8 bytes/token
             file_sizes[f.name] = tokens
             total_tokens += tokens
 
@@ -259,9 +261,11 @@ def _collect_evolution_metrics() -> dict:
         return {"corrections": 0, "competences": 0, "optimizations": 0}
 
     content = evo_path.read_text(encoding="utf-8")
-    corrections = content.count("### C0") + content.count("### C1") + content.count("### C2")
-    competences = content.count("### K0") + content.count("### K1")
-    optimizations = content.count("### O0")
+    # Mixed formats: corrections use **C0XX** bold, competences use ### K0XX headers,
+    # optimizations use **O0XX** bold. Match both patterns for each.
+    corrections = len(re.findall(r'\*\*C\d{2,3}\*\*', content)) or content.count("### C0")
+    competences = len(re.findall(r'### K\d{2,3}', content)) or len(re.findall(r'\*\*K\d{2,3}\*\*', content))
+    optimizations = len(re.findall(r'\*\*O\d{2,3}\*\*', content)) or content.count("### O0")
 
     return {"corrections": corrections, "competences": competences, "optimizations": optimizations}
 
@@ -321,7 +325,10 @@ def _collect_job_metrics(month_start: datetime, month_end: datetime) -> dict:
 def _collect_code_intel_metrics(project_name: str = "SwarmAI") -> dict:
     """Code Intelligence: index stats if available."""
     try:
-        from core.code_intel import load_project_graph
+        try:
+            from backend.core.code_intel import load_project_graph
+        except ImportError:
+            from core.code_intel import load_project_graph
         g = load_project_graph(project_name)
         if g:
             summary = g.get_codebase_summary()
@@ -332,8 +339,10 @@ def _collect_code_intel_metrics(project_name: str = "SwarmAI") -> dict:
                 "dead_code": summary.get("dead_code_count", 0),
                 "last_indexed": summary.get("last_indexed", "unknown"),
             }
-    except (ImportError, Exception):
+    except ImportError:
         pass
+    except Exception as e:
+        logger.debug("Code Intel unavailable for %s: %s", project_name, e)
     return {"available": False}
 
 
@@ -383,6 +392,52 @@ def _collect_pollinate_metrics(month_start: datetime, month_end: datetime) -> di
                     formats.add("poster")
 
     return {"pieces": pieces, "formats": sorted(formats)}
+
+
+def _collect_prior_month_metrics(month_start: datetime) -> dict | None:
+    """Read prior month's report to compute MoM deltas."""
+    # Prior month label
+    first_of_this = month_start.replace(day=1)
+    prior_end = first_of_this - timedelta(days=1)
+    prior_label = f"{prior_end.year}-{prior_end.month:02d}"
+
+    prior_path = SWARMWS / "Knowledge" / "Reports" / f"{prior_label}-swarmai-monthly.md"
+    if not prior_path.exists():
+        return None
+
+    content = prior_path.read_text(encoding="utf-8")
+    metrics: dict = {}
+
+    # Parse key metrics from markdown table rows
+    for line in content.split("\n"):
+        if "| **Pipeline** | Runs completed |" in line:
+            m = re.search(r'\|\s*(\d+)\s*\|', line.split("Runs completed")[1])
+            if m:
+                metrics["pipeline_runs"] = int(m.group(1))
+        elif "| **Codebase** | Commits |" in line:
+            m = re.search(r'\|\s*(\d+)\s*\|', line.split("Commits")[1])
+            if m:
+                metrics["commits"] = int(m.group(1))
+        elif "| **Context** | System prompt total |" in line:
+            m = re.search(r'([\d,]+)\s*tok', line)
+            if m:
+                metrics["context_tokens"] = int(m.group(1).replace(",", ""))
+        elif "| **DDD Cultivation** | Lessons auto-applied |" in line:
+            m = re.search(r'\|\s*(\d+)\s*\|', line.split("auto-applied")[1])
+            if m:
+                metrics["ddd_applied"] = int(m.group(1))
+        elif "| **Jobs** | Success rate |" in line:
+            m = re.search(r'([\d.]+)%', line)
+            if m:
+                metrics["job_success_rate"] = float(m.group(1))
+        elif "| **Skills** | Total |" in line:
+            m = re.search(r'\|\s*(\d+)\s', line.split("Total")[1])
+            if m:
+                metrics["skills_total"] = int(m.group(1))
+
+    if not metrics:
+        logger.debug("Prior month report exists (%s) but no metrics parsed", prior_path.name)
+    return metrics if metrics else None
 
 
 def _collect_session_metrics(month_start: datetime, month_end: datetime) -> dict:
@@ -465,6 +520,7 @@ def _generate_monthly_report(
     poll = metrics["pollinate"]
     sess = metrics["sessions"]
     git = metrics["git"]
+    prior = metrics.get("prior_month")
 
     lines = [
         "---",
@@ -643,6 +699,36 @@ def _generate_monthly_report(
         for proj, stats in cult["by_project"].items():
             lines.append(f"  - {proj}: {stats['applied']} applied, {stats['escalated']} escalated")
     lines.append("")
+
+    # ─── Month-over-Month ───
+    if prior:
+        lines.append("## Month-over-Month")
+        lines.append("")
+        lines.append("| Metric | Prior | Current | Delta |")
+        lines.append("|--------|-------|---------|-------|")
+
+        def _delta(curr: int | float, prev: int | float) -> str:
+            diff = curr - prev
+            if diff > 0:
+                return f"+{diff:g} 📈"
+            elif diff < 0:
+                return f"{diff:g} 📉"
+            return "— "
+
+        if "pipeline_runs" in prior:
+            lines.append(f"| Pipeline runs | {prior['pipeline_runs']} | {pipe['runs_completed']} | {_delta(pipe['runs_completed'], prior['pipeline_runs'])} |")
+        if "commits" in prior:
+            lines.append(f"| Commits | {prior['commits']} | {git['commits']} | {_delta(git['commits'], prior['commits'])} |")
+        if "context_tokens" in prior:
+            lines.append(f"| Context tokens | {prior['context_tokens']:,} | {ctx['total_tokens']:,} | {_delta(ctx['total_tokens'], prior['context_tokens'])} |")
+        if "ddd_applied" in prior:
+            lines.append(f"| DDD cultivated | {prior['ddd_applied']} | {cult['applied']} | {_delta(cult['applied'], prior['ddd_applied'])} |")
+        if "job_success_rate" in prior:
+            lines.append(f"| Job success % | {prior['job_success_rate']}% | {jobs['success_rate']}% | {_delta(jobs['success_rate'], prior['job_success_rate'])} |")
+        if "skills_total" in prior:
+            lines.append(f"| Skills | {prior['skills_total']} | {skills['total']} | {_delta(skills['total'], prior['skills_total'])} |")
+
+        lines.append("")
 
     # ─── Risks & Next Month ───
     lines.append("## Risks & Next Month")
