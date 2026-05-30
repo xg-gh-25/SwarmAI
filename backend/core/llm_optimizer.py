@@ -43,12 +43,14 @@ def _resolve_bedrock_model() -> tuple[str, bool]:
 
     cfg = AppConfigManager.instance()
     short_name = cfg.get("default_model", "claude-opus-4-6")
-    model_map = cfg.get("bedrock_model_map", {})
+    model_map = cfg.get("bedrock_model_map") or {}  # null-safe: config may have null
     model_id = model_map.get(short_name, f"us.anthropic.{short_name}")
 
-    # Opus 4.8+ rejects temperature != 1 with adaptive thinking.
-    # 4.6 and earlier accept it fine.
-    supports_temperature = "4-8" not in model_id and "4-7" not in model_id
+    # Opus 4.7+ rejects temperature != 1 with adaptive thinking.
+    # Explicit set on short_name (not substring on model_id) to avoid
+    # false matches on future names like "claude-opus-4-80".
+    _NO_TEMPERATURE_MODELS = {"claude-opus-4-7", "claude-opus-4-8"}
+    supports_temperature = short_name not in _NO_TEMPERATURE_MODELS
 
     return model_id, supports_temperature
 
