@@ -252,3 +252,76 @@ def _check_port_free(host: str, port: int) -> bool:
         return True  # Port is free
     finally:
         sock.close()
+
+
+# ---------------------------------------------------------------------------
+# Guardian bundling (run_8a9de435) — guardian assets must ship in the .app so
+# the Rust auto_install_daemon can install the C034 recovery watchdog for
+# end-user installs (not just the deprecated Python installer).
+# ---------------------------------------------------------------------------
+
+RESOURCES_DAEMON_DIR = BACKEND_DIR.parent / "desktop" / "resources" / "daemon"
+GUARDIAN_PLIST_TEMPLATE = RESOURCES_DAEMON_DIR / "com.swarmai.guardian.plist.template"
+GUARDIAN_SCRIPT = RESOURCES_DAEMON_DIR / "swarmai_guardian.sh"
+GUARDIAN_GUARD_PY = RESOURCES_DAEMON_DIR / "daemon_guard.py"
+GUARD_PY_SOURCE = BACKEND_DIR / "core" / "daemon_guard.py"
+
+
+class TestGuardianBundling:
+    """The guardian watchdog assets must be staged in desktop/resources/daemon/
+    so Tauri bundles them into the .app (tauri.conf ../resources/daemon/* glob)
+    and Rust auto_install_daemon can install them for end users."""
+
+    def test_guardian_assets_staged_for_bundling(self):
+        # AC1: all 3 guardian assets present in the bundled resources dir.
+        assert GUARDIAN_PLIST_TEMPLATE.exists(), f"Missing: {GUARDIAN_PLIST_TEMPLATE}"
+        assert GUARDIAN_SCRIPT.exists(), f"Missing: {GUARDIAN_SCRIPT}"
+        assert GUARDIAN_GUARD_PY.exists(), f"Missing: {GUARDIAN_GUARD_PY}"
+
+    def test_guardian_plist_template_valid_and_substitutable(self):
+        # AC4: rendered plist parses and leaves no unsubstituted __ placeholders.
+        content = GUARDIAN_PLIST_TEMPLATE.read_text()
+        content = content.replace("__GUARDIAN_SCRIPT__", "/tmp/swarmai_guardian.sh")
+        content = content.replace("__LOG_DIR__", "/tmp/logs")
+        assert "__" not in content, "guardian plist has unsubstituted __ placeholders"
+        plist = plistlib.loads(content.encode())
+        assert plist["Label"] == "com.swarmai.guardian"
+        assert plist["StartInterval"] <= 60
+        assert plist.get("RunAtLoad") is True
+
+    def test_staged_guard_py_identical_to_source(self):
+        # AC5: drift guard — the bundled daemon_guard.py must match the source
+        # of truth (backend/core/daemon_guard.py). build-backend.sh refreshes it,
+        # but this test catches drift if someone edits one without the other.
+        import filecmp
+        assert filecmp.cmp(str(GUARDIAN_GUARD_PY), str(GUARD_PY_SOURCE), shallow=False), \
+            "Staged daemon_guard.py drifted from backend/core/daemon_guard.py — " \
+            "re-run build-backend.sh or copy the source"
+
+    def test_guardian_script_is_executable_and_self_contained(self):
+        # The bundled script must run the STANDALONE guard (not `-m core...`),
+        # since the .app install has no repo/PYTHONPATH.
+        body = GUARDIAN_SCRIPT.read_text()
+        assert "-m core.daemon_guard" not in body
+        assert "guardian/daemon_guard.py" in body
+
+    def test_all_bundled_guardian_assets_match_sources(self):
+        # Drift guard for ALL 3 bundled assets (not just guard.py): the bundled
+        # script + plist template must track their sources of truth too. The
+        # sync script (run via build-backend.sh AND tauri beforeBuildCommand)
+        # keeps them current; this test is the backstop.
+        import filecmp
+        pairs = [
+            (GUARDIAN_GUARD_PY, GUARD_PY_SOURCE),
+            (GUARDIAN_SCRIPT, CHANNELS_DIR / "swarmai_guardian.sh"),
+            (GUARDIAN_PLIST_TEMPLATE, CHANNELS_DIR / "com.swarmai.guardian.plist"),
+        ]
+        for staged, source in pairs:
+            assert filecmp.cmp(str(staged), str(source), shallow=False), \
+                f"Bundled {staged.name} drifted from {source} — run sync-guardian-assets.sh"
+
+    def test_sync_script_exists(self):
+        # The single-source-of-truth sync script must exist (wired into both
+        # build-backend.sh and tauri.conf beforeBuildCommand).
+        sync = BACKEND_DIR.parent / "desktop" / "scripts" / "sync-guardian-assets.sh"
+        assert sync.exists(), "sync-guardian-assets.sh missing"
