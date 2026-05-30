@@ -61,10 +61,10 @@ def test_extract_fastapi_routes():
     methods = sorted(r.method for r in routes)
     assert methods == ["DELETE", "GET", "GET", "POST"]
 
-    # Check paths
+    # Check paths — APIRouter(prefix="/api/users") prepends to all routes
     paths = sorted(r.path for r in routes)
-    assert "/" in paths
-    assert "/{user_id}" in paths
+    assert "/api/users" in paths
+    assert "/api/users/{user_id}" in paths
 
     # Check framework
     for r in routes:
