@@ -421,6 +421,36 @@ After all specialist sub-agents complete:
 - Confidence 3-4: suppress from main findings (appendix only)
 - Confidence 1-2: suppress entirely
 
+**3c.1 Shared-State Override (BLOCKING — overrides suppression):**
+
+A low-confidence finding may NOT be suppressed if it touches **shared mutable
+state** — a variable, flag, field, or attribute read by **2+ code sites**.
+Confidence reflects the reviewer's certainty about ONE site; it cannot account
+for the blast radius across all readers. The reviewer who flagged it likely
+checked the same single consumer you'd check to dismiss it.
+
+**Trigger:** finding references a variable/flag/attribute (e.g. `_content_emitted`,
+`self._x`, a status field, a module-level global) that the changeset's diff
+**reads or writes**, AND that symbol has ≥2 readers.
+
+**Required action (do NOT suppress until done):**
+1. `grep -n "<symbol>" <changed_file>` and across the module → list ALL readers.
+2. For EACH reader, answer: does the value change introduced by this changeset
+   alter that reader's behavior? Binary yes/no, per site.
+3. If ANY reader's behavior changes in a way not covered by a test → the finding
+   is REAL regardless of the reviewer's original confidence. Fix + add a test.
+4. If all readers verified safe → record the per-site verification in the
+   delivery artifact (`shared_state_audit`), THEN suppression is allowed.
+
+**Why this exists (run_fd4d756b, 2026-05-30):** adversarial review flagged a
+LOW conf-4 finding on `_content_emitted`. It was suppressed/rejected after
+checking only ONE of its 3 consumers (the one that confirmed dismissal). The
+2nd consumer (zombie detection: `streaming_dur<2s and not _content_emitted →
+kill+retry`) had no guard — a real kill-healthy-subprocess regression shipped
+to the delivery artifact. PE review caught it post-hoc. Confidence gating is
+calibrated for false-positive noise, NOT for blast-radius blindness. Shared
+state is the one place a "low confidence" score is structurally untrustworthy.
+
 ---
 
 #### Step 4: Red Team (Conditional, Sequential)
