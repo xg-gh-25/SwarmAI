@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev:full",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "bash scripts/sync-guardian-assets.sh || echo 'WARN: guardian asset sync failed \u2014 shipping committed copies'; npm run build",
+    "beforeBuildCommand": "bash scripts/pre-build.sh",
     "frontendDist": "../dist"
   },
   "app": {
