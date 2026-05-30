@@ -325,6 +325,36 @@ class TestAssistantMessagePreservation:
         assert thinking_blocks == [], "whitespace-only thinking must not be persisted"
 
     @pytest.mark.asyncio
+    async def test_empty_thinking_only_marks_content_emitted(self):
+        """An AssistantMessage whose ONLY block is empty thinking must still set
+        _content_emitted=True. The model DID respond (empty thinking is valid
+        Opus 4.8 output); skipping the block must not remove the proof, or
+        zombie-detection (streaming_dur<2s + not _content_emitted → kill+retry)
+        would false-fire and kill a healthy subprocess. Regression guard for the
+        empty-thinking fix removing an implicit safety net (LL08 pattern)."""
+        unit = _make_unit()
+
+        thinking_block = _MockThinkingBlock()
+        thinking_block.thinking = ""
+        thinking_block.signature = "ErUBsig..."
+
+        assistant_msg = _MockAssistantMessage()
+        assistant_msg.content = [thinking_block]  # ONLY an empty thinking block
+        assistant_msg.model = "claude-opus-4-8"
+        assistant_msg.session_id = None
+
+        result_msg = _make_result_message(usage=None)
+        _set_mock_client(unit, [assistant_msg, result_msg])
+
+        with _patch_sdk_modules():
+            await _collect_events(unit)
+
+        assert unit._content_emitted is True, (
+            "empty-thinking-only turn must mark content emitted to avoid "
+            "false zombie-kill"
+        )
+
+    @pytest.mark.asyncio
     async def test_nonempty_thinking_preserves_signature(self):
         """A ThinkingBlock WITH content must be emitted with BOTH thinking and
         signature preserved (signature was previously dropped at line 2095)."""
