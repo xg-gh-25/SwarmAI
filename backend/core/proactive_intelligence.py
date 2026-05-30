@@ -735,13 +735,26 @@ def _get_todo_highlights(max_items: int = 5) -> list[str]:
 
 
 def _get_skill_health_highlights(ctx_dir: Path) -> list[str]:
-    """Read skill_health.json and surface medium-confidence recommendations."""
+    """Read skill_health.json and surface medium-confidence recommendations.
+
+    Staleness filter: items unchanged for >7 days are suppressed. If the user
+    hasn't acted on a recommendation in a week, repeating it every session
+    is noise, not a reminder. The item stays in skill_health.json for the
+    evolution pipeline — it just stops polluting the briefing.
+    """
+    import time as _time
+
     health_path = ctx_dir / "skill_health.json"
     if not health_path.exists():
         return []
 
     try:
         report = json.loads(health_path.read_text(encoding="utf-8"))
+        # Staleness gate: if file hasn't been modified in >7 days, all items are stale
+        file_age_days = (_time.time() - health_path.stat().st_mtime) / 86400
+        if file_age_days > 7:
+            return []  # All recommendations are stale — suppress entirely
+
         highlights = []
         for skill in report.get("skills", []):
             try:
@@ -802,17 +815,11 @@ def _get_health_highlights(working_directory: str) -> list[str]:
         elif level == "warning":
             lines.append(f"  - [warning] {msg}")
 
-    # Weekly memory health summary
+    # Weekly memory health summary — only surface gaps (not routine maintenance)
+    # Maintenance actions (stale memory cleanup, compression) are expected automated
+    # housekeeping — showing them every session is pure noise.
     mem_health = data.get("memory_health")
     if mem_health:
-        actions = mem_health.get("actions", [])
-        summary = mem_health.get("summary", "")
-        if actions:
-            action_text = ", ".join(a[:50] for a in actions[:3])
-            lines.append(f"  - [maintenance] {action_text}")
-        elif summary:
-            lines.append(f"  - [maintenance] {_sanitize_prompt_field(summary, 100)}")
-
         # Capability gaps — recurring error patterns detected by weekly analysis
         gaps = mem_health.get("capability_gaps", [])
         for gap in gaps[:3]:
@@ -1104,6 +1111,18 @@ def build_session_briefing(
         # Filter ranked items against user-dismissed titles
         ranked = _filter_dismissed_ranked(ranked, dismissed)
 
+        # Quality filter: suppress low-signal P2 suggestions without momentum.
+        # "MCP Gateway" showing every session when untouched for weeks = noise.
+        # Keep items with: momentum, P0/P1, blocking, or high frequency.
+        # Exception: if ALL items would be filtered, keep the top 1 (better than
+        # empty focus section when there IS open work, just nothing urgent).
+        high_signal = [item for item in ranked
+                       if item.from_continue_hint
+                       or item.priority in ("P0", "P1")
+                       or item.blocks_others
+                       or item.report_count >= 3]
+        ranked = high_signal if high_signal else ranked[:1]
+
         if not ranked and not signals:
             return None
 
@@ -1150,15 +1169,24 @@ def build_session_briefing(
             sections.append("**System health:**\n" + "\n".join(health_lines))
 
         # L5: DDD escalations (risky changes needing human decision)
+        # Only show escalations from the last 7 days — older ones are stale
+        # (either user silently approved by not acting, or they're low priority)
         try:
             from core.ddd_cultivation import read_pending_proposals
             active_proj = _detect_active_project(workspace) or "SwarmAI"
             ddd_escalations = read_pending_proposals(workspace, active_proj)
             if ddd_escalations:
-                esc_lines = [f"  - [{p.target_doc}] {p.content[:100]}" for p in ddd_escalations[:3]]
-                sections.append(
-                    f"**DDD escalations ({len(ddd_escalations)} awaiting decision):**\n" + "\n".join(esc_lines)
-                )
+                import time as _t
+                now = _t.time()
+                fresh = [p for p in ddd_escalations
+                         if hasattr(p, 'created_at') and (now - (p.created_at or 0)) < 7 * 86400]
+                # Fall back to all if created_at not available
+                to_show = fresh if fresh else ddd_escalations
+                if to_show:
+                    esc_lines = [f"  - [{p.target_doc}] {p.content[:100]}" for p in to_show[:5]]
+                    sections.append(
+                        f"**DDD escalations ({len(to_show)} awaiting decision):**\n" + "\n".join(esc_lines)
+                    )
         except Exception as exc:
             logger.debug("DDD escalations read failed: %s", exc)
 
