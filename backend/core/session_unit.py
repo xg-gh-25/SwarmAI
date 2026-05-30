@@ -2104,6 +2104,16 @@ class SessionUnit:
                                 # to the API on any future multi-turn reconstruction.
                                 "signature": getattr(block, "signature", ""),
                             })
+                        else:
+                            # The model DID respond (it produced a thinking block,
+                            # just with redacted/empty content). Mark content as
+                            # emitted so zombie-detection (streaming_dur<2s +
+                            # not _content_emitted → kill+retry) and empty-result
+                            # guards don't false-fire on a legitimate Opus 4.8
+                            # turn whose only block is empty thinking. Skipping the
+                            # block must not also remove the proof that the LLM
+                            # answered.
+                            self._content_emitted = True
                     elif isinstance(block, ToolUseBlock):
                         if block.name == "AskUserQuestion":
                             questions = block.input.get("questions", [])
