@@ -142,7 +142,7 @@ Commit ALL changed files: `release: vX.Y.Z`
 ```
 Stage 2 VERSION BUMP: PASS
   Old: X.Y.Z → New: X.Y.Z (minor|patch)
-  Files updated: 5/5 synced
+  Files updated: 7/7 synced (5 version + 2 lockfiles)
 ```
 
 ---
