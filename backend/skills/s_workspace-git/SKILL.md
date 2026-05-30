@@ -6,7 +6,6 @@ description: >
   TRIGGER: "git status", "commit changes", "what changed", "git log", "git diff", "stash", "undo last commit",
   "show me the diff", "commit today's work", "git history", "revert".
   DO NOT USE: for GitHub PR/issue operations (use github-research or gh CLI directly), or non-SwarmWS repos.
-  SIBLINGS: workspace-finder = file search | workspace-organizer = batch file ops | code-review = PR review.
 tier: always
 ---
 # Workspace Git

@@ -8,8 +8,6 @@ description: >
   "wrap up this feature", "prepare for handoff", "what did we build".
   DO NOT USE: for ongoing work (just keep building), or for shipping/deploying
   code (future ship skill).
-  SIBLINGS: code-review = review code quality | qa = test quality |
-  deliver = package everything for handoff.
 consumes_artifacts: [evaluation, research, alternatives, design_doc, changeset, review, test_report]
 produces_artifact: delivery
 tier: always

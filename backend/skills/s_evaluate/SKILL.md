@@ -8,8 +8,6 @@ description: >
   "triage this", "is this worth doing", "prioritize this".
   DO NOT USE: for existing tasks already in progress (just build), or for
   pure research without a decision gate (use deep-research).
-  SIBLINGS: deep-research = investigate without judging | alternatives = compare approaches |
-  evaluate = judge whether to proceed at all.
 consumes_artifacts: [research]
 produces_artifact: evaluation
 tier: always

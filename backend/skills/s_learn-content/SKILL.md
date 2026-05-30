@@ -5,7 +5,6 @@ description: >
   Stores source URL + metadata + briefing (NOT full text). On-demand retrieval from source.
   TRIGGER: "learn this", "save this article", "read and remember", "ingest this", "learn from".
   DO NOT USE: for deep multi-source research (use deep-research), quick summaries without storage (use summarize), or saving raw facts to memory (use save-memory).
-  SIBLINGS: summarize = quick summary, no storage | deep-research = multi-source investigation | save-memory = raw facts to MEMORY.md | learn-content = structured knowledge card with source retrieval.
 tier: always
 ---
 # Learn Content

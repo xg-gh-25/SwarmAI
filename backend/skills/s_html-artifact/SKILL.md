@@ -9,7 +9,6 @@ description: >
   DO NOT USE: for chat conversation (stay inline markdown), agent self-use files (.context/,
   DDD docs, DailyActivity), or Slack output (mrkdwn only). Also NOT for full web pages or
   apps (use frontend-design skill).
-  SIBLINGS: frontend-design = full web pages/apps | html-artifact = structured data artifacts for review/decision.
 version: "1.0.0"
 tier: lazy
 platform: all

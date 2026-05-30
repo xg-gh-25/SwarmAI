@@ -627,6 +627,18 @@ class PromptBuilder:
                 logger.info("Non-owner channel DM — light context, excluding %s", exclude_files)
             # Owner DM and chat tabs: full context (no exclusion)
 
+            # O2: EVOLUTION.md only for coding sessions — corrections, capabilities,
+            # and optimizations are irrelevant when user is doing research/reports/chat.
+            # Saves ~5K tokens for non-coding sessions.
+            if not channel_context:  # Only for desktop chat tabs
+                try:
+                    from .proactive_intelligence import _detect_active_coding_project
+                    if not _detect_active_coding_project(Path(working_directory)):
+                        exclude_files = exclude_files or set()
+                        exclude_files.add("EVOLUTION.md")
+                except Exception:
+                    pass  # Proactive module unavailable — include EVOLUTION by default
+
             # Memory injection is always active — auto-selects full injection
             # (< 30K tokens) or selective mode (≥ 30K).  No config flag needed.
             # Build keyword hint for selective mode's section matching.

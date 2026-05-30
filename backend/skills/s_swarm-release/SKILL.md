@@ -8,8 +8,6 @@ description: >
   "release swarm", "swarm release".
   DO NOT USE: for build-only (use s_swarm-build), for version bump without
   shipping (use s_release), for Hive updates (use s_swarm-hive).
-  SIBLINGS: s_swarm-build = binary build only | s_release = version bump + tag only |
-  s_swarm-hive = cloud deployment | s_swarm-ci = check CI status.
 tier: lazy
 platform: desktop
 project_scope: SwarmAI

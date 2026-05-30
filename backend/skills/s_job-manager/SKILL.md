@@ -10,8 +10,6 @@ description: >
   "check my inbox every morning", "weekly summary", "monitor".
   DO NOT USE: for one-time reminders (use apple-reminders), calendar events (use
   outlook-assistant), or Apple Reminders. This is for recurring background automation.
-  SIBLINGS: apple-reminders = one-time reminders synced to Apple |
-  outlook-assistant = Outlook calendar + email | radar-todo = work packet tracking.
 input_type: text
 output_type: text
 tier: lazy

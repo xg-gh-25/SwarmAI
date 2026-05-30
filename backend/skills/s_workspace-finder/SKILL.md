@@ -6,7 +6,6 @@ description: >
   TRIGGER: "find files", "search workspace", "where is", "find all", "what changed", "show me files", "find TODOs",
   "files modified today", "large files", "find duplicates".
   DO NOT USE: for web search (use tavily-search), GitHub repo research (use github-research), or reading a known file (use Read tool).
-  SIBLINGS: deep-research = web research | tavily-search = web search | workspace-git = git-specific operations.
 tier: always
 ---
 # Workspace Finder

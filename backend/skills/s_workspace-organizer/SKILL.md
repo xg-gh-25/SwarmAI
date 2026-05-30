@@ -7,7 +7,6 @@ description: >
   "deduplicate", "batch rename", "clean empty folders", "organize by date", "tidy up".
   DO NOT USE: for single file rename/move (use explorer context menu), deleting files (use explorer delete),
   or git operations (use workspace-git).
-  SIBLINGS: workspace-finder = find files | workspace-git = git operations | project-manager = project CRUD.
 tier: lazy
 ---
 # Workspace Organizer

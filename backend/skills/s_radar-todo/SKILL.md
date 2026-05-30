@@ -9,8 +9,6 @@ description: >
   "mark todo done", "complete todo", "delete todo", "todo list", "what's on my radar".
   DO NOT USE: for Apple Reminders (use apple-reminders), calendar events (use
   outlook-assistant), or project task management (tasks are a different entity).
-  SIBLINGS: apple-reminders = one-time reminders synced to Apple |
-  outlook-assistant = Outlook calendar + email | save-memory = persistent memory.
 input_type: text
 output_type: text
 tier: always

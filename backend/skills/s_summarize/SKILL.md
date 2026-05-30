@@ -4,7 +4,6 @@ description: >
   Quickly summarize articles, documents, URLs, long text, or multi-source content into concise key points.
   TRIGGER: "summarize", "summary", "tl;dr", "key points", "what's this about", "give me the gist", "condense".
   DO NOT USE: for deep multi-source research (use deep-research), consulting-grade analysis (use consulting-report), or full document writing (use narrative-writing).
-  SIBLINGS: deep-research = multi-source investigation with citations | consulting-report = strategic analysis with frameworks | summarize = fast single/multi-source condensation.
 tier: always
 ---
 # Summarize

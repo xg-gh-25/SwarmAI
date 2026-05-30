@@ -9,7 +9,6 @@ description: >
   TRIGGER: always-active — auto-detects corrections, capability gaps, stuck states.
   Also invoked explicitly for governance changes ("add rule", "steeringify").
   DO NOT USE: for one-off file edits (just edit directly).
-  SIBLINGS: loops-health = monthly compression | save-memory = facts → MEMORY.md.
 tier: always
 platform: all
 ---
