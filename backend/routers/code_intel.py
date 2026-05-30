@@ -132,6 +132,33 @@ async def get_code_intel_graph(project: str, limit: int = 300):
     return data
 
 
+@router.get("/{project}/routes")
+async def get_code_intel_routes(project: str):
+    """Return all detected HTTP routes for a project.
+
+    Returns JSON list of routes with method, path, handler, framework,
+    file_path, and line_number.
+    """
+    if not _SAFE_PROJECT_RE.match(project):
+        raise HTTPException(status_code=400, detail="Invalid project name")
+    graph = load_project_graph(project)
+    if graph is None:
+        raise HTTPException(status_code=404, detail=f"Code intelligence not found for project '{project}'")
+
+    routes = await asyncio.to_thread(graph.get_routes)
+    return [
+        {
+            "method": r["method"],
+            "path": r["path"],
+            "handler": r["handler_node_id"],
+            "framework": r["framework"],
+            "file_path": r["file_path"],
+            "line_number": r["line_number"],
+        }
+        for r in routes
+    ]
+
+
 @router.post("/{project}/reindex", response_model=ReindexResponse, status_code=202)
 async def trigger_reindex(project: str, background_tasks: BackgroundTasks):
     """Trigger a background re-index for the given project.
@@ -185,7 +212,7 @@ def _run_reindex(project: str) -> None:
     """
     try:
         from core.code_intel.graph_store import GraphStore
-        from core.code_intel.parser import parse_repository
+        from core.code_intel.parser import parse_repo
 
         db_path = get_code_intel_db_path(project)
         if not db_path.exists():
@@ -208,9 +235,10 @@ def _run_reindex(project: str) -> None:
         repo_path = match.group(1)
         logger.info(f"Re-indexing {project} from {repo_path}")
 
+        from pathlib import Path as _Path
         graph = GraphStore(db_path)
-        result = parse_repository(repo_path)
-        graph.bulk_upsert(result.nodes, result.edges)
+        parse_results = parse_repo(_Path(repo_path))
+        graph.bulk_insert(parse_results)
         graph.set_meta("last_full_index", datetime.now(timezone.utc).isoformat())
         graph.close()
 

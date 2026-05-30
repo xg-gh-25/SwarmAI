@@ -35,6 +35,19 @@ LANGUAGE_MAP = {
     ".jsx": "javascript",
     ".java": "java",
     ".go": "go",
+    ".rs": "rust",
+    ".rb": "ruby",
+    ".cs": "csharp",
+    ".kt": "kotlin",
+    ".kts": "kotlin",
+    ".php": "php",
+    ".swift": "swift",
+    ".c": "c",
+    ".h": "c",
+    ".cpp": "cpp",
+    ".cc": "cpp",
+    ".cxx": "cpp",
+    ".hpp": "cpp",
 }
 
 DEFINITION_TYPES = {
@@ -48,6 +61,14 @@ DEFINITION_TYPES = {
         "interface_declaration", "enum_declaration",
     ],
     "go": ["function_declaration", "method_declaration", "type_declaration"],
+    "rust": ["function_item", "struct_item", "impl_item", "trait_item"],
+    "ruby": ["method", "class", "module"],
+    "csharp": ["method_declaration", "class_declaration", "interface_declaration"],
+    "kotlin": ["function_declaration", "class_declaration", "object_declaration"],
+    "php": ["function_definition", "class_declaration", "method_declaration"],
+    "swift": ["function_declaration", "class_declaration", "protocol_declaration"],
+    "c": ["function_definition", "struct_specifier"],
+    "cpp": ["function_definition", "class_specifier", "struct_specifier"],
 }
 
 CALL_TYPES = {
@@ -55,6 +76,14 @@ CALL_TYPES = {
     "typescript": ["call_expression", "new_expression"],
     "java": ["method_invocation", "object_creation_expression"],
     "go": ["call_expression"],
+    "rust": ["call_expression"],
+    "ruby": ["call"],
+    "csharp": ["invocation_expression", "object_creation_expression"],
+    "kotlin": ["call_expression"],
+    "php": ["function_call_expression", "method_call_expression"],
+    "swift": ["call_expression"],
+    "c": ["call_expression"],
+    "cpp": ["call_expression"],
 }
 
 # NOTE: IMPORT_TYPES not used in Phase 1 — imports extracted via regex in

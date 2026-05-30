@@ -127,4 +127,19 @@ def _build_context(graph, file_path: str, project: str) -> str | None:
         f"  Module: {module}",
     ]
 
+    # Inject route context if available
+    try:
+        file_routes = graph.get_routes(file_path=rel_path)
+        if file_routes:
+            route_strs = []
+            for r in file_routes[:5]:
+                handler_name = r.get("handler_node_id", "").split("::")[-1] if "::" in r.get("handler_node_id", "") else r.get("handler_node_id", "")
+                route_strs.append(f"{r['method']} {r['path']} → {handler_name}()")
+            route_line = "  Routes: " + ", ".join(route_strs)
+            if len(file_routes) > 5:
+                route_line += f" ... and {len(file_routes) - 5} more"
+            lines.append(route_line)
+    except Exception:
+        pass  # Routes table may not exist in older DBs
+
     return "\n".join(lines)
