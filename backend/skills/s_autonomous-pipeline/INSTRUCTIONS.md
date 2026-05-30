@@ -489,6 +489,21 @@ ALL 6 layers must pass simultaneously. A candidate that passes 5/6 is not push-r
 stage). L4 checks whether all their findings are resolved. Only re-spawn
 specialists if a convergence fix changes code that the original review didn't cover.
 
+**L4 verify-against-disk (BLOCKING — never trust the `resolved` flag):** For each
+finding marked `resolved: true`, do NOT take the flag's word for it — grep the
+actual file on disk and confirm the fix is present. The artifact's `resolved`
+field records intent ("I applied the fix"), not state ("the fix is on disk").
+These diverge whenever a fix is reverted between application and delivery —
+e.g. an external `git stash pop`, a parallel-session commit, or a linter undo.
+This run (run_b5592983) shipped a delivery artifact marked `resolved: true` for
+a hardening fix that a mid-pipeline git conflict had silently reverted; the
+function had no test coverage, so nothing else caught it. PE review found it by
+reading the file. Mechanical step: for each resolved finding, `grep` the durable
+behavior (function name, guard, the specific line the fix added) in the current
+file. If absent → the finding is NOT resolved, re-apply. Cost: seconds per
+finding; the failure it prevents is "the record said done, the disk said
+otherwise" (C011 class).
+
 **L5 mechanism (Constitution Pattern):**
 L5 is NOT an honor-system self-assessment. It is a mechanical extraction + verification:
 
