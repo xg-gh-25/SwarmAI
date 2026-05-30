@@ -192,8 +192,8 @@ cmd_release() {
     cd "$DESKTOP_DIR"
     npm run build:backend
 
-    # 2b. Verify binary (38 capability checks)
-    _log "Step 2/4: Post-build verification (38 checks)..."
+    # 2b. Verify binary capabilities
+    _log "Step 2/4: Post-build verification..."
     cd "$BACKEND_DIR"
     if python scripts/verify_build.py "$BACKEND_BINARY"; then
         _ok "All capabilities verified"
