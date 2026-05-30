@@ -164,6 +164,11 @@ def _resolve_cli_version() -> str:
             [str(cli_path), "--version"],
             capture_output=True, text=True, timeout=2.0,
         )
+        # Non-zero exit (corrupt binary, auth/license error) may still print
+        # diagnostic text to stdout — don't mistake its first token for a
+        # version. Treat any failure as unknown.
+        if out.returncode != 0:
+            return "unknown"
         # Output form: "2.1.150 (Claude Code)" — take the first token.
         first = (out.stdout or "").strip().split()
         return first[0] if first else "unknown"
