@@ -36,6 +36,16 @@ WRAPPER_SOURCE = Path(__file__).parent / "swarmai_backend.sh"
 # to ~/.swarm-ai/ avoids the "Operation not permitted" error entirely.
 WRAPPER_DEST = APP_DATA_DIR / "swarmai_backend.sh"
 
+# ── Guardian watchdog (C034 recovery) ──────────────────────────────────────
+GUARDIAN_LABEL = "com.swarmai.guardian"
+GUARDIAN_TEMPLATE = Path(__file__).parent / "com.swarmai.guardian.plist"
+GUARDIAN_SCRIPT_SOURCE = Path(__file__).parent / "swarmai_guardian.sh"
+GUARDIAN_SCRIPT_DEST = APP_DATA_DIR / "swarmai_guardian.sh"
+# Standalone copy of daemon_guard.py (pure stdlib) so the installed guardian can
+# run it directly — no repo checkout, no PYTHONPATH, no frozen-bundle dependency.
+GUARDIAN_GUARD_PY_SOURCE = Path(__file__).parent.parent / "core" / "daemon_guard.py"
+GUARDIAN_GUARD_PY_DEST = APP_DATA_DIR / "guardian" / "daemon_guard.py"
+
 
 def _uid() -> int:
     return os.getuid()
@@ -195,9 +205,77 @@ def install():
     print(f"  Logs: {_resolve_log_dir()}/backend-{{stdout,stderr}}.log")
     print(f"  Check: launchctl list | grep swarmai.backend")
 
+    # Install the guardian watchdog alongside the backend.
+    install_guardian()
+
+
+def install_guardian():
+    """Install the guardian watchdog plist (C034 recovery).
+
+    The guardian polls every 30s and re-bootstraps the backend ONLY when it is
+    deregistered AND no intent sentinel is present AND the port is dead for N
+    probes. Idempotent — safe to call on every backend install.
+    """
+    if not GUARDIAN_TEMPLATE.exists() or not GUARDIAN_SCRIPT_SOURCE.exists() \
+            or not GUARDIAN_GUARD_PY_SOURCE.exists():
+        print(f"  Guardian assets missing — skipping watchdog install", file=sys.stderr)
+        return
+
+    # Copy guardian loop script to ~/.swarm-ai/ (non-TCC-protected).
+    import shutil
+    GUARDIAN_SCRIPT_DEST.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(str(GUARDIAN_SCRIPT_SOURCE), str(GUARDIAN_SCRIPT_DEST))
+    GUARDIAN_SCRIPT_DEST.chmod(0o755)
+    subprocess.run(
+        ["xattr", "-d", "com.apple.quarantine", str(GUARDIAN_SCRIPT_DEST)],
+        capture_output=True,
+    )
+
+    # Copy the standalone (stdlib-only) guard script so the guardian can run it
+    # directly — works for end-user .app installs with no repo / no PYTHONPATH.
+    GUARDIAN_GUARD_PY_DEST.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(str(GUARDIAN_GUARD_PY_SOURCE), str(GUARDIAN_GUARD_PY_DEST))
+
+    # Generate guardian plist from template.
+    content = GUARDIAN_TEMPLATE.read_text()
+    content = content.replace("__GUARDIAN_SCRIPT__", str(GUARDIAN_SCRIPT_DEST))
+    content = content.replace("__LOG_DIR__", _resolve_log_dir())
+    content = content.replace("__HOME__", str(Path.home()))
+
+    dest = LAUNCH_AGENTS / f"{GUARDIAN_LABEL}.plist"
+    dest.write_text(content)
+
+    result = subprocess.run(
+        ["launchctl", "bootstrap", f"gui/{_uid()}", str(dest)],
+        capture_output=True, text=True,
+    )
+    if result.returncode in (5, 37):
+        print(f"  Guardian already loaded (re-installed plist)")
+    elif result.returncode != 0:
+        print(f"  Guardian bootstrap warning (code {result.returncode}): {result.stderr.strip()}", file=sys.stderr)
+    else:
+        print(f"  Loaded guardian watchdog: {GUARDIAN_LABEL}")
+
 
 def uninstall():
-    """Remove the backend daemon plist."""
+    """Remove the backend daemon plist (and the guardian watchdog)."""
+    # Remove guardian FIRST so it can't resurrect the backend we're about to
+    # stop. Verify deregistration — if bootout fails transiently, a surviving
+    # guardian would re-bootstrap the backend within 30s of us removing it.
+    g_target = f"gui/{_uid()}/{GUARDIAN_LABEL}"
+    r = subprocess.run(["launchctl", "bootout", g_target], capture_output=True)
+    if r.returncode not in (0, 3):  # 3 = no such process (already gone)
+        # Retry once, then SIGKILL as a last resort, then bootout again.
+        subprocess.run(["launchctl", "kill", "SIGKILL", g_target], capture_output=True)
+        subprocess.run(["launchctl", "bootout", g_target], capture_output=True)
+    # Unlink the guardian plist BEFORE booting out the backend: even if a
+    # guardian invocation is mid-flight, its missing-plist guard (line ~100 in
+    # swarmai_guardian.sh) makes it abort rather than re-bootstrap.
+    guardian_plist = LAUNCH_AGENTS / f"{GUARDIAN_LABEL}.plist"
+    if guardian_plist.exists():
+        guardian_plist.unlink()
+        print(f"Removed: {GUARDIAN_LABEL}")
+
     subprocess.run(
         ["launchctl", "bootout", f"gui/{_uid()}/{DAEMON_LABEL}"],
         capture_output=True,

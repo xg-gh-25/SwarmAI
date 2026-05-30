@@ -300,10 +300,69 @@ _daemon_wait_healthy() {
     return 1
 }
 
+# ── Daemon-descendant guard (C034 prevention) ──────────────────
+#
+# If a lifecycle op is invoked from inside the daemon's own process tree
+# (e.g. an agent CLI subprocess), killing/booting-out the daemon kills our
+# own host — leaving it in HTTP-dead-but-not-exited limbo (C034). Detect this
+# via core.daemon_guard ancestry walk and re-exec the command detached in a
+# new session group so it survives the daemon's death.
+#
+# Resolves a Python that can import core.daemon_guard (dev venv or system).
+_guard_python() {
+    if [ -n "${_GUARD_PYTHON:-}" ]; then echo "${_GUARD_PYTHON}"; return 0; fi
+    local backend_dir="${PROJECT_ROOT}/backend"
+    for cand in "${backend_dir}/.venv/bin/python" "$(command -v python3)" /opt/homebrew/bin/python3 /usr/bin/python3; do
+        [ -x "$cand" ] && { echo "$cand"; return 0; }
+    done
+    return 1
+}
+
+# Re-exec this lifecycle command detached if we're a daemon descendant; returns
+# 0 when it re-execed (caller MUST stop — the detached copy owns the op), 1 when
+# the caller should proceed inline.
+#
+# Delegates BOTH the ancestry decision AND the detach to the unit-tested
+# core.daemon_guard reexec-if-descendant CLI, so the production prevention path
+# is exactly the code path covered by tests. The guard uses
+# start_new_session=True (NOT setsid — absent on macOS — and NOT `nohup &` which
+# keeps the child in the daemon's process group where a daemon SIGKILL would
+# still reap it). The detached child is invoked with the detach env flag set, so
+# its own guard short-circuits (no recursion).
+_reexec_detached_if_descendant() {
+    [ -n "${_SWARM_LIFECYCLE_DETACHED:-}" ] && return 1  # already detached → inline
+    local py; py="$(_guard_python)" || return 1          # no python → can't guard → inline
+    # Resolve $0 to an ABSOLUTE path. The CLI Popens the re-exec, and a relative
+    # $0 like "./prod.sh" would be unfindable in the child's cwd. Use /bin/bash
+    # NOT $SHELL: $0 has a #!/bin/bash shebang + bashisms; $SHELL is often zsh
+    # and would mis-execute. PYTHONPATH lets the CLI import core.* without cwd.
+    local abs0
+    abs0="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$0")"
+    [ -f "$abs0" ] || abs0="$0"
+    if PYTHONPATH="${PROJECT_ROOT}/backend${PYTHONPATH:+:$PYTHONPATH}" \
+        "$py" -m core.daemon_guard reexec-if-descendant /bin/bash "$abs0" "$@" >/dev/null 2>&1; then
+        _warn "Lifecycle op from a daemon-descendant (C034 guard) — re-executed detached."
+        _ok "This session may end if it was the daemon's child; the detached copy owns the op."
+        return 0
+    fi
+    return 1  # not a descendant (or guard unavailable) → proceed inline
+}
+
 # ── cmd_daemon ─────────────────────────────────────────────────
 
 cmd_daemon() {
     local sub="${1:-status}"
+
+    # C034 prevention: ops that kill/bootout the daemon must not run from inside
+    # the daemon's process tree. Re-exec detached if we're a descendant.
+    case "$sub" in
+        restart|force-restart|stop)
+            if _reexec_detached_if_descendant daemon "$@"; then
+                return 0
+            fi
+            ;;
+    esac
+
     case "$sub" in
         restart)
             if ! _check_daemon_version; then
@@ -349,6 +408,11 @@ cmd_daemon() {
             ;;
         stop)
             _log "Stopping daemon..."
+            # Write the intent sentinel BEFORE bootout so the guardian knows
+            # this down-state is intentional and does NOT resurrect the daemon.
+            local _gpy; _gpy="$(_guard_python)" && \
+                (cd "${PROJECT_ROOT}/backend" && "$_gpy" -m core.daemon_guard write-sentinel "manual stop" "stop" "permanent" 2>/dev/null) || \
+                _warn "Could not write intent sentinel — guardian may restart the daemon"
             launchctl bootout "$GUI_TARGET" 2>/dev/null || true
             if _wait_port_free "$DAEMON_PORT" 10; then
                 _ok "Daemon stopped (port ${DAEMON_PORT} released)"
@@ -367,6 +431,10 @@ cmd_daemon() {
             _log "Starting daemon..."
             _bootstrap_daemon
             _daemon_wait_healthy 90
+            # Clear the intent sentinel — an explicit start means the operator
+            # wants the daemon up; the guardian should resume protecting it.
+            local _gpy; _gpy="$(_guard_python)" && \
+                (cd "${PROJECT_ROOT}/backend" && "$_gpy" -m core.daemon_guard clear-sentinel 2>/dev/null) || true
             ;;
         status)
             if _daemon_is_running; then

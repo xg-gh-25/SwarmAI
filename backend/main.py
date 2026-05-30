@@ -943,6 +943,24 @@ async def lifespan(app: FastAPI):
     )
     logger.info("Startup complete - ready to serve requests")
 
+    # ── Observability: surface any partial binary deploy (deployed_no_restart) ──
+    # The /api/system/upgrade upgrader writes a result file; a
+    # ``deployed_no_restart`` status means a new binary was rsynced but the
+    # daemon never came back (bootstrap failed). The guardian normally
+    # self-heals this, so it's observability-only — but if WE are the daemon
+    # that came up, it means recovery already happened; log it so the partial
+    # deploy is visible rather than silent (LL18 — never silent-degrade).
+    try:
+        from core.daemon_guard import scan_deployed_no_restart
+        for finding in scan_deployed_no_restart():
+            logger.warning(
+                "Partial deploy detected (deployed_no_restart): version=%s file=%s "
+                "— guardian likely recovered the daemon; review upgrade logs.",
+                finding.get("version", "?"), finding.get("file", "?"),
+            )
+    except Exception:
+        logger.debug("deployed_no_restart scan skipped", exc_info=True)
+
     # ── Start managed subsidiary services (Slack bot, etc.) ─────────────
     # Deferred to background so it never blocks startup.  Services
     # discover the backend via ~/.swarm-ai/backend.port written here.
@@ -1500,6 +1518,20 @@ try:
     # Correct combo: kill first (instant), then bootout (deregister, no process = instant).
     gui_target = "gui/" + str(uid) + "/com.swarmai.backend"
 
+    # 1-sentinel: write the intent sentinel BEFORE the SIGKILL+bootout below so
+    # the guardian agent knows this deregistration is intentional and must NOT
+    # re-bootstrap the daemon mid-rsync (bootstrapping the OLD binary while
+    # rsync is replacing it corrupts the onedir bundle — COE 2026-05-01
+    # PYZ/zlib corruption). Cleared after a confirmed-healthy bootstrap below.
+    sentinel_path = os.path.expanduser("~/.swarm-ai/.daemon-intentional-down")
+    try:
+        pathlib.Path(sentinel_path).write_text(json.dumps({{
+            "reason": "binary upgrade", "written_by": "upgrade",
+            "written_at": time.time(), "written_at_iso": time.strftime(TS_FMT),
+        }}))
+    except OSError:
+        pass
+
     # 1a: SIGKILL — instant process death (no SIGTERM wait, no SSE blocking)
     subprocess.run(
         ["launchctl", "kill", "SIGKILL", gui_target],
@@ -1585,6 +1617,20 @@ try:
             bootstrap_ok = True
             break
         time.sleep(2)  # Let launchd finish cleanup
+
+    # Step 7-sentinel: clear the intent sentinel now that the rsync window has
+    # closed (rsync completed at Step 3 — the binary is consistent, so a
+    # guardian bootstrap is no longer dangerous). Clearing on BOTH outcomes is
+    # deliberate: on success the daemon is up (guardian skips anyway); on
+    # bootstrap failure (deployed_no_restart) the guardian can recover in ~90s
+    # instead of waiting out the stale-guard (5min). The stale-guard remains the
+    # backstop for an upgrader that crashes mid-rsync before reaching here.
+    try:
+        pathlib.Path(sentinel_path).unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
 
     # Step 8: Write result file — distinguish success vs partial failure
     status = "success" if bootstrap_ok else "deployed_no_restart"
