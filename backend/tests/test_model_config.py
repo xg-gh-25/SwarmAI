@@ -51,9 +51,9 @@ class TestBedrockModelMapping:
 class TestDefaultConfig:
     """Tests for DEFAULT_CONFIG model settings."""
 
-    def test_default_model_is_opus_4_8(self):
-        """Default model should be claude-opus-4-8."""
-        assert DEFAULT_CONFIG["default_model"] == "claude-opus-4-8"
+    def test_default_model_is_opus_4_6(self):
+        """Default model should be claude-opus-4-6."""
+        assert DEFAULT_CONFIG["default_model"] == "claude-opus-4-6"
 
     def test_opus_4_6_in_available_models(self):
         """claude-opus-4-6 remains available as fallback."""

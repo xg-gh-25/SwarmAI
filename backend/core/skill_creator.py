@@ -19,6 +19,12 @@ from typing import Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from .session_router import SessionRouter
 
+
+def _get_default_model() -> str:
+    """Resolve default model from config (single source of truth)."""
+    from core.app_config_manager import AppConfigManager
+    return AppConfigManager.instance().get("default_model", "claude-opus-4-6")
+
 logger = logging.getLogger(__name__)
 
 SKILL_CREATOR_SYSTEM_PROMPT_TEMPLATE = """\
@@ -100,7 +106,7 @@ async def run_skill_creator(
         "global_user_mode": False,
         "enable_tool_logging": True,
         "enable_safety_checks": True,
-        "model": model or "claude-opus-4-8",
+        "model": model or _get_default_model(),
     }
 
     logger.info(

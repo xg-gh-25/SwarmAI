@@ -54,7 +54,7 @@ SECRET_KEYS: frozenset[str] = frozenset({
 DEFAULT_CONFIG: dict[str, Any] = {
     "use_bedrock": True,
     "aws_region": "us-east-1",
-    "default_model": "claude-opus-4-8",
+    "default_model": "claude-opus-4-6",
     "available_models": [
         "claude-opus-4-8",
         "claude-opus-4-6",
