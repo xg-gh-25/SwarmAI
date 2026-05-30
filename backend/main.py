@@ -126,6 +126,58 @@ _backend_start_monotonic: float = 0.0  # set during lifespan startup
 _boot_id: str = __import__("uuid").uuid4().hex[:12]
 
 
+def _resolve_sdk_version() -> str:
+    """Resolve the real claude-agent-sdk version at runtime.
+
+    Frozen-env-safe: PyInstaller strips dist-info, so importlib.metadata
+    fails in production. The SDK ships a ``__version__`` attribute on the
+    package itself, which survives freezing. Fallback chain:
+    ``claude_agent_sdk.__version__`` → env ``CLAUDE_AGENT_SDK_VERSION`` →
+    literal ``"unknown"``. Never raises.
+    """
+    try:
+        import claude_agent_sdk
+        v = getattr(claude_agent_sdk, "__version__", None)
+        if v:
+            return str(v)
+    except Exception:
+        pass
+    return os.environ.get("CLAUDE_AGENT_SDK_VERSION") or "unknown"
+
+
+def _resolve_cli_version() -> str:
+    """Resolve the bundled Claude Code CLI version by running ``--version``.
+
+    Called ONCE at boot (cached in ``_cli_version``); never per request.
+    The bundled CLI path is resolved the same way the SDK's transport does:
+    ``<subprocess_cli pkg>/.._bundled/claude``. 2s timeout, returns
+    ``"unknown"`` on any failure (missing binary, timeout, parse error).
+    Never raises.
+    """
+    try:
+        from claude_agent_sdk._internal.transport import subprocess_cli as _sc
+        cli_name = "claude.exe" if sys.platform == "win32" else "claude"
+        cli_path = Path(_sc.__file__).resolve().parents[2] / "_bundled" / cli_name
+        if not cli_path.is_file():
+            return "unknown"
+        out = subprocess.run(
+            [str(cli_path), "--version"],
+            capture_output=True, text=True, timeout=2.0,
+        )
+        # Output form: "2.1.150 (Claude Code)" — take the first token.
+        first = (out.stdout or "").strip().split()
+        return first[0] if first else "unknown"
+    except Exception:
+        return "unknown"
+
+
+# Real runtime versions for /health observability.
+# _sdk_version is eager (attribute read, cheap). _cli_version is filled at
+# boot in lifespan() (subprocess, must not run per health request).
+_sdk_version: str = _resolve_sdk_version()
+_cli_version: str = "unknown"
+
+
 def _is_port_listening(host: str, port: int) -> bool:
     """Check if a TCP port is accepting connections."""
     import socket as _socket
@@ -928,6 +980,12 @@ async def lifespan(app: FastAPI):
     write_backend_json(port=backend_port, mode=backend_mode)
     logger.info("backend.json written (port=%d, mode=%s)", backend_port, backend_mode)
 
+    # Resolve the bundled CLI version ONCE at boot (subprocess — must never
+    # run inside the per-request health handler, which is polled every 5s).
+    global _cli_version
+    _cli_version = _resolve_cli_version()
+    logger.info("runtime versions: sdk=%s cli=%s", _sdk_version, _cli_version)
+
     # Mark startup as complete - health check will now return healthy
     _startup_complete = True
     total_ms = round((time.monotonic() - t0) * 1000)
@@ -1130,6 +1188,8 @@ async def health_check():
             "status": "initializing",
             "version": settings.app_version,
             "sdk": "claude-agent-sdk",
+            "sdk_version": _sdk_version,
+            "cli_version": _cli_version,
         }
     
     # PE Review Finding #5: Use property directly, not hasattr
@@ -1168,6 +1228,8 @@ async def health_check():
         "status": status,
         "version": settings.app_version,
         "sdk": "claude-agent-sdk",
+        "sdk_version": _sdk_version,
+        "cli_version": _cli_version,
         "pending_hook_tasks": pending_hooks,
         "boot_id": _boot_id,
         "db_healthy": db_healthy,
