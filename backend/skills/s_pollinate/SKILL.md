@@ -1,15 +1,8 @@
 ---
 name: pollinate
-description: >
-  Swarm's media value delivery engine. Transforms messages into optimized
-  media packages (poster, video, narrative, shorts, README) via an 8-stage
-  pipeline (EVALUATE->REFLECT). Message-first, format follows audience.
-  Your message, their attention, the right format.
-  TRIGGER: "pollinate", "make content about", "GTM for", "promote",
-  "launch content", "content pipeline", "produce content".
-  DO NOT USE: for one-off text generation (just write), for code changes
-  (use autonomous-pipeline), for research without content output (use
-  deep-research).
+description: "Swarm's media value delivery engine. Transforms messages into optimized media packages (poster, video, narrative, shorts, README) via an 8-stage pipeline (EVALUATE->REFLECT). Message-first,\
+  \ format follows audience. Your message, their attention, the right format.\n  TRIGGER: \"pollinate\", \"make content about\", \"GTM for\", \"promote\".\n  NOT FOR: autonomous-pipeline, deep-research\
+  \ use cases."
 tier: lazy
 ---
 

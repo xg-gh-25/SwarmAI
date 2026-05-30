@@ -1,13 +1,8 @@
 ---
 name: release
-description: >
-  Bump version across all package files, update CHANGELOG, create git tag, and
-  publish GitHub Release. Ensures no file is missed during version bumps.
-  SUPERSEDED BY: s_swarm-release (which includes build + package + smoke test).
-  Use this skill ONLY for version-bump-without-shipping scenarios.
-  TRIGGER: "bump version only", "version bump", "just tag".
-  DO NOT USE: for full releases (use s_swarm-release), build/verify (use
-  s_swarm-build), DMG packaging, or deploy.
+description: "Bump version across all package files, update CHANGELOG, create git tag, and publish GitHub Release. Ensures no file is missed during version bumps. SUPERSEDED BY: s_swarm-release (which includes\
+  \ build + package + smoke test). Use this skill ONLY for version-bump-without-shipping scenarios.\n  TRIGGER: \"bump version only\", \"version bump\", \"just tag\".\n  NOT FOR: s_swarm-release, s_swarm-build\
+  \ use cases."
 tier: lazy
 ---
 # Release (Version Bump Only)

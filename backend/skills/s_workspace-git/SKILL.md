@@ -1,11 +1,7 @@
 ---
 name: workspace-git
-description: >
-  Git operations scoped to SwarmWS: status, diff, commit, log, search, stash, and branch management.
-  Provides structured output for the agent to reason about workspace changes.
-  TRIGGER: "git status", "commit changes", "what changed", "git log", "git diff", "stash", "undo last commit",
-  "show me the diff", "commit today's work", "git history", "revert".
-  DO NOT USE: for GitHub PR/issue operations (use github-research or gh CLI directly), or non-SwarmWS repos.
+description: "Git operations scoped to SwarmWS: status, diff, commit, log, search, stash, and branch management. Provides structured output for the agent to reason about workspace changes.\n  TRIGGER: \"\
+  git status\", \"commit changes\", \"what changed\", \"git log\".\n  NOT FOR: github-research use cases."
 tier: always
 ---
 # Workspace Git

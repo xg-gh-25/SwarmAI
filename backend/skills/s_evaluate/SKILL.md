@@ -1,14 +1,9 @@
 ---
 name: evaluate
-description: >
-  Evaluate requirements, feature requests, and task intake against project DDD
-  context. Produces a GO/DEFER/REJECT/ESCALATE recommendation with ROI scoring,
-  scope definition, and acceptance criteria.
-  TRIGGER: "evaluate this request", "should we build this", "assess this requirement",
-  "triage this", "is this worth doing", "prioritize this".
-  DO NOT USE: for existing tasks already in progress (just build), or for
-  pure research without a decision gate (use deep-research).
-consumes_artifacts: [research]
+description: "Evaluate requirements, feature requests, and task intake against project DDD context. Produces a GO/DEFER/REJECT/ESCALATE recommendation with ROI scoring, scope definition, and acceptance\
+  \ criteria.\n  TRIGGER: \"evaluate this request\", \"should we build this\", \"assess this requirement\", \"triage this\".\n  NOT FOR: deep-research use cases."
+consumes_artifacts:
+- research
 produces_artifact: evaluation
 tier: always
 ---

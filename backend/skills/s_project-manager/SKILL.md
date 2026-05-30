@@ -1,12 +1,7 @@
 ---
 name: project-manager
-description: >
-  Create, list, edit, rename, and delete projects with DDD (Domain-Driven Design)
-  structure. Each project gets 4 knowledge documents (PRODUCT.md, TECH.md,
-  IMPROVEMENT.md, PROJECT.md) and an .artifacts/ directory for pipeline outputs.
-  TRIGGER: "add project", "new project", "create project", "rename project",
-  "remove project", "delete project", "list projects", "my projects", "update project".
-  DO NOT USE: for task/todo management within a project (use radar-todo).
+description: "Create, list, edit, rename, and delete projects with DDD (Domain-Driven Design) structure. Each project gets 4 knowledge documents (PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md) and an\
+  \ .artifacts/ directory for pipeline outputs.\n  TRIGGER: \"add project\", \"new project\", \"create project\", \"rename project\".\n  NOT FOR: radar-todo use cases."
 tier: always
 ---
 # Project Manager

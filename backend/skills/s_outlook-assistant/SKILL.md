@@ -1,11 +1,7 @@
 ---
 name: outlook-assistant
-description: >
-  Manage Outlook inbox: triage, cleanup, send, and organization via aws-outlook-mcp server.
-  TRIGGER: "check email", "email triage", "clean inbox", "email summary", "outlook", "calendar",
-  "send email", "reply email", "forward email".
-  DO NOT USE: for non-Outlook email (use google-workspace), Apple Reminders, or general scheduling.
-  SIBLINGS: google-workspace = Gmail + Google Calendar | outlook-assistant = Outlook email + calendar.
+description: "Manage Outlook inbox: triage, cleanup, send, and organization via aws-outlook-mcp server.\n  TRIGGER: \"check email\", \"email triage\", \"clean inbox\", \"email summary\".\n  NOT FOR: google-workspace\
+  \ use cases."
 tier: always
 ---
 # Outlook Assistant

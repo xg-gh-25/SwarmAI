@@ -1,12 +1,7 @@
 ---
 name: caveman
-description: >
-  Ultra-compressed communication. Cuts tokens ~70% by dropping articles,
-  filler, pleasantries, hedging. All technical substance stays exact.
-  TRIGGER: "caveman", "caveman mode", "be brief", "less tokens", "compress".
-  EXIT: "stop caveman", "normal mode", "/normal".
-  DO NOT USE: automatically — only on user request. Not for REPORT.md or
-  artifacts (permanent records always use full format).
+description: "Ultra-compressed communication. Cuts tokens ~70% by dropping articles, filler, pleasantries, hedging. All technical substance stays exact.\n  TRIGGER: \"caveman\", \"caveman mode\", \"be brief\"\
+  , \"less tokens\".\n  NOT FOR: full use cases."
 tier: always
 ---
 
