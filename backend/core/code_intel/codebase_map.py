@@ -77,15 +77,16 @@ def _format_briefing(project_name: str, summary: dict) -> str | None:
             hot_parts.append(f"{name}({callers})")
         lines.append(f"Most connected: {', '.join(hot_parts)}")
 
-    # Routes (top 10 — lets agent find handlers without grep)
+    # Routes (top 10, ranked by info density — most navigable first)
     routes = summary.get("routes", [])
     if routes:
+        ranked = _rank_routes(routes)
         route_parts = []
-        for r in routes[:10]:
+        for r in ranked[:10]:
             handler = r.get("handler_node_id", "").split("::")[-1] if "::" in r.get("handler_node_id", "") else r.get("handler_node_id", "?")
             route_parts.append(f"{r['method']} {r['path']} → {handler}")
         lines.append(f"Routes ({len(routes)} total): {', '.join(route_parts[:5])}")
-        if len(routes) > 5:
+        if len(route_parts) > 5:
             lines.append(f"  + {', '.join(route_parts[5:10])}")
 
     # Entry points and dead code
@@ -120,3 +121,52 @@ def _format_briefing(project_name: str, summary: dict) -> str | None:
             pass
 
     return "\n".join(lines)
+
+
+def _rank_routes(routes: list[dict]) -> list[dict]:
+    """Rank routes by navigation value for the agent.
+
+    Goal: show the routes an agent is MOST LIKELY TO NEED in its first actions.
+    Strategy: diversity × specificity — cover different domains, avoid showing
+    10 routes from the same file.
+
+    Scoring:
+    1. Path specificity (2-3 segments ideal — not too shallow, not too deep)
+    2. Diversity bonus (first route per file_path gets +2)
+    3. Penalize generic utility (/, /health) and overly deep CRUD variants
+    """
+    seen_files: set[str] = set()
+
+    def _score(r: dict) -> float:
+        path = r.get("path", "/")
+        method = r.get("method", "GET")
+        file_path = r.get("file_path", "")
+
+        # Penalize generic utility routes
+        generic_paths = {"/", "/health", "/status", "/ping", "/ready", "/metrics"}
+        if path in generic_paths:
+            return 0.1
+
+        # Path specificity: 2-3 segments is the sweet spot
+        segments = [s for s in path.split("/") if s and not s.startswith("{")]
+        segment_score = min(len(segments), 3)  # Cap at 3 — deeper isn't more useful
+
+        # Method variety: POST/PUT are actions, GET is discovery
+        method_weights = {"POST": 1.3, "PUT": 1.2, "DELETE": 1.1, "PATCH": 1.1, "GET": 1.0}
+        method_score = method_weights.get(method, 1.0)
+
+        # Diversity: first route per source file gets a big bonus
+        diversity_bonus = 2.0 if file_path not in seen_files else 0.0
+
+        return segment_score * method_score + diversity_bonus
+
+    # Score all, but track seen_files progressively (greedy diversity)
+    scored = []
+    for r in sorted(routes, key=lambda x: x.get("path", "")):
+        score = _score(r)
+        scored.append((score, r))
+        seen_files.add(r.get("file_path", ""))
+
+    # Re-sort by score descending
+    scored.sort(key=lambda x: -x[0])
+    return [r for _, r in scored]
