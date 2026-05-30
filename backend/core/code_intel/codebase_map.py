@@ -67,15 +67,28 @@ def _format_briefing(project_name: str, summary: dict) -> str | None:
             mod_parts.append(f"{name}({fn_count}fn)")
         lines.append(f"Modules: {' '.join(mod_parts)}")
 
-    # Hot files (most connected)
+    # High-risk files (many callers = change carefully)
     top_connected = summary.get("top_connected", [])
     if top_connected:
-        hot_parts = []
-        for item in top_connected[:5]:
-            name = item.get("name", "?")
-            callers = item.get("callers", 0)
-            hot_parts.append(f"{name}({callers})")
-        lines.append(f"Most connected: {', '.join(hot_parts)}")
+        # Filter out: generic names, test files, single-char names
+        _GENERIC_NAMES = {"add", "error", "post", "get", "put", "delete", "extend",
+                          "append", "update", "remove", "insert", "create", "close",
+                          "open", "read", "write", "send", "start", "stop", "run"}
+        meaningful = [
+            item for item in top_connected
+            if item.get("name", "").lower() not in _GENERIC_NAMES
+            and "test" not in item.get("file_path", "").lower()
+            and len(item.get("name", "")) > 2
+        ]
+        if meaningful:
+            hot_parts = []
+            for item in meaningful[:5]:
+                name = item.get("name", "?")
+                fp = item.get("file_path", "")
+                short_file = fp.split("/")[-1] if "/" in fp else fp
+                callers = item.get("callers", 0)
+                hot_parts.append(f"{short_file}::{name}({callers} callers)")
+            lines.append(f"High risk (change carefully): {', '.join(hot_parts)}")
 
     # Routes (top 10, ranked by info density — most navigable first)
     routes = summary.get("routes", [])
