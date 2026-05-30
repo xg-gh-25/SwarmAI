@@ -142,7 +142,85 @@ def cultivate(dry_run: bool = False) -> dict:
         # Actually apply DDD updates (append to relevant docs with [auto] tag)
         _apply_ddd_updates(result["proposed_updates"])
 
+        # Update PROJECT.md Active Threads from track results
+        _update_active_threads()
+
     return result
+
+
+def _update_active_threads():
+    """Rewrite PROJECT.md Active Threads table from engagement_log + track_results.
+
+    Replaces the entire Active Threads section with current data.
+    """
+    engagement_log_path = ARTIFACTS_DIR / "engagement_log.jsonl"
+    track_path = ARTIFACTS_DIR / "track_results.json"
+    project_path = DDD_DIR / "PROJECT.md"
+
+    if not project_path.exists() or not engagement_log_path.exists():
+        return
+
+    # Load engagement log
+    entries = []
+    with open(engagement_log_path) as f:
+        for line in f:
+            try:
+                entries.append(json.loads(line.strip()))
+            except json.JSONDecodeError:
+                continue
+
+    # Load track results for reply counts
+    reply_map = {}
+    if track_path.exists():
+        track_data = json.loads(track_path.read_text())
+        for score in track_data.get("scores", []):
+            reply_map[(score["repo"], score["issue"])] = score.get("reply_count", 0)
+
+    # Build table rows from published entries
+    published = [e for e in entries if e.get("published") or e.get("comment_id")]
+    # Deduplicate by (repo, issue_number), keep latest
+    seen = {}
+    for e in published:
+        key = (e.get("repo", ""), e.get("issue_number", 0))
+        seen[key] = e  # Last one wins (most recent)
+
+    table_lines = []
+    table_lines.append("| Repo | Issue/Discussion | Date | Status | Replies |")
+    table_lines.append("|------|-----------------|------|--------|---------|")
+
+    for (repo, issue_num), entry in sorted(seen.items(), key=lambda x: x[1].get("posted_at", ""), reverse=True):
+        date = entry.get("posted_at", "")[:10]
+        replies = reply_map.get((repo, issue_num), 0)
+        if replies > 0:
+            status = f"✅ **{replies} replies**"
+        else:
+            status = "active"
+        table_lines.append(f"| {repo} | #{issue_num} | {date} | {status} | {replies} |")
+
+    # Replace Active Threads section in PROJECT.md
+    content = project_path.read_text()
+    lines = content.split("\n")
+
+    # Find section boundaries
+    start_idx = None
+    end_idx = None
+    for i, line in enumerate(lines):
+        if "## Active Threads" in line:
+            start_idx = i
+        elif start_idx is not None and line.startswith("## ") and i > start_idx:
+            end_idx = i
+            break
+
+    if start_idx is None:
+        return  # Section not found, don't create it
+
+    if end_idx is None:
+        end_idx = len(lines)
+
+    # Replace section content
+    new_section = ["## Active Threads (engagement tracking)", ""] + table_lines + [""]
+    lines = lines[:start_idx] + new_section + lines[end_idx:]
+    project_path.write_text("\n".join(lines))
 
 
 def _apply_ddd_updates(updates: list[dict]):
@@ -196,8 +274,6 @@ def _apply_ddd_updates(updates: list[dict]):
             # Section doesn't exist — append at end of file
             with open(target_file, "a") as f:
                 f.write(f"\n\n{section_marker}\n{entry}\n")
-
-    return result
 
 
 if __name__ == "__main__":

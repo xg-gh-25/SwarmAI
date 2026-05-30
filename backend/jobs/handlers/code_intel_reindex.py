@@ -85,6 +85,8 @@ def reindex_projects(full: bool = False) -> dict:
                                 extract_and_store_routes(graph, fp, content, lang)
                             except Exception:
                                 pass
+                # Apply router prefix resolution (FastAPI include_router)
+                _resolve_prefixes(graph, repo_root)
             total_nodes = sum(len(pr.nodes) for pr in parse_results)
             # Export code-intel.json v2 after full reindex
             _export_json(graph, project_name, project_dir)

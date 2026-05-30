@@ -266,7 +266,7 @@ SYSTEM_JOBS: list[Job] = [
             "command": "python -m backend.jobs.handlers.code_intel_reindex",
             "cwd": _SWARMAI_ROOT,
         },
-        safety=JobSafety(max_budget_usd=0, timeout_seconds=60),
+        safety=JobSafety(max_budget_usd=0, timeout_seconds=120),
     ),
 
     # --- Code Intelligence Full Reindex (event-driven) ---

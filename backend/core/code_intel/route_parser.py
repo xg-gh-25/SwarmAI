@@ -215,6 +215,101 @@ def _extract_nextjs_routes(file_path: str, content: str) -> list[CodeRoute]:
     return routes
 
 
+# ── Prefix Resolution ──────────────────────────────────────────────────
+
+# Matches: app.include_router(some_var, prefix="/api/foo")
+_INCLUDE_ROUTER_RE = re.compile(
+    r'app\.include_router\(\s*(\w+)\s*(?:,\s*prefix\s*=\s*["\']([^"\']+)["\'])?',
+    re.MULTILINE,
+)
+
+# Matches import patterns:
+# from routers import agents_router, ...
+# from routers.jobs import router as jobs_router
+_IMPORT_FROM_RE = re.compile(
+    r'^from\s+([\w.]+)\s+import\s+(.+)$', re.MULTILINE
+)
+
+
+def build_prefix_map(entrypoint_content: str, entrypoint_path: str) -> dict[str, str]:
+    """Build a mapping of router file → URL prefix from FastAPI entrypoint.
+
+    Parses import statements to resolve variable names to file paths,
+    then matches include_router() calls to extract prefix arguments.
+
+    Args:
+        entrypoint_content: Content of main.py or equivalent.
+        entrypoint_path: Relative path to entrypoint (e.g. "backend/main.py").
+
+    Returns:
+        Dict mapping relative file path → prefix string.
+        e.g. {"backend/routers/chat.py": "/api/chat"}
+    """
+    # Step 1: Resolve variable names → module paths
+    var_to_module: dict[str, str] = {}
+
+    for match in _IMPORT_FROM_RE.finditer(entrypoint_content):
+        module_path = match.group(1)  # e.g. "routers" or "routers.jobs"
+        imports_str = match.group(2).strip()
+
+        # Handle "import router as jobs_router"
+        if " as " in imports_str:
+            parts = imports_str.split(" as ")
+            if len(parts) == 2:
+                _orig, alias = parts[0].strip(), parts[1].strip()
+                # module_path "routers.jobs" → "backend/routers/jobs.py"
+                file_path = _module_to_filepath(module_path, entrypoint_path)
+                var_to_module[alias] = file_path
+        else:
+            # Handle "import agents_router, skills_router, ..."
+            for name in imports_str.split(","):
+                name = name.strip()
+                if not name:
+                    continue
+                # Convention: agents_router imported from "routers" → routers/agents.py
+                # or channels_router → routers/channels.py
+                sub_module = name.replace("_router", "")
+                file_path = _module_to_filepath(f"{module_path}.{sub_module}", entrypoint_path)
+                var_to_module[name] = file_path
+
+    # Step 2: Parse include_router calls → var_name → prefix
+    prefix_map: dict[str, str] = {}
+    for match in _INCLUDE_ROUTER_RE.finditer(entrypoint_content):
+        var_name = match.group(1)
+        prefix = match.group(2) or ""  # No prefix arg = ""
+
+        if var_name in var_to_module and prefix:
+            prefix_map[var_to_module[var_name]] = prefix
+
+    return prefix_map
+
+
+def _module_to_filepath(module_path: str, entrypoint_path: str) -> str:
+    """Convert a Python module path to a relative file path.
+
+    Uses the entrypoint's directory as the base.
+    "routers.chat" with entrypoint "backend/main.py" → "backend/routers/chat.py"
+    """
+    base_dir = "/".join(entrypoint_path.replace("\\", "/").split("/")[:-1])
+    parts = module_path.split(".")
+    rel = "/".join(parts) + ".py"
+    return f"{base_dir}/{rel}" if base_dir else rel
+
+
+def apply_prefix_map(routes: list[CodeRoute], prefix_map: dict[str, str]) -> list[CodeRoute]:
+    """Apply router prefix to routes based on their file_path.
+
+    Modifies routes in-place and regenerates IDs. Only applies to routes
+    whose path doesn't already start with the prefix (idempotent).
+    """
+    for route in routes:
+        prefix = prefix_map.get(route.file_path, "")
+        if prefix and not route.path.startswith(prefix):
+            route.path = prefix.rstrip("/") + "/" + route.path.lstrip("/") if route.path != "/" else prefix
+            route.id = _make_route_id(route.file_path, route.method, route.path)
+    return routes
+
+
 # ── Helpers ─────────────────────────────────────────────────────────────
 
 def _make_route_id(file_path: str, method: str, path: str) -> str:
