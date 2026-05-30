@@ -166,6 +166,19 @@ class TestHealthEndpointVersionObservability:
         with patch("main.subprocess.run", side_effect=subprocess.TimeoutExpired("claude", 2)):
             assert main._resolve_cli_version() == "unknown"
 
+    def test_cli_version_nonzero_returncode_is_unknown(self):
+        """A non-zero CLI exit must yield 'unknown', not the first token of
+        whatever diagnostic text it printed to stdout (adversarial LOW conf 7).
+        The bundled CLI exists in the test venv, so is_file() is real; we only
+        mock the subprocess result to simulate a failing exit code."""
+        import main
+        from unittest.mock import MagicMock
+        fake = MagicMock()
+        fake.returncode = 1
+        fake.stdout = "ERROR: license check failed"
+        with patch("main.subprocess.run", return_value=fake):
+            assert main._resolve_cli_version() == "unknown"
+
     def test_initializing_response_still_has_version_and_sdk(self, test_client):
         """No regression: initializing branch keeps version + sdk fields."""
         with patch("main._startup_complete", False):
