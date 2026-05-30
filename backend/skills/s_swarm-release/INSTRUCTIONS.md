@@ -10,8 +10,8 @@ their own terminal where they can't be killed by session management.
 
 ```
 Agent: PREFLIGHT → BUMP → USER: BACKEND BUILD → Agent: VERIFY →
-USER: TAURI BUILD → Agent: VERIFY DMG → USER: DEPLOY →
-Agent: SMOKE → PUBLISH
+USER: DEPLOY → Agent: SMOKE → USER: TAURI BUILD →
+Agent: VERIFY DMG → PUBLISH
 ```
 
 ---
@@ -161,9 +161,54 @@ cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai && python3 desktop/scripts/ver
 
 ---
 
-## Stage 5: TAURI BUILD (User, 3-5 min)
+## Stage 5: DEPLOY + SMOKE (User deploy, Agent verify)
+
+**WHY this precedes Tauri build:** The daemon must be running the new binary
+before we build the DMG. Rationale:
+1. If the new binary can't start or fails health checks, building the DMG is
+   wasted effort (3-5 min saved on failure).
+2. The DMG is the final distribution artifact — it should only be produced after
+   confirming the backend actually runs correctly.
+3. Tauri build bundles the binary that's already proven working on this machine.
+
+Hand off deploy to user:
+
+```
+⏸️ YOUR TURN — 请在终端跑:
+┌─────────────────────────────────────────────────────
+│ cp ~/Desktop/SwarmAI-Workspace/swarmai/desktop/src-tauri/binaries/swarm-backend-aarch64-apple-darwin ~/.swarm-ai/daemon/swarm-backend && launchctl kickstart -k gui/$(id -u)/com.swarmai.daemon
+└─────────────────────────────────────────────────────
+等 10-15 秒 daemon 重启后说 "好了"。
+```
+
+When user confirms, agent runs smoke:
+
+```bash
+# Verify daemon is listening
+nc -z 127.0.0.1 18321 || { echo "FAIL: daemon port not open"; exit 1; }
+
+# Verify health + version
+curl -sf http://127.0.0.1:18321/health | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+v = d.get('version', '?')
+print(f'Status: {d[\"status\"]}')
+print(f'Version: {v}')
+print(f'DB: {d.get(\"db_healthy\", \"?\")}')
+assert d['status'] == 'healthy', 'NOT HEALTHY'
+"
+```
+
+**Pass:** healthy + version matches new release + JSON (not HTML).
+**Fail:** Daemon not starting or version mismatch → STOP. Do NOT proceed to Tauri build.
+
+---
+
+## Stage 6: TAURI BUILD (User, 3-5 min)
 
 **NON-SKIPPABLE** unless user explicitly says "skip DMG" or "不用打包桌面".
+
+Only reached after Stage 5 confirms the new backend binary runs correctly.
 
 Hand off to user:
 
@@ -179,7 +224,7 @@ Wait for user confirmation.
 
 ---
 
-## Stage 6: VERIFY DMG (Agent, 5s)
+## Stage 7: VERIFY DMG (Agent, 5s)
 
 ```bash
 cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop
@@ -189,35 +234,6 @@ find src-tauri/target/release/bundle -name "*.dmg" -newer src-tauri/Cargo.toml |
 
 **Pass:** DMG exists, >30MB.
 **Fail:** No DMG found → ask user to check build output.
-
----
-
-## Stage 7: DEPLOY + SMOKE (User deploy, Agent verify)
-
-Hand off deploy to user:
-
-```
-⏸️ YOUR TURN — 请在终端跑:
-┌─────────────────────────────────────────────────────
-│ curl -X POST http://127.0.0.1:18321/api/system/upgrade
-└─────────────────────────────────────────────────────
-等 10-15 秒 daemon 重启后说 "好了"。
-```
-
-When user confirms, agent runs smoke:
-
-```bash
-curl -sf http://127.0.0.1:18321/health | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-print(f'Status: {d[\"status\"]}')
-print(f'Version: {d.get(\"version\", \"?\")}')
-print(f'DB: {d.get(\"db_healthy\", \"?\")}')
-assert d['status'] == 'healthy', 'NOT HEALTHY'
-"
-```
-
-**Pass:** healthy + version matches + JSON (not HTML).
 
 ---
 
