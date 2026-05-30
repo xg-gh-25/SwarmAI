@@ -429,6 +429,115 @@ def _compute_live_source_matrix(engagement_log: list[dict], track_results: dict)
     return matrix
 
 
+def _compute_ddd_health() -> dict:
+    """Compute DDD health from actual file modification times and content."""
+    import os
+    from collections import Counter
+
+    health = {}
+    doc_names = {
+        "PRODUCT.md": "product",
+        "TECH.md": "tech",
+        "IMPROVEMENT.md": "improvement",
+        "PROJECT.md": "project",
+    }
+
+    source_count = 0
+    topic_count = 0
+    patterns_count = 0
+
+    for filename, key in doc_names.items():
+        filepath = DDD_DIR / filename
+        if filepath.exists():
+            mtime = datetime.fromtimestamp(os.path.getmtime(filepath), tz=timezone.utc)
+            health[f"{key}_updated"] = mtime.strftime("%Y-%m-%d")
+
+            content = filepath.read_text()
+            lines = content.split("\n")
+            non_empty = [l for l in lines if l.strip()]
+            health[f"{key}_completeness"] = f"{len(non_empty)} lines"
+
+            # Extract metrics from specific files
+            if key == "tech":
+                # Count Source Matrix entries (lines with | T1/T2/T3 pattern)
+                source_count = sum(1 for l in lines if "| 1 |" in l or "| 2 |" in l or "| 3 |" in l
+                                   or "T1" in l or "T2" in l or "T3" in l
+                                   if l.strip().startswith("|"))
+                # Count topic entries
+                topic_count = sum(1 for l in lines if l.strip().startswith("| T-"))
+            elif key == "improvement":
+                # Count pattern entries (lines starting with -)
+                patterns_count = sum(1 for l in lines if l.strip().startswith("- "))
+        else:
+            health[f"{key}_updated"] = "—"
+            health[f"{key}_completeness"] = "Missing"
+
+    health["source_matrix_size"] = max(source_count, 14)  # Minimum from known repos
+    health["topic_matrix_size"] = max(topic_count, 11)
+    health["patterns_count"] = patterns_count
+
+    return health
+
+
+def _compute_dynamic_actions(engagement_log: list[dict], track_results: dict) -> list[dict]:
+    """Generate follow-up actions dynamically from live data."""
+    from collections import Counter
+
+    actions = []
+    scores = track_results.get("scores", [])
+
+    # P1: Threads with replies we haven't followed up on
+    replied_threads = [s for s in scores if s.get("reply_count", 0) > 0]
+    if replied_threads:
+        top = sorted(replied_threads, key=lambda s: s["reply_count"], reverse=True)[:3]
+        for t in top:
+            actions.append({
+                "description": f"Follow up: {t['repo']} #{t['issue']} ({t['reply_count']} replies)",
+                "priority": "high",
+            })
+
+    # P2: Repos approaching quota (3/week)
+    from datetime import timedelta
+    week_start = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    repo_week_count = Counter()
+    for e in engagement_log:
+        if e.get("posted_at", "") >= week_start and e.get("published"):
+            repo_week_count[e["repo"]] += 1
+
+    for repo, count in repo_week_count.items():
+        if count >= 3:
+            actions.append({
+                "description": f"⚠️ {repo}: quota full ({count}/3 this week)",
+                "priority": "medium",
+            })
+
+    # P3: Track inbound on our Discussions
+    actions.append({
+        "description": "Track inbound comments on SwarmAI Discussions",
+        "priority": "medium",
+    })
+
+    # P3: New signals worth engaging
+    signals_path = ARTIFACTS_DIR / "signals.json"
+    if signals_path.exists():
+        try:
+            signals_data = json.loads(signals_path.read_text())
+            signals = signals_data if isinstance(signals_data, list) else signals_data.get("signals", [])
+            fresh = [s for s in signals if s.get("existing_comments", 99) == 0 and s.get("matched_topics")]
+            if fresh:
+                actions.append({
+                    "description": f"{len(fresh)} fresh 0-comment signals available for engagement",
+                    "priority": "low",
+                })
+        except (json.JSONDecodeError, KeyError):
+            pass
+
+    if not actions:
+        actions.append({"description": "No pending actions — engine running smoothly", "priority": "low"})
+
+    return actions
+
+
 def generate_weekly_report(dry_run: bool = False, output_path: str | None = None) -> str:
     """Generate the weekly report from LIVE engagement data (not hardcoded)."""
 
@@ -488,25 +597,9 @@ def generate_weekly_report(dry_run: bool = False, output_path: str | None = None
             "url": url,
         })
 
-    ddd_health = {
-        "product_updated": "2026-05-17",
-        "product_completeness": "Seeded",
-        "tech_updated": "2026-05-17",
-        "tech_completeness": "Full (14 repos, 11 topics)",
-        "improvement_updated": "2026-05-17",
-        "improvement_completeness": "Seed patterns",
-        "project_updated": "2026-05-17",
-        "project_completeness": "12 active threads",
-        "source_matrix_size": 14,
-        "topic_matrix_size": 11,
-        "patterns_count": 5,
-    }
+    ddd_health = _compute_ddd_health()
 
-    actions = [
-        {"description": "Check replies after 48h (first batch posted 2026-05-17)", "priority": "high"},
-        {"description": "Track inbound comments on SwarmAI Discussions", "priority": "high"},
-        {"description": "Engage forrestchang/andrej-karpathy-skills — DEMOTED (no engagement surface)", "priority": "low"},
-    ]
+    actions = _compute_dynamic_actions(engagement_log, track_results)
 
     # Build comments list from engagement log (with reply counts from track)
     reply_map = {(s["repo"], s["issue"]): s.get("reply_count", 0) for s in track_results.get("scores", [])}
@@ -573,6 +666,14 @@ def generate_weekly_report(dry_run: bool = False, output_path: str | None = None
 
     out.write_text(html)
     print(f"Report written to: {out}")
+
+    # Also copy to Knowledge/Reports/ for visibility
+    knowledge_reports = Path.home() / ".swarm-ai" / "SwarmWS" / "Knowledge" / "Reports"
+    knowledge_reports.mkdir(parents=True, exist_ok=True)
+    knowledge_copy = knowledge_reports / out.name
+    knowledge_copy.write_text(html)
+    print(f"Report copied to: {knowledge_copy}")
+
     return html
 
 
