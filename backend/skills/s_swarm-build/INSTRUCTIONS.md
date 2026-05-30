@@ -4,11 +4,12 @@ Build, verify, deploy, and confirm health of the SwarmAI backend binary.
 
 ## Co-Pilot Model
 
-This skill uses **human-in-the-loop** for steps that are slow (>60s) or kill
-the session. Agent handles fast checks; user runs long builds in their terminal.
+This skill uses **human-in-the-loop** for the build step (slow, kills session).
+Agent handles pre/post checks; user runs `./prod.sh build` which does everything:
+PyInstaller build → verify (46 checks) → deploy to daemon → restart.
 
 ```
-Agent: PREFLIGHT → USER: BUILD → Agent: VERIFY → USER: DEPLOY → Agent: HEALTH
+Agent: PREFLIGHT → USER: prod.sh build → Agent: HEALTH
 ```
 
 ---
@@ -36,11 +37,12 @@ When handing off to user, ALWAYS use this exact format:
 
 ### What NOT to Do
 
-- ❌ Run `build-backend.sh` directly (exit 137 from session death)
-- ❌ Run `npm run tauri build` directly (same problem)
-- ❌ Run upgrade/deploy endpoint (session dies)
+- ❌ Run `build-backend.sh` directly in session (exit 137)
+- ❌ Run `prod.sh build` directly in session (exit 137 — same problem)
+- ❌ Run upgrade/deploy API endpoint (session dies)
 - ❌ Use `nohup`, `run_in_background`, or TaskRunner for builds
 - ❌ Retry a failed build without user intervention
+- ❌ Hand-assemble rsync/launchctl deploy commands (use prod.sh — it handles .version, resources, permissions, restart)
 
 ---
 
@@ -65,7 +67,7 @@ cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai && \
 **Report:**
 ```
 Stage 1 PREFLIGHT: PASS
-  Version: 1.16.2
+  Version: 1.17.2
   Tree: clean | N uncommitted
   Daemon: UP | DOWN
 ```
@@ -74,94 +76,72 @@ Then immediately hand off to user for build.
 
 ---
 
-## Stage 2: BUILD (User, 2-5 min)
+## Stage 2: BUILD + DEPLOY (User, 2-5 min)
+
+`./prod.sh build` is a single command that does:
+1. Sync versions from VERSION file
+2. PyInstaller build → binary at `desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin/`
+3. Run `verify_build.py` (46 capability checks) — fails fast if broken
+4. `rsync -a --delete` binary bundle to `~/.swarm-ai/daemon/`
+5. Write `.version` file (semver + git hash + timestamp)
+6. Copy `desktop/resources/` to daemon
+7. `chmod +x` the daemon binary
+8. SIGKILL old daemon → KeepAlive auto-restarts with new binary
 
 Hand off to user:
 
 ```
 ⏸️ YOUR TURN — 请在终端跑:
 ┌─────────────────────────────────────────────────────
-│ cd ~/Desktop/SwarmAI-Workspace/swarmai && bash desktop/scripts/build-backend.sh
+│ cd ~/Desktop/SwarmAI-Workspace/swarmai && ./prod.sh build
 └─────────────────────────────────────────────────────
 完成后说 "好了" 或贴最后几行 output。
 ```
 
 Wait for user confirmation before proceeding.
 
+**If user reports verify failed:** Read their output, identify which checks failed, diagnose.
+**If user reports "Daemon not running":** prod.sh warns but doesn't fail. Proceed to health — it will confirm.
+
 ---
 
-## Stage 3: VERIFY (Agent, 10s)
+## Stage 3: HEALTH (Agent, 5-40s)
+
+Wait 5s for daemon to stabilize, then check:
 
 ```bash
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai && python3 desktop/scripts/verify_build.py
-```
-
-**Pass criteria:** All checks pass (currently 46/46).
-
-**Report:**
-```
-Stage 3 VERIFY: PASS (46/46)
-```
-
-If verify fails: report which checks failed, STOP. Do not proceed to deploy.
-
----
-
-## Stage 4: DEPLOY (User)
-
-Hand off to user with appropriate command based on daemon status:
-
-**If daemon is UP (most common):**
-```
-⏸️ YOUR TURN — 请在终端跑:
-┌─────────────────────────────────────────────────────
-│ curl -X POST http://127.0.0.1:18321/api/system/upgrade
-└─────────────────────────────────────────────────────
-等 10-15 秒 daemon 重启完成后说 "好了"。
-```
-
-**If daemon is DOWN:**
-```
-⏸️ YOUR TURN — 请在终端跑:
-┌─────────────────────────────────────────────────────
-│ DAEMON_DIR="$HOME/.swarm-ai/daemon" && \
-│ SIDECAR="$HOME/Desktop/SwarmAI-Workspace/swarmai/desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin" && \
-│ rsync -a --delete "$SIDECAR/" "$DAEMON_DIR/" && \
-│ chmod +x "$DAEMON_DIR/python-backend" && \
-│ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.swarmai.backend.plist
-└─────────────────────────────────────────────────────
-等 daemon 启动后说 "好了"。
-```
-
-Wait for user confirmation.
-
----
-
-## Stage 5: HEALTH (Agent, 5-40s)
-
-```bash
-HEALTH=$(curl -sf http://127.0.0.1:18321/health) && \
-  echo "$HEALTH" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Status: {d[\"status\"]}\nVersion: {d.get(\"version\",\"?\")}')" || \
-  echo "FAIL: daemon not responding"
+sleep 5 && \
+nc -z 127.0.0.1 18321 2>/dev/null && \
+curl -sf http://127.0.0.1:18321/health | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+print(f'Status: {d[\"status\"]}')
+print(f'Version: {d.get(\"version\", \"?\")}')
+print(f'SDK: {d.get(\"sdk_version\", \"?\")}')
+print(f'DB: {d.get(\"db_healthy\", \"?\")}')
+assert d['status'] == 'healthy', 'NOT HEALTHY'
+" || echo "FAIL: daemon not responding on port 18321"
 ```
 
 **Pass criteria:**
+- Port 18321 open
 - Returns JSON (not HTML)
 - `status: healthy`
-- Version matches what we just built
+- Version matches VERSION file
 
 **Report:**
 ```
-Stage 5 HEALTH: PASS
+Stage 3 HEALTH: PASS
   Status: healthy
-  Version: 1.16.2
+  Version: 1.17.2
 
 BUILD COMPLETE ✅
 ```
 
 **On failure:**
-- Not responding: "Daemon didn't start. Check `tail -20 ~/.swarm-ai/logs/backend-stderr.log`"
-- Version mismatch: "Stale binary. Re-run deploy step."
+- Port closed: "Daemon didn't start. Check: `tail -20 ~/.swarm-ai/logs/backend-stderr.log`"
+- Version mismatch: "Deploy may have failed. Re-run `./prod.sh build`"
+- Not JSON / HTML: "Caddy proxy issue, not a build problem"
 
 ---
 
@@ -171,10 +151,8 @@ BUILD COMPLETE ✅
 |-------|-----|----------|-----------|
 | 0 Guard | Agent | instant | Abort if wrong project |
 | 1 Preflight | Agent | 5s | Warn only |
-| 2 Build | **User** | 2-5 min | Yes — user fixes |
-| 3 Verify | Agent | 10s | Yes — blocks deploy |
-| 4 Deploy | **User** | 10-15s | Yes — user fixes |
-| 5 Health | Agent | 5-40s | Yes — retry deploy |
+| 2 Build+Deploy | **User** | 2-5 min | Yes — user retries |
+| 3 Health | Agent | 5-40s | Yes — check logs |
 
 ---
 
@@ -182,9 +160,32 @@ BUILD COMPLETE ✅
 
 | Error | Who Fixes | How |
 |-------|-----------|-----|
-| Build exit 137 | User | Close memory-heavy apps, retry |
-| Verify fails | Agent reports | Identify which checks failed |
-| Deploy 403 | User | Not in daemon mode — use manual path |
-| Deploy 409 | User | Wait 60s or `launchctl kill SIGKILL gui/$(id -u)/com.swarmai.backend` |
-| Health timeout | User | Check `~/.swarm-ai/logs/backend-stderr.log` |
-| Version mismatch | User | Re-run deploy |
+| Build exit 137 | User | Close memory-heavy apps, retry `./prod.sh build` |
+| Verify fails (inside prod.sh) | User reads output | Identify missing PyInstaller hiddenimports |
+| Daemon won't start | User | `tail ~/.swarm-ai/logs/backend-stderr.log` |
+| Version mismatch after build | User | Re-run `./prod.sh build` (deploy may have been partial) |
+| Port 18321 in use by old process | User | `launchctl kill SIGKILL gui/$(id -u)/com.swarmai.backend` then wait 10s |
+
+---
+
+## Why prod.sh (not manual rsync)
+
+`prod.sh build` calls `_deploy_daemon_binary()` from `scripts/daemon-lib.sh` which:
+- Validates binary exists before deploy
+- Uses `rsync -a --delete` (atomic, incremental)
+- Writes `.version` file in canonical format: `{semver} {git_hash} {timestamp}`
+- Copies `desktop/resources/` to daemon resources dir
+- Sets correct permissions
+
+Hand-assembling these steps in skill docs = guaranteed drift when daemon-lib.sh
+is updated. Single source of truth: `prod.sh build`.
+
+---
+
+## Relationship to Other Skills
+
+```
+s_swarm-build    → Binary build + deploy + health (THIS SKILL)
+s_swarm-release  → Full release cycle: bump + build + tauri + publish (calls prod.sh build internally)
+s_swarm-daemon   → Daemon operations only (status/stop/start/logs) — no build
+```
