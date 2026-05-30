@@ -65,6 +65,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "claude-opus-4-6": "us.anthropic.claude-opus-4-6-v1",
         "claude-sonnet-4-6": "us.anthropic.claude-sonnet-4-6",
     },
+    "thinking_mode": "adaptive",       # "adaptive" | "enabled" | "disabled"
+    "thinking_effort": "high",         # "low" | "medium" | "high" | "xhigh" | "max"
     "anthropic_base_url": None,
     "sandbox_additional_write_paths": "~/.swarm-ai/",
     "sandbox_enabled_default": False,

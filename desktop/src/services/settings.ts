@@ -48,6 +48,8 @@ export interface SettingsConfig extends Record<string, unknown> {
   awsRegion: string;
   defaultModel: string;
   availableModels: string[];
+  thinkingMode: 'adaptive' | 'enabled' | 'disabled';
+  thinkingEffort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   anthropicBaseUrl: string | null;
   readonly awsCredentialsConfigured: boolean;
   readonly anthropicApiKeyConfigured: boolean;

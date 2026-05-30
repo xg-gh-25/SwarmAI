@@ -18,7 +18,7 @@ from config import get_bedrock_model_id
 from jobs.paths import PORT_FILE
 from database import db
 from core.agent_defaults import build_agent_config, DEFAULT_AGENT_ID
-from core.app_config_manager import AppConfigManager
+from core.app_config_manager import AppConfigManager, DEFAULT_CONFIG
 from core.initialization_manager import initialization_manager
 from core.swarm_workspace_manager import swarm_workspace_manager
 from channels.gateway import channel_gateway
@@ -291,7 +291,7 @@ def _get_auth_config() -> dict:
         return {
             "use_bedrock": config.get("use_bedrock", False),
             "aws_region": config.get("aws_region", "us-east-1"),
-            "default_model": config.get("default_model", "claude-opus-4-8"),
+            "default_model": config.get("default_model", DEFAULT_CONFIG["default_model"]),
             "bedrock_model_map": config.get("bedrock_model_map"),
             "anthropic_base_url": config.get("anthropic_base_url"),
         }
@@ -300,7 +300,7 @@ def _get_auth_config() -> dict:
         return {
             "use_bedrock": True,
             "aws_region": "us-east-1",
-            "default_model": "claude-opus-4-8",
+            "default_model": DEFAULT_CONFIG["default_model"],
             "bedrock_model_map": None,
             "anthropic_base_url": None,
         }
@@ -338,7 +338,7 @@ async def verify_auth():
 def _verify_bedrock(config: dict) -> dict:
     """Verify Bedrock auth with a minimal invoke."""
     region = config.get("aws_region", "us-east-1")
-    model = config.get("default_model", "claude-opus-4-8")
+    model = config.get("default_model", DEFAULT_CONFIG["default_model"])
     bedrock_model = get_bedrock_model_id(model, config.get("bedrock_model_map"))
 
     start = time.monotonic()
@@ -399,7 +399,7 @@ async def _verify_anthropic_api(config: dict) -> dict:
         )
 
     base_url = config.get("anthropic_base_url") or "https://api.anthropic.com"
-    model = config.get("default_model", "claude-opus-4-8")
+    model = config.get("default_model", DEFAULT_CONFIG["default_model"])
     start = time.monotonic()
 
     try:
