@@ -154,6 +154,24 @@ async def update_app_configuration(request: Request):
                 detail="default_model must be in available_models",
             )
 
+    # Validation: thinking_mode must be one of the valid values
+    _VALID_THINKING_MODES = {"adaptive", "enabled", "disabled"}
+    if "thinking_mode" in updates:
+        if updates["thinking_mode"] not in _VALID_THINKING_MODES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"thinking_mode must be one of {sorted(_VALID_THINKING_MODES)}",
+            )
+
+    # Validation: thinking_effort must be one of the valid values
+    _VALID_THINKING_EFFORTS = {"low", "medium", "high", "xhigh", "max"}
+    if "thinking_effort" in updates:
+        if updates["thinking_effort"] not in _VALID_THINKING_EFFORTS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"thinking_effort must be one of {sorted(_VALID_THINKING_EFFORTS)}",
+            )
+
     # Auto-reset default_model when available_models changed
     if "available_models" in updates and "default_model" not in updates:
         current_default = cfg.get("default_model", DEFAULT_CONFIG["default_model"])

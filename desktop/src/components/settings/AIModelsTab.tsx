@@ -26,6 +26,8 @@ export default function AIModelsTab() {
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [defaultModel, setDefaultModel] = useState<string>('');
   const [newModelId, setNewModelId] = useState('');
+  const [thinkingMode, setThinkingMode] = useState<string>('adaptive');
+  const [thinkingEffort, setThinkingEffort] = useState<string>('high');
 
   const modelOptions = useMemo(() => availableModels.map(id => ({
     id,
@@ -38,6 +40,8 @@ export default function AIModelsTab() {
       .then((config) => {
         setAvailableModels(config.availableModels || []);
         setDefaultModel(config.defaultModel || '');
+        setThinkingMode(config.thinkingMode || 'adaptive');
+        setThinkingEffort(config.thinkingEffort || 'high');
       })
       .catch(() => {});
   }, []);
@@ -88,6 +92,51 @@ export default function AIModelsTab() {
       <section className="bg-[var(--color-card)] rounded-lg p-6">
         <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">AWS Account</h2>
         <AuthConfigPanel mode="settings" />
+      </section>
+
+      {/* Thinking */}
+      <section className="bg-[var(--color-card)] rounded-lg p-6">
+        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">Thinking</h2>
+        <div className="space-y-4">
+          <Dropdown
+            label="Thinking Mode"
+            options={[
+              { id: 'adaptive', name: 'Adaptive', description: 'Model decides when to think deeply' },
+              { id: 'enabled', name: 'Enabled', description: 'Always use extended thinking' },
+              { id: 'disabled', name: 'Disabled', description: 'Never use extended thinking' },
+            ]}
+            selectedId={thinkingMode}
+            onChange={async (id) => {
+              try {
+                const config = await settingsService.updateAPIConfiguration({ thinking_mode: id });
+                setThinkingMode(config.thinkingMode || 'adaptive');
+                setMessage({ type: 'success', text: t('common.message.saveSuccess') });
+              } catch (error) {
+                setMessage({ type: 'error', text: `${t('common.message.saveFailed')}: ${error}` });
+              }
+            }}
+          />
+          <Dropdown
+            label="Thinking Effort"
+            options={[
+              { id: 'low', name: 'Low', description: 'Minimal thinking — fastest responses' },
+              { id: 'medium', name: 'Medium', description: 'Balanced speed and depth' },
+              { id: 'high', name: 'High', description: 'Deep thinking (default)' },
+              { id: 'xhigh', name: 'Extra High', description: 'Very thorough analysis' },
+              { id: 'max', name: 'Maximum', description: 'Deepest reasoning — slowest' },
+            ]}
+            selectedId={thinkingEffort}
+            onChange={async (id) => {
+              try {
+                const config = await settingsService.updateAPIConfiguration({ thinking_effort: id });
+                setThinkingEffort(config.thinkingEffort || 'high');
+                setMessage({ type: 'success', text: t('common.message.saveSuccess') });
+              } catch (error) {
+                setMessage({ type: 'error', text: `${t('common.message.saveFailed')}: ${error}` });
+              }
+            }}
+          />
+        </div>
       </section>
 
       {/* Models */}
