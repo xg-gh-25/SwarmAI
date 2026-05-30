@@ -135,8 +135,8 @@ class TestHealthRadarTodos:
 # ── AC4: Memory health results in briefing ────────────────────────────
 
 class TestMemoryHealthInBriefing:
-    def test_memory_health_actions_in_highlights(self, tmp_path):
-        """Weekly memory health actions should appear in health highlights."""
+    def test_memory_health_gaps_in_highlights(self, tmp_path):
+        """Capability gaps from weekly memory health appear in highlights."""
         from core.proactive_intelligence import _get_health_highlights
 
         findings_dir = tmp_path / "Services" / "swarm-jobs"
@@ -145,16 +145,25 @@ class TestMemoryHealthInBriefing:
             "timestamp": "2026-03-26T03:00:00Z",
             "findings": [],
             "memory_health": {
+                "capability_gaps": [
+                    {
+                        "pattern": "Memory pipeline fails on large files",
+                        "priority": "medium",
+                        "occurrences": 3,
+                        "suggested_action": "add size guard",
+                    },
+                ],
                 "actions": [
                     "Removed stale memory: 2026-02-01: Ancient entry",
-                    "Resolved thread: Signal fetcher service",
                 ],
-                "summary": "2 items maintained",
+                "summary": "1 gap detected, 1 item maintained",
             },
         }))
 
         highlights = _get_health_highlights(str(tmp_path))
-        assert any("maintenance" in h.lower() or "memory" in h.lower() for h in highlights)
+        assert any("gap" in h.lower() or "memory" in h.lower() for h in highlights)
+        # Routine maintenance actions should NOT appear (noise suppression)
+        assert not any("removed stale" in h.lower() for h in highlights)
 
 
 # ── AC5: Governance promotion signal in briefing ───────────────────────
