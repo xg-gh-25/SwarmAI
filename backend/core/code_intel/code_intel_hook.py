@@ -2,7 +2,10 @@
 PreToolUse hook — injects dependency context when agent reads code files.
 
 Triggers on: Read, Grep (when path is inside a project's repo)
-Injects: ~100 tokens of code intelligence context
+Injects:
+  - Read: symbols, callers, routes, risk score, blast radius preview
+  - Grep: if pattern matches a URL path, returns handler file:line directly
+
 Cache: graph_store loaded once per session, lazy on first tool call.
 Latency target: <50ms per injection (SQLite indexed query).
 """
@@ -10,6 +13,7 @@ Latency target: <50ms per injection (SQLite indexed query).
 from __future__ import annotations
 
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -17,6 +21,9 @@ from typing import Any
 from . import detect_project_from_path, load_project_graph
 
 logger = logging.getLogger(__name__)
+
+# URL path pattern: starts with /, has at least one segment
+_URL_PATH_RE = re.compile(r"^/[a-zA-Z0-9_\-/{}\.:]+$")
 
 
 def create_code_intel_hook():
@@ -37,6 +44,25 @@ def create_code_intel_hook():
             return {"decision": "approve"}
 
         file_path = tool_input.get("file_path") or tool_input.get("path", "")
+
+        # ── Grep: route query shortcut ──────────────────────────────────
+        if tool_name == "Grep":
+            pattern = tool_input.get("pattern", "")
+            # If grep pattern looks like a URL path, try route lookup
+            if pattern and _URL_PATH_RE.match(pattern):
+                context = _route_query(pattern, _cache)
+                if context:
+                    return {
+                        "decision": "approve",
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "additionalContext": context,
+                        }
+                    }
+            # For Grep, also try file-based context if path is provided
+            if not file_path:
+                return {"decision": "approve"}
+
         if not file_path:
             return {"decision": "approve"}
 
@@ -86,8 +112,90 @@ def _get_or_load_graph(project: str, cache: dict) -> Any:
     return graph
 
 
+def _route_query(url_path: str, cache: dict) -> str | None:
+    """If url_path matches a known route, return handler location directly.
+
+    This is the O(1) "give me a path, get the handler" shortcut.
+    Agent greps for '/api/chat/send' → gets 'routers/chat.py::send_message (line 42)'.
+    """
+    # Try all cached projects
+    for project_name, graph in cache.items():
+        result = _search_routes_in_graph(graph, url_path)
+        if result:
+            return result
+
+    # Try all projects (may not be cached yet)
+    from . import _project_path_cache, _build_project_path_cache, _cache_initialized
+    if not _cache_initialized:
+        _build_project_path_cache()
+
+    for project_name in set(_project_path_cache.values()):
+        if project_name in cache:
+            continue  # Already tried
+        graph = _get_or_load_graph(project_name, cache)
+        if not graph:
+            continue
+        result = _search_routes_in_graph(graph, url_path)
+        if result:
+            return result
+
+    return None
+
+
+def _search_routes_in_graph(graph, url_path: str) -> str | None:
+    """Search for a URL path in a graph's routes. Supports exact and suffix match.
+
+    Skips test files (routes from test mocks pollute results).
+    """
+    try:
+        routes = graph.get_routes()
+    except Exception:
+        return None
+
+    # Filter out test file routes
+    real_routes = [r for r in routes if "test" not in r.get("file_path", "").lower()]
+
+    # Exact match first
+    for r in real_routes:
+        if r.get("path") == url_path:
+            return _format_route_match(r, url_path)
+
+    # Suffix match: /api/system/health → match /health (router mounts add prefix)
+    path_suffix = "/" + url_path.rstrip("/").split("/")[-1] if "/" in url_path else url_path
+    for r in real_routes:
+        if r.get("path", "").endswith(path_suffix) or url_path.endswith(r.get("path", "")):
+            return _format_route_match(r, url_path)
+
+    # Substring match: query is contained in route path (not the other way —
+    # avoids "/" matching everything)
+    for r in real_routes:
+        route_path = r.get("path", "")
+        # Only match if the route path is specific enough (>= half the query length)
+        if len(route_path) >= len(url_path) // 2 and url_path in route_path:
+            return _format_route_match(r, url_path)
+
+    return None
+
+
+def _format_route_match(r: dict, query: str) -> str:
+    """Format a route match result."""
+    handler = r.get("handler_node_id", "")
+    line = r.get("line_number", "?")
+    file_path = r.get("file_path", "")
+    method = r.get("method", "?")
+    path = r.get("path", query)
+    return (
+        f"🎯 Route Match: {method} {path}\n"
+        f"  Handler: {handler} (line {line})\n"
+        f"  File: {file_path}"
+    )
+
+
 def _build_context(graph, file_path: str, project: str) -> str | None:
-    """Build context injection string for a file."""
+    """Build context injection string for a file.
+
+    Includes: symbols, routes, risk assessment, blast radius preview.
+    """
     repo_root = graph.get_meta("repo_root")
     if not repo_root:
         return None
@@ -127,7 +235,23 @@ def _build_context(graph, file_path: str, project: str) -> str | None:
         f"  Module: {module}",
     ]
 
-    # Inject route context if available
+    # ── Risk assessment ─────────────────────────────────────────────────
+    if total_callers >= 5:
+        risk = _compute_file_risk(graph, rel_path, nodes, total_callers)
+        if risk:
+            lines.append(f"  ⚠️ Risk: {risk['level']} ({risk['reason']})")
+
+    # ── Blast radius preview (top callers) ──────────────────────────────
+    if total_callers >= 5:
+        top_callers = _get_top_callers(graph, rel_path, limit=3)
+        if top_callers:
+            caller_strs = []
+            for c in top_callers:
+                tested = "✓" if c["has_test"] else "✗ untested"
+                caller_strs.append(f"{c['name']} ({tested})")
+            lines.append(f"  Blast radius (top callers): {', '.join(caller_strs)}")
+
+    # ── Route context ───────────────────────────────────────────────────
     try:
         file_routes = graph.get_routes(file_path=rel_path)
         if file_routes:
@@ -143,3 +267,107 @@ def _build_context(graph, file_path: str, project: str) -> str | None:
         pass  # Routes table may not exist in older DBs
 
     return "\n".join(lines)
+
+
+def _compute_file_risk(graph, rel_path: str, nodes: list, total_callers: int) -> dict | None:
+    """Compute a simple risk score for a file.
+
+    Dimensions: caller_count × test_gap × churn (via git commits if available).
+    Returns: {"level": "HIGH", "reason": "28 callers, 3 untested symbols"}
+    """
+    # Check how many symbols have test callers
+    tested_count = 0
+    untested_count = 0
+    for n in nodes:
+        node_id = n.get("id", "") if isinstance(n, dict) else ""
+        if not node_id:
+            continue
+        # A symbol is "tested" if any of its callers is in a test file
+        try:
+            callers = graph._conn.execute(
+                "SELECT source_id FROM code_edges WHERE target_id = ? AND edge_type = 'calls' LIMIT 20",
+                (node_id,)
+            ).fetchall()
+            has_test_caller = any("test" in c[0].lower() for c in callers)
+            if has_test_caller:
+                tested_count += 1
+            elif n.get("is_export", True):
+                untested_count += 1
+        except Exception:
+            continue
+
+    # Risk level
+    if total_callers >= 20 and untested_count >= 5:
+        level = "CRITICAL"
+        reason = f"{total_callers} callers, {untested_count} untested exports"
+    elif total_callers >= 10 and untested_count >= 3:
+        level = "HIGH"
+        reason = f"{total_callers} callers, {untested_count} untested exports"
+    elif total_callers >= 5 and untested_count >= 2:
+        level = "MEDIUM"
+        reason = f"{total_callers} callers, {untested_count} untested exports"
+    elif total_callers >= 5:
+        level = "LOW"
+        reason = f"{total_callers} callers, well tested"
+    else:
+        return None
+
+    return {"level": level, "reason": reason}
+
+
+def _get_top_callers(graph, rel_path: str, limit: int = 3) -> list[dict]:
+    """Get top N callers of symbols in this file, with test coverage flag.
+
+    Returns: [{"name": "session_router.py::route_message", "has_test": True}, ...]
+    """
+    try:
+        # Get all node IDs in this file
+        node_ids = [
+            row[0] for row in graph._conn.execute(
+                "SELECT id FROM code_nodes WHERE file_path = ?", (rel_path,)
+            ).fetchall()
+        ]
+        if not node_ids:
+            return []
+
+        # Find callers across all nodes in this file, deduplicated by source file
+        placeholders = ",".join("?" * len(node_ids))
+        caller_rows = graph._conn.execute(
+            f"SELECT DISTINCT e.source_id, n.file_path, n.name "
+            f"FROM code_edges e "
+            f"JOIN code_nodes n ON n.id = e.source_id "
+            f"WHERE e.target_id IN ({placeholders}) "
+            f"AND e.edge_type = 'calls' "
+            f"AND n.file_path != ? "
+            f"ORDER BY n.file_path "
+            f"LIMIT ?",
+            node_ids + [rel_path, limit * 3],  # fetch extra, then deduplicate
+        ).fetchall()
+
+        # Deduplicate by file (show one caller per file)
+        seen_files: set[str] = set()
+        results = []
+        for source_id, caller_file, caller_name in caller_rows:
+            if caller_file in seen_files:
+                continue
+            seen_files.add(caller_file)
+            has_test = "test" in caller_file.lower()
+            # For non-test callers, check if THEY have test callers
+            if not has_test:
+                test_check = graph._conn.execute(
+                    "SELECT 1 FROM code_edges e "
+                    "JOIN code_nodes n ON n.id = e.source_id "
+                    "WHERE e.target_id = ? AND n.file_path LIKE '%test%' LIMIT 1",
+                    (source_id,)
+                ).fetchone()
+                has_test = test_check is not None
+            results.append({
+                "name": f"{caller_file.split('/')[-1]}::{caller_name}",
+                "has_test": has_test,
+            })
+            if len(results) >= limit:
+                break
+
+        return results
+    except Exception:
+        return []
