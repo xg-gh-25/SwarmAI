@@ -585,6 +585,48 @@ _SCHEDULER_INTERVAL_SECONDS = 3600  # 1 hour — same as the old launchd StartCa
 _job_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="job-executor")
 
 
+async def _start_code_intel_watchers() -> None:
+    """Start FS watchers for all indexed projects (daemon/hive only).
+
+    Scans Projects/ for those with code_intel.db, resolves repo_root from
+    graph metadata, and starts a CodeIntelWatcher for each (up to max capacity).
+    """
+    await asyncio.sleep(10)  # Let startup settle
+    try:
+        from core.code_intel import load_project_graph, get_code_intel_db_path
+        from core.code_intel.watcher import start_watcher
+        from jobs.paths import PROJECTS_DIR
+
+        if not PROJECTS_DIR.is_dir():
+            return
+
+        started = 0
+        for project_dir in PROJECTS_DIR.iterdir():
+            if not project_dir.is_dir():
+                continue
+            db_path = project_dir / "code_intel.db"
+            if not db_path.exists():
+                continue
+
+            project_name = project_dir.name
+            graph = load_project_graph(project_name)
+            if not graph:
+                continue
+
+            repo_root = graph.get_meta("repo_root")
+            if not repo_root or not Path(repo_root).is_dir():
+                continue
+
+            ok = await start_watcher(project_name, Path(repo_root), graph)
+            if ok:
+                started += 1
+
+        if started:
+            logger.info(f"Code Intelligence: started {started} FS watcher(s)")
+    except Exception:
+        logger.debug("Code Intelligence watcher startup failed (non-fatal)", exc_info=True)
+
+
 async def _run_inprocess_scheduler() -> None:
     """In-process job scheduler loop (daemon/hive only).
 
@@ -1051,10 +1093,22 @@ async def lifespan(app: FastAPI):
         )
         logger.info("In-process scheduler started (60min interval)")
 
+    # ── Code Intelligence FS watchers (daemon/hive only) ─────────────
+    # Start watchers for indexed projects so code-intel stays fresh.
+    if backend_mode in ("daemon", "hive"):
+        asyncio.create_task(_start_code_intel_watchers())
+
     yield
     # Shutdown
     _startup_complete = False
     logger.info("Shutting down...")
+    # Stop Code Intelligence FS watchers
+    try:
+        from core.code_intel.watcher import stop_all_watchers
+        await stop_all_watchers()
+        logger.info("Code Intelligence watchers stopped")
+    except Exception:
+        logger.debug("Code Intel watcher shutdown skipped", exc_info=True)
     if _scheduler_task and not _scheduler_task.done():
         _scheduler_task.cancel()
         try:

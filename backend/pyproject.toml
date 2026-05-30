@@ -51,6 +51,8 @@ dependencies = [
     # Code Intelligence — tree-sitter AST parsing (falls back to regex if unavailable)
     "tree-sitter>=0.24.0",
     "tree-sitter-language-pack>=0.5.0,!=1.6.3",
+    # Code Intelligence — FS watcher for auto-refresh (Rust-based, async-native)
+    "watchfiles>=1.0.0",
 ]
 
 [project.optional-dependencies]

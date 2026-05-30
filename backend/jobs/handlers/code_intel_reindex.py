@@ -84,6 +84,8 @@ def reindex_projects(full: bool = False) -> dict:
                             except Exception:
                                 pass
             total_nodes = sum(len(pr.nodes) for pr in parse_results)
+            # Export code-intel.json v2 after full reindex
+            _export_json(graph, project_name, project_dir)
             results.append({
                 "project": project_name,
                 "status": "full_reindex",
@@ -127,6 +129,16 @@ def reindex_projects(full: bool = False) -> dict:
             })
 
     return {"status": "success", "projects": results}
+
+
+def _export_json(graph, project_name: str, project_dir: Path) -> None:
+    """Export code-intel.json v2 after reindex. Non-fatal on failure."""
+    try:
+        from core.code_intel.json_exporter import export_code_intel_json
+        output_path = project_dir / "code-intel.json"
+        export_code_intel_json(graph, project_name, output_path)
+    except Exception as e:
+        logger.warning(f"JSON export failed for {project_name}: {e}")
 
 
 if __name__ == "__main__":
