@@ -116,6 +116,10 @@ def extract_routes(file_path: str, content: str, language: str) -> list[CodeRout
         List of CodeRoute instances. Returns empty list (never raises) if
         no framework is detected.
     """
+    # Skip test files — they define routes for testing but aren't real endpoints
+    if "/test" in file_path or "test_" in file_path.split("/")[-1]:
+        return []
+
     framework = detect_framework(file_path, content)
     if not framework:
         return []
@@ -133,15 +137,31 @@ def extract_routes(file_path: str, content: str, language: str) -> list[CodeRout
     return []
 
 
+# APIRouter(prefix="/api/jobs") — prefix in constructor
+_APIROUTER_PREFIX_RE = re.compile(
+    r'APIRouter\s*\([^)]*prefix\s*=\s*["\']([^"\']+)["\']',
+)
+
+
 def _extract_fastapi_routes(file_path: str, content: str) -> list[CodeRoute]:
     """Extract routes from FastAPI code."""
     routes: list[CodeRoute] = []
+
+    # Detect inline prefix from APIRouter(prefix="/api/jobs")
+    inline_prefix = ""
+    prefix_match = _APIROUTER_PREFIX_RE.search(content)
+    if prefix_match:
+        inline_prefix = prefix_match.group(1).rstrip("/")
 
     for match in _FASTAPI_HANDLER_RE.finditer(content):
         method = match.group(1).upper()
         path = match.group(2)
         handler_name = match.group(3)
         line_number = content[:match.start()].count("\n") + 1
+
+        # Apply inline prefix if route doesn't already include it
+        if inline_prefix and not path.startswith(inline_prefix):
+            path = inline_prefix + "/" + path.lstrip("/") if path != "/" else inline_prefix
 
         route_id = _make_route_id(file_path, method, path)
         handler_node_id = f"{file_path}::{handler_name}"

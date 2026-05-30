@@ -122,6 +122,8 @@ def reindex_projects(full: bool = False) -> dict:
                     graph.remove_file(rel_path)
                     refreshed += 1
 
+            # Apply router prefix resolution for any routes just inserted
+            _resolve_prefixes(graph, repo_root)
             graph.rebuild_fts()
             if freshness.current_head:
                 graph.set_meta("last_indexed_commit", freshness.current_head)
@@ -133,6 +135,68 @@ def reindex_projects(full: bool = False) -> dict:
             })
 
     return {"status": "success", "projects": results}
+
+
+def _resolve_prefixes(graph, repo_root: Path) -> None:
+    """Apply FastAPI include_router prefix resolution to stored routes.
+
+    Scans for common entrypoint files (main.py, app.py) in the repo,
+    builds a prefix map from include_router() calls, then updates
+    routes in the DB whose paths are bare (missing the mount prefix).
+    """
+    from core.code_intel.route_parser import build_prefix_map
+
+    # Find entrypoint candidates
+    candidates = [
+        "backend/main.py", "main.py", "app.py", "src/main.py", "src/app.py",
+        "server.py", "backend/app.py",
+    ]
+    entrypoint_path = None
+    entrypoint_content = None
+    for candidate in candidates:
+        fp = repo_root / candidate
+        if fp.exists():
+            entrypoint_path = candidate
+            entrypoint_content = fp.read_text(encoding="utf-8", errors="replace")
+            break
+
+    if not entrypoint_content:
+        return
+
+    prefix_map = build_prefix_map(entrypoint_content, entrypoint_path)
+    if not prefix_map:
+        return
+
+    # Load all routes from DB, apply prefix, re-store
+    import sqlite3
+    db_path = graph._db_path
+    conn = sqlite3.connect(str(db_path))
+    cur = conn.cursor()
+    cur.execute("SELECT id, method, path, handler_node_id, framework, file_path, line_number, middleware FROM code_routes")
+    rows = cur.fetchall()
+
+    updated = 0
+    for row in rows:
+        old_id, method, path, handler_node_id, framework, file_path, line_number, middleware = row
+        prefix = prefix_map.get(file_path, "")
+        if not prefix or path.startswith(prefix):
+            continue  # Already resolved or no prefix applies
+
+        # Apply prefix
+        new_path = prefix.rstrip("/") + "/" + path.lstrip("/") if path != "/" else prefix
+        from core.code_intel.route_parser import _make_route_id
+        new_id = _make_route_id(file_path, method, new_path)
+
+        cur.execute(
+            "UPDATE code_routes SET path = ?, id = ? WHERE id = ?",
+            (new_path, new_id, old_id)
+        )
+        updated += 1
+
+    conn.commit()
+    conn.close()
+    if updated:
+        logger.info(f"Prefix resolution: updated {updated} routes")
 
 
 def _export_json(graph, project_name: str, project_dir: Path) -> None:
