@@ -300,19 +300,22 @@ class TestEmptyThinkingBlock:
 
     @pytest.mark.asyncio
     async def test_empty_thinking_block(self):
-        """No crash or stale state from empty thinking block."""
+        """Empty Opus 4.8 thinking block (thinking_start, zero deltas) must NOT
+        leave a ghost widget. The opener is lazy-written on first delta, so with
+        no deltas thinking_content_sent stays False and end_thinking_phase emits
+        no separator — no '💭 ---' ghost."""
         ctx = _make_ctx()
 
-        # thinking_start — opener was delivered
+        # thinking_start fired but NO thinking_delta followed (opener deferred).
         ctx.in_thinking = True
-        ctx.thinking_content_sent = True
+        ctx.thinking_content_sent = False  # opener never written (lazy)
 
         # Immediately text_start — no thinking_delta between them
         await end_thinking_phase(ctx)
 
         assert ctx.in_thinking is False
-        # Separator still sent (closes the italic opened by 💭 _)
-        ctx.adapter.append_stream.assert_awaited_once()
+        # No opener was sent → no separator → no ghost widget.
+        ctx.adapter.append_stream.assert_not_awaited()
 
         # Text works fine after
         ctx.stream_buf.append("answer")
