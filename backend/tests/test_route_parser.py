@@ -2,7 +2,7 @@
 
 import pytest
 
-from core.code_intel.route_parser import CodeRoute, extract_routes, detect_framework
+from core.code_intel.route_parser import CodeRoute, extract_routes, detect_framework, build_prefix_map
 
 
 # ── test_extract_fastapi_routes ─────────────────────────────────────────
@@ -186,3 +186,84 @@ def test_language_map_coverage():
     """LANGUAGE_MAP must have at least 12 entries after expansion."""
     from core.code_intel.parser import LANGUAGE_MAP
     assert len(LANGUAGE_MAP) >= 12
+
+
+# ── test_build_prefix_map ──────────────────────────────────────────────
+
+MAIN_PY_SAMPLE = '''
+from routers import agents_router, chat_router, channels_router
+from routers.jobs import router as jobs_router
+from routers.pipelines import router as pipelines_router
+
+app = FastAPI()
+
+app.include_router(agents_router, prefix="/api/agents", tags=["agents"])
+app.include_router(chat_router, prefix="/api/chat", tags=["chat"])
+app.include_router(channels_router, prefix="/api/channels", tags=["channels"])
+app.include_router(jobs_router, tags=["jobs"])
+app.include_router(pipelines_router, prefix="/api/pipelines", tags=["pipelines"])
+'''
+
+
+def test_build_prefix_map_basic():
+    """build_prefix_map resolves router vars to file paths with correct prefixes."""
+    pmap = build_prefix_map(MAIN_PY_SAMPLE, "backend/main.py")
+
+    # Bulk import: agents_router → backend/routers/agents.py
+    assert pmap.get("backend/routers/agents.py") == "/api/agents"
+    assert pmap.get("backend/routers/chat.py") == "/api/chat"
+    assert pmap.get("backend/routers/channels.py") == "/api/channels"
+
+    # "as" import: pipelines_router → backend/routers/pipelines.py
+    assert pmap.get("backend/routers/pipelines.py") == "/api/pipelines"
+
+    # jobs_router has NO prefix kwarg → should NOT be in map
+    assert "backend/routers/jobs.py" not in pmap
+
+
+def test_build_prefix_map_prefix_not_first_kwarg():
+    """prefix= after other kwargs still gets captured."""
+    content = '''
+from routers import foo_router
+app.include_router(foo_router, tags=["foo"], prefix="/api/foo")
+'''
+    pmap = build_prefix_map(content, "backend/main.py")
+    assert pmap.get("backend/routers/foo.py") == "/api/foo"
+
+
+def test_build_prefix_map_multi_alias_import():
+    """Comma-separated 'as' imports on one line resolve correctly."""
+    content = '''
+from routers.auth import router as auth_router, sub_router as auth_sub_router
+app.include_router(auth_router, prefix="/api/auth")
+app.include_router(auth_sub_router, prefix="/api/auth/sub")
+'''
+    pmap = build_prefix_map(content, "backend/main.py")
+    # Both aliases come from the same module (routers.auth → backend/routers/auth.py)
+    assert pmap.get("backend/routers/auth.py") in ("/api/auth", "/api/auth/sub")
+
+
+# ── test_test_file_skip ────────────────────────────────────────────────
+
+def test_test_file_routes_skipped():
+    """Routes in test files are not extracted."""
+    code = '''
+from fastapi import FastAPI
+app = FastAPI()
+
+@app.get("/health")
+def health():
+    return "ok"
+'''
+    # Test file patterns that should be skipped
+    assert extract_routes("backend/tests/test_api.py", code, "python") == []
+    assert extract_routes("src/test/routes.py", code, "python") == []
+    assert extract_routes("tests/test_endpoints.py", code, "python") == []
+
+    # Non-test file should work
+    routes = extract_routes("backend/main.py", code, "python")
+    assert len(routes) == 1
+
+    # "contest" should NOT be skipped (no directory boundary)
+    routes = extract_routes("backend/routers/contest.py", code, "python")
+    assert len(routes) == 1

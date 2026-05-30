@@ -167,24 +167,25 @@ def _resolve_prefixes(graph, repo_root: Path) -> None:
     if not prefix_map:
         return
 
-    # Load all routes from DB, apply prefix, re-store
-    import sqlite3
-    db_path = graph._db_path
-    conn = sqlite3.connect(str(db_path))
+    # Use graph's own connection (WAL mode + busy_timeout already set)
+    from core.code_intel.route_parser import _make_route_id
+    conn = graph._conn
     cur = conn.cursor()
-    cur.execute("SELECT id, method, path, handler_node_id, framework, file_path, line_number, middleware FROM code_routes")
+    cur.execute("SELECT id, method, path, file_path FROM code_routes")
     rows = cur.fetchall()
 
     updated = 0
-    for row in rows:
-        old_id, method, path, handler_node_id, framework, file_path, line_number, middleware = row
+    for old_id, method, path, file_path in rows:
         prefix = prefix_map.get(file_path, "")
         if not prefix or path.startswith(prefix):
             continue  # Already resolved or no prefix applies
+        # Guard: if route path already contains the prefix as a substring,
+        # it was likely applied inline via APIRouter(prefix=...) — skip
+        if prefix.lstrip("/") in path:
+            continue
 
         # Apply prefix
         new_path = prefix.rstrip("/") + "/" + path.lstrip("/") if path != "/" else prefix
-        from core.code_intel.route_parser import _make_route_id
         new_id = _make_route_id(file_path, method, new_path)
 
         cur.execute(
@@ -194,7 +195,6 @@ def _resolve_prefixes(graph, repo_root: Path) -> None:
         updated += 1
 
     conn.commit()
-    conn.close()
     if updated:
         logger.info(f"Prefix resolution: updated {updated} routes")
 

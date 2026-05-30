@@ -973,8 +973,15 @@ def _detect_active_project(workspace: Path) -> str | None:
     return None
 
 
+# TTL cache for _detect_active_coding_project (avoids repeated FS traversal)
+_coding_project_cache: dict[str, tuple[float, str | None]] = {}
+_CODING_PROJECT_TTL = 60.0  # 60 seconds
+
+
 def _detect_active_coding_project(workspace: Path) -> str | None:
     """Detect if the current session context suggests coding work.
+
+    Cached for 60s to avoid repeated filesystem traversal during prompt assembly.
 
     Only returns a project name if there's evidence this session involves code:
     1. Recent DailyActivity (today/yesterday) mentions code files (.py, .ts, .rs, etc.)
@@ -983,6 +990,23 @@ def _detect_active_coding_project(workspace: Path) -> str | None:
 
     Returns None for non-coding sessions — saves ~300 tokens of route/risk briefing.
     """
+    import time
+
+    # TTL cache check — avoid repeated FS traversal within same prompt assembly
+    cache_key = str(workspace)
+    cached = _coding_project_cache.get(cache_key)
+    if cached:
+        ts, result = cached
+        if time.time() - ts < _CODING_PROJECT_TTL:
+            return result
+
+    result = _detect_active_coding_project_impl(workspace)
+    _coding_project_cache[cache_key] = (time.time(), result)
+    return result
+
+
+def _detect_active_coding_project_impl(workspace: Path) -> str | None:
+    """Inner implementation without cache."""
     import time
 
     projects_dir = workspace / "Projects"
@@ -1014,7 +1038,8 @@ def _detect_active_coding_project(workspace: Path) -> str | None:
     if daily_dir.is_dir():
         today = time.strftime("%Y-%m-%d")
         code_extensions = {".py", ".ts", ".tsx", ".js", ".rs", ".go", ".java"}
-        for da_file in sorted(daily_dir.iterdir(), reverse=True)[:2]:
+        da_files = [f for f in daily_dir.iterdir() if f.suffix == ".md" and f.stem[:4].isdigit()]
+        for da_file in sorted(da_files, reverse=True)[:2]:
             if today in da_file.name:
                 try:
                     content = da_file.read_text(errors="replace")[:5000]
@@ -1046,7 +1071,7 @@ def _detect_active_coding_project(workspace: Path) -> str | None:
                     index_file = git_dir / "index"
                     if index_file.exists():
                         age = time.time() - index_file.stat().st_mtime
-                        if age < 3600:  # git index touched in last hour → active coding
+                        if age < 14400:  # git index touched in last 4 hours → active coding
                             return name
         except Exception:
             continue
@@ -1121,7 +1146,7 @@ def build_session_briefing(
                        or item.priority in ("P0", "P1")
                        or item.blocks_others
                        or item.report_count >= 3]
-        ranked = high_signal if high_signal else ranked[:1]
+        ranked = high_signal  # Empty is fine — no noise better than stale noise
 
         if not ranked and not signals:
             return None
@@ -1178,10 +1203,14 @@ def build_session_briefing(
             if ddd_escalations:
                 import time as _t
                 now = _t.time()
-                fresh = [p for p in ddd_escalations
-                         if hasattr(p, 'created_at') and (now - (p.created_at or 0)) < 7 * 86400]
-                # Fall back to all if created_at not available
-                to_show = fresh if fresh else ddd_escalations
+                # Keep items without created_at (can't judge staleness) + fresh items
+                to_show = [p for p in ddd_escalations
+                           if not hasattr(p, 'created_at')
+                           or p.created_at is None
+                           or (now - p.created_at) < 7 * 86400]
+                # Fall back to all if filter removed everything
+                if not to_show:
+                    to_show = ddd_escalations
                 if to_show:
                     esc_lines = [f"  - [{p.target_doc}] {p.content[:100]}" for p in to_show[:5]]
                     sections.append(
