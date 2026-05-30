@@ -297,6 +297,34 @@ class TestAssistantMessagePreservation:
         assert text_blocks[0]["text"] == "The answer is 391."
 
     @pytest.mark.asyncio
+    async def test_whitespace_only_thinking_block_skipped(self):
+        """A ThinkingBlock with only whitespace content must also be skipped —
+        matches the stated intent of dropping content-free thinking blocks."""
+        unit = _make_unit()
+
+        thinking_block = _MockThinkingBlock()
+        thinking_block.thinking = "  \n  "   # whitespace-only
+        thinking_block.signature = "ErUBsig..."
+
+        text_block = _MockTextBlock()
+        text_block.text = "done"
+
+        assistant_msg = _MockAssistantMessage()
+        assistant_msg.content = [thinking_block, text_block]
+        assistant_msg.model = "claude-opus-4-8"
+        assistant_msg.session_id = None
+
+        result_msg = _make_result_message(usage=None)
+        _set_mock_client(unit, [assistant_msg, result_msg])
+
+        with _patch_sdk_modules():
+            events = await _collect_events(unit)
+
+        assistant_events = [e for e in events if e.get("type") == "assistant"]
+        thinking_blocks = [b for b in assistant_events[0]["content"] if b["type"] == "thinking"]
+        assert thinking_blocks == [], "whitespace-only thinking must not be persisted"
+
+    @pytest.mark.asyncio
     async def test_nonempty_thinking_preserves_signature(self):
         """A ThinkingBlock WITH content must be emitted with BOTH thinking and
         signature preserved (signature was previously dropped at line 2095)."""
