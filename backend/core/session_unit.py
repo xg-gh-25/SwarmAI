@@ -2093,9 +2093,10 @@ class SessionUnit:
                         content_blocks.append({"type": "text", "text": block.text})
                     elif isinstance(block, ThinkingBlock):
                         # Opus 4.8 over Bedrock returns thinking blocks with empty
-                        # content (signature-only, redacted reasoning). Skip empties
-                        # so they don't pollute the DB / render as ghost widgets.
-                        if block.thinking:
+                        # content (signature-only, redacted reasoning). Skip empty
+                        # AND whitespace-only content so they don't pollute the DB
+                        # or render as ghost widgets.
+                        if block.thinking and block.thinking.strip():
                             content_blocks.append({
                                 "type": "thinking",
                                 "thinking": block.thinking,
