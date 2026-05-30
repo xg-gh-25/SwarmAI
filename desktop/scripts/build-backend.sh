@@ -49,6 +49,14 @@ mkdir -p "$OUTPUT_DIR"
 BUILD_DIR=$(mktemp -d)
 trap "rm -rf $BUILD_DIR" EXIT
 
+# Refresh the bundled C034 guardian assets (script, standalone guard.py, plist
+# template) from their sources of truth so the .app never ships stale copies.
+# Delegates to the shared sync script — the SAME script tauri.conf
+# beforeBuildCommand runs — so both build entry points stay consistent.
+if [ -f "$SCRIPT_DIR/sync-guardian-assets.sh" ]; then
+    bash "$SCRIPT_DIR/sync-guardian-assets.sh"
+fi
+
 # Copy backend code to build directory
 cp -r "$BACKEND_DIR"/* "$BUILD_DIR/"
 

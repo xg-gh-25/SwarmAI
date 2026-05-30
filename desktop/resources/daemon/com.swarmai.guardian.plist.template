@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.swarmai.guardian</string>
+    <!--
+      Watchdog for the backend daemon. Polls every 30s and re-bootstraps
+      com.swarmai.backend ONLY when it is deregistered AND no intent sentinel
+      is present AND the port has been dead for N consecutive probes.
+      This recovers the C034 "deregistered with nobody to restart" state
+      without racing intentional stop/upgrade (the sentinel suppresses it).
+    -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__GUARDIAN_SCRIPT__</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>30</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>__LOG_DIR__/guardian-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__LOG_DIR__/guardian-stderr.log</string>
+    <!-- Background priority — never compete with user apps. -->
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>LowPriorityIO</key>
+    <true/>
+</dict>
+</plist>

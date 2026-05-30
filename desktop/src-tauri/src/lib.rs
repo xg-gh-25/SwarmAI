@@ -510,6 +510,37 @@ fn parse_health_response(body: &str) -> (bool, Option<String>, Option<String>) {
     }
 }
 
+/// Atomically install a file: copy `src` → `<dst>.<pid>.tmp-install`, chmod,
+/// then rename to `dst`. The rename is atomic on a POSIX same-filesystem, so a
+/// process already executing the old `dst` (e.g. a running guardian bash reading
+/// its own script during an app upgrade) keeps its original inode and finishes
+/// cleanly. Also avoids EACCES from re-copying over a read-only file left by a
+/// prior install (files extracted from a code-signed .app bundle are 0444).
+///
+/// The tmp name includes the PID so two concurrent installs (e.g. the user
+/// double-launches the .app) don't collide on a shared tmp path mid-copy.
+///
+/// NOT cfg-gated: uses only cross-platform stdlib (the PermissionsExt block is
+/// `#[cfg(unix)]`). Mirrors the un-gated `copy_dir_recursive` — gating this but
+/// not its un-gated caller `install_guardian` would break the Windows/Linux
+/// build (caller references a non-existent fn). Dead code on non-macOS (the
+/// only caller is reached solely from the macOS auto_install_daemon path).
+#[allow(dead_code, unused_variables)]
+fn atomic_install(src: &std::path::Path, dst: &std::path::Path, mode: u32) -> std::io::Result<()> {
+    let tmp = dst.with_extension(format!("{}.tmp-install", std::process::id()));
+    std::fs::copy(src, &tmp)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))?;
+    }
+    let r = std::fs::rename(&tmp, dst); // atomic swap on same filesystem
+    if r.is_err() {
+        let _ = std::fs::remove_file(&tmp); // don't leak tmp on rename failure
+    }
+    r
+}
+
 /// Recursively copy a directory's contents to a destination, deleting
 /// files in dst that don't exist in src (mirrors rsync --delete behavior).
 /// Critical for onedir upgrades: stale .so/.dylib from old versions must be removed.
@@ -1072,8 +1103,137 @@ fn auto_install_daemon(app: &tauri::AppHandle) -> Result<(), String> {
         ));
     }
 
+    // Step 6: Install the C034 guardian watchdog (NON-FATAL). The guardian is a
+    // recovery safety-net (re-bootstraps the backend if it dies deregistered);
+    // it must NEVER block backend startup. `let _ =` swallows any error — if the
+    // guardian fails to install, the backend still comes up via the bootstrap
+    // below. The prevention half (ancestry re-exec) ships inside the backend
+    // binary and is unaffected by guardian-install failure.
+    if let Err(e) = install_guardian(&home, &bundle_base, &log_dir) {
+        println!("[Tauri] Guardian install skipped (non-fatal): {}", e);
+    }
+
     // Step 5: Bootstrap via launchctl
     bootstrap_daemon(&home)
+}
+
+/// Install the C034 guardian watchdog launchd agent (macOS, NON-FATAL).
+///
+/// Mirrors the backend-install idioms: copy script + standalone stdlib guard to
+/// ~/.swarm-ai/, render the plist template, bootstrap via launchctl. Idempotent.
+///
+/// The caller invokes this with `let _ =` / `if let Err` — a guardian install
+/// failure must not prevent the backend daemon from coming up (the guardian is
+/// a safety net, not load-bearing).
+///
+/// Assets come from the bundled `daemon/` resources (staged in
+/// desktop/resources/daemon/): `swarmai_guardian.sh`, `daemon_guard.py`,
+/// `com.swarmai.guardian.plist.template`.
+fn install_guardian(
+    home: &str,
+    bundle_base: &std::path::Path,
+    log_dir: &std::path::Path,
+) -> Result<(), String> {
+    let home_path = std::path::Path::new(home);
+    let swarm_dir = home_path.join(".swarm-ai");
+    let guardian_dir = swarm_dir.join("guardian");
+    std::fs::create_dir_all(&guardian_dir)
+        .map_err(|e| format!("create guardian dir: {}", e))?;
+
+    // 1. Copy the guardian loop script → ~/.swarm-ai/swarmai_guardian.sh
+    //    ATOMIC (write .tmp + rename): on UPGRADE this overwrites a script the
+    //    OLD guardian (StartInterval 30s) may be mid-execution running. A plain
+    //    truncate-rewrite would corrupt a running bash read; rename swaps the
+    //    inode so the running bash keeps its original file. Also: files copied
+    //    out of a code-signed .app bundle are read-only (0444), so a 2nd-launch
+    //    in-place copy would EACCES — rename + explicit chmod avoids that.
+    let script_src = bundle_base.join("daemon").join("swarmai_guardian.sh");
+    let script_dest = swarm_dir.join("swarmai_guardian.sh");
+    if !script_src.exists() {
+        return Err(format!("guardian script not in bundle: {:?}", script_src));
+    }
+    atomic_install(&script_src, &script_dest, 0o755)
+        .map_err(|e| format!("install guardian script: {}", e))?;
+
+    // 2. Copy the standalone (pure-stdlib) guard → ~/.swarm-ai/guardian/daemon_guard.py
+    let guard_src = bundle_base.join("daemon").join("daemon_guard.py");
+    let guard_dest = guardian_dir.join("daemon_guard.py");
+    if !guard_src.exists() {
+        return Err(format!("guardian guard.py not in bundle: {:?}", guard_src));
+    }
+    atomic_install(&guard_src, &guard_dest, 0o644)
+        .map_err(|e| format!("install guardian guard.py: {}", e))?;
+
+    // Clear quarantine on BOTH installed files (Gatekeeper quarantines anything
+    // extracted from the .app bundle). The backend onedir clears its dir
+    // recursively; ~/.swarm-ai/guardian/ is NOT under that path, so do it here.
+    let _ = std::process::Command::new("xattr")
+        .args(["-dr", "com.apple.quarantine"])
+        .arg(&script_dest)
+        .output();
+    let _ = std::process::Command::new("xattr")
+        .args(["-dr", "com.apple.quarantine"])
+        .arg(&guard_dest)
+        .output();
+
+    // 3. Render the guardian plist from the template (__GUARDIAN_SCRIPT__/__LOG_DIR__).
+    let tmpl_src = bundle_base
+        .join("daemon")
+        .join("com.swarmai.guardian.plist.template");
+    if !tmpl_src.exists() {
+        return Err(format!("guardian plist template not in bundle: {:?}", tmpl_src));
+    }
+    let tmpl = std::fs::read_to_string(&tmpl_src)
+        .map_err(|e| format!("read guardian plist template: {}", e))?;
+    let rendered = tmpl
+        .replace("__GUARDIAN_SCRIPT__", script_dest.to_str().unwrap_or(""))
+        .replace("__LOG_DIR__", log_dir.to_str().unwrap_or(""));
+    let plist_dest = home_path
+        .join("Library")
+        .join("LaunchAgents")
+        .join("com.swarmai.guardian.plist");
+    std::fs::write(&plist_dest, &rendered)
+        .map_err(|e| format!("write guardian plist: {}", e))?;
+
+    // 4. Bootstrap the guardian (rc 0/5/37 = success — idempotent, like backend).
+    let uid_output = std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .map_err(|e| format!("get uid: {}", e))?;
+    let uid = String::from_utf8_lossy(&uid_output.stdout).trim().to_string();
+    let gui_target = format!("gui/{}", uid);
+    let plist_str = plist_dest.to_str().unwrap_or("");
+
+    let output = std::process::Command::new("launchctl")
+        .args(["bootstrap", &gui_target, plist_str])
+        .output()
+        .map_err(|e| format!("launchctl bootstrap guardian: {}", e))?;
+    match output.status.code() {
+        Some(0) => {
+            println!("[Tauri] Guardian watchdog bootstrapped");
+            Ok(())
+        }
+        Some(5) | Some(37) => {
+            // rc 5 (I/O error) / 37 (already in progress) usually mean "already
+            // loaded" — but a malformed plist can also return 5. Verify the
+            // agent is actually registered (parity with bootstrap_daemon), so a
+            // genuine failure isn't masked as idempotent success.
+            let verify = std::process::Command::new("launchctl")
+                .args(["list", "com.swarmai.guardian"])
+                .output();
+            match verify {
+                Ok(v) if v.status.success() => {
+                    println!("[Tauri] Guardian already loaded (verified)");
+                    Ok(())
+                }
+                _ => Err(format!(
+                    "guardian bootstrap rc 5/37 but not in launchctl list (plist may be malformed)"
+                )),
+            }
+        }
+        Some(code) => Err(format!("guardian bootstrap code {}", code)),
+        None => Err("guardian bootstrap killed by signal".to_string()),
+    }
 }
 
 /// Bootstrap the daemon via launchctl. Idempotent.
