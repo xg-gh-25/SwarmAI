@@ -1312,15 +1312,12 @@ class ChannelGateway:
                             ctx.thinking_set = True
                             set_reaction(ctx, EMOJI_THINKING)
                         reset_stall_timers(ctx)
-                        try:
-                            await adapter.append_stream(
-                                ctx.external_chat_id,
-                                ctx.streaming_msg_id,
-                                "💭 _",
-                            )
-                            ctx.thinking_content_sent = True
-                        except Exception:
-                            pass
+                        # NOTE: the "💭 _" opener is lazily written on the FIRST
+                        # non-empty thinking_delta (see thinking_delta handler),
+                        # NOT here. Opus 4.8 over Bedrock emits thinking_start +
+                        # an empty (signature-only) block with zero deltas — writing
+                        # the opener here would leave a ghost "💭" widget with no
+                        # content. end_thinking_phase() guards on thinking_content_sent.
                     continue
 
                 if event_type == "thinking_delta":
@@ -1333,6 +1330,18 @@ class ChannelGateway:
                         _ttft_logged = True
                     thinking_text = event.get("thinking", "")
                     if thinking_text and ctx.in_thinking and ctx.native_streaming and ctx.streaming_msg_id:
+                        # Lazy-open the thinking widget on first real content, so an
+                        # empty Opus 4.8 thinking block never renders a ghost "💭".
+                        if not ctx.thinking_content_sent:
+                            try:
+                                await adapter.append_stream(
+                                    ctx.external_chat_id,
+                                    ctx.streaming_msg_id,
+                                    "💭 _",
+                                )
+                                ctx.thinking_content_sent = True
+                            except Exception:
+                                pass
                         ctx.native_pending_buf.append(thinking_text)
                         schedule_native_flush(ctx)
                         reset_stall_timers(ctx)
@@ -1406,19 +1415,22 @@ class ChannelGateway:
                                         ctx.thinking_set = True
                                         set_reaction(ctx, EMOJI_THINKING)
                                     reset_stall_timers(ctx)
-                                    try:
-                                        await adapter.append_stream(
-                                            ctx.external_chat_id,
-                                            ctx.streaming_msg_id,
-                                            "💭 _",
-                                        )
-                                        ctx.thinking_content_sent = True
-                                    except Exception:
-                                        pass
+                                    # Opener lazily written on first non-empty delta
+                                    # (see below) — empty Opus 4.8 thinking → no ghost.
                                 continue
                             if fe_type == "thinking_delta":
                                 thinking_text = follow_event.get("thinking", "")
                                 if thinking_text and ctx.in_thinking and ctx.native_streaming and ctx.streaming_msg_id:
+                                    if not ctx.thinking_content_sent:
+                                        try:
+                                            await adapter.append_stream(
+                                                ctx.external_chat_id,
+                                                ctx.streaming_msg_id,
+                                                "💭 _",
+                                            )
+                                            ctx.thinking_content_sent = True
+                                        except Exception:
+                                            pass
                                     ctx.native_pending_buf.append(thinking_text)
                                     schedule_native_flush(ctx)
                                     reset_stall_timers(ctx)
