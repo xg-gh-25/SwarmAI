@@ -260,6 +260,71 @@ class TestAssistantMessagePreservation:
         assert evt["model"] == "claude-sonnet-4-20250514"
         assert unit.state == SessionState.IDLE
 
+    @pytest.mark.asyncio
+    async def test_empty_thinking_block_skipped(self):
+        """AssistantMessage with an empty-content ThinkingBlock must NOT emit a
+        thinking block. Opus 4.8 over Bedrock returns thinking blocks with empty
+        content + a signature; persisting them pollutes the DB with ghost rows
+        and renders nothing. The empty block must be dropped at the source."""
+        unit = _make_unit()
+
+        thinking_block = _MockThinkingBlock()
+        thinking_block.thinking = ""          # Opus 4.8: redacted/empty content
+        thinking_block.signature = "ErUBCkY..."  # signature present but useless without content
+
+        text_block = _MockTextBlock()
+        text_block.text = "The answer is 391."
+
+        assistant_msg = _MockAssistantMessage()
+        assistant_msg.content = [thinking_block, text_block]
+        assistant_msg.model = "claude-opus-4-8"
+        assistant_msg.session_id = None
+
+        result_msg = _make_result_message(usage=None)
+        _set_mock_client(unit, [assistant_msg, result_msg])
+
+        with _patch_sdk_modules():
+            events = await _collect_events(unit)
+
+        assistant_events = [e for e in events if e.get("type") == "assistant"]
+        assert len(assistant_events) == 1
+        blocks = assistant_events[0]["content"]
+        # The empty thinking block is dropped; only the text block survives.
+        thinking_blocks = [b for b in blocks if b["type"] == "thinking"]
+        assert thinking_blocks == [], "empty thinking block must not be persisted"
+        text_blocks = [b for b in blocks if b["type"] == "text"]
+        assert len(text_blocks) == 1
+        assert text_blocks[0]["text"] == "The answer is 391."
+
+    @pytest.mark.asyncio
+    async def test_nonempty_thinking_preserves_signature(self):
+        """A ThinkingBlock WITH content must be emitted with BOTH thinking and
+        signature preserved (signature was previously dropped at line 2095)."""
+        unit = _make_unit()
+
+        thinking_block = _MockThinkingBlock()
+        thinking_block.thinking = "Let me compute 17 * 23 step by step..."
+        thinking_block.signature = "ErUBCkYIByJ..."
+
+        assistant_msg = _MockAssistantMessage()
+        assistant_msg.content = [thinking_block]
+        assistant_msg.model = "claude-opus-4-6"
+        assistant_msg.session_id = None
+
+        result_msg = _make_result_message(usage=None)
+        _set_mock_client(unit, [assistant_msg, result_msg])
+
+        with _patch_sdk_modules():
+            events = await _collect_events(unit)
+
+        assistant_events = [e for e in events if e.get("type") == "assistant"]
+        assert len(assistant_events) == 1
+        thinking_blocks = [b for b in assistant_events[0]["content"] if b["type"] == "thinking"]
+        assert len(thinking_blocks) == 1
+        tb = thinking_blocks[0]
+        assert tb["thinking"] == "Let me compute 17 * 23 step by step..."
+        assert tb["signature"] == "ErUBCkYIByJ...", "signature must be preserved, not dropped"
+
 
 # ---------------------------------------------------------------------------
 # Preservation Tests — SystemMessage processing
