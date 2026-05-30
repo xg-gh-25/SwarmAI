@@ -2092,7 +2092,17 @@ class SessionUnit:
                     if isinstance(block, TextBlock):
                         content_blocks.append({"type": "text", "text": block.text})
                     elif isinstance(block, ThinkingBlock):
-                        content_blocks.append({"type": "thinking", "thinking": block.thinking})
+                        # Opus 4.8 over Bedrock returns thinking blocks with empty
+                        # content (signature-only, redacted reasoning). Skip empties
+                        # so they don't pollute the DB / render as ghost widgets.
+                        if block.thinking:
+                            content_blocks.append({
+                                "type": "thinking",
+                                "thinking": block.thinking,
+                                # Preserve signature — required to replay thinking
+                                # to the API on any future multi-turn reconstruction.
+                                "signature": getattr(block, "signature", ""),
+                            })
                     elif isinstance(block, ToolUseBlock):
                         if block.name == "AskUserQuestion":
                             questions = block.input.get("questions", [])
