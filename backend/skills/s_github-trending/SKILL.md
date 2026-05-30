@@ -8,8 +8,6 @@ description: >
   "trending on github", "github排行", "github热门".
   DO NOT USE: for specific repo research (use github-research), for GitHub
   releases tracking (already in signal pipeline via github-releases feed).
-  SIBLINGS: github-research = deep repo analysis | deep-research = multi-source |
-  github-trending = daily trending snapshot.
 tier: lazy
 ---
 # GitHub Trending

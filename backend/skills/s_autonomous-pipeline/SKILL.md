@@ -14,8 +14,6 @@ description: >
   "pipeline status".
   DO NOT USE: for a single stage (use the specific skill: evaluate, deep-research,
   code-review, qa, deliver). Not for tasks without a clear requirement.
-  SIBLINGS: evaluate = the GO/DEFER gate alone | qa = testing alone |
-  deliver = packaging alone | pipeline = the full orchestrated sequence.
 consumes_artifacts: [evaluation, research, alternatives, design_doc, changeset, review, test_report]
 produces_artifact: [evaluation, research, design_doc, changeset, review, test_report, delivery, checkpoint]
 tier: lazy

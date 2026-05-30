@@ -8,8 +8,6 @@ description: >
   "start daemon", "daemon health", "deploy daemon", "守护进程".
   DO NOT USE: for building the binary (use s_swarm-build first), for Hive
   instances (use s_swarm-hive), for non-SwarmAI services.
-  SIBLINGS: s_swarm-build = build + verify + deploy + restart |
-  s_swarm-hive = cloud instance management.
 tier: lazy
 platform: desktop
 project_scope: SwarmAI

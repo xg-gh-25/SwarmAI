@@ -7,8 +7,6 @@ description: >
   "build and deploy", "编译", "打包".
   DO NOT USE: for desktop/Tauri builds (manual), for release (use s_swarm-release),
   for dev mode start (use s_swarm-dev), for non-SwarmAI projects.
-  SIBLINGS: s_swarm-daemon = daemon ops only | s_swarm-release = full release cycle |
-  s_swarm-ci = CI status check.
 tier: lazy
 platform: desktop
 project_scope: SwarmAI

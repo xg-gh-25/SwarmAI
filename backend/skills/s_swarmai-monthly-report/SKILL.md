@@ -8,7 +8,6 @@ description: >
   "how did we do this month", "monthly recap", "monthly summary".
   DO NOT USE: for DDD weekly report (use ddd-weekly-report job), for CMHK reports
   (use cmhk-monthly-report), for daily briefings (automatic via proactive intelligence).
-  SIBLINGS: s_cmhk-monthly-report = CMHK revenue report | ddd-weekly-report = DDD cultivation weekly.
 tier: lazy
 platform: all
 project_scope: SwarmAI

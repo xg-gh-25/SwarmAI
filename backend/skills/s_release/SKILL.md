@@ -8,8 +8,6 @@ description: >
   TRIGGER: "bump version only", "version bump", "just tag".
   DO NOT USE: for full releases (use s_swarm-release), build/verify (use
   s_swarm-build), DMG packaging, or deploy.
-  SIBLINGS: s_swarm-release = full release cycle | deliver = pipeline artifact
-  packaging | qa = test verification.
 tier: lazy
 ---
 # Release (Version Bump Only)

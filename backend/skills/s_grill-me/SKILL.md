@@ -9,8 +9,6 @@ description: >
   "challenge this design", "interview me about this".
   DO NOT USE: for evaluating whether to build something (use evaluate).
   For deep research without grilling (use deep-research).
-  SIBLINGS: evaluate = should we build this? | grill-me = is the plan solid? |
-  deep-research = what do we need to know?
 tier: lazy
 ---
 

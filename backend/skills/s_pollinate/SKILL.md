@@ -10,8 +10,6 @@ description: >
   DO NOT USE: for one-off text generation (just write), for code changes
   (use autonomous-pipeline), for research without content output (use
   deep-research).
-  SIBLINGS: autonomous-pipeline = code delivery | deep-research = research
-  only | summarize = quick condensation | pollinate = full media value delivery.
 tier: lazy
 ---
 

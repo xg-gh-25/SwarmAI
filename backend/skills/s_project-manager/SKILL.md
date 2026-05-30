@@ -7,7 +7,6 @@ description: >
   TRIGGER: "add project", "new project", "create project", "rename project",
   "remove project", "delete project", "list projects", "my projects", "update project".
   DO NOT USE: for task/todo management within a project (use radar-todo).
-  SIBLINGS: save-memory = permanent facts -> MEMORY.md | save-context = handoff docs.
 tier: always
 ---
 # Project Manager

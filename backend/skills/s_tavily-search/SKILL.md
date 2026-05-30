@@ -4,7 +4,6 @@ description: >
   AI-powered web search and content extraction via Tavily API. Search the web, get AI answers, extract content from URLs.
   TRIGGER: "search the web", "web search", "tavily", "find online", "search for", "latest news about", "what's happening with".
   DO NOT USE: for fetching a single known URL (use WebFetch), GitHub repo research (use github-research), or deep multi-round investigation (use deep-research).
-  SIBLINGS: deep-research = multi-round investigation with synthesis | summarize = condense known content | tavily-search = fast web search + extraction as a building block.
 tier: always
 ---
 # Tavily Search
