@@ -209,8 +209,6 @@ class LLMJudge:
     Falls back to None on any failure (timeout, API error, parse failure).
     """
 
-    # Same Opus model as llm_optimizer.py — one model, zero complexity (KD28).
-    MODEL_ID = "us.anthropic.claude-opus-4-8"
     EFFORT = "low"  # Internal judge — structured eval, no deep reasoning needed
     TIMEOUT_SECONDS = 30
 
@@ -263,16 +261,20 @@ class LLMJudge:
         prompt = self._build_judge_prompt(skill_text, expected, actual, correction_context)
 
         try:
+            from core.llm_optimizer import _resolve_bedrock_model
+
             client = self._get_client()
+            model_id, supports_temperature = _resolve_bedrock_model()
+
+            inference_config: dict = {"maxTokens": 200}
+            if supports_temperature:
+                inference_config["temperature"] = 0.1  # Low temp for precise judge scoring
+
             response = client.converse(
-                modelId=self.MODEL_ID,
+                modelId=model_id,
                 messages=[{"role": "user", "content": [{"text": prompt}]}],
                 system=[{"text": _JUDGE_SYSTEM_PROMPT}],
-                inferenceConfig={
-                    "maxTokens": 200,
-                    # Note: temperature not set — Opus 4.8 rejects temperature != 1
-                    # when thinking is adaptive. Judge precision via system prompt.
-                },
+                inferenceConfig=inference_config,
                 additionalModelRequestFields={
                     "thinking": {"type": "adaptive"},
                     "output_config": {"effort": self.EFFORT},

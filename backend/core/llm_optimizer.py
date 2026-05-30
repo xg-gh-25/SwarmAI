@@ -30,6 +30,28 @@ from core.evolution_optimizer import TextChange
 
 logger = logging.getLogger(__name__)
 
+
+def _resolve_bedrock_model() -> tuple[str, bool]:
+    """Resolve Bedrock model ID from config + determine temperature safety.
+
+    Returns:
+        (model_id, supports_temperature) — model_id is the full Bedrock ARN-style
+        ID (e.g. "us.anthropic.claude-opus-4-6-v1"), supports_temperature is False
+        for models that reject temperature != 1 when thinking is adaptive (4.8+).
+    """
+    from core.app_config_manager import AppConfigManager
+
+    cfg = AppConfigManager.instance()
+    short_name = cfg.get("default_model", "claude-opus-4-6")
+    model_map = cfg.get("bedrock_model_map", {})
+    model_id = model_map.get(short_name, f"us.anthropic.{short_name}")
+
+    # Opus 4.8+ rejects temperature != 1 with adaptive thinking.
+    # 4.6 and earlier accept it fine.
+    supports_temperature = "4-8" not in model_id and "4-7" not in model_id
+
+    return model_id, supports_temperature
+
 # Cap changes per optimization to prevent runaway modifications
 MAX_CHANGES = 5
 
@@ -240,19 +262,20 @@ def _call_bedrock_opus(prompt: str, system: str = _SYSTEM_PROMPT) -> tuple[str, 
     Sync call — boto3.converse() is a sync API.
     Max tokens: 2000 (changes are small).
     Uses ``BEDROCK_EFFORT`` to control thinking depth (default: low).
+    Model resolved from config.json default_model (single source of truth).
     """
     client = _get_bedrock_client()
+    model_id, supports_temperature = _resolve_bedrock_model()
+
+    inference_config: dict = {"maxTokens": 2000}
+    if supports_temperature:
+        inference_config["temperature"] = 0.3  # Low temp for precise, structured output
 
     response = client.converse(
-        modelId="us.anthropic.claude-opus-4-8",
+        modelId=model_id,
         messages=[{"role": "user", "content": [{"text": prompt}]}],
         system=[{"text": system}],
-        inferenceConfig={
-            "maxTokens": 2000,
-            # Note: temperature not set — Opus 4.8 rejects temperature != 1
-            # when thinking is enabled/adaptive. Structured output quality
-            # is controlled via effort level + system prompt instead.
-        },
+        inferenceConfig=inference_config,
         additionalModelRequestFields={
             "thinking": {"type": "adaptive"},
             "output_config": {"effort": BEDROCK_EFFORT},
