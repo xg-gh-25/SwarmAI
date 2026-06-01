@@ -1016,18 +1016,65 @@ Traps discovered during SwarmAI production that the Engine MUST avoid in generat
 
 ---
 
-## Implementation Milestones
+## Implementation Milestones (Revised 2026-06-01)
 
-| Milestone | Deliverable | Validation | Status |
-|---|---|---|---|
-| **M1: Single-repo DDD generation** | Engine produces 7 DDD files + AGENTS.md for any single repo | E2E demo on MemPalace (391 files, 1124 commits). 3 adversarial rounds. | ✅ **DONE** (2026-06-01, 4 pipeline runs, 12 commits) |
-| **M2: Self-maintaining** | Parser + refresh skill installed, Tier 1 auto-detects staleness | Test: add new module → verify parser fires → verify stale notification appears | 🔲 Next |
-| **M3: Verified output** | VERIFY phase catches gaps in generated artifacts | Test: intentionally omit a module → VERIFY fails → re-gen adds it | 🔲 |
-| **M4: Multi-package** | 3-repo system produces per-package DDD + cross-package context | Test on a real multi-package system (frontend + backend + infra) | 🔲 |
-| **M5: IDE adapters** | Claude Code + Kiro install verified working end-to-end | E2E: install → open IDE → ask agent a task → agent uses artifacts correctly | 🔲 |
-| **M6: Published standard** | GitHub Discussion + spec + scoring rubric + templates | Community engagement signal (stars, comments, forks) | 🔲 |
+_Reordered after M1 implementation. Original order assumed bash parser + fresh verify design. M1 proved: Python helpers already cover parsing, User-Value Probe covers verification core. New order reflects actual dependency chain + customer value priority._
 
-Total: ~7 sessions to full capability. M1 took 1 session (originally estimated 2).
+| Priority | Milestone | Deliverable | Validation | Effort | Status |
+|---|---|---|---|---|---|
+| ✅ | **M1: Single-repo DDD generation** | Engine produces 7 DDD files + AGENTS.md for any single repo | E2E demo on MemPalace (391 files, 1124 commits). 3 adversarial rounds. | 1 session | **DONE** (2026-06-01) |
+| 1 | **M5→M2: IDE install** | `install.sh` — auto-detect Claude Code/Kiro, copy files, merge hooks config | E2E: install → open IDE → agent uses artifacts on first task | S (~1hr) | 🔲 Next |
+| 2 | **M3→M3: Verified output** | Sub-agent VERIFY — spawn fresh agent with ONLY output, give 3 tasks from git log, verify correct file found | Intentionally omit a module → VERIFY catches it → feedback to GENERATE | M (~1 session) | 🔲 |
+| 3 | **M2→M4: Self-maintaining** | Staleness detection + refresh trigger. Reuse `gather_repo_info()` diff against `ai-ready.json` snapshot. Hook config for auto-notification. | Add module → run check → stale detected → notification fires | M (~1 session) | 🔲 |
+| 4 | **M4→M5: Multi-package** | Per-package execution with cross-package synthesis. Fix 300-file cap per package (not global). | 3-repo system (frontend+backend+infra) → independent DDD + cross-deps | L (~2 sessions) | 🔲 |
+| 5 | **M6: Published standard** | GitHub Discussion + spec repo + scoring rubric + templates | Community signal (stars, comments, forks) | S (~1 session) | 🔲 |
+
+**Why reordered:**
+
+| Original → New | Rationale |
+|---|---|
+| M5 IDE adapters → **Priority 1** | Simplest (= copy files + README). Customers ask "how do I install?" first. Blocked zero technical work — just file placement. |
+| M3 Verified → **Priority 2** | User-Value Probe (already implemented) is 80% of VERIFY. Only need: spawn sub-agent, give it tasks, check it finds correct functions. High value (proves output quality to customer). |
+| M2 Self-maintaining → **Priority 3** | `gather_repo_info()` + `extract_import_graph()` already exist. Staleness = compare current output vs stored `ai-ready.json` snapshot. No new bash script needed. Was overestimated. |
+| M4 Multi-package → **Priority 4** | Highest complexity (300-file cap per package, cross-package edge synthesis, parallel execution). Least urgent (single-repo covers 80% of customer scenarios). |
+
+**M5 (now Priority 1) implementation sketch:**
+
+```bash
+#!/bin/bash
+# install.sh — zero-config, non-destructive
+set -e
+
+SOURCE_DIR="${1:-.}"  # Directory containing AGENTS.md + .ai-ready/
+TARGET="${2:-.}"      # Target project root
+
+# Auto-detect IDE
+if [ -d "$TARGET/.kiro" ]; then
+    IDE="kiro"
+elif [ -d "$TARGET/.claude" ] || [ -f "$TARGET/CLAUDE.md" ]; then
+    IDE="claude-code"
+else
+    IDE="claude-code"  # Default (AGENTS.md is most universal)
+fi
+
+# Install (non-destructive — never overwrite existing)
+if [ "$IDE" = "claude-code" ]; then
+    [ -f "$TARGET/AGENTS.md" ] && echo "AGENTS.md exists — skipping (use --force to overwrite)" || cp "$SOURCE_DIR/AGENTS.md" "$TARGET/"
+    cp -rn "$SOURCE_DIR/.ai-ready" "$TARGET/" 2>/dev/null || true
+    echo "✅ Installed for Claude Code. Agent will read AGENTS.md automatically."
+elif [ "$IDE" = "kiro" ]; then
+    mkdir -p "$TARGET/.kiro/docs/ai-ready"
+    cp -rn "$SOURCE_DIR/.ai-ready/"* "$TARGET/.kiro/docs/ai-ready/" 2>/dev/null || true
+    # Add steering reference
+    if [ ! -f "$TARGET/.kiro/steering/ai-ready-context.md" ]; then
+        mkdir -p "$TARGET/.kiro/steering"
+        cp "$SOURCE_DIR/AGENTS.md" "$TARGET/.kiro/steering/ai-ready-context.md"
+    fi
+    echo "✅ Installed for Kiro. Context available in .kiro/docs/ai-ready/."
+fi
+```
+
+Total remaining: ~5 sessions (was 6). M5-install is trivial (1hr, not 1 session).
 
 ---
 
