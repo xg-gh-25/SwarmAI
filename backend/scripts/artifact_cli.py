@@ -969,6 +969,37 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         run_state["taste_decisions"].append(decision)
 
     if args.profile:
+        # ── GATE: Profile immutability after BUILD ──────────────────────────────
+        # C036 (2026-06-01): Agent circumvented adversarial review gate by
+        # switching profile from "full" → "bugfix" at DELIVER stage. The adversarial
+        # gate checks the CURRENT profile, so a downgrade makes it inapplicable.
+        # Fix: profile downgrades are REJECTED once any stage past evaluate exists.
+        # Upgrades (trivial→full) are always allowed (more rigor = safe).
+        _PROFILE_RANK = {"trivial": 1, "docs": 2, "research": 2, "bugfix": 3, "full": 4, "standard": 4, "goal": 4}
+        current_profile = run_state.get("profile")
+        new_rank = _PROFILE_RANK.get(args.profile, 3)
+        current_rank = _PROFILE_RANK.get(current_profile, 3)
+
+        # Check if any stage beyond evaluate is completed
+        post_evaluate_stages = [
+            s for s in run_state.get("stages", [])
+            if s.get("stage", s.get("name", "")) != "evaluate"
+            and s.get("status") in ("completed", "done")
+        ]
+
+        if new_rank < current_rank and post_evaluate_stages:
+            print(json.dumps({
+                "error": (
+                    f"BLOCKED: Profile downgrade '{current_profile}' → '{args.profile}' "
+                    f"rejected. Profile is immutable after EVALUATE — {len(post_evaluate_stages)} "
+                    f"stage(s) already completed at '{current_profile}' tier. "
+                    f"Downgrades bypass quality gates (C036). "
+                    f"Upgrades (e.g., bugfix→full) are allowed."
+                ),
+                "pipeline_id": args.run_id,
+            }))
+            sys.exit(1)
+        # ─────────────────────────────────────────────────────────────────────────
         run_state["profile"] = args.profile
 
     if args.ddd_checksums:
