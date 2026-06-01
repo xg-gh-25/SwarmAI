@@ -99,8 +99,8 @@ if command -v git >/dev/null 2>&1 && [ -d "$TARGET/.git" ] || git -C "$TARGET" r
     COMMON_DIR=$(git -C "$TARGET" rev-parse --git-common-dir 2>/dev/null || true)
     GIT_DIR=$(git -C "$TARGET" rev-parse --git-dir 2>/dev/null || true)
     if [ -n "$COMMON_DIR" ] && [ -n "$GIT_DIR" ]; then
-        COMMON_ABS=$(cd "$TARGET" && cd "$COMMON_DIR" 2>/dev/null && pwd -P || true)
-        GIT_ABS=$(cd "$TARGET" && cd "$GIT_DIR" 2>/dev/null && pwd -P || true)
+        COMMON_ABS=$(cd "$TARGET" && cd -- "$COMMON_DIR" 2>/dev/null && pwd -P || echo "")
+        GIT_ABS=$(cd "$TARGET" && cd -- "$GIT_DIR" 2>/dev/null && pwd -P || echo "")
         if [ -n "$COMMON_ABS" ] && [ -n "$GIT_ABS" ] && [ "$COMMON_ABS" != "$GIT_ABS" ]; then
             MAIN_ROOT=$(dirname "$COMMON_ABS")
             echo "⚠️  WARNING: Target is a git worktree (ephemeral)."
@@ -162,7 +162,7 @@ if [ -z "$PLATFORM" ]; then
     # Check each platform's detect_pattern against target directory
     PLATFORM="generic"
     while IFS='|' read -r id agents ddd detect; do
-        if [ "$detect" != "NONE" ] && [ -e "$TARGET/$detect" ]; then
+        if [ "$detect" != "NONE" ] && [ -d "$TARGET/$detect" ]; then
             PLATFORM="$id"
             break
         fi
