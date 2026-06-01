@@ -272,10 +272,23 @@ def verify_texts(source: str, output: str) -> tuple[bool, list[str]]:
 
 # ── CLI ─────────────────────────────────────────────────────────────────────
 
+def _read_utf8(path: str) -> str:
+    """Read a file as UTF-8, raising ValueError with a clean message on bad encoding.
+
+    The whole tool assumes UTF-8 (the norm for Markdown). A non-UTF-8 source would
+    otherwise die with a raw UnicodeDecodeError traceback — convert it to the same
+    fail-loud, exit-2 path every other error uses.
+    """
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        raise ValueError(f"{path} is not valid UTF-8 — re-save it as UTF-8 and retry.")
+
+
 def _cmd_freeze(args: argparse.Namespace) -> int:
     src_path = Path(args.input)
-    text = src_path.read_text(encoding="utf-8")
     try:
+        text = _read_utf8(args.input)
         skeleton, payload, unclosed = freeze_text(text)
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
@@ -297,9 +310,9 @@ def _cmd_freeze(args: argparse.Namespace) -> int:
 
 
 def _cmd_stitch(args: argparse.Namespace) -> int:
-    skeleton = Path(args.skeleton).read_text(encoding="utf-8")
     try:
-        payload = json.loads(Path(args.blocks).read_text(encoding="utf-8"))
+        skeleton = _read_utf8(args.skeleton)
+        payload = json.loads(_read_utf8(args.blocks))
         out = stitch_text(skeleton, payload)
     except json.JSONDecodeError as e:
         print(f"error: {args.blocks} is not valid JSON: {e}", file=sys.stderr)
@@ -316,8 +329,12 @@ def _cmd_stitch(args: argparse.Namespace) -> int:
 
 
 def _cmd_verify(args: argparse.Namespace) -> int:
-    source = Path(args.source).read_text(encoding="utf-8")
-    output = Path(args.output).read_text(encoding="utf-8")
+    try:
+        source = _read_utf8(args.source)
+        output = _read_utf8(args.output)
+    except ValueError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
     ok, report = verify_texts(source, output)
     for line in report:
         print(line)

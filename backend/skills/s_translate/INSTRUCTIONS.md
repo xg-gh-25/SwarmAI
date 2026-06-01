@@ -43,9 +43,17 @@ python "$SC" freeze input.md --skeleton input.skeleton.md --blocks input.blocks.
 # 3. STITCH — reinsert byte-identical original blocks
 python "$SC" stitch input.skeleton.zh.md input.blocks.json -o output.zh.md
 
-# 4. VERIFY — prove structural equivalence (exit 0 = safe)
+# 4. VERIFY — prove structural equivalence (exit 0 = safe). THIS IS THE BACKSTOP.
 python "$SC" verify input.md output.zh.md
+
+# 5. CLEANUP — remove intermediates once verify passes
+rm input.skeleton.md input.skeleton.zh.md input.blocks.json
 ```
+
+**`verify` is the real guarantee — run it on ANY doc translation, even one you did
+inline.** It works on any (source, output) pair, not just freeze outputs. If you
+translated a code-dense doc without the freeze path, you can STILL `verify source
+output` to catch dropped/altered code blocks. Treat a non-zero exit as a blocker.
 
 **Rules for the TRANSLATE step:**
 - Translate prose, headings, list items, and table-cell text in the skeleton.
