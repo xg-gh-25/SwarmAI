@@ -42,7 +42,9 @@ Making {repo_name} genuinely understood by AI agents.
 
 ```
 ## ✦ INPUT [Repo + Signals]
-→ Repo: {path} | Signals: {N sources or "none (code-only mode)"}
+→ Repo: {path} ({N} files, {primary_language})
+  Signals: {list of selected signals or "code-only mode"}
+  Expected quality: Level {1|2|3}
 
 ## ✦ INGEST [Deterministic Scan]
 → {N} files | {languages} | {N} commits | {N} contributors
@@ -90,19 +92,93 @@ Helper script: `backend/skills/s_ai-ready-repo/scripts/ai_ready_helpers.py`
 
 ## Workflow
 
-### Phase 1: INPUT
+### Phase 1: INPUT (Human Touchpoint #1)
 
-Collect from user:
-1. **Repo path** (REQUIRED) — local path or URL
-2. **Signal sources** (OPTIONAL):
-   - Design docs / PRDs (file paths or URLs)
-   - Wiki / Confluence URLs
-   - Existing CLAUDE.md / AGENTS.md
-   - Verbal context ("we never deploy on Fridays")
+**Start by collecting repo path, then ask what signals the user can provide.**
 
-Ask: "What repo do you want to make AI-ready? Also share any design docs, wikis, or context that would help me understand the project better."
+#### Step 1.1: Get repo path (REQUIRED)
 
-If user provides only a path, proceed — engine gracefully degrades without signals.
+If not already provided, ask:
+"What repo do you want to make AI-ready? (local path or git URL)"
+
+#### Step 1.2: Signal collection (multi-select)
+
+After getting the repo path, present the signal menu. The user picks what they have — more signals = richer output (Level 1 → Level 3).
+
+**Present this to the user:**
+
+```
+The more context you provide, the better the output:
+
+  📁 Repo path: {confirmed path} ✓
+
+  What else can you provide? (all optional — pick any that apply)
+
+  □ Design docs / PRDs          — purpose, architecture decisions
+  □ Wiki / Confluence pages      — tribal knowledge, ops context  
+  □ Slack exports / meeting notes — decisions, known issues
+  □ Issue tracker (link or export) — bugs, tech debt patterns
+  □ Existing CLAUDE.md / AGENTS.md — baseline to build on
+  □ Verbal context               — "we never deploy on Fridays" type rules
+  □ Dashboard / runbook URLs     — operational context
+  □ Existing DDD docs            — if you already have PRODUCT/TECH/etc.
+
+  Or just say "code only" to proceed with just the repo.
+```
+
+**For each signal the user selects, collect the specific input:**
+
+| Signal | What to Ask | How to Ingest |
+|--------|------------|---------------|
+| Design docs / PRDs | "Drop the file path(s) or paste the content" | Read file directly (MD, PDF, plain text) |
+| Wiki / Confluence | "Paste the URL(s)" | WebFetch or ask user to paste content |
+| Slack exports | "Drop the JSON export file or paste key messages" | Parse JSON for decisions, issues |
+| Issue tracker | "Paste the URL or drop an export" | WebFetch or Read file |
+| Existing CLAUDE.md / AGENTS.md | "I'll look for it in the repo" | Read from repo root (auto-detect) |
+| Verbal context | "Tell me anything the code doesn't show" | Classify into target DDD file (see below) |
+| Dashboard / runbook URLs | "List the URLs" | Store as ops context for PRODUCT.md constraints |
+| Existing DDD docs | "Path to the directory" | Read all 4 files as baseline |
+
+#### Step 1.3: Signal classification (which signal → which DDD file)
+
+As signals come in, classify each piece of information by target:
+
+| Content Type | Target DDD File | Signal Patterns |
+|---|---|---|
+| Purpose, audience, constraints, compliance | **PRODUCT.md** | "users are...", "out of scope", "must comply with", "SLA" |
+| Architecture decisions, conventions, patterns | **TECH.md** | "always use...", "never call...", "pattern is", "we chose X because" |
+| Failures, postmortems, incidents, gotchas | **IMPROVEMENT.md** | "broke when", "don't touch", "burned by", "reverted" |
+| Priorities, blockers, current sprint, decisions | **PROJECT.md** | "this quarter", "blocked by", "decided to", "don't change until" |
+| Ops context, deploy process, monitoring | **PRODUCT.md** (constraints) + **TECH.md** (ops section) | "deploy with", "monitor via", "runbook at" |
+
+**Rules for signal processing:**
+- NEVER discard user-provided signals — everything gets classified somewhere
+- If classification is ambiguous, ask: "Is this a convention (TECH) or a lesson (IMPROVEMENT)?"
+- Verbal context gets tagged with `[source: user, {date}]` in the output
+- File-sourced content gets tagged with `[source: {filename}, {date}]`
+- Existing AGENTS.md / CLAUDE.md → extract rules into TECH.md, extract context into PROJECT.md
+
+#### Step 1.4: Confirm and proceed
+
+After collection, confirm what you have:
+
+```
+✓ Repo: /path/to/repo (391 files, Python)
+✓ Signals: 2 design docs, 1 verbal context, existing CLAUDE.md
+  → Expected output quality: Level 3 (full project understanding)
+
+Proceeding to analysis...
+```
+
+If user says "code only" or provides nothing extra:
+```
+✓ Repo: /path/to/repo (391 files, Python)
+  Signals: none (code-only mode)
+  → Expected output quality: Level 1-2 (navigation + safety, limited business context)
+  → PRODUCT.md and PROJECT.md will be skeletal — enrich later with "ai-ready learn"
+
+Proceeding to analysis...
+```
 
 ### Phase 2: INGEST
 
