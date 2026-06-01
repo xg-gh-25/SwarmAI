@@ -24,8 +24,9 @@ Making {repo_name} genuinely understood by AI agents.
   Phases:
     1. INPUT     — Collect repo path + optional signals
     2. INGEST    — Parse files, detect stack, gather git history
-    3. UNDERSTAND — Map modules, find patterns, extract knowledge
+    3. UNDERSTAND — Read code, map modules, extract patterns
     4. GENERATE  — Produce DDD artifacts (.ai-ready/ + AGENTS.md)
+    5. DELIVER   — Present output + next steps to user
 
   Output:
     AGENTS.md              ← Entry point (≤150 lines)
@@ -88,7 +89,8 @@ Helper script: `backend/skills/s_ai-ready-repo/scripts/ai_ready_helpers.py`
 - `parse_git_gotchas(path)` — evidence-grounded gotchas from git history
 - `render_agents_md(data)` — template rendering (≤150 lines guaranteed)
 - `build_ai_ready_meta(score, name)` — ai-ready.json metadata
-- `resolve_output_path(repo, name, target)` — deterministic output location
+- `resolve_output_path(repo_path, project_name, target)` — deterministic output location
+- `gotchas_for_agents_md(raw_gotchas)` — transform parse_git_gotchas output → render_agents_md input
 
 ## Workflow
 
@@ -327,7 +329,7 @@ For routes (if web framework detected):
 
 ### Phase 4: GENERATE
 
-Produce all output files. Use the templates from `backend/skills/s_ai-ready-repo/templates/` as structure reference.
+Produce all output files. The structure for each file is defined inline below.
 
 **Output directory:** Use `resolve_output_path()` to determine where to write:
 
