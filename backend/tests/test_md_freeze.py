@@ -102,3 +102,128 @@ def test_freeze_stitch_roundtrip_identity(tmp_path):
     assert r2.returncode == 0, r2.stderr
 
     assert out.read_text(encoding="utf-8") == MULTI_FENCE
+
+
+# ── AC2: frozen blocks are byte-identical (incl tilde + lang tags) ──────────
+
+def test_frozen_blocks_byte_identical():
+    skeleton, payload, unclosed = md_freeze.freeze_text(MULTI_FENCE)
+    assert not unclosed
+    # Both a ```json block and a ~~~ block must be captured verbatim.
+    assert payload["blocks"]["0"] == '```json\n{"key": "value", "n": 1}\n```\n'
+    assert payload["blocks"]["1"] == "~~~\nplain tilde-fenced block\nwith two lines\n~~~\n"
+    # Skeleton replaced each block with one sentinel line and dropped no prose.
+    assert "⟦FROZEN_0⟧" in skeleton and "⟦FROZEN_1⟧" in skeleton
+    assert "{\"key\"" not in skeleton  # code content is gone from the skeleton
+
+
+def test_nested_markdown_block_is_frozen_not_counted():
+    """A ```markdown template's inner headings/tables must be frozen, not counted."""
+    skeleton, payload, _ = md_freeze.freeze_text(NESTED_MARKDOWN)
+    # Exactly one fenced block — the whole ```markdown ... ``` template.
+    assert list(payload["blocks"]) == ["0"]
+    assert "## Quick Start" in payload["blocks"]["0"]      # inner heading frozen
+    assert "<!-- user: keep this -->" in payload["blocks"]["0"]
+    # Skeleton's only headings are the OUTER ones, not the template's inner ones.
+    assert "## Quick Start" not in skeleton
+    headings, tables = md_freeze._count_structure(skeleton)
+    assert headings == 1   # only "# Outer"
+    assert tables == 0     # the inner table is frozen
+
+
+# ── AC4: determinism (call-twice safe) ──────────────────────────────────────
+
+def test_freeze_is_deterministic():
+    s1, b1, _ = md_freeze.freeze_text(MULTI_FENCE)
+    s2, b2, _ = md_freeze.freeze_text(MULTI_FENCE)
+    assert s1 == s2
+    assert b1 == b2
+
+
+# ── AC5: unclosed fence does not hang; EOF closes it with a warning ─────────
+
+def test_unclosed_fence_closed_at_eof(tmp_path):
+    text = "# Title\n\nprose\n\n```python\nx = 1\n"  # never closed
+    skeleton, payload, unclosed = md_freeze.freeze_text(text)
+    assert unclosed is True
+    assert payload["blocks"]["0"] == "```python\nx = 1\n"
+    # CLI surfaces the warning on stderr.
+    src = tmp_path / "u.md"
+    src.write_text(text, encoding="utf-8")
+    r = _run_cli("freeze", str(src), "--skeleton", str(tmp_path / "u.sk.md"),
+                 "--blocks", str(tmp_path / "u.bl.json"))
+    assert r.returncode == 0
+    assert "unclosed code fence" in r.stderr.lower()
+
+
+# ── AC6: sentinel collision aborts with a clear error ───────────────────────
+
+def test_sentinel_collision_aborts(tmp_path):
+    text = "# Title\n\nThis text already has ⟦FROZEN_0⟧ in it.\n"
+    with pytest.raises(ValueError, match="sentinel"):
+        md_freeze.freeze_text(text)
+    # CLI returns nonzero with a clear message.
+    src = tmp_path / "c.md"
+    src.write_text(text, encoding="utf-8")
+    r = _run_cli("freeze", str(src))
+    assert r.returncode == 2
+    assert "sentinel" in r.stderr.lower()
+
+
+# ── AC3: verify catches dropped/altered blocks ──────────────────────────────
+
+def test_verify_passes_on_identity():
+    ok, report = md_freeze.verify_texts(MULTI_FENCE, MULTI_FENCE)
+    assert ok, report
+
+
+def test_verify_catches_dropped_block(tmp_path):
+    # Output where the json block was deleted entirely.
+    mutilated = MULTI_FENCE.replace('```json\n{"key": "value", "n": 1}\n```\n\n', "")
+    ok, report = md_freeze.verify_texts(MULTI_FENCE, mutilated)
+    assert not ok
+    assert any("FENCE COUNT" in line for line in report)
+    # CLI exits 1.
+    src = tmp_path / "s.md"; out = tmp_path / "o.md"
+    src.write_text(MULTI_FENCE, encoding="utf-8")
+    out.write_text(mutilated, encoding="utf-8")
+    r = _run_cli("verify", str(src), str(out))
+    assert r.returncode == 1
+
+
+def test_verify_catches_altered_block():
+    # Same block count, but the code content was changed (e.g. a value translated).
+    altered = MULTI_FENCE.replace('"value"', '"价值"')
+    ok, report = md_freeze.verify_texts(MULTI_FENCE, altered)
+    assert not ok
+    assert any("BLOCK 0 altered" in line for line in report)
+
+
+def test_stitch_detects_missing_sentinel():
+    """If the translated skeleton drops a placeholder, stitch must fail loud."""
+    _, payload, _ = md_freeze.freeze_text(MULTI_FENCE)
+    broken_skeleton = "# Title\n\nonly prose, no sentinels\n"
+    with pytest.raises(ValueError, match="never reinserted"):
+        md_freeze.stitch_text(broken_skeleton, payload)
+
+
+# ── AC7: INSTRUCTIONS.md has the mandatory decision gate ────────────────────
+
+def test_instructions_has_decision_gate():
+    skill_dir = _SCRIPT.parent.parent
+    text = (skill_dir / "INSTRUCTIONS.md").read_text(encoding="utf-8")
+    assert "Decision Gate" in text
+    assert "Freeze-Translate-Stitch" in text
+    # The gate must route code-dense / large docs through the freeze path.
+    assert "300 lines" in text
+    assert "md_freeze.py" in text
+
+
+# ── AC8: manifest declares the script ───────────────────────────────────────
+
+def test_manifest_declares_script():
+    import yaml  # available in backend deps
+    skill_dir = _SCRIPT.parent.parent
+    manifest = yaml.safe_load((skill_dir / "manifest.yaml").read_text(encoding="utf-8"))
+    paths = [s["path"] for s in manifest.get("scripts", [])]
+    assert "scripts/md_freeze.py" in paths
