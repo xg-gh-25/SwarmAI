@@ -1798,24 +1798,17 @@ export function useChatStreamingLifecycle(
             text: `\n\n⏸️ ${event.message || 'Turn limit reached — send a message to continue.'}`,
           };
           if (tabState) {
-            const lastAssistant = tabState.messages.findLast(
-              (m: Message) => m.role === 'assistant',
+            const lastAssistant = findLast(
+              tabState.messages, (m: Message) => m.role === 'assistant',
             );
             if (lastAssistant) {
               lastAssistant.content = [...lastAssistant.content, infoBlock];
             }
           }
-          if (isActiveTab) {
-            setMessages((prev) => {
-              const lastIdx = prev.findLastIndex((m) => m.role === 'assistant');
-              if (lastIdx < 0) return prev;
-              return prev.map((msg, idx) =>
-                idx === lastIdx
-                  ? { ...msg, content: [...msg.content, infoBlock] }
-                  : msg,
-              );
-            });
-          }
+          // Don't call setMessages here — the result event that immediately
+          // follows will sync tabState.messages → React state (line 1388).
+          // Calling setMessages here AND in result handler creates a fragile
+          // double-write that depends on React batching order.
           // Don't clear streaming state yet — the result event that follows
           // will handle transition. This event is purely informational.
         }

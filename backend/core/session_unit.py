@@ -2359,6 +2359,25 @@ class SessionUnit:
                             "cache_creation_input_tokens": usage.get("cache_creation_input_tokens"),
                         } if usage else None,
                     }
+                    # Persist token usage (same as normal result path)
+                    if usage:
+                        try:
+                            import database
+                            asyncio.get_running_loop().create_task(
+                                database.db.record_token_usage(
+                                    session_id=self.session_id,
+                                    source="cli",
+                                    input_tokens=usage.get("input_tokens") or 0,
+                                    output_tokens=usage.get("output_tokens") or 0,
+                                    cache_read_tokens=usage.get("cache_read_input_tokens") or 0,
+                                    cache_create_tokens=usage.get("cache_creation_input_tokens") or 0,
+                                    cost_usd=getattr(message, "total_cost_usd", None),
+                                    model=self._model_name,
+                                )
+                            )
+                        except Exception:
+                            pass  # fire-and-forget — never break streaming
+
                     for meta_event in self._emit_post_stream_metadata(
                         usage, num_turns=num_turns or 1,
                     ):
