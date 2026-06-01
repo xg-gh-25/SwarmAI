@@ -1009,41 +1009,51 @@ export function useChatStreamingLifecycle(
   // checkpoint, restore from checkpoint. This recovers from the P0 "18 min
   // content disappeared" bug where React state gets cleared but sessionStorage
   // retains the accumulated content.
+  //
+  // IMPORTANT: This runs AFTER the pendingState restore (declared above).
+  // Both are mount-only useEffects that fire in declaration order.
+  // We use a setTimeout(0) to defer to the NEXT microtask — ensuring
+  // the first useEffect's setMessages has flushed to messagesRef before
+  // we compare lengths. This prevents stale checkpoint from overwriting
+  // fresher pendingState data.
   useEffect(() => {
-    const currentSessionId = sessionIdRef.current;
-    if (!currentSessionId) return;
-    const key = `swarm_stream_checkpoint_${currentSessionId}`;
-    try {
-      const raw = window.sessionStorage.getItem(key);
-      if (!raw) return;
-      const { messages: checkpointMessages, timestamp } = JSON.parse(raw);
-      // Only restore if checkpoint is recent (< 30 min) and has more content
-      const age = Date.now() - (timestamp || 0);
-      if (age > 30 * 60 * 1000) {
-        window.sessionStorage.removeItem(key);
-        return;
-      }
-      const currentMessages = messagesRef.current;
-      if (checkpointMessages && checkpointMessages.length > currentMessages.length) {
-        console.warn('[StreamCheckpoint] Restoring from checkpoint:', {
-          checkpointLen: checkpointMessages.length,
-          currentLen: currentMessages.length,
-          ageSeconds: Math.round(age / 1000),
-        });
-        setMessages(checkpointMessages);
-        const tabId = activeTabIdRef.current;
-        if (tabId) {
-          const tabState = tabMapRef.current.get(tabId);
-          if (tabState) {
-            tabState.messages = checkpointMessages;
+    setTimeout(() => {
+      const currentSessionId = sessionIdRef.current;
+      if (!currentSessionId) return;
+      const key = `swarm_stream_checkpoint_${currentSessionId}`;
+      try {
+        const raw = window.sessionStorage.getItem(key);
+        if (!raw) return;
+        const { messages: checkpointMessages, timestamp } = JSON.parse(raw);
+        // Only restore if checkpoint is recent (< 30 min) and has more content
+        const age = Date.now() - (timestamp || 0);
+        if (age > 30 * 60 * 1000) {
+          window.sessionStorage.removeItem(key);
+          return;
+        }
+        // Compare against CURRENT state (after pendingState restore has flushed)
+        const currentMessages = messagesRef.current;
+        if (checkpointMessages && checkpointMessages.length > currentMessages.length) {
+          console.warn('[StreamCheckpoint] Restoring from checkpoint:', {
+            checkpointLen: checkpointMessages.length,
+            currentLen: currentMessages.length,
+            ageSeconds: Math.round(age / 1000),
+          });
+          setMessages(checkpointMessages);
+          const tabId = activeTabIdRef.current;
+          if (tabId) {
+            const tabState = tabMapRef.current.get(tabId);
+            if (tabState) {
+              tabState.messages = checkpointMessages;
+            }
           }
         }
+        // Clean up after restore attempt (whether restored or not — stale data)
+        window.sessionStorage.removeItem(key);
+      } catch {
+        // Non-fatal — checkpoint recovery is best-effort
       }
-      // Clean up after successful restore
-      window.sessionStorage.removeItem(key);
-    } catch {
-      // Non-fatal — checkpoint recovery is best-effort
-    }
+    }, 0);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps — mount-only
 
   // --- Fix 5: Deferred stale entry cleanup ---
@@ -1449,24 +1459,28 @@ export function useChatStreamingLifecycle(
           queryClient.invalidateQueries({ queryKey: ['radar', 'completedTasks'] });
 
           // ── Streaming content checkpoint (P0 content loss protection) ──
-          // Persist messages to sessionStorage on every result event so that
-          // even if React state is lost (SSE disconnect, error handler race,
-          // or any undiagnosed content clearing), the content survives.
-          // Recovery: restorePendingState() on mount reads it back.
-          // Only persist if we have meaningful content (>2 messages = beyond
-          // just user + empty placeholder). Uses a lightweight key distinct
-          // from ask_user_question persistence (which is removed on completion).
+          // Persist messages to sessionStorage so that even if React state is
+          // lost (SSE disconnect, error handler race, or undiagnosed clearing),
+          // the content survives and can be recovered on mount.
+          // Throttled: write at most every 10 seconds to avoid main-thread jank
+          // from JSON.stringify + synchronous sessionStorage.setItem on large
+          // message arrays (100+ tool results = 50-100KB per write).
           const checkpointSid = sid ?? tabState?.sessionId;
           if (checkpointSid && tabState && tabState.messages.length > 2) {
-            try {
-              const key = `swarm_stream_checkpoint_${checkpointSid}`;
-              const payload = JSON.stringify({
-                messages: prepareMessagesForStorage(tabState.messages),
-                timestamp: Date.now(),
-              });
-              window.sessionStorage.setItem(key, payload);
-            } catch {
-              // Quota exceeded — non-fatal
+            const now = Date.now();
+            const lastCheckpoint = tabState._lastCheckpointTime ?? 0;
+            if (now - lastCheckpoint > 10_000) {  // 10s throttle
+              tabState._lastCheckpointTime = now;
+              try {
+                const key = `swarm_stream_checkpoint_${checkpointSid}`;
+                const payload = JSON.stringify({
+                  messages: prepareMessagesForStorage(tabState.messages),
+                  timestamp: now,
+                });
+                window.sessionStorage.setItem(key, payload);
+              } catch {
+                // Quota exceeded — non-fatal
+              }
             }
           }
 
@@ -1488,6 +1502,9 @@ export function useChatStreamingLifecycle(
           const resultSessionId = sid ?? tabState?.sessionId;
           if (resultSessionId) {
             removePendingState(resultSessionId);
+            // Also clean up streaming checkpoint (written during long runs).
+            // Without this, sessionStorage fills with stale blobs over time.
+            try { window.sessionStorage.removeItem(`swarm_stream_checkpoint_${resultSessionId}`); } catch {}
           }
 
           if (!hasQueuedMessage) {
@@ -2181,17 +2198,18 @@ export function useChatStreamingLifecycle(
           tabState.messages = applyError(tabState.messages);
           const afterCount = tabState.messages.find((m) => m.id === assistantMessageId)?.content.length ?? 0;
           // PRODUCTION DIAGNOSTIC: P0 content loss investigation.
-          // If beforeCount > 0 and afterCount is unexpectedly low, we have a bug.
-          // Always log in production — this is the only signal for diagnosing
-          // "18 min content disappeared" (COE07/08 class, still unresolved).
-          console.warn('[ErrorHandler] Content preservation check:', {
-            assistantMessageId,
-            beforeCount,
-            afterCount,
-            totalMessages: tabState.messages.length,
-            tabId: capturedTabId,
-            error: error.message?.slice(0, 80),
-          });
+          // Only log when content may have been lost (beforeCount > 0 but
+          // afterCount didn't grow as expected) — avoids noise on routine errors.
+          if (beforeCount > 0 && afterCount <= beforeCount) {
+            console.warn('[ErrorHandler] Possible content loss:', {
+              assistantMessageId,
+              beforeCount,
+              afterCount,
+              totalMessages: tabState.messages.length,
+              tabId: capturedTabId,
+              error: error.message?.slice(0, 80),
+            });
+          }
         }
 
         if (isActiveTab) {

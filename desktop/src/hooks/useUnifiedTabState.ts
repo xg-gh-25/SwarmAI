@@ -146,6 +146,8 @@ export interface UnifiedTab {
     displayContent: ContentBlock[];
     messageId: string;
   };
+  /** Timestamp of last sessionStorage checkpoint write (throttle: max 1 per 10s). */
+  _lastCheckpointTime?: number;
   /** True when backend returned SESSION_BUSY — polling for response completion.
    *  Send button is disabled, "Waiting..." indicator shown, polling active. */
   isWaitingForBusy?: boolean;
