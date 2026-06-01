@@ -11,7 +11,7 @@
 # target_project: root of the project to make AI-ready
 #
 # Supports: Claude Code, Kiro. Default: Claude Code (AGENTS.md is most universal).
-# macOS + Linux compatible (POSIX sh, no GNU extensions).
+# Requires: bash (uses arrays). macOS + Linux compatible.
 
 set -eo pipefail
 
