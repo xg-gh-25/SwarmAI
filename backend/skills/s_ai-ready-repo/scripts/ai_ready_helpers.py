@@ -1447,7 +1447,7 @@ def prioritized_file_list(repo_path: Path, max_files: int = 300) -> list[str]:
             f"Large repo: {len(source_files)} source files, cap={max_files}. "
             f"Skipped {skipped} files (lowest priority). "
             f"Included: {len(priority_1)} entry points, {len(priority_2)} hot files, "
-            f"{len(priority_3)} interfaces, {min(len(remaining), max_files - len(priority_1) - len(priority_2) - len(priority_3))} others."
+            f"{len(priority_3)} interfaces, {len(result_files) - len([f for f in result_files if f in set(priority_1 + priority_2 + priority_3)])} others."
         )
 
     return result_files
