@@ -1023,11 +1023,11 @@ _Reordered after M1 implementation. Original order assumed bash parser + fresh v
 | Priority | Milestone | Deliverable | Validation | Effort | Status |
 |---|---|---|---|---|---|
 | ✅ | **M1: Single-repo DDD generation** | Engine produces 7 DDD files + AGENTS.md for any single repo | E2E demo on MemPalace (391 files, 1124 commits). 3 adversarial rounds. | 1 session | **DONE** (2026-06-01) |
-| 1 | **M5→M2: IDE install** | `install.sh` — auto-detect Claude Code/Kiro, copy files, merge hooks config | E2E: install → open IDE → agent uses artifacts on first task | S (~1hr) | 🔲 Next |
-| 2 | **M3→M3: Verified output** | Sub-agent VERIFY — spawn fresh agent with ONLY output, give 3 tasks from git log, verify correct file found | Intentionally omit a module → VERIFY catches it → feedback to GENERATE | M (~1 session) | 🔲 |
-| 3 | **M2→M4: Self-maintaining** | Staleness detection + refresh trigger. Reuse `gather_repo_info()` diff against `ai-ready.json` snapshot. Hook config for auto-notification. | Add module → run check → stale detected → notification fires | M (~1 session) | 🔲 |
-| 4 | **M4→M5: Multi-package** | Per-package execution with cross-package synthesis. Fix 300-file cap per package (not global). | 3-repo system (frontend+backend+infra) → independent DDD + cross-deps | L (~2 sessions) | 🔲 |
-| 5 | **M6: Published standard** | GitHub Discussion + spec repo + scoring rubric + templates | Community signal (stars, comments, forks) | S (~1 session) | 🔲 |
+| 1 | **M5→M2: IDE install** | `install.sh` — auto-detect Claude Code/Kiro, copy files, merge hooks config | E2E: install → open IDE → agent uses artifacts on first task | S (~1hr) | ✅ **DONE** (2026-06-01, commit 54f18cd3) |
+| 2 | **M3→M3: Verified output** | Sub-agent VERIFY — spawn fresh agent with ONLY output, give 3 tasks from git log, verify correct file found | Intentionally omit a module → VERIFY catches it → feedback to GENERATE | M (~1 session) | ✅ **DONE** (2026-06-01, commit 6a3209fe) |
+| 3 | **M2→M4: Self-maintaining** | Staleness detection + refresh trigger. Reuse `gather_repo_info()` diff against `ai-ready.json` snapshot. Hook config for auto-notification. | Add module → run check → stale detected → notification fires | M (~1 session) | ✅ **DONE** (2026-06-01, commit 4955b97d) |
+| 4 | **M4→M5: Multi-package** | Per-package execution with cross-package synthesis. Fix 300-file cap per package (not global). | 3-repo system (frontend+backend+infra) → independent DDD + cross-deps | L (~2 sessions) | ✅ **DONE** (2026-06-01, commit 4955b97d) |
+| 5 | **M6: Published standard** | GitHub Discussion + spec repo + scoring rubric + templates | Community signal (stars, comments, forks) | S (~1 session) | ✅ **DONE** (2026-06-01, ai-ready-repo commit 1c5fb94) |
 
 **Why reordered:**
 
@@ -1074,7 +1074,8 @@ elif [ "$IDE" = "kiro" ]; then
 fi
 ```
 
-Total remaining: ~5 sessions (was 6). M5-install is trivial (1hr, not 1 session).
+**ALL MILESTONES COMPLETE** (2026-06-01). Done in 1 session — originally estimated 7.
+Actual: 8 pipeline runs, 16 commits, 25 tests, ~2000 lines.
 
 ---
 
