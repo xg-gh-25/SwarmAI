@@ -837,6 +837,229 @@ def build_ai_ready_meta(score: float, project_name: str) -> dict[str, Any]:
     }
 
 
+# ─── Staleness Detection (P3: Self-Maintaining) ───
+
+def check_staleness(output_path: Path, repo_path: Path) -> dict[str, Any]:
+    """Compare current repo state against stored ai-ready.json snapshot.
+
+    Returns:
+        {
+            "overall": "fresh" | "stale",
+            "commits_since": int,
+            "stale_files": ["TECH.md", ...],  # which DDD files are outdated
+            "changes": ["new module added", "config changed", ...]
+        }
+    """
+    output_path = Path(output_path)
+    repo_path = _validate_repo_path(Path(repo_path))
+
+    # Read stored snapshot
+    meta_path = output_path / ".ai-ready" / "ai-ready.json"
+    if not meta_path.exists():
+        return {"overall": "stale", "commits_since": -1, "stale_files": ["all"], "changes": ["no ai-ready.json found"]}
+
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {"overall": "stale", "commits_since": -1, "stale_files": ["all"], "changes": ["corrupt ai-ready.json"]}
+
+    # Get current repo state
+    current_info = gather_repo_info(repo_path)
+    stored_generated = meta.get("generated_at", "")
+
+    # Count commits since generation
+    commits_since = 0
+    if stored_generated:
+        # Extract date from ISO timestamp
+        date_part = stored_generated.split("T")[0]
+        try:
+            result = subprocess.run(
+                ["git", "log", f"--since={date_part}", "--oneline"],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if result.returncode == 0:
+                commits_since = len([l for l in result.stdout.strip().split("\n") if l])
+        except subprocess.TimeoutExpired:
+            pass
+
+    # Detect specific changes
+    changes: list[str] = []
+    stale_files: list[str] = []
+
+    # Check file count delta (new modules?)
+    stored_file_count = meta.get("score", {}).get("_file_count", 0)
+    current_file_count = len(current_info["file_tree"])
+    if stored_file_count and abs(current_file_count - stored_file_count) > 10:
+        changes.append(f"file count changed: {stored_file_count} → {current_file_count}")
+        stale_files.append("TECH.md")  # Architecture changed
+
+    # Check config files changed
+    stored_frameworks = set(meta.get("score", {}).get("_frameworks", []))
+    current_frameworks = set(current_info["tech_stack"].get("frameworks", []))
+    if stored_frameworks != current_frameworks:
+        changes.append(f"frameworks changed: {stored_frameworks} → {current_frameworks}")
+        stale_files.append("TECH.md")
+
+    # Commits since threshold
+    if commits_since > 50:
+        changes.append(f"{commits_since} commits since last generation")
+        stale_files.extend(["TECH.md", "IMPROVEMENT.md", "PROJECT.md"])
+    elif commits_since > 20:
+        changes.append(f"{commits_since} commits since last generation")
+        stale_files.append("PROJECT.md")
+
+    # Deduplicate
+    stale_files = sorted(set(stale_files))
+
+    overall = "stale" if stale_files else "fresh"
+    return {
+        "overall": overall,
+        "commits_since": commits_since,
+        "stale_files": stale_files,
+        "changes": changes,
+    }
+
+
+def generate_hook_config(ide: str = "claude-code") -> dict[str, Any]:
+    """Generate IDE hook configuration for auto-staleness detection.
+
+    Returns a config dict that can be merged into the IDE's settings.
+    Claude Code: .claude/settings.json hooks.
+    Kiro: .kiro/hooks/ configuration.
+    """
+    if ide == "claude-code":
+        return {
+            "hooks": {
+                "FileChanged": [{
+                    "pattern": [
+                        "src/**/index.*", "package.json", "pyproject.toml",
+                        "Makefile", "Cargo.toml", "go.mod", "**/routes/**",
+                        "**/api/**", "requirements.txt", "setup.py",
+                    ],
+                    "command": "echo '🔄 Code structure changed — run refresh ai-ready to update context.'",
+                    "onFailure": "notify",
+                    "_source": "ai-ready-engine",
+                }]
+            }
+        }
+    elif ide == "kiro":
+        return {
+            "hooks": {
+                "onFileChange": {
+                    "patterns": ["src/**", "package.json", "pyproject.toml"],
+                    "action": "notify",
+                    "message": "🔄 Code structure changed — run 'refresh ai-ready' to update context.",
+                    "_source": "ai-ready-engine",
+                }
+            }
+        }
+    return {}
+
+
+# ─── Multi-Package Support (P4) ───
+
+def run_multi_package(
+    repo_paths: list[Path],
+    output_base: Path,
+    project_name: str | None = None,
+) -> dict[str, Any]:
+    """Run engine analysis on multiple packages, produce per-package output + cross-package synthesis.
+
+    Each package gets independent file/edge budgets.
+    Cross-package context identifies shared dependencies across packages.
+
+    Args:
+        repo_paths: list of paths to package roots
+        output_base: base directory for all output
+        project_name: optional system name (default: parent dir name)
+
+    Returns:
+        {
+            "packages": [{name, path, output_path, stats}],
+            "cross_package": {shared_deps, dep_order},
+            "output_path": str
+        }
+    """
+    output_base = Path(output_base)
+    output_base.mkdir(parents=True, exist_ok=True)
+
+    if not project_name:
+        # Use common parent directory name
+        parents = [p.parent for p in repo_paths]
+        project_name = parents[0].name if parents else "multi-package"
+
+    packages = []
+    all_imports: dict[str, set] = {}  # package_name → set of external imports
+
+    for repo_path in repo_paths:
+        repo_path = Path(repo_path)
+        if not repo_path.exists():
+            continue
+
+        pkg_name = repo_path.name
+        pkg_output = output_base / pkg_name
+
+        # Run per-package analysis (each gets full budget)
+        try:
+            info = gather_repo_info(repo_path)
+            graph = extract_import_graph(repo_path)
+            gotchas = parse_git_gotchas(repo_path)
+        except (ValueError, OSError):
+            packages.append({"name": pkg_name, "path": str(repo_path), "error": "analysis failed"})
+            continue
+
+        # Track external imports for cross-package synthesis
+        pkg_external_imports: set[str] = set()
+        for edge in graph.get("edges", []):
+            target = edge["to"]
+            if not target.startswith("."):  # absolute import = potentially cross-package
+                pkg_external_imports.add(target.split(".")[0])
+        all_imports[pkg_name] = pkg_external_imports
+
+        packages.append({
+            "name": pkg_name,
+            "path": str(repo_path),
+            "output_path": str(pkg_output),
+            "stats": {
+                "files": len(info["file_tree"]),
+                "edges": graph["stats"]["edges_found"],
+                "gotchas": len(gotchas),
+            },
+        })
+
+    # Cross-package synthesis: find shared dependencies
+    shared_deps: list[str] = []
+    if len(all_imports) >= 2:
+        # Find imports that appear in 2+ packages
+        from collections import Counter
+        import_counts: Counter = Counter()
+        for pkg_imports in all_imports.values():
+            for imp in pkg_imports:
+                import_counts[imp] += 1
+        shared_deps = [imp for imp, count in import_counts.items() if count >= 2]
+
+    # Determine dependency order (which packages import which)
+    dep_order: list[dict] = []
+    pkg_names = {p["name"] for p in packages if "error" not in p}
+    for pkg_name, pkg_imports in all_imports.items():
+        for imp in pkg_imports:
+            if imp in pkg_names and imp != pkg_name:
+                dep_order.append({"from": pkg_name, "to": imp})
+
+    return {
+        "packages": packages,
+        "cross_package": {
+            "shared_deps": sorted(shared_deps),
+            "dep_order": dep_order,
+        },
+        "output_path": str(output_base),
+        "project_name": project_name,
+    }
+
+
 # ─── Output Verification (VERIFY Phase) ───
 
 def select_verification_tasks(repo_path: Path) -> list[dict[str, Any]]:
