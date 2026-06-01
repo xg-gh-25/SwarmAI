@@ -9,6 +9,17 @@ Generate DDD-structured artifacts that make any codebase genuinely understood by
 
 **Phases:** INPUT → INGEST → UNDERSTAND → GENERATE
 
+**Output Levels (formal definition):**
+
+| Level | What's Documented | Agent Can | Agent Cannot |
+|-------|------------------|-----------|-------------|
+| **1: Navigable** | Module map + entry points + build commands | Find correct file, run build/test | Fix bugs, understand patterns |
+| **2: Safe** | + conventions with citations + gotchas with evidence + dependency graph | Avoid known mistakes, follow conventions | Modify complex code confidently |
+| **3: Modifiable** | + function-level tables for hot zones + data flow diagrams + extension points + honest coverage % | Fix bugs in hot zones, add features following existing patterns | Modify unanalyzed modules without reading source |
+
+**Target: Level 3 for hot-zone files, Level 2 for other key modules, Level 1 for the rest.**
+Honest about coverage — never claim 90% confidence on a file you only glanced at.
+
 ## Progress Display
 
 Print this briefing at the start, then show each phase landmark as it completes:
@@ -235,16 +246,44 @@ Pick files using this priority:
 **Minimum reads: 8 files.** For repos <50 files, read ALL source files.
 For repos 50-200 files, read 10-15. For repos >200 files, read 15-20.
 
-**Level 3 depth (MANDATORY for hot-zone files):** For the top 3 files by
+**Level 3 depth (MANDATORY for hot-zone files):** For the top 3-5 files by
 fix-commit count (from `parse_git_gotchas` output), read the FULL file and
 extract function-level knowledge:
-- Every public function: name, line range, signature, what it does (1 sentence)
+- Every public function: name, approximate line range (~N), signature, what it does (1 sentence)
 - Callers: which other functions call this one (from grep or import graph)
 - Gotchas: function-specific bugs/traps (from git history + code reading)
 - Data flow: what does this function receive → transform → return/write
 
+Additionally: for modules that are NOT hot-zone but are key infrastructure
+(e.g., config, utils, database layer), document at minimum:
+- Public API surface (function names + 1-line purpose)
+- Integration point (how other modules use it)
+- Known constraints (performance, thread-safety, limits)
+
+**Extension Points:** TECH.md MUST include an "Extension Points" section:
+- Where do new cross-cutting features plug in? (hooks, callbacks, post-mine phase?)
+- If no plugin system exists, say so explicitly: "No hook/event system — new features added inline at [specific location]."
+
 The output must be specific enough that an agent reading ONLY the DDD output
-(not the source) can identify the correct function to modify for a given bug.
+(not the source) can:
+- Identify correct function for a bug fix (hot-zone files: ~85% confidence)
+- Add a new feature following existing patterns (~70% confidence)
+- Navigate to correct file/module for ANY change (90%+ confidence)
+
+**Honest coverage declaration (MANDATORY in REVIEW-REPORT.md):**
+```
+Coverage: {N}/{M} source files read ({pct}%)
+  Hot zones (function-level): {list of files}
+  Module-level only: {list of files}
+  Not analyzed: {count} files
+
+Confidence by scenario:
+  Bug in hot-zone file: ~85%
+  Bug in module-level file: ~50% (will need source reading)
+  Bug in unanalyzed file: ~20% (navigation only)
+  New feature (existing pattern): ~70%
+  New feature (new pattern): ~40%
+```
 
 #### Step 3.2: Extract REAL dependencies (from import statements)
 
@@ -403,19 +442,30 @@ Every "ALWAYS do X" must say "(observed in: file1.py, file2.py)".
 Every "NEVER do Y" must say "(violation would break: explanation based on code reading)".
 
 **Level 3 requirement: TECH.md MUST include function-level architecture tables**
-for the top 3 hot-zone files. Format:
+for the top 3-5 hot-zone files. Format:
 
 ```markdown
 ### {filename} — {description} ({N} lines, {M} fix commits)
+_Verified at commit {short_hash}. Line numbers approximate — grep function name to confirm._
 
-| Function | Lines | Callers | What It Does | Gotchas |
-|----------|-------|---------|-------------|---------|
-| `func_name(args)` | 100-150 | module.caller1, module.caller2 | One sentence | Specific trap |
+| Function | ~Lines | Callers | What It Does | Gotchas |
+|----------|--------|---------|-------------|---------|
+| `func_name(args)` | ~100 | module.caller1, module.caller2 | One sentence | Specific trap |
 ```
+
+**Line number rules:**
+- Prefix with `~` to indicate approximate (lines shift on every commit)
+- Always include the function SIGNATURE — this is the stable anchor, not line number
+- Agent consumers should `grep -n "def func_name"` to confirm current line
+- Include `Verified at commit: {hash}` so staleness is detectable
 
 Plus a **data flow diagram** showing the main E2E path through the codebase (e.g.,
 CLI → mine → process_file → add_drawer → ChromaDB). This is what makes the output
 useful for bug-fixing — agent can trace the path without reading source.
+
+Plus an **Extension Points** section documenting where new cross-cutting features
+plug in. If no hook/event/plugin system exists, state: "No hook system — new
+features added inline at [specific location in the call chain]."
 
 End with: `<!-- user: Your additions below — refresh preserves this section -->`
 
@@ -538,6 +588,9 @@ Before entering GENERATE, self-check:
 | Import graph | `depends_on` derived from grep/Read of imports | Go back to Step 3.2 |
 | Conventions cited | Every convention cites 2+ files | Go back to Step 3.3 |
 | Entry points verified | Each entry point Read and confirmed | Go back to Step 3.5 |
+| Function tables | Top 3 hot-zone files have function tables (name, ~lines, callers, gotchas) | Go back to Step 3.1 and read full files |
+| Extension points | TECH.md states where new features plug in (or says "no hook system") | Add section to TECH.md |
+| Coverage declared | REVIEW-REPORT.md states honest coverage % and per-scenario confidence | Add coverage section |
 
 **If you didn't Read the code, you have NOTHING to generate.**
 README + git log alone is NEVER sufficient for TECH.md or code-intel.json.
