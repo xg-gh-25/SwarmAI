@@ -103,6 +103,11 @@ def validate_code_intel_json(doc: dict) -> list[str]:
     elif "repo" in doc:
         errors.append("'repo' must be a dict")
 
+    # Type checks for list fields (must be lists, not strings/dicts/None)
+    for field in ("modules", "edges", "entry_points", "routes", "hot_zones", "risk_areas", "dead_code"):
+        if field in doc and not isinstance(doc[field], list):
+            errors.append(f"'{field}' must be a list, got {type(doc[field]).__name__}")
+
     # Modules validation
     modules = doc.get("modules")
     if isinstance(modules, list):
@@ -113,8 +118,6 @@ def validate_code_intel_json(doc: dict) -> list[str]:
             for field in _REQUIRED_MODULE:
                 if field not in mod:
                     errors.append(f"modules[{i}] missing required field: '{field}'")
-    elif "modules" in doc and not isinstance(modules, list):
-        errors.append("'modules' must be a list")
 
     # Edges validation (basic structure check)
     edges = doc.get("edges")
@@ -124,6 +127,16 @@ def validate_code_intel_json(doc: dict) -> list[str]:
                 errors.append(f"edges[{i}] must be a dict")
             elif "from" not in edge or "to" not in edge:
                 errors.append(f"edges[{i}] must have 'from' and 'to' fields")
+
+    # Edge count consistency: repo.total_edges vs actual edges[]
+    if isinstance(repo, dict) and isinstance(edges, list):
+        claimed = repo.get("total_edges", 0)
+        actual = len(edges)
+        if claimed > 0 and actual > 0 and claimed > actual * 10:
+            errors.append(
+                f"Edge count inconsistency: repo.total_edges={claimed} but edges[] has {actual} entries. "
+                f"Either include more edges or set total_edges to match the delivered count."
+            )
 
     # Entry points validation
     entry_points = doc.get("entry_points")

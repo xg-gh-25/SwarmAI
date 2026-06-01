@@ -28,7 +28,7 @@ class TestCodeIntelValidation:
                 "name": "test-project",
                 "languages": {"python": 0.8, "shell": 0.2},
                 "total_symbols": 150,
-                "total_edges": 200,
+                "total_edges": 1,
             },
             "modules": [
                 {

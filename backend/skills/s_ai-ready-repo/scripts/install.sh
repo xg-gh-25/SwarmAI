@@ -47,7 +47,12 @@ TARGET="$(cd "$TARGET" && pwd)"
 # ─── Uninstall mode ───
 
 if [ "$UNINSTALL" = true ]; then
-    MANIFEST="$TARGET/.ai-ready/WHAT_WAS_ADDED.md"
+    # Detect IDE to find correct manifest location
+    if [ -d "$TARGET/.kiro" ]; then
+        MANIFEST="$TARGET/.kiro/docs/ai-ready/WHAT_WAS_ADDED.md"
+    else
+        MANIFEST="$TARGET/.ai-ready/WHAT_WAS_ADDED.md"
+    fi
     if [ ! -f "$MANIFEST" ]; then
         echo "❌ No WHAT_WAS_ADDED.md found at $MANIFEST — nothing to uninstall."
         exit 1
