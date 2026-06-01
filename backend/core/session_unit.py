@@ -2146,10 +2146,17 @@ class SessionUnit:
                     if isinstance(block, TextBlock):
                         content_blocks.append({"type": "text", "text": block.text})
                     elif isinstance(block, ThinkingBlock):
-                        # Opus 4.8 over Bedrock returns thinking blocks with empty
-                        # content (signature-only, redacted reasoning). Skip empty
-                        # AND whitespace-only content so they don't pollute the DB
-                        # or render as ghost widgets.
+                        # Skip content-free thinking blocks. Bedrock CAN emit
+                        # thinking blocks with empty/whitespace content under
+                        # certain conditions (signature-only, redacted reasoning)
+                        # — persisting them pollutes the DB and renders ghost
+                        # widgets. NOTE: this is conditional, NOT universal.
+                        # Verified 2026-06-01 (v1.17.5, claude-opus-4-8): under
+                        # adaptive thinking the common case is FULL plaintext
+                        # (529 non-empty deltas vs 7 empty in one turn; 12/12
+                        # blocks had 51-985 chars of content). The empty-block
+                        # path is the rare exception, not the rule.
+                        # See: Knowledge/Notes/2026-06-01-thinking-block-7layer-diagnosis.md
                         if block.thinking and block.thinking.strip():
                             content_blocks.append({
                                 "type": "thinking",

@@ -263,13 +263,18 @@ class TestAssistantMessagePreservation:
     @pytest.mark.asyncio
     async def test_empty_thinking_block_skipped(self):
         """AssistantMessage with an empty-content ThinkingBlock must NOT emit a
-        thinking block. Opus 4.8 over Bedrock returns thinking blocks with empty
-        content + a signature; persisting them pollutes the DB with ghost rows
-        and renders nothing. The empty block must be dropped at the source."""
+        thinking block. Bedrock CAN return thinking blocks with empty content +
+        a signature under certain conditions (signature-only, redacted
+        reasoning); persisting them pollutes the DB with ghost rows and renders
+        nothing. The empty block must be dropped at the source. NOTE: empty is
+        the rare exception — the common case under adaptive thinking is full
+        plaintext (verified 2026-06-01, v1.17.5). This test guards the
+        empty-block path specifically. See:
+        Knowledge/Notes/2026-06-01-thinking-block-7layer-diagnosis.md"""
         unit = _make_unit()
 
         thinking_block = _MockThinkingBlock()
-        thinking_block.thinking = ""          # Opus 4.8: redacted/empty content
+        thinking_block.thinking = ""          # rare case: redacted/empty content
         thinking_block.signature = "ErUBCkY..."  # signature present but useless without content
 
         text_block = _MockTextBlock()
