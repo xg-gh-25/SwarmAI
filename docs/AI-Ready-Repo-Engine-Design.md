@@ -1018,16 +1018,76 @@ Traps discovered during SwarmAI production that the Engine MUST avoid in generat
 
 ## Implementation Milestones
 
-| Milestone | Deliverable | Validation | Effort |
+| Milestone | Deliverable | Validation | Status |
 |---|---|---|---|
-| **M1: Single-repo DDD generation** | Engine produces 4 DDD files + AGENTS.md + code-intel.json for any single repo | Manual review by XG on a real project (not SwarmAI — needs cold-start test) | 2 sessions |
-| **M2: Self-maintaining** | Parser + refresh skill installed, Tier 1 auto-detects staleness | Test: add new module → verify parser fires → verify stale notification appears | 1 session |
-| **M3: Verified output** | VERIFY phase catches gaps in generated artifacts | Test: intentionally omit a module → VERIFY fails → re-gen adds it | 1 session |
-| **M4: Multi-package** | 3-repo system produces per-package DDD + cross-package context | Test on a real multi-package system (frontend + backend + infra) | 1 session |
-| **M5: IDE adapters** | Claude Code + Kiro install verified working end-to-end | E2E: install → open IDE → ask agent a task → agent uses artifacts correctly | 1 session |
-| **M6: Published standard** | GitHub Discussion + spec + scoring rubric + templates | Community engagement signal (stars, comments, forks) | 1 session |
+| **M1: Single-repo DDD generation** | Engine produces 7 DDD files + AGENTS.md for any single repo | E2E demo on MemPalace (391 files, 1124 commits). 3 adversarial rounds. | ✅ **DONE** (2026-06-01, 4 pipeline runs, 12 commits) |
+| **M2: Self-maintaining** | Parser + refresh skill installed, Tier 1 auto-detects staleness | Test: add new module → verify parser fires → verify stale notification appears | 🔲 Next |
+| **M3: Verified output** | VERIFY phase catches gaps in generated artifacts | Test: intentionally omit a module → VERIFY fails → re-gen adds it | 🔲 |
+| **M4: Multi-package** | 3-repo system produces per-package DDD + cross-package context | Test on a real multi-package system (frontend + backend + infra) | 🔲 |
+| **M5: IDE adapters** | Claude Code + Kiro install verified working end-to-end | E2E: install → open IDE → ask agent a task → agent uses artifacts correctly | 🔲 |
+| **M6: Published standard** | GitHub Discussion + spec + scoring rubric + templates | Community engagement signal (stars, comments, forks) | 🔲 |
 
-Total: ~7 sessions to full capability.
+Total: ~7 sessions to full capability. M1 took 1 session (originally estimated 2).
+
+---
+
+## Implementation Status (2026-06-01)
+
+### M1 Completed — Key Implementation Decisions
+
+| Decision | What We Chose | Why | Alternative Rejected |
+|---|---|---|---|
+| Architecture | Skill (`s_ai-ready-repo`) + helper script (`ai_ready_helpers.py`) | LLM-driven analysis doesn't benefit from classes. Script handles deterministic ops (git, schema, templates). | Backend module `core/ai_ready/` — over-engineering (M2-M6 don't need Python backend) |
+| Import graph | `extract_import_graph()` — automatic from source | Agent can't skip it (function call, not "remember to grep") | Manual grep instructions (agent skips them) |
+| Output path | `resolve_output_path()` — deterministic: user target > SwarmWS .artifacts/ > alongside repo | Eliminates "wrote to /tmp, can't find it" | Hardcoded path (doesn't work outside SwarmAI) |
+| Quality enforcement | Blocking quality gate in INSTRUCTIONS.md (7 checks before GENERATE) | Agent can't produce Level 1 output and claim Level 3 | Honor-system instructions only (agent rationalizes past them) |
+| Line numbers | Prefixed with `~` (approximate) + commit hash + grep instruction | Lines drift after every commit. Function signature is the stable anchor. | Exact line numbers (misleading after 1 week) |
+| Confidence claims | Per-scenario breakdown (hot-zone 85%, module-level 50%, unanalyzed 20%) | Honest. Blanket "90%" was falsified by adversarial review. | Single confidence number (false precision) |
+
+### Output Levels (Formal Definition — from implementation)
+
+| Level | What's Documented | Agent Can Do | Agent Cannot Do |
+|---|---|---|---|
+| **1: Navigable** | Module map + entry points + build commands | Find correct file, run build/test | Fix bugs, understand patterns |
+| **2: Safe** | + conventions with file citations + gotchas with commit evidence + dependency graph | Avoid known mistakes, follow conventions | Modify complex code confidently |
+| **3: Modifiable** | + function-level tables for hot zones + data flow diagrams + extension points + honest coverage % | Fix bugs in hot zones, add features following existing patterns | Modify unanalyzed modules without reading source |
+
+**Design principle: Level 3 for hot-zone files, Level 2 for key modules, Level 1 for the rest.** Never claim blanket coverage.
+
+### Implementation Pitfalls Added (P5-P7, from production)
+
+| # | Pitfall | What Happened | Fix |
+|---|---------|--------------|-----|
+| P5 | Quality gate is text, not code | Agent claimed Level 3 with Level 1 output (README paraphrase). All 5 ACs passed because they tested existence, not quality. | Added Filter 3 "garbage-in test" to EVALUATE AC gate + User-Value Probe to DELIVER |
+| P6 | Large repo silent truncation | `extract_import_graph` caps at 300 files, 500 edges. On 2000-file repos, 85% silently skipped. Output claims authority it doesn't have. | Honest coverage declaration mandatory. Future: configurable caps + warnings. |
+| P7 | Line numbers become stale in 1 week | Agent trusts "line 720" as navigation anchor. After any commit, lands on wrong code. False confidence worse than no line numbers. | Prefix `~`, add commit hash, mandate grep-to-confirm for consumers. |
+
+### Lessons Learned (from 3 adversarial rounds + 4 pipeline runs)
+
+1. **Code reading is the ENTIRE value** — without it, output is a README paraphrase. No one pays for a paraphrase. The code-reading mandate in UNDERSTAND phase is non-negotiable.
+2. **Function-level > module-level** — "miner.py imports palace.py" is useless for bug fixing. "miner.process_file() calls palace.file_already_mined() which paginates ALL groups because ChromaDB has undefined ordering" is actionable.
+3. **Data flow diagrams are highest-ROI artifact** — one ASCII trace (CLI→mine→process_file→add_drawer) replaces reading 5 files. Agent can trace any bug through the call chain.
+4. **Honest coverage > impressive numbers** — "7% files read, 85% confidence in hot zones, 20% elsewhere" builds trust. "90% confidence" (falsified by adversarial) destroys trust permanently.
+5. **User-Value Probe is the right final gate** — asks: "can you point to 3 things only knowable from the work?" If output is derivable from `cat README.md` in 2 minutes, it's worthless regardless of how correct the JSON schema is.
+6. **AC quality gate prevents pipeline theater** — "produces TECH.md" passes with Lorem Ipsum. "TECH.md conventions cite 2+ source files each" cannot. Filter 3 (garbage-in test) catches this at EVALUATE, before wasting BUILD tokens.
+7. **Extension Points section is critical for feature work** — "add a webhook" is impossible without knowing where post-mine hooks plug in. If no hook system exists, saying "no hook system — add inline at [location]" is more useful than silence.
+
+### Validated Output (MemPalace E2E Demo)
+
+```
+Projects/ai_ready_repo/.artifacts/ai-ready-mempalace/
+├── AGENTS.md                  (53 lines)  ← IDE entry point
+└── .ai-ready/
+    ├── PRODUCT.md             (35 lines)  ← skeletal (code-only mode)
+    ├── TECH.md               (150 lines)  ← function-level tables + data flow
+    ├── IMPROVEMENT.md         (46 lines)  ← 7 function-level gotchas
+    ├── PROJECT.md             (30 lines)  ← skeletal (code-only mode)
+    ├── code-intel.json       (390 lines)  ← 12 modules, 14 edges, validated
+    └── REVIEW-REPORT.md       (66 lines)  ← honest coverage + recommendations
+
+Total: ~14K tokens. Fits in any model context window.
+Score: 7.5/10 (gap: PRODUCT/PROJECT skeletal without ENRICH, KG/dedup undocumented)
+```
 
 ---
 
