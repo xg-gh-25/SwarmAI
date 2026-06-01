@@ -7,7 +7,75 @@ Generate DDD-structured artifacts that make any codebase genuinely understood by
 **Input:** Repo path + optional signal sources (docs, wikis, Slack exports)
 **Output:** `.ai-ready/` directory with 7 files + `AGENTS.md` entry point
 
-**Phases:** INPUT → INGEST → UNDERSTAND → GENERATE (M1 scope)
+**Phases:** INPUT → INGEST → UNDERSTAND → GENERATE
+
+## Progress Display
+
+Print this briefing at the start, then show each phase landmark as it completes:
+
+**Briefing (print once at start):**
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🏛️ AI-Ready-Repo Engine
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Making {repo_name} genuinely understood by AI agents.
+
+  Phases:
+    1. INPUT     — Collect repo path + optional signals
+    2. INGEST    — Parse files, detect stack, gather git history
+    3. UNDERSTAND — Map modules, find patterns, extract knowledge
+    4. GENERATE  — Produce DDD artifacts (.ai-ready/ + AGENTS.md)
+
+  Output:
+    AGENTS.md              ← Entry point (≤150 lines)
+    .ai-ready/PRODUCT.md   ← Why: purpose, audience, constraints
+    .ai-ready/TECH.md      ← How: architecture, conventions
+    .ai-ready/IMPROVEMENT.md ← Learned: gotchas, failures, patterns
+    .ai-ready/PROJECT.md   ← Now: priorities, decisions, blockers
+    .ai-ready/code-intel.json ← Graph: modules, deps, entry points
+    .ai-ready/REVIEW-REPORT.md ← For humans: score, gaps, assignments
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+**Per-phase landmarks (print after each phase completes):**
+
+```
+## ✦ INPUT [Repo + Signals]
+→ Repo: {path} | Signals: {N sources or "none (code-only mode)"}
+
+## ✦ INGEST [Deterministic Scan]
+→ {N} files | {languages} | {N} commits | {N} contributors
+  Config: {config_files_found}
+  Gotchas: {N} evidence-grounded from git history
+
+## ✦ UNDERSTAND [Code Intelligence]
+→ {N} modules | {N} entry points | {N} routes
+  Hot zones: {list}
+  Conventions: {N} detected
+  Framework: {detected_framework or "none"}
+
+## ✦ GENERATE [DDD Artifacts]
+→ Score: {X.X}/10 | AGENTS.md: {N} lines
+  Output: {output_path}/
+  ├── AGENTS.md ({N} lines)
+  ├── .ai-ready/PRODUCT.md
+  ├── .ai-ready/TECH.md
+  ├── .ai-ready/IMPROVEMENT.md ({N} gotchas)
+  ├── .ai-ready/PROJECT.md
+  ├── .ai-ready/code-intel.json ({N} modules, {M} edges)
+  ├── .ai-ready/ai-ready.json
+  └── .ai-ready/REVIEW-REPORT.md
+```
+
+**Completion (print at end):**
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✦ COMPLETE | AI-Ready Score: {X.X}/10
+  {project_name}: {N} modules, {M} gotchas, {K} conventions
+  Review: .ai-ready/REVIEW-REPORT.md
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
 
 ## Prerequisites
 
