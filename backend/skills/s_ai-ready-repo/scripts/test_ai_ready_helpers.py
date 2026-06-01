@@ -343,6 +343,135 @@ class TestImportGraphExtraction:
         # Should not crash on any repo
 
 
+# ─── Staleness Detection (P3) ───
+
+class TestStalenessDetection:
+    """Check if generated output is stale relative to current repo state."""
+
+    def test_fresh_output_returns_fresh(self, tmp_path):
+        """Output just generated from current state = fresh."""
+        from scripts.ai_ready_helpers import check_staleness, gather_repo_info, build_ai_ready_meta
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True)
+        (repo / "main.py").write_text("print('hello')")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True)
+
+        # Generate output
+        output = tmp_path / "output"
+        (output / ".ai-ready").mkdir(parents=True)
+        import json
+        meta = build_ai_ready_meta(5.0, "test")
+        (output / ".ai-ready" / "ai-ready.json").write_text(json.dumps(meta))
+
+        result = check_staleness(output, repo)
+        assert result["overall"] == "fresh"
+        assert result["commits_since"] == 0 or result["commits_since"] == 1  # just committed
+
+    def test_missing_meta_returns_stale(self, tmp_path):
+        """No ai-ready.json = always stale."""
+        from scripts.ai_ready_helpers import check_staleness
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True)
+        (repo / "x.py").write_text("x = 1")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True)
+
+        output = tmp_path / "output"
+        output.mkdir()
+
+        result = check_staleness(output, repo)
+        assert result["overall"] == "stale"
+        assert "no ai-ready.json" in result["changes"][0]
+
+    def test_hook_config_claude_code(self):
+        """Hook config for Claude Code has FileChanged pattern."""
+        from scripts.ai_ready_helpers import generate_hook_config
+
+        config = generate_hook_config("claude-code")
+        assert "hooks" in config
+        assert "FileChanged" in config["hooks"]
+        hook = config["hooks"]["FileChanged"][0]
+        assert "pattern" in hook
+        assert "pyproject.toml" in hook["pattern"]
+        assert hook["_source"] == "ai-ready-engine"
+
+    def test_hook_config_kiro(self):
+        """Hook config for Kiro has onFileChange."""
+        from scripts.ai_ready_helpers import generate_hook_config
+
+        config = generate_hook_config("kiro")
+        assert "hooks" in config
+        assert "onFileChange" in config["hooks"]
+
+
+# ─── Multi-Package (P4) ───
+
+class TestMultiPackage:
+    """Run engine on multiple packages with cross-package synthesis."""
+
+    def test_multi_package_produces_per_pkg_output(self, tmp_path):
+        """Each package gets independent analysis."""
+        from scripts.ai_ready_helpers import run_multi_package
+
+        # Create 2 mini repos
+        for name in ["frontend", "backend"]:
+            repo = tmp_path / name
+            repo.mkdir()
+            subprocess.run(["git", "init"], cwd=repo, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True)
+            (repo / "main.py").write_text(f"# {name}\nimport shared\n")
+            subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
+            subprocess.run(["git", "commit", "-m", f"init {name}"], cwd=repo, capture_output=True)
+
+        output = tmp_path / "output"
+        result = run_multi_package(
+            [tmp_path / "frontend", tmp_path / "backend"],
+            output,
+            project_name="my-system",
+        )
+
+        assert len(result["packages"]) == 2
+        assert result["project_name"] == "my-system"
+        # Each package has stats
+        for pkg in result["packages"]:
+            assert "stats" in pkg
+            assert pkg["stats"]["files"] >= 1
+
+    def test_cross_package_finds_shared_deps(self, tmp_path):
+        """Shared imports across packages are detected."""
+        from scripts.ai_ready_helpers import run_multi_package
+
+        # Create 2 repos that both import "shared_lib"
+        for name in ["svc_a", "svc_b"]:
+            repo = tmp_path / name
+            repo.mkdir()
+            subprocess.run(["git", "init"], cwd=repo, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True)
+            (repo / "app.py").write_text("import shared_lib\nimport common_utils\n")
+            subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
+            subprocess.run(["git", "commit", "-m", f"init {name}"], cwd=repo, capture_output=True)
+
+        result = run_multi_package(
+            [tmp_path / "svc_a", tmp_path / "svc_b"],
+            tmp_path / "out",
+        )
+
+        # Both import shared_lib and common_utils → should appear in shared_deps
+        assert "shared_lib" in result["cross_package"]["shared_deps"]
+        assert "common_utils" in result["cross_package"]["shared_deps"]
+
+
 # ─── Verification Tasks (M3) ───
 
 class TestVerificationTasks:
