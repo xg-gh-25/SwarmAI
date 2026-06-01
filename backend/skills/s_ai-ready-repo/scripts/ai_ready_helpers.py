@@ -575,6 +575,185 @@ def render_agents_md(data: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+# ─── Import Graph Extraction ───
+
+_IMPORT_PATTERNS = {
+    "python": re.compile(r"^\s*(?:from\s+([\w.]+)\s+import|import\s+([\w.]+))"),
+    "typescript": re.compile(r"""(?:import\s+.*?\s+from\s+['"]([^'"]+)['"]|require\(['"]([^'"]+)['"]\))"""),
+    "go": re.compile(r'^\s*"([^"]+)"'),
+}
+
+
+def extract_import_graph(repo_path: Path) -> dict[str, Any]:
+    """Extract REAL dependency graph from actual import statements in source code.
+
+    Returns dict with:
+      - modules: list of {name, path, imports_from, imported_by}
+      - edges: list of {from, to, file, line}
+      - stats: {files_scanned, edges_found}
+
+    This function does NOT guess. Every edge has a source file:line citation.
+    """
+    repo_path = _validate_repo_path(Path(repo_path))
+
+    # Get all source files
+    result = subprocess.run(
+        ["git", "ls-files"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    if result.returncode != 0:
+        return {"modules": [], "edges": [], "stats": {"files_scanned": 0, "edges_found": 0}}
+
+    all_files = [f for f in result.stdout.strip().split("\n") if f]
+
+    # Filter to source files only
+    source_extensions = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".rb"}
+    source_files = [f for f in all_files if Path(f).suffix in source_extensions]
+
+    # Detect primary language
+    lang_counter: Counter = Counter()
+    for f in source_files:
+        ext = Path(f).suffix
+        if ext in (".py",):
+            lang_counter["python"] += 1
+        elif ext in (".ts", ".tsx", ".js", ".jsx"):
+            lang_counter["typescript"] += 1
+        elif ext == ".go":
+            lang_counter["go"] += 1
+
+    primary_lang = lang_counter.most_common(1)[0][0] if lang_counter else "python"
+
+    # Extract imports from each source file
+    edges: list[dict[str, str]] = []
+    module_imports: dict[str, set] = {}  # file -> set of modules it imports
+    files_scanned = 0
+
+    for filepath in source_files[:300]:  # Cap at 300 files for large repos
+        full_path = repo_path / filepath
+        if not full_path.exists() or not full_path.is_file():
+            continue
+
+        try:
+            content = full_path.read_text(encoding="utf-8", errors="replace")
+        except (OSError, PermissionError):
+            continue
+
+        files_scanned += 1
+        file_imports: set[str] = set()
+
+        for line_num, line in enumerate(content.split("\n")[:200], 1):  # First 200 lines (imports at top)
+            pattern = _IMPORT_PATTERNS.get(primary_lang)
+            if not pattern:
+                break
+
+            match = pattern.match(line)
+            if match:
+                # Get the first non-None group
+                imported = next((g for g in match.groups() if g), None)
+                if imported:
+                    # Normalize: "from .palace import X" -> ".palace"
+                    # "from mempalace.backends import Y" -> "mempalace.backends"
+                    file_imports.add(imported)
+                    edges.append({
+                        "from": filepath,
+                        "to": imported,
+                        "line": line_num,
+                        "raw": line.strip(),
+                    })
+
+        if file_imports:
+            module_imports[filepath] = file_imports
+
+    # Build module-level summary (group by directory)
+    dir_modules: dict[str, set] = {}
+    for filepath in source_files:
+        parts = Path(filepath).parts
+        if len(parts) >= 2:
+            module_name = parts[0] if parts[0] != "src" else (parts[1] if len(parts) > 2 else parts[0])
+        else:
+            module_name = Path(filepath).stem
+        dir_modules.setdefault(module_name, set()).add(filepath)
+
+    # Compute imports_from / imported_by per module
+    modules: list[dict] = []
+    for mod_name, mod_files in sorted(dir_modules.items()):
+        imports_from: set[str] = set()
+        for f in mod_files:
+            for imp in module_imports.get(f, set()):
+                # Resolve relative imports to module names
+                if imp.startswith("."):
+                    # Relative import within same package
+                    imp_module = imp.lstrip(".").split(".")[0] if imp.lstrip(".") else mod_name
+                else:
+                    imp_module = imp.split(".")[0]
+                if imp_module != mod_name and imp_module in dir_modules:
+                    imports_from.add(imp_module)
+
+        modules.append({
+            "name": mod_name,
+            "path": f"{mod_name}/",
+            "files": sorted(mod_files)[:20],
+            "imports_from": sorted(imports_from),
+        })
+
+    # Compute imported_by (inverse of imports_from)
+    for mod in modules:
+        mod["imported_by"] = sorted(
+            m["name"] for m in modules
+            if mod["name"] in m.get("imports_from", [])
+        )
+
+    return {
+        "modules": modules,
+        "edges": edges[:500],  # Cap for memory
+        "stats": {
+            "files_scanned": files_scanned,
+            "edges_found": len(edges),
+            "primary_language": primary_lang,
+        },
+    }
+
+
+# ─── Output Path Resolution ───
+
+def resolve_output_path(
+    repo_path: Path,
+    project_name: str | None = None,
+    target: str | None = None,
+) -> Path:
+    """Resolve where to write AI-Ready output.
+
+    Priority:
+    1. User-specified target path (if provided)
+    2. SwarmWS .artifacts/ directory (if running inside SwarmAI)
+    3. Alongside the repo itself ({repo_parent}/ai-ready-{name}/)
+
+    Always returns an absolute path. Creates directories if needed.
+    """
+    if target:
+        out = Path(target).resolve()
+        out.mkdir(parents=True, exist_ok=True)
+        return out
+
+    repo_path = Path(repo_path).resolve()
+    name = project_name or repo_path.name
+
+    # Check if we're in SwarmAI workspace
+    swarmws = Path.home() / ".swarm-ai" / "SwarmWS"
+    if swarmws.exists():
+        out = swarmws / "Projects" / "ai_ready_repo" / ".artifacts" / f"ai-ready-{name}"
+        out.mkdir(parents=True, exist_ok=True)
+        return out
+
+    # Fallback: alongside repo
+    out = repo_path.parent / f"ai-ready-{name}"
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+
 # ─── AI-Ready Metadata ───
 
 def build_ai_ready_meta(score: float, project_name: str) -> dict[str, Any]:

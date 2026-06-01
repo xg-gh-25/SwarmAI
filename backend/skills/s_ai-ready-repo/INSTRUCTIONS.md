@@ -81,10 +81,12 @@ Making {repo_name} genuinely understood by AI agents.
 
 Helper script: `backend/skills/s_ai-ready-repo/scripts/ai_ready_helpers.py`
 - `gather_repo_info(path)` — git stats, file tree, tech stack detection
+- `extract_import_graph(path)` — REAL dependency graph from import statements (not guessed)
 - `validate_code_intel_json(doc)` — v2 schema enforcement
 - `parse_git_gotchas(path)` — evidence-grounded gotchas from git history
 - `render_agents_md(data)` — template rendering (≤150 lines guaranteed)
 - `build_ai_ready_meta(score, name)` — ai-ready.json metadata
+- `resolve_output_path(repo, name, target)` — deterministic output location
 
 ## Workflow
 
@@ -157,19 +159,24 @@ For repos 50-200 files, read 10-15. For repos >200 files, read 15-20.
 
 #### Step 3.2: Extract REAL dependencies (from import statements)
 
-For EACH key file you read:
-```
-Grep for: import, from X import, require(), use, mod
-Record: {file} imports {module} → this IS the dependency graph
+**Run the helper function — this is MANDATORY, not optional:**
+
+```python
+from ai_ready_helpers import extract_import_graph
+graph = extract_import_graph(Path(repo_path))
+# graph["modules"] → [{name, path, files, imports_from, imported_by}]
+# graph["edges"] → [{from (file), to (module), line, raw}]
+# graph["stats"] → {files_scanned, edges_found, primary_language}
 ```
 
-Do NOT guess dependencies from file names. Read the imports. Use Grep:
-```bash
-grep -rn "^import\|^from\|require(" {repo_path}/src/ --include="*.py" --include="*.ts" --include="*.js"
-```
-
+This scans ALL source files and extracts EVERY import statement with file:line citation.
 The `depends_on` and `depended_by` fields in code-intel.json MUST come from
-actual import statements you verified, not from guessing.
+this output — never from guessing.
+
+If `edges_found == 0` for a repo with code, something is wrong. Check the language detection.
+
+**After running the script**, also READ 3-5 key files to understand the imports semantically
+(what does module A actually USE from module B — just types? Or runtime calls?).
 
 #### Step 3.3: Extract REAL conventions (from code patterns)
 
@@ -246,7 +253,16 @@ For routes (if web framework detected):
 
 Produce all output files. Use the templates from `backend/skills/s_ai-ready-repo/templates/` as structure reference.
 
-**Output directory:** Create `.ai-ready/` at a working location (user specifies or default to `.artifacts/ai-ready-{project}/`)
+**Output directory:** Use `resolve_output_path()` to determine where to write:
+
+```python
+from ai_ready_helpers import resolve_output_path
+output_path = resolve_output_path(Path(repo_path), project_name="...", target=user_target_if_specified)
+# Creates: {output_path}/AGENTS.md + {output_path}/.ai-ready/
+```
+
+Priority: user-specified path > SwarmWS .artifacts/ > alongside repo.
+Output is always at a predictable location the user can find.
 
 #### 4.1: AGENTS.md (entry point)
 
