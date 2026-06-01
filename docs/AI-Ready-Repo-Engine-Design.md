@@ -254,7 +254,7 @@ Result: Handoff from months → days. Knowledge transfer via structured artifact
 
 | Level | What's Present | Agent Can | Agent Cannot |
 |-------|---------------|-----------|-------------|
-| **Level 1: Navigable** | AGENTS.md + TECH.md + code-intel.json | Find files, run build, follow conventions | Make judgments, avoid gotchas, understand priorities |
+| **Level 1: Navigable** | AGENTS.md + TECH.md + code-intel.json (with routes) | Find files, find handlers, run build, follow conventions | Make judgments, avoid gotchas, understand priorities |
 | **Level 2: Safe** | + IMPROVEMENT.md | + Avoid known pitfalls, understand blast radius | Make business decisions, understand priorities |
 | **Level 3: Autonomous** | + PRODUCT.md + PROJECT.md (full DDD) | + Make judgment calls, understand what matters, know boundaries | Nothing — full project understanding |
 
@@ -293,13 +293,23 @@ project-root/
 └── ide-adapters/                    # Layout mappings per IDE
 ```
 
-### code-intel.json Schema
+### code-intel.json Schema (v2 — 2026-05-30)
+
+> Updated from v1 to add route awareness, structured risk scoring, dead code detection, and JSON Schema validation.
+> See also: `Knowledge/Designs/2026-05-30-code-intel-v2-design.md` for SwarmAI-side implementation details.
 
 ```json
 {
+  "$schema": "https://ai-ready-repo.dev/schemas/code-intel.v2.json",
+  "version": "2.0",
   "generated_at": "2026-05-29T15:10:00+08:00",
   "git_hash": "abc123",
-  "language": "typescript",
+  "repo": {
+    "name": "payment-service",
+    "languages": {"typescript": 0.82, "python": 0.15, "shell": 0.03},
+    "total_symbols": 1847,
+    "total_edges": 2341
+  },
   "modules": [
     {
       "name": "processing",
@@ -310,6 +320,7 @@ project-root/
       "depended_by": ["api-routes", "webhooks"],
       "test_coverage": "high",
       "churn_rate": "medium",
+      "cohesion": 0.72,
       "key_files": ["handler.ts", "state-machine.ts", "validators.ts"],
       "file_count": 12
     }
@@ -318,17 +329,63 @@ project-root/
     {"from": "processing", "to": "database", "type": "runtime", "weight": "critical"},
     {"from": "webhooks", "to": "processing", "type": "event", "weight": "normal"}
   ],
+  "routes": [
+    {
+      "method": "POST",
+      "path": "/api/payments/process",
+      "handler": "src/routes/payments.ts::processPayment",
+      "framework": "express",
+      "middleware": ["auth", "rateLimit"]
+    },
+    {
+      "method": "GET",
+      "path": "/api/payments/:id",
+      "handler": "src/routes/payments.ts::getPayment",
+      "framework": "express"
+    },
+    {
+      "method": "POST",
+      "path": "/webhooks/stripe",
+      "handler": "src/webhooks/stripe.ts::handleWebhook",
+      "framework": "express",
+      "middleware": ["verifyStripeSignature"]
+    }
+  ],
   "entry_points": [
     {"path": "src/server.ts", "type": "http", "description": "Express app, port 3000"},
     {"path": "src/workers/reconciliation.ts", "type": "cron", "description": "Daily 2am UTC"}
   ],
   "hot_zones": [
-    {"path": "src/processing/state-machine.ts", "commits_30d": 45, "reason": "active refactor"}
+    {"path": "src/processing/state-machine.ts", "commits_30d": 45, "risk": "high", "reason": "active refactor, 18 callers"}
   ],
   "risk_areas": [
-    {"path": "src/legacy/", "reason": "high churn + zero test coverage"}
-  ]
+    {"module": "legacy", "dimension": "test_gap", "score": 0.8, "detail": "high churn + zero test coverage"},
+    {"module": "webhooks", "dimension": "security_surface", "score": 0.6, "detail": "external input, signature verification critical"}
+  ],
+  "dead_code": [
+    {"id": "src/legacy/old-processor.ts::legacyProcess", "last_touched": "2026-01-15", "confidence": 0.9}
+  ],
+  "dependencies": {
+    "processing → database": {"edges": 23, "direction": "downstream"},
+    "webhooks → processing": {"edges": 8, "direction": "upstream"}
+  }
 }
+```
+
+**v2 additions over v1:**
+
+| Field | Purpose | Value to Agent |
+|-------|---------|----------------|
+| `routes` | URL→handler mapping (framework-aware) | Agent finds handler in 1 lookup instead of 3-5 grep attempts |
+| `repo.languages` + `total_symbols/edges` | Quantified codebase size | Agent calibrates exploration scope |
+| `modules[].cohesion` | Internal vs external edge ratio | Agent knows which modules are tightly coupled |
+| `hot_zones[].risk` | Scored severity (not just listed) | Agent prioritizes caution |
+| `risk_areas[].score` | 0-1 per dimension | Machine-readable risk, not prose |
+| `dead_code` | Unused exported symbols with last-touch date | Agent can suggest cleanup; won't call dead functions |
+| `dependencies` (directional) | Blast radius shortcut | Agent knows "change X → check Y" without traversing graph |
+| `$schema` | JSON Schema URL | Tooling can validate, IDE can provide autocomplete |
+
+**Git strategy:** code-intel.json is **committed** in AI-Ready-Repo output (cold-start agents need it). SwarmAI internal equivalent stays in SQLite (FS watcher keeps it real-time, no git churn).
 ```
 
 ---
@@ -365,13 +422,15 @@ project-root/
 
 - **Code Intelligence**: LLM reads code → builds module graph (deps, entry points, responsibilities)
 - **Module detection**: File structure + import patterns → identify boundaries
+- **Route extraction** (v2): Detect web framework → parse URL→handler mappings → populate `routes[]` in code-intel.json. Supported Day 1: FastAPI, Express, Next.js. Regex-first detection (decorators/route definitions have predictable syntax). Framework auto-detected from imports/package.json/requirements.txt.
 - **Entry points**: Trace API surface, CLI commands, event handlers, workers
 - **Pattern extraction**: Naming conventions, error handling style, test patterns
-- **Hot zones**: git log → frequently modified files (30 days)
+- **Hot zones**: git log → frequently modified files (30 days), scored by callers × churn
 - **Tribal knowledge mining**: git blame + commit messages → gotchas
   - Grammar: WHEN [trigger] → RISK [what breaks] → BECAUSE [evidence: commit hash/date]
   - Rule: if evidence slot can't be filled, drop the gotcha
-- **Risk areas**: high churn ∩ low test coverage
+- **Risk areas**: 6-dimension scoring (module_spread, test_gap, caller_count, security_surface, file_churn, module_crossing) — each 0.0-1.0
+- **Dead code detection**: Exported non-entry-point symbols with zero incoming edges
 - **Build verification**: Actually run build + test commands, confirm they work
 
 ### Phase 4: ENRICH (Human Touchpoint #2)
@@ -404,9 +463,12 @@ Produce all DDD files + AGENTS.md + code-intel.json + REVIEW-REPORT.md.
 Uses SwarmAI's existing sub-agent mechanism (same as adversarial review):
 - Spawn via Claude SDK with worktree isolation
 - System prompt contains ONLY generated artifacts (no session history, no DDD)
-- 3 tasks selected from git log (most recent bug fix, most recent feature, most recent refactor)
-- **Pass criteria**: agent identifies correct file within 2 tool calls, doesn't violate any Critical Rule from AGENTS.md
-- **Fail**: specific failure reason fed back to GENERATE (max 2 iterations)
+- 3 tasks selected from git log:
+  - **Selection**: most recent bug fix (commit with `fix:`/`hotfix:`), most recent feature (`feat:`), most recent refactor (`refactor:`/large-diff non-feature). Falls back to most recent 3 commits of any type if conventional commits not used.
+  - **Fallback (git history < 10 commits)**: Synthesize 3 tasks from README + TECH.md: (1) "add an endpoint following existing patterns", (2) "find where to fix a bug in module X", (3) "run the test suite". These test navigation, convention compliance, and build understanding.
+- **Pass criteria**: agent identifies correct file within 2 tool calls, doesn't violate any Critical Rule from AGENTS.md, produces a plausible approach (not "I don't know where to look")
+- **Fail criteria**: agent navigates to wrong module, violates stated convention, or requires >4 tool calls to orient. Specific failure reason fed back to GENERATE (max 2 iterations)
+- **New project (no meaningful history)**: VERIFY tests only navigation and convention compliance (Levels 1-2). Tribal knowledge validation (Level 3) skipped — IMPROVEMENT.md will be skeletal by design.
 
 ### Phase 7: DELIVER
 
@@ -504,13 +566,14 @@ Static artifacts become actively misleading as code evolves. Stale context is wo
 `ai-ready-parser.sh` — bash + jq, language-agnostic:
 - Detects new/removed directories
 - Detects config file changes (package.json, pyproject.toml, Makefile, Cargo.toml, go.mod, pom.xml)
-- Detects new files matching API/route patterns
+- Detects new files matching API/route patterns (v2: also detects route decorator changes)
+- Re-extracts routes when router files change (regex-based, zero LLM — route decorators are syntactically predictable)
 - Counts commits since last refresh
 - Updates file-tree hash in ai-ready.json
 
 Two modes:
 - `--check-only`: exit 0 (fresh) / exit 1 (stale) — used by hook
-- `--refresh`: Update code-intel.json structural data from file tree + git log
+- `--refresh`: Update code-intel.json structural data (modules + routes + hot zones) from file tree + git log
 
 ### Tier 2: Refresh Skill (IDE Agent Executes)
 
@@ -667,14 +730,18 @@ User: "Yes"
 → TECH.md ## Conventions: "NEVER use raw SQL. ALWAYS access DB through repository pattern."
 ```
 
-### Classification Logic
+### Classification Logic (LLM Intent Classification)
 
-| Input Signal | Target File | Keywords |
+Classification is **LLM-driven intent analysis**, not keyword matching. The LLM reads the full statement in context and classifies by semantic intent. The table below shows representative signal patterns — they are training examples for the prompt, not an exhaustive rule set:
+
+| Input Signal | Target File | Example Patterns |
 |---|---|---|
 | Purpose, audience, constraints | PRODUCT.md | "users are", "out of scope", "compliance", "we don't do" |
 | Architecture, conventions, patterns | TECH.md | "always use", "never call", "pattern", "convention" |
 | Failures, gotchas, incidents | IMPROVEMENT.md | "burned by", "don't touch", "broke when", "revert" |
 | Priorities, blockers, decisions | PROJECT.md | "this quarter", "blocked", "decided to", "don't change until" |
+
+**Multi-language support**: LLM classification works identically across English, Chinese, and mixed-language repos — no tokenization or keyword boundary assumptions. The model understands intent regardless of language.
 
 ### Rules
 - NEVER overwrite existing entries (append only)
@@ -727,7 +794,7 @@ Day 90: SwarmAI Tier 3 re-gen (reads all learned entries as baseline, never lose
 
 ---
 
-## AI-Ready Score (8 Dimensions)
+## AI-Ready Score (9 Dimensions)
 
 | Dimension | 0 (unusable) | 5 (passable) | 10 (excellent) |
 |-----------|---|---|---|
@@ -736,9 +803,12 @@ Day 90: SwarmAI Tier 3 re-gen (reads all learned entries as baseline, never lose
 | **Architecture** | Black box | README describes but doesn't match | DDD TECH.md matches reality, boundaries clear |
 | **Conventions** | No rules | Scattered in comments | Structured, prescriptive, agent-executable |
 | **Tribal Knowledge** | All in people's heads | Some in commit messages | IMPROVEMENT.md: evidence-grounded, current |
-| **Code Graph** | None | Partial module awareness | Full deps + entry points + blast radius |
+| **Code Graph** | None | Partial module awareness | Full deps + entry points + blast radius + dead code |
+| **Route Coverage** | Web framework detected, no route map | Partial routes (main app only) | All URL→handler mapped, middleware visible |
 | **Test Safety** | No tests | Tests exist but broken CI | CI + coverage + safety-critical paths identified |
 | **Ops Context** | Don't know how to deploy | Runbook somewhere | Deploy chain + dashboards + alarms + on-call |
+
+> **Route Coverage** added in v2 (2026-05-30): For web projects, knowing "POST /api/payments → processPayment()" saves the agent 3-5 tool calls per endpoint interaction. Score formula: `detected_routes / (detected_routes + unresolved_handler_references)`. Non-web projects (CLI, library) get automatic 10/10 (not applicable = no penalty).
 
 ---
 
@@ -831,6 +901,49 @@ Day 90: SwarmAI Tier 3 re-gen (reads all learned entries as baseline, never lose
 
 ---
 
+## Token Budget & Progressive Loading
+
+### Target Artifact Sizes
+
+| Artifact | Target Size | Tokens (~) | Rationale |
+|----------|------------|-----------|-----------|
+| AGENTS.md | ≤150 lines | ~2,000 | Entry point — always loaded, must fit in any IDE's steering window |
+| PRODUCT.md | 80-200 lines | 1,500-3,500 | Business context, loaded for design/priority tasks |
+| TECH.md | 150-400 lines | 2,500-6,000 | Most detail-heavy; loaded for coding tasks |
+| IMPROVEMENT.md | 50-150 lines | 800-2,500 | Gotchas + history; loaded for refactors and bug fixes |
+| PROJECT.md | 30-80 lines | 500-1,200 | Most volatile; loaded for planning tasks |
+| code-intel.json | Varies by repo | 2,000-8,000 | Module graph; loaded for navigation and blast radius |
+| **Total (all loaded)** | | **~10K-23K** | Well within model context windows (1M). Note: Claude Code's per-task budget defaults to 128K — artifacts + tool results must fit within this, not just the model window. See "Implementation Pitfalls P2" below. |
+
+### Progressive Loading Strategy
+
+Not all artifacts load simultaneously. The agent entry point (AGENTS.md) includes a loading directive:
+
+```markdown
+## Deep Context (DDD)
+Load based on task type — do NOT load all at once:
+- Coding tasks → TECH.md + IMPROVEMENT.md + code-intel.json
+- Design decisions → PRODUCT.md + IMPROVEMENT.md  
+- Planning → PROJECT.md + PRODUCT.md
+- Bug fixes → IMPROVEMENT.md + TECH.md + code-intel.json
+- "I don't know where to start" → code-intel.json only
+```
+
+### IDE Context Window Compatibility
+
+| IDE/Agent | Context Window | Budget for AI-Ready | Strategy |
+|-----------|---------------|--------------------|---------| 
+| Claude Code (1M) | ~1,000K | Unlimited — load all | Full injection, no concern |
+| Kiro (steering) | ~8K steering + on-demand | 2K steering + on-demand file reads | AGENTS.md in steering; DDD loaded via skill |
+| Codex (128K) | ~128K | ~30K available | Progressive loading (2-3 files per task) |
+| Future agents (32K budget) | 32K | ~8K available | AGENTS.md only (Level 1); DDD via tool calls |
+
+**Design invariant**: AGENTS.md (≤2K tokens) must be self-sufficient for Level 1 (navigation + build + conventions). DDD files are strictly additive depth — the system degrades gracefully at any context window size.
+
+**Enforcement**: GENERATE phase runs token count on all artifacts. If any single DDD file exceeds 6K tokens → automatically splits into `{FILE}-summary.md` (≤2K, always loaded) + `{FILE}-detail.md` (on-demand reference). This ensures compatibility with constrained environments without sacrificing depth.
+
+---
+
 ## Design Principles
 
 | # | Principle | Source | Implementation |
@@ -847,6 +960,45 @@ Day 90: SwarmAI Tier 3 re-gen (reads all learned entries as baseline, never lose
 | 10 | **Knowledge must evolve or die** | DDD Cultivation | Freshness tracking, decay markers, staleness detection |
 | 11 | **Judgment > Description** | DDD | "Never call X directly" (judgment) beats "X exists" (description) |
 | 12 | **Evidence-grounded** | Bootstrapper + DDD | Tribal knowledge backed by commit hash/issue — if can't ground, don't write |
+
+---
+
+## Implementation Pitfalls (Learned 2026-06-01)
+
+Traps discovered during SwarmAI production that the Engine MUST avoid in generated artifacts and in its own execution:
+
+### P1: Hook/Context Injection Dedup
+
+**Trap**: IDE hooks (PreToolUse, system-reminders) inject context on every tool call. If the same file is accessed 20 times, the same annotation is injected 20 times — burning ~5K tokens of task budget on zero-information-gain noise.
+
+**For the Engine**: Any generated hooks (e.g. Code Intel annotations, linting context) MUST include per-session dedup. First access → inject. Subsequent → skip. Implementation: `_seen_files: set` in hook closure.
+
+**For generated AGENTS.md**: Keep it under 150 lines (already a principle), but also note: AGENTS.md is injected on EVERY system-reminder refresh. If it contains redundant info already in the system prompt, it doubles the cost.
+
+### P2: Task Budget ≠ Context Window
+
+**Trap**: Claude Code CLI has a `task_budget` (default 128K tokens) that triggers autocompact when a single user→agent interaction chain exceeds it. This is SEPARATE from the model's context window (1M). Deep investigations that read many files hit 128K in tool results alone → mid-task compaction → agent loses all accumulated understanding.
+
+**For the Engine**: When generating artifacts for large codebases (>500 files), the UNDERSTAND phase will consume many tool calls. The Engine MUST:
+1. Set `task_budget=800_000` for desktop execution (or higher if available)
+2. Use progressive summarization during INGEST — don't dump raw file content into context; extract key patterns first, then deep-dive selectively
+3. Prefer `Grep` (returns lines) over `Read` (returns full segments) for exploration
+4. Use sub-agents for parallelizable analysis — each sub-agent gets its own task budget
+
+### P3: Generated Artifacts Must Not Duplicate System Prompt Content
+
+**Trap**: If AGENTS.md repeats info from CLAUDE.md or other always-loaded files, every API call pays double tokens for the same content. With 85 skills × 71 tok = 6K already in system prompt, duplicating conventions/rules wastes budget fast.
+
+**For the Engine**: During GENERATE, cross-reference existing CLAUDE.md / settings.json. If a rule already exists there, reference it (`See CLAUDE.md`) rather than restating it in AGENTS.md.
+
+### P4: Avoid Tool-Loop Patterns in Generated Refresh Skills
+
+**Trap**: Refresh/maintenance skills that re-read the same files repeatedly trigger CompactionGuard (tool-loop detection) which kills the session. If the generated "ai-ready-refresh" skill reads all N modules sequentially, it looks like a loop to the guard.
+
+**For the Engine**: Generated refresh skills should:
+1. Use `git diff --stat` first to identify CHANGED files only (not re-scan everything)
+2. Batch file reads with distinct patterns (not sequential reads of the same directory)
+3. Include a `# unique-salt: {timestamp}` in tool inputs to avoid hash collisions that trigger consecutive-identical-call detection
 
 ---
 
