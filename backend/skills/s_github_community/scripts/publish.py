@@ -1,7 +1,12 @@
 """GitHub Community Engine — PUBLISH stage.
 
-Posts comments to GitHub with confidence gate, engagement logging, and dry-run support.
+Posts comments to GitHub Issues/PRs AND Discussions with confidence gate,
+engagement logging, and dry-run support.
 Enforces the 4-condition quality gate before any publish.
+
+Handles both:
+  - Issues/PRs: REST API /repos/{owner}/{repo}/issues/{number}/comments
+  - Discussions: GraphQL addDiscussionComment mutation
 
 Usage:
   python -m skills.s_github_community.scripts.publish \
@@ -32,7 +37,7 @@ def get_weekly_comment_count(repo: str) -> int:
         for line in f:
             try:
                 entry = json.loads(line.strip())
-                if entry.get("repo") == repo:
+                if entry.get("repo") == repo and entry.get("status") == "published":
                     posted_at = entry.get("posted_at", "")
                     if posted_at:
                         entry_ts = datetime.fromisoformat(posted_at.replace("Z", "+00:00")).timestamp()
@@ -77,6 +82,108 @@ def quality_gate(confidence: int, repo: str, body: str) -> tuple[bool, str]:
     return True, "passed"
 
 
+def _resolve_target(repo: str, number: int) -> tuple[str, str | None]:
+    """Determine if target is an Issue/PR or a Discussion.
+
+    Returns (target_type, node_id):
+      - ("issue", None) — use REST API
+      - ("discussion", "D_kwDO...") — use GraphQL
+      - ("not_found", None) — target doesn't exist
+    """
+    # Try as Issue/PR first (most common case)
+    try:
+        proc = subprocess.run(
+            ["gh", "api", f"repos/{repo}/issues/{number}", "--jq", ".node_id"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            return "issue", None
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        return "error", str(e)
+
+    # Try as Discussion (GraphQL)
+    owner, name = repo.split("/")
+    gql = json.dumps({
+        "query": f'{{ repository(owner: "{owner}", name: "{name}") {{ discussion(number: {number}) {{ id }} }} }}'
+    })
+    try:
+        proc = subprocess.run(
+            ["gh", "api", "graphql", "--input", "-"],
+            input=gql, capture_output=True, text=True, timeout=15,
+        )
+        if proc.returncode == 0:
+            data = json.loads(proc.stdout)
+            disc = data.get("data", {}).get("repository", {}).get("discussion")
+            if disc and disc.get("id"):
+                return "discussion", disc["id"]
+    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
+        pass
+
+    return "not_found", None
+
+
+def _publish_to_issue(repo: str, number: int, body: str) -> dict:
+    """Post comment via REST API (Issues/PRs)."""
+    cmd = [
+        "gh", "api", f"repos/{repo}/issues/{number}/comments",
+        "-X", "POST", "-f", f"body={body}", "--jq", ".id,.html_url",
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if proc.returncode == 0:
+        lines = proc.stdout.strip().split("\n")
+        return {
+            "published": True,
+            "status": "published",
+            "comment_id": int(lines[0]) if lines and lines[0].isdigit() else None,
+            "comment_url": lines[1] if len(lines) > 1 else None,
+        }
+    return {
+        "published": False,
+        "status": "error",
+        "error": proc.stderr[:200],
+    }
+
+
+def _publish_to_discussion(repo: str, number: int, body: str, discussion_id: str) -> dict:
+    """Post comment via GraphQL mutation (Discussions)."""
+    # Escape body for GraphQL JSON
+    escaped_body = body.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    mutation = json.dumps({
+        "query": f'mutation {{ addDiscussionComment(input: {{discussionId: "{discussion_id}", body: "{escaped_body}"}}) {{ comment {{ id url }} }} }}'
+    })
+    proc = subprocess.run(
+        ["gh", "api", "graphql", "--input", "-"],
+        input=mutation, capture_output=True, text=True, timeout=30,
+    )
+    if proc.returncode == 0:
+        try:
+            data = json.loads(proc.stdout)
+            comment = data.get("data", {}).get("addDiscussionComment", {}).get("comment", {})
+            if comment.get("url"):
+                return {
+                    "published": True,
+                    "status": "published",
+                    "comment_id": comment.get("id"),
+                    "comment_url": comment["url"],
+                    "target_type": "discussion",
+                }
+        except json.JSONDecodeError:
+            pass
+    return {
+        "published": False,
+        "status": "error",
+        "error": f"graphql_error: {proc.stderr[:100] or proc.stdout[:100]}",
+        "target_type": "discussion",
+    }
+
+
+def _log_result(result: dict) -> None:
+    """Append result to engagement log."""
+    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
+    with open(ENGAGEMENT_LOG, "a") as f:
+        f.write(json.dumps(result, default=str) + "\n")
+
+
 def publish_comment(
     repo: str,
     issue_number: int,
@@ -87,6 +194,7 @@ def publish_comment(
 ) -> dict:
     """Publish a comment to GitHub with full quality gate.
 
+    Automatically detects Issue/PR vs Discussion and uses the correct API.
     Returns result dict with status, comment_id (if published), reason.
     """
     # Run quality gate
@@ -117,43 +225,66 @@ def publish_comment(
         result["status"] = "dry_run"
         return result
 
-    # Publish via gh api
-    cmd = [
-        "gh", "api", f"repos/{repo}/issues/{issue_number}/comments",
-        "-X", "POST", "-f", f"body={body}", "--jq", ".id,.html_url",
-    ]
+    # Resolve target type (Issue/PR vs Discussion)
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        if proc.returncode == 0:
-            lines = proc.stdout.strip().split("\n")
-            result["comment_id"] = int(lines[0]) if lines else None
-            result["comment_url"] = lines[1] if len(lines) > 1 else None
-            result["published"] = True
-            result["status"] = "published"
-            print(f"✓ Published: {result['comment_url']}")
-        else:
-            result["status"] = "error"
-            result["error"] = proc.stderr[:200]
-            print(f"✗ Failed: {proc.stderr[:200]}")
+        target_type, node_id = _resolve_target(repo, issue_number)
+    except Exception as e:
+        result["status"] = "error"
+        result["error"] = f"resolve_failed: {type(e).__name__}: {e}"
+        print(f"✗ Cannot resolve target: {e}")
+        _log_result(result)
+        return result
+
+    if target_type == "not_found":
+        result["status"] = "error"
+        result["error"] = f"target_not_found: {repo}#{issue_number} (not an Issue, PR, or Discussion)"
+        print(f"✗ Target not found: {repo}#{issue_number}")
+        _log_result(result)
+        return result
+
+    if target_type == "error":
+        result["status"] = "error"
+        result["error"] = f"resolve_error: {node_id}"
+        print(f"✗ Error resolving target: {node_id}")
+        _log_result(result)
+        return result
+
+    # Publish to the correct endpoint
+    result["target_type"] = target_type
+    try:
+        if target_type == "issue":
+            pub_result = _publish_to_issue(repo, issue_number, body)
+        else:  # discussion
+            pub_result = _publish_to_discussion(repo, issue_number, body, node_id)
     except subprocess.TimeoutExpired:
         result["status"] = "timeout"
-        print("✗ Timeout publishing comment")
+        print(f"✗ Timeout publishing to {target_type}")
+        _log_result(result)
+        return result
+    except FileNotFoundError:
+        result["status"] = "error"
+        result["error"] = "gh_not_found: 'gh' CLI not in PATH"
+        print("✗ 'gh' CLI not found in PATH")
+        _log_result(result)
+        return result
 
-    # Log to engagement log (always, even on failure)
-    log_entry = {**result, "status": result.get("status", "unknown")}
-    ARTIFACTS_DIR.mkdir(parents=True, exist_ok=True)
-    with open(ENGAGEMENT_LOG, "a") as f:
-        f.write(json.dumps(log_entry, default=str) + "\n")
+    result.update(pub_result)
 
+    if result["published"]:
+        print(f"✓ Published ({target_type}): {result['comment_url']}")
+    else:
+        print(f"✗ Failed ({target_type}): {result.get('error', 'unknown')}")
+
+    _log_result(result)
     return result
 
 
 def main():
     """CLI entry point."""
     import argparse
-    parser = argparse.ArgumentParser(description="Publish comment to GitHub")
+    parser = argparse.ArgumentParser(description="Publish comment to GitHub (Issues/PRs + Discussions)")
     parser.add_argument("--repo", required=True, help="owner/repo")
-    parser.add_argument("--issue", type=int, required=True, help="Issue/PR number")
+    parser.add_argument("--issue", type=int, required=True, help="Issue/PR/Discussion number")
     parser.add_argument("--body", required=True, help="Comment body text")
     parser.add_argument("--confidence", type=int, required=True, help="Confidence score 1-10")
     parser.add_argument("--topic", default="unknown", help="Topic ID (T-XXX)")
