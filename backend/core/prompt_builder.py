@@ -1260,10 +1260,49 @@ class PromptBuilder:
         if channel_context and (max_turns is None or max_turns > 15):
             max_turns = 15
 
+        # ── Task budget: per-task token limit for CLI autocompact ─────
+        #
+        # DISCOVERY (2026-06-01): CLI default task_budget = 128K tokens.
+        # When a single user→agent interaction chain (including all tool
+        # call results) exceeds 128K, CLI triggers autocompact mid-task,
+        # destroying accumulated context and causing the agent to "forget"
+        # what it just read.
+        #
+        # For 1M models this is absurdly conservative — deep code
+        # investigations routinely hit 200-400K in tool results alone.
+        # The 128K default makes complex tasks fail reliably.
+        #
+        # FIX: Set 800K for desktop chat tabs (user present, can stop).
+        # Channel sessions get 400K (unattended but needs to read large
+        # docs; max_turns=15 is the independent safety cap for runaway).
+        #
+        # Evidence: session 59b18ce8 compacted 3 times at ~100-123K
+        # tokens while investigating a bug in a 3200-line file.
+        # Context window was 1M — compact threshold should be 987K.
+        # But task_budget (128K) fired first.
+        #
+        # Risk: Higher budget = more expensive runaway if agent loops.
+        # Mitigated by: max_turns=15 (channel), user stop (desktop),
+        # CompactionGuard (tool loop detection).
+        if channel_context:
+            # Channel: unattended but must handle large docs.
+            # max_turns=15 caps total interaction length independently.
+            task_budget = {"total": 400_000}
+        else:
+            # Desktop chat: user is present, generous budget
+            task_budget = {"total": 800_000}
+
         return ClaudeAgentOptions(
             system_prompt=system_prompt_config,
             allowed_tools=allowed_tools if allowed_tools else None,
-            disallowed_tools=mcp_disallowed_tools if mcp_disallowed_tools else [],
+            # Disallow Task* tools — we don't use them and their presence
+            # triggers periodic "task tools haven't been used" system-reminder
+            # noise (~100 tokens × 10+ per session = 1K+ wasted tokens).
+            disallowed_tools=[
+                *(mcp_disallowed_tools or []),
+                "TaskCreate", "TaskGet", "TaskList",
+                "TaskOutput", "TaskStop", "TaskUpdate",
+            ],
             mcp_servers=mcp_servers if mcp_servers else None,
             plugins=None,
             permission_mode=permission_mode,
@@ -1283,4 +1322,5 @@ class PromptBuilder:
             thinking=thinking_config,
             effort=effort,
             max_turns=max_turns,
+            task_budget=task_budget,
         )
