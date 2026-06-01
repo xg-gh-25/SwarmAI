@@ -1,0 +1,12 @@
+# Manifest for translate
+name: translate
+version: "1.1.0"
+tier: lazy
+
+scripts:
+  - path: scripts/md_freeze.py
+    description: "Freeze-Translate-Stitch for safe Markdown translation. Subcommands: freeze (extract fenced code blocks behind sentinels + emit prose skeleton), stitch (reinsert byte-identical blocks), verify (structural equivalence: fence count, per-block byte identity, heading/table counts)."
+    entry: true
+
+resources:
+  - scripts

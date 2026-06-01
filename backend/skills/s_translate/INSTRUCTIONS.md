@@ -2,6 +2,72 @@
 
 Translate text, documents, and structured files between languages. Zero external dependencies -- uses Claude's built-in multilingual capabilities plus optional free verification APIs.
 
+## 🚨 Decision Gate (read FIRST)
+
+Pick the path BEFORE translating. Choosing wrong is why document translation
+feels slow and risky (re-emitting code blocks, silently dropping segments).
+
+| Situation | Path | Why |
+|-----------|------|-----|
+| Short prose, inline text, chat snippet | **Inline** — translate directly (existing Workflow below) | No structure to protect; overhead not worth it |
+| i18n bundle (JSON/YAML/.strings/.properties) | **i18n mode** (existing Workflow) | Values-only translation, keys preserved |
+| **Markdown doc that is code-dense OR >300 lines** | **MUST use Freeze-Translate-Stitch** (next section) | Re-emitting fenced blocks wastes tokens and risks silent drift; a script guarantees byte-identical code + structural verification |
+
+**This gate is mandatory, not advisory.** Translating a 1000-line design doc by
+"read whole doc → rewrite whole doc" regenerates every code block verbatim — slow,
+and one silent edit corrupts the output with no warning. The freeze path makes the
+verbatim content untouchable by construction and *proves* completeness afterward.
+
+### Model routing (mechanical translation)
+
+Document translation is mechanical work. Prefer **Sonnet** over Opus for the
+skeleton-translation step (3-5x faster, quality sufficient for prose). Either set
+the tab's model to Sonnet, or spawn a sub-agent to translate the skeleton while the
+main session stays free. Opus is overkill for prose translation.
+
+## Freeze-Translate-Stitch (code-dense / large markdown docs)
+
+Deterministic pipeline. The script (`scripts/md_freeze.py`, stdlib-only) protects
+all fenced code blocks; you translate only prose; then you verify nothing drifted.
+
+```bash
+SC=scripts/md_freeze.py   # relative to this skill dir
+
+# 1. FREEZE — pull fenced blocks out behind ⟦FROZEN_N⟧ sentinels
+python "$SC" freeze input.md --skeleton input.skeleton.md --blocks input.blocks.json
+
+# 2. TRANSLATE — translate ONLY input.skeleton.md (the prose).
+#    NEVER touch ⟦FROZEN_N⟧ lines. Write the result to input.skeleton.zh.md.
+#    (This is the only LLM step. Use Sonnet — see model routing above.)
+
+# 3. STITCH — reinsert byte-identical original blocks
+python "$SC" stitch input.skeleton.zh.md input.blocks.json -o output.zh.md
+
+# 4. VERIFY — prove structural equivalence (exit 0 = safe)
+python "$SC" verify input.md output.zh.md
+```
+
+**Rules for the TRANSLATE step:**
+- Translate prose, headings, list items, and table-cell text in the skeleton.
+- Leave every `⟦FROZEN_N⟧` line exactly as-is (one per line, do not merge/reorder).
+- Preserve inline `` `code` ``, URLs, and `<!-- HTML comments -->` verbatim — these
+  are NOT frozen by the script (they live in prose), so it's on you to keep them.
+- Do not add or remove headings/table rows — `verify` counts them and will FAIL on drift.
+
+**Interpreting `verify`:**
+- `PASS` → fence count, every block's bytes, heading count, and table-row count all match. Safe to ship.
+- `FAIL: FENCE/HEADING/TABLE COUNT mismatch` → you dropped or added structure. Fix the skeleton, re-stitch.
+- `FAIL: BLOCK N altered` → a fenced block's content changed. **This is strict by design** — it flags EVERY change to fenced content. Decide per block:
+  - It's real code/JSON/config → the change is a bug; the freeze path should have protected it (check you didn't hand-edit the block). Re-stitch from the sidecar.
+  - It's *prose inside a fence* (e.g., an illustrative pseudo-flow diagram you intentionally translated) → acceptable; note it and proceed. The tool surfaces it so a human judges; it never silently passes.
+
+**Edge behavior (handled by the script):**
+- Both ` ``` ` and `~~~` fences, with or without language tags.
+- A ` ```markdown ` template whose body contains headings/tables/comments → frozen as one block, inner structure NOT counted (correct).
+- Unclosed fence at EOF → closed defensively with a stderr warning (no hang).
+- Source already containing `⟦FROZEN_` → aborts with a clear error (sentinel collision).
+- Re-running `freeze` on the same input is deterministic (same skeleton + blocks).
+
 ## Workflow
 
 ### Step 1: Parse the Request
