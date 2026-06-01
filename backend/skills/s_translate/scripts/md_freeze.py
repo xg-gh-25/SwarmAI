@@ -51,6 +51,42 @@ class SplitResult:
         self.unclosed = unclosed    # True if a fence was left open at EOF (closed defensively)
 
 
+def _split_lines_keepends(text: str) -> list:
+    """Split into lines on Markdown line breaks ONLY (\\n, \\r\\n, lone \\r), keeping terminators.
+
+    Deliberately NOT ``str.splitlines()``: the stdlib splits on eight extra
+    Unicode/control characters (VT \\x0b, FF \\x0c, FS \\x1c, GS \\x1d, RS \\x1e,
+    NEL \\x85, LS U+2028, PS U+2029) that CommonMark does NOT treat as line
+    breaks. If a fenced code block contained one of those followed by a fence
+    marker, ``splitlines`` would break there and a spurious ``` could close the
+    block early — leaking real code into the translatable skeleton. This splitter
+    is the single source of line truth for freeze, stitch, and structure counting.
+    """
+    lines: list = []
+    n = len(text)
+    i = start = 0
+    while i < n:
+        c = text[i]
+        if c == "\n":
+            lines.append(text[start:i + 1])
+            i += 1
+            start = i
+        elif c == "\r":
+            # \r\n is one break; a lone \r is also a break.
+            if i + 1 < n and text[i + 1] == "\n":
+                lines.append(text[start:i + 2])
+                i += 2
+            else:
+                lines.append(text[start:i + 1])
+                i += 1
+            start = i
+        else:
+            i += 1
+    if start < n:
+        lines.append(text[start:])  # final line without a trailing break
+    return lines
+
+
 def _fence_marker(line: str) -> str | None:
     """Return the fence run ('```' or '~~~...') if `line` opens/closes a fence, else None."""
     m = _FENCE_RE.match(line)
@@ -68,9 +104,9 @@ def split_blocks(text: str) -> SplitResult:
     the same way), guaranteeing the two never disagree on what counts as a block.
     """
     # Preserve exact line content including the trailing newline so reassembly is
-    # byte-perfect. splitlines(keepends=True) keeps each line's own terminator (or none
-    # for a final line without a trailing newline).
-    lines = text.splitlines(keepends=True)
+    # byte-perfect. Use the Markdown-only splitter (NOT str.splitlines) so Unicode/
+    # control separators inside code blocks are never mistaken for line breaks.
+    lines = _split_lines_keepends(text)
 
     skeleton_parts: list[str] = []
     blocks: list[str] = []
@@ -145,21 +181,29 @@ def freeze_text(text: str) -> tuple[str, dict, bool]:
 def stitch_text(skeleton: str, payload: dict) -> str:
     """Reassemble by replacing each sentinel line with its byte-identical block.
 
-    Fails loud (ValueError) if a referenced block is missing or a block is never used —
-    a silent mismatch here would defeat the entire point of the tool (LL18).
+    Fails loud (ValueError) if the sidecar is the wrong shape, a referenced block is
+    missing, a block value is not a string, or a block is never used — a silent
+    mismatch here would defeat the entire point of the tool (LL18).
     """
+    if not isinstance(payload, dict):
+        raise ValueError(f"blocks sidecar must be a JSON object, got {type(payload).__name__}.")
     blocks = payload.get("blocks", {})
+    if not isinstance(blocks, dict):
+        raise ValueError(f"blocks['blocks'] must be a JSON object, got {type(blocks).__name__}.")
     used: set[str] = set()
     out_parts: list[str] = []
 
-    for line in skeleton.splitlines(keepends=True):
+    for line in _split_lines_keepends(skeleton):
         bare = line.rstrip("\r\n")
         m = _SENTINEL_RE.match(bare)
         if m:
             key = m.group(1)
             if key not in blocks:
                 raise ValueError(f"Skeleton references {SENTINEL_PREFIX}{key}{SENTINEL_SUFFIX} but blocks.json has no block {key}.")
-            out_parts.append(blocks[key])
+            block = blocks[key]
+            if not isinstance(block, str):
+                raise ValueError(f"Block {key} must be a string, got {type(block).__name__} — blocks.json is corrupt.")
+            out_parts.append(block)
             used.add(key)
         else:
             out_parts.append(line)
@@ -176,7 +220,7 @@ def stitch_text(skeleton: str, payload: dict) -> str:
 def _count_structure(skeleton: str) -> tuple[int, int]:
     """Count ATX headings and table rows in skeleton prose (sentinels already excluded)."""
     headings = tables = 0
-    for line in skeleton.splitlines():
+    for line in _split_lines_keepends(skeleton):
         if _SENTINEL_RE.match(line.rstrip("\r\n")):
             continue
         if _ATX_HEADING_RE.match(line):
@@ -254,9 +298,12 @@ def _cmd_freeze(args: argparse.Namespace) -> int:
 
 def _cmd_stitch(args: argparse.Namespace) -> int:
     skeleton = Path(args.skeleton).read_text(encoding="utf-8")
-    payload = json.loads(Path(args.blocks).read_text(encoding="utf-8"))
     try:
+        payload = json.loads(Path(args.blocks).read_text(encoding="utf-8"))
         out = stitch_text(skeleton, payload)
+    except json.JSONDecodeError as e:
+        print(f"error: {args.blocks} is not valid JSON: {e}", file=sys.stderr)
+        return 2
     except ValueError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

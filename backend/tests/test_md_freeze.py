@@ -255,3 +255,55 @@ def test_longer_inner_fence_does_not_falsely_close():
     assert list(payload["blocks"]) == ["0"]
     assert payload["blocks"]["0"] == text
     assert md_freeze.stitch_text(skeleton, payload) == text
+
+
+# ── Unicode/control line-separator safety (adversarial HIGH) ────────────────
+
+@pytest.mark.parametrize("sep", ["\u2028", "\u2029", "\x85", "\x0c", "\x0b", "\x1c"])
+def test_unicode_line_separators_do_not_split_blocks(sep):
+    """Chars that str.splitlines() breaks on, but Markdown does NOT, must stay inside the block.
+
+    Regression for the splitlines() over-split bug: a fenced block containing a
+    Unicode/control separator followed by a fence marker must remain ONE block,
+    not leak its code into the translatable skeleton.
+    """
+    text = f"intro\n\n```\ncode-a{sep}```\nmore code\n```\n\nouter\n"
+    skeleton, payload, unclosed = md_freeze.freeze_text(text)
+    assert not unclosed, f"sep {sep!r} caused a spurious unclosed fence"
+    assert list(payload["blocks"]) == ["0"], f"sep {sep!r} split one block into many"
+    assert "more code" not in skeleton, f"sep {sep!r} leaked code into the skeleton"
+    # And the round-trip is byte-identical.
+    assert md_freeze.stitch_text(skeleton, payload) == text
+
+
+def test_unicode_separator_roundtrip_byte_identical():
+    text = "# T\n\n```json\n{\"a\": 1}\n```\nend\n"
+    skeleton, payload, _ = md_freeze.freeze_text(text)
+    assert md_freeze.stitch_text(skeleton, payload) == text
+
+
+# ── stitch fails loud on corrupt sidecar (adversarial MED/LOW) ──────────────
+
+def test_stitch_rejects_non_dict_payload():
+    with pytest.raises(ValueError, match="must be a JSON object"):
+        md_freeze.stitch_text("# T\n", [1, 2, 3])
+
+
+def test_stitch_rejects_non_dict_blocks():
+    with pytest.raises(ValueError, match="must be a JSON object"):
+        md_freeze.stitch_text("# T\n", {"blocks": "not a dict"})
+
+
+def test_stitch_rejects_non_string_block_value():
+    skeleton = "intro\n⟦FROZEN_0⟧\nouter\n"
+    with pytest.raises(ValueError, match="must be a string"):
+        md_freeze.stitch_text(skeleton, {"blocks": {"0": 42}})
+
+
+def test_cli_stitch_malformed_json_clean_error(tmp_path):
+    sk = tmp_path / "s.md"; bl = tmp_path / "b.json"
+    sk.write_text("# T\nprose\n", encoding="utf-8")
+    bl.write_text("{not valid json", encoding="utf-8")
+    r = _run_cli("stitch", str(sk), str(bl))
+    assert r.returncode == 2
+    assert "not valid JSON" in r.stderr
