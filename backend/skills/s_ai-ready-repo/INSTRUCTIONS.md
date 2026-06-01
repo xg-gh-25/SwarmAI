@@ -36,6 +36,7 @@ Making {repo_name} genuinely understood by AI agents.
     1. INPUT     — Collect repo path + optional signals
     2. INGEST    — Parse files, detect stack, gather git history
     3. UNDERSTAND — Read code, map modules, extract patterns
+    3.5 ENRICH  — Ask user max 5 questions (what code can't tell)
     4. GENERATE  — Produce DDD artifacts (.ai-ready/ + AGENTS.md)
     5. VERIFY    — Sub-agent test: can it use the output? (3 tasks)
     6. DELIVER   — Present output + next steps to user
@@ -382,6 +383,54 @@ For routes (if web framework detected):
 - `path` — URL pattern
 - `handler` — file:function reference (VERIFIED by reading the code)
 - `framework` — detected framework name
+
+### Phase 3.5: ENRICH (Human Touchpoint #2)
+
+> Ask ONLY what the code can't tell you. Max 5 questions. All optional.
+
+**Run the helper to determine what questions to ask:**
+
+```python
+from ai_ready_helpers import generate_enrich_questions, classify_enrich_answer
+
+questions = generate_enrich_questions(info, gotchas, graph)
+# Returns: [{question, target_file, why}]
+```
+
+**Present questions to user:**
+
+```
+I've analyzed the code. A few things I can't determine from code alone:
+
+1. [PRODUCT.md] Who are the primary users, and what problem does this solve?
+   (Why: README doesn't clearly state audience)
+
+2. [PRODUCT.md] What is explicitly OUT OF SCOPE? What should this project NEVER do?
+   (Why: Non-goals prevent agents from building wrong things)
+
+3. [PROJECT.md] What are your top 1-3 priorities right now?
+   (Why: Git shows what was done, not what should be done next)
+
+Answer any/all, or say "skip" to proceed with code-only analysis.
+```
+
+**Process answers:**
+- Each answer goes into the `target_file` specified by the question
+- If user provides unsolicited info, use `classify_enrich_answer(text)` to route it
+- Tag each entry: `[source: user, 2026-06-01]`
+- NEVER rewrite user's words — add them verbatim to the appropriate file section
+
+**If user says "skip" or provides no answers:**
+- Proceed to GENERATE. PRODUCT.md and PROJECT.md will be skeletal.
+- Note in REVIEW-REPORT.md: "ENRICH skipped — PRODUCT/PROJECT are code-derived only (Level 2)"
+
+**Progress display:**
+```
+## ✦ ENRICH [Human Touchpoint #2]
+→ Asked: {N} questions | Answered: {M} | Skipped: {K}
+  Enriched: {list of files that got new content}
+  Quality boost: Level {2→3 if answered, stays 2 if skipped}
+```
 
 ### Phase 4: GENERATE
 
