@@ -1003,6 +1003,49 @@ export function useChatStreamingLifecycle(
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps — mount-only
 
+  // --- Stream checkpoint recovery ---
+  // If a stream checkpoint exists for the current session (persisted during
+  // long streaming runs), and current messages are empty or shorter than the
+  // checkpoint, restore from checkpoint. This recovers from the P0 "18 min
+  // content disappeared" bug where React state gets cleared but sessionStorage
+  // retains the accumulated content.
+  useEffect(() => {
+    const currentSessionId = sessionIdRef.current;
+    if (!currentSessionId) return;
+    const key = `swarm_stream_checkpoint_${currentSessionId}`;
+    try {
+      const raw = window.sessionStorage.getItem(key);
+      if (!raw) return;
+      const { messages: checkpointMessages, timestamp } = JSON.parse(raw);
+      // Only restore if checkpoint is recent (< 30 min) and has more content
+      const age = Date.now() - (timestamp || 0);
+      if (age > 30 * 60 * 1000) {
+        window.sessionStorage.removeItem(key);
+        return;
+      }
+      const currentMessages = messagesRef.current;
+      if (checkpointMessages && checkpointMessages.length > currentMessages.length) {
+        console.warn('[StreamCheckpoint] Restoring from checkpoint:', {
+          checkpointLen: checkpointMessages.length,
+          currentLen: currentMessages.length,
+          ageSeconds: Math.round(age / 1000),
+        });
+        setMessages(checkpointMessages);
+        const tabId = activeTabIdRef.current;
+        if (tabId) {
+          const tabState = tabMapRef.current.get(tabId);
+          if (tabState) {
+            tabState.messages = checkpointMessages;
+          }
+        }
+      }
+      // Clean up after successful restore
+      window.sessionStorage.removeItem(key);
+    } catch {
+      // Non-fatal — checkpoint recovery is best-effort
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps — mount-only
+
   // --- Fix 5: Deferred stale entry cleanup ---
   // Scan sessionStorage for stale swarm_chat_pending_* entries on mount.
   // Deferred via setTimeout so it doesn't block initial render.
@@ -1404,6 +1447,28 @@ export function useChatStreamingLifecycle(
           }
           queryClient.invalidateQueries({ queryKey: ['radar', 'wipTasks'] });
           queryClient.invalidateQueries({ queryKey: ['radar', 'completedTasks'] });
+
+          // ── Streaming content checkpoint (P0 content loss protection) ──
+          // Persist messages to sessionStorage on every result event so that
+          // even if React state is lost (SSE disconnect, error handler race,
+          // or any undiagnosed content clearing), the content survives.
+          // Recovery: restorePendingState() on mount reads it back.
+          // Only persist if we have meaningful content (>2 messages = beyond
+          // just user + empty placeholder). Uses a lightweight key distinct
+          // from ask_user_question persistence (which is removed on completion).
+          const checkpointSid = sid ?? tabState?.sessionId;
+          if (checkpointSid && tabState && tabState.messages.length > 2) {
+            try {
+              const key = `swarm_stream_checkpoint_${checkpointSid}`;
+              const payload = JSON.stringify({
+                messages: prepareMessagesForStorage(tabState.messages),
+                timestamp: Date.now(),
+              });
+              window.sessionStorage.setItem(key, payload);
+            } catch {
+              // Quota exceeded — non-fatal
+            }
+          }
 
           // Drain site A: if a queued message is waiting, keep streaming
           // state TRUE to avoid a false→true flicker that kills the
@@ -2114,10 +2179,19 @@ export function useChatStreamingLifecycle(
         if (tabState) {
           const beforeCount = tabState.messages.find((m) => m.id === assistantMessageId)?.content.length ?? 0;
           tabState.messages = applyError(tabState.messages);
-          if (import.meta.env.DEV) {
-            const afterCount = tabState.messages.find((m) => m.id === assistantMessageId)?.content.length ?? 0;
-            console.log('[ErrorHandler] tabState message content:', { beforeCount, afterCount });
-          }
+          const afterCount = tabState.messages.find((m) => m.id === assistantMessageId)?.content.length ?? 0;
+          // PRODUCTION DIAGNOSTIC: P0 content loss investigation.
+          // If beforeCount > 0 and afterCount is unexpectedly low, we have a bug.
+          // Always log in production — this is the only signal for diagnosing
+          // "18 min content disappeared" (COE07/08 class, still unresolved).
+          console.warn('[ErrorHandler] Content preservation check:', {
+            assistantMessageId,
+            beforeCount,
+            afterCount,
+            totalMessages: tabState.messages.length,
+            tabId: capturedTabId,
+            error: error.message?.slice(0, 80),
+          });
         }
 
         if (isActiveTab) {
