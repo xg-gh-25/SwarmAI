@@ -343,6 +343,104 @@ class TestImportGraphExtraction:
         # Should not crash on any repo
 
 
+# ─── Incremental Update ───
+
+class TestIncrementalUpdate:
+    """Detect changed files for incremental re-analysis."""
+
+    def test_no_changes_returns_no_update(self, tmp_path):
+        """Same commit = no update needed."""
+        from scripts.ai_ready_helpers import incremental_update, build_ai_ready_meta
+        import json
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True)
+        (repo / "main.py").write_text("x = 1")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True)
+
+        # Get current HEAD and store in meta
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True).stdout.strip()
+        output = tmp_path / "output"
+        (output / ".ai-ready").mkdir(parents=True)
+        meta = build_ai_ready_meta(5.0, "test")
+        meta["_last_commit"] = head
+        (output / ".ai-ready" / "ai-ready.json").write_text(json.dumps(meta))
+
+        result = incremental_update(output, repo)
+        assert result["needs_update"] is False
+        assert result["commits_since"] == 0
+
+    def test_new_commit_returns_changed_files(self, tmp_path):
+        """New commits since stored hash = update needed with file list."""
+        from scripts.ai_ready_helpers import incremental_update, build_ai_ready_meta
+        import json
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True)
+        (repo / "main.py").write_text("x = 1")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True)
+
+        # Store current HEAD
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True).stdout.strip()
+        output = tmp_path / "output"
+        (output / ".ai-ready").mkdir(parents=True)
+        meta = build_ai_ready_meta(5.0, "test")
+        meta["_last_commit"] = head
+        (output / ".ai-ready" / "ai-ready.json").write_text(json.dumps(meta))
+
+        # Make a new commit
+        (repo / "new_module.py").write_text("def new(): pass")
+        (repo / "main.py").write_text("x = 2")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "feat: add new module"], cwd=repo, capture_output=True)
+
+        result = incremental_update(output, repo)
+        assert result["needs_update"] is True
+        assert result["commits_since"] == 1
+        assert "main.py" in result["changed_files"]
+        assert "new_module.py" in result["new_files"]
+
+
+# ─── Learning Tour ───
+
+class TestLearningTour:
+    """Generate topologically-sorted learning order."""
+
+    def test_sorts_by_dependencies(self):
+        """Modules with no deps come first, dependents come after."""
+        from scripts.ai_ready_helpers import generate_learning_tour
+
+        graph = {
+            "modules": [
+                {"name": "app", "path": "app/", "imports_from": ["core", "utils"]},
+                {"name": "core", "path": "core/", "imports_from": ["utils"]},
+                {"name": "utils", "path": "utils/", "imports_from": []},
+            ]
+        }
+
+        tour = generate_learning_tour(graph)
+        names = [t["name"] for t in tour]
+
+        # utils has 0 deps → first
+        assert names.index("utils") < names.index("core")
+        # core depends on utils → after utils
+        assert names.index("core") < names.index("app")
+        # app depends on both → last
+
+    def test_empty_graph_returns_empty(self):
+        """Empty module list → empty tour."""
+        from scripts.ai_ready_helpers import generate_learning_tour
+        assert generate_learning_tour({"modules": []}) == []
+
+
 # ─── Staleness Detection (P3) ───
 
 class TestStalenessDetection:
