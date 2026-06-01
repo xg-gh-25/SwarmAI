@@ -227,3 +227,31 @@ def test_manifest_declares_script():
     manifest = yaml.safe_load((skill_dir / "manifest.yaml").read_text(encoding="utf-8"))
     paths = [s["path"] for s in manifest.get("scripts", [])]
     assert "scripts/md_freeze.py" in paths
+
+
+# ── Byte-identity edge cases (adversarial surface from REVIEW) ───────────────
+
+def test_roundtrip_crlf_preserved():
+    """CRLF line endings survive freeze→stitch byte-for-byte."""
+    text = "# Title\r\n\r\nprose\r\n\r\n```json\r\n{\"a\": 1}\r\n```\r\nafter\r\n"
+    skeleton, payload, _ = md_freeze.freeze_text(text)
+    out = md_freeze.stitch_text(skeleton, payload)
+    assert out == text
+
+
+def test_roundtrip_no_trailing_newline():
+    """A file whose final line has no newline reassembles exactly."""
+    text = "# Title\n\nprose\n\n```\ncode\n```"  # no trailing \n
+    skeleton, payload, _ = md_freeze.freeze_text(text)
+    out = md_freeze.stitch_text(skeleton, payload)
+    assert out == text
+
+
+def test_longer_inner_fence_does_not_falsely_close():
+    """A longer ``` line inside a ~~~ block must NOT close the ~~~ block."""
+    text = "~~~\nhere is a fenced example:\n```\nnested\n```\nstill inside tilde\n~~~\n"
+    skeleton, payload, _ = md_freeze.freeze_text(text)
+    # The entire thing is ONE tilde block (the inner ``` are content, not closers).
+    assert list(payload["blocks"]) == ["0"]
+    assert payload["blocks"]["0"] == text
+    assert md_freeze.stitch_text(skeleton, payload) == text
