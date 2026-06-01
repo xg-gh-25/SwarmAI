@@ -989,6 +989,12 @@ class SessionUnit:
         self._content_emitted = False   # Track if meaningful content is emitted
 
         # Spawn if needed (COLD → IDLE under _spawn_lock + _env_lock)
+        # Also respawn if IDLE but client is gone (CLI exited after
+        # error_max_turns — state stayed IDLE for hooks/slots, but
+        # process is dead). Transition to COLD first so _ensure_spawned
+        # works correctly.
+        if self.state == SessionState.IDLE and self._client is None:
+            self._transition(SessionState.COLD)
         if self.state == SessionState.COLD:
             async for event in self._ensure_spawned(options, config):
                 if event.get("_abort"):
@@ -2337,6 +2343,13 @@ class SessionUnit:
                     # user can send the next message to continue work.
                     self._transition(SessionState.IDLE)
                     self.last_used = time.time()
+                    # CLI exited after error_max_turns (exit code 1).
+                    # Clear process references so next send() knows to
+                    # respawn (instead of writing to dead pipe → crash →
+                    # retry). Keep _sdk_session_id intact so respawn uses
+                    # --resume and preserves conversation context.
+                    self._client = None
+                    self._wrapper = None
                     # Still emit usage/metadata for this completed segment
                     self._lifecycle_response_count += 1
                     usage = getattr(message, "usage", None) or {}
