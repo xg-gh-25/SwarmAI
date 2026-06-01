@@ -235,6 +235,17 @@ Pick files using this priority:
 **Minimum reads: 8 files.** For repos <50 files, read ALL source files.
 For repos 50-200 files, read 10-15. For repos >200 files, read 15-20.
 
+**Level 3 depth (MANDATORY for hot-zone files):** For the top 3 files by
+fix-commit count (from `parse_git_gotchas` output), read the FULL file and
+extract function-level knowledge:
+- Every public function: name, line range, signature, what it does (1 sentence)
+- Callers: which other functions call this one (from grep or import graph)
+- Gotchas: function-specific bugs/traps (from git history + code reading)
+- Data flow: what does this function receive → transform → return/write
+
+The output must be specific enough that an agent reading ONLY the DDD output
+(not the source) can identify the correct function to modify for a given bug.
+
 #### Step 3.2: Extract REAL dependencies (from import statements)
 
 **Run the helper function — this is MANDATORY, not optional:**
@@ -390,6 +401,21 @@ Generate from ACTUAL CODE ANALYSIS (Phase 3 UNDERSTAND output). Sections:
 **Quality gate: TECH.md is REJECTED if any convention lacks file citations.**
 Every "ALWAYS do X" must say "(observed in: file1.py, file2.py)".
 Every "NEVER do Y" must say "(violation would break: explanation based on code reading)".
+
+**Level 3 requirement: TECH.md MUST include function-level architecture tables**
+for the top 3 hot-zone files. Format:
+
+```markdown
+### {filename} — {description} ({N} lines, {M} fix commits)
+
+| Function | Lines | Callers | What It Does | Gotchas |
+|----------|-------|---------|-------------|---------|
+| `func_name(args)` | 100-150 | module.caller1, module.caller2 | One sentence | Specific trap |
+```
+
+Plus a **data flow diagram** showing the main E2E path through the codebase (e.g.,
+CLI → mine → process_file → add_drawer → ChromaDB). This is what makes the output
+useful for bug-fixing — agent can trace the path without reading source.
 
 End with: `<!-- user: Your additions below — refresh preserves this section -->`
 
