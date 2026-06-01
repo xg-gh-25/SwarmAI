@@ -1029,53 +1029,91 @@ _Reordered after M1 implementation. Original order assumed bash parser + fresh v
 | 4 | **M4→M5: Multi-package** | Per-package execution with cross-package synthesis. Fix 300-file cap per package (not global). | 3-repo system (frontend+backend+infra) → independent DDD + cross-deps | L (~2 sessions) | ✅ **DONE** (2026-06-01, commit 4955b97d) |
 | 5 | **M6: Published standard** | GitHub Discussion + spec repo + scoring rubric + templates | Community signal (stars, comments, forks) | S (~1 session) | ✅ **DONE** (2026-06-01, ai-ready-repo commit 1c5fb94) |
 
-**Why reordered:**
+**ALL MILESTONES COMPLETE + 5 COMPETITIVE FEATURES** (2026-06-01).
+Done in 1 session — originally estimated 7. Actual: 9 pipeline runs, 20 commits, 29 tests, ~2500 lines.
 
-| Original → New | Rationale |
-|---|---|
-| M5 IDE adapters → **Priority 1** | Simplest (= copy files + README). Customers ask "how do I install?" first. Blocked zero technical work — just file placement. |
-| M3 Verified → **Priority 2** | User-Value Probe (already implemented) is 80% of VERIFY. Only need: spawn sub-agent, give it tasks, check it finds correct functions. High value (proves output quality to customer). |
-| M2 Self-maintaining → **Priority 3** | `gather_repo_info()` + `extract_import_graph()` already exist. Staleness = compare current output vs stored `ai-ready.json` snapshot. No new bash script needed. Was overestimated. |
-| M4 Multi-package → **Priority 4** | Highest complexity (300-file cap per package, cross-package edge synthesis, parallel execution). Least urgent (single-repo covers 80% of customer scenarios). |
+---
 
-**M5 (now Priority 1) implementation sketch:**
+## Competitive Features (adopted from Understand-Anything, 2026-06-01)
 
-```bash
-#!/bin/bash
-# install.sh — zero-config, non-destructive
-set -e
+Based on analysis of [Understand-Anything](https://github.com/Lum1104/Understand-Anything) (48K stars, v2.7):
 
-SOURCE_DIR="${1:-.}"  # Directory containing AGENTS.md + .ai-ready/
-TARGET="${2:-.}"      # Target project root
+| Feature | What We Adopted | What We Kept Different |
+|---|---|---|
+| **12+ IDE support** | Platforms table in `install.sh` — one table drives all IDEs (Claude Code, Kiro, Cursor, Codex, Gemini, OpenCode, VS Code Copilot, Windsurf, Cline, Hermes, Trae, generic) | They use symlinks to skill dirs. We copy DDD files directly (no runtime dependency on plugin install). |
+| **Incremental update** | `incremental_update()` — git diff against stored commit, returns only changed source files | They fingerprint files. We use git commit hash (simpler, equally effective for git repos). |
+| **Worktree detection** | `install.sh` warns when target is ephemeral worktree + suggests main repo root | Same approach — they learned this from issue #133, we adopted their fix pattern. |
+| **Guided Tours** | `generate_learning_tour()` — topologically-sorted learning order from import graph | They use multi-agent to generate narrative tours. We use deterministic topo-sort (cheaper, reproducible). |
+| **Localization** | Language parameter in INPUT phase — all generated text in user's language | They support `--language` flag. We ask at INPUT and carry through GENERATE. |
 
-# Auto-detect IDE
-if [ -d "$TARGET/.kiro" ]; then
-    IDE="kiro"
-elif [ -d "$TARGET/.claude" ] || [ -f "$TARGET/CLAUDE.md" ]; then
-    IDE="claude-code"
-else
-    IDE="claude-code"  # Default (AGENTS.md is most universal)
-fi
+### Where We Intentionally Diverge
 
-# Install (non-destructive — never overwrite existing)
-if [ "$IDE" = "claude-code" ]; then
-    [ -f "$TARGET/AGENTS.md" ] && echo "AGENTS.md exists — skipping (use --force to overwrite)" || cp "$SOURCE_DIR/AGENTS.md" "$TARGET/"
-    cp -rn "$SOURCE_DIR/.ai-ready" "$TARGET/" 2>/dev/null || true
-    echo "✅ Installed for Claude Code. Agent will read AGENTS.md automatically."
-elif [ "$IDE" = "kiro" ]; then
-    mkdir -p "$TARGET/.kiro/docs/ai-ready"
-    cp -rn "$SOURCE_DIR/.ai-ready/"* "$TARGET/.kiro/docs/ai-ready/" 2>/dev/null || true
-    # Add steering reference
-    if [ ! -f "$TARGET/.kiro/steering/ai-ready-context.md" ]; then
-        mkdir -p "$TARGET/.kiro/steering"
-        cp "$SOURCE_DIR/AGENTS.md" "$TARGET/.kiro/steering/ai-ready-context.md"
-    fi
-    echo "✅ Installed for Kiro. Context available in .kiro/docs/ai-ready/."
-fi
+| Understand-Anything | AI-Ready-Repo Engine | Why |
+|---|---|---|
+| Interactive Dashboard (React Flow) | Static DDD text files | Our consumer is the IDE agent's system prompt, not a human looking at a browser. Text > graph for LLM consumption. |
+| Tree-sitter AST (WASM) | Regex import extraction + LLM code reading | Tree-sitter gives precise syntax. But our LLM-driven UNDERSTAND phase gives *semantics* (what functions DO, not just their signatures). For "can this agent modify the code?" — semantics matter more. |
+| Single knowledge-graph.json | DDD 4-file model (PRODUCT/TECH/IMPROVEMENT/PROJECT) + code-intel.json | Separation enables progressive loading (task-type → specific file). One mega-JSON forces full load always. |
+| No quality verification | VERIFY sub-agent + User-Value Probe + adversarial review | Their output quality is unverified. Ours is mechanically tested: "can a fresh agent USE this?" |
+| File-level summaries | Function-level tables + data flow diagrams for hot zones | File-level = "miner.py handles mining." Function-level = "miner.process_file() calls palace.file_already_mined() which paginates ALL groups because ChromaDB has undefined ordering." The latter prevents bugs. |
+
+---
+
+## References & Related Work
+
+| Project | Relationship | What We Learned |
+|---|---|---|
+| **[Understand-Anything](https://github.com/Lum1104/Understand-Anything)** (48K★) | Primary competitor. Dashboard + graph visualization for codebases. | Platforms table pattern, incremental updates, worktree pitfall, localization. |
+| **SwarmAI Code Intelligence** (`backend/core/code_intel/`) | Internal implementation of the same concepts. `json_exporter.py` exports code-intel.json v2. | Schema reuse (same v2 format). Production lessons: prefix resolution, test filtering, reindex timeout, thread safety. |
+| **SwarmAI DDD Cultivation** (`backend/core/ddd/`) | The internal system that keeps DDD docs alive via event-driven updates. | Freshness/decay model reused for `ai-ready.json`. Tier concept (structural→semantic→full) directly maps to our 3-tier refresh. |
+| **SwarmAI Autonomous Pipeline** (`skills/s_autonomous-pipeline/`) | Quality system that this engine runs through. | AC quality gate (Filter 3), User-Value Probe, adversarial review — all born from building this engine and discovering gaps. |
+| **[agents.md spec](https://github.com/anthropics/agents-md)** | Community convention for AI agent context. | We extend it: AGENTS.md is our entry point (≤150 lines). The spec is flat; we add layered DDD depth behind it. |
+| **[AI-Native Brownfield Bootstrapper](https://github.com/AINativeBrownfieldBootstrapper)** (Amazon internal) | Amazon-internal tool generating AGENTS.md from CRs/wiki. | "Detect don't assume", ≤150 line entry point, two human touchpoints, WHEN/RISK/BECAUSE grammar. All adopted in our design. |
+
+---
+
+## Final Architecture (as implemented)
+
 ```
+User: "make [repo] AI-ready"
+  │
+  ├─ INPUT (Human Touchpoint #1)
+  │    ├─ Repo path (required)
+  │    ├─ Signal collection (multi-select: docs, wiki, verbal, etc.)
+  │    └─ Output language (default: English)
+  │
+  ├─ INGEST (deterministic — ai_ready_helpers.py)
+  │    ├─ gather_repo_info()      → file tree, tech stack, git stats
+  │    ├─ parse_git_gotchas()     → evidence-grounded WHEN/RISK/BECAUSE
+  │    └─ extract_import_graph()  → 1000+ edges from actual import statements
+  │
+  ├─ UNDERSTAND (LLM reads actual code — minimum 8 files)
+  │    ├─ Function-level tables for top 3-5 hot-zone files
+  │    ├─ Conventions with 2+ file citations each
+  │    ├─ Data flow diagrams (E2E trace)
+  │    └─ Extension points documentation
+  │
+  ├─ GENERATE (produce 7 files)
+  │    ├─ AGENTS.md (≤150 lines, entry point)
+  │    ├─ .ai-ready/PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md
+  │    ├─ .ai-ready/code-intel.json (v2 schema, validated)
+  │    └─ .ai-ready/ai-ready.json + REVIEW-REPORT.md
+  │
+  ├─ VERIFY (sub-agent quality gate)
+  │    ├─ select_verification_tasks() → 3 tasks from git log
+  │    ├─ Spawn fresh agent with ONLY DDD output (no source)
+  │    └─ evaluate_verification_response() → PASS (2/3) or FAIL + feedback
+  │
+  └─ DELIVER
+       ├─ resolve_output_path() → deterministic location
+       ├─ install.sh → 12 IDEs via platforms_table
+       └─ generate_learning_tour() → topological onboarding order
 
-**ALL MILESTONES COMPLETE** (2026-06-01). Done in 1 session — originally estimated 7.
-Actual: 8 pipeline runs, 16 commits, 25 tests, ~2000 lines.
+Post-install maintenance:
+  ├─ check_staleness()        → per-file fresh/stale status
+  ├─ incremental_update()     → only re-analyze changed files
+  ├─ generate_hook_config()   → FileChanged auto-notification
+  └─ run_multi_package()      → per-package analysis + cross-pkg synthesis
+```
 
 ---
 
