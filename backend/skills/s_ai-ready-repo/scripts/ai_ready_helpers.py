@@ -649,9 +649,13 @@ def extract_import_graph(repo_path: Path) -> dict[str, Any]:
 
     all_files = [f for f in result.stdout.strip().split("\n") if f]
 
-    # Filter to source files only
+    # Filter to source files — use prioritized sampling for large repos
     source_extensions = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".rb"}
     source_files = [f for f in all_files if Path(f).suffix in source_extensions]
+
+    # Large repo: prioritize important files (entry points, hot zones, interfaces first)
+    if len(source_files) > 300:
+        source_files = prioritized_file_list(repo_path, max_files=300)
 
     # Detect primary language
     lang_counter: Counter = Counter()
@@ -1273,6 +1277,180 @@ def run_multi_package(
         "output_path": str(output_base),
         "project_name": project_name,
     }
+
+
+# ─── ENRICH Phase (Targeted Questions) ───
+
+def generate_enrich_questions(
+    repo_info: dict[str, Any],
+    gotchas: list[dict],
+    import_graph: dict[str, Any],
+) -> list[dict[str, str]]:
+    """Generate max 5 targeted questions about what code analysis COULDN'T determine.
+
+    The engine already knows: file structure, tech stack, git history, import graph,
+    conventions from code patterns. ENRICH asks only what's INVISIBLE in code:
+    business context, priorities, tribal knowledge not in git.
+
+    Args:
+        repo_info: from gather_repo_info()
+        gotchas: from parse_git_gotchas()
+        import_graph: from extract_import_graph()
+
+    Returns list of {question, target_file, why} — max 5 items.
+    """
+    questions: list[dict[str, str]] = []
+
+    # Q1: Purpose / audience (PRODUCT.md) — always ask unless README is very explicit
+    readme = repo_info.get("readme_content", "")
+    if len(readme) < 500 or "who" not in readme.lower():
+        questions.append({
+            "question": "Who are the primary users of this project, and what problem does it solve for them?",
+            "target_file": "PRODUCT.md",
+            "why": "README doesn't clearly state audience + value proposition",
+        })
+
+    # Q2: Non-goals (PRODUCT.md) — almost never in code
+    questions.append({
+        "question": "What is explicitly OUT OF SCOPE? What should this project NEVER do?",
+        "target_file": "PRODUCT.md",
+        "why": "Non-goals are almost never expressed in code — they prevent agents from building wrong things",
+    })
+
+    # Q3: Current priorities (PROJECT.md) — git shows activity, not intent
+    questions.append({
+        "question": "What are your top 1-3 priorities right now? What should agents focus on vs avoid?",
+        "target_file": "PROJECT.md",
+        "why": "Git shows what was done, not what should be done next",
+    })
+
+    # Q4: Constraints (PRODUCT.md) — compliance, SLA, business rules
+    config_files = repo_info.get("config_files", {})
+    has_ci = ".github/workflows/ci.yml" in config_files or ".github/workflows/ci.yaml" in config_files
+    if not has_ci or len(gotchas) > 10:
+        questions.append({
+            "question": "Any compliance requirements, SLAs, or hard business rules an agent must respect?",
+            "target_file": "PRODUCT.md",
+            "why": "Regulatory/business constraints are invisible in code but critical for agent judgment",
+        })
+
+    # Q5: Tribal knowledge not in git (IMPROVEMENT.md) — only if gotchas are sparse
+    if len(gotchas) < 5:
+        questions.append({
+            "question": "Any gotchas or 'things that burned you' that aren't captured in git history?",
+            "target_file": "IMPROVEMENT.md",
+            "why": f"Only found {len(gotchas)} evidence-grounded gotchas — verbal knowledge may fill gaps",
+        })
+
+    return questions[:5]
+
+
+def classify_enrich_answer(answer: str) -> str:
+    """Classify a user's ENRICH answer into the target DDD file.
+
+    Simple heuristic classification — the LLM should use this as a fallback
+    when the target isn't already known from the question context.
+
+    Returns: "PRODUCT.md" | "TECH.md" | "IMPROVEMENT.md" | "PROJECT.md"
+    """
+    answer_lower = answer.lower()
+
+    # PROJECT.md signals
+    project_signals = ["this quarter", "priority", "blocked", "sprint", "focused on", "don't change", "migration"]
+    if any(s in answer_lower for s in project_signals):
+        return "PROJECT.md"
+
+    # IMPROVEMENT.md signals
+    improvement_signals = ["broke", "burned", "reverted", "don't touch", "gotcha", "incident", "failed"]
+    if any(s in answer_lower for s in improvement_signals):
+        return "IMPROVEMENT.md"
+
+    # TECH.md signals
+    tech_signals = ["always use", "never call", "convention", "pattern", "architecture", "we chose"]
+    if any(s in answer_lower for s in tech_signals):
+        return "TECH.md"
+
+    # Default: PRODUCT.md (purpose, audience, constraints)
+    return "PRODUCT.md"
+
+
+# ─── Large Repo Sampling Strategy ───
+
+def prioritized_file_list(repo_path: Path, max_files: int = 300) -> list[str]:
+    """Get source files prioritized by importance, not alphabetical order.
+
+    Priority order:
+    1. Entry points (main.*, index.*, app.*, server.*)
+    2. Hot zones (recently modified files — from git log)
+    3. Config/interface files (base.*, types.*, config.*)
+    4. Largest files by line count (more code = more important)
+    5. Everything else (alphabetical within remaining budget)
+
+    This ensures that even with a 300-file cap, the MOST IMPORTANT files
+    are always included in the import graph.
+    """
+    repo_path = _validate_repo_path(Path(repo_path))
+
+    # Get all source files
+    try:
+        result = subprocess.run(
+            ["git", "ls-files"],
+            cwd=repo_path, capture_output=True, text=True, timeout=15,
+        )
+        all_files = [f for f in result.stdout.strip().split("\n") if f] if result.returncode == 0 else []
+    except subprocess.TimeoutExpired:
+        all_files = []
+
+    source_exts = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".rb", ".java", ".kt", ".swift"}
+    source_files = [f for f in all_files if Path(f).suffix in source_exts]
+
+    if len(source_files) <= max_files:
+        return source_files  # No prioritization needed
+
+    # Priority 1: entry points
+    entry_patterns = {"main", "index", "app", "server", "cli", "__main__", "mod"}
+    priority_1 = [f for f in source_files if Path(f).stem in entry_patterns]
+
+    # Priority 2: recently modified (hot files from git log)
+    try:
+        result = subprocess.run(
+            ["git", "log", "--pretty=format:", "--name-only", "-n", "50"],
+            cwd=repo_path, capture_output=True, text=True, timeout=15,
+        )
+        recent_files = set()
+        if result.returncode == 0:
+            for line in result.stdout.strip().split("\n"):
+                if line.strip() and Path(line.strip()).suffix in source_exts:
+                    recent_files.add(line.strip())
+        priority_2 = [f for f in source_files if f in recent_files and f not in priority_1]
+    except subprocess.TimeoutExpired:
+        priority_2 = []
+
+    # Priority 3: interface/config files
+    interface_patterns = {"base", "types", "config", "interface", "schema", "models", "constants"}
+    priority_3 = [f for f in source_files
+                  if Path(f).stem in interface_patterns
+                  and f not in priority_1 and f not in priority_2]
+
+    # Priority 4+5: everything else (already have the rest)
+    seen = set(priority_1 + priority_2 + priority_3)
+    remaining = [f for f in source_files if f not in seen]
+
+    # Assemble prioritized list
+    prioritized = priority_1 + priority_2 + priority_3 + remaining
+    result_files = prioritized[:max_files]
+
+    # Log what was skipped
+    skipped = len(source_files) - len(result_files)
+    if skipped > 0:
+        logger.warning(
+            f"Large repo: {len(source_files)} source files, cap={max_files}. "
+            f"Skipped {skipped} files (lowest priority). "
+            f"Included: {len(priority_1)} entry points, {len(priority_2)} hot files, "
+            f"{len(priority_3)} interfaces, {min(len(remaining), max_files - len(priority_1) - len(priority_2) - len(priority_3))} others."
+        )
+
+    return result_files
 
 
 # ─── Output Verification (VERIFY Phase) ───

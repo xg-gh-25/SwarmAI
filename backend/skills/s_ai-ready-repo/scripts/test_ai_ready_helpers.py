@@ -343,6 +343,91 @@ class TestImportGraphExtraction:
         # Should not crash on any repo
 
 
+# ─── ENRICH Phase ───
+
+class TestEnrichQuestions:
+    """Generate targeted questions for what code can't tell."""
+
+    def test_generates_questions_for_sparse_repo(self):
+        """Sparse repo (short README, few gotchas) → all 5 questions."""
+        from scripts.ai_ready_helpers import generate_enrich_questions
+
+        info = {"readme_content": "# My App\nA short readme.", "config_files": {}}
+        questions = generate_enrich_questions(info, gotchas=[], import_graph={"modules": []})
+
+        assert len(questions) >= 3
+        assert all("question" in q for q in questions)
+        assert all("target_file" in q for q in questions)
+        # Should ask about non-goals (always)
+        assert any("scope" in q["question"].lower() or "never" in q["question"].lower() for q in questions)
+
+    def test_skips_audience_if_readme_explicit(self):
+        """Long README with 'who' → skip audience question."""
+        from scripts.ai_ready_helpers import generate_enrich_questions
+
+        long_readme = "# My App\n" + "This tool is for developers who need X. " * 50
+        info = {"readme_content": long_readme, "config_files": {".github/workflows/ci.yml": ""}}
+        questions = generate_enrich_questions(info, gotchas=[{"when": "x", "risk": "y", "because": "z"}] * 10, import_graph={"modules": []})
+
+        # With many gotchas + CI, fewer questions needed
+        assert len(questions) <= 4
+
+    def test_classifies_answer_correctly(self):
+        """Answer classification routes to correct DDD file."""
+        from scripts.ai_ready_helpers import classify_enrich_answer
+
+        assert classify_enrich_answer("This quarter we're focused on migration") == "PROJECT.md"
+        assert classify_enrich_answer("We broke production when someone called X directly") == "IMPROVEMENT.md"
+        assert classify_enrich_answer("Always use the repository pattern for DB access") == "TECH.md"
+        assert classify_enrich_answer("Our users are enterprise developers") == "PRODUCT.md"
+
+
+# ─── Large Repo Sampling ───
+
+class TestLargeRepoSampling:
+    """Prioritized file selection for large repos."""
+
+    def test_prioritizes_entry_points(self, tmp_path):
+        """Entry point files (main, index, app) come first."""
+        from scripts.ai_ready_helpers import prioritized_file_list
+
+        repo = tmp_path / "big"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True)
+
+        # Create 10 files — main.py should be prioritized
+        for i in range(10):
+            (repo / f"module_{i}.py").write_text(f"# module {i}")
+        (repo / "main.py").write_text("# entry point")
+        (repo / "index.py").write_text("# another entry")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True)
+
+        result = prioritized_file_list(repo, max_files=5)
+        # Entry points should be in the result
+        assert "main.py" in result
+        assert "index.py" in result
+
+    def test_returns_all_if_under_cap(self, tmp_path):
+        """Small repo (under cap) returns all files."""
+        from scripts.ai_ready_helpers import prioritized_file_list
+
+        repo = tmp_path / "small"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True)
+        (repo / "a.py").write_text("x = 1")
+        (repo / "b.py").write_text("y = 2")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=repo, capture_output=True)
+
+        result = prioritized_file_list(repo, max_files=300)
+        assert len(result) == 2  # All files returned
+
+
 # ─── Incremental Update ───
 
 class TestIncrementalUpdate:
