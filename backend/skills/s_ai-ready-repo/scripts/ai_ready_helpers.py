@@ -293,8 +293,18 @@ _LANG_EXTENSIONS = {
 _IGNORE_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv",
     "dist", "build", ".next", ".nuxt", "target", ".tox",
-    ".eggs", "*.egg-info", ".mypy_cache", ".pytest_cache",
+    ".eggs", ".mypy_cache", ".pytest_cache",
 }
+# Glob patterns that need fnmatch (can't use set membership)
+_IGNORE_DIR_PATTERNS = ["*.egg-info"]
+
+
+def _is_ignored_dir(part: str) -> bool:
+    """Check if a path component should be ignored (exact match or glob pattern)."""
+    import fnmatch
+    if part in _IGNORE_DIRS:
+        return True
+    return any(fnmatch.fnmatch(part, pat) for pat in _IGNORE_DIR_PATTERNS)
 
 
 def gather_repo_info(repo_path: Path) -> dict[str, Any]:
@@ -320,15 +330,19 @@ def _build_file_tree(repo_path: Path, max_depth: int = 4) -> list[str]:
     files = []
 
     # Use git ls-files if possible (respects .gitignore)
-    result = subprocess.run(
-        ["git", "ls-files"],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
+    try:
+        result = subprocess.run(
+            ["git", "ls-files"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning(f"git ls-files timed out for {repo_path}, falling back to rglob")
+        result = None
 
-    if result.returncode == 0 and result.stdout.strip():
+    if result and result.returncode == 0 and result.stdout.strip():
         files = [f for f in result.stdout.strip().split("\n") if f]
     else:
         # Fallback: walk filesystem
@@ -336,7 +350,7 @@ def _build_file_tree(repo_path: Path, max_depth: int = 4) -> list[str]:
             if path.is_file():
                 rel = path.relative_to(repo_path)
                 # Skip ignored directories
-                if any(part in _IGNORE_DIRS for part in rel.parts):
+                if any(_is_ignored_dir(part) for part in rel.parts):
                     continue
                 if len(rel.parts) <= max_depth:
                     files.append(str(rel))
@@ -349,15 +363,18 @@ def _detect_tech_stack(repo_path: Path) -> dict[str, Any]:
     # Count language by file extension
     lang_counter: Counter = Counter()
 
-    result = subprocess.run(
-        ["git", "ls-files"],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-
-    files = result.stdout.strip().split("\n") if result.returncode == 0 else []
+    try:
+        result = subprocess.run(
+            ["git", "ls-files"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        files = result.stdout.strip().split("\n") if result.returncode == 0 else []
+    except subprocess.TimeoutExpired:
+        logger.warning(f"git ls-files timed out in _detect_tech_stack for {repo_path}")
+        files = []
 
     for f in files:
         ext = Path(f).suffix.lower()
@@ -383,22 +400,9 @@ def _detect_tech_stack(repo_path: Path) -> dict[str, Any]:
         if (repo_path / config_file).exists():
             frameworks.append(framework)
 
-    # Detect web frameworks from imports
-    framework_signals = {
-        "fastapi": "FastAPI",
-        "flask": "Flask",
-        "django": "Django",
-        "express": "Express",
-        "next": "Next.js",
-        "react": "React",
-        "vue": "Vue",
-        "angular": "Angular",
-    }
-
     return {
         "languages": languages,
         "frameworks": frameworks,
-        "framework_signals": [],  # Populated by LLM during UNDERSTAND phase
     }
 
 
@@ -475,6 +479,23 @@ def _find_config_files(repo_path: Path) -> dict[str, str]:
             configs[name] = "\n".join(lines[:50])
 
     return configs
+
+
+# ─── Data Transformers ───
+
+def gotchas_for_agents_md(raw_gotchas: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Transform parse_git_gotchas output into render_agents_md input format.
+
+    parse_git_gotchas returns: {when, risk, because}
+    render_agents_md expects: {summary, evidence}
+    """
+    return [
+        {
+            "summary": f"{g['when']} — {g['risk']}",
+            "evidence": g["because"],
+        }
+        for g in raw_gotchas
+    ]
 
 
 # ─── AGENTS.md Template Rendering ───
@@ -578,10 +599,16 @@ def render_agents_md(data: dict[str, Any]) -> str:
 # ─── Import Graph Extraction ───
 
 _IMPORT_PATTERNS = {
+    # Python: matches "from X import" and "import X" at start of line
     "python": re.compile(r"^\s*(?:from\s+([\w.]+)\s+import|import\s+([\w.]+))"),
-    "typescript": re.compile(r"""(?:import\s+.*?\s+from\s+['"]([^'"]+)['"]|require\(['"]([^'"]+)['"]\))"""),
+    # TypeScript/JS: matches import...from and require() ANYWHERE in line (uses search, not match)
+    "typescript": re.compile(r"""(?:import\s+.*?\s+from\s+['"]([^'"]+)['"]|require\(\s*['"]([^'"]+)['"]\s*\))"""),
+    # Go: matches quoted import paths (indented in import blocks)
     "go": re.compile(r'^\s*"([^"]+)"'),
 }
+
+# TypeScript/JS patterns need search() not match() because require() can appear mid-line
+_SEARCH_LANGS = {"typescript"}
 
 
 def extract_import_graph(repo_path: Path) -> dict[str, Any]:
@@ -644,18 +671,25 @@ def extract_import_graph(repo_path: Path) -> dict[str, Any]:
         files_scanned += 1
         file_imports: set[str] = set()
 
-        for line_num, line in enumerate(content.split("\n")[:200], 1):  # First 200 lines (imports at top)
-            pattern = _IMPORT_PATTERNS.get(primary_lang)
-            if not pattern:
-                break
+        # Python: imports always at top (200 lines sufficient)
+        # TypeScript: require() can appear anywhere — scan full file (capped at 500 lines)
+        scan_limit = 500 if primary_lang in _SEARCH_LANGS else 200
+        pattern = _IMPORT_PATTERNS.get(primary_lang)
+        if not pattern:
+            continue
 
-            match = pattern.match(line)
-            if match:
+        for line_num, line in enumerate(content.split("\n")[:scan_limit], 1):
+            # TypeScript/JS uses search() (require can be mid-line)
+            # Python/Go uses match() (imports are at line start)
+            if primary_lang in _SEARCH_LANGS:
+                m = pattern.search(line)
+            else:
+                m = pattern.match(line)
+
+            if m:
                 # Get the first non-None group
-                imported = next((g for g in match.groups() if g), None)
+                imported = next((g for g in m.groups() if g), None)
                 if imported:
-                    # Normalize: "from .palace import X" -> ".palace"
-                    # "from mempalace.backends import Y" -> "mempalace.backends"
                     file_imports.add(imported)
                     edges.append({
                         "from": filepath,
@@ -667,15 +701,28 @@ def extract_import_graph(repo_path: Path) -> dict[str, Any]:
         if file_imports:
             module_imports[filepath] = file_imports
 
-    # Build module-level summary (group by directory)
+    # Build module-level summary (group by top-level package directory)
     dir_modules: dict[str, set] = {}
+    file_to_module: dict[str, str] = {}  # filepath -> module name (for resolution)
+
     for filepath in source_files:
         parts = Path(filepath).parts
         if len(parts) >= 2:
+            # Skip "src/" as a module name — use the next level
             module_name = parts[0] if parts[0] != "src" else (parts[1] if len(parts) > 2 else parts[0])
         else:
             module_name = Path(filepath).stem
         dir_modules.setdefault(module_name, set()).add(filepath)
+        file_to_module[filepath] = module_name
+
+    # Also index individual file stems within each module (for relative import resolution)
+    # e.g., "myapp/database.py" → file_stem_to_module["database"] = "myapp"
+    file_stem_to_module: dict[str, str] = {}
+    for filepath in source_files:
+        stem = Path(filepath).stem
+        mod = file_to_module.get(filepath)
+        if mod and stem != "__init__":
+            file_stem_to_module[stem] = mod
 
     # Compute imports_from / imported_by per module
     modules: list[dict] = []
@@ -683,14 +730,21 @@ def extract_import_graph(repo_path: Path) -> dict[str, Any]:
         imports_from: set[str] = set()
         for f in mod_files:
             for imp in module_imports.get(f, set()):
-                # Resolve relative imports to module names
                 if imp.startswith("."):
-                    # Relative import within same package
-                    imp_module = imp.lstrip(".").split(".")[0] if imp.lstrip(".") else mod_name
+                    # Relative import: ".database" → resolve to module containing "database.py"
+                    rel_name = imp.lstrip(".").split(".")[0] if imp.lstrip(".") else ""
+                    if not rel_name:
+                        continue  # "from . import X" = same module, skip
+                    # Check if this relative import points to a file in a DIFFERENT module
+                    resolved_module = file_stem_to_module.get(rel_name, mod_name)
+                    if resolved_module != mod_name:
+                        imports_from.add(resolved_module)
+                    # Relative imports within same package are expected — not cross-module edges
                 else:
+                    # Absolute import: "mempalace.backends" → top-level = "mempalace"
                     imp_module = imp.split(".")[0]
-                if imp_module != mod_name and imp_module in dir_modules:
-                    imports_from.add(imp_module)
+                    if imp_module != mod_name and imp_module in dir_modules:
+                        imports_from.add(imp_module)
 
         modules.append({
             "name": mod_name,
