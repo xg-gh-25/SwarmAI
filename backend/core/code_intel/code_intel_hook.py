@@ -31,14 +31,24 @@ def create_code_intel_hook():
     Create a PreToolUse hook that injects dependency context.
 
     Returns a callable hook function compatible with Claude Agent SDK hooks.
+
+    Deduplication (2026-06-01): Injects context for a given file only ONCE
+    per session. Repeated Read/Grep on the same file returns approve-only
+    (no additionalContext). This prevents ~200 tokens × N repeated accesses
+    from eating into the task_budget and triggering premature autocompact.
+    Evidence: session 59b18ce8 had the same file's context injected 25 times
+    (5000 tokens wasted). With 128K task_budget, that's 4% burned on noise.
     """
     _cache: dict[str, Any] = {}  # project_name → GraphStore
+    _seen_files: set[str] = set()  # files already annotated this session
 
     def hook(tool_name: str, tool_input: dict) -> dict:
         """
         Hook signature: (tool_name, tool_input) → dict.
         Returns {"decision": "approve"} always, with optional additionalContext
         via hookSpecificOutput for Read/Grep on indexed projects.
+
+        Per-session dedup: each file gets context injected only on FIRST access.
         """
         if tool_name not in ("Read", "Grep"):
             return {"decision": "approve"}
@@ -66,6 +76,12 @@ def create_code_intel_hook():
         if not file_path:
             return {"decision": "approve"}
 
+        # ── Dedup: skip if already injected for this file ──────────────
+        # Normalize to avoid path variants (./ prefix, trailing /, etc.)
+        norm_path = str(Path(file_path).resolve())
+        if norm_path in _seen_files:
+            return {"decision": "approve"}
+
         # Detect project from file path
         project = detect_project_from_path(file_path)
         if not project:
@@ -86,6 +102,8 @@ def create_code_intel_hook():
                 logger.warning(f"code_intel hook took {elapsed_ms:.0f}ms for {file_path}")
 
             if context:
+                # Mark as seen AFTER successful build — failed builds can retry
+                _seen_files.add(norm_path)
                 return {
                     "decision": "approve",
                     "hookSpecificOutput": {

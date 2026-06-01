@@ -867,44 +867,98 @@ class SessionUnit:
                 pass  # Expected — cancel or flush timeout
             self._pipe_flush_task = None
 
-        # If a previous request got stuck (SDK never sent ResultMessage),
-        # the unit stays in STREAMING forever.  Instead of rejecting the
-        # new message with an error, force-recover to COLD and proceed.
-        # The user never sees an error — just a slightly longer response.
+        # ── STREAMING state handling — three cases ─────────────────────
         #
-        # GUARD (2026-04-02 fix): Only force-kill if the session is
-        # genuinely stuck (stall > AUTO_RECOVER_STALL_THRESHOLD).
-        # If actively streaming (stall < threshold), raise SessionBusyError
-        # so the frontend can queue the message instead.
-        # Root cause: SSE disconnect caused frontend to send a new request
-        # while backend was still STREAMING → force_unstick killed active
-        # subprocess with stall=1s, losing the in-progress response.
+        # HISTORY (this section has been fixed 4+ times):
+        #   2026-04-02: Added SessionBusyError to stop force_unstick killing
+        #               active streams (SSE disconnect race).
+        #   2026-05-14: Added frontend poll recovery for SESSION_BUSY.
+        #   2026-06-01: Added interrupt-wait path below (this fix).
+        #
+        # BUG (2026-06-01): "Must send twice after stop to resume"
+        #   User clicks Stop → frontend fire-and-forget POST /chat/stop
+        #   → backend interrupt() begins (async, takes 1-5s)
+        #   → user sends new message BEFORE interrupt() completes
+        #   → send() sees state=STREAMING + stall<180s → SessionBusyError
+        #   → frontend shows "Connection interrupted"
+        #   → second message arrives after interrupt() is done → works.
+        #
+        # ROOT CAUSE: Frontend stopSession() is fire-and-forget (correct
+        # for UX — user sees "Stopped" immediately). But backend's
+        # interrupt() is async (awaits client.interrupt() up to 5s).
+        # No synchronization between "stop completed" and "next send".
+        #
+        # WHY THIS FIX: We distinguish "STREAMING because the model is
+        # actively responding" (→ reject with SessionBusyError) from
+        # "STREAMING because interrupt() hasn't finished yet" (→ wait).
+        # The signal is _stop_event.is_set() — interrupt() sets it at
+        # entry (line ~2593) and clears it on completion (line ~2635).
+        # If set, we know an interrupt is in flight — just wait for it.
+        #
+        # WHY NOT FIX FRONTEND: Making stopSession() await would block
+        # the UI for 1-5s on every stop. Current UX is correct.
+        # WHY NOT FIX INTERRUPT SPEED: client.interrupt() latency is
+        # SDK-controlled (sends SIGINT, waits for graceful shutdown).
+        #
         if self.state == SessionState.STREAMING:
-            stall = self.streaming_stall_seconds
-            if stall is not None and stall < AUTO_RECOVER_STALL_THRESHOLD:
-                from .exceptions import SessionBusyError
+            if self._stop_event.is_set():
+                # ── Case 1: Interrupt in progress ─────────────────────
+                # _stop_event is ONLY set by interrupt() at entry and
+                # cleared on completion. If set → interrupt() is mid-await.
+                # Wait for it to finish (state → IDLE or COLD).
                 logger.info(
-                    "session_unit.active_streaming_rejected "
-                    "session_id=%s stall=%.0fs (threshold=%.0fs) "
-                    "— rejecting send, frontend should queue",
-                    self.session_id, stall, AUTO_RECOVER_STALL_THRESHOLD,
+                    "session_unit.awaiting_interrupt_completion "
+                    "session_id=%s — stop_event set, waiting for "
+                    "interrupt to finish before send()",
+                    self.session_id,
                 )
-                raise SessionBusyError(
-                    detail=(
-                        f"Session {self.session_id} is actively streaming "
-                        f"(last event {stall:.0f}s ago, threshold "
-                        f"{AUTO_RECOVER_STALL_THRESHOLD:.0f}s). "
-                        f"Queue the message on the frontend."
-                    ),
+                # Poll state with short sleeps — interrupt() will transition
+                # STREAMING → IDLE within its 5s timeout, or kill → COLD.
+                # Budget: 6s > interrupt timeout (5s) to avoid racing.
+                for _ in range(60):  # 60 × 100ms = 6s max
+                    await asyncio.sleep(0.1)
+                    if self.state != SessionState.STREAMING:
+                        break
+                if self.state == SessionState.STREAMING:
+                    # Interrupt didn't complete in 6s — force recovery.
+                    # This shouldn't happen (interrupt timeout = 5s + kill),
+                    # but defensive against edge cases.
+                    logger.warning(
+                        "session_unit.interrupt_wait_timeout "
+                        "session_id=%s — forcing COLD after 6s wait",
+                        self.session_id,
+                    )
+                    await self.force_unstick_streaming()
+                # Fall through — state is now IDLE or COLD
+            else:
+                # ── Case 2 & 3: Genuinely streaming (no interrupt) ────
+                stall = self.streaming_stall_seconds
+                if stall is not None and stall < AUTO_RECOVER_STALL_THRESHOLD:
+                    # Case 2: Actively streaming — reject, frontend queues.
+                    from .exceptions import SessionBusyError
+                    logger.info(
+                        "session_unit.active_streaming_rejected "
+                        "session_id=%s stall=%.0fs (threshold=%.0fs) "
+                        "— rejecting send, frontend should queue",
+                        self.session_id, stall, AUTO_RECOVER_STALL_THRESHOLD,
+                    )
+                    raise SessionBusyError(
+                        detail=(
+                            f"Session {self.session_id} is actively streaming "
+                            f"(last event {stall:.0f}s ago, threshold "
+                            f"{AUTO_RECOVER_STALL_THRESHOLD:.0f}s). "
+                            f"Queue the message on the frontend."
+                        ),
+                    )
+                # Case 3: Stuck (no events for >180s) — force kill + respawn.
+                logger.warning(
+                    "session_unit.auto_recover_stuck session_id=%s state=%s "
+                    "stall=%.0fs (threshold=%.0fs) — forcing COLD before retry",
+                    self.session_id, self.state.value,
+                    stall or 0, AUTO_RECOVER_STALL_THRESHOLD,
                 )
-            logger.warning(
-                "session_unit.auto_recover_stuck session_id=%s state=%s "
-                "stall=%.0fs (threshold=%.0fs) — forcing COLD before retry",
-                self.session_id, self.state.value,
-                stall or 0, AUTO_RECOVER_STALL_THRESHOLD,
-            )
-            await self.force_unstick_streaming()
-            # After force_unstick, state is COLD — fall through to spawn
+                await self.force_unstick_streaming()
+                # After force_unstick, state is COLD — fall through to spawn
 
         if self.state == SessionState.WAITING_INPUT:
             # Frontend crashed or user abandoned the question — auto-recover.
@@ -2073,9 +2127,37 @@ class SessionUnit:
                         self._content_emitted = True
                         yield {"type": "text_delta", "text": delta["text"], "index": event_data.get("index", 0)}
                     elif delta.get("type") == "thinking_delta" and delta.get("thinking"):
+                        # [TEMP-THINK-DIAG] confirm real thinking content arrives
+                        logger.info(
+                            "TEMP_THINK_DIAG stream thinking_delta session_id=%s len=%d preview=%r",
+                            self.session_id, len(delta["thinking"]), delta["thinking"][:60],
+                        )
                         yield {"type": "thinking_delta", "thinking": delta["thinking"], "index": event_data.get("index", 0)}
+                    elif delta.get("type") == "thinking_delta":
+                        # [TEMP-THINK-DIAG] thinking_delta present but EMPTY content
+                        logger.info(
+                            "TEMP_THINK_DIAG stream thinking_delta EMPTY session_id=%s delta_keys=%s",
+                            self.session_id, sorted(delta.keys()),
+                        )
+                    elif delta.get("type") == "signature_delta":
+                        # [TEMP-THINK-DIAG] signature-only delta (redacted thinking signature)
+                        sig = delta.get("signature", "")
+                        logger.info(
+                            "TEMP_THINK_DIAG stream signature_delta session_id=%s sig_len=%d",
+                            self.session_id, len(sig) if isinstance(sig, str) else -1,
+                        )
                 elif event_type == "content_block_start":
                     block = event_data.get("content_block", {})
+                    # [TEMP-THINK-DIAG] log every block start type + initial content
+                    if block.get("type") in ("thinking", "redacted_thinking"):
+                        _init_think = block.get("thinking", "")
+                        logger.info(
+                            "TEMP_THINK_DIAG block_start type=%s session_id=%s init_thinking_len=%d "
+                            "has_signature=%s block_keys=%s",
+                            block.get("type"), self.session_id,
+                            len(_init_think) if isinstance(_init_think, str) else -1,
+                            bool(block.get("signature")), sorted(block.keys()),
+                        )
                     if block.get("type") == "thinking":
                         yield {"type": "thinking_start", "index": event_data.get("index", 0)}
                     elif block.get("type") == "text":
@@ -2096,6 +2178,19 @@ class SessionUnit:
                         # content (signature-only, redacted reasoning). Skip empty
                         # AND whitespace-only content so they don't pollute the DB
                         # or render as ghost widgets.
+                        # [TEMP-THINK-DIAG] confirm whether ThinkingBlock is empty/signature-only
+                        _tb_thinking = getattr(block, "thinking", None)
+                        _tb_sig = getattr(block, "signature", "")
+                        logger.info(
+                            "TEMP_THINK_DIAG AssistantMessage ThinkingBlock session_id=%s "
+                            "thinking_is_none=%s thinking_len=%d stripped_len=%d sig_len=%d preview=%r",
+                            self.session_id,
+                            _tb_thinking is None,
+                            len(_tb_thinking) if isinstance(_tb_thinking, str) else -1,
+                            len(_tb_thinking.strip()) if isinstance(_tb_thinking, str) else -1,
+                            len(_tb_sig) if isinstance(_tb_sig, str) else -1,
+                            (_tb_thinking[:60] if isinstance(_tb_thinking, str) else None),
+                        )
                         if block.thinking and block.thinking.strip():
                             content_blocks.append({
                                 "type": "thinking",
@@ -2633,6 +2728,10 @@ class SessionUnit:
             # the SSE heartbeat loop checks stop_event between interrupt()
             # return and the next send().
             self._stop_event.clear()
+            # Clear interrupted flag — without this, a stale _interrupted=True
+            # could contaminate the next send()'s _read_formatted_response if
+            # it somehow checks before send()'s Layer 0 clears it.
+            self._interrupted = False
             logger.info(
                 "session_unit.interrupt succeeded session_id=%s pid=%s",
                 self.session_id, self.pid,
