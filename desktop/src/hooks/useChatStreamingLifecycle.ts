@@ -1781,6 +1781,44 @@ export function useChatStreamingLifecycle(
             }
           }
         }
+        // Turn limit reached — CLI hit maxTurns cap (default 100, we set 200).
+        // This is NOT an error — the agent completed its work up to this point.
+        // Preserve all streamed content. Show a gentle "paused" indicator so the
+        // user knows to send a message (or click Resume) to continue.
+        // BUG FIX (2026-06-01): Previously this arrived as an 'error' event which
+        // triggered error UI path and could clear streamed content.
+        else if (event.type === 'turn_limit_reached') {
+          const tabState = capturedTabId
+            ? tabMapRef.current.get(capturedTabId)
+            : undefined;
+          // Append a gentle info message to the assistant's last response
+          // (NOT as an error — no isError flag, no red styling).
+          const infoBlock: ContentBlock = {
+            type: 'text' as const,
+            text: `\n\n⏸️ ${event.message || 'Turn limit reached — send a message to continue.'}`,
+          };
+          if (tabState) {
+            const lastAssistant = tabState.messages.findLast(
+              (m: Message) => m.role === 'assistant',
+            );
+            if (lastAssistant) {
+              lastAssistant.content = [...lastAssistant.content, infoBlock];
+            }
+          }
+          if (isActiveTab) {
+            setMessages((prev) => {
+              const lastIdx = prev.findLastIndex((m) => m.role === 'assistant');
+              if (lastIdx < 0) return prev;
+              return prev.map((msg, idx) =>
+                idx === lastIdx
+                  ? { ...msg, content: [...msg.content, infoBlock] }
+                  : msg,
+              );
+            });
+          }
+          // Don't clear streaming state yet — the result event that follows
+          // will handle transition. This event is purely informational.
+        }
         // Context compacted — backend emits when the SDK compacts the context window
         // (either auto or manual trigger). Clear the originating tab's warning.
         else if (event.type === 'context_compacted') {

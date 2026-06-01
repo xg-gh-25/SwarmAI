@@ -2127,37 +2127,9 @@ class SessionUnit:
                         self._content_emitted = True
                         yield {"type": "text_delta", "text": delta["text"], "index": event_data.get("index", 0)}
                     elif delta.get("type") == "thinking_delta" and delta.get("thinking"):
-                        # [TEMP-THINK-DIAG] confirm real thinking content arrives
-                        logger.info(
-                            "TEMP_THINK_DIAG stream thinking_delta session_id=%s len=%d preview=%r",
-                            self.session_id, len(delta["thinking"]), delta["thinking"][:60],
-                        )
                         yield {"type": "thinking_delta", "thinking": delta["thinking"], "index": event_data.get("index", 0)}
-                    elif delta.get("type") == "thinking_delta":
-                        # [TEMP-THINK-DIAG] thinking_delta present but EMPTY content
-                        logger.info(
-                            "TEMP_THINK_DIAG stream thinking_delta EMPTY session_id=%s delta_keys=%s",
-                            self.session_id, sorted(delta.keys()),
-                        )
-                    elif delta.get("type") == "signature_delta":
-                        # [TEMP-THINK-DIAG] signature-only delta (redacted thinking signature)
-                        sig = delta.get("signature", "")
-                        logger.info(
-                            "TEMP_THINK_DIAG stream signature_delta session_id=%s sig_len=%d",
-                            self.session_id, len(sig) if isinstance(sig, str) else -1,
-                        )
                 elif event_type == "content_block_start":
                     block = event_data.get("content_block", {})
-                    # [TEMP-THINK-DIAG] log every block start type + initial content
-                    if block.get("type") in ("thinking", "redacted_thinking"):
-                        _init_think = block.get("thinking", "")
-                        logger.info(
-                            "TEMP_THINK_DIAG block_start type=%s session_id=%s init_thinking_len=%d "
-                            "has_signature=%s block_keys=%s",
-                            block.get("type"), self.session_id,
-                            len(_init_think) if isinstance(_init_think, str) else -1,
-                            bool(block.get("signature")), sorted(block.keys()),
-                        )
                     if block.get("type") == "thinking":
                         yield {"type": "thinking_start", "index": event_data.get("index", 0)}
                     elif block.get("type") == "text":
@@ -2178,19 +2150,6 @@ class SessionUnit:
                         # content (signature-only, redacted reasoning). Skip empty
                         # AND whitespace-only content so they don't pollute the DB
                         # or render as ghost widgets.
-                        # [TEMP-THINK-DIAG] confirm whether ThinkingBlock is empty/signature-only
-                        _tb_thinking = getattr(block, "thinking", None)
-                        _tb_sig = getattr(block, "signature", "")
-                        logger.info(
-                            "TEMP_THINK_DIAG AssistantMessage ThinkingBlock session_id=%s "
-                            "thinking_is_none=%s thinking_len=%d stripped_len=%d sig_len=%d preview=%r",
-                            self.session_id,
-                            _tb_thinking is None,
-                            len(_tb_thinking) if isinstance(_tb_thinking, str) else -1,
-                            len(_tb_thinking.strip()) if isinstance(_tb_thinking, str) else -1,
-                            len(_tb_sig) if isinstance(_tb_sig, str) else -1,
-                            (_tb_thinking[:60] if isinstance(_tb_thinking, str) else None),
-                        )
                         if block.thinking and block.thinking.strip():
                             content_blocks.append({
                                 "type": "thinking",
@@ -2334,6 +2293,77 @@ class SessionUnit:
             if isinstance(message, ResultMessage):
                 is_error = getattr(message, "is_error", False)
                 subtype = getattr(message, "subtype", None)
+
+                # ── Turn limit reached (NOT a real error) ─────────
+                # CLI emits is_error=True + subtype="error_max_turns"
+                # when the configured max_turns limit is hit. This is a
+                # graceful pause, not an error — the agent completed its
+                # last tool call successfully but the CLI won't start
+                # another API roundtrip. The user can Resume to continue.
+                #
+                # BUG FIX (2026-06-01): Previously this fell through to
+                # the error path, yielding an error event that caused the
+                # frontend to show "Interrupted" and potentially clear
+                # streamed content. Now we emit a distinct event type so
+                # the frontend can show "Turn limit reached" and preserve
+                # all previously streamed content.
+                #
+                # Evidence: run_bbe3f167 — pipeline hit 101 turns (CLI
+                # default maxTurns=100), emitted error_max_turns, frontend
+                # showed "Interrupted" and user had to manually Resume.
+                if is_error and subtype == "error_max_turns":
+                    num_turns = getattr(message, "num_turns", None)
+                    logger.info(
+                        "session_unit.turn_limit_reached session_id=%s "
+                        "num_turns=%s subtype=%s",
+                        self.session_id, num_turns, subtype,
+                    )
+                    # Yield a non-error event — frontend preserves content
+                    yield {
+                        "type": "turn_limit_reached",
+                        "num_turns": num_turns,
+                        "message": (
+                            "Turn limit reached — send a message to continue."
+                        ),
+                    }
+                    # Transition to IDLE (not error) — session is healthy,
+                    # user can send the next message to continue work.
+                    self._transition(SessionState.IDLE)
+                    self.last_used = time.time()
+                    # Still emit usage/metadata for this completed segment
+                    self._lifecycle_response_count += 1
+                    usage = getattr(message, "usage", None) or {}
+                    logger.info(
+                        "session_unit.result_usage session_id=%s "
+                        "raw_usage=%s input_tokens=%s model=%s "
+                        "lifecycle_response=%d",
+                        self.session_id,
+                        usage,
+                        usage.get("input_tokens") if usage else None,
+                        self._model_name,
+                        self._lifecycle_response_count,
+                    )
+                    # Yield result event so frontend knows the turn ended
+                    yield {
+                        "type": "result",
+                        "subtype": "turn_limit_reached",
+                        "stop_reason": "turn_limit",
+                        "session_id": self.session_id,
+                        "duration_ms": getattr(message, "duration_ms", 0),
+                        "total_cost_usd": getattr(message, "total_cost_usd", None),
+                        "num_turns": num_turns,
+                        "usage": {
+                            "input_tokens": usage.get("input_tokens"),
+                            "output_tokens": usage.get("output_tokens"),
+                            "cache_read_input_tokens": usage.get("cache_read_input_tokens"),
+                            "cache_creation_input_tokens": usage.get("cache_creation_input_tokens"),
+                        } if usage else None,
+                    }
+                    for meta_event in self._emit_post_stream_metadata(
+                        usage, num_turns=num_turns or 1,
+                    ):
+                        yield meta_event
+                    return
 
                 if is_error or subtype == "error_during_execution":
                     error_text = str(

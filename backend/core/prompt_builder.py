@@ -1249,16 +1249,29 @@ class PromptBuilder:
         thinking_config = self._build_thinking_config(channel_context=channel_context)
         effort = self._build_effort(channel_context=channel_context)
 
-        # Channel sessions: cap max_turns to prevent unbounded tool loops
-        # that cause truncation.  Agent config default is 100 but the SDK
-        # default (None = unlimited) is fine for chat tabs where the user
-        # can interrupt.  Channel sessions run unattended — a runaway loop
-        # burns cost and hits output limits.  15 turns is the safety cap;
-        # most channel questions complete in 1-5 turns.  Reduced from 30
-        # after 905K token blowup incident (15 turns consumed 830K).
+        # ── Max turns: per-message API roundtrip limit ─────────────
+        #
+        # DISCOVERY (2026-06-01): CLI default maxTurns = 100.
+        # When SDK consumer passes max_turns=None, CLI uses its internal
+        # default of 100 turns. Pipeline runs routinely hit 100+ turns
+        # (8 stages × 12-15 turns/stage). At turn 101, CLI emits
+        # ResultMessage(is_error=True, subtype="error_max_turns") and
+        # exits — causing "Interrupted" in the UI mid-pipeline.
+        #
+        # FIX: Explicit 200 for desktop (covers 99% of pipeline runs).
+        # Channel keeps 15 (unattended safety cap).
+        # Evidence: run_bbe3f167 hit exactly 101 turns at pipeline stage 7/8.
+        #
+        # Safety: task_budget=800K is the independent cost cap.
+        # 200 turns × ~400 output tokens/turn = ~80K output, well within budget.
+        # User can always press Stop for true runaway scenarios.
         max_turns = agent_config.get("max_turns") or None
         if channel_context and (max_turns is None or max_turns > 15):
             max_turns = 15
+        elif not channel_context and max_turns is None:
+            # Desktop: override CLI default (100) with generous limit.
+            # Pipeline full-profile runs need 100-150 turns typically.
+            max_turns = 200
 
         # ── Task budget: per-task token limit for CLI autocompact ─────
         #
