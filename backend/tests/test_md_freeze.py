@@ -307,3 +307,12 @@ def test_cli_stitch_malformed_json_clean_error(tmp_path):
     r = _run_cli("stitch", str(sk), str(bl))
     assert r.returncode == 2
     assert "not valid JSON" in r.stderr
+
+
+def test_cli_freeze_non_utf8_clean_error(tmp_path):
+    """A non-UTF-8 source fails loud with a clear message, not a raw traceback."""
+    src = tmp_path / "latin1.md"
+    src.write_bytes("# Café\n\nré sumé\n".encode("latin-1"))  # invalid UTF-8
+    r = _run_cli("freeze", str(src))
+    assert r.returncode == 2
+    assert "not valid UTF-8" in r.stderr
