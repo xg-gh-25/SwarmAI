@@ -115,6 +115,11 @@ Helper script: `backend/skills/s_ai-ready-repo/scripts/ai_ready_helpers.py`
 If not already provided, ask:
 "What repo do you want to make AI-ready? (local path or git URL)"
 
+**Output language:** Also ask: "Output language? (default: English, or: zh/ja/ko/es/fr/de)"
+If user specifies a language, ALL generated text (summaries, conventions, gotchas,
+architecture descriptions) must be in that language. Technical terms (function names,
+file paths, framework names) stay in English. Store as `output_language` for GENERATE.
+
 #### Step 1.2: Signal collection (multi-select)
 
 After getting the repo path, present the signal menu. The user picks what they have — more signals = richer output (Level 1 → Level 3).

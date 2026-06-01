@@ -1,42 +1,90 @@
 #!/bin/bash
-# AI-Ready-Repo Engine — IDE Installer
-# Zero-config, non-destructive. Detects IDE, places files, generates manifest.
+# AI-Ready-Repo Engine — Universal IDE Installer
+# Zero-config, non-destructive. Supports 12+ IDEs via platforms_table.
 #
 # Usage:
-#   bash install.sh <source_dir> <target_project>
-#   bash install.sh <source_dir> <target_project> --force    # overwrite existing
-#   bash install.sh <source_dir> <target_project> --uninstall # remove installed files
+#   bash install.sh <source_dir> <target_project> [platform]
+#   bash install.sh <source_dir> <target_project> --force
+#   bash install.sh <source_dir> <target_project> --uninstall
+#   bash install.sh --list-platforms
 #
 # source_dir: directory containing AGENTS.md + .ai-ready/ (engine output)
 # target_project: root of the project to make AI-ready
+# platform: optional — auto-detects if not specified
 #
-# Supports: Claude Code, Kiro. Default: Claude Code (AGENTS.md is most universal).
 # Requires: bash (uses arrays). macOS + Linux compatible.
 
 set -eo pipefail
+
+# ─── Platforms Table ───
+# Format: id|agents_file_target|ddd_dir_target|detect_pattern
+# detect_pattern: file/dir to check in target for auto-detection
+# Agents file = entry point (AGENTS.md content). DDD dir = .ai-ready/ content.
+
+platforms_table() {
+  cat <<'EOF'
+claude-code|AGENTS.md|.ai-ready|.claude
+kiro|.kiro/steering/ai-ready-context.md|.kiro/docs/ai-ready|.kiro
+cursor|AGENTS.md|.ai-ready|.cursor
+codex|AGENTS.md|.ai-ready|.codex
+gemini|AGENTS.md|.ai-ready|.gemini
+opencode|AGENTS.md|.ai-ready|.opencode
+vscode-copilot|AGENTS.md|.ai-ready|.copilot
+windsurf|AGENTS.md|.ai-ready|.windsurf
+cline|AGENTS.md|.ai-ready|.cline
+hermes|AGENTS.md|.ai-ready|.hermes
+trae|AGENTS.md|.ai-ready|.trae
+generic|AGENTS.md|.ai-ready|NONE
+EOF
+}
+
+platform_ids() { platforms_table | cut -d'|' -f1; }
+
+resolve_platform() {
+  local id="$1"
+  platforms_table | awk -F'|' -v id="$id" '$1==id {print; exit}'
+}
 
 # ─── Args ───
 
 SOURCE="${1:-}"
 TARGET="${2:-}"
+PLATFORM=""
 FORCE=false
 UNINSTALL=false
+LIST_PLATFORMS=false
 
 for arg in "$@"; do
     case "$arg" in
         --force) FORCE=true ;;
         --uninstall) UNINSTALL=true ;;
+        --list-platforms) LIST_PLATFORMS=true ;;
     esac
 done
 
+# Check if 3rd positional arg is a platform name (not a flag)
+if [ -n "${3:-}" ] && [[ "${3}" != --* ]]; then
+    PLATFORM="$3"
+fi
+
+if [ "$LIST_PLATFORMS" = true ]; then
+    echo "Supported platforms:"
+    platforms_table | while IFS='|' read -r id agents ddd detect; do
+        printf "  %-16s agents→%s  ddd→%s\n" "$id" "$agents" "$ddd"
+    done
+    exit 0
+fi
+
 if [ -z "$SOURCE" ] || [ -z "$TARGET" ]; then
-    echo "Usage: bash install.sh <source_dir> <target_project> [--force] [--uninstall]"
+    echo "Usage: bash install.sh <source_dir> <target_project> [platform] [--force] [--uninstall]"
     echo ""
-    echo "  source_dir:     Directory containing AGENTS.md + .ai-ready/ (engine output)"
+    echo "  source_dir:     Directory containing AGENTS.md + .ai-ready/"
     echo "  target_project: Root of the project to install into"
+    echo "  platform:       Optional (auto-detects). Use --list-platforms to see all."
     echo ""
-    echo "  --force:     Overwrite existing AGENTS.md (default: skip)"
-    echo "  --uninstall: Remove all installed files (reads WHAT_WAS_ADDED.md)"
+    echo "  --force:          Overwrite existing files"
+    echo "  --uninstall:      Remove installed files (reads manifest)"
+    echo "  --list-platforms: Show supported platforms"
     exit 1
 fi
 
@@ -44,21 +92,44 @@ fi
 SOURCE="$(cd "$SOURCE" && pwd)"
 TARGET="$(cd "$TARGET" && pwd)"
 
-# ─── Uninstall mode ───
+# ─── Worktree Detection ───
+# Claude Code worktrees are ephemeral — output written there is lost on session end.
+
+if command -v git >/dev/null 2>&1 && [ -d "$TARGET/.git" ] || git -C "$TARGET" rev-parse 2>/dev/null; then
+    COMMON_DIR=$(git -C "$TARGET" rev-parse --git-common-dir 2>/dev/null || true)
+    GIT_DIR=$(git -C "$TARGET" rev-parse --git-dir 2>/dev/null || true)
+    if [ -n "$COMMON_DIR" ] && [ -n "$GIT_DIR" ]; then
+        COMMON_ABS=$(cd "$TARGET" && cd "$COMMON_DIR" 2>/dev/null && pwd -P || true)
+        GIT_ABS=$(cd "$TARGET" && cd "$GIT_DIR" 2>/dev/null && pwd -P || true)
+        if [ -n "$COMMON_ABS" ] && [ -n "$GIT_ABS" ] && [ "$COMMON_ABS" != "$GIT_ABS" ]; then
+            MAIN_ROOT=$(dirname "$COMMON_ABS")
+            echo "⚠️  WARNING: Target is a git worktree (ephemeral)."
+            echo "   Output written here may be lost when the session ends."
+            echo "   Main repo root: $MAIN_ROOT"
+            echo "   Recommendation: install to main root instead:"
+            echo "     bash install.sh $SOURCE $MAIN_ROOT"
+            echo ""
+            echo "   Continuing anyway (Ctrl+C to abort)..."
+            sleep 2
+        fi
+    fi
+fi
+
+# ─── Uninstall Mode ───
 
 if [ "$UNINSTALL" = true ]; then
-    # Detect IDE to find correct manifest location
+    # Detect platform to find correct manifest location
     if [ -d "$TARGET/.kiro" ]; then
         MANIFEST="$TARGET/.kiro/docs/ai-ready/WHAT_WAS_ADDED.md"
     else
         MANIFEST="$TARGET/.ai-ready/WHAT_WAS_ADDED.md"
     fi
     if [ ! -f "$MANIFEST" ]; then
-        echo "❌ No WHAT_WAS_ADDED.md found at $MANIFEST — nothing to uninstall."
+        echo "❌ No WHAT_WAS_ADDED.md found — nothing to uninstall."
+        echo "   Checked: $MANIFEST"
         exit 1
     fi
     echo "🗑️  Uninstalling AI-Ready artifacts from $TARGET..."
-    # Parse manifest — lines starting with "- " are file paths
     grep '^- ' "$MANIFEST" | sed 's/^- //' | while read -r filepath; do
         full="$TARGET/$filepath"
         if [ -f "$full" ]; then
@@ -66,14 +137,13 @@ if [ "$UNINSTALL" = true ]; then
             echo "  removed: $filepath"
         fi
     done
-    # Remove empty .ai-ready/ if it exists
     [ -d "$TARGET/.ai-ready" ] && rmdir "$TARGET/.ai-ready" 2>/dev/null && echo "  removed: .ai-ready/" || true
     rm -f "$MANIFEST" 2>/dev/null
     echo "✅ Uninstall complete."
     exit 0
 fi
 
-# ─── Validate source ───
+# ─── Validate Source ───
 
 if [ ! -f "$SOURCE/AGENTS.md" ]; then
     echo "❌ Source directory missing AGENTS.md: $SOURCE"
@@ -86,23 +156,36 @@ if [ ! -d "$SOURCE/.ai-ready" ]; then
     exit 1
 fi
 
-# ─── Detect IDE ───
+# ─── Auto-Detect Platform ───
 
-IDE="claude-code"  # default
-
-if [ -d "$TARGET/.kiro" ]; then
-    IDE="kiro"
-elif [ -d "$TARGET/.claude" ] || [ -f "$TARGET/CLAUDE.md" ]; then
-    IDE="claude-code"
+if [ -z "$PLATFORM" ]; then
+    # Check each platform's detect_pattern against target directory
+    PLATFORM="generic"
+    while IFS='|' read -r id agents ddd detect; do
+        if [ "$detect" != "NONE" ] && [ -e "$TARGET/$detect" ]; then
+            PLATFORM="$id"
+            break
+        fi
+    done < <(platforms_table)
 fi
 
+# Resolve platform config
+PLATFORM_ROW=$(resolve_platform "$PLATFORM")
+if [ -z "$PLATFORM_ROW" ]; then
+    echo "❌ Unknown platform: $PLATFORM"
+    echo "   Use --list-platforms to see supported platforms."
+    exit 1
+fi
+
+IFS='|' read -r P_ID P_AGENTS P_DDD P_DETECT <<< "$PLATFORM_ROW"
+
 echo "🏛️  AI-Ready-Repo Installer"
-echo "   Source: $SOURCE"
-echo "   Target: $TARGET"
-echo "   IDE:    $IDE"
+echo "   Source:   $SOURCE"
+echo "   Target:   $TARGET"
+echo "   Platform: $PLATFORM"
 echo ""
 
-# ─── Install — track everything for manifest ───
+# ─── Install — Track Everything for Manifest ───
 
 INSTALLED_FILES=()
 
@@ -116,70 +199,47 @@ install_file() {
         return
     fi
 
-    # Create parent directory
     mkdir -p "$(dirname "$dst")"
     cp "$src" "$dst"
     INSTALLED_FILES+=("$rel")
     echo "  ✓ $rel"
 }
 
-# ─── Claude Code layout ───
+# ─── Install Files Based on Platform Config ───
 
-if [ "$IDE" = "claude-code" ]; then
-    echo "Installing for Claude Code..."
-    echo ""
+echo "Installing for $PLATFORM..."
+echo ""
 
-    # AGENTS.md at project root
-    install_file "$SOURCE/AGENTS.md" "$TARGET/AGENTS.md"
+# Install agents entry point
+install_file "$SOURCE/AGENTS.md" "$TARGET/$P_AGENTS"
 
-    # .ai-ready/ directory
-    for f in "$SOURCE/.ai-ready/"*; do
-        [ -f "$f" ] || continue
-        filename="$(basename "$f")"
-        install_file "$f" "$TARGET/.ai-ready/$filename"
-    done
+# Install .ai-ready/ contents to DDD target
+for f in "$SOURCE/.ai-ready/"*; do
+    [ -f "$f" ] || continue
+    filename="$(basename "$f")"
+    install_file "$f" "$TARGET/$P_DDD/$filename"
+done
 
-# ─── Kiro layout ───
-
-elif [ "$IDE" = "kiro" ]; then
-    echo "Installing for Kiro..."
-    echo ""
-
-    # AGENTS.md → .kiro/steering/ai-ready-context.md
-    install_file "$SOURCE/AGENTS.md" "$TARGET/.kiro/steering/ai-ready-context.md"
-
-    # .ai-ready/ files → .kiro/docs/ai-ready/
-    for f in "$SOURCE/.ai-ready/"*; do
-        [ -f "$f" ] || continue
-        filename="$(basename "$f")"
-        install_file "$f" "$TARGET/.kiro/docs/ai-ready/$filename"
-    done
-fi
-
-# ─── Generate manifest (WHAT_WAS_ADDED.md) — only if files were installed ───
+# ─── Generate Manifest ───
 
 if [ ${#INSTALLED_FILES[@]} -eq 0 ]; then
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "✅ Installed 0 files for $IDE (all already present)"
+    echo "✅ Installed 0 files for $PLATFORM (all already present)"
     echo "   Use --force to overwrite existing files."
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     exit 0
 fi
 
-MANIFEST_PATH="$TARGET/.ai-ready/WHAT_WAS_ADDED.md"
-if [ "$IDE" = "kiro" ]; then
-    MANIFEST_PATH="$TARGET/.kiro/docs/ai-ready/WHAT_WAS_ADDED.md"
-fi
-
+MANIFEST_PATH="$TARGET/$P_DDD/WHAT_WAS_ADDED.md"
 mkdir -p "$(dirname "$MANIFEST_PATH")"
 {
     echo "# What Was Added"
     echo ""
     echo "Installed by AI-Ready-Repo Engine on $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    echo "IDE: $IDE | Source: $SOURCE"
+    echo "Platform: $PLATFORM | Source: $SOURCE"
     echo ""
-    echo "## Files (remove all to uninstall, or run: bash install.sh <src> <target> --uninstall)"
+    echo "## Files (run with --uninstall to remove all)"
     echo ""
     for f in "${INSTALLED_FILES[@]}"; do
         echo "- $f"
@@ -189,11 +249,11 @@ mkdir -p "$(dirname "$MANIFEST_PATH")"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "✅ Installed ${#INSTALLED_FILES[@]} files for $IDE"
+echo "✅ Installed ${#INSTALLED_FILES[@]} files for $PLATFORM"
 echo ""
 echo "   Your agent now has full project understanding."
-echo "   See .ai-ready/REVIEW-REPORT.md for confidence levels and gaps."
+echo "   See $P_DDD/REVIEW-REPORT.md for confidence levels and gaps."
 echo ""
-echo "   Manifest: $(echo "$MANIFEST_PATH" | sed "s|$TARGET/||")"
+echo "   Manifest: $P_DDD/WHAT_WAS_ADDED.md"
 echo "   Uninstall: bash install.sh $SOURCE $TARGET --uninstall"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

@@ -972,6 +972,193 @@ def generate_hook_config(ide: str = "claude-code") -> dict[str, Any]:
     return {}
 
 
+# ─── Incremental Update (Competitive Feature #2) ───
+
+def incremental_update(output_path: Path, repo_path: Path) -> dict[str, Any]:
+    """Detect changed files since last generation and return what needs re-analysis.
+
+    Uses git diff against the commit hash stored in ai-ready.json.
+    Returns only the files that need re-processing — not the full repo.
+
+    Returns:
+        {
+            "needs_update": bool,
+            "changed_files": [str],  # relative paths of changed source files
+            "new_files": [str],      # files added since last gen
+            "deleted_files": [str],  # files removed since last gen
+            "commits_since": int,
+            "last_commit": str,      # current HEAD hash
+        }
+    """
+    repo_path = _validate_repo_path(Path(repo_path))
+    output_path = Path(output_path)
+
+    # Read stored generation commit
+    meta_path = output_path / ".ai-ready" / "ai-ready.json"
+    if not meta_path.exists():
+        return {"needs_update": True, "changed_files": [], "new_files": [], "deleted_files": [],
+                "commits_since": -1, "last_commit": "", "reason": "no ai-ready.json — full regeneration needed"}
+
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {"needs_update": True, "changed_files": [], "new_files": [], "deleted_files": [],
+                "commits_since": -1, "last_commit": "", "reason": "corrupt ai-ready.json"}
+
+    stored_commit = meta.get("_last_commit", "")
+    if not stored_commit:
+        return {"needs_update": True, "changed_files": [], "new_files": [], "deleted_files": [],
+                "commits_since": -1, "last_commit": "", "reason": "no stored commit hash — full regeneration needed"}
+
+    # Get current HEAD
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_path, capture_output=True, text=True, timeout=10,
+        )
+        current_head = result.stdout.strip() if result.returncode == 0 else ""
+    except subprocess.TimeoutExpired:
+        current_head = ""
+
+    if not current_head:
+        return {"needs_update": True, "changed_files": [], "new_files": [], "deleted_files": [],
+                "commits_since": 0, "last_commit": "", "reason": "cannot determine HEAD"}
+
+    if current_head == stored_commit:
+        return {"needs_update": False, "changed_files": [], "new_files": [], "deleted_files": [],
+                "commits_since": 0, "last_commit": current_head}
+
+    # Get diff between stored commit and HEAD
+    source_exts = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".rb", ".java", ".kt", ".swift"}
+
+    try:
+        # Changed/modified files
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "--diff-filter=M", f"{stored_commit}..HEAD"],
+            cwd=repo_path, capture_output=True, text=True, timeout=30,
+        )
+        changed = [f for f in result.stdout.strip().split("\n") if f and Path(f).suffix in source_exts]
+
+        # New files
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "--diff-filter=A", f"{stored_commit}..HEAD"],
+            cwd=repo_path, capture_output=True, text=True, timeout=30,
+        )
+        new = [f for f in result.stdout.strip().split("\n") if f and Path(f).suffix in source_exts]
+
+        # Deleted files
+        result = subprocess.run(
+            ["git", "diff", "--name-only", "--diff-filter=D", f"{stored_commit}..HEAD"],
+            cwd=repo_path, capture_output=True, text=True, timeout=30,
+        )
+        deleted = [f for f in result.stdout.strip().split("\n") if f and Path(f).suffix in source_exts]
+
+        # Commit count
+        result = subprocess.run(
+            ["git", "rev-list", "--count", f"{stored_commit}..HEAD"],
+            cwd=repo_path, capture_output=True, text=True, timeout=10,
+        )
+        commits_since = int(result.stdout.strip()) if result.returncode == 0 else 0
+
+    except (subprocess.TimeoutExpired, ValueError):
+        return {"needs_update": True, "changed_files": [], "new_files": [], "deleted_files": [],
+                "commits_since": 0, "last_commit": current_head, "reason": "git diff failed"}
+
+    needs_update = bool(changed or new or deleted)
+    return {
+        "needs_update": needs_update,
+        "changed_files": changed,
+        "new_files": new,
+        "deleted_files": deleted,
+        "commits_since": commits_since,
+        "last_commit": current_head,
+    }
+
+
+# ─── Guided Learning Tour (Competitive Feature #4) ───
+
+def generate_learning_tour(import_graph: dict[str, Any]) -> list[dict[str, str]]:
+    """Generate a topologically-sorted learning order for modules.
+
+    "Learn the codebase in the right order" — start with modules that have
+    no dependencies (foundations), then modules that only depend on those,
+    and so on. This gives a new developer the optimal reading path.
+
+    Returns list of {name, path, reason, depends_on} in learning order.
+    """
+    modules = import_graph.get("modules", [])
+    if not modules:
+        return []
+
+    # Build adjacency: module_name → set of dependencies
+    deps: dict[str, set] = {}
+    name_to_module: dict[str, dict] = {}
+    for mod in modules:
+        name = mod["name"]
+        name_to_module[name] = mod
+        deps[name] = set(mod.get("imports_from", []))
+
+    # Topological sort (Kahn's algorithm)
+    in_degree: dict[str, int] = {name: 0 for name in deps}
+    for name, mod_deps in deps.items():
+        for dep in mod_deps:
+            if dep in in_degree:
+                in_degree[name] = in_degree.get(name, 0)  # dep adds to name's in-degree
+                # Actually: name depends on dep, so dep has an edge TO name
+                pass
+    # Recompute: in_degree[X] = number of modules X depends on (that are in our set)
+    for name, mod_deps in deps.items():
+        in_degree[name] = len(mod_deps & set(deps.keys()))
+
+    tour: list[dict[str, str]] = []
+    queue = sorted([n for n, d in in_degree.items() if d == 0])
+    visited: set[str] = set()
+
+    while queue:
+        current = queue.pop(0)
+        if current in visited:
+            continue
+        visited.add(current)
+
+        mod = name_to_module.get(current, {})
+        dep_list = sorted(deps.get(current, set()) & set(deps.keys()))
+
+        if not dep_list:
+            reason = "Foundation — no internal dependencies. Start here."
+        else:
+            reason = f"Depends on: {', '.join(dep_list)} (learn those first)"
+
+        tour.append({
+            "name": current,
+            "path": mod.get("path", f"{current}/"),
+            "reason": reason,
+            "depends_on": dep_list,
+        })
+
+        # Find modules whose in-degree drops to 0 after removing current
+        for name, mod_deps in deps.items():
+            if name in visited:
+                continue
+            if current in mod_deps:
+                in_degree[name] -= 1
+                if in_degree[name] <= 0 and name not in visited:
+                    queue.append(name)
+        queue.sort()
+
+    # Add any remaining (cycles) at the end
+    for name in deps:
+        if name not in visited:
+            mod = name_to_module.get(name, {})
+            tour.append({
+                "name": name,
+                "path": mod.get("path", f"{name}/"),
+                "reason": "Circular dependency — read after understanding the rest",
+                "depends_on": sorted(deps.get(name, set()) & set(deps.keys())),
+            })
+
+    return tour
+
+
 # ─── Multi-Package Support (P4) ───
 
 def run_multi_package(
