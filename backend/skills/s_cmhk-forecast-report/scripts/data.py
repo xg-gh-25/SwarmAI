@@ -114,7 +114,12 @@ def fetch_genai_bedrock_split(client: DataProxyClient, cycle_id: str,
     Each entry: {"month": "2026-01", "revenue": float}
     """
     try:
-        # Use current month range: last 12 months of ar_month_start_date
+        # Scope filter: GCR = all, GCR/BU = filter by sh_l3
+        scope_filter = ""
+        if hierarchy_id and hierarchy_id != "GCR" and "/" in hierarchy_id:
+            bu = hierarchy_id.split("/", 1)[1].replace("'", "''")
+            scope_filter = f"AND sh_l3 = '{bu}'"
+
         sql = f"""
             SELECT ar_month_start_date,
                    CASE WHEN genai_product_group_gcr LIKE 'Bedrock%'
@@ -126,6 +131,7 @@ def fetch_genai_bedrock_split(client: DataProxyClient, cycle_id: str,
               AND sh_l1 = 'GCR'
               AND genai_flag = 'GENAI'
               AND ar_month_start_date >= DATE '2025-01-01'
+              {scope_filter}
             GROUP BY ar_month_start_date,
                      CASE WHEN genai_product_group_gcr LIKE 'Bedrock%'
                           OR genai_product_group_gcr LIKE 'Amazon Bedrock%'
