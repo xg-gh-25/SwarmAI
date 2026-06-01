@@ -186,19 +186,37 @@ the requirement matches goal indicators → override scope to "goal".
 
 **Every AC must describe an observable outcome, not a mechanism.**
 
-Test: "If I implement a no-op that produces the named artifact (file, output, endpoint) but delivers zero user value — does this AC still pass?" If yes → AC is too weak.
+**Three filters — ALL must pass for every AC:**
 
-| ❌ Mechanism AC | ✅ Outcome AC |
-|----------------|--------------|
+**Filter 1: No-op test** — "If I implement a no-op that produces the named artifact (file, output, endpoint) but delivers zero user value — does this AC still pass?" If yes → AC is too weak.
+
+**Filter 2: User-value test** — "Would a real user pay $5 for this AC being true?" If the answer is "they'd expect that for free / they wouldn't notice" → AC is measuring an implementation detail, not value delivery.
+
+**Filter 3: Garbage-in test** — "Could this AC pass with trivially wrong content?" If the output is a document/report/analysis, can it pass by being structurally correct but factually empty? Examples of ACs that FAIL this filter:
+- "Produces TECH.md file" ← passes with an empty template
+- "code-intel.json has valid schema" ← passes with fabricated module names
+- "AGENTS.md is ≤150 lines" ← passes with Lorem Ipsum
+
+**Fix: add a QUALITY qualifier to every content-producing AC:**
+- "TECH.md conventions each cite 2+ source files where the pattern was observed"
+- "code-intel.json edges verified against actual import statements (edge count > 0)"
+- "AGENTS.md Critical Rules are backed by code evidence (not README paraphrase)"
+
+| ❌ Mechanism/Existence AC | ✅ Outcome + Quality AC |
+|---|---|
 | "Save .full_data.json to disk" | "Re-render with insights completes in <2s without network calls" |
-| "Add fallback query to forecast table" | "≥90% of top-20 accounts have non-empty owner field" |
+| "Produces TECH.md" | "TECH.md conventions cite 2+ source files each; not derivable from README alone" |
+| "code-intel.json valid schema" | "code-intel.json modules match actual directory structure; edges from verified imports" |
 | "Filter incomplete month" | "No MTD partial data appears in insights_data.json monthly_trend" |
+| "Works on external repo" | "Output contains at least 3 facts discoverable ONLY by reading source code" |
 
 **Rules:**
 - Each AC must be verifiable by a command, assertion, or observation — not by reading code
 - "Does X exist?" is never sufficient — "Does X achieve Y?" is required
 - If the AC is about a cache/optimization: the AC measures the speedup, not the cache existence
 - If the AC is about data quality: the AC measures the output quality, not the query change
+- **If the AC is about generated content: the AC measures content quality, not just structure**
+- **At least 1 AC per feature must be a "user would notice" criterion — something that fails if the output is trivially wrong**
 
 ### Pre-mortem Gate
 

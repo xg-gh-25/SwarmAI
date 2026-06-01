@@ -15,8 +15,9 @@
 2. Completion Audit — AC → evidence verification
 3. Adversarial Review Gate — spawn specialist sub-agents (multi-domain review)
 4. Meta-Review — spawn sub-agent (operational blind spots)
-5. Doc Sync Check — non-blocking warning (surfaces doc gaps as todos)
-6. Push-Ready Gate — binary final verdict
+5. User-Value Probe — "does output contain anything user couldn't get in 2 min?"
+6. Doc Sync Check — non-blocking warning (surfaces doc gaps as todos)
+7. Push-Ready Gate — binary final verdict
 ```
 
 ### 🚨 CRITICAL: Adversarial Review is NON-NEGOTIABLE
@@ -633,6 +634,75 @@ If verdict is RISKS_IDENTIFIED: list each risk with concrete mitigation.
 **Profile gating:**
 - full, bugfix → run meta-review
 - trivial, research, docs → skip (no operational context to analyze)
+
+---
+
+### User-Value Probe (BLOCKING)
+
+**After meta-review, before Doc Sync Check.** Applies to ALL profiles that
+produce user-facing output (full, bugfix). Skip for research/docs.
+
+**Purpose:** Catches the "code is correct but output is useless" failure mode.
+Adversarial review validates code quality. Meta-review validates operational
+correctness. Neither asks: **"Would a real user actually benefit from this?"**
+
+This probe was born from run_bbe3f167 (AI-Ready-Repo Engine M1, 2026-06-01):
+pipeline declared PUSH-READY with 9 green tests, adversarial clean, all ACs
+pass — but the output was a README paraphrase. No code was read. The TECH.md
+had no file citations. code-intel.json edges were fabricated. A user receiving
+this output would learn NOTHING they couldn't get from `cat README.md`.
+
+**The probe asks ONE question:**
+
+> "If I'm the user who requested this feature, and I receive this output —
+> can I point to at least 3 things in the output that are ONLY knowable by
+> the work this pipeline did? Things I couldn't have gotten by spending 2
+> minutes myself?"
+
+**How to verify (mechanical, not vibes):**
+
+1. Pick 3 claims from the output (e.g., a convention in TECH.md, an edge in
+   code-intel.json, a gotcha in IMPROVEMENT.md, a test result)
+2. For each claim, answer: "Could this be produced WITHOUT the work this
+   pipeline did?" — i.e., without reading source code, running tests, analyzing
+   git history, or asking the user questions.
+3. If YES for all 3 → the output is derivable from public surface info →
+   **NOT-PUSH-READY: output adds no value over what user could do in 2 minutes**
+
+**Examples:**
+
+| Claim in Output | Derivable without pipeline work? | Verdict |
+|---|---|---|
+| "Uses Python 3.9+" | YES — visible in pyproject.toml | ❌ Not value-add |
+| "palace.py `mine_lock` is threading.Lock, not async-safe — concurrent mine from MCP + CLI = deadlock" | NO — requires reading palace.py:35 + understanding MCP server concurrency model | ✅ Value-add |
+| "ALWAYS call through `palace.get_collection()` — never instantiate PersistentClient directly (observed in: searcher.py:20, miner.py:23, format_miner.py:72)" | NO — requires reading 4 source files and identifying the repeated pattern | ✅ Value-add |
+| "Architecture: 12 modules" | YES — `ls mempalace/` gives this | ❌ Not value-add |
+
+**Verdict rules:**
+- 3+ value-add claims found → PASS (output demonstrates genuine work)
+- 1-2 value-add claims → WARNING (output is thin — suggest enrichment)
+- 0 value-add claims → **NOT-PUSH-READY** (output is a paraphrase, not analysis)
+
+**Record in delivery artifact:**
+```json
+{
+  "user_value_probe": {
+    "verdict": "PASS|WARNING|FAIL",
+    "claims_checked": 3,
+    "value_add_count": 3,
+    "evidence": [
+      {"claim": "...", "derivable_without_work": false, "source": "file:line"}
+    ]
+  }
+}
+```
+
+**Why this is BLOCKING (not advisory):** The pipeline's entire value proposition
+is "I did the work so you don't have to." If the output contains nothing that
+required the work, the pipeline consumed tokens and produced noise. A user who
+receives a "score 7.8/10" report full of README-derivable facts will never
+trust the tool again. First impressions are permanent. One garbage output
+destroys credibility for all future outputs.
 
 ---
 
