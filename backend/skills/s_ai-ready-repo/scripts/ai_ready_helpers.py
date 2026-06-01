@@ -835,3 +835,236 @@ def build_ai_ready_meta(score: float, project_name: str) -> dict[str, Any]:
             },
         },
     }
+
+
+# ─── Output Verification (VERIFY Phase) ───
+
+def select_verification_tasks(repo_path: Path) -> list[dict[str, Any]]:
+    """Select 3 verification tasks from git history.
+
+    Each task has:
+      - type: "fix" | "feat" | "refactor"
+      - description: commit subject (what to ask the agent)
+      - correct_file: primary file changed in that commit (ground truth)
+      - correct_functions: functions modified (from diff, if detectable)
+      - commit: hash for evidence
+
+    Selection:
+      1. Most recent fix:/hotfix:/revert: commit
+      2. Most recent feat: commit
+      3. Most recent large-diff commit (or refactor:)
+      Fallback: 3 most recent commits of any type
+    """
+    repo_path = _validate_repo_path(Path(repo_path))
+
+    # Get recent commits with files changed
+    try:
+        result = subprocess.run(
+            ["git", "log", "--pretty=format:%H|%s", "--name-only", "-n", "100"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return []
+
+    if result.returncode != 0:
+        return []
+
+    # Parse commits
+    commits = []
+    current: dict | None = None
+    for line in result.stdout.strip().split("\n"):
+        if not line:
+            continue
+        if "|" in line:
+            parts = line.split("|", 1)
+            if len(parts[0]) == 40 and all(c in "0123456789abcdef" for c in parts[0]):
+                if current:
+                    commits.append(current)
+                current = {"hash": parts[0], "subject": parts[1], "files": []}
+                continue
+        if current and line.strip():
+            current["files"].append(line.strip())
+    if current:
+        commits.append(current)
+
+    # Select by type
+    tasks: list[dict[str, Any]] = []
+    fix_pattern = re.compile(r"^(fix|hotfix|revert|bugfix)[\s:(]", re.IGNORECASE)
+    feat_pattern = re.compile(r"^feat[\s:(]", re.IGNORECASE)
+
+    # Task 1: fix commit
+    for c in commits:
+        if fix_pattern.match(c["subject"]) and c["files"]:
+            source_files = [f for f in c["files"] if not f.startswith("tests/") and f.endswith((".py", ".ts", ".js", ".rs", ".go"))]
+            if source_files:
+                tasks.append({
+                    "type": "fix",
+                    "description": c["subject"],
+                    "correct_file": source_files[0],
+                    "commit": c["hash"][:7],
+                })
+                break
+
+    # Task 2: feat commit
+    for c in commits:
+        if feat_pattern.match(c["subject"]) and c["files"]:
+            source_files = [f for f in c["files"] if not f.startswith("tests/") and f.endswith((".py", ".ts", ".js", ".rs", ".go"))]
+            if source_files:
+                tasks.append({
+                    "type": "feat",
+                    "description": c["subject"],
+                    "correct_file": source_files[0],
+                    "commit": c["hash"][:7],
+                })
+                break
+
+    # Task 3: largest diff (most files changed)
+    for c in sorted(commits[:30], key=lambda x: len(x["files"]), reverse=True):
+        if c["hash"][:7] not in [t.get("commit") for t in tasks] and c["files"]:
+            source_files = [f for f in c["files"] if not f.startswith("tests/") and f.endswith((".py", ".ts", ".js", ".rs", ".go"))]
+            if source_files:
+                tasks.append({
+                    "type": "refactor",
+                    "description": c["subject"],
+                    "correct_file": source_files[0],
+                    "commit": c["hash"][:7],
+                })
+                break
+
+    # Fallback: use first 3 commits with source files
+    if len(tasks) < 3:
+        for c in commits:
+            if len(tasks) >= 3:
+                break
+            if c["hash"][:7] in [t.get("commit") for t in tasks]:
+                continue
+            source_files = [f for f in c["files"] if not f.startswith("tests/") and f.endswith((".py", ".ts", ".js", ".rs", ".go"))]
+            if source_files:
+                tasks.append({
+                    "type": "general",
+                    "description": c["subject"],
+                    "correct_file": source_files[0],
+                    "commit": c["hash"][:7],
+                })
+
+    return tasks[:3]
+
+
+def build_verification_prompt(ddd_content: dict[str, str], tasks: list[dict]) -> str:
+    """Build the sub-agent verification prompt.
+
+    Args:
+        ddd_content: dict mapping filename → content string
+            Expected keys: "AGENTS.md", "TECH.md", "IMPROVEMENT.md", "code-intel.json"
+        tasks: list from select_verification_tasks()
+
+    Returns:
+        Complete prompt for the verification sub-agent.
+        The prompt contains ONLY DDD text — no source code, no file paths to read.
+    """
+    prompt_parts = [
+        "You are verifying AI-Ready artifacts. You have ONLY the following context",
+        "about a codebase — no source code access, no file reading tools.",
+        "",
+        "Your job: for each task below, identify the CORRECT file and function",
+        "to modify. Use ONLY the information provided. If the answer is not",
+        "findable from these artifacts, say 'INSUFFICIENT — need: [what is missing]'.",
+        "",
+        "=" * 60,
+        "ARTIFACTS (this is ALL you have):",
+        "=" * 60,
+        "",
+    ]
+
+    for filename, content in ddd_content.items():
+        prompt_parts.append(f"### {filename}")
+        prompt_parts.append("```")
+        prompt_parts.append(content)
+        prompt_parts.append("```")
+        prompt_parts.append("")
+
+    prompt_parts.append("=" * 60)
+    prompt_parts.append("TASKS (answer each):")
+    prompt_parts.append("=" * 60)
+    prompt_parts.append("")
+
+    for i, task in enumerate(tasks, 1):
+        prompt_parts.append(f"Task {i} ({task['type']}): {task['description']}")
+        prompt_parts.append(f"  → Which file would you modify?")
+        prompt_parts.append(f"  → Which function/class in that file?")
+        prompt_parts.append(f"  → What's your approach (1 sentence)?")
+        prompt_parts.append("")
+
+    prompt_parts.append("=" * 60)
+    prompt_parts.append("FORMAT: For each task, respond exactly:")
+    prompt_parts.append("  TASK N: FILE: <path> | FUNCTION: <name> | APPROACH: <1 sentence>")
+    prompt_parts.append("  or: TASK N: INSUFFICIENT — need: <what specific info is missing>")
+
+    return "\n".join(prompt_parts)
+
+
+def evaluate_verification_response(
+    response: str,
+    tasks: list[dict],
+) -> dict[str, Any]:
+    """Evaluate the sub-agent's verification response against ground truth.
+
+    Returns:
+        {
+            "passed": bool (2/3 correct = pass),
+            "score": "2/3",
+            "results": [{"task": ..., "correct": bool, "detail": str}],
+            "feedback": [str] (specific gaps if any task failed)
+        }
+    """
+    results = []
+    feedback = []
+    correct_count = 0
+
+    for i, task in enumerate(tasks, 1):
+        # Look for "TASK N:" in response
+        task_pattern = re.compile(
+            rf"TASK\s*{i}:?\s*(.*?)(?=TASK\s*{i+1}|$)",
+            re.IGNORECASE | re.DOTALL,
+        )
+        match = task_pattern.search(response)
+
+        if not match:
+            results.append({"task": task["description"][:50], "correct": False, "detail": "No response found"})
+            feedback.append(f"Task {i}: sub-agent gave no answer — DDD output may be unclear")
+            continue
+
+        answer = match.group(1).strip()
+
+        if "INSUFFICIENT" in answer.upper():
+            results.append({"task": task["description"][:50], "correct": False, "detail": f"Insufficient: {answer}"})
+            # Extract what's missing for feedback
+            need_match = re.search(r"need:\s*(.+)", answer, re.IGNORECASE)
+            if need_match:
+                feedback.append(f"Task {i} ({task['type']}): Missing from output — {need_match.group(1).strip()}")
+            else:
+                feedback.append(f"Task {i} ({task['type']}): Sub-agent said INSUFFICIENT but didn't specify what's missing")
+            continue
+
+        # Check if correct file is mentioned
+        correct_file = task["correct_file"]
+        # Match on filename (without full path) or full path
+        filename = Path(correct_file).name
+        file_stem = Path(correct_file).stem
+
+        if correct_file in answer or filename in answer or file_stem in answer:
+            correct_count += 1
+            results.append({"task": task["description"][:50], "correct": True, "detail": f"Found: {filename}"})
+        else:
+            results.append({"task": task["description"][:50], "correct": False, "detail": f"Expected: {correct_file}, got: {answer[:80]}"})
+            feedback.append(f"Task {i} ({task['type']}): Agent pointed to wrong file. Expected {correct_file}. TECH.md may need better module mapping for this area.")
+
+    return {
+        "passed": correct_count >= 2,
+        "score": f"{correct_count}/{len(tasks)}",
+        "results": results,
+        "feedback": feedback,
+    }

@@ -37,7 +37,8 @@ Making {repo_name} genuinely understood by AI agents.
     2. INGEST    — Parse files, detect stack, gather git history
     3. UNDERSTAND — Read code, map modules, extract patterns
     4. GENERATE  — Produce DDD artifacts (.ai-ready/ + AGENTS.md)
-    5. DELIVER   — Present output + next steps to user
+    5. VERIFY    — Sub-agent test: can it use the output? (3 tasks)
+    6. DELIVER   — Present output + next steps to user
 
   Output:
     AGENTS.md              ← Entry point (≤150 lines)
@@ -539,7 +540,79 @@ Generate a human-readable report covering:
 - Improvement recommendations (prioritized)
 - Known gaps (what the engine couldn't determine)
 
-### Phase 5: DELIVER (post-generation)
+### Phase 5: VERIFY (sub-agent quality gate)
+
+> "Can an agent actually USE this output?" — proved mechanically, not assumed.
+
+**Step 5.1: Select 3 verification tasks from git log**
+
+```python
+from ai_ready_helpers import select_verification_tasks
+tasks = select_verification_tasks(Path(repo_path))
+# Returns: [{type, description, correct_file, commit}]
+```
+
+If fewer than 2 tasks found (repo has < 3 meaningful commits), skip VERIFY
+and note in REVIEW-REPORT.md: "VERIFY skipped — insufficient commit history."
+
+**Step 5.2: Build verification prompt**
+
+```python
+from ai_ready_helpers import build_verification_prompt
+
+# Collect the generated DDD content
+ddd_content = {
+    "AGENTS.md": Path(output_path / "AGENTS.md").read_text(),
+    "TECH.md": Path(output_path / ".ai-ready/TECH.md").read_text(),
+    "IMPROVEMENT.md": Path(output_path / ".ai-ready/IMPROVEMENT.md").read_text(),
+    "code-intel.json": Path(output_path / ".ai-ready/code-intel.json").read_text(),
+}
+
+prompt = build_verification_prompt(ddd_content, tasks)
+```
+
+**Step 5.3: Spawn verification sub-agent**
+
+Use the Agent tool to spawn a fresh sub-agent with ISOLATED context:
+
+```
+Agent({
+  description: "Verify AI-Ready output usability",
+  prompt: <the prompt from build_verification_prompt>,
+  model: "sonnet"  // cheaper model is fine for verification
+})
+```
+
+The sub-agent has ONLY the DDD text — no Read tools, no source code access.
+It must answer using solely the provided artifacts.
+
+**Step 5.4: Evaluate response**
+
+```python
+from ai_ready_helpers import evaluate_verification_response
+result = evaluate_verification_response(response, tasks)
+# Returns: {passed: bool, score: "2/3", results: [...], feedback: [...]}
+```
+
+**Step 5.5: Pass/Fail decision**
+
+- **PASS (score >= 2/3):** Proceed to DELIVER. Note score in REVIEW-REPORT.md.
+- **FAIL (score < 2/3):** Read the `feedback` list. Each entry tells you what's
+  missing from the output. Go back to GENERATE and add the missing information
+  (e.g., "dedup.py function list not in TECH.md" → add dedup.py to function tables).
+  Then re-run VERIFY (max 2 iterations).
+- **After 2 failed iterations:** Proceed to DELIVER anyway, but mark in
+  REVIEW-REPORT.md: "VERIFY FAILED — output has known gaps: {feedback}"
+
+**Progress display:**
+```
+## ✦ VERIFY [Sub-Agent Quality Test]
+→ Tasks: {N} from git log | Score: {X}/{N} | {PASS/FAIL}
+  {per-task result summary}
+  {feedback if any}
+```
+
+### Phase 6: DELIVER (post-verification)
 
 Present to user:
 ```

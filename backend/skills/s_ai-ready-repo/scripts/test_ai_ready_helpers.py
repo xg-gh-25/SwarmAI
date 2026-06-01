@@ -343,6 +343,112 @@ class TestImportGraphExtraction:
         # Should not crash on any repo
 
 
+# ─── Verification Tasks (M3) ───
+
+class TestVerificationTasks:
+    """Select tasks from git log and build verification prompts."""
+
+    def test_selects_tasks_from_git_log(self, tmp_path):
+        """Selects fix/feat/refactor tasks from a repo with conventional commits."""
+        from scripts.ai_ready_helpers import select_verification_tasks
+
+        repo = tmp_path / "verified"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=repo, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=repo, capture_output=True)
+
+        # Create commits with conventional prefixes
+        (repo / "handler.py").write_text("def handle(): pass")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "feat: add handler endpoint"], cwd=repo, capture_output=True)
+
+        (repo / "handler.py").write_text("def handle():\n    validate()\n    pass")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "fix: validate input before processing"], cwd=repo, capture_output=True)
+
+        (repo / "utils.py").write_text("def validate(): pass")
+        subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "refactor: extract validation to utils"], cwd=repo, capture_output=True)
+
+        tasks = select_verification_tasks(repo)
+        assert len(tasks) >= 2
+        # Each task has required fields
+        for t in tasks:
+            assert "type" in t
+            assert "description" in t
+            assert "correct_file" in t
+            assert "commit" in t
+            assert t["correct_file"].endswith(".py")
+
+    def test_builds_prompt_without_source_paths(self):
+        """Verification prompt contains only DDD text, no source file paths."""
+        from scripts.ai_ready_helpers import build_verification_prompt
+
+        ddd = {
+            "AGENTS.md": "# MyProject\n## Architecture\n- `src/core/` — business logic",
+            "TECH.md": "# Tech\n## Conventions\n- Always use repository pattern",
+        }
+        tasks = [
+            {"type": "fix", "description": "fix: null pointer in handler", "correct_file": "src/handler.py", "commit": "abc1234"},
+        ]
+
+        prompt = build_verification_prompt(ddd, tasks)
+
+        # Contains DDD content
+        assert "Always use repository pattern" in prompt
+        assert "Architecture" in prompt
+        # Contains task
+        assert "null pointer in handler" in prompt
+        # Does NOT contain instruction to read source
+        assert "Read(" not in prompt
+        assert "/src/handler.py" not in prompt  # source path not leaked
+
+    def test_evaluates_correct_response(self):
+        """Correct file identification scores as pass."""
+        from scripts.ai_ready_helpers import evaluate_verification_response
+
+        tasks = [
+            {"type": "fix", "description": "fix null pointer", "correct_file": "src/handler.py", "commit": "abc"},
+            {"type": "feat", "description": "feat add auth", "correct_file": "src/auth.py", "commit": "def"},
+            {"type": "refactor", "description": "refactor utils", "correct_file": "src/utils.py", "commit": "ghi"},
+        ]
+
+        response = """
+        TASK 1: FILE: src/handler.py | FUNCTION: handle_request | APPROACH: add null check
+        TASK 2: FILE: src/auth.py | FUNCTION: authenticate | APPROACH: add middleware
+        TASK 3: FILE: src/utils.py | FUNCTION: validate | APPROACH: extract to separate module
+        """
+
+        result = evaluate_verification_response(response, tasks)
+        assert result["passed"] is True
+        assert result["score"] == "3/3"
+        assert all(r["correct"] for r in result["results"])
+
+    def test_evaluates_insufficient_response(self):
+        """INSUFFICIENT response generates feedback for GENERATE improvement."""
+        from scripts.ai_ready_helpers import evaluate_verification_response
+
+        tasks = [
+            {"type": "fix", "description": "fix dedup threshold", "correct_file": "mempalace/dedup.py", "commit": "abc"},
+            {"type": "feat", "description": "feat add webhook", "correct_file": "mempalace/miner.py", "commit": "def"},
+            {"type": "refactor", "description": "refactor palace", "correct_file": "mempalace/palace.py", "commit": "ghi"},
+        ]
+
+        response = """
+        TASK 1: INSUFFICIENT — need: dedup.py function list not in TECH.md
+        TASK 2: INSUFFICIENT — need: no extension points documented for post-mine hooks
+        TASK 3: FILE: mempalace/palace.py | FUNCTION: file_already_mined | APPROACH: simplify pagination
+        """
+
+        result = evaluate_verification_response(response, tasks)
+        assert result["passed"] is False
+        assert result["score"] == "1/3"
+        assert len(result["feedback"]) == 2
+        assert "dedup" in result["feedback"][0].lower()
+        assert "extension" in result["feedback"][1].lower()
+
+
 # ─── Output Path Resolution ───
 
 class TestOutputPathResolution:
