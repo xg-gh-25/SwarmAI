@@ -1028,6 +1028,19 @@ def incremental_update(output_path: Path, repo_path: Path) -> dict[str, Any]:
         return {"needs_update": False, "changed_files": [], "new_files": [], "deleted_files": [],
                 "commits_since": 0, "last_commit": current_head}
 
+    # Verify stored commit exists locally (handles force-push + shallow clone)
+    try:
+        verify = subprocess.run(
+            ["git", "cat-file", "-e", stored_commit],
+            cwd=repo_path, capture_output=True, timeout=5,
+        )
+        if verify.returncode != 0:
+            return {"needs_update": True, "changed_files": [], "new_files": [], "deleted_files": [],
+                    "commits_since": -1, "last_commit": current_head,
+                    "reason": "stored commit not in local history (force-push or shallow clone) — full regen needed"}
+    except subprocess.TimeoutExpired:
+        pass  # Continue anyway — best effort
+
     # Get diff between stored commit and HEAD
     source_exts = {".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".rb", ".java", ".kt", ".swift"}
 
@@ -1090,13 +1103,15 @@ def generate_learning_tour(import_graph: dict[str, Any]) -> list[dict[str, str]]
     if not modules:
         return []
 
-    # Build adjacency: module_name → set of dependencies
+    # Build adjacency: module_name → set of INTERNAL dependencies only
+    all_module_names = {m["name"] for m in modules}
     deps: dict[str, set] = {}
     name_to_module: dict[str, dict] = {}
     for mod in modules:
         name = mod["name"]
         name_to_module[name] = mod
-        deps[name] = set(mod.get("imports_from", []))
+        # Filter to only internal deps (external packages like numpy/fastapi don't count)
+        deps[name] = set(mod.get("imports_from", [])) & all_module_names
 
     # Topological sort (Kahn's algorithm)
     in_degree: dict[str, int] = {name: 0 for name in deps}
