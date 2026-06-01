@@ -12,12 +12,61 @@ All functions are pure/stateless. No LLM calls. No network.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import subprocess
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+
+# ─── Input Validation ───
+
+def _validate_repo_path(repo_path: Path) -> Path:
+    """Validate repo path: must exist, be a directory, and contain .git.
+
+    Resolves symlinks to prevent traversal attacks.
+    Raises ValueError if validation fails.
+    """
+    repo_path = Path(repo_path).resolve()
+
+    if not repo_path.exists():
+        raise ValueError(f"Path does not exist: {repo_path}")
+    if not repo_path.is_dir():
+        raise ValueError(f"Path is not a directory: {repo_path}")
+    if not (repo_path / ".git").exists():
+        raise ValueError(f"Not a git repository (no .git): {repo_path}")
+
+    return repo_path
+
+
+def _safe_file_read(file_path: Path, repo_root: Path, max_size: int = 10 * 1024 * 1024) -> str | None:
+    """Read a file safely: resolve symlinks, enforce containment within repo_root.
+
+    Returns file content or None if unsafe/unreadable.
+    """
+    resolved = file_path.resolve()
+    try:
+        resolved.relative_to(repo_root.resolve())
+    except ValueError:
+        # Path traversal attempt — file resolves outside repo
+        logger.warning(f"Path traversal blocked: {file_path} resolves to {resolved}")
+        return None
+
+    if not resolved.is_file():
+        return None
+
+    try:
+        if resolved.stat().st_size > max_size:
+            logger.warning(f"File too large ({resolved.stat().st_size} bytes), skipping: {resolved}")
+            return None
+        return resolved.read_text(encoding="utf-8", errors="replace")
+    except (OSError, PermissionError) as e:
+        logger.warning(f"Cannot read {resolved}: {e}")
+        return None
 
 
 # ─── code-intel.json v2 Schema Validation ───
@@ -101,24 +150,30 @@ def parse_git_gotchas(repo_path: Path) -> list[dict[str, str]]:
 
     Returns list of dicts with keys: when, risk, because.
     Only returns entries with real commit hash evidence.
+    Raises ValueError if repo_path is not a valid git repository.
     """
-    repo_path = Path(repo_path)
+    repo_path = _validate_repo_path(Path(repo_path))
     gotchas: list[dict[str, str]] = []
 
     # Get git log with hash, date, subject, and files changed
-    result = subprocess.run(
-        [
-            "git", "log", "--pretty=format:%H|%ai|%s",
-            "--name-only", "--diff-filter=M",
-            "-n", "200",  # Last 200 commits max
-        ],
-        cwd=repo_path,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    try:
+        result = subprocess.run(
+            [
+                "git", "log", "--pretty=format:%H|%ai|%s",
+                "--name-only", "--diff-filter=M",
+                "-n", "200",  # Last 200 commits max
+            ],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning(f"Git log timed out for {repo_path}")
+        return []
 
     if result.returncode != 0:
+        logger.warning(f"Git log failed for {repo_path}: {result.stderr.strip()}")
         return []
 
     # Parse log into commit records
@@ -169,7 +224,11 @@ def parse_git_gotchas(repo_path: Path) -> list[dict[str, str]]:
 
 
 def _parse_git_log(log_output: str) -> list[dict]:
-    """Parse git log --pretty=format:%H|%ai|%s --name-only output."""
+    """Parse git log --pretty=format:%H|%ai|%s --name-only output.
+
+    Handles pipes in commit subjects by splitting on first 2 pipes only.
+    Supports both SHA-1 (40 char) and future SHA-256 (64 char) hashes.
+    """
     commits = []
     current: dict | None = None
 
@@ -178,18 +237,25 @@ def _parse_git_log(log_output: str) -> list[dict]:
             continue
 
         # Check if this is a header line (hash|date|subject)
-        if "|" in line and len(line.split("|")) >= 3:
+        # Split on first 2 pipes only — subject may contain pipes
+        if "|" in line:
             parts = line.split("|", 2)
-            if len(parts[0]) == 40:  # SHA-1 hash
-                if current:
-                    commits.append(current)
-                current = {
-                    "hash": parts[0],
-                    "date": parts[1].strip(),
-                    "subject": parts[2].strip(),
-                    "files": [],
-                }
-                continue
+            if len(parts) >= 3:
+                hash_candidate = parts[0]
+                # Support SHA-1 (40) and SHA-256 (64) hashes
+                if (
+                    len(hash_candidate) in (40, 64)
+                    and all(c in "0123456789abcdef" for c in hash_candidate)
+                ):
+                    if current:
+                        commits.append(current)
+                    current = {
+                        "hash": hash_candidate,
+                        "date": parts[1].strip(),
+                        "subject": parts[2].strip(),
+                        "files": [],
+                    }
+                    continue
 
         # Otherwise it's a filename
         if current and line.strip():
@@ -236,8 +302,9 @@ def gather_repo_info(repo_path: Path) -> dict[str, Any]:
 
     Returns dict with: file_tree, tech_stack, git_stats, readme_content, config_files.
     Works on ANY git repository — no SwarmAI-specific assumptions.
+    Raises ValueError if repo_path is not a valid git repository.
     """
-    repo_path = Path(repo_path)
+    repo_path = _validate_repo_path(Path(repo_path))
 
     return {
         "file_tree": _build_file_tree(repo_path),
@@ -348,7 +415,10 @@ def _get_git_stats(repo_path: Path) -> dict[str, Any]:
         timeout=10,
     )
     if result.returncode == 0:
-        stats["total_commits"] = int(result.stdout.strip())
+        try:
+            stats["total_commits"] = int(result.stdout.strip())
+        except (ValueError, AttributeError):
+            stats["total_commits"] = 0
 
     # Contributors
     result = subprocess.run(
@@ -380,17 +450,17 @@ def _get_git_stats(repo_path: Path) -> dict[str, Any]:
 
 
 def _read_readme(repo_path: Path) -> str:
-    """Read README content (first 200 lines)."""
+    """Read README content (first 200 lines). Uses safe file read with containment check."""
     for name in ["README.md", "readme.md", "README.rst", "README.txt", "README"]:
-        readme = repo_path / name
-        if readme.exists():
-            lines = readme.read_text(encoding="utf-8", errors="replace").split("\n")
+        content = _safe_file_read(repo_path / name, repo_path)
+        if content:
+            lines = content.split("\n")
             return "\n".join(lines[:200])
     return ""
 
 
 def _find_config_files(repo_path: Path) -> dict[str, str]:
-    """Find and read key config files (first 50 lines each)."""
+    """Find and read key config files (first 50 lines each). Uses safe file reads."""
     config_names = [
         "pyproject.toml", "package.json", "Cargo.toml", "go.mod",
         "Makefile", "Dockerfile", "docker-compose.yml",
@@ -399,9 +469,9 @@ def _find_config_files(repo_path: Path) -> dict[str, str]:
 
     configs: dict[str, str] = {}
     for name in config_names:
-        path = repo_path / name
-        if path.exists():
-            lines = path.read_text(encoding="utf-8", errors="replace").split("\n")
+        content = _safe_file_read(repo_path / name, repo_path)
+        if content:
+            lines = content.split("\n")
             configs[name] = "\n".join(lines[:50])
 
     return configs
@@ -483,6 +553,24 @@ def render_agents_md(data: dict[str, Any]) -> str:
 
     # User section marker
     lines.append("<!-- user: Your additions below — refresh preserves this section -->")
+
+    # Enforce ≤150 line hard limit — trim gotchas and rules if over
+    MAX_LINES = 150
+    if len(lines) > MAX_LINES:
+        # Find sections we can trim (gotchas first, then rules)
+        for section_header in ("## Top Gotchas", "## Critical Rules"):
+            if len(lines) <= MAX_LINES:
+                break
+            start = next((i for i, l in enumerate(lines) if l == section_header), -1)
+            if start == -1:
+                continue
+            end = next(
+                (i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")),
+                len(lines),
+            )
+            # Keep header + max 2 items + blank line
+            keep = min(4, end - start)
+            lines = lines[:start + keep] + lines[end:]
 
     return "\n".join(lines)
 
