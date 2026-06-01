@@ -128,34 +128,118 @@ print(json.dumps({'info': info, 'gotchas': gotchas}, indent=2, default=str))
 "
 ```
 
-Also read:
-- README (first 200 lines — already in info['readme_content'])
-- Config files (already in info['config_files'])
-- Any user-provided signal documents (Read them directly)
+INGEST gives you the structural skeleton: file tree, tech stack, git stats, gotchas.
+It does NOT read code — that happens in UNDERSTAND (Phase 3).
+
+Also read any user-provided signal documents (Read them directly).
 
 ### Phase 3: UNDERSTAND
 
-Using the gathered info, analyze the codebase to determine:
+> 🚨 **THIS PHASE READS ACTUAL CODE. No shortcuts.**
+>
+> The entire value of AI-Ready-Repo is that an agent read the code so future
+> agents don't have to re-discover it. If you skip reading code, the output
+> is worthless — a README paraphrase anyone could write in 2 minutes.
 
-1. **Module boundaries** — group files by directory structure + import patterns
-2. **Entry points** — find main files, server starts, CLI commands, event handlers
-3. **Conventions** — detect patterns from code (naming, error handling, test style)
-4. **Architecture** — how modules relate (from imports and directory structure)
-5. **Hot zones** — use git log data from `info['git_stats']`
-6. **Route detection** — look for web framework patterns (FastAPI @app.route, Express router, etc.)
+**MANDATORY: Read at minimum these files before proceeding to GENERATE:**
 
-For each module detected, determine:
+#### Step 3.1: Identify key files to read (from INGEST file_tree)
+
+Pick files using this priority:
+1. **Entry points** — `__main__.py`, `cli.py`, `app.py`, `server.py`, `main.ts`, `index.ts`
+2. **Core module files** — the largest `.py`/`.ts`/`.rs` files by line count (top 5)
+3. **Config/setup** — already parsed in INGEST (`pyproject.toml`, `package.json`, etc.)
+4. **Base classes / interfaces** — files named `base.py`, `types.ts`, `interface.go`
+5. **Hot zones** — files with most fix/revert commits (from gotchas output)
+
+**Minimum reads: 8 files.** For repos <50 files, read ALL source files.
+For repos 50-200 files, read 10-15. For repos >200 files, read 15-20.
+
+#### Step 3.2: Extract REAL dependencies (from import statements)
+
+For EACH key file you read:
+```
+Grep for: import, from X import, require(), use, mod
+Record: {file} imports {module} → this IS the dependency graph
+```
+
+Do NOT guess dependencies from file names. Read the imports. Use Grep:
+```bash
+grep -rn "^import\|^from\|require(" {repo_path}/src/ --include="*.py" --include="*.ts" --include="*.js"
+```
+
+The `depends_on` and `depended_by` fields in code-intel.json MUST come from
+actual import statements you verified, not from guessing.
+
+#### Step 3.3: Extract REAL conventions (from code patterns)
+
+Read 3+ implementation files and look for REPEATED patterns:
+- Error handling style (exceptions? error codes? Result types?)
+- Naming conventions (snake_case? camelCase? prefixes?)
+- File organization (one class per file? barrel exports?)
+- Test patterns (fixtures? mocks? factories?)
+- Logging approach (structured? print? logger per module?)
+- DB access patterns (raw queries? ORM? repository pattern?)
+
+**Rule: every convention you write in TECH.md must cite at least 2 files where you observed it.**
+If you saw it in only 1 file, it might be an anomaly, not a convention.
+
+Example — GOOD:
+```
+ALWAYS use `logger = logging.getLogger(__name__)` per module
+  (observed in: palace.py:12, miner.py:8, searcher.py:5, backends/chroma.py:10)
+```
+
+Example — BAD:
+```
+ALWAYS use logging  ← (too vague, could mean anything)
+```
+
+#### Step 3.4: Extract REAL architecture (from what code actually does)
+
+For each module/directory:
+- Read the top of the file (docstring, first class/function)
+- What does it ACTUALLY do? (not what you guess from the filename)
+- What public API does it expose? (functions/classes that others import)
+- What does it depend on? (imports you verified in Step 3.2)
+
+#### Step 3.5: Detect entry points and routes
+
+- **CLI:** Read the actual CLI file — what commands exist? What do they do?
+- **HTTP routes:** Grep for `@app.route`, `@router.`, `app.get(`, `router.post(`
+- **MCP tools:** Grep for `@tool`, `@server.tool`, MCP handler registrations
+- **Event handlers:** Grep for `@listener`, `on_event`, signal handlers
+
+#### Step 3.6: Validate against running (if possible)
+
+If the project has a test suite or build command, try running it:
+```bash
+# Try to build/install
+cd {repo_path} && {detected_build_command} 2>&1 | tail -10
+
+# Try to run tests (just first few to verify they work)
+{detected_test_command} --co -q 2>&1 | tail -5  # collect only, don't run
+```
+
+This validates that your detected build/test commands actually work.
+If they fail, note the failure in REVIEW-REPORT.md.
+
+---
+
+**UNDERSTAND phase output** (these feed directly into GENERATE):
+
+For each module detected:
 - `name` — directory name or logical grouping
 - `path` — relative path from repo root
-- `responsibility` — one sentence: what this module does
-- `depends_on` — which other modules it imports from
-- `depended_by` — which modules import from it
+- `responsibility` — one sentence DERIVED FROM READING THE CODE (not from filename)
+- `depends_on` — FROM ACTUAL IMPORT STATEMENTS (cite file:line)
+- `depended_by` — FROM GREP OF WHO IMPORTS THIS MODULE
 - `entry_points` — exported/public functions that serve as API surface
 
 For routes (if web framework detected):
 - `method` — HTTP method
 - `path` — URL pattern
-- `handler` — file:function reference
+- `handler` — file:function reference (VERIFIED by reading the code)
 - `framework` — detected framework name
 
 ### Phase 4: GENERATE
@@ -202,12 +286,16 @@ End with: `<!-- user: Your additions below — refresh preserves this section --
 
 #### 4.3: TECH.md
 
-Generate from code analysis. Sections:
-- **Stack** — languages, frameworks, databases (from `info['tech_stack']`)
-- **Architecture** — module map (matches code-intel.json modules)
-- **Conventions** — prescriptive rules detected from code patterns
+Generate from ACTUAL CODE ANALYSIS (Phase 3 UNDERSTAND output). Sections:
+- **Stack** — languages, frameworks, databases (verified from imports + config)
+- **Architecture** — module map WITH verified dependency arrows (from Step 3.2)
+- **Conventions** — prescriptive rules, EACH citing 2+ files where observed (Step 3.3)
 - **Key Decisions** — architectural choices visible in code + git history
-- **Invariants** — things that must always be true
+- **Invariants** — things that must always be true (from base classes, assertions, guards)
+
+**Quality gate: TECH.md is REJECTED if any convention lacks file citations.**
+Every "ALWAYS do X" must say "(observed in: file1.py, file2.py)".
+Every "NEVER do Y" must say "(violation would break: explanation based on code reading)".
 
 End with: `<!-- user: Your additions below — refresh preserves this section -->`
 
@@ -320,6 +408,20 @@ Next steps:
 
 Score each 0-10. Overall = average. Minimum for "AI-Ready": 6.0.
 
+## Quality Gate (BLOCKING — before writing ANY output)
+
+Before entering GENERATE, self-check:
+
+| Check | Pass Condition | If FAIL |
+|-------|---------------|---------|
+| Files read | ≥8 source files actually Read (not just listed) | Go back to UNDERSTAND |
+| Import graph | `depends_on` derived from grep/Read of imports | Go back to Step 3.2 |
+| Conventions cited | Every convention cites 2+ files | Go back to Step 3.3 |
+| Entry points verified | Each entry point Read and confirmed | Go back to Step 3.5 |
+
+**If you didn't Read the code, you have NOTHING to generate.**
+README + git log alone is NEVER sufficient for TECH.md or code-intel.json.
+
 ## Boundaries
 
 ### Always
@@ -328,6 +430,9 @@ Score each 0-10. Overall = average. Minimum for "AI-Ready": 6.0.
 - IMPROVEMENT.md gotchas have commit evidence (WHEN/RISK/BECAUSE grammar)
 - All DDD files end with `<!-- user -->` preservation marker
 - Works on ANY repo — no SwarmAI-specific paths
+- **TECH.md conventions cite source files (2+ per convention)**
+- **code-intel.json edges come from verified import statements**
+- **Read ≥8 source files before generating output**
 
 ### Never
 - Never generate gotchas without commit hash evidence
@@ -335,3 +440,6 @@ Score each 0-10. Overall = average. Minimum for "AI-Ready": 6.0.
 - Never exceed 150 lines in AGENTS.md
 - Never overwrite existing AGENTS.md without asking
 - Never assume specific IDE or framework
+- **Never write TECH.md conventions without file citations**
+- **Never guess dependency edges — verify from imports**
+- **Never skip UNDERSTAND and go straight to GENERATE**
