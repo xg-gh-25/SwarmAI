@@ -738,8 +738,9 @@ def _merge_consecutive_assistant_messages(messages: list[dict]) -> list[dict]:
                 prev_content = [{"type": "text", "text": prev_content}]
             if isinstance(new_content, str):
                 new_content = [{"type": "text", "text": new_content}]
-            prev_content.extend(new_content)
-            prev["content"] = prev_content
+            # Defensive copy: avoid mutating the source row's content list
+            # in case a read cache is added in the future.
+            prev["content"] = list(prev_content) + list(new_content)
             # Take latest model
             if msg.get("model"):
                 prev["model"] = msg["model"]
