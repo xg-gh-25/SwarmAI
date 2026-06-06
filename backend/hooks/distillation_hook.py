@@ -1775,13 +1775,14 @@ class DistillationTriggerHook:
         E2E flow: DB messages → scan for entry IDs → update MEMORY.md metadata.
         This enables Ebbinghaus decay scoring to know which entries are "alive."
         """
+        import sqlite3
         from core.memory_decay import (
             scan_session_for_memory_refs,
             bump_entry_references,
             _ENTRY_ID_RE,
         )
         from utils.file_lock import flock_exclusive, flock_unlock
-        from database.sqlite import get_db_sync
+        from jobs.paths import DB_PATH
 
         if not memory_path.exists():
             return
@@ -1793,12 +1794,18 @@ class DistillationTriggerHook:
             return
 
         # 2. Fetch recent messages from this session (last 50, enough to detect refs)
-        db = get_db_sync()
-        rows = db.execute(
-            "SELECT content FROM messages WHERE session_id = ? "
-            "ORDER BY created_at DESC LIMIT 50",
-            (session_id,),
-        ).fetchall()
+        #    Use direct sqlite3 (this runs in a thread via asyncio.to_thread)
+        if not DB_PATH.exists():
+            return
+        conn = sqlite3.connect(str(DB_PATH), timeout=5)
+        try:
+            rows = conn.execute(
+                "SELECT content FROM messages WHERE session_id = ? "
+                "ORDER BY created_at DESC LIMIT 50",
+                (session_id,),
+            ).fetchall()
+        finally:
+            conn.close()
         messages = [{"content": row[0]} for row in rows if row[0]]
 
         if not messages:
@@ -1989,6 +1996,7 @@ class DistillationTriggerHook:
                 archived_sections: dict[str, list[str]] = {}
 
                 for section_name, cap in SECTION_CAPS.items():
+                    decay_available = False  # Reset per section (F2 fix)
                     section_range = _find_section_range(content, section_name)
                     if section_range is None:
                         continue
@@ -2044,9 +2052,22 @@ class DistillationTriggerHook:
                     overflow_count = len(entry_indices) - cap
                     evict_set = set(eviction_order[:overflow_count])
 
-                    overflow_indices = evict_set
+                    # Include metadata/detail lines that follow evicted entries
+                    # to prevent orphaned <!-- ref:... --> comments (F4 fix)
+                    full_evict_set: set[int] = set()
+                    for idx in evict_set:
+                        full_evict_set.add(idx)
+                        for offset in range(1, len(lines) - idx):
+                            next_idx = idx + offset
+                            if next_idx >= len(lines):
+                                break
+                            if lines[next_idx].strip().startswith("- "):
+                                break  # Next entry starts
+                            full_evict_set.add(next_idx)
+
+                    overflow_indices = full_evict_set
                     overflow_lines = [
-                        lines[i] for i in entry_indices if i in evict_set
+                        lines[i] for i in sorted(evict_set)
                     ]
                     if overflow_lines:
                         archived_sections[section_name] = overflow_lines
