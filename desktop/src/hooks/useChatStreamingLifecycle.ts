@@ -2073,8 +2073,22 @@ export function useChatStreamingLifecycle(
   const createErrorHandler = useCallback(
     (assistantMessageId: string, tabId?: string) => {
       const capturedTabId = tabId ?? activeTabIdRef.current;
+      // Capture stream generation — stale errors from a previous stream
+      // must not kill the spinner or invalidate handlers for the current stream.
+      const capturedStreamGen = streamGenRef.current;
 
       return (error: Error) => {
+        // Generation guard: discard errors from a previous stream.
+        if (capturedTabId) {
+          const genCheckTab = tabMapRef.current.get(capturedTabId);
+          if (genCheckTab && genCheckTab.streamGen !== capturedStreamGen) {
+            console.log('[ErrorHandler] Discarding stale error from previous stream generation', { capturedTabId });
+            return; // stale error — discard silently
+          }
+        } else if (streamGenRef.current !== capturedStreamGen) {
+          return; // stale error — discard silently
+        }
+
         console.error('Stream error:', error);
         const tabState = capturedTabId
           ? tabMapRef.current.get(capturedTabId)

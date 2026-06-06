@@ -860,11 +860,34 @@ class SessionUnit:
         # and at most 3s when flush is mid-timeout (rare, but prevents
         # user-visible error that forces resend).
         if self._pipe_flush_task and not self._pipe_flush_task.done():
-            self._pipe_flush_task.cancel()
+            # CRITICAL: Do NOT cancel — let the flush complete so the pipe
+            # is drained of stale response data.  Cancelling leaves old
+            # response bytes in the subprocess stdout pipe, which then get
+            # yielded as part of the NEW response (cross-turn bleed P0 bug).
+            #
+            # The flush itself has a 3s internal timeout + generation guard,
+            # so worst case we wait 3s here.  If it finishes faster (common
+            # case: <100ms when subprocess already idle), we proceed instantly.
             try:
-                await self._pipe_flush_task
+                await asyncio.wait_for(self._pipe_flush_task, timeout=5.0)
+            except asyncio.TimeoutError:
+                # Flush didn't complete in 3.5s — cancel and force-kill
+                # the subprocess for a clean slate on next spawn.
+                self._pipe_flush_task.cancel()
+                try:
+                    await self._pipe_flush_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                # Kill subprocess to ensure no stale pipe data remains
+                if self._client is not None:
+                    logger.warning(
+                        "session_unit.pipe_flush_timeout session_id=%s — "
+                        "killing subprocess for clean respawn",
+                        self.session_id,
+                    )
+                    await self.kill()
             except (asyncio.CancelledError, Exception):
-                pass  # Expected — cancel or flush timeout
+                pass  # Task completed with error — pipe is clean either way
             self._pipe_flush_task = None
 
         # ── STREAMING state handling — three cases ─────────────────────
@@ -2699,9 +2722,9 @@ class SessionUnit:
                 self.session_id,
             )
         except asyncio.CancelledError:
-            # send() cancelled us — expected, means user sent quickly after stop.
+            # Cancelled externally (e.g. timeout wrapper or session teardown).
             logger.info(
-                "session_unit.flush_pipe session_id=%s — cancelled by send()",
+                "session_unit.flush_pipe session_id=%s — cancelled externally",
                 self.session_id,
             )
             return
