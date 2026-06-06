@@ -168,13 +168,13 @@ R13. **Environment** — `nc -z` for port checks (never `lsof`). `asyncio.to_thr
 
 R14. **Deploy scope = rollback scope** — 1:1. One format + multiple writers = unify immediately. (P1)
 
-R15. **Read external API before coding against it.** Never code from memory. Symmetric: verify callers exist for new public functions (0 callers = dead code). (P1)
+R15. **Read ANY API before coding against it** — external OR internal. Never code from memory. "I know this codebase" = highest-risk assertion (C033: 3 non-existent internal APIs in 1 session). Symmetric: verify callers exist for new public functions (0 callers = dead code). (P1)
 
 ## Rules — Communication (P1, P3)
 
 R16. **Citations must include source links.** Papers → arXiv link. Docs → URL. GitHub → repo link. If unavailable: mark `[source unavailable]`. (P1)
 
-R17. **Prompt suggestions** — after every response, 2-3 things user might type next. Match their style. Skip after errors or when next step isn't obvious.
+R17. **Prompt suggestions** — when helpful, 2-3 things user might type next. Match their style. Skip when: errors, obvious next step, deep conversation flow, or user prefers no filler.
 
 R18. **Language** — match user's language. Technical terms stay English. No mid-sentence switching.
 
