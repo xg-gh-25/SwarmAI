@@ -206,6 +206,16 @@ class DistillationTriggerHook:
             )
             self._write_flag(da_dir, len(undistilled_files))
 
+        # Bump MEMORY entry reference counts based on session messages (non-blocking)
+        try:
+            await asyncio.to_thread(
+                self._bump_memory_refs_from_session,
+                context.session_id,
+                Path(ws_path) / ".context" / "MEMORY.md",
+            )
+        except Exception as exc:
+            logger.debug("Memory ref bumping failed (non-blocking): %s", exc)
+
         # Archive stale Recent Context entries from MEMORY.md (non-blocking)
         try:
             await asyncio.to_thread(
@@ -1757,6 +1767,70 @@ class DistillationTriggerHook:
     _RC_PROTECTED_KEYWORDS = ("Birthday", "GitHub", "repo", "architecture", "re-architecture")
     _RC_STALE_DAYS = 30
 
+    def _bump_memory_refs_from_session(
+        self, session_id: str, memory_path: Path
+    ) -> None:
+        """Scan session messages for MEMORY entry IDs and bump ref metadata.
+
+        E2E flow: DB messages → scan for entry IDs → update MEMORY.md metadata.
+        This enables Ebbinghaus decay scoring to know which entries are "alive."
+        """
+        from core.memory_decay import (
+            scan_session_for_memory_refs,
+            bump_entry_references,
+            _ENTRY_ID_RE,
+        )
+        from utils.file_lock import flock_exclusive, flock_unlock
+        from database.sqlite import get_db_sync
+
+        if not memory_path.exists():
+            return
+
+        # 1. Read MEMORY.md to extract all entry IDs
+        content = memory_path.read_text(encoding="utf-8")
+        all_ids = set(_ENTRY_ID_RE.findall(content))
+        if not all_ids:
+            return
+
+        # 2. Fetch recent messages from this session (last 50, enough to detect refs)
+        db = get_db_sync()
+        rows = db.execute(
+            "SELECT content FROM messages WHERE session_id = ? "
+            "ORDER BY created_at DESC LIMIT 50",
+            (session_id,),
+        ).fetchall()
+        messages = [{"content": row[0]} for row in rows if row[0]]
+
+        if not messages:
+            return
+
+        # 3. Scan messages for entry ID mentions
+        referenced = scan_session_for_memory_refs(messages, all_ids)
+        if not referenced:
+            return
+
+        # 4. Bump metadata in MEMORY.md (under file lock)
+        lock_path = memory_path.with_suffix(memory_path.suffix + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = None
+        try:
+            fd = open(lock_path, "w")
+            flock_exclusive(fd)
+            # Re-read under lock to avoid TOCTOU
+            content = memory_path.read_text(encoding="utf-8")
+            updated = bump_entry_references(content, referenced, date.today())
+            if updated != content:
+                memory_path.write_text(updated, encoding="utf-8")
+                logger.info(
+                    "Bumped decay refs for %d MEMORY entries: %s",
+                    len(referenced),
+                    ", ".join(sorted(referenced)),
+                )
+        finally:
+            if fd:
+                flock_unlock(fd)
+                fd.close()
+
     def _archive_stale_rc_entries(self, memory_path: Path, ws_path: Path) -> None:
         """Archive stale RC entries from MEMORY.md Recent Context section.
 
@@ -1896,17 +1970,12 @@ class DistillationTriggerHook:
         if not memory_path.exists():
             return
 
-        # Load usage data for smart eviction (lowest-usage first).
-        # Falls back to oldest-first if no usage data exists.
-        _KEY_RE = re.compile(r"\[([A-Z]{2,3}\d{2,3})\]")
-        usage: dict[str, int] = {}
-        if ws_path is not None:
-            usage_path = ws_path / ".context" / ".memory-usage.json"
-            if usage_path.exists():
-                try:
-                    usage = json.loads(usage_path.read_text(encoding="utf-8"))
-                except (json.JSONDecodeError, OSError):
-                    pass
+        # Load decay scores for smart eviction (lowest-decay-score first).
+        # Falls back to oldest-first if no decay metadata exists in entries.
+        from core.memory_decay import compute_decay_score, _META_RE as _DECAY_META_RE
+        _KEY_RE = re.compile(r"\[((?:KD|LL|RC|COE|OT)\d{2,3})\]")
+        today = date.today()
+        decay_available = False
 
         lock_path = memory_path.with_suffix(memory_path.suffix + ".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1937,18 +2006,40 @@ class DistillationTriggerHook:
                     if len(entry_indices) <= cap:
                         continue
 
-                    # Smart eviction: sort entries by usage (lowest first),
-                    # then by position (bottom = oldest = lower priority).
-                    # Entries with 0 usage get evicted before used entries.
-                    def _entry_usage(idx: int) -> int:
-                        m = _KEY_RE.search(lines[idx])
-                        return usage.get(m.group(1), 0) if m else 0
+                    # Smart eviction: sort by decay score (lowest first).
+                    # Decay score incorporates ref_count, sessions, and recency.
+                    # Falls back to oldest-first if no decay metadata found.
+                    def _entry_decay_score(idx: int) -> float:
+                        nonlocal decay_available
+                        # Look for decay metadata in lines after this entry
+                        for offset in range(1, 4):
+                            if idx + offset >= len(lines):
+                                break
+                            meta_m = _DECAY_META_RE.match(lines[idx + offset])
+                            if meta_m:
+                                decay_available = True
+                                ref_count = int(meta_m.group(2))
+                                last_str = meta_m.group(3)
+                                sessions = int(meta_m.group(5))
+                                try:
+                                    last_ref = date.fromisoformat(last_str) if last_str != "none" else None
+                                except ValueError:
+                                    last_ref = None
+                                return compute_decay_score(
+                                    ref_count=ref_count,
+                                    sessions_referenced=sessions,
+                                    last_referenced=last_ref,
+                                    created=None,
+                                    today=today,
+                                )
+                            if lines[idx + offset].strip().startswith("- "):
+                                break  # Next entry, stop looking
+                        return 0.0  # No metadata = lowest priority (evict first)
 
-                    if usage:
-                        # Sort by usage ascending — lowest usage evicted first
-                        eviction_order = sorted(entry_indices, key=_entry_usage)
-                    else:
-                        # No usage data: fall back to oldest-first (bottom of section)
+                    # Sort by decay score ascending — lowest score evicted first
+                    eviction_order = sorted(entry_indices, key=_entry_decay_score)
+                    if not decay_available:
+                        # No decay metadata anywhere: fall back to oldest-first (bottom of section)
                         eviction_order = list(reversed(entry_indices))
                     overflow_count = len(entry_indices) - cap
                     evict_set = set(eviction_order[:overflow_count])
