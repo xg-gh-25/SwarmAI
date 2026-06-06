@@ -27,7 +27,6 @@ from .security_hooks import (
     create_governance_file_gate,
     create_skill_access_checker,
 )
-from .adversarial_commit_gate import create_adversarial_commit_gate
 from .agent_defaults import expand_allowed_skills_with_plugins
 
 logger = logging.getLogger(__name__)
@@ -195,11 +194,6 @@ async def build_hooks(
     governance_gate = create_governance_file_gate()
     registry.register("PreToolUse", governance_gate, "governance_file_gate")
     logger.debug("Governance file gate attached (advisory mode)")
-
-    # ── PreToolUse: adversarial commit gate (Bash-scoped) ──────
-    adversarial_gate = create_adversarial_commit_gate(hook_session_context)
-    registry.register("PreToolUse", adversarial_gate, "adversarial_commit_gate", matcher="Bash")
-    logger.debug("Adversarial commit gate attached")
 
     # ── Skill access control ─────────────────────────────────
     allowed_skills = agent_config.get("allowed_skills", [])
