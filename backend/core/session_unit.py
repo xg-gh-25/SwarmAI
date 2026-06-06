@@ -846,7 +846,7 @@ class SessionUnit:
 
         # Cancel any in-flight pipe flush from a prior SSE disconnect.
         # The flush sends a JSON "interrupt" control request to the CLI
-        # subprocess (NOT an OS signal).  If the flush times out (3s), it
+        # subprocess (NOT an OS signal).  If the flush times out (5s), it
         # kills the subprocess → transitions to DEAD → COLD.
         #
         # We must await the task completion to prevent two races:
@@ -857,7 +857,7 @@ class SessionUnit:
         #     the old interrupt AND our new send_message → confused state.
         #
         # Awaiting costs <1ms when flush already completed (common path),
-        # and at most 3s when flush is mid-timeout (rare, but prevents
+        # and at most 5s when flush is mid-timeout (rare, but prevents
         # user-visible error that forces resend).
         if self._pipe_flush_task and not self._pipe_flush_task.done():
             # CRITICAL: Do NOT cancel — let the flush complete so the pipe
@@ -865,13 +865,13 @@ class SessionUnit:
             # response bytes in the subprocess stdout pipe, which then get
             # yielded as part of the NEW response (cross-turn bleed P0 bug).
             #
-            # The flush itself has a 3s internal timeout + generation guard,
-            # so worst case we wait 3s here.  If it finishes faster (common
+            # The flush itself has a 5s internal timeout + generation guard,
+            # so worst case we wait 5s here.  If it finishes faster (common
             # case: <100ms when subprocess already idle), we proceed instantly.
             try:
                 await asyncio.wait_for(self._pipe_flush_task, timeout=5.0)
             except asyncio.TimeoutError:
-                # Flush didn't complete in 3.5s — cancel and force-kill
+                # Flush didn't complete in 5s — cancel and force-kill
                 # the subprocess for a clean slate on next spawn.
                 self._pipe_flush_task.cancel()
                 try:
