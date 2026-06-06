@@ -201,14 +201,11 @@ class ToDoManager:
             results = await db.todos.list()
 
         # Auto-purge: exclude handled/cancelled todos older than 7 days
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-        terminal_statuses = (ToDoStatus.HANDLED.value, "cancelled")
+        cutoff_dt = datetime.now(timezone.utc) - timedelta(days=7)
+        terminal_statuses = (ToDoStatus.HANDLED.value, ToDoStatus.CANCELLED.value)
         results = [
             r for r in results
-            if not (
-                r.get("status") in terminal_statuses
-                and (r.get("updated_at") or "") < cutoff
-            )
+            if not self._is_stale_terminal(r, terminal_statuses, cutoff_dt)
         ]
 
         # Apply pagination
@@ -476,7 +473,7 @@ class ToDoManager:
         Only matches active statuses (pending, in_discussion) — handled/cancelled
         todos do NOT block re-creation.
         """
-        active_statuses = (ToDoStatus.PENDING.value, "in_discussion")
+        active_statuses = (ToDoStatus.PENDING.value, ToDoStatus.IN_DISCUSSION.value)
         all_todos = await db.todos.list_by_workspace(workspace_id)
         for todo in all_todos:
             if (
@@ -486,6 +483,22 @@ class ToDoManager:
             ):
                 return todo
         return None
+
+    def _is_stale_terminal(self, todo: dict, terminal_statuses: tuple, cutoff_dt: datetime) -> bool:
+        """Check if a todo is in terminal state AND older than cutoff.
+
+        Returns False (keep) if updated_at is missing — don't purge items
+        without timestamps.
+        """
+        if todo.get("status") not in terminal_statuses:
+            return False
+        updated_str = todo.get("updated_at")
+        if not updated_str:
+            return False  # No timestamp = keep (don't purge unknowns)
+        updated_dt = self._parse_datetime(updated_str)
+        if not updated_dt:
+            return False  # Unparseable = keep
+        return updated_dt < cutoff_dt
 
     def _parse_datetime(self, value: Optional[str]) -> Optional[datetime]:
         """Parse a datetime string to datetime object.
