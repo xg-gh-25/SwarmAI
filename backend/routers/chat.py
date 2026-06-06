@@ -704,6 +704,59 @@ async def get_session(session_id: str):
     )
 
 
+def _merge_consecutive_assistant_messages(messages: list[dict]) -> list[dict]:
+    """Merge consecutive assistant DB rows into single message dicts.
+
+    The backend persists each agentic turn as a separate row (crash safety).
+    When loaded for display, consecutive assistant rows should appear as ONE
+    message bubble — matching what the frontend shows during streaming.
+
+    Rules:
+    - Consecutive assistant rows (no user row between them) get their content
+      arrays concatenated into a single message dict.
+    - The merged message uses the FIRST row's id and created_at (stable reference).
+    - The LAST row's model wins (most recent model attribution).
+    - Non-assistant rows and user rows are never merged.
+    """
+    if not messages:
+        return []
+
+    merged: list[dict] = []
+    for msg in messages:
+        role = msg.get("role")
+        if (
+            role == "assistant"
+            and merged
+            and merged[-1].get("role") == "assistant"
+        ):
+            # Merge into previous assistant message
+            prev = merged[-1]
+            prev_content = prev.get("content") or []
+            new_content = msg.get("content") or []
+            # Normalize: if content is a bare string (legacy), wrap in text block
+            if isinstance(prev_content, str):
+                prev_content = [{"type": "text", "text": prev_content}]
+            if isinstance(new_content, str):
+                new_content = [{"type": "text", "text": new_content}]
+            prev_content.extend(new_content)
+            prev["content"] = prev_content
+            # Take latest model
+            if msg.get("model"):
+                prev["model"] = msg["model"]
+        else:
+            # New message (user, or first assistant after user)
+            merged.append({
+                "id": msg.get("id"),
+                "session_id": msg.get("session_id"),
+                "role": role,
+                "content": msg.get("content", []),
+                "model": msg.get("model"),
+                "created_at": msg.get("created_at"),
+            })
+
+    return merged
+
+
 @router.get("/sessions/{session_id}/messages")
 async def get_session_messages(
     session_id: str,
@@ -748,17 +801,12 @@ async def get_session_messages(
     else:
         messages = await db.messages.list_by_session(session_id)
 
-    data = [
-        {
-            "id": msg.get("id"),
-            "session_id": msg.get("session_id"),
-            "role": msg.get("role"),
-            "content": msg.get("content", []),
-            "model": msg.get("model"),
-            "created_at": msg.get("created_at"),
-        }
-        for msg in messages
-    ]
+    # Merge consecutive assistant messages into one.
+    # The backend persists each agentic turn as a separate DB row (crash safety),
+    # but the frontend expects one assistant bubble per user→agent exchange.
+    # Without merging, loadSessionMessages renders 5-20 separate assistant bubbles
+    # with overlapping text content for a single response.
+    data = _merge_consecutive_assistant_messages(messages)
 
     headers = {"ETag": etag} if etag else {}
     return JSONResponse(content=data, headers=headers)
