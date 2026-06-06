@@ -51,8 +51,9 @@ _META_RE = re.compile(
 )
 
 # Entry header pattern (matches MEMORY.md bullet format)
+# Aligned with _ENTRY_ID_RE to prevent asymmetric matching
 _ENTRY_HEADER_RE = re.compile(
-    r"^- \[([A-Z]+\d{2,3})\]",
+    r"^- \[((?:KD|LL|RC|COE|OT)\d{2,3})\]",
     re.MULTILINE,
 )
 
@@ -183,6 +184,13 @@ def scan_session_for_memory_refs(
     found: set[str] = set()
     for msg in messages:
         content = msg.get("content", "")
+        # Handle list-type content blocks (Anthropic Messages API format)
+        if isinstance(content, list):
+            content = " ".join(
+                block.get("text", "")
+                for block in content
+                if isinstance(block, dict) and block.get("type") == "text"
+            )
         if not content or not isinstance(content, str):
             continue
         matches = _ENTRY_ID_RE.findall(content)
@@ -198,17 +206,18 @@ def scan_session_for_memory_refs(
 def bump_entry_references(
     memory_content: str,
     referenced_ids: set[str],
-    session_id: str,
     today: date,
 ) -> str:
     """Update ref:N, last:date, sessions:N metadata for referenced entries.
 
     For each referenced entry:
-    1. If metadata comment exists → increment ref, update last, increment sessions
-    2. If no metadata comment → insert one after the entry line
+    1. If metadata comment exists anywhere after header → update it in place
+    2. If no metadata comment → insert one directly after the header line
 
-    The session_id is used to ensure the same session doesn't double-count
-    (though in practice distillation runs once per session close).
+    Bumping always resets decay state to 'active' (referenced = alive).
+
+    Note: Callers must serialize access to MEMORY.md (e.g., via locked_write)
+    to prevent concurrent bump_entry_references calls from losing updates.
     """
     if not referenced_ids:
         return memory_content
@@ -216,50 +225,67 @@ def bump_entry_references(
     lines = memory_content.split("\n")
     result_lines: list[str] = []
     today_str = today.isoformat()
-    i = 0
 
-    while i < len(lines):
-        line = lines[i]
+    # Track which entries we've seen headers for but haven't found metadata yet
+    pending_entry: str | None = None
+    pending_header_idx: int = -1
 
+    for i, line in enumerate(lines):
         # Check if this line is a MEMORY entry header with an ID we care about
         header_match = _ENTRY_HEADER_RE.match(line)
         if header_match and header_match.group(1) in referenced_ids:
-            entry_id = header_match.group(1)
-            result_lines.append(line)
-            i += 1
-
-            # Look for existing metadata comment on next line(s)
-            meta_found = False
-            while i < len(lines):
-                meta_match = _META_RE.match(lines[i])
-                if meta_match:
-                    # Update existing metadata
-                    indent = meta_match.group(1)
-                    ref_count = int(meta_match.group(2)) + 1
-                    # decay state stays active (bumping = alive)
-                    sessions = int(meta_match.group(5)) + 1
-                    result_lines.append(
-                        f"{indent}<!-- ref:{ref_count} | last:{today_str} "
-                        f"| decay:active | sessions:{sessions} -->"
-                    )
-                    meta_found = True
-                    i += 1
-                    break
-                elif lines[i].strip().startswith("<!--") and "maturity:" in lines[i]:
-                    # Skip DDD maturity metadata (not ours)
-                    result_lines.append(lines[i])
-                    i += 1
-                else:
-                    break
-
-            if not meta_found:
-                # Insert new metadata comment
-                result_lines.append(
-                    f"  <!-- ref:1 | last:{today_str} "
-                    f"| decay:active | sessions:1 -->"
+            # If we had a pending entry without metadata, insert metadata now
+            if pending_entry is not None:
+                # Insert after the header (at pending_header_idx + 1)
+                result_lines.insert(
+                    pending_header_idx + 1,
+                    f"  <!-- ref:1 | last:{today_str} | decay:active | sessions:1 -->",
                 )
-        else:
+                pending_entry = None
+
             result_lines.append(line)
-            i += 1
+            pending_entry = header_match.group(1)
+            pending_header_idx = len(result_lines) - 1
+            continue
+
+        # Check if this line is a metadata comment for the pending entry
+        if pending_entry is not None:
+            meta_match = _META_RE.match(line)
+            if meta_match:
+                # Update existing metadata in place
+                indent = meta_match.group(1)
+                ref_count = int(meta_match.group(2)) + 1
+                sessions = int(meta_match.group(5)) + 1
+                result_lines.append(
+                    f"{indent}<!-- ref:{ref_count} | last:{today_str} "
+                    f"| decay:active | sessions:{sessions} -->"
+                )
+                pending_entry = None
+                continue
+
+            # If we hit another entry header, the previous entry had no metadata
+            next_header = _ENTRY_HEADER_RE.match(line)
+            if next_header or (line.startswith("- ") and not line.startswith("  ")):
+                # Insert metadata for the pending entry
+                result_lines.insert(
+                    pending_header_idx + 1,
+                    f"  <!-- ref:1 | last:{today_str} | decay:active | sessions:1 -->",
+                )
+                pending_entry = None
+                # Now handle this line — re-check if it's a header we care about
+                if next_header and next_header.group(1) in referenced_ids:
+                    result_lines.append(line)
+                    pending_entry = next_header.group(1)
+                    pending_header_idx = len(result_lines) - 1
+                    continue
+
+        result_lines.append(line)
+
+    # Handle trailing pending entry (entry at end of file without metadata)
+    if pending_entry is not None:
+        result_lines.insert(
+            pending_header_idx + 1,
+            f"  <!-- ref:1 | last:{today_str} | decay:active | sessions:1 -->",
+        )
 
     return "\n".join(result_lines)

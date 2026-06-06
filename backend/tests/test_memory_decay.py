@@ -209,7 +209,7 @@ class TestBumpEntryReferences:
             "  <!-- ref:2 | last:2026-06-03 | decay:active | sessions:1 -->\n"
         )
         today = date(2026, 6, 7)
-        result = bump_entry_references(content, {"KD01"}, "session_abc", today)
+        result = bump_entry_references(content, {"KD01"}, today)
         assert "ref:3" in result
         assert "last:2026-06-07" in result
         assert "sessions:2" in result
@@ -220,5 +220,42 @@ class TestBumpEntryReferences:
 
         content = "- [KD05] 2026-05-22 Ontology scope\n\n"
         today = date(2026, 6, 7)
-        result = bump_entry_references(content, {"KD05"}, "session_xyz", today)
+        result = bump_entry_references(content, {"KD05"}, today)
         assert "<!-- ref:1 | last:2026-06-07 | decay:active | sessions:1 -->" in result
+
+    def test_multiline_entry_body_before_metadata(self):
+        """Entry with content lines between header and metadata — no duplication."""
+        from core.memory_decay import bump_entry_references
+
+        content = (
+            "- [KD01] 2026-06-01 CLI maxTurns fix\n"
+            "  Impact: reduced confusion in long sessions\n"
+            "  <!-- ref:2 | last:2026-06-03 | decay:active | sessions:1 -->\n"
+        )
+        today = date(2026, 6, 7)
+        result = bump_entry_references(content, {"KD01"}, today)
+        # Should update existing metadata, not create duplicate
+        assert result.count("<!-- ref:") == 1
+        assert "ref:3" in result
+        assert "sessions:2" in result
+
+
+class TestListContentHandling:
+    """Handle Anthropic Messages API list-type content blocks."""
+
+    def test_list_content_blocks_scanned(self):
+        """Messages with list-type content are handled correctly."""
+        from core.memory_decay import scan_session_for_memory_refs
+
+        messages = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "Based on KD01, the fix is..."},
+                    {"type": "image", "source": {"data": "..."}},
+                ],
+            },
+        ]
+        entry_ids = {"KD01", "KD02"}
+        found = scan_session_for_memory_refs(messages, entry_ids)
+        assert found == {"KD01"}
