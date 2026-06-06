@@ -1638,6 +1638,16 @@ def _write_evolution_proposal(ctx_dir: Path, proposal: dict) -> None:
     proposals.append(proposal)
     proposals_path.write_text(json.dumps(proposals, indent=2), encoding="utf-8")
 
+    # Only create Radar todo for proposals with sufficient confidence.
+    # Low-confidence proposals (< 0.5) are noise — they stay in proposals.json
+    # for inspection but don't pollute the Radar sidebar.
+    if proposal.get("confidence", 0) < 0.5:
+        logger.debug(
+            "Skipping Radar todo for %s (confidence %.0f%% < 50%%)",
+            proposal["skill_name"], proposal.get("confidence", 0) * 100,
+        )
+        return
+
     # Create Radar todo for visibility (async API)
     try:
         import asyncio

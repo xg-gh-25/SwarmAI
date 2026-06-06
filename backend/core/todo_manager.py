@@ -12,7 +12,7 @@ cache is properly invalidated (Requirement 34.2).
 Requirements: 4.1-4.9, 6.1-6.8, 34.2
 """
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 from uuid import uuid4
 
@@ -87,7 +87,7 @@ class ToDoManager:
                   If workspace_id is not provided, defaults to SwarmWS.
 
         Returns:
-            ToDoResponse: The created ToDo.
+            ToDoResponse: The created ToDo (or existing if deduplicated).
 
         Validates: Requirements 1.3, 4.1, 6.2
         """
@@ -99,6 +99,14 @@ class ToDoManager:
 
         # Enforce archived workspace read-only (Requirement 36.6)
         await self._check_workspace_not_archived(workspace_id)
+
+        # Dedup gate: if a pending/in_discussion todo with same title+source
+        # already exists, return it instead of creating a duplicate.
+        if data.title and data.source:
+            existing = await self._find_duplicate(workspace_id, data.title, data.source)
+            if existing:
+                logger.debug("Dedup gate: returning existing todo %s", existing["id"][:8])
+                return self._dict_to_response(existing)
 
         now = datetime.now(timezone.utc).isoformat()
         todo_id = str(uuid4())
@@ -191,6 +199,17 @@ class ToDoManager:
             results = await db.todos.list_by_status(status.value)
         else:
             results = await db.todos.list()
+
+        # Auto-purge: exclude handled/cancelled todos older than 7 days
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        terminal_statuses = (ToDoStatus.HANDLED.value, "cancelled")
+        results = [
+            r for r in results
+            if not (
+                r.get("status") in terminal_statuses
+                and (r.get("updated_at") or "") < cutoff
+            )
+        ]
 
         # Apply pagination
         paginated = results[offset:offset + limit]
@@ -447,6 +466,26 @@ class ToDoManager:
             logger.debug(f"Marked ToDo {todo['id']} as overdue (on read)")
 
         return todo
+
+    async def _find_duplicate(
+        self, workspace_id: str, title: str, source: str
+    ) -> Optional[dict]:
+        """Check if a pending/in_discussion todo with same title+source exists.
+
+        Returns the existing todo dict if found, None otherwise.
+        Only matches active statuses (pending, in_discussion) — handled/cancelled
+        todos do NOT block re-creation.
+        """
+        active_statuses = (ToDoStatus.PENDING.value, "in_discussion")
+        all_todos = await db.todos.list_by_workspace(workspace_id)
+        for todo in all_todos:
+            if (
+                todo.get("title") == title
+                and todo.get("source") == source
+                and todo.get("status") in active_statuses
+            ):
+                return todo
+        return None
 
     def _parse_datetime(self, value: Optional[str]) -> Optional[datetime]:
         """Parse a datetime string to datetime object.
