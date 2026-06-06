@@ -213,13 +213,11 @@ Surface the classification brief to the decider. User has final authority after 
 | Mode | When | Process |
 |------|------|---------|
 | **Full Pipeline** | ALL code changes (mandatory, no size threshold) | `s_autonomous-pipeline`. EVALUATE→REFLECT. Profile auto-selects (trivial/bugfix/full). |
-| **Direct** | ONLY when user explicitly says "直接做" / "just do it" | Read→code→test→**adversarial sub-agent→fix**→commit. Still R3+R7. Agent MUST strong-propose pipeline first. |
+| **Direct** | ONLY when user explicitly says "直接做" / "just do it" | Read→code→test→commit. Still R3+R7. Agent MUST strong-propose pipeline first. |
 
 User says "做"/"go ahead"/"用pipeline做" = proceed with Pipeline (default). Only "直接做"/"just do it"/"skip pipeline" = Direct mode.
 
 **When user asks for a code change without specifying mode:** Always run pipeline. If the change looks trivial, use `--profile trivial` (6 stages, ~5min, still includes adversarial review). NEVER self-exempt based on perceived simplicity — this session (2026-05-26) proved 5 HIGH bugs hide in "trivial" changes.
-
-**🚨 ADVERSARIAL IS NEVER OPTIONAL — BOTH MODES:** Whether pipeline or direct, adversarial sub-agent spawns BEFORE commit. The sequence is always: code→test→adversarial→fix→commit. There is NO code path that reaches `git commit` without a fresh-context adversarial review having run. 11 occurrences (C011→C037) prove: every time adversarial was skipped, real bugs shipped. The rationalization is always "this change is too simple/obvious/safe" — that rationalization is the bug signal, not the escape hatch.
 
 ## Environment & Platform
 
