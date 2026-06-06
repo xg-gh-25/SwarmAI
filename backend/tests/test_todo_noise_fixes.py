@@ -6,7 +6,7 @@ AC3: Auto-purge — handled/cancelled > 7 days excluded from list
 """
 import pytest
 from datetime import datetime, timezone, timedelta
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, MagicMock
 from fastapi.testclient import TestClient
 
 
@@ -127,8 +127,10 @@ class TestEvolutionConfidenceGate:
                 "proposed_at": datetime.now(timezone.utc).isoformat(),
             }
 
-            # Patch asyncio to intercept any todo creation attempt
-            with patch("core.evolution_optimizer.asyncio") as mock_asyncio:
+            # Patch ToDoManager.create to detect if todo creation is attempted.
+            # The function does a lazy `import asyncio` + `from core.todo_manager import ToDoManager`
+            # inside the high-confidence branch, so we patch the manager itself.
+            with patch("core.todo_manager.ToDoManager.create", new_callable=AsyncMock) as mock_create:
                 _write_evolution_proposal(ctx_dir, proposal)
 
                 # Proposals file should be written
@@ -138,9 +140,8 @@ class TestEvolutionConfidenceGate:
                 assert len(saved) == 1
                 assert saved[0]["skill_name"] == "test-skill"
 
-                # asyncio should NOT have been imported/called (early return)
-                mock_asyncio.get_running_loop.assert_not_called()
-                mock_asyncio.run.assert_not_called()
+                # ToDoManager.create should NOT have been called (confidence < 0.5 → early return)
+                mock_create.assert_not_called()
 
     def test_high_confidence_creates_todo(self):
         """Proposals with confidence >= 0.5 should attempt to create a todo."""
@@ -160,14 +161,17 @@ class TestEvolutionConfidenceGate:
                 "proposed_at": datetime.now(timezone.utc).isoformat(),
             }
 
-            # For high confidence, it SHOULD try to use asyncio (todo creation)
-            with patch("core.evolution_optimizer.asyncio") as mock_asyncio:
-                mock_asyncio.get_running_loop.side_effect = RuntimeError("no loop")
-                mock_asyncio.run.return_value = "fake_title"
+            # For high confidence, ToDoManager.create SHOULD be called
+            with patch("core.todo_manager.ToDoManager.create", new_callable=AsyncMock) as mock_create:
+                mock_create.return_value = MagicMock(id="fake-id", title="fake")
                 _write_evolution_proposal(ctx_dir, proposal)
 
-                # asyncio.run SHOULD have been called (todo creation attempted)
-                mock_asyncio.run.assert_called_once()
+                # Proposals file should be written
+                proposals_path = ctx_dir / ".evolution_proposals.json"
+                assert proposals_path.exists()
+
+                # ToDoManager.create SHOULD have been called (confidence >= 0.5)
+                mock_create.assert_called_once()
 
 
 class TestAutoPurge:
@@ -188,29 +192,15 @@ class TestAutoPurge:
         todo = _create_todo(client, workspace_id, title="Old handled purge", source="test_old_h")
         client.post(f"/api/todos/{todo['id']}/mark-handled")
 
-        # Backdate via direct DB call through the app's event loop
-        from core.todo_manager import todo_manager
+        # Backdate via direct SQL through the app's internal DB connection.
+        # The TestClient runs the ASGI app in a thread with its own event loop.
+        # We use the app's lifespan-scoped DB by calling through an endpoint hack:
+        # PUT the todo with a status field (no-op since already handled) to trigger
+        # an updated_at change, then use raw SQL through the test transport.
+        #
+        # Correct approach: use httpx AsyncClient with ASGITransport in an async test.
         old_date = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
-        # Use the PUT endpoint with a mock field that triggers updated_at indirectly
-        # Actually, we need to directly access DB. The TestClient's app has its own event loop.
-        import httpx
-        # Use a helper that runs inside the test client's ASGI app event loop
-        from database import db
-        import anyio
-
-        async def _backdate():
-            await db.todos.update(todo["id"], {"updated_at": old_date})
-
-        # Run via the test client's transport
-        with client:
-            pass  # TestClient context is already entered
-
-        # The simplest approach: use starlette's event loop
-        from starlette.testclient import TestClient as _TC
-        import asyncio
-        loop = asyncio.new_event_loop()
-        loop.run_until_complete(_backdate())
-        loop.close()
+        _backdate_todo_via_app(client, todo["id"], old_date)
 
         resp = client.get("/api/todos")
         assert resp.status_code == 200
@@ -222,13 +212,8 @@ class TestAutoPurge:
         todo = _create_todo(client, workspace_id, title="Old cancelled purge", source="test_cancel_c")
         client.post(f"/api/todos/{todo['id']}/mark-cancelled")
 
-        # Backdate
-        from database import db
-        import asyncio
         old_date = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
-        loop = asyncio.new_event_loop()
-        loop.run_until_complete(db.todos.update(todo["id"], {"updated_at": old_date}))
-        loop.close()
+        _backdate_todo_via_app(client, todo["id"], old_date)
 
         resp = client.get("/api/todos")
         assert resp.status_code == 200
@@ -239,15 +224,44 @@ class TestAutoPurge:
         """Old pending todos should NOT be excluded (only handled/cancelled)."""
         todo = _create_todo(client, workspace_id, title="Old pending keep", source="test_pending_p")
 
-        # Backdate
-        from database import db
-        import asyncio
         old_date = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
-        loop = asyncio.new_event_loop()
-        loop.run_until_complete(db.todos.update(todo["id"], {"updated_at": old_date}))
-        loop.close()
+        _backdate_todo_via_app(client, todo["id"], old_date)
 
         resp = client.get("/api/todos")
         assert resp.status_code == 200
         ids = [t["id"] for t in resp.json()]
         assert todo["id"] in ids
+
+
+def _backdate_todo_via_app(client: TestClient, todo_id: str, iso_date: str) -> None:
+    """Backdate a todo's updated_at by running raw SQL through the app's DB.
+
+    The TestClient runs the ASGI app in a background thread with its own event
+    loop. We use `client.app` to access the FastAPI app, then run an async
+    helper inside that app's event loop via a temporary endpoint.
+    """
+    from starlette.testclient import TestClient as _TC
+    from starlette.responses import JSONResponse
+    from fastapi import Request
+
+    app = client.app
+
+    # Add a temporary test-only endpoint that does the backdate
+    @app.post(f"/_test/backdate/{todo_id}")
+    async def _backdate_endpoint(request: Request):
+        from database import db
+        # Direct SQL update bypassing schema validation.
+        # db.todos is a SQLiteTable which has _get_connection().
+        async with db.todos._get_connection() as conn:
+            await conn.execute(
+                "UPDATE todos SET updated_at = ? WHERE id = ?",
+                (iso_date, todo_id),
+            )
+            await conn.commit()
+        return JSONResponse({"ok": True})
+
+    resp = client.post(f"/_test/backdate/{todo_id}")
+    assert resp.status_code == 200, f"Backdate failed: {resp.text}"
+
+    # Clean up the temporary route
+    app.routes[:] = [r for r in app.routes if not (hasattr(r, 'path') and r.path == f"/_test/backdate/{todo_id}")]
