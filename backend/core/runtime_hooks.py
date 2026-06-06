@@ -522,6 +522,9 @@ def create_subagent_capture_hook(
     sid = ctx.get("sdk_session_id", "unknown")
 
     async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
+        # Signal for adversarial_commit_gate: a sub-agent was spawned this session
+        ctx["adversarial_done"] = True
+
         transcript_path = _extract_field(input_data, "agent_transcript_path", "")
         agent_id = _extract_field(input_data, "agent_id", "unknown")
 
