@@ -243,6 +243,12 @@ export function blockKey(block: ContentBlock): string {
  * Merges new content blocks into the matching assistant message using
  * Set-based O(n+m) deduplication instead of O(n×m) nested iteration.
  *
+ * For text blocks, also checks substring containment: if any existing text
+ * block's content ends with the incoming text, the incoming block is treated
+ * as a duplicate. This handles multi-turn agentic responses where text_delta
+ * accumulates ALL turns' text into one block, but AssistantMessage events
+ * arrive per-turn with only that turn's text.
+ *
  * Returns the same message reference when no new content is added
  * (referential stability for React memoization).
  */
@@ -255,7 +261,39 @@ export function updateMessages(
   return currentMessages.map((msg) => {
     if (msg.id !== assistantMessageId) return msg;
     const existingKeys = new Set(msg.content.map(blockKey));
-    const filteredContent = newContent.filter((b) => !existingKeys.has(blockKey(b)));
+
+    const filteredContent = newContent.filter((b) => {
+      // Fast path: exact blockKey match (handles tool_use, tool_result, same-text)
+      if (existingKeys.has(blockKey(b))) return false;
+
+      // Multi-turn text dedup: if an existing text block's content ends with
+      // (or equals) the incoming text, the streaming already rendered it.
+      // This prevents the per-turn AssistantMessage from adding a duplicate
+      // when text_delta accumulated text across multiple agentic turns.
+      //
+      // Guard: only apply for text >= 20 chars to avoid false dedup of short
+      // strings that happen to be suffixes (e.g., "Done.", "Security").
+      // The real bug manifests with multi-sentence paragraphs, not short tokens.
+      //
+      // Note: empty-string guard (`b.text` falsy check) prevents catastrophic
+      // `"anything".endsWith("")` === true dedup-all-text-blocks bug.
+      if (b.type === 'text' && b.text && b.text.length >= 20) {
+        const incomingText = b.text;
+        for (const existing of msg.content) {
+          if (
+            existing.type === 'text' &&
+            existing.text &&
+            existing.text.length > incomingText.length &&
+            existing.text.endsWith(incomingText)
+          ) {
+            return false; // Already rendered via streaming — skip
+          }
+        }
+      }
+
+      return true;
+    });
+
     if (filteredContent.length === 0) {
       return msg; // No changes — return same reference
     }
@@ -1093,8 +1131,24 @@ export function useChatStreamingLifecycle(
       // Capture the tab this handler belongs to. Falls back to active tab
       // for backward compatibility with single-tab usage.
       const capturedTabId = tabId ?? activeTabIdRef.current;
+      // Capture stream generation at creation time — events from a stale
+      // generation (e.g. old response arriving after user sent a new message)
+      // must be discarded to prevent cross-turn bleed.
+      const capturedStreamGen = streamGenRef.current;
 
       return (event: StreamEvent) => {
+        // Generation guard: discard events from a previous stream.
+        // This prevents cross-turn bleed where stale SSE events from an
+        // interrupted response arrive after a new stream has started.
+        if (capturedTabId) {
+          const currentTabState = tabMapRef.current.get(capturedTabId);
+          if (currentTabState && currentTabState.streamGen !== capturedStreamGen) {
+            return; // stale event — discard silently
+          }
+        } else if (streamGenRef.current !== capturedStreamGen) {
+          return; // stale event — discard silently
+        }
+
         // Guard: if tab was closed while stream was running, no-op
         const tabState = capturedTabId
           ? tabMapRef.current.get(capturedTabId)

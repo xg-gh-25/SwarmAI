@@ -407,11 +407,14 @@ def create_session_checkpoint(
             logger.exception("Failed to write session checkpoint to %s", path)
 
         # 2. Append content snapshot to DailyActivity (mid-session memory)
-        # Only write if new files or commits since last checkpoint
-        last_count = ctx.get(last_da_count_key, 0)
-        has_new_content = len(files) > last_count or git_commits
-        if not has_new_content and count <= interval:
-            # Skip first checkpoint if nothing meaningful happened yet
+        # Only write if new files or commits since last checkpoint.
+        # Track both file count AND commit count to prevent redundant writes
+        # when git_commits is non-empty but unchanged since last checkpoint.
+        last_file_count = ctx.get(last_da_count_key, 0)
+        last_commit_count = ctx.get("_last_da_commit_count", 0)
+        has_new_files = len(files) > last_file_count
+        has_new_commits = len(git_commits) > last_commit_count
+        if not has_new_files and not has_new_commits:
             return {}
 
         try:
@@ -452,6 +455,7 @@ def create_session_checkpoint(
                 f.write(entry)
 
             ctx[last_da_count_key] = len(files)
+            ctx["_last_da_commit_count"] = len(git_commits)
             logger.debug(
                 "Mid-session checkpoint written to DailyActivity: %d files, %d commits",
                 len(files), len(git_commits),
