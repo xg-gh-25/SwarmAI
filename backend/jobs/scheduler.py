@@ -123,6 +123,46 @@ def save_state(state: SchedulerState) -> None:
     STATE_FILE.write_text(state.model_dump_json(indent=2))
 
 
+def emit_event_atomic(event_name: str, data: dict | None = None) -> str:
+    """Atomically emit an event into state without clobbering other fields.
+
+    Unlike emit_event() which operates on an in-memory state object,
+    this function does a targeted load→append→save cycle. Use this from
+    hooks and external callers that don't own the full scheduler state.
+
+    This prevents the race condition where a hook loads stale state (with
+    old job statuses) and saves it back, overwriting the scheduler's
+    successful job updates.
+    """
+    import uuid
+    import fcntl
+
+    event_id = str(uuid.uuid4())
+    event_entry = {
+        "event_id": event_id,
+        "event_name": event_name,
+        "emitted_at": datetime.now(timezone.utc).isoformat(),
+        "data": data or {},
+    }
+
+    lock_file = STATE_FILE.with_suffix(".lock")
+    try:
+        with open(lock_file, "w") as lf:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+            # Load current state, append event, save — all under lock
+            state = load_state()
+            if len(state.pending_events) >= _MAX_PENDING_EVENTS:
+                state.pending_events = state.pending_events[-(_MAX_PENDING_EVENTS // 2):]
+            state.pending_events.append(event_entry)
+            save_state(state)
+    except Exception as e:
+        logger.warning(f"emit_event_atomic failed: {e}")
+        return ""
+
+    logger.info(f"Event emitted (atomic): {event_name} (id={event_id[:8]})")
+    return event_id
+
+
 def load_user_context() -> str:
     """Build user context for signal relevance scoring.
 

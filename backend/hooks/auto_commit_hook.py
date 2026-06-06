@@ -177,14 +177,14 @@ class WorkspaceAutoCommitHook:
                     pass  # Non-blocking: cultivation emit failure never breaks commit
 
                 # 5c. Emit git_commit event for job scheduler (code_intel reindex)
+                # Uses emit_event_atomic to avoid race condition: hook loading
+                # stale state would overwrite scheduler's successful job updates.
                 try:
-                    from jobs.scheduler import emit_event, load_state, save_state
-                    sched_state = load_state()
-                    emit_event(sched_state, "git_commit", data={
+                    from jobs.scheduler import emit_event_atomic
+                    emit_event_atomic("git_commit", data={
                         "files": changed_files,
                         "message": message,
                     })
-                    save_state(sched_state)
                 except Exception as e:
                     logger.debug("Failed to emit git_commit event: %s", e)
 

@@ -52,6 +52,8 @@
 | 42 | [100 ⭐ — Thank You (and What's Next)](42-100-star-thank-you-and-whats-next.md) | Announcements | 2026-05-22 |
 | 43 | [Why We Chose Single-Agent (And Multi-Agent Frameworks Are Proving Us Right)](43-why-we-chose-single-agent.md) | General | 2026-05-23 |
 | 45 | ["Dreaming" Is Just Note-Taking — The Real Evolution Happens Elsewhere](45-dreaming-is-just-note-taking.md) | General | 2026-05-23 |
+| 46 | [Your AI Agent Can't "Just Read" Your Codebase — Here's What It Actually Needs](46-ai-ready-repo-standard.md) | General | 2026-06-01 |
+| 56 | [The Hidden Defaults That Break Your AI Agent — Claude Code CLI's Undocumented Limits](56-the-hidden-defaults-that-break-your-ai-agent.md) | General | 2026-06-01 |
 
 ---
 

@@ -44,6 +44,82 @@ class EntityRef:
     section: str
 
 
+def extract_clean_description(product_md_path: Path) -> str:
+    """Extract a clean one-line description from PRODUCT.md.
+
+    Reads the file and finds the first non-heading, non-blank content line.
+    Strips common markdown formatting artifacts:
+    - Leading _ (italic wrappers)
+    - Leading > (blockquote markers)
+    - Leading - (list item prefix)
+    - Leading **Name:** patterns
+    - Trailing _ (closing italic)
+    Truncates at 80 chars on word boundary.
+
+    Args:
+        product_md_path: Path to a project's PRODUCT.md file.
+
+    Returns:
+        Clean description string, or empty string if none found.
+    """
+    if not product_md_path.exists():
+        return ""
+
+    try:
+        content = product_md_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+    for line in content.splitlines():
+        stripped = line.strip()
+        # Skip blank lines, headings, HR/frontmatter, HTML comments, images
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped == "---" or stripped.startswith("<!--") or stripped.startswith("!["):
+            continue
+
+        # Strip leading/trailing markdown artifacts
+        desc = stripped
+
+        # Remove italic wrappers: _text_ or _> text_
+        if desc.startswith("_") and desc.endswith("_"):
+            desc = desc[1:-1].strip()
+        elif desc.startswith("_"):
+            desc = desc[1:].strip()
+
+        # Remove blockquote markers
+        if desc.startswith(">"):
+            desc = desc[1:].strip()
+
+        # Remove list prefix: - or *
+        if desc.startswith("- ") or desc.startswith("* "):
+            desc = desc[2:].strip()
+
+        # Remove **Name:** prefix pattern (e.g., **Name:** BMS 2.0)
+        if desc.startswith("**") and ":**" in desc:
+            # Extract everything after the first :** pattern
+            idx = desc.index(":**") + 3
+            desc = desc[idx:].strip()
+
+        # Remove any remaining leading/trailing bold markers
+        while desc.startswith("**"):
+            desc = desc[2:]
+        while desc.endswith("**"):
+            desc = desc[:-2]
+        desc = desc.strip()
+
+        if not desc:
+            continue
+
+        # Truncate at 80 chars on word boundary
+        if len(desc) > 80:
+            desc = desc[:80].rsplit(" ", 1)[0]
+
+        return desc
+
+    return ""
+
+
 def extract_entities_from_ddd(projects_dir: Path) -> list[EntityRef]:
     """Extract ## headings from all DDD docs across all projects.
 
@@ -125,10 +201,13 @@ def format_entity_index(entities: list[EntityRef]) -> list[str]:
 
     # PE-3 fix: sort by UNIQUE project count (post-dedup), not raw ref count
     def _unique_project_count(name: str) -> int:
-        return len(set((r.project, r.doc) for r in grouped[name]))
+        return len(set(r.project for r in grouped[name]))
+
+    # Filter: only keep entities referenced by 2+ different projects
+    multi_project_names = [n for n in grouped if _unique_project_count(n) >= 2]
 
     sorted_names = sorted(
-        grouped.keys(),
+        multi_project_names,
         key=lambda n: (-_unique_project_count(n), n),
     )
 

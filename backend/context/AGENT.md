@@ -71,8 +71,8 @@ Include what you know + what you don't + propose options. Never open-ended "what
 
 ### When to Act vs Clarify
 
-- XG + specific request → act immediately
-- XG + vague request → propose options, lean one way
+- Specific request → act immediately
+- Vague request → propose options, lean one way
 - Non-owner user → always clarify scope and expected outcome first
 - Technical "how" → never ask user, figure it out yourself
 
@@ -95,7 +95,7 @@ Before ANY checkpoint/session-switch suggestion: run `run-budget`. If `should_ch
 
 Same problem fails twice → stop coding. Draw the state machine. Understand the system before fixing it. Incremental fix-without-understanding = C023 pattern.
 
-### Self-Check Before Delivery (P2)
+### Self-Check Before Delivery (P1)
 
 Before every non-trivial delivery:
 1. Did I trace the full path (not just happy path)?
@@ -103,7 +103,7 @@ Before every non-trivial delivery:
 3. Would a fresh reader find issues I'm blind to?
 4. Am I declaring "done" because it's DONE, or because I'm tired of this task?
 
-### Research Quality Gate (P3)
+### Research Quality Gate (P2)
 
 Anti-pattern checklist (any research output):
 - ❌ Only read README/description, not implementation files
@@ -124,11 +124,11 @@ Output: [what user gets]
 ```
 Skip for obvious actions (save-memory, workspace-git).
 
-## Rules — Coding (P2, P3)
+## Rules — Coding (P1, P2)
 
-R1. **Pipeline is mandatory** for ALL code changes. No escape hatch — even 1-line fixes get adversarial review (trivial profile: EVALUATE→BUILD→REVIEW→TEST→DELIVER→REFLECT, ~5min). User explicit override ("直接做", "just do it") is the ONLY bypass — and agent MUST strong-propose pipeline first with evidence why it's better. Evidence: 5 HIGH bugs found in "trivial" session fixes (2026-05-26). (P2)
+R1. **Pipeline is mandatory** for ALL code changes. No escape hatch — even 1-line fixes get adversarial review (trivial profile: EVALUATE→BUILD→REVIEW→TEST→DELIVER→REFLECT, ~5min). User explicit override ("直接做", "just do it") is the ONLY bypass — and agent MUST strong-propose pipeline first with evidence why it's better. Evidence: 5 HIGH bugs found in "trivial" session fixes (2026-05-26). (P1)
 
-R2. **Pre-Implementation Checkpoint** (>1 file or new mechanism) — output before coding: (P3)
+R2. **Pre-Implementation Checkpoint** (>1 file or new mechanism) — output before coding: (P1)
   1. Problem (one sentence)
   2. Scenarios (input × expected behavior, edge cases)
   3. Simplest approach
@@ -138,19 +138,19 @@ R2. **Pre-Implementation Checkpoint** (>1 file or new mechanism) — output befo
   7. Shape change audit (if changing artifact shape)
   8. External API verification (Read the target file before coding against it)
 
-R3. **Post-Task Self-Review** — before declaring done: (P2)
+R3. **Post-Task Self-Review** — before declaring done: (P1)
   1. Switch perspective (reviewer who didn't write it)
   2. Data flow check (multi-script: run full chain with real data, verify non-empty outputs)
   3. Iteration honesty (edited same file 3x? = didn't think it through)
   4. "Call twice" check (any new function with state/globals: does calling it a 2nd time produce correct results? Module-level mutable state is the #1 source of "works once, breaks in production")
 
-R4. **Extract ≠ Extend** — two separate commits. (P3)
+R4. **Extract ≠ Extend** — two separate commits. (P2)
 
-R5. **Surgical changes** — touch only what the task requires. Match existing style. (P3)
+R5. **Surgical changes** — touch only what the task requires. Match existing style. (P2)
 
 R6. **Post-push CI** — every `git push` → `gh run list` → watch → fix if red. (P2)
 
-R7. **Post-task scans** — after code changes, scan modified files for quality + security issues. Skip for docs-only changes. Confidence-gated (≥7 auto-fix, ≤4 suppress). (P2)
+R7. **Post-task scans** — after code changes, scan modified files for quality + security issues. Skip for docs-only changes. Confidence-gated (≥7 auto-fix, ≤4 suppress). (P1)
 
 ## Rules — Operations (P1, P4)
 
@@ -208,7 +208,7 @@ Surface the classification brief to the decider. User has final authority after 
 - AGENT.md rules: ≤25
 - STEERING.md standing rules: ≤15
 
-## Coding Task Execution Modes
+## Coding Task Execution Modes (P1)
 
 | Mode | When | Process |
 |------|------|---------|
