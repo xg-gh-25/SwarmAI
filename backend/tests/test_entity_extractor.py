@@ -200,3 +200,91 @@ class TestPruneEntityIndex:
         pruned = prune_entity_index(lines, max_chars=8000)
         assert "## Cross-Project Knowledge Index" in pruned
         assert "| Entity | References |" in pruned
+
+
+class TestFilterSingleProjectEntities:
+    """AC1: Cross-Project Index only shows entities with 2+ project refs."""
+
+    def test_excludes_single_project_entities(self, projects_dir):
+        """Entities found in only 1 project are excluded from index."""
+        entities = extract_entities_from_ddd(projects_dir)
+        lines = format_entity_index(entities)
+        # "Data Sources" only appears in CMHK_SalesIntel — should be excluded
+        data_sources_lines = [l for l in lines if "Data Sources" in l and "|" in l]
+        assert data_sources_lines == []
+
+    def test_keeps_multi_project_entities(self, projects_dir):
+        """Entities found in 2+ projects are kept."""
+        entities = extract_entities_from_ddd(projects_dir)
+        lines = format_entity_index(entities)
+        # "Architecture" appears in SwarmAI AND CMHK_SalesIntel — should be kept
+        arch_lines = [l for l in lines if "Architecture" in l and "|" in l]
+        assert len(arch_lines) == 1
+        # "What Worked" appears in SwarmAI AND CMHK_SalesIntel — kept
+        worked_lines = [l for l in lines if "What Worked" in l and "|" in l]
+        assert len(worked_lines) == 1
+
+    def test_vision_in_multiple_projects_kept(self, projects_dir):
+        """'Vision' appears in SwarmAI and PhysicalAI — kept."""
+        entities = extract_entities_from_ddd(projects_dir)
+        lines = format_entity_index(entities)
+        vision_lines = [l for l in lines if "Vision" in l and "|" in l]
+        assert len(vision_lines) == 1
+
+
+class TestCleanDescriptionExtraction:
+    """AC2: Clean one-line descriptions without markdown artifacts."""
+
+    def test_strips_leading_underscore_italic(self, tmp_path):
+        """PRODUCT.md lines starting with _ (italic wrapper) are stripped."""
+        proj = tmp_path / "TestProj"
+        proj.mkdir()
+        (proj / "PRODUCT.md").write_text(
+            "# TestProj\n\n"
+            "_> **CMHK** is the current official name for the region_\n\n"
+            "## Vision\n\nSome vision.\n"
+        )
+        # Use the extraction logic from refresh_projects_index
+        from core.entity_extractor import extract_clean_description
+        desc = extract_clean_description(proj / "PRODUCT.md")
+        assert not desc.startswith("_")
+        assert not desc.startswith(">")
+        assert "CMHK" in desc
+
+    def test_strips_bold_name_prefix(self, tmp_path):
+        """Lines like '- **Name:** BMS 2.0...' get cleaned."""
+        proj = tmp_path / "BMS"
+        proj.mkdir()
+        (proj / "PRODUCT.md").write_text(
+            "# BMS\n\n"
+            "- **Name:** BMS 2.0 (Business Management System 2.0)\n\n"
+            "## Vision\n\nUnified business ops.\n"
+        )
+        from core.entity_extractor import extract_clean_description
+        desc = extract_clean_description(proj / "PRODUCT.md")
+        assert not desc.startswith("-")
+        assert not desc.startswith("**")
+        assert "BMS 2.0" in desc or "Business Management" in desc
+
+    def test_truncates_at_80_chars_word_boundary(self, tmp_path):
+        """Long descriptions are truncated at word boundary."""
+        proj = tmp_path / "LongDesc"
+        proj.mkdir()
+        long_line = "A " * 60  # 120 chars
+        (proj / "PRODUCT.md").write_text(
+            f"# LongDesc\n\n{long_line}\n\n## Vision\n\nStuff.\n"
+        )
+        from core.entity_extractor import extract_clean_description
+        desc = extract_clean_description(proj / "PRODUCT.md")
+        assert len(desc) <= 80
+
+    def test_skips_blank_and_heading_lines(self, tmp_path):
+        """Blank lines and # headings are not used as description."""
+        proj = tmp_path / "HeadingsOnly"
+        proj.mkdir()
+        (proj / "PRODUCT.md").write_text(
+            "# HeadingsOnly\n\n\n## Section\n\nActual content here.\n"
+        )
+        from core.entity_extractor import extract_clean_description
+        desc = extract_clean_description(proj / "PRODUCT.md")
+        assert desc == "Actual content here."

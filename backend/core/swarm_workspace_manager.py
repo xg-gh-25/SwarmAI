@@ -28,7 +28,7 @@ from uuid import uuid4
 import anyio
 import subprocess
 
-from core.entity_extractor import extract_entities_from_ddd, format_entity_index, prune_entity_index
+from core.entity_extractor import extract_clean_description, extract_entities_from_ddd, format_entity_index, prune_entity_index
 from core.project_schema_migrations import CURRENT_SCHEMA_VERSION, migrate_if_needed
 
 logger = logging.getLogger(__name__)
@@ -978,18 +978,8 @@ class SwarmWorkspaceManager:
                             })
                 ddd_status = ", ".join(ddd_docs) if ddd_docs else "none"
 
-                # Read one-line vision from PRODUCT.md
-                vision = ""
-                product_md = candidate / "PRODUCT.md"
-                if product_md.exists():
-                    try:
-                        for line in product_md.read_text(encoding="utf-8").splitlines():
-                            line = line.strip()
-                            if line and not line.startswith("#") and not line.startswith("_"):
-                                vision = line[:80].rsplit(" ", 1)[0] if len(line) > 80 else line
-                                break
-                    except OSError:
-                        pass
+                # Read one-line vision from PRODUCT.md (cleaned)
+                vision = extract_clean_description(candidate / "PRODUCT.md")
 
                 entries.append({
                     "name": name,
