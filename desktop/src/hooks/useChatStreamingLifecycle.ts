@@ -1470,6 +1470,14 @@ export function useChatStreamingLifecycle(
           pendingToolUseRef.current = false;
         }
 
+        // ── File change notification — dispatch DOM event for FileEditorCore ──
+        if (event.type === 'file_changed') {
+          const path = (event as unknown as Record<string, unknown>).path as string;
+          if (path) {
+            window.dispatchEvent(new CustomEvent('swarm:file-changed', { detail: { path } }));
+          }
+        }
+
         if (event.type === 'session_start' && event.sessionId) {
           // Update per-tab map. Keep isStreaming true — the tab is still
           // actively streaming after session_start. The pending phase ends
