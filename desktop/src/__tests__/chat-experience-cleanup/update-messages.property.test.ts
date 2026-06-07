@@ -192,7 +192,13 @@ describe('Feature: chat-experience-cleanup, Property 1: updateMessages Structura
 
           const newText = (newBlock as Record<string, unknown>).text as string ?? '';
           const oldText = (confirmedBlock as Record<string, unknown>).text as string ?? '';
-          const isSameTurnReEmission = newText === oldText || newText.startsWith(oldText);
+          // Must match the actual MIN_DEDUP_LENGTH guard in updateMessages:
+          // Short text (< 20 chars): exact match only (prevents false positives)
+          // Long text (>= 20 chars): exact match OR startsWith (handles SDK growth)
+          const MIN_DEDUP_LENGTH = 20;
+          const isSameTurnReEmission = oldText.length >= MIN_DEDUP_LENGTH
+            ? (newText === oldText || newText.startsWith(oldText))
+            : (newText === oldText);
 
           if (isSameTurnReEmission) {
             // Same-turn dedup: old text replaced by new (BUG FIX 2026-06-07)
