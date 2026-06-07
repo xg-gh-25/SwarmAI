@@ -462,6 +462,7 @@ export default function FileEditorCore({
         const freshContent = resp.data.content;
         if (freshContent !== contentRef.current) {
           setContent(freshContent);
+          setSavedContent(freshContent); // Update baseline so hasUnsavedEdits stays false
           onContentChangeRef.current?.(freshContent);
         }
       } catch {

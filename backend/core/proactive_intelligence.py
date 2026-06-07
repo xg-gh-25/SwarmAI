@@ -1913,17 +1913,13 @@ def build_session_briefing_data(
                         completed_at = run_data.get("completed_at", "")
                         if not completed_at:
                             completed_at = datetime.fromtimestamp(run_json.stat().st_mtime).isoformat()
-                        # Extract title from REPORT.md if exists, else requirement
-                        if report.exists():
-                            text = report.read_text(encoding="utf-8")[:600]
-                            title = _extract_report_field(text, "Requirement", "Pipeline Report")
-                            confidence = _extract_report_confidence(text)
-                            report_file = str(report.relative_to(workspace))
-                        else:
-                            req = run_data.get("requirement", "Pipeline Run")
-                            title = req[:100] if len(req) > 100 else req
-                            confidence = None
-                            report_file = ""
+                        # Only show builds that have a proper REPORT.md (= DELIVER completed)
+                        if not report.exists():
+                            continue
+                        text = report.read_text(encoding="utf-8")[:600]
+                        title = _extract_report_field(text, "Requirement", "Pipeline Report")
+                        confidence = _extract_report_confidence(text)
+                        report_file = str(report.relative_to(workspace))
                         builds.append({
                             "runId": run_dir.name,
                             "project": proj_dir.name,
