@@ -317,16 +317,17 @@ class ContextHealthHook:
                     project_dir.name, freshness.commits_behind,
                     len(freshness.changed_files),
                 )
-                # Emit event for background full reindex (non-blocking)
+                # Emit event for background full reindex (non-blocking).
+                # Uses emit_event_atomic (fcntl-locked load→append→save) to
+                # avoid the race where this hook's stale state overwrites the
+                # scheduler's successful job updates. See scheduler.emit_event_atomic.
                 try:
-                    from jobs.scheduler import emit_event, load_state, save_state
-                    sched_state = load_state()
-                    emit_event(sched_state, "code_intel_full_reindex", data={
+                    from jobs.scheduler import emit_event_atomic
+                    emit_event_atomic("code_intel_full_reindex", data={
                         "project": project_dir.name,
                         "commits_behind": freshness.commits_behind,
                         "files_changed": len(freshness.changed_files),
                     })
-                    save_state(sched_state)
                 except Exception as emit_err:
                     logger.debug("code_intel: failed to emit reindex event: %s", emit_err)
                 continue  # don't block session start — background job handles it

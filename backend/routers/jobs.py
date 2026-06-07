@@ -82,7 +82,7 @@ async def run_job(req: RunJobRequest):
     try:
         from jobs.scheduler import (
             load_jobs, load_config, load_feeds, load_state,
-            save_state, load_user_context, load_defaults,
+            save_state_reconciled, load_user_context, load_defaults,
         )
         from jobs.executor import execute_job
 
@@ -108,7 +108,8 @@ async def run_job(req: RunJobRequest):
 
         all_job_ids = {j.id for j in jobs}
         result = execute_job(job, state, feeds, user_context, defaults, all_job_ids)
-        save_state(state)
+        # Reconciled save preserves events hooks emitted during the run.
+        save_state_reconciled(state)
 
         return RunJobResponse(
             job_id=result.job_id,

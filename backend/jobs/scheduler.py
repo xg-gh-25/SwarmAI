@@ -17,6 +17,7 @@ import argparse
 import json
 import logging
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -119,23 +120,101 @@ def load_state() -> SchedulerState:
 
 
 def save_state(state: SchedulerState) -> None:
-    """Persist state to JSON."""
+    """Persist state to JSON.
+
+    NOTE: This is a raw write with no cross-process locking. Callers that
+    may race with hooks emitting events (the scheduler's main loop) MUST use
+    ``save_state_reconciled`` instead, which preserves hook-appended events.
+    Direct ``save_state`` is safe only for callers that don't touch
+    ``pending_events`` concurrently with hooks (CLI --run-now, tests).
+    """
     STATE_FILE.write_text(state.model_dump_json(indent=2))
+
+
+@contextmanager
+def _state_lock():
+    """Acquire the cross-process exclusive lock guarding state.json.
+
+    Both ``emit_event_atomic`` (hooks) and ``save_state_reconciled``
+    (scheduler) take this lock so their read-modify-write cycles on
+    ``pending_events`` are serialized across processes. The lock file is
+    ``state.lock`` alongside ``state.json``.
+
+    Blocking acquire — hold time is tiny (a load+write of small JSON), and
+    the only contenders are the scheduler's final save and event-emitting
+    hooks, so contention is rare and brief.
+    """
+    import fcntl
+
+    lock_file = STATE_FILE.with_suffix(".lock")
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    lf = open(lock_file, "w")  # noqa: SIM115
+    try:
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        lf.close()
+
+
+def save_state_reconciled(
+    state: SchedulerState, consumed_event_ids: set[str] | None = None
+) -> None:
+    """Persist scheduler state while preserving concurrently-appended events.
+
+    Closes the lost-update race between the scheduler process (which holds
+    state in memory across a multi-minute job run) and event-emitting hooks
+    (``emit_event_atomic``) that append to ``pending_events`` on disk during
+    that run.
+
+    Under the shared state lock:
+    1. Re-read the on-disk ``pending_events`` (authoritative — includes any
+       events hooks appended during the run).
+    2. Drop only the events this scheduler run actually consumed
+       (``consumed_event_ids``).
+    3. Write the scheduler's in-memory ``state`` (job statuses, spend, etc.)
+       but with the reconciled ``pending_events``.
+
+    This keeps scheduler-owned fields authoritative while never discarding a
+    hook-emitted event that arrived mid-run.
+    """
+    consumed = consumed_event_ids or set()
+    try:
+        with _state_lock():
+            disk = load_state()
+            reconciled = [
+                e for e in disk.pending_events
+                if e.get("event_id") not in consumed
+            ]
+            # Cap to bound growth (newest kept), matching emit_event_atomic.
+            if len(reconciled) > _MAX_PENDING_EVENTS:
+                reconciled = reconciled[-_MAX_PENDING_EVENTS:]
+            state.pending_events = reconciled
+            save_state(state)
+    except Exception as e:
+        # Never let a state-save failure crash the scheduler — fall back to a
+        # raw write so job-status updates aren't lost (events may be, rarely).
+        logger.warning(f"save_state_reconciled failed, falling back to raw save: {e}")
+        save_state(state)
 
 
 def emit_event_atomic(event_name: str, data: dict | None = None) -> str:
     """Atomically emit an event into state without clobbering other fields.
 
     Unlike emit_event() which operates on an in-memory state object,
-    this function does a targeted load→append→save cycle. Use this from
-    hooks and external callers that don't own the full scheduler state.
+    this function does a targeted load→append→save cycle under the shared
+    state lock. Use this from hooks and external callers that don't own the
+    full scheduler state.
 
     This prevents the race condition where a hook loads stale state (with
     old job statuses) and saves it back, overwriting the scheduler's
-    successful job updates.
+    successful job updates — and, paired with ``save_state_reconciled``,
+    ensures the scheduler's final save never drops a hook-emitted event.
     """
     import uuid
-    import fcntl
 
     event_id = str(uuid.uuid4())
     event_entry = {
@@ -145,10 +224,8 @@ def emit_event_atomic(event_name: str, data: dict | None = None) -> str:
         "data": data or {},
     }
 
-    lock_file = STATE_FILE.with_suffix(".lock")
     try:
-        with open(lock_file, "w") as lf:
-            fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+        with _state_lock():
             # Load current state, append event, save — all under lock
             state = load_state()
             if len(state.pending_events) >= _MAX_PENDING_EVENTS:
@@ -406,7 +483,9 @@ def run_scheduler(dry_run: bool = False, force_job: str | None = None) -> None:
         if not dry_run:
             result = execute_job(job, state, feeds, user_context, defaults, all_job_ids)
             logger.info(f"Result: {result.status} — {result.summary}")
-            save_state(state)
+            # Reconciled save preserves any events hooks emitted during the
+            # forced run (this path doesn't consume events).
+            save_state_reconciled(state)
             # Print JSON result for --run-now callers
             print(json.dumps(result.model_dump(), default=str))
         else:
@@ -474,6 +553,9 @@ def run_scheduler(dry_run: bool = False, force_job: str | None = None) -> None:
 
     # Phase 3: Evaluate and execute event-triggered (on:<event>) jobs.
     # These consume pending events from state.pending_events.
+    # Track the exact event IDs consumed so the final reconciled save drops
+    # only these — preserving any events hooks appended during this run.
+    consumed_event_ids: set[str] = set()
     if event_based_jobs and state.pending_events:
         due_events: list[Job] = []
         for job in event_based_jobs:
@@ -489,13 +571,24 @@ def run_scheduler(dry_run: bool = False, force_job: str | None = None) -> None:
                 # Only consume events on success — failed jobs should retry
                 # on next tick (circuit breaker handles repeated failures)
                 if result.status in ("success", "partial", "skipped"):
+                    # Record IDs being consumed BEFORE removing them, so the
+                    # reconciled save drops exactly these from disk.
+                    event_name = job.schedule[3:] if job.schedule.startswith("on:") else None
+                    if event_name:
+                        consumed_event_ids.update(
+                            e.get("event_id")
+                            for e in state.pending_events
+                            if e.get("event_name") == event_name and e.get("event_id")
+                        )
                     consume_events_for_job(state, job.schedule)
 
     if not results:
         logger.info("No jobs due")
         return
 
-    save_state(state)
+    # Reconciled save: re-read disk under lock, drop only the events we
+    # consumed, preserve hook-appended events that arrived during this run.
+    save_state_reconciled(state, consumed_event_ids)
 
     # Summary
     ok = sum(1 for r in results if r.status in ("success", "skipped"))

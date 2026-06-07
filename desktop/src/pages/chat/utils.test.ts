@@ -12,8 +12,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fc from 'fast-check';
 import type { ChatSession } from '../../types';
-import { groupSessionsByTime, formatTimestamp } from './utils';
+import { groupSessionsByTime, formatTimestamp, mergeOlderMessages } from './utils';
 import { MS_PER_DAY } from './constants';
+import type { Message, ContentBlock } from '../../types';
 
 // ============== Arbitraries ==============
 
@@ -322,5 +323,79 @@ describe('Chat Utilities - Property-Based Tests', () => {
         { numRuns: 100 }
       );
     });
+  });
+});
+
+// ============== mergeOlderMessages (pagination seam) ==============
+
+describe('mergeOlderMessages', () => {
+  const asst = (id: string, text: string, model?: string): Message => ({
+    id,
+    role: 'assistant',
+    content: [{ type: 'text', text } as ContentBlock],
+    timestamp: id,
+    model,
+  });
+  const user = (id: string, text: string): Message => ({
+    id,
+    role: 'user',
+    content: [{ type: 'text', text } as ContentBlock],
+    timestamp: id,
+  });
+
+  it('returns current when older is empty', () => {
+    const cur = [asst('a1', 'hi')];
+    expect(mergeOlderMessages([], cur)).toBe(cur);
+  });
+
+  it('returns older when current is empty', () => {
+    const old = [asst('a1', 'hi')];
+    expect(mergeOlderMessages(old, [])).toBe(old);
+  });
+
+  it('merges boundary when both sides are assistant', () => {
+    // older page ends with assistant turn 1; current page starts with turn 2
+    const older = [user('u1', 'q'), asst('a1', 'part one', 'sonnet')];
+    const current = [asst('a2', ' part two', 'opus'), user('u2', 'q2')];
+    const result = mergeOlderMessages(older, current);
+
+    // u1, merged-assistant, u2 → 3 messages (a1+a2 collapsed)
+    expect(result).toHaveLength(3);
+    expect(result[0].id).toBe('u1');
+    expect(result[1].id).toBe('a1'); // older anchor id retained
+    expect(result[1].content.map((b) => (b as { text: string }).text)).toEqual([
+      'part one',
+      ' part two',
+    ]);
+    expect(result[1].model).toBe('opus'); // newer model wins
+    expect(result[2].id).toBe('u2');
+  });
+
+  it('does NOT merge when boundary is user → assistant', () => {
+    const older = [asst('a1', 'resp'), user('u1', 'next q')];
+    const current = [asst('a2', 'resp2')];
+    const result = mergeOlderMessages(older, current);
+    expect(result).toHaveLength(3);
+    expect(result.map((m) => m.id)).toEqual(['a1', 'u1', 'a2']);
+  });
+
+  it('does NOT merge when boundary is assistant → user', () => {
+    const older = [asst('a1', 'resp')];
+    const current = [user('u1', 'q'), asst('a2', 'resp2')];
+    const result = mergeOlderMessages(older, current);
+    expect(result).toHaveLength(3);
+    expect(result.map((m) => m.id)).toEqual(['a1', 'u1', 'a2']);
+  });
+
+  it('does not mutate the input arrays or messages', () => {
+    const olderMsg = asst('a1', 'one');
+    const olderContent = olderMsg.content;
+    const older = [olderMsg];
+    const current = [asst('a2', 'two')];
+    mergeOlderMessages(older, current);
+    // Original content array length unchanged (no in-place concat)
+    expect(olderMsg.content).toBe(olderContent);
+    expect(olderMsg.content).toHaveLength(1);
+    expect(older).toHaveLength(1);
   });
 });
