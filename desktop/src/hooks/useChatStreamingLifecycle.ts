@@ -391,12 +391,15 @@ export function updateMessages(
 
     if (newThinkingBlocks.length > 0) {
       const newThinking = (newThinkingBlocks[0] as Record<string, unknown>).thinking as string ?? '';
-      if (newThinking.length >= MIN_DEDUP_LENGTH) {
+      if (newThinking) {
         for (let i = confirmed.length - 1; i >= 0; i--) {
           if (confirmed[i].type === 'thinking' && (confirmed[i] as Record<string, unknown>)._confirmed) {
             const existingThinking = (confirmed[i] as Record<string, unknown>).thinking as string ?? '';
-            if (existingThinking.length >= MIN_DEDUP_LENGTH &&
-                (newThinking === existingThinking || newThinking.startsWith(existingThinking))) {
+            if (!existingThinking) break;
+            const isMatch = existingThinking.length >= MIN_DEDUP_LENGTH
+              ? (newThinking === existingThinking || newThinking.startsWith(existingThinking))
+              : (newThinking === existingThinking);
+            if (isMatch) {
               confirmed.splice(i, 1);
             }
             break;
