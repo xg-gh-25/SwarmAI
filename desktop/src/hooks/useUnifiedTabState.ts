@@ -148,6 +148,9 @@ export interface UnifiedTab {
   };
   /** Timestamp of last sessionStorage checkpoint write (throttle: max 1 per 10s). */
   _lastCheckpointTime?: number;
+  /** Reconciliation race guard: set ONLY by setIsStreaming(true). Never touched by
+   *  elapsed-timer effects or selectTab. Used by reconcile loop to skip fresh streams. */
+  _reconcileStreamStart?: number;
   /** True when backend returned SESSION_BUSY — polling for response completion.
    *  Send button is disabled, "Waiting..." indicator shown, polling active. */
   isWaitingForBusy?: boolean;
