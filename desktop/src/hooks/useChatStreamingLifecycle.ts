@@ -359,20 +359,31 @@ export function updateMessages(
     const newTextBlocks = authoritativeBlocks.filter((b) => b.type === 'text');
     const newThinkingBlocks = authoritativeBlocks.filter((b) => b.type === 'thinking');
 
+    // Same-turn dedup: if new text equals or extends the last confirmed text,
+    // replace it. This handles SDK re-emission where the same turn emits
+    // multiple assistant events with growing text content.
+    //
+    // NOTE: Do NOT add a "hasToolAfter" guard here. In the P0 bug scenario,
+    // tools ARE between text blocks (text → tool_use → tool_result → text re-emission).
+    // The hasToolAfter check was attempted in commit 410200eb and BREAKS the fix.
+    // Cross-turn safety is handled by the `startsWith` check: genuinely different
+    // turns have different text, so startsWith returns false → no dedup.
     if (newTextBlocks.length > 0) {
       const newText = (newTextBlocks[0] as Record<string, unknown>).text as string ?? '';
-      if (newText.length >= MIN_DEDUP_LENGTH) {
-        // Find the last confirmed text block and check if it's a same-turn re-emission
+      if (newText) {  // Skip empty string (guard against "".startsWith("") === true)
         for (let i = confirmed.length - 1; i >= 0; i--) {
           if (confirmed[i].type === 'text' && (confirmed[i] as Record<string, unknown>)._confirmed) {
             const existingText = (confirmed[i] as Record<string, unknown>).text as string ?? '';
-            // Same-turn re-emission: new text equals or extends existing text
-            // (SDK accumulates within a turn — text grows as model produces more)
-            if (existingText.length >= MIN_DEDUP_LENGTH &&
-                (newText === existingText || newText.startsWith(existingText))) {
+            if (!existingText) break;  // Empty confirmed text — don't dedup
+            // Short text: exact match only (prevents false positive on common words)
+            // Long text: exact match OR startsWith (handles SDK text growth within turn)
+            const isMatch = existingText.length >= MIN_DEDUP_LENGTH
+              ? (newText === existingText || newText.startsWith(existingText))
+              : (newText === existingText);
+            if (isMatch) {
               confirmed.splice(i, 1);
             }
-            break; // Only check the last confirmed text block
+            break;
           }
         }
       }
