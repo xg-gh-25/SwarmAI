@@ -1504,7 +1504,7 @@ export function useChatStreamingLifecycle(
           } else if (isActiveTab && !tabState) {
             // Fallback: initial tab before registration (capturedTabId === null).
             // No tabState exists yet — apply updateMessages directly to React state.
-            setMessages((prev) => updateMessages(prev, assistantMessageId, event.content, event.model));
+            setMessages((prev) => updateMessages(prev, assistantMessageId, event.content!, event.model));
           }
         } else if (
           event.type === 'ask_user_question' &&
