@@ -1,4 +1,27 @@
 
+### 2026-06-07: Streaming P0 Cluster — 5 Bugs, 1 Root Cause Pattern
+
+**What Worked:**
+- **Structural reconciliation > string matching** — `_confirmed` marker + replace-not-dedup eliminated text duplication by construction. No amount of `endsWith`/`startsWith` heuristics can cover all edge cases (whitespace, prefix, re-emission). Making the wrong thing structurally impossible is the only robust fix.
+- **Adversarial review caught 2 HIGH bugs** the author missed — `appendTextDelta` corrupting confirmed blocks, and same-turn re-emission dedup needing tool-boundary guard. Fresh context beats self-review every time.
+- **Backend liveness events (thinking_progress)** — simple 15-line change to `sse_with_heartbeat` that eliminates both the stall warning AND gives users elapsed time feedback.
+
+**What Failed:**
+- **Streaming is highest-risk, lowest-coverage surface** — 700+ backend tests, 0 integration tests that simulate real SDK event sequences (20 text_delta + 5 tool_use + 3 assistant events in realistic order and timing). All streaming tests are unit-level against `updateMessages` in isolation.
+- **Dev environment ≠ production regime** — Dev uses short conversations (<100K context). Production uses 1.4M context + 40+ tools/turn + 12min extended thinking. Timing, batching, content redaction all behave differently at scale. Every streaming P0 was invisible in dev testing.
+- **"Clever" over "Structural" design** — `endsWith` dedup was elegant (5 lines) but assumed byte-identical text. One trailing `\n` difference → P0. Pattern: any logic that relies on "detecting" or "matching" instead of "preventing" is a time bomb.
+- **Stall detection had no concept of thinking phase** — 60s threshold designed for text generation, applied universally. Extended thinking (redacted content, 12min silent) is a fundamentally different regime that needs its own UX treatment.
+- **No "large context" QA gate** — Changes to streaming code were validated only with short conversations. Need a mandatory smoke test on 1M+ context session after any streaming change.
+
+**Known Limitation (deliberate tradeoff):**
+- **Cross-turn identical text dedup false positive** — If two separate turns produce identical text (≥20 chars), same-turn dedup (`startsWith` check) collapses them into 1 block. This is extremely rare in practice (agent almost never produces byte-identical ≥20 char text across turns). Tradeoff accepted: P0 fix (content explosion → spinner hang) > edge case (identical cross-turn text merged). **Structural fix direction:** backend should tag each assistant event with a monotonic turn index; frontend replaces "block from same turn index" instead of matching by string content. This eliminates ALL heuristic matching — true "impossible by construction."
+
+**Lessons (systemic, not per-bug):**
+1. **Streaming needs integration test harness** — Replay real SDK event sequences from production session logs. Not mock, not unit — real timing, real event order, real content shapes.
+2. **"Make wrong impossible" > "Detect wrong after"** — `_confirmed` marker eliminated an entire class of bugs. Any future "match and filter" logic in the hot path should be replaced with structural markers. NOTE: same-turn dedup still uses `startsWith` heuristic — this is a known deviation from the principle, accepted as P0 tradeoff until turn-index tagging is implemented.
+3. **5 P0s in 1 cluster = architecture gap, not 5 bugs** — Every fix touched `useChatStreamingLifecycle.ts`. The file is 2600+ lines with 19 exported functions and no isolation between streaming phases. Extraction into focused modules (reconciliation, stall detection, tab routing) would make each testable in isolation.
+4. **Production testing for production regimes** — After any streaming change, verify on a real 1M+ context session with extended thinking. Can't simulate 12-min thinking silence in unit tests.
+
 ### 2026-05-16: Strangler Fig + Pipeline Self-Improvement Session
 
 **What Worked:**
