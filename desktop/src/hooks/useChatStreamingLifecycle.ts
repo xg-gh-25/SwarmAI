@@ -937,7 +937,8 @@ export function useChatStreamingLifecycle(
   //
   // Design: iterates ALL tabs in tabMapRef (not just active) so background
   // tabs running sub-agents also get reconciled. Guards against race with
-  // legitimately-restarted streams by checking _reconcileStreamStart.
+  // legitimately-restarted streams via _reconcileStreamStart timestamp
+  // (skips tabs where stream started <10s ago to avoid clobbering fresh turns).
   //
   // CRITICAL (adversarial #1): trigger on ANY tab streaming, not just active.
   // If active tab completes but background tab is stuck, `isStreaming` (derived
@@ -975,10 +976,9 @@ export function useChatStreamingLifecycle(
           const backendIsStreaming = backendState?.streaming ?? false;
 
           if (!backendIsStreaming) {
-            // Race guard: use _reconcileStreamStart (set only by setIsStreaming(true),
-            // never cleared by elapsed-timer or selectTab — immune to dual-writer bug).
-            const reconcileStart = (tabState as unknown as Record<string, number>)._reconcileStreamStart ?? 0;
-            const streamAge = Date.now() - reconcileStart;
+            // Race guard: _reconcileStreamStart is set only by setIsStreaming(true),
+            // never cleared by elapsed-timer or selectTab — immune to dual-writer bug.
+            const streamAge = Date.now() - (tabState._reconcileStreamStart ?? 0);
             if (streamAge < 10_000) continue;  // too fresh — let it settle
 
             console.warn(
@@ -1093,10 +1093,7 @@ export function useChatStreamingLifecycle(
         if (tabState) {
           tabState.isStreaming = streaming;
           if (streaming) {
-            // Reconcile-specific timestamp: NOT shared with Fix-9 elapsed timer
-            // or selectTab. Those write streamStartTime for UI display; this is
-            // purely for the reconciliation race guard (never cleared by other code).
-            (tabState as unknown as Record<string, number>)._reconcileStreamStart = Date.now();
+            tabState._reconcileStreamStart = Date.now();
           }
         }
       }
@@ -1796,18 +1793,22 @@ export function useChatStreamingLifecycle(
           // seamlessly continue the stream with a new conversation turn.
           const hasQueuedMessage = !!(capturedTabId && tabState?.queuedMessage);
 
-          // ── DIAGNOSTIC: spinner-hang root cause (remove after confirmed) ──
-          console.warn('[DIAG:result]', {
-            capturedTabId,
-            activeTabId: activeTabIdRef.current,
-            isActiveTab,
-            hasQueuedMessage,
-            queuedMessage: tabState?.queuedMessage ? String(tabState.queuedMessage).slice(0, 50) : null,
-            tabStateIsStreaming: tabState?.isStreaming,
-            tabStateIsReconnecting: tabState?.isReconnecting,
-            pendingStreamTabs: [...pendingStreamTabs],
-            sid,
-          });
+          // ── DIAGNOSTIC: spinner-hang root cause ──
+          // Gated behind localStorage flag to avoid noise in production.
+          // Enable: localStorage.setItem('swarm_diag_result', '1')
+          if (typeof localStorage !== 'undefined' && localStorage.getItem('swarm_diag_result')) {
+            console.warn('[DIAG:result]', {
+              capturedTabId,
+              activeTabId: activeTabIdRef.current,
+              isActiveTab,
+              hasQueuedMessage,
+              queuedMessage: tabState?.queuedMessage ? String(tabState.queuedMessage).slice(0, 50) : null,
+              tabStateIsStreaming: tabState?.isStreaming,
+              tabStateIsReconnecting: tabState?.isReconnecting,
+              pendingStreamTabs: [...pendingStreamTabs],
+              sid,
+            });
+          }
 
           if (!hasQueuedMessage) {
             // Normal completion — clear streaming state so spinner stops
