@@ -100,9 +100,9 @@ class ToDoManager:
         # Enforce archived workspace read-only (Requirement 36.6)
         await self._check_workspace_not_archived(workspace_id)
 
-        # Dedup gate: if a pending/in_discussion todo with same title+source
+        # Dedup gate: if a pending/in_discussion todo with same title(+source)
         # already exists, return it instead of creating a duplicate.
-        if data.title and data.source:
+        if data.title:
             existing = await self._find_duplicate(workspace_id, data.title, data.source)
             if existing:
                 logger.debug("Dedup gate: returning existing todo %s", existing["id"][:8])
@@ -465,23 +465,28 @@ class ToDoManager:
         return todo
 
     async def _find_duplicate(
-        self, workspace_id: str, title: str, source: str
+        self, workspace_id: str, title: str, source: Optional[str]
     ) -> Optional[dict]:
         """Check if a pending/in_discussion todo with same title+source exists.
 
         Returns the existing todo dict if found, None otherwise.
         Only matches active statuses (pending, in_discussion) — handled/cancelled
         todos do NOT block re-creation.
+
+        When source is None, matches on title-only (any source).
+        When source is provided, requires exact title+source match.
         """
         active_statuses = (ToDoStatus.PENDING.value, ToDoStatus.IN_DISCUSSION.value)
         all_todos = await db.todos.list_by_workspace(workspace_id)
         for todo in all_todos:
-            if (
-                todo.get("title") == title
-                and todo.get("source") == source
-                and todo.get("status") in active_statuses
-            ):
-                return todo
+            if todo.get("status") not in active_statuses:
+                continue
+            if todo.get("title") != title:
+                continue
+            # If source provided, require exact match; if None, match any
+            if source is not None and todo.get("source") != source:
+                continue
+            return todo
         return None
 
     def _is_stale_terminal(self, todo: dict, terminal_statuses: tuple, cutoff_dt: datetime) -> bool:

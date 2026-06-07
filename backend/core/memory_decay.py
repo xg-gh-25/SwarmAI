@@ -33,7 +33,7 @@ from typing import Optional
 # ── Constants ────────────────────────────────────────────────────────────────
 
 STRENGTH_FLOOR = 0.05       # Never fully forgotten (MemPalace: same value)
-STABILITY_BASE = 1.0        # Initial decay resistance (days)
+STABILITY_BASE = 5.0        # Initial decay resistance (days)
 SPACING_BONUS = 0.3         # Stability gain per distinct session (Cepeda effect)
 VOLUME_FACTOR = 0.2         # Diminishing log(1+ref_count) contribution
 MAX_STABILITY = 10.0        # Cap so no entry becomes immortal
@@ -255,7 +255,10 @@ def bump_entry_references(
                 # Update existing metadata in place
                 indent = meta_match.group(1)
                 ref_count = int(meta_match.group(2)) + 1
-                sessions = int(meta_match.group(5)) + 1
+                old_last = meta_match.group(3)  # previous last-referenced date
+                # Only increment sessions if last_referenced date differs (Cepeda dedup)
+                old_sessions = int(meta_match.group(5))
+                sessions = old_sessions + (1 if old_last != today_str else 0)
                 result_lines.append(
                     f"{indent}<!-- ref:{ref_count} | last:{today_str} "
                     f"| decay:active | sessions:{sessions} -->"
@@ -265,7 +268,7 @@ def bump_entry_references(
 
             # If we hit another entry header, the previous entry had no metadata
             next_header = _ENTRY_HEADER_RE.match(line)
-            if next_header or (line.startswith("- ") and not line.startswith("  ")):
+            if next_header:
                 # Insert metadata for the pending entry
                 result_lines.insert(
                     pending_header_idx + 1,
@@ -273,7 +276,7 @@ def bump_entry_references(
                 )
                 pending_entry = None
                 # Now handle this line — re-check if it's a header we care about
-                if next_header and next_header.group(1) in referenced_ids:
+                if next_header.group(1) in referenced_ids:
                     result_lines.append(line)
                     pending_entry = next_header.group(1)
                     pending_header_idx = len(result_lines) - 1
