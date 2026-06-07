@@ -30,6 +30,10 @@ interface ReviewModeGutterProps {
   onRemoveComment: (id: string) => void;
   onCancelPopover: () => void;
   getCommentForLine: (lineNumber: number) => ReviewComment | undefined;
+  /** Send a single comment immediately to the agent. */
+  onSendSingle?: (text: string, lineNumber: number) => void;
+  /** Check if a comment has been applied (target lines changed). */
+  isCommentApplied?: (comment: ReviewComment) => boolean;
 }
 
 export default function ReviewModeGutter({
@@ -44,6 +48,8 @@ export default function ReviewModeGutter({
   onRemoveComment,
   onCancelPopover,
   getCommentForLine,
+  onSendSingle,
+  isCommentApplied,
 }: ReviewModeGutterProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const gutterWidth = `${Math.max(3, String(lineCount).length) + 1}ch`;
@@ -83,6 +89,7 @@ export default function ReviewModeGutter({
           const comment = getCommentForLine(lineNum);
           const hasComment = !!comment;
           const isPopoverTarget = activePopoverLine === lineNum;
+          const applied = hasComment && isCommentApplied ? isCommentApplied(comment) : false;
 
           return (
             <div
@@ -90,19 +97,23 @@ export default function ReviewModeGutter({
               className={`relative cursor-pointer transition-colors ${
                 isPopoverTarget
                   ? 'bg-[var(--color-primary)]/15 text-[var(--color-primary)]'
-                  : hasComment
-                    ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
-                    : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
+                  : applied
+                    ? 'bg-green-500/10 text-green-600 dark:text-green-400'
+                    : hasComment
+                      ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
+                      : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
               }`}
               onClick={() => handleLineClick(lineNum)}
-              title={hasComment ? `Comment: ${comment.text}` : `Add comment on line ${lineNum}`}
+              title={applied && comment ? `Applied: ${comment.text}` : hasComment && comment ? `Comment: ${comment.text}` : `Add comment on line ${lineNum}`}
               role="button"
               aria-label={hasComment ? `Edit comment on line ${lineNum}` : `Add comment on line ${lineNum}`}
             >
-              {hasComment && (
+              {applied ? (
+                <span className="absolute left-0.5 top-1/2 -translate-y-1/2 text-[10px]">✅</span>
+              ) : hasComment ? (
                 <span className="absolute left-0.5 top-1/2 -translate-y-1/2 text-[10px]">💬</span>
-              )}
-              <span className={hasComment ? 'pl-3' : ''}>{lineNum}</span>
+              ) : null}
+              <span className={hasComment || applied ? 'pl-3' : ''}>{lineNum}</span>
             </div>
           );
         })}
@@ -126,6 +137,14 @@ export default function ReviewModeGutter({
               ? () => onRemoveComment(activeComment.id)
               : undefined
           }
+          onSendSingle={onSendSingle ? (text) => {
+            // Add comment first (if new), then send to agent
+            const existingComment = getCommentForLine(activePopoverLine);
+            if (!existingComment) {
+              onAddComment(activePopoverLine, activePopoverLine, text);
+            }
+            onSendSingle(text, activePopoverLine);
+          } : undefined}
           topOffset={popoverTopOffset}
           anchorRef={containerRef}
         />

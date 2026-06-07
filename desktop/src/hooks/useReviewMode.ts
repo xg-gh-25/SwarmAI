@@ -64,6 +64,8 @@ export interface ReviewComment {
   timestamp: number;
   /** When comment was made on a diff line, captures the diff context. */
   diffContext?: DiffContext;
+  /** Snapshot of the target line content at comment creation time. */
+  originalLineContent?: string;
 }
 
 function generateId(): string {
@@ -104,6 +106,8 @@ export function useReviewMode(content: string, filePath?: string) {
   const addComment = useCallback(
     (lineStart: number, lineEnd: number, text: string, diffContext?: DiffContext) => {
       const heading = findNearestHeading(contentLines, lineStart);
+      // Capture the original line content for "applied" detection
+      const originalLineContent = contentLines[lineStart - 1] ?? '';
       const comment: ReviewComment = {
         id: generateId(),
         lineStart,
@@ -112,6 +116,7 @@ export function useReviewMode(content: string, filePath?: string) {
         sectionHeading: heading,
         timestamp: Date.now(),
         diffContext,
+        originalLineContent,
       };
       setComments((prev) => [...prev, comment]);
       setActivePopoverLine(null);
@@ -218,6 +223,29 @@ export function useReviewMode(content: string, filePath?: string) {
     setEditingCommentId(null);
   }, []);
 
+  /** Format a single comment for immediate send to the agent. */
+  const formatSingleComment = useCallback(
+    (comment: ReviewComment, fileName: string): string => {
+      const lineRef =
+        comment.lineStart === comment.lineEnd
+          ? `L${comment.lineStart}`
+          : `L${comment.lineStart}-${comment.lineEnd}`;
+      return `[Review: \`${fileName}\`:${lineRef}] ${comment.text}`;
+    },
+    [],
+  );
+
+  /** Check if a comment has been "applied" — its target line content changed. */
+  const isCommentApplied = useCallback(
+    (comment: ReviewComment): boolean => {
+      if (!comment.originalLineContent) return false;
+      const currentLine = contentLines[comment.lineStart - 1];
+      // If line no longer exists or content differs → applied
+      return currentLine === undefined || currentLine !== comment.originalLineContent;
+    },
+    [contentLines],
+  );
+
   return {
     isReviewMode,
     toggleReviewMode,
@@ -229,6 +257,8 @@ export function useReviewMode(content: string, filePath?: string) {
     clearComments,
     getCommentForLine,
     formatFeedback,
+    formatSingleComment,
+    isCommentApplied,
     activePopoverLine,
     setActivePopoverLine,
     editingCommentId,

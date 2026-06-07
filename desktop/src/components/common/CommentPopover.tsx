@@ -23,6 +23,8 @@ interface CommentPopoverProps {
   onCancel: () => void;
   /** Called when user wants to delete this comment (only shown for existing). */
   onDelete?: () => void;
+  /** Called to immediately send this single comment to the agent. */
+  onSendSingle?: (text: string) => void;
   /** Vertical offset from top of the editor area (px). */
   topOffset: number;
   /** Ref to the gutter container — used to calculate portal position. */
@@ -35,6 +37,7 @@ export default function CommentPopover({
   onSubmit,
   onCancel,
   onDelete,
+  onSendSingle,
   topOffset,
   anchorRef,
 }: CommentPopoverProps) {
@@ -169,6 +172,21 @@ export default function CommentPopover({
           >
             Cancel
           </button>
+          {onSendSingle && (
+            <button
+              onClick={() => {
+                const trimmed = text.trim();
+                if (trimmed) onSendSingle(trimmed);
+              }}
+              disabled={!text.trim()}
+              className="px-2 py-1 text-xs rounded text-[var(--color-primary)] border border-[var(--color-primary)]/40 hover:bg-[var(--color-primary)]/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-0.5"
+              data-testid="comment-send-single"
+              title="Send this comment to agent immediately"
+            >
+              <span className="material-symbols-outlined text-xs">send</span>
+              Send
+            </button>
+          )}
           <button
             onClick={handleSubmit}
             disabled={!text.trim()}

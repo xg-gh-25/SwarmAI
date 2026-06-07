@@ -144,9 +144,14 @@ export function ChatInput({
   // L2: Listen for auto-diff injection from FileEditorPanel save
   // and L3 review feedback. Updates both the visible textarea AND the
   // per-tab draft storage so the text survives tab switches.
+  // Supports `autoSend: true` to immediately dispatch the message to the agent.
+  // Auto-send uses a two-phase approach: set pendingAutoSend flag, then fire
+  // onSend in a separate effect AFTER React has flushed the input state update.
+  const [pendingAutoSend, setPendingAutoSend] = useState(false);
+
   useEffect(() => {
     const handler = (e: Event) => {
-      const { text, focus } = (e as CustomEvent<{ text: string; focus?: boolean }>).detail ?? {};
+      const { text, focus, autoSend } = (e as CustomEvent<{ text: string; focus?: boolean; autoSend?: boolean }>).detail ?? {};
       if (text) {
         onInputChange(text);
         // Sync to per-tab draft storage so the injected text survives tab switches
@@ -154,7 +159,9 @@ export function ChatInput({
         if (tabId && inputValueMapRef) {
           inputValueMapRef.current.set(tabId, text);
         }
-        if (focus) {
+        if (autoSend) {
+          setPendingAutoSend(true);
+        } else if (focus) {
           requestAnimationFrame(() => textareaRef.current?.focus());
         }
       }
@@ -162,6 +169,14 @@ export function ChatInput({
     window.addEventListener('swarm:inject-chat-input', handler);
     return () => window.removeEventListener('swarm:inject-chat-input', handler);
   }, [onInputChange, activeTabIdRef, inputValueMapRef]);
+
+  // Phase 2: fire onSend after React has committed the input state update
+  useEffect(() => {
+    if (pendingAutoSend) {
+      setPendingAutoSend(false);
+      onSend();
+    }
+  }, [pendingAutoSend, onSend]);
 
   // Apply a brief CSS transition for mode toggle animations only (not during typing)
   const applyTransition = useCallback(() => {
