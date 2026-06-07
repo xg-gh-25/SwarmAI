@@ -175,10 +175,11 @@ def verify_binary(binary_path: str) -> tuple[list[str], list[str], list[str]]:
 
     try:
         # Wait for health endpoint
-        # 90s: PyInstaller one-file mode extracts 140MB+ to temp on first run.
-        # On CI runners with slow I/O, 30s isn't enough.
-        if not _wait_for_health(port, timeout=90):
-            print("❌ Binary failed to start within 90s")
+        # 180s: PyInstaller one-file mode extracts 200MB+ to temp on first run.
+        # On macOS, uvicorn import alone takes ~88s during extraction (measured 2026-06-07).
+        # On CI runners with slow I/O, this can be even longer.
+        if not _wait_for_health(port, timeout=180):
+            print("❌ Binary failed to start within 180s")
             # Dump captured stdout for diagnosis
             if proc.poll() is not None:
                 print(f"  Process exited with code {proc.returncode}")
