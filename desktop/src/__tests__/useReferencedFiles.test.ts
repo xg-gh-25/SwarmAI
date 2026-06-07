@@ -17,11 +17,15 @@ describe('useReferencedFiles', () => {
   const SESSION_ID = 'test-session-123';
 
   beforeEach(() => {
-    sessionStorage.clear();
+    if (typeof globalThis.sessionStorage !== 'undefined') {
+      globalThis.sessionStorage.clear();
+    }
   });
 
   afterEach(() => {
-    sessionStorage.clear();
+    if (typeof globalThis.sessionStorage !== 'undefined') {
+      globalThis.sessionStorage.clear();
+    }
   });
 
   it('starts empty', () => {

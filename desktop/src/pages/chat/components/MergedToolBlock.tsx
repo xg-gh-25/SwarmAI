@@ -54,18 +54,24 @@ const FILE_PATH_CATEGORIES = new Set(['read', 'write', 'edit', 'search', 'list_d
  */
 const PATH_PREFIXES = [
   'Writing to ', 'Reading ', 'Editing ',
-  'Searching in /', 'Listing /',
-  'Wrote to ', 'Created /',
+  'Searching in ', 'Listing ',
+  'Wrote to ', 'Created ',
 ];
 
 /**
  * Extract a file path from a tool summary string for read/write/edit tools.
  * Returns { before, path } or null if no path found.
+ * Handles trailing content like "(42 lines)" by stopping at first space after path chars.
  */
 function extractFilePath(summary: string): { before: string; path: string } | null {
   for (const prefix of PATH_PREFIXES) {
     if (summary.startsWith(prefix)) {
-      const path = summary.slice(prefix.length).trim();
+      const raw = summary.slice(prefix.length).trim();
+      if (!raw) continue;
+      // Extract path: take the longest leading non-space token that looks like a path
+      // (stops at first space, or takes the whole string if no trailing content)
+      const pathMatch = raw.match(/^(\S+)/);
+      const path = pathMatch ? pathMatch[1] : raw;
       if (path && (path.includes('/') || path.includes('.'))) {
         return { before: prefix, path };
       }
@@ -73,6 +79,9 @@ function extractFilePath(summary: string): { before: string; path: string } | nu
   }
   return null;
 }
+
+/** Exported for testing */
+export { extractFilePath as _extractFilePath };
 
 interface MergedToolBlockProps {
   name: string;

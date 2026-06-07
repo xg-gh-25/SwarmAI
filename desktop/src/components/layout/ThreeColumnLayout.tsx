@@ -549,8 +549,8 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
         document.dispatchEvent(new CustomEvent('swarm:open-file-dialog'));
       }
 
-      // Cmd+Shift+C — Copy active file path
-      if (isMeta && e.shiftKey && e.key === 'C') {
+      // Cmd+Shift+P — Copy active file path (avoids DevTools conflict with Cmd+Shift+C)
+      if (isMeta && e.shiftKey && (e.key === 'P' || e.key === 'p')) {
         e.preventDefault();
         if (fileViewerFile?.filePath) {
           import('../../utils/clipboard').then(({ copyToClipboard }) => {
