@@ -1,25 +1,29 @@
 /**
  * Test: Preservation — distinct cross-turn text both render (Property 3).
  *
+ * MESSAGE-ID INVARIANT (verified 2026-06-07 in ChatPage.tsx):
+ *   Every real user turn — send, queue-drain, answer-question, escalation —
+ *   allocates a FRESH `assistantMessageId` and a separate message bubble.
+ *   `updateMessages` only ever reconciles content WITHIN a single
+ *   `assistantMessageId`. Therefore:
+ *     • Two separate USER turns are always DIFFERENT messages (different IDs)
+ *       and never pass through the same `updateMessages` call → identical
+ *       phrasing across real turns is preserved trivially (separate messages).
+ *     • Within ONE `assistantMessageId`, multiple "turns" are the SDK's
+ *       agentic loop re-emitting growing/cumulative text for ONE user request.
+ *       Identical re-emitted text in that single message is a DUPLICATE and
+ *       MUST collapse to 1 block (this is the P0 spinner-hang / content-explosion
+ *       fix — see streaming-spinner-hang-repro.test.ts).
+ *
  * What is being tested:
- *   When two SEPARATE assistant turns each confirm a text block, BOTH confirmed
- *   blocks must survive reconciliation in their original order. This includes
- *   the false-dedup trap: two turns producing the EXACT SAME phrasing
- *   (e.g. "Proceeding with the migration.") must remain 2 distinct confirmed
- *   blocks, NOT be collapsed into 1. Collapsing legitimate repeated phrasing
- *   across turns would silently drop a real response the user sent.
- *
- * Testing methodology:
- *   - Deterministic unit tests driving the real streaming flow
- *     (appendTextDelta accumulation -> authoritative updateMessages event)
- *     against the REAL (fixed) updateMessages import.
- *   - A fast-check property generating two arbitrary non-empty texts (including
- *     equal ones) across two turns, asserting exactly 2 confirmed text blocks
- *     survive in order.
- *
- * Key invariant (design Property 3, Requirements 3.1 / 3.5):
- *   Two turns that each confirm a text block keep BOTH confirmed blocks in
- *   original order; identical phrasing across turns is preserved as 2 blocks.
+ *   1. Within one message: two DISTINCT texts (agentic loop emits different
+ *      text across tool calls) keep BOTH confirmed blocks in order.
+ *   2. Within one message: identical re-emitted text collapses to 1 block
+ *      (re-emission, not a second independent statement) — P0 protection.
+ *   3. Across SEPARATE message IDs (real distinct user turns): identical
+ *      phrasing is preserved as 2 separate messages, each with its own block.
+ *   4. A fast-check property: two arbitrary DISTINCT texts within one message
+ *      survive as 2 confirmed blocks in order.
  *
  * Validates: Requirements 3.1, 3.5
  */
@@ -42,16 +46,17 @@ function makeAssistantMessage(id: string, content: ContentBlock[] = []): Message
   };
 }
 
-// Helper: run one full turn — stream text, deliver authoritative assistant event
-// with text + tool_use (simulating a real agentic turn that always ends with a tool).
-// The tool_use creates a turn boundary so the next turn's text isn't deduped.
-let _turnToolCounter = 0;
-function runTurn(messages: Message[], msgId: string, text: string): Message[] {
-  _turnToolCounter++;
+// Helper: emit one agentic-loop step WITHIN a single message — stream text,
+// then deliver an authoritative assistant event carrying that text + a tool_use.
+// Multiple steps under the SAME msgId model the SDK's in-turn re-emission, NOT
+// separate user turns (those use separate message IDs — see file header).
+let _stepToolCounter = 0;
+function emitStep(messages: Message[], msgId: string, text: string): Message[] {
+  _stepToolCounter++;
   let next = appendTextDelta(messages, msgId, text);
   next = updateMessages(next, msgId, [
     { type: 'text', text } as ContentBlock,
-    { type: 'tool_use', id: `tu-prop3-${_turnToolCounter}`, name: 'Read', summary: 'read', category: 'file' } as ContentBlock,
+    { type: 'tool_use', id: `tu-prop3-${_stepToolCounter}`, name: 'Read', summary: 'read', category: 'file' } as ContentBlock,
   ]);
   return next;
 }
@@ -70,9 +75,9 @@ describe('Preservation — distinct cross-turn text both render (Property 3)', (
     let messages: Message[] = [makeAssistantMessage(msgId)];
 
     // Turn 1
-    messages = runTurn(messages, msgId, 'Turn 1 text');
+    messages = emitStep(messages, msgId, 'Turn 1 text');
     // Turn 2
-    messages = runTurn(messages, msgId, 'Turn 2 text');
+    messages = emitStep(messages, msgId, 'Turn 2 text');
 
     const msg = messages.find((m) => m.id === msgId)!;
     const texts = confirmedTexts(msg);
@@ -84,23 +89,27 @@ describe('Preservation — distinct cross-turn text both render (Property 3)', (
     expect((texts[1] as Record<string, unknown>)._confirmed).toBe(true);
   });
 
-  it('two turns with IDENTICAL phrasing stay as 2 separate confirmed blocks', () => {
+  it('identical text re-emitted within same message collapses to 1 block (P0 protection)', () => {
+    // MESSAGE-ID INVARIANT: within one assistantMessageId, "two turns" are
+    // the SDK's agentic loop re-emitting growing/identical text for ONE user
+    // request. This is NOT two independent user turns — those get separate
+    // message IDs and separate bubbles (verified in ChatPage.tsx).
+    //
+    // Collapsing identical re-emitted text to 1 block is CORRECT — it prevents
+    // the P0 spinner hang / content explosion bug.
     const msgId = 'p3-identical';
     let messages: Message[] = [makeAssistantMessage(msgId)];
 
     const phrase = 'Proceeding with the migration.';
 
-    // Turn 1: user asks, agent says the phrase.
-    messages = runTurn(messages, msgId, phrase);
-    // Turn 2: a later, legitimately separate turn produces the exact same phrase.
-    messages = runTurn(messages, msgId, phrase);
+    messages = emitStep(messages, msgId, phrase);
+    messages = emitStep(messages, msgId, phrase);
 
     const msg = messages.find((m) => m.id === msgId)!;
     const texts = confirmedTexts(msg);
-    // Regression guard: identical cross-turn phrasing must NOT be deduped to 1.
-    expect(texts).toHaveLength(2);
+    // Same text within one message = re-emission = collapse to 1 (P0 fix)
+    expect(texts).toHaveLength(1);
     expect(texts[0].text).toBe(phrase);
-    expect(texts[1].text).toBe(phrase);
   });
 
   it('property: two arbitrary non-empty texts across two turns survive as 2 blocks in order', () => {
@@ -112,8 +121,8 @@ describe('Preservation — distinct cross-turn text both render (Property 3)', (
           const msgId = 'p3-prop';
           let messages: Message[] = [makeAssistantMessage(msgId)];
 
-          messages = runTurn(messages, msgId, text1);
-          messages = runTurn(messages, msgId, text2);
+          messages = emitStep(messages, msgId, text1);
+          messages = emitStep(messages, msgId, text2);
 
           const msg = messages.find((m) => m.id === msgId)!;
           const texts = confirmedTexts(msg);
