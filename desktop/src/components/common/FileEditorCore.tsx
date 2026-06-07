@@ -447,18 +447,21 @@ export default function FileEditorCore({
   hasUnsavedEditsRef.current = hasUnsavedEdits;
   const onContentChangeRef = useRef(onContentChange);
   onContentChangeRef.current = onContentChange;
-  const refreshFailuresRef = useRef(0);
 
+  // ── AC2: Auto-refresh via SSE file_changed event (not polling) ──
   useEffect(() => {
-    refreshFailuresRef.current = 0;
-    const interval = setInterval(async () => {
+    const handler = async (e: Event) => {
+      const changedPath = (e as CustomEvent<{ path: string }>).detail?.path;
+      if (!changedPath) return;
+      // Match: exact path, or absolute path ends with workspace-relative filePath
+      const isMatch = changedPath === filePath
+        || changedPath.endsWith(`/${filePath}`);
+      if (!isMatch) return;
       if (hasUnsavedEditsRef.current) return; // Don't overwrite user's unsaved edits
-      if (refreshFailuresRef.current >= 3) return; // Stop polling after 3 consecutive failures
       try {
         const resp = await api.get<{ content: string }>('/workspace/file', {
           params: { path: filePath },
         });
-        refreshFailuresRef.current = 0;
         const freshContent = resp.data.content;
         if (freshContent !== contentRef.current) {
           setContent(freshContent);
@@ -466,10 +469,11 @@ export default function FileEditorCore({
           onContentChangeRef.current?.(freshContent);
         }
       } catch {
-        refreshFailuresRef.current++;
+        // Silently ignore — file may have been deleted
       }
-    }, 3000);
-    return () => clearInterval(interval);
+    };
+    window.addEventListener('swarm:file-changed', handler);
+    return () => window.removeEventListener('swarm:file-changed', handler);
   }, [filePath]);
 
   // L3: Review mode — inline comments (used for both normal review and diff review)

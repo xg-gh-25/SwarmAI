@@ -2039,6 +2039,7 @@ class SessionUnit:
 
         response_iter = self._client.receive_response().__aiter__()
         _STREAM_EXHAUSTED = object()  # Sentinel: iterator is done
+        _pending_file_changes: dict[str, str] = {}  # tool_use_id → file_path for Edit/Write
 
         async def _next_or_sentinel():
             """Wrap __anext__ so StopAsyncIteration doesn't leak into Task.
@@ -2207,6 +2208,11 @@ class SessionUnit:
                             # answered.
                             self._content_emitted = True
                     elif isinstance(block, ToolUseBlock):
+                        # ── Track file-modifying tools for file_changed events ──
+                        if block.name in ("Edit", "Write", "NotebookEdit") and isinstance(block.input, dict):
+                            _fp = block.input.get("file_path", "")
+                            if _fp:
+                                _pending_file_changes[block.id] = _fp
                         if block.name == "AskUserQuestion":
                             questions = block.input.get("questions", [])
                             yield {
@@ -2318,6 +2324,19 @@ class SessionUnit:
                             "content": truncated, "is_error": getattr(block, "is_error", False),
                             "truncated": was_truncated,
                         })
+                        # ── Emit file_changed event for Edit/Write completions ──
+                        _changed_path = _pending_file_changes.pop(block.tool_use_id, None)
+                        if _changed_path and not getattr(block, "is_error", False):
+                            # Flush accumulated content blocks first, then emit file_changed
+                            if content_blocks:
+                                self._content_emitted = True
+                                yield {
+                                    "type": "assistant",
+                                    "content": content_blocks,
+                                    "model": getattr(message, "model", None),
+                                }
+                                content_blocks = []
+                            yield {"type": "file_changed", "path": _changed_path}
                 if content_blocks:
                     self._content_emitted = True
                     yield {
