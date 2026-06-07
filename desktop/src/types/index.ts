@@ -177,6 +177,8 @@ export interface ChatMessage {
 export interface TextContent {
   type: 'text';
   text: string;
+  /** Marks this block as authoritative (from an assistant event), not provisional (from streaming delta). */
+  _confirmed?: boolean;
 }
 
 export interface ToolUseContent {
@@ -217,6 +219,8 @@ export interface AskUserQuestionContent {
 export interface ThinkingContent {
   type: 'thinking';
   thinking: string;
+  /** Marks this block as authoritative (from an assistant event), not provisional (from streaming delta). */
+  _confirmed?: boolean;
 }
 
 export interface CmdPermissionContent {

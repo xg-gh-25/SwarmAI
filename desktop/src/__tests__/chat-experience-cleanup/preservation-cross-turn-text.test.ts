@@ -118,6 +118,15 @@ describe('Preservation — distinct cross-turn text both render (Property 3)', (
         fc.string({ minLength: 1, maxLength: 200 }),
         fc.string({ minLength: 1, maxLength: 200 }),
         (text1, text2) => {
+          // Exclude pairs that legitimately collapse under same-turn re-emission dedup:
+          // equal text, or one being a prefix of the other. Those model SDK cumulative
+          // re-emission (covered by the re-emission test), not two distinct statements.
+          fc.pre(
+            text1 !== text2 &&
+            !text2.startsWith(text1) &&
+            !text1.startsWith(text2),
+          );
+
           const msgId = 'p3-prop';
           let messages: Message[] = [makeAssistantMessage(msgId)];
 
