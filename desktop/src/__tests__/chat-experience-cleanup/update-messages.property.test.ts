@@ -172,7 +172,7 @@ describe('Feature: chat-experience-cleanup, Property 1: updateMessages Structura
     );
   });
 
-  it('confirmed text blocks survive a subsequent updateMessages call', () => {
+  it('confirmed text blocks survive unless replaced by same-turn re-emission', () => {
     fc.assert(
       fc.property(
         fc.uuid(),
@@ -190,10 +190,19 @@ describe('Feature: chat-experience-cleanup, Property 1: updateMessages Structura
           const target = result.find(m => m.id === msgId)!;
           const textBlocks = target.content.filter(b => b.type === 'text');
 
-          // The confirmed block from prior turn MUST survive
-          expect(textBlocks.some(b => b.text === confirmedBlock.text)).toBe(true);
-          // The new block is also present (confirmed)
-          expect(textBlocks.some(b => b.text === newBlock.text)).toBe(true);
+          const newText = (newBlock as Record<string, unknown>).text as string ?? '';
+          const oldText = (confirmedBlock as Record<string, unknown>).text as string ?? '';
+          const isSameTurnReEmission = newText === oldText || newText.startsWith(oldText);
+
+          if (isSameTurnReEmission) {
+            // Same-turn dedup: old text replaced by new (BUG FIX 2026-06-07)
+            expect(textBlocks).toHaveLength(1);
+            expect(textBlocks[0].text).toBe(newText);
+          } else {
+            // Different turn: both survive
+            expect(textBlocks.some(b => b.text === oldText)).toBe(true);
+            expect(textBlocks.some(b => b.text === newText)).toBe(true);
+          }
         },
       ),
       { numRuns: 100 },
