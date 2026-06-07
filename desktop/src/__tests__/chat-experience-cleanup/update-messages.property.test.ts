@@ -1,103 +1,70 @@
 /**
- * Property-based test: updateMessages behavioral equivalence.
+ * Property-based test: updateMessages structural reconciliation invariants.
  *
  * What is being tested:
- * - ``updateMessages`` from ``useChatStreamingLifecycle`` — the optimized Set-based
- *   implementation produces identical output to the original O(n×m) nested-iteration
- *   approach for all valid inputs.
+ * - ``updateMessages`` from ``useChatStreamingLifecycle`` — the structural
+ *   reconciliation (replace, not dedup) correctly partitions confirmed vs
+ *   unconfirmed blocks, deduplicates tools by ID, and marks new text/thinking
+ *   as confirmed.
  *
  * Testing methodology: Property-based testing with fast-check + Vitest
- * Key property: For any valid message array, assistant message ID, array of new
- * content blocks (text, tool_use, tool_result), and optional model string, the
- * optimized implementation SHALL produce output identical to the original.
  *
- * **Validates: Requirements 2.5**
+ * Key invariants:
+ * 1. Tool blocks are never duplicated (dedup by ID).
+ * 2. Unconfirmed text/thinking blocks are replaced by authoritative content.
+ * 3. Confirmed text/thinking blocks survive across assistant events.
+ * 4. Non-matching message IDs are never modified.
+ * 5. Output text/thinking blocks from newContent are always marked _confirmed.
  */
 
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
-import { updateMessages, blockKey } from '../../hooks/useChatStreamingLifecycle';
+import { updateMessages } from '../../hooks/useChatStreamingLifecycle';
 import type { Message, ContentBlock } from '../../types';
-
-// ---------------------------------------------------------------------------
-// Original (reference) implementation — O(n×m) nested .some() approach
-// ---------------------------------------------------------------------------
-
-/**
- * Reference implementation of updateMessages using the original nested-iteration
- * algorithm. This is the behavioral baseline that the optimized Set-based
- * implementation must match exactly.
- */
-function originalUpdateMessages(
-  currentMessages: Message[],
-  assistantMessageId: string,
-  newContent: ContentBlock[],
-  model?: string,
-): Message[] {
-  return currentMessages.map((msg) => {
-    if (msg.id !== assistantMessageId) return msg;
-
-    // Original O(n×m) nested .some() dedup logic
-    const filteredContent = newContent.filter((newBlock) => {
-      return !msg.content.some((existing) => {
-        if (existing.type === 'tool_use' && newBlock.type === 'tool_use') {
-          return existing.id === newBlock.id;
-        }
-        if (existing.type === 'tool_result' && newBlock.type === 'tool_result') {
-          return existing.toolUseId === newBlock.toolUseId;
-        }
-        if (existing.type === 'text' && newBlock.type === 'text') {
-          return existing.text === newBlock.text;
-        }
-        return false;
-      });
-    });
-
-    if (filteredContent.length === 0) return msg;
-    return {
-      ...msg,
-      content: [...msg.content, ...filteredContent],
-      ...(model ? { model } : {}),
-      // Clear isError when new non-error content arrives (auto-retry recovery)
-      ...(msg.isError ? { isError: false } : {}),
-    };
-  });
-}
 
 // ---------------------------------------------------------------------------
 // fast-check Arbitraries
 // ---------------------------------------------------------------------------
 
-/** Arbitrary for a text content block. */
 const arbTextContent = fc.record({
   type: fc.constant('text' as const),
   text: fc.string({ minLength: 1, maxLength: 100 }),
 });
 
-/** Arbitrary for a tool_use content block. */
+const arbConfirmedTextContent = fc.record({
+  type: fc.constant('text' as const),
+  text: fc.string({ minLength: 1, maxLength: 100 }),
+  _confirmed: fc.constant(true),
+});
+
 const arbToolUseContent = fc.record({
   type: fc.constant('tool_use' as const),
   id: fc.uuid(),
   name: fc.string({ minLength: 1, maxLength: 50 }),
-  input: fc.constant({} as Record<string, unknown>),
+  summary: fc.constant('summary'),
+  category: fc.constant('file'),
 });
 
-/** Arbitrary for a tool_result content block. */
 const arbToolResultContent = fc.record({
   type: fc.constant('tool_result' as const),
   toolUseId: fc.uuid(),
   content: fc.option(fc.string({ maxLength: 200 }), { nil: undefined }),
-  isError: fc.boolean(),
+  is_error: fc.boolean(),
+  truncated: fc.constant(false),
 });
 
-/** Arbitrary for any ContentBlock (text, tool_use, or tool_result). */
 const arbContentBlock: fc.Arbitrary<ContentBlock> = fc.oneof(
   arbTextContent,
   arbToolUseContent,
   arbToolResultContent,
-);
+) as fc.Arbitrary<ContentBlock>;
 
-/** Arbitrary for a Message with a given role and content blocks. */
+const arbNewContentBlock: fc.Arbitrary<ContentBlock> = fc.oneof(
+  arbTextContent,
+  arbToolUseContent,
+  arbToolResultContent,
+) as fc.Arbitrary<ContentBlock>;
+
 function arbMessage(role: 'user' | 'assistant'): fc.Arbitrary<Message> {
   return fc.record({
     id: fc.uuid(),
@@ -105,18 +72,10 @@ function arbMessage(role: 'user' | 'assistant'): fc.Arbitrary<Message> {
     content: fc.array(arbContentBlock, { minLength: 0, maxLength: 8 }),
     timestamp: fc.constant(new Date().toISOString()),
     model: fc.option(fc.string({ minLength: 1, maxLength: 20 }), { nil: undefined }),
-  });
+  }) as fc.Arbitrary<Message>;
 }
 
-/**
- * Arbitrary for a message array that contains at least one assistant message.
- * Returns both the array and the ID of a randomly chosen assistant message
- * to use as the target for updateMessages.
- */
-const arbMessagesWithTarget: fc.Arbitrary<{
-  messages: Message[];
-  targetId: string;
-}> = fc
+const arbMessagesWithTarget = fc
   .tuple(
     fc.array(arbMessage('user'), { minLength: 0, maxLength: 3 }),
     arbMessage('assistant'),
@@ -131,53 +90,129 @@ const arbMessagesWithTarget: fc.Arbitrary<{
   }));
 
 // ---------------------------------------------------------------------------
-// Property Test
+// Property Tests
 // ---------------------------------------------------------------------------
 
-describe('Feature: chat-experience-cleanup, Property 1: updateMessages Behavioral Equivalence', () => {
-  /**
-   * **Validates: Requirements 2.5**
-   *
-   * For any valid message array, any assistant message ID present in that
-   * array, any array of new content blocks (containing arbitrary mixes of
-   * text, tool_use, and tool_result blocks), and any optional model string,
-   * the optimized Set-based updateMessages implementation SHALL produce
-   * output identical to the original nested-iteration implementation.
-   */
-  it('optimized Set-based implementation matches original nested-iteration for all inputs', () => {
+describe('Feature: chat-experience-cleanup, Property 1: updateMessages Structural Invariants', () => {
+
+  it('non-matching messages are never modified (referential equality)', () => {
     fc.assert(
       fc.property(
         arbMessagesWithTarget,
-        fc.array(arbContentBlock, { minLength: 0, maxLength: 10 }),
-        fc.option(fc.string({ minLength: 1, maxLength: 20 }), { nil: undefined }),
-        ({ messages, targetId }, newContent, model) => {
-          const optimized = updateMessages(messages, targetId, newContent, model);
-          const reference = originalUpdateMessages(messages, targetId, newContent, model);
-
-          expect(optimized).toEqual(reference);
+        fc.array(arbNewContentBlock, { minLength: 1, maxLength: 5 }),
+        ({ messages, targetId }, newContent) => {
+          const result = updateMessages(messages, targetId, newContent);
+          for (let i = 0; i < result.length; i++) {
+            if (result[i].id !== targetId) {
+              expect(result[i]).toBe(messages[i]); // Same reference
+            }
+          }
         },
       ),
       { numRuns: 100 },
     );
   });
 
-  /**
-   * **Validates: Requirements 2.5**
-   *
-   * When the target assistant message ID does not exist in the array,
-   * both implementations should return messages unchanged.
-   */
-  it('both implementations return unchanged messages when target ID is absent', () => {
+  it('tool_use blocks are deduped by id — no duplicates in output', () => {
+    fc.assert(
+      fc.property(
+        arbMessagesWithTarget,
+        fc.array(arbToolUseContent as fc.Arbitrary<ContentBlock>, { minLength: 1, maxLength: 5 }),
+        ({ messages, targetId }, newContent) => {
+          const result = updateMessages(messages, targetId, newContent);
+          const target = result.find(m => m.id === targetId)!;
+          const toolUseIds = target.content
+            .filter(b => b.type === 'tool_use')
+            .map(b => (b as Record<string, unknown>).id);
+          // No duplicate IDs
+          expect(new Set(toolUseIds).size).toBe(toolUseIds.length);
+        },
+      ),
+      { numRuns: 100 },
+    );
+  });
+
+  it('tool_result blocks are deduped by toolUseId — no duplicates in output', () => {
+    fc.assert(
+      fc.property(
+        arbMessagesWithTarget,
+        fc.array(arbToolResultContent as fc.Arbitrary<ContentBlock>, { minLength: 1, maxLength: 5 }),
+        ({ messages, targetId }, newContent) => {
+          const result = updateMessages(messages, targetId, newContent);
+          const target = result.find(m => m.id === targetId)!;
+          const toolResultIds = target.content
+            .filter(b => b.type === 'tool_result')
+            .map(b => (b as Record<string, unknown>).toolUseId);
+          // No duplicate toolUseIds
+          expect(new Set(toolResultIds).size).toBe(toolResultIds.length);
+        },
+      ),
+      { numRuns: 100 },
+    );
+  });
+
+  it('text/thinking blocks from newContent are always marked _confirmed', () => {
+    fc.assert(
+      fc.property(
+        arbMessagesWithTarget,
+        fc.array(arbTextContent as fc.Arbitrary<ContentBlock>, { minLength: 1, maxLength: 5 }),
+        ({ messages, targetId }, newContent) => {
+          const result = updateMessages(messages, targetId, newContent);
+          const target = result.find(m => m.id === targetId)!;
+          // All text blocks from newContent should be confirmed
+          const textBlocks = target.content.filter(b => b.type === 'text');
+          for (const block of textBlocks) {
+            // Every text block in output should be confirmed (either from
+            // prior turns or freshly confirmed by this assistant event)
+            expect((block as Record<string, unknown>)._confirmed).toBe(true);
+          }
+        },
+      ),
+      { numRuns: 100 },
+    );
+  });
+
+  it('confirmed text blocks survive a subsequent updateMessages call', () => {
+    fc.assert(
+      fc.property(
+        fc.uuid(),
+        arbConfirmedTextContent,
+        arbTextContent,
+        (msgId, confirmedBlock, newBlock) => {
+          const messages: Message[] = [{
+            id: msgId,
+            role: 'assistant',
+            content: [confirmedBlock as ContentBlock],
+            timestamp: new Date().toISOString(),
+          }];
+
+          const result = updateMessages(messages, msgId, [newBlock as ContentBlock]);
+          const target = result.find(m => m.id === msgId)!;
+          const textBlocks = target.content.filter(b => b.type === 'text');
+
+          // The confirmed block from prior turn MUST survive
+          expect(textBlocks.some(b => b.text === confirmedBlock.text)).toBe(true);
+          // The new block is also present (confirmed)
+          expect(textBlocks.some(b => b.text === newBlock.text)).toBe(true);
+        },
+      ),
+      { numRuns: 100 },
+    );
+  });
+
+  it('absent target ID returns messages unchanged', () => {
     fc.assert(
       fc.property(
         fc.array(arbMessage('user'), { minLength: 1, maxLength: 5 }),
-        fc.array(arbContentBlock, { minLength: 1, maxLength: 5 }),
+        fc.array(arbNewContentBlock, { minLength: 1, maxLength: 5 }),
         (messages, newContent) => {
           const missingId = 'non-existent-id';
-          const optimized = updateMessages(messages, missingId, newContent);
-          const reference = originalUpdateMessages(messages, missingId, newContent);
-
-          expect(optimized).toEqual(reference);
+          const result = updateMessages(messages, missingId, newContent);
+          // Same references — nothing touched
+          expect(result).toEqual(messages);
+          for (let i = 0; i < result.length; i++) {
+            expect(result[i]).toBe(messages[i]);
+          }
         },
       ),
       { numRuns: 100 },
