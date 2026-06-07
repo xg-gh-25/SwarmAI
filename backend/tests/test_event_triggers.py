@@ -218,3 +218,78 @@ class TestRegressionExistingSchedules:
             "data": {},
         })
         assert is_job_due(job, state) is False
+
+
+# ── AC7: save_state_reconciled closes the hook-vs-scheduler lost-update race ──
+
+
+class TestSaveStateReconciled:
+    """The scheduler loads state, runs jobs for minutes, then saves. Hooks may
+    append events to disk during that window. save_state_reconciled must
+    preserve those events while dropping only the ones the scheduler consumed.
+    """
+
+    @pytest.fixture
+    def isolated_state(self, tmp_path, monkeypatch):
+        """Point STATE_FILE at a temp file so tests don't touch real state."""
+        import jobs.scheduler as sched
+        state_file = tmp_path / "state.json"
+        monkeypatch.setattr(sched, "STATE_FILE", state_file)
+        return sched, state_file
+
+    def test_hook_event_during_run_survives_reconciled_save(self, isolated_state):
+        """An event a hook appends mid-run is preserved by the scheduler's save."""
+        sched, _ = isolated_state
+
+        # 1. Scheduler loads state with one pending event (will be consumed).
+        sched.save_state(SchedulerState(pending_events=[{
+            "event_id": "consumed-1", "event_name": "git_commit",
+            "emitted_at": datetime.now(timezone.utc).isoformat(), "data": {},
+        }]))
+        scheduler_state = sched.load_state()
+
+        # 2. Scheduler runs jobs (simulated). Meanwhile a HOOK emits a new
+        #    event straight to disk via emit_event_atomic.
+        sched.emit_event_atomic("code_intel_full_reindex", data={"project": "X"})
+
+        # 3. Scheduler finishes: consumes the event it processed, saves.
+        sched.save_state_reconciled(scheduler_state, consumed_event_ids={"consumed-1"})
+
+        # 4. Disk must contain ONLY the hook event — consumed one dropped,
+        #    hook event preserved (NOT clobbered by scheduler's stale memory).
+        disk = sched.load_state()
+        names = [e["event_name"] for e in disk.pending_events]
+        assert "git_commit" not in names, "consumed event should be dropped"
+        assert "code_intel_full_reindex" in names, (
+            "hook event emitted during run was clobbered — race NOT closed"
+        )
+
+    def test_reconciled_save_preserves_job_status_fields(self, isolated_state):
+        """Scheduler-owned fields (job statuses) are written authoritatively."""
+        from jobs.models import JobState
+        sched, _ = isolated_state
+
+        sched.save_state(SchedulerState())
+        scheduler_state = sched.load_state()
+        scheduler_state.jobs["signal-fetch"] = JobState(
+            last_run=datetime.now(timezone.utc), last_status="success", total_runs=5,
+        )
+        sched.save_state_reconciled(scheduler_state, consumed_event_ids=set())
+
+        disk = sched.load_state()
+        assert disk.jobs["signal-fetch"].last_status == "success"
+        assert disk.jobs["signal-fetch"].total_runs == 5
+
+    def test_reconciled_save_caps_pending_events(self, isolated_state):
+        """Reconciled pending_events are capped to bound growth."""
+        sched, _ = isolated_state
+        # Seed disk with more than the cap.
+        over = sched._MAX_PENDING_EVENTS + 20
+        sched.save_state(SchedulerState(pending_events=[{
+            "event_id": f"e{i}", "event_name": "x",
+            "emitted_at": datetime.now(timezone.utc).isoformat(), "data": {},
+        } for i in range(over)]))
+
+        sched.save_state_reconciled(sched.load_state(), consumed_event_ids=set())
+        disk = sched.load_state()
+        assert len(disk.pending_events) <= sched._MAX_PENDING_EVENTS

@@ -50,7 +50,7 @@ import { useVoiceConversation } from '../hooks/useVoiceConversation';
 import { ChatHeader, ChatInput, MessageBubble, WelcomeScreen } from './chat/components';
 import { RadarSidebar } from './chat/components/RightSidebar';
 
-import { groupSessionsByTime } from './chat/utils';
+import { groupSessionsByTime, mergeOlderMessages } from './chat/utils';
 import { EXPLORER_ATTACH_FILE, EXPLORER_ASK_ABOUT_FILE } from '../constants/explorerEvents';
 import { CLAUDE_NATIVE_IMAGE_MIMES } from '../utils/fileClassification';
 
@@ -425,7 +425,10 @@ export default function ChatPage() {
       // Capture scroll height before prepending for position preservation
       const container = messagesContainerRef.current;
       if (container) prevScrollHeightRef.current = container.scrollHeight;
-      setMessages(prev => [...olderMessages.map(toDisplayMessage), ...prev]);
+      // Seam merge: if the agent response straddles the page boundary, the
+      // last older message and first current message are both assistant —
+      // merge them so it renders as one bubble (backend can't merge across fetches).
+      setMessages(prev => mergeOlderMessages(olderMessages.map(toDisplayMessage), prev));
     } finally {
       setIsLoadingOlderMessages(false);
     }

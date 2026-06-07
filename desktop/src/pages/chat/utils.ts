@@ -1,5 +1,52 @@
-import type { ChatSession } from '../../types';
+import type { ChatSession, Message, ContentBlock } from '../../types';
 import { MS_PER_DAY, type TimeGroup } from './constants';
+
+/**
+ * Concatenate a page of older messages in front of the current messages,
+ * merging the page boundary when both sides are assistant messages.
+ *
+ * The backend persists each agentic turn as a separate DB row and merges
+ * consecutive assistant rows per-fetch (see `_merge_consecutive_assistant_messages`).
+ * But a single agent response whose rows straddle a pagination boundary is
+ * split across two fetches — the backend cannot merge across fetches. Without
+ * this seam merge, "load older" would render the response as two bubbles.
+ *
+ * Rule: if the LAST message of `older` and the FIRST message of `current` are
+ * both assistant, their content blocks are concatenated into one message that
+ * keeps the older message's id/timestamp (stable anchor for the cursor) and
+ * the newer message's model (most recent attribution).
+ *
+ * Pure function — does not mutate either input array or their messages.
+ */
+export function mergeOlderMessages(
+  older: Message[],
+  current: Message[],
+): Message[] {
+  if (older.length === 0) return current;
+  if (current.length === 0) return older;
+
+  const lastOlder = older[older.length - 1];
+  const firstCurrent = current[0];
+
+  if (lastOlder.role === 'assistant' && firstCurrent.role === 'assistant') {
+    const mergedBoundary: Message = {
+      ...lastOlder,
+      content: [
+        ...(lastOlder.content as ContentBlock[]),
+        ...(firstCurrent.content as ContentBlock[]),
+      ],
+      // Newer message's model wins (most recent attribution).
+      model: firstCurrent.model ?? lastOlder.model,
+    };
+    return [
+      ...older.slice(0, -1),
+      mergedBoundary,
+      ...current.slice(1),
+    ];
+  }
+
+  return [...older, ...current];
+}
 
 export interface GroupedSessions {
   group: TimeGroup;
