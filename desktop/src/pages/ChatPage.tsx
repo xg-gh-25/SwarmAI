@@ -77,7 +77,7 @@ function toDisplayMessage(msg: { id: string; role: string; content: ContentBlock
     // provisional and WIPE them (structural reconciliation replaces unconfirmed blocks).
     content: (msg.content as ContentBlock[]).map((block) =>
       (block.type === 'text' || block.type === 'thinking')
-        ? { ...block, _confirmed: true } as ContentBlock
+        ? { ...block, _confirmed: true }
         : block
     ),
     timestamp: msg.createdAt,

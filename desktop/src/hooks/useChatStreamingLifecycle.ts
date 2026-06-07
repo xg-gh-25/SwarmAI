@@ -36,6 +36,10 @@ import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react'
 import type {
   Message,
   ContentBlock,
+  TextContent,
+  ThinkingContent,
+  ToolUseContent,
+  ToolResultContent,
   StreamEvent,
   SystemPromptMetadata,
   CompactionGuardEvent,
@@ -297,7 +301,7 @@ export function updateMessages(
 
     for (const block of msg.content) {
       if (block.type === 'text' || block.type === 'thinking') {
-        if ((block as Record<string, unknown>)._confirmed) {
+        if ((block as TextContent | ThinkingContent)._confirmed) {
           confirmed.push(block);
         } else {
           hadUnconfirmed[block.type] = true;
@@ -313,28 +317,28 @@ export function updateMessages(
     // Dedup tool_use by id, tool_result by toolUseId — separately.
     const existingToolUseIds = new Set(
       confirmed
-        .filter((b) => b.type === 'tool_use')
-        .map((b) => (b as Record<string, unknown>).id)
+        .filter((b): b is ToolUseContent => b.type === 'tool_use')
+        .map((b) => b.id)
     );
     const existingToolResultIds = new Set(
       confirmed
-        .filter((b) => b.type === 'tool_result')
-        .map((b) => (b as Record<string, unknown>).toolUseId)
+        .filter((b): b is ToolResultContent => b.type === 'tool_result')
+        .map((b) => b.toolUseId)
     );
 
     const authoritativeBlocks: ContentBlock[] = [];
     for (const block of newContent) {
       if (block.type === 'tool_use') {
-        if (!existingToolUseIds.has((block as Record<string, unknown>).id)) {
+        if (!existingToolUseIds.has(block.id)) {
           authoritativeBlocks.push(block);
         }
       } else if (block.type === 'tool_result') {
-        if (!existingToolResultIds.has((block as Record<string, unknown>).toolUseId)) {
+        if (!existingToolResultIds.has(block.toolUseId)) {
           authoritativeBlocks.push(block);
         }
       } else if (block.type === 'text' || block.type === 'thinking') {
         // Mark as confirmed — next assistant event won't remove these
-        authoritativeBlocks.push({ ...block, _confirmed: true } as ContentBlock);
+        authoritativeBlocks.push({ ...block, _confirmed: true });
       } else {
         authoritativeBlocks.push(block);
       }
@@ -369,11 +373,11 @@ export function updateMessages(
     // Cross-turn safety is handled by the `startsWith` check: genuinely different
     // turns have different text, so startsWith returns false → no dedup.
     if (newTextBlocks.length > 0) {
-      const newText = (newTextBlocks[0] as Record<string, unknown>).text as string ?? '';
+      const newText = (newTextBlocks[0] as TextContent).text ?? '';
       if (newText) {  // Skip empty string (guard against "".startsWith("") === true)
         for (let i = confirmed.length - 1; i >= 0; i--) {
-          if (confirmed[i].type === 'text' && (confirmed[i] as Record<string, unknown>)._confirmed) {
-            const existingText = (confirmed[i] as Record<string, unknown>).text as string ?? '';
+          if (confirmed[i].type === 'text' && (confirmed[i] as TextContent)._confirmed) {
+            const existingText = (confirmed[i] as TextContent).text ?? '';
             if (!existingText) break;  // Empty confirmed text — don't dedup
             // Short text: exact match only (prevents false positive on common words)
             // Long text: exact match OR startsWith (handles SDK text growth within turn)
@@ -390,11 +394,11 @@ export function updateMessages(
     }
 
     if (newThinkingBlocks.length > 0) {
-      const newThinking = (newThinkingBlocks[0] as Record<string, unknown>).thinking as string ?? '';
+      const newThinking = (newThinkingBlocks[0] as ThinkingContent).thinking ?? '';
       if (newThinking) {
         for (let i = confirmed.length - 1; i >= 0; i--) {
-          if (confirmed[i].type === 'thinking' && (confirmed[i] as Record<string, unknown>)._confirmed) {
-            const existingThinking = (confirmed[i] as Record<string, unknown>).thinking as string ?? '';
+          if (confirmed[i].type === 'thinking' && (confirmed[i] as ThinkingContent)._confirmed) {
+            const existingThinking = (confirmed[i] as ThinkingContent).thinking ?? '';
             if (!existingThinking) break;
             const isMatch = existingThinking.length >= MIN_DEDUP_LENGTH
               ? (newThinking === existingThinking || newThinking.startsWith(existingThinking))
@@ -440,7 +444,7 @@ export function appendTextDelta(
     if (msg.id !== assistantMessageId) return msg;
     const content = [...msg.content];
     const lastBlock = content[content.length - 1];
-    if (lastBlock && lastBlock.type === 'text' && !(lastBlock as Record<string, unknown>)._confirmed) {
+    if (lastBlock && lastBlock.type === 'text' && !lastBlock._confirmed) {
       // Append to existing UNCONFIRMED text block (new reference).
       // Never append to a confirmed block — that belongs to a prior turn.
       content[content.length - 1] = {
@@ -471,7 +475,7 @@ export function appendThinkingDelta(
     if (msg.id !== assistantMessageId) return msg;
     const content = [...msg.content];
     const lastBlock = content[content.length - 1];
-    if (lastBlock && lastBlock.type === 'thinking' && !(lastBlock as Record<string, unknown>)._confirmed) {
+    if (lastBlock && lastBlock.type === 'thinking' && !lastBlock._confirmed) {
       // Append to existing UNCONFIRMED thinking block (new reference).
       // Never append to a confirmed block — that belongs to a prior turn.
       content[content.length - 1] = {
