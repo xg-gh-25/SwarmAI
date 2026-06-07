@@ -74,6 +74,87 @@ Read the BUILD stage artifacts:
 
 ---
 
+## Spec Compliance Gate (Serial, BLOCKING — runs BEFORE fan-out)
+
+After Litmus Pre-Gate passes (verdict = PASS or BORDERLINE), dispatch a Spec
+Compliance sub-agent FIRST. This verifies the implementation matches acceptance
+criteria from PLAN — nothing more, nothing less. It runs SERIAL and BLOCKING because:
+- If spec fails, no point checking code quality (saves ~45K tokens)
+- Spec reviewer needs zero context from quality reviewers
+- Finding "AC #3 not implemented" is cheaper than finding "AC #3 has a race condition"
+
+### Process
+
+1. **Extract Acceptance Criteria** from the PLAN artifact (authoritative source):
+   ```bash
+   python backend/scripts/artifact_cli.py discover --project <PROJECT> --types design_doc --full
+   ```
+   Pull `acceptance_criteria` array from the design_doc artifact. This is the
+   canonical source — `run.json` references are for quick Litmus lookup only;
+   spec gate MUST use artifact_cli to ensure freshness.
+
+2. **Prepare diff context** — same diff used for Litmus (git diff or inline).
+
+3. **Spawn Spec Compliance sub-agent** using the Agent tool:
+   ```
+   Prompt template: review-agents/spec-compliance.md
+   Context: acceptance_criteria + code diff + commit messages
+   ```
+   The sub-agent returns a JSON report with verdict + coverage matrix.
+
+4. **Route on verdict:**
+
+| Verdict | Action |
+|---------|--------|
+| **PASS** | Proceed to Parallel Fan-Out Review. No modifications. |
+| **BLOCK** | Do NOT spawn quality sub-agents. Return to BUILD with specific MISSING/MISUNDERSTOOD ACs as rework instructions. Increment `litmus_fail_count` (shared counter with Litmus). |
+| **WARNING** | Proceed to Parallel Fan-Out, but inject EXTRA findings into the merge phase for visibility in the delivery report. |
+
+### Relationship to Litmus HF2
+
+Litmus HF2 is a 5-second smoke test: "can you name the function/file for >70% of
+ACs on a quick pass?" It catches gross incompleteness (>30% ACs unidentifiable).
+Spec Compliance is the rigorous per-AC verification for cases that pass HF2 but
+have subtle gaps (single missing AC, partially-implemented AC, misunderstood AC).
+They are not duplicates — they operate at different precision levels.
+
+### Retry Accounting
+
+- Spec BLOCK uses a SEPARATE counter: `stages.review.spec_fail_count` (not shared
+  with Litmus's `litmus_fail_count`).
+- Max 2 spec BLOCKs per pipeline run before escalation.
+- On escalation: spec findings become MANDATORY fix items in BUILD rework.
+- Litmus escalation (3rd litmus_fail_count) triggers "full review with all agents."
+  Spec escalation triggers "mandatory BUILD rework." They are independent paths.
+
+### Profile-Aware Behavior
+
+| Profile | Spec Review | Notes |
+|---------|-------------|-------|
+| full | Always | Standard behavior |
+| bugfix | Always | Even bugfixes must match their AC (prevents scope creep) |
+| trivial | Always | Trivial still has ACs — verify them |
+| goal | Per-cycle | Each goal cycle's mini-BUILD has ACs to verify |
+
+**No profile skips spec review.** This is the lesson of C036 — profile downgrades
+must not bypass quality gates.
+
+### Artifact Recording
+
+Include spec compliance results in the review artifact under `"spec_compliance"`:
+```json
+{
+  "spec_compliance": {
+    "verdict": "PASS",
+    "coverage_matrix": [...],
+    "extra_work": [],
+    "findings": []
+  }
+}
+```
+
+---
+
 ## Parallel Fan-Out Review
 
 **When the changeset touches >3 files OR >100 lines OR touches auth/data/infra
@@ -89,6 +170,11 @@ changeset + relevant DDD docs independently.
 ```
 Sub-agent prompts are in: backend/skills/s_autonomous-pipeline/review-agents/
 
+[Already completed before fan-out — see Spec Compliance Gate above]
+  Spec Compliance Agent (review-agents/spec-compliance.md)
+  → AC coverage matrix, MISSING/EXTRA/MISUNDERSTOOD detection
+
+[Parallel fan-out agents — spawned in single turn]
 1. Code Quality Agent (review-agents/code-quality.md)
    → TECH.md conformance, integration trace, replace/move parity,
      runtime patterns RP1-RP39, depth & seam analysis
@@ -661,6 +747,7 @@ Before concluding REVIEW, reject these shortcuts:
 ### 15. Exit Evidence Checklist
 
 Confirm each before publishing:
+- [ ] Spec compliance gate passed (coverage matrix shows all ACs IMPLEMENTED, or WARNING findings injected into merge)
 - [ ] Integration trace output present (`N symbols checked, M connected, K warnings`)
 - [ ] Runtime pattern checklist complete (every applicable RP has pass or N/A)
 - [ ] Operational pattern checklist complete (every applicable OP has pass or N/A, or "no lifecycle ops, N/A")
@@ -721,7 +808,7 @@ platforms — the information was available, but BUILD didn't cross-reference it
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
   --type review --producer s_autonomous-pipeline \
   --summary "Review: <N findings>, <M auto-fixed>, <K integration warnings>" --stage review \
-  --data '{"approved":true,"findings_count":N,"findings":[...],"security_findings":[],"integration_trace":{"checked":N,"clean":true,"details":"..."},"runtime_patterns":{"checked":N,"violations":0,"patterns":[{"pattern":"name","status":"pass|N/A","detail":"what was checked (>10 chars)"}]},"ux_review":{"triggered":true/false,"checks":5,"findings":[...]},"wire_test":{"boundaries":N,"verified":M,"findings":[...]}}'
+  --data '{"approved":true,"findings_count":N,"findings":[...],"litmus_gate":{"verdict":"PASS","hf_checked":[true,true,true,true],"soft_signal_count":0,"weak_areas":[],"evidence":"..."},"spec_compliance":{"verdict":"PASS|BLOCK|WARNING","coverage_matrix":[{"ac_number":1,"ac_description":"...","status":"IMPLEMENTED|MISSING|MISUNDERSTOOD","evidence":"..."}],"extra_work":[],"findings":[]},"security_findings":[],"integration_trace":{"checked":N,"clean":true,"details":"..."},"runtime_patterns":{"checked":N,"violations":0,"patterns":[{"pattern":"name","status":"pass|N/A","detail":"what was checked (>10 chars)"}]},"ux_review":{"triggered":true/false,"checks":5,"findings":[...]},"wire_test":{"boundaries":N,"verified":M,"findings":[...]}}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state test
 ```
 
