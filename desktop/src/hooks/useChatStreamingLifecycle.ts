@@ -252,6 +252,26 @@ export function blockKey(block: ContentBlock): string {
  * Returns the same message reference when no new content is added
  * (referential stability for React memoization).
  */
+/**
+ * Reconcile authoritative content from an ``assistant`` SSE event into the
+ * message's content array.
+ *
+ * Design principle: **replace, don't dedup.** The assistant event is the SDK's
+ * authoritative truth for that turn. Streamed text/thinking blocks are
+ * PROVISIONAL (user sees them in real-time for UX), and must be REPLACED by
+ * the authoritative content when the assistant event arrives.
+ *
+ * Strategy:
+ * 1. KEEP all existing blocks that are "confirmed" from prior turns
+ *    (tool_use, tool_result, and text/thinking blocks that were already
+ *    reconciled by a previous assistant event — marked with `_confirmed`).
+ * 2. REMOVE unconfirmed text/thinking blocks (these are streaming provisional).
+ * 3. APPEND all blocks from the assistant event, marking text/thinking as
+ *    `_confirmed`. Tool_use/tool_result are deduped by ID (they may already
+ *    exist from tool_result events that arrived during execution).
+ *
+ * This makes duplication impossible by construction — no string matching needed.
+ */
 export function updateMessages(
   currentMessages: Message[],
   assistantMessageId: string,
@@ -260,49 +280,66 @@ export function updateMessages(
 ): Message[] {
   return currentMessages.map((msg) => {
     if (msg.id !== assistantMessageId) return msg;
-    const existingKeys = new Set(msg.content.map(blockKey));
 
-    const filteredContent = newContent.filter((b) => {
-      // Fast path: exact blockKey match (handles tool_use, tool_result, same-text)
-      if (existingKeys.has(blockKey(b))) return false;
+    // Partition existing content into confirmed (prior turns) and unconfirmed (streaming)
+    const confirmed: ContentBlock[] = [];
+    const hadUnconfirmed = { text: false, thinking: false };
 
-      // Multi-turn text dedup: if an existing text block's content ends with
-      // (or equals) the incoming text, the streaming already rendered it.
-      // This prevents the per-turn AssistantMessage from adding a duplicate
-      // when text_delta accumulated text across multiple agentic turns.
-      //
-      // Guard: only apply for text >= 50 chars to avoid false dedup of short
-      // strings that coincidentally match suffixes of previous turns.
-      // The real bug manifests with multi-sentence paragraphs, not short tokens.
-      //
-      // Note: empty-string guard (`b.text` falsy check) prevents catastrophic
-      // `"anything".endsWith("")` === true dedup-all-text-blocks bug.
-      if (b.type === 'text' && b.text && b.text.length >= 50) {
-        const incomingText = b.text;
-        for (const existing of msg.content) {
-          if (
-            existing.type === 'text' &&
-            existing.text &&
-            existing.text.length > incomingText.length &&
-            existing.text.endsWith(incomingText)
-          ) {
-            return false; // Already rendered via streaming — skip
-          }
+    for (const block of msg.content) {
+      if (block.type === 'text' || block.type === 'thinking') {
+        if ((block as Record<string, unknown>)._confirmed) {
+          confirmed.push(block);
+        } else {
+          hadUnconfirmed[block.type] = true;
+          // Drop — will be replaced by authoritative content
         }
+      } else {
+        // tool_use, tool_result, ask_user_question — always keep
+        confirmed.push(block);
       }
-
-      return true;
-    });
-
-    if (filteredContent.length === 0) {
-      return msg; // No changes — return same reference
     }
+
+    // Build the authoritative content from the assistant event.
+    // Dedup tool_use by id, tool_result by toolUseId — separately.
+    const existingToolUseIds = new Set(
+      confirmed
+        .filter((b) => b.type === 'tool_use')
+        .map((b) => (b as Record<string, unknown>).id)
+    );
+    const existingToolResultIds = new Set(
+      confirmed
+        .filter((b) => b.type === 'tool_result')
+        .map((b) => (b as Record<string, unknown>).toolUseId)
+    );
+
+    const authoritativeBlocks: ContentBlock[] = [];
+    for (const block of newContent) {
+      if (block.type === 'tool_use') {
+        if (!existingToolUseIds.has((block as Record<string, unknown>).id)) {
+          authoritativeBlocks.push(block);
+        }
+      } else if (block.type === 'tool_result') {
+        if (!existingToolResultIds.has((block as Record<string, unknown>).toolUseId)) {
+          authoritativeBlocks.push(block);
+        }
+      } else if (block.type === 'text' || block.type === 'thinking') {
+        // Mark as confirmed — next assistant event won't remove these
+        authoritativeBlocks.push({ ...block, _confirmed: true } as ContentBlock);
+      } else {
+        authoritativeBlocks.push(block);
+      }
+    }
+
+    // If nothing changed (no unconfirmed blocks existed AND no new blocks to add),
+    // return same reference for React memoization.
+    if (!hadUnconfirmed.text && !hadUnconfirmed.thinking && authoritativeBlocks.length === 0) {
+      return msg;
+    }
+
     return {
       ...msg,
-      content: [...msg.content, ...filteredContent],
+      content: [...confirmed, ...authoritativeBlocks],
       ...(model ? { model } : {}),
-      // Clear isError when new non-error content arrives — handles the
-      // auto-retry case where backend recovers after emitting an error event.
       ...(msg.isError ? { isError: false } : {}),
     };
   });
@@ -1362,14 +1399,16 @@ export function useChatStreamingLifecycle(
             );
           }
 
-          // Update useState with functional updater to avoid stale messagesRef
-          if (isActiveTab) {
-            setMessages((prev) => updateMessages(
-              prev,
-              assistantMessageId,
-              event.content!,
-              event.model,
-            ));
+          // Sync React state from the authoritative tabState (already deduped).
+          // CRITICAL: Do NOT use `setMessages((prev) => updateMessages(prev, ...))`
+          // here — React's `prev` can be stale if text_delta updaters haven't
+          // flushed yet, causing `existingKeys` to miss streamed text blocks
+          // and letting the assistant event's text through as a DUPLICATE.
+          // Using tabState.messages directly (spread for new reference) is safe
+          // because L1366 already ran updateMessages synchronously on it.
+          if (isActiveTab && tabState) {
+            const authoritative = [...tabState.messages];
+            setMessages(() => authoritative);
           }
         } else if (
           event.type === 'ask_user_question' &&
