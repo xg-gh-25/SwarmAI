@@ -431,6 +431,14 @@ export const chatService = {
     return response.data.map(toSessionCamelCase);
   },
 
+  // Get streaming state for all sessions (reconciliation endpoint)
+  async getStreamingState(): Promise<Record<string, { streaming: boolean; state: string }>> {
+    const response = await api.get<{ sessions: Record<string, { streaming: boolean; state: string }> }>(
+      '/chat/sessions/streaming-state',
+    );
+    return response.data.sessions;
+  },
+
   // Get a specific session
   async getSession(sessionId: string): Promise<ChatSession> {
     const response = await api.get<Record<string, unknown>>(`/chat/sessions/${sessionId}`);
