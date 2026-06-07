@@ -344,39 +344,52 @@ export function updateMessages(
     // In agentic loops, the SDK re-emits the same text in multiple
     // AssistantMessage events within one turn (e.g., text + tool_use,
     // then same text + tool_use + tool_result + more tools). Without dedup,
-    // each re-emission adds another confirmed text block → content explodes.
+    // each re-emission adds another confirmed text block → content explodes
+    // → React render hang → spinner stuck forever.
     //
     // Strategy: If the new assistant event has a text block whose content
     // MATCHES (equals or extends) the LAST confirmed text block, replace it.
     // If the text is genuinely DIFFERENT (new turn), keep both.
+    //
+    // Guards against false positives:
+    // - Minimum 20 chars: short strings have high collision probability
+    // - Empty string skip: "".startsWith("") is always true
+    // - Only checks the LAST confirmed text block (most recent turn)
+    const MIN_DEDUP_LENGTH = 20;
     const newTextBlocks = authoritativeBlocks.filter((b) => b.type === 'text');
     const newThinkingBlocks = authoritativeBlocks.filter((b) => b.type === 'thinking');
 
     if (newTextBlocks.length > 0) {
       const newText = (newTextBlocks[0] as Record<string, unknown>).text as string ?? '';
-      // Find the last confirmed text block and check if it's a same-turn re-emission
-      for (let i = confirmed.length - 1; i >= 0; i--) {
-        if (confirmed[i].type === 'text' && (confirmed[i] as Record<string, unknown>)._confirmed) {
-          const existingText = (confirmed[i] as Record<string, unknown>).text as string ?? '';
-          // Same-turn re-emission: new text equals or extends existing text
-          // (SDK accumulates within a turn — text grows as model produces more output)
-          if (newText === existingText || newText.startsWith(existingText)) {
-            confirmed.splice(i, 1);
+      if (newText.length >= MIN_DEDUP_LENGTH) {
+        // Find the last confirmed text block and check if it's a same-turn re-emission
+        for (let i = confirmed.length - 1; i >= 0; i--) {
+          if (confirmed[i].type === 'text' && (confirmed[i] as Record<string, unknown>)._confirmed) {
+            const existingText = (confirmed[i] as Record<string, unknown>).text as string ?? '';
+            // Same-turn re-emission: new text equals or extends existing text
+            // (SDK accumulates within a turn — text grows as model produces more)
+            if (existingText.length >= MIN_DEDUP_LENGTH &&
+                (newText === existingText || newText.startsWith(existingText))) {
+              confirmed.splice(i, 1);
+            }
+            break; // Only check the last confirmed text block
           }
-          break; // Only check the last confirmed text block
         }
       }
     }
 
     if (newThinkingBlocks.length > 0) {
       const newThinking = (newThinkingBlocks[0] as Record<string, unknown>).thinking as string ?? '';
-      for (let i = confirmed.length - 1; i >= 0; i--) {
-        if (confirmed[i].type === 'thinking' && (confirmed[i] as Record<string, unknown>)._confirmed) {
-          const existingThinking = (confirmed[i] as Record<string, unknown>).thinking as string ?? '';
-          if (newThinking === existingThinking || newThinking.startsWith(existingThinking)) {
-            confirmed.splice(i, 1);
+      if (newThinking.length >= MIN_DEDUP_LENGTH) {
+        for (let i = confirmed.length - 1; i >= 0; i--) {
+          if (confirmed[i].type === 'thinking' && (confirmed[i] as Record<string, unknown>)._confirmed) {
+            const existingThinking = (confirmed[i] as Record<string, unknown>).thinking as string ?? '';
+            if (existingThinking.length >= MIN_DEDUP_LENGTH &&
+                (newThinking === existingThinking || newThinking.startsWith(existingThinking))) {
+              confirmed.splice(i, 1);
+            }
+            break;
           }
-          break;
         }
       }
     }
