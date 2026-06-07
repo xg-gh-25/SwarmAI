@@ -587,8 +587,10 @@ const CLICKABLE_EXTENSIONS = new Set([
  * system paths (/etc, /usr, /bin, /var, /tmp, /proc, /sys, /dev, /sbin).
  */
 export function isWorkspaceFilePath(text: string): boolean {
-  // No spaces (workspace paths don't have spaces)
-  if (/\s/.test(text)) return false;
+  // Reject prose (3+ spaces = sentence, not a file path)
+  if ((text.match(/\s/g) || []).length > 2) return false;
+  // Spaced text must look like a real path (contain / AND file extension)
+  if (/\s/.test(text) && !(/[/\\]/.test(text) && /\.\w{1,10}$/.test(text))) return false;
   // Not a URL
   if (/^https?:\/\//i.test(text)) return false;
   // No path traversal segments

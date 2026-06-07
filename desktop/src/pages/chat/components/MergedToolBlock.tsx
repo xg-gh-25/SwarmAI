@@ -46,13 +46,17 @@ export function getToolIcon(category?: string): string {
 }
 
 /** Categories whose summaries contain a file path worth making clickable. */
-const FILE_PATH_CATEGORIES = new Set(['read', 'write']);
+const FILE_PATH_CATEGORIES = new Set(['read', 'write', 'edit', 'search', 'list_dir']);
 
 /**
  * Known summary prefixes that precede a file path.
  * Matched in order; first match wins. The path is everything after the prefix.
  */
-const PATH_PREFIXES = ['Writing to ', 'Reading ', 'Editing '];
+const PATH_PREFIXES = [
+  'Writing to ', 'Reading ', 'Editing ',
+  'Searching in /', 'Listing /',
+  'Wrote to ', 'Created /',
+];
 
 /**
  * Extract a file path from a tool summary string for read/write/edit tools.
