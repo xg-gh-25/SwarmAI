@@ -10,7 +10,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import { OPEN_FILE_EVENT } from '../common/MarkdownRenderer';
 
 export function OpenFileButton() {
-  const handleClickRef = useRef<() => void>();
+  const handleClickRef = useRef<(() => void) | undefined>(undefined);
 
   const handleClick = useCallback(async () => {
     try {
