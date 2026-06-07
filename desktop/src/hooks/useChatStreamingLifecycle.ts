@@ -1501,6 +1501,10 @@ export function useChatStreamingLifecycle(
           if (isActiveTab && tabState) {
             const authoritative = [...tabState.messages];
             setMessages(() => authoritative);
+          } else if (isActiveTab && !tabState) {
+            // Fallback: initial tab before registration (capturedTabId === null).
+            // No tabState exists yet — apply updateMessages directly to React state.
+            setMessages((prev) => updateMessages(prev, assistantMessageId, event.content, event.model));
           }
         } else if (
           event.type === 'ask_user_question' &&
