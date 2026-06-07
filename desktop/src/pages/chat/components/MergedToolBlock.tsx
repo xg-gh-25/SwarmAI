@@ -17,7 +17,7 @@
  * @exports getToolIcon          — Returns Material Symbols icon name for a tool category
  */
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { copyToClipboard } from '../../../utils/clipboard';
 import { OPEN_FILE_EVENT } from '../../../components/common/MarkdownRenderer';
 
@@ -141,6 +141,21 @@ export function MergedToolBlock({
     if (!FILE_PATH_CATEGORIES.has(category ?? '')) return null;
     return extractFilePath(summary);
   }, [summary, category]);
+
+  // Dispatch file-referenced event for the Referenced Files panel (once per path, when not pending)
+  const dispatchedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (fileParts && !isPending && dispatchedRef.current !== fileParts.path) {
+      dispatchedRef.current = fileParts.path;
+      const operation = (category === 'write' || category === 'edit') ? 'written'
+        : category === 'search' ? 'searched' : 'read';
+      document.dispatchEvent(
+        new CustomEvent('swarm:file-referenced', {
+          detail: { path: fileParts.path, operation },
+        }),
+      );
+    }
+  }, [fileParts, isPending, category]);
 
   const handlePathClick = (e: React.MouseEvent) => {
     e.preventDefault();

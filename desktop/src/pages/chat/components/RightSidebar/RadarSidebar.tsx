@@ -18,6 +18,8 @@ import { RADAR_SIDEBAR_WIDTH_KEY } from './types';
 import { CollapsibleSection } from './shared/CollapsibleSection';
 import { TodoSection } from './TodoSection';
 import { ArtifactsSection } from './ArtifactsSection';
+import { ReferencedFilesSection } from './ReferencedFilesSection';
+import { useReferencedFiles } from '../../../../hooks/useReferencedFiles';
 import {
   systemService,
   type SessionBriefing,
@@ -70,6 +72,7 @@ export function RadarSidebar({
   onSelectSession,
   onDeleteSession,
   workspaceId,
+  sessionId,
   onItemClick,
 }: RadarSidebarProps) {
   // Auto-hide when file editor panel is open
@@ -139,6 +142,9 @@ export function RadarSidebar({
     if (!briefing) return 0;
     return briefing.output.builds.length + briefing.output.content.length + briefing.output.files.length;
   }, [briefing]);
+
+  // Referenced Files tracking
+  const { files: referencedFiles, totalCount: referencedCount } = useReferencedFiles(sessionId);
 
   // History popover session select → switch tab
   const handleHistorySelect = useCallback(
@@ -230,6 +236,13 @@ export function RadarSidebar({
         {outputCount > 0 && (
           <CollapsibleSection name="output" icon="hive" label="Output" count={outputCount} defaultExpanded={false} accent="rgba(168,85,247,0.35)">
             <SwarmOutputSection output={briefing!.output} compact />
+          </CollapsibleSection>
+        )}
+
+        {/* Referenced Files — teal (session context) */}
+        {referencedCount > 0 && (
+          <CollapsibleSection name="referenced-files" icon="insert_drive_file" label="Files" count={referencedCount} defaultExpanded={true} accent="rgba(20,184,166,0.35)">
+            <ReferencedFilesSection grouped={referencedFiles} totalCount={referencedCount} />
           </CollapsibleSection>
         )}
 

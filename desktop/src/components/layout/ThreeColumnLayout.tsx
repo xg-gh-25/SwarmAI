@@ -537,6 +537,33 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     };
   }, [addToast]);
 
+  // Keyboard shortcuts: Cmd+O (open file), Cmd+Shift+C (copy active file path)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isMeta = e.metaKey || e.ctrlKey;
+
+      // Cmd+O — Open File dialog
+      if (isMeta && e.key === 'o' && !e.shiftKey) {
+        e.preventDefault();
+        // Trigger OpenFileButton click via custom event (component handles dialog)
+        document.dispatchEvent(new CustomEvent('swarm:open-file-dialog'));
+      }
+
+      // Cmd+Shift+C — Copy active file path
+      if (isMeta && e.shiftKey && e.key === 'C') {
+        e.preventDefault();
+        if (fileViewerFile?.filePath) {
+          import('../../utils/clipboard').then(({ copyToClipboard }) => {
+            copyToClipboard(fileViewerFile.filePath);
+          });
+        }
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [fileViewerFile?.filePath]);
+
   // Handle Swarm workspace warning confirmation
   const handleSwarmWarningConfirm = useCallback(async () => {
     if (swarmWarning.pendingFile) {
