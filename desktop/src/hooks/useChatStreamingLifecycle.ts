@@ -1764,6 +1764,19 @@ export function useChatStreamingLifecycle(
           // seamlessly continue the stream with a new conversation turn.
           const hasQueuedMessage = !!(capturedTabId && tabState?.queuedMessage);
 
+          // ── DIAGNOSTIC: spinner-hang root cause (remove after confirmed) ──
+          console.warn('[DIAG:result]', {
+            capturedTabId,
+            activeTabId: activeTabIdRef.current,
+            isActiveTab,
+            hasQueuedMessage,
+            queuedMessage: tabState?.queuedMessage ? String(tabState.queuedMessage).slice(0, 50) : null,
+            tabStateIsStreaming: tabState?.isStreaming,
+            tabStateIsReconnecting: tabState?.isReconnecting,
+            pendingStreamTabs: [...pendingStreamTabs],
+            sid,
+          });
+
           if (!hasQueuedMessage) {
             // Normal completion — clear streaming state so spinner stops
             // and input re-enables.
