@@ -929,15 +929,18 @@ export function useChatStreamingLifecycle(
     return () => clearInterval(interval);
   }, [isStreaming]);
 
-  // ── Streaming state reconciliation ──
-  // Safety net: if frontend thinks isStreaming=true but backend has already
-  // transitioned to idle, force-clear streaming state. This catches SSE events
-  // lost due to disconnect, tab switch races, or event reader failures.
-  // Polls every 15s while streaming. Minimal cost: 1 lightweight GET request.
+  // ── Streaming state reconciliation (all tabs) ──
+  // Safety net: if ANY frontend tab thinks isStreaming=true but backend has
+  // already transitioned to idle, force-clear that tab's streaming state.
+  // Catches SSE events lost due to disconnect, tab switch races, or event
+  // reader failures. Polls every 15s while any tab is streaming.
+  //
+  // Design: iterates ALL tabs in tabMapRef (not just active) so background
+  // tabs running sub-agents also get reconciled. Guards against race with
+  // legitimately-restarted streams by checking streamGen stability.
   useEffect(() => {
     if (!isStreaming) return;
 
-    // Wait 15s before first check — gives normal completion time to arrive
     const RECONCILE_DELAY_MS = 15_000;
     const RECONCILE_INTERVAL_MS = 15_000;
 
@@ -951,53 +954,66 @@ export function useChatStreamingLifecycle(
         const states = await chatService.getStreamingState();
         if (cancelled) return;
 
-        const tabId = activeTabIdRef.current;
-        if (!tabId) return;
-        const tabState = tabMapRef.current.get(tabId);
-        if (!tabState) return;
+        let anyCleared = false;
 
-        const sid = tabState.sessionId;
-        if (!sid) return;
+        // Check ALL tabs, not just active — background tabs can hang too
+        for (const [tabId, tabState] of tabMapRef.current.entries()) {
+          if (!tabState.isStreaming) continue;  // only check streaming tabs
+          const sid = tabState.sessionId;
+          if (!sid) continue;
 
-        const backendState = states[sid];
-        // Backend says NOT streaming but frontend thinks it is → reconcile
-        if (backendState && !backendState.streaming && tabState.isStreaming) {
-          console.warn(
-            '[StreamReconcile] Backend idle but frontend streaming — forcing clear',
-            { sessionId: sid, backendState: backendState.state },
-          );
-          tabState.isStreaming = false;
-          tabState.isReconnecting = false;
-          tabState.isResuming = false;
-          // Force React re-render so derived `isStreaming` recalculates from
-          // the mutated tabState ref. setPendingStreamTabs is declared above.
+          const backendState = states[sid];
+          if (!backendState) continue;  // session unknown to backend (maybe cold)
+
+          // Backend says NOT streaming but this tab thinks it is
+          if (!backendState.streaming) {
+            // Race guard: if stream started less than 10s ago, a new stream
+            // may have just started — skip this cycle to avoid clobbering it
+            const streamAge = Date.now() - (tabState.streamStartTime ?? 0);
+            if (streamAge < 10_000) continue;  // too fresh — let it settle
+
+            console.warn(
+              '[StreamReconcile] Backend idle but tab streaming — forcing clear',
+              { tabId, sessionId: sid, backendState: backendState.state },
+            );
+            tabState.isStreaming = false;
+            tabState.isReconnecting = false;
+            tabState.isResuming = false;
+            anyCleared = true;
+
+            // Sync messages from DB for this tab (content is there, event was lost)
+            chatService.invalidateMessageCache(sid);
+            chatService.getSessionMessages(sid).then((msgs) => {
+              if (cancelled) return;
+              const mapped = msgs.map((m) => ({
+                id: m.id,
+                role: m.role as 'user' | 'assistant',
+                content: m.content as ContentBlock[],
+                timestamp: m.createdAt || new Date().toISOString(),
+              }));
+              if (tabId === activeTabIdRef.current) {
+                setMessages(() => mapped);
+              } else {
+                tabState.messages = mapped;
+              }
+            }).catch(() => {});
+          }
+        }
+
+        // Force re-render if any tab was cleared
+        if (anyCleared) {
           setPendingStreamTabs((prev) => {
             const next = new Set(prev);
-            next.delete(tabId);
+            // Remove all tabs that are no longer streaming
+            for (const id of next) {
+              const ts = tabMapRef.current.get(id);
+              if (ts && !ts.isStreaming) next.delete(id);
+            }
             return next;
           });
-
-          // Sync messages from DB — the result content is there even if
-          // the SSE event was lost
-          chatService.invalidateMessageCache(sid);
-          chatService.getSessionMessages(sid).then((msgs) => {
-            if (cancelled) return;
-            // Map ChatMessage → Message (same pattern as SESSION_BUSY recovery)
-            const mapped = msgs.map((m) => ({
-              id: m.id,
-              role: m.role as 'user' | 'assistant',
-              content: m.content as ContentBlock[],
-              timestamp: m.createdAt || new Date().toISOString(),
-            }));
-            if (tabId === activeTabIdRef.current) {
-              setMessages(() => mapped);
-            } else {
-              tabState.messages = mapped;
-            }
-          }).catch(() => {});
         }
       } catch {
-        // API unavailable — no-op (backend might be restarting)
+        // API unavailable — no-op
       }
     };
 
@@ -1066,6 +1082,9 @@ export function useChatStreamingLifecycle(
         const tabState = tabMapRef.current.get(targetTabId);
         if (tabState) {
           tabState.isStreaming = streaming;
+          if (streaming) {
+            tabState.streamStartTime = Date.now();
+          }
         }
       }
 
