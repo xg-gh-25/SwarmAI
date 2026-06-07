@@ -967,9 +967,10 @@ export function useChatStreamingLifecycle(
 
           // Backend says NOT streaming but this tab thinks it is
           if (!backendState.streaming) {
-            // Race guard: if stream started less than 10s ago, a new stream
-            // may have just started — skip this cycle to avoid clobbering it
-            const streamAge = Date.now() - (tabState.streamStartTime ?? 0);
+            // Race guard: use _reconcileStreamStart (set only by setIsStreaming(true),
+            // never cleared by elapsed-timer or selectTab — immune to dual-writer bug).
+            const reconcileStart = (tabState as unknown as Record<string, number>)._reconcileStreamStart ?? 0;
+            const streamAge = Date.now() - reconcileStart;
             if (streamAge < 10_000) continue;  // too fresh — let it settle
 
             console.warn(
@@ -1083,7 +1084,10 @@ export function useChatStreamingLifecycle(
         if (tabState) {
           tabState.isStreaming = streaming;
           if (streaming) {
-            tabState.streamStartTime = Date.now();
+            // Reconcile-specific timestamp: NOT shared with Fix-9 elapsed timer
+            // or selectTab. Those write streamStartTime for UI display; this is
+            // purely for the reconciliation race guard (never cleared by other code).
+            (tabState as unknown as Record<string, number>)._reconcileStreamStart = Date.now();
           }
         }
       }
