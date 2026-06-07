@@ -237,30 +237,38 @@ class TestUsageBasedEviction:
     """Test _enforce_section_caps uses usage data for eviction order."""
 
     def test_evicts_lowest_usage_first(self, tmp_path):
-        """AC4: When cap exceeded, zero-usage entries evicted before high-usage ones."""
-        memory_path = tmp_path / "MEMORY.md"
-        ctx_dir = tmp_path / ".context"
-        ctx_dir.mkdir(parents=True, exist_ok=True)
+        """AC4: When cap exceeded, lowest-decay-score entries evicted before high-score ones.
 
-        # Create MEMORY.md with 5 entries (cap is typically 30, we'll override)
-        entries = [
-            "- [RC01] 2026-04-01: Old but heavily used entry",
-            "- [RC02] 2026-04-02: Never used entry A",
-            "- [RC03] 2026-04-03: Moderately used entry",
-            "- [RC04] 2026-04-04: Never used entry B",
-            "- [RC05] 2026-04-05: Recently used entry",
-        ]
+        Uses inline decay metadata (<!-- ref:N | last:DATE | decay:X | sessions:N -->)
+        which is the format _enforce_section_caps reads for smart eviction.
+        """
+        memory_path = tmp_path / "MEMORY.md"
+
+        # Create MEMORY.md with 5 entries + inline decay metadata.
+        # RC01: high ref count (10 refs, recent) → high decay score → survives
+        # RC02: zero refs → lowest decay score → evicted
+        # RC03: moderate refs (3 refs) → moderate score → survives
+        # RC04: zero refs → lowest decay score → evicted
+        # RC05: good refs (5 refs, recent) → high score → survives
+        entries = (
+            "- [RC01] 2026-04-01: Old but heavily used entry\n"
+            "  <!-- ref:10 | last:2026-06-01 | decay:low | sessions:8 -->\n"
+            "- [RC02] 2026-04-02: Never used entry A\n"
+            "  <!-- ref:0 | last:none | decay:critical | sessions:0 -->\n"
+            "- [RC03] 2026-04-03: Moderately used entry\n"
+            "  <!-- ref:3 | last:2026-05-20 | decay:medium | sessions:3 -->\n"
+            "- [RC04] 2026-04-04: Never used entry B\n"
+            "  <!-- ref:0 | last:none | decay:critical | sessions:0 -->\n"
+            "- [RC05] 2026-04-05: Recently used entry\n"
+            "  <!-- ref:5 | last:2026-06-05 | decay:low | sessions:5 -->\n"
+        )
         memory_path.write_text(
-            "## Recent Context\n\n" + "\n".join(entries) + "\n",
+            "## Recent Context\n\n" + entries,
             encoding="utf-8",
         )
 
-        # Write usage data: RC01=10, RC03=3, RC05=5, RC02=0, RC04=0
-        usage = {"RC01": 10, "RC03": 3, "RC05": 5}
-        (ctx_dir / ".memory-usage.json").write_text(json.dumps(usage))
-
         # Evict to cap of 3 (remove 2 entries)
-        # Should remove RC02 and RC04 (zero usage), keep RC01, RC03, RC05
+        # Should remove RC02 and RC04 (zero refs/sessions), keep RC01, RC03, RC05
         import hooks.distillation_hook as dh
         original_caps = dh.SECTION_CAPS.copy()
         try:
