@@ -21,6 +21,7 @@ TIER1_REPOS = [
     "anthropics/skills",
     "MemPalace/mempalace",
     "garrytan/gstack",
+    "obra/superpowers",
 ]
 
 # Tier 2 — scan daily but lower priority
@@ -32,6 +33,9 @@ TIER2_REPOS = [
     "crewAIInc/crewAI",
     "volcengine/OpenViking",
     "nexu-io/open-design",
+    "Panniantong/Agent-Reach",
+    "santifer/career-ops",
+    "danielmiessler/Personal_AI_Infrastructure",
 ]
 
 # Topic keywords for signal matching

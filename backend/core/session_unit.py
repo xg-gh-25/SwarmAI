@@ -866,7 +866,7 @@ class SessionUnit:
             # yielded as part of the NEW response (cross-turn bleed P0 bug).
             #
             # The flush itself has a 5s internal timeout + generation guard,
-            # so worst case we wait 5s here.  If it finishes faster (common
+            # so worst case we wait ~5s here.  If it finishes faster (common
             # case: <100ms when subprocess already idle), we proceed instantly.
             try:
                 await asyncio.wait_for(self._pipe_flush_task, timeout=5.0)
@@ -886,7 +886,9 @@ class SessionUnit:
                         self.session_id,
                     )
                     await self.kill()
-            except (asyncio.CancelledError, Exception):
+            except asyncio.CancelledError:
+                raise  # Propagate — caller (HTTP request) was aborted
+            except Exception:
                 pass  # Task completed with error — pipe is clean either way
             self._pipe_flush_task = None
 

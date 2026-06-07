@@ -271,13 +271,13 @@ export function updateMessages(
       // This prevents the per-turn AssistantMessage from adding a duplicate
       // when text_delta accumulated text across multiple agentic turns.
       //
-      // Guard: only apply for text >= 20 chars to avoid false dedup of short
-      // strings that happen to be suffixes (e.g., "Done.", "Security").
+      // Guard: only apply for text >= 50 chars to avoid false dedup of short
+      // strings that coincidentally match suffixes of previous turns.
       // The real bug manifests with multi-sentence paragraphs, not short tokens.
       //
       // Note: empty-string guard (`b.text` falsy check) prevents catastrophic
       // `"anything".endsWith("")` === true dedup-all-text-blocks bug.
-      if (b.type === 'text' && b.text && b.text.length >= 20) {
+      if (b.type === 'text' && b.text && b.text.length >= 50) {
         const incomingText = b.text;
         for (const existing of msg.content) {
           if (
@@ -2372,9 +2372,20 @@ export function useChatStreamingLifecycle(
    */
   const createDisconnectHandler = useCallback((tabId?: string) => {
     const capturedTabId = tabId ?? activeTabIdRef.current;
+    const capturedStreamGen = streamGenRef.current;
     const DISCONNECT_TIMEOUT_MS = 30_000; // 30s before giving up
 
     return () => {
+      // Generation guard: discard stale disconnect from a previous stream.
+      if (capturedTabId) {
+        const currentTabState = tabMapRef.current.get(capturedTabId);
+        if (currentTabState && currentTabState.streamGen !== capturedStreamGen) {
+          return; // stale disconnect — discard silently
+        }
+      } else if (streamGenRef.current !== capturedStreamGen) {
+        return; // stale disconnect — discard silently
+      }
+
       console.warn('[DisconnectHandler] Premature SSE disconnect', { capturedTabId });
 
       if (capturedTabId) {

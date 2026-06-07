@@ -12,10 +12,22 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture
 def workspace_id(client: TestClient) -> str:
-    """Return the singleton workspace ID."""
-    import asyncio
-    from tests.helpers import ensure_default_workspace
-    return asyncio.run(ensure_default_workspace())
+    """Seed workspace via sync sqlite to avoid event loop deadlock with async conftest."""
+    import sqlite3
+    ws_id = "swarmws"
+    # conftest swaps database.db to a temp SQLiteDatabase; reuse its path.
+    from tests.conftest import _test_db
+    db_file = str(_test_db.db_path)
+    conn = sqlite3.connect(db_file)
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO workspace_config (id, name, file_path, context) VALUES (?, ?, ?, ?)",
+            (ws_id, "SwarmWS", "/tmp/test-swarm-workspaces/SwarmWS", ""),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return ws_id
 
 
 def _create_todo(client: TestClient, workspace_id: str, **overrides) -> dict:

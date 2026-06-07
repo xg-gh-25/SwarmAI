@@ -2042,7 +2042,7 @@ class DistillationTriggerHook:
                                 )
                             if lines[idx + offset].strip().startswith("- "):
                                 break  # Next entry, stop looking
-                        return 0.0  # No metadata = lowest priority (evict first)
+                        return 0.5  # No metadata = neutral priority (sort in middle)
 
                     # Sort by decay score ascending — lowest score evicted first
                     eviction_order = sorted(entry_indices, key=_entry_decay_score)
