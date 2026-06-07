@@ -281,7 +281,17 @@ export function updateMessages(
   return currentMessages.map((msg) => {
     if (msg.id !== assistantMessageId) return msg;
 
-    // Partition existing content into confirmed (prior turns) and unconfirmed (streaming)
+    // Partition existing content into confirmed (prior turns) and unconfirmed (streaming).
+    //
+    // BUG FIX (2026-06-07): In agentic loops with many tools, the SDK emits
+    // multiple AssistantMessage events per API roundtrip. Each event for the SAME
+    // turn re-sends the same (or growing) text. The old code kept ALL _confirmed
+    // text blocks → duplicates accumulated (4x, 8x...) → content array exploded
+    // → React render hang → spinner stuck forever.
+    //
+    // Fix: When the new assistant event has text/thinking, REPLACE the LAST
+    // confirmed text/thinking block (same-turn update). Earlier confirmed
+    // text/thinking blocks (from genuinely different prior turns) are preserved.
     const confirmed: ContentBlock[] = [];
     const hadUnconfirmed = { text: false, thinking: false };
 
@@ -330,6 +340,55 @@ export function updateMessages(
       }
     }
 
+    // ── Same-turn text dedup (BUG FIX 2026-06-07) ──────────────────────
+    // In agentic loops, the SDK re-emits the same text in multiple
+    // AssistantMessage events within one turn (e.g., text + tool_use,
+    // then same text + tool_use + tool_result + more tools). Without dedup,
+    // each re-emission adds another confirmed text block → content explodes.
+    //
+    // Strategy: If the new assistant event has a text block whose content
+    // MATCHES (equals or extends) the LAST confirmed text block, replace it.
+    // If the text is genuinely DIFFERENT (new turn), keep both.
+    const newTextBlocks = authoritativeBlocks.filter((b) => b.type === 'text');
+    const newThinkingBlocks = authoritativeBlocks.filter((b) => b.type === 'thinking');
+
+    if (newTextBlocks.length > 0) {
+      const newText = (newTextBlocks[0] as Record<string, unknown>).text as string ?? '';
+      // Find the last confirmed text block and check if it's a same-turn re-emission
+      for (let i = confirmed.length - 1; i >= 0; i--) {
+        if (confirmed[i].type === 'text' && (confirmed[i] as Record<string, unknown>)._confirmed) {
+          const existingText = (confirmed[i] as Record<string, unknown>).text as string ?? '';
+          // Same-turn re-emission: new text equals or extends existing text
+          // (SDK accumulates within a turn — text grows as model produces more output).
+          // BUT only if there's no tool_use/tool_result AFTER this text block —
+          // tools after text indicate a turn boundary (text → tools → new turn).
+          const hasToolAfter = confirmed.slice(i + 1).some(
+            (b) => b.type === 'tool_use' || b.type === 'tool_result'
+          );
+          if (!hasToolAfter && (newText === existingText || newText.startsWith(existingText))) {
+            confirmed.splice(i, 1);
+          }
+          break; // Only check the last confirmed text block
+        }
+      }
+    }
+
+    if (newThinkingBlocks.length > 0) {
+      const newThinking = (newThinkingBlocks[0] as Record<string, unknown>).thinking as string ?? '';
+      for (let i = confirmed.length - 1; i >= 0; i--) {
+        if (confirmed[i].type === 'thinking' && (confirmed[i] as Record<string, unknown>)._confirmed) {
+          const existingThinking = (confirmed[i] as Record<string, unknown>).thinking as string ?? '';
+          const hasToolAfter = confirmed.slice(i + 1).some(
+            (b) => b.type === 'tool_use' || b.type === 'tool_result'
+          );
+          if (!hasToolAfter && (newThinking === existingThinking || newThinking.startsWith(existingThinking))) {
+            confirmed.splice(i, 1);
+          }
+          break;
+        }
+      }
+    }
+
     // If nothing changed (no unconfirmed blocks existed AND no new blocks to add),
     // return same reference for React memoization.
     if (!hadUnconfirmed.text && !hadUnconfirmed.thinking && authoritativeBlocks.length === 0) {
@@ -362,14 +421,15 @@ export function appendTextDelta(
     if (msg.id !== assistantMessageId) return msg;
     const content = [...msg.content];
     const lastBlock = content[content.length - 1];
-    if (lastBlock && lastBlock.type === 'text') {
-      // Append to existing text block (new reference)
+    if (lastBlock && lastBlock.type === 'text' && !(lastBlock as Record<string, unknown>)._confirmed) {
+      // Append to existing UNCONFIRMED text block (new reference).
+      // Never append to a confirmed block — that belongs to a prior turn.
       content[content.length - 1] = {
         ...lastBlock,
         text: (lastBlock.text ?? '') + text,
       };
     } else {
-      // First text token — create a new text block
+      // First text token or last block is confirmed/non-text — create new provisional block
       content.push({ type: 'text', text } as ContentBlock);
     }
     return { ...msg, content };
@@ -392,14 +452,15 @@ export function appendThinkingDelta(
     if (msg.id !== assistantMessageId) return msg;
     const content = [...msg.content];
     const lastBlock = content[content.length - 1];
-    if (lastBlock && lastBlock.type === 'thinking') {
-      // Append to existing thinking block (new reference)
+    if (lastBlock && lastBlock.type === 'thinking' && !(lastBlock as Record<string, unknown>)._confirmed) {
+      // Append to existing UNCONFIRMED thinking block (new reference).
+      // Never append to a confirmed block — that belongs to a prior turn.
       content[content.length - 1] = {
         ...lastBlock,
         thinking: ((lastBlock as { thinking?: string }).thinking ?? '') + thinking,
       } as ContentBlock;
     } else {
-      // First thinking token — create a new thinking block
+      // First thinking token or last block is confirmed — create new provisional block
       content.push({ type: 'thinking', thinking } as ContentBlock);
     }
     return { ...msg, content };
