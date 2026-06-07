@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import type { FileTreeItem } from './FileTreeNode';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
 import { copyToClipboard } from '../../utils/clipboard';
+import api from '../../services/api';
 
 /**
  * FileContextMenu component - right-click context menu for file operations
@@ -69,10 +70,24 @@ export default function FileContextMenu({
   returnFocusRef,
 }: FileContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
+  const wsRootRef = useRef<string>('');
   const [isDeleting, setIsDeleting] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [showSwarmWorkspaceWarning, setShowSwarmWorkspaceWarning] = useState(false);
+
+  // Resolve workspace root once for absolute path copy
+  useEffect(() => {
+    let cancelled = false;
+    api.get<{ file_path?: string; filePath?: string }>('/workspace')
+      .then((resp) => {
+        if (!cancelled) {
+          wsRootRef.current = resp.data.file_path ?? resp.data.filePath ?? '';
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -147,10 +162,15 @@ export default function FileContextMenu({
     firstItem?.focus();
   }, []);
 
-  // Copy path to clipboard
+  // Copy absolute path to clipboard
   const handleCopyPath = useCallback(async () => {
     try {
-      await copyToClipboard(item.path);
+      const absolutePath = item.path.startsWith('/')
+        ? item.path
+        : wsRootRef.current
+          ? `${wsRootRef.current}/${item.path}`
+          : item.path;
+      await copyToClipboard(absolutePath);
       onClose();
     } catch (error) {
       console.error('Failed to copy path:', error);
