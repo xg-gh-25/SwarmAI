@@ -188,36 +188,57 @@ describe('Structural reconciliation (replace, not dedup)', () => {
     expect(textBlocks[0].text).toBe('Important content');
   });
 
-  it('handles the exact P0 scenario: 4000 char text appearing once not twice', () => {
+  it('handles the exact P0 scenario: same-turn re-emission deduplicates', () => {
     const msgId = 'a8';
     let messages: Message[] = [makeAssistantMessage(msgId)];
 
-    // Long multi-turn streaming: turn 1 thinking + tools + text
     const longText = 'Now I have the full picture. '.repeat(50); // ~1450 chars
 
-    // Stream turn 1
+    // Stream turn 1 text
     messages = appendTextDelta(messages, msgId, longText);
 
-    // Assistant event for turn 1 (same text + tool)
+    // First assistant event for turn 1 (text only — no tool yet)
+    messages = updateMessages(messages, msgId, [
+      { type: 'text', text: longText } as ContentBlock,
+    ]);
+
+    // SDK re-emits same text (same turn, growing content) with a tool_use added
     messages = updateMessages(messages, msgId, [
       { type: 'text', text: longText } as ContentBlock,
       { type: 'tool_use', id: 'tu-1', name: 'Write', summary: 'write', category: 'file' } as ContentBlock,
     ]);
 
-    // Stream turn 2 text
-    messages = appendTextDelta(messages, msgId, longText); // Same text again (agent repeats)
+    const msg = messages.find(m => m.id === msgId)!;
+    const textBlocks = msg.content.filter(b => b.type === 'text');
+    // P0 fix: same-turn re-emission produces exactly 1 text block, not 2+
+    expect(textBlocks).toHaveLength(1);
+    expect(textBlocks[0].text).toBe(longText);
+  });
 
-    // Assistant event for turn 2 (same text content as turn 1!)
+  it('different turns with same text content correctly produces 2 blocks', () => {
+    const msgId = 'a8b';
+    let messages: Message[] = [makeAssistantMessage(msgId)];
+
+    const sameText = 'The analysis shows positive results.'.repeat(3);
+
+    // Turn 1: text + tool
+    messages = appendTextDelta(messages, msgId, sameText);
     messages = updateMessages(messages, msgId, [
-      { type: 'text', text: longText } as ContentBlock,
+      { type: 'text', text: sameText } as ContentBlock,
+      { type: 'tool_use', id: 'tu-1', name: 'Write', summary: 'write', category: 'file' } as ContentBlock,
+    ]);
+
+    // Turn 2: agent coincidentally produces same text (different turn)
+    messages = appendTextDelta(messages, msgId, sameText);
+    messages = updateMessages(messages, msgId, [
+      { type: 'text', text: sameText } as ContentBlock,
     ]);
 
     const msg = messages.find(m => m.id === msgId)!;
     const textBlocks = msg.content.filter(b => b.type === 'text');
-    // Turn 1 text (confirmed) + Turn 2 text (just confirmed) = 2 blocks
-    // Both have the same content, but that's correct — they're from different turns
+    // Two turns = two text blocks, even if content is identical
+    // (The tool_use between them proves they're separate turns)
     expect(textBlocks).toHaveLength(2);
-    // NOT 3 or 4 (no duplicates from streaming)
   });
 
   it('blockKey still works for tool_use/tool_result exact matching', () => {

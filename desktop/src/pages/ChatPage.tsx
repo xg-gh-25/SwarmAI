@@ -72,7 +72,14 @@ function toDisplayMessage(msg: { id: string; role: string; content: ContentBlock
   return {
     id: msg.id,
     role: msg.role as 'user' | 'assistant',
-    content: msg.content as ContentBlock[],
+    // Mark DB-loaded text/thinking as confirmed — they are authoritative history.
+    // Without this, a subsequent streaming assistant event would treat them as
+    // provisional and WIPE them (structural reconciliation replaces unconfirmed blocks).
+    content: (msg.content as ContentBlock[]).map((block) =>
+      (block.type === 'text' || block.type === 'thinking')
+        ? { ...block, _confirmed: true } as ContentBlock
+        : block
+    ),
     timestamp: msg.createdAt,
     model: msg.model,
   };
