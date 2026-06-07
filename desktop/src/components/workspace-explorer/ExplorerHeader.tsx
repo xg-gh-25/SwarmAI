@@ -18,6 +18,7 @@
  */
 
 import { useTreeData } from '../../contexts/ExplorerContext';
+import { OpenFileButton } from './OpenFileButton';
 
 export interface ExplorerHeaderProps {
   onCollapseToggle?: () => void;
@@ -55,6 +56,9 @@ export default function ExplorerHeader({ onCollapseToggle }: ExplorerHeaderProps
         </span>
 
         <div className="flex items-center gap-1">
+          {/* Open file from disk */}
+          <OpenFileButton />
+
           {/* Manual refresh button — fallback for external filesystem changes */}
           <button
             onClick={refreshTree}

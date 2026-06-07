@@ -57,6 +57,8 @@ export interface RadarSidebarProps {
   onSelectSession: (session: ChatSession) => void;
   onDeleteSession: (session: ChatSession) => void;
   workspaceId: string | null;
+  /** Current active session ID — used for Referenced Files tracking */
+  sessionId?: string;
   /** Unified callback: populate ChatInput with message + context */
   onItemClick?: ItemClickHandler;
   /** Auto-send a message to the active chat tab (injects + sends immediately). */
