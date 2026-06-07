@@ -929,6 +929,91 @@ export function useChatStreamingLifecycle(
     return () => clearInterval(interval);
   }, [isStreaming]);
 
+  // ── Streaming state reconciliation ──
+  // Safety net: if frontend thinks isStreaming=true but backend has already
+  // transitioned to idle, force-clear streaming state. This catches SSE events
+  // lost due to disconnect, tab switch races, or event reader failures.
+  // Polls every 15s while streaming. Minimal cost: 1 lightweight GET request.
+  useEffect(() => {
+    if (!isStreaming) return;
+
+    // Wait 15s before first check — gives normal completion time to arrive
+    const RECONCILE_DELAY_MS = 15_000;
+    const RECONCILE_INTERVAL_MS = 15_000;
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let interval: ReturnType<typeof setInterval> | null = null;
+    let cancelled = false;
+
+    const reconcile = async () => {
+      if (cancelled) return;
+      try {
+        const states = await chatService.getStreamingState();
+        if (cancelled) return;
+
+        const tabId = activeTabIdRef.current;
+        if (!tabId) return;
+        const tabState = tabMapRef.current.get(tabId);
+        if (!tabState) return;
+
+        const sid = tabState.sessionId;
+        if (!sid) return;
+
+        const backendState = states[sid];
+        // Backend says NOT streaming but frontend thinks it is → reconcile
+        if (backendState && !backendState.streaming && tabState.isStreaming) {
+          console.warn(
+            '[StreamReconcile] Backend idle but frontend streaming — forcing clear',
+            { sessionId: sid, backendState: backendState.state },
+          );
+          tabState.isStreaming = false;
+          tabState.isReconnecting = false;
+          tabState.isResuming = false;
+          // Force React re-render so derived `isStreaming` recalculates from
+          // the mutated tabState ref. setPendingStreamTabs is declared above.
+          setPendingStreamTabs((prev) => {
+            const next = new Set(prev);
+            next.delete(tabId);
+            return next;
+          });
+
+          // Sync messages from DB — the result content is there even if
+          // the SSE event was lost
+          chatService.invalidateMessageCache(sid);
+          chatService.getSessionMessages(sid).then((msgs) => {
+            if (cancelled) return;
+            // Map ChatMessage → Message (same pattern as SESSION_BUSY recovery)
+            const mapped = msgs.map((m) => ({
+              id: m.id,
+              role: m.role as 'user' | 'assistant',
+              content: m.content as ContentBlock[],
+              timestamp: m.createdAt || new Date().toISOString(),
+            }));
+            if (tabId === activeTabIdRef.current) {
+              setMessages(() => mapped);
+            } else {
+              tabState.messages = mapped;
+            }
+          }).catch(() => {});
+        }
+      } catch {
+        // API unavailable — no-op (backend might be restarting)
+      }
+    };
+
+    timer = setTimeout(() => {
+      if (cancelled) return;
+      reconcile();
+      interval = setInterval(reconcile, RECONCILE_INTERVAL_MS);
+    }, RECONCILE_DELAY_MS);
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      if (interval) clearInterval(interval);
+    };
+  }, [isStreaming, activeTabIdRef, tabMapRef, setMessages, setPendingStreamTabs]);
+
   // Pending states
   const [pendingQuestion, setPendingQuestion] =
     useState<PendingQuestion | null>(null);
