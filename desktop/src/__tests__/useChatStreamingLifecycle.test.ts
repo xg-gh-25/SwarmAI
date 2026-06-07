@@ -315,6 +315,7 @@ describe('useChatStreamingLifecycle', () => {
       expect(result.current.messages[0].content[0]).toEqual({
         type: 'text',
         text: 'Hello world',
+        _confirmed: true,
       });
     });
 

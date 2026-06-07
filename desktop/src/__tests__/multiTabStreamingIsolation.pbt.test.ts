@@ -444,12 +444,14 @@ describe('Preservation Property Tests', () => {
 
         // Start streaming again and verify messages accumulate
         const msgId = `msg-${tabId}`;
+        const initialMsg = makeMessage({ id: msgId, role: 'assistant', content: [] });
         act(() => {
-          result.current.setMessages([
-            makeMessage({ id: msgId, role: 'assistant', content: [] }),
-          ]);
+          result.current.setMessages([initialMsg]);
           result.current.setIsStreaming(true);
         });
+        // Also seed the tabState.messages so updateMessages can find the message
+        const tab = testTabMap.get(tabId);
+        if (tab) tab.messages = [initialMsg];
 
         const handler = result.current.createStreamHandler(msgId, tabId);
 
