@@ -359,13 +359,8 @@ export function updateMessages(
         if (confirmed[i].type === 'text' && (confirmed[i] as Record<string, unknown>)._confirmed) {
           const existingText = (confirmed[i] as Record<string, unknown>).text as string ?? '';
           // Same-turn re-emission: new text equals or extends existing text
-          // (SDK accumulates within a turn — text grows as model produces more output).
-          // BUT only if there's no tool_use/tool_result AFTER this text block —
-          // tools after text indicate a turn boundary (text → tools → new turn).
-          const hasToolAfter = confirmed.slice(i + 1).some(
-            (b) => b.type === 'tool_use' || b.type === 'tool_result'
-          );
-          if (!hasToolAfter && (newText === existingText || newText.startsWith(existingText))) {
+          // (SDK accumulates within a turn — text grows as model produces more output)
+          if (newText === existingText || newText.startsWith(existingText)) {
             confirmed.splice(i, 1);
           }
           break; // Only check the last confirmed text block
@@ -378,10 +373,7 @@ export function updateMessages(
       for (let i = confirmed.length - 1; i >= 0; i--) {
         if (confirmed[i].type === 'thinking' && (confirmed[i] as Record<string, unknown>)._confirmed) {
           const existingThinking = (confirmed[i] as Record<string, unknown>).thinking as string ?? '';
-          const hasToolAfter = confirmed.slice(i + 1).some(
-            (b) => b.type === 'tool_use' || b.type === 'tool_result'
-          );
-          if (!hasToolAfter && (newThinking === existingThinking || newThinking.startsWith(existingThinking))) {
+          if (newThinking === existingThinking || newThinking.startsWith(existingThinking)) {
             confirmed.splice(i, 1);
           }
           break;
@@ -1395,6 +1387,10 @@ export function useChatStreamingLifecycle(
           if (capturedTabId && tabState && tabState.status !== 'streaming') {
             updateTabStatus(capturedTabId, 'streaming');
           }
+          // Reset stall threshold to text-mode (60s) — thinking phase is over.
+          // Without this, pendingToolUseRef stays true from thinking_start and
+          // the stall detector uses the 180s tool threshold for the text phase.
+          pendingToolUseRef.current = false;
 
           if (tabState) {
             tabState.messages = appendTextDelta(
@@ -1439,6 +1435,10 @@ export function useChatStreamingLifecycle(
           if (capturedTabId && tabState && tabState.status !== 'streaming') {
             updateTabStatus(capturedTabId, 'streaming');
           }
+          // Extended thinking can have 30-120s silent periods (deep reasoning
+          // without producing tokens). Use the longer tool threshold to avoid
+          // false "session stalled" warnings during thinking.
+          pendingToolUseRef.current = true;
         } else if (event.type === 'assistant' && event.content) {
           // Full assistant message — the SDK's complete, authoritative content.
           // When streaming is on, text was already rendered incrementally via
