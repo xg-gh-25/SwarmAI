@@ -937,9 +937,16 @@ export function useChatStreamingLifecycle(
   //
   // Design: iterates ALL tabs in tabMapRef (not just active) so background
   // tabs running sub-agents also get reconciled. Guards against race with
-  // legitimately-restarted streams by checking streamGen stability.
+  // legitimately-restarted streams by checking _reconcileStreamStart.
+  //
+  // CRITICAL (adversarial #1): trigger on ANY tab streaming, not just active.
+  // If active tab completes but background tab is stuck, `isStreaming` (derived
+  // from active) goes false → useEffect cleanup kills the loop → background
+  // tab never recovers. Fix: use pendingStreamTabs.size > 0 as trigger.
+  const anyTabStreaming = isStreaming || pendingStreamTabs.size > 0;
+
   useEffect(() => {
-    if (!isStreaming) return;
+    if (!anyTabStreaming) return;
 
     const RECONCILE_DELAY_MS = 15_000;
     const RECONCILE_INTERVAL_MS = 15_000;
@@ -963,10 +970,11 @@ export function useChatStreamingLifecycle(
           if (!sid) continue;
 
           const backendState = states[sid];
-          if (!backendState) continue;  // session unknown to backend (maybe cold)
+          // Missing from backend = session GC'd/evicted = certainly not streaming.
+          // Treat as idle (adversarial finding #4: don't skip unknown sessions).
+          const backendIsStreaming = backendState?.streaming ?? false;
 
-          // Backend says NOT streaming but this tab thinks it is
-          if (!backendState.streaming) {
+          if (!backendIsStreaming) {
             // Race guard: use _reconcileStreamStart (set only by setIsStreaming(true),
             // never cleared by elapsed-timer or selectTab — immune to dual-writer bug).
             const reconcileStart = (tabState as unknown as Record<string, number>)._reconcileStreamStart ?? 0;
@@ -1005,16 +1013,17 @@ export function useChatStreamingLifecycle(
         if (anyCleared) {
           setPendingStreamTabs((prev) => {
             const next = new Set(prev);
-            // Remove all tabs that are no longer streaming
+            // Remove tabs that are no longer streaming OR no longer exist
             for (const id of next) {
               const ts = tabMapRef.current.get(id);
-              if (ts && !ts.isStreaming) next.delete(id);
+              if (!ts || !ts.isStreaming) next.delete(id);
             }
             return next;
           });
         }
-      } catch {
-        // API unavailable — no-op
+      } catch (err) {
+        // API unavailable — log for observability but don't block
+        console.warn('[StreamReconcile] poll failed:', err);
       }
     };
 
@@ -1029,7 +1038,7 @@ export function useChatStreamingLifecycle(
       if (timer) clearTimeout(timer);
       if (interval) clearInterval(interval);
     };
-  }, [isStreaming, activeTabIdRef, tabMapRef, setMessages, setPendingStreamTabs]);
+  }, [anyTabStreaming, activeTabIdRef, tabMapRef, setMessages, setPendingStreamTabs]);
 
   // Pending states
   const [pendingQuestion, setPendingQuestion] =
