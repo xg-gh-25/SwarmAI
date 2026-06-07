@@ -439,6 +439,38 @@ export default function FileEditorCore({
   const isMarkdown = /\.md$/i.test(fileName);
   const isSvg = /\.svg$/i.test(fileName);
 
+  // ── AC2: Auto-refresh — poll file content every 3s when editor is open ──
+  // Uses refs to avoid stale closures without re-creating the interval on every render.
+  const contentRef = useRef(content);
+  contentRef.current = content;
+  const hasUnsavedEditsRef = useRef(hasUnsavedEdits);
+  hasUnsavedEditsRef.current = hasUnsavedEdits;
+  const onContentChangeRef = useRef(onContentChange);
+  onContentChangeRef.current = onContentChange;
+  const refreshFailuresRef = useRef(0);
+
+  useEffect(() => {
+    refreshFailuresRef.current = 0;
+    const interval = setInterval(async () => {
+      if (hasUnsavedEditsRef.current) return; // Don't overwrite user's unsaved edits
+      if (refreshFailuresRef.current >= 3) return; // Stop polling after 3 consecutive failures
+      try {
+        const resp = await api.get<{ content: string }>('/workspace/file', {
+          params: { path: filePath },
+        });
+        refreshFailuresRef.current = 0;
+        const freshContent = resp.data.content;
+        if (freshContent !== contentRef.current) {
+          setContent(freshContent);
+          onContentChangeRef.current?.(freshContent);
+        }
+      } catch {
+        refreshFailuresRef.current++;
+      }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [filePath]);
+
   // L3: Review mode — inline comments (used for both normal review and diff review)
   // filePath key enables sessionStorage persistence across tab switches (U10).
   const review = useReviewMode(content, filePath);
@@ -537,6 +569,20 @@ export default function FileEditorCore({
       review.toggleReviewMode();
     }
   }, [review]);
+
+  // ── AC1: Single-comment send — dispatch individual annotation to agent ──
+  const handleSendSingleComment = useCallback(
+    (text: string, lineNumber: number) => {
+      const lineRef = `L${lineNumber}`;
+      const message = `[Review: \`${fileName}\`:${lineRef}] ${text}`;
+      window.dispatchEvent(
+        new CustomEvent('swarm:inject-chat-input', {
+          detail: { text: message, focus: true, autoSend: true },
+        }),
+      );
+    },
+    [fileName],
+  );
 
   // --- Handlers ---
 
@@ -1069,6 +1115,8 @@ export default function FileEditorCore({
                     review.setEditingCommentId(null);
                   }}
                   getCommentForLine={review.getCommentForLine}
+                  onSendSingle={handleSendSingleComment}
+                  isCommentApplied={review.isCommentApplied}
                 />
               ) : (
                 <LineGutter
