@@ -311,6 +311,10 @@ async def sse_with_heartbeat(
     Sends heartbeat messages at regular intervals when no data is being sent,
     keeping the SSE connection alive during long operations.
 
+    During extended thinking (thinking_start received, no text_start/text_delta
+    yet), emits ``thinking_progress`` events instead of plain heartbeats so the
+    frontend can show elapsed time and suppress "session stalled" warnings.
+
     Args:
         message_generator: The async generator that yields message dicts
         heartbeat_interval: Seconds between heartbeats (default: 15)
@@ -320,6 +324,13 @@ async def sse_with_heartbeat(
     """
     message_queue: asyncio.Queue = asyncio.Queue()
     generator_done = False
+
+    # ── Thinking phase tracking ────────────────────────────────────────
+    # When the SDK is in extended thinking, heartbeat slots emit
+    # thinking_progress events so the frontend knows the session is alive
+    # even when no thinking_delta arrives (content redacted by API).
+    thinking_active = False
+    thinking_start_time: float = 0.0
 
     async def consume_messages():
         """Consume messages from the generator and put them in the queue."""
@@ -359,6 +370,22 @@ async def sse_with_heartbeat(
                         logger.warning("SSE json.dumps failed: %s", json_err)
                         yield create_sse_error("SERIALIZATION_ERROR", str(json_err))
                         continue
+
+                    # ── Track thinking phase for liveness events ────────
+                    msg_type = item.get("type", "") if isinstance(item, dict) else ""
+                    if msg_type == "thinking_start":
+                        thinking_active = True
+                        thinking_start_time = time.time()
+                    elif msg_type in ("text_start", "text_delta", "result",
+                                      "assistant", "content_block_stop"):
+                        # Thinking phase ends when text output begins or turn completes
+                        if thinking_active and msg_type != "content_block_stop":
+                            thinking_active = False
+                        # content_block_stop for the thinking block itself — check index
+                        # For simplicity: any text-producing event ends thinking
+                        if msg_type in ("text_start", "text_delta", "result", "assistant"):
+                            thinking_active = False
+
                     # Check for evolution event markers embedded in agent output
                     for evo_event in _extract_evolution_events(item):
                         try:
@@ -383,8 +410,20 @@ async def sse_with_heartbeat(
                                 break
                         except Exception:
                             pass  # is_disconnected() can fail — don't break the loop
-                    logger.debug("Sending SSE heartbeat")
-                    yield create_sse_heartbeat()
+
+                    # During thinking: emit thinking_progress (frontend shows elapsed
+                    # timer and suppresses stall warning). Otherwise: plain heartbeat.
+                    if thinking_active:
+                        elapsed = int(time.time() - thinking_start_time)
+                        progress_event = {
+                            "type": "thinking_progress",
+                            "elapsed_seconds": elapsed,
+                            "timestamp": time.time(),
+                        }
+                        yield f"data: {json.dumps(progress_event)}\n\n"
+                    else:
+                        logger.debug("Sending SSE heartbeat")
+                        yield create_sse_heartbeat()
             except Exception as unexpected_err:
                 # Catch-all: send structured error to client before closing
                 logger.error("Unexpected SSE stream error: %s", unexpected_err, exc_info=True)
