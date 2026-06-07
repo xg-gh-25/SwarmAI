@@ -725,21 +725,27 @@ async def list_sessions(
 
 
 @router.get("/sessions/streaming-state")
-async def get_streaming_state_before_param():
-    """Return the streaming state for all active sessions.
+async def get_streaming_state_before_param(session_id: str | None = None):
+    """Return the streaming state for active sessions.
 
     Frontend polls this to reconcile stale isStreaming state when SSE events
     are lost. Must be registered BEFORE /sessions/{session_id} to avoid
     path parameter capturing 'streaming-state' as a session ID.
+
+    Args:
+        session_id: Optional filter — return only this session's state.
     """
     sr = _get_session_router()
     result: dict[str, dict] = {}
     for unit in sr.list_units():
-        if unit.session_id and not unit.session_id.startswith("prewarm"):
-            result[unit.session_id] = {
-                "streaming": unit.state.value == "streaming",
-                "state": unit.state.value,
-            }
+        if not unit.session_id or unit.session_id.startswith("prewarm"):
+            continue
+        if session_id and unit.session_id != session_id:
+            continue
+        result[unit.session_id] = {
+            "streaming": unit.state.value == "streaming",
+            "state": unit.state.value,
+        }
     return {"sessions": result}
 
 
