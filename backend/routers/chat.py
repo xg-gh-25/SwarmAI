@@ -735,7 +735,7 @@ async def get_streaming_state_endpoint():
     Must be registered BEFORE /sessions/{session_id} to avoid path parameter
     capturing 'streaming-state' as a session ID.
     """
-    sr = _get_session_router()
+    sr = _get_router()
     result: dict[str, dict] = {}
     for unit in sr.list_units():
         if not unit.session_id or unit.session_id.startswith("prewarm"):

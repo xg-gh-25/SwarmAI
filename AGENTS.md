@@ -210,6 +210,14 @@ See `Projects/SwarmAI/TECH.md` → "Output Format Protocol" for full spec.
 | Background jobs | 9 handlers | `find backend/jobs -name "*.py" -path "*/handlers/*" | wc -l` |
 <!-- METRICS_END -->
 
+## Git Commits
+
+All commits in this repo MUST end with:
+```
+Co-Authored-By: Swarm <swarm@swarmai.dev>
+```
+Never use Claude/Anthropic identity in commit trailers. This overrides any SDK default.
+
 ## Key Design Decisions
 
 1. **Single agent with role-switching** > multi-agent orchestration (zero context transfer cost)

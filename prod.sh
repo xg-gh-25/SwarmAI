@@ -321,6 +321,16 @@ cmd_release() {
         else
             _warn "Smoke: /api/system/tokens/usage not reachable (may need auth — non-blocking)"
         fi
+
+        # Check streaming-state endpoint (catches NameError/import bugs that silently 500)
+        local stream_body
+        stream_body=$(curl -sf --max-time 5 "${DAEMON_API}/api/chat/sessions/streaming-state" 2>/dev/null || true)
+        if [ -n "$stream_body" ] && echo "$stream_body" | python3 -c "import json,sys; d=json.load(sys.stdin); assert 'sessions' in d" 2>/dev/null; then
+            _ok "Smoke: /api/chat/sessions/streaming-state returns valid JSON"
+        else
+            _err "Smoke FAIL: /api/chat/sessions/streaming-state not responding (reconciliation safety net broken)"
+            smoke_ok=false
+        fi
     else
         _warn "Smoke: daemon not running — skipping automated checks"
         smoke_ok=false

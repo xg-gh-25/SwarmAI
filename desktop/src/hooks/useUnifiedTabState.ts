@@ -95,7 +95,10 @@ export interface UnifiedTab {
   // --- Runtime state (not persisted) ---
   messages: Message[];
   pendingQuestion: PendingQuestion | null;
-  isStreaming: boolean;
+  /** Write ONLY via setIsStreaming() — direct mutation bypasses re-render
+   *  and causes spinner-hang on background tabs. Marked readonly to enforce
+   *  at compile time; setIsStreaming() uses a type cast internally. */
+  readonly isStreaming: boolean;
   abortController: AbortController | null;
   streamGen: number;
   status: TabStatus;
@@ -183,10 +186,10 @@ export interface UseUnifiedTabStateReturn {
 
   // --- Runtime state ---
   getTabState: (tabId: string) => UnifiedTab | undefined;
-  /** Patch excludes `id` to prevent primary key corruption. */
+  /** Patch excludes `id` (primary key) and `isStreaming` (write-only via setIsStreaming). */
   updateTabState: (
     tabId: string,
-    patch: Partial<Omit<UnifiedTab, 'id'>>,
+    patch: Partial<Omit<UnifiedTab, 'id' | 'isStreaming'>>,
   ) => void;
   updateTabStatus: (tabId: string, status: TabStatus) => void;
 
@@ -511,7 +514,7 @@ export function useUnifiedTabState(
   );
 
   const updateTabState = useCallback(
-    (tabId: string, patch: Partial<Omit<UnifiedTab, 'id'>>) => {
+    (tabId: string, patch: Partial<Omit<UnifiedTab, 'id' | 'isStreaming'>>) => {
       const tab = tabMapRef.current.get(tabId);
       if (!tab) return;
       Object.assign(tab, patch);
