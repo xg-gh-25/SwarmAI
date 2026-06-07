@@ -4,7 +4,7 @@
  * 2. Expanded clickable tool categories (MergedToolBlock)
  * 3. Spaced paths accepted (MarkdownRenderer)
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 
 // We test the exported utility functions directly
 // Import will work after the fixes are applied
@@ -74,11 +74,11 @@ describe('Bug 2: extractFilePath handles edit/search prefixes', () => {
     expect(result!.path).toBe('/Users/gawan/file.ts');
   });
 
-  it('extracts path from "Searching in /" prefix', () => {
+  it('extracts path from "Searching in " prefix', () => {
     if (!extractFilePath) return;
     const result = extractFilePath('Searching in /Users/gawan/src/');
     expect(result).not.toBeNull();
-    expect(result!.path).toBe('Users/gawan/src/');
+    expect(result!.path).toBe('/Users/gawan/src/');
   });
 
   it('extracts path from "Writing to " prefix', () => {

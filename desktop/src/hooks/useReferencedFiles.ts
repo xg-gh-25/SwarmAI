@@ -9,7 +9,7 @@
  * @exports ReferencedFile interface
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 
 export type FileOperation = 'written' | 'read' | 'searched';
 
@@ -137,23 +137,25 @@ export function useReferencedFiles(sessionId: string | undefined) {
     return () => document.removeEventListener(EVENT_NAME, handler);
   }, [sessionId]);
 
-  // Group files by operation
-  const grouped = {
-    written: [] as ReferencedFile[],
-    read: [] as ReferencedFile[],
-    searched: [] as ReferencedFile[],
-  };
+  // Group files by operation (memoized to avoid unnecessary re-renders)
+  const { grouped, totalCount } = useMemo(() => {
+    const g: Record<FileOperation, ReferencedFile[]> = {
+      written: [],
+      read: [],
+      searched: [],
+    };
 
-  for (const file of files.values()) {
-    grouped[file.operation].push(file);
-  }
+    for (const file of files.values()) {
+      g[file.operation].push(file);
+    }
 
-  // Sort each group by firstSeen descending (newest first)
-  for (const key of Object.keys(grouped) as FileOperation[]) {
-    grouped[key].sort((a, b) => b.firstSeen - a.firstSeen);
-  }
+    // Sort each group by firstSeen descending (newest first)
+    for (const key of Object.keys(g) as FileOperation[]) {
+      g[key].sort((a, b) => b.firstSeen - a.firstSeen);
+    }
 
-  const totalCount = files.size;
+    return { grouped: g, totalCount: files.size };
+  }, [files]);
 
   const clear = useCallback(() => {
     if (sessionId) {
