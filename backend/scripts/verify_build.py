@@ -173,6 +173,24 @@ def verify_binary(binary_path: str) -> tuple[list[str], list[str], list[str]]:
         start_new_session=True,
     )
 
+    # Drain stdout in background thread to prevent pipe buffer deadlock.
+    # macOS pipe buffer is 64KB — if binary writes more than that during
+    # startup (common with 86 skills + code intel + hooks logging), it
+    # blocks on write() and never reaches the health endpoint.
+    import threading
+    captured_output: list[bytes] = []
+
+    def _drain_stdout():
+        assert proc.stdout is not None
+        while True:
+            chunk = proc.stdout.read(4096)
+            if not chunk:
+                break
+            captured_output.append(chunk)
+
+    drain_thread = threading.Thread(target=_drain_stdout, daemon=True)
+    drain_thread.start()
+
     try:
         # Wait for health endpoint
         # 180s: PyInstaller one-file mode extracts 200MB+ to temp on first run.
@@ -183,7 +201,8 @@ def verify_binary(binary_path: str) -> tuple[list[str], list[str], list[str]]:
             # Dump captured stdout for diagnosis
             if proc.poll() is not None:
                 print(f"  Process exited with code {proc.returncode}")
-            out = proc.stdout.read(4096) if proc.stdout else b""
+            drain_thread.join(timeout=2)
+            out = b"".join(captured_output)
             if out:
                 print(f"  Last output:\n{out.decode('utf-8', errors='replace')[-2000:]}")
             return [], ["binary_startup"], []
