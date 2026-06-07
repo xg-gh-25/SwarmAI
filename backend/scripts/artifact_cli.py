@@ -397,6 +397,22 @@ def _auto_validate_before_advance(project: str, next_state: str) -> None:
                        f"Verify before advancing to '{next_state}'.",
         }), file=sys.stderr)
 
+    # REPORT.md gate: deliver stage MUST produce REPORT.md before advancing.
+    # 52% of historical "completed" runs lacked REPORT.md because this was never enforced.
+    if current_stage == "deliver":
+        run_dir = artifacts_dir / run_id
+        if not (run_dir / "REPORT.md").exists():
+            print(json.dumps({
+                "validation_blocked": True,
+                "stage": "deliver",
+                "errors": [
+                    "[deliver] REPORT.md not found. DELIVER stage requires generating "
+                    "REPORT.md at .artifacts/runs/<RUN_ID>/REPORT.md before advancing. "
+                    "Run: artifact_cli.py run-report --project <PROJECT> --run-id <RUN_ID>"
+                ],
+            }, indent=2), file=sys.stderr)
+            sys.exit(1)
+
     # Run validator
     try:
         validator = Path(__file__).parent / "pipeline_validator.py"
