@@ -19,6 +19,8 @@ from ..adapters.web_search import fetch_web_search
 from ..adapters.trending import fetch_trending
 from ..adapters.github_trending import fetch_github_trending
 from ..adapters.github_community import fetch_github_community
+from ..adapters.weibo_trending import fetch_weibo_trending
+from ..adapters.eastmoney_market import fetch_eastmoney_market
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +33,8 @@ ADAPTER_MAP = {
     FeedType.TRENDING: fetch_trending,
     FeedType.GITHUB_TRENDING: fetch_github_trending,
     FeedType.GITHUB_COMMUNITY: fetch_github_community,
+    FeedType.WEIBO_TRENDING: fetch_weibo_trending,
+    FeedType.EASTMONEY_MARKET: fetch_eastmoney_market,
 }
 
 

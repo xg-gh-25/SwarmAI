@@ -876,6 +876,10 @@ async def resolve_workspace_file(
     expanded_path = await _get_workspace_path()
     workspace_root = Path(expanded_path)
 
+    # Reject null bytes early — they crash Path.resolve() and are a classic injection vector
+    if "\x00" in path:
+        raise HTTPException(status_code=400, detail="Invalid path: contains null byte")
+
     # --- Stage 0: Absolute path handling ---
     # The agent often outputs absolute paths like /Users/.../swarmai/backend/foo.py.
     # First try to convert to workspace-relative via project symlinks.
@@ -932,27 +936,64 @@ async def resolve_workspace_file(
                 if _is_path_under(candidate, workspace_root) or _is_symlink_traversal(workspace_root, candidate_rel):
                     return {"resolved_path": candidate_rel}
 
-    # --- Stage 3: Bare filename → recursive search in Projects/ ---
-    # For paths like "fileClassification.ts" with no directory separators,
-    # search recursively within project directories (depth-limited for perf).
-    if "/" not in path and "\\" not in path and projects_dir.is_dir():
-        _MAX_DEPTH = 8
-        for project in sorted(projects_dir.iterdir()):
-            if not project.is_dir():
-                continue
-            project_resolved = project.resolve()
-            for match in project_resolved.rglob(path):
-                if not match.is_file():
-                    continue
-                # Depth check: count path components from project root
+    # --- Stage 3 & 4: Bare filename → recursive search ---
+    # For paths like "fileClassification.ts" or "2026-04-29-foo.md" with no
+    # directory separators, search in Projects/ first, then workspace root.
+    # Uses os.walk for pruning (avoids walking node_modules/etc) and
+    # exact string match (`path in files`) — no glob expansion.
+    _MAX_DEPTH = 8
+    _EXCLUDED_DIRS = {'.git', 'node_modules', '__pycache__', '.pytest_cache', '.venv', '.mypy_cache'}
+
+    if "/" not in path and "\\" not in path:
+
+        def _find_bare_filename() -> str | None:
+            """Synchronous search — run via to_thread to avoid blocking event loop."""
+            # Stage 3: search inside Projects/ (symlinked repos)
+            if projects_dir.is_dir():
+                for project in sorted(projects_dir.iterdir()):
+                    if not project.is_dir():
+                        continue
+                    project_resolved = project.resolve()
+                    for root, dirs, files in os.walk(project_resolved):
+                        # Sort dirs for deterministic traversal order
+                        dirs[:] = sorted(d for d in dirs if d not in _EXCLUDED_DIRS)
+                        # Depth check
+                        try:
+                            rel_root = Path(root).relative_to(project_resolved)
+                        except ValueError:
+                            continue
+                        if len(rel_root.parts) >= _MAX_DEPTH:
+                            dirs.clear()
+                            continue
+                        if path in files:
+                            rel_file = rel_root / path
+                            return f"Projects/{project.name}/{rel_file}"
+
+            # Stage 4: search workspace root (Knowledge/, .context/, Services/, etc.)
+            # Exclude Projects/ (already searched) and other noise directories.
+            _STAGE4_EXCLUDE = _EXCLUDED_DIRS | {'Projects'}
+            for root, dirs, files in os.walk(workspace_root):
+                # Sort dirs for deterministic traversal order
+                dirs[:] = sorted(d for d in dirs if d not in _STAGE4_EXCLUDE)
                 try:
-                    rel_to_project = match.relative_to(project_resolved)
+                    rel_root = Path(root).relative_to(workspace_root)
                 except ValueError:
                     continue
-                if len(rel_to_project.parts) > _MAX_DEPTH:
+                if len(rel_root.parts) >= _MAX_DEPTH:
+                    dirs.clear()
                     continue
-                candidate_rel = f"Projects/{project.name}/{rel_to_project}"
-                return {"resolved_path": candidate_rel}
+                if path in files:
+                    return str(rel_root / path)
+
+            return None
+
+        try:
+            result = await asyncio.to_thread(_find_bare_filename)
+        except OSError:
+            result = None
+
+        if result:
+            return {"resolved_path": result}
 
     raise HTTPException(status_code=404, detail=f"Could not resolve file: {path}")
 

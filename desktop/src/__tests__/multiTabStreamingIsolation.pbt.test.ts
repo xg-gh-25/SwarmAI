@@ -120,7 +120,7 @@ describe('Multi-Tab Streaming Isolation — Bug Condition Exploration', () => {
 
         // Mark Tab A as streaming in the per-tab map
         const tabA = testTabMap.get(tabAId)!;
-        tabA.isStreaming = true;
+        (tabA as { isStreaming: boolean }).isStreaming = true;
 
         // Switch active tab to idle Tab B
         act(() => {
@@ -258,7 +258,7 @@ describe('Multi-Tab Streaming Isolation — Bug Condition Exploration', () => {
         act(() => {
           result.current.setIsStreaming(true);
         });
-        testTabMap.get(tabAId)!.isStreaming = true;
+        (testTabMap.get(tabAId)! as { isStreaming: boolean }).isStreaming = true;
 
         // Simulate tab switch to Tab B: handleTabSelect calls
         // setIsStreaming(tabState.isStreaming) where Tab B is idle.

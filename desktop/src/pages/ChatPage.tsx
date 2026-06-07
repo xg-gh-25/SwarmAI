@@ -1426,6 +1426,19 @@ export default function ChatPage() {
     }
 
     // ──── NORMAL SEND PATH (existing code) ──────────────────────────────
+    // Register the active tab in the per-tab map BEFORE setIsStreaming(true).
+    // setIsStreaming only writes tabState.isStreaming when the tab exists; if
+    // registration happened later (it used to, ~60 lines down), the flag write
+    // here would be a silent no-op and only pendingStreamTabs would be set.
+    // Since the isStreaming derivation treats the per-tab flag as authoritative
+    // once a tab is registered, a dropped flag write would leave the spinner
+    // missing for the first turn on a brand-new tab. Registering first makes
+    // the flag write deterministic.
+    const sendTabId = activeTabIdRef.current;
+    if (sendTabId && !tabMapRef.current.has(sendTabId)) {
+      initTabState(sendTabId, messagesRef.current);
+    }
+
     // Set streaming flag IMMEDIATELY after guard passes to close the race
     // window between guard check and the old setIsStreaming call ~20 lines
     // below.  setIsStreaming synchronously mutates tabMapRef.isStreaming,
@@ -1489,9 +1502,9 @@ export default function ChatPage() {
     const assistantPlaceholder: Message = { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() };
     setMessages((prev) => [...prev, assistantPlaceholder]);
 
-    // Ensure the active tab is registered in the per-tab state map BEFORE
-    // creating the stream handler. Without this, capturedTabId would be null
-    // and isActiveTab would become false once initTabState fires later.
+    // Tab registration — normally already done at the top of the send path
+    // (before setIsStreaming). Kept as a defensive fallback for any path that
+    // reaches here without prior registration. Idempotent: no-op if present.
     if (currentActiveTabId && !tabMapRef.current.has(currentActiveTabId)) {
       initTabState(currentActiveTabId, messagesRef.current);
     }

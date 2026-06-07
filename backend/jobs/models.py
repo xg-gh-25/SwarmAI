@@ -42,6 +42,8 @@ class FeedType(str, Enum):
     TRENDING = "trending"
     GITHUB_TRENDING = "github-trending"
     GITHUB_COMMUNITY = "github-community"
+    WEIBO_TRENDING = "weibo-trending"
+    EASTMONEY_MARKET = "eastmoney-market"
 
 
 class TierType(str, Enum):
