@@ -236,11 +236,13 @@ describe('Structural reconciliation (replace, not dedup)', () => {
 
     const msg = messages.find(m => m.id === msgId)!;
     const textBlocks = msg.content.filter(b => b.type === 'text');
-    // Two turns separated by a tool_use = 2 text blocks (correct).
-    // The tool boundary proves they're different turns, even with identical text.
-    // P0 (content explosion) is prevented by structural reconciliation — unconfirmed
-    // blocks are removed before authoritative content is appended.
-    expect(textBlocks).toHaveLength(2);
+    // BUG FIX (2026-06-07): Same text re-emitted = deduped to 1 block.
+    // Cannot distinguish "same turn re-emission" from "different turn same text"
+    // without SDK-level turn markers. The P0 fix (prevent content explosion that
+    // causes spinner hang) takes priority over this rare edge case.
+    // A "hasToolAfter" guard was attempted (commit 410200eb) but BREAKS the P0
+    // fix because tools are always between text in the bug scenario.
+    expect(textBlocks).toHaveLength(1);
   });
 
   it('blockKey still works for tool_use/tool_result exact matching', () => {
