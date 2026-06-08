@@ -1270,8 +1270,9 @@ class PromptBuilder:
             max_turns = 15
         elif not channel_context and max_turns is None:
             # Desktop: override CLI default (100) with generous limit.
-            # Pipeline full-profile runs need 100-150 turns typically.
-            max_turns = 200
+            # Pipeline full-profile runs need 150-250 turns typically;
+            # complex goal-profile or multi-milestone work can exceed 300.
+            max_turns = 400
 
         # ── Task budget: per-task token limit for CLI autocompact ─────
         #
