@@ -410,6 +410,7 @@ export default function FileEditorCore({
   const [attachFeedback, setAttachFeedback] = useState(false);
   const [copyPathFeedback, setCopyPathFeedback] = useState(false);
   const [scrollTop, setScrollTop] = useState(0);
+  const [highlightedLines, setHighlightedLines] = useState<Set<number>>(new Set());
   const rootRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
@@ -451,7 +452,7 @@ export default function FileEditorCore({
   const onContentChangeRef = useRef(onContentChange);
   onContentChangeRef.current = onContentChange;
 
-  // ── AC2: Auto-refresh via SSE file_changed event (not polling) ──
+  // ── Auto-refresh via SSE file_changed event + diff highlight ──
   useEffect(() => {
     const handler = async (e: Event) => {
       const changedPath = (e as CustomEvent<{ path: string }>).detail?.path;
@@ -467,9 +468,22 @@ export default function FileEditorCore({
         });
         const freshContent = resp.data.content;
         if (freshContent !== contentRef.current) {
+          // Compute changed lines for highlight
+          const oldLines = (contentRef.current || '').split('\n');
+          const newLines = freshContent.split('\n');
+          const changed = new Set<number>();
+          const maxLen = Math.max(oldLines.length, newLines.length);
+          for (let i = 0; i < maxLen; i++) {
+            if (oldLines[i] !== newLines[i]) changed.add(i + 1); // 1-based
+          }
           setContent(freshContent);
-          setSavedContent(freshContent); // Update baseline so hasUnsavedEdits stays false
+          setSavedContent(freshContent);
           onContentChangeRef.current?.(freshContent);
+          // Highlight changed lines for 5s
+          if (changed.size > 0) {
+            setHighlightedLines(changed);
+            setTimeout(() => setHighlightedLines(new Set()), 5000);
+          }
         }
       } catch {
         // Silently ignore — file may have been deleted
@@ -1184,6 +1198,36 @@ export default function FileEditorCore({
                   style={{ tabSize: 4 }}
                   aria-hidden="true"
                 />
+                {/* Diff highlight overlay — shows green border on changed lines after reload */}
+                {highlightedLines.size > 0 && (
+                  <pre
+                    className={clsx(
+                      'absolute inset-0 m-0 p-4 overflow-y-scroll overflow-x-hidden',
+                      'font-mono text-sm leading-6 whitespace-pre-wrap break-words',
+                      'pointer-events-none z-[1]',
+                      '[word-break:break-all]'
+                    )}
+                    style={{ tabSize: 4 }}
+                    aria-hidden="true"
+                  >
+                    {content.split('\n').map((line, lineIdx) => {
+                      const lineNum = lineIdx + 1;
+                      const isHighlighted = highlightedLines.has(lineNum);
+                      return (
+                        <div
+                          key={lineIdx}
+                          className={isHighlighted
+                            ? 'border-l-3 border-green-500 bg-green-500/10 transition-opacity duration-1000'
+                            : ''
+                          }
+                        >
+                          <span className="invisible">{line || ' '}</span>
+                          {'\n'}
+                        </div>
+                      );
+                    })}
+                  </pre>
+                )}
                 {/* Search highlight overlay */}
                 {showSearch && searchMatches.length > 0 && (
                   <pre
