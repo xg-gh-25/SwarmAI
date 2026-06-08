@@ -936,6 +936,32 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                     "pipeline_id": args.run_id,
                 }), file=_sys.stderr)
 
+            # ── GOAL PROFILE: Adversarial Review Gate (BLOCKING) ──
+            # Goal profile has no DELIVER stage, so the artifact_id gate above
+            # doesn't fire. This parallel gate ensures adversarial review ran
+            # before goal completion. Without it, agent can rationalize skip
+            # (CLASS A pattern: "DoD passed, adversarial is redundant").
+            _goal_profile = run_state.get("profile")
+            if _goal_profile == "goal":
+                goal_cycle_rec = next(
+                    (s for s in run_state.get("stages", [])
+                     if s.get("stage", s.get("name", "")) == "goal_cycle"
+                     and s.get("status") in ("completed", "done")),
+                    None,
+                )
+                if goal_cycle_rec and not goal_cycle_rec.get("adversarial_review"):
+                    print(json.dumps({
+                        "error": "Cannot mark completed: goal profile requires Final "
+                                 "Adversarial Review on total changeset before completion. "
+                                 "Run adversarial review (git diff start..HEAD), then "
+                                 "update goal_cycle stage with adversarial_review: true.",
+                        "pipeline_id": args.run_id,
+                        "fix": 'run-update --stage-json \'{"stage":"goal_cycle",'
+                               '"status":"completed","adversarial_review":true,'
+                               '"stage_doc_consumed":true}\'',
+                    }))
+                    return
+
             run_state["completed_at"] = now
             # Auto-generate METRICS.json on completion
             _try_generate_metrics(args.project, args.run_id, run_state, reg)
