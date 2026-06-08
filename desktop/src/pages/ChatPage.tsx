@@ -1323,8 +1323,12 @@ export default function ChatPage() {
     // Per-tab streaming guard: check only the active tab's state
     const activeTabForGuard = tabMapRef.current.get(activeTabIdRef.current ?? '');
 
-    // Hard guard: session creation in-flight — truly can't queue or send
-    if (pendingStreamTabs.has(activeTabIdRef.current ?? '')) return;
+    // Hard guard: session creation in-flight — block ONLY during true pre-session
+    // phase (tab has no sessionId yet). Once a session exists, the streaming guard
+    // at L1333 handles queueing correctly. Previously this blocked ALL sends when
+    // pendingStreamTabs contained the tab — but setIsStreaming(true) during drain
+    // re-adds to pendingStreamTabs (for re-render), silently swallowing user input.
+    if (!activeTabForGuard?.sessionId && pendingStreamTabs.has(activeTabIdRef.current ?? '')) return;
 
     // Hard guard: SESSION_BUSY recovery in progress — don't send (prevents duplicates)
     if (activeTabForGuard?.isWaitingForBusy) return;
@@ -2294,6 +2298,33 @@ export default function ChatPage() {
                   <div className="flex items-center gap-2 text-[var(--color-text-muted)] py-2">
                     <Spinner size="sm" />
                     <span className="text-sm">{t('chat.waitingForResponse', 'Waiting for response...')}</span>
+                  </div>
+                )}
+                {/* Sticky streaming indicator — always visible when agent is working,
+                    regardless of scroll position. Uses CSS sticky to float at the
+                    bottom of the scroll viewport when user scrolls up. Click to
+                    scroll to the active streaming message. */}
+                {isStreaming && lastAssistantIdx >= 0 && (
+                  <div className="sticky bottom-0 z-10 flex items-center justify-center py-1.5">
+                    <button
+                      type="button"
+                      onClick={scrollToBottom}
+                      className="flex items-center gap-2 px-3 py-1.5 rounded-full
+                                    bg-[var(--color-bg-primary)]/95 backdrop-blur-sm
+                                    border border-[var(--color-border-subtle)]
+                                    shadow-sm text-[var(--color-text-muted)]
+                                    hover:border-[var(--color-border)] hover:text-[var(--color-text-secondary)]
+                                    transition-colors cursor-pointer">
+                      <Spinner size="sm" />
+                      <span className="text-xs font-medium">
+                        {displayedActivity?.toolName
+                          ? t('chat.runningTool', { tool: displayedActivity.toolName })
+                          : t('chat.thinking')}
+                      </span>
+                      {elapsedSeconds >= 5 && (
+                        <span className="text-xs opacity-60">{formatElapsed(elapsedSeconds)}</span>
+                      )}
+                    </button>
                   </div>
                 )}
                 <div ref={messagesEndRef} />
