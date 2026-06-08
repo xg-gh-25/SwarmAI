@@ -141,14 +141,49 @@ re-discovering a failure costs hours.
 
 ### Goal Mode Detection
 
-If the requirement describes an open-ended improvement (not a bounded feature),
-classify as `goal_mode: true` and switch to `goal` profile.
+**Default bias: prefer goal over full.** When in doubt between full and goal,
+choose goal — iterative cycles with DoD checks are structurally safer than a
+single-shot BUILD that might miss edge cases or deliver incomplete work.
 
-**Indicators of goal mode:**
+If the requirement describes work where the end state is clearer than the path
+to get there, classify as `goal_mode: true` and switch to `goal` profile.
+
+**Indicators of goal mode (ANY ONE is sufficient):**
+
+Category 1 — Metric/threshold targets:
 - "Get X to Y%" / "Improve X until Y" / "Reduce X below Y"
+- Any requirement with a measurable success criterion (test pass, coverage, perf)
+
+Category 2 — Bulk/sweep operations:
 - "Migrate all callers" / "Fix all warnings" / "Remove all instances of"
-- Measurable end state but unbounded scope (don't know how many changes needed)
-- No single "done" deliverable — done means metric reached
+- "Refactor X across the codebase" / "Unify all Y" / "Standardize Z"
+- Work that touches N sites where N is unknown upfront
+
+Category 3 — Multi-file features (>3 files likely):
+- Requirement touches both backend AND frontend
+- Requirement involves new API endpoint + consumer + tests
+- Implementation path has 4+ distinct steps that each need verification
+- "Implement X" where X spans multiple modules or layers
+
+Category 4 — Quality/hardening:
+- "Fix all findings from review" / "Address N issues"
+- "Harden X" / "Make X production-ready" / "Complete X"
+- Work where "done" means "nothing left to fix" rather than "artifact produced"
+
+Category 5 — Iterative discovery:
+- Requirement where you won't know the full scope until you start
+- "Investigate and fix" / "Debug and resolve" (diagnosis + fix cycles)
+- Work that may surface additional issues as you go
+
+**When NOT goal (use full/bugfix/trivial instead):**
+- Single bounded change with clear before/after (one function, one component)
+- Pure research with no code output (use research profile)
+- Documentation-only (use docs profile)
+- One-liner fix with known root cause (use trivial/bugfix)
+
+**Decision heuristic:** If you can write ALL acceptance criteria as specific
+file:function changes before starting → NOT goal. If ACs describe outcomes
+that require discovery → goal.
 
 **When detected:**
 1. Set `scope: "goal"` in evaluation (triggers `goal` profile selection)
