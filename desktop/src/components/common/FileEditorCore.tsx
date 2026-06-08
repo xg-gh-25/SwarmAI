@@ -411,6 +411,7 @@ export default function FileEditorCore({
   const [scrollTop, setScrollTop] = useState(0);
   const [highlightedLines, setHighlightedLines] = useState<Set<number>>(new Set());
   const lastFetchRef = useRef(Date.now());
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const rootRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
@@ -482,7 +483,7 @@ export default function FileEditorCore({
           // Highlight changed lines for 5s
           if (changed.size > 0) {
             setHighlightedLines(changed);
-            setTimeout(() => setHighlightedLines(new Set()), 5000);
+            clearTimeout(highlightTimerRef.current); highlightTimerRef.current = setTimeout(() => setHighlightedLines(new Set()), 5000);
           }
           lastFetchRef.current = Date.now();
         }
@@ -494,9 +495,10 @@ export default function FileEditorCore({
     return () => window.removeEventListener('swarm:file-changed', handler);
   }, [filePath]);
 
-  // ── Focus-based refetch: reload when editor gains focus if >3s since last fetch ──
+  // ── Visibility-based refetch: reload when app/tab becomes visible if >3s idle ──
   useEffect(() => {
-    const handleFocus = async () => {
+    const handleVisibility = async () => {
+      if (document.hidden) return;
       if (Date.now() - lastFetchRef.current < 3000) return;
       if (hasUnsavedEditsRef.current) return;
       try {
@@ -514,17 +516,14 @@ export default function FileEditorCore({
           onContentChangeRef.current?.(fresh);
           if (changed.size > 0) {
             setHighlightedLines(changed);
-            setTimeout(() => setHighlightedLines(new Set()), 5000);
+            clearTimeout(highlightTimerRef.current); highlightTimerRef.current = setTimeout(() => setHighlightedLines(new Set()), 5000);
           }
           lastFetchRef.current = Date.now();
         }
       } catch { /* ignore */ }
     };
-    const rootEl = rootRef.current;
-    if (rootEl) {
-      rootEl.addEventListener('focusin', handleFocus);
-      return () => rootEl.removeEventListener('focusin', handleFocus);
-    }
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
   }, [filePath]);
 
   // L3: Review mode — inline comments (used for both normal review and diff review)
@@ -1009,7 +1008,7 @@ export default function FileEditorCore({
                     onContentChange?.(fresh);
                     if (changed.size > 0) {
                       setHighlightedLines(changed);
-                      setTimeout(() => setHighlightedLines(new Set()), 5000);
+                      clearTimeout(highlightTimerRef.current); highlightTimerRef.current = setTimeout(() => setHighlightedLines(new Set()), 5000);
                     }
                   }
                 } catch { /* file gone — ignore */ }
