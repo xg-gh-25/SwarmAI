@@ -404,6 +404,9 @@ export default function FileEditorCore({
   const [searchQuery, setSearchQuery] = useState('');
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const [activeLineNumber, setActiveLineNumber] = useState<number | undefined>(undefined);
+  const [selectionText, setSelectionText] = useState('');
+  const [selectionPopoverPos, setSelectionPopoverPos] = useState<{ top: number; left: number } | null>(null);
+  const [showSelectionComment, setShowSelectionComment] = useState(false);
   const [attachFeedback, setAttachFeedback] = useState(false);
   const [copyPathFeedback, setCopyPathFeedback] = useState(false);
   const [scrollTop, setScrollTop] = useState(0);
@@ -575,18 +578,37 @@ export default function FileEditorCore({
     }
   }, [review]);
 
-  // ── AC1: Single-comment send — dispatch individual annotation to agent ──
-  const handleSendSingleComment = useCallback(
-    (text: string, lineNumber: number) => {
-      const lineRef = `L${lineNumber}`;
-      const message = `[Review: \`${fileName}\`:${lineRef}] ${text}`;
+  // ── Send review comment with full context (filePath + selectedText + comment) ──
+  const handleSendReviewComment = useCallback(
+    (comment: string, selectedTextOverride?: string) => {
+      const selected = selectedTextOverride || selectionText;
+      let message: string;
+      if (selected) {
+        message = `[File Review: \`${filePath}\`]\n\nSelected text:\n\`\`\`\n${selected}\n\`\`\`\n\nInstruction: ${comment}`;
+      } else {
+        // Fallback: no selection, just file + comment
+        message = `[File Review: \`${filePath}\`]\n\nInstruction: ${comment}`;
+      }
       window.dispatchEvent(
         new CustomEvent('swarm:inject-chat-input', {
           detail: { text: message, focus: true, autoSend: true },
         }),
       );
+      // Clear selection state after send
+      setSelectionText('');
+      setSelectionPopoverPos(null);
+      setShowSelectionComment(false);
     },
-    [fileName],
+    [filePath, selectionText],
+  );
+
+  // Legacy single-line send (for gutter click — now sends line content, not line number)
+  const handleSendSingleComment = useCallback(
+    (text: string, lineNumber: number) => {
+      const lineContent = content.split('\n')[lineNumber - 1] || '';
+      handleSendReviewComment(text, lineContent);
+    },
+    [content, handleSendReviewComment],
   );
 
   // --- Handlers ---
@@ -773,10 +795,29 @@ export default function FileEditorCore({
 
   const handleSelect = useCallback(() => {
     if (!textareaRef.current) return;
-    const pos = textareaRef.current.selectionStart;
+    const ta = textareaRef.current;
+    const pos = ta.selectionStart;
     const textBefore = content.slice(0, pos);
     const line = textBefore.split('\n').length;
     setActiveLineNumber(line);
+
+    // Track text selection for review comment
+    const selected = content.slice(ta.selectionStart, ta.selectionEnd);
+    if (selected && selected.length > 0 && ta.selectionStart !== ta.selectionEnd) {
+      setSelectionText(selected);
+      // Position floating button near end of selection
+      const rect = ta.getBoundingClientRect();
+      const lineHeight = 24;
+      const endPos = ta.selectionEnd;
+      const linesBeforeEnd = content.slice(0, endPos).split('\n').length;
+      const top = rect.top + (linesBeforeEnd * lineHeight) - ta.scrollTop + 16; // 16px padding
+      const left = rect.left + 80;
+      setSelectionPopoverPos({ top: Math.min(top, rect.bottom - 40), left });
+    } else {
+      setSelectionText('');
+      setSelectionPopoverPos(null);
+      setShowSelectionComment(false);
+    }
   }, [content]);
 
   const handleAttachToChat = useCallback(() => {
@@ -1210,6 +1251,32 @@ export default function FileEditorCore({
                   autoCorrect="off"
                   data-testid="file-editor-textarea"
                 />
+
+                {/* Floating "Comment" button — appears on text selection */}
+                {selectionText && selectionPopoverPos && !showSelectionComment && (
+                  <button
+                    className="fixed z-[999] px-2 py-1 text-xs font-medium rounded-lg bg-[var(--color-primary)] text-white shadow-lg hover:bg-[var(--color-primary-hover)] transition-colors flex items-center gap-1"
+                    style={{ top: selectionPopoverPos.top, left: selectionPopoverPos.left }}
+                    onClick={() => setShowSelectionComment(true)}
+                    data-testid="selection-comment-btn"
+                  >
+                    <span className="material-symbols-outlined text-sm">comment</span>
+                    Comment
+                  </button>
+                )}
+
+                {/* Selection comment popover */}
+                {showSelectionComment && selectionText && (
+                  <CommentPopover
+                    lineNumber={activeLineNumber ?? 0}
+                    initialText=""
+                    onSubmit={(text) => handleSendReviewComment(text)}
+                    onCancel={() => { setShowSelectionComment(false); setSelectionPopoverPos(null); }}
+                    onSendSingle={(text) => handleSendReviewComment(text)}
+                    topOffset={selectionPopoverPos?.top ? selectionPopoverPos.top - (rootRef.current?.getBoundingClientRect().top ?? 0) : 100}
+                    anchorRef={rootRef}
+                  />
+                )}
               </div>
             </>
           )}
