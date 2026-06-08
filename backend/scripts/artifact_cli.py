@@ -962,6 +962,35 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                     }))
                     return
 
+            # ── REPORT.md Gate (BLOCKING) ──
+            # Every completed pipeline MUST have a REPORT.md that documents
+            # the execution process (stages, decisions, findings, methodology).
+            # Without this, pipeline outputs are untraceable.
+            report_path = run_file.parent / "REPORT.md"
+            if not report_path.exists():
+                print(json.dumps({
+                    "error": "Cannot mark completed: REPORT.md not found. "
+                             "Generate the pipeline report at "
+                             f".artifacts/runs/{args.run_id}/REPORT.md before completing. "
+                             "The report must document pipeline execution process "
+                             "(stages run, decisions made, findings, methodology impact).",
+                    "pipeline_id": args.run_id,
+                    "expected_path": str(report_path),
+                }))
+                return
+            report_size = report_path.stat().st_size
+            if report_size < 500:
+                print(json.dumps({
+                    "error": "Cannot mark completed: REPORT.md is too short "
+                             f"({report_size} bytes). A valid pipeline report must "
+                             "include: TL;DR, requirement, pipeline execution table, "
+                             "quality gates, and lessons. Minimum ~500 bytes.",
+                    "pipeline_id": args.run_id,
+                    "report_path": str(report_path),
+                    "report_size_bytes": report_size,
+                }))
+                return
+
             run_state["completed_at"] = now
             # Auto-generate METRICS.json on completion
             _try_generate_metrics(args.project, args.run_id, run_state, reg)
