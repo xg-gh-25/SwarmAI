@@ -2443,6 +2443,112 @@ def cmd_run_cultivate(args, reg: ArtifactRegistry) -> None:
     print(json.dumps(result, indent=2))
 
 
+def cmd_run_observe(args, reg: ArtifactRegistry) -> None:
+    """Record pipeline telemetry events (Meta-Intelligence Layer 1: OBSERVE).
+
+    Appends structured observation data to METRICS.json for cross-run analysis.
+    Called at stage boundaries, on profile selection, and on abandon.
+
+    Events:
+      stage_start   — stage begins execution (records timestamp)
+      stage_end     — stage completes (records timing, retries)
+      profile_selected — EVALUATE chose a profile (records indicators)
+      abandon       — pipeline abandoned (records reason, partial progress)
+      think_depth   — THINK stage depth measurement
+      requirement_shape — requirement characteristic analysis
+    """
+    run_file = _resolve_run_file(args.project, args.run_id)
+    run_dir = run_file.parent
+    metrics_file = run_dir / "METRICS.json"
+
+    # Load or initialize METRICS.json
+    metrics: dict = {}
+    if metrics_file.exists():
+        try:
+            metrics = json.loads(metrics_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    event = args.event
+    now = args.timestamp or datetime.now(timezone.utc).isoformat()
+
+    if event == "stage_start":
+        stage_timing = metrics.setdefault("stage_timing", {})
+        stage_timing[args.stage] = {"start": now}
+
+    elif event == "stage_end":
+        stage_timing = metrics.setdefault("stage_timing", {})
+        entry = stage_timing.get(args.stage, {})
+        entry["end"] = now
+        # Calculate wall minutes if start exists
+        if entry.get("start"):
+            try:
+                t0 = datetime.fromisoformat(entry["start"])
+                t1 = datetime.fromisoformat(now)
+                entry["wall_minutes"] = round((t1 - t0).total_seconds() / 60, 2)
+            except (ValueError, TypeError):
+                pass
+        if args.retries:
+            entry["retries"] = int(args.retries)
+        stage_timing[args.stage] = entry
+
+    elif event == "profile_selected":
+        metrics["profile_decision"] = {
+            "detected_scope": args.scope or "unknown",
+            "indicators_matched": json.loads(args.indicators) if args.indicators else [],
+            "user_override": args.user_override,
+            "files_estimated": int(args.files_estimated) if args.files_estimated else None,
+        }
+
+    elif event == "abandon":
+        metrics["abandon_context"] = {
+            "reason": args.reason or "unknown",
+            "last_stage": args.stage or "unknown",
+            "tokens_consumed": int(args.tokens_consumed) if args.tokens_consumed else 0,
+            "partial_output": args.partial or "",
+            "recoverable": not (args.reason in ("superseded", "user_stopped")),
+        }
+
+    elif event == "think_depth":
+        metrics["think_depth"] = {
+            "alternatives_count": int(args.alternatives) if args.alternatives else 0,
+            "risk_probes_count": int(args.probes) if args.probes else 0,
+            "probes_self_resolved": int(args.resolved) if args.resolved else 0,
+            "probes_escalated": int(args.escalated) if args.escalated else 0,
+        }
+
+    elif event == "requirement_shape":
+        metrics["requirement_shape"] = {
+            "touches_frontend": args.frontend == "true",
+            "touches_backend": args.backend == "true",
+            "estimated_files": int(args.files_estimated) if args.files_estimated else 0,
+            "crosses_modules": json.loads(args.modules) if args.modules else [],
+        }
+
+    elif event == "adversarial_patterns":
+        metrics["adversarial_patterns"] = {
+            "findings_by_category": json.loads(args.categories) if args.categories else {},
+            "rp_violations": json.loads(args.rp_violations) if args.rp_violations else [],
+            "findings_fixed": int(args.fixed) if args.fixed else 0,
+            "findings_dismissed": int(args.dismissed) if args.dismissed else 0,
+        }
+
+    elif event == "review_gap":
+        metrics["review_to_adversarial_ratio"] = {
+            "review_findings": int(args.review_count) if args.review_count else 0,
+            "adversarial_findings": int(args.adversarial_count) if args.adversarial_count else 0,
+            "overlap": int(args.overlap) if args.overlap else 0,
+        }
+
+    else:
+        print(json.dumps({"error": f"Unknown event type: {event}"}))
+        return
+
+    # Persist
+    metrics_file.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    print(json.dumps({"status": "ok", "event": event, "run_id": args.run_id}))
+
+
 def cmd_ddd_health(args, reg) -> None:
     """5-dimensional DDD health scoring per section."""
     project_dir = _get_workspace() / "Projects" / args.project
@@ -2572,6 +2678,36 @@ def main() -> None:
     p_cleanup = sub.add_parser("cleanup-orphans", help="Mark stale 'running' pipeline runs as abandoned")
     p_cleanup.add_argument("--threshold", type=float, default=2.0, help="Hours threshold (default 2.0)")
 
+    # run-observe (Meta-Intelligence L1: telemetry events)
+    p_observe = sub.add_parser("run-observe", help="Record pipeline telemetry event (Meta-Intelligence)")
+    p_observe.add_argument("--project", required=True)
+    p_observe.add_argument("--run-id", required=True, help="Pipeline run ID")
+    p_observe.add_argument("--event", required=True, help="Event type: stage_start|stage_end|profile_selected|abandon|think_depth|requirement_shape|adversarial_patterns|review_gap")
+    p_observe.add_argument("--stage", default=None, help="Stage name (for stage_start/stage_end/abandon)")
+    p_observe.add_argument("--timestamp", default=None, help="ISO timestamp (default: now)")
+    p_observe.add_argument("--retries", default=None, help="Retry count (for stage_end)")
+    p_observe.add_argument("--reason", default=None, help="Abandon reason category")
+    p_observe.add_argument("--partial", default=None, help="Partial output summary (for abandon)")
+    p_observe.add_argument("--tokens-consumed", default=None, help="Tokens consumed so far")
+    p_observe.add_argument("--scope", default=None, help="Detected scope (for profile_selected)")
+    p_observe.add_argument("--indicators", default=None, help="JSON array of matched indicators")
+    p_observe.add_argument("--user-override", default=None, help="User profile override")
+    p_observe.add_argument("--files-estimated", default=None, help="Estimated file count")
+    p_observe.add_argument("--frontend", default=None, help="Touches frontend (true/false)")
+    p_observe.add_argument("--backend", default=None, help="Touches backend (true/false)")
+    p_observe.add_argument("--modules", default=None, help="JSON array of crossed modules")
+    p_observe.add_argument("--alternatives", default=None, help="Think alternatives count")
+    p_observe.add_argument("--probes", default=None, help="Think risk probes count")
+    p_observe.add_argument("--resolved", default=None, help="Self-resolved probes count")
+    p_observe.add_argument("--escalated", default=None, help="Escalated probes count")
+    p_observe.add_argument("--categories", default=None, help="JSON of findings by category")
+    p_observe.add_argument("--rp-violations", default=None, help="JSON array of RP patterns violated")
+    p_observe.add_argument("--fixed", default=None, help="Adversarial findings fixed count")
+    p_observe.add_argument("--dismissed", default=None, help="Adversarial findings dismissed count")
+    p_observe.add_argument("--review-count", default=None, help="Review findings count")
+    p_observe.add_argument("--adversarial-count", default=None, help="Adversarial findings count")
+    p_observe.add_argument("--overlap", default=None, help="Overlap count (review ∩ adversarial)")
+
     # ddd-health
     p_ddd_health = sub.add_parser("ddd-health", help="5-dimensional DDD health scoring per section")
     p_ddd_health.add_argument("--project", required=True)
@@ -2599,6 +2735,7 @@ def main() -> None:
         "run-analytics": cmd_run_analytics,
         "run-cultivate": cmd_run_cultivate,
         "cleanup-orphans": cmd_cleanup_orphans,
+        "run-observe": cmd_run_observe,
         "ddd-health": cmd_ddd_health,
     }
     handlers[args.command](args, reg)

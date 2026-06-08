@@ -185,6 +185,35 @@ Category 5 — Iterative discovery:
 file:function changes before starting → NOT goal. If ACs describe outcomes
 that require discovery → goal.
 
+### Intelligence-Informed Profile Selection (Meta-Intelligence L3)
+
+Before classifying scope, check if `pipeline_intelligence.json` exists in the
+workspace root. If it does, load it and apply these adjustments:
+
+```bash
+# Check for intelligence file (non-blocking — skip if absent)
+cat pipeline_intelligence.json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(json.dumps(d.get('dimensions',{}).get('abandon_patterns',{}).get('high_risk_shapes',[])))" 2>/dev/null
+```
+
+**A1. High-risk shape detection:**
+If the requirement's shape matches a `high_risk_shapes` entry (>30% abandon rate):
+- Prefer `goal` profile (iterative cycles recover from scope explosion)
+- Set `max_cycles` higher than default (abandoned runs often = underestimated scope)
+- Note in evaluation artifact: "Intelligence: similar requirements have {N}% abandon rate in {profile} profile"
+
+**A2. Budget calibration:**
+If `dimensions.estimation_accuracy.stage_estimates` exists, use those values
+instead of the default budget estimates. These are calibrated from actual
+historical consumption across all completed runs.
+
+**A3. Chronic RP injection:**
+If `dimensions.adversarial_value.build_injection_recommendations` is non-empty,
+note the patterns for injection into BUILD stage preamble later.
+
+**Skip intelligence if:** file doesn't exist, is >30 days old (stale), or
+confidence < 0.7 for any recommendation. Intelligence is advisory only —
+never override explicit user intent.
+
 **When detected:**
 1. Set `scope: "goal"` in evaluation (triggers `goal` profile selection)
 2. Generate `dod_criteria` array — each criterion has type + check:

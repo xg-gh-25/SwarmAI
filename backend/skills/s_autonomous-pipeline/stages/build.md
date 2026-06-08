@@ -37,6 +37,28 @@ RIGHT (vertical tracer bullet):
   RED→GREEN: test3→impl3
 ```
 
+## Chronic Pattern Reminder (Meta-Intelligence L3)
+
+Before starting TDD cycles, check if the evaluation artifact contains
+`build_injection_recommendations` (populated from pipeline_intelligence.json
+during EVALUATE). If present, these are RP patterns that adversarial review
+has caught repeatedly in similar changesets.
+
+**Action:** For each recommended pattern, add it to your mental checklist for
+this BUILD. Verify compliance before advancing to TEST.
+
+Example injection:
+```
+⚠️ Intelligence: The following patterns are frequently violated in this type of changeset:
+- RP3 (React hook cleanup): Verify useEffect cleanup releases ALL resources
+- RP12 (unstable callback refs): Wrap callbacks in useCallback with correct deps
+- RP35 (shared pool contention): Any to_thread() >5s needs dedicated executor
+```
+
+If no `build_injection_recommendations` exist, skip this section.
+
+---
+
 ## Step 1: RED→GREEN Tracer Bullet
 
 1. Read acceptance criteria from the evaluation artifact (or design_doc if PLAN ran)

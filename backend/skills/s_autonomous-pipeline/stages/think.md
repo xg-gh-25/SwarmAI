@@ -103,6 +103,27 @@ at a time, provide your recommended answer, wait for confirmation. Max 5 questio
 - User already specified the approach ("use pipeline", "just do it")
 - Only one viable approach exists (mechanical, no design choice)
 
+### Minimum Depth Gate (Meta-Intelligence L3)
+
+THINK must produce substantive analysis, not a token-saving shortcut. Historical
+data shows runs with deeper THINK (>10K tokens) have higher completion rates
+and fewer adversarial findings.
+
+**Minimum requirements (BLOCKING):**
+1. At least **2 distinct approaches** with explicit tradeoffs (not 1 approach + "don't do it")
+2. At least **3 risk probes** attempted (verified, falsified, or unresolved)
+3. Each alternative must state its **cost** (effort, risk, tradeoff) — not just benefits
+
+**If the requirement is genuinely trivial:** The profile should be `trivial` (skips THINK).
+If you're IN think, the requirement deserves depth. "This is obvious" is not a valid
+reason to produce shallow output — it means EVALUATE mis-classified.
+
+**Telemetry:** After completing THINK, record depth metrics:
+```bash
+python backend/scripts/artifact_cli.py run-observe --project <PROJECT> --run-id <RUN_ID> \
+  --event think_depth --alternatives <N> --probes <N> --resolved <N> --escalated <N>
+```
+
 ### Artifact Publish
 
 ```bash

@@ -1161,6 +1161,85 @@ python -m jobs.job_manager pipeline \
   [--schedule "0 9 * * 1-5"] [--profile full] [--budget 2.00] [--one-shot]
 ```
 
+## Observe Protocol (Meta-Intelligence L1)
+
+At every stage boundary, emit telemetry for cross-run learning. These calls are
+lightweight (<100ms each) and persist to METRICS.json in the run directory.
+
+**On stage entry:**
+```bash
+python backend/scripts/artifact_cli.py run-observe --project <PROJECT> --run-id <RUN_ID> \
+  --event stage_start --stage <stage_name>
+```
+
+**On stage exit:**
+```bash
+python backend/scripts/artifact_cli.py run-observe --project <PROJECT> --run-id <RUN_ID> \
+  --event stage_end --stage <stage_name> [--retries N]
+```
+
+**On profile selection (EVALUATE):**
+```bash
+python backend/scripts/artifact_cli.py run-observe --project <PROJECT> --run-id <RUN_ID> \
+  --event profile_selected --scope <scope> --indicators '["indicator1","indicator2"]' \
+  --files-estimated <N>
+```
+
+**On THINK completion:**
+```bash
+python backend/scripts/artifact_cli.py run-observe --project <PROJECT> --run-id <RUN_ID> \
+  --event think_depth --alternatives <N> --probes <N> --resolved <N> --escalated <N>
+```
+
+**On DELIVER (adversarial results):**
+```bash
+python backend/scripts/artifact_cli.py run-observe --project <PROJECT> --run-id <RUN_ID> \
+  --event adversarial_patterns --categories '{"correctness":2,"security":1}' \
+  --rp-violations '["RP3","RP12"]' --fixed 3 --dismissed 0
+
+python backend/scripts/artifact_cli.py run-observe --project <PROJECT> --run-id <RUN_ID> \
+  --event review_gap --review-count 2 --adversarial-count 5 --overlap 1
+```
+
+**Non-blocking:** If any observe call fails (file locked, permission error), log
+and continue. Telemetry must never block pipeline execution.
+
+---
+
+## Abandon Protocol (Meta-Intelligence L4)
+
+When a pipeline is abandoned (checkpoint, user stop, session crash), capture
+partial learnings before exit. Without this, 15% of pipeline knowledge is lost.
+
+**On explicit abandon/checkpoint:**
+```bash
+python backend/scripts/artifact_cli.py run-observe --project <PROJECT> --run-id <RUN_ID> \
+  --event abandon --reason "<category>" --stage "<last_stage>" \
+  --tokens-consumed <N> --partial "<what was accomplished>"
+```
+
+**Reason categories:**
+- `user_stopped` — User explicitly said "stop" or closed session
+- `budget` — run-budget returned should_checkpoint: true
+- `session_crash` — No explicit stop, session ended abnormally
+- `blocker` — L2 BLOCK with no resolution available
+- `superseded` — Same requirement started in a new run
+- `scope_explosion` — BUILD discovered 3x more work than estimated
+
+**Recovery artifact:** On abandon, if any BUILD work was done (files created,
+tests written), summarize in the partial field: "3 files created, 2 tests passing,
+blocked on X." This enables intelligent resume:
+
+1. Future `run-create` with similar requirement → EVALUATE sees prior attempt
+2. Resume loads partial progress → THINK skips explored alternatives
+3. PLAN reuses file discovery (if files unchanged since abandon)
+
+**Stale run cleanup:** Handled by existing `cleanup-orphans` command. Runs
+stale >2h are auto-marked abandoned with reason `session_crash`. This already
+exists — no new code needed.
+
+---
+
 ## Background Execution (v3)
 
 Pipelines can run as background jobs via the Swarm Job System. This decouples
