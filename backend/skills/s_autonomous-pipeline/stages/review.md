@@ -1,10 +1,22 @@
 # REVIEW Stage
 
+### Purpose: REVIEW vs ADVERSARIAL — Different Jobs
+
+| | REVIEW (this stage) | ADVERSARIAL (inside DELIVER/goal_cycle) |
+|---|---|---|
+| **Who** | Agent self-reviews with mechanical aids | Fresh sub-agent with zero BUILD context |
+| **What** | Conformance: does code match spec, patterns, conventions? | Bugs: what breaks under adversarial pressure? |
+| **How** | RP1-40 checklist, integration trace, DDD conformance | Free-form attack with specialist prompts |
+| **Catches** | Missing exports, wrong naming, violated conventions | Logic errors, race conditions, edge cases |
+
+Both are necessary — REVIEW catches "did you follow the rules" (mechanical),
+ADVERSARIAL catches "does it actually work" (creative). Neither replaces the other.
+
 ### 🚨 CRITICAL: Self-Review ≠ Review
 
 You wrote this code. You cannot objectively review it. "I already looked at it
 during BUILD" is not a review — it's re-reading your own assumptions. REVIEW
-requires: integration trace (real wiring check), runtime patterns RP1-RP39
+requires: integration trace (real wiring check), runtime patterns RP1-RP40
 (mechanical checklist), and for >3 files: parallel sub-agents with ISOLATED
 context. C011: builder rated 10/10, feature was 100% broken.
 
