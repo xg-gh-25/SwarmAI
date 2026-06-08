@@ -154,6 +154,10 @@ export interface UnifiedTab {
   /** Reconciliation race guard: set ONLY by setIsStreaming(true). Never touched by
    *  elapsed-timer effects or selectTab. Used by reconcile loop to skip fresh streams. */
   _reconcileStreamStart?: number;
+  /** True between result-event (hasQueuedMessage) and drain completion.
+   *  Signals reconcile poll: "backend is IDLE but drain is intentionally
+   *  holding streaming state — do NOT force-clear." */
+  drainPending?: boolean;
   /** True when backend returned SESSION_BUSY — polling for response completion.
    *  Send button is disabled, "Waiting..." indicator shown, polling active. */
   isWaitingForBusy?: boolean;

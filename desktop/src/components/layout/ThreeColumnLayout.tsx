@@ -673,7 +673,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   }, [fileEditorState?.fileName]);
 
   return (
-    <div className="flex flex-col h-screen bg-[var(--color-bg)]">
+    <div className="flex flex-col h-screen overflow-hidden bg-[var(--color-bg)]">
       <ExplorerProvider>
         <RefreshTreeBridge refreshTreeRef={refreshTreeRef} />
 
