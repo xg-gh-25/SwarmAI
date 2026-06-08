@@ -35,7 +35,6 @@ import type { SearchMatch } from './FileEditorModal';
 import { useReviewMode } from '../../hooks/useReviewMode';
 import type { DiffContext, ReviewComment } from '../../hooks/useReviewMode';
 import ReviewModeGutter from './ReviewModeGutter';
-import ReviewFeedbackBar from './ReviewFeedbackBar';
 import CommentPopover from './CommentPopover';
 
 export interface FileEditorCoreProps {
@@ -496,7 +495,6 @@ export default function FileEditorCore({
   // L3: Review mode — inline comments (used for both normal review and diff review)
   // filePath key enables sessionStorage persistence across tab switches (U10).
   const review = useReviewMode(content, filePath);
-  const feedbackText = review.formatFeedback(fileName);
 
   // Diff-line comment tracking
   const [activeDiffPopoverIndex, setActiveDiffPopoverIndex] = useState<number | null>(null);
@@ -582,15 +580,6 @@ export default function FileEditorCore({
     setActiveDiffPopoverIndex(null);
     setEditingDiffComment(null);
   }, []);
-
-  const handleReviewFeedbackSent = useCallback(() => {
-    review.clearComments();
-    setActiveDiffPopoverIndex(null);
-    setEditingDiffComment(null);
-    if (review.isReviewMode) {
-      review.toggleReviewMode();
-    }
-  }, [review]);
 
   // ── Send review comment with full context (filePath + selectedText + comment) ──
   const handleSendReviewComment = useCallback(
@@ -1336,19 +1325,6 @@ export default function FileEditorCore({
           </div>
         )}
 
-        {/* Review Feedback Bar (L3) — shown in review mode OR diff mode with comments */}
-        {(review.isReviewMode || (showDiff && review.comments.length > 0)) && (
-          <ReviewFeedbackBar
-            commentCount={review.comments.length}
-            feedbackText={feedbackText}
-            onFeedbackSent={handleReviewFeedbackSent}
-            onClearComments={() => {
-              review.clearComments();
-              setActiveDiffPopoverIndex(null);
-              setEditingDiffComment(null);
-            }}
-          />
-        )}
 
         {/* Footer */}
         <div className="flex items-center justify-between px-4 py-2.5 border-t border-[var(--color-border)] shrink-0">
