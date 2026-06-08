@@ -162,9 +162,10 @@ class TestStageOrder:
         """Second stage requires first to be completed."""
         stages_list = [
             _stage_record("evaluate", status="completed"),
+            _stage_record("think", status="completed"),
             _stage_record("build", status="running"),
         ]
-        # In trivial profile: evaluate -> build
+        # In trivial profile: evaluate -> think -> build
         assert _check_stage_order("build", "trivial", stages_list) is True
 
     def test_skipped_stage_before_fails(self):
@@ -189,9 +190,9 @@ class TestStageOrder:
 
     def test_stage_not_in_profile(self):
         """Stage not in profile fails order check."""
-        stages_list = [_stage_record("think")]
-        # think is NOT in trivial profile
-        assert _check_stage_order("think", "trivial", stages_list) is False
+        stages_list = [_stage_record("goal_cycle")]
+        # goal_cycle is NOT in trivial profile
+        assert _check_stage_order("goal_cycle", "trivial", stages_list) is False
 
 
 # ---------------------------------------------------------------------------
@@ -212,10 +213,13 @@ class TestArtifactExists:
         """reflect never needs an artifact."""
         assert _check_artifact_exists("reflect", {"artifact_id": None}) is True
 
-    def test_all_non_reflect_require_artifact(self):
-        """Every stage except reflect requires an artifact."""
-        for stage in ["evaluate", "think", "plan", "build", "review", "test", "deliver"]:
+    def test_all_non_exempt_require_artifact(self):
+        """Every stage except reflect and think requires an artifact."""
+        for stage in ["evaluate", "plan", "build", "review", "test", "deliver"]:
             assert _check_artifact_exists(stage, {"artifact_id": None}) is False
+        # think and reflect are exempt (no artifact produced)
+        for stage in ["think", "reflect"]:
+            assert _check_artifact_exists(stage, {"artifact_id": None}) is True
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +339,7 @@ class TestProfileRespected:
         assert _check_profile_respected("build", "trivial") is True
 
     def test_stage_not_in_profile(self):
-        assert _check_profile_respected("think", "trivial") is False
+        assert _check_profile_respected("goal_cycle", "trivial") is False
         assert _check_profile_respected("build", "research") is False
         assert _check_profile_respected("test", "docs") is False
 
@@ -436,12 +440,12 @@ class TestValidateIntegration:
         artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
         runs_dir = artifacts_dir / "runs" / "run_test1"
 
-        # think stage in trivial profile (violation) + no artifact (violation)
+        # goal_cycle stage in trivial profile (violation) + no artifact (violation)
         _make_run(runs_dir, profile="trivial", stages=[
-            _stage_record("think", artifact_id=None),
+            _stage_record("goal_cycle", artifact_id=None),
         ])
 
-        result = validate("TestProject", "run_test1", "think")
+        result = validate("TestProject", "run_test1", "goal_cycle")
         assert result["valid"] is False
         assert len(result["errors"]) >= 2  # Profile + artifact
 
@@ -464,6 +468,7 @@ class TestSummary:
 
         _make_run(runs_dir, profile="trivial", stages=[
             _stage_record("evaluate", artifact_id="art_eval"),
+            _stage_record("think", status="completed", artifact_id=None),
             _stage_record("build", artifact_id="art_build"),
         ])
 
@@ -478,7 +483,7 @@ class TestSummary:
                 r = validate("TestProject", "run_test1", stage_rec["stage"])
                 results.append(r)
 
-        assert len(results) == 2
+        assert len(results) == 3
         assert all(r["valid"] for r in results)
 
 
