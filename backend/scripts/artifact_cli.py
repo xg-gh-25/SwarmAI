@@ -1098,7 +1098,14 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
     run_state["updated_at"] = now
     run_file.write_text(json.dumps(run_state, indent=2), encoding="utf-8")
 
-    print(json.dumps({"pipeline_id": args.run_id, "updated": True}))
+    result = {"pipeline_id": args.run_id, "updated": True}
+    if args.status == "completed":
+        result["reminder"] = (
+            "⚠️ OUTPUT COMPLETION SUMMARY TO CHAT (Step 6.2 — MANDATORY). "
+            "Pipeline is NOT done until user sees the formatted summary block. "
+            "Silent completion = indistinguishable from crash."
+        )
+    print(json.dumps(result))
 
 
 def cmd_run_get(args, reg: ArtifactRegistry) -> None:
