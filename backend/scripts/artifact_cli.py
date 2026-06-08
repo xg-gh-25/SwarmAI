@@ -985,7 +985,7 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             # Every completed pipeline MUST have a REPORT.md that documents
             # the execution process (stages, decisions, findings, methodology).
             # Without this, pipeline outputs are untraceable.
-            report_path = run_file.parent / "REPORT.md"
+            report_path = _run_dir(args.project, args.run_id) / "REPORT.md"
             if not report_path.exists():
                 print(json.dumps({
                     "error": "Cannot mark completed: REPORT.md not found. "

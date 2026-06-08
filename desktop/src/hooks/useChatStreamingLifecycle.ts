@@ -1107,6 +1107,12 @@ export function useChatStreamingLifecycle(
           (tabState as { isStreaming: boolean }).isStreaming = streaming;
           if (streaming) {
             tabState._reconcileStreamStart = Date.now();
+            // Record stream start time for elapsed timer on tab switch
+            if (!tabState.streamStartTime) {
+              tabState.streamStartTime = Date.now();
+            }
+          } else {
+            tabState.streamStartTime = undefined;
           }
         }
       }

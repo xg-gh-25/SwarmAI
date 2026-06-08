@@ -1920,8 +1920,10 @@ def build_session_briefing_data(
                         title = ""
                         req = run_data.get("requirement", "")
                         if req and len(req) > 10:
-                            # Truncate long requirements to first sentence or 120 chars
-                            title = req.split(".")[0].split("。")[0][:120]
+                            # Truncate at sentence boundary (period/。 followed by space or EOL)
+                            import re as _re
+                            _sent = _re.split(r'[.。]\s', req, maxsplit=1)
+                            title = _sent[0][:120]
                         if not title:
                             text = report.read_text(encoding="utf-8")[:600]
                             title = _extract_report_field(text, "Requirement", "Pipeline Report")
