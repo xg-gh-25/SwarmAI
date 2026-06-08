@@ -660,50 +660,76 @@ enforced by the validator, not honor-system.
 
 ## Step 6: COMPLETE
 
-After reflect stage:
+### 🚨 CRITICAL: The pipeline is NOT done until the user sees the summary.
 
-1. Update pipeline run status to "completed":
+A pipeline that completes silently is indistinguishable from one that crashed.
+The user MUST see a clear, formatted completion summary in the chat window.
+This is the LAST thing you output — never end a pipeline run without it.
+
+**Sequence (all 3 steps are mandatory):**
+
+1. Generate REPORT.md and update run status to "completed":
    ```bash
+   python backend/scripts/artifact_cli.py run-report --project <PROJECT> --run-id <RUN_ID>
    python backend/scripts/artifact_cli.py run-update \
      --project <PROJECT> --run-id <RUN_ID> --status completed
    ```
 
-   **⚠️ MECHANICAL GATE:** This command runs `pipeline_validator.py` on the
-   DELIVER stage artifact before allowing completion. It will **BLOCK** if:
-   - `adversarial_review.profile_tier` is `skipped`/`lite` for full/bugfix profiles
-   - Any HIGH severity finding is unresolved
-   - Deliver artifact can't be loaded (missing or corrupt)
+   **⚠️ MECHANICAL GATE:** `run-update --status completed` will **BLOCK** if:
+   - Any non-skippable stage is incomplete (goal_cycle, deliver, reflect)
+   - `adversarial_review` not recorded (goal profile)
+   - REFLECT has no substantive lessons
+   - REPORT.md missing or <500 bytes
+   - Validator finds blocking errors (full/bugfix)
 
-   **If blocked:** fix the issue (run adversarial review, resolve findings),
-   re-publish the deliver artifact, then retry `--status completed`.
-   You CANNOT bypass this gate — it is code-enforced, not prompt-enforced.
+   **If blocked:** fix the issue, then retry. You CANNOT bypass — code-enforced.
 
-2. Present the completion summary in chat:
+2. **OUTPUT THE COMPLETION SUMMARY TO CHAT (MANDATORY — never skip):**
 
 ```
-Pipeline COMPLETE (run_<id>) -- <N> stages, <M> skipped, <K> escalations
-Status: PUSH-READY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ Pipeline COMPLETE — run_<id>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-  TL;DR: <2-3 sentences: what was built, what problem it solves, what value
-         it delivers. Written for someone who won't read the rest.>
+<2-3 sentence TL;DR: what was built, what problem it solves>
 
-  Artifacts:
-    evaluation  -> art_xxxx (GO, ROI 4.2)
-    design_doc  -> art_xxxx (<approach>, 5 acceptance criteria)
-    changeset   -> art_xxxx (47 lines, 2 files, TDD: 5 red → all green)
-    review      -> art_xxxx (clean, 0 findings)
-    delivery    -> art_xxxx (PUSH-READY, meta-review: CLEAR)
+Profile: <profile> | Stages: <N> completed, <M> skipped
+Commit: <git hash> | Files: <N> changed, +<A>/-<D> lines
 
-  TDD: <N> criteria → <M> tests generated → <K> bugs caught → all green
-  Decisions: <X> mechanical, <Y> taste (all approved), <Z> judgment
-  Lessons: <N> written to IMPROVEMENT.md
+Quality:
+  • Adversarial: <N> findings → <M> fixed, <K> dismissed
+  • Tests: <N> passed, <M> generated
+  • Confidence: <score>/12
 
-  Report: .artifacts/runs/<run_id>/REPORT.md
+Lessons → IMPROVEMENT.md: <N> entries
+Report: .artifacts/runs/<run_id>/REPORT.md
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-3. Save the final pipeline-run JSON to `.artifacts/`
-4. The REPORT.md (generated in DELIVER) is the permanent record — always
-   saved to `.artifacts/runs/<RUN_ID>/REPORT.md` alongside the run.json
+For **goal profile**, use this variant:
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ Pipeline COMPLETE — run_<id>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<2-3 sentence TL;DR>
+
+Profile: goal | DoD: <X>/<Y> met in <N> cycles
+Commit: <git hash> | Files: <N> changed
+
+Quality:
+  • Final adversarial: <N> findings → all resolved
+  • Per-cycle tests: <N> passed across <M> cycles
+  • Periodic review: <N> findings addressed
+
+Lessons → IMPROVEMENT.md: <N> entries
+Report: .artifacts/runs/<run_id>/REPORT.md
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+3. **STOP.** Do not add explanatory text after the summary. Do not ask
+   "would you like me to push?" The summary is the terminal output.
+   User will respond if they want more.
 
 ---
 
@@ -973,25 +999,8 @@ Autonomous Pipeline — from requirement to push-ready code.
   ★ Final Adversarial: <runs when all DoD met>
 ```
 
-**Completion summary (shown once at end):**
-
-For standard/full/bugfix profiles:
-```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✦ COMPLETE | PUSH-READY
-  TDD: <N>→<M>→<K> bugs | Adversarial: <summary> | Meta-review: CLEAR | DDD: <N> decisions shaped
-  <PR/CI status> | .artifacts/runs/run_<id>/REPORT.md
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
-
-For goal profile:
-```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✦ COMPLETE | <X>/<Y> DoD met in <N> cycles
-  Goal: <velocity summary> | Adversarial: <summary> | DDD: <N> decisions shaped
-  .artifacts/runs/run_<id>/REPORT.md
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
+**Completion summary (shown once at end) — see Step 6 for exact format.**
+The pipeline MUST end with a visible summary block. No silent completion.
 
 ### Display Rules
 
