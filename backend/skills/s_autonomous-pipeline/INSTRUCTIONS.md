@@ -97,15 +97,21 @@ based on the evaluation's scope classification:
 | research-only | **research** | evaluate, think, reflect |
 | docs-only | **docs** | evaluate, think, plan, deliver, reflect |
 | bugfix | **bugfix** | evaluate, plan, build, review, test, deliver, reflect |
-| goal (open-ended) | **goal** | evaluate, plan, goal_cycle |
+| goal (multi-step) | **goal** | evaluate, plan, goal_cycle |
 
 > **Why 8 entries, not 9?** The architecture is 9 stages (ADVERSARIAL is stage 7).
 > In execution, ADVERSARIAL is a mandatory blocking gate *inside* the DELIVER stage
 > (spawn fresh-context sub-agent). It's not a separate orchestration step — see
 > `stages/deliver.md` § "Adversarial Review Gate (BLOCKING)". All external docs say 9.
 
-If the evaluate stage doesn't classify scope (L0), default to **full**.
+**Default bias: goal over full.** If the evaluate stage doesn't classify scope,
+or if scope is "standard/complex" but the requirement touches >3 files or spans
+multiple layers (backend+frontend, API+consumer+test), prefer **goal**.
+Only use **full** when the work is genuinely single-shot (one bounded deliverable,
+known approach, no discovery needed).
+
 The user can override: "skip research, I know the approach" → switch to bugfix.
+The user can force: "use full pipeline" → override goal detection.
 
 ### Goal Profile Orchestration
 
