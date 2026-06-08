@@ -975,6 +975,13 @@ export function useChatStreamingLifecycle(
         // Check ALL tabs, not just active — background tabs can hang too
         for (const [tabId, tabState] of tabMapRef.current.entries()) {
           if (!tabState.isStreaming) continue;  // only check streaming tabs
+
+          // DRAIN/QUEUE IMMUNITY: never force-clear a tab that has a pending
+          // drain or queued message. The "backend=IDLE + frontend=streaming"
+          // state is INTENTIONAL during the drain gap (result arrived, drain
+          // scheduled via setTimeout(0), new stream not yet started).
+          if (tabState.drainPending || tabState.queuedMessage) continue;
+
           const sid = tabState.sessionId;
           if (!sid) continue;
 
@@ -987,7 +994,7 @@ export function useChatStreamingLifecycle(
             // Race guard: _reconcileStreamStart is set only by setIsStreaming(true),
             // never cleared by elapsed-timer or selectTab — immune to dual-writer bug.
             const streamAge = Date.now() - (tabState._reconcileStreamStart ?? 0);
-            if (streamAge < 10_000) continue;  // too fresh — let it settle
+            if (streamAge < 30_000) continue;  // too fresh — let it settle (was 10s, raised to 30s to avoid killing pipeline tool calls)
 
             console.warn(
               '[StreamReconcile] Backend idle but tab streaming — forcing clear',
@@ -1000,7 +1007,8 @@ export function useChatStreamingLifecycle(
             tabState.isResuming = false;
             anyCleared = true;
 
-            // Sync messages from DB for this tab (content is there, event was lost)
+            // Sync messages from DB for this tab (content is there, event was lost).
+            // MERGE: preserve local-only queued messages that DB doesn't have.
             chatService.invalidateMessageCache(sid);
             chatService.getSessionMessages(sid).then((msgs) => {
               if (cancelled) return;
@@ -1010,10 +1018,16 @@ export function useChatStreamingLifecycle(
                 content: m.content as ContentBlock[],
                 timestamp: m.createdAt || new Date().toISOString(),
               }));
+              // Preserve queued messages — they exist only in frontend state,
+              // not in DB. Without this, reconcile refetch silently drops user input.
+              const localQueued = (tabState.messages || []).filter(
+                (m) => (m as Message & { isQueued?: boolean }).isQueued || m.id.startsWith('queued-')
+              );
+              const merged = localQueued.length > 0 ? [...mapped, ...localQueued] : mapped;
               if (tabId === activeTabIdRef.current) {
-                setMessages(() => mapped);
+                setMessages(() => merged);
               } else {
-                tabState.messages = mapped;
+                tabState.messages = merged;
               }
             }).catch(() => {});
           }
@@ -1880,10 +1894,20 @@ export function useChatStreamingLifecycle(
           }
 
           if (hasQueuedMessage) {
+            // Mark drain-in-progress so reconcile poll skips this tab.
+            // Without this, reconcile sees backend=IDLE + frontend=streaming
+            // and force-clears — killing the drain before it starts.
+            if (tabState) tabState.drainPending = true;
             // Schedule drain — isStreaming stays true, indicator persists.
             // setTimeout(0) lets React flush the result-event state updates
             // (messages sync, session ID) before starting the next turn.
             setTimeout(() => deps.onDrainQueue?.(capturedTabId!), 0);
+            // Safety timeout: if drain callback no-ops (component unmounted,
+            // stale closure), clear drainPending so reconcile isn't suppressed
+            // forever. 5s is generous — drain fires in <16ms normally.
+            setTimeout(() => {
+              if (tabState?.drainPending) tabState.drainPending = false;
+            }, 5000);
           }
         } else if (event.type === 'error') {
           // Suppress error events from a user-stopped stream — the abort

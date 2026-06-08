@@ -1702,9 +1702,12 @@ export default function ChatPage() {
       tabState.hasReceivedData = false;
       tabState.isReconnecting = false;
       tabState.reconnectionAttempt = 0;
+      // Drain started successfully — reconcile can resume normal checks
+      tabState.drainPending = false;
     } catch (e) {
       // Send failed — restore queue so user doesn't lose their message
       tabState.queuedMessage = queued;
+      tabState.drainPending = false;  // drain over (failed) — reconcile can resume
       cleanupStreamingState();
       console.error('[queue-drain] failed, queue restored:', e);
     }
