@@ -93,10 +93,10 @@ based on the evaluation's scope classification:
 | Scope | Profile | Stages |
 |-------|---------|--------|
 | standard, complex | **full** | evaluate, think, plan, build, review, test, deliver, reflect |
-| trivial | **trivial** | evaluate, build, review, test, deliver, reflect |
+| trivial | **trivial** | evaluate, think, build, review, test, deliver, reflect |
 | research-only | **research** | evaluate, think, reflect |
 | docs-only | **docs** | evaluate, think, plan, deliver, reflect |
-| bugfix | **bugfix** | evaluate, plan, build, review, test, deliver, reflect |
+| bugfix | **bugfix** | evaluate, think, plan, build, review, test, deliver, reflect |
 | goal | **goal** | evaluate, think, plan, goal_cycle, deliver, reflect |
 
 > **Why 8 entries, not 9?** The architecture is 9 stages (ADVERSARIAL is stage 7).

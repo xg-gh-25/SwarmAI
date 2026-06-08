@@ -58,14 +58,10 @@ def _complete_all_stages(workspace: Path, run_id: str, profile: str = "full",
     """Add all profile stages as completed so the run can be marked done.
 
     If skip_existing=True, won't overwrite stages already in run.json.
+    Also creates REPORT.md (required by completion gate).
     """
-    profiles = {
-        "full": ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"],
-        "trivial": ["evaluate", "build", "review", "test", "deliver", "reflect"],
-        "research": ["evaluate", "think", "reflect"],
-        "docs": ["evaluate", "think", "plan", "deliver", "reflect"],
-        "bugfix": ["evaluate", "plan", "build", "review", "test", "deliver", "reflect"],
-    }
+    from core.pipeline_profiles import PIPELINE_PROFILES
+    profiles = PIPELINE_PROFILES
     # Check which stages already exist if skipping
     existing_stages: set = set()
     if skip_existing:
@@ -80,15 +76,29 @@ def _complete_all_stages(workspace: Path, run_id: str, profile: str = "full",
     for stg in profiles.get(profile, profiles["full"]):
         if stg in existing_stages:
             continue
+        stage_json: dict = {
+            "stage": stg, "status": "completed",
+            "stage_doc_consumed": True,
+            "token_cost": 2000,
+            "artifact_id": f"art_{stg}" if stg not in ("reflect", "goal_cycle") else None,
+            "decisions": [],
+        }
+        if stg == "reflect":
+            stage_json["lessons"] = ["Substantive lesson learned from this pipeline run"]
+        if stg == "goal_cycle":
+            stage_json["adversarial_review"] = True
         _run_cli(workspace, "run-update",
                  "--project", "TestProject", "--run-id", run_id,
-                 "--stage-json", json.dumps({
-                     "stage": stg, "status": "completed",
-                     "token_cost": 2000,
-                     "artifact_id": f"art_{stg}" if stg != "reflect" else None,
-                     "lessons": ["Substantive lesson learned from this pipeline run"] if stg == "reflect" else None,
-                     "decisions": [],
-                 }))
+                 "--stage-json", json.dumps(stage_json))
+
+    # Create REPORT.md (required by completion gate)
+    run_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / run_id
+    report = run_dir / "REPORT.md"
+    if not report.exists():
+        report.write_text(
+            "# Pipeline Report\n\nTest pipeline run completed successfully.\n"
+            "Stages executed, decisions made, quality verified.\n" + "x" * 400
+        )
 
 
 class TestRunCreate:
@@ -176,16 +186,17 @@ class TestRunUpdate:
 
     def test_completion_gate_allows_skipped_with_reason(self, workspace, run_id):
         """Skipped stages with explicit reason pass the gate."""
-        # Add all full-profile stages as completed or skipped-with-reason
-        full_stages = ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"]
+        from core.pipeline_profiles import PIPELINE_PROFILES
+        full_stages = PIPELINE_PROFILES["full"]
         for stg in full_stages:
             if stg == "think":
-                # Simulate explicit skip with reason
+                # Simulate explicit skip with reason (think is skippable)
                 _run_cli(workspace, "run-update",
                          "--project", "TestProject", "--run-id", run_id,
                          "--stage-json", json.dumps({
                              "stage": stg, "status": "skipped",
                              "skip_reason": "User override: approach already known",
+                             "stage_doc_consumed": True,
                              "decisions": [],
                          }))
             else:
@@ -193,10 +204,15 @@ class TestRunUpdate:
                          "--project", "TestProject", "--run-id", run_id,
                          "--stage-json", json.dumps({
                              "stage": stg, "status": "completed",
+                             "stage_doc_consumed": True,
                              "token_cost": 1000,
+                             "artifact_id": f"art_{stg}" if stg != "reflect" else None,
                              "lessons": ["Skipped stages with explicit reason pass the completion gate"] if stg == "reflect" else None,
                              "decisions": [],
                          }))
+        # Create REPORT.md (required by gate)
+        run_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / run_id
+        (run_dir / "REPORT.md").write_text("# Report\n" + "x" * 600)
         result = _run_cli(workspace, "run-update",
                           "--project", "TestProject", "--run-id", run_id,
                           "--status", "completed")
@@ -205,21 +221,29 @@ class TestRunUpdate:
 
     def test_reflect_quality_gate_blocks_trivial_lessons(self, workspace, run_id):
         """REFLECT lessons must be >20 chars — no 'done' or '3 lessons captured'."""
-        # Add all stages but with trivial reflect lessons
-        for stg in ["evaluate", "think", "plan", "build", "review", "test", "deliver"]:
+        from core.pipeline_profiles import PIPELINE_PROFILES
+        # Add all stages with proper fields
+        for stg in PIPELINE_PROFILES["full"]:
+            if stg == "reflect":
+                continue
             _run_cli(workspace, "run-update",
                      "--project", "TestProject", "--run-id", run_id,
                      "--stage-json", json.dumps({
                          "stage": stg, "status": "completed",
+                         "stage_doc_consumed": True,
                          "token_cost": 2000, "decisions": [],
                      }))
         _run_cli(workspace, "run-update",
                  "--project", "TestProject", "--run-id", run_id,
                  "--stage-json", json.dumps({
                      "stage": "reflect", "status": "completed",
+                     "stage_doc_consumed": True,
                      "token_cost": 2000, "lessons": ["done", "3 captured"],
                      "decisions": [],
                  }))
+        # Create REPORT.md so we hit the reflect gate (not the report gate)
+        run_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / run_id
+        (run_dir / "REPORT.md").write_text("# Report\n" + "x" * 600)
         result = _run_cli(workspace, "run-update",
                           "--project", "TestProject", "--run-id", run_id,
                           "--status", "completed")
@@ -230,6 +254,7 @@ class TestRunUpdate:
         stage = json.dumps({
             "stage": "evaluate",
             "status": "completed",
+            "stage_doc_consumed": True,
             "artifact_id": "art_abc123",
             "escalation_id": None,
             "started_at": "2026-03-24T10:00:00Z",
@@ -253,6 +278,7 @@ class TestRunUpdate:
         """Updating a stage with the same name replaces it (retry scenario)."""
         stage_v1 = json.dumps({
             "stage": "build", "status": "running",
+            "stage_doc_consumed": True,
             "artifact_id": None, "escalation_id": None,
             "started_at": "2026-03-24T10:00:00Z", "completed_at": None,
             "token_cost": 0, "retry_count": 0, "notes": None, "decisions": [],
@@ -263,6 +289,7 @@ class TestRunUpdate:
 
         stage_v2 = json.dumps({
             "stage": "build", "status": "completed",
+            "stage_doc_consumed": True,
             "artifact_id": "art_xyz789", "escalation_id": None,
             "started_at": "2026-03-24T10:00:00Z", "completed_at": "2026-03-24T10:05:00Z",
             "token_cost": 55000, "retry_count": 1, "notes": "Built with retry", "decisions": [],
@@ -369,6 +396,7 @@ class TestRunGet:
                      "--project", "TestProject", "--run-id", run_id,
                      "--stage-json", json.dumps({
                          "stage": stage_name, "status": "completed",
+                         "stage_doc_consumed": True,
                          "artifact_id": f"art_{stage_name}", "escalation_id": None,
                          "started_at": None, "completed_at": None,
                          "token_cost": 0, "retry_count": 0,
@@ -395,7 +423,7 @@ class TestPipelineRunIntegration:
                  "--run-id", run_id,
                  "--stage-json", json.dumps({
                      "stage": "evaluate", "status": "completed",
-                     "artifact_id": "art_eval_001", "escalation_id": None,
+                     "artifact_id": "art_eval_001", "stage_doc_consumed": True, "escalation_id": None,
                      "started_at": "2026-03-24T10:00:00Z",
                      "completed_at": "2026-03-24T10:01:00Z",
                      "token_cost": 8500, "retry_count": 0,
@@ -410,7 +438,7 @@ class TestPipelineRunIntegration:
                  "--run-id", run_id,
                  "--stage-json", json.dumps({
                      "stage": "think", "status": "completed",
-                     "artifact_id": "art_research_001", "escalation_id": None,
+                     "artifact_id": "art_research_001", "stage_doc_consumed": True, "escalation_id": None,
                      "started_at": "2026-03-24T10:01:00Z",
                      "completed_at": "2026-03-24T10:03:00Z",
                      "token_cost": 35000, "retry_count": 0,
@@ -430,11 +458,16 @@ class TestPipelineRunIntegration:
                      "--run-id", run_id,
                      "--stage-json", json.dumps({
                          "stage": stg, "status": "completed",
+                         "stage_doc_consumed": True,
                          "token_cost": 3000,
                          "artifact_id": f"art_{stg}" if stg != "reflect" else None,
                          "lessons": ["httpx built-in retry is simpler than tenacity"] if stg == "reflect" else None,
                          "decisions": [],
                      }))
+
+        # Create REPORT.md (required by gate)
+        run_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / run_id
+        (run_dir / "REPORT.md").write_text("# Report\n" + "x" * 600)
 
         # Complete
         _run_cli(workspace, "run-update", "--project", "TestProject",
@@ -486,6 +519,7 @@ class TestRunBudget:
                  "--stage-json", json.dumps({
                      "stage": "evaluate", "status": "completed",
                      "artifact_id": "art_x", "escalation_id": None,
+                     "stage_doc_consumed": True,
                      "started_at": None, "completed_at": None,
                      "token_cost": 12000, "retry_count": 0,
                      "notes": None, "decisions": [],
@@ -505,6 +539,7 @@ class TestRunBudget:
                      "--stage-json", json.dumps({
                          "stage": stage_name, "status": "completed",
                          "artifact_id": f"art_{stage_name}", "escalation_id": None,
+                         "stage_doc_consumed": True,
                          "started_at": None, "completed_at": None,
                          "token_cost": cost, "retry_count": 0,
                          "notes": None, "decisions": [],
@@ -517,7 +552,7 @@ class TestRunBudget:
         assert result["should_checkpoint"] is True
 
     def test_budget_respects_profile(self, workspace):
-        """Trivial profile skips think/plan — next stage after evaluate is build."""
+        """Trivial profile skips plan — next stage after evaluate is think."""
         result = _run_cli(workspace, "run-create",
                           "--project", "TestProject",
                           "--requirement", "Trivial fix",
@@ -527,6 +562,7 @@ class TestRunBudget:
                  "--project", "TestProject", "--run-id", run_id,
                  "--stage-json", json.dumps({
                      "stage": "evaluate", "status": "completed",
+                     "stage_doc_consumed": True,
                      "artifact_id": "art_e", "escalation_id": None,
                      "started_at": None, "completed_at": None,
                      "token_cost": 5000, "retry_count": 0,
@@ -534,7 +570,7 @@ class TestRunBudget:
                  }))
         budget = _run_cli(workspace, "run-budget",
                           "--project", "TestProject", "--run-id", run_id)
-        assert budget["next_stage"] == "build"  # skips think, plan
+        assert budget["next_stage"] == "think"  # trivial: evaluate→think→build→...
 
 
 class TestRunHistory:
@@ -554,13 +590,15 @@ class TestRunHistory:
                          "--project", "TestProject", "--run-id", rid,
                          "--stage-json", json.dumps({
                              "stage": stage_name, "status": "completed",
+                             "stage_doc_consumed": True,
                              "artifact_id": f"art_{stage_name}", "escalation_id": None,
                              "started_at": None, "completed_at": None,
                              "token_cost": cost, "retry_count": 0,
                              "notes": None, "decisions": [],
                          }))
             # Completion gate: all profile stages must be present
-            _complete_all_stages(workspace, rid, "full")
+            # skip_existing=True preserves our custom token_cost values above
+            _complete_all_stages(workspace, rid, "full", skip_existing=True)
             _run_cli(workspace, "run-update",
                      "--project", "TestProject", "--run-id", rid,
                      "--status", "completed")
@@ -588,7 +626,7 @@ class TestRunCheckpoint:
                  "--project", "TestProject", "--run-id", rid,
                  "--stage-json", json.dumps({
                      "stage": "evaluate", "status": "completed",
-                     "artifact_id": "art_eval", "escalation_id": None,
+                     "artifact_id": "art_eval", "stage_doc_consumed": True, "escalation_id": None,
                      "started_at": None, "completed_at": None,
                      "token_cost": 9000, "retry_count": 0,
                      "notes": "GO", "decisions": [],
@@ -714,6 +752,7 @@ class TestRunResume:
                  "--run-id", rid,
                  "--stage-json", json.dumps({
                      "stage": "evaluate", "status": "completed",
+                     "stage_doc_consumed": True,
                      "artifact_id": "art_e", "escalation_id": None,
                      "started_at": None, "completed_at": None,
                      "token_cost": 8000, "retry_count": 0,
