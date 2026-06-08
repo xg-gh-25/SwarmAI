@@ -97,40 +97,55 @@ based on the evaluation's scope classification:
 | research-only | **research** | evaluate, think, reflect |
 | docs-only | **docs** | evaluate, think, plan, deliver, reflect |
 | bugfix | **bugfix** | evaluate, plan, build, review, test, deliver, reflect |
-| goal (multi-step) | **goal** | evaluate, plan, goal_cycle |
+| goal | **goal** | evaluate, think, plan, goal_cycle, deliver, reflect |
 
 > **Why 8 entries, not 9?** The architecture is 9 stages (ADVERSARIAL is stage 7).
 > In execution, ADVERSARIAL is a mandatory blocking gate *inside* the DELIVER stage
 > (spawn fresh-context sub-agent). It's not a separate orchestration step — see
 > `stages/deliver.md` § "Adversarial Review Gate (BLOCKING)". All external docs say 9.
 
-**Default bias: goal over full.** If the evaluate stage doesn't classify scope,
-or if scope is "standard/complex" but the requirement touches >3 files or spans
-multiple layers (backend+frontend, API+consumer+test), prefer **goal**.
-Only use **full** when the work is genuinely single-shot (one bounded deliverable,
-known approach, no discovery needed).
+### Profile Selection Principle
 
+**Full vs Goal** — both have all stages. The only difference is execution mode:
+- **Full:** BUILD runs once → REVIEW once → TEST once → DELIVER. One-shot.
+- **Goal:** goal_cycle loops BUILD+TEST per cycle, periodic REVIEW, final adversarial
+  inside goal_cycle, then exits to DELIVER → REFLECT.
+
+**When to use Goal:**
+- "Done" is defined by an **externally measurable condition** — a command exits 0,
+  a metric reaches a threshold, all items in a list are addressed.
+- The work requires **iteration toward a target** where you can't predict how many
+  changes are needed upfront.
+
+**When to use Full:**
+- "Done" is the **artifact existing and passing review** — feature implemented,
+  code committed, tests pass. The deliverable IS the proof.
+- The work is **bounded** — you know the approach, the files, the shape of done.
+
+If the evaluate stage doesn't classify scope, default to **full**.
 The user can override: "skip research, I know the approach" → switch to bugfix.
-The user can force: "use full pipeline" → override goal detection.
+The user can force: "use goal" or "use full pipeline" → override detection.
 
 ### Goal Profile Orchestration
 
-When profile is `goal`, the pipeline operates differently after PLAN:
+Goal has the **same stages as full** — the difference is execution mode.
+Where full does BUILD→REVIEW→TEST once, goal loops them inside goal_cycle:
 
 1. **EVALUATE** — standard + goal_mode detection (DoD criteria, max_cycles)
-2. **PLAN** — standard (defines approach for achieving the goal, not per-step)
-3. **GOAL_CYCLE** — the stage itself loops internally:
+2. **THINK** — standard (research alternatives, risk probes)
+3. **PLAN** — standard (defines approach for achieving the goal)
+4. **GOAL_CYCLE** — loops internally (replaces BUILD+REVIEW+TEST):
    - Each cycle: budget gate → DoD check → pick step → BUILD+TEST → progress → mini-reflect
    - Periodic REVIEW every N cycles on accumulated diff
    - Final ADVERSARIAL on total changeset when DoD met
-   - Full REFLECT at goal completion (distills all mini-reflects)
    - See `stages/goal_cycle.md` for complete behavior
+5. **DELIVER** — standard (packaging, report, CI push)
+6. **REFLECT** — standard (DDD loop closure, reads mini-reflects from progress file)
 
-**No DELIVER stage** — goal profile doesn't produce a single "delivery candidate."
-Instead, each cycle commits incremental progress. Quality is assured by:
-- Per-cycle TEST (regression check)
-- Periodic REVIEW (convention/pattern compliance)
-- Final ADVERSARIAL (fresh-eyes attack on total changeset)
+Quality assurance in goal_cycle (replaces full's single-shot gates):
+- Per-cycle TEST (immediate regression check)
+- Periodic REVIEW (convention/pattern compliance on accumulated diff)
+- Final ADVERSARIAL (fresh-eyes attack on total changeset, code-enforced gate)
 
 **Scheduled mode** (for goals spanning multiple sessions):
 After EVALUATE+PLAN, if the user requests overnight/unattended execution or

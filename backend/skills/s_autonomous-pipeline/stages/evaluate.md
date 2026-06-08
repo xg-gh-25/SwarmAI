@@ -141,49 +141,47 @@ re-discovering a failure costs hours.
 
 ### Goal Mode Detection
 
-**Default bias: prefer goal over full.** When in doubt between full and goal,
-choose goal — iterative cycles with DoD checks are structurally safer than a
-single-shot BUILD that might miss edge cases or deliver incomplete work.
+**Core principle:** The distinction between goal and full is NOT about scope or
+file count — it's about how "done" is verified.
 
-If the requirement describes work where the end state is clearer than the path
-to get there, classify as `goal_mode: true` and switch to `goal` profile.
+- **Goal:** "Done" = externally measurable condition passes (command exit 0, metric
+  threshold met, all items in a checklist addressed). Requires iteration until pass.
+- **Full:** "Done" = artifact exists and passes review. The deliverable IS the proof.
 
-**Indicators of goal mode (ANY ONE is sufficient):**
+If the requirement's completion can be verified by running a command or checking
+a measurable outcome, classify as `goal_mode: true` and switch to `goal` profile.
+
+**Goal indicators (ANY ONE is sufficient):**
 
 Category 1 — Metric/threshold targets:
 - "Get X to Y%" / "Improve X until Y" / "Reduce X below Y"
-- Any requirement with a measurable success criterion (test pass, coverage, perf)
+- Any requirement with a measurable success criterion (coverage, perf, count)
 
 Category 2 — Bulk/sweep operations:
 - "Migrate all callers" / "Fix all warnings" / "Remove all instances of"
 - "Refactor X across the codebase" / "Unify all Y" / "Standardize Z"
-- Work that touches N sites where N is unknown upfront
+- Work that addresses N items where N is unknown upfront
 
-Category 3 — Multi-file features (>3 files likely):
-- Requirement touches both backend AND frontend
-- Requirement involves new API endpoint + consumer + tests
-- Implementation path has 4+ distinct steps that each need verification
-- "Implement X" where X spans multiple modules or layers
-
-Category 4 — Quality/hardening:
+Category 3 — Quality/hardening with measurable end-state:
 - "Fix all findings from review" / "Address N issues"
-- "Harden X" / "Make X production-ready" / "Complete X"
-- Work where "done" means "nothing left to fix" rather than "artifact produced"
+- "Make X production-ready" (where "ready" has testable criteria)
+- Work where "done" = "nothing left that fails the check"
 
-Category 5 — Iterative discovery:
-- Requirement where you won't know the full scope until you start
-- "Investigate and fix" / "Debug and resolve" (diagnosis + fix cycles)
+Category 4 — Iterative convergence:
+- "Investigate and fix" where diagnosis reveals scope
 - Work that may surface additional issues as you go
+- Optimization toward a target (latency, size, quality score)
 
-**When NOT goal (use full/bugfix/trivial instead):**
-- Single bounded change with clear before/after (one function, one component)
-- Pure research with no code output (use research profile)
-- Documentation-only (use docs profile)
-- One-liner fix with known root cause (use trivial/bugfix)
+**When NOT goal (use full/bugfix/trivial):**
+- "Implement X feature" where done = feature exists + tests pass → **full**
+- Clear bug with known root cause → **bugfix**
+- One-liner or config change → **trivial**
+- Pure research → **research**
+- Documentation → **docs**
 
-**Decision heuristic:** If you can write ALL acceptance criteria as specific
-file:function changes before starting → NOT goal. If ACs describe outcomes
-that require discovery → goal.
+**Decision heuristic:** Can you write a shell command that returns exit 0 only
+when the requirement is fully satisfied? YES → goal. NO (done = "review says
+it's good") → full.
 
 ### Intelligence-Informed Profile Selection (Meta-Intelligence L3)
 

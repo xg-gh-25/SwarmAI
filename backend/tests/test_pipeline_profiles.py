@@ -36,7 +36,7 @@ class TestPipelineProfiles:
         ("research", ["evaluate", "think", "reflect"]),
         ("docs", ["evaluate", "think", "plan", "deliver", "reflect"]),
         ("bugfix", ["evaluate", "plan", "build", "review", "test", "deliver", "reflect"]),
-        ("goal", ["evaluate", "plan", "goal_cycle"]),
+        ("goal", ["evaluate", "think", "plan", "goal_cycle", "deliver", "reflect"]),
     ])
     def test_profile_stages_correct(self, profile, expected):
         """Each profile returns its documented stage sequence."""
@@ -54,7 +54,7 @@ class TestGetProfileStages:
     def test_known_profile(self):
         """Known profile name returns its stages."""
         assert get_profile_stages("full") == PIPELINE_PROFILES["full"]
-        assert get_profile_stages("goal") == ["evaluate", "plan", "goal_cycle"]
+        assert get_profile_stages("goal") == ["evaluate", "think", "plan", "goal_cycle", "deliver", "reflect"]
 
     def test_none_defaults_to_full(self):
         """None input defaults to full profile."""
