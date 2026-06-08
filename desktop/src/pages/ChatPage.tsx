@@ -2221,17 +2221,35 @@ export default function ChatPage() {
                             <span className="text-sm">
                               {displayedActivity?.toolName
                                 ? (displayedActivity.toolContext
-                                    ? t('chat.runningToolWithContext', {
-                                        tool: displayedActivity.toolName,
-                                        context: displayedActivity.toolContext,
-                                        count: displayedActivity.toolCount,
-                                      })
+                                    ? (elapsedSeconds >= ELAPSED_DISPLAY_THRESHOLD_MS / 1000
+                                        ? t('chat.runningToolWithContextElapsed', {
+                                            tool: displayedActivity.toolName,
+                                            context: displayedActivity.toolContext,
+                                            count: displayedActivity.toolCount,
+                                            elapsed: formatElapsed(elapsedSeconds),
+                                          })
+                                        : t('chat.runningToolWithContext', {
+                                            tool: displayedActivity.toolName,
+                                            context: displayedActivity.toolContext,
+                                            count: displayedActivity.toolCount,
+                                          }))
                                     : displayedActivity.toolCount > 1
-                                      ? t('chat.runningToolWithCount', {
-                                          tool: displayedActivity.toolName,
-                                          count: displayedActivity.toolCount,
-                                        })
-                                      : t('chat.runningTool', { tool: displayedActivity.toolName }))
+                                      ? (elapsedSeconds >= ELAPSED_DISPLAY_THRESHOLD_MS / 1000
+                                          ? t('chat.runningToolWithCountElapsed', {
+                                              tool: displayedActivity.toolName,
+                                              count: displayedActivity.toolCount,
+                                              elapsed: formatElapsed(elapsedSeconds),
+                                            })
+                                          : t('chat.runningToolWithCount', {
+                                              tool: displayedActivity.toolName,
+                                              count: displayedActivity.toolCount,
+                                            }))
+                                      : (elapsedSeconds >= ELAPSED_DISPLAY_THRESHOLD_MS / 1000
+                                          ? t('chat.runningToolElapsed', {
+                                              tool: displayedActivity.toolName,
+                                              elapsed: formatElapsed(elapsedSeconds),
+                                            })
+                                          : t('chat.runningTool', { tool: displayedActivity.toolName })))
                                 : displayedActivity?.hasContent
                                   ? t('chat.processing')
                                   : elapsedSeconds >= ELAPSED_DISPLAY_THRESHOLD_MS / 1000
