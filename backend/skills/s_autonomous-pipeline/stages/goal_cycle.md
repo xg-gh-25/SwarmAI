@@ -222,7 +222,7 @@ velocity = gm.get_velocity()
 # Append to progress file: "## Velocity Summary\n- Avg delta/cycle: {velocity['avg_delta_per_cycle']}\n..."
 ```
 
-**Final Quality Gate (before REFLECT):**
+**Final Quality Gate (before exiting goal_cycle stage):**
 1. Full ADVERSARIAL review on total changeset:
    ```bash
    git diff <start_commit>..HEAD
@@ -231,7 +231,9 @@ velocity = gm.get_velocity()
 2. If adversarial finds issues → execute up to 3 more fix cycles
 3. If issues persist after 3 fix cycles → CHECKPOINT with findings
 
-Then proceed to REFLECT (full mode).
+**After final adversarial passes:** Mark goal_cycle stage as completed
+(with `adversarial_review: true` — required by the completion gate).
+The pipeline then proceeds to DELIVER → REFLECT as normal stages.
 
 ### EXIT with CHECKPOINT
 
@@ -322,18 +324,17 @@ No DDD writes. No LLM distillation. Accumulates raw material.
 
 ### Full REFLECT (at goal completion)
 
-Triggered only on EXIT with SUCCESS (after final adversarial passes):
+**This now happens in the formal REFLECT stage (after DELIVER).** When
+goal_cycle exits with SUCCESS, the pipeline proceeds to:
+1. **DELIVER** — standard deliver stage behavior (packaging, report, CI)
+2. **REFLECT** — standard reflect stage behavior (DDD loop closure)
 
-1. Read all mini-reflects from progress file
-2. Read the goal requirement and DoD criteria
-3. Distill patterns:
-   - Which DoD criteria were hardest? Why?
-   - Which cycle actions had highest leverage?
-   - Any recurring blockers across cycles?
-4. Write to IMPROVEMENT.md:
-   - "What Worked" entry: the effective patterns
-   - "What Failed" entry (if any cycles stalled): the anti-patterns
-5. Update PROJECT.md: goal completed, date, cycles taken
+The REFLECT stage reads all mini-reflects from the progress file as
+input context, combining them with the standard reflect workflow
+(lessons → IMPROVEMENT.md → DDD update → PROJECT.md).
+
+This ensures goal runs get the same DDD loop closure as full runs —
+no separate inline implementation needed.
 
 ---
 
