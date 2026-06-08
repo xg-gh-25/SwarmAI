@@ -795,13 +795,29 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                 name = s.get("stage", s.get("name", "?"))
                 stage_status_map[name] = s.get("status", "unknown")
 
+            # ── Non-skippable stages per profile (BLOCKING) ──
+            # These stages are structurally essential to the profile's quality
+            # loop. Skipping them defeats the purpose of the profile.
+            _NON_SKIPPABLE = {
+                "full": {"deliver", "reflect"},
+                "bugfix": {"deliver", "reflect"},
+                "goal": {"goal_cycle", "deliver", "reflect"},
+            }
+            non_skippable = _NON_SKIPPABLE.get(profile, set())
+
             missing_stages = []
             for stg in profile_stages:
                 status = stage_status_map.get(stg)
                 if status in ("completed", "done"):
                     continue
                 elif status == "skipped":
-                    # Skipped is allowed ONLY with an explicit reason in the record
+                    # Non-skippable stages CANNOT be skipped regardless of reason
+                    if stg in non_skippable:
+                        missing_stages.append(
+                            f"{stg} (cannot be skipped — essential to {profile} profile quality loop)"
+                        )
+                        continue
+                    # Other stages: skipped is allowed ONLY with an explicit reason
                     record = next(
                         (s for s in run_state.get("stages", [])
                          if s.get("stage", s.get("name")) == stg),
@@ -888,7 +904,10 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                     None,
                 )
                 # Block if deliver stage completed WITHOUT artifact_id
-                # (trivial/research/docs profiles are exempt)
+                # (trivial/research/docs profiles are exempt — they have no
+                # adversarial review in DELIVER, so no artifact_id is expected.
+                # Goal profile is also exempt here — its adversarial runs inside
+                # goal_cycle, enforced by the adversarial_review gate below.)
                 _profile = run_state.get("profile", "full")
                 if deliver_rec and not deliver_rec.get("artifact_id"):
                     if _profile in ("full", "bugfix", "standard"):
