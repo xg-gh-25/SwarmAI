@@ -1916,14 +1916,23 @@ def build_session_briefing_data(
                         # Only show builds that have a proper REPORT.md (= DELIVER completed)
                         if not report.exists():
                             continue
-                        text = report.read_text(encoding="utf-8")[:600]
-                        title = _extract_report_field(text, "Requirement", "Pipeline Report")
+                        # Title priority: run.json requirement (unique per run) > REPORT.md extraction
+                        title = ""
+                        req = run_data.get("requirement", "")
+                        if req and len(req) > 10:
+                            # Truncate long requirements to first sentence or 120 chars
+                            title = req.split(".")[0].split("。")[0][:120]
+                        if not title:
+                            text = report.read_text(encoding="utf-8")[:600]
+                            title = _extract_report_field(text, "Requirement", "Pipeline Report")
+                        else:
+                            text = report.read_text(encoding="utf-8")[:600]
                         confidence = _extract_report_confidence(text)
                         report_file = str(report.relative_to(workspace))
                         builds.append({
                             "runId": run_dir.name,
                             "project": proj_dir.name,
-                            "title": title,
+                            "title": title or f"{proj_dir.name} pipeline",
                             "confidence": confidence,
                             "status": "complete",
                             "date": completed_at,
