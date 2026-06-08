@@ -394,7 +394,7 @@ _DEFAULT_TTL_HOURS = 168
 
 
 # Stages that never require an artifact (regardless of profile)
-NO_ARTIFACT_STAGES = {"reflect"}
+NO_ARTIFACT_STAGES = {"reflect", "think"}
 
 # Stages where artifact is optional for bugfix/trivial profiles
 # (reduces ceremony — validator warns instead of blocking)

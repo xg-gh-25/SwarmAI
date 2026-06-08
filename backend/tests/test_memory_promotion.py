@@ -247,20 +247,23 @@ class TestUsageBasedEviction:
         # Create MEMORY.md with 5 entries + inline decay metadata.
         # RC01: high ref count (10 refs, recent) → high decay score → survives
         # RC02: zero refs → lowest decay score → evicted
-        # RC03: moderate refs (3 refs) → moderate score → survives
+        # RC03: moderate refs (5 refs, recent) → moderate score → survives
         # RC04: zero refs → lowest decay score → evicted
         # RC05: good refs (5 refs, recent) → high score → survives
+        from datetime import date, timedelta
+        today = date.today()
+        recent_date = (today - timedelta(days=2)).isoformat()
         entries = (
             "- [RC01] 2026-04-01: Old but heavily used entry\n"
-            "  <!-- ref:10 | last:2026-06-01 | decay:low | sessions:8 -->\n"
+            f"  <!-- ref:10 | last:{recent_date} | decay:low | sessions:8 -->\n"
             "- [RC02] 2026-04-02: Never used entry A\n"
             "  <!-- ref:0 | last:none | decay:critical | sessions:0 -->\n"
             "- [RC03] 2026-04-03: Moderately used entry\n"
-            "  <!-- ref:3 | last:2026-05-20 | decay:medium | sessions:3 -->\n"
+            f"  <!-- ref:5 | last:{recent_date} | decay:low | sessions:5 -->\n"
             "- [RC04] 2026-04-04: Never used entry B\n"
             "  <!-- ref:0 | last:none | decay:critical | sessions:0 -->\n"
             "- [RC05] 2026-04-05: Recently used entry\n"
-            "  <!-- ref:5 | last:2026-06-05 | decay:low | sessions:5 -->\n"
+            f"  <!-- ref:5 | last:{recent_date} | decay:low | sessions:5 -->\n"
         )
         memory_path.write_text(
             "## Recent Context\n\n" + entries,
