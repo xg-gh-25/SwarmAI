@@ -542,7 +542,7 @@ export function ChatInput({
     onSend();
     const el = textareaRef.current;
     if (el) {
-      el.style.height = '';       // clear inline style, rows={2} reasserts minimum
+      el.style.height = '';       // clear inline style, rows={3} reasserts minimum
       el.style.overflowY = 'hidden';
     }
   }, [onSend, isExpanded, onExpandedChange, applyTransition]);
@@ -712,7 +712,7 @@ export function ChatInput({
                       ? 'Type to queue a follow-up...'
                       : 'Ask Swarm anything...'
               }
-              rows={2}
+              rows={3}
               disabled={disabled}
               className={clsx(
                 'flex-1 bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] resize-none focus:outline-none py-2',
@@ -775,7 +775,7 @@ export function ChatInput({
           </div>
 
           {/* Bottom Row - attachment left, context/TSCC right */}
-          <div className="flex items-center justify-between mt-3 pt-3 border-t border-[var(--color-border)]/50">
+          <div className="flex items-center justify-between mt-2 pt-2 border-t border-[var(--color-border)]/50">
             {/* Left: Attachment + Voice buttons */}
             <div className="flex items-center gap-2">
               <FileAttachmentButton onFilesSelected={onAddFiles} disabled={isProcessingFiles || disabled} canAddMore={canAddMore} />
