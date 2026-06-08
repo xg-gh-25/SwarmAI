@@ -32,10 +32,10 @@ class TestPipelineProfiles:
 
     @pytest.mark.parametrize("profile,expected", [
         ("full", ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"]),
-        ("trivial", ["evaluate", "build", "review", "test", "deliver", "reflect"]),
+        ("trivial", ["evaluate", "think", "build", "review", "test", "deliver", "reflect"]),
         ("research", ["evaluate", "think", "reflect"]),
         ("docs", ["evaluate", "think", "plan", "deliver", "reflect"]),
-        ("bugfix", ["evaluate", "plan", "build", "review", "test", "deliver", "reflect"]),
+        ("bugfix", ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"]),
         ("goal", ["evaluate", "think", "plan", "goal_cycle", "deliver", "reflect"]),
     ])
     def test_profile_stages_correct(self, profile, expected):
