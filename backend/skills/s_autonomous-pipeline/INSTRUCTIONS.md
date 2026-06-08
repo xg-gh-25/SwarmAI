@@ -921,112 +921,27 @@ silently between stages with no error message.
 ✦ EVALUATE → GO 3.8 | ✦ PLAN → 4AC 1file | ✦ BUILD → 2R2G 28pass | ✦ REVIEW → clean | ✦ TEST → 48/0 | ✦ DELIVER → push-ready | ✦ REFLECT → 2 lessons
 ```
 
-### Format
+### Stage Output Format
 
-Show progress as structured landmarks after each stage completes. Each stage
-header includes its **methodology concept** in brackets — these serve as anchor
-points for live demo (user can point at them and explain the approach verbally).
-
-**Pipeline briefing (shown once at start, before first stage):**
+After each stage completes, output a 1-3 line structured landmark:
 ```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Pipeline: <requirement> (run_<id>)
-Project: <PROJECT> | Profile: <profile>
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-Autonomous Pipeline — from requirement to push-ready code.
-
-  How: DDD (domain knowledge) informs every decision
-       SDD (spec before code) defines what to build
-       TDD (test before implement) proves it works
-
-  Quality gates:
-       ★ Adversarial Review — independent AI reviews code cold, finds builder blind spots
-       ★ Quality Convergence — 6 layers must pass simultaneously before shipping
-       ★ Goal Loop — iterative cycles with measurable progress (goal profile only)
-
-  Stages: <stage list for this profile, e.g., EVALUATE → THINK → PLAN → BUILD → REVIEW → TEST → DELIVER → REFLECT>
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+## ✦ STAGE_NAME [Concept]
+→ key metrics | result
+  DDD insight (only if a DDD doc actually changed a decision)
 ```
 
-**Per-stage output (1-3 lines each, shown after stage completes):**
-
-```
-## ✦ EVALUATE [DDD-Informed Decision Gate]
-→ <GO/DEFER/REJECT> | ROI <X.X> | <N> AC | <scope> scope
-  <DDD insight if it influenced a decision — omit if none>
-
-## ✦ THINK [Constraint-Driven Alternatives]
-→ Recommend: <Approach X> (<CONSTRAINT>)
-  <N> approaches evaluated, <DDD influence summary>, <grill questions resolved>
-
-## ✦ PLAN [SDD: Spec Before Code]
-→ <N> AC → <N> test strategies mapped | ~<M> lines | <K> files
-  Boundaries: <key always/never constraints>
-
-## ✦ BUILD [TDD: Red-Green-Verify]
-→ <N> RED → <M> GREEN | <K> tests | <L> lines | <J> atomic commits
-  SMOKE <✓/✗>  USER-PATH <✓/✗>  PROBE <✓/✗>
-  <DDD insight if TECH.md trap or pattern was applied — omit if none>
-
-## ✦ REVIEW [DDD Conformance + Pattern Checks]
-→ <N> high | <M> med fixed | integration trace <clean/N warnings>
-  L5 pre-check: TECH.md <N/N> ✓ | IMPROVEMENT.md anti-patterns <N/N> ✓
-
-## ✦ TEST [Regression Scope]
-→ <N> new + <M> existing pass | <K> regressions | WTF: <J>
-
-## ✦ DELIVER [Multi-Gate Quality Assurance]
-  ├─ Taste Gate: <N> decisions → <approved/overridden>
-  ├─ ★ Adversarial Review: <summary — e.g., "3 findings, 1 HIGH fixed">
-  ├─ ★ Quality Convergence: L1-L6 <result> (<N> iterations)
-  └─ CI <✅/⏳/❌> | <PR info if created>
-
-## ✦ REFLECT [DDD Knowledge Loop]
-→ <N> lessons → IMPROVEMENT.md
-  <one-line: what future pipelines will know>
-```
-
-**Goal profile — GOAL LOOP replaces BUILD/REVIEW/TEST/DELIVER:**
-
-```
-## ✦ GOAL LOOP [Iterative Convergence]
-→ Cycle <N>/<max> | <X>/<Y> DoD met | velocity: <Δ>/cycle
-  ✓ <met criteria>
-  ~ <in-progress criteria with current→target>
-  ○ <pending criteria>
-  ★ Periodic Review: <if triggered this cycle>
-  ★ Final Adversarial: <runs when all DoD met>
-```
+Concept labels: EVALUATE [DDD-Informed Decision Gate], THINK [Constraint-Driven Alternatives], PLAN [SDD: Spec Before Code], BUILD [TDD: Red-Green-Verify], REVIEW [DDD Conformance + Pattern Checks], TEST [Regression Scope], DELIVER [Multi-Gate Quality Assurance], REFLECT [DDD Knowledge Loop], GOAL LOOP [Iterative Convergence].
 
 **Completion summary (shown once at end) — see Step 6 for exact format.**
 The pipeline MUST end with a visible summary block. No silent completion.
 
 ### Display Rules
 
-1. **Concept brackets are mandatory** — every `## ✦` header includes `[Concept Name]`.
-   These are the demo anchor points. Even if the user doesn't read the content,
-   scanning the headers tells the methodology story.
-
-2. **DDD insights only when real** — show DDD influence only when a DDD doc actually
-   changed a decision. "DDD: TECH.md was read" is not an insight. Silence > false attribution.
-
-3. **★ marks core methodology features** — Adversarial Review, Quality Convergence,
-   Goal Loop get `★` when they are ACTIVE in that stage. This visually highlights
-   the pipeline's unique capabilities.
-
-4. **DELIVER always shows the tree** — Even if all sub-steps pass cleanly, show the
-   three branches (Taste Gate, Adversarial, Convergence). These are the methodology
-   differentiators that the user points to during demo.
-
-5. **Skip visibility** — If a core feature is skipped due to profile:
-   ```
-   ⊘ Adversarial: skipped (trivial profile)
-   ```
-   Only for surprising absence. Don't annotate every stage where Goal Loop "doesn't apply."
-
-6. **Density is flexible** — The templates above are maximums. A bugfix BUILD that
-   changes 1 line gets: `→ 1 RED → 1 GREEN | 2 tests | 3 lines | 1 commit`. Done.
+1. Concept brackets mandatory on every `## ✦` header.
+2. DDD insights only when real — silence > false attribution.
+3. ★ marks Adversarial/Convergence/Goal when ACTIVE.
+4. Density is flexible — bugfix with 1 line change gets 1 line output.
+5. If approaching token limit, compress to single-line: `✦ EVAL → GO | ✦ BUILD → 2R2G | ✦ DELIVER → push-ready`
 
 ---
 
@@ -1117,69 +1032,32 @@ The pipeline MUST end with a visible summary block. No silent completion.
 
 ## Artifact Operations Reference
 
+All commands use: `python backend/scripts/artifact_cli.py <command> [args]`
+
 ```bash
-# ── Artifact Registry ──
+# Artifacts
+discover --project <P> --types <types> --full    # find upstream artifacts
+publish  --project <P> --type <T> --producer s_autonomous-pipeline --summary "<S>" --stage <stg> --data '<json>'
+state    --project <P>                           # current pipeline state
+advance  --project <P> --state <stage>           # advance state machine
 
-# Discover upstream artifacts
-python backend/scripts/artifact_cli.py discover --project <PROJECT> --types <types> --full
+# Pipeline runs
+run-create  --project <P> --requirement "<text>" [--profile <profile>]
+run-update  --project <P> --run-id <R> [--stage-json '<json>'] [--status <S>] [--profile <P>]
+run-get     --project <P> [--run-id <R>]
+run-budget  --project <P> --run-id <R>           # check before next stage
+run-checkpoint --project <P> --run-id <R> --stage <stg> --reason "<why>"
+run-resume  --project <P> --run-id <R>
+run-status  [--active-only]                      # cross-project dashboard
+run-report  --project <P> --run-id <R>           # generate REPORT.md
+run-observe --project <P> --run-id <R> --event <E> [args]  # telemetry
 
-# Publish an artifact (--stage validates schema BEFORE writing; fail-fast on errors)
-python backend/scripts/artifact_cli.py publish --project <PROJECT> \
-  --type <type> --producer s_autonomous-pipeline --summary "<summary>" \
-  --stage <stage> --data '<json>'
+# ⚠️ CRITICAL: deliver stage-json MUST include artifact_id from publish output.
+# Pattern: ART_ID=$(publish ... | python3 -c "import sys,json; print(json.load(sys.stdin)['artifact_id'])")
+#          run-update --stage-json '{"stage":"deliver","status":"completed","stage_doc_consumed":true,"artifact_id":"'$ART_ID'"}'
+```
 
-# Get pipeline state
-python backend/scripts/artifact_cli.py state --project <PROJECT>
-
-# Advance pipeline state
-python backend/scripts/artifact_cli.py advance --project <PROJECT> --state <stage>
-
-# Record outcome (reflect stage)
-python backend/scripts/artifact_cli.py learn --project <PROJECT> \
-  --evaluation-id <id> --outcome <success/partial/failure> \
-  --actual-effort "<effort>" --lessons "<semicolon-separated>"
-
-# List all projects
-python backend/scripts/artifact_cli.py projects
-
-# ── Pipeline Run Management ──
-
-# Create a new pipeline run
-python backend/scripts/artifact_cli.py run-create --project <PROJECT> \
-  --requirement "<requirement text>" [--profile full|trivial|research|docs|bugfix]
-
-# Update pipeline run (add stage, taste decision, change status/profile)
-# ⚠️ CRITICAL: stage-json for full/bugfix DELIVER MUST include artifact_id from publish.
-#    Without it, the completion gate will BLOCK the pipeline (see artifact_cli.py L660-680).
-#    Pattern: ART_ID=$(publish ... | python -c "import sys,json; print(json.load(sys.stdin)['artifact_id'])")
-#             run-update --stage-json '{"stage":"deliver","status":"completed","stage_doc_consumed":true,"artifact_id":"'$ART_ID'"}'
-python backend/scripts/artifact_cli.py run-update --project <PROJECT> --run-id <RUN_ID> \
-  [--stage-json '<json>'] [--taste-decision '<json>'] [--status <status>] [--profile <profile>]
-
-# Get pipeline run state (or list all runs if --run-id omitted)
-python backend/scripts/artifact_cli.py run-get --project <PROJECT> [--run-id <RUN_ID>]
-
-# ── v2: Budget & Checkpoint ──
-
-# Check budget before next stage
-python backend/scripts/artifact_cli.py run-budget --project <PROJECT> --run-id <RUN_ID>
-
-# Atomic checkpoint: pause + artifact + Radar todo
-python backend/scripts/artifact_cli.py run-checkpoint --project <PROJECT> --run-id <RUN_ID> \
-  --stage <next_stage> --reason "<why paused>"
-
-# Historical token costs for calibration
-python backend/scripts/artifact_cli.py run-history --project <PROJECT> [--limit 10]
-
-# ── v3: Dashboard, Resume, Background Jobs ──
-
-# Cross-project pipeline dashboard (all projects)
-python backend/scripts/artifact_cli.py run-status [--active-only]
-
-# Resume a paused pipeline (after escalation resolved)
-python backend/scripts/artifact_cli.py run-resume --project <PROJECT> --run-id <RUN_ID>
-
-# Create a background pipeline job (runs via scheduler)
+# Background pipeline job
 python -m jobs.job_manager pipeline \
   --project <PROJECT> --requirement "<what to build>" \
   [--schedule "0 9 * * 1-5"] [--profile full] [--budget 2.00] [--one-shot]
