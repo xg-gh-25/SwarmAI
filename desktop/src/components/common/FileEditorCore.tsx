@@ -584,7 +584,7 @@ export default function FileEditorCore({
   // ── Send review comment with full context (filePath + selectedText + comment) ──
   const handleSendReviewComment = useCallback(
     (comment: string, selectedTextOverride?: string) => {
-      const selected = selectedTextOverride || selectionText;
+      const selected = selectedTextOverride ?? selectionText;
       let message: string;
       if (selected) {
         message = `[File Review: \`${filePath}\`]\n\nSelected text:\n\`\`\`\n${selected}\n\`\`\`\n\nInstruction: ${comment}`;
@@ -1191,12 +1191,12 @@ export default function FileEditorCore({
                 {highlightedLines.size > 0 && (
                   <pre
                     className={clsx(
-                      'absolute inset-0 m-0 p-4 overflow-y-scroll overflow-x-hidden',
+                      'absolute inset-0 m-0 p-4 overflow-hidden',
                       'font-mono text-sm leading-6 whitespace-pre-wrap break-words',
                       'pointer-events-none z-[1]',
                       '[word-break:break-all]'
                     )}
-                    style={{ tabSize: 4 }}
+                    style={{ tabSize: 4, transform: `translateY(-${scrollTop}px)` }}
                     aria-hidden="true"
                   >
                     {content.split('\n').map((line, lineIdx) => {
@@ -1290,6 +1290,7 @@ export default function FileEditorCore({
                   <button
                     className="fixed z-[999] px-2 py-1 text-xs font-medium rounded-lg bg-[var(--color-primary)] text-white shadow-lg hover:bg-[var(--color-primary-hover)] transition-colors flex items-center gap-1"
                     style={{ top: selectionPopoverPos.top, left: selectionPopoverPos.left }}
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => setShowSelectionComment(true)}
                     data-testid="selection-comment-btn"
                   >
