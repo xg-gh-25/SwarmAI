@@ -1241,11 +1241,13 @@ export function useChatStreamingLifecycle(
     }
   }, [isStreaming]); // eslint-disable-line react-hooks/exhaustive-deps — refs are stable
 
-  // --- Fix 9: Tick elapsed counter every second while waiting for first content ---
+  // --- Fix 9: Tick elapsed counter every second while streaming ---
+  // Ticks for the entire streaming duration (both "Thinking..." and tool execution).
+  // This gives users a time reference when tools (especially sub-agents) run long.
   useEffect(() => {
-    if (!isStreaming || streamingActivity !== null) {
-      // Content arrived or not streaming — clear elapsed
-      if (elapsedSeconds !== 0) setElapsedSeconds(0);
+    if (!isStreaming) {
+      // Not streaming — clear elapsed (unconditional; React bails out if already 0)
+      setElapsedSeconds(0);
       return;
     }
 
@@ -1258,7 +1260,7 @@ export function useChatStreamingLifecycle(
     }, 1000);
 
     return () => clearInterval(intervalId);
-  }, [isStreaming, streamingActivity]); // eslint-disable-line react-hooks/exhaustive-deps — elapsedSeconds intentionally omitted to avoid restarting the interval on every tick
+  }, [isStreaming]); // eslint-disable-line react-hooks/exhaustive-deps — elapsedSeconds intentionally omitted to avoid restarting the interval on every tick
 
   // Long-stream timeout warning removed — the elapsed timer (Fix 9) already
   // shows "Thinking… Xs" when the agent hasn't produced content yet. A blanket
@@ -2787,14 +2789,10 @@ export function useChatStreamingLifecycle(
     lastActivityChangeTimeRef.current = Date.now();
 
     // Derive elapsedSeconds and streamStartTimeRef for the new tab
-    if (tabIsStreaming && activity === null && tabState?.streamStartTime) {
-      // Still in "Thinking…" phase — restore elapsed from stored start time
+    if (tabIsStreaming && tabState?.streamStartTime) {
+      // Streaming (any phase) — restore elapsed from stored start time
       streamStartTimeRef.current = tabState.streamStartTime;
       setElapsedSeconds(Math.floor((Date.now() - tabState.streamStartTime) / 1000));
-    } else if (tabIsStreaming) {
-      // Content already arrived — elapsed not shown, but keep start time
-      streamStartTimeRef.current = tabState?.streamStartTime ?? null;
-      setElapsedSeconds(0);
     } else {
       // Not streaming — clear everything
       streamStartTimeRef.current = null;

@@ -1691,7 +1691,7 @@ describe('Fix 9: Elapsed time counter during initial wait', () => {
     expect(result.current.elapsedSeconds).toBeGreaterThanOrEqual(11);
   });
 
-  it('clears elapsed when first content arrives (streamingActivity becomes non-null)', () => {
+  it('keeps ticking elapsed when first content arrives (streamingActivity becomes non-null)', () => {
     const { result } = renderHook(() =>
       useChatStreamingLifecycle(createMockDeps()),
     );
@@ -1717,13 +1717,12 @@ describe('Fix 9: Elapsed time counter during initial wait', () => {
       ]);
     });
 
-    // After content arrives, elapsed should reset to 0
-    // Allow a tick for the useEffect to fire
+    // After content arrives, elapsed keeps ticking (shows during tool execution)
     act(() => {
-      vi.advanceTimersByTime(100);
+      vi.advanceTimersByTime(2000);
     });
 
-    expect(result.current.elapsedSeconds).toBe(0);
+    expect(result.current.elapsedSeconds).toBeGreaterThanOrEqual(6);
   });
 
   it('resets elapsed to 0 when streaming stops', () => {
@@ -1753,7 +1752,7 @@ describe('Fix 9: Elapsed time counter during initial wait', () => {
     expect(result.current.elapsedSeconds).toBe(0);
   });
 
-  it('does not count when streaming with content already present', () => {
+  it('counts elapsed when streaming with content already present (tool execution)', () => {
     const { result } = renderHook(() =>
       useChatStreamingLifecycle(createMockDeps()),
     );
@@ -1773,8 +1772,8 @@ describe('Fix 9: Elapsed time counter during initial wait', () => {
       vi.advanceTimersByTime(15000);
     });
 
-    // streamingActivity is non-null (tool_use present), so elapsed stays 0
-    expect(result.current.elapsedSeconds).toBe(0);
+    // streamingActivity is non-null (tool_use present), elapsed still ticks
+    expect(result.current.elapsedSeconds).toBeGreaterThanOrEqual(14);
   });
 });
 
