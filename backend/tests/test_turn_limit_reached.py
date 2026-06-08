@@ -185,8 +185,8 @@ async def test_result_event_after_turn_limit():
 
 
 @pytest.mark.asyncio
-async def test_max_turns_200_set_for_desktop():
-    """prompt_builder should set max_turns=200 for desktop sessions."""
+async def test_max_turns_400_set_for_desktop():
+    """prompt_builder should set max_turns=400 for desktop sessions."""
     # This tests the logic, not the full prompt_builder (which requires DB etc)
     channel_context = None
     agent_config: dict[str, Any] = {}  # No explicit max_turns
@@ -195,9 +195,9 @@ async def test_max_turns_200_set_for_desktop():
     if channel_context and (max_turns is None or max_turns > 15):
         max_turns = 15
     elif not channel_context and max_turns is None:
-        max_turns = 200
+        max_turns = 400
 
-    assert max_turns == 200
+    assert max_turns == 400
 
 
 @pytest.mark.asyncio
@@ -210,7 +210,7 @@ async def test_max_turns_15_for_channel():
     if channel_context and (max_turns is None or max_turns > 15):
         max_turns = 15
     elif not channel_context and max_turns is None:
-        max_turns = 200
+        max_turns = 400
 
     assert max_turns == 15
 
@@ -225,6 +225,6 @@ async def test_explicit_max_turns_respected():
     if channel_context and (max_turns is None or max_turns > 15):
         max_turns = 15
     elif not channel_context and max_turns is None:
-        max_turns = 200
+        max_turns = 400
 
     assert max_turns == 50  # Explicit value preserved
