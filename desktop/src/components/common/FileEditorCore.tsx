@@ -18,6 +18,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import clsx from 'clsx';
 import hljs from 'highlight.js';
 import Button from './Button';
@@ -133,6 +134,112 @@ function LineGutter({ lineCount, scrollTop, activeLineNumber }: {
         })}
       </div>
     </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  SelectionCommentPopover                                             */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Lightweight inline popover for selection-based comments.
+ * Positioned directly at viewport coords (from selectionPopoverPos)
+ * instead of using the anchorRef-based positioning in CommentPopover
+ * which is designed for gutter-click review mode.
+ */
+function SelectionCommentPopover({
+  position,
+  onSubmit,
+  onCancel,
+}: {
+  position: { top: number; left: number };
+  onSubmit: (text: string) => void;
+  onCancel: () => void;
+}) {
+  const [text, setText] = useState('');
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  // Click-outside dismisses
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        onCancel();
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [onCancel]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        const trimmed = text.trim();
+        if (trimmed) onSubmit(trimmed);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onCancel();
+      }
+    },
+    [text, onSubmit, onCancel],
+  );
+
+  return createPortal(
+    <div
+      ref={popoverRef}
+      className="fixed z-[1000] w-72 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg shadow-xl"
+      style={{ top: position.top + 28, left: position.left }}
+      data-testid="selection-comment-popover"
+    >
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-hover)] rounded-t-lg">
+        <span className="text-xs text-[var(--color-text-muted)] font-medium">
+          Comment on selection
+        </span>
+        <button
+          onClick={onCancel}
+          className="p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)] transition-colors"
+        >
+          <span className="material-symbols-outlined text-sm">close</span>
+        </button>
+      </div>
+      <div className="p-2">
+        <textarea
+          ref={inputRef}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Type your instruction..."
+          rows={2}
+          className="w-full px-2 py-1.5 text-xs rounded bg-[var(--color-background)] text-[var(--color-text)] border border-[var(--color-border)] outline-none focus:border-[var(--color-primary)] resize-none"
+          data-testid="selection-comment-input"
+        />
+      </div>
+      <div className="flex items-center justify-end gap-1 px-2 pb-2">
+        <button
+          onClick={onCancel}
+          className="px-2 py-1 text-xs rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={() => { const trimmed = text.trim(); if (trimmed) onSubmit(trimmed); }}
+          disabled={!text.trim()}
+          className="px-3 py-1 text-xs rounded bg-[var(--color-primary)] text-white hover:bg-[var(--color-primary-hover)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1"
+          data-testid="selection-comment-send"
+        >
+          <span className="material-symbols-outlined text-xs">send</span>
+          Send
+        </button>
+      </div>
+      <div className="px-3 pb-1.5 text-[10px] text-[var(--color-text-dim)]">
+        ⌘+Enter to send · Esc to cancel
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -412,6 +519,8 @@ export default function FileEditorCore({
   const [highlightedLines, setHighlightedLines] = useState<Set<number>>(new Set());
   const lastFetchRef = useRef(Date.now());
   const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Clear pending highlight timer on unmount (covers reload button's setTimeout)
+  useEffect(() => () => { clearTimeout(highlightTimerRef.current); }, []);
   const rootRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
@@ -492,7 +601,7 @@ export default function FileEditorCore({
       }
     };
     window.addEventListener('swarm:file-changed', handler);
-    return () => window.removeEventListener('swarm:file-changed', handler);
+    return () => { window.removeEventListener('swarm:file-changed', handler); clearTimeout(highlightTimerRef.current); };
   }, [filePath]);
 
   // ── Visibility-based refetch: reload when app/tab becomes visible if >3s idle ──
@@ -523,7 +632,7 @@ export default function FileEditorCore({
       } catch { /* ignore */ }
     };
     document.addEventListener('visibilitychange', handleVisibility);
-    return () => document.removeEventListener('visibilitychange', handleVisibility);
+    return () => { document.removeEventListener('visibilitychange', handleVisibility); clearTimeout(highlightTimerRef.current); };
   }, [filePath]);
 
   // L3: Review mode — inline comments (used for both normal review and diff review)
@@ -855,12 +964,15 @@ export default function FileEditorCore({
         top: Math.max(rect.top + 8, Math.min(top, rect.bottom - 40)),
         left: Math.min(left, rect.right - 100),
       });
-    } else {
+    } else if (!showSelectionComment) {
+      // Only clear selection state when the comment popover is NOT active.
+      // Clicking the Comment button causes WebKit to collapse the textarea selection,
+      // which would clear selectionText and prevent the popover from ever mounting.
       setSelectionText('');
       setSelectionPopoverPos(null);
       setShowSelectionComment(false);
     }
-  }, [content]);
+  }, [content, showSelectionComment]);
 
   const handleAttachToChat = useCallback(() => {
     if (!onAttachToChat || isAttached || attachFeedback) return;
@@ -1305,6 +1417,7 @@ export default function FileEditorCore({
                             .sort((a, b) => a - b)
                             .map(n => lines[n - 1] ?? '')
                             .join('\n');
+                          if (!changedText.trim()) return; // Guard: no empty selection → stuck UI
                           setSelectionText(changedText);
                           setShowSelectionComment(true);
                           setSelectionPopoverPos({
@@ -1403,16 +1516,12 @@ export default function FileEditorCore({
                   </button>
                 )}
 
-                {/* Selection comment popover */}
-                {showSelectionComment && selectionText && (
-                  <CommentPopover
-                    lineNumber={activeLineNumber ?? 0}
-                    initialText=""
+                {/* Selection comment popover — positioned directly at selection coords */}
+                {showSelectionComment && selectionText && selectionPopoverPos && (
+                  <SelectionCommentPopover
+                    position={selectionPopoverPos}
                     onSubmit={(text) => handleSendReviewComment(text)}
                     onCancel={() => { setShowSelectionComment(false); setSelectionPopoverPos(null); }}
-                    onSendSingle={(text) => handleSendReviewComment(text)}
-                    topOffset={selectionPopoverPos?.top ? selectionPopoverPos.top - (rootRef.current?.getBoundingClientRect().top ?? 0) : 100}
-                    anchorRef={rootRef}
                   />
                 )}
               </div>
