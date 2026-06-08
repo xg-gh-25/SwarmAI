@@ -372,7 +372,7 @@ EVALUATE -> THINK -> PLAN -> BUILD ->
 - **Inputs:** Evaluation artifact + TECH.md + IMPROVEMENT.md
 - **Outputs:** Alternatives artifact with tradeoff analysis
 - **Design principle:** Each alternative includes: What (1-2 sentences), Effort (T-shirt size), Risk, and Tradeoff. The recommendation cites DDD alignment evidence.
-- **Skipped by:** trivial profile, bugfix profile
+- **Skipped by:** (none — all profiles now include THINK as of v5, 2026-06-08)
 
 #### Stage 3: PLAN — Design & Acceptance Criteria
 
@@ -795,11 +795,14 @@ The EVALUATE stage selects the right profile based on scope classification:
 
 | Profile | Stages Run | When | Typical Budget |
 |---|---|---|---|
-| **full** | All 8 | Standard features, complex work | ~116K tokens |
-| **trivial** | EVALUATE → BUILD → REVIEW → TEST → DELIVER → REFLECT | Config change, 1-file fix, thin wrapper | ~98K tokens |
-| **research** | EVALUATE → THINK | Investigation without implementation | ~16K tokens |
-| **docs** | EVALUATE → THINK → PLAN → REVIEW → DELIVER → REFLECT | Design doc, ADR, runbook | ~47K tokens |
-| **bugfix** | EVALUATE → PLAN → BUILD → REVIEW → TEST → DELIVER → REFLECT | Bug with known root cause, skip research | ~106K tokens |
+| **full** | EVALUATE → THINK → PLAN → BUILD → REVIEW → TEST → DELIVER → REFLECT | Standard features, complex work | ~75K tokens |
+| **bugfix** | EVALUATE → THINK → PLAN → BUILD → REVIEW → TEST → DELIVER → REFLECT | Bug with known root cause | ~52K tokens |
+| **trivial** | EVALUATE → THINK → BUILD → REVIEW → TEST → DELIVER → REFLECT | Config change, 1-file fix | ~39K tokens |
+| **goal** | EVALUATE → THINK → PLAN → GOAL_CYCLE → DELIVER → REFLECT | Externally-measurable target (metric, checklist) | ~83K tokens |
+| **docs** | EVALUATE → THINK → PLAN → DELIVER → REFLECT | Design doc, ADR, runbook | ~47K tokens |
+| **research** | EVALUATE → THINK → REFLECT | Investigation without implementation | ~16K tokens |
+
+> **v5 change (2026-06-08):** All profiles now include THINK. Goal expanded to full stage coverage. Profile selection based on verification mode (externally measurable → goal, artifact exists → full), not file count.
 
 ### Budget Tracking & Calibration
 
