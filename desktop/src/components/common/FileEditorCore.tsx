@@ -410,6 +410,7 @@ export default function FileEditorCore({
   const [copyPathFeedback, setCopyPathFeedback] = useState(false);
   const [scrollTop, setScrollTop] = useState(0);
   const [highlightedLines, setHighlightedLines] = useState<Set<number>>(new Set());
+  const lastFetchRef = useRef(Date.now());
   const rootRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
@@ -483,6 +484,7 @@ export default function FileEditorCore({
             setHighlightedLines(changed);
             setTimeout(() => setHighlightedLines(new Set()), 5000);
           }
+          lastFetchRef.current = Date.now();
         }
       } catch {
         // Silently ignore — file may have been deleted
@@ -490,6 +492,39 @@ export default function FileEditorCore({
     };
     window.addEventListener('swarm:file-changed', handler);
     return () => window.removeEventListener('swarm:file-changed', handler);
+  }, [filePath]);
+
+  // ── Focus-based refetch: reload when editor gains focus if >3s since last fetch ──
+  useEffect(() => {
+    const handleFocus = async () => {
+      if (Date.now() - lastFetchRef.current < 3000) return;
+      if (hasUnsavedEditsRef.current) return;
+      try {
+        const resp = await api.get<{ content: string }>('/workspace/file', { params: { path: filePath } });
+        const fresh = resp.data.content;
+        if (fresh !== contentRef.current) {
+          const oldLines = (contentRef.current || '').split('\n');
+          const newLines = fresh.split('\n');
+          const changed = new Set<number>();
+          for (let i = 0; i < Math.max(oldLines.length, newLines.length); i++) {
+            if (oldLines[i] !== newLines[i]) changed.add(i + 1);
+          }
+          setContent(fresh);
+          setSavedContent(fresh);
+          onContentChangeRef.current?.(fresh);
+          if (changed.size > 0) {
+            setHighlightedLines(changed);
+            setTimeout(() => setHighlightedLines(new Set()), 5000);
+          }
+          lastFetchRef.current = Date.now();
+        }
+      } catch { /* ignore */ }
+    };
+    const rootEl = rootRef.current;
+    if (rootEl) {
+      rootEl.addEventListener('focusin', handleFocus);
+      return () => rootEl.removeEventListener('focusin', handleFocus);
+    }
   }, [filePath]);
 
   // L3: Review mode — inline comments (used for both normal review and diff review)
@@ -808,14 +843,19 @@ export default function FileEditorCore({
     const selected = content.slice(ta.selectionStart, ta.selectionEnd);
     if (selected && selected.length > 0 && ta.selectionStart !== ta.selectionEnd) {
       setSelectionText(selected);
-      // Position floating button near end of selection
+      // Position floating button near end of selection using textarea geometry
       const rect = ta.getBoundingClientRect();
-      const lineHeight = 24;
+      const computedStyle = window.getComputedStyle(ta);
+      const lineHeight = parseFloat(computedStyle.lineHeight) || 24;
+      const paddingTop = parseFloat(computedStyle.paddingTop) || 16;
       const endPos = ta.selectionEnd;
       const linesBeforeEnd = content.slice(0, endPos).split('\n').length;
-      const top = rect.top + (linesBeforeEnd * lineHeight) - ta.scrollTop + 16; // 16px padding
-      const left = rect.left + 80;
-      setSelectionPopoverPos({ top: Math.min(top, rect.bottom - 40), left });
+      const top = rect.top + paddingTop + (linesBeforeEnd * lineHeight) - ta.scrollTop;
+      const left = rect.left + Math.min(rect.width * 0.4, 200); // 40% of width, max 200px
+      setSelectionPopoverPos({
+        top: Math.max(rect.top + 8, Math.min(top, rect.bottom - 40)),
+        left: Math.min(left, rect.right - 100),
+      });
     } else {
       setSelectionText('');
       setSelectionPopoverPos(null);
@@ -951,6 +991,35 @@ export default function FileEditorCore({
                 {showSvgPreview ? 'Edit' : 'Preview'}
               </button>
             )}
+            {/* Reload button — refetch file from disk */}
+            <button
+              onClick={async () => {
+                try {
+                  const resp = await api.get<{ content: string }>('/workspace/file', { params: { path: filePath } });
+                  const fresh = resp.data.content;
+                  if (fresh !== contentRef.current) {
+                    const oldLines = (contentRef.current || '').split('\n');
+                    const newLines = fresh.split('\n');
+                    const changed = new Set<number>();
+                    for (let i = 0; i < Math.max(oldLines.length, newLines.length); i++) {
+                      if (oldLines[i] !== newLines[i]) changed.add(i + 1);
+                    }
+                    setContent(fresh);
+                    setSavedContent(fresh);
+                    onContentChange?.(fresh);
+                    if (changed.size > 0) {
+                      setHighlightedLines(changed);
+                      setTimeout(() => setHighlightedLines(new Set()), 5000);
+                    }
+                  }
+                } catch { /* file gone — ignore */ }
+              }}
+              className="flex items-center px-2 py-1 rounded-lg text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
+              title="Reload file from disk"
+              data-testid="file-editor-reload"
+            >
+              <span className="material-symbols-outlined text-sm">refresh</span>
+            </button>
             {/* Review Mode toggle (L3) */}
             <button
               onClick={review.toggleReviewMode}
@@ -1189,33 +1258,69 @@ export default function FileEditorCore({
                 />
                 {/* Diff highlight overlay — shows green border on changed lines after reload */}
                 {highlightedLines.size > 0 && (
-                  <pre
-                    className={clsx(
-                      'absolute inset-0 m-0 p-4 overflow-hidden',
-                      'font-mono text-sm leading-6 whitespace-pre-wrap break-words',
-                      'pointer-events-none z-[1]',
-                      '[word-break:break-all]'
-                    )}
-                    style={{ tabSize: 4, transform: `translateY(-${scrollTop}px)` }}
-                    aria-hidden="true"
-                  >
-                    {content.split('\n').map((line, lineIdx) => {
-                      const lineNum = lineIdx + 1;
-                      const isHighlighted = highlightedLines.has(lineNum);
-                      return (
-                        <div
-                          key={lineIdx}
-                          className={isHighlighted
-                            ? 'border-l-3 border-green-500 bg-green-500/10 transition-opacity duration-1000'
-                            : ''
-                          }
-                        >
-                          <span className="invisible">{line || ' '}</span>
-                          {'\n'}
-                        </div>
-                      );
-                    })}
-                  </pre>
+                  <>
+                    <pre
+                      className={clsx(
+                        'absolute inset-0 m-0 p-4 overflow-hidden',
+                        'font-mono text-sm leading-6 whitespace-pre-wrap break-words',
+                        'pointer-events-none z-[1]',
+                        '[word-break:break-all]'
+                      )}
+                      style={{ tabSize: 4, transform: `translateY(-${scrollTop}px)` }}
+                      aria-hidden="true"
+                    >
+                      {content.split('\n').map((line, lineIdx) => {
+                        const lineNum = lineIdx + 1;
+                        const isHighlighted = highlightedLines.has(lineNum);
+                        return (
+                          <div
+                            key={lineIdx}
+                            className={isHighlighted
+                              ? 'border-l-3 border-green-500 bg-green-500/10 transition-opacity duration-1000'
+                              : ''
+                            }
+                          >
+                            <span className="invisible">{line || ' '}</span>
+                            {'\n'}
+                          </div>
+                        );
+                      })}
+                    </pre>
+                    {/* Confirm/Redo floating bar */}
+                    <div className="absolute top-2 right-2 z-[2] flex items-center gap-1 px-2 py-1 rounded-lg bg-green-500/15 border border-green-500/30 backdrop-blur-sm">
+                      <span className="text-xs text-green-600 dark:text-green-400 font-medium">
+                        {highlightedLines.size} line{highlightedLines.size > 1 ? 's' : ''} changed
+                      </span>
+                      <button
+                        onClick={() => setHighlightedLines(new Set())}
+                        className="px-1.5 py-0.5 text-xs rounded bg-green-500/20 text-green-700 dark:text-green-300 hover:bg-green-500/30 transition-colors"
+                        title="Dismiss highlights"
+                      >
+                        ✓
+                      </button>
+                      <button
+                        onClick={() => {
+                          // Redo: pre-select the changed text and open comment
+                          const lines = content.split('\n');
+                          const changedText = [...highlightedLines]
+                            .sort((a, b) => a - b)
+                            .map(n => lines[n - 1] ?? '')
+                            .join('\n');
+                          setSelectionText(changedText);
+                          setShowSelectionComment(true);
+                          setSelectionPopoverPos({
+                            top: (rootRef.current?.getBoundingClientRect().top ?? 0) + 50,
+                            left: (rootRef.current?.getBoundingClientRect().left ?? 0) + 100,
+                          });
+                          setHighlightedLines(new Set());
+                        }}
+                        className="px-1.5 py-0.5 text-xs rounded bg-amber-500/20 text-amber-700 dark:text-amber-300 hover:bg-amber-500/30 transition-colors"
+                        title="Request changes to these lines"
+                      >
+                        ↩ Redo
+                      </button>
+                    </div>
+                  </>
                 )}
                 {/* Search highlight overlay */}
                 {showSearch && searchMatches.length > 0 && (
