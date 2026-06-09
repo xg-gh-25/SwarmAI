@@ -4,7 +4,28 @@ Pipeline-owned stage (no sibling skill). This is the core implementation stage.
 
 The BUILD stage follows TDD methodology: tests before code, code until tests pass.
 
-### 🚨 CRITICAL: Tests BEFORE Code — Not After, Not "Later"
+### 🚨 STOP — Are You About to Skip TDD?
+
+**Read this table BEFORE writing any code. If ANY thought below matches your
+current thinking, you are rationalizing. CLASS A has 11 occurrences, 0 self-
+corrections. You will not be the first to self-correct.**
+
+| What you're thinking right now | Why it's wrong | Evidence |
+|------|------|------|
+| "This is just a config change / one-liner" | C025: 3 files, 2 functions, "simple" → user caught 2 bugs | C025 |
+| "I'll write tests after to verify" | Tests written after pass immediately — proves nothing. You never see them catch the bug. | C011 |
+| "I already know the implementation works" | C011: 57 tests green, 10/10 confidence → feature 100% non-functional in production | C011 |
+| "TDD is overkill for this change" | 5/5 HIGH adversarial findings in "trivial" session fixes came from untested code (2026-05-26) | IMPROVEMENT.md 2026-05-26 |
+| "Let me get the code working first, then add tests" | Code written before tests? Delete it. You WILL rationalize test coverage to match existing code. | C009 |
+| "The pipeline profile is trivial, so less rigor" | Trivial profile still includes BUILD+REVIEW+TEST. Profile selects STAGES, not RIGOR within stages. | C036 |
+| "I'll do a quick prototype then formalize" | Prototypes never get formalized. The "quick" version ships. Write the test first. | Observed pattern |
+| "The plan says X, but I see a better approach mid-implementation" | Deviate from Change Spec = deviate from the spec. You haven't reviewed implications for other ACs. Use Micro-Replan Trigger (Step 2) or go back to PLAN. | Step 2 design |
+
+**If you wrote code before a test: DELETE IT. Start over from RED.**
+
+---
+
+### Tests BEFORE Code — The Iron Law
 
 Write the test FIRST. Watch it FAIL. Then write implementation. If you wrote code
 before a test exists for it, you are not doing TDD — you are doing "code then
