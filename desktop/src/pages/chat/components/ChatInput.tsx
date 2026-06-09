@@ -775,7 +775,7 @@ export function ChatInput({
           </div>
 
           {/* Bottom Row - attachment left, context/TSCC right */}
-          <div className="flex items-center justify-between mt-2 pt-2 border-t border-[var(--color-border)]/50">
+          <div className="flex items-center justify-between mt-1.5 pt-1.5 border-t border-[var(--color-border)]/30">
             {/* Left: Attachment + Voice buttons */}
             <div className="flex items-center gap-2">
               <FileAttachmentButton onFilesSelected={onAddFiles} disabled={isProcessingFiles || disabled} canAddMore={canAddMore} />
