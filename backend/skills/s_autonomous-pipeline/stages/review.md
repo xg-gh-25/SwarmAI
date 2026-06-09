@@ -105,12 +105,25 @@ Read the BUILD stage artifacts:
 
 ## Spec Compliance Gate (Serial, BLOCKING — runs BEFORE fan-out)
 
+`NO FAN-OUT REVIEW WITHOUT SPEC SUB-AGENT FIRST`
+
 After Litmus Pre-Gate passes (verdict = PASS or BORDERLINE), dispatch a Spec
 Compliance sub-agent FIRST. This verifies the implementation matches acceptance
 criteria from PLAN — nothing more, nothing less. It runs SERIAL and BLOCKING because:
 - If spec fails, no point checking code quality (saves ~45K tokens)
 - Spec reviewer needs zero context from quality reviewers
 - Finding "AC #3 not implemented" is cheaper than finding "AC #3 has a race condition"
+
+**Why a FRESH sub-agent, not inline self-assessment:** You wrote this code in
+BUILD. Your confidence from BUILD pollutes spec compliance judgment (C011:
+builder rated 10/10 on 100% broken code). A fresh sub-agent has ZERO BUILD
+context — it only sees the diff + ACs. This isolation is the entire value.
+
+**Mechanical enforcement:** The spec_compliance artifact MUST include
+`spawned_as_subagent: true`. Inline self-assessment does NOT count — the
+Agent tool call must be verifiable in the conversation. Do NOT include BUILD
+confidence ratings, progress commentary, or "I think this is correct" in the
+sub-agent prompt — only raw diff + raw ACs.
 
 ### Process
 

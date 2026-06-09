@@ -54,6 +54,7 @@ Code that CLAIMS to implement an AC but does something different:
 
 ```json
 {
+  "spawned_as_subagent": true,
   "spec_compliance": {
     "verdict": "PASS | BLOCK | WARNING",
     "coverage_matrix": [
