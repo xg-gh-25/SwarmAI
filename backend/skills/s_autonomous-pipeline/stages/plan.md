@@ -78,25 +78,46 @@ out the sequencing itself — burning TDD time on logistics instead of code.
 Inspired by Sweep's "Issue Sub-Request Decomposition" — each sub-change maps
 to a specific file and function, and they're ordered by dependency.
 
+**Framing Principle: Write for an implementer with ZERO project context.**
+Assume the BUILD agent has never seen this codebase. It cannot infer file
+locations, naming conventions, or architectural patterns. Every sub-change
+must be executable by reading ONLY this spec — no ambient knowledge assumed.
+If BUILD has to grep to find a file you referenced, the spec is incomplete.
+
 **Format:**
 ```markdown
 ## Change Spec (ordered)
 1. `backend/routers/chat.py` → Add `POST /api/chat/transcribe` endpoint
    - Depends on: nothing (new endpoint)
    - AC: AC1 (returns 200 with transcript)
+   - Current: file has 12 routes, `transcribe` does not exist
+   - Target: new route handler, ~20 lines, returns `{"text": str}`
+   - Verify: `curl -X POST localhost:18321/api/chat/transcribe` returns 200
 
 2. `backend/core/transcribe.py` → Create `transcribe_audio()` function
    - Depends on: #1 (endpoint calls this)
    - AC: AC1, AC2 (handles timeout)
+   - Current: file does not exist
+   - Target: new module, single public function, timeout param
+   - Verify: `pytest tests/test_transcribe.py -x` passes
 
 3. `desktop/src/services/chat.ts` → Add `transcribeAudio()` client method
    - Depends on: #1 (needs endpoint contract)
    - AC: AC3 (frontend integration)
-
-4. `backend/routers/chat.py` → Add error handling for Transcribe failures
-   - Depends on: #2 (extends the function)
-   - AC: AC2 (graceful timeout)
+   - Current: `chat.ts` has `sendMessage()`, `getMessages()` etc.
+   - Target: new export, matches existing `post()` pattern
+   - Verify: TypeScript compiles without error
 ```
+
+**Required fields per sub-change:**
+- `Depends on:` — explicit dependency (BUILD processes in order)
+- `AC:` — which acceptance criteria this satisfies (traceability)
+- `Current:` — what the file/function looks like NOW (1-2 lines)
+- `Target:` — what it should look like AFTER (shape, not full code)
+- `Verify:` — command or check that proves this sub-change worked
+
+For **trivial profile** only: Current/Target/Verify fields optional when the
+sub-change is self-explanatory (rename a constant, fix a typo).
 
 **Rules:**
 - Each sub-change maps to ONE file + ONE function/class/endpoint
