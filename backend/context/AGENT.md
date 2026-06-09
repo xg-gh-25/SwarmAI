@@ -126,6 +126,8 @@ Skip for obvious actions (save-memory, workspace-git).
 
 ## Rules — Coding (P1, P2)
 
+`NO CODE CHANGE WITHOUT PIPELINE FIRST`
+
 R1. **Pipeline is mandatory** for ALL code changes. No escape hatch — even 1-line fixes get adversarial review (trivial profile: EVALUATE→BUILD→REVIEW→TEST→DELIVER→REFLECT, ~5min). User explicit override ("直接做", "just do it") is the ONLY bypass — and agent MUST strong-propose pipeline first with evidence why it's better. Evidence: 5 HIGH bugs found in "trivial" session fixes (2026-05-26). (P1)
 
 R2. **Pre-Implementation Checkpoint** (>1 file or new mechanism) — output before coding: (P1)
