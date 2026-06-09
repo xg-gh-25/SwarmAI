@@ -818,11 +818,30 @@ user time and split work unnecessarily.
 
 ### When to Checkpoint
 
-Checkpoint (pause the pipeline) when ANY of:
-- L2 BLOCK escalation (judgment decision)
-- Stage retry exhaustion (>= max_retries failures)
-- Budget insufficient for next stage (`run-budget` returns `should_checkpoint: true`)
-- Pipeline error (unexpected failure)
+```dot
+digraph checkpoint_decision {
+  rankdir=TB;
+  stage_done [label="Stage complete", shape=ellipse];
+  run_budget [label="run-budget\nshould_checkpoint?", shape=diamond];
+  checkpoint_yes [label="CHECKPOINT", shape=box, style=filled, fillcolor="#ffcccc"];
+  l2_block [label="L2 BLOCK\npending?", shape=diamond];
+  retries [label="Retries >=\nmax_retries?", shape=diamond];
+  error [label="Unexpected\nerror?", shape=diamond];
+  continue [label="CONTINUE\n(next stage)", shape=box, style=filled, fillcolor="#ccffcc"];
+
+  stage_done -> run_budget;
+  run_budget -> checkpoint_yes [label="true"];
+  run_budget -> l2_block [label="false"];
+  l2_block -> checkpoint_yes [label="yes"];
+  l2_block -> retries [label="no"];
+  retries -> checkpoint_yes [label="yes"];
+  retries -> error [label="no"];
+  error -> checkpoint_yes [label="yes"];
+  error -> continue [label="no"];
+}
+```
+
+**Follow the tree sequentially.** First YES → checkpoint. All NO → continue.
 
 **NOT valid reasons to checkpoint:**
 - "BUILD is a big stage" (it's ~60K tokens, you have 800K)

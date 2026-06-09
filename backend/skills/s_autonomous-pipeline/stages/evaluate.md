@@ -139,45 +139,49 @@ Without active cross-referencing, the same patterns recur (COE03: big-bang refac
 C023: 3x daemon hang from same root cause). The check costs 30 seconds of reading;
 re-discovering a failure costs hours.
 
-### Goal Mode Detection
+### Profile Selection (Decision Tree)
 
 **Core principle:** The distinction between goal and full is NOT about scope or
 file count — it's about how "done" is verified.
 
-- **Goal:** "Done" = externally measurable condition passes (command exit 0, metric
-  threshold met, all items in a checklist addressed). Requires iteration until pass.
-- **Full:** "Done" = artifact exists and passes review. The deliverable IS the proof.
+```dot
+digraph profile_selection {
+  rankdir=TB;
+  start [label="Parse requirement", shape=ellipse];
+  q1 [label="Can 'done' be verified by\na shell command (exit 0)?", shape=diamond];
+  goal [label="GOAL", shape=box, style=filled, fillcolor="#e6ffe6"];
+  q2 [label="Clear bug with\nknown root cause?", shape=diamond];
+  bugfix [label="BUGFIX", shape=box, style=filled, fillcolor="#fff2e6"];
+  q3 [label="≤1 file, config/const\nonly, no logic?", shape=diamond];
+  trivial [label="TRIVIAL", shape=box, style=filled, fillcolor="#f2f2f2"];
+  q4 [label="No code output?\n(research only)", shape=diamond];
+  research [label="RESEARCH", shape=box, style=filled, fillcolor="#e6f2ff"];
+  q5 [label="Only .md/.rst\nchanges?", shape=diamond];
+  docs [label="DOCS", shape=box, style=filled, fillcolor="#f9f2ff"];
+  full [label="FULL (default)", shape=box, style=filled, fillcolor="#ffe6e6"];
 
-If the requirement's completion can be verified by running a command or checking
-a measurable outcome, classify as `goal_mode: true` and switch to `goal` profile.
+  start -> q1;
+  q1 -> goal [label="yes"];
+  q1 -> q2 [label="no"];
+  q2 -> bugfix [label="yes"];
+  q2 -> q3 [label="no"];
+  q3 -> trivial [label="yes"];
+  q3 -> q4 [label="no"];
+  q4 -> research [label="yes"];
+  q4 -> q5 [label="no"];
+  q5 -> docs [label="yes"];
+  q5 -> full [label="no"];
+}
+```
 
-**Goal indicators (ANY ONE is sufficient):**
+**Evaluate each condition sequentially.** The first YES determines the profile.
+If all conditions are NO, default to FULL.
 
-Category 1 — Metric/threshold targets:
-- "Get X to Y%" / "Improve X until Y" / "Reduce X below Y"
-- Any requirement with a measurable success criterion (coverage, perf, count)
-
-Category 2 — Bulk/sweep operations:
-- "Migrate all callers" / "Fix all warnings" / "Remove all instances of"
-- "Refactor X across the codebase" / "Unify all Y" / "Standardize Z"
-- Work that addresses N items where N is unknown upfront
-
-Category 3 — Quality/hardening with measurable end-state:
-- "Fix all findings from review" / "Address N issues"
-- "Make X production-ready" (where "ready" has testable criteria)
-- Work where "done" = "nothing left that fails the check"
-
-Category 4 — Iterative convergence:
-- "Investigate and fix" where diagnosis reveals scope
-- Work that may surface additional issues as you go
-- Optimization toward a target (latency, size, quality score)
-
-**When NOT goal (use full/bugfix/trivial):**
-- "Implement X feature" where done = feature exists + tests pass → **full**
-- Clear bug with known root cause → **bugfix**
-- One-liner or config change → **trivial**
-- Pure research → **research**
-- Documentation → **docs**
+**Goal indicators (ANY ONE → goal):**
+- Metric/threshold targets: "Get X to Y%", "Reduce X below Y"
+- Bulk/sweep operations: "Migrate all", "Fix all warnings", "Remove all instances"
+- Quality hardening: "Fix all findings", "Make X production-ready"
+- Iterative convergence: "Investigate and fix", optimization toward target
 
 **Decision heuristic:** Can you write a shell command that returns exit 0 only
 when the requirement is fully satisfied? YES → goal. NO (done = "review says
