@@ -6,7 +6,7 @@
  * and reports page info via onStatusInfo.
  */
 
-import { useState, useCallback, useRef, useEffect, memo } from 'react';
+import { useState, useCallback, useMemo, useRef, useEffect, memo } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
@@ -53,8 +53,8 @@ const PdfRenderer = memo(function PdfRenderer({
   const [loading, setLoading] = useState<boolean>(true);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Decode base64 content to Uint8Array for react-pdf
-  const fileData = useCallback(() => {
+  // Decode base64 content to Uint8Array for react-pdf (memoized to prevent re-load on every render)
+  const pdfData = useMemo(() => {
     if (!content) return null;
     try {
       const binaryString = atob(content);
@@ -68,7 +68,8 @@ const PdfRenderer = memo(function PdfRenderer({
     }
   }, [content]);
 
-  const pdfData = fileData();
+  // Stable file prop object — only changes when pdfData changes
+  const fileSource = useMemo(() => (pdfData ? { data: pdfData } : null), [pdfData]);
 
   // Report page info to parent
   const reportPageInfo = useCallback(
@@ -168,7 +169,7 @@ const PdfRenderer = memo(function PdfRenderer({
   }, [prevPage, nextPage]);
 
   // --- No content ---
-  if (!content || !pdfData) {
+  if (!content || !fileSource) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-[var(--color-text-muted)]">
         <span className="material-symbols-outlined text-4xl mb-2">picture_as_pdf</span>
@@ -286,7 +287,7 @@ const PdfRenderer = memo(function PdfRenderer({
         )}
 
         <Document
-          file={{ data: pdfData }}
+          file={fileSource}
           onLoadSuccess={onDocumentLoadSuccess}
           onLoadError={onDocumentLoadError}
           loading={null}
