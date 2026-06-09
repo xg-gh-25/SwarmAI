@@ -1,5 +1,23 @@
 # TEST Stage
 
+### 🚨 STOP — Are You About to Skip Test Layers?
+
+**The temptation at TEST is not to skip testing entirely — it's to run only
+Layer 1 (AC tests you wrote) and declare "tests pass." Layers 2 and 3 catch
+the bugs YOUR tests can't — because you wrote both the code AND the tests.**
+
+| What you're thinking right now | Why it's wrong | Evidence |
+|------|------|------|
+| "My unit tests pass, that's sufficient" | Unit tests verify YOUR assumptions. Layer 2 catches collateral damage to code that imports yours. | C011: all unit tests green, feature broken |
+| "Dependency-scoped grep found 0 files" | Wrong grep pattern? Check TECH.md for import style. 0 results for non-trivial change = suspicious, not reassuring. | LL31: mock format ≠ production format |
+| "Import smoke is pointless for existing files" | Circular imports, missing deps, wrong relative paths — all invisible to unit tests that import individual functions. | C011: circular dep crashed real import |
+| "I'm running low on budget, skip Layer 3" | Layer 3 is ONE command per file, usually <10 seconds total. It costs less context than the sentence you used to rationalize skipping it. | O008: measure before optimizing |
+| "Tests passed in BUILD, why run again?" | BUILD tests ran BEFORE the refactor step. Post-refactor state may differ. Fresh run = fresh evidence. | SOUL P1: Verify, Don't Infer |
+| "Full suite would be better but takes too long" | NEVER run full suite (STEERING R9). Layers 1-3 ARE the scoped alternative. Skipping them means you have NO regression signal. | C013: full suite deadlocked |
+| "The fix was obvious, no need for WTF scoring" | Score EVERY fix. WTF gate is mechanical, not discretionary. "Obvious" fixes that touch 4+ files are not obvious. | C009 |
+
+---
+
 ## Base Methodology
 
 > **Reference:** `backend/skills/s_qa/INSTRUCTIONS.md`

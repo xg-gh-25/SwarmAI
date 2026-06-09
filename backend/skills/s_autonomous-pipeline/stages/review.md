@@ -1,5 +1,22 @@
 # REVIEW Stage
 
+### 🚨 STOP — Are You About to Shortcut Review?
+
+**Read this table BEFORE deciding how to review. The thought "I already reviewed
+this during BUILD" is the single most common CLASS A rationalization.**
+
+| What you're thinking right now | Why it's wrong | Evidence |
+|------|------|------|
+| "I already reviewed during BUILD, I know it's correct" | You WROTE it. You're re-reading your own assumptions, not reviewing. C011: builder rated 10/10, feature 100% broken. | C011 |
+| "Tests pass, so the code is correct" | Tests verify declared behavior. Review catches undeclared behavior: missing error paths, wrong conventions, integration wiring. | C029 |
+| "This is a small change, full review is overkill" | C025: 3 files, "simple" → 2 HIGH findings. Small changes have the HIGHEST skip rate and the HIGHEST bug density per line. | C025 |
+| "I'll just do a quick self-review" | Self-review found 0. Adversarial found 5 (2 HIGH). Same code, same session. Your confidence is anti-correlated with bug presence. | run_bd42b58f |
+| "The changeset is only 1-2 files, no need for sub-agents" | Integration trace and RP checklist are mechanical — they don't need sub-agents. But they DO need to run. Size doesn't exempt process. | C030 |
+| "I'm running low on context/budget, skip to DELIVER" | CHECKPOINT instead. A skipped REVIEW means DELIVER's adversarial is your ONLY safety net — single point of failure. | STEERING R11 |
+| "This finding is valid but I'll fix it in a follow-up" | There is no follow-up. This pipeline run ends at DELIVER. A "deferred" finding is a shipped bug. Fix now or escalate. | Pipeline design |
+
+---
+
 ### Purpose: REVIEW vs ADVERSARIAL — Different Jobs
 
 | | REVIEW (this stage) | ADVERSARIAL (inside DELIVER/goal_cycle) |
@@ -12,7 +29,7 @@
 Both are necessary — REVIEW catches "did you follow the rules" (mechanical),
 ADVERSARIAL catches "does it actually work" (creative). Neither replaces the other.
 
-### 🚨 CRITICAL: Self-Review ≠ Review
+### Self-Review ≠ Review
 
 You wrote this code. You cannot objectively review it. "I already looked at it
 during BUILD" is not a review — it's re-reading your own assumptions. REVIEW
