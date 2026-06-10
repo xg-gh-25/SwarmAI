@@ -67,7 +67,8 @@ export function useSubAgentProgress(
             tier: computeTier(data.elapsed_s),
           });
         } else {
-          setProgress({ active: false, elapsedS: 0, label: null, tier: 0 });
+          // Functional update: skip if already inactive (prevents new object → re-render)
+          setProgress(prev => prev.active ? { active: false, elapsedS: 0, label: null, tier: 0 } : prev);
         }
       } catch {
         // Silently ignore poll errors (session might have ended)

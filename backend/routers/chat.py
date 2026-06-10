@@ -762,8 +762,8 @@ async def get_sub_agent_progress(session_id: str):
     if not unit:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    # Only report active if session is actually streaming
-    active_tools = unit._active_agent_tools
+    # Snapshot the dict — prevents TOCTOU if .pop() mutates during iteration
+    active_tools = unit._active_agent_tools.copy()
     is_streaming = unit.state.value == "streaming"
 
     if not active_tools or not is_streaming:

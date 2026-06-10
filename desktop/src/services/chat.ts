@@ -444,8 +444,9 @@ export const chatService = {
     active: boolean;
     elapsed_s: number;
     label: string | null;
+    count: number;
   }> {
-    const response = await api.get<{ active: boolean; elapsed_s: number; label: string | null }>(
+    const response = await api.get<{ active: boolean; elapsed_s: number; label: string | null; count: number }>(
       `/chat/sessions/${sessionId}/sub-agent-progress`,
     );
     return response.data;
