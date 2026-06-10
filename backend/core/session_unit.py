@@ -456,6 +456,13 @@ class SessionUnit:
         # Flag: health check runs only ONCE per session (first ResultMessage).
         self._mcp_health_checked: bool = False
 
+        # ── Sub-agent progress observability ─────────────────────
+        # Set when a ToolUseBlock with name="Agent" is received (sub-agent
+        # spawned). Cleared when the matching ToolResultBlock arrives.
+        # Frontend polls this via GET /sessions/{id}/sub-agent-progress
+        # to show tiered awareness banners (T0-T4) based on elapsed time.
+        self._active_agent_tool: Optional[dict] = None
+
         # ── Proactive RSS restart cooldown ────────────────────────
         # Monotonic timestamp of last proactive compact→kill cycle.
         # Prevents repeated restarts within the PROACTIVE_COOLDOWN window.
@@ -2208,6 +2215,14 @@ class SessionUnit:
                             # answered.
                             self._content_emitted = True
                     elif isinstance(block, ToolUseBlock):
+                        # ── Track sub-agent (Agent tool) for progress observability ──
+                        if block.name == "Agent" and isinstance(block.input, dict):
+                            _agent_label = block.input.get("description") or block.input.get("prompt") or ""
+                            self._active_agent_tool = {
+                                "tool_use_id": block.id,
+                                "label": _agent_label[:80],
+                                "start_time": time.time(),
+                            }
                         # ── Track file-modifying tools for file_changed events ──
                         if block.name in ("Edit", "Write", "NotebookEdit") and isinstance(block.input, dict):
                             _fp = block.input.get("file_path", "")
@@ -2313,6 +2328,12 @@ class SessionUnit:
                                 await self.interrupt()
                                 return
                     elif isinstance(block, ToolResultBlock):
+                        # ── Clear sub-agent progress when Agent tool completes ──
+                        if (
+                            self._active_agent_tool
+                            and block.tool_use_id == self._active_agent_tool["tool_use_id"]
+                        ):
+                            self._active_agent_tool = None
                         block_content = str(block.content) if block.content else ""
                         if _has_tool_summarizer:
                             truncated, was_truncated = truncate_tool_result(block_content)
