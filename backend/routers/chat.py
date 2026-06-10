@@ -763,17 +763,21 @@ async def get_sub_agent_progress(session_id: str):
         raise HTTPException(status_code=404, detail="Session not found")
 
     # Only report active if session is actually streaming
-    agent_tool = unit._active_agent_tool
+    active_tools = unit._active_agent_tools
     is_streaming = unit.state.value == "streaming"
 
-    if not agent_tool or not is_streaming:
-        return {"active": False, "elapsed_s": 0, "label": None}
+    if not active_tools or not is_streaming:
+        return {"active": False, "elapsed_s": 0, "label": None, "count": 0}
 
-    elapsed = _time.time() - agent_tool["start_time"]
+    # Report the oldest (longest-running) sub-agent for elapsed display
+    oldest_id = min(active_tools, key=lambda k: active_tools[k]["start_time"])
+    oldest = active_tools[oldest_id]
+    elapsed = _time.time() - oldest["start_time"]
     return {
         "active": True,
         "elapsed_s": round(elapsed, 1),
-        "label": agent_tool.get("label"),
+        "label": oldest.get("label"),
+        "count": len(active_tools),
     }
 
 
