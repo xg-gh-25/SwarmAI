@@ -734,6 +734,49 @@ def _get_todo_highlights(max_items: int = 5) -> list[str]:
     return lines
 
 
+def _get_ddd_trust_summary(workspace: Path) -> list[str]:
+    """F3: Surface DDD sections with low trust in session briefing.
+
+    Reads maturity annotations from DDD docs directly (not a separate
+    health file). Sections with trust=low or trust=very_low are surfaced
+    so the agent knows to verify before relying on them.
+
+    Returns max 5 lines to avoid briefing bloat (~50 tokens).
+    """
+    lines: list[str] = []
+    projects_dir = workspace / "Projects"
+    if not projects_dir.is_dir():
+        return lines
+
+    for project_dir in sorted(projects_dir.iterdir()):
+        if not project_dir.is_dir():
+            continue
+        # Read maturity annotations from DDD docs
+        for doc_name in ("TECH.md", "IMPROVEMENT.md", "PRODUCT.md"):
+            doc_path = project_dir / doc_name
+            if not doc_path.exists():
+                continue
+            try:
+                content = doc_path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            # Parse maturity comments: <!-- maturity: X | ... | trust: Y | ... -->
+            for match in re.finditer(
+                r"^##\s+(.+)\n<!-- maturity: (\w+) .+trust: (\w+)",
+                content, re.MULTILINE
+            ):
+                section_name = match.group(1).strip()
+                _level = match.group(2)
+                trust = match.group(3)
+                if trust in ("low", "very_low"):
+                    lines.append(
+                        f"{project_dir.name}/{doc_name} §{section_name} "
+                        f"[trust:{trust}]"
+                    )
+
+    return lines[:5]
+
+
 def _get_skill_health_highlights(ctx_dir: Path) -> list[str]:
     """Read skill_health.json and surface medium-confidence recommendations.
 
@@ -1218,6 +1261,17 @@ def build_session_briefing(
                     )
         except Exception as exc:
             logger.debug("DDD escalations read failed: %s", exc)
+
+        # L3b (F3): DDD low-trust sections — surface knowledge the agent should verify
+        try:
+            trust_lines = _get_ddd_trust_summary(workspace)
+            if trust_lines:
+                sections.append(
+                    "**DDD low-trust sections** (verify before relying):\n"
+                    + "\n".join(f"  - {line}" for line in trust_lines)
+                )
+        except Exception as exc:
+            logger.debug("DDD trust summary failed: %s", exc)
 
         # L4: Skill health recommendations from evolution pipeline
         ctx_dir = workspace / ".context"

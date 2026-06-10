@@ -687,17 +687,20 @@ class DddCultivationOrchestrator:
         return []
 
     def _ch_entry_lifecycle(self, root: Path, ws_path: str) -> list[str]:
-        """Channel 8: Per-entry decay assessment and state transitions.
+        """Channel 8: Per-entry reference bumping, decay assessment, and state transitions.
 
-        Runs on TIMER_30MIN and SESSION_CLOSE. Checks all entries in
-        IMPROVEMENT.md for decay transitions (active→dormant→archived).
+        Runs on TIMER_30MIN and SESSION_CLOSE. For each project's IMPROVEMENT.md:
+        1. Bump references from recent DailyActivity text (F1 activation)
+        2. Assess decay transitions (active→dormant→archived)
+        3. Archive entries that reached end-of-life
         Uses fcntl advisory lock to prevent concurrent read-modify-write.
         """
         import fcntl
-        from datetime import date as _date
+        from datetime import date as _date, timedelta as _timedelta
         from core.ddd_entry_lifecycle import (
             archive_entries,
             assess_decay,
+            bump_references,
             inject_entry_metadata,
             parse_entries,
         )
@@ -742,6 +745,36 @@ class DddCultivationOrchestrator:
                     # C2 fix: don't use continue — fall through to finally
                     pass
                 else:
+                    # F1: Bump references from recent DailyActivity text
+                    # This makes ref counts non-zero for actively-discussed knowledge,
+                    # preventing the decay engine from archiving useful entries.
+                    daily_dir = Path(ws_path) / "Knowledge" / "DailyActivity"
+                    if daily_dir.is_dir():
+                        today_str = today.isoformat()
+                        yesterday_str = (today - _timedelta(days=1)).isoformat()
+                        signal_texts: list[str] = []
+                        try:
+                            for da_file in sorted(daily_dir.iterdir(), reverse=True)[:10]:
+                                if da_file.suffix != ".md":
+                                    continue
+                                if da_file.stem.startswith(today_str) or da_file.stem.startswith(yesterday_str):
+                                    signal_texts.append(da_file.read_text(errors="ignore")[:8000])
+                        except OSError:
+                            pass  # DailyActivity unreadable — skip bumping, still decay
+
+                        if signal_texts:
+                            combined_text = "\n".join(signal_texts)
+                            graph_path = Path(ws_path) / ".context" / ".knowledge-graph.yaml"
+                            bumped = bump_references(
+                                entries, combined_text, today,
+                                graph_path=graph_path if graph_path.exists() else None,
+                            )
+                            if bumped:
+                                findings.append(
+                                    f"ENTRY_BUMP: {bumped} entries referenced in "
+                                    f"{project_dir.name} (from DailyActivity)"
+                                )
+
                     transitions = assess_decay(entries, today)
                     if transitions:
                         # Separate archival transitions from dormant transitions
@@ -760,13 +793,12 @@ class DddCultivationOrchestrator:
                         if to_archive:
                             archive_entries(project_dir, to_archive)
 
-                        # C6 fix: filter out archived entries before injecting metadata
-                        active_entries = [e for e in entries if e.decay_state != "archived"]
-
-                        # Write updated metadata back (only for non-archived entries)
-                        updated = inject_entry_metadata(content, active_entries)
-                        if updated != content:
-                            imp_path.write_text(updated, encoding="utf-8")
+                    # Write updated metadata back — covers BOTH ref bumps (F1)
+                    # and decay transitions. Only write if content actually changed.
+                    active_entries = [e for e in entries if e.decay_state != "archived"]
+                    updated = inject_entry_metadata(content, active_entries)
+                    if updated != content:
+                        imp_path.write_text(updated, encoding="utf-8")
 
             except Exception as exc:
                 logger.debug(

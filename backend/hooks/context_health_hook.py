@@ -890,8 +890,9 @@ class ContextHealthHook:
 
         Steps:
         1. For each project with DDD docs, update source_count from changelog.
-        2. Evaluate promotions (sparse→growing, growing→mature).
-        3. Apply promotions + log to changelog.
+        2. F5: Set verified_by_production from completed pipeline runs.
+        3. Evaluate promotions (sparse→growing, growing→mature).
+        4. Apply promotions + log to changelog.
 
         Runs after cultivation so new changelog entries are counted.
         Respects shared _deadline from _light_refresh (PE-3).
@@ -927,7 +928,12 @@ class ContextHealthHook:
                 # Step 1: Update evidence from changelog
                 update_evidence_from_changelog(project_path)
 
-                # Step 2+3: Evaluate and apply promotions
+                # Step 2 (F5): Set verified_by_production from completed pipeline runs.
+                # If a pipeline delivered successfully using this project's DDD,
+                # all sections contributed to that success → mark verified.
+                self._set_verified_from_pipeline_runs(project_path)
+
+                # Step 3+4: Evaluate and apply promotions
                 promotions = evaluate_all_promotions(project_path)
                 for promo in promotions:
                     success = promote_section(
@@ -968,6 +974,94 @@ class ContextHealthHook:
         }
         with open(changelog_path, "a", encoding="utf-8") as f:
             f.write(_json.dumps(entry) + "\n")
+
+    def _set_verified_from_pipeline_runs(self, project_path: Path) -> None:
+        """F5: Set verified_by_production on maturity states from completed pipeline runs.
+
+        Scans recent runs (last 10). If a run has status=completed AND a deliver
+        stage with status=completed, ALL sections in this project's DDD are marked
+        verified_by_production=True + used_in_decision=True (the pipeline consumed
+        DDD context at EVALUATE/THINK/BUILD).
+
+        Marks processed runs with 'maturity_updated: true' to avoid re-processing.
+        """
+        import json as _json
+        from core.ddd_maturity import (
+            inject_maturity,
+            parse_maturity,
+        )
+
+        runs_dir = project_path / ".artifacts" / "runs"
+        if not runs_dir.is_dir():
+            return
+
+        # Find completed runs with deliver stage, not yet processed
+        found_verification = False
+        for run_dir in sorted(runs_dir.iterdir(), reverse=True)[:10]:
+            run_json = run_dir / "run.json"
+            if not run_json.exists():
+                continue
+            try:
+                data = _json.loads(run_json.read_text(encoding="utf-8"))
+            except (ValueError, OSError):
+                continue
+
+            if data.get("maturity_updated"):
+                continue  # Already processed
+            if data.get("status") != "completed":
+                continue
+
+            # Check if deliver stage completed
+            stages = data.get("stages", [])
+            has_deliver = any(
+                s.get("stage") == "deliver" and s.get("status") == "completed"
+                for s in stages
+            )
+            if not has_deliver:
+                continue
+
+            # This run delivered successfully → mark verified
+            found_verification = True
+            data["maturity_updated"] = True
+            try:
+                # Atomic write: tmp + rename prevents corruption on crash
+                tmp = run_json.with_suffix(".tmp")
+                tmp.write_text(_json.dumps(data, indent=2), encoding="utf-8")
+                os.replace(tmp, run_json)
+            except OSError:
+                pass
+            logger.debug(
+                "context_health: F5 verified maturity from run %s for %s",
+                run_dir.name, project_path.name,
+            )
+            break  # One run per session is enough
+
+        if not found_verification:
+            return
+
+        # Apply verification to all DDD doc sections
+        for doc_name in ("TECH.md", "IMPROVEMENT.md", "PRODUCT.md", "PROJECT.md"):
+            doc_path = project_path / doc_name
+            if not doc_path.exists():
+                continue
+            content = doc_path.read_text(encoding="utf-8")
+            states = parse_maturity(content)
+            if not states:
+                continue
+
+            changed = False
+            for state in states.values():
+                if not state.verified_by_production:
+                    state.verified_by_production = True
+                    changed = True
+                if not state.used_in_decision:
+                    state.used_in_decision = True
+                    changed = True
+
+            if changed:
+                new_content = inject_maturity(content, states)
+                if new_content != content:
+                    doc_path.write_text(new_content, encoding="utf-8")
 
     def _track_memory_usage(self, root: Path) -> None:
         """Scan session transcripts for memory key references.
