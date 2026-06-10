@@ -1,6 +1,7 @@
 ---
 title: "Autonomous Pipeline — Coding as Black Box"
-date: 2026-05-12
+created: 2026-05-12
+updated: 2026-05-14
 tags: [architecture, pipeline, autonomous-delivery, quality-convergence, adversarial-review]
 project: SwarmAI
 status: PE-review

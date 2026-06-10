@@ -1,6 +1,7 @@
 ---
 title: "Goal Loop — Iterative Convergence for Open-Ended Objectives"
-date: 2026-05-14
+created: 2026-05-14
+updated: 2026-05-14
 tags: [architecture, pipeline, goal-loop, quality-convergence, autonomous-delivery]
 project: SwarmAI
 status: PE-review

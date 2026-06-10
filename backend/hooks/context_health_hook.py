@@ -205,6 +205,54 @@ class ContextHealthHook:
             except Exception as exc:
                 logger.debug("context_health: PROJECTS.md refresh skipped: %s", exc)
 
+        # Auto-update `updated:` date in design doc frontmatter when modified
+        try:
+            self._auto_update_doc_frontmatter(root)
+        except Exception as exc:
+            logger.debug("context_health: doc frontmatter auto-update skipped: %s", exc)
+
+    def _auto_update_doc_frontmatter(self, root: Path) -> None:
+        """Auto-update `updated:` field in docs/*.md that were modified this session.
+
+        Checks git for uncommitted or recently-committed changes to docs/*.md,
+        and updates the `updated:` frontmatter field to today's date if stale.
+        Only touches files with existing YAML frontmatter (created:/updated:).
+        """
+        docs_dir = root / "docs"
+        if not docs_dir.is_dir():
+            return
+
+        today_str = date.today().isoformat()
+
+        # Find docs modified in working tree (staged + unstaged)
+        try:
+            result = subprocess.run(
+                ["git", "diff", "--name-only", "HEAD", "--", "docs/*.md"],
+                capture_output=True, text=True, timeout=3,
+                cwd=str(root),
+            )
+            modified = [
+                docs_dir.parent / line.strip()
+                for line in result.stdout.strip().split("\n")
+                if line.strip().endswith(".md")
+            ]
+        except (subprocess.TimeoutExpired, OSError):
+            return
+
+        for filepath in modified:
+            if not filepath.exists():
+                continue
+            content = filepath.read_text(encoding="utf-8")
+            if not content.startswith("---"):
+                continue
+
+            # Check if updated: field exists and is not today
+            match = re.search(r"^updated:\s*(.+)$", content, re.MULTILINE)
+            if match and match.group(1).strip() != today_str:
+                new_content = content[:match.start()] + f"updated: {today_str}" + content[match.end():]
+                filepath.write_text(new_content, encoding="utf-8")
+                logger.debug("context_health: auto-updated frontmatter date in %s", filepath.name)
+
     def _refresh_projects_index_sync(self, root: Path) -> None:
         """Sync wrapper: regenerate PROJECTS.md after cultivation modified DDD docs.
 

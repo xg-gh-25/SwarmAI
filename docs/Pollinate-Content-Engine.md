@@ -1,6 +1,7 @@
 ---
 title: "Pollinate v3 — Personal Content Delivery Engine"
-date: 2026-05-26
+created: 2026-05-26
+updated: 2026-05-29
 tags: [architecture, pollinate, content-engine, ddd-integration, brand-delivery, discover]
 project: SwarmAI
 status: shipped
