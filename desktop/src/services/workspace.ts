@@ -160,13 +160,21 @@ let _cachedTree: TreeNode[] | null = null;
  * All files are user-manageable — no system-managed restrictions.
  */
 export function treeNodeToCamelCase(data: Record<string, unknown>): TreeNode {
+  // children: array → recurse, null → null (truncated/lazy-loadable), absent → undefined (file)
+  let children: TreeNode[] | null | undefined;
+  if (Array.isArray(data.children)) {
+    children = (data.children as Record<string, unknown>[]).map(treeNodeToCamelCase);
+  } else if (data.children === null) {
+    children = null; // depth-truncated: lazy-loadable on expand
+  } else {
+    children = undefined; // file node or not provided
+  }
+
   return {
     name: data.name as string,
     path: data.path as string,
     type: data.type as 'file' | 'directory',
-    children: data.children
-      ? (data.children as Record<string, unknown>[]).map(treeNodeToCamelCase)
-      : undefined,
+    children,
     gitStatus: (data.git_status ?? data.gitStatus) as TreeNode['gitStatus'],
     isSymlink: (data.is_symlink ?? data.isSymlink) as boolean | undefined,
   };
@@ -220,6 +228,16 @@ export const workspaceService = {
     }
   },
 
+  /** Update the service-layer cached tree without a server round-trip.
+   *
+   * Call after local mutations (e.g., expandDirectory injecting children into
+   * the tree) to keep _cachedTree in sync with React state. This prevents
+   * the ETag poll from reverting locally-expanded nodes on 304 responses.
+   */
+  setCachedTree(tree: TreeNode[]): void {
+    _cachedTree = tree;
+  },
+
   /** Force-fetch the workspace tree, bypassing the ETag cache.
    *
    * Call this after CRUD mutations (create/delete project, create/delete
@@ -229,6 +247,18 @@ export const workspaceService = {
     _treeETag = null;
     _cachedTree = null;
     return this.getTree(depth);
+  },
+
+  /**
+   * Lazy-expand a single directory that was returned with children: null
+   * (depth-truncated). Returns the children nodes for that directory.
+   */
+  async expandDirectory(path: string, depth: number = 2): Promise<TreeNode[]> {
+    const response = await api.get<Record<string, unknown>[]>(
+      `/workspace/tree/expand`,
+      { params: { path, depth } }
+    );
+    return response.data.map(treeNodeToCamelCase);
   },
 
   /**

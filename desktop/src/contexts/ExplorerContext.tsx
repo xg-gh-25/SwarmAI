@@ -385,6 +385,23 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
   }, [searchQuery, treeData]);
 
   // ── Expand / collapse actions ──────────────────────────────────────────
+
+  /** Recursively find a node by path and inject children into a tree copy. */
+  const injectChildren = useCallback((tree: TreeNode[], targetPath: string, children: TreeNode[]): TreeNode[] => {
+    return tree.map((node) => {
+      if (node.path === targetPath) {
+        return { ...node, children };
+      }
+      if (node.children && targetPath.startsWith(node.path + '/')) {
+        return { ...node, children: injectChildren(node.children, targetPath, children) };
+      }
+      return node;
+    });
+  }, []);
+
+  /** Set of paths currently being lazy-loaded (prevents duplicate fetches). */
+  const loadingPaths = useRef<Set<string>>(new Set());
+
   const toggleExpand = useCallback((path: string) => {
     setExpandedPaths((prev) => {
       const next = new Set(prev);
@@ -395,7 +412,40 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
       }
       return next;
     });
-  }, []);
+
+    // Lazy load: if the directory has children === null (depth-truncated),
+    // fetch its children from the server and inject into the tree.
+    const findNode = (nodes: TreeNode[], target: string): TreeNode | null => {
+      for (const n of nodes) {
+        if (n.path === target) return n;
+        if (n.children && target.startsWith(n.path + '/')) {
+          const found = findNode(n.children, target);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+
+    const node = findNode(treeData, path);
+    if (node && node.type === 'directory' && node.children === null && !loadingPaths.current.has(path)) {
+      loadingPaths.current.add(path);
+      workspaceService.expandDirectory(path).then((children) => {
+        setTreeData((prev) => {
+          const updated = injectChildren(prev, path, children);
+          lastTreeRef.current = updated;
+          // Keep service cache in sync so ETag poll (304) doesn't revert
+          // expanded children. Without this, poll returns stale _cachedTree
+          // which lacks the injected children → silent regression every 30s.
+          workspaceService.setCachedTree(updated);
+          return updated;
+        });
+      }).catch(() => {
+        // Silently fail — node stays collapsed without children
+      }).finally(() => {
+        loadingPaths.current.delete(path);
+      });
+    }
+  }, [treeData, injectChildren]);
 
   const expandAll = useCallback(() => {
     const allPaths = collectAllDirectoryPaths(treeData);

@@ -561,7 +561,7 @@ def _compute_etag_and_tree_sync(workspace_root: Path, depth: int) -> tuple[str, 
 
 @router.get("/workspace/tree")
 async def get_workspace_tree(
-    depth: int = Query(default=8, ge=1, le=10),
+    depth: int = Query(default=3, ge=1, le=10),
     if_none_match: Optional[str] = Header(default=None),
 ) -> list[dict]:
     """Return the SwarmWS filesystem tree as nested JSON.
@@ -627,6 +627,41 @@ async def get_workspace_tree(
         media_type="application/json",
         headers={"ETag": etag_value},
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Lazy-expand: fetch children of a single directory
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/workspace/tree/expand")
+async def expand_tree_directory(
+    path: str = Query(..., description="Relative path of the directory to expand"),
+    depth: int = Query(default=2, ge=1, le=5),
+) -> list[dict]:
+    """Expand a single directory in the workspace tree (lazy loading).
+
+    Returns the children of the specified directory at the given depth.
+    Used by the frontend when the user expands a directory that was
+    previously returned with ``children: null`` (depth-truncated).
+    """
+    workspace_root = Path(await _get_workspace_path())
+    target = workspace_root / path
+
+    # Security: ensure path doesn't escape workspace root (BEFORE any fs operation)
+    try:
+        target.resolve().relative_to(workspace_root.resolve())
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Path escapes workspace root")
+
+    if not target.is_dir():
+        raise HTTPException(status_code=404, detail=f"Directory not found: {path}")
+
+    git_status = await asyncio.to_thread(_get_git_status, workspace_root)
+    children = await asyncio.to_thread(
+        _build_tree, target, workspace_root, depth, git_status, _get_subrepo_status_cached,
+    )
+    return children
 
 
 # ─────────────────────────────────────────────────────────────────────────────
