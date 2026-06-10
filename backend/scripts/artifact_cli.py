@@ -2643,6 +2643,84 @@ def cmd_ddd_health(args, reg) -> None:
     print(json.dumps(result, indent=2, default=str))
 
 
+def cmd_ddd_stage_inject(args, reg) -> None:
+    """F2: Output type-filtered DDD knowledge for a pipeline stage.
+
+    Reads IMPROVEMENT.md + TECH.md entries, filters by stage affinity
+    (guideline/pitfall for BUILD, decisions for EVALUATE, etc.), sorts
+    by relevance (graph boost + ref count), and prints formatted markdown.
+    """
+    project_dir = _get_workspace() / "Projects" / args.project
+    if not project_dir.is_dir():
+        print(json.dumps({"error": f"Project '{args.project}' not found"}))
+        return
+
+    from core.ddd_entry_lifecycle import get_stage_knowledge, parse_entries
+
+    # Gather entries from IMPROVEMENT.md and TECH.md
+    entries = []
+    for doc_name in ("IMPROVEMENT.md", "TECH.md"):
+        doc_path = project_dir / doc_name
+        if doc_path.exists():
+            entries += parse_entries(doc_path.read_text(encoding="utf-8"))
+
+    if not entries:
+        print(f"## DDD Knowledge for {args.stage.upper()} stage ({args.project})\n\n_No entries found._")
+        return
+
+    # Load knowledge graph for relevance boost
+    graph_path = _get_workspace() / ".context" / ".knowledge-graph.yaml"
+    try:
+        from core.knowledge_graph import load_graph
+        graph = load_graph(graph_path) if graph_path.exists() else None
+    except (ImportError, Exception):
+        graph = None
+
+    # Context entities for boost (files being worked on)
+    context_entities = args.context.split(",") if args.context else []
+
+    # Get stage-filtered, relevance-sorted entries
+    stage_entries = get_stage_knowledge(
+        entries, args.stage, context_entities, graph
+    )
+
+    if not stage_entries:
+        print(f"## DDD Knowledge for {args.stage.upper()} stage ({args.project})\n\n_No relevant entries for this stage._")
+        return
+
+    # Format output grouped by type
+    from core.ddd_entry_lifecycle import VALID_TYPES
+
+    # Stage affinity labels
+    type_labels = {
+        "guideline": "Guidelines (apply these)",
+        "pitfall": "Pitfalls (avoid these)",
+        "decision": "Decisions (context)",
+        "model": "Models (understand these)",
+        "process": "Processes (follow these)",
+    }
+
+    output_lines = [f"## DDD Knowledge for {args.stage.upper()} stage ({args.project})\n"]
+
+    # Group by type
+    by_type: dict[str, list] = {}
+    for entry in stage_entries[:20]:  # Cap at 20 entries
+        t = entry.entry_type if entry.entry_type in VALID_TYPES else "guideline"
+        by_type.setdefault(t, []).append(entry)
+
+    for entry_type in VALID_TYPES:
+        type_entries = by_type.get(entry_type, [])
+        if not type_entries:
+            continue
+        output_lines.append(f"\n### {type_labels.get(entry_type, entry_type)}\n")
+        for e in type_entries:
+            ref_str = f"[ref:{e.ref_count}]" if e.ref_count > 0 else ""
+            output_lines.append(f"- **{e.title}** {ref_str}")
+
+    output_lines.append(f"\n_({len(stage_entries)} entries, sorted by relevance to {args.stage})_")
+    print("\n".join(output_lines))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Artifact registry CLI for SwarmAI pipeline"
@@ -2793,6 +2871,12 @@ def main() -> None:
     p_ddd_health = sub.add_parser("ddd-health", help="5-dimensional DDD health scoring per section")
     p_ddd_health.add_argument("--project", required=True)
 
+    # ddd-stage-inject (F2: type-filtered knowledge for pipeline stages)
+    p_ddd_inject = sub.add_parser("ddd-stage-inject", help="Output type-filtered DDD knowledge for a pipeline stage")
+    p_ddd_inject.add_argument("--project", required=True)
+    p_ddd_inject.add_argument("--stage", required=True, help="Pipeline stage: evaluate/think/plan/build/review/test/deliver")
+    p_ddd_inject.add_argument("--context", default=None, help="Comma-separated context file paths (for relevance boost)")
+
     args = parser.parse_args()
     reg = ArtifactRegistry(_get_workspace())
 
@@ -2818,6 +2902,7 @@ def main() -> None:
         "cleanup-orphans": cmd_cleanup_orphans,
         "run-observe": cmd_run_observe,
         "ddd-health": cmd_ddd_health,
+        "ddd-stage-inject": cmd_ddd_stage_inject,
     }
     handlers[args.command](args, reg)
 
