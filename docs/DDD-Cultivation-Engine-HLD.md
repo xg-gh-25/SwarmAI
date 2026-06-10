@@ -1,6 +1,7 @@
 ---
 title: "DDD Cultivation Engine — Domain Expertise as Infrastructure"
-date: 2026-05-12
+created: 2026-05-12
+updated: 2026-06-10
 tags: [architecture, ddd, cultivation, knowledge-lifecycle, autonomous-delivery]
 project: SwarmAI
 status: PE-review
@@ -9,6 +10,13 @@ status: PE-review
 # DDD Cultivation Engine
 
 ## Domain Expertise as Infrastructure
+
+### Change Log
+
+| Date | Change | Sections Affected |
+|------|--------|-------------------|
+| 2026-06-10 | Added: Knowledge Graph relations layer, Auto-approval gate, Memory decay (Ebbinghaus+Hebbian), Three-tier KNOWLEDGE index, Entry lifecycle channel. Updated channel count 7→8. | §3 L2, §6 Feeds, §7 Approval, new §9b |
+| 2026-05-12 | Initial PE-review version. 8 feed channels, 4 pillars, progressive loading, pipeline integration. | All |
 
 ---
 
@@ -75,7 +83,7 @@ The four documents together typically occupy 3-5K tokens — small enough to loa
 
 ### Layer 2: Intelligence (What Keeps Docs Alive)
 
-Without Layer 2, the four documents would follow the same decay trajectory as any documentation. The Intelligence Layer provides three mechanisms that prevent decay:
+Without Layer 2, the four documents would follow the same decay trajectory as any documentation. The Intelligence Layer provides four mechanisms that prevent decay:
 
 **Code Graph** — Maps relationships between documented knowledge and actual code. Detects drift (documented pattern no longer used), identifies blast radius (which sections are affected by a code change), and flags contradictions (doc says X, code does Y).
 
@@ -83,11 +91,15 @@ Without Layer 2, the four documents would follow the same decay trajectory as an
 
 **Maturity Tracking** — Per-section confidence levels that gate AI autonomy. A [Sparse] section means "ask before using this as a decision basis." An [Evergreen] section means "act with full confidence."
 
+**Knowledge Graph Relations** *(added 2026-05-19)* — Cross-entry relationship tracking stored in `.knowledge-graph.yaml`. 10 relation types (`applies_to`, `motivated_by`, `superseded_by`, `extends`, `conflicts_with`, etc.). Relations grow automatically as pipeline stages reference entries — creating `applies_to` edges to the files being worked on. Enables: (1) relevance boost during injection (entry related to current file ranks higher), (2) contradiction detection across entries, (3) knowledge cluster visualization. Implementation: `ddd_entry_lifecycle.py` + batch operations for bulk relation creation. Not a graph database — a flat YAML file that fits in context.
+
 ### Layer 3: Orchestration (What Makes It Self-Sustaining)
 
 Layer 3 closes the loop — it is the mechanism by which knowledge grows without human effort.
 
 **Cultivation Engine** — Receives signals from 8 feed channels, generates proposals for DDD changes, routes them through an approval gate, and applies approved changes to the correct document and section.
+
+**Auto-Approval Gate** *(added 2026-05-26)* — Mechanical approval for proposals that meet strict criteria: (a) target section is [Mature] or [Evergreen], (b) change is additive (no contradiction/deletion), (c) change magnitude below threshold, (d) observation pattern miner confirms consistency with recent work. Proposals that don't meet all criteria → human review. Implementation: `ddd_orchestrator.py::_ch_auto_apply()`.
 
 **Entity Index** — A flat routing table (stored in PROJECTS.md) that maps domain concepts to specific project/document/section triples. Enables cross-project discovery without a graph database.
 
@@ -291,17 +303,18 @@ Eight channels nourish DDD from the natural flow of work. No channel requires de
 
 ![Figure 6: Eight Feed Channels](diagrams-ddd-v2/04-seven-channels.svg)
 
-| Channel | Source | Signal Type | Target Doc |
-|---------|--------|-------------|-----------|
-| Code Changes | Git commits, PRs | Architecture drift, new patterns | TECH.md |
-| External Learning | Research sessions, articles | New capabilities, approaches | PRODUCT.md, TECH.md |
-| Pipeline Delivery | REFLECT stage output | Lessons, failures, refinements | IMPROVEMENT.md |
-| Industry Signals | Feeds, trend analysis | Strategic context shifts | PRODUCT.md |
-| Conversation | Session corrections | Implicit domain rules | TECH.md |
-| Corrections | Explicit "no, do X" | High-priority rule updates | Any |
-| Code Intelligence | Static analysis, graph | Structural truth | TECH.md |
+| # | Channel | Source | Signal Type | Target Doc |
+|---|---------|--------|-------------|-----------|
+| 1 | Code Changes | Git commits, PRs | Architecture drift, new patterns | TECH.md |
+| 2 | External Learning | Research sessions, articles | New capabilities, approaches | PRODUCT.md, TECH.md |
+| 3 | Pipeline Delivery | REFLECT stage output | Lessons, failures, refinements | IMPROVEMENT.md |
+| 4 | Industry Signals | Feeds, trend analysis | Strategic context shifts | PRODUCT.md |
+| 5 | Conversation | Session corrections | Implicit domain rules | TECH.md |
+| 6 | Corrections | Explicit "no, do X" | High-priority rule updates | Any |
+| 7 | Code Intelligence | Static analysis, graph | Structural truth | TECH.md |
+| 8 | Entry Lifecycle | Decay engine, ref tracking | State transitions, archival | IMPROVEMENT.md |
 
-**Channel priority:** Corrections (Ch6) have highest priority because they represent explicit human judgment. Pipeline Delivery (Ch3) is the richest feed because REFLECT stage output is already structured and contextualized.
+**Channel priority:** Corrections (Ch6) have highest priority because they represent explicit human judgment. Pipeline Delivery (Ch3) is the richest feed because REFLECT stage output is already structured and contextualized. Entry Lifecycle (Ch8) runs on a timer and maintains knowledge freshness without human input.
 
 ### Pillar 2: Health
 
@@ -520,6 +533,83 @@ Without this integration, every pipeline run starts from the same knowledge base
 
 ---
 
+## 9b. Entry Lifecycle & Memory Decay *(added 2026-05-19 / 2026-06-07)*
+
+### Per-Entry Knowledge Tracking
+
+Individual bullet entries within DDD documents (primarily IMPROVEMENT.md) have their own lifecycle metadata, stored as inline HTML comments:
+
+```markdown
+- [pitfall] **Silent fallback 是最危险的 bug 类型** — "能用" ≠ "正常工作"...
+  <!-- ref:4 | last:2026-05-22 | decay:active -->
+```
+
+| Field | Meaning | Source |
+|-------|---------|--------|
+| `ref` | Reference count — how many times this entry influenced a decision | Auto-incremented by pipeline stages |
+| `last` | Last referenced date | Auto-updated on reference |
+| `decay` | Lifecycle state: `active` → `dormant` → `archived` | Computed by decay engine |
+
+### 5-Type Classification
+
+Every entry is classified into one of 5 MECE types that determine injection behavior:
+
+| Type | Description | Injected During | Lives In |
+|------|-------------|-----------------|----------|
+| `guideline` | "Do this" | BUILD, REVIEW | IMPROVEMENT.md (What Worked) |
+| `pitfall` | "Don't do this" | BUILD, REVIEW, TEST | IMPROVEMENT.md (What Failed) |
+| `decision` | "We chose A over B because..." | EVALUATE, PLAN | PRODUCT.md |
+| `model` | "This is what it looks like" | BUILD, DEBUG | TECH.md |
+| `process` | "These are the steps" | BUILD, DELIVER | TECH.md |
+
+Type classification is automatic via signal-word detection (`_TYPE_SIGNALS` in `ddd_entry_lifecycle.py`). `guideline` is the fallback — most entries are lessons/recommendations.
+
+### Decay Engine — Darwinian Knowledge Management
+
+Linear decay (the original design) was replaced in 2026-06-07 with **Ebbinghaus + Hebbian** scoring from neuroscience research:
+
+| Mechanism | What It Does | Effect |
+|-----------|-------------|--------|
+| **Ebbinghaus forgetting curve** | `score = exp(-days_idle / stability)` | Entries decay exponentially when not referenced |
+| **Hebbian potentiation** | Each reference increases `stability` | Frequently-used entries resist decay more strongly |
+| **Cepeda spacing effect** | References from distinct sessions count more than bursts | Prevents gaming by referencing 10x in one session |
+| **Strength floor** | Score never reaches 0 (floor = 0.05) | Entries are never fully forgotten, just deprioritized |
+
+**Decay thresholds:**
+
+| Condition | Transition | Grace |
+|-----------|-----------|-------|
+| Entry < 30 days old | Immune to all decay | Grace period for new knowledge |
+| 90 days idle, ref < 10 | active → dormant | Standard threshold |
+| 180 days idle, ref ≥ 10 | active → dormant | Veteran bonus (2× grace) |
+| 90 more days in dormant | dormant → archived | Moved to archive file |
+
+**What dormant means:** Entry stays searchable but is NOT auto-injected into pipeline stages. Only `active` entries are injected. This automatically keeps prompt cost flat as knowledge accumulates — the active set stays ~80 entries (steady state), regardless of total historical entries.
+
+### Three-Tier KNOWLEDGE.md Index *(added 2026-05-30)*
+
+KNOWLEDGE.md uses a Hot/Cold tiering model for its own index entries:
+
+| Tier | Criteria | Effect |
+|------|----------|--------|
+| **Hot** | Referenced in last 14 days | Full entry in prompt |
+| **Warm** | Referenced in last 60 days | Title + one-liner only |
+| **Cold** | >60 days without reference | Section heading only (on-demand fetch) |
+
+This is the progressive loading principle (Section 5) applied to workspace-level knowledge, not just project-level DDD.
+
+### Channel 8: Entry Lifecycle *(added 2026-05-19)*
+
+The 8th cultivation channel. Fires on `GIT_COMMIT` and `TIMER_30MIN`:
+
+1. Scans all project IMPROVEMENT.md files for entry metadata comments
+2. Bumps `ref` count for entries whose text appears in recent pipeline contexts
+3. Runs decay assessment → transitions entries between states
+4. Moves archived entries to `Knowledge/Archives/` with provenance trail
+5. Reports transitions in session briefing (e.g., "3 entries → dormant this week")
+
+---
+
 ## 10. Quality and Safety
 
 ### Edge Cases and Handling
@@ -616,6 +706,27 @@ It is not the most powerful system imaginable (a knowledge graph with a custom q
 | Entity Index becomes stale | Cross-project routing fails | Medium | Code Intelligence channel validates index against actual code |
 | Auto-approval permits bad changes | Trust erosion | Low | Conservative criteria: only additive, minor, to [Mature]+ sections |
 | Single-project use limits discovery value | No cross-project benefit | High (early) | Designed to deliver value per-project first; discovery is additive |
+
+---
+
+---
+
+## Document Metadata Convention
+
+All design documents in this repository follow this frontmatter convention:
+
+```yaml
+---
+title: "Document Title"
+created: YYYY-MM-DD      # When the document was first written
+updated: YYYY-MM-DD      # Last substantive update (not typo fixes)
+tags: [...]
+project: ProjectName
+status: draft | PE-review | approved | superseded
+---
+```
+
+Additionally, a **Change Log** table immediately after the title tracks major updates with date, description, and affected sections. This ensures readers can quickly assess freshness and what changed since they last read it.
 
 ---
 
