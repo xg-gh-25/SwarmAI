@@ -44,17 +44,23 @@ def parse_frontmatter(content: str) -> dict[str, str]:
     return fields
 
 
-def check_file(filepath: Path) -> list[str]:
-    """Check a single file for frontmatter compliance. Returns list of violations."""
-    violations = []
+def check_file(filepath: Path, content: str | None = None) -> list[str]:
+    """Check a single file for frontmatter compliance. Returns list of violations.
 
-    if not filepath.exists():
-        return []
+    Args:
+        filepath: Path to the file (for name checks and fallback read).
+        content: Optional pre-loaded content (e.g., from git staging area).
+                 If None, reads from disk.
+    """
+    violations = []
 
     if filepath.name in EXEMPT_FILES:
         return []
 
-    content = filepath.read_text(encoding="utf-8")
+    if content is None:
+        if not filepath.exists():
+            return []
+        content = filepath.read_text(encoding="utf-8")
 
     # Must have frontmatter
     if not content.startswith("---"):
@@ -97,6 +103,10 @@ def get_staged_docs() -> list[Path]:
         capture_output=True,
         text=True,
     )
+    # FIX #7: Fail-closed — if git fails, report it and block
+    if result.returncode != 0:
+        print("ERROR: git diff --cached failed", file=sys.stderr)
+        sys.exit(1)
     staged = []
     for line in result.stdout.strip().split("\n"):
         if line.startswith("docs/") and line.endswith(".md"):
@@ -104,14 +114,32 @@ def get_staged_docs() -> list[Path]:
     return staged
 
 
+def read_staged_content(filepath: Path) -> str:
+    """Read file content from git staging area (not working tree).
+
+    FIX #3: Ensures we validate what will actually be committed,
+    not what's currently on disk (which may differ with partial staging).
+    """
+    result = subprocess.run(
+        ["git", "show", f":{filepath}"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        # Fallback to disk if git show fails (e.g., new untracked file)
+        return filepath.read_text(encoding="utf-8") if filepath.exists() else ""
+    return result.stdout
+
+
 def main():
     args = sys.argv[1:]
+    use_staged = "--staged" in args
 
-    if "--staged" in args:
+    if use_staged:
         files = get_staged_docs()
         if not files:
             sys.exit(0)
-    elif args:
+    elif [a for a in args if a.endswith(".md")]:
         files = [Path(a) for a in args if a.endswith(".md")]
     else:
         files = sorted(DOCS_DIR.glob("*.md"))
@@ -119,7 +147,9 @@ def main():
     all_violations: dict[str, list[str]] = {}
 
     for filepath in files:
-        violations = check_file(filepath)
+        # FIX #3: In staged mode, read from git index (not working tree)
+        content = read_staged_content(filepath) if use_staged else None
+        violations = check_file(filepath, content=content)
         if violations:
             all_violations[str(filepath)] = violations
 

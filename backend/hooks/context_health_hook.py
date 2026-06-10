@@ -217,22 +217,32 @@ class ContextHealthHook:
         Checks git for uncommitted or recently-committed changes to docs/*.md,
         and updates the `updated:` frontmatter field to today's date if stale.
         Only touches files with existing YAML frontmatter (created:/updated:).
+
+        FIX #1: Uses swarmai repo path (not SwarmWS workspace) since docs/ lives there.
+        FIX #2: Only searches within YAML frontmatter block (between --- delimiters).
+        FIX #4: Validates existing value is a YYYY-MM-DD date before replacing.
         """
-        docs_dir = root / "docs"
+        # docs/ lives in the swarmai repo, not SwarmWS. Resolve via env or known path.
+        swarmai_dir = Path(os.environ.get("SWARMAI_DIR", "")).resolve()
+        if not swarmai_dir.is_dir():
+            # Fallback: try standard location
+            swarmai_dir = Path.home() / "Desktop" / "SwarmAI-Workspace" / "swarmai"
+        docs_dir = swarmai_dir / "docs"
         if not docs_dir.is_dir():
             return
 
         today_str = date.today().isoformat()
+        date_re = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
         # Find docs modified in working tree (staged + unstaged)
         try:
             result = subprocess.run(
-                ["git", "diff", "--name-only", "HEAD", "--", "docs/*.md"],
+                ["git", "diff", "--name-only", "HEAD", "--", "docs/"],
                 capture_output=True, text=True, timeout=3,
-                cwd=str(root),
+                cwd=str(swarmai_dir),
             )
             modified = [
-                docs_dir.parent / line.strip()
+                swarmai_dir / line.strip()
                 for line in result.stdout.strip().split("\n")
                 if line.strip().endswith(".md")
             ]
@@ -246,12 +256,31 @@ class ContextHealthHook:
             if not content.startswith("---"):
                 continue
 
-            # Check if updated: field exists and is not today
-            match = re.search(r"^updated:\s*(.+)$", content, re.MULTILINE)
-            if match and match.group(1).strip() != today_str:
-                new_content = content[:match.start()] + f"updated: {today_str}" + content[match.end():]
-                filepath.write_text(new_content, encoding="utf-8")
-                logger.debug("context_health: auto-updated frontmatter date in %s", filepath.name)
+            # FIX #2: Only search within frontmatter block (between first two ---)
+            fm_end = content.find("---", 3)
+            if fm_end == -1:
+                continue
+            frontmatter = content[:fm_end]
+
+            # Find updated: field within frontmatter only
+            match = re.search(r"^updated:\s*(.+)$", frontmatter, re.MULTILINE)
+            if not match:
+                continue
+
+            existing_value = match.group(1).strip().strip('"').strip("'")
+
+            # FIX #4: Only replace if existing value is a valid date format
+            if not date_re.match(existing_value):
+                continue
+
+            if existing_value == today_str:
+                continue
+
+            # Replace within the full content using the match position (safe because
+            # match is within frontmatter which is a prefix of content)
+            new_content = content[:match.start()] + f"updated: {today_str}" + content[match.end():]
+            filepath.write_text(new_content, encoding="utf-8")
+            logger.debug("context_health: auto-updated frontmatter date in %s", filepath.name)
 
     def _refresh_projects_index_sync(self, root: Path) -> None:
         """Sync wrapper: regenerate PROJECTS.md after cultivation modified DDD docs.
