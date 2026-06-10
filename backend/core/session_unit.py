@@ -457,11 +457,13 @@ class SessionUnit:
         self._mcp_health_checked: bool = False
 
         # ── Sub-agent progress observability ─────────────────────
-        # Set when a ToolUseBlock with name="Agent" is received (sub-agent
-        # spawned). Cleared when the matching ToolResultBlock arrives.
-        # Frontend polls this via GET /sessions/{id}/sub-agent-progress
-        # to show tiered awareness banners (T0-T4) based on elapsed time.
-        self._active_agent_tool: Optional[dict] = None
+        # Tracks active sub-agent(s) for progress observability.
+        # Keys = tool_use_id, values = {label, start_time}.
+        # Set when ToolUseBlock(name="Agent") arrives, removed when matching
+        # ToolResultBlock arrives. Cleared at every turn boundary (send,
+        # interrupt, turn_limit) to prevent cross-turn stale banners.
+        # Frontend polls via GET /sessions/{id}/sub-agent-progress.
+        self._active_agent_tools: dict[str, dict] = {}
 
         # ── Proactive RSS restart cooldown ────────────────────────
         # Monotonic timestamp of last proactive compact→kill cycle.
@@ -1019,6 +1021,7 @@ class SessionUnit:
         self._buffer_overflow_recovery = False
         self._compaction_guard.reset()  # New user turn — reset tool tracking
         self._content_emitted = False   # Track if meaningful content is emitted
+        self._active_agent_tools = {}  # Clear stale sub-agent progress on new turn
 
         # Spawn if needed (COLD → IDLE under _spawn_lock + _env_lock)
         # Also respawn if IDLE but client is gone (CLI exited after
@@ -2218,8 +2221,7 @@ class SessionUnit:
                         # ── Track sub-agent (Agent tool) for progress observability ──
                         if block.name == "Agent" and isinstance(block.input, dict):
                             _agent_label = block.input.get("description") or block.input.get("prompt") or ""
-                            self._active_agent_tool = {
-                                "tool_use_id": block.id,
+                            self._active_agent_tools[block.id] = {
                                 "label": _agent_label[:80],
                                 "start_time": time.time(),
                             }
@@ -2329,11 +2331,7 @@ class SessionUnit:
                                 return
                     elif isinstance(block, ToolResultBlock):
                         # ── Clear sub-agent progress when Agent tool completes ──
-                        if (
-                            self._active_agent_tool
-                            and block.tool_use_id == self._active_agent_tool["tool_use_id"]
-                        ):
-                            self._active_agent_tool = None
+                        self._active_agent_tools.pop(block.tool_use_id, None)
                         block_content = str(block.content) if block.content else ""
                         if _has_tool_summarizer:
                             truncated, was_truncated = truncate_tool_result(block_content)
@@ -2390,6 +2388,7 @@ class SessionUnit:
                 # default maxTurns=100), emitted error_max_turns, frontend
                 # showed "Interrupted" and user had to manually Resume.
                 if is_error and subtype == "error_max_turns":
+                    self._active_agent_tools = {}  # Clear stale sub-agent progress
                     num_turns = getattr(message, "num_turns", None)
                     logger.info(
                         "session_unit.turn_limit_reached session_id=%s "
@@ -2821,6 +2820,7 @@ class SessionUnit:
 
         self._stop_event.set()
         self._interrupted = True
+        self._active_agent_tools = {}  # Clear stale sub-agent progress on interrupt
 
         if self._client is None:
             # No client — just transition to DEAD (no race: no subprocess)
@@ -2943,6 +2943,7 @@ class SessionUnit:
         )
         self._compaction_guard.reset()
         self._content_emitted = False  # Reset zombie detection for new stream
+        self._active_agent_tools = {}  # Clear stale sub-agent progress
         self._transition(SessionState.STREAMING)
 
         try:
@@ -2995,6 +2996,7 @@ class SessionUnit:
         # don't accumulate across the permission boundary.
         self._compaction_guard.reset()
         self._content_emitted = False  # Reset zombie detection for new stream
+        self._active_agent_tools = {}  # Clear stale sub-agent progress
         self._transition(SessionState.STREAMING)
 
         try:
