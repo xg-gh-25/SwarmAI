@@ -355,7 +355,7 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
         display: 'flex',
         alignItems: 'center',
         gap: '4px',
-        paddingRight: '8px',
+        paddingRight: '12px',
         cursor: 'pointer',
         userSelect: 'none',
         fontSize: depth === 0 ? '12.5px' : '12px',

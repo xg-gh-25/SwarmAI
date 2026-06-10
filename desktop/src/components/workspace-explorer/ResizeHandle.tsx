@@ -83,7 +83,7 @@ export default function ResizeHandle({
 
   return (
     <div
-      className={`absolute top-0 right-0 w-1 h-full cursor-col-resize transition-colors z-10 ${
+      className={`absolute top-0 right-0 w-2 h-full cursor-col-resize transition-colors z-10 ${
         isDragging || isHovered
           ? 'bg-[var(--color-primary)]'
           : 'bg-transparent hover:bg-[var(--color-primary-hover)]'
@@ -98,13 +98,7 @@ export default function ResizeHandle({
       aria-valuemin={LAYOUT_CONSTANTS.MIN_WORKSPACE_EXPLORER_WIDTH}
       aria-valuemax={LAYOUT_CONSTANTS.MAX_WORKSPACE_EXPLORER_WIDTH}
       aria-label="Resize workspace explorer"
-    >
-      {/* Wider hit area for easier grabbing */}
-      <div 
-        className="absolute top-0 -left-1 w-3 h-full"
-        aria-hidden="true"
-      />
-    </div>
+    />
   );
 }
 

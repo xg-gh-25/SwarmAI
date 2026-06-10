@@ -187,6 +187,12 @@ export default function SectionedExplorer({ onFileDoubleClick, onAttachToChat }:
       <div className="flex-1 overflow-hidden min-h-0">
         <AutoSizer
           renderProp={({ height, width }) => {
+            // Guard: skip render only when AutoSizer hasn't measured yet (undefined).
+            // Do NOT guard against height=0 — blocking render when height=0 creates a
+            // deadlock: no content → container stays 0 → no resize event → stuck forever.
+            // Instead, render with whatever height AutoSizer provides; react-window
+            // handles height=0 gracefully (renders 0 rows) and AutoSizer re-measures
+            // on the next frame once the flex layout resolves.
             if (height === undefined || width === undefined) return null;
             return (
               <VirtualizedTree

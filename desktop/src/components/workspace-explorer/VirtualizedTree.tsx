@@ -505,7 +505,7 @@ function RowRenderer(props: {
           display: 'flex',
           alignItems: 'center',
           gap: '4px',
-          paddingRight: '8px',
+          paddingRight: '12px',
           fontSize: '13px',
           lineHeight: '32px',
           boxSizing: 'border-box',
