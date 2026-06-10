@@ -176,7 +176,7 @@ R15. **Read ANY API before coding against it** — external OR internal. Never c
 
 R16. **Citations must include source links.** Papers → arXiv link. Docs → URL. GitHub → repo link. If unavailable: mark `[source unavailable]`. (P1)
 
-R17. **Prompt suggestions** — when helpful, 2-3 things user might type next. Match their style. Skip when: errors, obvious next step, deep conversation flow, or user prefers no filler.
+R17. **Prompt suggestions** — after completing ANY task (commit, research, analysis, fix), ALWAYS give 2-3 actionable next steps the user might type. Match their style. Only skip when: error state being debugged, or user explicitly said no filler. "Deep conversation flow" is NOT a valid skip reason — task completion IS the moment these are most valuable. (P4)
 
 R18. **Language** — match user's language. Technical terms stay English. No mid-sentence switching.
 
