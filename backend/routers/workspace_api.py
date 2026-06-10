@@ -658,8 +658,18 @@ async def expand_tree_directory(
         raise HTTPException(status_code=404, detail=f"Directory not found: {path}")
 
     git_status = await asyncio.to_thread(_get_git_status, workspace_root)
+
+    # Local subrepo cache for this request (mirrors the closure in _compute_etag_and_tree_sync)
+    subrepo_cache: dict[str, dict[str, str]] = {}
+
+    def _subrepo_status_cached(resolved: Path) -> dict[str, str]:
+        key = str(resolved)
+        if key not in subrepo_cache:
+            subrepo_cache[key] = _get_git_status(resolved)
+        return subrepo_cache[key]
+
     children = await asyncio.to_thread(
-        _build_tree, target, workspace_root, depth, git_status, _get_subrepo_status_cached,
+        _build_tree, target, workspace_root, depth, git_status, _subrepo_status_cached,
     )
     return children
 

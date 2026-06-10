@@ -1054,28 +1054,50 @@ class ContextHealthHook:
             return
 
         # Apply verification to all DDD doc sections
+        # Use fcntl advisory lock (same lock file as _ch_entry_lifecycle) to prevent
+        # concurrent read-modify-write on IMPROVEMENT.md between F5 and Channel 8.
+        import fcntl
+
         for doc_name in ("TECH.md", "IMPROVEMENT.md", "PRODUCT.md", "PROJECT.md"):
             doc_path = project_path / doc_name
             if not doc_path.exists():
                 continue
-            content = doc_path.read_text(encoding="utf-8")
-            states = parse_maturity(content)
-            if not states:
-                continue
 
-            changed = False
-            for state in states.values():
-                if not state.verified_by_production:
-                    state.verified_by_production = True
-                    changed = True
-                if not state.used_in_decision:
-                    state.used_in_decision = True
-                    changed = True
+            lock_path = project_path / f".{doc_name}.lock"
+            lock_fd = None
+            try:
+                lock_fd = open(lock_path, "w")
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except (OSError, IOError):
+                if lock_fd:
+                    lock_fd.close()
+                continue  # Another process holds the lock — skip this doc
 
-            if changed:
-                new_content = inject_maturity(content, states)
-                if new_content != content:
-                    doc_path.write_text(new_content, encoding="utf-8")
+            try:
+                content = doc_path.read_text(encoding="utf-8")
+                states = parse_maturity(content)
+                if not states:
+                    continue
+
+                changed = False
+                for state in states.values():
+                    if not state.verified_by_production:
+                        state.verified_by_production = True
+                        changed = True
+                    if not state.used_in_decision:
+                        state.used_in_decision = True
+                        changed = True
+
+                if changed:
+                    new_content = inject_maturity(content, states)
+                    if new_content != content:
+                        doc_path.write_text(new_content, encoding="utf-8")
+            finally:
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                except (OSError, IOError):
+                    pass
+                lock_fd.close()
 
     def _track_memory_usage(self, root: Path) -> None:
         """Scan session transcripts for memory key references.
