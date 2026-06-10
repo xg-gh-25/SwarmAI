@@ -237,8 +237,10 @@ export function BottomBar() {
         <CodeGraph project="SwarmAI" onClose={() => setShowGraph(false)} />
       )}
 
-      {/* Right: keyboard hints with badge-style kbd */}
-      <div className="flex items-center gap-3 font-mono text-[9px]">
+      {/* Right: keyboard hints with badge-style kbd — overflow-hidden allows graceful
+          clipping at extreme narrow widths instead of rigid flex-shrink-0 which would
+          push the left status section off-screen. pr-1.5 avoids window edge clip. */}
+      <div className="flex items-center gap-3 pr-1.5 font-mono text-[9px] overflow-x-hidden">
         <span className="flex items-center gap-1">
           <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1 py-px rounded-[3px]">Enter</kbd>
           <span>send</span>

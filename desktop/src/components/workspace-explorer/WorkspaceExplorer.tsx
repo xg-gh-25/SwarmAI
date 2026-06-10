@@ -142,7 +142,7 @@ export default function WorkspaceExplorer({ onFileDoubleClick, onAttachToChat }:
   // Expanded state
   return (
     <div
-      className="relative flex-shrink-0 bg-[var(--color-bg-chrome)] border-r border-[var(--color-border)] flex flex-col transition-all duration-200 ease-in-out"
+      className="relative flex-shrink-0 h-full bg-[var(--color-bg-chrome)] border-r border-[var(--color-border)] flex flex-col transition-all duration-200 ease-in-out"
       style={{
         width: workspaceExplorerWidth,
         minWidth: LAYOUT_CONSTANTS.MIN_WORKSPACE_EXPLORER_WIDTH,
@@ -154,8 +154,11 @@ export default function WorkspaceExplorer({ onFileDoubleClick, onAttachToChat }:
 
       <ExplorerHeader onCollapseToggle={handleCollapseToggle} />
 
-      {/* Tree content area — fills remaining vertical space */}
-      <div className="flex-1 overflow-hidden">
+      {/* Tree content area — fills remaining vertical space.
+          min-h-0 is CRITICAL: without it, flex items default to min-height:auto
+          which means the content won't shrink below its intrinsic size, causing
+          overflow instead of scroll within react-window. */}
+      <div className="flex-1 overflow-hidden min-h-0">
         {isLoading && <TreeSkeleton />}
 
         {!isLoading && error && <TreeErrorState onRetry={refreshTree} />}

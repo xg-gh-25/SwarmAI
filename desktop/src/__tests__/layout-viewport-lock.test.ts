@@ -106,7 +106,11 @@ describe('Layout viewport lock — ERROR behavior (must NOT happen)', () => {
 
 describe('Layout viewport lock — EXPECTED behavior (must happen)', () => {
   it('viewport lock rule must appear BEFORE base styles (specificity/order)', () => {
-    const viewportLockIdx = INDEX_CSS.indexOf('html, body, #root');
+    // Viewport lock may be split into "html, body" + "#root" or combined "html, body, #root"
+    const viewportLockIdx = Math.max(
+      INDEX_CSS.indexOf('html, body, #root'),
+      INDEX_CSS.indexOf('html, body {'),
+    );
     const baseStylesIdx = INDEX_CSS.indexOf('/* Base styles */');
     expect(viewportLockIdx).toBeGreaterThan(-1);
     expect(baseStylesIdx).toBeGreaterThan(-1);

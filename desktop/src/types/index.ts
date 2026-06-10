@@ -942,7 +942,8 @@ export interface TreeNode {
   name: string;
   path: string;
   type: 'file' | 'directory';
-  children?: TreeNode[];
+  /** Directory children. undefined = file/not-applicable, null = truncated (lazy-loadable), [] = empty dir. */
+  children?: TreeNode[] | null;
   /** Git status of this file/folder, if known. */
   gitStatus?: GitStatus;
   /** True when this entry is a filesystem symlink (e.g., linked project). */

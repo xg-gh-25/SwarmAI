@@ -81,9 +81,11 @@ function TopBar() {
       {/* Center: drag region (flexible spacer) */}
       <div className="flex-1" />
 
-      {/* Right: token usage metrics */}
+      {/* Right: token usage metrics — pr-5 (20px) keeps content away from window
+          edge/resize handle. macOS has no right-side controls; Windows/Linux may
+          have snap layout button area (~8px). 20px covers both safely. */}
       <div
-        className="flex items-center gap-2 mr-8 text-[11px] text-[var(--color-text-muted)]"
+        className="flex items-center gap-2 pr-5 text-[11px] text-[var(--color-text-muted)]"
         role="status"
         aria-label="Token usage"
         title={tokenUsage
@@ -680,8 +682,10 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
         {/* Top bar -- session context, draggable */}
         <TopBar />
 
-        {/* Main layout below top bar */}
-        <div className="flex flex-1 overflow-hidden">
+        {/* Main layout below top bar — min-h-0 overrides flex auto-min-height
+            (which uses intrinsic content size and prevents shrinking). Without this,
+            AutoSizer can't get a resolved height from the flex algorithm. */}
+        <div className="flex flex-1 overflow-hidden min-h-0">
           <LeftSidebar />
           <WorkspaceExplorer onFileDoubleClick={handleFileDoubleClick} />
           <MainChatPanel>{children}</MainChatPanel>

@@ -238,10 +238,21 @@
 
 /* Viewport lock — prevents page-level scrollbar in desktop app.
  * Tailwind v4 preflight zeroes margin but does NOT set height/overflow.
- * Without this, html/body are unconstrained and the document scrolls. */
-html, body, #root {
+ * Without this, html/body are unconstrained and the document scrolls.
+ *
+ * Strategy: `overflow: hidden` on html/body as universal fallback,
+ * then `overflow: clip` as progressive enhancement (avoids creating a
+ * new BFC that could interfere with child scroll containers).
+ * #root uses overflow: hidden to create the containing block. */
+html, body {
   height: 100%;
   margin: 0;
+  overflow: hidden;
+  overflow: clip; /* Progressive enhancement — older WebKit ignores this */
+}
+
+#root {
+  height: 100%;
   overflow: hidden;
 }
 
