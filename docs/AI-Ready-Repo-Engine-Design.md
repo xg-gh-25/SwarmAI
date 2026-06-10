@@ -1,3 +1,12 @@
+---
+title: "AI-Ready-Repo Engine — Making Any Codebase Agent-Ready"
+created: 2026-05-29
+updated: 2026-06-01
+tags: [ai-ready, ddd, code-intel, delivery-engine]
+project: SwarmAI
+status: approved
+---
+
 # AI-Ready-Repo Engine — Making Any Codebase Agent-Ready
 
 ## Summary

@@ -1,6 +1,7 @@
 ---
 title: "Session Observation Layer — Technical Design Document"
-date: 2026-05-29
+created: 2026-05-29
+updated: 2026-05-29
 author: XG (architecture), Swarm (synthesis)
 status: shipped
 audience: AWS Internal PEs, Technical Architects

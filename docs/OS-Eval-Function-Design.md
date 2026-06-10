@@ -1,3 +1,12 @@
+---
+title: "SwarmAI OS Eval Function — Continuous Self-Awareness Engine"
+created: 2026-06-08
+updated: 2026-06-08
+tags: [eval, self-awareness, golden-set, cognitive-health]
+project: SwarmAI
+status: draft
+---
+
 # SwarmAI OS Eval Function — Continuous Self-Awareness Engine
 
 > **Thesis:** An AI OS without eval is an organism without proprioception — it doesn't know its own state until something breaks. Eval is not testing; it is *the capacity to know whether you're still you, and still good.*

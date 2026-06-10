@@ -2,7 +2,8 @@
 title: "SwarmAI — Agentic OS Architecture"
 subtitle: "High-Level Design Document"
 version: "2.1"
-date: "April 15, 2026"
+created: 2026-04-15
+updated: 2026-05-14
 author: "Xiaogang Wang (XG) + Swarm (AI Co-Architect)"
 status: "For PE / Tech Leadership Review"
 classification: "Internal"

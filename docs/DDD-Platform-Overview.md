@@ -1,6 +1,7 @@
 ---
 title: "DDD — One Knowledge Layer, Multiple AI Delivery Engines"
-date: 2026-05-12
+created: 2026-05-12
+updated: 2026-05-12
 tags: [architecture, ddd, platform, pipeline, pollinate, cultivation, autonomous-delivery]
 project: SwarmAI
 status: LT-review

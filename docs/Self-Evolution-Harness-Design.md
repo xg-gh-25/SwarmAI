@@ -1,6 +1,7 @@
 ---
 title: "Self-Evolution Harness — Technical Design Document"
-date: 2026-04-15
+created: 2026-04-15
+updated: 2026-05-14
 author: XG (architecture), Swarm (synthesis)
 status: PE-review-ready
 audience: AWS Internal PEs, Technical Architects
