@@ -222,10 +222,24 @@ class ContextHealthHook:
         FIX #2: Only searches within YAML frontmatter block (between --- delimiters).
         FIX #4: Validates existing value is a YYYY-MM-DD date before replacing.
         """
-        # docs/ lives in the swarmai repo, not SwarmWS. Resolve via env or known path.
+        # docs/ lives in the swarmai repo, not SwarmWS. Resolution order:
+        # 1. SWARMAI_DIR env var (explicit, works on all platforms)
+        # 2. git rev-parse from CWD (works if CWD is inside swarmai repo)
+        # 3. Standard macOS dev location (fallback)
         swarmai_dir = Path(os.environ.get("SWARMAI_DIR", "")).resolve()
         if not swarmai_dir.is_dir():
-            # Fallback: try standard location
+            # Try git-based discovery (works regardless of hardcoded paths)
+            try:
+                result = subprocess.run(
+                    ["git", "rev-parse", "--show-toplevel"],
+                    capture_output=True, text=True, timeout=2,
+                    cwd=str(Path(__file__).parent.parent),  # backend/ dir is inside swarmai repo
+                )
+                if result.returncode == 0:
+                    swarmai_dir = Path(result.stdout.strip())
+            except (subprocess.TimeoutExpired, OSError):
+                pass
+        if not swarmai_dir.is_dir():
             swarmai_dir = Path.home() / "Desktop" / "SwarmAI-Workspace" / "swarmai"
         docs_dir = swarmai_dir / "docs"
         if not docs_dir.is_dir():
