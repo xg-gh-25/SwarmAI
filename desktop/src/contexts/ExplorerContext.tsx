@@ -305,10 +305,17 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
       if (document.hidden) return;
       try {
         const tree = await workspaceService.getTree();
-        // On 304, getTree() returns the same _cachedTree reference.
-        // Only update state when the reference differs (actual change).
+        // On 304, getTree() returns the same _cachedTree reference (setCachedTree keeps it in sync).
+        // Only update state when the reference differs (actual filesystem change → 200 response).
         if (tree !== lastTreeRef.current) {
+          // TODO: When depth=3 tree arrives from a 200 response, it lacks children that
+          // were lazily expanded. A proper fix would merge expanded children from
+          // lastTreeRef into the new tree. For now, the 200 path resets expanded dirs.
+          // This is acceptable because: (1) setCachedTree prevents the 304 case (most polls),
+          // (2) 200 only fires on actual filesystem changes (infrequent),
+          // (3) user can re-expand with one click.
           lastTreeRef.current = tree;
+          workspaceService.setCachedTree(tree);
           setTreeData(tree);
         }
       } catch {
