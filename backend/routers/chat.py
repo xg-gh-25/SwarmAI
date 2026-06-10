@@ -747,6 +747,36 @@ async def get_streaming_state_endpoint():
     return {"sessions": result}
 
 
+@router.get("/sessions/{session_id}/sub-agent-progress")
+async def get_sub_agent_progress(session_id: str):
+    """Return progress info when a sub-agent (Agent tool) is active.
+
+    Frontend polls this every 5s while streaming to render tiered
+    awareness banners (T0-T4) based on elapsed time. Lightweight:
+    single field read, no computation.
+    """
+    import time as _time
+
+    sr = _get_router()
+    unit = sr.get_unit(session_id)
+    if not unit:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # Only report active if session is actually streaming
+    agent_tool = unit._active_agent_tool
+    is_streaming = unit.state.value == "streaming"
+
+    if not agent_tool or not is_streaming:
+        return {"active": False, "elapsed_s": 0, "label": None}
+
+    elapsed = _time.time() - agent_tool["start_time"]
+    return {
+        "active": True,
+        "elapsed_s": round(elapsed, 1),
+        "label": agent_tool.get("label"),
+    }
+
+
 @router.get("/sessions/{session_id}", response_model=ChatSessionResponse)
 async def get_session(session_id: str):
     """Get a specific chat session by ID."""

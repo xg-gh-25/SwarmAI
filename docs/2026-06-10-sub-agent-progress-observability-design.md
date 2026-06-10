@@ -4,7 +4,7 @@ created: 2026-06-10
 updated: 2026-06-10
 tags: [ux, sub-agent, progress, observability, streaming]
 project: SwarmAI
-status: draft
+status: approved
 ---
 
 # Sub-Agent Progress Observability
@@ -57,11 +57,18 @@ During the pause: ZERO intermediate events reach the frontend.
 
 This is documented in SwarmAI IMPROVEMENT.md as a known SDK constraint (`[constraint] Sub-agent events not observable from parent stream`). It is NOT a bug — it's the Claude Code architecture.
 
-**What we CAN observe from the backend:**
-- The sub-agent runs in its own session (session_unit)
-- That session has `tool_call_count` incrementing in real-time
-- That session has state (STREAMING, IDLE, etc.)
-- We know when it started (timestamp)
+**What we CAN observe from the backend (verified 2026-06-10):**
+- Parent SessionUnit is in STREAMING state
+- The last ToolUseBlock received has `name === "Agent"` (we know a sub-agent is running)
+- The ToolUseBlock's `input.description` field = the agent label
+- The timestamp when that ToolUseBlock arrived → elapsed time
+- The parent's `_last_event_time` stops updating (SDK stream paused)
+
+**What we CANNOT observe (SDK architectural constraint):**
+- Sub-agent does NOT get its own SessionUnit — it runs inside the SDK CLI subprocess
+- No `tool_call_count` from sub-agent reaches the backend
+- No intermediate events (tool_use, text_delta) from sub-agent are visible
+- The backend only sees: ToolUseBlock(Agent) → silence → tool_result
 
 ---
 
@@ -79,7 +86,7 @@ A 12-minute research agent producing excellent output is GOOD. Force-killing it 
 |------|---------|--------|-------------|
 | **T0: Normal** | 0-60s | Standard spinner + "Agent thinking..." | Stop button (existing) |
 | **T1: Duration notice** | 60s elapsed | Subtle elapsed timer appears: `"1:03"` in muted text next to spinner | Stop |
-| **T2: Active notice** | 3 min elapsed | Yellow inline banner below spinner: `"Sub-agent running 3+ min — this is normal for research/design tasks."` + tool count if available | Stop |
+| **T2: Active notice** | 3 min elapsed | Yellow inline banner below spinner: `"Sub-agent running 3+ min — this is normal for research/design tasks."` | Stop |
 | **T3: Stall warning** | 8 min elapsed | Orange banner: `"8+ minutes. May be doing extensive work or stuck."` | **[Stop]** + **[Keep waiting]** |
 | **T4: Soft ceiling** | 15 min elapsed | Red banner: `"15 min without response. Consider stopping."` | **[Stop now]** (prominent) + [Keep waiting] (secondary) |
 
@@ -107,6 +114,16 @@ A 12-minute research agent producing excellent output is GOOD. Force-killing it 
 
 ## Technical Architecture
 
+### Key Insight: Observe Parent, Not Child
+
+The sub-agent is a **black box** to our backend (runs inside SDK CLI subprocess). But we don't need to observe the child — we can detect the sub-agent's existence entirely from the **parent session's event stream**:
+
+1. Parent receives `ToolUseBlock(name="Agent", input={description: "..."})` → sub-agent started
+2. Parent's SSE stream goes silent (no more events) → sub-agent is running
+3. Parent receives `tool_result` for that block → sub-agent completed
+
+We track the **gap** between step 1 and step 3. That's all we need for tiered UX.
+
 ### Data Flow
 
 ```
@@ -114,16 +131,16 @@ A 12-minute research agent producing excellent output is GOOD. Force-killing it 
 │ Frontend (ChatPage / MessageBubbles)             │
 │                                                  │
 │  SSE stream from parent session:                 │
-│    ... tool_use(Agent) ...                       │
+│    ... tool_use(name="Agent") ...                │
 │    ← silence (SDK constraint) →                  │
 │    ... tool_result ...                           │
 │                                                  │
 │  NEW: Poll backend for sub-agent progress:       │
-│    GET /api/chat/sessions/{parent_id}/sub-agent-progress
+│    GET /api/chat/sessions/{id}/sub-agent-progress│
 │    Response: { active: true, elapsed_s: 187,     │
-│               tool_calls: 38, label: "DDD..." }  │
+│               label: "DDD runtime design..." }   │
 │                                                  │
-│  Display logic:                                  │
+│  Display logic (frontend-owned):                 │
 │    elapsed < 60  → T0 (spinner only)             │
 │    elapsed < 180 → T1 (show timer)              │
 │    elapsed < 480 → T2 (yellow banner)           │
@@ -131,7 +148,7 @@ A 12-minute research agent producing excellent output is GOOD. Force-killing it 
 │    elapsed >= 900 → T4 (red banner)             │
 └──────────────────────────────────────────────────┘
          │
-         │ Poll every 5s (only while sub-agent active)
+         │ Poll every 5s (only while streaming)
          ▼
 ┌──────────────────────────────────────────────────┐
 │ Backend (new endpoint)                           │
@@ -139,33 +156,33 @@ A 12-minute research agent producing excellent output is GOOD. Force-killing it 
 │ GET /api/chat/sessions/{id}/sub-agent-progress   │
 │                                                  │
 │ Logic:                                           │
-│   1. Check if session is in STREAMING state      │
-│   2. Check if current tool is "Agent"            │
-│   3. Find the sub-agent session (child)          │
-│   4. Read child session's:                       │
-│      - start_time → compute elapsed              │
-│      - tool_call_count → progress indicator      │
-│      - last_tool_name → "what it's doing now"    │
-│      - label (from Agent tool invocation)        │
-│   5. Return structured progress object           │
+│   1. Get SessionUnit for this session            │
+│   2. Check if _active_agent_tool is set:         │
+│      - _active_agent_tool.start_time → elapsed   │
+│      - _active_agent_tool.label → description    │
+│   3. Return { active, elapsed_s, label }         │
 │                                                  │
-│ If no active sub-agent → { active: false }       │
+│ If no active Agent tool → { active: false }      │
 └──────────────────────────────────────────────────┘
          │
          │ Reads from
          ▼
 ┌──────────────────────────────────────────────────┐
-│ SessionUnit (child session)                      │
+│ SessionUnit (parent session — already exists)    │
+│                                                  │
+│ NEW field (lightweight):                         │
+│   _active_agent_tool: {                          │
+│     tool_use_id: str,   # block.id              │
+│     label: str,         # input.description      │
+│     start_time: float,  # time.time()           │
+│   } | None                                       │
+│                                                  │
+│ Set when: ToolUseBlock with name="Agent" arrives │
+│ Cleared when: matching tool_result arrives       │
 │                                                  │
 │ Already tracks:                                  │
-│   - _streaming_start_time (when send() called)   │
-│   - _tool_call_count (incremented per tool_use)  │
-│   - state (STREAMING/IDLE/etc)                   │
-│                                                  │
-│ Need to add:                                     │
-│   - parent_session_id (who spawned me)           │
-│   - agent_label (description from Agent tool)    │
-│   - last_tool_name (most recent tool invocation) │
+│   - state (STREAMING/IDLE/etc) — no change       │
+│   - _last_event_time — no change                 │
 └──────────────────────────────────────────────────┘
 ```
 
@@ -173,19 +190,19 @@ A 12-minute research agent producing excellent output is GOOD. Force-killing it 
 
 | File | Change | Lines |
 |------|--------|-------|
-| `backend/core/session_unit.py` | Add `parent_session_id`, `agent_label`, `last_tool_name` fields to SessionUnit | ~10 |
-| `backend/core/session_router.py` | When spawning sub-agent, pass parent_id + label to child SessionUnit | ~5 |
-| `backend/routers/chat.py` | New endpoint `GET /sessions/{id}/sub-agent-progress` | ~30 |
-| **Total backend** | | **~45 lines** |
+| `backend/core/session_unit.py` | Add `_active_agent_tool: dict | None` field. Set on ToolUseBlock(Agent), clear on matching tool_result. | ~15 |
+| `backend/routers/chat.py` | New endpoint `GET /sessions/{id}/sub-agent-progress` — reads `_active_agent_tool` from SessionUnit | ~25 |
+| **Total backend** | | **~40 lines** |
 
 ### Frontend Changes
 
 | File | Change | Lines |
 |------|--------|-------|
-| `desktop/src/hooks/useSubAgentProgress.ts` | New hook: poll endpoint every 5s when streaming, compute tier | ~40 |
-| `desktop/src/components/chat/SubAgentProgressBanner.tsx` | New component: tiered banner (T0-T4) with elapsed timer | ~60 |
+| `desktop/src/hooks/useSubAgentProgress.ts` | New hook: poll endpoint every 5s when `isStreaming`, compute tier from elapsed_s | ~40 |
+| `desktop/src/components/chat/SubAgentProgressBanner.tsx` | New component: tiered banner (T0-T4) with elapsed timer + label | ~60 |
 | `desktop/src/pages/chat/components/MessageBubbles.tsx` | Render `SubAgentProgressBanner` when `isStreaming && subAgentActive` | ~5 |
-| **Total frontend** | | **~105 lines** |
+| `desktop/src/services/chat.ts` | New API function `getSubAgentProgress(sessionId)` | ~10 |
+| **Total frontend** | | **~115 lines** |
 
 ### API Contract
 
@@ -193,14 +210,18 @@ A 12-minute research agent producing excellent output is GOOD. Force-killing it 
 // GET /api/chat/sessions/{session_id}/sub-agent-progress
 // Response:
 interface SubAgentProgress {
-  active: boolean;            // Is a sub-agent currently running?
-  elapsed_s: number;          // Seconds since sub-agent started
-  tool_calls: number;         // How many tools the sub-agent has used
-  last_tool: string | null;   // Most recent tool name ("Read", "Grep", "Bash")
-  label: string | null;       // Agent description from parent's Agent tool call
-  // Derived by frontend:
+  active: boolean;            // Is a sub-agent currently running in this session?
+  elapsed_s: number;          // Seconds since Agent tool_use block arrived (0 if not active)
+  label: string | null;       // Agent description from tool_use input.description
+  // Frontend derives:
   // tier: 0-4 based on elapsed_s thresholds
 }
+
+// Backend Python model:
+// class SubAgentProgressResponse(BaseModel):
+//     active: bool
+//     elapsed_s: float = 0
+//     label: str | None = None
 ```
 
 ### Polling Strategy
@@ -216,12 +237,13 @@ interface SubAgentProgress {
 
 | Case | Handling |
 |------|---------|
-| Sub-agent finishes between polls | Next poll returns `active: false` → banner disappears (max 5s stale) |
-| Multiple nested sub-agents | Show outermost only (deepest child's elapsed is what matters to user) |
-| Sub-agent spawns from a sub-agent | Track chain via `parent_session_id`. Show total elapsed from root. |
-| Session switches while sub-agent runs | Poll is per-session. Switching tab stops the poll. Switching back resumes. |
-| Backend restart during sub-agent | Sub-agent session dies → next poll: `active: false` → banner disappears |
+| Sub-agent finishes between polls | tool_result clears `_active_agent_tool` → next poll returns `active: false` → banner disappears (max 5s stale) |
+| Nested sub-agents (agent spawns agent) | We only see the parent's Agent tool_use. Nested agents are invisible — but elapsed time still accumulates correctly from parent's perspective. |
+| Session switches while sub-agent runs | Poll is per-session. Switching tab stops the poll for that tab. Switching back resumes. |
+| Backend restart during sub-agent | SessionUnit recreated → `_active_agent_tool` is None → poll returns `active: false`. SDK subprocess also dies, so parent will error/resume. |
 | Sub-agent in channel (non-desktop) | No frontend → no banner. Channel has its own timeout (max_turns=15). |
+| Agent tool_use arrives but NOT name="Agent" | Only `name === "Agent"` triggers tracking. Regular tools (Read, Bash) don't set `_active_agent_tool`. |
+| Concurrent Agent tools (theoretically impossible) | SDK serializes tool calls. Only one Agent tool can be active per session at a time. |
 
 ---
 
@@ -229,8 +251,8 @@ interface SubAgentProgress {
 
 | Non-goal | Why not | Future? |
 |----------|---------|---------|
-| **Real-time tool streaming from sub-agent** | SDK constraint. Would need Anthropic to change Agent tool architecture. | Wait for SDK evolution |
-| **Sub-agent step-by-step progress** | Would need sub-agent to write to a progress file. High coupling, fragile. | Maybe U3 later if demand |
+| **Real-time tool count from sub-agent** | Sub-agent runs inside SDK subprocess — backend has zero visibility into its internal tool calls. Would need Anthropic to expose sub-agent events. | Wait for SDK evolution |
+| **Sub-agent step-by-step progress** | Would need sub-agent to write to a shared progress file. High coupling, fragile, and SDK doesn't support it. | Maybe if SDK adds progress callbacks |
 | **Automatic ETA prediction** | Would need historical duration data per task type. Over-engineering for now. | Maybe after 100+ datapoints |
 | **Force timeout** | See "Why NOT Force Timeout" section above. | Never (by design) |
 
@@ -240,12 +262,13 @@ interface SubAgentProgress {
 
 | Order | Component | Effort | Dependency |
 |-------|-----------|--------|-----------|
-| 1 | SessionUnit fields (`parent_session_id`, `agent_label`, `last_tool_name`) | 20 min | None |
-| 2 | SessionRouter: wire parent→child metadata on spawn | 15 min | Step 1 |
-| 3 | New API endpoint `/sub-agent-progress` | 30 min | Step 2 |
-| 4 | Frontend hook `useSubAgentProgress` | 30 min | Step 3 |
-| 5 | Frontend component `SubAgentProgressBanner` | 45 min | Step 4 |
-| 6 | Integration test (mock sub-agent, verify tiers) | 30 min | Step 5 |
+| 1 | SessionUnit: add `_active_agent_tool` field + set/clear logic in event processing | 20 min | None |
+| 2 | New API endpoint `GET /sessions/{id}/sub-agent-progress` in `chat.py` | 25 min | Step 1 |
+| 3 | Frontend service: `getSubAgentProgress()` in `chat.ts` | 10 min | Step 2 |
+| 4 | Frontend hook `useSubAgentProgress.ts` (poll + tier computation) | 30 min | Step 3 |
+| 5 | Frontend component `SubAgentProgressBanner.tsx` (tiered banners) | 45 min | Step 4 |
+| 6 | Integration in `MessageBubbles.tsx` | 10 min | Step 5 |
+| 7 | Tests: backend endpoint + frontend hook + component | 40 min | Step 6 |
 | **Total** | | **~3 hours** | |
 
 ---
@@ -254,10 +277,10 @@ interface SubAgentProgress {
 
 | Metric | Before | After |
 |--------|--------|-------|
-| User knows sub-agent is running (not stuck) | ❌ No signal after 5s | ✅ Timer + tool count visible |
+| User knows sub-agent is running (not stuck) | ❌ No signal after 5s | ✅ Elapsed timer + label visible |
 | User knows when to intervene | ❌ Blind guess | ✅ Tiered guidance at 3/8/15 min |
-| User can stop without guilt | ❌ "Maybe it's almost done?" | ✅ "8+ min, 55 tools called — if that's too long, stop" |
-| False "stuck" perception | High (any > 2 min feels stuck) | Low (timer + tool count = "it's working") |
+| User can stop without guilt | ❌ "Maybe it's almost done?" | ✅ "8+ min elapsed — if that's too long for this task, stop" |
+| False "stuck" perception | High (any > 2 min feels stuck) | Low (timer = "it's actively running, time is progressing") |
 
 ---
 

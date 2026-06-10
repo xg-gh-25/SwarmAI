@@ -34,6 +34,8 @@ import type { MemorySaveStatus } from '../../../hooks/useMemorySave';
 import { useToast } from '../../../contexts/ToastContext';
 import { ActivityFeed } from './ActivityFeed';
 import { copyToClipboard } from '../../../utils/clipboard';
+import { useSubAgentProgress } from '../../../hooks/useSubAgentProgress';
+import { SubAgentProgressBanner } from '../../../components/chat/SubAgentProgressBanner';
 
 export interface AssistantMessageViewProps {
   /** The assistant message to render */
@@ -81,6 +83,12 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
 }) => {
   const [copied, setCopied] = useState(false);
   const { addToast } = useToast();
+
+  // Sub-agent progress observability (polls only for last streaming message)
+  const subAgentProgress = useSubAgentProgress(
+    isLastAssistant && isStreaming ? (sessionId ?? null) : null,
+    !!(isLastAssistant && isStreaming),
+  );
 
   // Per-session memory save state
   const { statusMap, toastMap, save: saveMemory, reset: resetMemory } = useMemorySave();
@@ -230,6 +238,10 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
           {/* Streaming cursor — blinking caret at end of streaming content */}
           {isStreaming && (
             <span className="inline-block w-2 h-4 bg-primary/70 rounded-sm animate-pulse align-text-bottom" aria-hidden="true" />
+          )}
+          {/* Sub-agent progress banner — tiered awareness for long-running agents */}
+          {isStreaming && isLastAssistant && (
+            <SubAgentProgressBanner progress={subAgentProgress} />
           )}
         </div>
       )}
