@@ -1584,6 +1584,7 @@ class SessionUnit:
                     yield {"_abort": True}
                     return
 
+            self._active_agent_tools = {}  # Clear ghost entries from crashed attempt
             self._transition(SessionState.STREAMING)
 
             try:
