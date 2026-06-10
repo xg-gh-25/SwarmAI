@@ -68,6 +68,8 @@ When creating a new Word document from scratch, use **docx-js**, which allows yo
 
 **READ FIRST**: Before creating any document, read [`xg-doc-style-standard.md`](xg-doc-style-standard.md) for the user's preferred formatting: Calibri 10.5pt body, 0.7" margins, 1.15 line spacing, KaiTi for Chinese text, compact tables (8-9pt), bold+underline inline labels, and specific heading/color conventions. Apply these defaults unless the user specifies otherwise.
 
+**Amazon Narrative Format**: If the user requests an "Amazon narrative", "LT review doc", "6-pager", or is writing for L7+ Amazon leadership — use the **Amazon Narrative Format** section in `xg-doc-style-standard.md`. Key differences: dense prose (not bullets), bold lead assertions per paragraph, flat section structure via `List Paragraph` style, tables only in appendix, Tenets as first appendix section. Body target ~2 pages excluding appendix.
+
 ### Design Principles
 
 **CRITICAL**: Before creating any document, analyze the content and choose appropriate design elements:
