@@ -1,10 +1,10 @@
 ---
 title: "Autonomous Pipeline — Coding as Black Box"
 created: 2026-05-12
-updated: 2026-05-14
-tags: [architecture, pipeline, autonomous-delivery, quality-convergence, adversarial-review]
+updated: 2026-06-11
+tags: [architecture, pipeline, autonomous-delivery, quality-convergence, adversarial-review, tdd, ddd]
 project: SwarmAI
-status: PE-review
+status: current
 ---
 
 # Autonomous Pipeline — Coding as Black Box
@@ -13,482 +13,767 @@ status: PE-review
 
 ## 1. Executive Summary
 
-### Vision: Coding as Black Box
+### Vision
 
 The Autonomous Pipeline transforms software delivery into a black-box operation. A user provides a requirement; the system delivers push-ready code. What happens between input and output is the pipeline's problem, not the user's.
 
-This is not "AI writes code and hopes it works." It is a delivery system with a built-in quality guarantee: 9 sequential stages produce a delivery candidate, and a Quality Convergence Loop iterates on that candidate until it meets the push-ready standard — or escalates to a human with a precise gap report.
-
-### Goal: Push-Ready Delivery
-
-Every pipeline output is good enough to merge without human code review. Not "good enough for a draft PR." Not "mostly correct pending a few fixes." Push-ready means: create a PR, CI passes, auto-merge.
+This is not "AI writes code and hopes it works." It is a **dual-mode execution architecture** with:
+- **Shared decision layer** (EVALUATE → THINK → PLAN) that fronts both modes
+- **Full Mode** — bounded tasks ("implement feature X") via 9 linear stages + convergence
+- **Goal-Driven Mode** — open-ended objectives ("improve metric X to Y") via iterative cycles until DoD met
+- **Shared quality backend** (ADVERSARIAL → DELIVER → REFLECT) that gates both modes
+- **Background execution** — decoupled from interactive sessions via Job System
+- **Knowledge compounding** — every run writes back to DDD, making the next run smarter
 
 ### Architecture in One Sentence
 
-9 sequential stages produce a delivery candidate; the Quality Convergence Loop iterates until that candidate is push-ready.
+Dual-mode pipeline (bounded tasks + open-ended goals) with shared decision front-end, shared adversarial backend, and a DDD knowledge loop that compounds across runs.
 
-![Figure 1: Overall Architecture — The Pipeline as Unified System](diagrams-pipeline/01-overall-architecture.svg)
+### Key Properties
 
-The diagram above is the complete architecture. The 9 stages are the production line. The Quality Convergence Loop is the QA inspector. Together they form one system. There is no separation — the loop is not "an additional feature" bolted on after the stages. It is the mechanism that transforms a probabilistic output (one-shot) into a deterministic quality guarantee (converge or escalate).
-
----
-
-## 2. The Problem
-
-### "AI Can Code" Does Not Equal "AI Can Deliver"
-
-The industry treats AI coding as solved because models can produce syntactically correct code that passes unit tests. This measures construction — the cheapest part of delivery.
-
-Delivery requires correctness across integration boundaries, conformance to project conventions, safety against regressions, and resolution of architectural decisions. Construction alone guarantees none of these.
-
-### The One-Shot Problem
-
-Run 9 stages once. Hope the output is good enough. This is how most AI coding pipelines work — and it produces quality that is structurally unpredictable.
-
-| Dimension | One-Shot Pipeline | Pipeline + Convergence |
-|-----------|-------------------|----------------------|
-| Quality certainty | Probabilistic (varies per run) | Deterministic (converge or escalate) |
-| Failure detection | Post-delivery (user finds bugs) | Pre-delivery (gate catches gaps) |
-| Failure response | Start over from scratch | Targeted fix of identified gap |
-| Architecture safety | Hope-based | Adversarially verified |
-| Confidence signal | "Tests pass" | 6-layer gate + self-assessment |
-
-### No Quality Guarantee
-
-Tests passing does not mean push-ready. The following are all true simultaneously in a "tests pass" state:
-
-- State machine has unreachable transitions
-- Error handling swallows failures silently
-- Convention violations create maintenance debt
-- Cross-boundary contracts are implicitly assumed, not verified
-- Race conditions exist in paths no test exercises
-
-### What Is Missing: Systematic Convergence
-
-The gap is not in any individual stage. Each stage does its job. The gap is that running stages once is a gamble — sometimes the output is excellent, sometimes it has subtle defects that no individual stage catches because each stage only sees its own scope.
-
-What is needed: a mechanism that evaluates the COMPLETE output against the COMPLETE quality standard, identifies specific gaps, fixes them precisely, and re-verifies until no gaps remain.
-
-![Figure 2: One-Shot vs Quality Convergence](diagrams-pipeline/02-problem-convergence.svg)
+| Property | Mechanism |
+|----------|-----------|
+| Push-ready guarantee | 6-layer gate + convergence loop (max 3 iterations) |
+| Self-review blind spot elimination | Fresh-context adversarial sub-agents (zero builder bias) |
+| Failure mode safety | Always "escalate with gap report" — never "ship despite known issues" |
+| Cross-run learning | pipeline_intelligence.json + DDD cultivation + RP/OP pattern growth |
+| Structural error prevention | 40 runtime patterns (RP1-40) + 8 operational invariants (OP1-8) |
+| Dual execution modes | Bounded tasks (linear) + open-ended goals (iterative) — same quality gates |
+| Background autonomy | Job System decouples pipeline from chat; runs overnight, notifies on completion |
 
 ---
 
-## 3. Overall Architecture
+## 2. Architecture Overview
 
-### The Pipeline = 9 Stages + Quality Convergence Loop
+![Figure 1: Overall Architecture](diagrams-pipeline/01-overall-architecture.svg)
 
-This is one system, not two. The 9 stages are the production line — they take a requirement and produce a delivery candidate. The Quality Convergence Loop is the quality inspector — it evaluates the candidate and either approves it or sends it back for targeted improvement.
+![Figure 9: Dual-Mode Execution Architecture (v3)](diagrams-pipeline/09-dual-mode-architecture.svg)
 
-### How They Connect
+### The Dual-Mode System
+
+The pipeline is organized in three layers that execute top-to-bottom:
 
 ```
-Requirement → [9 Stages] → Delivery Candidate → [Quality Convergence Loop] → Push-Ready
-                                                         ↓
-                                                   (or Escalate)
+┌─────────────────────────────────────────────────────────────────────┐
+│  📝 REQUIREMENT INPUT                                               │
+├─────────────────────────────────────────────────────────────────────┤
+│  SHARED DECISION LAYER (前端决策层)                                   │
+│  EVALUATE → THINK → PLAN                                            │
+│  DDD-driven judgment: should we? how? what exactly?                 │
+├────────────────────────┬────────────────────────────────────────────┤
+│  FULL MODE (左轨)       │  GOAL-DRIVEN MODE (右轨)                    │
+│  Bounded Task          │  Open-Ended Goal                           │
+│  "实现 feature X"       │  "提升指标 X 到 Y"                           │
+│                        │                                            │
+│  BUILD → REVIEW → TEST │  ┌─ GOAL_CYCLE ─────────────────────┐     │
+│       ↑                │  │ BUILD → TEST → DoD check         │     │
+│       └── Convergence  │  │      ↑         │                 │     │
+│            Loop        │  │      └── NOT MET ─┘              │     │
+│                        │  │      DoD MET → exit              │     │
+│  ~60% fully autonomous │  └──────────────────────────────────┘     │
+│  10-60 min             │  Budget/stuck/revert safeguards           │
+│                        │  ⏰ Cross-session via Job System           │
+├────────────────────────┴────────────────────────────────────────────┤
+│  SHARED QUALITY BACKEND (后端质量门)                                  │
+│  ADVERSARIAL (4 agents + 9 specialists) → DELIVER → REFLECT        │
+│  Right-to-left: attack → gate → compound                           │
+├─────────────────────────────────────────────────────────────────────┤
+│  ✅ PR-READY OUTPUT                                                  │
+└─────────────────────────────────────────────────────────────────────┘
+
+        ┌── DDD (知识治理层) ──┐
+        │  PRODUCT.md          │ ← EVALUATE reads
+        │  TECH.md             │ ← BUILD reads
+        │  IMPROVEMENT.md      │ ← REVIEW reads
+        │  PROJECT.md          │ ← DELIVER reads
+        │  Code Intelligence   │ ← blast radius
+        └──────────────────────┘
+                ↑
+                │ REFLECT writes back (知识复利闭环)
+                └── every run makes DDD richer → next run smarter
 ```
 
-The 9 stages are linear and sequential. They run once to produce the initial candidate. The convergence loop then takes over:
+### Why Dual Mode?
 
-1. **Evaluate candidate** against the Push-Ready Gate (6 layers), agent self-assessment, and task goal alignment
-2. **If all three pass** — candidate is push-ready. Create PR with auto-merge.
-3. **If any fail** — identify which specific layer/assessment failed, why, and what would fix it
-4. **Apply targeted fix** — minimal, scoped change addressing only the identified gap
-5. **Re-verify** — run the candidate through the same checks again
-6. **Repeat** until convergence (all pass) or max iterations (escalate)
+| Dimension | Full Mode | Goal-Driven Mode |
+|-----------|-----------|------------------|
+| Task shape | Bounded ("add X") | Open-ended ("improve X to Y") |
+| Completion signal | All ACs pass | Definition of Done criteria met |
+| Execution | Linear 9 stages, one pass + convergence | Iterative cycles until convergence or budget |
+| Session model | Single session (10-60 min) | Cross-session via Job System (hours/days) |
+| Failure mode | Escalate with gap report | Checkpoint + resume next session |
+| Typical use | Features, bugfixes, config changes | Performance goals, refactoring campaigns, metric improvement |
 
-### Why This Architecture
+### Profile Routing
 
-One-shot delivery has a quality ceiling. No matter how good the individual stages are, running them once produces output whose quality is probabilistic — it depends on which patterns the model activates, what context is loaded, and how ambiguous the requirement was.
+The pipeline selects a profile at EVALUATE based on task characteristics. Full Mode and Goal-Driven Mode are the two execution tracks; profiles within Full Mode control which stages run:
 
-The convergence loop removes probability from the equation. The output is either push-ready (verified by 6 independent layers + self-assessment) or it is escalated with a precise report of what remains unresolved. There is no "ship and hope" state.
+| Mode | Profile | Stage Sequence | When Used |
+|------|---------|---------------|-----------|
+| **Full** | **full** | evaluate → think → plan → build → review → test → deliver → reflect | Standard features, complex changes |
+| **Full** | **bugfix** | evaluate → think → plan → build → review → test → deliver → reflect | Bug fixes (same stages, different selection criteria) |
+| **Full** | **trivial** | evaluate → think → build → review → test → deliver → reflect | Config changes, typo fixes (skips plan) |
+| **Full** | **research** | evaluate → think → reflect | Research-only tasks (no code output) |
+| **Full** | **docs** | evaluate → think → plan → deliver → reflect | Documentation changes (no build/test) |
+| **Goal** | **goal** | evaluate → think → plan → goal_cycle → deliver → reflect | Open-ended goals with iterative progress |
 
-### Max Iterations and Escalation
+Profile is **immutable after EVALUATE** — cannot be downgraded mid-run (code-enforced gate).
 
-The loop has a configurable maximum iteration count to prevent infinite cycling. When max iterations are exhausted without convergence:
+### Background Execution
 
-- The system does NOT silently fail or ship a substandard output
-- It escalates to a human with: (a) what still fails, (b) what was attempted, (c) why the gap persists
-- The human either fixes the remaining gap manually or adjusts the requirement
+Pipelines can run as background jobs via the Swarm Job System, decoupling execution from interactive chat sessions:
 
-This means the pipeline's failure mode is "ask for help with a clear problem statement" — never "silently ship broken code."
+```
+Interactive (foreground)           Background (Job System)
+─────────────────────────          ─────────────────────────
+User types requirement             Scheduled or one-shot job
+  → pipeline runs in chat            → pipeline runs headless
+  → user sees progress               → notifies on completion
+  → escalation = inline ask          → escalation = Radar todo
+```
 
-### Production Smoke
+**Goal-Driven Mode + Background = overnight autonomy:** A goal profile can span multiple sessions — the Job System runs cycles every 4 hours, checks DoD, and stops when met (or budget exhausted). User sees result next morning.
 
-Before declaring push-ready, a final "production smoke" runs: the full test suite executes one more time in a clean state to ensure that no accumulated fix introduced a side effect. This is the last check before the PR is created.
+**Resuming after escalation:** When a background pipeline checkpoints (L2 BLOCK or budget), a Radar todo appears. Resolution paths:
+1. Drag the Radar todo into chat → agent resumes inline
+2. Say "resume pipeline for X" → reads checkpoint and continues
+3. Wait for next scheduler run → background job auto-resumes
 
-![Figure 1: Overall Architecture — The Pipeline as Unified System](diagrams-pipeline/01-overall-architecture.svg)
+### Stage Artifact Flow
 
----
+Each stage consumes upstream artifacts and produces its own:
 
-## 4. The 9 Stages
+| Stage | Consumes | Produces |
+|-------|----------|----------|
+| evaluate | — | evaluation |
+| think | evaluation | research |
+| plan | evaluation, research | design_doc |
+| build | design_doc | changeset |
+| review | changeset | review |
+| test | changeset, review | test_report |
+| deliver | changeset, review, test_report | delivery |
+| reflect | test_report, delivery | — (writes to DDD) |
 
-### Purpose: Produce the Initial Delivery Candidate
+Artifacts are persisted via `artifact_cli.py` and validated against JSON schemas at each stage boundary.
 
-The 9 stages form the production line. They are linear, sequential, and each builds on the output of the previous stage. Their job is to take a task requirement and produce the best possible first candidate — which the convergence loop then verifies and potentially improves.
+### DDD Integration — Bidirectional Flow
 
-![Figure 3: The 9 Stages with DDD Annotations](diagrams-pipeline/03-nine-stages.svg)
+![Figure 7: DDD Integration](diagrams-pipeline/07-ddd-integration.svg)
 
-### Stage Detail
+### DDD Document Loading (Per-Stage)
 
-| Stage | Purpose | DDD Input | Output | Decision Class |
-|-------|---------|-----------|--------|----------------|
-| 1. EVALUATE | Determine if task should proceed | PRODUCT.md | GO/DEFER/REJECT/ESCALATE | Judgment |
-| 2. THINK | Research approach, consider alternatives | TECH.md, IMPROVEMENT.md | Chosen approach with rationale | Judgment |
-| 3. PLAN | Specify what to build (SDD) | All DDD docs | Specification + test strategy | Taste |
-| 4. BUILD | Implement via TDD red-green-refactor | TECH.md conventions | Working code + passing tests | Mechanical |
-| 5. REVIEW | Self-check against PLAN specification | SDD from Stage 3 | Conformance report, fixes | Mechanical |
-| 6. TEST | Integration testing, edge cases, QA | Test strategy from Stage 3 | Test results, coverage gaps | Mechanical |
-| 7. ADVERSARIAL | Fresh-context sub-agent attack review | IMPROVEMENT.md anti-patterns | Issue list or clean bill | Mechanical |
-| 8. DELIVER | Package as delivery candidate | All stage outputs | Delivery candidate + report | Mechanical |
-| 9. REFLECT | Extract learnings for DDD cultivation | Execution trace | Cultivation proposals | Mechanical |
+| Stage | Reads |
+|-------|-------|
+| evaluate | PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md |
+| think | PRODUCT.md, IMPROVEMENT.md |
+| plan | PRODUCT.md, PROJECT.md |
+| build | TECH.md, PROJECT.md |
+| review | TECH.md, IMPROVEMENT.md |
+| test | TECH.md, IMPROVEMENT.md |
+| deliver | PROJECT.md |
+| reflect | IMPROVEMENT.md |
 
-### Decision Classification
+### Sub-Agent Architecture
 
-Each stage classifies its decisions into one of three categories:
+The pipeline spawns fresh-context sub-agents at two points:
 
-- **Mechanical** — can be auto-approved (formatting, test execution, packaging)
-- **Taste** — batched at the delivery gate for human review if desired (naming, approach style)
-- **Judgment** — blocks execution until human decides (scope changes, risky architecture)
+| Spawn Point | Sub-Agents | Purpose |
+|-------------|-----------|---------|
+| **REVIEW** (spec compliance) | 1 serial sub-agent | Verify ACs → implementation mapping without builder bias |
+| **REVIEW** (parallel fan-out) | Up to 3 parallel sub-agents | Code quality + security + UX review |
+| **DELIVER** (adversarial gate) | Up to 5 specialist sub-agents + 1 meta-review | Fresh-eyes adversarial attack on complete delivery |
 
-Stages 1 and 2 are judgment-heavy (should we build this? how?). Stages 4-9 are mostly mechanical (execute the plan). Stage 3 is taste-heavy (how should the spec look?).
-
-### Stages Are Not Enough
-
-Running these 9 stages produces a candidate that is likely correct but not guaranteed correct. The stages are individually sound but collectively incomplete — each stage only verifies its own scope. The integration of all stages into a push-ready whole is the convergence loop's job.
-
----
-
-## 5. Adversarial Review
-
-### Why It Is Mandatory
-
-Adversarial review exists because the builder cannot find its own blind spots. The same context window that produced the code cannot objectively evaluate that code — it shares the same assumptions, the same mental model, the same happy-path bias.
-
-The historical evidence is clear: code that passes all other stages of self-review can still be fundamentally broken. Tests pass because they test the same assumptions the code makes. Types check because the interface was designed to match the implementation, not the other way around.
-
-### How It Works
-
-A separate sub-agent is spawned with:
-- Fresh context (no builder bias carried over)
-- The code changes (what was built)
-- The DDD anti-pattern catalog (what to look for)
-- The task requirement (what should have been built)
-
-The sub-agent's only job is to find problems. It has no stake in the code being correct. It is adversarial by design — it succeeds when it finds issues, not when it approves code.
-
-### What It Catches That Self-Review Cannot
-
-| Category | Example | Why Builder Misses It |
-|----------|---------|----------------------|
-| State machine gaps | Missing error-to-recovery transition | Builder assumed happy path covers it |
-| Cross-boundary errors | Module A sends format B does not expect | Each module tested in isolation |
-| Happy-path assumptions | Edge case produces silent corruption | Tests only exercise common paths |
-| Concurrency issues | Race between event handler and state update | Single-threaded mental model during build |
-| Convention violations | Uses pattern marked as anti-pattern in IMPROVEMENT.md | Builder did not re-read DDD during build |
-| Silent failures | Error caught, logged, but state left inconsistent | "It did not crash" treated as "it works" |
-
-### Position in Architecture
-
-Adversarial review occupies two positions simultaneously:
-
-1. **Stage 7 of 9** — runs as part of the initial candidate production
-2. **Layer 4 of the Push-Ready Gate** — re-runs during convergence loop if initial adversarial found issues that were supposedly fixed
-
-This dual position means adversarial review runs at minimum once (Stage 7) and potentially multiple times (each convergence iteration that fails L4).
-
-![Figure 6: Adversarial Review Coverage Gap](diagrams-pipeline/06-adversarial-coverage.svg)
+Sub-agents use **review-agents/** (4 domain agents) and **stages/specialists/** (9 specialist profiles).
 
 ---
 
-## 6. Quality Convergence Loop
+## 3. The Stages
 
-### The QA Inspector
+![Figure 3: Stage Flow with DDD Annotations](diagrams-pipeline/03-nine-stages.svg)
 
-If the 9 stages are the production line that assembles the product, the Quality Convergence Loop is the inspector that verifies the assembled product meets the quality standard before it ships. Products that fail inspection go back for targeted rework — not back to the beginning of the line, but to the specific station that can fix the identified defect.
+### 3.1 EVALUATE — Should We Build This?
 
-### Inspired by the Ralph Loop
+**Purpose:** Determine if the task should proceed, select profile, define acceptance criteria.
 
-The Ralph Loop pattern: iterate toward a goal, evaluating after each iteration, until the goal is met or you determine it cannot be met. This is not multi-session. This is not about persisting goals across days. This is about converging on quality within a single task execution.
+**Mechanics:**
+1. **Requirement Clarification (P0)** — Parse WHO/WHAT/WHY/WHEN; detect ambiguities
+2. **Subsystem Health Audit (P1)** — For non-greenfield: check 8 operational invariants (OP1-8)
+3. **Codebase Complexity Assessment** — If `code_intel.db` exists: dead code + fragility metrics
+4. **Anti-Repetition Check (BLOCKING)** — Scan IMPROVEMENT.md "What Failed" for similar past failures
+5. **Profile Selection** — Decision tree maps task → profile (full/bugfix/trivial/research/docs/goal)
+6. **Intelligence-Informed Selection** — Read `pipeline_intelligence.json` for high-risk shapes, budget calibration
+7. **Acceptance Criteria Quality Gate** — Each AC must be testable, scoped, unambiguous
+8. **Pre-mortem Gate** — "What would make this fail?" (mandatory output)
 
-### The 6-Layer Push-Ready Gate
+**Blocking Gates:** Anti-repetition match → REJECT/ESCALATE. Unresolvable ambiguities (>=2) → ESCALATE.
 
-The gate has 6 independent layers. ALL must pass for the candidate to be declared push-ready:
+**Output:** `evaluation` artifact → GO/DEFER/REJECT/ESCALATE + scope + acceptance_criteria + pre_mortem
+
+**Exit Routing:** GO advances to think. DEFER/REJECT ends pipeline. ESCALATE = L2 BLOCK (human review).
+
+---
+
+### 3.2 THINK — Research & Alternatives
+
+**Purpose:** Explore approaches, identify risks, recommend direction.
+
+**Mechanics:**
+1. **Constraint-Driven Alternatives (T2)** — Generate >=2 approaches using explicit constraints (SPEED, QUALITY, SIMPLICITY, FLEXIBILITY, DELETION) — not generic Minimal/Ideal/Creative
+2. **Design Risk Probe (T1)** — Self-answering probes that verify/falsify assumptions without user interaction (>=3 probes required)
+3. **Minimum Depth Gate (BLOCKING)** — >=2 approaches + >=3 probes + cost tradeoffs stated
+
+**Blocking Gates:** Minimum depth gate. If <50% probes resolved AND high-stakes: escalate to interactive grill (max 5 questions).
+
+**Output:** `research` artifact → alternatives[], risk_probe[], recommendation, sources[]
+
+---
+
+### 3.3 PLAN — Specify What to Build
+
+**Purpose:** Exhaustive file discovery + ordered change specification + test strategy.
+
+**Mechanics:**
+1. **Exhaustive File Discovery** — Search → expand → categorize (MODIFY/TEST/VERIFY/IRRELEVANT) BEFORE designing
+2. **Change Spec** — Topologically-sorted atomic sub-changes with depends_on, AC mapping, verify command
+3. **Boundaries** — Three-tier system (Always/Ask First/Never) from IMPROVEMENT.md failures + TECH.md conventions
+4. **Success Criteria** — Reframed into testable conditions (distinct from ACs)
+5. **Test Strategy Table** — For each AC: how-to-test, mock-boundary, input-construction
+6. **Impact Projection** — If `code_intel.db` exists: blast radius via dependents graph
+
+**Blocking Gates:** File discovery contradicts approach → return to THINK. Missing required fields → validator rejects.
+
+**Output:** `design_doc` artifact → approach, file_discovery[], change_spec[], boundaries, success_criteria[], test_strategy[], impact_projection
+
+---
+
+### 3.4 BUILD — TDD Red-Green-Verify
+
+**Purpose:** Implement via vertical tracer bullets (RED → GREEN per AC, not horizontal slices).
+
+**Mechanics:**
+1. **API Existence Check (BLOCKING)** — Before coding against any module: Read target, verify function signature exists
+2. **Mechanism Declaration (BLOCKING)** — For system API usage (flock, signals, atomicity): declare MECHANISM/ASSUMPTION/VERIFY
+3. **RED → GREEN Loop** — Per AC: write failing test (RED) → implement minimum code (GREEN) → verify
+4. **Micro-Replan Trigger** — Same AC fails RED→GREEN 2x consecutively → stop, devise different approach
+5. **Path Symmetry Check** — After each GREEN: enumerate ALL code paths reaching same end state, verify postconditions
+6. **VERIFY** — Run changed test files + files importing changed modules (not full suite)
+7. **Caller Verification** — New public functions must have callers (else WARN)
+8. **Interface Seam Verification** — Cross-module boundaries: methods exist + signature compatible
+9. **SMOKE** — Start/import test; crash = fix before advancing
+10. **User-Path Trace** — Trace 2-3 user scenarios through the new code
+11. **AC Coverage Matrix (MANDATORY)** — Every PLAN AC must have impl + test + verified=true
+
+**Blocking Gates:** API Existence (Step 1.5), Mechanism Declaration (Step 1.7), Horizontal Slice anti-pattern, AC Coverage Matrix, max 20 fixes/session.
+
+**Output:** `changeset` artifact → branch, commits[], files_changed[], tdd metrics, ac_coverage[]
+
+---
+
+### 3.5 REVIEW — Multi-Layer Quality Gate
+
+**Purpose:** Catch integration wiring bugs, convention violations, and security issues that self-review misses.
+
+**Architecture:** Two-phase with retry accounting.
+
+#### Phase 1: Pre-Gate + Spec Compliance (Serial)
+
+1. **Litmus Pre-Gate** — 30-second structural sanity check:
+   - HF1: Scaffold-only (no real logic)
+   - HF2: AC coverage gaps
+   - HF3: Internal contradictions
+   - HF4: Missing error handling
+   - Any HF = FAIL → rework to BUILD (max 2 litmus failures)
+
+2. **Spec Compliance Gate (BLOCKING)** — Spawn fresh sub-agent (NOT self-review):
+   - Verify AC → implementation mapping
+   - Verdict: PASS / WARNING / BLOCK
+   - BLOCK → rework to BUILD (max 2 spec blocks; 3rd → full escalation)
+
+#### Phase 2: Parallel Fan-Out (Conditional)
+
+**Trigger:** >3 files OR >100 lines OR touches auth/data/infra code.
+
+Spawn 3 parallel sub-agents:
+- **Code Quality Agent** — RP1-RP40 checklist, integration trace, depth analysis
+- **Security & Safety Agent** — Confidence-gated scan per file (1-10 + exploit scenario), wire test (WR1-4)
+- **UX & Test Agent** — Only if frontend files changed; discoverability, feedback states, escape handling
+
+**Output:** `review` artifact → litmus_gate, spec_compliance, quality_findings[], security_findings[], ux_findings[]
+
+---
+
+### 3.6 TEST — Three-Layer Verification
+
+**Purpose:** Verify correctness at three levels of scope.
+
+**Layers:**
+1. **AC-Driven Verification** — Run tests explicitly declared in ac_coverage
+2. **Dependency-Scoped Regression** — Run tests importing changed modules (via grep)
+3. **Import Smoke** — For each new .py file: verify import without crash
+
+**Additional Checks:**
+- **WTF Gate** — Risk score: files_touched(+2 if >3) + unrelated_module(+3) + API_change(+2) + fix_count(+1 if >10). Score >=5 → L2 BLOCK
+- **Single-Platform Compile Trap (BLOCKING)** — Cross-platform changesets cannot report fully-green on single OS
+- **Max 20 fixes/session** — Hard cap; checkpoint after
+- **Exit Evidence Checklist** — 9 items verifying all 3 layers executed
+
+**Output:** `test_report` artifact → passed, layers{ac_driven, dependency_scoped, import_smoke}, regressions, wtf_score
+
+---
+
+### 3.7 DELIVER — 6-Layer Convergence + Adversarial
+
+**Purpose:** Final quality convergence — iterate until push-ready or escalate.
 
 ![Figure 4: 6-Layer Push-Ready Gate](diagrams-pipeline/04-push-ready-gate.svg)
 
-| Layer | What It Checks | How It Checks |
-|-------|----------------|---------------|
-| L1: Tests Pass | Unit + integration tests all green | Run full test suite |
-| L2: Type-Safe | No type errors, linter clean | Run type checker + linter |
-| L3: No Regressions | Existing tests still pass | Run pre-existing test suite |
-| L4: Adversarial Clean | No critical issues found by fresh reviewer | Sub-agent review (or re-review) |
-| L5: DDD Conformance | Follows TECH.md conventions, avoids IMPROVEMENT.md anti-patterns | Pattern matching against DDD docs |
-| L6: Human Decisions Resolved | All taste/judgment decisions surfaced | Check decision log from stages |
+![Figure 5: Quality Convergence Loop](diagrams-pipeline/05-convergence-loop-detail.svg)
 
-### Convergence Behavior
+#### Quality Convergence Loop (max 3 iterations)
 
-Each iteration narrows the gap between the current candidate and the push-ready standard:
+Each iteration checks 6 layers. ALL must pass:
 
-- Iteration 1: Candidate fails L4 (adversarial found state machine gap). Fix: add missing transition. Re-verify.
-- Iteration 2: Candidate fails L3 (fix introduced regression in existing test). Fix: adjust implementation. Re-verify.
-- Iteration 3: All layers pass. Agent self-assessment: satisfied. Goal alignment: requirement fully met. Declare push-ready.
+| Layer | Check | Mechanism |
+|-------|-------|-----------|
+| L1 | Tests pass | pytest exits 0 |
+| L2 | Type-safe | No type errors, linter clean |
+| L3 | No regressions | Pre-existing tests still pass |
+| L4 | Adversarial clean | Specialist sub-agents find no HIGH/MED |
+| L5 | DDD conformance | TECH.md traps + IMPROVEMENT.md anti-patterns |
+| L6 | Decisions resolved | All taste/judgment decisions logged |
 
-The key property: fixes are TARGETED. The loop does not re-run all 9 stages. It identifies which specific layer failed, what specific issue caused the failure, and applies a minimal change to resolve that issue. Then it re-verifies the entire gate to ensure the fix did not introduce new failures.
+#### Adversarial Review Gate (BLOCKING, NON-NEGOTIABLE)
 
-### Exit Conditions
+![Figure 6: Adversarial Review Coverage](diagrams-pipeline/06-adversarial-coverage.svg)
 
-The loop exits when:
+Mechanically enforced by `artifact_cli` — cannot complete pipeline without `adversarial_review.profile_tier == "full"` for full/bugfix profiles.
 
-1. **All 6 gate layers pass** — no quality gap remains
-2. **Agent self-assessment positive** — "I am satisfied with this delivery"
-3. **Task goal alignment confirmed** — "This solves what was asked"
+**Multi-specialist review army** (spawned fresh, zero build context):
 
-If all three are true: push-ready. Create PR.
+| Specialist | Scope | Trigger |
+|-----------|-------|---------|
+| Correctness | Logic errors, edge cases, boundary conditions | Always (>50 lines) |
+| Security | Injection, auth, secrets, serialization | Auth/input/DB/API changes |
+| Performance | N+1, O(n^2), pool contention, no-op scaling | Backend endpoints, loops, DB queries |
+| API Contract | Breaking changes, type mismatches | Router/endpoint/model changes |
+| Concurrency | Shared resources, race conditions, pool exhaustion | Thread/async/lock code |
+| Integration | Dead code, unwired functions, registration gaps | New public functions |
+| Operational | Env assumptions, deploy context mismatch | Daemon/hook/job code |
+| State Machine | Unreachable states, stuck transitions, orphan states | State enums, lifecycle methods |
+| Red Team | Cross-domain attacks other specialists missed | CONDITIONAL: >200 lines OR any HIGH found |
 
-### Why the Loop Itself Is NOT a Sub-Agent
+Plus **Meta-Review** sub-agent for operational blind spots.
 
-A natural question: "Should the convergence loop be a separate sub-agent for objectivity?"
+#### Additional Audits
 
-No. The division of labor is intentional:
+- **Fresh User Audit (P6)** — Could a new user succeed without modifying source?
+- **User Path Latency Trace (P6.5)** — Trace user scenarios for hidden latency, silent failures
+- **Completion Audit** — AC → evidence matrix with independent verification
+- **Push-Ready Gate (Binary)** — PUSH-READY or NOT-PUSH-READY (no numeric score)
 
-| Component | Executor | Why |
-|-----------|----------|-----|
-| 9 Stages (build) | Main agent | Needs full task context |
-| Adversarial Review (Stage 7 / Gate L4) | **Sub-agent** | Fresh context = catches builder blindspots |
-| Convergence Loop (evaluate + iterate) | Main agent | Needs builder context to identify and fix gaps |
-
-The convergence loop requires **builder knowledge** — only the builder knows what corners were cut, what trade-offs were made, and what the minimal fix is for a specific gap. A sub-agent evaluating convergence would lose this context and either repeat the adversarial review (redundant) or make uninformed fix attempts (wasteful).
-
-The adversarial sub-agent provides the "fresh eyes." The convergence loop provides the "fix it precisely." Together they cover both detection (adversarial) and correction (convergence).
-
-If the loop identifies that Layer 4 (adversarial) needs re-checking after a fix, it re-spawns the adversarial sub-agent — targeted at the specific fix, not the entire delivery.
-
-### Failure Mode
-
-If max iterations exhausted without convergence:
-
-- **Do not ship** — quality standard not met
-- **Escalate** — provide human with: remaining failures, attempted fixes, root cause hypothesis
-- **Human decides** — fix manually, adjust requirement, or accept known limitation
-
-![Figure 5: Quality Convergence Loop — Internal Mechanics](diagrams-pipeline/05-convergence-loop-detail.svg)
+**Output:** `delivery` artifact → push_ready, adversarial_review{specialists, findings}, completion_audit, fresh_user_audit[]
 
 ---
 
-## 7. DDD Integration
+### 3.8 REFLECT — Extract & Cultivate
 
-### Every Stage Reads Relevant DDD Context
+**Purpose:** Close the feedback loop — write learnings to DDD, update meta-intelligence.
 
-The pipeline does not operate in a vacuum. Before each stage executes, it loads the relevant DDD documents to inform its decisions:
+**10-Step Methodology:**
+1. Extract lessons (specific, self-contained)
+2. Write to IMPROVEMENT.md (What Worked / What Failed)
+3. Update MEMORY.md (cross-project lessons)
+4. Checklist maintenance — add new RP patterns if bugs were missed
+5. ADR gate — record surprising, costly, hard-to-reverse decisions
+6. Dead code checkpoint — compare before/after via code_intel.db
+7. **DDD Cultivation** — `artifact_cli run-cultivate` auto-applies additive lessons to TECH.md/IMPROVEMENT.md
+8. Record structured lessons in run.json
+9. Record outcome for meta-intelligence learning feedback
+10. Regenerate REPORT.md with lessons inlined
 
-| Stage | DDD Docs Read | Why |
-|-------|---------------|-----|
-| EVALUATE | PRODUCT.md | Does this task align with product direction? |
-| THINK | TECH.md, IMPROVEMENT.md | What patterns to follow? What to avoid? |
-| PLAN | All four docs | Full context for specification |
-| BUILD | TECH.md | Conventions, patterns, architecture rules |
-| ADVERSARIAL | IMPROVEMENT.md | Known anti-patterns, previous mistakes |
-| Gate L5 | TECH.md, IMPROVEMENT.md | Conformance check |
-
-Without DDD, the pipeline operates blind — it might produce technically correct code that violates every convention the project has established. With DDD, it starts informed and delivers domain-correctly.
-
-### REFLECT Writes Back: The Cultivation Cycle
-
-Stage 9 (REFLECT) is where the pipeline feeds DDD. After delivery is complete, REFLECT examines the execution trace and proposes cultivation:
-
-- New patterns discovered during BUILD that should be documented in TECH.md
-- Anti-patterns encountered that should be added to IMPROVEMENT.md
-- Convention violations that indicate a missing rule in TECH.md
-- Architecture decisions that affect PRODUCT.md direction
-
-This makes the pipeline DDD's richest feed channel (Channel 3 in the DDD framework). Every pipeline run that delivers successfully also proposes knowledge improvements — creating a compound growth cycle where the pipeline gets better at delivery because DDD gets richer, and DDD gets richer because the pipeline keeps delivering.
-
-### Without DDD vs With DDD
-
-| Aspect | Without DDD | With DDD |
-|--------|-------------|----------|
-| Convention adherence | Random (depends on model training) | Enforced (read before building) |
-| Mistake repetition | Repeats same errors across runs | Learns from previous mistakes via IMPROVEMENT.md |
-| Architecture alignment | Drifts with each delivery | Stays aligned via PRODUCT.md + TECH.md |
-| Knowledge accumulation | Zero (each run starts fresh) | Compound (each run adds knowledge) |
-
-![Figure 7: DDD Integration — Bidirectional Flow](diagrams-pipeline/07-ddd-integration.svg)
+**Output:** IMPROVEMENT.md updates, PROJECT.md updates, optional ADRs, regenerated REPORT.md
 
 ---
 
-## 8. Critical Design Decisions
+### 3.9 GOAL_CYCLE — Iterative Goal Pursuit
 
-### Single-Agent with Role-Switching over Multi-Agent Orchestration
+**Purpose:** For open-ended goals, loop BUILD+TEST internally until Definition of Done criteria met.
 
-The pipeline uses one agent that switches roles (builder, reviewer, adversary) rather than multiple independent agents communicating through messages. This eliminates coordination overhead, context synchronization issues, and the "telephone game" of information loss between agents.
+**Pre-Cycle Setup:**
+- Load evaluation, initialize progress file (DoD criteria table + current state)
+- Record initial commit, set cycle counter, initialize GoalMetrics
 
-Role-switching preserves the full execution context while changing the evaluation lens. The adversarial role has fresh context not because it is a different agent, but because it is invoked as a sub-agent without the builder's accumulated assumptions.
+**Per-Cycle Loop (12 steps):**
+1. Budget Gate — EXIT if remaining < 150K tokens
+2. DoD Check — EXIT if all criteria met (exit-first design)
+3. Stuck Detection — EXIT if last 3 cycles have zero progress
+4. Read Progress — load current state
+5. Pick Step — select next DoD criterion to advance
+6. Execute Step — BUILD-equivalent (1-3 files per cycle)
+7. Test — verify step didn't break anything
+8. Update Progress — record what changed
+9. Mini-Reflect — 2-3 sentence what worked/what didn't
+9.5. Track Cycle Metrics — GoalMetrics velocity tracking
+10. Periodic REVIEW Gate — every N cycles, run REVIEW on accumulated diff
+11. Revert Check — EXIT if 2 consecutive cycles end in revert
+12. Loop
+
+**Regression Protocol:** Max 2 attempts to fix failing test; 2nd fail → revert cycle changes (progress file preserved).
+
+**Final:** When DoD met → adversarial review on total changeset → advance to DELIVER.
+
+---
+
+## 4. Review Architecture
+
+### Review-Agents (4 Domain Agents)
+
+| Agent | File | Responsibility |
+|-------|------|---------------|
+| **Spec Compliance** | `review-agents/spec-compliance.md` | AC verification: MISSING / EXTRA / MISUNDERSTOOD. Serial, blocking. |
+| **Code Quality** | `review-agents/code-quality.md` | RP1-40 checklist, integration trace, replace/move parity, depth/seam analysis |
+| **Security & Safety** | `review-agents/security-safety.md` | Confidence-gated security scan (1-10 per file + exploit scenario), wire test WR1-4 |
+| **UX & Test** | `review-agents/ux-test.md` | Frontend-only. Discoverability, feedback states, escape handling, E2E trace |
+
+### Specialists (9 Deep Reviewers)
+
+Dispatched during DELIVER's adversarial gate. Each is scope-gated, produces JSON with severity/confidence/fix.
+
+| Specialist | Key Patterns Checked |
+|-----------|---------------------|
+| API Contract | Breaking changes, type mismatches, new required params |
+| Concurrency | Shared resource enumeration, contention paths (RP35-37) |
+| Correctness | Logic errors, off-by-one, edge cases (None, [], "", 0) |
+| Integration | 0-caller detection, registration/wiring gaps, call chain compatibility |
+| Operational | Dev vs daemon vs Hive env assumptions (RP8, RP18-19) |
+| Performance | N+1, O(n^2), pool contention (RP30, RP35-36), no-op scaling |
+| Red Team | Cross-domain adversarial attack; only activates on >200 lines OR any HIGH |
+| Security | Injection vectors, auth guards, secret exposure, serialization (RP17, RP24) |
+| State Machine | State completeness, unreachable states, stuck transitions (RP13) |
+
+### Pattern Checklists
+
+**REVIEW_PATTERNS.md (RP1-RP40)** — 40 production-proven bug patterns organized by category:
+- Resource lifecycle (RP1-2, RP6, RP11)
+- React/frontend (RP3-5, RP12, RP20-21, RP23)
+- API boundaries (RP7-9, RP14, RP24)
+- State & async (RP13, RP15-16, RP22, RP27)
+- Data integrity (RP17-18, RP28, RP34)
+- Production context (RP19, RP25-26, RP30, RP35-40)
+
+Every applicable pattern must be explicitly verified or marked N/A. Silence = unchecked = fail.
+
+**OPERATIONAL_PATTERNS.md (OP1-OP8)** — 8 system-level invariants:
+
+| # | Pattern | Core Check |
+|---|---------|------------|
+| OP1 | Concurrency guard | Atomic status gate or lock prevents parallel execution |
+| OP2 | Rollback path | Backup BEFORE + restore on failure |
+| OP3 | Data backup | Automated schedule + tested restore |
+| OP4 | Access control on secrets | Auth guard on credential endpoints |
+| OP5 | Health unauthenticated | Monitoring endpoints accessible without auth |
+| OP6 | Fail-loud placeholders | Invalid format that causes runtime failure, not silent acceptance |
+| OP7 | Single canonical path | One way to do each operation; alternatives deleted |
+| OP8 | Config consistency | All copies in sync or explicitly excluded |
+
+---
+
+## 5. Tooling Layer
+
+### artifact_cli.py — State Management
+
+The pipeline's state machine is managed by `artifact_cli.py`:
+
+| Command | Purpose |
+|---------|---------|
+| `run-create` | Initialize new pipeline run with metadata |
+| `run-update` | Update run status (code-enforced blocking gates) |
+| `run-get` | Retrieve run state |
+| `run-budget` | Check token budget remaining |
+| `run-checkpoint` | Save checkpoint for resume |
+| `run-resume` | Restore from checkpoint |
+| `run-status` | Pipeline run status summary |
+| `run-report` | Generate REPORT.md from run data |
+| `run-observe` | Record telemetry event |
+| `run-cultivate` | Auto-apply additive DDD lessons |
+| `discover` | Find artifacts for a project |
+| `publish` | Store artifact with schema validation |
+| `state` | Query artifact state |
+| `advance` | Move artifact to next stage |
+
+### Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `confidence_score.py` | Deterministic delivery gate scorer; reads run.json + artifacts, outputs score 1-12 with breakdown |
+| `goal_metrics.py` | Goal loop velocity tracking; per-cycle deltas, regression counts, cross-run aggregation |
+| `pipeline_pr.py` | Auto-create GitHub PR from pipeline output; constructs title/body from REPORT.md |
+| `wtf_gate.py` | TEST stage risk scorer; formula-based halt/pass decision on changeset complexity |
+
+---
+
+## 6. Meta-Intelligence & Learning
+
+### pipeline_intelligence.json
+
+A per-project knowledge base that accumulates across pipeline runs:
+
+| Dimension | What It Tracks | How It's Used |
+|-----------|---------------|---------------|
+| `abandon_patterns` | Task shapes that historically fail | EVALUATE: detect high-risk shapes early |
+| `estimation_accuracy` | Predicted vs actual effort | EVALUATE: calibrate budget estimates |
+| `adversarial_value` | Which specialist findings were real vs false positive | DELIVER: weight specialist confidence |
+| `build_injection_recommendations` | Chronic RP patterns for this project | BUILD: inject as mental checklist preamble |
+
+### Learning Feedback Loop
+
+```
+REFLECT records outcome (success/failure, actual_effort, lessons)
+  → artifact_cli learn → updates pipeline_intelligence.json
+  → next run's EVALUATE reads intelligence → better profile selection, budget, injection
+  → compound improvement across runs
+```
+
+### DDD Cultivation (Closed Loop)
+
+```
+Pipeline execution produces lessons
+  → REFLECT calls run-cultivate
+  → Additive changes auto-applied to TECH.md, IMPROVEMENT.md
+  → Risky changes (PRODUCT.md contradictions) → proposal queue for human
+  → Next pipeline run reads richer DDD → better decisions
+```
+
+---
+
+## 7. Budget, Retry & Checkpoint
+
+### Token Budget (Base Stage Costs)
+
+| Stage | Base Cost | Typical Range |
+|-------|-----------|--------------|
+| evaluate | 6K | 4-10K |
+| think | 10K | 5-20K |
+| plan | 8K | 5-15K |
+| build | 40K | 15-80K |
+| review | 15K | 8-25K |
+| test | 25K | 10-50K |
+| deliver | 20K | 8-50K |
+| reflect | 3K | 2-5K |
+
+Budget tracking includes DDD reads, artifacts consumed, lines changed, test count, tool calls.
+
+### Retry Accounting
+
+| Stage | Max Retries | Escalation |
+|-------|-------------|-----------|
+| evaluate | 2 | ESCALATE to human |
+| think | 2 | ESCALATE |
+| plan | 2 | ESCALATE |
+| build | 3 | Checkpoint |
+| review (litmus) | 2 | Full review with all sub-agents |
+| review (spec) | 2 (separate counter) | Escalate on 3rd |
+| test | Per-fix (max 20 total) | WTF gate → L2 BLOCK |
+| deliver | 1 | Escalate |
+| reflect | 1 | Escalate |
+
+### Checkpoint Protocol
+
+**Mandatory budget check before any checkpoint.** Triggers:
+- `run-budget` returns `should_checkpoint: true`
+- L2 BLOCK pending human decision
+- Retries exhausted
+- Unexpected error
+
+**Invalid triggers (do NOT checkpoint):** "BUILD is big", "read a lot of files", "context might be full".
+
+Checkpoint saves: current stage, completed stages, all artifacts, escalation state, decision log.
+
+---
+
+## 8. Decision Classification
+
+Every decision during pipeline execution is classified:
+
+| Class | Definition | Handling |
+|-------|-----------|----------|
+| **Mechanical** | One correct answer, deterministic | L0 INFORM — auto-approve |
+| **Taste** | Reasonable default exists | L1 CONSULT — batch at delivery gate |
+| **Judgment** | Genuinely ambiguous, high stakes | L2 BLOCK — checkpoint, wait for human |
+
+Stages 1-2 are judgment-heavy. Stages 4-9 are mostly mechanical. Stage 3 is taste-heavy.
+
+---
+
+## 9. Execution Modes & Escape Hatches
+
+### Profile as Escape Hatch
+
+The profile system IS the escape hatch. A trivial change gets `trivial` profile (7 stages, ~5 min). Research gets `research` (3 stages). There is no "skip pipeline" — there is only "right-sized pipeline."
+
+| Profile | Typical Duration | Use Case |
+|---------|-----------------|----------|
+| full | 30-60 min | Features, complex changes |
+| bugfix | 20-40 min | Bug fixes with investigation |
+| trivial | 5-15 min | Config, typos, 1-file logic fix |
+| research | 10-20 min | Investigation, no code output |
+| docs | 15-25 min | Documentation changes |
+| goal | 60-120 min | Open-ended iterative goals |
+
+### Direct Mode (User Override Only)
+
+Only when user explicitly says "just do it" / "skip pipeline":
+- Agent MUST strong-propose pipeline first with evidence why it's better
+- Still requires adversarial review before commit (STEERING R13)
+- Still requires R3 post-task self-review
+
+---
+
+## 10. Critical Design Decisions
+
+### Single-Agent with Role-Switching
+
+One agent switches roles (builder, reviewer, adversary) rather than multi-agent orchestration. Eliminates context synchronization overhead. Sub-agents provide fresh context where needed (adversarial review) without losing builder knowledge for targeted fixes.
 
 ### DDD/SDD/TDD Trilogy
 
-Three methodologies serve distinct purposes:
+| Methodology | Question | Applied |
+|-------------|----------|---------|
+| DDD | Should we? How does this fit? | EVALUATE, THINK |
+| SDD | What exactly? | PLAN output, verified in REVIEW |
+| TDD | Did we? Does it work? | BUILD (red-green), TEST (3 layers) |
 
-| Methodology | Question It Answers | When Applied |
-|-------------|--------------------|----|
-| DDD (Domain-Driven Design) | Should we? How does this fit? | Stages 1-3 (judgment and taste) |
-| SDD (Specification-Driven Design) | What exactly? | Stage 3 output, verified in Stage 5 |
-| TDD (Test-Driven Development) | Did we? Does it work? | Stage 4 (red-green-refactor) |
+### Quality Convergence over One-Shot
 
-DDD provides judgment. SDD provides specification. TDD provides verification. Together they cover the full delivery lifecycle: decide, specify, verify.
+The architecture explicitly accepts that one pass may not produce perfection. Instead of demanding flawless output from 9 stages (impossible with non-deterministic models), it demands **convergence** through targeted iteration. The quality contract shifts from "try hard once" to "iterate until verified."
 
-### Quality Convergence over One-Shot Perfection
+### Adversarial Review Is Mechanically Enforced
 
-The architecture explicitly accepts that one pass may not produce perfection. This is a feature, not a limitation. Instead of demanding that 9 stages produce flawless output every time (impossible with non-deterministic models), the architecture demands convergence toward flawless output through iteration.
+Not a configuration flag. Not skippable by confidence. Enforced by `artifact_cli` code validation — pipeline cannot complete without adversarial review evidence at the correct profile tier. This gate was added after 11 instances of self-exemption (CLASS A corrections C011-C036).
 
-This shifts the quality contract from "try really hard once" to "iterate until verified" — a fundamentally stronger guarantee.
+### Profile Immutability After EVALUATE
 
-### Adversarial Review Is Mandatory, Not Optional
+Once EVALUATE selects a profile, it cannot be downgraded. This prevents the pattern of starting as `full` then switching to `bugfix` at DELIVER to bypass adversarial gates. Code-enforced in `artifact_cli.py`.
 
-There is no configuration flag to skip adversarial review. It is baked into both the stage sequence (Stage 7) and the push-ready gate (Layer 4). Skipping it requires using an escape hatch, which carries explicit burden of proof.
+### Push-Ready = Binary, Not Scored
 
-### Decision Classification
-
-Every decision produced during pipeline execution is classified:
-
-| Classification | Auto-approve? | When Reviewed | Example |
-|---------------|---------------|---------------|---------|
-| Mechanical | Yes | Never (unless failed) | "Run tests", "Format code" |
-| Taste | Batched | At delivery gate | "Name this variable X vs Y" |
-| Judgment | Blocks | Immediately | "Should we refactor module Z?" |
-
-This ensures the pipeline can run autonomously for mechanical work (most of delivery) while still surfacing the decisions that require human input.
-
-### Push-Ready via PR, Not Direct Push
-
-The pipeline creates a Pull Request with auto-merge enabled — it does not push directly to main. This provides:
-
-- CI as an independent verification layer (outside the pipeline)
-- A visible record of what was delivered and why
-- A rollback point if post-merge issues are discovered
-- An opportunity for human spot-check if desired (though not required)
+There is no "8.5/10 confidence." The delivery is either PUSH-READY (all 6 layers pass, all specialists clean, completion audit green) or NOT-PUSH-READY (with specific gap identified). This eliminates the rationalization of "close enough."
 
 ---
 
-## 9. Escape Hatches and Failure Modes
+## 11. Observability
 
-### When the Full Pipeline Is Overkill
+### Telemetry (run-observe)
 
-Not every change needs 9 stages plus convergence. The architecture provides escape hatches for legitimate cases — but the burden of proof is on escaping, not on using the pipeline.
+Events recorded at stage boundaries:
+- `stage_start` / `stage_end` — timing + token consumption
+- `profile_selected` — which profile and why
+- `think_depth` — alternatives count, probes count, resolution rate
+- `adversarial_patterns` — specialist findings by category
+- `review_gap` — patterns that reviewers missed but adversarial caught
 
-| Escape Hatch | When Valid | What Runs | What Is Skipped |
-|-------------|-----------|-----------|-----------------|
-| Direct Mode | 1-file fix, config change, typo correction | BUILD + basic verification | All planning stages, adversarial, convergence loop |
-| TDD-Only | Extending existing well-documented pattern | BUILD + TEST + basic gate | EVALUATE, THINK, PLAN (pattern already planned) |
-| P0 Urgent | Production is down, needs immediate fix | Direct fix first, full pipeline follow-up mandatory | Everything initially, nothing ultimately |
+### Abandon Protocol
 
-### Rules for Escape Hatches
-
-1. Direct mode changes must be genuinely trivial — if the change touches logic, it is not trivial
-2. TDD-only requires an existing, documented pattern — if the pattern is novel, full pipeline
-3. P0 urgent gets the fix out fast but creates a mandatory follow-up pipeline run to verify and improve
-4. Every escape hatch use is logged for REFLECT to evaluate — overuse triggers a process review
-
-### Failure Modes and Recovery
-
-| Failure | What Happens | Recovery |
-|---------|-------------|----------|
-| Convergence loop does not converge | Max iterations reached | Escalate to human with gap report |
-| Adversarial sub-agent produces false positives | Human reviews adversarial findings | Override specific finding, document why |
-| Stage 1 EVALUATE rejects valid work | Human overrides with rationale | EVALUATE criteria adjusted in DDD |
-| DDD documents are wrong or outdated | Pipeline follows bad guidance | REFLECT proposes correction; human approves |
-| Test suite itself is flawed | Gate L1/L3 pass but quality is low | Adversarial (L4) catches what tests miss |
-
-### The Key Principle
-
-The pipeline's failure mode is always "surface the problem clearly" — never "hide the problem and ship anyway." Every failure path terminates at either "fixed and verified" or "escalated with clear explanation." There is no path that leads to "shipped despite known issues."
+When a run is abandoned (user stop, budget exhaustion, session crash, scope explosion):
+- Partial learnings captured
+- Reason classified: user_stopped / budget / session_crash / blocker / superseded / scope_explosion
+- Run marked as abandoned (not failed — different semantics for intelligence)
 
 ---
 
-## 10. Harness Integration — Where the Pipeline Runs
+## 12. Success Metrics
 
-The Autonomous Pipeline is not a standalone service. It executes within an existing agent harness that provides context management, tool access, and knowledge infrastructure.
+| Metric | Target | Measurement |
+|--------|--------|-------------|
+| First-pass convergence rate | >70% | Candidates passing gate on first check |
+| Average convergence iterations | <2 | When loop activates |
+| False escalation rate | <10% | Human override rate |
+| Adversarial accuracy | >90% | Human agreement with findings |
+| DDD cultivation rate | >1 proposal per 5 runs | REFLECT output frequency |
+| CI pass rate post-merge | >99% | Pipeline PRs that pass CI |
+| Regression introduction | 0 | Gate L3 catch rate |
+| RP pattern growth | +2-3 per month | New patterns from REFLECT |
 
-![Figure 8: Pipeline Runtime — Inside the Agent Harness](diagrams-pipeline/08-harness-integration.svg)
+### What Success Looks Like
 
-### Runtime Model
+1. User states requirement
+2. Pipeline runs (the "black box")
+3. PR appears, CI green, auto-merged
+4. Code is correct, conformant, tested, adversarially reviewed, documented
+5. DDD is richer than before the run
+6. Next run is slightly better than this one
 
-The pipeline runs as a **skill invocation** within a single agent session. There is no separate process, no orchestration service, no message queue. The same agent that talks to the user switches roles through the 9 stages — builder at BUILD, reviewer at REVIEW, adversary at ADVERSARIAL (spawned as sub-agent for fresh context).
+This is Coding as Black Box.
+
+---
+
+## 13. File Structure Reference
+
+```
+s_autonomous-pipeline/
+├── SKILL.md                    # Skill frontmatter + description
+├── INSTRUCTIONS.md             # Orchestrator (1,207 lines)
+├── REVIEW_PATTERNS.md          # RP1-RP40 bug pattern checklist
+├── OPERATIONAL_PATTERNS.md     # OP1-OP8 system invariants
+├── stages/
+│   ├── evaluate.md             # Stage 1: intake + profile selection
+│   ├── think.md                # Stage 2: research + alternatives
+│   ├── plan.md                 # Stage 3: file discovery + change spec
+│   ├── build.md                # Stage 4: TDD implementation
+│   ├── review.md               # Stage 5: multi-layer review
+│   ├── test.md                 # Stage 6: 3-layer verification
+│   ├── deliver.md              # Stage 7: convergence + adversarial
+│   ├── reflect.md              # Stage 8: lessons + cultivation
+│   ├── goal_cycle.md           # Goal profile: iterative loop
+│   └── specialists/            # 9 deep-review specialist profiles
+│       ├── api-contract.md
+│       ├── concurrency.md
+│       ├── correctness.md
+│       ├── integration.md
+│       ├── operational.md
+│       ├── performance.md
+│       ├── red-team.md
+│       ├── security.md
+│       └── state-machine.md
+├── review-agents/              # 4 domain review agents
+│   ├── spec-compliance.md
+│   ├── code-quality.md
+│   ├── security-safety.md
+│   └── ux-test.md
+└── scripts/                    # Pipeline tooling
+    ├── artifact_cli.py         # State management + artifact storage
+    ├── confidence_score.py     # Delivery gate scorer
+    ├── goal_metrics.py         # Goal loop velocity tracking
+    ├── pipeline_pr.py          # Auto-PR creation
+    └── wtf_gate.py             # Changeset risk scoring
+```
+
+---
+
+## 14. Runtime Integration
+
+![Figure 8: Pipeline Inside the Agent Harness](diagrams-pipeline/08-harness-integration.svg)
+
+The pipeline runs as a **skill invocation** within a single agent session. No separate orchestration service. The same agent that talks to the user switches roles through stages. The harness provides:
 
 | Component | Provided By | Pipeline's Use |
 |-----------|-------------|----------------|
-| Context (system prompt) | 11-file context system (P0-P10) | Pipeline reads behavioral rules, DDD, user preferences |
-| Tool access | Claude Agent SDK + MCP servers | BUILD uses code tools; TEST runs pytest; REVIEW reads files |
-| DDD knowledge | Context loader + on-demand pulls | Every stage reads relevant DDD sections (see Section 7) |
-| Memory | MEMORY.md (P7) | Pipeline reads past corrections to avoid repeating mistakes |
-| Self-evolution | EVOLUTION.md (P8) | Corrections captured during pipeline inform future runs |
-| Skill system | Skill projection layer | Pipeline itself is a skill (`s_autonomous-pipeline`) |
-
-### How Pipeline Stages Access Context
-
-At pipeline start, the agent's full context is already loaded (system prompt assembled from 11 files). Pipeline stages don't need to "fetch" context — it's already there. DDD on-demand pulls (Section 7) use the same Read tool mechanism the agent uses for any file access.
-
-### How REFLECT Writes Back
-
-REFLECT does not write directly to files. It generates **cultivation proposals** that flow through the DDD approval gate (see DDD Cultivation Engine companion doc). The write path:
-
-```
-REFLECT output → structured lessons → cultivation proposals → approval queue
-  → user approves (30s) → DDD updated → next pipeline run reads richer context
-```
-
-This ensures pipeline outputs never silently modify authoritative knowledge.
-
-### Why Not a Separate Service?
-
-A pipeline-as-service architecture would require:
-- Context transfer between agent and service (expensive, lossy)
-- Separate auth and tool access (complexity)
-- State synchronization for DDD reads/writes (race conditions)
-- Deployment and scaling infrastructure (operational cost)
-
-Running within the agent session eliminates all of these. The tradeoff: pipeline execution competes with the user's context window. The Quality Convergence Loop's budget awareness (max iterations) prevents this from becoming a problem.
+| Context (system prompt) | 11-file context system | DDD, behavioral rules, user preferences |
+| Tool access | Claude Agent SDK + MCP | Code tools (BUILD), pytest (TEST), file reads (REVIEW) |
+| Memory | MEMORY.md | Past corrections to avoid repeating mistakes |
+| Self-evolution | EVOLUTION.md | Corrections inform future runs |
+| Skill system | Projection layer | Pipeline IS a skill (`s_autonomous-pipeline`) |
+| Jobs | Scheduler + executor | Background/recurring pipeline execution |
 
 ---
 
-## 11. Success Metrics
+## 15. Relationship to Other Documents
 
-### What Push-Ready Delivery Looks Like
-
-The pipeline succeeds when its outputs consistently meet the push-ready standard without requiring human intervention on mechanical or taste decisions.
-
-### Before vs After
-
-| Metric | Without Pipeline | With Pipeline |
-|--------|-----------------|---------------|
-| PR merge confidence | Requires human review to trust | Trusted by default (gate-verified) |
-| Bug introduction rate | Discovered post-merge | Caught pre-merge by convergence loop |
-| Convention adherence | Inconsistent across PRs | Uniform (DDD-enforced) |
-| Delivery time variance | High (depends on task complexity estimation) | Predictable (stages + convergence iterations) |
-| Knowledge capture | Zero (human reviewer's brain only) | Systematic (REFLECT + DDD cultivation) |
-| Post-merge fixes needed | Common (code review catches things) | Rare (adversarial catches them pre-merge) |
-| Human time per delivery | Full code review required | Spot-check optional, not required |
-
-### Key Properties to Track
-
-| Property | Target State | Measurement |
-|----------|-------------|-------------|
-| First-pass rate | >70% of candidates pass gate on first check | Convergence iterations / total runs |
-| Convergence iterations | Average <2 iterations when loop activates | Iteration count distribution |
-| False escalation rate | <10% of escalations are non-issues | Human override rate on escalations |
-| Adversarial accuracy | >90% of adversarial findings are valid | Human agreement with adversarial findings |
-| DDD cultivation rate | >1 cultivation proposal per 5 pipeline runs | REFLECT output frequency |
-| CI pass rate post-merge | >99% of pipeline PRs pass CI | CI failure rate on auto-merged PRs |
-| Regression introduction | 0 regressions reach main branch | Gate L3 catch rate |
-
-### What Success Means
-
-When the pipeline works correctly, the experience is:
-
-1. User states requirement in one sentence
-2. Time passes (pipeline runs — the "black box")
-3. PR appears, CI green, auto-merged
-4. Code is correct, conformant, tested, adversarially reviewed, and documented
-
-The user never reviews code. Never runs tests manually. Never checks for regressions. Never verifies convention adherence. The pipeline handles all of it — and the Quality Convergence Loop guarantees it, or clearly explains why it could not.
-
-This is Coding as Black Box.
+| Document | Scope | Audience |
+|----------|-------|----------|
+| **This document** (Autonomous-Pipeline-Design.md) | Architecture + design decisions + how it all fits together | Anyone understanding the system |
+| **AIDLC-Phase3-Design.md** | Original conceptual framing (DDD+SDD+TDD closed loop, psychology) | Conceptual understanding |
+| **INSTRUCTIONS.md** | Mechanical orchestration (exact commands, routing tables, budget formulas) | The agent executing the pipeline |
+| **Stage docs** (stages/*.md) | Per-stage mechanics (blocking gates, anti-patterns, outputs) | The agent at each stage |
+| **Review-agents & specialists** | Sub-agent briefings (what to check, output format, confidence rules) | Spawned sub-agents |
+| **SwarmAI TECH.md** (DDD) | Pipeline as subsystem within SwarmAI architecture | Codebase contributors |
