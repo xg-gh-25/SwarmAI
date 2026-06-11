@@ -9,6 +9,8 @@ tags: [aidlc, phase-3, autonomous-pipeline, ddd, sdd, tdd, self-improvement, age
 supersedes: 2026-04-10-aidlc-phase3-autonomous-pipeline-design.md
 ---
 
+> **Implementation Reference:** This document describes the *conceptual design intent* (DDD+SDD+TDD closed loop, decision classification psychology, phase evolution). For the current implementation architecture — dual-mode execution, stage mechanics, blocking gates, sub-agent model, tooling, and meta-intelligence — see **[Autonomous-Pipeline-Design.md](Autonomous-Pipeline-Design.md)** (updated 2026-06-11).
+
 # AIDLC Phase 3: Autonomous Pipeline
 
 ## Executive Summary
