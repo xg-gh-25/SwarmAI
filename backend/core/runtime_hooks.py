@@ -239,6 +239,14 @@ def create_user_correction_detector(
             ctx["_corrections_count"] = ctx.get("_corrections_count", 0) + 1
             ctx["_correction_just_detected"] = True  # Signal for observation DDD event
 
+            # Evolution v3: record to correction class tracker
+            try:
+                from core.evolution.correction_tracker import CorrectionClassTracker
+                tracker = CorrectionClassTracker()
+                tracker.record("UNCLASSIFIED", evidence=prompt[:200])
+            except Exception:
+                pass  # Non-blocking — tracker failure must never break the hook
+
         return {}
 
     return _hook

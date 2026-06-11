@@ -268,6 +268,22 @@ class EvolutionMaintenanceHook:
         # Check governance 3x threshold for promotion candidates
         self._check_promotion_threshold(evo_path, content)
 
+        # Evolution v3: auto-resolve correction classes after 30 days silence
+        try:
+            from core.evolution.correction_tracker import CorrectionClassTracker
+            tracker = CorrectionClassTracker()
+            resolved = tracker.check_auto_resolve()
+            if resolved:
+                for cls in resolved:
+                    _append_changelog(
+                        changelog_path, "auto_resolve", cls,
+                        f"Correction class {cls} resolved (30d no recurrence post-gate)",
+                        source="correction_tracker",
+                    )
+                logger.info("Correction tracker auto-resolved: %s", resolved)
+        except Exception as exc:
+            logger.debug("Correction tracker auto-resolve skipped: %s", exc)
+
         # Run evolution cycle weekly (check last run date)
         await self._maybe_run_evolution(ctx_dir)
 

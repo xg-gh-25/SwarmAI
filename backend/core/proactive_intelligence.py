@@ -943,6 +943,17 @@ def _get_health_highlights(working_directory: str) -> list[str]:
         except (json.JSONDecodeError, OSError):
             pass  # Graceful — malformed signal is not critical
 
+    # L4.3: Evolution v3 — correction class tracker status
+    try:
+        from core.evolution.correction_tracker import CorrectionClassTracker
+        tracker = CorrectionClassTracker()
+        tracker_lines = tracker.briefing_lines()
+        if tracker_lines:
+            for tl in tracker_lines:
+                lines.append(f"  - [evolution] {tl}")
+    except Exception:
+        pass  # Non-blocking — tracker absence must never break briefing
+
     return lines
 
 
