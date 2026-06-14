@@ -2,7 +2,9 @@
 __pycache__/
 *.py[cod]
 
-# Code Intelligence — machine-local graph databases (rebuilt in <10s)
+# Projects — only SwarmAI is public; all others are private/internal
+Projects/*
+!Projects/SwarmAI/
 Projects/*/code_intel.db
 *$py.class
 *.so
