@@ -318,6 +318,12 @@ def _is_retriable_error(raw_error: str, tb_str: str = "") -> bool:
         # failure where Bedrock/Anthropic accepted the request but returned
         # nothing (429 converted to empty response, connection drop, etc.)
         r"API returned empty response",
+        # Bedrock API timeout — cross-region latency + cache miss can
+        # exceed the API gateway timeout.  Retry succeeds because prompt
+        # cache was created on the first attempt (5min TTL); the second
+        # attempt gets a cache hit and completes within timeout.
+        # Circuit breaker stops after 2 consecutive timeouts + >1M context.
+        r"operation timed out",
     ]
     for pattern in retriable_patterns:
         if re.search(pattern, raw_error, re.IGNORECASE):

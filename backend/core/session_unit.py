@@ -2504,11 +2504,102 @@ class SessionUnit:
                     if _is_retriable_error(error_text):
                         raise RuntimeError(f"Retriable SDK error: {error_text}")
 
-                    # Non-retriable error — yield error event
+                    # Non-retriable error — yield error event and RETURN.
+                    # BUG FIX (2026-06-14): Previously this had no return
+                    # statement, causing fall-through to the normal result
+                    # path below.  Result: (1) backend log showed normal
+                    # streaming→idle with result_usage, zero error signal;
+                    # (2) frontend received BOTH an error event AND a
+                    # normal result event (double-delivery); (3) the
+                    # output_tokens=0 empty-response guard (line ~2621)
+                    # was bypassed because it checks `not is_error`.
+                    # Evidence: session e2c335b9 2026-06-14 16:57-17:08,
+                    # two turns with 392 and 0 output tokens showed as
+                    # normal completions in logs.
+                    logger.warning(
+                        "session_unit.sdk_error session_id=%s is_error=%s "
+                        "subtype=%s error_text=%.200s",
+                        self.session_id, is_error, subtype, error_text,
+                    )
                     friendly, suggested = _sanitize_sdk_error(error_text)
                     yield _build_error_event(
                         code="SDK_ERROR", message=friendly, suggested_action=suggested,
                     )
+                    # Clear stale sub-agent progress (matches
+                    # turn_limit_reached and interrupt paths).
+                    self._active_agent_tools = {}
+                    # Transition to IDLE — session is not broken, just this
+                    # turn failed.  User can retry.  Matches the interrupted
+                    # path (line ~2484) which also transitions to IDLE.
+                    self._transition(SessionState.IDLE)
+                    self.last_used = time.time()
+                    # If CLI subprocess died (the error it returned may have
+                    # been its dying gasp), clear client refs so next send()
+                    # respawns instead of writing to a dead pipe.
+                    # _sdk_session_id is preserved for --resume on respawn.
+                    if self._pid:
+                        try:
+                            os.kill(self._pid, 0)  # signal 0 = liveness check
+                        except (ProcessLookupError, OSError):
+                            # Process is dead — clear refs
+                            self._client = None
+                            self._wrapper = None
+                    # Still track usage for cost accounting (even failed
+                    # turns consume input tokens for the prompt).
+                    self._lifecycle_response_count += 1
+                    usage = getattr(message, "usage", None) or {}
+                    logger.info(
+                        "session_unit.result_usage session_id=%s "
+                        "raw_usage=%s input_tokens=%s model=%s "
+                        "lifecycle_response=%d (ERROR path)",
+                        self.session_id,
+                        usage,
+                        usage.get("input_tokens") if usage else None,
+                        self._model_name,
+                        self._lifecycle_response_count,
+                    )
+                    # Yield result event so frontend knows the turn ended
+                    yield {
+                        "type": "result",
+                        "subtype": "sdk_error",
+                        "stop_reason": "error",
+                        "session_id": self.session_id,
+                        "duration_ms": getattr(message, "duration_ms", 0),
+                        "total_cost_usd": getattr(message, "total_cost_usd", None),
+                        "num_turns": getattr(message, "num_turns", 1),
+                        "usage": {
+                            "input_tokens": usage.get("input_tokens"),
+                            "output_tokens": usage.get("output_tokens"),
+                            "cache_read_input_tokens": usage.get("cache_read_input_tokens"),
+                            "cache_creation_input_tokens": usage.get("cache_creation_input_tokens"),
+                        } if usage else None,
+                    }
+                    # Persist token usage (fire-and-forget)
+                    if usage:
+                        try:
+                            import database
+                            asyncio.get_running_loop().create_task(
+                                database.db.record_token_usage(
+                                    session_id=self.session_id,
+                                    source="cli",
+                                    input_tokens=usage.get("input_tokens") or 0,
+                                    output_tokens=usage.get("output_tokens") or 0,
+                                    cache_read_tokens=usage.get("cache_read_input_tokens") or 0,
+                                    cache_create_tokens=usage.get("cache_creation_input_tokens") or 0,
+                                    cost_usd=getattr(message, "total_cost_usd", None),
+                                    model=self._model_name,
+                                )
+                            )
+                        except Exception:
+                            pass  # fire-and-forget
+                    # Emit context metadata so frontend updates context
+                    # ring/bar — especially important for timeout errors
+                    # that correlate with large contexts.
+                    for meta_event in self._emit_post_stream_metadata(
+                        usage, num_turns=getattr(message, "num_turns", 1) or 1,
+                    ):
+                        yield meta_event
+                    return
 
                 # Yield result event with usage metrics
                 self._lifecycle_response_count += 1
@@ -2523,6 +2614,22 @@ class SessionUnit:
                     self._model_name,
                     self._lifecycle_response_count,
                 )
+
+                # ── Observability: cache miss detection ───────────
+                # A cache miss (cache_read=0) with large context means
+                # full prompt was re-sent to Bedrock — latency spike
+                # risk and potential timeout trigger.  Log for
+                # post-mortem diagnosis.
+                cache_read = usage.get("cache_read_input_tokens") or 0
+                cache_create = usage.get("cache_creation_input_tokens") or 0
+                if cache_read == 0 and cache_create > 50_000:
+                    logger.info(
+                        "session_unit.cache_miss session_id=%s "
+                        "cache_creation=%d cache_read=0 — full prompt "
+                        "sent (latency risk)",
+                        self.session_id, cache_create,
+                    )
+
                 stop_reason = getattr(message, "stop_reason", None) or ""
                 subtype = getattr(message, "subtype", "") or ""
                 yield {
