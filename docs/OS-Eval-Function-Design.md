@@ -207,7 +207,7 @@ metrics:
 |---------|----------------|-----------|
 | SOUL.md P1-P5 | Active | Referenced in every decision |
 | STEERING R1 (pipeline mandatory) | Active | Governs every code task |
-| MEMORY RC11 (CMHK Data Skills) | Dormant-to-Dead | Only relevant during CMHK work |
+| MEMORY RC11 (ClientOrg Data Skills) | Dormant-to-Dead | Only relevant during ClientOrg work |
 | KNOWLEDGE "Claude Code CLI Hidden Defaults" | Active | Directly prevents P0 bugs |
 | EVOLUTION F001-F004 | Dormant | Historical record, rarely referenced |
 
@@ -468,7 +468,7 @@ When user asks something whose answer exists in Knowledge/, the agent must locat
 | Case | Trigger | Expected | Source |
 |------|---------|----------|--------|
 | "TTFT 研究结论" | `Notes/2026-05-03-ttft-model-routing-research.md` exists | Read file, cite 3 conclusions | KD12 |
-| "Rocky SQL template standard" | `CMHK_SalesIntel/TECH.md` L1262-1319 | Read correct offset, cite template rules | Real usage |
+| "Rocky SQL template standard" | `SalesIntel/TECH.md` L1262-1319 | Read correct offset, cite template rules | Real usage |
 | "One-Page Strategy Map" | `Notes/2026-04-19-one-page-strategy-map...` | Read + reference 5 pillars | KD18 |
 | "GitHub community source matrix" | `Library/2026-05-17-github-community-engine.md` | Read specific matrix table | RC |
 
@@ -485,7 +485,7 @@ When task involves a project, agent must consult DDD docs and let them influence
 | Case | Trigger | Expected | Source |
 |------|---------|----------|--------|
 | Edit `session_unit.py` | SwarmAI project active | Read `SwarmAI/TECH.md` relevant section first | PROJECTS.md directive |
-| "给 CMHK 做新 report" | CMHK_SalesIntel project | Read TECH.md for data tables + SQL filters | LL31 |
+| "给 ClientOrg 做新 report" | SalesIntel project | Read TECH.md for data tables + SQL filters | LL31 |
 | "Add wiki from knowledge graph" | ai_ready_repo project | Read PRODUCT.md non-goals → REJECT | KD05 |
 | Pipeline EVALUATE on any task | Active project detected | Reasoning references DDD content | KD16 |
 | "Add feature X to pipeline" | SwarmAI project | Read IMPROVEMENT.md "What Failed" first | Design principle |
@@ -1428,9 +1428,9 @@ simulations:
 
 ---
 
-## Appendix C: Operational Patterns (from Rocky CMHK Agent Platform Eval)
+## Appendix C: Operational Patterns (from Rocky ClientOrg Agent Platform Eval)
 
-> Source: Pippin `cmhkagentplatform/cmhkagentplatform_evaluation_platform` (zjinpeng/liukp, Jun 2026)
+> Source: Pippin `clientagentplatform/clientagentplatform_evaluation_platform` (zjinpeng/liukp, Jun 2026)
 
 Rocky's system is a pure **deployment gate** (CFN deploy → diff → test → promote/block). Different scale and purpose, but 5 operational patterns are directly applicable to our OS Eval.
 

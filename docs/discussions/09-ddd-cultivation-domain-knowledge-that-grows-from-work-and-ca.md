@@ -1,3 +1,7 @@
+---
+created: 2026-05-18
+updated: 2026-05-18
+---
 # DDD Cultivation — domain knowledge that grows from work and cannot go stale
 
 > 📎 [View on GitHub](https://github.com/xg-gh-25/SwarmAI/discussions/9) | Category: General | Published: 2026-05-18
@@ -11,7 +15,7 @@
 Every AI coding tool has the same failure mode:
 
 ```
-User: "Add a revenue report for CMHK"
+User: "Add a revenue report for ClientOrg"
 AI: [generates technically correct code that violates every domain rule]
   - Wrong date filters (must partition by month_sequence, not calendar date)
   - Missing mandatory WHERE clauses (sh_l1='GCR' always required)

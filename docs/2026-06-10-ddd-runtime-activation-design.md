@@ -257,7 +257,7 @@ Agent reads at session start:
 ```
 **DDD low-trust sections** (verify before relying):
   - SwarmAI/TECH.md §Voice Input [trust:low, score:28]
-  - CMHK_SalesIntel/TECH.md §Entity Resolution [trust:moderate, score:35]
+  - SalesIntel/TECH.md §Entity Resolution [trust:moderate, score:35]
 ```
 
 When working in these areas, the agent will naturally verify (pull the section, cross-check with code) instead of blindly trusting.

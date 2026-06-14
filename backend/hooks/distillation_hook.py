@@ -907,7 +907,7 @@ class DistillationTriggerHook:
         the gate passes unconditionally — don't block onboarding.
 
         Marathon session bypass: a DailyActivity file with >30 session
-        sections is a marathon (e.g., CMHK full-day sprint). Entries from
+        sections is a marathon (e.g., full-day sprint). Entries from
         marathon files pass unconditionally — they represent intensive,
         high-value work that shouldn't wait for a second mention.
 

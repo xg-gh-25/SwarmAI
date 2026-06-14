@@ -18,7 +18,7 @@ Check:
 Get recent CI run status with structured output.
 
 ```bash
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai
+cd $SWARMAI_ROOT
 
 # Recent runs (paginated — GitHub API requires pagination for full count)
 gh run list --limit 10 --json databaseId,status,conclusion,name,headBranch,createdAt,updatedAt \

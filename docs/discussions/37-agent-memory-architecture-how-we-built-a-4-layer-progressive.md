@@ -1,3 +1,7 @@
+---
+created: 2026-05-21
+updated: 2026-05-21
+---
 # Agent Memory Architecture: How We Built a 4-Layer Progressive Memory System
 
 > 📎 [View on GitHub](https://github.com/xg-gh-25/SwarmAI/discussions/37) | Category: Show and tell | Published: 2026-05-21
@@ -120,7 +124,7 @@ Summarization → DailyActivity → Distillation (git-verified) → MEMORY.md �
 - "BU 排风险：MEAGS > ISV > DNBP" + ±10 context window
 
 **今天 Layer 4 (~150ms):**
-- KnowledgeStore: CMHK_SalesIntel/TECH.md hierarchy model (cosine 0.78)
+- KnowledgeStore: SalesIntel/TECH.md hierarchy model (cosine 0.78)
 - TranscriptStore: 昨天 session detailed MEAGS breakdown (cosine 0.71)
 - Graph: Entity "MEAGS" → 1-hop [RFHC, ISV, forecast_table]
 

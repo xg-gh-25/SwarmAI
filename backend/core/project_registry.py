@@ -45,7 +45,7 @@ def get_project_dir(name: str) -> Path:
     """Resolve a specific project's root directory.
 
     Args:
-        name: Project directory name (e.g., "CMHK_SalesIntel")
+        name: Project directory name (e.g., "MyProject")
 
     Returns:
         Path to the project directory.
@@ -68,7 +68,7 @@ def get_output_dir(name: str, *, create: bool = True) -> Path:
     All skill generators should use this instead of hardcoding paths.
 
     Args:
-        name: Project directory name (e.g., "CMHK_SalesIntel")
+        name: Project directory name (e.g., "MyProject")
         create: If True, create the directory if it doesn't exist.
 
     Returns:
@@ -130,7 +130,7 @@ def _discover_by_prefix(prefix: str, fallback: str) -> str:
     return fallback
 
 
-CMHK_SALESINTEL: str = _discover_by_prefix("CMHK_", "CMHK_SalesIntel")
+# CMHK_SALESINTEL discovery removed — project is local-only (not in public repo)
 BMS_BIZ: str = _discover_by_prefix("BMS_", "BMS_BIZ")
 AIDLC: str = _discover_by_prefix("AIDLC", "AIDLC")
 GITHUB_COMMUNITY: str = _discover_by_prefix("GitHub_", "GitHub_Community")

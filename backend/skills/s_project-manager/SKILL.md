@@ -324,7 +324,7 @@ DDD documents are plain markdown — any edit is valid.
 
 ### Rename a Project
 
-User says: "Rename project CMHK_BIZ to CMHK_SalesIntel", "Rename project X to Y"
+User says: "Rename project BizProject to SalesIntel", "Rename project X to Y"
 
 #### Rules:
 - **SwarmAI project CANNOT be renamed.** It's the default project.
@@ -349,7 +349,7 @@ Edit the `# OldName` heading in each of PRODUCT.md, TECH.md, IMPROVEMENT.md, PRO
 Edit `.artifacts/manifest.json` — change `"project": "OldName"` to `"project": "NewName"`.
 
 #### Step 5: Update shared path constant (if applicable)
-If the project is referenced in `backend/skills/_shared/project_paths.py` (e.g., `CMHK_PROJECT`), update that constant. Also update `backend/core/project_registry.py` if it has a named constant for this project.
+If the project is referenced in `backend/skills/_shared/project_paths.py` (e.g., `ClientOrg_PROJECT`), update that constant. Also update `backend/core/project_registry.py` if it has a named constant for this project.
 
 #### Step 6: Trigger refresh
 ```python

@@ -58,7 +58,7 @@ FAIL:  ABORT with "s_swarm-build is SwarmAI-only."
 ## Stage 1: PREFLIGHT (Agent, 5s)
 
 ```bash
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai && \
+cd $SWARMAI_ROOT && \
   echo "Version: $(cat VERSION)" && \
   echo "Tree: $(git status --porcelain | wc -l | tr -d ' ') uncommitted" && \
   nc -z 127.0.0.1 18321 2>/dev/null && echo "Daemon: UP" || echo "Daemon: DOWN"

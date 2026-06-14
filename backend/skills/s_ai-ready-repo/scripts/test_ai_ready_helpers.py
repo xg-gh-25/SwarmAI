@@ -204,7 +204,7 @@ class TestGatherRepoInfo:
         """AC5: Must work on non-SwarmAI repo (cold-start test)."""
         from scripts.ai_ready_helpers import gather_repo_info
 
-        external_repo = Path("/Users/gawan/Desktop/SwarmAI-Workspace/ai-ready-repo")
+        external_repo = Path("$WORKSPACE_ROOT/ai-ready-repo")
         if not external_repo.exists():
             pytest.skip("External repo not available")
 
@@ -334,7 +334,7 @@ class TestImportGraphExtraction:
         """Extract import graph from ai-ready-repo (external)."""
         from scripts.ai_ready_helpers import extract_import_graph
 
-        external_repo = Path("/Users/gawan/Desktop/SwarmAI-Workspace/ai-ready-repo")
+        external_repo = Path("$WORKSPACE_ROOT/ai-ready-repo")
         if not external_repo.exists():
             pytest.skip("External repo not available")
 

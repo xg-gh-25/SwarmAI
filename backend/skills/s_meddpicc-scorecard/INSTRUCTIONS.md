@@ -5,8 +5,8 @@ Score opportunities against the AWS MEDDPICC framework so sellers know exactly w
 ## Quick Start
 
 ```
-User: "MEDDPICC score the Meituan AI Coding deal"
-→ Agent pulls SFDC data → scores 8 dimensions → checks stage gates → outputs scorecard with actions
+User: "MEDDPICC score the Acme Corp GenAI Platform deal"
+→ Agent pulls CRM data → scores 8 dimensions → checks stage gates → outputs scorecard with actions
 ```
 
 ## Workflow
@@ -24,7 +24,7 @@ Resolve the user's input to one or more SFDC opportunity IDs.
 
 ### Step 2: Collect Data
 
-Pull from AWSentral MCP. All calls are best-effort — gracefully degrade if access-denied.
+Pull from CRM MCP. All calls are best-effort — gracefully degrade if access-denied.
 
 | Tool | Data | Required? |
 |------|------|-----------|
@@ -126,7 +126,7 @@ Pull from AWSentral MCP. All calls are best-effort — gracefully degrade if acc
 
 | Q# | Question | Max | How to Score |
 |----|----------|-----|-------------|
-| 1 | Know customer's alternatives | 4 | **Full 4:** `primary_Competitor__c` populated + `details_if_Other_or_No_Competition__c` has specifics. **Partial 2:** competitor field populated but generic ("Other" without details). **Zero:** competitor field empty. |
+| 1 | Know customer's alternatives | 4 | **Full 4:** Competitor field populated + competition details have specifics. **Partial 2:** competitor field populated but generic ("Other" without details). **Zero:** competitor field empty. |
 | 2 | Differentiated against alternatives | 4 | **Full 4:** description shows specific AWS advantages for this deal. **Partial 2:** AWS has known structural advantage for this deal type (e.g., global regions for international expansion). **Zero:** no differentiation evidence. |
 | 3 | Requirements favor AWS | 4 | **Full 4:** forecast positive + stage advancing + criteria aligned to AWS strengths. **Partial 2:** deal is active but no evidence requirements tilt toward AWS. **Zero:** competitor appears to be winning or status is "At Risk." |
 

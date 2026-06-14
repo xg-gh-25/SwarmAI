@@ -663,7 +663,7 @@ class TestBashCommandNormalization:
     def test_strips_cd_prefix(self):
         n = CompactionGuard._normalize_bash_command
         assert (
-            n("cd /Users/gawan/swarmai/backend && python -m pytest tests/")
+            n("cd ~/swarmai/backend && python -m pytest tests/")
             == "python -m pytest tests/"
         )
 
@@ -677,7 +677,7 @@ class TestBashCommandNormalization:
     def test_strips_combined_preamble(self):
         """The exact pattern from the dead-loop sample."""
         n = CompactionGuard._normalize_bash_command
-        cmd1 = "cd /Users/gawan/swarmai/backend && rm -f /private/tmp/claude-503/pytest_lock 2>/dev/null; python -m pytest tests/ -x -q 2>&1 | tail -20"
+        cmd1 = "cd ~/swarmai/backend && rm -f /private/tmp/claude-503/pytest_lock 2>/dev/null; python -m pytest tests/ -x -q 2>&1 | tail -20"
         cmd2 = "python -m pytest tests/ -x -q 2>&1 | tail -30"
         cmd3 = "python -m pytest tests/ -x -q"
         # All three should normalize to the same core command
@@ -875,7 +875,7 @@ class TestConsecutiveRepeatDetection:
         commands = [
             "python -m pytest tests/ -x -q 2>&1 | tail -30",
             "python -m pytest tests/ -x -q 2>&1 | tail -20",
-            "cd /Users/gawan/swarmai/backend && python -m pytest tests/ -x -q 2>&1 | tail -20",
+            "cd ~/swarmai/backend && python -m pytest tests/ -x -q 2>&1 | tail -20",
             "rm -f /private/tmp/claude-503/pytest_lock 2>/dev/null; python -m pytest tests/ -x -q 2>&1 | tail -30",
             "python -m pytest tests/ -x -q 2>&1 | tail -20",
             "python -m pytest tests/ -x -q",

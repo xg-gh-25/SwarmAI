@@ -19,11 +19,11 @@ describe('Bug 1: isWorkspaceFilePath accepts paths with 1-2 spaces', () => {
   });
 
   it('accepts path with one space (has / and extension)', () => {
-    expect(isWorkspaceFilePath('/Users/gawan/My Projects/file.py')).toBe(true);
+    expect(isWorkspaceFilePath('~/My Projects/file.py')).toBe(true);
   });
 
   it('accepts path with two spaces (has / and extension)', () => {
-    expect(isWorkspaceFilePath('/Users/gawan/My Cool Project/main.ts')).toBe(true);
+    expect(isWorkspaceFilePath('~/My Cool Project/main.ts')).toBe(true);
   });
 
   it('rejects prose with 3+ spaces (sentence)', () => {
@@ -69,23 +69,23 @@ describe('Bug 2: extractFilePath handles edit/search prefixes', () => {
 
   it('extracts path from "Editing " prefix', () => {
     if (!extractFilePath) return; // Skip if not exported
-    const result = extractFilePath('Editing /Users/gawan/file.ts');
+    const result = extractFilePath('Editing ~/file.ts');
     expect(result).not.toBeNull();
-    expect(result!.path).toBe('/Users/gawan/file.ts');
+    expect(result!.path).toBe('~/file.ts');
   });
 
   it('extracts path from "Searching in " prefix', () => {
     if (!extractFilePath) return;
-    const result = extractFilePath('Searching in /Users/gawan/src/');
+    const result = extractFilePath('Searching in ~/src/');
     expect(result).not.toBeNull();
-    expect(result!.path).toBe('/Users/gawan/src/');
+    expect(result!.path).toBe('~/src/');
   });
 
   it('extracts path from "Writing to " prefix', () => {
     if (!extractFilePath) return;
-    const result = extractFilePath('Writing to /Users/gawan/output.json');
+    const result = extractFilePath('Writing to ~/output.json');
     expect(result).not.toBeNull();
-    expect(result!.path).toBe('/Users/gawan/output.json');
+    expect(result!.path).toBe('~/output.json');
   });
 });
 

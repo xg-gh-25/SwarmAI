@@ -51,16 +51,11 @@ ALWAYS_TIER_SKILLS = frozenset([
 ])
 
 COMPLEX_SKILLS = frozenset([
-    "cmhk-weekly-report",
     "pptx",
     "docx",
     "pdf",
-    "cmhk-industry-gtm-analysis",
     "skill-builder",
-    "cmhk-gtm-report-gen",
-    "cmhk-customer-ai-research",
     "narrative-writing",
-    "cmhk-data-proxy",
     "save-memory",
     "outlook-assistant",
     "browser-agent",

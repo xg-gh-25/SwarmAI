@@ -54,7 +54,7 @@ _RECALL_QUERIES: list[tuple[str, list[str]]] = [
     ("越用越聪明", ["KD07"]),
     # CJK natural language (bidirectional substring)
     ("竞品分析的结论是什么", ["LL24"]),
-    ("CMHK 周报怎么做的", ["RC02", "RC09"]),
+    ("周报怎么做的", ["RC02", "RC09"]),
 ]
 _RECALL_PASS_THRESHOLD = 7  # at least 7/10 must hit
 

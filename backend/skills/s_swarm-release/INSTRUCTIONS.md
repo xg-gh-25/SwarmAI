@@ -63,7 +63,7 @@ Check:
 ## Stage 1: PREFLIGHT (Agent, 30s)
 
 ```bash
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai
+cd $SWARMAI_ROOT
 
 # 1. Tree must be clean
 git status --porcelain
@@ -107,7 +107,7 @@ If >40: BLOCK — must split.
 ## Stage 1.5: CONVERGENCE (Agent, 5s, optional)
 
 ```bash
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai
+cd $SWARMAI_ROOT
 python backend/scripts/update_convergence.py
 ```
 
@@ -124,7 +124,7 @@ Update VERSION file, then run sync-version.sh to propagate to all targets + lock
 ```bash
 # 1. Edit VERSION file with new version
 # 2. Sync to all 4 targets + regenerate lockfiles:
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai && bash scripts/sync-version.sh
+cd $SWARMAI_ROOT && bash scripts/sync-version.sh
 ```
 
 This updates:
@@ -233,7 +233,7 @@ Wait for user confirmation.
 ## Stage 6: VERIFY DMG (Agent, 5s)
 
 ```bash
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop
+cd $SWARMAI_ROOT/desktop
 # DMG might be in bundle/dmg/ or bundle/macos/ depending on Tauri version
 find src-tauri/target/release/bundle -name "*.dmg" -newer src-tauri/Cargo.toml | head -3
 ```
@@ -246,7 +246,7 @@ find src-tauri/target/release/bundle -name "*.dmg" -newer src-tauri/Cargo.toml |
 ## Stage 7: PUBLISH (Agent, 30s)
 
 ```bash
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai
+cd $SWARMAI_ROOT
 VERSION=$(cat VERSION)
 
 # Push commits (MUST succeed — no silent swallowing)

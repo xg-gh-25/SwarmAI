@@ -1159,7 +1159,7 @@ class PromptBuilder:
             # created during this session but CANNOT access the owner's
             # workspace, personal files, or any other path.
             # This is the STRUCTURAL enforcement — even if the agent tries
-            # to read /Users/gawan/.swarm-ai/SwarmWS/MEMORY.md, the hook
+            # to read ~/.swarm-ai/SwarmWS/MEMORY.md, the hook
             # returns "deny" before the tool executes.
             file_access_handler = create_file_access_permission_handler(
                 [_channel_sender_dir]

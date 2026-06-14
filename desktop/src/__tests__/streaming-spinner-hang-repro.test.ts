@@ -356,7 +356,7 @@ describe('Streaming spinner hang — full event sequence repro', () => {
       toolUseBlock('read-3', 'Read'),
       toolResultBlock('read-3', 'function createStallDetection(...)'),
       toolUseBlock('bash-1', 'Bash'),
-      toolResultBlock('bash-1', '/Users/gawan/.swarm-ai/logs/backend-daemon.log'),
+      toolResultBlock('bash-1', '~/.swarm-ai/logs/backend-daemon.log'),
       toolUseBlock('bash-2', 'Bash'),
       toolResultBlock('bash-2', '16:04:17 - session_unit.transition streaming → idle'),
     ];

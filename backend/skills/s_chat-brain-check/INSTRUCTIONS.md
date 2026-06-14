@@ -17,7 +17,7 @@ Run phases Q1-Q4 in order. Any BLOCK failure = do not ship.
 
 ```bash
 # Backend E2E (14 scenarios)
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend && \
+cd $SWARMAI_ROOT/backend && \
 source .venv/bin/activate && \
 python -m pytest tests/test_chat_scenarios_e2e.py -v --tb=short 2>&1
 
@@ -25,7 +25,7 @@ python -m pytest tests/test_chat_scenarios_e2e.py -v --tb=short 2>&1
 python -m pytest tests/ -k "chat or session or stream or sse or context_warning or context_inject" -v --tb=short 2>&1
 
 # Frontend streaming (3 test files, ~170 tests)
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop && \
+cd $SWARMAI_ROOT/desktop && \
 npx vitest run src/__tests__/useChatStreamingLifecycle.test.ts \
   src/__tests__/streaming-lifecycle-preservation.test.ts \
   src/pages/__tests__/ChatPageSpinner.property.test.tsx \
@@ -39,7 +39,7 @@ Any failure = BLOCK. Known skip: `test_context_warning_bridge::test_yields_warn_
 Run all checks. Any failure = BLOCK.
 
 ```bash
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop/src
+cd $SWARMAI_ROOT/desktop/src
 
 echo "=== 2.1: Drain preserves streaming (no false-to-true gap) ==="
 # Must find: if (!hasQueuedMessage) { setIsStreaming(false, ...) }
@@ -83,7 +83,7 @@ grep -A5 'streamCmdPermissionContinue' ../pages/ChatPage.tsx | grep 'streamHandl
 ### Q3: Regression Patterns [BLOCK / WARN]
 
 ```bash
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai
+cd $SWARMAI_ROOT
 
 echo "=== 3.1: Null bytes in context files [BLOCK] ==="
 find ~/.swarm-ai/SwarmWS/.context/ ~/.swarm-ai/SwarmWS/Knowledge/DailyActivity/ \
@@ -115,7 +115,7 @@ grep -c 'userStopped' desktop/src/hooks/useChatStreamingLifecycle.ts
 ### Q4: TypeScript [BLOCK]
 
 ```bash
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop && npx tsc --noEmit 2>&1 | tail -5
+cd $SWARMAI_ROOT/desktop && npx tsc --noEmit 2>&1 | tail -5
 ```
 
 Must be clean. Pre-existing `stall` warnings in chat.ts are acceptable.
@@ -229,7 +229,7 @@ For each scenario relevant to the change, trace the code path and verify the che
 ### F2: SSE Pipeline Integrity
 
 ```bash
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai
+cd $SWARMAI_ROOT
 
 # [DONE] sentinel
 grep -n 'data: \[DONE\]' backend/routers/chat.py
@@ -251,7 +251,7 @@ grep -n "event.type === 'heartbeat'" desktop/src/services/chat.ts
 ### F3: Streaming Indicator Pipeline
 
 ```bash
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop/src
+cd $SWARMAI_ROOT/desktop/src
 
 # Render condition
 grep 'isLastAssistantForStreaming' pages/ChatPage.tsx | head -2

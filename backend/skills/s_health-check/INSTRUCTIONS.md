@@ -23,7 +23,7 @@ Run checks in parallel where possible (1-3 have no dependencies). Use Bash tool 
 ```bash
 # Port is RANDOM in production (Tauri portpicker). Dev mode uses 8000.
 # Discover dynamically via psutil socket inspection.
-source /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/.venv/bin/activate && python3 << 'PYEOF'
+source $SWARMAI_ROOT/backend/.venv/bin/activate && python3 << 'PYEOF'
 import psutil, urllib.request, json
 
 def find_backend_port():
@@ -108,7 +108,7 @@ PYEOF
 ### 4. MCP Servers Connected (requires running backend)
 ```bash
 # Uses dynamic port discovery from Check 1
-source /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/.venv/bin/activate && python3 << 'PYEOF'
+source $SWARMAI_ROOT/backend/.venv/bin/activate && python3 << 'PYEOF'
 import psutil, urllib.request, json
 
 def find_backend_port():

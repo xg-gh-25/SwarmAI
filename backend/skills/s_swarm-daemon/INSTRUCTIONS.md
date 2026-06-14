@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:18321/health 2>/dev/null || echo "Unreachable"
 ls -la ~/.swarm-ai/daemon/python-backend | awk '{print $6, $7, $8}'
 
 # 5. Compare against source HEAD
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai && git rev-parse --short HEAD
+cd $SWARMAI_ROOT && git rev-parse --short HEAD
 ```
 
 **Report format:**
@@ -218,7 +218,7 @@ Deploy a pre-built binary to daemon path WITHOUT rebuilding.
 Use when binary already exists (e.g., after s_swarm-build Stage 2-3).
 
 ```bash
-SIDECAR="/Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin"
+SIDECAR="$SWARMAI_ROOT/desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin"
 DAEMON_DIR="${HOME}/.swarm-ai/daemon"
 GUI_TARGET="gui/$(id -u)/com.swarmai.backend"
 PLIST_DST="${HOME}/Library/LaunchAgents/com.swarmai.backend.plist"
@@ -252,7 +252,7 @@ rsync -a --delete "$SIDECAR/" "$DAEMON_DIR/"
 chmod +x "$DAEMON_DIR/python-backend"
 
 # Step 5: Version marker (use VERSION file — single source of truth)
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai
+cd $SWARMAI_ROOT
 APP_VER=$(cat VERSION)
 echo "${APP_VER} $(git rev-parse --short HEAD) $(date '+%Y-%m-%d %H:%M:%S')" > "$DAEMON_DIR/.version"
 echo "Deployed: $(cat $DAEMON_DIR/.version)"
@@ -346,7 +346,7 @@ echo "Deployed version: $DEPLOYED"
 echo "Running version: $RUNNING"
 
 # 3. Source HEAD comparison
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai
+cd $SWARMAI_ROOT
 SOURCE_HEAD=$(git rev-parse --short HEAD)
 echo "Source HEAD: $SOURCE_HEAD"
 
@@ -361,7 +361,7 @@ fi
 if [ "$DEPLOYED" = "$SOURCE_HEAD" ]; then
   echo "FRESHNESS: up-to-date"
 else
-  BEHIND=$(cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai && git rev-list --count ${DEPLOYED}..HEAD 2>/dev/null || echo "?")
+  BEHIND=$(cd $SWARMAI_ROOT && git rev-list --count ${DEPLOYED}..HEAD 2>/dev/null || echo "?")
   echo "FRESHNESS: $BEHIND commits behind HEAD"
 fi
 ```

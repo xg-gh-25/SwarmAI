@@ -29,7 +29,7 @@ Additionally: if you are executing this skill, the SwarmAI app IS running. You a
 **IMPORTANT**: Always activate the SwarmAI venv first. System Python does NOT have psutil.
 
 ```bash
-source /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/.venv/bin/activate && python3 << 'PYEOF'
+source $SWARMAI_ROOT/backend/.venv/bin/activate && python3 << 'PYEOF'
 import psutil, json, collections
 
 # === SYSTEM ===

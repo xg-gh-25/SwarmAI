@@ -225,7 +225,7 @@ Three triggers cause the AI to pull additional DDD content:
 | Trigger | Example | What Happens |
 |---------|---------|-------------|
 | **Needs a [Sparse/Growing] section** | AI about to make architecture decision, sees "Voice Input [Sparse]" heading | Pulls that section (~500 tokens), uses it with uncertainty annotation |
-| **Entity Index keyword match** | User mentions "timeout handling", Entity Index routes to CMHK/IMPROVEMENT#dataproxy | Pulls cross-project section (~500 tokens) |
+| **Entity Index keyword match** | User mentions "timeout handling", Entity Index routes to ClientOrg/IMPROVEMENT#dataproxy | Pulls cross-project section (~500 tokens) |
 | **Decision depends on unknown** | Agent directive: "Before relying on a section you haven't read, pull it" | Explicit pull before committing to a decision |
 
 **Budget guard:** Max 3 pulls per turn × ~500 tokens = 1.5K additional. Never unbounded.
@@ -260,32 +260,32 @@ Progressive loading means DDD scales to any size without competing with task exe
 
 ### E2E Example: DDD Retrieval During a Real Pipeline Run
 
-To make this concrete, here is a real task flowing through the pipeline with DDD retrieval at each stage. The scenario: user asks to add retry with exponential backoff to the CMHK DataProxy API. Two DDD projects exist: **CMHK_BIZ** (active) and **SwarmAI** (has relevant cross-project knowledge).
+To make this concrete, here is a real task flowing through the pipeline with DDD retrieval at each stage. The scenario: user asks to add retry with exponential backoff to the ClientOrg DataProxy API. Two DDD projects exist: **BizProject** (active) and **SwarmAI** (has relevant cross-project knowledge).
 
 ![Figure 4: E2E DDD Knowledge Retrieval Flow](diagrams-ddd-v2/09-e2e-retrieval-flow.svg)
 
-**Walkthrough:** The user says "DataProxy keeps timing out, add retry." The pipeline detects CMHK_BIZ as the active project and loads its 4 DDD docs. At EVALUATE, it reads PRODUCT.md — reliability is a top priority, so the task is a GO. It also finds in IMPROVEMENT.md that the real timeout is 90s (not the commonly assumed 30s) — the first domain-correct decision without asking the user.
+**Walkthrough:** The user says "DataProxy keeps timing out, add retry." The pipeline detects BizProject as the active project and loads its 4 DDD docs. At EVALUATE, it reads PRODUCT.md — reliability is a top priority, so the task is a GO. It also finds in IMPROVEMENT.md that the real timeout is 90s (not the commonly assumed 30s) — the first domain-correct decision without asking the user.
 
-At THINK, the agent reasons about "retry + timeout" and the Entity Index fires: it routes to SwarmAI/IMPROVEMENT.md#subprocess-timeout, a different project entirely. The agent pulls that section (~500 tokens) and discovers that async timeout handling requires `asyncio.to_thread` — a lesson SwarmAI learned months ago that CMHK would have rediscovered the hard way.
+At THINK, the agent reasons about "retry + timeout" and the Entity Index fires: it routes to SwarmAI/IMPROVEMENT.md#subprocess-timeout, a different project entirely. The agent pulls that section (~500 tokens) and discovers that async timeout handling requires `asyncio.to_thread` — a lesson SwarmAI learned months ago that ClientOrg would have rediscovered the hard way.
 
-During BUILD, it pulls a [Sparse] section from CMHK/TECH.md to get the exact error classification rules. The adversarial sub-agent then checks the result against known anti-patterns — specifically "silent fallback is the most dangerous bug type" — and verifies the retry implementation has proper observability.
+During BUILD, it pulls a [Sparse] section from ClientOrg/TECH.md to get the exact error classification rules. The adversarial sub-agent then checks the result against known anti-patterns — specifically "silent fallback is the most dangerous bug type" — and verifies the retry implementation has proper observability.
 
-Finally, REFLECT proposes two updates back to CMHK's DDD: the retry configuration goes into TECH.md, and a new pitfall (DataProxy returns 500 on non-partition date ranges) goes into IMPROVEMENT.md. User approves in 30 seconds. Next time anyone works on CMHK DataProxy, this knowledge is already there.
+Finally, REFLECT proposes two updates back to ClientOrg's DDD: the retry configuration goes into TECH.md, and a new pitfall (DataProxy returns 500 on non-partition date ranges) goes into IMPROVEMENT.md. User approves in 30 seconds. Next time anyone works on ClientOrg DataProxy, this knowledge is already there.
 
 **Step-by-step:**
 
 | Step | Pipeline Stage | DDD Action | What AI Learns |
 |------|---------------|-----------|----------------|
-| 1 | Task arrives | Detect active project: CMHK_BIZ | — |
-| 2 | Session start | Load CMHK DDD (4 docs) + Entity Index | Full project context + cross-project routing |
+| 1 | Task arrives | Detect active project: BizProject | — |
+| 2 | Session start | Load ClientOrg DDD (4 docs) + Entity Index | Full project context + cross-project routing |
 | 3 | EVALUATE | Read PRODUCT.md + IMPROVEMENT.md | "DataProxy reliability is P1" + "Real timeout is 90s not 30s" |
 | 4 | THINK | **Cross-project pull** triggered by Entity Index: "API timeout" → SwarmAI/IMPROVEMENT#subprocess-timeout | "Must use asyncio.to_thread, not subprocess.run" (lesson from SwarmAI) |
-| 5 | BUILD | Read CMHK/TECH.md#data-sources + pull TECH.md#error-handling [Sparse] | Correct auth headers, correct error classification |
+| 5 | BUILD | Read ClientOrg/TECH.md#data-sources + pull TECH.md#error-handling [Sparse] | Correct auth headers, correct error classification |
 | 6 | ADVERSARIAL | Read IMPROVEMENT.md anti-patterns | Verifies no silent fallback (LL07), verifies retry has observability |
-| 7 | REFLECT | Write 2 proposals back to CMHK DDD | New retry config → TECH.md, new pitfall → IMPROVEMENT.md |
+| 7 | REFLECT | Write 2 proposals back to ClientOrg DDD | New retry config → TECH.md, new pitfall → IMPROVEMENT.md |
 
 **What DDD prevented (without it, all three would have shipped):**
-- ✗ 30s timeout (wrong — real value is 90s, learned from CMHK/IMPROVEMENT.md)
+- ✗ 30s timeout (wrong — real value is 90s, learned from ClientOrg/IMPROVEMENT.md)
 - ✗ subprocess.run blocking event loop (wrong — learned from SwarmAI cross-project pull)
 - ✗ Silent retry degradation (wrong — caught by adversarial reading anti-patterns)
 

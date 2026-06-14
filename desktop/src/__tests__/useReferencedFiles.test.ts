@@ -38,9 +38,9 @@ describe('useReferencedFiles', () => {
 
   it('adds a file on event', () => {
     const { result } = renderHook(() => useReferencedFiles(SESSION_ID));
-    act(() => dispatchFileRef('/Users/gawan/file.py', 'read'));
+    act(() => dispatchFileRef('~/file.py', 'read'));
     expect(result.current.totalCount).toBe(1);
-    expect(result.current.files.read[0].path).toBe('/Users/gawan/file.py');
+    expect(result.current.files.read[0].path).toBe('~/file.py');
     expect(result.current.files.read[0].fileName).toBe('file.py');
   });
 

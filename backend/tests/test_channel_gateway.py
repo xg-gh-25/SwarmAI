@@ -706,7 +706,7 @@ class TestFileAccessSandbox:
 
         # Blocked: home directory
         result = asyncio.run(
-            handler("Read", {"file_path": "/Users/gawan/.aws/credentials"}, {})
+            handler("Read", {"file_path": "~/.aws/credentials"}, {})
         )
         assert result["behavior"] == "deny"
 

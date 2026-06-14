@@ -101,7 +101,7 @@ crontab "$TMPDIR/crontab_new"
    # Bad
    0 9 * * * python3 backup.py
    # Good
-   0 9 * * * /opt/homebrew/bin/python3 /Users/gawan/scripts/backup.py
+   0 9 * * * /opt/homebrew/bin/python3 ~/scripts/backup.py
    ```
 
 2. **Redirect output** -- otherwise cron mails it (which nobody reads)
@@ -149,7 +149,7 @@ com.swarm-ai.{task-name}.plist
     <key>ProgramArguments</key>
     <array>
         <string>/opt/homebrew/bin/python3</string>
-        <string>/Users/gawan/scripts/task.py</string>
+        <string>~/scripts/task.py</string>
     </array>
 
     <!-- Run daily at 9:00 AM -->
@@ -263,7 +263,7 @@ Present as:
 | Task | Daily backup |
 | Schedule | Every day at 9:00 AM CST |
 | Method | crontab |
-| Command | `/opt/homebrew/bin/python3 /Users/gawan/scripts/backup.py` |
+| Command | `/opt/homebrew/bin/python3 ~/scripts/backup.py` |
 | Log | `/tmp/backup.log` |
 | Created | 2026-03-09 |
 

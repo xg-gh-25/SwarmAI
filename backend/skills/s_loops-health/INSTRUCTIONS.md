@@ -16,7 +16,7 @@ a garbage collector that fixes what it can and only escalates genuine judgment c
 Execute the health check script:
 
 ```bash
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai
+cd $SWARMAI_ROOT
 source backend/.venv/bin/activate
 python backend/skills/s_loops-health/scripts/loops_health_check.py --auto-fix --json
 ```

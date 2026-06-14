@@ -1,6 +1,6 @@
 ---
 name: meddpicc-scorecard
-description: "Score Salesforce opportunities using the AWS MEDDPICC framework (8 dimensions, 100 points). Pulls data from AWSentral MCP, scores each dimension against evidence, checks stage gates, detects\
+description: "Score Salesforce opportunities using the MEDDPICC framework (8 dimensions, 100 points). Pulls data from CRM MCP, scores each dimension against evidence, checks stage gates, detects\
   \ risk signals, and generates prioritized actions with estimated point impact.\n  TRIGGER: \"MEDDPICC\", \"MEDDPICC analysis\", \"MEDDPICC score\", \"score this opportunity\"."
 tier: lazy
 ---

@@ -39,7 +39,7 @@ WEIBO_HEADERS = {
     "Referer": "https://weibo.com/",
 }
 
-# Default keywords relevant to CMHK/AWS business
+# Default keywords relevant to cloud/AI business
 DEFAULT_KEYWORDS = [
     "云计算", "AI", "人工智能", "大模型", "AWS", "亚马逊云",
     "数字化转型", "AIGC", "智能体", "Agent",

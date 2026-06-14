@@ -168,7 +168,7 @@ function buildExport() {
 | Pipeline artifact | `Projects/<project>/.artifacts/REPORT.html` | Pipeline delivery report |
 | Knowledge report | `Knowledge/Reports/YYYY-MM-DD-<topic>.html` | Monthly analysis |
 | Ad-hoc artifact | `Attachments/YYYY-MM-DD-<topic>.html` | One-off comparison |
-| CMHK reports | `Knowledge/Reports/` (already handled by cmhk-* skills) | Weekly/Monthly |
+| ClientOrg reports | `Knowledge/Reports/` (already handled by client-* skills) | Weekly/Monthly |
 
 ## Chat Integration Pattern
 

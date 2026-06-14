@@ -1387,7 +1387,7 @@ class ContextHealthHook:
             """Convert a filesystem path to Claude SDK project slug.
 
             SDK format: replace / with - (keeping leading -), replace . with -.
-            e.g. /Users/gawan/.swarm-ai/SwarmWS -> -Users-gawan--swarm-ai-SwarmWS
+            e.g. ~/.swarm-ai/SwarmWS -> -Users-gawan--swarm-ai-SwarmWS
             """
             return str(Path(p).resolve()).replace("/", "-").replace(".", "-")
 

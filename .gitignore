@@ -103,3 +103,5 @@ pytest-of-gawan/
 
 # CMHK internal skills — AWS sensitive data, local only
 backend/skills/s_cmhk-*/
+backend/skills/_shared/
+Services/cmhk-quick-mcp/

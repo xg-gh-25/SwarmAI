@@ -493,7 +493,7 @@ class TestExtractKeyToolResults:
         msgs = [
             {"role": "assistant", "content": [
                 {"type": "tool_use", "id": "t1", "name": "Read", "input": {},
-                 "summary": "Reading /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/core/context_injector.py"},
+                 "summary": "Reading $SWARMAI_ROOT/backend/core/context_injector.py"},
             ]},
         ]
         result = _extract_key_tool_results(msgs)

@@ -55,21 +55,12 @@ _MAX_BLOCKS_PER_MSG = 50       # max blocks array length per message
 _MAX_BLOCKS_TEXT_BYTES = 38_000  # total text across all blocks in one API call (~40K payload limit)
 
 # Known Slack user IDs → display names.
-# AWS internal Slack doesn't allow users:read or users.profile:read scopes
+# Internal Slack doesn't allow users:read or users.profile:read scopes
 # (COE02), so API resolution always fails. Pre-populate the cache to avoid
 # per-message warning noise and provide human-readable sender names.
-# Loaded from ~/.swarm-ai/slack-known-users.json if it exists,
-# otherwise falls back to the hardcoded defaults below.
-_DEFAULT_KNOWN_USERS: dict[str, str] = {
-    "REDACTED_ID1": "XG",              # REDACTED_NAME (owner)
-    "REDACTED_ID2": "Titus",           # REDACTED_NAME
-    "REDACTED_ID3": "REDACTED",          # REDACTED_NAME
-    "REDACTED_ID4": "REDACTED",     # REDACTED_NAME
-    "REDACTED_ID5": "REDACTED_NAME",       # REDACTED_NAME
-    "REDACTED_ID6": "REDACTED",          # REDACTED_NAME
-    "REDACTED_ID7": "REDACTED",           # REDACTED_NAME
-    "REDACTED_ID8": "REDACTED",      # REDACTED_NAME
-}
+# Loaded from ~/.swarm-ai/slack-known-users.json (required).
+# No hardcoded defaults — all user mappings must come from the config file.
+_DEFAULT_KNOWN_USERS: dict[str, str] = {}
 
 
 def _load_known_users() -> dict[str, str]:

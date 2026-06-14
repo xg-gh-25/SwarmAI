@@ -8,7 +8,7 @@ The report tells a story: what happened, so what, what's next — not just numbe
 ## How to Run
 
 ```bash
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend
+cd $SWARMAI_ROOT/backend
 .venv/bin/python -c "
 from jobs.handlers.swarmai_monthly_report import run_swarmai_monthly_report
 result = run_swarmai_monthly_report(config={'month': 'YYYY-MM'})

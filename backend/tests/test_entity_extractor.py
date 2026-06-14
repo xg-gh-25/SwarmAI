@@ -46,16 +46,16 @@ def projects_dir(tmp_path):
         "## Open Items\n\n- Entity Index\n"
     )
 
-    # Project 2: CMHK_SalesIntel
-    cmhk = tmp_path / "CMHK_SalesIntel"
-    cmhk.mkdir()
-    (cmhk / "TECH.md").write_text(
-        "# CMHK_SalesIntel -- Technical Context\n\n"
+    # Project 2: SalesIntel
+    client = tmp_path / "SalesIntel"
+    client.mkdir()
+    (client / "TECH.md").write_text(
+        "# SalesIntel -- Technical Context\n\n"
         "## Architecture\n\nDataProxy + SDK.\n\n"
         "## Data Sources\n\nAthena, Forecast API.\n"
     )
-    (cmhk / "IMPROVEMENT.md").write_text(
-        "# CMHK_SalesIntel -- Lessons\n\n"
+    (client / "IMPROVEMENT.md").write_text(
+        "# SalesIntel -- Lessons\n\n"
         "## What Worked\n\n- Rocky templates.\n\n"
         "## What Failed\n\n- Month_sequence only has value 1.\n"
     )
@@ -77,7 +77,7 @@ class TestExtractEntitiesFromDDD:
     def test_extracts_h2_headings_as_entities(self, projects_dir):
         """AC1+AC2: Extracts ## headings from DDD docs with correct references."""
         entities = extract_entities_from_ddd(projects_dir)
-        # Should find "Architecture" in both SwarmAI and CMHK_SalesIntel
+        # Should find "Architecture" in both SwarmAI and SalesIntel
         arch_refs = [e for e in entities if e.name == "Architecture"]
         assert len(arch_refs) >= 2
         # Each ref should have project + doc + section
@@ -156,11 +156,11 @@ class TestFormatEntityIndex:
         """Entities with same name across projects share one row."""
         entities = extract_entities_from_ddd(projects_dir)
         lines = format_entity_index(entities)
-        # "Architecture" appears in both SwarmAI and CMHK_SalesIntel
+        # "Architecture" appears in both SwarmAI and SalesIntel
         arch_line = [l for l in lines if "Architecture" in l and "|" in l]
         assert len(arch_line) == 1  # One row, not two
         assert "SwarmAI" in arch_line[0]
-        assert "CMHK_SalesIntel" in arch_line[0]
+        assert "SalesIntel" in arch_line[0]
 
     def test_caps_references_per_entity(self, projects_dir):
         """Max 3 refs per entity (design doc spec)."""
@@ -209,7 +209,7 @@ class TestFilterSingleProjectEntities:
         """Entities found in only 1 project are excluded from index."""
         entities = extract_entities_from_ddd(projects_dir)
         lines = format_entity_index(entities)
-        # "Data Sources" only appears in CMHK_SalesIntel — should be excluded
+        # "Data Sources" only appears in SalesIntel — should be excluded
         data_sources_lines = [l for l in lines if "Data Sources" in l and "|" in l]
         assert data_sources_lines == []
 
@@ -217,10 +217,10 @@ class TestFilterSingleProjectEntities:
         """Entities found in 2+ projects are kept."""
         entities = extract_entities_from_ddd(projects_dir)
         lines = format_entity_index(entities)
-        # "Architecture" appears in SwarmAI AND CMHK_SalesIntel — should be kept
+        # "Architecture" appears in SwarmAI AND SalesIntel — should be kept
         arch_lines = [l for l in lines if "Architecture" in l and "|" in l]
         assert len(arch_lines) == 1
-        # "What Worked" appears in SwarmAI AND CMHK_SalesIntel — kept
+        # "What Worked" appears in SwarmAI AND SalesIntel — kept
         worked_lines = [l for l in lines if "What Worked" in l and "|" in l]
         assert len(worked_lines) == 1
 
@@ -241,7 +241,7 @@ class TestCleanDescriptionExtraction:
         proj.mkdir()
         (proj / "PRODUCT.md").write_text(
             "# TestProj\n\n"
-            "_> **CMHK** is the current official name for the region_\n\n"
+            "_> **ClientOrg** is the current official name for the region_\n\n"
             "## Vision\n\nSome vision.\n"
         )
         # Use the extraction logic from refresh_projects_index
@@ -249,7 +249,7 @@ class TestCleanDescriptionExtraction:
         desc = extract_clean_description(proj / "PRODUCT.md")
         assert not desc.startswith("_")
         assert not desc.startswith(">")
-        assert "CMHK" in desc
+        assert "ClientOrg" in desc
 
     def test_strips_bold_name_prefix(self, tmp_path):
         """Lines like '- **Name:** BMS 2.0...' get cleaned."""

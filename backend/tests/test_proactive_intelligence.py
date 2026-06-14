@@ -420,7 +420,7 @@ class TestFormatSuggestions:
 
 class TestBuildSessionBriefing:
     def test_full_briefing_with_real_workspace(self):
-        workspace = Path("/Users/gawan/.swarm-ai/SwarmWS")
+        workspace = Path("~/.swarm-ai/SwarmWS")
         if not workspace.exists():
             pytest.skip("Real workspace not available")
         briefing = build_session_briefing(workspace)
