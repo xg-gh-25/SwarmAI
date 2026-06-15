@@ -74,6 +74,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "sandbox_excluded_commands": "docker,ps,pgrep,pkill,top,open,screencapture,osascript,launchctl",
     "sandbox_allow_unsandboxed": False,
     "sandbox_allowed_hosts": "*",
+    "eval_judge_model": "claude-sonnet-4-20250514",  # Pinned judge for self-eval (prevents observer effect)
     "evolution": {
         "enabled": True,
         "max_retries": 3,

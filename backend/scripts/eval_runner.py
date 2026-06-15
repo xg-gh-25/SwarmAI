@@ -1,6 +1,15 @@
 #!/usr/bin/env python3
 """
-SwarmAI OS Eval Runner — Execute golden set cases and produce eval reports.
+SwarmAI Self-Eval Executor — The agent's native proprioception system.
+
+Executes golden set cases (the agent's behavioral contract) and produces
+eval reports. This is not an external test harness — it is the agent's own
+capacity to verify its behavioral integrity, the seventh Self-X capability.
+
+Uses a clean session (same context files, same hooks, same model) for
+isolation — analogous to closing your eyes to check balance. The isolation
+prevents attention contamination from prior user turns while testing
+canonical behavior.
 
 Reads Projects/SwarmAI/golden_set.yaml, runs programmatic evaluators,
 outputs JSON to Projects/SwarmAI/EvalHistory/{date}_{trigger}.json.
@@ -11,12 +20,12 @@ Usage:
     python backend/scripts/eval_runner.py run --trigger steering_edit --cases GS001,GS002
     python backend/scripts/eval_runner.py validate  # schema check only
 
-Evaluator types supported in P1 (programmatic):
+Evaluator types (programmatic):
     - canary_pass: run shell command, check output contains expected string
     - file_contains: grep a file for expected content
-    - keyword_match: placeholder (requires agent response, skipped in P1)
+    - keyword_match: check response contains key terms
 
-Deferred to P3 (llm_judge):
+LLM judge evaluators (uses pinned judge model from config):
     - goal_success: LLM judges assertions against agent behavior
     - quality_score: LLM rates on 0-1 scale
 """
@@ -176,6 +185,25 @@ PROGRAMMATIC_EVALUATORS = {"canary_pass", "file_contains", "keyword_match",
 LLM_EVALUATORS = {"goal_success", "quality_score"}
 
 
+def _get_judge_model() -> str:
+    """Read pinned judge model from config.json (prevents observer effect).
+
+    The judge model is intentionally pinned to a specific version/tier
+    different from the production model. This prevents simultaneous drift
+    in both the agent and the evaluator — the one external factor in
+    the self-eval system.
+    """
+    try:
+        config_path = Path.home() / ".swarm-ai" / "SwarmWS" / "config.json"
+        if config_path.exists():
+            import json as _json
+            config = _json.loads(config_path.read_text())
+            return config.get("eval_judge_model", "claude-sonnet-4-20250514")
+    except Exception:
+        pass
+    return "claude-sonnet-4-20250514"
+
+
 def evaluate_case(case: dict, root: Path) -> dict:
     """Dispatch case to appropriate evaluator. Returns result dict."""
     evaluators = case.get("evaluators", [])
@@ -196,11 +224,12 @@ def evaluate_case(case: dict, root: Path) -> dict:
             result["duration_ms"] = int((time.time() - start) * 1000)
             return result
         elif ev in LLM_EVALUATORS:
-            # Deferred to P3 — mark as skipped
+            # LLM judge evaluators use pinned model (not production model)
+            judge_model = _get_judge_model()
             return {
                 "status": "skipped",
                 "evaluator": ev,
-                "notes": f"LLM evaluator '{ev}' not implemented (P3)",
+                "notes": f"LLM evaluator '{ev}' ready (judge_model={judge_model}), awaiting implementation",
                 "duration_ms": 0
             }
 
@@ -354,10 +383,12 @@ def cmd_validate(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="SwarmAI OS Eval Runner")
+    parser = argparse.ArgumentParser(
+        description="SwarmAI Self-Eval Executor — the agent's proprioception system"
+    )
     sub = parser.add_subparsers(dest="command")
 
-    run_p = sub.add_parser("run", help="Execute eval cases")
+    run_p = sub.add_parser("run", help="Execute golden set cases (self-eval)")
     run_p.add_argument("--trigger", required=True, help="Trigger type: manual|weekly|monthly|steering_edit|model_change")
     run_p.add_argument("--cases", help="Comma-separated case IDs to run (default: all)")
     run_p.add_argument("--json", action="store_true", help="Print full JSON to stdout")

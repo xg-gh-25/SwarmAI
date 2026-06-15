@@ -1,8 +1,11 @@
 """
-Eval API endpoints — serves OS Eval Dashboard.
+Self-Eval API endpoints — serves OS Eval Dashboard.
 
-P2: Read-only endpoints (health, history, golden-set, case detail).
-P3: Mutations (CRUD on golden set, run triggers).
+The agent's self-awareness surface: exposes behavioral contract health,
+eval history, and golden set management.
+
+Read endpoints: health score, run history, case details.
+Mutation endpoints: CRUD on golden set cases, run triggers, promotions.
 """
 
 import logging

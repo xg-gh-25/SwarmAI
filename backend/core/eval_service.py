@@ -1,9 +1,13 @@
 """
-SwarmAI OS Eval Service — In-memory cache for golden set + eval history.
+SwarmAI Self-Eval Service — In-memory cache for golden set + eval history.
+
+The golden set is the agent's behavioral contract — part of its identity,
+equal in ontological status to SOUL/AGENT/STEERING. This service manages
+that contract and the history of self-evaluation runs.
 
 Parsed on startup from:
-  - Projects/SwarmAI/golden_set.yaml (case definitions)
-  - Projects/SwarmAI/EvalHistory/*.json (run results)
+  - Projects/SwarmAI/golden_set.yaml (behavioral contract)
+  - Projects/SwarmAI/EvalHistory/*.json (self-eval run results)
 
 Serves the Eval Dashboard API with zero-latency reads.
 Cache invalidated on: eval run completion, manual reload.

@@ -1,10 +1,14 @@
 """
-OS Eval automation hooks — auto-growth mechanisms for the golden set.
+Self-Eval hooks — the agent's nervous system for behavioral integrity.
 
-(1) change_triggered_eval: PostToolUse hook that fires after STEERING/AGENT/SOUL edits
-    → runs affected eval cases in background.
-(2) seed_from_correction: called from user_correction_detector → auto-generates draft case.
-(3) post_run_promotion: called after eval run completes → promotes stable cases.
+These hooks make eval a native capability (proprioception), not an external harness:
+
+(1) change_triggered_eval: PostToolUse hook that fires after governance file edits
+    → runs affected eval cases in background (the agent sensing its own change).
+(2) seed_from_correction: called from user_correction_detector → auto-grows the
+    behavioral contract from failures (the agent learning from mistakes).
+(3) post_run_promotion: called after eval run → promotes stable cases to quarterly
+    cadence (the agent recognizing internalized behaviors).
 """
 
 import logging

@@ -24,7 +24,7 @@ class TestLoadGoldenSet:
         gs_path = root / "Projects" / "SwarmAI" / "golden_set.yaml"
         data = load_golden_set(gs_path)
         assert data["version"] == 2
-        assert len(data["cases"]) == 20
+        assert len(data["cases"]) >= 20  # Grows via flywheel (auto-seed from corrections)
 
     def test_all_cases_have_required_fields(self):
         root = _find_workspace_root()

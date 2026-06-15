@@ -1284,6 +1284,26 @@ def build_session_briefing(
         except Exception as exc:
             logger.debug("DDD trust summary failed: %s", exc)
 
+        # L4: Self-Eval awareness (golden set health — lightweight, ~1 line)
+        try:
+            golden_path = workspace / "Projects" / "SwarmAI" / "golden_set.yaml"
+            if golden_path.exists():
+                from core.eval_service import get_eval_service
+                svc = get_eval_service()
+                health = svc.get_health()
+                if health.get("overall_score") is not None:
+                    last_run = health.get("last_run", {})
+                    last_date = (last_run.get("triggered_at") or "")[:10]
+                    sections.append(
+                        f"**Self-Eval:** {svc.case_count} cases | "
+                        f"Score: {health['overall_score']} | "
+                        f"Last: {last_date or 'never'}"
+                    )
+                elif svc.case_count > 0:
+                    sections.append(f"**Self-Eval:** {svc.case_count} cases (no runs yet)")
+        except Exception as exc:
+            logger.debug("Self-eval briefing failed: %s", exc)
+
         # L4: Skill health recommendations from evolution pipeline
         ctx_dir = workspace / ".context"
         skill_health_lines = _get_skill_health_highlights(ctx_dir)
