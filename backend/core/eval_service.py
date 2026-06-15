@@ -11,7 +11,10 @@ Cache invalidated on: eval run completion, manual reload.
 
 import json
 import logging
+import tempfile
 import threading
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -32,6 +35,9 @@ class EvalService:
         self._golden_set: dict = {"version": 2, "cases": []}
         self._cases: list[dict] = []
         self._runs: list[dict] = []
+        self._data_lock = threading.Lock()  # Guards _cases/_golden_set mutations
+        self._run_lock = threading.Lock()   # Guards _running flag
+        self._running: bool = False
 
         if workspace_root is self._UNSET:
             self._workspace_root = self._find_workspace()
@@ -208,6 +214,175 @@ class EvalService:
             **case,
             "history": self._get_case_history(case_id),
         }
+
+    # ─── CRUD Operations (P3) ───────────────────────────────────────────────
+
+    _REQUIRED_CASE_FIELDS = {"id", "category", "dimension", "evaluators", "affected_by"}
+
+    def add_case(self, case_data: dict) -> dict:
+        """Add a new case to golden set. Raises ValueError on invalid input."""
+        missing = self._REQUIRED_CASE_FIELDS - set(case_data.keys())
+        if missing:
+            raise ValueError(f"Missing required fields: {missing}")
+
+        with self._data_lock:
+            case_id = case_data["id"]
+            if any(c.get("id") == case_id for c in self._cases):
+                raise ValueError(f"Case '{case_id}' already exists")
+
+            self._cases.append(case_data)
+            self._persist_golden_set()
+        return case_data
+
+    def update_case(self, case_id: str, updates: dict) -> dict:
+        """Update an existing case. Raises ValueError if not found or changing id."""
+        if "id" in updates and updates["id"] != case_id:
+            raise ValueError("Cannot change case ID via update")
+
+        with self._data_lock:
+            case = next((c for c in self._cases if c.get("id") == case_id), None)
+            if case is None:
+                raise ValueError(f"Case '{case_id}' not found")
+
+            case.update(updates)
+            self._persist_golden_set()
+        return case
+
+    def delete_case(self, case_id: str) -> dict:
+        """Archive (soft-delete) a case. Sets tier='archived'."""
+        with self._data_lock:
+            case = next((c for c in self._cases if c.get("id") == case_id), None)
+            if case is None:
+                raise ValueError(f"Case '{case_id}' not found")
+
+            case["tier"] = "archived"
+            self._persist_golden_set()
+        return case
+
+    # ─── Run Triggers (P3) ────────────────────────────────────────────────
+
+    def trigger_run(self, trigger: str = "manual", case_ids: list[str] | None = None) -> str:
+        """Trigger an eval run in background thread. Returns run_id.
+
+        Raises RuntimeError if a run is already in progress.
+        """
+        with self._run_lock:
+            if self._running:
+                raise RuntimeError("An eval run is already in progress")
+            self._running = True
+
+        now = datetime.now(timezone.utc)
+        short_id = uuid.uuid4().hex[:6]
+        run_id = f"eval_{now.strftime('%Y%m%d_%H%M%S')}_{short_id}_{trigger}"
+
+        thread = threading.Thread(
+            target=self._execute_run,
+            args=(run_id, trigger, case_ids),
+            daemon=True,
+            name=f"eval-run-{run_id}",
+        )
+        thread.start()
+        return run_id
+
+    def run_canary(self) -> dict:
+        """Run programmatic-only cases synchronously. Returns result dict."""
+        from scripts.eval_runner import run_eval
+
+        cases_data = {"cases": [c for c in self._cases if c.get("tier") != "archived"]}
+
+        result = run_eval(cases_data, "canary", None, self._workspace_root)
+        short_id = uuid.uuid4().hex[:6]
+        result["run_id"] = f"eval_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{short_id}_canary"
+
+        # Persist
+        self._write_run_result(result)
+        self._load_history()
+        return result
+
+    def get_run(self, run_id: str) -> Optional[dict]:
+        """Get a specific run by ID."""
+        return next((r for r in self._runs if r.get("run_id") == run_id), None)
+
+    @property
+    def is_running(self) -> bool:
+        """Whether an eval run is currently in progress."""
+        return self._running
+
+    # ─── Private: Persistence ────────────────────────────────────────────
+
+    def _persist_golden_set(self) -> None:
+        """Atomic write golden_set.yaml (tmp + rename pattern)."""
+        if yaml is None:
+            raise RuntimeError("PyYAML not available, cannot persist")
+
+        self._golden_set["cases"] = self._cases
+        content = yaml.dump(self._golden_set, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+        # Atomic write: write to temp, then rename
+        tmp_fd = tempfile.NamedTemporaryFile(
+            mode="w",
+            dir=str(self._golden_set_path.parent),
+            suffix=".yaml.tmp",
+            delete=False,
+        )
+        try:
+            tmp_fd.write(content)
+            tmp_fd.flush()
+            tmp_fd.close()
+            Path(tmp_fd.name).replace(self._golden_set_path)
+        except Exception:
+            Path(tmp_fd.name).unlink(missing_ok=True)
+            raise
+
+    def _write_run_result(self, result: dict) -> Path:
+        """Write eval run result to EvalHistory/."""
+        self._history_dir.mkdir(parents=True, exist_ok=True)
+        trigger = result.get("triggered_by", "unknown")
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
+        filename = f"{ts}_{trigger}.json"
+        path = self._history_dir / filename
+
+        with open(path, "w") as f:
+            json.dump(result, f, indent=2)
+        return path
+
+    def _execute_run(self, run_id: str, trigger: str, case_ids: list[str] | None) -> None:
+        """Background execution of eval run."""
+        try:
+            from scripts.eval_runner import run_eval
+
+            cases_data = {"cases": [c for c in self._cases if c.get("tier") != "archived"]}
+            result = run_eval(cases_data, trigger, case_ids, self._workspace_root)
+            result["run_id"] = run_id
+
+            self._write_run_result(result)
+            self._load_history()
+        except Exception as e:
+            logger.error("eval_service: background run failed: %s", e)
+            # Write failure result so user can see what happened
+            failure_result = {
+                "run_id": run_id,
+                "triggered_by": trigger,
+                "triggered_at": datetime.now(timezone.utc).isoformat(),
+                "status": "failed",
+                "error": str(e),
+                "overall_score": 0,
+                "dimensions": {},
+                "cases": [],
+                "total_cases": 0,
+                "cases_passed": 0,
+                "cases_failed": 0,
+                "cases_skipped": 0,
+                "duration_seconds": 0,
+            }
+            try:
+                self._write_run_result(failure_result)
+                self._load_history()
+            except Exception:
+                pass  # Best effort — don't mask original error
+        finally:
+            with self._run_lock:
+                self._running = False
 
     # ─── Private Helpers ──────────────────────────────────────────────────
 

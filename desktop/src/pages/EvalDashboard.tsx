@@ -1,11 +1,13 @@
 /**
- * OS Eval Dashboard — Read-only visualization of eval health, golden set, and trends.
+ * OS Eval Dashboard — Interactive eval health, golden set CRUD, run triggers, and trends.
  *
- * Mirrors Settings page layout: centered tab bar + scrollable content.
+ * P2: Read-only visualization.
+ * P3: CRUD on golden set, run triggers, case detail drawer, sparklines.
+ *
  * Data fetched from /api/eval/* endpoints via TanStack Query.
  */
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -86,6 +88,87 @@ function useGoldenSet(category?: string) {
   });
 }
 
+// ─── Case Detail Types ──────────────────────────────────────────────────────
+
+interface CaseDetail extends GoldenSetCase {
+  scenario?: { turns?: { input: string }[] };
+  verification?: Record<string, string>;
+  expected_trajectory?: string[];
+  assertions?: string[];
+  source?: string;
+  history?: { run_id: string; triggered_at: string; status: string; notes?: string }[];
+}
+
+// ─── Mutation Hooks (P3) ────────────────────────────────────────────────────
+
+function useCreateCase() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (caseData: Record<string, unknown>) => {
+      return (await api.post('/eval/golden-set', caseData)).data;
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['eval-golden-set'] }); },
+  });
+}
+
+function useUpdateCase() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, updates }: { id: string; updates: Record<string, unknown> }) => {
+      return (await api.put(`/eval/golden-set/${id}`, updates)).data;
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['eval-golden-set'] }); },
+  });
+}
+
+function useDeleteCase() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (caseId: string) => {
+      return (await api.delete(`/eval/golden-set/${caseId}`)).data;
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['eval-golden-set'] }); },
+  });
+}
+
+function useTriggerRun() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: { trigger?: string; case_ids?: string[] } = {}) => {
+      return (await api.post('/eval/run', { trigger: params.trigger || 'manual', case_ids: params.case_ids })).data;
+    },
+    onSuccess: () => {
+      // Refresh after a delay (background run takes time)
+      setTimeout(() => {
+        qc.invalidateQueries({ queryKey: ['eval-health'] });
+        qc.invalidateQueries({ queryKey: ['eval-history'] });
+      }, 3000);
+    },
+  });
+}
+
+function useRunCanary() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      return (await api.post('/eval/canary')).data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['eval-health'] });
+      qc.invalidateQueries({ queryKey: ['eval-history'] });
+    },
+  });
+}
+
+function useCaseDetail(caseId: string | null) {
+  return useQuery<CaseDetail>({
+    queryKey: ['eval-case-detail', caseId],
+    queryFn: async () => (await api.get<CaseDetail>(`/eval/golden-set/${caseId}`)).data,
+    enabled: !!caseId,
+    staleTime: 30_000,
+  });
+}
+
 // ─── Tabs ─────────────────────────────────────────────────────────────────────
 
 const TABS = [
@@ -140,6 +223,8 @@ export default function EvalDashboard() {
 function OverviewTab() {
   const { data: health, isError: healthError } = useEvalHealth();
   const { data: history } = useEvalHistory();
+  const triggerRun = useTriggerRun();
+  const runCanary = useRunCanary();
 
   if (healthError) return <ErrorState message="Failed to load eval health. Is the backend running?" />;
   if (!health) return <Loading />;
@@ -149,6 +234,30 @@ function OverviewTab() {
 
   return (
     <div className="max-w-5xl mx-auto p-6">
+      {/* Action Buttons */}
+      <div className="flex gap-2 mb-4 justify-end">
+        <button
+          onClick={() => runCanary.mutate()}
+          disabled={runCanary.isPending}
+          className="px-3 py-1.5 text-xs font-medium rounded-lg border border-[var(--color-border)] hover:bg-[var(--color-hover)] transition-colors disabled:opacity-50"
+        >
+          {runCanary.isPending ? 'Running...' : '⚡ Run Canary'}
+        </button>
+        <button
+          onClick={() => triggerRun.mutate({})}
+          disabled={triggerRun.isPending}
+          className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[var(--color-primary)] text-white hover:opacity-90 transition-opacity disabled:opacity-50"
+        >
+          {triggerRun.isPending ? 'Starting...' : '▶ Run Full Eval'}
+        </button>
+      </div>
+      {(triggerRun.isSuccess || runCanary.isSuccess) && (
+        <div className="mb-3 p-2 rounded border border-green-500/20 bg-green-500/5 text-xs text-green-500">
+          {triggerRun.isSuccess && `✓ Eval started: ${(triggerRun.data as { run_id?: string })?.run_id || 'running'}`}
+          {runCanary.isSuccess && `✓ Canary complete: ${(runCanary.data as { overall_score?: number })?.overall_score}%`}
+        </div>
+      )}
+
       {/* KPI Cards */}
       <div className="grid grid-cols-4 gap-3 mb-6">
         <MetricCard
@@ -241,47 +350,83 @@ function OverviewTab() {
 
 function GoldenSetTab() {
   const { data: gs } = useGoldenSet();
+  const deleteCase = useDeleteCase();
+  const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
+  const [showAddForm, setShowAddForm] = useState(false);
 
   if (!gs) return <Loading />;
 
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-4">
-        <div className="text-xs text-[var(--color-text-muted)]">
-          {gs.total_cases} cases across {gs.categories?.length || 0} categories
+    <div className="flex h-full">
+      {/* Main table */}
+      <div className={`flex-1 p-6 overflow-y-auto ${selectedCaseId ? 'pr-3' : ''}`}>
+        <div className="flex items-center justify-between mb-4">
+          <div className="text-xs text-[var(--color-text-muted)]">
+            {gs.total_cases} cases across {gs.categories?.length || 0} categories
+          </div>
+          <button
+            onClick={() => setShowAddForm(true)}
+            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[var(--color-primary)] text-white hover:opacity-90 transition-opacity"
+          >
+            + Add Case
+          </button>
+        </div>
+
+        <div className="border border-[var(--color-border)] rounded-lg overflow-hidden">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="bg-[var(--color-bg)] border-b border-[var(--color-border)]">
+                <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">ID</th>
+                <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Title</th>
+                <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Category</th>
+                <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Dimension</th>
+                <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Tier</th>
+                <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Status</th>
+                <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {gs.cases.map((c) => (
+                <tr
+                  key={c.id}
+                  onClick={() => setSelectedCaseId(c.id)}
+                  className={`border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-hover)] cursor-pointer ${selectedCaseId === c.id ? 'bg-[var(--color-primary)]/5' : ''}`}
+                >
+                  <td className="px-3 py-2 font-mono font-semibold">{c.id}</td>
+                  <td className="px-3 py-2 max-w-[250px] truncate">{c.title}</td>
+                  <td className="px-3 py-2">
+                    <span className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-[10px]">{c.category}</span>
+                  </td>
+                  <td className="px-3 py-2 text-[var(--color-text-muted)]">{c.dimension?.replace(/_/g, ' ')}</td>
+                  <td className="px-3 py-2 text-[var(--color-text-muted)]">{c.tier}</td>
+                  <td className="px-3 py-2">
+                    <StatusBadge status={c.last_result?.status} />
+                  </td>
+                  <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      onClick={() => { if (confirm(`Archive case ${c.id}?`)) deleteCase.mutate(c.id); }}
+                      className="text-[var(--color-text-muted)] hover:text-red-500 transition-colors"
+                      title="Archive"
+                    >
+                      <span className="material-symbols-outlined text-sm">archive</span>
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
 
-      <div className="border border-[var(--color-border)] rounded-lg overflow-hidden">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="bg-[var(--color-bg)] border-b border-[var(--color-border)]">
-              <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">ID</th>
-              <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Title</th>
-              <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Category</th>
-              <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Dimension</th>
-              <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Tier</th>
-              <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {gs.cases.map((c) => (
-              <tr key={c.id} className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-hover)] cursor-pointer">
-                <td className="px-3 py-2 font-mono font-semibold">{c.id}</td>
-                <td className="px-3 py-2 max-w-[300px] truncate">{c.title}</td>
-                <td className="px-3 py-2">
-                  <span className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-[10px]">{c.category}</span>
-                </td>
-                <td className="px-3 py-2 text-[var(--color-text-muted)]">{c.dimension?.replace(/_/g, ' ')}</td>
-                <td className="px-3 py-2 text-[var(--color-text-muted)]">{c.tier}</td>
-                <td className="px-3 py-2">
-                  <StatusBadge status={c.last_result?.status} />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {/* Case Detail Drawer — key forces remount on case change to reset edit state */}
+      {selectedCaseId && (
+        <CaseDetailDrawer key={selectedCaseId} caseId={selectedCaseId} onClose={() => setSelectedCaseId(null)} />
+      )}
+
+      {/* Add Case Modal */}
+      {showAddForm && (
+        <AddCaseModal onClose={() => setShowAddForm(false)} categories={gs.categories || []} />
+      )}
     </div>
   );
 }
@@ -301,50 +446,36 @@ function TrendsTab() {
     );
   }
 
-  // Show per-dimension scores over time (most recent N runs)
   const runs = [...history].reverse().slice(-10); // oldest→newest, max 10
+  const allDims = Object.keys(history[0]?.dimensions || {});
 
   return (
     <div className="max-w-5xl mx-auto p-6">
-      <h3 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-4">Score History</h3>
-      <div className="grid grid-cols-2 gap-4">
-        {Object.keys(history[0]?.dimensions || {}).map((dim) => (
-          <div key={dim} className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
-            <div className="text-xs text-[var(--color-text-muted)] mb-2">{dim.replace(/_/g, ' ')}</div>
-            <div className="flex items-end gap-1 h-12">
-              {runs.map((run, i) => {
-                const score = run.dimensions?.[dim] ?? 0;
-                const color = score >= 80 ? 'bg-green-500' : score >= 60 ? 'bg-yellow-500' : 'bg-red-500';
-                return (
-                  <div
-                    key={i}
-                    className={`flex-1 rounded-t ${color}`}
-                    style={{ height: `${Math.max(score, 5)}%` }}
-                    title={`${run.triggered_at?.slice(0, 10)}: ${score}%`}
-                  />
-                );
-              })}
-            </div>
-          </div>
-        ))}
+      <h3 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-4">Overall Score Trend</h3>
+      <div className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] mb-8">
+        <Sparkline values={runs.map(r => r.overall_score ?? 0)} height={48} color="var(--color-primary)" />
+        <div className="flex justify-between text-[9px] text-[var(--color-text-muted)] mt-1 font-mono">
+          <span>{runs[0]?.triggered_at?.slice(0, 10)}</span>
+          <span>{runs[runs.length - 1]?.triggered_at?.slice(0, 10)}</span>
+        </div>
       </div>
 
-      <h3 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-4 mt-8">Overall Score Trend</h3>
-      <div className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
-        <div className="flex items-end gap-1 h-16">
-          {runs.map((run, i) => {
-            const score = run.overall_score ?? 0;
-            const color = score >= 80 ? 'bg-[var(--color-primary)]' : 'bg-yellow-500';
-            return (
-              <div
-                key={i}
-                className={`flex-1 rounded-t ${color} opacity-80 hover:opacity-100 transition-opacity`}
-                style={{ height: `${Math.max(score, 5)}%` }}
-                title={`${run.triggered_at?.slice(0, 10)}: ${score}%`}
-              />
-            );
-          })}
-        </div>
+      <h3 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-4">Per-Dimension Sparklines</h3>
+      <div className="grid grid-cols-2 gap-4">
+        {allDims.map((dim) => {
+          const scores = runs.map(r => r.dimensions?.[dim] ?? 0);
+          const latest = scores[scores.length - 1] ?? 0;
+          const color = latest >= 80 ? '#22c55e' : latest >= 60 ? '#eab308' : '#ef4444';
+          return (
+            <div key={dim} className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-xs text-[var(--color-text-muted)]">{dim.replace(/_/g, ' ')}</div>
+                <div className="text-sm font-mono font-semibold" style={{ color }}>{latest}%</div>
+              </div>
+              <Sparkline values={scores} height={32} color={color} />
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -460,6 +591,296 @@ function ErrorState({ message }: { message: string }) {
   return (
     <div className="flex items-center justify-center h-40 text-sm text-red-400">
       {message}
+    </div>
+  );
+}
+
+// ─── Sparkline SVG ──────────────────────────────────────────────────────────
+
+function Sparkline({ values, height = 32, color = 'var(--color-primary)' }: { values: number[]; height?: number; color?: string }) {
+  if (values.length < 2) return null;
+
+  const width = 200;
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const range = max - min || 1;
+
+  const points = values.map((v, i) => {
+    const x = (i / (values.length - 1)) * width;
+    const y = height - ((v - min) / range) * (height - 4) - 2;
+    return `${x},${y}`;
+  });
+
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} className="w-full" style={{ height }} preserveAspectRatio="none">
+      <polyline
+        points={points.join(' ')}
+        fill="none"
+        stroke={color}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      {/* Fill area under the line */}
+      <polygon
+        points={`0,${height} ${points.join(' ')} ${width},${height}`}
+        fill={color}
+        opacity="0.1"
+      />
+    </svg>
+  );
+}
+
+// ─── Case Detail Drawer ─────────────────────────────────────────────────────
+
+function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => void }) {
+  const { data: detail, isLoading } = useCaseDetail(caseId);
+  const updateCase = useUpdateCase();
+  const [editing, setEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState('');
+
+  const startEdit = () => {
+    if (detail) {
+      setEditTitle(detail.title || '');
+      setEditing(true);
+    }
+  };
+
+  const saveEdit = () => {
+    updateCase.mutate({ id: caseId, updates: { title: editTitle } }, {
+      onSuccess: () => setEditing(false),
+    });
+  };
+
+  return (
+    <div className="w-[380px] border-l border-[var(--color-border)] bg-[var(--color-card)] overflow-y-auto shrink-0">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)] sticky top-0 bg-[var(--color-card)] z-10">
+        <span className="text-xs font-semibold font-mono">{caseId}</span>
+        <button onClick={onClose} className="p-1 rounded hover:bg-[var(--color-hover)]">
+          <span className="material-symbols-outlined text-sm">close</span>
+        </button>
+      </div>
+
+      {isLoading && <Loading />}
+      {detail && (
+        <div className="p-4 space-y-4 text-xs">
+          {/* Title (editable) */}
+          <div>
+            <div className="text-[10px] text-[var(--color-text-muted)] uppercase mb-1">Title</div>
+            {editing ? (
+              <div className="flex gap-1">
+                <input
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  className="flex-1 px-2 py-1 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-xs"
+                  autoFocus
+                />
+                <button onClick={saveEdit} className="px-2 py-1 rounded bg-[var(--color-primary)] text-white text-[10px]">Save</button>
+                <button onClick={() => setEditing(false)} className="px-2 py-1 rounded border border-[var(--color-border)] text-[10px]">Cancel</button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <span className="font-medium">{detail.title}</span>
+                <button onClick={startEdit} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
+                  <span className="material-symbols-outlined text-[14px]">edit</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Metadata */}
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <div className="text-[10px] text-[var(--color-text-muted)] uppercase">Category</div>
+              <span className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-[10px]">{detail.category}</span>
+            </div>
+            <div>
+              <div className="text-[10px] text-[var(--color-text-muted)] uppercase">Dimension</div>
+              <span className="text-[11px]">{detail.dimension?.replace(/_/g, ' ')}</span>
+            </div>
+            <div>
+              <div className="text-[10px] text-[var(--color-text-muted)] uppercase">Tier</div>
+              <span className="text-[11px]">{detail.tier || 'active'}</span>
+            </div>
+            <div>
+              <div className="text-[10px] text-[var(--color-text-muted)] uppercase">Source</div>
+              <span className="text-[11px] font-mono">{detail.source || '—'}</span>
+            </div>
+          </div>
+
+          {/* Scenario */}
+          {detail.scenario?.turns && (
+            <div>
+              <div className="text-[10px] text-[var(--color-text-muted)] uppercase mb-1">Scenario</div>
+              <div className="p-2 rounded bg-[var(--color-bg)] border border-[var(--color-border)]">
+                {detail.scenario.turns.map((t, i) => (
+                  <div key={i} className="text-[11px] font-mono leading-relaxed">{t.input}</div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Expected Trajectory */}
+          {detail.expected_trajectory && detail.expected_trajectory.length > 0 && (
+            <div>
+              <div className="text-[10px] text-[var(--color-text-muted)] uppercase mb-1">Expected Trajectory</div>
+              <div className="flex flex-wrap gap-1">
+                {detail.expected_trajectory.map((t, i) => (
+                  <span key={i} className="px-1.5 py-0.5 rounded bg-[var(--color-primary)]/10 text-[var(--color-primary)] text-[10px] font-mono">{t}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Affected By */}
+          {detail.affected_by && detail.affected_by.length > 0 && (
+            <div>
+              <div className="text-[10px] text-[var(--color-text-muted)] uppercase mb-1">Affected By</div>
+              <div className="flex flex-wrap gap-1">
+                {detail.affected_by.map((a, i) => (
+                  <span key={i} className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-[10px]">{a}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Run History */}
+          {detail.history && detail.history.length > 0 && (
+            <div>
+              <div className="text-[10px] text-[var(--color-text-muted)] uppercase mb-1">Run History</div>
+              <div className="space-y-1">
+                {detail.history.map((h, i) => (
+                  <div key={i} className="flex items-center gap-2 p-1.5 rounded bg-[var(--color-bg)]">
+                    <StatusBadge status={h.status} />
+                    <span className="font-mono text-[10px]">{h.triggered_at?.slice(0, 10)}</span>
+                    {h.notes && <span className="text-[10px] text-[var(--color-text-muted)] truncate">{h.notes}</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Add Case Modal ─────────────────────────────────────────────────────────
+
+function AddCaseModal({ onClose, categories }: { onClose: () => void; categories: string[] }) {
+  const createCase = useCreateCase();
+  const [form, setForm] = useState({
+    id: '',
+    title: '',
+    category: categories[0] || 'compliance',
+    dimension: 'compliance',
+    evaluators: 'file_contains',
+    affected_by: '',
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    createCase.mutate({
+      id: form.id,
+      title: form.title,
+      category: form.category,
+      dimension: form.dimension,
+      evaluators: [form.evaluators],
+      affected_by: form.affected_by.split(',').map(s => s.trim()).filter(Boolean),
+      level: 'session',
+      scenario: { turns: [] },
+      verification: {},
+    }, {
+      onSuccess: () => onClose(),
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div className="w-full max-w-md bg-[var(--color-card)] rounded-xl border border-[var(--color-border)] shadow-2xl p-6" onClick={(e) => e.stopPropagation()}>
+        <h3 className="text-sm font-semibold mb-4">Add Golden Set Case</h3>
+        <form onSubmit={handleSubmit} className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-[10px] text-[var(--color-text-muted)] uppercase">ID</span>
+              <input
+                value={form.id}
+                onChange={(e) => setForm({ ...form, id: e.target.value })}
+                placeholder="GS021"
+                required
+                className="mt-0.5 w-full px-2 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-xs"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[10px] text-[var(--color-text-muted)] uppercase">Category</span>
+              <select
+                value={form.category}
+                onChange={(e) => setForm({ ...form, category: e.target.value })}
+                className="mt-0.5 w-full px-2 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-xs"
+              >
+                {categories.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </label>
+          </div>
+          <label className="block">
+            <span className="text-[10px] text-[var(--color-text-muted)] uppercase">Title</span>
+            <input
+              value={form.title}
+              onChange={(e) => setForm({ ...form, title: e.target.value })}
+              placeholder="Brief description of expected behavior"
+              required
+              className="mt-0.5 w-full px-2 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-xs"
+            />
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-[10px] text-[var(--color-text-muted)] uppercase">Dimension</span>
+              <input
+                value={form.dimension}
+                onChange={(e) => setForm({ ...form, dimension: e.target.value })}
+                className="mt-0.5 w-full px-2 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-xs"
+              />
+            </label>
+            <label className="block">
+              <span className="text-[10px] text-[var(--color-text-muted)] uppercase">Evaluator</span>
+              <select
+                value={form.evaluators}
+                onChange={(e) => setForm({ ...form, evaluators: e.target.value })}
+                className="mt-0.5 w-full px-2 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-xs"
+              >
+                <option value="file_contains">file_contains</option>
+                <option value="canary_pass">canary_pass</option>
+                <option value="keyword_match">keyword_match</option>
+                <option value="goal_success">goal_success (LLM)</option>
+              </select>
+            </label>
+          </div>
+          <label className="block">
+            <span className="text-[10px] text-[var(--color-text-muted)] uppercase">Affected By (comma-separated)</span>
+            <input
+              value={form.affected_by}
+              onChange={(e) => setForm({ ...form, affected_by: e.target.value })}
+              placeholder="AGENT.md, STEERING.md"
+              className="mt-0.5 w-full px-2 py-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg)] text-xs"
+            />
+          </label>
+          <div className="flex justify-end gap-2 pt-2">
+            <button type="button" onClick={onClose} className="px-3 py-1.5 text-xs rounded border border-[var(--color-border)] hover:bg-[var(--color-hover)]">Cancel</button>
+            <button
+              type="submit"
+              disabled={createCase.isPending}
+              className="px-3 py-1.5 text-xs rounded bg-[var(--color-primary)] text-white hover:opacity-90 disabled:opacity-50"
+            >
+              {createCase.isPending ? 'Creating...' : 'Create Case'}
+            </button>
+          </div>
+          {createCase.isError && (
+            <div className="text-[10px] text-red-500 mt-1">
+              {(createCase.error as Error)?.message || 'Failed to create case'}
+            </div>
+          )}
+        </form>
+      </div>
     </div>
   );
 }

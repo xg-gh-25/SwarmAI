@@ -16,7 +16,7 @@ const sizeClasses = {
   xl: 'max-w-xl',
   '2xl': 'max-w-2xl',
   '3xl': 'max-w-3xl',
-  fullscreen: 'w-[95vw] h-[90vh] max-w-none',
+  fullscreen: 'w-[95vw] max-w-none',  // height managed by flex + overflow
 };
 
 export default function Modal({
@@ -52,8 +52,10 @@ export default function Modal({
     <div
       ref={overlayRef}
       className={clsx(
-        "fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm",
-        size === 'fullscreen' && 'pt-12'  // Clear macOS title bar / Tauri drag region
+        "fixed inset-0 z-50 flex justify-center bg-black/50 backdrop-blur-sm",
+        size === 'fullscreen'
+          ? 'items-start px-4 pb-4 pt-12'  // items-start + top padding clears macOS title bar
+          : 'items-center p-4'
       )}
       onMouseDown={(e) => {
         // Only close when clicking directly on the overlay background
@@ -64,7 +66,8 @@ export default function Modal({
     >
       <div
         className={clsx(
-          'w-full bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl shadow-2xl flex flex-col max-h-[90vh]',
+          'w-full bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl shadow-2xl flex flex-col',
+          size === 'fullscreen' ? 'max-h-[calc(100vh-4rem)] overflow-hidden' : 'max-h-[90vh]',
           sizeClasses[size]
         )}
         // Stop event propagation to prevent overlay close when clicking inside modal
