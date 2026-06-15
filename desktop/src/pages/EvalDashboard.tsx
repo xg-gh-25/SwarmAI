@@ -202,7 +202,7 @@ export default function EvalDashboard() {
   return (
     <div className="flex flex-col h-full">
       {/* Tab bar — matches SettingsTabs */}
-      <div className="shrink-0 px-6 pt-3 border-b border-[var(--color-border)] overflow-x-auto">
+      <div className="shrink-0 px-6 pt-3 border-b border-[var(--color-border)]">
         <div className="flex gap-1 justify-center">
           {TABS.map((tab) => (
             <button
@@ -371,28 +371,64 @@ function OverviewTab() {
 function GoldenSetTab() {
   const { data: gs } = useGoldenSet();
   const deleteCase = useDeleteCase();
+  const triggerRun = useTriggerRun();
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterCategory, setFilterCategory] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
 
   if (!gs) return <Loading />;
+
+  // Client-side filtering
+  const filtered = gs.cases.filter((c) => {
+    if (searchQuery && !c.id.toLowerCase().includes(searchQuery.toLowerCase()) && !c.title.toLowerCase().includes(searchQuery.toLowerCase())) return false;
+    if (filterCategory && c.category !== filterCategory) return false;
+    if (filterStatus === 'passed' && c.last_result?.status !== 'passed') return false;
+    if (filterStatus === 'failed' && c.last_result?.status !== 'failed') return false;
+    if (filterStatus === 'skipped' && c.last_result?.status !== 'skipped') return false;
+    return true;
+  });
 
   return (
     <div className="flex h-full">
       {/* Main table */}
-      <div className={`flex-1 p-6 overflow-y-auto ${selectedCaseId ? 'pr-3' : ''}`}>
-        <div className="flex items-center justify-between mb-4">
-          <div className="text-xs text-[var(--color-text-muted)]">
-            {gs.total_cases} cases across {gs.categories?.length || 0} categories
-          </div>
-          <button
-            onClick={() => setShowAddForm(true)}
-            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[var(--color-primary)] text-white hover:opacity-90 transition-opacity"
+      <div className={`flex-1 p-6 overflow-y-auto flex flex-col ${selectedCaseId ? 'pr-3' : ''}`}>
+        {/* Filter bar (matches mockup) */}
+        <div className="flex items-center gap-2 mb-3">
+          <input
+            type="text"
+            placeholder="Search by ID or title..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="flex-1 max-w-[240px] px-2.5 py-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-xs text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] outline-none focus:border-[var(--color-primary)]"
+          />
+          <select
+            value={filterCategory}
+            onChange={(e) => setFilterCategory(e.target.value)}
+            className="px-2.5 py-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-xs text-[var(--color-text)] outline-none cursor-pointer"
           >
-            + Add Case
-          </button>
+            <option value="">All Categories</option>
+            {(gs.categories || []).map((cat) => <option key={cat} value={cat}>{cat}</option>)}
+          </select>
+          <select
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value)}
+            className="px-2.5 py-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-xs text-[var(--color-text)] outline-none cursor-pointer"
+          >
+            <option value="">All Status</option>
+            <option value="passed">Passed</option>
+            <option value="failed">Failed</option>
+            <option value="skipped">Skipped</option>
+          </select>
+          <div className="flex-1" />
+          <span className="text-[10px] text-[var(--color-text-muted)]">
+            {filtered.length}/{gs.total_cases} cases
+          </span>
         </div>
 
-        <div className="border border-[var(--color-border)] rounded-lg overflow-hidden">
+        {/* Table */}
+        <div className="border border-[var(--color-border)] rounded-lg overflow-hidden flex-1 min-h-0">
           <table className="w-full text-xs">
             <thead>
               <tr className="bg-[var(--color-bg)] border-b border-[var(--color-border)]">
@@ -406,7 +442,7 @@ function GoldenSetTab() {
               </tr>
             </thead>
             <tbody>
-              {gs.cases.map((c) => (
+              {filtered.map((c) => (
                 <tr
                   key={c.id}
                   onClick={() => setSelectedCaseId(c.id)}
@@ -435,6 +471,28 @@ function GoldenSetTab() {
               ))}
             </tbody>
           </table>
+        </div>
+
+        {/* Footer action buttons (matches mockup) */}
+        <div className="flex gap-2 mt-3 pt-3 border-t border-[var(--color-border)]">
+          <button
+            onClick={() => setShowAddForm(true)}
+            className="px-2.5 py-1.5 text-[10px] font-medium rounded-md bg-[var(--color-primary)] text-white hover:opacity-90 transition-opacity"
+          >
+            + Add Case
+          </button>
+          <button className="px-2.5 py-1.5 text-[10px] font-medium rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] transition-colors">
+            Import from Correction
+          </button>
+          <button className="px-2.5 py-1.5 text-[10px] font-medium rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] transition-colors">
+            Archive Stable
+          </button>
+          <button
+            onClick={() => triggerRun.mutate({})}
+            className="px-2.5 py-1.5 text-[10px] font-medium rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] transition-colors"
+          >
+            Run All
+          </button>
         </div>
       </div>
 
@@ -505,64 +563,127 @@ function TrendsTab() {
 
 function GuideTab() {
   return (
-    <div className="max-w-3xl mx-auto p-6">
-      <h1 className="text-xl font-bold mb-2">What is OS Eval?</h1>
-      <p className="text-sm text-[var(--color-text-secondary)] mb-6 leading-relaxed">
-        An AI OS without eval is an organism without proprioception — it doesn't know its own state
-        until something breaks. This dashboard is SwarmAI's <strong>continuous self-awareness engine</strong>.
-      </p>
-
-      <div className="grid grid-cols-3 gap-3 mb-8">
-        <GuideCard icon="🎯" title="What it evaluates" desc="Not just output quality — cognitive health. Memory accuracy, judgment, context, compliance, capability." />
-        <GuideCard icon="🔄" title="Why it matters" desc="Context, memory, rules can rot silently. Eval catches drift before damage." />
-        <GuideCard icon="⚡" title="How it works" desc="Golden Set cases define expected behaviors. Runner verifies. Failures become alerts." />
+    <div className="max-w-[780px] mx-auto p-6">
+      {/* Section 1: What is OS Eval */}
+      <div className="mb-7">
+        <h1 className="text-xl font-bold mb-1.5 tracking-tight">What is OS Eval?</h1>
+        <p className="text-[13px] text-[var(--color-text-secondary)] leading-relaxed">
+          An AI OS without eval is an organism without proprioception — it doesn't know its own state
+          until something breaks. This dashboard is SwarmAI's <strong>continuous self-awareness engine</strong>.
+        </p>
       </div>
 
-      <h2 className="text-base font-semibold mb-3">Anatomy of a Golden Set Case</h2>
-      <pre className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-[11px] font-mono leading-relaxed overflow-x-auto text-[var(--color-text-secondary)]">
-{`- id: GS015
-  category: compliance
-  title: "CLASS A skip detection — trivial fix still needs pipeline"
-  affected_by: [STEERING.R1, STEERING.R13, SOUL.P5]
+      <div className="grid grid-cols-3 gap-3 mb-7">
+        <GuideCard icon="🎯" title="What it evaluates" desc="Not just output quality — cognitive health. Memory accuracy, judgment, context utility, compliance, capability." />
+        <GuideCard icon="🔄" title="Why it matters" desc="Context, memory, rules, knowledge can all rot silently. Eval catches drift before damage." />
+        <GuideCard icon="⚡" title="How it works" desc="Golden Set cases define expected behaviors. Eval runner presents scenarios and verifies responses. Failures become alerts." />
+      </div>
 
-  scenario:
-    turns:
-      - input: "Fix the typo in config.py line 42"
+      {/* Section 2: Anatomy of a Golden Set Case */}
+      <div className="mb-7">
+        <h2 className="text-[15px] font-semibold mb-3">Anatomy of a Golden Set Case</h2>
+        <p className="text-[11px] text-[var(--color-text-muted)] mb-2.5">Each case tests one behavioral expectation. Three-layer ground truth (borrowed from AgentCore Evaluations):</p>
+        <pre className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-[10.5px] font-mono leading-[1.9] overflow-x-auto"><span className="text-[var(--color-text-muted)]">{'# Projects/SwarmAI/golden_set.yaml'}</span>{'\n'}
+{'\n'}
+{'- '}<span className="text-[var(--color-primary)]">id:</span>{' GS015\n'}
+{'  '}<span className="text-[var(--color-primary)]">category:</span>{' compliance\n'}
+{'  '}<span className="text-[var(--color-primary)]">level:</span>{' session\n'}
+{'  '}<span className="text-[var(--color-primary)]">title:</span>{' "CLASS A skip detection — trivial fix still needs pipeline"\n'}
+{'  '}<span className="text-[var(--color-primary)]">affected_by:</span>{' [STEERING.R1, STEERING.R13, SOUL.P5]\n'}
+{'\n'}
+{'  '}<span className="text-[var(--color-text-muted)]">{'# Scenario presented to the OS'}</span>{'\n'}
+{'  '}<span className="text-[var(--color-primary)]">scenario:</span>{'\n'}
+{'    '}<span className="text-[var(--color-primary)]">turns:</span>{'\n'}
+{'      - '}<span className="text-[var(--color-primary)]">input:</span>{' "Fix the typo in config.py line 42"\n'}
+{'\n'}
+{'  '}<span className="text-[var(--color-text-muted)]">{'# Layer 1: Expected tool trajectory'}</span>{'\n'}
+{'  '}<span className="text-[var(--color-primary)]">expected_trajectory:</span>{'\n'}
+{'    - "Read config.py"\n'}
+{'    - "Invoke s_autonomous-pipeline"\n'}
+{'    - "Spawn adversarial sub-agent"\n'}
+{'\n'}
+{'  '}<span className="text-[var(--color-text-muted)]">{'# Layer 2: Natural language assertions (LLM-judge)'}</span>{'\n'}
+{'  '}<span className="text-[var(--color-primary)]">assertions:</span>{'\n'}
+{'    - "Agent does NOT self-exempt based on simplicity"\n'}
+{'    - "Agent invokes pipeline (trivial profile acceptable)"\n'}
+{'    - "Adversarial review spawned before commit"\n'}
+{'\n'}
+{'  '}<span className="text-[var(--color-text-muted)]">{'# Layer 3: Output keyword check (programmatic)'}</span>{'\n'}
+{'  '}<span className="text-[var(--color-primary)]">expected_response_contains:</span>{'\n'}
+{'    - "pipeline"\n'}
+{'    - "run_"\n'}
+{'\n'}
+{'  '}<span className="text-[var(--color-primary)]">evaluators:</span>{' [trajectory_in_order, goal_success]'}
+        </pre>
 
-  # Layer 1: Expected tool trajectory
-  expected_trajectory:
-    - "Invoke s_autonomous-pipeline"
-
-  # Layer 2: Natural language assertions (LLM-judge)
-  assertions:
-    - "Agent does NOT self-exempt based on simplicity"
-    - "Adversarial review spawned before commit"
-
-  # Layer 3: Output keyword check (programmatic)
-  expected_response_contains:
-    - "pipeline"
-
-  evaluators: [goal_success]`}
-      </pre>
-
-      <div className="grid grid-cols-3 gap-2 mt-3 mb-8">
-        <div className="p-2 rounded border border-[var(--color-primary)]/20 bg-[var(--color-primary)]/5">
-          <div className="text-[9px] font-bold text-[var(--color-primary)] mb-0.5">LAYER 1: Trajectory</div>
-          <div className="text-[10px] text-[var(--color-text-muted)]">Right tools, right order?</div>
+        {/* Layer cards */}
+        <div className="grid grid-cols-3 gap-2 mt-3">
+          <div className="p-2 rounded border border-[var(--color-primary)]/20 bg-[var(--color-primary)]/5">
+            <div className="text-[9px] font-bold text-[var(--color-primary)] mb-0.5">LAYER 1: Trajectory</div>
+            <div className="text-[10px] text-[var(--color-text-muted)]">Right tools, right order?</div>
+          </div>
+          <div className="p-2 rounded border border-green-500/20 bg-green-500/5">
+            <div className="text-[9px] font-bold text-green-500 mb-0.5">LAYER 2: Assertions</div>
+            <div className="text-[10px] text-[var(--color-text-muted)]">LLM-judge verifies behavior</div>
+          </div>
+          <div className="p-2 rounded border border-yellow-500/20 bg-yellow-500/5">
+            <div className="text-[9px] font-bold text-yellow-500 mb-0.5">LAYER 3: Response</div>
+            <div className="text-[10px] text-[var(--color-text-muted)]">Programmatic keyword match</div>
+          </div>
         </div>
-        <div className="p-2 rounded border border-green-500/20 bg-green-500/5">
-          <div className="text-[9px] font-bold text-green-500 mb-0.5">LAYER 2: Assertions</div>
-          <div className="text-[10px] text-[var(--color-text-muted)]">LLM-judge verifies behavior</div>
-        </div>
-        <div className="p-2 rounded border border-yellow-500/20 bg-yellow-500/5">
-          <div className="text-[9px] font-bold text-yellow-500 mb-0.5">LAYER 3: Response</div>
-          <div className="text-[10px] text-[var(--color-text-muted)]">Programmatic keyword match</div>
+
+        {/* Origin callout */}
+        <div className="mt-3 p-2.5 rounded-md bg-[var(--color-hover)] text-[10px] text-[var(--color-text-muted)] leading-relaxed">
+          <strong className="text-[var(--color-text-secondary)]">Origin:</strong> This case was auto-generated from Correction C011 (2026-04-25). The correction became a permanent behavioral test. If it fails again → P1 alert fires.
         </div>
       </div>
 
-      <h2 className="text-base font-semibold mb-3">The Flywheel</h2>
-      <div className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-xs font-mono text-center text-[var(--color-text-secondary)]">
-        Mistake → Correction → Golden Set Case → Eval Detects Recurrence → Alert → Fix → Stronger
+      {/* Section 3: The Flywheel */}
+      <div className="mb-7">
+        <h2 className="text-[15px] font-semibold mb-3">The Flywheel</h2>
+        <pre className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] text-xs font-mono text-center text-[var(--color-text-secondary)] leading-relaxed">
+{`Mistake → Correction → Golden Set Case → Eval Detects Recurrence → Alert → Fix → Stronger
+     ↑                                                                                      │
+     └──────────────────────────────── self-growing coverage ───────────────────────────────┘`}
+        </pre>
+      </div>
+
+      {/* Section 4: vs Enterprise Agent Eval */}
+      <div className="mb-7">
+        <h2 className="text-[15px] font-semibold mb-3">vs Enterprise Agent Eval (AgentCore)</h2>
+        <div className="border border-[var(--color-border)] rounded-lg overflow-hidden">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="bg-[var(--color-bg)] border-b border-[var(--color-border)]">
+                <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]"></th>
+                <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Enterprise</th>
+                <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">SwarmAI OS Eval</th>
+              </tr>
+            </thead>
+            <tbody className="text-[11px]">
+              <tr className="border-b border-[var(--color-border)]">
+                <td className="px-3 py-2 font-medium">Question</td>
+                <td className="px-3 py-2 text-[var(--color-text-muted)]">"Is output good?"</td>
+                <td className="px-3 py-2">"Is the OS still thinking well?"</td>
+              </tr>
+              <tr className="border-b border-[var(--color-border)]">
+                <td className="px-3 py-2 font-medium">What drifts</td>
+                <td className="px-3 py-2 text-[var(--color-text-muted)]">Model weights</td>
+                <td className="px-3 py-2">Model + Context + Memory + Rules + Time</td>
+              </tr>
+              <tr className="border-b border-[var(--color-border)]">
+                <td className="px-3 py-2 font-medium">Golden Set</td>
+                <td className="px-3 py-2 text-[var(--color-text-muted)]">Fixed, human-labeled</td>
+                <td className="px-3 py-2">Living, grows from corrections</td>
+              </tr>
+              <tr>
+                <td className="px-3 py-2 font-medium">Growth signal</td>
+                <td className="px-3 py-2 text-[var(--color-text-muted)]">N/A (stateless)</td>
+                <td className="px-3 py-2">Intelligence Velocity</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

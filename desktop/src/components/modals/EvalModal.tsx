@@ -39,7 +39,7 @@ export default function EvalModal({ isOpen, onClose }: EvalModalProps) {
       title={title}
       size="fullscreen"
     >
-      <div className="h-full flex flex-col -m-6 overflow-hidden">
+      <div className="h-full flex flex-col -m-6">
         <EvalDashboard />
       </div>
     </Modal>
