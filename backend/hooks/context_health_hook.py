@@ -1010,7 +1010,7 @@ class ContextHealthHook:
             return
 
         # Find completed runs with deliver stage, not yet processed
-        found_verification = False
+        found_run: tuple | None = None  # (run_dir, run_json, data)
         for run_dir in sorted(runs_dir.iterdir(), reverse=True)[:10]:
             run_json = run_dir / "run.json"
             if not run_json.exists():
@@ -1034,30 +1034,20 @@ class ContextHealthHook:
             if not has_deliver:
                 continue
 
-            # This run delivered successfully → mark verified
-            found_verification = True
-            data["maturity_updated"] = True
-            try:
-                # Atomic write: tmp + rename prevents corruption on crash
-                tmp = run_json.with_suffix(".tmp")
-                tmp.write_text(_json.dumps(data, indent=2), encoding="utf-8")
-                os.replace(tmp, run_json)
-            except OSError:
-                pass
-            logger.debug(
-                "context_health: F5 verified maturity from run %s for %s",
-                run_dir.name, project_path.name,
-            )
+            found_run = (run_dir, run_json, data)
             break  # One run per session is enough
 
-        if not found_verification:
+        if not found_run:
             return
 
-        # Apply verification to all DDD doc sections
-        # Use fcntl advisory lock (same lock file as _ch_entry_lifecycle) to prevent
-        # concurrent read-modify-write on IMPROVEMENT.md between F5 and Channel 8.
-        import fcntl
+        run_dir, run_json, data = found_run
 
+        # Apply verification to all DDD doc sections FIRST, before marking run.
+        # This ensures we don't permanently lose verification if doc writes fail.
+        # Use cross-platform file lock (same lock file as _ch_entry_lifecycle).
+        from utils.file_lock import flock_exclusive_nb, flock_unlock
+
+        any_doc_updated = False
         for doc_name in ("TECH.md", "IMPROVEMENT.md", "PRODUCT.md", "PROJECT.md"):
             doc_path = project_path / doc_name
             if not doc_path.exists():
@@ -1067,8 +1057,8 @@ class ContextHealthHook:
             lock_fd = None
             try:
                 lock_fd = open(lock_path, "w")
-                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except (OSError, IOError):
+                flock_exclusive_nb(lock_fd)
+            except (BlockingIOError, OSError, IOError):
                 if lock_fd:
                     lock_fd.close()
                 continue  # Another process holds the lock — skip this doc
@@ -1092,12 +1082,31 @@ class ContextHealthHook:
                     new_content = inject_maturity(content, states)
                     if new_content != content:
                         doc_path.write_text(new_content, encoding="utf-8")
+                        any_doc_updated = True
             finally:
                 try:
-                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    flock_unlock(lock_fd)
                 except (OSError, IOError):
                     pass
                 lock_fd.close()
+
+        # Only mark run as processed AFTER doc writes succeeded.
+        # If no docs were updated (all locked or no maturity states), still mark
+        # to avoid re-scanning — but only if at least one doc was attempted.
+        if any_doc_updated or not any(
+            (project_path / d).exists() for d in ("TECH.md", "IMPROVEMENT.md", "PRODUCT.md", "PROJECT.md")
+        ):
+            data["maturity_updated"] = True
+            try:
+                tmp = run_json.with_suffix(".tmp")
+                tmp.write_text(_json.dumps(data, indent=2), encoding="utf-8")
+                os.replace(tmp, run_json)
+            except OSError:
+                pass
+            logger.debug(
+                "context_health: F5 verified maturity from run %s for %s",
+                run_dir.name, project_path.name,
+            )
 
     def _track_memory_usage(self, root: Path) -> None:
         """Scan session transcripts for memory key references.

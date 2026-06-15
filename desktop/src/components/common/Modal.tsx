@@ -51,7 +51,10 @@ export default function Modal({
   return (
     <div
       ref={overlayRef}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+      className={clsx(
+        "fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm",
+        size === 'fullscreen' && 'pt-12'  // Clear macOS title bar / Tauri drag region
+      )}
       onMouseDown={(e) => {
         // Only close when clicking directly on the overlay background
         if (e.target === overlayRef.current) {

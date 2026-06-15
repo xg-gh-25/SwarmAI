@@ -111,7 +111,7 @@ def classify_failure(
         return FailureType.RATE_LIMIT, metadata
 
     # ── 4. Timeout ────────────────────────────────────────────
-    if "timeout" in error_lower or "streaming timeout" in error_lower:
+    if "timeout" in error_lower or "timed out" in error_lower:
         return FailureType.TIMEOUT, metadata
 
     # ── 5. API / transient errors ─────────────────────────────

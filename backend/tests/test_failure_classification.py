@@ -82,6 +82,15 @@ class TestClassifyFailure:
         )
         assert ft == FailureType.TIMEOUT
 
+    def test_timeout_operation_timed_out(self):
+        """Regression: 'The operation timed out' from Bedrock must classify as TIMEOUT."""
+        ft, _ = classify_failure("The operation timed out")
+        assert ft == FailureType.TIMEOUT
+
+    def test_timeout_connection_timed_out(self):
+        ft, _ = classify_failure("Connection timed out after 30s")
+        assert ft == FailureType.TIMEOUT
+
     def test_api_error_service_unavailable(self):
         ft, _ = classify_failure("service unavailable")
         assert ft == FailureType.API_ERROR
