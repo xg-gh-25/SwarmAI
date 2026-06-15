@@ -103,13 +103,19 @@ function TopBar() {
 
 // Left Sidebar - narrow navigation column with icon-only navigation
 function LeftSidebar() {
-  const { activeModal, openModal, settingsTab, setSettingsTab, workspaceExplorerCollapsed, setWorkspaceExplorerCollapsed } = useLayout();
+  const { activeModal, openModal, closeModal, settingsTab, setSettingsTab, workspaceExplorerCollapsed, setWorkspaceExplorerCollapsed } = useLayout();
 
   // Skills and MCP now open Settings with the corresponding tab pre-selected
+  // Toggle: if already on that tab, close the modal
   const handleNavClick = (target: 'skills' | 'mcp' | 'engine') => {
     const tabMap = { skills: 'skills', mcp: 'mcp-servers', engine: 'engine' };
-    setSettingsTab(tabMap[target]);
-    openModal('settings');
+    const targetTab = tabMap[target];
+    if (activeModal === 'settings' && settingsTab === targetTab) {
+      closeModal();
+    } else {
+      setSettingsTab(targetTab);
+      openModal('settings');
+    }
   };
 
   // Open Code Intelligence graph overlay via custom event (BottomBar listens)
@@ -202,7 +208,14 @@ function LeftSidebar() {
           icon="gear"
           label="Settings"
           isActive={activeModal === 'settings' && !settingsTab}
-          onClick={() => { setSettingsTab(undefined); openModal('settings'); }}
+          onClick={() => {
+            if (activeModal === 'settings') {
+              closeModal();
+            } else {
+              setSettingsTab(undefined);
+              openModal('settings');
+            }
+          }}
           data-testid="nav-settings"
         />
         <a
