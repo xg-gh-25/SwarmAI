@@ -1,0 +1,277 @@
+"""
+SwarmAI OS Eval Service — In-memory cache for golden set + eval history.
+
+Parsed on startup from:
+  - Projects/SwarmAI/golden_set.yaml (case definitions)
+  - Projects/SwarmAI/EvalHistory/*.json (run results)
+
+Serves the Eval Dashboard API with zero-latency reads.
+Cache invalidated on: eval run completion, manual reload.
+"""
+
+import json
+import logging
+import threading
+from pathlib import Path
+from typing import Optional
+
+try:
+    import yaml
+except ImportError:
+    yaml = None  # type: ignore
+
+logger = logging.getLogger(__name__)
+
+
+class EvalService:
+    """In-memory cache of golden set cases and eval run history."""
+
+    _UNSET = object()
+
+    def __init__(self, workspace_root=_UNSET):
+        self._golden_set: dict = {"version": 2, "cases": []}
+        self._cases: list[dict] = []
+        self._runs: list[dict] = []
+
+        if workspace_root is self._UNSET:
+            self._workspace_root = self._find_workspace()
+        elif workspace_root is None:
+            # Empty fallback — no workspace, no loading
+            self._workspace_root = Path.home()
+            self._project_dir = self._workspace_root / "nonexistent"
+            self._golden_set_path = self._project_dir / "golden_set.yaml"
+            self._history_dir = self._project_dir / "EvalHistory"
+            return
+        else:
+            self._workspace_root = workspace_root
+
+        self._project_dir = self._workspace_root / "Projects" / "SwarmAI"
+        self._golden_set_path = self._project_dir / "golden_set.yaml"
+        self._history_dir = self._project_dir / "EvalHistory"
+        self._load()
+
+    @staticmethod
+    def _find_workspace() -> Path:
+        """Find SwarmWS root."""
+        candidates = [
+            Path.home() / ".swarm-ai" / "SwarmWS",
+            Path.cwd(),
+        ]
+        for c in candidates:
+            if (c / "Projects" / "SwarmAI").is_dir():
+                return c
+        raise FileNotFoundError("Cannot locate SwarmWS")
+
+    def _load(self) -> None:
+        """Load golden set + history into memory."""
+        self._load_golden_set()
+        self._load_history()
+
+    def _load_golden_set(self) -> None:
+        """Parse golden_set.yaml."""
+        if not self._golden_set_path.exists():
+            logger.warning("eval_service: golden_set.yaml not found at %s", self._golden_set_path)
+            self._golden_set = {"version": 2, "cases": []}
+            self._cases = []
+            return
+
+        if yaml is None:
+            logger.warning("eval_service: PyYAML not available, golden set not loaded")
+            self._golden_set = {"version": 2, "cases": []}
+            self._cases = []
+            return
+
+        try:
+            with open(self._golden_set_path, encoding="utf-8") as f:
+                self._golden_set = yaml.safe_load(f) or {}
+            self._cases = self._golden_set.get("cases", [])
+            logger.info("eval_service: loaded %d cases from golden_set.yaml", len(self._cases))
+        except Exception as e:
+            logger.error("eval_service: failed to parse golden_set.yaml: %s", e)
+            self._golden_set = {"version": 2, "cases": []}
+            self._cases = []
+
+    def _load_history(self) -> None:
+        """Parse all JSON files in EvalHistory/."""
+        self._runs = []
+        if not self._history_dir.exists():
+            return
+
+        for json_file in sorted(self._history_dir.glob("*.json"), reverse=True):
+            try:
+                data = json.loads(json_file.read_text())
+                self._runs.append(data)
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning("eval_service: skipping %s: %s", json_file.name, e)
+
+        logger.info("eval_service: loaded %d eval runs", len(self._runs))
+
+    def reload(self) -> None:
+        """Reload all data from disk (after new eval run)."""
+        self._load()
+
+    @property
+    def case_count(self) -> int:
+        """Number of golden set cases loaded."""
+        return len(self._cases)
+
+    @property
+    def run_count(self) -> int:
+        """Number of eval runs loaded."""
+        return len(self._runs)
+
+    # ─── Public API ───────────────────────────────────────────────────────
+
+    def get_health(self) -> dict:
+        """Current OS Health Score + per-dimension scores from latest run."""
+        if not self._runs:
+            return {
+                "overall_score": None,
+                "dimensions": {},
+                "last_run": None,
+                "total_cases": len(self._cases),
+                "trend": None,
+            }
+
+        latest = self._runs[0]  # sorted desc
+        trend = self._compute_trend()
+
+        return {
+            "overall_score": latest.get("overall_score"),
+            "dimensions": latest.get("dimensions", {}),
+            "last_run": {
+                "run_id": latest.get("run_id"),
+                "triggered_by": latest.get("triggered_by"),
+                "triggered_at": latest.get("triggered_at"),
+                "cases_passed": latest.get("cases_passed", 0),
+                "cases_failed": latest.get("cases_failed", 0),
+                "cases_skipped": latest.get("cases_skipped", 0),
+            },
+            "total_cases": len(self._cases),
+            "trend": trend,
+        }
+
+    def get_history(self, limit: int = 20) -> list[dict]:
+        """List eval runs sorted by date (newest first)."""
+        return [
+            {
+                "run_id": r.get("run_id"),
+                "triggered_by": r.get("triggered_by"),
+                "triggered_at": r.get("triggered_at"),
+                "overall_score": r.get("overall_score"),
+                "total_cases": r.get("total_cases"),
+                "cases_passed": r.get("cases_passed"),
+                "cases_failed": r.get("cases_failed"),
+                "cases_skipped": r.get("cases_skipped"),
+                "duration_seconds": r.get("duration_seconds"),
+                "dimensions": r.get("dimensions", {}),
+            }
+            for r in self._runs[:limit]
+        ]
+
+    def get_golden_set(self, category: Optional[str] = None) -> dict:
+        """Return golden set metadata + cases (optionally filtered)."""
+        cases = self._cases
+        if category:
+            cases = [c for c in cases if c.get("category") == category]
+
+        return {
+            "version": self._golden_set.get("version", 2),
+            "total_cases": len(self._cases),
+            "filtered_count": len(cases),
+            "categories": self._golden_set.get("categories", []),
+            "dimensions": self._golden_set.get("dimensions", []),
+            "cases": [
+                {
+                    "id": c.get("id"),
+                    "category": c.get("category"),
+                    "dimension": c.get("dimension"),
+                    "level": c.get("level"),
+                    "title": c.get("title"),
+                    "source": c.get("source"),
+                    "tier": c.get("tier", "active"),
+                    "affected_by": c.get("affected_by", []),
+                    "evaluators": c.get("evaluators", []),
+                    "last_result": self._get_case_last_result(c.get("id")),
+                }
+                for c in cases
+            ],
+        }
+
+    def get_case_detail(self, case_id: str) -> Optional[dict]:
+        """Return full case detail including scenario + history."""
+        case = next((c for c in self._cases if c.get("id") == case_id), None)
+        if not case:
+            return None
+
+        return {
+            **case,
+            "history": self._get_case_history(case_id),
+        }
+
+    # ─── Private Helpers ──────────────────────────────────────────────────
+
+    def _get_case_last_result(self, case_id: str) -> Optional[dict]:
+        """Find this case's result in the most recent run."""
+        if not self._runs:
+            return None
+        for run in self._runs:
+            for case_result in run.get("cases", []):
+                if case_result.get("id") == case_id:
+                    return {
+                        "status": case_result.get("status"),
+                        "run_id": run.get("run_id"),
+                        "triggered_at": run.get("triggered_at"),
+                    }
+        return None
+
+    def _get_case_history(self, case_id: str, limit: int = 10) -> list[dict]:
+        """Get this case's results across recent runs."""
+        history = []
+        for run in self._runs[:limit]:
+            for case_result in run.get("cases", []):
+                if case_result.get("id") == case_id:
+                    history.append({
+                        "run_id": run.get("run_id"),
+                        "triggered_at": run.get("triggered_at"),
+                        "status": case_result.get("status"),
+                        "notes": case_result.get("notes", ""),
+                    })
+                    break
+        return history
+
+    def _compute_trend(self) -> Optional[dict]:
+        """Compare latest score to previous run."""
+        if len(self._runs) < 2:
+            return None
+
+        latest_score = self._runs[0].get("overall_score") or 0
+        prev_score = self._runs[1].get("overall_score") or 0
+        delta = round(latest_score - prev_score, 1)
+
+        return {
+            "delta": delta,
+            "direction": "up" if delta > 0 else ("down" if delta < 0 else "stable"),
+        }
+
+
+# Module-level singleton (initialized lazily, thread-safe)
+_eval_service: Optional[EvalService] = None
+_eval_service_lock = threading.Lock()
+
+
+def get_eval_service() -> EvalService:
+    """Get or create the EvalService singleton (thread-safe)."""
+    global _eval_service
+    if _eval_service is None:
+        with _eval_service_lock:
+            if _eval_service is None:  # Double-check after lock
+                try:
+                    _eval_service = EvalService()
+                except FileNotFoundError:
+                    logger.warning("eval_service: workspace not found, creating empty service")
+                    _eval_service = EvalService(workspace_root=None)
+                except Exception as e:
+                    logger.error("eval_service: init failed: %s", e)
+                    _eval_service = EvalService(workspace_root=None)
+    return _eval_service

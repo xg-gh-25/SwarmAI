@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState, useCallback, useMemo, R
 
 // Modal types that can be opened from the left sidebar
 // Skills and MCP modals removed — now integrated as Settings tabs (2026-03-26)
-export type ModalType = 'settings' | 'file-editor' | 'workspace-settings';
+export type ModalType = 'settings' | 'file-editor' | 'workspace-settings' | 'eval';
 
 // Workspace scope - 'all' for all workspaces or a specific workspace ID
 export type WorkspaceScope = 'all' | string;

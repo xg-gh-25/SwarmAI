@@ -1227,6 +1227,10 @@ app.include_router(memory_router, tags=["memory"])
 from routers.code_intel import router as code_intel_router
 app.include_router(code_intel_router, prefix="/api/code-intel", tags=["code-intel"])
 
+# OS Eval API
+from routers.eval import router as eval_router
+app.include_router(eval_router, prefix="/api/eval", tags=["eval"])
+
 # Register development-only router when DEBUG=true
 if settings.debug:
     from routers.dev import router as dev_router

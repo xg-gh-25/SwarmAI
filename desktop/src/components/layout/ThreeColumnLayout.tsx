@@ -11,6 +11,7 @@ import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
 import { openExternal } from '../../utils/openExternal';
 import SettingsModal from '../modals/SettingsModal';
 import WorkspaceSettingsModal from '../modals/WorkspaceSettingsModal';
+import EvalModal from '../modals/EvalModal';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
 import type { GitStatus } from '../../types';
 import api from '../../services/api';
@@ -187,6 +188,19 @@ function LeftSidebar() {
           isActive={activeModal === 'settings' && settingsTab === 'engine'}
           onClick={() => handleNavClick('engine')}
           data-testid="nav-engine"
+        />
+        <NavIconButton
+          icon="heartbeat"
+          label="OS Eval"
+          isActive={activeModal === 'eval'}
+          onClick={() => {
+            if (activeModal === 'eval') {
+              closeModal();
+            } else {
+              openModal('eval');
+            }
+          }}
+          data-testid="nav-eval"
         />
         <NavIconButton
           icon="book"
@@ -753,6 +767,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
         onClose={closeModal}
         workspaceId={workspaceSettingsId}
       />
+      <EvalModal isOpen={activeModal === 'eval'} onClose={closeModal} />
     </div>
   );
 }
