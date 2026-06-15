@@ -693,14 +693,38 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
             <div data-testid="chat-content">Chat Content</div>
           );
 
+          // Model the toggle state machine:
+          // - Settings: if modal open → close; else open (tab=undefined)
+          // - Skills/MCP: if modal open AND same tab → close; else open (tab=X)
+          let modalOpen = false;
+          let activeTab: string | undefined = undefined;
+          const tabMap: Record<NavModalType, string | undefined> = {
+            skills: 'skills', mcp: 'mcp-servers', settings: undefined
+          };
+
           for (const modalType of clickSequence) {
             const navButton = screen.getByTestId(navToTestId[modalType]);
             act(() => {
               navButton.click();
             });
 
-            // Property: After each click, the clicked button SHALL be active
-            expect(navButton.getAttribute('aria-pressed')).toBe('true');
+            // Compute expected state after click
+            if (modalType === 'settings') {
+              if (modalOpen) { modalOpen = false; activeTab = undefined; }
+              else { modalOpen = true; activeTab = undefined; }
+            } else {
+              const targetTab = tabMap[modalType];
+              if (modalOpen && activeTab === targetTab) { modalOpen = false; activeTab = undefined; }
+              else { modalOpen = true; activeTab = targetTab; }
+            }
+
+            // Property: button active state matches modeled state
+            const expectedActive = modalOpen && (
+              (modalType === 'settings' && activeTab === undefined) ||
+              (modalType === 'skills' && activeTab === 'skills') ||
+              (modalType === 'mcp' && activeTab === 'mcp-servers')
+            );
+            expect(navButton.getAttribute('aria-pressed')).toBe(String(expectedActive));
 
             // Property: Layout SHALL be preserved after each click
             const structure = verifyLayoutStructure();
@@ -716,11 +740,16 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
     });
 
     it('should switch active modal when clicking a different navigation icon', () => {
-      const twoDistinctModalsArb = fc.tuple(navModalTypeArb, navModalTypeArb)
+      // With toggle behavior: Settings closes modal if it's already open (any tab).
+      // Skills/MCP: close if same tab already active, else switch to their tab.
+      // So skills→mcp = switch (active stays). skills→settings = close (since modal is open).
+      // Only test the skills↔mcp transition which is a true switch.
+      const skillsMcpArb = fc.constantFrom<NavModalType>('skills', 'mcp');
+      const twoDistinctArb = fc.tuple(skillsMcpArb, skillsMcpArb)
         .filter(([first, second]) => first !== second);
 
       fc.assert(
-        fc.property(twoDistinctModalsArb, ([firstModal, secondModal]) => {
+        fc.property(twoDistinctArb, ([firstModal, secondModal]) => {
           mockStorage.clear();
 
           const { unmount } = renderWithCleanup(
@@ -739,7 +768,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
             secondButton.click();
           });
 
-          // Property: Second button SHALL now be active
+          // Property: Second button SHALL now be active (tab switch within settings modal)
           expect(secondButton.getAttribute('aria-pressed')).toBe('true');
 
           // Property: First button SHALL no longer be active
@@ -887,6 +916,12 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
             <div data-testid="chat-content">Chat Content</div>
           );
 
+          // Track state to predict toggle behavior
+          // Settings button: closes if modal already open (any tab)
+          // Skills/MCP: closes if same tab active, else switches tab
+          let modalOpen = false;
+          let activeTab: string | undefined = undefined;
+
           for (let i = 0; i < navSequence.length; i++) {
             const currentItem = navSequence[i];
             const currentButton = screen.getByTestId(navToTestId[currentItem]);
@@ -895,8 +930,39 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
               currentButton.click();
             });
 
-            // Property: Current button SHALL have active indicator
-            expect(currentButton.getAttribute('aria-pressed')).toBe('true');
+            // Predict toggle behavior based on implementation:
+            const tabMap: Record<NavItem, string | undefined> = {
+              skills: 'skills', mcp: 'mcp-servers', settings: undefined
+            };
+
+            if (currentItem === 'settings') {
+              // Settings: if modal open → close; else open with no tab
+              if (modalOpen) {
+                modalOpen = false;
+                activeTab = undefined;
+              } else {
+                modalOpen = true;
+                activeTab = undefined;
+              }
+            } else {
+              // Skills/MCP: if modal open AND same tab → close; else open with tab
+              const targetTab = tabMap[currentItem];
+              if (modalOpen && activeTab === targetTab) {
+                modalOpen = false;
+                activeTab = undefined;
+              } else {
+                modalOpen = true;
+                activeTab = targetTab;
+              }
+            }
+
+            // Property: Button active state matches predicted state
+            const expectedActive = modalOpen && (
+              (currentItem === 'settings' && !activeTab) ||
+              (currentItem === 'skills' && activeTab === 'skills') ||
+              (currentItem === 'mcp' && activeTab === 'mcp-servers')
+            );
+            expect(currentButton.getAttribute('aria-pressed')).toBe(String(expectedActive));
 
             // Property: All other buttons SHALL NOT have active indicator
             for (const otherItem of navItems) {
@@ -1473,6 +1539,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
      * **Validates: Requirements 2.3, 4.1, 5.1**
      *
      * Navigation click behavior SHALL work through any sequence of clicks.
+     * Toggle behavior: clicking the same item twice closes it (aria-pressed=false).
      */
     it('should correctly handle any sequence of navigation clicks', () => {
       const clickSequenceArb = fc.array(navItemArb, { minLength: 1, maxLength: 10 });
@@ -1485,14 +1552,23 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
             <div data-testid="chat-content">Chat Content</div>
           );
 
+          let lastClickedId: string | null = null;
+
           for (const item of clickSequence) {
             const button = screen.getByTestId(item.testId);
             act(() => {
               button.click();
             });
 
-            // Property: After each click, the clicked item SHALL be active
-            expect(button.getAttribute('aria-pressed')).toBe('true');
+            if (item.testId === lastClickedId) {
+              // Toggle: clicking same item again closes it
+              expect(button.getAttribute('aria-pressed')).toBe('false');
+              lastClickedId = null;
+            } else {
+              // New item: SHALL be active
+              expect(button.getAttribute('aria-pressed')).toBe('true');
+              lastClickedId = item.testId;
+            }
 
             // Property: All other items SHALL be inactive
             for (const otherItem of allNavItems) {
@@ -1841,6 +1917,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
      * **Validates: Requirements 8.1, 8.4**
      *
      * Active state SHALL correctly track through any sequence of modal switches.
+     * Toggle behavior: clicking the same modal item twice closes it.
      */
     it('should correctly track active state through any sequence of modal switches', () => {
       const modalSequenceArb = fc.array(navItemArb, { minLength: 2, maxLength: 10 });
@@ -1853,6 +1930,8 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
             <div data-testid="chat-content">Chat Content</div>
           );
 
+          let lastClickedId: string | null = null;
+
           for (const currentItem of modalSequence) {
             const currentButton = screen.getByTestId(currentItem.testId);
 
@@ -1860,8 +1939,15 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
               currentButton.click();
             });
 
-            // Property: Current item SHALL have active state
-            expect(currentButton.getAttribute('aria-pressed')).toBe('true');
+            if (currentItem.testId === lastClickedId) {
+              // Toggle: same item clicked again → modal closes, no active state
+              expect(currentButton.getAttribute('aria-pressed')).toBe('false');
+              lastClickedId = null;
+            } else {
+              // Property: Current item SHALL have active state
+              expect(currentButton.getAttribute('aria-pressed')).toBe('true');
+              lastClickedId = currentItem.testId;
+            }
 
             // Property: All other items SHALL NOT have active state
             for (const otherItem of allNavItems) {
