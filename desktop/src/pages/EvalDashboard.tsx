@@ -12,6 +12,19 @@ import api from '../services/api';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+interface IntelligenceVelocity {
+  score: number;
+  components: {
+    pass_rate: number;
+    stability_ratio: number;
+    golden_set_size: number;
+    golden_set_size_score: number;
+    growth_score: number;
+    draft_count: number;
+    stable_count: number;
+  };
+}
+
 interface EvalHealth {
   overall_score: number | null;
   dimensions: Record<string, number>;
@@ -25,6 +38,7 @@ interface EvalHealth {
   } | null;
   total_cases: number;
   trend: { delta: number; direction: string } | null;
+  intelligence_velocity?: IntelligenceVelocity;
 }
 
 interface EvalRun {
@@ -259,12 +273,18 @@ function OverviewTab() {
       )}
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-4 gap-3 mb-6">
+      <div className="grid grid-cols-5 gap-3 mb-6">
         <MetricCard
           label="OS Health Score"
           value={health.overall_score != null ? `${health.overall_score}%` : '—'}
           color={health.overall_score != null && health.overall_score >= 80 ? 'green' : 'yellow'}
           sub={health.trend ? `${health.trend.delta > 0 ? '↑' : '↓'} ${Math.abs(health.trend.delta)}% vs prev` : 'No trend yet'}
+        />
+        <MetricCard
+          label="Intelligence Velocity"
+          value={health.intelligence_velocity ? `${health.intelligence_velocity.score}` : '—'}
+          color={health.intelligence_velocity && health.intelligence_velocity.score >= 50 ? 'green' : 'yellow'}
+          sub={health.intelligence_velocity ? `${health.intelligence_velocity.components.stable_count} stable, ${health.intelligence_velocity.components.draft_count} draft` : ''}
         />
         <MetricCard
           label="Cases Passed"
@@ -273,7 +293,7 @@ function OverviewTab() {
           sub={health.last_run ? `${health.last_run.cases_skipped} skipped (LLM-judge)` : ''}
         />
         <MetricCard
-          label="Dimensions Scored"
+          label="Dimensions"
           value={`${dimEntries.length}`}
           color="default"
           sub={dimEntries.filter(([, v]) => v >= 80).length + ' green, ' + dimEntries.filter(([, v]) => v < 80).length + ' attention'}

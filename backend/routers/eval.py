@@ -61,9 +61,11 @@ class TriggerRunRequest(BaseModel):
 
 @router.get("/health")
 async def get_eval_health():
-    """Current OS Health Score + per-dimension breakdown."""
+    """Current OS Health Score + per-dimension breakdown + Intelligence Velocity."""
     svc = get_eval_service()
-    return svc.get_health()
+    health = svc.get_health()
+    health["intelligence_velocity"] = svc.compute_intelligence_velocity(detail=True)
+    return health
 
 
 @router.get("/history")
@@ -176,6 +178,14 @@ async def run_specific_cases(req: TriggerRunRequest):
         return {"status": "started", "run_id": run_id}
     except (RuntimeError, ValueError) as e:
         raise HTTPException(status_code=409, detail=str(e))
+
+
+@router.post("/promote-stable")
+async def promote_stable_cases():
+    """Promote cases with 10+ consecutive passes to stable tier."""
+    svc = get_eval_service()
+    promoted = svc.promote_stable_cases()
+    return {"status": "ok", "promoted": promoted, "count": len(promoted)}
 
 
 @router.post("/reload")

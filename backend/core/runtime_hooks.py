@@ -247,6 +247,15 @@ def create_user_correction_detector(
             except Exception:
                 pass  # Non-blocking — tracker failure must never break the hook
 
+            # P4: Auto-seed golden set case from correction (best-effort)
+            try:
+                correction_count = ctx.get("_corrections_count", 1)
+                correction_id = f"C{correction_count:03d}"
+                from core.eval_hooks import seed_from_correction
+                seed_from_correction(correction_id, prompt[:200], "UNCLASSIFIED")
+            except Exception:
+                pass  # Non-blocking
+
         return {}
 
     return _hook
@@ -890,6 +899,17 @@ def register_runtime_hooks(
         create_memory_edit_guard(),
         "memory_edit_guard",
     )
+
+    # Phase 4: PostToolUse change-triggered eval (STEERING/AGENT edits → scoped eval)
+    try:
+        from core.eval_hooks import create_change_triggered_eval
+        registry.register(
+            "PostToolUse",
+            create_change_triggered_eval(session_context),
+            "change_triggered_eval",
+        )
+    except Exception:
+        pass  # Non-blocking — eval hooks are optional
 
     # Phase 2: SubagentStop transcript capture
     registry.register(

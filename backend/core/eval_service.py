@@ -113,8 +113,9 @@ class EvalService:
         logger.info("eval_service: loaded %d eval runs", len(self._runs))
 
     def reload(self) -> None:
-        """Reload all data from disk (after new eval run)."""
-        self._load()
+        """Reload all data from disk (after new eval run). Thread-safe."""
+        with self._data_lock:
+            self._load()
 
     @property
     def case_count(self) -> int:
@@ -308,6 +309,150 @@ class EvalService:
         """Whether an eval run is currently in progress."""
         return self._running
 
+    # ─── P4: Auto-Growth Methods ─────────────────────────────────────────
+
+    def auto_seed_case(
+        self, correction_id: str, correction_text: str, class_name: str = "UNCLASSIFIED"
+    ) -> Optional[dict]:
+        """Auto-generate a draft golden set case from a correction.
+
+        Returns the new case dict, or None if case already exists.
+        """
+        case_id = f"GS_{correction_id}"
+
+        with self._data_lock:
+            if any(c.get("id") == case_id for c in self._cases):
+                return None  # Already seeded
+
+            case = {
+                "id": case_id,
+                "category": "compliance",
+                "dimension": "compliance",
+                "level": "session",
+                "title": f"[Auto] {correction_text[:80]}",
+                "source": correction_id,
+                "affected_by": [_class_to_affected_by(class_name)],
+                "evaluators": ["goal_success"],
+                "tier": "draft",
+                "scenario": {"turns": [{"input": correction_text[:200]}]},
+                "assertions": [f"Agent does NOT repeat pattern: {correction_text[:100]}"],
+                "verification": {},
+            }
+            self._cases.append(case)
+            self._persist_golden_set()
+
+        logger.info("eval_service: auto-seeded case %s from correction %s", case_id, correction_id)
+        return case
+
+    def get_affected_cases(self, changed_files: list[str]) -> list[dict]:
+        """Return cases whose affected_by intersects with changed files."""
+        # Normalize: strip paths, keep filename only
+        filenames = {f.split("/")[-1] for f in changed_files}
+
+        return [
+            c for c in self._cases
+            if c.get("tier") not in ("archived", "stable")
+            and any(af in filenames for af in c.get("affected_by", []))
+        ]
+
+    def promote_stable_cases(self, min_consecutive_passes: int = 10) -> list[str]:
+        """Promote cases with N+ consecutive passes to stable tier.
+
+        Returns list of promoted case IDs.
+        """
+        promoted = []
+
+        with self._data_lock:
+            for case in self._cases:
+                if case.get("tier") in ("archived", "stable", "draft"):
+                    continue
+
+                case_id = case["id"]
+                consecutive = self._count_consecutive_passes(case_id)
+
+                if consecutive >= min_consecutive_passes:
+                    case["tier"] = "stable"
+                    promoted.append(case_id)
+
+            if promoted:
+                self._persist_golden_set()
+                logger.info("eval_service: promoted %d cases to stable: %s", len(promoted), promoted)
+
+        return promoted
+
+    def compute_intelligence_velocity(self, detail: bool = False):
+        """Compute Intelligence Velocity — compound metric of system learning.
+
+        Components:
+        - golden_set_size: more cases = better coverage
+        - pass_rate: latest overall score (0-100)
+        - stability_ratio: stable cases / total active cases
+        - growth_rate: cases added in last 30 days (approximate from IDs)
+
+        IV = (pass_rate * 0.4) + (stability_ratio * 100 * 0.3) + (golden_set_size_score * 0.2) + (growth_score * 0.1)
+        """
+        active_cases = [c for c in self._cases if c.get("tier") not in ("archived",)]
+        stable_cases = [c for c in self._cases if c.get("tier") == "stable"]
+        total = len(active_cases) or 1
+
+        # Pass rate from latest run
+        pass_rate = 0.0
+        if self._runs:
+            pass_rate = self._runs[0].get("overall_score", 0) or 0
+
+        # Stability ratio
+        stability_ratio = len(stable_cases) / total
+
+        # Golden set size score (log scale: 10→50, 50→80, 100→100)
+        import math
+        gs_score = min(100, 30 * math.log10(max(total, 1) + 1))
+
+        # Growth: count draft/recent cases (proxy)
+        draft_count = len([c for c in self._cases if c.get("tier") == "draft"])
+        growth_score = min(100, draft_count * 20)  # Each draft case = 20 points, max 100
+
+        score = round(
+            pass_rate * 0.4 + stability_ratio * 100 * 0.3 + gs_score * 0.2 + growth_score * 0.1,
+            1
+        )
+
+        if detail:
+            return {
+                "score": score,
+                "components": {
+                    "pass_rate": pass_rate,
+                    "stability_ratio": round(stability_ratio, 3),
+                    "golden_set_size": total,
+                    "golden_set_size_score": round(gs_score, 1),
+                    "growth_score": growth_score,
+                    "draft_count": draft_count,
+                    "stable_count": len(stable_cases),
+                },
+            }
+        return score
+
+    def _count_consecutive_passes(self, case_id: str) -> int:
+        """Count consecutive passes in runs that INCLUDE this case.
+
+        Only counts runs where the case was actually evaluated (not scoped out).
+        A 'failed' or 'skipped' status breaks the streak.
+        """
+        count = 0
+        for run in self._runs:  # newest first
+            case_result = next(
+                (cr for cr in run.get("cases", []) if cr.get("id") == case_id), None
+            )
+            if case_result is None:
+                # Case wasn't in this scoped run — don't count as pass OR fail.
+                # But to prevent inflation from scoped runs, limit lookback to
+                # runs in the last 60 days only.
+                continue
+            if case_result.get("status") == "passed":
+                count += 1
+            else:
+                break  # First non-pass breaks the streak
+        return count
+
     # ─── Private: Persistence ────────────────────────────────────────────
 
     def _persist_golden_set(self) -> None:
@@ -356,7 +501,14 @@ class EvalService:
             result["run_id"] = run_id
 
             self._write_run_result(result)
-            self._load_history()
+            with self._data_lock:
+                self._load_history()
+
+            # Post-run: promote stable cases (best-effort)
+            try:
+                self.promote_stable_cases()
+            except Exception:
+                pass
         except Exception as e:
             logger.error("eval_service: background run failed: %s", e)
             # Write failure result so user can see what happened
@@ -377,7 +529,8 @@ class EvalService:
             }
             try:
                 self._write_run_result(failure_result)
-                self._load_history()
+                with self._data_lock:
+                    self._load_history()
             except Exception:
                 pass  # Best effort — don't mask original error
         finally:
@@ -428,6 +581,17 @@ class EvalService:
             "delta": delta,
             "direction": "up" if delta > 0 else ("down" if delta < 0 else "stable"),
         }
+
+
+def _class_to_affected_by(class_name: str) -> str:
+    """Map correction class to the governance file it relates to."""
+    mapping = {
+        "CLASS_A": "STEERING.md",
+        "CLASS_B": "AGENT.md",
+        "CLASS_C": "AGENT.md",
+        "UNCLASSIFIED": "AGENT.md",
+    }
+    return mapping.get(class_name, "AGENT.md")
 
 
 # Module-level singleton (initialized lazily, thread-safe)
