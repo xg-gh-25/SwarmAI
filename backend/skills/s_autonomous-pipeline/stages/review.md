@@ -277,7 +277,7 @@ refactors.
 
 ## Pipeline-Specific Checks
 
-The REVIEW stage extends the base code review with 16 pipeline-specific checks,
+The REVIEW stage extends the base code review with 17 pipeline-specific checks,
 organized into tiers:
 
 **Tier 1 — Always (run for every changeset):**
@@ -288,6 +288,7 @@ organized into tiers:
 - 6: Runtime Pattern Checklist (RP1-RP39) — includes RP35 (pool contention), RP36 (fix-enables-regression), RP37 (process tree lifetime)
 - 14: Anti-Rationalization Gate
 - 15: Exit Evidence Checklist
+- 17: Blocking Constraints (TECH.md per-project rules — passes silently if section absent)
 
 **Tier 2 — Conditional (triggered by changeset characteristics):**
 - 4: Replace/Move Parity (only when code moved/replaced)
@@ -801,6 +802,7 @@ Confirm each before publishing:
 - [ ] Inverse operations checked (or "no state transitions, N/A" stated)
 - [ ] Cross-file consistency checked (or "no related files found, N/A" stated)
 - [ ] Neighborhood review done (or "single-function change, N/A" stated)
+- [ ] Blocking constraints checked (or "project has no ## Blocking Constraints section, N/A" stated)
 
 ---
 
@@ -841,6 +843,33 @@ in daemon context (the bug we were trying to fix). TECH.md explicitly listed 4
 platforms — the information was available, but BUILD didn't cross-reference it.
 
 **Skip when:** changeset is purely logic/algorithm with no platform-dependent behavior.
+
+---
+
+### 17. Blocking Constraints (TECH.md per-project rules)
+
+**Check whether the changeset violates any project-declared blocking constraints.**
+
+**Process:**
+1. Read the project's TECH.md
+2. Find `## Blocking Constraints` section (if it exists)
+3. For each rule with a `Verify:` field — run the mechanical check against the changeset
+4. Violation = **blocking finding** (identical severity to RP pattern violation)
+
+**Format expected in TECH.md:**
+```markdown
+## Blocking Constraints
+- SEC-01: No hardcoded credentials | Verify: grep -rn 'AKIA[A-Z0-9]{16}' in changed files
+- SEC-02: All API routes require @require_auth | Verify: AST check on new route decorators
+```
+
+**Behavior:**
+- Section exists + rules defined → run each `Verify:` check
+- Section exists but empty → pass (no constraints declared)
+- Section missing → pass silently (project hasn't declared constraints yet)
+- Violation found → blocking finding with constraint ID cited
+
+**Why this exists:** Different projects have different compliance/security/style requirements. Rather than adding an EXTENSIONS.md (5th DDD doc), constraints live as a section in TECH.md — leveraging existing DDD cultivation, staleness detection, and stage routing.
 
 ---
 

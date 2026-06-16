@@ -1047,6 +1047,17 @@ The pipeline MUST end with a visible summary block. No silent completion.
     omit preambles for bugfix/trivial. The pipeline's value is in the CODE
     committed, not the TEXT displayed.
 
+21. **Planning unit = pipeline run.** When estimating work, presenting
+    execution plans, or decomposing features — the atomic unit is a pipeline
+    run, not a time-based step or a task list with hours. Each pipeline run
+    is one independently committable + verifiable deliverable. Estimation =
+    number of pipeline runs. Progress = run pass/fail. Never present plans
+    as "Step 1 (2h): do X, Step 2 (1h): do Y" — that is the traditional
+    human-team model. Present as "Run 1: {requirement}, Run 2: {requirement}"
+    with profile selection. This applies to: user asks "what's the plan",
+    EVALUATE stage scope breakdown, multi-feature decomposition, and any
+    conversation about execution strategy.
+
 ---
 
 ## Artifact Operations Reference

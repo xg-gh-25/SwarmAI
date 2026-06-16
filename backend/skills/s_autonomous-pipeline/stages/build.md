@@ -80,6 +80,35 @@ If no `build_injection_recommendations` exist, skip this section.
 
 ---
 
+## Gate 1: Pre-Check (Skeptic + SSA) — PLACEHOLDER
+
+> **Status:** Not yet active. Skip this section entirely.
+> When activated (Pipeline Run 2), verdict will be logged to run.json, initially non-blocking.
+
+**When active (profile = full or goal):** Before BUILD begins, spawn a fresh-context
+sub-agent with the Skeptic+SSA prompt. Input: plan artifact + THINK's rejected
+alternatives + TECH.md Blocking Constraints + IMPROVEMENT.md "What Failed."
+
+**Sub-agent asks:**
+1. Does this plan violate any declared constraint? (Verify: field check)
+2. Does this approach structurally resemble a past failure? (IMPROVEMENT.md match)
+3. Is this the simplest approach? (KD20 三问: exists? compounds? simplest loop?)
+4. Is this structural or a patch? (SSA: root cause targeted, or symptom masked?)
+5. Are all referenced APIs verified to exist? (R15 check)
+
+**Verdict:** PASS / WARN / BLOCK
+- PASS → proceed to Step 1
+- WARN → log, acknowledge, proceed
+- BLOCK → return to PLAN, revise, re-run Gate 1 (max 2 retries)
+
+**Current behavior (dry-run):** Skip this section. Gate 1 is not yet active.
+When activated, verdict will be recorded in stage-json:
+```json
+{"stage": "build", "gate1_verdict": "PASS|WARN|BLOCK", "gate1_notes": "..."}
+```
+
+---
+
 ## Step 1: RED→GREEN Tracer Bullet
 
 1. Read acceptance criteria from the evaluation artifact (or design_doc if PLAN ran)

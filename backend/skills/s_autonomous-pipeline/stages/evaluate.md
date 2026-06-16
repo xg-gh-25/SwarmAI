@@ -86,6 +86,53 @@ Adjust **Feasibility** score:
 
 **Skip** when no `code_intel.db` exists or requirement is research-only.
 
+### Drift Detection (P2 — Warning, Non-Blocking)
+
+**Before scoring, check whether code has drifted from design docs since
+the last pipeline delivery.** If code changed but design docs didn't update,
+the pipeline may be working from stale assumptions.
+
+**Process:**
+1. Find the last completed pipeline run for this project:
+   ```bash
+   python backend/scripts/artifact_cli.py run-get --project <PROJECT> 2>/dev/null | python3 -c "
+   import sys,json
+   runs = json.load(sys.stdin).get('runs',[])
+   completed = [r for r in runs if r.get('status')=='completed']
+   if completed: print(completed[-1].get('completed_at',''))
+   " 2>/dev/null
+   ```
+2. If a prior run exists, check git for changes since then (scope to swarmai repo, not workspace):
+   ```bash
+   # Run from swarmai repo root. Count code commits touching backend/ or desktop/
+   git log --oneline --after="<completed_at>" -- backend/ desktop/ | wc -l
+   # Count design doc commits for this project
+   git -C <WORKSPACE> log --oneline --after="<completed_at>" -- Projects/<PROJECT>/TECH.md Projects/<PROJECT>/PRODUCT.md Projects/<PROJECT>/IMPROVEMENT.md | wc -l
+   ```
+3. **Drift signal:** code_commits > 0 AND design_commits == 0
+
+**Output (include in evaluation artifact if drift detected):**
+```json
+{
+  "drift_detection": {
+    "last_pipeline": "run_abc123",
+    "code_commits_since": 7,
+    "design_doc_commits_since": 0,
+    "verdict": "DRIFT_WARNING"
+  }
+}
+```
+
+**Behavior:**
+- Drift detected → emit warning in stage landmark: `⚠️ Drift: {N} code commits since last pipeline, 0 design doc updates`
+- Agent treats as P2 signal — continues if changes are mechanical (config, deps, formatting)
+- Agent pauses and proposes design update if changes are architectural (new module, changed API, new state)
+- **Never auto-update design docs from code** — that inverts the direction of truth
+
+**When no prior run exists:** Skip silently (first pipeline for this project — no baseline to drift from).
+
+---
+
 ### Anti-Repetition Check (BLOCKING)
 
 **Before producing the final GO/DEFER recommendation, cross-reference
