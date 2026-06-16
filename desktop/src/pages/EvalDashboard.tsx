@@ -722,6 +722,48 @@ const guideContent = {
     en: 'The Self-Growing Flywheel',
     zh: '自增长飞轮',
   },
+  iv: {
+    en: 'Intelligence Velocity',
+    zh: '智能速度（Intelligence Velocity）',
+  },
+  ivDesc: {
+    en: 'A compound metric that answers: "Is the OS getting smarter over time, or just maintaining?" Unlike pass rate (which can be gamed by removing hard cases), IV rewards coverage growth and penalizes recurring corrections.',
+    zh: '一个复合指标，回答："OS 在随时间变聪明，还是仅仅维持现状？" 不同于通过率（可以通过移除困难案例来作弊），IV 奖励覆盖增长并惩罚重复纠正。',
+  },
+  ivFormula: {
+    en: 'IV  =  pass_rate  ×  coverage_growth  ×  correction_decay  /  time_window',
+    zh: 'IV  =  通过率  ×  覆盖增长  ×  纠正衰减  /  时间窗口',
+  },
+  ivComponents: [
+    { en: { name: 'Pass Rate', desc: 'Active cases passing / total active cases. Target: ≥0.85' }, zh: { name: '通过率', desc: '通过的活跃案例 / 活跃案例总数。目标：≥0.85' } },
+    { en: { name: 'Coverage Growth', desc: 'New cases added this window / cases at window start. Measures flywheel velocity.' }, zh: { name: '覆盖增长', desc: '本窗口新增案例 / 窗口起始案例数。衡量飞轮速度。' } },
+    { en: { name: 'Correction Decay', desc: '1 - (recurring corrections / total corrections). Penalizes repeating the same mistake class.' }, zh: { name: '纠正衰减', desc: '1 -（重复纠正 / 总纠正数）。惩罚重复同一类错误。' } },
+  ],
+  howToWrite: {
+    en: 'How to Write a Case',
+    zh: '如何编写案例',
+  },
+  howToWriteDesc: {
+    en: 'Three steps to crystallize any correction into a permanent behavioral test:',
+    zh: '三步将任何纠正结晶为永久行为测试：',
+  },
+  howToWriteSteps: [
+    {
+      icon: '🎯',
+      en: { title: '1. Define the Scenario', desc: 'Write the prompt that triggers the behavior you want to test. Include enough context for the agent to act — but not so much that it gives away the answer. Good scenarios are indistinguishable from real user messages.', example: '"Fix the bug in session_unit.py where timeout is too short"' },
+      zh: { title: '1. 定义场景', desc: '编写触发你想测试的行为的 prompt。包含足够的上下文让智能体行动 — 但不要多到暗示答案。好的场景与真实用户消息无法区分。', example: '"修复 session_unit.py 中超时时间太短的 bug"' },
+    },
+    {
+      icon: '🏗️',
+      en: { title: '2. Set 3-Layer Ground Truth', desc: 'Layer 1 (Trajectory): Which tools must be called, in what order? Layer 2 (Assertions): What semantic properties must the response have? Layer 3 (Response): What keywords must appear in the output?', example: 'trajectory: [Read, Edit, Bash(pytest)]\nassertions: ["Does NOT skip pipeline"]\nkeywords: ["pipeline", "adversarial"]' },
+      zh: { title: '2. 设置三层 Ground Truth', desc: '第一层（轨迹）：必须调用哪些工具，什么顺序？第二层（断言）：响应必须具备什么语义属性？第三层（响应）：输出中必须出现什么关键词？', example: 'trajectory: [Read, Edit, Bash(pytest)]\nassertions: ["不跳过 pipeline"]\nkeywords: ["pipeline", "adversarial"]' },
+    },
+    {
+      icon: '⚙️',
+      en: { title: '3. Choose Evaluators', desc: 'Pick from 8 evaluators. Rule of thumb: use programmatic (trajectory_*, file_contains, keyword_match) for mechanical behaviors, LLM-judge (goal_success, quality_score) for nuanced judgment. Most cases use 2-3 evaluators.', example: 'evaluators:\n  - trajectory_in_order\n  - goal_success' },
+      zh: { title: '3. 选择评估器', desc: '从 8 种评估器中选择。经验法则：对机械行为用程序化评估器（trajectory_*, file_contains, keyword_match），对细微判断用 LLM-judge（goal_success, quality_score）。大多数案例使用 2-3 个评估器。', example: 'evaluators:\n  - trajectory_in_order\n  - goal_success' },
+    },
+  ],
 };
 
 // Coverage data from golden_set.yaml (verified via grep)
@@ -827,7 +869,8 @@ function GuideTab() {
         <h2 className="text-[15px] font-semibold mb-3">{guideContent.architecture[t]}</h2>
         <div className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
           <pre className="text-[10px] font-mono text-[var(--color-text-secondary)] leading-[2] whitespace-pre overflow-x-auto">
-{`┌─────────────────────────────────────────────────────────────┐
+{t === 'en'
+? `┌─────────────────────────────────────────────────────────────┐
 │  PRODUCTION SESSION              EVAL SESSION (isolated)     │
 │  ┌───────────────────┐          ┌───────────────────┐       │
 │  │ User conversation │          │ Golden Set case   │       │
@@ -846,6 +889,27 @@ function GuideTab() {
 │  │ Production  │                │ Pinned Judge │            │
 │  │ Model       │                │ Model        │            │
 │  │ (latest)    │                │ (sonnet-4)   │            │
+│  └─────────────┘                └──────────────┘            │
+└─────────────────────────────────────────────────────────────┘`
+: `┌─────────────────────────────────────────────────────────────┐
+│  生产 SESSION                    评估 SESSION（隔离）        │
+│  ┌───────────────────┐          ┌───────────────────┐       │
+│  │ 用户对话           │          │ Golden Set 案例   │       │
+│  │ + 累积的           │          │ （零历史）        │       │
+│  │   上下文           │          │                   │       │
+│  └────────┬──────────┘          └────────┬──────────┘       │
+│           │                              │                   │
+│           ▼                              ▼                   │
+│  ┌───────────────────────────────────────────────────┐      │
+│  │        完全相同的 System Prompt 组装               │      │
+│  │  （11 上下文文件 + hooks + skills + 模型）         │      │
+│  └───────────────────────────────────────────────────┘      │
+│           │                              │                   │
+│           ▼                              ▼                   │
+│  ┌─────────────┐                ┌──────────────┐            │
+│  │ 生产模型     │                │ 固定 Judge  │            │
+│  │ （最新版）   │                │ 模型         │            │
+│  │             │                │ (sonnet-4)   │            │
 │  └─────────────┘                └──────────────┘            │
 └─────────────────────────────────────────────────────────────┘`}
           </pre>
@@ -1030,6 +1094,46 @@ function GuideTab() {
               ))}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      {/* Section 10: Intelligence Velocity */}
+      <div className="mb-8">
+        <h2 className="text-[15px] font-semibold mb-1.5">{guideContent.iv[t]}</h2>
+        <p className="text-[11px] text-[var(--color-text-muted)] mb-3 leading-relaxed">{guideContent.ivDesc[t]}</p>
+        <div className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] mb-3">
+          <pre className="text-[11px] font-mono text-center text-[var(--color-primary)] font-semibold whitespace-pre-wrap overflow-x-auto">{guideContent.ivFormula[t]}</pre>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          {guideContent.ivComponents.map((comp, i) => {
+            const c = comp[t] ?? comp['en'];
+            return (
+              <div key={i} className="p-2.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
+                <div className="text-[10px] font-bold text-[var(--color-text-secondary)] mb-1">{c.name}</div>
+                <div className="text-[10px] text-[var(--color-text-muted)] leading-relaxed">{c.desc}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Section 11: How to Write a Case */}
+      <div className="mb-8">
+        <h2 className="text-[15px] font-semibold mb-1.5">{guideContent.howToWrite[t]}</h2>
+        <p className="text-[11px] text-[var(--color-text-muted)] mb-3">{guideContent.howToWriteDesc[t]}</p>
+        <div className="space-y-3">
+          {guideContent.howToWriteSteps.map((step, i) => (
+            <div key={i} className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)]">
+              <div className="flex items-start gap-2">
+                <span className="text-lg shrink-0" aria-hidden="true">{step.icon}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[11px] font-semibold mb-1">{(step[t] ?? step['en']).title}</div>
+                  <div className="text-[10px] text-[var(--color-text-muted)] leading-relaxed mb-2">{(step[t] ?? step['en']).desc}</div>
+                  <pre className="text-[9px] font-mono p-2 rounded bg-[var(--color-hover)] text-[var(--color-text-secondary)] whitespace-pre-wrap">{(step[t] ?? step['en']).example}</pre>
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </div>
