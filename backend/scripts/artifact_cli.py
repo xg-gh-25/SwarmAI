@@ -907,6 +907,63 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                         "pipeline_id": args.run_id,
                     }), file=_sys.stderr)
 
+            # ── Auto-aggregate delivery artifact (P0 friction fix) ──────────────
+            # When pipeline agent calls --status completed but no delivery artifact
+            # exists, auto-construct it from stage-json. This eliminates the
+            # publish → validation_failed → fix JSON → re-publish ceremony that
+            # wastes ~5K tokens per run. Only for full/bugfix where delivery matters.
+            _requirement = run_state.get("requirement", "")
+            if profile in ("full", "bugfix", "standard"):
+                deliver_stage_rec = next(
+                    (s for s in run_state.get("stages", [])
+                     if s.get("stage", s.get("name", "")) == "deliver"
+                     and s.get("status") in ("completed", "done")),
+                    None,
+                )
+                if deliver_stage_rec and not deliver_stage_rec.get("artifact_id"):
+                    # Auto-aggregate from stage-json fields
+                    _adv = deliver_stage_rec.get("adversarial_review", {})
+                    _audit = deliver_stage_rec.get("completion_audit", {})
+                    _ac = deliver_stage_rec.get("ac_verification", {})
+                    if (_adv and _adv.get("findings")) or (_audit and _audit.get("criteria_met")) or _ac:
+                        # Build delivery artifact data
+                        auto_delivery = {
+                            "title": _requirement[:80] or "Pipeline Delivery",
+                            "summary": deliver_stage_rec.get("summary", _requirement[:200]),
+                            "adversarial_review": _adv if _adv else {"spawned": False, "findings": []},
+                            "completion_audit": _audit if _audit else {},
+                            "ac_verification": _ac if _ac else {},
+                            "confidence_score": deliver_stage_rec.get("confidence_score", 0),
+                            "push_ready": deliver_stage_rec.get("push_ready", True),
+                            "auto_aggregated": True,
+                        }
+                        # Add profile_tier for validator
+                        if isinstance(_adv, dict) and not _adv.get("profile_tier"):
+                            auto_delivery["adversarial_review"]["profile_tier"] = profile
+                        # Publish internally (relaxed schema — skip user-facing strictness)
+                        try:
+                            art_id = reg.publish(
+                                project=args.project,
+                                artifact_type="delivery",
+                                producer="s_autonomous-pipeline",
+                                summary=f"[Auto-aggregated] {_requirement[:60]}",
+                                data=auto_delivery,
+                                stage="deliver",
+                            )
+                            deliver_stage_rec["artifact_id"] = art_id
+                            import sys as _sys
+                            print(json.dumps({
+                                "auto_aggregated": True,
+                                "artifact_id": art_id,
+                                "source": "deliver stage-json fields",
+                            }), file=_sys.stderr)
+                        except Exception as _agg_exc:
+                            import sys as _sys
+                            print(json.dumps({
+                                "warning": f"Auto-aggregate delivery failed: {_agg_exc}",
+                                "fallback": "Manual publish required",
+                            }), file=_sys.stderr)
+
             # ── Validator Gate: run pipeline_validator on ALL completed stages ──
             # L2 enforcement: agent cannot close a run without passing structural
             # validation. Catches skipped adversarial review, missing artifacts,
@@ -1142,6 +1199,32 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             "Pipeline is NOT done until user sees the formatted summary block. "
             "Silent completion = indistinguishable from crash."
         )
+
+    # ── Auto-emit budget info on stage-json update (LL07 fix) ──────────
+    # Agent doesn't need to remember to call run-budget — it's free info
+    # emitted automatically on every stage update. Prevents feeling-based
+    # checkpoints by making budget always visible.
+    if args.stage_json and not args.status:
+        try:
+            budget = run_state.get("budget") or _estimate_session_budget(args.project)
+            consumed = sum(s.get("token_cost", 0) for s in run_state.get("stages", []))
+            session_total = budget.get("session_total", 800_000)
+            remaining = session_total - consumed
+            pct = round(consumed / session_total * 100, 1) if session_total > 0 else 0
+            result["budget"] = {
+                "consumed": consumed,
+                "remaining": remaining,
+                "pct": pct,
+                "should_checkpoint": pct > 70,
+            }
+            if pct > 70:
+                result["budget_warning"] = (
+                    "⚠️ Budget >70% consumed. Run `run-budget` for full analysis "
+                    "before starting next stage."
+                )
+        except Exception:
+            pass  # Budget calculation failure should never block stage update
+
     print(json.dumps(result))
 
 
@@ -1754,16 +1837,21 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> None:
     taste = sum(1 for d in all_decisions if d.get("classification") == "taste")
     judgment = sum(1 for d in all_decisions if d.get("classification") == "judgment")
 
+    # ── Stage map (needed by all sections for stage-json PRIMARY reads) ──
+    _stage_map = {s.get("stage", s.get("name", "?")): s for s in stages}
+
     # ── Section 1: TL;DR ──────────────────────────────────────────────
     delivery = art_data.get("deliver", {})
     title = delivery.get("title", requirement[:80] or "Pipeline Report")
 
     # ── Section 2: Evaluation ─────────────────────────────────────────
+    # PRIMARY: stage-json (always populated per Rule 22), FALLBACK: published artifact
+    _eval_stage_rec = _stage_map.get("evaluate", {})
     eval_data = art_data.get("evaluate", {})
     eval_scores = eval_data.get("scores", {})
-    eval_recommendation = eval_data.get("recommendation", "?")
-    eval_scope = eval_data.get("scope", "?")
-    eval_criteria = eval_data.get("acceptance_criteria", [])
+    eval_recommendation = _eval_stage_rec.get("recommendation") or eval_data.get("recommendation", "?")
+    eval_scope = _eval_stage_rec.get("scope") or eval_data.get("scope", "?")
+    eval_criteria = _eval_stage_rec.get("acceptance_criteria") or eval_data.get("acceptance_criteria", [])
 
     eval_table_lines = []
     for dim in ["strategic", "priority", "historical", "feasibility"]:
@@ -1775,18 +1863,22 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> None:
         eval_table_lines.append(f"| **ROI** | **{roi:.3f}** | **{eval_recommendation}** |")
 
     # ── Section 3: Design & Approach ──────────────────────────────────
-    # Design data lives in plan stage (approach, boundaries) or think stage (alternatives)
+    # PRIMARY: stage-json (think/plan records), FALLBACK: published artifacts
+    _think_stage_rec = _stage_map.get("think", {})
+    _plan_stage_rec = _stage_map.get("plan", {})
     design = art_data.get("plan", {})
     if not design.get("approach"):
         design = art_data.get("think", {})
-    approach = design.get("approach", "")
+    approach = _plan_stage_rec.get("approach_chosen") or _think_stage_rec.get("approach_chosen") or design.get("approach", "")
     boundaries = design.get("boundaries", {})
-    success_criteria = design.get("success_criteria", design.get("acceptance_criteria", []))
-    files_to_change = design.get("files_to_change", [])
+    success_criteria = _plan_stage_rec.get("spec_summary") or design.get("success_criteria", design.get("acceptance_criteria", []))
+    if isinstance(success_criteria, str):
+        success_criteria = [success_criteria]
+    files_to_change = _plan_stage_rec.get("files_planned") or design.get("files_to_change", [])
     # Think stage research findings
     think_data = art_data.get("think", {})
-    key_findings = think_data.get("key_findings", [])
-    alternatives = think_data.get("alternatives", [])
+    key_findings = _think_stage_rec.get("key_findings") or think_data.get("key_findings", [])
+    alternatives = _think_stage_rec.get("alternatives") or think_data.get("alternatives", [])
 
     # ── Section 4: Pipeline Execution ─────────────────────────────────
     # Show ALL 8 standard stages — executed ones with data, skipped with reason
@@ -1805,7 +1897,7 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> None:
 
     # ── Extract stage-json metrics (Rule 22: stage records ARE the audit trail) ──
     # These supplement artifact data with per-stage metrics that may not be in published artifacts
-    _stage_map = {s.get("stage", s.get("name", "?")): s for s in stages}
+    # (_stage_map already defined above for Section 2-3 reads)
 
     # Gate 1 verdict (from build stage-json)
     _build_rec = _stage_map.get("build", {})

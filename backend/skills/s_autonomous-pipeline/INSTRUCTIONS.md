@@ -1115,6 +1115,35 @@ A: ①GO ②3alt ③4AC ④★PASS | B: ⑤3R3G ⑥clean ⑦28/0 | C: ⑧★2fix
     garbage in = garbage out. The chat showed "198 tests pass, 2 files +58/-4"
     but none of that was in run.json. Never again.
 
+23. **Adversarial review = Agent tool spawn (MANDATORY for full/bugfix).**
+    Gate 2 (Adversarial Review) for full/bugfix profiles MUST use the Agent
+    tool to spawn an independent sub-agent. Self-review disguised as adversarial
+    (declaring `spawned=true` without Agent tool invocation) is structurally
+    equivalent to skipping the gate. If spawning is infeasible (token budget
+    exhaustion, context limit), CHECKPOINT — don't fake it.
+
+    **Why this exists:** run_d6cdd758 and run_1c94f115 declared `spawned=true`
+    without Agent tool invocation. Validator checks the field value, not the
+    behavior. Only fresh-context sub-agent catches bugs the builder is blind to.
+    (Evidence: 24 findings in 10 runs, all from real spawns, 0 from self-review.)
+
+    **Detection:** Golden set trajectory case GS021 verifies Agent tool appears
+    in the execution trace. Future: PostToolUse hook audit at deliver completion.
+
+24. **Stage-json fields for EVALUATE/THINK/PLAN (report completeness).**
+    The following fields MUST be recorded in stage-json (via `run-update
+    --stage-json`) so that `run-report` can populate Sections 2-3:
+
+    | Stage | Required Fields |
+    |-------|----------------|
+    | evaluate | `scope`, `recommendation`, `acceptance_criteria` |
+    | think | `alternatives`, `approach_chosen`, `key_findings` |
+    | plan | `spec_summary`, `files_planned`, `approach_chosen` |
+
+    **Why:** Report Sections 2-3 were empty because data lived only in chat
+    output, not in stage-json. `run-report` reads stage-json as PRIMARY
+    source — if the field isn't there, the section is empty.
+
 ---
 
 ## Artifact Operations Reference
