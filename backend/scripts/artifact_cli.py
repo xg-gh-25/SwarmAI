@@ -1199,9 +1199,29 @@ def _run_summary(state: dict) -> dict:
 
 
 def cmd_run_checkpoint(args, reg: ArtifactRegistry) -> None:
-    """Atomic checkpoint: pause run + publish checkpoint artifact + create Radar todo."""
+    """Atomic checkpoint: pause run + publish checkpoint artifact + create Radar todo.
+
+    LL07 enforcement: emits warning if checkpoint is called without run-budget
+    showing should_checkpoint=true. Prevents feeling-based checkpoints that
+    waste context restart overhead (~15K tokens per resume).
+    """
+    import sys as _sys
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat()
+
+    # ── LL07: Checkpoint without evidence warning ──
+    # The agent MUST run run-budget before checkpointing. If reason doesn't
+    # mention budget/L2/error/crash, it's likely a feeling-based checkpoint.
+    _valid_reasons = ("budget", "l2", "block", "error", "crash", "escalat", "stuck")
+    reason_lower = (args.reason or "").lower()
+    if not any(r in reason_lower for r in _valid_reasons):
+        print(json.dumps({
+            "warning": "LL07: Checkpoint called without budget/L2/error justification. "
+                       "Did you run `run-budget` first? Context restart costs ~15K tokens. "
+                       "If context is actually fine, consider continuing instead of checkpointing.",
+            "pipeline_id": args.run_id,
+            "reason_given": args.reason,
+        }), file=_sys.stderr)
 
     run_file = _resolve_run_file(args.project, args.run_id)
     run_state = json.loads(run_file.read_text(encoding="utf-8"))
@@ -1783,12 +1803,38 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> None:
         elif stg in skipped_stages:
             stage_lines.append(f"| {stg} | ⏭ skipped | - | 0 | {skipped_stages[stg]} |")
 
+    # ── Extract stage-json metrics (Rule 22: stage records ARE the audit trail) ──
+    # These supplement artifact data with per-stage metrics that may not be in published artifacts
+    _stage_map = {s.get("stage", s.get("name", "?")): s for s in stages}
+
+    # Gate 1 verdict (from build stage-json)
+    _build_rec = _stage_map.get("build", {})
+    gate1_verdict = _build_rec.get("gate1_verdict", "N/A")
+    gate1_checks = _build_rec.get("gate1_checks", {})
+    gate1_override = _build_rec.get("gate1_override", False)
+
+    # Files changed (prefer stage-json, fallback to artifact)
+    stage_files_changed = _build_rec.get("files_changed", [])
+
+    # TDD from stage-json (test or build stage)
+    _test_rec = _stage_map.get("test", {})
+    stage_tdd = _test_rec.get("tdd", _build_rec.get("tdd", {}))
+
+    # Total token cost (sum all stages)
+    total_token_cost = sum(s.get("token_cost", 0) for s in stages)
+
     # ── Section 5: TDD Results ────────────────────────────────────────
     test_data = art_data.get("test", {})
-    test_total = test_data.get("total", test_data.get("passed", 0) + test_data.get("failed", 0))
-    test_passed = test_data.get("passed", 0)
-    test_failed = test_data.get("failed", 0)
-    test_new = test_data.get("new_tests", 0)
+    # Prefer stage-json tdd over artifact data
+    if stage_tdd:
+        test_total = stage_tdd.get("tests_total", stage_tdd.get("total", 0))
+        test_passed = stage_tdd.get("tests_passed", stage_tdd.get("passed", 0))
+        test_failed = stage_tdd.get("tests_failed", stage_tdd.get("failed", 0))
+    else:
+        test_total = test_data.get("total", test_data.get("passed", 0) + test_data.get("failed", 0))
+        test_passed = test_data.get("passed", 0)
+        test_failed = test_data.get("failed", 0)
+    test_new = test_data.get("new_tests", stage_tdd.get("new_tests", 0))
     test_duration = test_data.get("duration_s", 0)
 
     changeset = art_data.get("build", {})
@@ -1822,7 +1868,8 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> None:
         confidence_score = confidence_score.get("score", 0)
 
     # ── Section 8: Files Changed ──────────────────────────────────────
-    _fc = changeset.get("files_changed", [])
+    # Prefer stage-json files_changed (always populated per Rule 22), fallback to artifact
+    _fc = stage_files_changed if stage_files_changed else changeset.get("files_changed", [])
     files_changed = _fc if isinstance(_fc, list) else []
     files_changed_count = len(files_changed) if isinstance(_fc, list) else (_fc if isinstance(_fc, int) else 0)
     lines_added = changeset.get("lines_added", 0)
@@ -1855,7 +1902,8 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> None:
     sections.append(f"""# Autonomous Pipeline Report: {title}
 
 **Run ID:** {run_state['id']} | **Project:** {args.project} | **Profile:** {profile}
-**Date:** {now} | **Duration:** {duration_str or 'N/A'} | **Confidence:** {confidence_score}/10""")
+**Date:** {now} | **Duration:** {duration_str or 'N/A'} | **Tokens:** {total_token_cost:,}
+**Gate 1:** {gate1_verdict}{' (override)' if gate1_override else ''} | **Files:** {files_changed_count} | **Tests:** {test_passed}/{test_total}""")
 
     # TL;DR
     summary_text = delivery.get("summary", requirement[:200])
@@ -2095,11 +2143,13 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> None:
 
     print(json.dumps({
         "report_path": str(report_path),
-        "confidence": confidence_score,
+        "gate1_verdict": gate1_verdict,
+        "total_tokens": total_token_cost,
         "stages": len(stages),
         "decisions": len(all_decisions),
         "files_changed": files_changed_count,
-        "tests": test_total,
+        "tests_passed": test_passed,
+        "tests_total": test_total,
     }))
 
 
