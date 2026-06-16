@@ -1,0 +1,105 @@
+version: 2
+last_updated: '2026-06-16'
+categories:
+- decision
+- compliance
+- recall
+- loop_active
+- ddd_informed
+evaluator_types:
+  programmatic:
+  - canary_pass
+  - file_contains
+  - keyword_match
+  - trajectory_exact
+  - trajectory_in_order
+  - trajectory_any_order
+  llm_judge:
+  - goal_success
+  - quality_score
+dimensions:
+- factual_accuracy
+- judgment_quality
+- context_utility
+- compliance
+- capability
+cases:
+- id: FIX001
+  category: compliance
+  dimension: compliance
+  level: session
+  title: "Fixture: compliance case with tags"
+  source: test fixture
+  promoted_from: fixture_test
+  tags: [smoke, regression]
+  scenario:
+    turns:
+    - input: Test input
+  expected_response_contains:
+  - pipeline
+  evaluators:
+  - keyword_match
+  - goal_success
+  affected_by:
+  - STEERING.R1
+  tier: active
+- id: FIX002
+  category: decision
+  dimension: judgment_quality
+  level: session
+  title: "Fixture: decision case with tags"
+  tags: [full]
+  scenario:
+    turns:
+    - input: Should we do X?
+  assertions:
+  - Agent decides correctly
+  evaluators:
+  - goal_success
+  affected_by:
+  - MEMORY.KD34
+  tier: active
+- id: FIX003
+  category: loop_active
+  dimension: capability
+  level: tool_call
+  title: "Fixture: canary pass case (no tags)"
+  verification:
+    command: echo OK
+    expected_contains: OK
+  evaluators:
+  - canary_pass
+  affected_by:
+  - backend/core/
+  tier: stable
+- id: FIX004
+  category: recall
+  dimension: factual_accuracy
+  level: trace
+  title: "Fixture: file_contains case with tags"
+  tags: [smoke]
+  verification:
+    file: backend/scripts/eval_runner.py
+    grep: eval_keyword_match
+    expected_contains: eval_keyword_match
+  evaluators:
+  - file_contains
+  affected_by:
+  - backend/scripts/eval_runner.py
+  tier: stable
+- id: FIX005
+  category: ddd_informed
+  dimension: context_utility
+  level: trace
+  title: "Fixture: trajectory case"
+  tags: [regression]
+  expected_trajectory:
+  - Read target file
+  - Invoke pipeline
+  trajectory_match: in_order
+  evaluators:
+  - trajectory_in_order
+  - goal_success
+  affected_by:
+  - stages/build.md
+  tier: active

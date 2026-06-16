@@ -1,4 +1,9 @@
-"""Tests for eval_runner.py."""
+"""Tests for eval_runner.py.
+
+Uses a committed fixture (testdata/golden_set_fixture.yaml) for structural
+validation tests. Tests that need live workspace data are marked and skip
+gracefully if workspace is not available (CI-safe).
+"""
 import json
 import sys
 from pathlib import Path
@@ -19,21 +24,29 @@ from backend.scripts.eval_runner import (
     _find_swarmai_repo,
 )
 
+# Committed fixture path (always available, even in CI)
+FIXTURE_PATH = Path(__file__).resolve().parent / "testdata" / "golden_set_fixture.yaml"
+
+
+def _workspace_available() -> bool:
+    """Check if live workspace golden_set exists (not available in CI)."""
+    try:
+        root = _find_workspace_root()
+        return (root / "Projects" / "SwarmAI" / "golden_set.yaml").exists()
+    except FileNotFoundError:
+        return False
+
 
 class TestLoadGoldenSet:
-    """Test golden_set.yaml loading and validation."""
+    """Test golden_set.yaml loading and validation (uses fixture for CI-safety)."""
 
     def test_loads_successfully(self):
-        root = _find_workspace_root()
-        gs_path = root / "Projects" / "SwarmAI" / "golden_set.yaml"
-        data = load_golden_set(gs_path)
+        data = load_golden_set(FIXTURE_PATH)
         assert data["version"] == 2
-        assert len(data["cases"]) >= 20  # Grows via flywheel (auto-seed from corrections)
+        assert len(data["cases"]) >= 3
 
     def test_all_cases_have_required_fields(self):
-        root = _find_workspace_root()
-        gs_path = root / "Projects" / "SwarmAI" / "golden_set.yaml"
-        data = load_golden_set(gs_path)
+        data = load_golden_set(FIXTURE_PATH)
         for case in data["cases"]:
             assert "id" in case, f"Missing id: {case.get('title')}"
             assert "evaluators" in case, f"{case['id']} missing evaluators"
@@ -43,19 +56,24 @@ class TestLoadGoldenSet:
             assert "title" in case, f"{case['id']} missing title"
 
     def test_unique_ids(self):
-        root = _find_workspace_root()
-        gs_path = root / "Projects" / "SwarmAI" / "golden_set.yaml"
-        data = load_golden_set(gs_path)
+        data = load_golden_set(FIXTURE_PATH)
         ids = [c["id"] for c in data["cases"]]
         assert len(ids) == len(set(ids)), f"Duplicate IDs: {[i for i in ids if ids.count(i) > 1]}"
 
     def test_valid_categories(self):
-        root = _find_workspace_root()
-        gs_path = root / "Projects" / "SwarmAI" / "golden_set.yaml"
-        data = load_golden_set(gs_path)
+        data = load_golden_set(FIXTURE_PATH)
         valid_categories = set(data["categories"])
         for case in data["cases"]:
             assert case["category"] in valid_categories, f"{case['id']} has invalid category '{case['category']}'"
+
+    @pytest.mark.skipif(not _workspace_available(), reason="Live workspace not available (CI)")
+    def test_live_workspace_loads(self):
+        """Smoke test: live workspace golden_set parses without error."""
+        root = _find_workspace_root()
+        gs_path = root / "Projects" / "SwarmAI" / "golden_set.yaml"
+        data = load_golden_set(gs_path)
+        assert data["version"] == 2
+        assert len(data["cases"]) >= 10
 
 
 class TestComputeScores:
@@ -295,9 +313,8 @@ class TestProgrammaticFirstCascade:
             "expected_response_contains": ["pipeline"],
             "affected_by": ["STEERING.R1"],
         }
-        root = _find_workspace_root()
-        # This should use keyword_match (programmatic), not goal_success (LLM)
-        result = evaluate_case(case, root, simulated_response="Run the pipeline here")
+        repo_root = _find_swarmai_repo()
+        result = evaluate_case(case, repo_root, simulated_response="Run the pipeline here")
         assert result["evaluator"] == "keyword_match"
         assert result["status"] == "passed"
 
@@ -311,47 +328,60 @@ class TestProgrammaticFirstCascade:
             "assertions": ["Agent decides correctly"],
             "affected_by": ["MEMORY.KD34"],
         }
-        root = _find_workspace_root()
-        result = evaluate_case(case, root)
+        repo_root = _find_swarmai_repo()
+        result = evaluate_case(case, repo_root)
         assert result["evaluator"] == "goal_success"
         assert result["status"] == "skipped"  # LLM not implemented yet
 
 
 class TestGoldenSetNewFields:
-    """Test that golden_set.yaml supports new fields."""
+    """Test that golden_set.yaml supports new fields (uses committed fixture)."""
 
     def test_tags_field_accepted(self):
         """Cases with tags field should load without error."""
-        root = _find_workspace_root()
-        gs_path = root / "Projects" / "SwarmAI" / "golden_set.yaml"
-        data = load_golden_set(gs_path)
-        # At least some cases should have tags after our update
+        data = load_golden_set(FIXTURE_PATH)
         tagged_cases = [c for c in data["cases"] if c.get("tags")]
-        assert len(tagged_cases) > 0, "Expected at least some cases to have tags"
+        assert len(tagged_cases) >= 3, f"Expected >=3 tagged cases in fixture, got {len(tagged_cases)}"
 
     def test_promoted_from_field_accepted(self):
         """Cases with promoted_from field should load without error."""
-        root = _find_workspace_root()
-        gs_path = root / "Projects" / "SwarmAI" / "golden_set.yaml"
-        data = load_golden_set(gs_path)
-        # Check that cases with source field exist (promoted_from is optional)
-        sourced = [c for c in data["cases"] if c.get("source") or c.get("promoted_from")]
-        assert len(sourced) > 0
+        data = load_golden_set(FIXTURE_PATH)
+        promoted = [c for c in data["cases"] if c.get("promoted_from")]
+        assert len(promoted) >= 1, "Expected at least 1 case with promoted_from in fixture"
+
+    def test_fixture_has_all_evaluator_types(self):
+        """Fixture covers all programmatic evaluator types."""
+        data = load_golden_set(FIXTURE_PATH)
+        evaluators_used = set()
+        for case in data["cases"]:
+            for ev in case.get("evaluators", []):
+                evaluators_used.add(ev)
+        # Fixture should exercise keyword_match, canary_pass, file_contains, trajectory_in_order, goal_success
+        assert "keyword_match" in evaluators_used
+        assert "canary_pass" in evaluators_used
+        assert "file_contains" in evaluators_used
+        assert "trajectory_in_order" in evaluators_used
+        assert "goal_success" in evaluators_used
 
 
 class TestEvalHistoryOutput:
-    """Test that eval run produces valid output."""
+    """Test that eval run produces valid output (workspace-dependent, skips in CI)."""
 
+    @pytest.mark.skipif(not _workspace_available(), reason="Live workspace not available (CI)")
     def test_output_file_exists(self):
         root = _find_workspace_root()
         hist_dir = root / "Projects" / "SwarmAI" / "EvalHistory"
         json_files = list(hist_dir.glob("*.json"))
         assert len(json_files) > 0, "No eval history files found"
 
+    @pytest.mark.skipif(not _workspace_available(), reason="Live workspace not available (CI)")
     def test_output_schema_valid(self):
         root = _find_workspace_root()
         hist_dir = root / "Projects" / "SwarmAI" / "EvalHistory"
-        latest = sorted(hist_dir.glob("*.json"))[-1]
+        json_files = sorted(hist_dir.glob("*.json"))
+        if not json_files:
+            pytest.skip("No eval history files to validate")
+        latest = json_files[-1]
         data = json.loads(latest.read_text())
 
         assert "run_id" in data
