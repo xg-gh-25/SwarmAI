@@ -870,6 +870,43 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                         }))
                         return
 
+            # ── REPORT.md quality gate: must have >500 bytes (Rule 12) ──
+            report_path = _run_dir(args.project, args.run_id) / "REPORT.md"
+            if not report_path.exists() or report_path.stat().st_size < 500:
+                print(json.dumps({
+                    "error": "Cannot mark completed: REPORT.md not found. "
+                             "Generate the pipeline report at "
+                             f".artifacts/runs/{args.run_id}/REPORT.md "
+                             "before completing. The report must document pipeline "
+                             "execution process (stages run, decisions made, "
+                             "findings, methodology impact).",
+                    "pipeline_id": args.run_id,
+                    "expected_path": str(report_path),
+                }))
+                return
+
+            # ── Stage metrics gate (full/bugfix only): audit trail completeness ──
+            # Every stage must have token_cost recorded. Chat output IS the live
+            # demo, run.json IS the audit trail, REPORT.md IS the projection.
+            # Empty metrics = empty report = useless audit.
+            if profile in ("full", "bugfix", "standard"):
+                stages_without_metrics = []
+                for s in run_state.get("stages", []):
+                    name = s.get("stage", s.get("name", "?"))
+                    status = s.get("status")
+                    if status in ("completed", "done") and name != "reflect":
+                        tc = s.get("token_cost", 0)
+                        if not tc or tc == 0:
+                            stages_without_metrics.append(name)
+                # WARN but don't BLOCK (yet) — this is a new enforcement, start soft
+                if stages_without_metrics:
+                    import sys as _sys
+                    print(json.dumps({
+                        "warning": f"Stages missing token_cost (audit gap): "
+                                   f"{stages_without_metrics}. Future: this will BLOCK.",
+                        "pipeline_id": args.run_id,
+                    }), file=_sys.stderr)
+
             # ── Validator Gate: run pipeline_validator on ALL completed stages ──
             # L2 enforcement: agent cannot close a run without passing structural
             # validation. Catches skipped adversarial review, missing artifacts,

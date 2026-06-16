@@ -277,6 +277,17 @@ def validate_artifact_data(stage: str, data: dict, profile: str = "full") -> lis
                     f"adversarial_review.profile_tier='{tier}' but profile='{profile}' "
                     f"requires full adversarial review. Only trivial/research/docs exempt."
                 )
+            # spawned=true enforcement: adversarial sub-agent must actually run (not just tier declared)
+            spawned = ar.get("spawned")
+            if profile in _strict_profiles and profile not in _relaxed_profiles_ar:
+                if spawned is True or spawned == "true" or spawned == 1:
+                    pass  # Valid: sub-agent was spawned
+                else:
+                    errors.append(
+                        f"adversarial_review.spawned={spawned} but profile='{profile}' "
+                        f"requires sub-agent to be actually spawned (spawned=true). "
+                        f"Cannot skip adversarial execution."
+                    )
             elif tier and tier != "skipped":
                 findings = ar.get("findings", [])
                 if isinstance(findings, list):

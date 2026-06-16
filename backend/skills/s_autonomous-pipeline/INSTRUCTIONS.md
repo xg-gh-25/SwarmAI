@@ -1096,6 +1096,25 @@ A: ①GO ②3alt ③4AC ④★PASS | B: ⑤3R3G ⑥clean ⑦28/0 | C: ⑧★2fix
     EVALUATE stage scope breakdown, multi-feature decomposition, and any
     conversation about execution strategy.
 
+22. **Stage metrics are audit trail — MANDATORY for full/bugfix.** Every
+    `run-update --stage-json` MUST include `token_cost` (estimated tokens
+    consumed by this stage). Chat output IS the live demo, run.json IS the
+    audit record, REPORT.md IS the projection of run.json. All three must
+    be consistent — if you show a result in chat, it must also be in
+    stage-json. The completion gate will WARN (future: BLOCK) on stages
+    with `token_cost: 0`. Stage-json fields to always include:
+    - `token_cost`: estimated tokens for this stage (use formula from §Budget)
+    - `files_changed`: list of files modified (BUILD stage)
+    - `tdd`: test counts (BUILD/TEST stages)
+    - `decisions`: any non-trivial decisions made (all stages)
+    - Gate verdicts: `gate1_verdict`/`gate1_checks` (BUILD), adversarial
+      findings summary (DELIVER)
+    
+    **Why this exists:** run_d6cdd758 REPORT.md was an empty stub because
+    stage-json had no metrics. The report is auto-generated from run.json —
+    garbage in = garbage out. The chat showed "198 tests pass, 2 files +58/-4"
+    but none of that was in run.json. Never again.
+
 ---
 
 ## Artifact Operations Reference
