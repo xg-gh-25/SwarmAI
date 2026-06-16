@@ -775,7 +775,7 @@ export function ChatInput({
           </div>
 
           {/* Bottom Row - attachment left, context/TSCC right */}
-          <div className="flex items-center justify-between mt-1.5 pt-1.5 border-t border-[var(--color-border)]/30">
+          <div className="flex items-center justify-between mt-1">
             {/* Left: Attachment + Voice buttons */}
             <div className="flex items-center gap-2">
               <FileAttachmentButton onFilesSelected={onAddFiles} disabled={isProcessingFiles || disabled} canAddMore={canAddMore} />
@@ -849,7 +849,7 @@ export function ChatInput({
             </div>
             {/* Right: Context ring + TSCC */}
             <div className="flex items-center gap-2">
-              <ContextUsageRing pct={contextPct ?? null} size={20} showLabel />
+              <ContextUsageRing pct={contextPct ?? null} size={18} showLabel />
               <TSCCPopoverButton sessionId={sessionId ?? null} metadata={promptMetadata ?? null} />
             </div>
           </div>
