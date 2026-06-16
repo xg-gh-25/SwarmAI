@@ -1142,6 +1142,12 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         else:
             run_state["stages"].append(stage_record)
 
+        # Reset resume_attempts on successful stage completion — a stage advancing
+        # proves progress, so the pipeline deserves fresh auto-resume budget if it
+        # crashes again later at a different stage.
+        if stage_status in ("completed", "done") and run_state.get("resume_attempts", 0) > 0:
+            run_state["resume_attempts"] = 0
+
     if args.taste_decision:
         decision = json.loads(args.taste_decision)
         run_state["taste_decisions"].append(decision)

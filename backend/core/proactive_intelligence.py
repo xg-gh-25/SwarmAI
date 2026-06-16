@@ -689,6 +689,191 @@ def _get_job_result_highlights(working_directory: str, max_items: int = 5) -> li
     return lines
 
 
+_MAX_PIPELINE_RESUME_ATTEMPTS = 3
+# Exponential cooldown between resume attempts (seconds): 30s, 60s, 120s
+_RESUME_COOLDOWN_SECONDS = [30, 60, 120]
+
+
+def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list[str]:
+    """Scan for paused/running pipeline runs and produce auto-resume directives.
+
+    Auto-resume strategy (max 3 attempts, with exponential cooldown 30s/60s/120s):
+    - If resume_attempts < 3 AND cooldown elapsed: emit DIRECTIVE to auto-resume.
+      Increments resume_attempts in run.json with file-level locking.
+    - If cooldown not elapsed: skip (will be picked up on next session start).
+    - If resume_attempts >= 3: emit informational-only line (human must intervene).
+    - For "running" status (orphaned from crash): same logic — transition to
+      "paused" first, preserving original checkpoint reason.
+
+    Finds runs updated within the last 24h. Graceful no-op on any error.
+    """
+    import fcntl
+    from datetime import datetime, timezone
+
+    lines: list[str] = []
+    try:
+        projects_dir = workspace / "Projects"
+        if not projects_dir.exists():
+            return []
+
+        now = time.time()
+        max_age_seconds = 24 * 3600  # Only surface runs from last 24h
+
+        # (priority, mtime, line) — directives sort before informational
+        candidates: list[tuple[int, float, str]] = []
+
+        for project_dir in projects_dir.iterdir():
+            if not project_dir.is_dir():
+                continue
+            runs_dir = project_dir / ".artifacts" / "runs"
+            if not runs_dir.exists():
+                continue
+
+            for run_dir in runs_dir.iterdir():
+                run_file = run_dir / "run.json"
+                if not run_file.exists():
+                    continue
+                try:
+                    run_data = json.loads(run_file.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    continue
+
+                status = run_data.get("status", "")
+                if status not in ("paused", "running"):
+                    continue
+
+                # Check freshness FIRST — skip old runs before any mutation
+                updated = run_data.get("updated_at", "")
+                if updated:
+                    try:
+                        dt = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+                        age = now - dt.timestamp()
+                        if age > max_age_seconds:
+                            continue
+                    except (ValueError, TypeError):
+                        pass  # Can't parse date — include it anyway
+
+                # Save original updated_at BEFORE any mutation — used for cooldown check
+                original_updated_at = run_data.get("updated_at", "")
+
+                # Orphan detection: "running" status in a NEW session = previous
+                # session crashed. Transition to "paused" preserving original reason.
+                if status == "running":
+                    run_data["status"] = "paused"
+                    run_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    if "checkpoint" not in run_data:
+                        run_data["checkpoint"] = {}
+                    # Preserve original reason if it exists
+                    if not run_data["checkpoint"].get("reason"):
+                        run_data["checkpoint"]["reason"] = "session_crash_auto_detected"
+                    try:
+                        run_file.write_text(
+                            json.dumps(run_data, indent=2), encoding="utf-8"
+                        )
+                    except OSError:
+                        pass  # Best-effort
+                    status = "paused"
+
+                # Gather run metadata
+                project_name = project_dir.name
+                run_id = run_data.get("id", run_dir.name)
+                requirement = run_data.get("requirement", "")[:60]
+                stages = run_data.get("stages", [])
+                completed_stages = [s.get("stage", "?") for s in stages
+                                    if s.get("status") == "completed"]
+                last_stage = completed_stages[-1] if completed_stages else "init"
+                next_stage = run_data.get("checkpoint", {}).get("next_stage", "")
+                resume_stage = next_stage or last_stage
+
+                # Check resume attempts with file lock to prevent race conditions
+                resume_attempts = run_data.get("resume_attempts", 0)
+
+                if resume_attempts < _MAX_PIPELINE_RESUME_ATTEMPTS:
+                    # Cooldown check: don't retry too fast after a failed resume.
+                    # First attempt (resume_attempts=0) has no cooldown — the run
+                    # just crashed and deserves immediate recovery. Subsequent
+                    # attempts use exponential backoff (30s, 60s).
+                    # Uses ORIGINAL updated_at (pre-mutation) to avoid orphan
+                    # transition setting it to "now" which would always trigger cooldown.
+                    if resume_attempts > 0:
+                        cooldown_idx = min(resume_attempts - 1, len(_RESUME_COOLDOWN_SECONDS) - 1)
+                        cooldown = _RESUME_COOLDOWN_SECONDS[cooldown_idx]
+                        if original_updated_at:
+                            try:
+                                last_dt = datetime.fromisoformat(original_updated_at.replace("Z", "+00:00"))
+                                elapsed = max(0, now - last_dt.timestamp())
+                                if elapsed < cooldown:
+                                    # Not enough time since last attempt — skip for now
+                                    continue
+                            except (ValueError, TypeError):
+                                pass  # Can't parse — proceed with resume
+
+                    # AUTO-RESUME: increment counter with exclusive lock
+                    lock_file = run_dir / ".resume.lock"
+                    fd = None
+                    try:
+                        fd = lock_file.open("w")
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+                        # Re-read under lock to prevent TOCTOU race
+                        run_data = json.loads(run_file.read_text(encoding="utf-8"))
+                        resume_attempts = run_data.get("resume_attempts", 0)
+                        if resume_attempts >= _MAX_PIPELINE_RESUME_ATTEMPTS:
+                            # Another session already exhausted attempts
+                            fd.close()
+                            continue
+
+                        run_data["resume_attempts"] = resume_attempts + 1
+                        run_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+                        run_file.write_text(
+                            json.dumps(run_data, indent=2), encoding="utf-8"
+                        )
+                        fd.close()
+                    except OSError:
+                        # Lock held by another session or IO error — skip
+                        if fd is not None:
+                            try:
+                                fd.close()
+                            except Exception:
+                                pass
+                        continue
+
+                    attempt_label = f"attempt {resume_attempts + 1}/{_MAX_PIPELINE_RESUME_ATTEMPTS}"
+                    line = (
+                        f"  - 🚀 AUTO-RESUME ({attempt_label}): "
+                        f"[{project_name}] \"{requirement}\" — "
+                        f"resume from {resume_stage}. "
+                        f"Execute: `artifact_cli.py run-resume "
+                        f"--project {project_name} --run-id {run_id}` "
+                        f"then invoke `s_autonomous-pipeline` with "
+                        f"`--resume --run-id {run_id} --project {project_name}`."
+                    )
+                    priority = 0  # Directives first
+                else:
+                    # EXHAUSTED: informational only
+                    reason = run_data.get("checkpoint", {}).get("reason", "")
+                    line = (
+                        f"  - ⚠️ [{project_name}] \"{requirement}\" — "
+                        f"exhausted {_MAX_PIPELINE_RESUME_ATTEMPTS} auto-resume attempts. "
+                        f"Last stage: {resume_stage}"
+                        f"{f' ({reason[:40]})' if reason else ''}. "
+                        f"Manual intervention needed."
+                    )
+                    priority = 1  # Informational after directives
+
+                mtime = run_file.stat().st_mtime
+                candidates.append((priority, mtime, line))
+
+        # Sort: directives first (priority 0), then by freshness (newest first)
+        candidates.sort(key=lambda x: (x[0], -x[1]))
+        lines = [line for _, _, line in candidates[:max_items]]
+
+    except Exception as exc:
+        logger.debug("Paused pipeline scan failed: %s", exc)
+
+    return lines
+
+
 def _get_todo_highlights(max_items: int = 5) -> list[str]:
     """Read pending/overdue Radar todos from SQLite for system prompt injection.
 
@@ -1236,6 +1421,14 @@ def build_session_briefing(
         job_lines = _get_job_result_highlights(str(workspace))
         if job_lines:
             sections.append("**Recent job results (last 24h):**\n" + "\n".join(job_lines))
+
+        # L4: Paused pipelines — auto-resume directives (max 3 attempts) or informational
+        pipeline_lines = _get_paused_pipeline_highlights(workspace)
+        if pipeline_lines:
+            sections.append(
+                "**Pipeline auto-resume (execute immediately before other work):**\n"
+                + "\n".join(pipeline_lines)
+            )
 
         # L4: Pending Radar todos — surface so agent proactively addresses them
         todo_lines = _get_todo_highlights()

@@ -57,6 +57,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.pipeline_profiles import get_profile_stages
 
+# ---------------------------------------------------------------------------
+# Gate 2 Agent Tool Audit — marker file directory
+# Written by SubagentStop hook, verified by depth check on DELIVER.
+# ---------------------------------------------------------------------------
+try:
+    from jobs.paths import STATE_DIR as _VALIDATOR_STATE_DIR
+    AGENT_AUDIT_DIR = _VALIDATOR_STATE_DIR / "pipeline_agent_audit"
+except Exception:
+    AGENT_AUDIT_DIR = Path.home() / ".swarm-ai" / "state" / "pipeline_agent_audit"
+
 
 # ---------------------------------------------------------------------------
 # Stage artifact schemas — required fields produce BLOCK, recommended produce WARN
@@ -787,7 +797,8 @@ def _extract_section(text: str, heading: str) -> str:
 # Depth validation (L2) — field values indicate real work
 # ---------------------------------------------------------------------------
 
-def _check_depth(stage: str, artifact_data: dict, profile: str) -> list[str]:
+def _check_depth(stage: str, artifact_data: dict, profile: str,
+                 run_id: str = "") -> list[str]:
     """Layer 2: validate field values, not just existence.
 
     Catches hollow artifacts where fields exist but content indicates
@@ -1881,11 +1892,63 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
     # --- Check 9: Depth validation (L2) — field values indicate real work ---
     # Only runs when artifact data is available (L0/L1 catch missing data)
     if artifact_data and stage in ("review", "deliver", "build", "test"):
-        depth_errors = _check_depth(stage, artifact_data, profile)
+        depth_errors = _check_depth(stage, artifact_data, profile, run_id=run_id)
         errors.extend(depth_errors)
         if not depth_errors:
             checks_passed += 1
         checks_total += 1
+
+    # --- Check 9b: Gate 2 Agent Tool Audit (marker file verification) ---
+    # Written by SubagentStop hook when Agent tool completes during a pipeline run.
+    # Primary: <run_id>.marker (exact match). Fallback: session_*_<ts>.marker
+    # with timestamp within the run's execution window.
+    # If no marker found and profile requires adversarial → WARN (future: BLOCK).
+    if stage == "deliver" and profile in ("full", "bugfix"):
+        checks_total += 1
+        marker_found = False
+        # Primary: exact run_id marker
+        marker_file = AGENT_AUDIT_DIR / f"{run_id}.marker"
+        if marker_file.exists():
+            marker_found = True
+        elif AGENT_AUDIT_DIR.exists():
+            # Fallback: any session marker written after run started
+            run_created = run.get("created_at", "")
+            run_start_ts = 0.0
+            if run_created:
+                try:
+                    from datetime import datetime, timezone
+                    dt = datetime.fromisoformat(run_created.replace("Z", "+00:00"))
+                    run_start_ts = dt.timestamp()
+                except (ValueError, TypeError):
+                    pass
+            for f in AGENT_AUDIT_DIR.iterdir():
+                if f.name.startswith("session_") and f.suffix == ".marker":
+                    try:
+                        data = json.loads(f.read_text(encoding="utf-8"))
+                        if data.get("ts", 0) > run_start_ts:
+                            marker_found = True
+                            break
+                    except (json.JSONDecodeError, OSError):
+                        continue
+        if marker_found:
+            checks_passed += 1
+        else:
+            warnings.append(
+                "Agent tool audit: no SubagentStop marker file found for this run. "
+                "This suggests the Agent tool was never invoked for adversarial review. "
+                "Ensure the runtime hook is active and the Agent tool was actually spawned."
+            )
+
+        # Opportunistic cleanup: remove markers older than 7 days
+        try:
+            if AGENT_AUDIT_DIR.exists():
+                import time as _time
+                cutoff = _time.time() - 7 * 86400
+                for old_f in AGENT_AUDIT_DIR.iterdir():
+                    if old_f.suffix == ".marker" and old_f.stat().st_mtime < cutoff:
+                        old_f.unlink(missing_ok=True)
+        except OSError:
+            pass  # Non-critical cleanup
 
     # --- Check 10: Push-Ready gate (L3) — binary verdict ---
     # V2: reads `quality.push_ready` (boolean) or infers from quality fields.

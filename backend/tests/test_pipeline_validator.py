@@ -2700,3 +2700,82 @@ class TestBuildAcCoverage:
         # The SSO AC should NOT be matched by the email AC
         assert any("SSO" in e for e in result["errors"]), \
             f"Expected 'SSO' AC not-covered error, got: {result['errors']}"
+
+
+# ---------------------------------------------------------------------------
+# Gate 2 Agent Tool Audit — marker file verification
+# ---------------------------------------------------------------------------
+
+class TestAgentToolAudit:
+    """Validate that the agent tool audit marker file is checked on DELIVER."""
+
+    def _setup_deliver_run(self, workspace, profile="full", run_id="run_test1"):
+        """Helper: create a valid deliver artifact + run for audit testing."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / run_id
+        _make_artifact(artifacts_dir, run_id, "art_del", "delivery", {
+            "title": "Done", "status": "delivered",
+            "quality": {"push_ready": True, "blockers": []},
+            "adversarial_review": {
+                "profile_tier": profile if profile in ("full", "bugfix") else "skipped",
+                "spawned": True, "evidence": "Agent tool invocation",
+                "findings": [],
+            },
+            "completion_audit": {"all_green": True, "gaps": 0},
+        })
+        stages = [
+            _stage_record("evaluate"),
+            _stage_record("think"),
+        ]
+        if profile not in ("trivial",):
+            stages.append(_stage_record("plan"))
+        stages.extend([
+            _stage_record("build", artifact_id="art_b"),
+            _stage_record("review", artifact_id="art_r"),
+            _stage_record("test", artifact_id="art_t"),
+            _stage_record("deliver", artifact_id="art_del"),
+        ])
+        _make_run(runs_dir, profile=profile, stages=stages, run_id=run_id)
+        return artifacts_dir
+
+    def test_deliver_warns_without_marker_file(self, workspace):
+        """DELIVER on full profile WARNS if no agent audit marker file exists."""
+        run_id = "run_audit_no_marker"
+        self._setup_deliver_run(workspace, profile="full", run_id=run_id)
+
+        result = validate("TestProject", run_id, "deliver")
+        all_messages = result["errors"] + result["warnings"]
+        assert any("agent tool" in m.lower() or "audit marker" in m.lower()
+                   for m in all_messages), \
+            f"Expected agent audit marker warning, got: {all_messages}"
+
+    def test_deliver_passes_with_marker_file(self, workspace):
+        """DELIVER passes when marker file exists for the run."""
+        from scripts.pipeline_validator import AGENT_AUDIT_DIR
+
+        run_id = "run_audit_with_marker"
+        self._setup_deliver_run(workspace, profile="full", run_id=run_id)
+
+        # Create the marker file
+        marker_dir = AGENT_AUDIT_DIR
+        marker_dir.mkdir(parents=True, exist_ok=True)
+        marker_file = marker_dir / f"{run_id}.marker"
+        marker_file.write_text('{"ts": 1718600000, "event": "SubagentStop"}')
+
+        try:
+            result = validate("TestProject", run_id, "deliver")
+            audit_msgs = [e for e in result["errors"] + result["warnings"]
+                         if "agent tool" in e.lower() or "audit marker" in e.lower()]
+            assert not audit_msgs, f"Unexpected audit messages: {audit_msgs}"
+        finally:
+            marker_file.unlink(missing_ok=True)
+
+    def test_trivial_profile_skips_audit_check(self, workspace):
+        """Trivial profile does NOT require agent audit marker."""
+        run_id = "run_audit_trivial"
+        self._setup_deliver_run(workspace, profile="trivial", run_id=run_id)
+
+        result = validate("TestProject", run_id, "deliver")
+        audit_msgs = [e for e in result["errors"] + result["warnings"]
+                     if "agent tool" in e.lower() or "audit marker" in e.lower()]
+        assert not audit_msgs, f"Trivial should skip audit: {audit_msgs}"

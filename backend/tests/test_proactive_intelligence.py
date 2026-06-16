@@ -944,3 +944,145 @@ class TestGetJobResultHighlights:
         (jr_dir / ".job-results.jsonl").write_text("\n".join(lines) + "\n")
         result = _get_job_result_highlights(str(tmp_path), max_items=3)
         assert len(result) == 3
+
+
+# ── Pipeline Auto-Resume Tests ──
+
+_get_paused_pipeline_highlights = _mod._get_paused_pipeline_highlights
+
+
+class TestPipelineAutoResume:
+    """Test auto-resume directive generation for paused/crashed pipelines."""
+
+    def _make_run(self, workspace, project="TestProj", run_id="run_abc",
+                  status="paused", requirement="Fix bug", resume_attempts=0,
+                  next_stage="build", updated_at=None):
+        """Helper: create a minimal run.json for testing."""
+        from datetime import datetime, timezone, timedelta
+        runs_dir = workspace / "Projects" / project / ".artifacts" / "runs" / run_id
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        if updated_at is None:
+            # Default: 5 minutes ago (past any cooldown window)
+            updated_at = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        run_data = {
+            "id": run_id,
+            "status": status,
+            "requirement": requirement,
+            "resume_attempts": resume_attempts,
+            "updated_at": updated_at,
+            "stages": [
+                {"stage": "evaluate", "status": "completed"},
+                {"stage": "think", "status": "completed"},
+            ],
+            "checkpoint": {"next_stage": next_stage, "reason": "session crash"},
+        }
+        run_file = runs_dir / "run.json"
+        run_file.write_text(json.dumps(run_data, indent=2))
+        return run_file
+
+    def test_auto_resume_directive_emitted(self, tmp_path):
+        """Paused pipeline with attempts < 3 produces AUTO-RESUME directive."""
+        self._make_run(tmp_path, resume_attempts=0)
+        result = _get_paused_pipeline_highlights(tmp_path)
+        assert len(result) == 1
+        assert "AUTO-RESUME" in result[0]
+        assert "attempt 1/3" in result[0]
+        assert "run-resume" in result[0]
+
+    def test_resume_increments_counter(self, tmp_path):
+        """Each auto-resume directive increments resume_attempts in run.json."""
+        run_file = self._make_run(tmp_path, resume_attempts=1)
+        _get_paused_pipeline_highlights(tmp_path)
+        # Re-read the file — should now be 2
+        updated = json.loads(run_file.read_text())
+        assert updated["resume_attempts"] == 2
+
+    def test_exhausted_attempts_shows_informational(self, tmp_path):
+        """After 3 attempts, shows informational warning, not directive."""
+        self._make_run(tmp_path, resume_attempts=3)
+        result = _get_paused_pipeline_highlights(tmp_path)
+        assert len(result) == 1
+        assert "AUTO-RESUME" not in result[0]
+        assert "exhausted" in result[0]
+        assert "Manual intervention" in result[0]
+
+    def test_running_orphan_transitions_to_paused(self, tmp_path):
+        """A 'running' pipeline in a new session gets marked 'paused' first."""
+        # Create a run with no pre-existing checkpoint reason, old enough to pass cooldown
+        from datetime import datetime, timezone, timedelta
+        runs_dir = tmp_path / "Projects" / "TestProj" / ".artifacts" / "runs" / "run_orphan"
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        run_data = {
+            "id": "run_orphan",
+            "status": "running",
+            "requirement": "Test orphan",
+            "resume_attempts": 0,
+            "updated_at": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),
+            "stages": [{"stage": "evaluate", "status": "completed"}],
+            "checkpoint": {"next_stage": "build"},  # No "reason" field
+        }
+        run_file = runs_dir / "run.json"
+        run_file.write_text(json.dumps(run_data, indent=2))
+
+        result = _get_paused_pipeline_highlights(tmp_path)
+        # Should emit auto-resume directive
+        assert "AUTO-RESUME" in result[0]
+        # run.json should now show status=paused with crash reason
+        updated = json.loads(run_file.read_text())
+        assert updated["status"] == "paused"
+        assert updated["checkpoint"]["reason"] == "session_crash_auto_detected"
+
+    def test_old_runs_ignored(self, tmp_path):
+        """Runs older than 24h are not surfaced."""
+        from datetime import datetime, timezone, timedelta
+        old_time = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
+        self._make_run(tmp_path, updated_at=old_time)
+        result = _get_paused_pipeline_highlights(tmp_path)
+        assert len(result) == 0
+
+    def test_old_running_orphan_not_mutated(self, tmp_path):
+        """A 'running' orphan older than 24h is NOT mutated (freshness before mutation)."""
+        from datetime import datetime, timezone, timedelta
+        old_time = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
+        run_file = self._make_run(tmp_path, status="running", updated_at=old_time)
+        _get_paused_pipeline_highlights(tmp_path)
+        # Should not have been mutated — still "running"
+        data = json.loads(run_file.read_text())
+        assert data["status"] == "running"
+
+    def test_first_attempt_no_cooldown(self, tmp_path):
+        """First resume attempt (from 0) has no cooldown — immediate recovery."""
+        from datetime import datetime, timezone, timedelta
+        # Just crashed 2 seconds ago — attempt 0 should still fire immediately
+        recent = (datetime.now(timezone.utc) - timedelta(seconds=2)).isoformat()
+        self._make_run(tmp_path, updated_at=recent, resume_attempts=0)
+        result = _get_paused_pipeline_highlights(tmp_path)
+        assert len(result) == 1
+        assert "AUTO-RESUME" in result[0]
+
+    def test_cooldown_skips_too_recent(self, tmp_path):
+        """Second attempt is skipped if within 30s cooldown window."""
+        from datetime import datetime, timezone, timedelta
+        # 10 seconds ago — within 30s cooldown for attempt 1
+        recent = (datetime.now(timezone.utc) - timedelta(seconds=10)).isoformat()
+        self._make_run(tmp_path, updated_at=recent, resume_attempts=1)
+        result = _get_paused_pipeline_highlights(tmp_path)
+        # Should NOT emit directive (cooldown not elapsed)
+        assert len(result) == 0
+
+    def test_cooldown_respects_attempt_level(self, tmp_path):
+        """Higher attempt levels have longer cooldown (60s for attempt 2)."""
+        from datetime import datetime, timezone, timedelta
+        # 45 seconds ago — past 30s (attempt 1 cooldown) but within 60s (attempt 2)
+        recent = (datetime.now(timezone.utc) - timedelta(seconds=45)).isoformat()
+        self._make_run(tmp_path, updated_at=recent, resume_attempts=2)
+        result = _get_paused_pipeline_highlights(tmp_path)
+        # Should NOT emit (45s < 60s cooldown for attempt 2)
+        assert len(result) == 0
+
+    def test_max_items_respected(self, tmp_path):
+        """Only top N items returned."""
+        for i in range(5):
+            self._make_run(tmp_path, project=f"Proj{i}", run_id=f"run_{i}")
+        result = _get_paused_pipeline_highlights(tmp_path, max_items=2)
+        assert len(result) == 2

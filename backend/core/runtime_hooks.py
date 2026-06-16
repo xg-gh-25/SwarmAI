@@ -529,6 +529,69 @@ _ERROR_PATTERNS = re.compile(
 )
 
 
+# ---------------------------------------------------------------------------
+# SubagentStop: Pipeline Agent Tool Audit — write marker file for Gate 2
+# ---------------------------------------------------------------------------
+
+_PIPELINE_AUDIT_DIR = _STATE_DIR / "pipeline_agent_audit"
+
+
+def create_agent_tool_audit_hook(
+    session_context: Optional[dict] = None,
+):
+    """Factory: creates a SubagentStop hook that writes an audit marker file.
+
+    When the Agent tool completes (SubagentStop event), writes a marker file
+    at ``STATE_DIR/pipeline_agent_audit/<run_id>.marker``. The pipeline
+    validator reads this file to confirm the Agent tool was actually invoked
+    during adversarial review — structural proof, not honor-system.
+
+    Two modes:
+    1. If ``_active_pipeline_run_id`` is set in session_context: writes
+       ``<run_id>.marker`` (precise match — pipeline orchestrator sets this).
+    2. Otherwise: writes ``<session_id>_<ts>.marker`` as session-level evidence.
+       The validator accepts either form. This ensures the hook produces
+       evidence even before the orchestrator wires up the run_id.
+    """
+    ctx = session_context if session_context is not None else {}
+
+    async def _hook(input_data: Any, tool_use_id: Any, context: Any) -> dict:
+        session_id = ctx.get("sdk_session_id", "")
+        run_id = ctx.get("_active_pipeline_run_id")
+
+        if not session_id and not run_id:
+            return {}
+
+        try:
+            _PIPELINE_AUDIT_DIR.mkdir(parents=True, exist_ok=True)
+            ts = time.time()
+
+            # Write run-specific marker if run_id available (primary path)
+            if run_id:
+                marker_file = _PIPELINE_AUDIT_DIR / f"{run_id}.marker"
+                marker_file.write_text(json.dumps({
+                    "ts": ts,
+                    "event": "SubagentStop",
+                    "run_id": run_id,
+                    "session_id": session_id,
+                }))
+
+            # Always write session-level marker as fallback evidence
+            session_marker = _PIPELINE_AUDIT_DIR / f"session_{session_id}_{int(ts)}.marker"
+            session_marker.write_text(json.dumps({
+                "ts": ts,
+                "event": "SubagentStop",
+                "session_id": session_id,
+                "run_id": run_id or "unknown",
+            }))
+        except Exception:
+            logger.warning("Failed to write agent audit marker (session=%s)", session_id)
+
+        return {}
+
+    return _hook
+
+
 def create_subagent_capture_hook(
     corrections_path: Optional[str] = None,
     session_context: Optional[dict] = None,
@@ -916,6 +979,13 @@ def register_runtime_hooks(
         "SubagentStop",
         create_subagent_capture_hook(path, session_context),
         "subagent_capture",
+    )
+
+    # Gate 2 Agent Tool Audit: write marker file on SubagentStop
+    registry.register(
+        "SubagentStop",
+        create_agent_tool_audit_hook(session_context),
+        "agent_tool_audit",
     )
 
     # UserPromptSubmit hooks
