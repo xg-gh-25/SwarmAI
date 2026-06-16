@@ -80,32 +80,178 @@ If no `build_injection_recommendations` exist, skip this section.
 
 ---
 
-## Gate 1: Pre-Check (Skeptic + SSA) — PLACEHOLDER
+## Gate 1: Pre-Check (Skeptic + SSA) — DRY-RUN MODE
 
-> **Status:** Not yet active. Skip this section entirely.
-> When activated (Pipeline Run 2), verdict will be logged to run.json, initially non-blocking.
+> **Status:** Active in DRY-RUN mode. Verdict is logged to run.json but does NOT
+> block BUILD. Observe signal quality over 3-5 pipeline runs before enabling blocking.
 
-**When active (profile = full or goal):** Before BUILD begins, spawn a fresh-context
-sub-agent with the Skeptic+SSA prompt. Input: plan artifact + THINK's rejected
-alternatives + TECH.md Blocking Constraints + IMPROVEMENT.md "What Failed."
+### Trigger Conditions
 
-**Sub-agent asks:**
-1. Does this plan violate any declared constraint? (Verify: field check)
-2. Does this approach structurally resemble a past failure? (IMPROVEMENT.md match)
-3. Is this the simplest approach? (KD20 三问: exists? compounds? simplest loop?)
-4. Is this structural or a patch? (SSA: root cause targeted, or symptom masked?)
-5. Are all referenced APIs verified to exist? (R15 check)
+| Profile | Gate 1? | Rationale |
+|---------|:---:|-----------|
+| full | ✅ Always | Maximum rigor — wrong direction multiplied by full BUILD |
+| goal | ✅ First cycle only | Wrong start × N cycles = maximum waste. Fires once before goal_cycle begins, not per-cycle. |
+| bugfix | ⚠️ Only if plan touches >3 files | Small targeted fix = low direction-error risk |
+| trivial | ❌ Skip | Single-file, scope too small for direction error |
+| research | ❌ Skip | No code generation — nothing to pre-check |
+| docs | ❌ Skip | No code generation |
 
-**Verdict:** PASS / WARN / BLOCK
-- PASS → proceed to Step 1
-- WARN → log, acknowledge, proceed
-- BLOCK → return to PLAN, revise, re-run Gate 1 (max 2 retries)
+**Bugfix execution order:** Read the plan artifact first. Count files in the plan's
+change list. If ≤3 files → skip Gate 1 and record SKIPPED. If >3 → proceed with full execution.
 
-**Current behavior (dry-run):** Skip this section. Gate 1 is not yet active.
-When activated, verdict will be recorded in stage-json:
-```json
-{"stage": "build", "gate1_verdict": "PASS|WARN|BLOCK", "gate1_notes": "..."}
+**If skipped:** Record in stage-json: `"gate1_verdict": "SKIPPED", "gate1_reason": "profile=trivial", "gate1_blocking": false`
+
+### Input Context (Feed to Sub-Agent)
+
+Assemble these 5 inputs before spawning (any can be empty — sub-agent handles missing gracefully):
+
+1. **Plan artifact** — the design_doc from PLAN stage (`discover --types design_doc --full`)
+2. **Rejected alternatives** — from THINK stage research artifact, the "alternatives considered
+   and why rejected" section. Prevents Skeptic from re-challenging dismissed options.
+   If THINK explored no alternatives (trivial approach): omit — sub-agent skips deconfliction.
+3. **TECH.md Blocking Constraints** — extract `## Blocking Constraints` section (if it exists).
+   If section missing: omit — sub-agent passes Check 1 automatically.
+4. **IMPROVEMENT.md "What Failed"** — extract `[pitfall]` entries for failure pattern matching.
+   If no pitfall entries exist: omit — sub-agent passes Check 2 automatically.
+5. **EVALUATE anti-repetition verdict** — if EVALUATE's Anti-Repetition Check found a match
+   but passed with reasoning ("PROCEED — structural difference: X"), include that verdict.
+   Prevents Gate 1 from re-litigating what EVALUATE already resolved.
+
+### Sub-Agent Prompt (Skeptic + SSA)
+
+Spawn a fresh-context sub-agent with this system prompt:
+
+```markdown
+## Role: Plan Skeptic + Structural Solution Assessor
+
+You receive a code generation plan. Your job is to find reasons this plan will
+FAIL or WASTE EFFORT before any code is written. You are NOT building — you are
+preventing wrong starts. You have zero context from the builder's session.
+
+**Burden of proof is on the plan, not on you.** If you cannot verify a claim
+the plan makes, that's a finding (WARN). If you find a clear violation, that's
+a BLOCK. Default to skepticism — optimism costs 30-60 minutes of rework.
+
+---
+
+### Check 1: Constraint Violation
+
+Read the TECH.md "Blocking Constraints" section provided below (if any).
+For each rule with a `Verify:` field:
+- Can you determine from the PLAN whether it will violate this constraint?
+- If YES violation likely → BLOCK with constraint ID
+- If MAYBE → WARN with explanation
+- If NO constraints section provided → PASS this check (no rules = no violations)
+
+### Check 2: Proven Failure Pattern
+
+Read the IMPROVEMENT.md "What Failed" entries provided below.
+For each [pitfall] entry:
+- Does the PLAN's chosen approach STRUCTURALLY resemble this failed approach?
+- "Structurally" means: same technique (big-bang refactor, polling loop, multi-writer,
+  shared mutex, silent fallback), not just same domain.
+- If match found → check the "Rejected Alternatives" input: was this already
+  considered and dismissed with reasoning? If yes → PASS (already addressed).
+  If not addressed → BLOCK with citation to the failed entry.
+
+### Check 3: Simplicity Gate
+
+Answer three questions about the plan:
+1. Does this problem ACTUALLY EXIST for this project? (Or is it hypothetical/preventive?)
+2. What's the SIMPLEST possible solution? Does the plan match it, or is it over-engineered?
+3. Does this solution COMPOUND (form a learning loop) or is it one-off?
+
+Signals of over-engineering:
+- Plan touches >3× the minimum files needed
+- Plan introduces a new abstraction for a single use case
+- Plan adds infrastructure (new module, new config, new DB table) for a problem
+  solvable with existing tools
+
+If over-engineered → WARN with simpler alternative suggested.
+
+### Check 4: Structural Solution Assessment (SSA)
+
+For bugfix/modification plans ONLY (skip for greenfield features):
+- Does the plan target the ROOT CAUSE, or a downstream symptom?
+- Would this fix PREVENT the same class of bug elsewhere? Or only this one instance?
+- Does the plan add UNDERSTANDING to the system (type constraint, invariant, schema)
+  or just a CHECK (null guard, try/except, fallback)?
+
+Verdict:
+- STRUCTURAL → no concern (root cause addressed)
+- PATCH (ACCEPTABLE) → WARN: "Root cause known but structural fix deferred.
+  Recommend logging tech debt todo: {description}"
+- PATCH (BLOCKING) → BLOCK: "Root cause unknown or fix in wrong layer.
+  Structural alternative: {proposal}"
+
+### Check 5: API Existence Verification
+
+For each internal function/module/API the plan references:
+- Has the plan verified it exists? (Read call, grep, or explicit "verified in THINK")
+- If the plan says "call X.y()" without evidence X.y exists → WARN
+- If the plan invents a function name not found in the codebase → BLOCK
+
+This catches AGENT.md R15 violations: "never code against an API from memory."
+
+---
+
+## Output Format (MANDATORY — use exactly this structure)
+
 ```
+GATE 1 VERDICT: [PASS | WARN | BLOCK]
+
+Checks:
+  1. Constraints:     [PASS | WARN: ... | BLOCK: ...]
+  2. Failure Pattern: [PASS | WARN: ... | BLOCK: ...]
+  3. Simplicity:      [PASS | WARN: ... | BLOCK: ...]
+  4. SSA:             [PASS | WARN: ... | BLOCK: ... | N/A (greenfield)]
+  5. API Existence:   [PASS | WARN: ... | BLOCK: ...]
+
+Overall: [PASS — proceed to BUILD | WARN — proceed with noted concerns | BLOCK — revise PLAN]
+
+[If WARN or BLOCK: specific actionable items, max 3 lines each]
+```
+
+**Rules:**
+- Any single BLOCK → overall = BLOCK
+- Any WARN + no BLOCK → overall = WARN
+- All PASS → overall = PASS
+- Be SPECIFIC: cite the constraint ID, the failure entry date, the API name.
+  Vague findings ("could be improved") are not findings — they are noise.
+```
+
+### Execution (DRY-RUN)
+
+1. Assemble the 4 input sections (plan, rejected alternatives, constraints, failures)
+2. Spawn sub-agent with the prompt above + input sections as user message
+3. Parse the verdict from sub-agent response
+4. **DRY-RUN behavior:** Log verdict but ALWAYS proceed to Step 1 regardless of result
+
+```
+⚠️ GATE 1 (dry-run): {VERDICT}
+  {summary of checks — 1 line per non-PASS check}
+  [Dry-run: logged, not blocking. Proceed to BUILD.]
+```
+
+### Recording in run.json
+
+After Gate 1 completes, update the build stage record:
+
+```bash
+python backend/scripts/artifact_cli.py run-update --project <PROJECT> --run-id <RUN_ID> \
+  --stage-json '{"stage":"build","gate1_verdict":"PASS|WARN|BLOCK","gate1_checks":{"constraints":"PASS","failure_pattern":"PASS","simplicity":"WARN: touches 5 files for single-use abstraction","ssa":"N/A","api_existence":"PASS"},"gate1_blocking":false}'
+```
+
+**`gate1_blocking: false`** = dry-run mode. When activated: change to `true` and
+BLOCK verdict → return to PLAN (max 2 retries before CHECKPOINT).
+
+### Future Activation (not yet — requires 3-5 dry-run observations)
+
+When signal quality is validated (>50% of WARN/BLOCK verdicts are genuinely useful):
+1. Change `gate1_blocking` to `true` in stage-json
+2. BLOCK verdict → present to user with structural alternative → revise PLAN or accept-as-is
+3. WARN verdict → log + acknowledge + proceed (no user interrupt)
+4. Add golden set cases: "Given plan X, Gate 1 should PASS/BLOCK?"
 
 ---
 
