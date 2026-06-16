@@ -108,8 +108,12 @@ interface CaseDetail extends GoldenSetCase {
   scenario?: { turns?: { input: string }[] };
   verification?: Record<string, string>;
   expected_trajectory?: string[];
+  trajectory_match?: string;
   assertions?: string[];
+  expected_response_contains?: string[];
   source?: string;
+  tags?: string[];
+  promoted_from?: string;
   history?: { run_id: string; triggered_at: string; status: string; notes?: string }[];
 }
 
@@ -829,7 +833,7 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
             )}
           </div>
 
-          {/* Metadata */}
+          {/* Metadata Grid — 2×3 */}
           <div className="grid grid-cols-2 gap-2">
             <div>
               <div className="text-[10px] text-[var(--color-text-muted)] uppercase">Category</div>
@@ -840,6 +844,10 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
               <span className="text-[11px]">{detail.dimension?.replace(/_/g, ' ')}</span>
             </div>
             <div>
+              <div className="text-[10px] text-[var(--color-text-muted)] uppercase">Level</div>
+              <span className="text-[11px]">{detail.level || '—'}</span>
+            </div>
+            <div>
               <div className="text-[10px] text-[var(--color-text-muted)] uppercase">Tier</div>
               <span className="text-[11px]">{detail.tier || 'active'}</span>
             </div>
@@ -847,31 +855,15 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
               <div className="text-[10px] text-[var(--color-text-muted)] uppercase">Source</div>
               <span className="text-[11px] font-mono">{detail.source || '—'}</span>
             </div>
+            <div>
+              <div className="text-[10px] text-[var(--color-text-muted)] uppercase">Evaluators</div>
+              <div className="flex flex-wrap gap-0.5 mt-0.5">
+                {(detail.evaluators || []).map((ev, i) => (
+                  <span key={i} className="px-1 py-0.5 rounded bg-[var(--color-hover)] text-[9px] font-mono">{ev}</span>
+                ))}
+              </div>
+            </div>
           </div>
-
-          {/* Scenario */}
-          {detail.scenario?.turns && (
-            <div>
-              <div className="text-[10px] text-[var(--color-text-muted)] uppercase mb-1">Scenario</div>
-              <div className="p-2 rounded bg-[var(--color-bg)] border border-[var(--color-border)]">
-                {detail.scenario.turns.map((t, i) => (
-                  <div key={i} className="text-[11px] font-mono leading-relaxed">{t.input}</div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Expected Trajectory */}
-          {detail.expected_trajectory && detail.expected_trajectory.length > 0 && (
-            <div>
-              <div className="text-[10px] text-[var(--color-text-muted)] uppercase mb-1">Expected Trajectory</div>
-              <div className="flex flex-wrap gap-1">
-                {detail.expected_trajectory.map((t, i) => (
-                  <span key={i} className="px-1.5 py-0.5 rounded bg-[var(--color-primary)]/10 text-[var(--color-primary)] text-[10px] font-mono">{t}</span>
-                ))}
-              </div>
-            </div>
-          )}
 
           {/* Affected By */}
           {detail.affected_by && detail.affected_by.length > 0 && (
@@ -882,6 +874,84 @@ function CaseDetailDrawer({ caseId, onClose }: { caseId: string; onClose: () => 
                   <span key={i} className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-[10px]">{a}</span>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* Scenario */}
+          {detail.scenario?.turns && detail.scenario.turns.length > 0 && (
+            <div>
+              <div className="text-[10px] text-[var(--color-text-muted)] uppercase mb-1">Scenario</div>
+              <div className="p-2.5 rounded bg-[var(--color-bg)] border border-[var(--color-border)]">
+                {detail.scenario.turns.map((t, i) => (
+                  <div key={i} className="text-[11px] font-mono leading-relaxed">
+                    <span className="text-[var(--color-text-muted)]">→ </span>{t.input}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Layer 1: Expected Trajectory */}
+          {detail.expected_trajectory && detail.expected_trajectory.length > 0 && (
+            <div className="p-2.5 rounded border border-[var(--color-primary)]/20 bg-[var(--color-primary)]/5">
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="text-[9px] font-bold text-[var(--color-primary)] uppercase">Layer 1: Trajectory</div>
+                {detail.trajectory_match && (
+                  <span className="text-[9px] text-[var(--color-text-muted)] font-mono">{detail.trajectory_match}</span>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {detail.expected_trajectory.map((t, i) => (
+                  <span key={i} className="px-1.5 py-0.5 rounded bg-[var(--color-primary)]/10 text-[var(--color-primary)] text-[10px] font-mono">{t}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Layer 2: Assertions */}
+          {detail.assertions && detail.assertions.length > 0 && (
+            <div className="p-2.5 rounded border border-green-500/20 bg-green-500/5">
+              <div className="text-[9px] font-bold text-green-500 uppercase mb-1.5">Layer 2: Assertions</div>
+              <ul className="space-y-1">
+                {detail.assertions.map((a, i) => (
+                  <li key={i} className="text-[10px] text-[var(--color-text-secondary)] leading-relaxed flex gap-1.5">
+                    <span className="text-green-500 shrink-0">•</span>
+                    <span>{a}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Layer 3: Expected Response Contains */}
+          {detail.expected_response_contains && detail.expected_response_contains.length > 0 && (
+            <div className="p-2.5 rounded border border-yellow-500/20 bg-yellow-500/5">
+              <div className="text-[9px] font-bold text-yellow-500 uppercase mb-1.5">Layer 3: Response</div>
+              <div className="flex flex-wrap gap-1">
+                {detail.expected_response_contains.map((kw, i) => (
+                  <span key={i} className="px-1.5 py-0.5 rounded bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 text-[10px] font-mono">{kw}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Tags */}
+          {detail.tags && detail.tags.length > 0 && (
+            <div>
+              <div className="text-[10px] text-[var(--color-text-muted)] uppercase mb-1">Tags</div>
+              <div className="flex flex-wrap gap-1">
+                {detail.tags.map((tag, i) => (
+                  <span key={i} className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-[10px] text-[var(--color-text-muted)]">{tag}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Promoted From */}
+          {detail.promoted_from && (
+            <div>
+              <div className="text-[10px] text-[var(--color-text-muted)] uppercase mb-1">Promoted From</div>
+              <span className="text-[10px] text-[var(--color-text-muted)] font-mono">{detail.promoted_from}</span>
             </div>
           )}
 

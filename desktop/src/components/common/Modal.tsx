@@ -85,7 +85,10 @@ export default function Modal({
         </div>
 
         {/* Content - scrollable, fills remaining height */}
-        <div className="p-6 overflow-y-auto flex-1 min-h-0">{children}</div>
+        <div className={clsx(
+          "overflow-y-auto flex-1 min-h-0 relative",
+          size === 'fullscreen' ? 'p-0' : 'p-6'
+        )}>{children}</div>
       </div>
     </div>
   );

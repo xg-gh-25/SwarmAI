@@ -483,22 +483,20 @@ class EvalService:
             except Exception:
                 pass  # If disk read fails, proceed with in-memory only
 
-        # Merge: for each in-memory case, preserve disk-only fields
+        # Merge: for each in-memory case, preserve user-owned disk fields
+        # Inversion: exclude-list is safer — new fields default to "write through"
+        # (fail-open = over-write, never lose), only user-owned fields are protected.
+        _USER_OWNED_FIELDS = frozenset({"tags", "notes", "promoted_from"})
         merged_cases = []
         for mem_case in self._cases:
             case_id = mem_case.get("id")
             if case_id and case_id in disk_cases:
-                # Start with disk version (has all fields), overlay in-memory changes
+                # Start with disk version (preserves user-owned fields like tags)
                 merged = dict(disk_cases[case_id])
-                # In-memory fields that eval_service actively manages:
-                _managed_fields = {"id", "category", "dimension", "level", "title",
-                                   "source", "affected_by", "evaluators", "tier",
-                                   "scenario", "assertions", "verification",
-                                   "expected_trajectory", "trajectory_match",
-                                   "expected_response_contains"}
-                for key in _managed_fields:
-                    if key in mem_case:
-                        merged[key] = mem_case[key]
+                # Overlay all in-memory fields EXCEPT user-owned ones
+                for key, value in mem_case.items():
+                    if key not in _USER_OWNED_FIELDS:
+                        merged[key] = value
                 merged_cases.append(merged)
             else:
                 # New case (not on disk) — write as-is
