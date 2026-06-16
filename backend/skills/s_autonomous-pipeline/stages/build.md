@@ -91,13 +91,10 @@ If no `build_injection_recommendations` exist, skip this section.
 |---------|:---:|-----------|
 | full | ✅ Always | Maximum rigor — wrong direction multiplied by full BUILD |
 | goal | ✅ First cycle only | Wrong start × N cycles = maximum waste. Fires once before goal_cycle begins, not per-cycle. |
-| bugfix | ⚠️ Only if plan touches >3 files | Small targeted fix = low direction-error risk |
-| trivial | ❌ Skip | Single-file, scope too small for direction error |
+| bugfix | ✅ Always | Bugfix = highest patch risk. SSA is most valuable here. |
+| trivial | ❌ Skip | Single config/const change, no direction to validate |
 | research | ❌ Skip | No code generation — nothing to pre-check |
 | docs | ❌ Skip | No code generation |
-
-**Bugfix execution order:** Read the plan artifact first. Count files in the plan's
-change list. If ≤3 files → skip Gate 1 and record SKIPPED. If >3 → proceed with full execution.
 
 **If skipped:** Record in stage-json: `"gate1_verdict": "SKIPPED", "gate1_reason": "profile=trivial", "gate1_blocking": false`
 
@@ -162,10 +159,10 @@ Answer three questions about the plan:
 3. Does this solution COMPOUND (form a learning loop) or is it one-off?
 
 Signals of over-engineering:
-- Plan touches >3× the minimum files needed
 - Plan introduces a new abstraction for a single use case
 - Plan adds infrastructure (new module, new config, new DB table) for a problem
   solvable with existing tools
+- Plan creates an extension point nobody asked for (YAGNI)
 
 If over-engineered → WARN with simpler alternative suggested.
 
