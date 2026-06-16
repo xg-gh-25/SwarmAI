@@ -106,7 +106,146 @@ def load_golden_set(path: Path) -> dict:
     return data
 
 
+# ─── Tag Filtering ───────────────────────────────────────────────────────────
+
+def filter_cases_by_tags(cases: list[dict], tags: list[str] | None) -> list[dict]:
+    """Filter cases by tags. Returns all cases if tags is None or empty."""
+    if not tags:
+        return cases
+    tag_set = set(tags)
+    return [c for c in cases if tag_set & set(c.get("tags", []))]
+
+
 # ─── Evaluators (Programmatic) ────────────────────────────────────────────────
+
+def eval_keyword_match(case: dict, simulated_response: str | None = None) -> dict:
+    """Check if response contains all expected keywords (case-insensitive).
+
+    Used for cases with `expected_response_contains` field. This is a
+    programmatic evaluator — no LLM call needed. Resolves pass/fail
+    deterministically from keyword presence.
+
+    Args:
+        case: Golden set case with expected_response_contains field.
+        simulated_response: The agent response text to check against.
+            In production, this comes from a clean eval session. In tests,
+            passed directly.
+    """
+    keywords = case.get("expected_response_contains", [])
+    if not keywords:
+        return {"status": "skipped", "notes": "No expected_response_contains defined"}
+
+    if simulated_response is None:
+        # No response available — can't evaluate programmatically
+        return {"status": "skipped", "notes": "No response available for keyword check"}
+
+    response_lower = simulated_response.lower()
+    missing = [kw for kw in keywords if kw.lower() not in response_lower]
+
+    if not missing:
+        return {"status": "passed", "notes": f"All {len(keywords)} keywords found"}
+    else:
+        return {
+            "status": "failed",
+            "notes": f"Missing keywords: {missing}"
+        }
+
+
+def eval_trajectory(case: dict, actual_trajectory: list[str] | None = None) -> dict:
+    """Check if actual tool-call trajectory matches expected trajectory.
+
+    Supports three match modes:
+    - exact: actual must equal expected exactly (same steps, same order, no extras)
+    - in_order: all expected steps must appear in actual, in order (extras OK between)
+    - any_order: all expected steps must appear in actual (order doesn't matter)
+
+    Step matching is case-insensitive substring: expected "Read target file" matches
+    actual "Read file: backend/core/target_file.py".
+
+    Args:
+        case: Golden set case with expected_trajectory and trajectory_match fields.
+        actual_trajectory: List of actual tool call descriptions from the eval session.
+    """
+    expected = case.get("expected_trajectory", [])
+    match_mode = case.get("trajectory_match", "in_order")
+
+    if not expected:
+        return {"status": "skipped", "notes": "No expected_trajectory defined"}
+
+    if actual_trajectory is None:
+        return {"status": "skipped", "notes": "No actual trajectory available"}
+
+    def _step_matches(expected_step: str, actual_step: str) -> bool:
+        """Case-insensitive matching with two strategies.
+
+        Strategy 1 (exact substring): "Read initialization_manager" in actual.
+        Strategy 2 (key tokens): Split expected into tokens >=3 chars,
+        check all appear in actual (order-independent). Short tokens (<3 chars)
+        like "in", "to" are noise and are skipped.
+
+        "Read initialization_manager" matches "Read file: backend/core/initialization_manager.py"
+        because tokens 'read' and 'initialization_manager' both appear in actual.
+        """
+        exp_lower = expected_step.lower()
+        act_lower = actual_step.lower()
+        # Strategy 1: direct substring (most precise)
+        if exp_lower in act_lower:
+            return True
+        # Strategy 2: key tokens (>=3 chars) all present in actual
+        tokens = [t for t in exp_lower.split() if len(t) >= 3]
+        if not tokens:
+            return False
+        return all(token in act_lower for token in tokens)
+
+    if match_mode == "exact":
+        # Must match 1:1 — same length, same order, each step matches
+        if len(actual_trajectory) != len(expected):
+            return {
+                "status": "failed",
+                "notes": f"Expected {len(expected)} steps, got {len(actual_trajectory)}"
+            }
+        for i, (exp, act) in enumerate(zip(expected, actual_trajectory)):
+            if not _step_matches(exp, act):
+                return {
+                    "status": "failed",
+                    "notes": f"Step {i}: expected '{exp}' but got '{act}'"
+                }
+        return {"status": "passed", "notes": f"All {len(expected)} steps match exactly"}
+
+    elif match_mode == "in_order":
+        # All expected steps must appear in order (extras between are OK)
+        search_from = 0
+        for exp_step in expected:
+            found = False
+            for i in range(search_from, len(actual_trajectory)):
+                if _step_matches(exp_step, actual_trajectory[i]):
+                    search_from = i + 1
+                    found = True
+                    break
+            if not found:
+                return {
+                    "status": "failed",
+                    "notes": f"Step '{exp_step}' not found in order after position {search_from}"
+                }
+        return {"status": "passed", "notes": f"All {len(expected)} steps found in order"}
+
+    elif match_mode == "any_order":
+        # All expected steps must appear somewhere (order doesn't matter)
+        missing = []
+        for exp_step in expected:
+            found = any(_step_matches(exp_step, act) for act in actual_trajectory)
+            if not found:
+                missing.append(exp_step)
+        if missing:
+            return {
+                "status": "failed",
+                "notes": f"Missing steps: {missing}"
+            }
+        return {"status": "passed", "notes": f"All {len(expected)} steps found"}
+
+    else:
+        return {"status": "skipped", "notes": f"Unknown trajectory_match mode: {match_mode}"}
+
 
 def eval_canary_pass(case: dict, root: Path) -> dict:
     """Run a command and check output contains expected string."""
@@ -204,32 +343,68 @@ def _get_judge_model() -> str:
     return "claude-sonnet-4-20250514"
 
 
-def evaluate_case(case: dict, root: Path) -> dict:
-    """Dispatch case to appropriate evaluator. Returns result dict."""
+def evaluate_case(case: dict, root: Path, *,
+                   simulated_response: str | None = None,
+                   actual_trajectory: list[str] | None = None) -> dict:
+    """Dispatch case to appropriate evaluator. Programmatic-first cascade.
+
+    Strategy: Try ALL programmatic evaluators first. If any returns a
+    definitive result (passed or failed), use it immediately — no LLM needed.
+    Only fall through to LLM judge when programmatic evaluators skip (can't
+    determine pass/fail from available data).
+
+    This saves cost and time: keyword_match and trajectory checks are
+    deterministic, instant, and don't consume LLM tokens.
+
+    Args:
+        case: Golden set case dict.
+        root: Workspace root path.
+        simulated_response: Agent response text (from eval session or test).
+        actual_trajectory: List of tool call descriptions (from eval session or test).
+    """
     evaluators = case.get("evaluators", [])
     case_id = case["id"]
 
     start = time.time()
 
-    # Determine which evaluator to use (first match)
+    # Phase 1: Try programmatic evaluators (instant, free, deterministic)
     for ev in evaluators:
         if ev == "canary_pass":
             result = eval_canary_pass(case, root)
-            result["evaluator"] = "canary_pass"
-            result["duration_ms"] = int((time.time() - start) * 1000)
-            return result
+            if result["status"] != "skipped":
+                result["evaluator"] = "canary_pass"
+                result["duration_ms"] = int((time.time() - start) * 1000)
+                return result
+
         elif ev == "file_contains":
             result = eval_file_contains(case, root)
-            result["evaluator"] = "file_contains"
-            result["duration_ms"] = int((time.time() - start) * 1000)
-            return result
-        elif ev in LLM_EVALUATORS:
-            # LLM judge evaluators use pinned model (not production model)
+            if result["status"] != "skipped":
+                result["evaluator"] = "file_contains"
+                result["duration_ms"] = int((time.time() - start) * 1000)
+                return result
+
+        elif ev == "keyword_match":
+            result = eval_keyword_match(case, simulated_response=simulated_response)
+            if result["status"] != "skipped":
+                result["evaluator"] = "keyword_match"
+                result["duration_ms"] = int((time.time() - start) * 1000)
+                return result
+
+        elif ev in ("trajectory_exact", "trajectory_in_order", "trajectory_any_order"):
+            result = eval_trajectory(case, actual_trajectory=actual_trajectory)
+            if result["status"] != "skipped":
+                result["evaluator"] = ev
+                result["duration_ms"] = int((time.time() - start) * 1000)
+                return result
+
+    # Phase 2: Fall through to LLM judge (expensive, non-deterministic)
+    for ev in evaluators:
+        if ev in LLM_EVALUATORS:
             judge_model = _get_judge_model()
             return {
                 "status": "skipped",
                 "evaluator": ev,
-                "notes": f"LLM evaluator '{ev}' ready (judge_model={judge_model}), awaiting implementation",
+                "notes": f"LLM evaluator '{ev}' ready (judge_model={judge_model}), awaiting session executor",
                 "duration_ms": 0
             }
 
@@ -279,11 +454,26 @@ def compute_scores(cases: list, results: list[dict]) -> dict:
 
 # ─── Run Orchestration ────────────────────────────────────────────────────────
 
-def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root: Path) -> dict:
-    """Execute eval run. Returns full run result dict."""
+def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root: Path,
+             *, tags: list[str] | None = None) -> dict:
+    """Execute eval run. Returns full run result dict.
+
+    Evaluator cascade: programmatic first (keyword_match, trajectory, canary_pass,
+    file_contains), then LLM judge only if programmatic can't determine.
+
+    Args:
+        golden_set: Parsed golden_set.yaml dict.
+        trigger: What triggered this run (manual, weekly, steering_edit, etc.)
+        case_filter: Optional list of case IDs to run.
+        root: Workspace root path.
+        tags: Optional list of tags to filter (smoke, full, regression).
+    """
     cases = golden_set["cases"]
 
-    # Filter if specific cases requested
+    # Filter by tags first (smoke/full/regression)
+    cases = filter_cases_by_tags(cases, tags)
+
+    # Then filter by specific case IDs
     if case_filter:
         cases = [c for c in cases if c["id"] in case_filter]
 
@@ -349,7 +539,8 @@ def cmd_run(args):
     print(f"Loaded {len(golden_set['cases'])} cases from {gs_path.name}")
 
     case_filter = args.cases.split(",") if args.cases else None
-    run_result = run_eval(golden_set, args.trigger, case_filter, root)
+    tags = args.tags.split(",") if args.tags else None
+    run_result = run_eval(golden_set, args.trigger, case_filter, root, tags=tags)
 
     out_path = write_run(run_result, root)
     print(f"\n{'='*60}")
@@ -391,6 +582,7 @@ def main():
     run_p = sub.add_parser("run", help="Execute golden set cases (self-eval)")
     run_p.add_argument("--trigger", required=True, help="Trigger type: manual|weekly|monthly|steering_edit|model_change")
     run_p.add_argument("--cases", help="Comma-separated case IDs to run (default: all)")
+    run_p.add_argument("--tags", help="Comma-separated tags to filter (smoke,full,regression)")
     run_p.add_argument("--json", action="store_true", help="Print full JSON to stdout")
 
     sub.add_parser("validate", help="Validate golden_set.yaml schema")

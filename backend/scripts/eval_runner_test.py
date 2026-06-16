@@ -11,6 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from backend.scripts.eval_runner import (
     load_golden_set,
     compute_scores,
+    eval_keyword_match,
+    eval_trajectory,
+    evaluate_case,
+    filter_cases_by_tags,
     _find_workspace_root,
     _find_swarmai_repo,
 )
@@ -98,6 +102,241 @@ class TestPathResolution:
     def test_swarmai_repo_found(self):
         repo = _find_swarmai_repo()
         assert (repo / "backend" / "core").is_dir()
+
+
+class TestKeywordMatch:
+    """Test keyword_match evaluator."""
+
+    def test_all_keywords_present(self):
+        case = {
+            "id": "TEST001",
+            "expected_response_contains": ["pipeline", "trivial"],
+            "evaluators": ["keyword_match"],
+        }
+        # Simulate a response that contains both keywords
+        result = eval_keyword_match(case, simulated_response="Use pipeline with trivial profile")
+        assert result["status"] == "passed"
+
+    def test_keyword_missing(self):
+        case = {
+            "id": "TEST002",
+            "expected_response_contains": ["pipeline", "DEFER"],
+            "evaluators": ["keyword_match"],
+        }
+        result = eval_keyword_match(case, simulated_response="Use pipeline for this change")
+        assert result["status"] == "failed"
+        assert "DEFER" in result["notes"]
+
+    def test_case_insensitive(self):
+        case = {
+            "id": "TEST003",
+            "expected_response_contains": ["Pipeline"],
+            "evaluators": ["keyword_match"],
+        }
+        result = eval_keyword_match(case, simulated_response="run pipeline now")
+        assert result["status"] == "passed"
+
+    def test_no_keywords_defined(self):
+        case = {
+            "id": "TEST004",
+            "evaluators": ["keyword_match"],
+        }
+        result = eval_keyword_match(case, simulated_response="anything")
+        assert result["status"] == "skipped"
+
+
+class TestTrajectoryEvaluator:
+    """Test trajectory_* evaluators."""
+
+    def test_in_order_pass(self):
+        case = {
+            "id": "TEST010",
+            "expected_trajectory": ["Read target file", "Invoke pipeline"],
+            "trajectory_match": "in_order",
+            "evaluators": ["trajectory_in_order"],
+        }
+        actual_trajectory = [
+            "Read target file",
+            "Discuss approach",
+            "Invoke pipeline",
+        ]
+        result = eval_trajectory(case, actual_trajectory=actual_trajectory)
+        assert result["status"] == "passed"
+
+    def test_in_order_fail_wrong_order(self):
+        case = {
+            "id": "TEST011",
+            "expected_trajectory": ["Read target file", "Invoke pipeline"],
+            "trajectory_match": "in_order",
+            "evaluators": ["trajectory_in_order"],
+        }
+        actual_trajectory = [
+            "Invoke pipeline",
+            "Read target file",
+        ]
+        result = eval_trajectory(case, actual_trajectory=actual_trajectory)
+        assert result["status"] == "failed"
+
+    def test_in_order_fail_missing_step(self):
+        case = {
+            "id": "TEST012",
+            "expected_trajectory": ["Read target file", "Invoke pipeline"],
+            "trajectory_match": "in_order",
+            "evaluators": ["trajectory_in_order"],
+        }
+        actual_trajectory = ["Read target file"]
+        result = eval_trajectory(case, actual_trajectory=actual_trajectory)
+        assert result["status"] == "failed"
+
+    def test_any_order_pass(self):
+        case = {
+            "id": "TEST013",
+            "expected_trajectory": ["Invoke pipeline", "Read target file"],
+            "trajectory_match": "any_order",
+            "evaluators": ["trajectory_any_order"],
+        }
+        actual_trajectory = [
+            "Read target file",
+            "Invoke pipeline",
+        ]
+        result = eval_trajectory(case, actual_trajectory=actual_trajectory)
+        assert result["status"] == "passed"
+
+    def test_exact_pass(self):
+        case = {
+            "id": "TEST014",
+            "expected_trajectory": ["Read file", "Edit file"],
+            "trajectory_match": "exact",
+            "evaluators": ["trajectory_exact"],
+        }
+        actual_trajectory = ["Read file", "Edit file"]
+        result = eval_trajectory(case, actual_trajectory=actual_trajectory)
+        assert result["status"] == "passed"
+
+    def test_exact_fail_extra_step(self):
+        case = {
+            "id": "TEST015",
+            "expected_trajectory": ["Read file", "Edit file"],
+            "trajectory_match": "exact",
+            "evaluators": ["trajectory_exact"],
+        }
+        actual_trajectory = ["Read file", "Think", "Edit file"]
+        result = eval_trajectory(case, actual_trajectory=actual_trajectory)
+        assert result["status"] == "failed"
+
+    def test_no_trajectory_skips(self):
+        case = {
+            "id": "TEST016",
+            "evaluators": ["trajectory_in_order"],
+        }
+        result = eval_trajectory(case, actual_trajectory=[])
+        assert result["status"] == "skipped"
+
+    def test_substring_matching(self):
+        """Trajectory steps should match as substrings (case-insensitive)."""
+        case = {
+            "id": "TEST017",
+            "expected_trajectory": ["Read initialization_manager", "Verify get_session_context exists"],
+            "trajectory_match": "in_order",
+            "evaluators": ["trajectory_in_order"],
+        }
+        actual_trajectory = [
+            "Read file: backend/core/initialization_manager.py",
+            "Grep: verify get_session_context exists in the module",
+        ]
+        result = eval_trajectory(case, actual_trajectory=actual_trajectory)
+        assert result["status"] == "passed"
+
+
+class TestFilterCasesByTags:
+    """Test tag-based filtering of cases."""
+
+    def test_filter_smoke(self):
+        cases = [
+            {"id": "A", "tags": ["smoke", "regression"]},
+            {"id": "B", "tags": ["full"]},
+            {"id": "C", "tags": ["smoke"]},
+            {"id": "D"},  # no tags
+        ]
+        filtered = filter_cases_by_tags(cases, ["smoke"])
+        assert len(filtered) == 2
+        assert {c["id"] for c in filtered} == {"A", "C"}
+
+    def test_filter_multiple_tags(self):
+        cases = [
+            {"id": "A", "tags": ["smoke"]},
+            {"id": "B", "tags": ["regression"]},
+            {"id": "C", "tags": ["full"]},
+        ]
+        filtered = filter_cases_by_tags(cases, ["smoke", "regression"])
+        assert len(filtered) == 2
+
+    def test_no_filter_returns_all(self):
+        cases = [{"id": "A", "tags": ["smoke"]}, {"id": "B"}]
+        filtered = filter_cases_by_tags(cases, None)
+        assert len(filtered) == 2
+
+    def test_empty_tags_returns_all(self):
+        cases = [{"id": "A", "tags": ["smoke"]}, {"id": "B"}]
+        filtered = filter_cases_by_tags(cases, [])
+        assert len(filtered) == 2
+
+
+class TestProgrammaticFirstCascade:
+    """Test that programmatic evaluators are tried before LLM judge."""
+
+    def test_keyword_match_resolves_without_llm(self):
+        """Case with expected_response_contains + keyword_match evaluator should not need LLM."""
+        case = {
+            "id": "GS_TEST",
+            "category": "compliance",
+            "dimension": "compliance",
+            "evaluators": ["keyword_match", "goal_success"],
+            "expected_response_contains": ["pipeline"],
+            "affected_by": ["STEERING.R1"],
+        }
+        root = _find_workspace_root()
+        # This should use keyword_match (programmatic), not goal_success (LLM)
+        result = evaluate_case(case, root, simulated_response="Run the pipeline here")
+        assert result["evaluator"] == "keyword_match"
+        assert result["status"] == "passed"
+
+    def test_fallthrough_to_llm_when_no_programmatic(self):
+        """Case with only LLM evaluators falls through."""
+        case = {
+            "id": "GS_LLM_ONLY",
+            "category": "decision",
+            "dimension": "judgment_quality",
+            "evaluators": ["goal_success"],
+            "assertions": ["Agent decides correctly"],
+            "affected_by": ["MEMORY.KD34"],
+        }
+        root = _find_workspace_root()
+        result = evaluate_case(case, root)
+        assert result["evaluator"] == "goal_success"
+        assert result["status"] == "skipped"  # LLM not implemented yet
+
+
+class TestGoldenSetNewFields:
+    """Test that golden_set.yaml supports new fields."""
+
+    def test_tags_field_accepted(self):
+        """Cases with tags field should load without error."""
+        root = _find_workspace_root()
+        gs_path = root / "Projects" / "SwarmAI" / "golden_set.yaml"
+        data = load_golden_set(gs_path)
+        # At least some cases should have tags after our update
+        tagged_cases = [c for c in data["cases"] if c.get("tags")]
+        assert len(tagged_cases) > 0, "Expected at least some cases to have tags"
+
+    def test_promoted_from_field_accepted(self):
+        """Cases with promoted_from field should load without error."""
+        root = _find_workspace_root()
+        gs_path = root / "Projects" / "SwarmAI" / "golden_set.yaml"
+        data = load_golden_set(gs_path)
+        # Check that cases with source field exist (promoted_from is optional)
+        sourced = [c for c in data["cases"] if c.get("source") or c.get("promoted_from")]
+        assert len(sourced) > 0
 
 
 class TestEvalHistoryOutput:
