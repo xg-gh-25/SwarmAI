@@ -687,44 +687,71 @@ This is the LAST thing you output — never end a pipeline run without it.
 2. **OUTPUT THE COMPLETION SUMMARY TO CHAT (MANDATORY — never skip):**
 
 ```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ✅ Pipeline COMPLETE — run_<id>
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 <2-3 sentence TL;DR: what was built, what problem it solves>
 
-Profile: <profile> | Stages: <N> completed, <M> skipped
+Profile: <profile> | Stages: <N>/10 completed
 Commit: <git hash> | Files: <N> changed, +<A>/-<D> lines
 
-Quality:
-  • Adversarial: <N> findings → <M> fixed, <K> dismissed
-  • Tests: <N> passed, <M> generated
-  • Confidence: <score>/12
+Phase A (Decision):
+  ① EVALUATE → GO | ② THINK → <approach> | ③ PLAN → <N> AC
+  ④ ★ Gate 1 → <PASS/WARN/BLOCK>
 
-Lessons → IMPROVEMENT.md: <N> entries
+Phase B (Execution):
+  ⑤ BUILD → <N>R→<N>G, <N> tests | ⑥ REVIEW → <N> findings
+  ⑦ TEST → <N> passed, 0 failed
+
+Phase C (Delivery):
+  ⑧ ★ Gate 2 → <N> findings, <M> fixed | convergence: <iter>/3
+  ⑨ DELIVER → 6L pass, push-ready
+  ⑩ REFLECT → <N> lessons → IMPROVEMENT.md
+
 Report: .artifacts/runs/<run_id>/REPORT.md
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
 For **goal profile**, use this variant:
 ```
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ✅ Pipeline COMPLETE — run_<id>
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 <2-3 sentence TL;DR>
 
 Profile: goal | DoD: <X>/<Y> met in <N> cycles
+
+Phase A (Decision):
+  ① EVALUATE → GO | ② THINK → <approach> | ③ PLAN → DoD defined
+  ④ ★ Gate 1 → <verdict>
+
+Phase B (Execution — <N> cycles):
+  ⑤⑦ BUILD+TEST × <N> cycles | ⑥ REVIEW (periodic, <M> times)
+
+Phase C (Delivery):
+  ⑧ ★ Gate 2 (on total diff) → <N> findings, all fixed
+  ⑨ DELIVER → 6L pass, push-ready
+  ⑩ REFLECT → <N> lessons (aggregated from mini-reflects)
+
 Commit: <git hash> | Files: <N> changed
-
-Quality:
-  • Final adversarial: <N> findings → all resolved
-  • Per-cycle tests: <N> passed across <M> cycles
-  • Periodic review: <N> findings addressed
-
-Lessons → IMPROVEMENT.md: <N> entries
 Report: .artifacts/runs/<run_id>/REPORT.md
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+For **trivial/bugfix** (compact — no phase headers in body):
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ Pipeline COMPLETE — run_<id>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+<1-2 sentence TL;DR>
+
+A: ①GO ③<N>AC ④★<verdict> | B: ⑤<N>R<N>G ⑥<findings> ⑦<pass> | C: ⑧★<findings> ⑨push-ready ⑩<N>lessons
+Commit: <hash> | Files: <N> changed
+Report: .artifacts/runs/<run_id>/REPORT.md
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
 3. **STOP.** Do not add explanatory text after the summary. Do not ask
@@ -880,87 +907,98 @@ Reason: <why>
 
 ---
 
-## Progress Display (Structured Landmarks)
+## Progress Display — 3 Phases, 10 Stages, 2 Gates
 
-### Quality First Rule
+> **Principle:** The pipeline execution IS the live demo. A user reading the chat
+> window should understand: which phase, which stage, what Gate 1/Gate 2 decided,
+> and what each stage produced — without needing to read INSTRUCTIONS.md.
 
-Output formatting MUST NOT degrade pipeline execution quality.
-- Output is generated AFTER stage execution completes, not during
-- Output is NEVER a retry trigger (validator + tests = the only gates)
-- If token budget is tight (run-budget > 70%), compress to status-only lines
-- Agent priority: execute → verify → THEN format output
+### Architecture (shown to user via output structure)
 
-### Output Token Conservation (Mandatory)
-
-**Problem:** A full pipeline run (7-8 stages) in a single response can exceed the
-~16K output token limit, causing mid-response truncation. The pipeline stops
-silently between stages with no error message.
-
-**Rules — minimize output tokens WITHOUT reducing execution quality:**
-
-1. **Artifact CLI output: suppress JSON echo.** After `publish`, `run-update`,
-   `advance`, `run-budget` — do NOT paste the returned JSON into chat. One-line
-   confirmation only: `art_xxxx ✓` or `→ build`. The JSON is in `.artifacts/`,
-   not the chat window.
-
-2. **Tool output: tail only.** For pytest, use `| tail -5` (pass/fail summary).
-   For git diff, use `--stat` not full diff. For file reads needed for context,
-   read once and reference — don't re-read the same file across stages.
-
-3. **Stage preamble: omit SIGNAL/CHECK/FAIL for bugfix/trivial profiles.**
-   These are valuable for full/complex profiles where the stage definition isn't
-   obvious. For bugfix (well-understood scope), the 3-line preamble per stage
-   is ~150 tokens × 7 stages = ~1000 tokens wasted. Skip it.
-
-4. **Validator output: suppress when valid.** Only show validator output when
-   `valid: false`. A passing validator is expected — don't echo the success JSON.
-
-5. **DDD doc reads: batch before first stage, not per-stage.** Read TECH.md and
-   IMPROVEMENT.md once at pipeline start (during EVALUATE). Subsequent stages
-   reference what was already loaded — don't re-invoke Read tool.
-
-6. **No explanatory prose between stages.** The structured landmark (## ✦ line)
-   IS the stage output. Don't add paragraphs explaining what you're about to do
-   or what just happened. Execute → landmark → next stage.
-
-7. **Commit messages: use HEREDOC, no preview.** Don't echo the commit message
-   in chat before running it. Just commit. The git output confirms.
-
-**Token budget targets (approximate, per profile):**
-
-| Profile | Target output tokens | Stages | Strategy |
-|---------|---------------------|--------|----------|
-| bugfix | <8K | 7 | Suppress preambles, batch reads, tail-only tests |
-| trivial | <6K | 6 | Same as bugfix, even shorter landmarks |
-| full | <14K | 8 | Preambles allowed, but suppress CLI JSON |
-| research | <4K | 3 | Minimal — mostly internal reasoning |
-
-**If approaching limit:** Compress stage landmarks to single-line format:
 ```
-✦ EVALUATE → GO 3.8 | ✦ PLAN → 4AC 1file | ✦ BUILD → 2R2G 28pass | ✦ REVIEW → clean | ✦ TEST → 48/0 | ✦ DELIVER → push-ready | ✦ REFLECT → 2 lessons
+PHASE A: DECISION    ①②③④     — shared by both modes
+PHASE B: EXECUTION   ⑤⑥⑦      — full (one-shot) or goal (iterative)
+PHASE C: DELIVERY    ⑧⑨⑩     — shared quality gate + knowledge loop
 ```
 
 ### Stage Output Format
 
-After each stage completes, output a 1-3 line structured landmark:
+**Phase headers** — output ONCE when entering a new phase:
 ```
-## ✦ STAGE_NAME [Concept]
-→ key metrics | result
-  DDD insight (only if a DDD doc actually changed a decision)
+---
+**PHASE A: DECISION**
+---
 ```
 
-Concept labels: EVALUATE [DDD-Informed Decision Gate], THINK [Constraint-Driven Alternatives], PLAN [SDD: Spec Before Code], BUILD [TDD: Red-Green-Verify], REVIEW [DDD Conformance + Pattern Checks], TEST [Regression Scope], DELIVER [Multi-Gate Quality Assurance], REFLECT [DDD Knowledge Loop], GOAL LOOP [Iterative Convergence].
+**Stage landmarks** — output after each stage completes:
+```
+## ✦ <circled_number> STAGE_NAME
+→ <key result in one line>
+  <optional: DDD insight or Gate verdict>
+```
 
-**Completion summary (shown once at end) — see Step 6 for exact format.**
-The pipeline MUST end with a visible summary block. No silent completion.
+**Gate verdicts** — output with visual prominence when gates fire:
+```
+## ★ GATE 1: SKEPTIC + SSA
+→ PASS | all 5 checks clean
+  (or) → BLOCK | Check 4 SSA: plan targets symptom, not root cause
+         Structural alternative: fix producer to guarantee dict shape
+         [Fix Plan]  [Proceed Anyway]
+```
+
+```
+## ★ GATE 2: ADVERSARIAL
+→ 3 findings (1 HIGH, 2 LOW) | 3 fixed, 0 remaining
+  Convergence: 6/6 layers pass (1 iteration)
+```
+
+### Complete Stage Reference (circled numbers are MANDATORY in output)
+
+| # | Stage | Phase | Output line format |
+|---|-------|-------|-------------------|
+| ① | EVALUATE | A | `→ GO \| profile: full \| scope: standard` |
+| ② | THINK | A | `→ 3 alternatives explored, 2 risk probes, approach: X` |
+| ③ | PLAN | A | `→ 4 AC, 3 files, spec: {one-line description}` |
+| ④ | PRE-CHECK | A | `★ GATE 1: {PASS/WARN/BLOCK} \| {detail}` |
+| ⑤ | BUILD | B | `→ TDD: {N}R→{N}G \| {N} tests, {N} commits` |
+| ⑥ | REVIEW | B | `→ {N} checks, {N} findings ({M} fixed) \| constraints: {pass/N violations}` |
+| ⑦ | TEST | B | `→ {N} passed, {M} failed \| regression: clean` |
+| ⑧ | ADVERSARIAL | C | `★ GATE 2: {N} findings → {M} fixed \| convergence: {iter}/3` |
+| ⑨ | DELIVER | C | `→ 6L gate: {pass/fail} \| push-ready: {yes/no}` |
+| ⑩ | REFLECT | C | `→ {N} lessons → IMPROVEMENT.md` |
+
+### Token Conservation Rules
+
+Output formatting MUST NOT degrade execution quality. Rules:
+
+1. **Suppress CLI JSON** — one-line confirmation only (`art_xxxx ✓`)
+2. **Tool output: tail only** — pytest `| tail -5`, git `--stat`
+3. **No prose between stages** — the landmark IS the output
+4. **Validator: suppress when valid** — only show on failure
+5. **DDD reads: batch at EVALUATE** — don't re-read per-stage
+6. **Commit messages: HEREDOC, no preview**
+
+**Token targets:**
+
+| Profile | Target | Strategy |
+|---------|--------|----------|
+| full | <14K | Phase headers + full landmarks + Gate verdicts |
+| bugfix | <8K | Phase headers + compact landmarks + Gate verdicts |
+| trivial | <6K | Compact landmarks only (no phase headers) |
+| research | <4K | Minimal |
+
+**Emergency compress (approaching limit):**
+```
+A: ①GO ②3alt ③4AC ④★PASS | B: ⑤3R3G ⑥clean ⑦28/0 | C: ⑧★2fix ⑨6L-pass ⑩2lessons
+```
 
 ### Display Rules
 
-1. Concept brackets mandatory on every `## ✦` header.
-2. DDD insights only when real — silence > false attribution.
-3. ★ marks Adversarial/Convergence/Goal when ACTIVE.
-4. Density is flexible — bugfix with 1 line change gets 1 line output.
-5. If approaching token limit, compress to single-line: `✦ EVAL → GO | ✦ BUILD → 2R2G | ✦ DELIVER → push-ready`
+1. Circled numbers (①②③...) MANDATORY on every stage landmark
+2. Phase dividers (`---\n**PHASE X:**\n---`) at each phase transition (full/bugfix only)
+3. Gates use `★` prefix, not `✦` — visually distinct from regular stages
+4. DDD insights only when real — silence > false attribution
+5. Density is flexible — trivial profile compresses to single-line per stage
 
 ---
 
