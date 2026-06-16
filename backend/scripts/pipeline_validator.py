@@ -269,8 +269,10 @@ def validate_artifact_data(stage: str, data: dict, profile: str = "full") -> lis
         if isinstance(ar, dict):
             tier = ar.get("profile_tier", "")
             # Tier=skipped on full/bugfix → BLOCK (C026 fix)
+            # Relaxed profiles (trivial/research/docs) can skip adversarial
             _strict_profiles = ("full", "bugfix", "standard", "")
-            if tier in ("skipped", "lite") and profile in _strict_profiles:
+            _relaxed_profiles_ar = ("trivial", "research", "docs")
+            if tier in ("skipped", "lite") and profile in _strict_profiles and profile not in _relaxed_profiles_ar:
                 errors.append(
                     f"adversarial_review.profile_tier='{tier}' but profile='{profile}' "
                     f"requires full adversarial review. Only trivial/research/docs exempt."
@@ -290,7 +292,18 @@ def validate_artifact_data(stage: str, data: dict, profile: str = "full") -> lis
         # For full/bugfix profiles, ALL deliver sub-steps must have evidence.
         # This prevents the C028 pattern: running adversarial but skipping
         # completion audit, meta-review, and convergence loop.
-        if profile in ("full", "bugfix", "standard", ""):
+        # Profile-aware relaxation: trivial/research/docs skip meta_review + convergence.
+        _relaxed_profiles = ("trivial", "research", "docs")
+        if profile in _relaxed_profiles:
+            # Relaxed validation: only need completion_audit (basic AC check)
+            ca = data.get("completion_audit")
+            if not isinstance(ca, dict):
+                errors.append(
+                    "completion_audit missing from deliver artifact. "
+                    "Even trivial profiles need basic AC verification."
+                )
+            # meta_review, convergence: NOT required for relaxed profiles
+        elif profile in ("full", "bugfix", "standard", ""):
             # Check: completion_audit must exist and be all_green
             ca = data.get("completion_audit")
             if not isinstance(ca, dict):

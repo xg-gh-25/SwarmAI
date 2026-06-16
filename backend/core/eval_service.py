@@ -460,11 +460,52 @@ class EvalService:
     # ─── Private: Persistence ────────────────────────────────────────────
 
     def _persist_golden_set(self) -> None:
-        """Atomic write golden_set.yaml (tmp + rename pattern)."""
+        """Atomic write golden_set.yaml with merge-preserve pattern.
+
+        Before writing, re-reads the current disk state and merges:
+        - Existing cases: preserves all fields from disk (tags, promoted_from, etc.)
+          that we didn't explicitly modify in-memory. In-memory additions (new cases)
+          are appended.
+        - This prevents data loss when another session (or manual edit) added fields
+          that this process's in-memory state doesn't know about.
+        """
         if yaml is None:
             raise RuntimeError("PyYAML not available, cannot persist")
 
-        self._golden_set["cases"] = self._cases
+        # Read current disk state to preserve externally-added fields
+        disk_cases = {}
+        if self._golden_set_path.exists():
+            try:
+                disk_data = yaml.safe_load(self._golden_set_path.read_text()) or {}
+                for case in disk_data.get("cases", []):
+                    if case.get("id"):
+                        disk_cases[case["id"]] = case
+            except Exception:
+                pass  # If disk read fails, proceed with in-memory only
+
+        # Merge: for each in-memory case, preserve disk-only fields
+        merged_cases = []
+        for mem_case in self._cases:
+            case_id = mem_case.get("id")
+            if case_id and case_id in disk_cases:
+                # Start with disk version (has all fields), overlay in-memory changes
+                merged = dict(disk_cases[case_id])
+                # In-memory fields that eval_service actively manages:
+                _managed_fields = {"id", "category", "dimension", "level", "title",
+                                   "source", "affected_by", "evaluators", "tier",
+                                   "scenario", "assertions", "verification",
+                                   "expected_trajectory", "trajectory_match",
+                                   "expected_response_contains"}
+                for key in _managed_fields:
+                    if key in mem_case:
+                        merged[key] = mem_case[key]
+                merged_cases.append(merged)
+            else:
+                # New case (not on disk) — write as-is
+                merged_cases.append(mem_case)
+
+        self._golden_set["cases"] = merged_cases
+        self._cases = merged_cases  # Keep in-memory in sync
         content = yaml.dump(self._golden_set, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
         # Atomic write: write to temp, then rename
