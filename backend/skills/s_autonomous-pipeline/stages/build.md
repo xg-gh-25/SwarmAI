@@ -80,10 +80,10 @@ If no `build_injection_recommendations` exist, skip this section.
 
 ---
 
-## Gate 1: Pre-Check (Skeptic + SSA) — DRY-RUN MODE
+## Gate 1: Pre-Check (Skeptic + SSA) — ACTIVE
 
-> **Status:** Active in DRY-RUN mode. Verdict is logged to run.json but does NOT
-> block BUILD. Observe signal quality over 3-5 pipeline runs before enabling blocking.
+> **Status:** ACTIVE. BLOCK verdict halts BUILD until resolved.
+> User can override with "proceed anyway" (logged as override, not silent skip).
 
 ### Trigger Conditions
 
@@ -220,18 +220,40 @@ Overall: [PASS — proceed to BUILD | WARN — proceed with noted concerns | BLO
   Vague findings ("could be improved") are not findings — they are noise.
 ```
 
-### Execution (DRY-RUN)
+### Execution
 
-1. Assemble the 4 input sections (plan, rejected alternatives, constraints, failures)
-2. Spawn sub-agent with the prompt above + input sections as user message
+1. Assemble the 5 input sections (plan, rejected alternatives, constraints, failures, EVALUATE verdict)
+2. Spawn sub-agent with the Skeptic+SSA prompt above + input sections as user message
 3. Parse the verdict from sub-agent response
-4. **DRY-RUN behavior:** Log verdict but ALWAYS proceed to Step 1 regardless of result
+4. **Handle verdict:**
 
+**PASS:**
 ```
-⚠️ GATE 1 (dry-run): {VERDICT}
-  {summary of checks — 1 line per non-PASS check}
-  [Dry-run: logged, not blocking. Proceed to BUILD.]
+✅ GATE 1: PASS — direction validated, proceed to BUILD.
 ```
+→ Proceed to Step 1.
+
+**WARN:**
+```
+⚠️ GATE 1: WARN
+  {summary of concerns — 1 line per non-PASS check}
+→ Acknowledged. Proceeding to BUILD with noted concerns.
+```
+→ Log warnings, proceed to Step 1. No user interrupt.
+
+**BLOCK:**
+```
+🛑 GATE 1: BLOCK — direction challenge
+
+  Issue: {specific finding from sub-agent}
+  Structural alternative: {what the sub-agent proposed}
+
+  [Fix Plan — revise and re-run Gate 1]  [Proceed Anyway — accept risk]
+```
+→ Present to user. Two options:
+  - **Fix Plan:** Return to PLAN stage. Revise approach. Re-run Gate 1. Max 2 retries.
+  - **Proceed Anyway:** User explicitly overrides. Log as override. Proceed to Step 1.
+    Override is NOT silent — recorded in run.json for signal quality tracking.
 
 ### Recording in run.json
 
@@ -239,19 +261,19 @@ After Gate 1 completes, update the build stage record:
 
 ```bash
 python backend/scripts/artifact_cli.py run-update --project <PROJECT> --run-id <RUN_ID> \
-  --stage-json '{"stage":"build","gate1_verdict":"PASS|WARN|BLOCK","gate1_checks":{"constraints":"PASS","failure_pattern":"PASS","simplicity":"WARN: touches 5 files for single-use abstraction","ssa":"N/A","api_existence":"PASS"},"gate1_blocking":false}'
+  --stage-json '{"stage":"build","gate1_verdict":"PASS|WARN|BLOCK","gate1_blocking":true,"gate1_override":false,"gate1_checks":{"constraints":"PASS","failure_pattern":"PASS","simplicity":"WARN: ...","ssa":"N/A","api_existence":"PASS"}}'
 ```
 
-**`gate1_blocking: false`** = dry-run mode. When activated: change to `true` and
-BLOCK verdict → return to PLAN (max 2 retries before CHECKPOINT).
+**Fields:**
+- `gate1_verdict` — PASS, WARN, BLOCK, or SKIPPED
+- `gate1_blocking` — always `true` (gate is active)
+- `gate1_override` — `true` if user chose "Proceed Anyway" on a BLOCK verdict
+- `gate1_checks` — per-check detail for signal quality tracking
+- `gate1_retries` — number of PLAN revisions attempted (0, 1, or 2)
 
-### Future Activation (not yet — requires 3-5 dry-run observations)
-
-When signal quality is validated (>50% of WARN/BLOCK verdicts are genuinely useful):
-1. Change `gate1_blocking` to `true` in stage-json
-2. BLOCK verdict → present to user with structural alternative → revise PLAN or accept-as-is
-3. WARN verdict → log + acknowledge + proceed (no user interrupt)
-4. Add golden set cases: "Given plan X, Gate 1 should PASS/BLOCK?"
+**Override tracking:** When `gate1_override: true`, OS Eval can later assess whether
+the override was justified (plan succeeded despite BLOCK) or the BLOCK was correct
+(plan produced rework). This data informs prompt tuning.
 
 ---
 
