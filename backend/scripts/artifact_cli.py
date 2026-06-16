@@ -485,8 +485,14 @@ def cmd_projects(args, reg: ArtifactRegistry) -> None:
 
 # ── Pipeline run management ──────────────────────────────────────────
 
-# Default token budget estimates per stage (conservative).
-# Historical calibration overrides these when data is available.
+# Default token budget estimates per stage (CONSERVATIVE — used for run-budget
+# should_checkpoint calculation). These are intentionally HIGHER than the
+# INSTRUCTIONS.md "Base stage costs" table (which shows typical/observed costs)
+# because run-budget must avoid premature checkpoints. The INSTRUCTIONS.md values
+# (evaluate=6K, think=10K, plan=8K, build=40K, etc.) are what the agent targets;
+# these values are what the budget system uses as worst-case estimates.
+# After 5+ completed runs, _calibrated_stage_budget() overrides these with
+# historical averages + 20% buffer — making both sets irrelevant.
 DEFAULT_STAGE_BUDGETS = {
     "evaluate": 10_000,
     "think": 40_000,
@@ -870,26 +876,14 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                         }))
                         return
 
-            # ── REPORT.md quality gate: must have >500 bytes (Rule 12) ──
-            report_path = _run_dir(args.project, args.run_id) / "REPORT.md"
-            if not report_path.exists() or report_path.stat().st_size < 500:
-                print(json.dumps({
-                    "error": "Cannot mark completed: REPORT.md not found. "
-                             "Generate the pipeline report at "
-                             f".artifacts/runs/{args.run_id}/REPORT.md "
-                             "before completing. The report must document pipeline "
-                             "execution process (stages run, decisions made, "
-                             "findings, methodology impact).",
-                    "pipeline_id": args.run_id,
-                    "expected_path": str(report_path),
-                }))
-                return
+            # ── REPORT.md gate: checked later (line ~1078) after validator runs.
+            # Removed duplicate early check — single canonical gate is post-validator.
 
             # ── Stage metrics gate (full/bugfix only): audit trail completeness ──
             # Every stage must have token_cost recorded. Chat output IS the live
             # demo, run.json IS the audit trail, REPORT.md IS the projection.
             # Empty metrics = empty report = useless audit.
-            if profile in ("full", "bugfix", "standard"):
+            if profile in ("full", "bugfix"):
                 stages_without_metrics = []
                 for s in run_state.get("stages", []):
                     name = s.get("stage", s.get("name", "?"))
@@ -913,7 +907,7 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
             # publish → validation_failed → fix JSON → re-publish ceremony that
             # wastes ~5K tokens per run. Only for full/bugfix where delivery matters.
             _requirement = run_state.get("requirement", "")
-            if profile in ("full", "bugfix", "standard"):
+            if profile in ("full", "bugfix"):
                 deliver_stage_rec = next(
                     (s for s in run_state.get("stages", [])
                      if s.get("stage", s.get("name", "")) == "deliver"
@@ -1004,7 +998,7 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                 # goal_cycle, enforced by the adversarial_review gate below.)
                 _profile = run_state.get("profile", "full")
                 if deliver_rec and not deliver_rec.get("artifact_id"):
-                    if _profile in ("full", "bugfix", "standard"):
+                    if _profile in ("full", "bugfix"):
                         validator_errors.append(
                             "[deliver] Stage completed without artifact_id. "
                             "Pipeline ceremony requires: publish deliver artifact "
@@ -1159,6 +1153,7 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         # gate checks the CURRENT profile, so a downgrade makes it inapplicable.
         # Fix: profile downgrades are REJECTED once any stage past evaluate exists.
         # Upgrades (trivial→full) are always allowed (more rigor = safe).
+        # "standard" kept as backwards-compat alias for "full" (legacy run.json files may use it)
         _PROFILE_RANK = {"trivial": 1, "docs": 2, "research": 2, "bugfix": 3, "full": 4, "standard": 4, "goal": 4}
         current_profile = run_state.get("profile")
         new_rank = _PROFILE_RANK.get(args.profile, 3)

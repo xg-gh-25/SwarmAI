@@ -1122,13 +1122,22 @@ A: ①GO ②3alt ③4AC ④★PASS | B: ⑤3R3G ⑥clean ⑦28/0 | C: ⑧★2fix
     equivalent to skipping the gate. If spawning is infeasible (token budget
     exhaustion, context limit), CHECKPOINT — don't fake it.
 
+    **Two-field enforcement (code-enforced):** The validator requires BOTH:
+    - `adversarial_review.spawned: true` — declares spawn happened
+    - `adversarial_review.evidence: "<description>"` — describes HOW (non-empty)
+    
+    Example: `"evidence": "Agent tool invocation: adversarial code reviewer"`
+    
+    Missing or empty `evidence` field = validator BLOCKS completion. This
+    eliminates the honor-system gap where `spawned=true` was declared without
+    actual Agent tool invocation.
+
     **Why this exists:** run_d6cdd758 and run_1c94f115 declared `spawned=true`
-    without Agent tool invocation. Validator checks the field value, not the
-    behavior. Only fresh-context sub-agent catches bugs the builder is blind to.
-    (Evidence: 24 findings in 10 runs, all from real spawns, 0 from self-review.)
+    without Agent tool invocation. Single-field `spawned` check is trivially
+    bypassable. Two-field enforcement + GS021 trajectory = two-layer gate.
 
     **Detection:** Golden set trajectory case GS021 verifies Agent tool appears
-    in the execution trace. Future: PostToolUse hook audit at deliver completion.
+    in the execution trace. Validator enforces evidence field at completion.
 
 24. **Stage-json fields for EVALUATE/THINK/PLAN (report completeness).**
     The following fields MUST be recorded in stage-json (via `run-update

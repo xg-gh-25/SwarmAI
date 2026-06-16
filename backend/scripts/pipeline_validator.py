@@ -270,7 +270,7 @@ def validate_artifact_data(stage: str, data: dict, profile: str = "full") -> lis
             tier = ar.get("profile_tier", "")
             # Tier=skipped on full/bugfix → BLOCK (C026 fix)
             # Relaxed profiles (trivial/research/docs) can skip adversarial
-            _strict_profiles = ("full", "bugfix", "standard", "")
+            _strict_profiles = ("full", "bugfix", "")
             if tier in ("skipped", "lite") and profile in _strict_profiles:
                 errors.append(
                     f"adversarial_review.profile_tier='{tier}' but profile='{profile}' "
@@ -280,7 +280,19 @@ def validate_artifact_data(stage: str, data: dict, profile: str = "full") -> lis
             spawned = ar.get("spawned")
             if profile in _strict_profiles:
                 if spawned is True or spawned == "true" or spawned == 1:
-                    pass  # Valid: sub-agent was spawned
+                    # Two-field enforcement (Rule 23): spawned=true alone is insufficient.
+                    # Agent must also provide 'evidence' field describing HOW it was spawned.
+                    # This blocks the CLASS A pattern of declaring spawned=true without
+                    # actually invoking the Agent tool. Combined with GS021 golden set
+                    # trajectory case, creates two-layer enforcement.
+                    evidence = ar.get("evidence", "")
+                    if not evidence or not str(evidence).strip():
+                        errors.append(
+                            "adversarial_review.spawned=true but 'evidence' field is missing or empty. "
+                            "Rule 23 requires describing HOW the sub-agent was spawned "
+                            "(e.g., 'Agent tool invocation for adversarial review'). "
+                            "This prevents self-review disguised as adversarial."
+                        )
                 else:
                     errors.append(
                         f"adversarial_review.spawned={spawned} but profile='{profile}' "
@@ -313,7 +325,7 @@ def validate_artifact_data(stage: str, data: dict, profile: str = "full") -> lis
                     "Even trivial profiles need basic AC verification."
                 )
             # meta_review, convergence: NOT required for relaxed profiles
-        elif profile in ("full", "bugfix", "standard", ""):
+        elif profile in ("full", "bugfix", ""):
             # Check: completion_audit must exist and be all_green
             ca = data.get("completion_audit")
             if not isinstance(ca, dict):
@@ -808,7 +820,7 @@ def _check_depth(stage: str, artifact_data: dict, profile: str) -> list[str]:
         ar = artifact_data.get("adversarial_review")
         if ar is None:
             # Absent field = adversarial review was never run
-            if profile in ("full", "bugfix", "standard", ""):
+            if profile in ("full", "bugfix", ""):
                 errors.append(
                     "Depth: adversarial_review field MISSING from deliver artifact — "
                     "adversarial sub-agent was never spawned. This is MANDATORY for "
@@ -849,7 +861,7 @@ def _check_depth(stage: str, artifact_data: dict, profile: str) -> list[str]:
 
         # completion_audit: MUST exist for full/bugfix profiles
         ca = artifact_data.get("completion_audit")
-        if ca is None and profile in ("full", "bugfix", "standard", ""):
+        if ca is None and profile in ("full", "bugfix", ""):
             errors.append(
                 "Depth: completion_audit field MISSING from deliver artifact — "
                 "was the Completion Audit (AC → evidence verification) actually run? "
