@@ -185,34 +185,34 @@ async def test_result_event_after_turn_limit():
 
 
 @pytest.mark.asyncio
-async def test_max_turns_400_set_for_desktop():
-    """prompt_builder should set max_turns=400 for desktop sessions."""
+async def test_max_turns_500_set_for_desktop():
+    """prompt_builder should set max_turns=500 for desktop sessions."""
     # This tests the logic, not the full prompt_builder (which requires DB etc)
     channel_context = None
     agent_config: dict[str, Any] = {}  # No explicit max_turns
 
     max_turns = agent_config.get("max_turns") or None
-    if channel_context and (max_turns is None or max_turns > 15):
-        max_turns = 15
+    if channel_context and (max_turns is None or max_turns > 100):
+        max_turns = 100
     elif not channel_context and max_turns is None:
-        max_turns = 400
+        max_turns = 500
 
-    assert max_turns == 400
+    assert max_turns == 500
 
 
 @pytest.mark.asyncio
-async def test_max_turns_15_for_channel():
-    """prompt_builder should set max_turns=15 for channel sessions."""
+async def test_max_turns_100_for_channel():
+    """prompt_builder should set max_turns=100 for channel sessions."""
     channel_context = {"channel_id": "C123"}
     agent_config: dict[str, Any] = {}
 
     max_turns = agent_config.get("max_turns") or None
-    if channel_context and (max_turns is None or max_turns > 15):
-        max_turns = 15
+    if channel_context and (max_turns is None or max_turns > 100):
+        max_turns = 100
     elif not channel_context and max_turns is None:
-        max_turns = 400
+        max_turns = 500
 
-    assert max_turns == 15
+    assert max_turns == 100
 
 
 @pytest.mark.asyncio
@@ -222,9 +222,9 @@ async def test_explicit_max_turns_respected():
     agent_config: dict[str, Any] = {"max_turns": 50}
 
     max_turns = agent_config.get("max_turns") or None
-    if channel_context and (max_turns is None or max_turns > 15):
-        max_turns = 15
+    if channel_context and (max_turns is None or max_turns > 100):
+        max_turns = 100
     elif not channel_context and max_turns is None:
-        max_turns = 400
+        max_turns = 500
 
     assert max_turns == 50  # Explicit value preserved

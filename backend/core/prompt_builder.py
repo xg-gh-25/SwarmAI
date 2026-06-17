@@ -1266,13 +1266,17 @@ class PromptBuilder:
         # 200 turns × ~400 output tokens/turn = ~80K output, well within budget.
         # User can always press Stop for true runaway scenarios.
         max_turns = agent_config.get("max_turns") or None
-        if channel_context and (max_turns is None or max_turns > 15):
-            max_turns = 15
+        if channel_context and (max_turns is None or max_turns > 100):
+            # Channel: generous limit for skill execution (was 15, too small).
+            # Real safety comes from task_budget=400K, not turn count.
+            # 100 covers all skills (max observed: ~60 turns for complex research).
+            max_turns = 100
         elif not channel_context and max_turns is None:
             # Desktop: override CLI default (100) with generous limit.
-            # Pipeline full-profile runs need 150-250 turns typically;
-            # complex goal-profile or multi-milestone work can exceed 300.
-            max_turns = 400
+            # Pipeline full-profile runs need 150-300 turns typically;
+            # complex goal-profile or multi-milestone work can exceed 400.
+            # Self-healing triggers at max_turns-20 for seamless refresh.
+            max_turns = 500
 
         # ── Task budget: per-task token limit for CLI autocompact ─────
         #
@@ -1288,7 +1292,7 @@ class PromptBuilder:
         #
         # FIX: Set 800K for desktop chat tabs (user present, can stop).
         # Channel sessions get 400K (unattended but needs to read large
-        # docs; max_turns=15 is the independent safety cap for runaway).
+        # docs; max_turns=100 is the independent safety cap for runaway).
         #
         # Evidence: session 59b18ce8 compacted 3 times at ~100-123K
         # tokens while investigating a bug in a 3200-line file.
@@ -1296,11 +1300,11 @@ class PromptBuilder:
         # But task_budget (128K) fired first.
         #
         # Risk: Higher budget = more expensive runaway if agent loops.
-        # Mitigated by: max_turns=15 (channel), user stop (desktop),
+        # Mitigated by: max_turns=100 (channel), user stop (desktop),
         # CompactionGuard (tool loop detection).
         if channel_context:
             # Channel: unattended but must handle large docs.
-            # max_turns=15 caps total interaction length independently.
+            # max_turns=100 caps total interaction length independently.
             task_budget = {"total": 400_000}
         else:
             # Desktop chat: user is present, generous budget

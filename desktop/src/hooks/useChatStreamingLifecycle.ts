@@ -74,6 +74,25 @@ const STALL_THRESHOLD_TEXT_MS = 60_000;
 /** Stall threshold during tool execution — tools like Bash/Read can take minutes. */
 const STALL_THRESHOLD_TOOL_MS = 180_000;
 
+// ---------------------------------------------------------------------------
+// Self-healing grace period
+// ---------------------------------------------------------------------------
+
+/**
+ * Grace period (ms) before showing disconnect error during backend self-heal.
+ *
+ * When the backend's HealingLoop refreshes a session (kill → respawn), the SSE
+ * connection drops briefly (3-10s typical). During this window:
+ * - Don't clear streaming state (isStreaming stays true)
+ * - Don't show error toast
+ * - Keep the spinner/thinking indicator (looks like "still working")
+ * - Only show error if disconnect persists beyond this threshold
+ *
+ * User sees: brief pause in output, then work continues seamlessly.
+ * User does NOT see: error messages, "Reconnecting...", or manual intervention.
+ */
+export const HEAL_GRACE_PERIOD_MS = 30_000;
+
 /**
  * Compute the reconnection delay for a given attempt using exponential backoff.
  *

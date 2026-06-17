@@ -162,7 +162,7 @@ async def build_agent_config(agent_id: str) -> dict | None:
 
         # Behavior from default-agent.json
         "permission_mode": base.get("permission_mode", "default"),
-        "max_turns": base.get("max_turns", 100),
+        "max_turns": base.get("max_turns"),  # None → prompt_builder applies platform default (500 desktop, 100 channel)
         "enable_bash_tool": base.get("enable_bash_tool", True),
         "enable_file_tools": base.get("enable_file_tools", True),
         "enable_web_tools": base.get("enable_web_tools", True),

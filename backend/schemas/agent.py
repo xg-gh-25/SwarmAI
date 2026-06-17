@@ -47,7 +47,7 @@ class AgentConfig(BaseModel):
         default=None, description="Claude model to use (defaults to Claude Code default)"
     )
     permission_mode: Literal["default", "acceptEdits", "plan", "bypassPermissions"] = "default"
-    max_turns: int | None = Field(default=None, ge=1, le=100)
+    max_turns: int | None = Field(default=None, ge=1, le=2000)
     system_prompt: str | None = None
     allowed_tools: list[str] = Field(default_factory=list)
     plugin_ids: list[str] = Field(default_factory=list, description="List of installed plugin IDs to enable for this agent")
@@ -111,7 +111,7 @@ class AgentCreateRequest(BaseModel):
     description: str | None = None
     model: str | None = None
     permission_mode: Literal["default", "acceptEdits", "plan", "bypassPermissions"] = "bypassPermissions"
-    max_turns: int | None = Field(default=100, ge=1, le=100)
+    max_turns: int | None = Field(default=None, ge=1, le=2000)
     system_prompt: str | None = None
     allowed_tools: list[str] = Field(default_factory=list)
     plugin_ids: list[str] = Field(default_factory=list)
