@@ -888,12 +888,31 @@ CITATIONS:
 """
 
     def _call_llm(self, prompt: str) -> str:
-        """Make Bedrock Sonnet call. Returns response text."""
-        from jobs.bedrock import get_client, get_model_id
+        """Make Bedrock Sonnet call with explicit timeouts. Returns response text.
 
-        client = get_client()
-        # Use Sonnet for cost (Layer 2 runs weekly, budget matters)
-        model_id = "us.anthropic.claude-sonnet-4-6"
+        Timeout: connect=5s, read=25s — fits within the channel's 30s budget.
+        If Bedrock is slow, the call fails cleanly rather than lingering.
+        """
+        from jobs.bedrock import get_client
+        from botocore.config import Config as BotoConfig
+
+        # Get base client, then create a timeout-constrained one for this call
+        base_client = get_client()
+        # Use the same region but with explicit timeouts
+        model_id = self._get_sonnet_model_id()
+
+        # Create a timeout-scoped client (reuses credentials from get_client)
+        import boto3
+        timeout_config = BotoConfig(
+            connect_timeout=5,
+            read_timeout=25,
+            retries={"max_attempts": 1, "mode": "standard"},
+        )
+        client = boto3.client(
+            "bedrock-runtime",
+            region_name=base_client.meta.region_name,
+            config=timeout_config,
+        )
 
         response = client.invoke_model(
             modelId=model_id,
@@ -913,6 +932,17 @@ CITATIONS:
         if content and content[0].get("type") == "text":
             return content[0]["text"]
         return ""
+
+    @staticmethod
+    def _get_sonnet_model_id() -> str:
+        """Get Sonnet model ID from config (same source as summarization.py)."""
+        try:
+            from core.app_config_manager import AppConfigManager
+            cfg = AppConfigManager.instance()
+            bedrock_map = cfg.get("bedrock_model_map") or {}
+            return bedrock_map.get("claude-sonnet-4-6", "us.anthropic.claude-sonnet-4-6")
+        except Exception:
+            return "us.anthropic.claude-sonnet-4-6"
 
     def _parse_response(self, response: str) -> tuple[str, list[str]]:
         """Parse LLM response into (proposed_text, citations_list)."""

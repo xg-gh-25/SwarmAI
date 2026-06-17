@@ -1206,10 +1206,9 @@ class DddCultivationOrchestrator:
         from core.auto_refresh import RefreshResult, log_refresh_results
 
         try:
-            content = doc_path.read_text(encoding="utf-8")
+            import fcntl
 
-            # Length sanity check: catch truncation mismatch where LLM rewrites
-            # a truncated excerpt but the replacement would leave trailing content
+            # Length sanity check (pre-lock — no file I/O needed)
             current_len = len(proposal.current_text)
             proposed_len = len(proposal.proposed_text)
             if current_len > 0 and abs(proposed_len - current_len) / current_len > 0.5:
@@ -1220,15 +1219,34 @@ class DddCultivationOrchestrator:
                 )
                 return False
 
-            # Exact match replacement
-            if proposal.current_text in content:
+            # Read-modify-write under sidecar lock (consistent with _auto_apply_ddd_proposals)
+            lock_path = doc_path.with_suffix(doc_path.suffix + ".lock")
+            lock_fd = open(lock_path, "w")
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+            try:
+                content = doc_path.read_text(encoding="utf-8")
+
+                # Exact match replacement
+                if proposal.current_text not in content:
+                    logger.debug(
+                        "auto_refresh.L2: current_text not found in %s — skipping",
+                        doc_path.name,
+                    )
+                    return False
+
                 new_content = content.replace(
                     proposal.current_text, proposal.proposed_text, 1
                 )
-                # Atomic write to prevent corruption on crash
+                # Atomic write under lock
                 tmp_path = doc_path.with_suffix(".tmp")
                 tmp_path.write_text(new_content, encoding="utf-8")
                 os.replace(tmp_path, doc_path)
+            finally:
+                try:
+                    fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+                except (OSError, IOError):
+                    pass
+                lock_fd.close()
 
                 # Log for weekly report
                 result = RefreshResult(
@@ -1248,12 +1266,6 @@ class DddCultivationOrchestrator:
                     doc_path.name, proposal.confidence,
                 )
                 return True
-            else:
-                logger.debug(
-                    "auto_refresh.L2: current_text not found in %s — skipping apply",
-                    doc_path.name,
-                )
-                return False
         except Exception as exc:
             logger.warning("auto_refresh.L2: apply failed for %s: %s", doc_path.name, exc)
             return False
