@@ -1596,9 +1596,19 @@ export function useChatStreamingLifecycle(
         // The null case only occurs for the first tab before initTabState fires.
         const isActiveTab = capturedTabId === null || capturedTabId === activeTabIdRef.current;
 
-        // Mark that we've received data — used by reconnection logic to
-        // distinguish connection-phase vs mid-stream failures.
-        if (tabState && !tabState.hasReceivedData) {
+        // Mark that we've received data — used by reconnection logic AND the
+        // post-stop silent-retry to distinguish connection-phase vs mid-stream
+        // failures. Control/lifecycle events (session_start, session_resuming)
+        // and error events do NOT count as "data": otherwise a connection-phase
+        // error that arrives right AFTER session_start (e.g. the backend pipe-
+        // flush from a Stop kills the freshly-spawned subprocess on the next
+        // send) would flip hasReceivedData=true and defeat the silent-retry,
+        // surfacing a spurious "Connection interrupted — send again" and forcing
+        // the user to manually resend every time after a Stop.
+        const isDataEvent = event.type !== 'session_start'
+          && event.type !== 'session_resuming'
+          && event.type !== 'error';
+        if (tabState && !tabState.hasReceivedData && isDataEvent) {
           tabState.hasReceivedData = true;
 
           // ── Self-heal grace: data arrived → heal succeeded silently ──
