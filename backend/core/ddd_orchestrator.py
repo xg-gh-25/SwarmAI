@@ -105,6 +105,8 @@ class DddCultivationOrchestrator:
         "signal_ddd_bridge": 3.0,
         "code_intel_drift": 5.0,
         "entry_lifecycle": 3.0,
+        "mechanical_refresh": 3.0,
+        "memory_refresh": 3.0,
     }
 
     def _get_gate_manager(self, root: Path) -> "GateManager | None":
@@ -144,6 +146,12 @@ class DddCultivationOrchestrator:
             }),
             ("entry_lifecycle", self._ch_entry_lifecycle, {
                 EventType.TIMER_30MIN, EventType.SESSION_CLOSE,
+            }),
+            ("mechanical_refresh", self._ch_mechanical_refresh, {
+                EventType.GIT_COMMIT, EventType.TIMER_30MIN,
+            }),
+            ("memory_refresh", self._ch_memory_refresh, {
+                EventType.GIT_COMMIT, EventType.TIMER_30MIN,
             }),
         ]
 
@@ -813,5 +821,110 @@ class DddCultivationOrchestrator:
                     except (OSError, IOError):
                         pass
                     lock_fd.close()
+
+    # ── Channel 9: Mechanical Auto-Refresh (Layer 1) ──────────────────────
+
+    def _ch_mechanical_refresh(self, root: Path, ws_path: str) -> list[str]:
+        """Layer 1: Detect and fix numeric/list drift in DDD & context files.
+
+        Zero LLM. Uses filesystem as source of truth. Provably correct.
+        Runs on GIT_COMMIT (detect drift from code changes) + TIMER_30MIN.
+        """
+        findings: list[str] = []
+
+        try:
+            from core.auto_refresh import (
+                MechanicalRefresher, log_refresh_results,
+            )
+
+            swarmai_root = _find_swarmai_root()
+            if not swarmai_root:
+                return findings
+
+            refresher = MechanicalRefresher(swarmai_root, Path(root))
+            results = refresher.detect_and_fix()
+
+            if not results:
+                return findings
+
+            # Apply fixes
+            applied = refresher.apply_fixes(results)
+
+            # Log for weekly report audit trail
+            log_path = Path(root) / ".context" / ".auto_refresh_log.jsonl"
+            applied_results = [r for r in results if r.applied]
+            if applied_results:
+                log_refresh_results(applied_results, log_path)
+
+            # Report findings
+            for r in results:
+                status = "FIXED" if r.applied else "DETECTED"
+                findings.append(
+                    f"AUTO-REFRESH-L1: {status} {r.target_file}: "
+                    f"'{r.old_value}' → '{r.new_value}' [{r.evidence}]"
+                )
+
+            if applied > 0:
+                logger.info(
+                    "ddd_orchestrator.mechanical_refresh: applied %d fixes", applied
+                )
+
+        except Exception as exc:
+            logger.warning("ddd_orchestrator.mechanical_refresh failed: %s", exc)
+            findings.append(f"CHANNEL_ERROR: mechanical_refresh — {type(exc).__name__}: {exc}")
+
+        return findings
+
+    # ── Channel 10: Memory Entry Refresh ──────────────────────────────────
+
+    def _ch_memory_refresh(self, root: Path, ws_path: str) -> list[str]:
+        """Cross-reference MEMORY.md KD/LL entries against source code constants.
+
+        Detects when a KD references a value that has changed in code.
+        Layer 1 (mechanical) — fixes numeric drift in existing memory entries.
+        """
+        findings: list[str] = []
+
+        try:
+            from core.auto_refresh import (
+                MemoryEntryRefresher, MechanicalRefresher, log_refresh_results,
+            )
+
+            swarmai_root = _find_swarmai_root()
+            if not swarmai_root:
+                return findings
+
+            refresher = MemoryEntryRefresher(swarmai_root, Path(root))
+            results = refresher.scan_memory()
+
+            if not results:
+                return findings
+
+            # Apply fixes using MechanicalRefresher's apply logic
+            mech = MechanicalRefresher(swarmai_root, Path(root))
+            applied = mech.apply_fixes(results)
+
+            # Log
+            log_path = Path(root) / ".context" / ".auto_refresh_log.jsonl"
+            applied_results = [r for r in results if r.applied]
+            if applied_results:
+                log_refresh_results(applied_results, log_path)
+
+            for r in results:
+                status = "FIXED" if r.applied else "DETECTED"
+                findings.append(
+                    f"AUTO-REFRESH-MEMORY: {status} {r.old_value} → {r.new_value} [{r.evidence}]"
+                )
+
+            if applied > 0:
+                logger.info(
+                    "ddd_orchestrator.memory_refresh: applied %d fixes", applied
+                )
+
+        except Exception as exc:
+            logger.warning("ddd_orchestrator.memory_refresh failed: %s", exc)
+            findings.append(f"CHANNEL_ERROR: memory_refresh — {type(exc).__name__}: {exc}")
+
+        return findings
 
         return findings

@@ -51,6 +51,40 @@ print(f'Output: {result[\"output_path\"]}')
 - `Projects/*/.artifacts/ddd-changelog.jsonl` — applied entries (per project)
 - `Projects/*/.artifacts/proposals/*.json` — pending escalations
 - `Projects/*/PRODUCT.md|TECH.md|IMPROVEMENT.md|PROJECT.md` — health stats (line count, mtime)
+- `.context/.auto_refresh_log.jsonl` — Layer 1/2 auto-refresh activity (NEW)
+
+## Auto-Refresh Audit Section (NEW — 2026-06-17)
+
+The weekly report MUST include an **Auto-Refresh Audit** section that shows what
+the DDD & Memory Auto-Refresh Engine did this week. Read the log file:
+
+```python
+from core.auto_refresh import read_refresh_log
+from pathlib import Path
+
+log_path = Path(workspace) / ".context" / ".auto_refresh_log.jsonl"
+entries = read_refresh_log(log_path, since_days=7)
+```
+
+**Format the section:**
+
+```markdown
+## Auto-Refresh Audit
+
+### Layer 1 — Mechanical (auto-applied, FYI only)
+| Target | Change | Evidence |
+|--------|--------|----------|
+| .context/MEMORY.md | "8-stage" → "9-stage" | stages/*.md count = 9 |
+
+### Layer 2 — LLM-Proposed (auto-applied, review window)
+(none this week)
+
+### Layer 3 — Pending Escalation (needs decision)
+(use existing "Decisions Needed" section — proposals with source="auto_refresh")
+```
+
+If no auto-refresh activity this week, show: `No auto-refresh activity this week.`
+Keep it concise — 3-8 items max. This is an audit trail, not a wall of noise.
 
 ## Multi-Project by Design
 
