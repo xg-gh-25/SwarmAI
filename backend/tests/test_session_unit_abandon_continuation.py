@@ -115,7 +115,12 @@ class TestInjectAbandonContinuation:
 
     @pytest.mark.asyncio
     async def test_none_context_returns_false(self):
-        """AC3: None from build_resume_context → no injection."""
+        """AC3: None/falsy from build_resume_context → no injection.
+
+        Note: build_resume_context normally returns "" not None, but the
+        guard handles both via `if not continuation or not continuation.strip()`.
+        This test validates defensive behavior against unexpected None.
+        """
         unit = _make_unit()
 
         with patch(
@@ -226,6 +231,85 @@ class TestInjectAbandonContinuation:
 
         call_kwargs = mock_build.call_args[1]
         assert call_kwargs["token_budget"] == 20_000
+
+
+# ---------------------------------------------------------------------------
+# Tests for double-injection guard and edge cases
+# ---------------------------------------------------------------------------
+
+
+class TestDoubleInjectionGuard:
+    """Finding 1: Prevent double context injection (heal-checkpoint + abandon)."""
+
+    @pytest.mark.asyncio
+    async def test_already_enriched_string_skips_injection(self):
+        """If query_content already has a heal-checkpoint separator, skip."""
+        unit = _make_unit()
+        # Simulate query_content that was already enriched by heal-checkpoint
+        enriched_query = "heal checkpoint context\n\n---\n\noriginal user message"
+
+        with patch(
+            "core.context_injector.build_resume_context",
+            new_callable=AsyncMock,
+            return_value="abandon context that should NOT be added",
+        ):
+            result, injected = await unit._inject_abandon_continuation(enriched_query)
+
+        assert injected is False
+        assert result == enriched_query  # unchanged
+
+    @pytest.mark.asyncio
+    async def test_already_enriched_multimodal_skips_injection(self):
+        """If multimodal query_content already has enrichment text block, skip."""
+        unit = _make_unit()
+        # Simulate multimodal already enriched by heal-checkpoint
+        enriched_query = [
+            {"type": "text", "text": "heal context\n\n---\n\nmore stuff"},
+            {"type": "text", "text": "actual user message"},
+        ]
+
+        with patch(
+            "core.context_injector.build_resume_context",
+            new_callable=AsyncMock,
+            return_value="abandon context",
+        ):
+            result, injected = await unit._inject_abandon_continuation(enriched_query)
+
+        assert injected is False
+        assert result == enriched_query
+
+    @pytest.mark.asyncio
+    async def test_fresh_string_query_still_gets_injected(self):
+        """Normal string without separator still gets continuation."""
+        unit = _make_unit()
+
+        with patch(
+            "core.context_injector.build_resume_context",
+            new_callable=AsyncMock,
+            return_value="fresh continuation",
+        ):
+            result, injected = await unit._inject_abandon_continuation(
+                "plain user message without any separator"
+            )
+
+        assert injected is True
+        assert "fresh continuation" in result
+        assert "plain user message" in result
+
+    @pytest.mark.asyncio
+    async def test_whitespace_only_context_returns_false(self):
+        """Finding 6: Whitespace-only build_resume_context → no injection."""
+        unit = _make_unit()
+
+        with patch(
+            "core.context_injector.build_resume_context",
+            new_callable=AsyncMock,
+            return_value="   \n\n  \t  ",
+        ):
+            result, injected = await unit._inject_abandon_continuation("msg")
+
+        assert injected is False
+        assert result == "msg"
 
 
 # ---------------------------------------------------------------------------

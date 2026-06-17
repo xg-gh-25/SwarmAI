@@ -887,7 +887,7 @@ class SessionUnit:
         # Store app_session_id for downstream use by _retry_with_resume's
         # abandon-fallback path (build_resume_context needs the stable
         # persistence key, not the transient sdk_session_id).
-        self._app_session_id: Optional[str] = app_session_id
+        self._app_session_id = app_session_id
 
         # Cancel any in-flight pipe flush from a prior SSE disconnect.
         # The flush sends a JSON "interrupt" control request to the CLI
@@ -1476,8 +1476,10 @@ class SessionUnit:
         # Capture SDK session ID before cleanup for --resume
         resume_session_id = self._sdk_session_id
         _consecutive_timeouts = 0
-        # Once-only guard: prevents duplicate continuation injection across
-        # multiple retry iterations after the abandon transition (Property 3).
+        # Once-only guard *within this retry loop invocation*: prevents
+        # duplicate continuation injection across multiple retry iterations
+        # after the abandon transition (Property 3).  Resets naturally on
+        # each new send() call since _retry_with_resume is re-entered fresh.
         _continuation_injected = False
 
         _tb_str = initial_tb_str or ""
@@ -1561,6 +1563,11 @@ class SessionUnit:
             # ── Circuit breaker: stop retrying if structurally doomed ──
             # High context + repeated timeouts = model inference time exceeds
             # our timeout cap. Retrying produces the same result every time.
+            # NOTE: This check is intentionally BEFORE the abandon-continuation
+            # injection below. For >1M context sessions, injecting 30K more
+            # tokens is counterproductive — the session is structurally doomed
+            # regardless of context preservation. The circuit breaker emits
+            # CONTEXT_TOO_LARGE and stops; no injection occurs.
             context_tokens = getattr(self, "_last_known_context_tokens", 0) or 0
             if should_circuit_break_timeout(_consecutive_timeouts, context_tokens):
                 logger.warning(
@@ -1804,12 +1811,25 @@ class SessionUnit:
                 timeout=5.0,
             )
 
-            if not continuation:
+            if not continuation or not continuation.strip():
                 logger.info(
                     "session_unit.abandon_continuation_empty session_id=%s",
                     self.session_id,
                 )
                 return query_content, False  # no history → blank respawn (3.5)
+
+            # Guard against double injection: if query_content already carries
+            # a heal-checkpoint continuation (prepended by send() at spawn time),
+            # skip — the existing context is sufficient and stacking two
+            # preambles wastes tokens without adding value.
+            _CONTINUATION_SEPARATOR = "\n\n---\n\n"
+            if isinstance(query_content, str) and _CONTINUATION_SEPARATOR in query_content:
+                logger.info(
+                    "session_unit.abandon_continuation_skipped_already_enriched "
+                    "session_id=%s",
+                    self.session_id,
+                )
+                return query_content, False
 
             logger.info(
                 "session_unit.abandon_continuation_injected session_id=%s "
@@ -1819,8 +1839,21 @@ class SessionUnit:
 
             # Prepend continuation — mirrors _heal_checkpoint shape
             if isinstance(query_content, str):
-                return f"{continuation}\n\n---\n\n{query_content}", True
-            # Multimodal list: prepend a text block
+                return f"{continuation}{_CONTINUATION_SEPARATOR}{query_content}", True
+            # Multimodal list: prepend a text block (check for existing enrichment)
+            if (
+                isinstance(query_content, list)
+                and len(query_content) >= 2
+                and isinstance(query_content[0], dict)
+                and query_content[0].get("type") == "text"
+                and _CONTINUATION_SEPARATOR in (query_content[0].get("text") or "")
+            ):
+                logger.info(
+                    "session_unit.abandon_continuation_skipped_already_enriched "
+                    "session_id=%s (multimodal)",
+                    self.session_id,
+                )
+                return query_content, False
             return [{"type": "text", "text": continuation}, *query_content], True
 
         except asyncio.TimeoutError:
@@ -3380,20 +3413,55 @@ class SessionUnit:
     # When a single session's process tree RSS exceeds this threshold
     # while IDLE, we compact (to generate a checkpoint), then kill
     # the subprocess.  The next send() will lazy-restart with --resume.
-    # This prevents macOS jetsam from OOM-killing the entire backend.
-    # Threshold: 1.8GB.  Normal steady-state is 1.4-1.6GB (verified from
-    # lifecycle_manager logs 2026-04-12).  Old 1.2GB was below steady-state,
-    # causing every session to be proactively killed after each response.
-    # 2026-06-17: raised 1.8GB→3.5GB. task_budget=800K means IDLE sessions
-    # after deep pipelines sit at 1.5-2.5GB. Real safety is jetsam.
+    #
+    # ┌─────────────────────────────────────────────────────────────┐
+    # │ THRESHOLD SIZING RATIONALE (2026-06-17)                     │
+    # │                                                             │
+    # │ Memory model (measured, not theoretical):                   │
+    # │   - CLI base (Node.js V8):          ~300 MB                │
+    # │   - 7 MCP sub-processes:            ~350 MB                │
+    # │   - Conversation context (800K):    ~600-1500 MB           │
+    # │   - Normal IDLE steady-state:       750 MB - 1.5 GB        │
+    # │   - Normal STREAMING peak:          2.5 - 4.5 GB           │
+    # │     (V8 JSON.stringify doubles RAM: source + buffer)        │
+    # │                                                             │
+    # │ History:                                                    │
+    # │   1.2 GB (2026-04) — below steady-state, killed every turn │
+    # │   1.8 GB (2026-04) — OK for 128K budget, broke at 800K    │
+    # │   3.5 GB (2026-06) — current. Covers 800K budget IDLE.    │
+    # │                                                             │
+    # │ Safety layers (defense in depth):                           │
+    # │   L1: This threshold — proactive compact+kill, IDLE only   │
+    # │   L2: STREAMING_RSS_KILL — emergency kill during streaming │
+    # │   L3: lifecycle_manager system pressure (>85%) — any state │
+    # │   L4: macOS jetsam — OS-level kill at memory crisis        │
+    # │                                                             │
+    # │ 36 GB machine: 3.5 GB = 10%. Two sessions at threshold =  │
+    # │ 20%. Jetsam fires at ~85%. Massive headroom.               │
+    # └─────────────────────────────────────────────────────────────┘
     PROACTIVE_RSS_THRESHOLD: int = 3_500_000_000  # 3.5GB
     PROACTIVE_COOLDOWN: float = 180.0  # 3 minutes
-    # STREAMING RSS kill threshold: if a STREAMING session exceeds this,
-    # lifecycle_manager kills it immediately.  Closes the adaptive timeout
-    # blind spot (up to 900s) where proactive_rss_restart can't act.
-    # 2026-06-17: raised 3GB→7GB. CLI serializing 400-800K token context
-    # peaks at 3-4.5GB — normal V8 serialization. 36GB machine, 7GB=19%.
-    # Real safety net = macOS jetsam at system pressure >85%.
+
+    # ┌─────────────────────────────────────────────────────────────┐
+    # │ STREAMING RSS KILL THRESHOLD (2026-06-17)                   │
+    # │                                                             │
+    # │ Purpose: kill STREAMING sessions that are truly leaking,    │
+    # │ NOT sessions doing normal large-context API calls.          │
+    # │                                                             │
+    # │ Why 7 GB:                                                   │
+    # │   - Normal peak during 800K-token API call: 3-4.5 GB       │
+    # │   - After call completes, drops back to ~750 MB            │
+    # │   - Pattern is SAWTOOTH (peak→drop), not MONOTONIC         │
+    # │   - 7 GB = ~1.5x worst normal peak = true leak signal      │
+    # │                                                             │
+    # │ Evidence (2026-06-17 backend-daemon.log):                   │
+    # │   22:52 764MB → 22:53 2739MB → 22:55 3322MB → 22:57 764MB │
+    # │   This is normal. Old 3GB threshold killed at 22:56.       │
+    # │   Session was interrupted 4x in 15 min = user-facing bug.  │
+    # │                                                             │
+    # │ On 36 GB: 7 GB = 19%. Even 2 sessions peaking = 38%.      │
+    # │ Still far below jetsam trigger (~85% system pressure).     │
+    # └─────────────────────────────────────────────────────────────┘
     STREAMING_RSS_KILL_THRESHOLD: int = 7_000_000_000  # 7GB
 
     async def _check_rss_and_proactive_restart(self) -> None:
