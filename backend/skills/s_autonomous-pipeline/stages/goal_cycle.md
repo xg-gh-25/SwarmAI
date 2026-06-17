@@ -39,6 +39,73 @@ calls this stage once; the stage itself manages the cycle loop.
 
 ---
 
+## DoD Quality Rules (BLOCKING — enforced at Pre-Cycle Setup)
+
+The DoD criteria from EVALUATE are the goal profile's primary quality lever.
+Weak DoD = weak output. These rules prevent the most common DoD failure modes:
+
+### Rule 1: Mandatory Negative Test
+
+At least ONE DoD criterion must be a **negative test** — it verifies that
+a failure case is handled correctly, not just that the happy path works.
+
+```
+❌ Weak DoD (all positive):
+  - "script exists"
+  - "script runs without error"
+  - "output contains expected text"
+
+✅ Strong DoD (includes negative):
+  - "script exists"
+  - "script runs without error"  
+  - "output contains expected text"
+  - "script exits 1 (not crash) when target unreachable"  ← NEGATIVE
+```
+
+**Why:** run_2f2e078a delivered code that passed all 4 positive DoD criteria
+but had 4 undetected gaps (untested error path, failure propagation, scope
+mismatch, orphan accumulation). A single negative test ("what happens when
+the server is down?") would have caught 3 of 4.
+
+**Enforcement:** At Pre-Cycle Setup, scan `dod_criteria`. If zero criteria
+test a failure/error/edge case → the agent MUST add one before starting
+cycles. Heuristic: criterion text contains "fail", "error", "invalid",
+"not", "without", "missing", "crash", "timeout", or tests exit code != 0
+on a deliberately broken input.
+
+If the evaluation artifact has no negative test:
+```
+⚠️ DoD has no negative test. Adding: [auto-generated criterion].
+   Override with "skip negative" if intentional.
+```
+
+### Rule 2: Cross-Path Coverage
+
+When the deliverable has **multiple input paths** (e.g., `--scope full` vs
+`--scope frontend-only`, or `--backend` vs `--frontend` vs `--all`), at
+least one DoD criterion must exercise a **non-default path**.
+
+**Why:** run_2f2e078a had 4 DoD criteria, all exercising the default path.
+The `frontend-only` scope path was completely untested — it existed in code
+but could have been syntactically broken and DoD would still pass.
+
+**Heuristic for detection:** If the PLAN's `files_planned` introduces code
+with branching on a user-supplied flag/arg/scope — require DoD for ≥2 branches.
+
+### Rule 3: Behavioral Over Existential
+
+Prefer DoD criteria that verify **behavior** over **existence**.
+
+```
+❌ Existential: grep -q "function_name" file.py
+✅ Behavioral: python3 file.py --action 2>&1 | grep -q "expected output"
+```
+
+Existential criteria pass on dead code. Behavioral criteria require the
+code to actually execute.
+
+---
+
 ## Per-Cycle Execution
 
 Each cycle follows this exact sequence:
@@ -223,13 +290,37 @@ velocity = gm.get_velocity()
 ```
 
 **Final Quality Gate (before exiting goal_cycle stage):**
+
 1. Full ADVERSARIAL review on total changeset:
    ```bash
    git diff <start_commit>..HEAD
    ```
    Spawn sub-agent with this diff + DoD criteria + requirement.
-2. If adversarial finds issues → execute up to 3 more fix cycles
-3. If issues persist after 3 fix cycles → CHECKPOINT with findings
+
+2. **Cross-path adversarial prompt (MANDATORY):**
+   The adversarial sub-agent MUST be given this additional instruction:
+
+   > "Beyond reviewing the diff for correctness, answer these cross-path
+   > questions:
+   > 1. List ALL distinct code paths (branches, flag values, scope options)
+   >    in the delivered code. For EACH path: was it exercised by the DoD
+   >    criteria? If no → it's an untested path. Flag it.
+   > 2. For each function that calls another function: what happens if the
+   >    callee FAILS (returns error, throws, exits non-zero)? Is the failure
+   >    propagated, handled, or silently swallowed?
+   > 3. If this code runs repeatedly (N times), does anything accumulate
+   >    without cleanup? (sessions, files, locks, temp data)
+   > 4. Are there any code paths that exist in the diff but cannot be
+   >    reached by any DoD criterion? Those are dead-on-arrival paths."
+
+   **Why this exists:** run_2f2e078a adversarial found 5 single-file bugs
+   but missed 4 cross-path gaps (untested frontend path, failure propagation,
+   scope mismatch, orphan accumulation). Standard adversarial asks "is this
+   code correct?" — cross-path adversarial asks "is this code correct FOR
+   ALL ITS USES?"
+
+3. If adversarial finds issues → execute up to 3 more fix cycles
+4. If issues persist after 3 fix cycles → CHECKPOINT with findings
 
 **After final adversarial passes:** Mark goal_cycle stage as completed
 (with `adversarial_review: true` — required by the completion gate).

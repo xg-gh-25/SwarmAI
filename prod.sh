@@ -5,7 +5,7 @@
 #   ./prod.sh release        — Full release (backend + DMG + tag + publish)
 #   ./prod.sh verify         — Verify existing binary capabilities
 #   ./prod.sh status         — Show daemon health, binary versions, staleness
-#   ./prod.sh deploy         — (deprecated → runs build)
+#   ./prod.sh deploy         — Auto-scope deploy (detects changes + builds + E2E smoke)
 #
 # Daemon management:
 #   ./prod.sh daemon restart — Restart the backend daemon (launchd)
@@ -392,14 +392,156 @@ cmd_release() {
 }
 
 cmd_deploy() {
-    # DEPRECATED: ./prod.sh build already includes deploy + restart.
-    # This command only existed for "binary already built, just push it" which
-    # is rare and not worth a separate code path.
-    _warn "DEPRECATED: './prod.sh deploy' is deprecated."
-    _warn "  Use: ./prod.sh build  (includes build + deploy + restart)"
+    # Auto-scope deploy: detects what changed (backend/frontend/both) and
+    # runs the correct build path. Integrates E2E smoke test as exit gate.
+    local scope="${1:-auto}"
+    local needs_backend=false
+    local needs_frontend=false
+
     echo ""
-    _log "Running './prod.sh build' for you..."
-    cmd_build
+    echo -e "${BOLD}SwarmAI Auto-Scope Deploy${NC}"
+    echo "═════════════════════════"
+    echo ""
+
+    if [ "$scope" = "auto" ]; then
+        # Compare HEAD against currently deployed daemon version
+        local deployed_hash=""
+        if [ -f "$DAEMON_VERSION_FILE" ]; then
+            deployed_hash=$(awk '{print $2}' "$DAEMON_VERSION_FILE")
+        fi
+
+        # Fallback if no version file or hash is the semver (legacy)
+        if [ -z "$deployed_hash" ] || [ ${#deployed_hash} -lt 7 ]; then
+            deployed_hash="HEAD~5"
+            _warn "No deployed git hash found — comparing last 5 commits"
+        fi
+
+        # Check what changed since last deploy
+        local changed_files
+        changed_files=$(git diff --name-only "$deployed_hash"..HEAD 2>/dev/null || git diff --name-only HEAD~5..HEAD)
+
+        if echo "$changed_files" | grep -qE '^backend/|^scripts/'; then
+            needs_backend=true
+        fi
+        if echo "$changed_files" | grep -qE '^desktop/src/|^desktop/index.html|^desktop/tailwind'; then
+            needs_frontend=true
+        fi
+
+        # Also check uncommitted changes
+        local unstaged
+        unstaged=$(git status --porcelain 2>/dev/null || true)
+        if echo "$unstaged" | grep -qE '^ ?M.*(backend|scripts)/'; then
+            needs_backend=true
+        fi
+        if echo "$unstaged" | grep -qE '^ ?M.*desktop/src/'; then
+            needs_frontend=true
+        fi
+
+        if [ "$needs_backend" = false ] && [ "$needs_frontend" = false ]; then
+            # Safety net: if we couldn't get a valid diff, warn and default to backend
+            if [ -z "$changed_files" ] && [ -z "$unstaged" ]; then
+                _warn "Could not detect changes reliably — defaulting to backend build"
+                needs_backend=true
+            else
+                _ok "Nothing to deploy (no backend/ or desktop/src/ changes since ${deployed_hash:0:7})"
+                return 0
+            fi
+        fi
+
+        _log "Auto-detected scope:"
+        [ "$needs_backend" = true ] && echo "  ✓ Backend (Python changes)"
+        [ "$needs_frontend" = true ] && echo "  ✓ Frontend (TypeScript/CSS changes)"
+        echo ""
+    elif [ "$scope" = "--backend" ]; then
+        needs_backend=true
+    elif [ "$scope" = "--frontend" ]; then
+        needs_frontend=true
+    elif [ "$scope" = "--all" ]; then
+        needs_backend=true
+        needs_frontend=true
+    else
+        _err "Unknown scope: $scope"
+        echo "  Usage: ./prod.sh deploy [--backend|--frontend|--all]"
+        return 1
+    fi
+
+    # ── Execute builds (explicit error handling — set -e alone is not enough
+    # when cmd_build is called from within conditionals in some shells) ──
+    if [ "$needs_backend" = true ]; then
+        _log "Building backend..."
+        if ! cmd_build; then
+            _err "Backend build failed — aborting deploy"
+            return 1
+        fi
+    fi
+
+    if [ "$needs_frontend" = true ]; then
+        _log "Building frontend (Tauri)..."
+        if ! _build_frontend; then
+            _err "Frontend build failed — aborting deploy"
+            return 1
+        fi
+    fi
+
+    # ── Post-deploy E2E smoke (scope-aware, retry once for model flakiness) ──
+    echo ""
+    local smoke_scope="full"
+    if [ "$needs_backend" = false ] && [ "$needs_frontend" = true ]; then
+        # Frontend-only deploy: skip chat stream (daemon didn't change)
+        smoke_scope="frontend-only"
+    fi
+
+    _log "Running E2E smoke test (scope: $smoke_scope)..."
+    if python3 "$PROJECT_ROOT/scripts/smoke_e2e.py" --scope "$smoke_scope"; then
+        _ok "Deploy verified: all critical paths working ✓"
+    else
+        _warn "Smoke test failed — retrying once..."
+        sleep 3
+        if python3 "$PROJECT_ROOT/scripts/smoke_e2e.py" --scope "$smoke_scope" --verbose; then
+            _ok "Deploy verified on retry: all critical paths working ✓"
+        else
+            _err "E2E smoke FAILED (2 attempts) — deploy has regressions"
+            _err "Run: python3 scripts/smoke_e2e.py --scope $smoke_scope --verbose"
+            return 1
+        fi
+    fi
+}
+
+_build_frontend() {
+    # Build frontend via Tauri (produces new .app binary with embedded assets)
+    local app_path="/Applications/SwarmAI.app/Contents/MacOS/SwarmAI"
+    local app_before=0
+    if [ -f "$app_path" ]; then
+        app_before=$(stat -f %m "$app_path" 2>/dev/null || echo 0)
+    fi
+
+    cd "$DESKTOP_DIR"
+    _log "npm run build:all (this takes ~3-5 min)..."
+    set +e  # Temporarily disable set -e to capture exit code through pipe
+    npm run build:all 2>&1 | tail -5
+    local npm_rc=${PIPESTATUS[0]}
+    set -e
+    if [ "$npm_rc" -ne 0 ]; then
+        _err "npm run build:all failed (exit $npm_rc)"
+        cd "$PROJECT_ROOT"
+        return 1
+    fi
+
+    local app_after=0
+    if [ -f "$app_path" ]; then
+        app_after=$(stat -f %m "$app_path" 2>/dev/null || echo 0)
+    fi
+
+    if [ "$app_after" -gt "$app_before" ]; then
+        _ok "Frontend built: .app binary updated"
+        _warn "Relaunch SwarmAI.app to load new frontend"
+    else
+        _err "Frontend build may have failed — .app timestamp unchanged"
+        _err "Check: ls -la $app_path"
+        cd "$PROJECT_ROOT"
+        return 1
+    fi
+    cd "$PROJECT_ROOT"
 }
 
 cmd_verify() {
@@ -737,7 +879,7 @@ case "${1:-help}" in
         echo "  verify           Run post-build capability verification"
         echo "  preflight        Check readiness (tests, dirty tree, version) without building"
         echo "  status           Show daemon health, binary versions, staleness"
-        echo "  deploy           (deprecated → runs build)"
+        echo "  deploy           Auto-detect scope (backend/frontend/both) + build + E2E verify"
         echo ""
         echo "Daemon:"
         echo "  daemon restart   Restart the backend daemon (launchd)"
@@ -750,7 +892,8 @@ case "${1:-help}" in
         echo "  ./prod.sh release-all          # Ship everything: Desktop + Hive + GitHub"
         echo "  ./prod.sh release              # Desktop only: check → build → DMG"
         echo "  ./prod.sh release-hive         # Hive only: tar.gz + verify"
-        echo "  ./prod.sh build                # Backend change → build + deploy + restart"
+        echo "  ./prod.sh deploy               # Auto-detect changes → build + E2E verify"
+        echo "  ./prod.sh build                # Backend only: build + deploy + restart"
         echo "  ./prod.sh status               # Check what's running"
         ;;
 esac
