@@ -31,6 +31,7 @@ import subprocess
 import time
 import traceback
 from enum import Enum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 
 from .compaction_guard import EscalationLevel
@@ -1075,6 +1076,23 @@ class SessionUnit:
         self._transition(SessionState.STREAMING)
         self._model_name = getattr(options, "model", None)
 
+        # Fix #5: Capture original query before any system injections
+        # so checkpoint stores the real user request, not modified text.
+        _original_user_query = str(query_content)[:500] if query_content else ""
+
+        # ── Graceful pre-kill injection (AC2) ──────────────────────
+        # If turn_approaching was detected last turn, inject wrap-up prompt
+        # so agent finishes naturally before the actual kill on next check.
+        # One-shot: clear flag after injection (Fix #3: prevent stuck flag).
+        if self._graceful_wrap_pending and isinstance(query_content, str):
+            query_content = f"{query_content}\n\n---\n\n{WRAP_UP_PROMPT}"
+            # Don't clear here — cleared on actual kill or timeout.
+            # The flag stays True so the heal check knows to proceed with kill.
+            logger.info(
+                "session_unit.self_heal_wrap_injected session_id=%s turn=%d",
+                self.session_id, self._health_sensor.turn_count,
+            )
+
         # ── Heal checkpoint injection (invisible to user) ─────────
         # If a self-heal just happened, prepend continuation context to the
         # user's query so the agent knows to continue seamlessly.
@@ -1095,38 +1113,62 @@ class SessionUnit:
             # If so, proactively heal (kill → respawn) so next turn starts fresh.
             # User sees nothing — this happens between turns, not mid-stream.
             #
-            # DISABLED (2026-06-17): Auto-kill between turns causes cascading
-            # failures when --resume is unreliable (timeout, interrupted, no
-            # response). Symptoms: multiple "Session Resumed" dividers, full
-            # conversation dimmed, minutes of silence. Re-enable once resume
-            # path is hardened with timeout + fallback.
-            # Gate: set SWARMAI_SELF_HEAL=1 to re-enable for testing.
-            _self_heal_enabled = os.environ.get("SWARMAI_SELF_HEAL", "0") == "1"
+            # Gate: SWARMAI_SELF_HEAL=0 (off, default) | 1 (all) | canary (first tab only)
+            # Canary mode enables for ONE non-channel session, logs everything.
+            _self_heal_enabled = is_self_heal_enabled(
+                self.session_id, is_channel=bool(getattr(self, "_channel_id", None))
+            )
             should_heal, trigger = self._health_sensor.should_checkpoint()
+            # Fix #3: clear stale graceful flag if sensor no longer triggering
+            if not should_heal and self._graceful_wrap_pending:
+                self._graceful_wrap_pending = False
             if should_heal and _self_heal_enabled:
                 can_heal, reason = self._healing_loop.can_heal()
                 if can_heal:
-                    logger.info(
-                        "session_unit.self_heal trigger=%s session_id=%s turn=%d",
-                        trigger, self.session_id, self._health_sensor.turn_count,
-                    )
-                    self._healing_loop.record_heal_start()
-                    # Build TaskCheckpoint before kill (captures current context)
-                    self._heal_checkpoint = TaskCheckpoint(
-                        original_request=str(query_content)[:500] if query_content else "",
-                        trigger=trigger,
-                        turn_count=self._health_sensor.turn_count,
-                        heal_attempt=self._healing_loop.heal_attempts,
-                    )
-                    # Kill subprocess but keep _sdk_session_id (for --resume).
-                    # _crash_to_cold_async(clear_identity=False) = kill + COLD
-                    # so next send() re-spawns with --resume context.
-                    await self._crash_to_cold_async(clear_identity=False)
-                    self._health_sensor.reset()
-                    self._healing_loop.record_heal_success()
-                    # Next send() will detect state=COLD → _ensure_spawned
-                    # The _heal_checkpoint is consumed by _ensure_spawned to
-                    # inject continuation context into the new subprocess.
+                    # Graceful pre-kill for turn_approaching:
+                    # First time: set flag so next send() injects wrap-up prompt.
+                    # Second time (flag already set): proceed with actual kill.
+                    if trigger == "turn_approaching" and not self._graceful_wrap_pending:
+                        self._graceful_wrap_pending = True
+                        logger.info(
+                            "session_unit.self_heal_graceful_pending "
+                            "trigger=%s session_id=%s turn=%d "
+                            "(will inject wrap-up prompt on next send)",
+                            trigger, self.session_id, self._health_sensor.turn_count,
+                        )
+                    else:
+                        # Actual heal: checkpoint → kill → respawn on next send()
+                        logger.info(
+                            "session_unit.self_heal trigger=%s session_id=%s turn=%d",
+                            trigger, self.session_id, self._health_sensor.turn_count,
+                        )
+                        self._healing_loop.record_heal_start()
+                        # Build rich TaskCheckpoint (git diff + file tracker)
+                        # Workspace dir from standard path (same as context_injector)
+                        _ws_dir = str(Path.home() / ".swarm-ai" / "SwarmWS")
+                        self._heal_checkpoint = await build_rich_checkpoint(
+                            original_request=_original_user_query,
+                            working_dir=_ws_dir,
+                            file_tracker_paths=list(getattr(self, "_files_touched", [])),
+                            turn_count=self._health_sensor.turn_count,
+                            trigger=trigger,
+                            heal_attempt=self._healing_loop.heal_attempts,
+                        )
+                        self._graceful_wrap_pending = False
+                        # Kill subprocess but keep _sdk_session_id (for --resume).
+                        # Fix #9: wrap in try/except to prevent inconsistent state
+                        try:
+                            await self._crash_to_cold_async(clear_identity=False)
+                            self._health_sensor.reset()
+                            self._healing_loop.record_heal_success()
+                        except Exception as heal_exc:
+                            self._heal_checkpoint = None  # Discard unusable
+                            self._healing_loop.record_heal_failure(str(heal_exc))
+                            logger.error(
+                                "session_unit.self_heal_failed session_id=%s: %s",
+                                self.session_id, str(heal_exc)[:200],
+                            )
+                        # Next send() will detect state=COLD → _ensure_spawned
                 elif self._healing_loop.should_escalate():
                     logger.warning(
                         "session_unit.self_heal_exhausted session_id=%s "
@@ -3342,19 +3384,17 @@ class SessionUnit:
     # Threshold: 1.8GB.  Normal steady-state is 1.4-1.6GB (verified from
     # lifecycle_manager logs 2026-04-12).  Old 1.2GB was below steady-state,
     # causing every session to be proactively killed after each response.
-    # 2026-06-17: raised from 1.8GB→2.8GB. With task_budget=800K tokens,
-    # CLI steady-state after deep conversation = 1.5-2.5GB. 1.8GB caused
-    # proactive kills on normal IDLE sessions after long pipelines.
-    PROACTIVE_RSS_THRESHOLD: int = 2_800_000_000  # 2.8GB
+    # 2026-06-17: raised 1.8GB→3.5GB. task_budget=800K means IDLE sessions
+    # after deep pipelines sit at 1.5-2.5GB. Real safety is jetsam.
+    PROACTIVE_RSS_THRESHOLD: int = 3_500_000_000  # 3.5GB
     PROACTIVE_COOLDOWN: float = 180.0  # 3 minutes
     # STREAMING RSS kill threshold: if a STREAMING session exceeds this,
     # lifecycle_manager kills it immediately.  Closes the adaptive timeout
     # blind spot (up to 900s) where proactive_rss_restart can't act.
-    # 2026-06-17: raised from 3GB→5GB. Claude CLI serializing 400-800K
-    # token context peaks at 3-4GB RSS during API calls — this is NORMAL
-    # Node.js JSON serialization behavior, not a leak. 3GB threshold was
-    # killing sessions mid-response. Only true leaks exceed 5GB.
-    STREAMING_RSS_KILL_THRESHOLD: int = 5_000_000_000  # 5GB
+    # 2026-06-17: raised 3GB→7GB. CLI serializing 400-800K token context
+    # peaks at 3-4.5GB — normal V8 serialization. 36GB machine, 7GB=19%.
+    # Real safety net = macOS jetsam at system pressure >85%.
+    STREAMING_RSS_KILL_THRESHOLD: int = 7_000_000_000  # 7GB
 
     async def _check_rss_and_proactive_restart(self) -> None:
         """Proactive restart: if tree RSS > threshold, compact → kill.
@@ -3689,6 +3729,8 @@ class SessionUnit:
         self._channel_history_injected = False
         # Reset recall injection flag — new subprocess needs fresh recall.
         self._recall_injected = False
+        # Release canary ownership if this session held it (Fix #1: canary leak)
+        release_canary(self.session_id)
 
     def _full_cleanup(self) -> None:
         """Full cleanup for non-retriable crashes where the session should NOT be resumable.

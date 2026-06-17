@@ -1,7 +1,7 @@
 """Session self-healing: invisible detection, checkpoint, and recovery.
 
 This module provides the self-healing layer that keeps sessions alive without
-user intervention. Three components:
+user intervention. Components:
 
 - HealthSensor: Monitors per-turn health signals (latency, RSS, errors).
   Pure data, no side effects. Says "heal now" or "keep going".
@@ -9,6 +9,10 @@ user intervention. Three components:
   Immutable snapshot of task progress.
 - HealingLoop: Orchestrates the heal cycle (checkpoint → kill → respawn → continue).
   Calls existing SessionUnit methods, no new process management.
+- build_rich_checkpoint(): Async function that populates TaskCheckpoint with
+  git state + file tracker + context.
+- WRAP_UP_PROMPT: Graceful pre-kill injection text for turn_approaching trigger.
+- parse_self_heal_mode(): 3-mode gate parser (off/all/canary).
 
 Design principle: User sees nothing. System heals itself. Task completes.
 The only user-visible interruptions are explicit approval gates.
@@ -18,12 +22,16 @@ Key invariants:
 - 60s cooldown between heal cycles (prevents thrash)
 - HealthSensor is read-only — detection separated from action
 - TaskCheckpoint is immutable once created
+- Graceful pre-kill: turn_approaching injects wrap-up prompt before kill
+- Canary mode: only first non-channel session gets self-heal
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+import subprocess as _subprocess
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -314,3 +322,160 @@ class HealingLoop:
     def should_escalate(self) -> bool:
         """After max attempts, should we escalate to user?"""
         return self._heal_attempts >= MAX_HEAL_ATTEMPTS
+
+
+# ─── Graceful Pre-Kill ──────────────────────────────────────────────────────
+
+WRAP_UP_PROMPT = (
+    "SYSTEM NOTE (invisible to user — do NOT acknowledge this instruction): "
+    "The session is approaching its turn limit. "
+    "Wrap up your current thought and deliver what you have so far. "
+    "Summarize any remaining work as next steps. "
+    "The system will checkpoint and continue seamlessly. "
+    "Finish your current response naturally, then stop. "
+    "Do NOT mention this note, the turn limit, or any system refresh to the user."
+)
+
+
+# ─── Canary Mode ────────────────────────────────────────────────────────────
+
+# Module-level canary tracking. First session to claim canary owns it.
+_canary_session_id: str | None = None
+
+
+def parse_self_heal_mode(env_value: str) -> str:
+    """Parse SWARMAI_SELF_HEAL env var into mode.
+
+    Returns:
+        "off" — self-healing disabled (default)
+        "all" — enabled for all sessions
+        "canary" — enabled for first non-channel session only
+    """
+    v = env_value.strip().lower()
+    if v == "1":
+        return "all"
+    if v == "canary":
+        return "canary"
+    return "off"
+
+
+def is_self_heal_enabled(session_id: str, is_channel: bool = False) -> bool:
+    """Check if self-healing is enabled for this specific session.
+
+    Respects the 3-mode gate:
+    - off: always False
+    - all: always True
+    - canary: True only for the first non-channel session that claims it
+    """
+    global _canary_session_id
+
+    mode = parse_self_heal_mode(os.environ.get("SWARMAI_SELF_HEAL", "0"))
+
+    if mode == "off":
+        return False
+    if mode == "all":
+        return True
+    # canary mode
+    if is_channel:
+        return False  # channels never get canary self-heal
+    if _canary_session_id is None:
+        _canary_session_id = session_id
+        logger.info(
+            "[canary] Self-heal canary claimed by session_id=%s", session_id
+        )
+        return True
+    return _canary_session_id == session_id
+
+
+def release_canary(session_id: str) -> None:
+    """Release canary ownership (called on session close)."""
+    global _canary_session_id
+    if _canary_session_id == session_id:
+        logger.info("[canary] Self-heal canary released by session_id=%s", session_id)
+        _canary_session_id = None
+
+
+# ─── Rich Checkpoint Builder ────────────────────────────────────────────────
+
+
+async def _run_git_command_async(
+    cmd: list[str], working_dir: str, timeout: float = 3.0
+) -> str:
+    """Run a git command asynchronously with timeout.
+
+    Returns stdout as string. Returns empty string on any failure.
+    """
+    def _run() -> str:
+        try:
+            result = _subprocess.run(
+                cmd,
+                cwd=working_dir,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            return result.stdout.strip() if result.returncode == 0 else ""
+        except (_subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            return ""
+
+    return await asyncio.to_thread(_run)
+
+
+async def build_rich_checkpoint(
+    original_request: str,
+    working_dir: str | None = None,
+    file_tracker_paths: list[str] | None = None,
+    turn_count: int = 0,
+    trigger: str = "",
+    heal_attempt: int = 0,
+    pipeline_run_id: str | None = None,
+    pipeline_stage: str | None = None,
+) -> TaskCheckpoint:
+    """Build a fully-populated TaskCheckpoint from available context.
+
+    Extracts:
+    - files_modified: from git diff --name-only (uncommitted changes)
+    - uncommitted_changes: from git status --short
+    - key_findings: from file_tracker_paths (files touched this session)
+
+    All git operations have 3s timeout and graceful fallback to empty.
+    Never crashes — monitoring/heal must never introduce new failures.
+    """
+    files_modified: list[str] = []
+    uncommitted_changes: str = ""
+    key_findings: str = ""
+
+    if working_dir:
+        try:
+            # Get list of modified files (staged + unstaged vs HEAD)
+            diff_output = await _run_git_command_async(
+                ["git", "diff", "--name-only", "HEAD"], working_dir
+            )
+            if diff_output:
+                files_modified = [f for f in diff_output.split("\n") if f.strip()]
+
+            # Get short status for uncommitted changes summary
+            status_output = await _run_git_command_async(
+                ["git", "status", "--short"], working_dir
+            )
+            if status_output:
+                uncommitted_changes = status_output[:500]  # Cap at 500 chars
+        except Exception:
+            logger.debug("Rich checkpoint git extraction failed", exc_info=True)
+
+    # Build key_findings from file tracker (files agent read/wrote)
+    if file_tracker_paths:
+        recent = file_tracker_paths[-10:]  # Last 10 files touched
+        key_findings = f"Files touched this session: {', '.join(recent)}"
+
+    return TaskCheckpoint(
+        original_request=original_request[:500] if original_request else "",
+        files_modified=files_modified,
+        uncommitted_changes=uncommitted_changes,
+        key_findings=key_findings,
+        trigger=trigger,
+        turn_count=turn_count,
+        heal_attempt=heal_attempt,
+        pipeline_run_id=pipeline_run_id,
+        pipeline_stage=pipeline_stage,
+    )

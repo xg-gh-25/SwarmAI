@@ -1,11 +1,13 @@
 """Tests for session self-healing module.
 
 Tests HealthSensor trigger detection, TaskCheckpoint serialization,
-and HealingLoop state management. Pure unit tests — no subprocess
-spawning or SessionUnit integration.
+HealingLoop state management, rich checkpoint population, graceful
+pre-kill injection, and canary mode gating. Pure unit tests — no
+subprocess spawning or SessionUnit integration.
 """
 
 import time
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -20,9 +22,12 @@ from core.session_healing import (
     RSS_GROWTH_THRESHOLD_MB,
     RSS_WINDOW,
     TURN_APPROACH_BUFFER,
+    WRAP_UP_PROMPT,
     HealingLoop,
     HealthSensor,
     TaskCheckpoint,
+    build_rich_checkpoint,
+    parse_self_heal_mode,
 )
 
 
@@ -388,3 +393,142 @@ class TestSensorHealIntegration:
         should, trigger = sensor.should_checkpoint()
         assert should is True
         assert trigger == "latency_degradation"
+
+
+# ─── Rich Checkpoint Tests ──────────────────────────────────────────────────
+
+
+class TestBuildRichCheckpoint:
+    """Test build_rich_checkpoint() populates all fields from git + context."""
+
+    @pytest.mark.asyncio
+    async def test_fills_files_modified_from_git(self):
+        """AC1: files_modified populated from git diff --name-only."""
+        mock_git_output = "backend/core/session_healing.py\nbackend/core/session_unit.py\n"
+        with patch(
+            "core.session_healing._run_git_command_async",
+            new_callable=AsyncMock,
+            side_effect=[mock_git_output, "M session_healing.py\nM session_unit.py\n"],
+        ):
+            cp = await build_rich_checkpoint(
+                original_request="Fix the auth bug",
+                working_dir="/tmp/test",
+                file_tracker_paths=["auth.py", "config.py"],
+            )
+        # git diff --name-only returns full relative paths
+        assert any("session_healing.py" in f for f in cp.files_modified)
+        assert any("session_unit.py" in f for f in cp.files_modified)
+        assert len(cp.files_modified) == 2
+
+    @pytest.mark.asyncio
+    async def test_fills_uncommitted_changes(self):
+        """AC1: uncommitted_changes populated from git status."""
+        with patch(
+            "core.session_healing._run_git_command_async",
+            new_callable=AsyncMock,
+            side_effect=["file1.py\nfile2.py\n", "M file1.py\nA file2.py\n"],
+        ):
+            cp = await build_rich_checkpoint(
+                original_request="Add feature X",
+                working_dir="/tmp/test",
+            )
+        assert cp.uncommitted_changes != ""
+        assert "file1.py" in cp.uncommitted_changes
+
+    @pytest.mark.asyncio
+    async def test_includes_file_tracker_paths(self):
+        """AC1: file_tracker_paths included in key_findings."""
+        with patch(
+            "core.session_healing._run_git_command_async",
+            new_callable=AsyncMock,
+            return_value="",
+        ):
+            cp = await build_rich_checkpoint(
+                original_request="Debug the issue",
+                working_dir="/tmp/test",
+                file_tracker_paths=["router.py", "hooks.py", "models.py"],
+            )
+        assert "router.py" in cp.key_findings
+        assert "hooks.py" in cp.key_findings
+
+    @pytest.mark.asyncio
+    async def test_graceful_on_git_failure(self):
+        """Should not crash if git commands fail."""
+        with patch(
+            "core.session_healing._run_git_command_async",
+            new_callable=AsyncMock,
+            side_effect=Exception("git not found"),
+        ):
+            cp = await build_rich_checkpoint(
+                original_request="Do something",
+                working_dir="/tmp/test",
+            )
+        # Should still have the original request
+        assert cp.original_request == "Do something"
+        assert cp.files_modified == []
+
+    @pytest.mark.asyncio
+    async def test_continuation_prompt_has_real_content(self):
+        """AC1: to_continuation_prompt() has 5+ lines of real context."""
+        with patch(
+            "core.session_healing._run_git_command_async",
+            new_callable=AsyncMock,
+            side_effect=["a.py\nb.py\n", "M a.py\nM b.py\n"],
+        ):
+            cp = await build_rich_checkpoint(
+                original_request="Implement session healing",
+                working_dir="/tmp/test",
+                file_tracker_paths=["c.py"],
+                turn_count=150,
+                trigger="latency_degradation",
+            )
+        prompt = cp.to_continuation_prompt()
+        lines = [l for l in prompt.split("\n") if l.strip()]
+        assert len(lines) >= 5
+        assert "Implement session healing" in prompt
+        assert "a.py" in prompt
+
+
+# ─── Graceful Pre-Kill Tests ────────────────────────────────────────────────
+
+
+class TestWrapUpPrompt:
+    """Test the graceful pre-kill wrap-up prompt."""
+
+    def test_wrap_up_prompt_exists_and_nonempty(self):
+        """AC2: WRAP_UP_PROMPT constant is defined and meaningful."""
+        assert WRAP_UP_PROMPT
+        assert len(WRAP_UP_PROMPT) > 50
+        assert "wrap" in WRAP_UP_PROMPT.lower() or "finish" in WRAP_UP_PROMPT.lower()
+
+    def test_wrap_up_prompt_instructs_agent(self):
+        """AC2: Wrap-up prompt gives clear instruction to finish current work."""
+        assert "continue" in WRAP_UP_PROMPT.lower() or "checkpoint" in WRAP_UP_PROMPT.lower()
+
+
+# ─── Canary Mode Tests ──────────────────────────────────────────────────────
+
+
+class TestCanaryMode:
+    """Test the 3-mode SWARMAI_SELF_HEAL parsing."""
+
+    def test_parse_mode_off(self):
+        """'0' means off."""
+        assert parse_self_heal_mode("0") == "off"
+
+    def test_parse_mode_all(self):
+        """'1' means all sessions."""
+        assert parse_self_heal_mode("1") == "all"
+
+    def test_parse_mode_canary(self):
+        """'canary' means first non-channel session only."""
+        assert parse_self_heal_mode("canary") == "canary"
+
+    def test_parse_mode_empty(self):
+        """Empty string defaults to off."""
+        assert parse_self_heal_mode("") == "off"
+
+    def test_parse_mode_invalid(self):
+        """Invalid values default to off (safe default)."""
+        assert parse_self_heal_mode("yes") == "off"
+        assert parse_self_heal_mode("true") == "off"
