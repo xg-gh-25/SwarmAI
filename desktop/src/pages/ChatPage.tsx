@@ -415,6 +415,10 @@ export default function ChatPage() {
         const tab = tabMapRef.current.get(currentTabId);
         if (tab && tab.sessionId === sid && !tab.isStreaming) {
           tab.messages = formattedMessages;
+          // Seed the store too — keep store and tabState.messages in sync so the
+          // store→React sync effect doesn't later clobber React with an empty
+          // snapshot on the next tab switch.
+          messageStoreRegistry.getOrCreate(currentTabId).replace(formattedMessages);
         }
       }
     } catch (error) {
@@ -600,6 +604,16 @@ export default function ChatPage() {
         // useLayoutEffect scroll restore fires.
         userScrolledUpRef.current = true;
 
+        // Seed the MessageStore from the restored messages BEFORE the
+        // store→React sync effect re-subscribes (it re-runs on tab change and
+        // immediately calls setMessages(store.getSnapshot())). Without this, a
+        // tab whose store is empty/stale — while its tabState.messages holds the
+        // history — gets clobbered to [] → WelcomeScreen shows until a second
+        // switch. Skip during streaming: the store is authoritative then and
+        // replace() is a no-op mid-stream.
+        if (!tabState.isStreaming) {
+          messageStoreRegistry.getOrCreate(tabId).replace(tabState.messages);
+        }
         setMessages(tabState.messages);
         setSessionId(tabState.sessionId);
         setPendingQuestion(tabState.pendingQuestion);
