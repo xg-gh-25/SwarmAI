@@ -2648,6 +2648,39 @@ export function useChatStreamingLifecycle(
           return; // Don't show error — reconnection in progress
         }
 
+        // --- Self-heal grace period ---
+        // If data WAS being received (mid-stream disconnect), this may be the
+        // backend self-healing (kill → respawn). Don't show error immediately —
+        // wait HEAL_GRACE_PERIOD_MS. If the backend reconnects within that window,
+        // the user sees nothing (just a brief pause that looks like "thinking").
+        const hadData = tabState?.hasReceivedData ?? false;
+        if (hadData && tabState && !tabState._healGraceActive) {
+          tabState._healGraceActive = true;
+          console.log(
+            `[HealGrace] Tab ${capturedTabId}: mid-stream disconnect — entering ${HEAL_GRACE_PERIOD_MS / 1000}s grace period`,
+          );
+          // Keep isStreaming = true (spinner stays, looks like thinking)
+          // Don't show error toast yet
+          // Set a timeout — if backend doesn't reconnect, THEN show error
+          setTimeout(() => {
+            const currentTab = capturedTabId ? tabMapRef.current.get(capturedTabId) : undefined;
+            if (currentTab && currentTab._healGraceActive) {
+              // Grace period expired without recovery — show the error now
+              currentTab._healGraceActive = false;
+              console.warn(`[HealGrace] Tab ${capturedTabId}: grace period expired — showing error`);
+              // Clear streaming state
+              setIsStreaming(false, capturedTabId ?? undefined);
+              incrementStreamGen();
+              if (capturedTabId) updateTabStatus(capturedTabId, 'idle');
+              // Toast is fine here (30s elapsed = real problem)
+              addToast({ severity: 'warning', message: 'Connection lost after self-heal attempt. Send your message again to continue.', autoDismiss: true });
+            }
+            // If _healGraceActive was cleared (by a successful reconnection),
+            // do nothing — the heal worked, user saw nothing.
+          }, HEAL_GRACE_PERIOD_MS);
+          return; // Don't show error — heal grace in progress
+        }
+
         // --- Reconnection exhausted or mid-stream failure ---
         // Clear reconnection state
         if (tabState) {

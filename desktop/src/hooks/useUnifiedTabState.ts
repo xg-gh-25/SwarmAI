@@ -168,6 +168,11 @@ export interface UnifiedTab {
   busyPollInterval?: ReturnType<typeof setInterval>;
   /** Per-tab polling timeout handle — cleared on tab close or recovery. */
   busyPollTimeout?: ReturnType<typeof setTimeout>;
+  /** Self-healing grace period active — backend may be refreshing session.
+   *  While true, don't show error on SSE disconnect (looks like "thinking").
+   *  Cleared by: (a) grace timeout expiry → show error, or
+   *  (b) new stream data arrives → heal succeeded, continue silently. */
+  _healGraceActive?: boolean;
 }
 
 /** Fields persisted to ~/.swarm-ai/open_tabs.json (re-exported from tabPersistence service). */

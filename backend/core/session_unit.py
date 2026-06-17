@@ -34,6 +34,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 
 from .compaction_guard import EscalationLevel
+from .session_healing import HealthSensor, HealingLoop
 
 if TYPE_CHECKING:
     from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
@@ -497,6 +498,14 @@ class SessionUnit:
         # transitions / kills if the generation has advanced — meaning
         # a new send() started while the old interrupt was in-flight.
         self._send_generation: int = 0
+
+        # ── Self-healing (invisible session refresh) ────────────────
+        # HealthSensor monitors per-turn metrics and triggers heal when
+        # degradation is detected. HealingLoop orchestrates the refresh
+        # cycle. Together they prevent sessions from crashing — the system
+        # heals itself without user intervention.
+        self._health_sensor: HealthSensor = HealthSensor(max_turns=500)
+        self._healing_loop: HealingLoop = HealingLoop()
 
         # ── OOM tracking (persists across send() calls) ───────────
         # Counts consecutive OOM kills for this session.  NOT reset in
@@ -1045,6 +1054,33 @@ class SessionUnit:
                 yield event
             # Success — reset OOM counter (session is healthy)
             self._consecutive_oom_kills = 0
+
+            # ── Self-healing check (invisible to user) ────────────
+            # After successful stream, check if session health is degrading.
+            # If so, proactively heal (kill → respawn) so next turn starts fresh.
+            # User sees nothing — this happens between turns, not mid-stream.
+            should_heal, trigger = self._health_sensor.should_checkpoint()
+            if should_heal:
+                can_heal, reason = self._healing_loop.can_heal()
+                if can_heal:
+                    logger.info(
+                        "session_unit.self_heal trigger=%s session_id=%s turn=%d",
+                        trigger, self.session_id, self._health_sensor.turn_count,
+                    )
+                    self._healing_loop.record_heal_start()
+                    # Kill subprocess but keep _sdk_session_id (for --resume).
+                    # _crash_to_cold_async(clear_identity=False) = kill + COLD
+                    # so next send() re-spawns with --resume context.
+                    await self._crash_to_cold_async(clear_identity=False)
+                    self._health_sensor.reset()
+                    self._healing_loop.record_heal_success()
+                    # Next send() will detect state=COLD → _ensure_spawned
+                elif self._healing_loop.should_escalate():
+                    logger.warning(
+                        "session_unit.self_heal_exhausted session_id=%s "
+                        "trigger=%s attempts=%d",
+                        self.session_id, trigger, self._healing_loop.heal_attempts,
+                    )
         except Exception as exc:
             error_str = str(exc)
             tb_str = traceback.format_exc()
@@ -2674,6 +2710,17 @@ class SessionUnit:
                 ):
                     yield meta_event
 
+                # ── Health sensor: record turn metrics ─────────────
+                # Duration and RSS feed the self-healing system.
+                # Errors are recorded separately (via error path above).
+                turn_duration = getattr(message, "duration_ms", 0) or 0
+                turn_rss = self._peak_tree_rss_bytes // (1024 * 1024)  # bytes → MB
+                self._health_sensor.record_turn(
+                    latency_ms=float(turn_duration),
+                    rss_mb=turn_rss,
+                    had_error=False,
+                )
+
                 # ── MCP health check (first response only) ────────
                 if not self._mcp_health_checked and self._configured_mcps:
                     try:
@@ -3585,6 +3632,29 @@ class SessionUnit:
             self.session_id,
             self.pid,
         )
+        await self._crash_to_cold_async(clear_identity=False)
+
+    async def refresh_context(self) -> None:
+        """User-triggered context refresh — kill subprocess for resume.
+
+        Same mechanism as force_unstick but explicitly user-initiated.
+        Preserves _sdk_session_id so the next send() triggers --resume
+        with structured context injection (50-100K tokens of conversation
+        summary). Works from any non-STREAMING state.
+
+        After this call, state = COLD and next send() will auto-resume.
+        """
+        logger.info(
+            "session_unit.refresh_context session_id=%s state=%s "
+            "— user-triggered context refresh",
+            self.session_id,
+            self.state.value if self.state else "None",
+        )
+        if self.state == SessionState.STREAMING:
+            raise RuntimeError("Cannot refresh while streaming")
+        # If already COLD (no subprocess), nothing to kill — just return
+        if self.state == SessionState.COLD:
+            return
         await self._crash_to_cold_async(clear_identity=False)
 
     def clear_session_identity(self) -> None:

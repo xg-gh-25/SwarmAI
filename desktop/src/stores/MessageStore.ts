@@ -65,6 +65,13 @@ export class MessageStore {
   private _reconcileInFlight = 0;
   private _destroyed = false;
 
+  // ─── Resume boundary tracking ───
+  // Index of the last resume_boundary system message in _messages.
+  // Messages at indices <= this are from a prior session and should NOT be
+  // treated as "new" content during reconcile. Prevents the resume message
+  // leakage bug where old messages appear as fresh after cold resume.
+  private _resumeBoundaryIdx = -1;
+
   // ─── Injected dependencies ───
   private _fetchMessages: ((sessionId: string) => Promise<ChatMessage[]>) | undefined;
   private _toDisplayMessage: ((msg: ChatMessage) => Message) | undefined;
@@ -111,7 +118,19 @@ export class MessageStore {
   append(msg: Message): void {
     if (this._destroyed) return;
     this._messages = [...this._messages, msg];
+    // Track resume boundary position for filtering
+    if (msg.role === 'system' && msg.id?.startsWith('resume-boundary')) {
+      this._resumeBoundaryIdx = this._messages.length - 1;
+    }
     this._notify();
+  }
+
+  /**
+   * Index of the last resume boundary marker (-1 if none).
+   * Messages at or before this index are from a prior session.
+   */
+  get resumeBoundaryIdx(): number {
+    return this._resumeBoundaryIdx;
   }
 
   /**
@@ -402,6 +421,19 @@ export class MessageStore {
     const convert = this._toDisplayMessage || this._defaultToDisplay;
     const dbConverted = dbMessages.map(convert);
 
+    // Boundary-aware filtering: if we have a resume boundary, identify
+    // which local messages are "before boundary" (prior session content).
+    // DB messages matching those IDs should not appear as "new" — they're
+    // old content that the backend persisted but the user shouldn't re-see.
+    const preBoundaryIds = new Set<string>();
+    if (this._resumeBoundaryIdx >= 0) {
+      for (let i = 0; i < this._resumeBoundaryIdx; i++) {
+        if (this._messages[i]?.id) {
+          preBoundaryIds.add(this._messages[i].id);
+        }
+      }
+    }
+
     const localById = new Map(this._messages.map(m => [m.id, m]));
     const dbIds = new Set(dbConverted.map(m => m.id));
 
@@ -421,7 +453,11 @@ export class MessageStore {
           merged.push(dbMsg);
         }
       } else {
-        // New from DB — add it
+        // New from DB — but skip if it belongs to pre-boundary content
+        // (prevents old messages from "leaking" into current view after resume)
+        if (preBoundaryIds.has(dbMsg.id)) {
+          continue; // Skip — this is prior session content
+        }
         merged.push(dbMsg);
       }
     }
