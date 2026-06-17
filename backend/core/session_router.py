@@ -964,6 +964,7 @@ class SessionRouter:
         channel_context: Optional[dict] = None,
         editor_context: Optional[dict] = None,
         agent_config: Optional[dict] = None,
+        client_id: Optional[str] = None,
     ) -> AsyncIterator[dict]:
         """Entry point for chat requests.
 
@@ -1004,6 +1005,7 @@ class SessionRouter:
             title = (user_message or "Chat")[:50]
             try:
                 await session_manager.store_session(session_id, agent_id, title)
+                _msg_metadata = {"client_id": client_id} if client_id else None
                 await db.messages.put({
                     "id": str(uuid4()),
                     "session_id": session_id,
@@ -1011,6 +1013,7 @@ class SessionRouter:
                     "content": user_content,
                     "model": None,
                     "created_at": datetime.now().isoformat(),
+                    **({"metadata": _msg_metadata} if _msg_metadata else {}),
                 })
             except Exception as exc:
                 # Non-fatal: proceed even if persist fails.  The message
@@ -1271,6 +1274,10 @@ class SessionRouter:
                     await self._persist_assistant_blocks(
                         session_id, event["content"], event.get("model"),
                     )
+
+                # Echo client_id in result event for frontend dedup (AC2)
+                if client_id and event.get("type") == "result":
+                    event["client_id"] = client_id
 
                 yield event
         except Exception as send_err:

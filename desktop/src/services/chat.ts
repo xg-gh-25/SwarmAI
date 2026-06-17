@@ -396,6 +396,8 @@ export const chatService = {
           file_name: request.editorContext.fileName,
         },
       }),
+      // Correlation ID for optimistic message dedup (AC2/AC3)
+      ...(request.clientId && { client_id: request.clientId }),
     };
 
     // If content array is provided, use it; otherwise use message

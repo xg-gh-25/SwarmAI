@@ -1611,7 +1611,11 @@ export default function ChatPage() {
       userMessageContent.push({ type: 'text', text: `📎 ${currentAttachments.map((a) => a.name).join(', ')}` });
     }
 
-    const userMessage: Message = { id: Date.now().toString(), role: 'user', content: userMessageContent, timestamp: new Date().toISOString() };
+    // Generate clientId for optimistic message dedup — this ID is sent to
+    // backend and echoed in result event so MessageStore can correlate
+    // optimistic→DB messages during reconcile (eliminates R2/R4 duplication).
+    const clientId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const userMessage: Message = { id: clientId, role: 'user', content: userMessageContent, timestamp: new Date().toISOString() };
     // NOTE: optimistic insertion is deferred — the user message is appended to
     // the MessageStore (single source of truth) together with the assistant
     // placeholder below, so the store→React sync effect doesn't clobber a
@@ -1684,6 +1688,7 @@ export default function ChatPage() {
         enableSkills,
         enableMCP,
         ...(editorContextRef.current && { editorContext: editorContextRef.current }),
+        clientId,  // Correlation ID for optimistic message dedup
       },
       wrappedCreateStreamHandler(assistantMessageId),
       createErrorHandler(assistantMessageId, activeTabIdRef.current ?? undefined),

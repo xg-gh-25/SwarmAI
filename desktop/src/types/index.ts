@@ -172,6 +172,8 @@ export interface ChatMessage {
   content: ContentBlock[];
   model?: string;
   createdAt: string;
+  /** Backend metadata — includes client_id for optimistic message dedup */
+  metadata?: { client_id?: string; [key: string]: unknown };
 }
 
 export interface TextContent {
@@ -284,6 +286,8 @@ export interface ChatRequest {
   enableMCP?: boolean;
   /** Currently open file in the editor panel — injected as agent context */
   editorContext?: { filePath: string; fileName: string };
+  /** Correlation ID for optimistic message dedup — echoed in result event */
+  clientId?: string;
 }
 
 // ============== File Attachment Types ==============

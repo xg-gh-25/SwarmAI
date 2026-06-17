@@ -53,6 +53,7 @@ class ChatRequest(BaseModel):
     enable_skills: bool = False
     enable_mcp: bool = False
     editor_context: EditorContext | None = None  # Currently open file in editor panel
+    client_id: str | None = None  # Correlation ID for optimistic message dedup
 
 
 class AnswerQuestionRequest(BaseModel):

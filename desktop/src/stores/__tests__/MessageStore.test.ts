@@ -614,3 +614,86 @@ describe('MessageStore — recovery uses replace (no duplicated frozen partial)'
     store.destroy();
   });
 });
+
+
+// ─── ClientId Dedup (AC4/AC5) ───
+
+describe('MessageStore clientId dedup', () => {
+  it('reconcile deduplicates optimistic message via metadata.client_id', () => {
+    const store = new MessageStore();
+
+    // Frontend inserts optimistic user message with local-* ID
+    const optimistic = makeMsg('local-1718700000-abc123', 'user', 'Hello');
+    store.replace([optimistic]);
+    expect(store.messages).toHaveLength(1);
+    expect(store.messages[0].id).toBe('local-1718700000-abc123');
+
+    // Backend returns the same message with a UUID and metadata.client_id
+    const dbMessages: ChatMessage[] = [{
+      id: 'uuid-real-msg-001',
+      sessionId: 'sess-1',
+      role: 'user',
+      content: [{ type: 'text', text: 'Hello' }] as any,
+      createdAt: new Date().toISOString(),
+      metadata: { client_id: 'local-1718700000-abc123' },
+    }];
+
+    store.reconcile(dbMessages);
+
+    // Should have 1 message (not 2) — DB version replaces optimistic
+    expect(store.messages).toHaveLength(1);
+    expect(store.messages[0].id).toBe('uuid-real-msg-001');
+    store.destroy();
+  });
+
+  it('reconcile preserves local messages without clientId match', () => {
+    const store = new MessageStore();
+
+    // Insert optimistic + a synthetic boundary marker
+    const optimistic = makeMsg('local-1718700000-xyz', 'user', 'Test');
+    const boundary = makeMsg('boundary-resume', 'system', '--- Session Resumed ---');
+    store.replace([optimistic, boundary]);
+
+    // DB only has the real version of the user message
+    const dbMessages: ChatMessage[] = [{
+      id: 'uuid-real-002',
+      sessionId: 'sess-1',
+      role: 'user',
+      content: [{ type: 'text', text: 'Test' }] as any,
+      createdAt: new Date().toISOString(),
+      metadata: { client_id: 'local-1718700000-xyz' },
+    }];
+
+    store.reconcile(dbMessages);
+
+    // Should have 2: DB version (replaced optimistic) + boundary (preserved)
+    expect(store.messages).toHaveLength(2);
+    expect(store.messages[0].id).toBe('uuid-real-002');
+    expect(store.messages[1].id).toBe('boundary-resume');
+    store.destroy();
+  });
+
+  it('backward compat: no client_id in metadata = normal merge behavior', () => {
+    const store = new MessageStore();
+
+    // Old-style message without client_id (pre-feature)
+    const local = makeMsg('timestamp-123', 'user', 'Old msg');
+    store.replace([local]);
+
+    // DB returns same message under a different ID (no metadata.client_id)
+    const dbMessages: ChatMessage[] = [{
+      id: 'uuid-old-001',
+      sessionId: 'sess-1',
+      role: 'user',
+      content: [{ type: 'text', text: 'Old msg' }] as any,
+      createdAt: new Date().toISOString(),
+      // No metadata — backward compat
+    }];
+
+    store.reconcile(dbMessages);
+
+    // Both exist (no dedup possible without clientId — this is expected prior behavior)
+    expect(store.messages).toHaveLength(2);
+    store.destroy();
+  });
+});

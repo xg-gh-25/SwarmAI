@@ -466,6 +466,13 @@ export class MessageStore {
     const convert = this._toDisplayMessage || this._defaultToDisplay;
     const dbConverted = dbMessages.map(convert);
 
+    // Build clientId→dbIndex map from raw DB messages (before conversion loses metadata)
+    const dbClientIdToDbIdx = new Map<string, number>();
+    for (let i = 0; i < dbMessages.length; i++) {
+      const cid = dbMessages[i].metadata?.client_id;
+      if (cid) dbClientIdToDbIdx.set(cid, i);
+    }
+
     // Boundary-aware filtering: if we have a resume boundary, identify
     // which local messages are "before boundary" (prior session content).
     // DB messages matching those IDs should not appear as "new" — they're
@@ -482,12 +489,28 @@ export class MessageStore {
     const localById = new Map(this._messages.map(m => [m.id, m]));
     const dbIds = new Set(dbConverted.map(m => m.id));
 
+    // clientId correlation map: for DB messages that have metadata.client_id,
+    // build a reverse lookup so we can match optimistic messages (whose .id IS
+    // the clientId) against their DB counterparts. This eliminates R2/R4
+    // duplication where optimistic ID !== DB UUID.
+    const clientIdToLocalIdx = new Map<string, number>();
+    for (let i = 0; i < this._messages.length; i++) {
+      const m = this._messages[i];
+      // Optimistic messages have IDs like "local-{ts}-{rand}"
+      if (m.id.startsWith('local-')) {
+        clientIdToLocalIdx.set(m.id, i);
+      }
+    }
+    // Track which local messages were matched by clientId (to exclude from Pass 2)
+    const matchedByClientId = new Set<string>();
+
     const merged: Message[] = [];
 
     // Pass 1: Walk DB messages in order
     // Note: _applyMerge only runs when phase=idle (streamingMessageId=null),
     // so the streaming guard below is for future safety only.
-    for (const dbMsg of dbConverted) {
+    for (let dbIdx = 0; dbIdx < dbConverted.length; dbIdx++) {
+      const dbMsg = dbConverted[dbIdx];
       const localMatch = localById.get(dbMsg.id);
       if (localMatch) {
         // Streaming message always wins (defensive — normally null here)
@@ -498,19 +521,31 @@ export class MessageStore {
           merged.push(dbMsg);
         }
       } else {
-        // New from DB — but skip if it belongs to pre-boundary content
-        // (prevents old messages from "leaking" into current view after resume)
-        if (preBoundaryIds.has(dbMsg.id)) {
-          continue; // Skip — this is prior session content
+        // No direct ID match — try clientId correlation (AC4).
+        // The raw DB message has metadata.client_id matching a local
+        // optimistic message's .id (format: "local-{ts}-{rand}").
+        const dbClientId = dbMessages[dbIdx]?.metadata?.client_id;
+        if (dbClientId && clientIdToLocalIdx.has(dbClientId)) {
+          // Match found — DB message replaces the optimistic local message.
+          // DB wins (has real ID, persisted content).
+          matchedByClientId.add(dbClientId);
+          merged.push(dbMsg);
+        } else {
+          // New from DB — but skip if it belongs to pre-boundary content
+          // (prevents old messages from "leaking" into current view after resume)
+          if (preBoundaryIds.has(dbMsg.id)) {
+            continue; // Skip — this is prior session content
+          }
+          merged.push(dbMsg);
         }
-        merged.push(dbMsg);
       }
     }
 
     // Pass 2: Preserve local-only messages not in DB
     // (queued messages, synthetic boundaries, resume markers)
+    // Skip messages already matched by clientId (they were replaced by DB version in Pass 1)
     for (const local of this._messages) {
-      if (!dbIds.has(local.id)) {
+      if (!dbIds.has(local.id) && !matchedByClientId.has(local.id)) {
         // Local-only: insert at chronological position in merged
         const insertIdx = this._findChronologicalPosition(merged, local.timestamp);
         merged.splice(insertIdx, 0, local);
