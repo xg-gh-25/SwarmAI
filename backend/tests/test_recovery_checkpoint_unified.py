@@ -328,3 +328,52 @@ class TestWiredPathsArmBeforeColdTransition:
 
         assert probe.get("called") is None  # early-returned before kill
         assert unit._heal_checkpoint is None
+
+
+class TestStaleCheckpointClearedOnSend:
+    """send() Layer 0 clears stale _heal_checkpoint from prior aborted kills.
+
+    Scenario: RSS spike → _arm_recovery_checkpoint armed → spike subsides → kill
+    never fires → checkpoint lingers.  Next normal send() must clear it so a later
+    unrelated restart doesn't inject stale context.
+    """
+
+    @pytest.mark.asyncio
+    async def test_send_layer0_clears_stale_heal_checkpoint(self):
+        """Production send() Layer 0 clears _heal_checkpoint in its synchronous preamble.
+
+        Layer 0 is the section between 'Layer 0: Advance generation' comment and the
+        first real ``await`` statement.  The clear must live there alongside
+        _send_generation/_stop_event/_interrupted so no interleaving can occur.
+        """
+        import inspect
+
+        source = inspect.getsource(SessionUnit.send)
+        lines = source.split("\n")
+
+        # Find Layer 0 marker and first real await (not in comments)
+        layer0_start = None
+        first_await = None
+        for i, line in enumerate(lines):
+            if "Layer 0:" in line and layer0_start is None:
+                layer0_start = i
+            stripped = line.lstrip()
+            if (
+                stripped.startswith("await ")
+                and first_await is None
+                and not stripped.startswith("#")
+            ):
+                first_await = i
+
+        assert layer0_start is not None, "Layer 0 comment not found in send()"
+        assert first_await is not None, "No real await found in send()"
+
+        # The _heal_checkpoint clear must be between Layer 0 marker and first await
+        layer0_section = "\n".join(lines[layer0_start:first_await])
+        assert "_heal_checkpoint = None" in layer0_section, (
+            "send() Layer 0 (synchronous preamble) must contain "
+            "'self._heal_checkpoint = None' to clear stale checkpoints "
+            "from prior aborted kills. Found Layer 0 at line "
+            f"{layer0_start}, first await at line {first_await}, "
+            f"but no _heal_checkpoint clear in between."
+        )
