@@ -548,6 +548,12 @@ export const chatService = {
     return response.data;
   },
 
+  // User-triggered context refresh — kills subprocess for resume with summary
+  async refreshSession(sessionId: string): Promise<{ status: string; message: string }> {
+    const response = await api.post<{ status: string; message: string }>(`/chat/refresh/${sessionId}`);
+    return response.data;
+  },
+
   // Submit AskUserQuestion answer and continue streaming
   streamAnswerQuestion(
     request: {

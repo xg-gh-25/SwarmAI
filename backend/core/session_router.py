@@ -1383,6 +1383,35 @@ class SessionRouter:
             return {"success": False, "message": f"Session {session_id} not found"}
         return await unit.compact(instructions)
 
+    async def refresh_session(self, session_id: str) -> dict:
+        """Refresh a session's context by killing subprocess for resume.
+
+        User-triggered "same-tab restart": kills the subprocess but preserves
+        _sdk_session_id so the next send() auto-resumes with structured context
+        injection. Only works when session is IDLE (not streaming).
+
+        Returns dict with success status and message.
+        """
+        unit = self.get_unit(session_id)
+        if unit is None:
+            return {"success": False, "message": f"Session {session_id} not found"}
+
+        if unit.state in (SessionState.STREAMING, SessionState.WAITING_INPUT):
+            return {
+                "success": False,
+                "message": "Cannot refresh while the AI is active. Stop or answer the pending question first.",
+            }
+
+        try:
+            await unit.refresh_context()
+            return {
+                "success": True,
+                "message": "Context refreshed. Next message will resume with summary.",
+            }
+        except Exception as exc:
+            logger.error("refresh_session failed for %s: %s", session_id, exc)
+            return {"success": False, "message": str(exc)}
+
     async def enable_mcp_for_session(
         self, session_id: str, mcp_name: str,
     ) -> dict:

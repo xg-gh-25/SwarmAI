@@ -926,6 +926,28 @@ async def stop_session(session_id: str):
         return {"status": "not_found", "message": result["message"]}
 
 
+@router.post("/refresh/{session_id}")
+async def refresh_session(session_id: str):
+    """Refresh a session's context by killing subprocess and preparing for resume.
+
+    This is a user-triggered "same-tab restart": the subprocess is killed,
+    but _sdk_session_id is preserved so the next send() will use --resume,
+    injecting a structured summary of the conversation into the new context.
+
+    The frontend should:
+    1. Insert a visual separator in the chat
+    2. Dim old messages
+    3. Send the next user message normally (which triggers auto-resume)
+    """
+    logger.info(f"Received refresh request for session {session_id}")
+    result = await _get_router().refresh_session(session_id)
+
+    if result["success"]:
+        return {"status": "refreshed", "message": result["message"]}
+    else:
+        raise HTTPException(status_code=409, detail=result["message"])
+
+
 @router.post("/compact/{session_id}")
 async def compact_session(session_id: str, body: Optional[dict] = None):
     """Trigger manual compaction of a session's context window.

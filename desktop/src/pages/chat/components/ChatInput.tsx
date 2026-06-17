@@ -47,6 +47,8 @@ interface ChatInputProps {
   onInputValueChange?: (tabId: string, value: string) => void;
   /** True when streaming but no real SDK events received for >60s (session likely stalled). */
   isLikelyStalled?: boolean;
+  /** Callback to trigger context refresh (same-tab restart with resume) */
+  onRefreshContext?: () => void;
   /** Available skills for slash command picker */
   skills?: Skill[];
   /** Voice conversation mode state (off = normal text mode) */
@@ -85,6 +87,7 @@ export function ChatInput({
   inputValueMapRef,
   onInputValueChange,
   isLikelyStalled = false,
+  onRefreshContext,
   skills = [],
   voiceConversationState = 'off',
   onVoiceConversationToggle,
@@ -847,9 +850,23 @@ export function ChatInput({
                 </span>
               )}
             </div>
-            {/* Right: Context ring + TSCC */}
+            {/* Right: Context ring + Refresh + TSCC */}
             <div className="flex items-center gap-2">
               <ContextUsageRing pct={contextPct ?? null} size={18} showLabel />
+              {onRefreshContext && (
+                <button
+                  type="button"
+                  onClick={onRefreshContext}
+                  disabled={isStreaming || disabled}
+                  className="p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  title="Refresh context — restart AI with conversation summary"
+                  aria-label="Refresh context"
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>
+                    refresh
+                  </span>
+                </button>
+              )}
               <TSCCPopoverButton sessionId={sessionId ?? null} metadata={promptMetadata ?? null} />
             </div>
           </div>
