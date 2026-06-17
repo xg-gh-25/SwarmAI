@@ -32,7 +32,8 @@ from typing import Optional
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-VALID_TYPES = ("guideline", "pitfall", "decision", "model", "process")
+VALID_TYPES = ("guideline", "pitfall", "decision", "model", "process",
+               "principle", "correction")
 DEFAULT_TYPE = "guideline"
 
 # Grace period: new entries are immune to decay
@@ -49,6 +50,10 @@ HIGH_REF_MULTIPLIER = 2
 # Type classification signal words (order matters — first match wins)
 # NOTE: Signals must be distinctive. Common words like "→", "pipeline", "step"
 # appear in ALL entry types and shouldn't trigger classification alone.
+#
+# Priority chain: pitfall → decision → correction → principle → guideline → process → model
+# Rationale: pitfall/decision have strongest signals. correction before principle
+# because its signals are more specific (less false-positive risk).
 _TYPE_SIGNALS: dict[str, list[str]] = {
     "pitfall": ["bug", "broke", "break", "failed", "failure", "regression",
                 "race condition", "silent", "crash", "hang", "corrupt",
@@ -56,13 +61,26 @@ _TYPE_SIGNALS: dict[str, list[str]] = {
     "decision": ["chose", "chosen", "selected", "instead of",
                  "approach:", "vs ", "trade-off", "tradeoff",
                  "we decided", "architecture decision"],
+    "correction": ["class a", "class b", "cognitive bias", "tendency to",
+                   "i tend to", "self-correction", "认知偏差",
+                   "0 self-corrections", "agent 的偏差",
+                   "correction:", "我倾向于", "consistently fail",
+                   "same mistake", "11 occurrences", "behavioral pattern",
+                   "behavioral bias", "self-cognition failure"],
+    "principle": ["philosophy", "principle:", "first principle",
+                  "design principle", "系统思维", "fundamental",
+                  "north star", "axiom", "core belief", "引用=",
+                  "architectural principle", "design decision:",
+                  "the reason is", "达尔文", "darwinian",
+                  "natural selection", "进化论", "> multi-agent",
+                  "sovereignty", "compound"],
     "process": ["workflow:", "state machine:", "lifecycle:",
                 "sequence of steps", "procedure:", "protocol:"],
     "model": ["entity", "schema", "field", "relationship", "data structure",
               "data model", "table schema"],
     # guideline is the fallback — most entries are lessons/recommendations
     "guideline": ["pattern:", "rule:", "lesson:", "should", "prefer",
-                  "always", "never", "must", "principle", "best practice",
+                  "always", "never", "must", "best practice",
                   "roi", "saves", "prevents", "eliminates", "tip:"],
 }
 
@@ -131,14 +149,19 @@ def classify_entry_type(text: str) -> str:
     """Classify a knowledge entry's type from its text content.
 
     Uses signal word matching with priority ordering:
-    1. pitfall (strongest signals — bug/failure language)
+    1. pitfall (strongest — bug/failure language)
     2. decision (chose/selected language)
-    3. guideline (pattern/rule/lesson — most common)
-    4. model/process (rare, very specific signals)
-    5. Default: guideline (safe for ambiguous cases)
+    3. correction (behavioral patterns, self-awareness, cognitive biases)
+    4. principle (design philosophy, first principles, system thinking)
+    5. guideline (pattern/rule/lesson — most common)
+    6. process (workflow/steps)
+    7. model (structure/schema)
+    Default: guideline (safe for ambiguous cases)
 
-    Ambiguous entries default to 'guideline' since most lessons are
-    recommendations/best practices.
+    Three layers of knowledge:
+    - Operational (guideline, pitfall, process): how to DO things
+    - Cognitive (decision, model): how to UNDERSTAND things
+    - Meta-cognitive (principle, correction): how to THINK and EVOLVE
     """
     text_lower = text.lower()
 
@@ -152,12 +175,22 @@ def classify_entry_type(text: str) -> str:
         if signal in text_lower:
             return "decision"
 
-    # Priority 3: guideline (most common — lessons, patterns, rules)
+    # Priority 3: correction (specific self-awareness signals)
+    for signal in _TYPE_SIGNALS["correction"]:
+        if signal in text_lower:
+            return "correction"
+
+    # Priority 4: principle (philosophy/first-principles)
+    for signal in _TYPE_SIGNALS["principle"]:
+        if signal in text_lower:
+            return "principle"
+
+    # Priority 5: guideline (most common — lessons, patterns, rules)
     for signal in _TYPE_SIGNALS["guideline"]:
         if signal in text_lower:
             return "guideline"
 
-    # Priority 4: process and model (rare, need very specific signals)
+    # Priority 6-7: process and model (rare, very specific signals)
     for signal in _TYPE_SIGNALS["process"]:
         if signal in text_lower:
             return "process"
