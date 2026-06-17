@@ -1511,12 +1511,14 @@ export default function ChatPage() {
               : m
           )
         );
-        // Store-driven: update queued message content via store
-        const queueStore = messageStoreRegistry.get(activeTabIdRef.current ?? '');
-        if (queueStore) {
-          queueStore.updateById(existingQueued.messageId, (m) => ({
-            ...m, content: combinedDisplayContent, timestamp: new Date().toISOString(),
-          }));
+        // Direct tabState write (synchronous — avoids rAF subscription race
+        // that can leak messages across tabs during tab switch).
+        if (activeTabForGuard.messages) {
+          activeTabForGuard.messages = activeTabForGuard.messages.map((m) =>
+            m.id === existingQueued.messageId
+              ? { ...m, content: combinedDisplayContent, timestamp: new Date().toISOString() }
+              : m
+          );
         }
 
         activeTabForGuard.queuedMessage = {
@@ -1544,10 +1546,9 @@ export default function ChatPage() {
       };
       setMessages((prev) => [...prev, queuedUserMessage]);
 
-      // Store-driven: append queued message via store
-      const newQueueStore = messageStoreRegistry.get(activeTabIdRef.current ?? '');
-      if (newQueueStore) {
-        newQueueStore.append(queuedUserMessage);
+      // Direct tabState write (synchronous — avoids rAF cross-tab race)
+      if (activeTabForGuard.messages) {
+        activeTabForGuard.messages = [...activeTabForGuard.messages, queuedUserMessage];
       }
 
       activeTabForGuard.queuedMessage = {
@@ -1790,10 +1791,12 @@ export default function ChatPage() {
         )
       );
     }
-    // Store-driven: unmark queued flag via store
-    const drainStore = messageStoreRegistry.get(tabId);
-    if (drainStore) {
-      drainStore.updateById(queued.messageId, (m) => ({ ...m, isQueued: false }));
+    // Direct tabState write (synchronous — avoids rAF cross-tab race)
+    const drainTab = tabMapRef.current.get(tabId);
+    if (drainTab?.messages) {
+      drainTab.messages = drainTab.messages.map((m) =>
+        m.id === queued.messageId ? { ...m, isQueued: false } : m
+      );
     }
 
     // Helper: clean up streaming state on drain failure.
@@ -1874,10 +1877,10 @@ export default function ChatPage() {
 
     // Remove from React state (display)
     setMessages((prev) => prev.filter((m) => m.id !== queued.messageId));
-    // Store-driven: remove queued message via store
-    const cancelStore = messageStoreRegistry.get(tabId);
-    if (cancelStore) {
-      cancelStore.remove((m) => m.id === queued.messageId);
+    // Direct tabState write (synchronous — avoids rAF cross-tab race)
+    const cancelTab = tabMapRef.current.get(tabId);
+    if (cancelTab?.messages) {
+      cancelTab.messages = cancelTab.messages.filter((m) => m.id !== queued.messageId);
     }
 
     // Clear queue
@@ -2062,28 +2065,18 @@ export default function ChatPage() {
       ),
     })));
 
-    // Store-driven: update permission decision in message content
+    // Direct tabState write (synchronous — avoids rAF cross-tab race)
     if (tabId) {
-      const permStore = messageStoreRegistry.get(tabId);
-      if (permStore) {
-        // Find the message with the permission request and update it
-        const msgs = permStore.messages;
-        const targetMsg = msgs.find(msg =>
-          msg.content.some(b => b.type === 'cmd_permission_request' && 'requestId' in b && b.requestId === requestId)
-        );
-        if (targetMsg) {
-          permStore.updateById(targetMsg.id, (msg) => ({
-            ...msg,
-            content: msg.content.map((block) =>
-              block.type === 'cmd_permission_request' && 'requestId' in block && block.requestId === requestId
-                ? { ...block, decision }
-                : block,
-            ),
-          }));
-        }
-      }
       const tabState = tabMapRef.current.get(tabId);
       if (tabState) {
+        tabState.messages = tabState.messages.map((msg) => ({
+          ...msg,
+          content: msg.content.map((block) =>
+            block.type === 'cmd_permission_request' && block.requestId === requestId
+              ? { ...block, decision }
+              : block,
+          ),
+        }));
         tabState.pendingPermissionRequestId = null;
       }
     }
@@ -2160,7 +2153,11 @@ export default function ChatPage() {
       }
     }
 
-    // 2. End store streaming FIRST — unblocks replace()/reconcile()
+    // 2. End store streaming — unblocks replace()/reconcile() for this tab.
+    // MUST NOT trigger notification here (endStreaming flushes reconcile thunk
+    // which could async-notify during tab switch → cross-tab leak).
+    // Safe: endStreaming() only notifies if reconcile thunk was pending AND
+    // async fetch completes. The actual notification is async (not immediate).
     if (currentTabId) {
       const stopStorePhase = messageStoreRegistry.get(currentTabId);
       if (stopStorePhase) stopStorePhase.endStreaming();
@@ -2195,21 +2192,26 @@ export default function ChatPage() {
       }];
     });
 
-    // 4. Store-driven: append "Stopped" marker to last assistant message
+    // 4. Append "Stopped" to tabMapRef (synchronous, no rAF race)
+    // MUST stay as direct tabState.messages write — store.updateById triggers
+    // rAF-deferred subscription notification. During that delay the user can
+    // switch tabs, causing the subscription to push this tab's messages into
+    // the new tab's React state (cross-tab leak, P0 regression 2026-06-18).
     if (currentTabId) {
-      const stopStore = messageStoreRegistry.get(currentTabId);
-      if (stopStore && stopStore.messages.length > 0) {
-        // Find last assistant message
-        const msgs = stopStore.messages;
-        let lastAssistantId: string | null = null;
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          if (msgs[i].role === 'assistant') { lastAssistantId = msgs[i].id; break; }
-        }
-        if (lastAssistantId) {
-          stopStore.updateById(lastAssistantId, (m) => ({
-            ...m,
-            content: [...m.content, { type: 'text' as const, text: '\n\n---\n*Stopped*' }],
-          }));
+      const tabState = tabMapRef.current.get(currentTabId);
+      if (tabState && tabState.messages && tabState.messages.length > 0) {
+        const lastIdx = tabState.messages.reduce(
+          (acc: number, m: Message, i: number) => m.role === 'assistant' ? i : acc, -1,
+        );
+        if (lastIdx >= 0) {
+          const updated = [...tabState.messages];
+          const lastMsg = { ...updated[lastIdx] };
+          lastMsg.content = [
+            ...lastMsg.content,
+            { type: 'text' as const, text: '\n\n---\n*Stopped*' },
+          ];
+          updated[lastIdx] = lastMsg;
+          tabState.messages = updated;
         }
       }
     }
