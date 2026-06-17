@@ -57,6 +57,7 @@ export class MessageStore {
   private _notifying = false;
   private _dirty = false;
   private _rafId: number | null = null;
+  private _fallbackTimerId: ReturnType<typeof setTimeout> | null = null;
   private _watchdogTimer: ReturnType<typeof setTimeout> | null = null;
   private _watchdogTimeoutMs: number;
   private _pendingReconcileThunk: (() => void) | null = null;
@@ -318,6 +319,10 @@ export class MessageStore {
       cancelAnimationFrame(this._rafId);
       this._rafId = null;
     }
+    if (this._fallbackTimerId !== null) {
+      clearTimeout(this._fallbackTimerId);
+      this._fallbackTimerId = null;
+    }
     this._listeners.clear();
     this._messages = [];
   }
@@ -365,8 +370,24 @@ export class MessageStore {
       }
       this._rafId = requestAnimationFrame(() => {
         this._rafId = null;
+        if (this._fallbackTimerId !== null) {
+          clearTimeout(this._fallbackTimerId);
+          this._fallbackTimerId = null;
+        }
         this._flush();
       });
+      // Fallback: if rAF is throttled (Tauri WebView background/AppNap),
+      // force flush after 100ms. Without this, UI freezes indefinitely
+      // when macOS throttles animation frames on background tabs.
+      // Evidence: 2026-06-18 session response intermittent freeze.
+      this._fallbackTimerId = setTimeout(() => {
+        this._fallbackTimerId = null;
+        if (this._rafId !== null) {
+          cancelAnimationFrame(this._rafId);
+          this._rafId = null;
+          this._flush();
+        }
+      }, 100);
     }
   }
 

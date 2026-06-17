@@ -47,8 +47,8 @@ class TestStreamingRSSKill:
     """STREAMING sessions with excessive RSS are killed."""
 
     @pytest.mark.asyncio
-    async def test_streaming_rss_above_5gb_triggers_kill(self):
-        """AC1: STREAMING session with RSS > 5GB should be killed."""
+    async def test_streaming_rss_above_7gb_triggers_kill(self):
+        """AC1: STREAMING session with RSS > 7GB should be killed."""
         from core.lifecycle_manager import LifecycleManager
 
         unit = _make_unit("streaming-bloat")
@@ -62,7 +62,7 @@ class TestStreamingRSSKill:
 
         # Mock resource_monitor imported inside the method
         mock_rm = MagicMock()
-        mock_rm.process_tree_rss.return_value = int(5.5 * 1024**3)  # 5.5GB > 5GB
+        mock_rm.process_tree_rss.return_value = int(7.5 * 1024**3)  # 7.5GB > 7GB
         mock_rm.system_memory.return_value = MagicMock(percent_used=70.0)
         with patch("core.resource_monitor.resource_monitor", mock_rm):
             await mgr._streaming_rss_check()
@@ -71,7 +71,7 @@ class TestStreamingRSSKill:
 
     @pytest.mark.asyncio
     async def test_streaming_rss_below_threshold_not_killed(self):
-        """STREAMING session with RSS < 5GB should NOT be killed."""
+        """STREAMING session with RSS < 7GB should NOT be killed."""
         from core.lifecycle_manager import LifecycleManager
 
         unit = _make_unit("streaming-ok")

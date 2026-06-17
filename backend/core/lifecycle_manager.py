@@ -339,12 +339,13 @@ class LifecycleManager:
                         resource_monitor.record_spawn_cost(tree_rss)
                 if tree_rss > prev_peak:
                     unit._peak_tree_rss_bytes = tree_rss
-                    # 2026-06-17: raised warning from 1.5GB→2.5GB. With 800K
-                    # task_budget + 7 MCPs, normal steady-state is 1-2GB.
+                    # Advisory warning only — no kill. Useful for tracking
+                    # growth trends in logs. Threshold = midpoint between
+                    # normal IDLE (1-2GB) and proactive kill (3.5GB).
                     if tree_rss > 2_500_000_000 and prev_peak <= 2_500_000_000:
                         logger.warning(
                             "lifecycle_manager.memory_warning session=%s "
-                            "tree_rss=%dMB — crossed 2.5GB threshold",
+                            "tree_rss=%dMB — crossed 2.5GB advisory threshold",
                             unit.session_id[:8],
                             tree_rss // (1024 * 1024),
                         )

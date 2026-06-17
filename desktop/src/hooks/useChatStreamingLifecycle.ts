@@ -316,6 +316,16 @@ export function updateMessages(
     // Fix: When the new assistant event has text/thinking, REPLACE the LAST
     // confirmed text/thinking block (same-turn update). Earlier confirmed
     // text/thinking blocks (from genuinely different prior turns) are preserved.
+    //
+    // BUG FIX (2026-06-18): In agentic multi-turn flows, the SDK emits
+    // intermediate AssistantMessage events that contain only thinking + tool_use
+    // (no text block). The old code unconditionally dropped unconfirmed text
+    // blocks — wiping streamed text the user was already seeing. Fix: only drop
+    // unconfirmed text/thinking when the authoritative payload actually provides
+    // a replacement of that type. Otherwise preserve the streaming provisional.
+    const newHasText = newContent.some((b) => b.type === 'text');
+    const newHasThinking = newContent.some((b) => b.type === 'thinking');
+
     const confirmed: ContentBlock[] = [];
     const hadUnconfirmed = { text: false, thinking: false };
 
@@ -324,8 +334,19 @@ export function updateMessages(
         if ((block as TextContent | ThinkingContent)._confirmed) {
           confirmed.push(block);
         } else {
-          hadUnconfirmed[block.type] = true;
-          // Drop — will be replaced by authoritative content
+          // Only drop unconfirmed blocks when the authoritative payload
+          // provides a replacement. Otherwise preserve streaming provisional
+          // content so it remains visible to the user.
+          const shouldDrop =
+            (block.type === 'text' && newHasText) ||
+            (block.type === 'thinking' && newHasThinking);
+          if (shouldDrop) {
+            hadUnconfirmed[block.type] = true;
+            // Drop — will be replaced by authoritative content
+          } else {
+            // Preserve — no replacement provided in this event
+            confirmed.push(block);
+          }
         }
       } else {
         // tool_use, tool_result, ask_user_question — always keep
