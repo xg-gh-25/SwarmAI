@@ -61,6 +61,8 @@ export class MessageStore {
   private _watchdogTimeoutMs: number;
   private _pendingReconcileThunk: (() => void) | null = null;
   private _reconcileGen = 0;
+  private _initializeGen = 0;
+  private _reconcileInFlight = 0;
   private _destroyed = false;
 
   // ─── Injected dependencies ───
@@ -134,8 +136,12 @@ export class MessageStore {
 
     if (idx < 0) return;
 
-    // Mutate internally (zero-copy hot path) — rAF notify produces snapshot
-    this._messages[idx] = updater(this._messages[idx]);
+    // Create new array reference for React immutability contract.
+    // Spread is necessary: getter exposes _messages directly, and rAF-deferred
+    // notification means reads between mutation and flush would see stale ref.
+    const updated = [...this._messages];
+    updated[idx] = updater(updated[idx]);
+    this._messages = updated;
     this._resetWatchdog();
     this._notify();
   }
@@ -147,7 +153,10 @@ export class MessageStore {
     if (this._destroyed) return;
     const idx = this._messages.findIndex(m => m.id === id);
     if (idx < 0) return;
-    this._messages[idx] = updater(this._messages[idx]);
+    // New array reference for React immutability contract (same as updateLast)
+    const updated = [...this._messages];
+    updated[idx] = updater(updated[idx]);
+    this._messages = updated;
     this._notify();
   }
 
@@ -163,7 +172,7 @@ export class MessageStore {
   reconcile(dbMessages: ChatMessage[]): void {
     if (this._destroyed) return;
 
-    if (this._phase === 'streaming') {
+    if (this._phase === 'streaming' || this._reconcileInFlight > 0) {
       // Queue a thunk that re-fetches fresh data on drain (not stale data)
       this._pendingReconcileThunk = () => this._fetchAndReconcile();
       return;
@@ -244,9 +253,11 @@ export class MessageStore {
       return;
     }
 
+    const gen = ++this._initializeGen;
     try {
       const dbMessages = await this._fetchMessages(sessionId);
-      // Guard: if streaming started during fetch, don't replace
+      // Guard: discard if another initialize was called, or streaming started during fetch
+      if (gen !== this._initializeGen || this._destroyed) return;
       if (this._phase === 'streaming') {
         this._pendingReconcileThunk = () => this._fetchAndReconcile();
         return;
@@ -357,6 +368,7 @@ export class MessageStore {
   private async _fetchAndReconcile(): Promise<void> {
     if (!this._fetchMessages || !this._sessionId) return;
 
+    this._reconcileInFlight++;
     const gen = ++this._reconcileGen;
     try {
       const dbMessages = await this._fetchMessages(this._sessionId);
@@ -371,6 +383,8 @@ export class MessageStore {
       this._applyMerge(dbMessages);
     } catch (err) {
       console.error('[MessageStore] fetchAndReconcile failed:', err);
+    } finally {
+      this._reconcileInFlight--;
     }
   }
 
@@ -394,15 +408,17 @@ export class MessageStore {
     const merged: Message[] = [];
 
     // Pass 1: Walk DB messages in order
+    // Note: _applyMerge only runs when phase=idle (streamingMessageId=null),
+    // so the streaming guard below is for future safety only.
     for (const dbMsg of dbConverted) {
       const localMatch = localById.get(dbMsg.id);
       if (localMatch) {
-        // Streaming message always wins
-        if (localMatch.id === this._streamingMessageId) {
+        // Streaming message always wins (defensive — normally null here)
+        if (this._streamingMessageId && localMatch.id === this._streamingMessageId) {
           merged.push(localMatch);
         } else {
-          // Keep local version (it may have confirmed blocks, streaming state, etc.)
-          merged.push(localMatch);
+          // DB is source of truth for completed messages (server-side edits propagate)
+          merged.push(dbMsg);
         }
       } else {
         // New from DB — add it

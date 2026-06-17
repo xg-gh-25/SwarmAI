@@ -391,6 +391,9 @@ export default function ChatPage() {
       const sessionMessages = await chatService.getSessionMessagesPaginated(sid, INITIAL_MESSAGE_LOAD_LIMIT);
       // Async guard: discard if a newer load was started while we awaited
       if (loadGenRef.current !== thisGen) return;
+      // Tab-switch guard: discard if active tab changed during the async fetch
+      // (prevents session A's messages from being applied to tab B)
+      if (activeTabIdRef.current !== currentTabForGate) return;
       // Phase guard (post-fetch): streaming may have started during the async fetch
       const postFetchTab = activeTabIdRef.current ? tabMapRef.current.get(activeTabIdRef.current) : null;
       if (postFetchTab?.isStreaming) {

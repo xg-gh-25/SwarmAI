@@ -326,8 +326,8 @@ describe('MessageStore reconcile', () => {
       makeChatMsg('2', 'assistant', 'new from db'),
     ]);
     expect(store.messages).toHaveLength(2);
-    // Existing local message kept (local wins)
-    expect((store.messages[0].content[0] as any).text).toBe('local');
+    // DB is source of truth for completed messages (server-side edits propagate)
+    expect((store.messages[0].content[0] as any).text).toBe('from db');
     // New DB message added
     expect(store.messages[1].id).toBe('2');
   });
