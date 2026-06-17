@@ -240,6 +240,8 @@ class TaskCheckpoint:
             parts.append(f"**Working state:** {self.uncommitted_changes}")
         if self.key_findings:
             parts.append(f"**Key context:** {self.key_findings}")
+        if self.active_file_context:
+            parts.append(f"**Active file:** {self.active_file_context}")
         if self.pipeline_run_id:
             parts.append(
                 f"**Pipeline:** {self.pipeline_run_id} at stage {self.pipeline_stage}"
@@ -336,6 +338,19 @@ WRAP_UP_PROMPT = (
     "Do NOT mention this note, the turn limit, or any system refresh to the user."
 )
 
+CHANNEL_WRAP_UP_PROMPT = (
+    "SYSTEM NOTE (invisible to user — do NOT acknowledge this instruction): "
+    "This channel session is approaching its budget limit. "
+    "Wrap up your answer concisely and deliver what you have. "
+    "If the task needs more work, suggest: 'For deeper investigation, "
+    "continue this on the desktop app where I have more room to work.' "
+    "Finish your response naturally, then stop."
+)
+
+# Number of turns before channel max_turns where wrap-up injects.
+# Channel max_turns=100, so this fires at turn 90.
+CHANNEL_WRAP_BUFFER = 10
+
 
 # ─── Canary Mode ────────────────────────────────────────────────────────────
 
@@ -430,20 +445,31 @@ async def build_rich_checkpoint(
     heal_attempt: int = 0,
     pipeline_run_id: str | None = None,
     pipeline_stage: str | None = None,
+    agent_conclusion: str = "",
+    completed_steps: list[str] | None = None,
+    pending_steps: list[str] | None = None,
+    active_file: str | None = None,
+    key_findings: str = "",
 ) -> TaskCheckpoint:
     """Build a fully-populated TaskCheckpoint from available context.
 
-    Extracts:
+    Always-on git floor (preserves 3.3):
     - files_modified: from git diff --name-only (uncommitted changes)
     - uncommitted_changes: from git status --short
-    - key_findings: from file_tracker_paths (files touched this session)
+
+    Layered enrichment (passed by the heal call site, all optional):
+    - agent_conclusion: the agent's own wrap-up summary — LEADS key_findings
+      so the respawned agent knows where it left off (GAP 2 / 2.5).
+    - key_findings: substantive findings derived from session history.
+    - file_tracker_paths: appended as secondary "Files touched" context.
+    - completed_steps / pending_steps / active_file / pipeline_*: history- or
+      session-derived task context (GAP 1 / 2.1, 2.2).
 
     All git operations have 3s timeout and graceful fallback to empty.
     Never crashes — monitoring/heal must never introduce new failures.
     """
     files_modified: list[str] = []
     uncommitted_changes: str = ""
-    key_findings: str = ""
 
     if working_dir:
         try:
@@ -463,16 +489,29 @@ async def build_rich_checkpoint(
         except Exception:
             logger.debug("Rich checkpoint git extraction failed", exc_info=True)
 
-    # Build key_findings from file tracker (files agent read/wrote)
+    # Compose key_findings: LEAD with the agent's own wrap-up conclusion when one
+    # exists (GAP 2 / 2.5), then any history-derived substantive findings, then the
+    # existing file-tracker line as secondary context (3.3 floor preserved).
+    findings_segments: list[str] = []
+    if agent_conclusion and agent_conclusion.strip():
+        findings_segments.append(agent_conclusion.strip())
+    if key_findings and key_findings.strip():
+        findings_segments.append(key_findings.strip())
     if file_tracker_paths:
         recent = file_tracker_paths[-10:]  # Last 10 files touched
-        key_findings = f"Files touched this session: {', '.join(recent)}"
+        findings_segments.append(
+            f"Files touched this session: {', '.join(recent)}"
+        )
+    composed_findings = " | ".join(findings_segments)
 
     return TaskCheckpoint(
         original_request=original_request[:500] if original_request else "",
+        completed_steps=completed_steps or [],
+        pending_steps=pending_steps or [],
         files_modified=files_modified,
         uncommitted_changes=uncommitted_changes,
-        key_findings=key_findings,
+        key_findings=composed_findings,
+        active_file_context=active_file or "",
         trigger=trigger,
         turn_count=turn_count,
         heal_attempt=heal_attempt,

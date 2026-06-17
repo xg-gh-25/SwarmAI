@@ -582,6 +582,144 @@ export class MessageStore {
     }
     return -1;
   }
+
+  // ─── Persistence (crash recovery) ───
+
+  /** Storage key prefix for crash recovery state. */
+  private static readonly _PERSIST_PREFIX = 'swarm_store_';
+  /** Schema version for persisted data. Bump on breaking changes. */
+  private static readonly _PERSIST_VERSION = 1;
+  /** Max tool_use blocks before truncating tool_result content. */
+  private static readonly _LARGE_SESSION_TOOL_THRESHOLD = 80;
+  /** Max chars for truncated tool_result content blocks. */
+  private static readonly _TRUNCATED_CONTENT_LENGTH = 200;
+
+  /**
+   * Persist current messages to sessionStorage for crash recovery.
+   * Gracefully degrades on quota exceeded. Truncates large tool_result
+   * content blocks for sessions with 80+ tool calls.
+   */
+  persist(sessionId: string): void {
+    if (this._destroyed || this._messages.length === 0) return;
+    if (typeof window === 'undefined' || typeof window.sessionStorage === 'undefined') return;
+
+    const key = `${MessageStore._PERSIST_PREFIX}${sessionId}`;
+    const msgs = MessageStore._prepareForStorage(this._messages);
+    const payload = {
+      version: MessageStore._PERSIST_VERSION,
+      messages: msgs,
+      phase: this._phase,
+      resumeBoundaryIdx: this._resumeBoundaryIdx,
+      persistedAt: Date.now(),
+    };
+
+    try {
+      window.sessionStorage.setItem(key, JSON.stringify(payload));
+    } catch {
+      // Quota exceeded — graceful degradation
+      console.warn('[MessageStore] persist failed (quota exceeded)');
+    }
+  }
+
+  /**
+   * Restore messages from sessionStorage. Returns null if no valid entry.
+   * Does NOT modify this store — caller decides what to do with the data.
+   */
+  static restore(sessionId: string): { messages: Message[]; resumeBoundaryIdx: number } | null {
+    if (typeof window === 'undefined' || typeof window.sessionStorage === 'undefined') return null;
+
+    const key = `${MessageStore._PERSIST_PREFIX}${sessionId}`;
+    try {
+      const raw = window.sessionStorage.getItem(key);
+      if (!raw) return null;
+
+      const parsed = JSON.parse(raw);
+      if (
+        !parsed ||
+        parsed.version !== MessageStore._PERSIST_VERSION ||
+        !Array.isArray(parsed.messages)
+      ) {
+        window.sessionStorage.removeItem(key);
+        return null;
+      }
+
+      return {
+        messages: parsed.messages,
+        resumeBoundaryIdx: parsed.resumeBoundaryIdx ?? -1,
+      };
+    } catch {
+      // Corrupted — discard
+      try { window.sessionStorage.removeItem(key); } catch { /* ignore */ }
+      return null;
+    }
+  }
+
+  /**
+   * Remove persisted state for a session (called on normal result).
+   */
+  static removePersisted(sessionId: string): void {
+    if (typeof window === 'undefined' || typeof window.sessionStorage === 'undefined') return;
+    try {
+      window.sessionStorage.removeItem(`${MessageStore._PERSIST_PREFIX}${sessionId}`);
+    } catch { /* ignore */ }
+  }
+
+  /**
+   * Clean up stale persisted entries older than maxAgeMs.
+   * Called on app startup to prevent sessionStorage bloat.
+   */
+  static cleanup(maxAgeMs: number = 24 * 60 * 60 * 1000): void {
+    if (typeof window === 'undefined' || typeof window.sessionStorage === 'undefined') return;
+
+    const now = Date.now();
+    const keysToRemove: string[] = [];
+
+    try {
+      for (let i = 0; i < window.sessionStorage.length; i++) {
+        const key = window.sessionStorage.key(i);
+        if (!key?.startsWith(MessageStore._PERSIST_PREFIX)) continue;
+
+        try {
+          const raw = window.sessionStorage.getItem(key);
+          if (!raw) continue;
+          const parsed = JSON.parse(raw);
+          if (parsed.persistedAt && (now - parsed.persistedAt) > maxAgeMs) {
+            keysToRemove.push(key);
+          }
+        } catch {
+          keysToRemove.push(key); // Corrupted — remove
+        }
+      }
+
+      for (const key of keysToRemove) {
+        window.sessionStorage.removeItem(key);
+      }
+    } catch { /* iteration failed — skip cleanup */ }
+  }
+
+  /** Truncate tool_result content for large sessions. */
+  private static _prepareForStorage(messages: Message[]): Message[] {
+    let toolUseCount = 0;
+    for (const msg of messages) {
+      for (const block of msg.content) {
+        if (block.type === 'tool_use') toolUseCount++;
+      }
+    }
+
+    if (toolUseCount < MessageStore._LARGE_SESSION_TOOL_THRESHOLD) return messages;
+
+    return messages.map(msg => ({
+      ...msg,
+      content: msg.content.map(block => {
+        if (block.type !== 'tool_result') return block;
+        const raw = block as unknown as Record<string, unknown>;
+        if (typeof raw.content === 'string' && raw.content.length > MessageStore._TRUNCATED_CONTENT_LENGTH) {
+          return { ...block, content: (raw.content as string).slice(0, MessageStore._TRUNCATED_CONTENT_LENGTH) + '…' } as typeof block;
+        }
+        return block;
+      }),
+    }));
+  }
 }
 
 // ---------------------------------------------------------------------------

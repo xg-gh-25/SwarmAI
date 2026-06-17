@@ -451,7 +451,8 @@ export default function ChatPage() {
       const store = messageStoreRegistry.getOrCreate(tabId);
       if (store.phase !== 'idle') return;
       store.replace(formatted);
-      tabNow.messages = formatted;
+      // Bridge: sync store → tabState for legacy readers
+      tabNow.messages = store.messages;
       tabNow._dbReconcileFailed = false;
       if (tabId === activeTabIdRef.current) {
         setMessages(formatted);
@@ -1510,12 +1511,12 @@ export default function ChatPage() {
               : m
           )
         );
-        if (activeTabForGuard.messages) {
-          activeTabForGuard.messages = activeTabForGuard.messages.map((m) =>
-            m.id === existingQueued.messageId
-              ? { ...m, content: combinedDisplayContent, timestamp: new Date().toISOString() }
-              : m
-          );
+        // Store-driven: update queued message content via store
+        const queueStore = messageStoreRegistry.get(activeTabIdRef.current ?? '');
+        if (queueStore) {
+          queueStore.updateById(existingQueued.messageId, (m) => ({
+            ...m, content: combinedDisplayContent, timestamp: new Date().toISOString(),
+          }));
         }
 
         activeTabForGuard.queuedMessage = {
@@ -1543,9 +1544,10 @@ export default function ChatPage() {
       };
       setMessages((prev) => [...prev, queuedUserMessage]);
 
-      // Sync to tabMapRef (authoritative store)
-      if (activeTabForGuard.messages) {
-        activeTabForGuard.messages = [...activeTabForGuard.messages, queuedUserMessage];
+      // Store-driven: append queued message via store
+      const newQueueStore = messageStoreRegistry.get(activeTabIdRef.current ?? '');
+      if (newQueueStore) {
+        newQueueStore.append(queuedUserMessage);
       }
 
       activeTabForGuard.queuedMessage = {
@@ -1788,10 +1790,10 @@ export default function ChatPage() {
         )
       );
     }
-    if (tabState.messages) {
-      tabState.messages = tabState.messages.map((m) =>
-        m.id === queued.messageId ? { ...m, isQueued: false } : m
-      );
+    // Store-driven: unmark queued flag via store
+    const drainStore = messageStoreRegistry.get(tabId);
+    if (drainStore) {
+      drainStore.updateById(queued.messageId, (m) => ({ ...m, isQueued: false }));
     }
 
     // Helper: clean up streaming state on drain failure.
@@ -1872,9 +1874,10 @@ export default function ChatPage() {
 
     // Remove from React state (display)
     setMessages((prev) => prev.filter((m) => m.id !== queued.messageId));
-    // Remove from tabMapRef (authoritative)
-    if (tabState.messages) {
-      tabState.messages = tabState.messages.filter((m) => m.id !== queued.messageId);
+    // Store-driven: remove queued message via store
+    const cancelStore = messageStoreRegistry.get(tabId);
+    if (cancelStore) {
+      cancelStore.remove((m) => m.id === queued.messageId);
     }
 
     // Clear queue
@@ -2059,18 +2062,28 @@ export default function ChatPage() {
       ),
     })));
 
-    // Also update tabMapRef messages (authoritative source)
+    // Store-driven: update permission decision in message content
     if (tabId) {
+      const permStore = messageStoreRegistry.get(tabId);
+      if (permStore) {
+        // Find the message with the permission request and update it
+        const msgs = permStore.messages;
+        const targetMsg = msgs.find(msg =>
+          msg.content.some(b => b.type === 'cmd_permission_request' && 'requestId' in b && b.requestId === requestId)
+        );
+        if (targetMsg) {
+          permStore.updateById(targetMsg.id, (msg) => ({
+            ...msg,
+            content: msg.content.map((block) =>
+              block.type === 'cmd_permission_request' && 'requestId' in block && block.requestId === requestId
+                ? { ...block, decision }
+                : block,
+            ),
+          }));
+        }
+      }
       const tabState = tabMapRef.current.get(tabId);
       if (tabState) {
-        tabState.messages = tabState.messages.map((msg) => ({
-          ...msg,
-          content: msg.content.map((block) =>
-            block.type === 'cmd_permission_request' && block.requestId === requestId
-              ? { ...block, decision }
-              : block,
-          ),
-        }));
         tabState.pendingPermissionRequestId = null;
       }
     }
@@ -2176,22 +2189,21 @@ export default function ChatPage() {
       }];
     });
 
-    // 4. Also sync "Stopped" to tabMapRef (authoritative store)
+    // 4. Store-driven: append "Stopped" marker to last assistant message
     if (currentTabId) {
-      const tabState = tabMapRef.current.get(currentTabId);
-      if (tabState && tabState.messages.length > 0) {
-        const lastIdx = tabState.messages.reduce(
-          (acc: number, m: Message, i: number) => m.role === 'assistant' ? i : acc, -1,
-        );
-        if (lastIdx >= 0) {
-          const updated = [...tabState.messages];
-          const lastMsg = { ...updated[lastIdx] };
-          lastMsg.content = [
-            ...lastMsg.content,
-            { type: 'text' as const, text: '\n\n---\n*Stopped*' },
-          ];
-          updated[lastIdx] = lastMsg;
-          tabState.messages = updated;
+      const stopStore = messageStoreRegistry.get(currentTabId);
+      if (stopStore && stopStore.messages.length > 0) {
+        // Find last assistant message
+        const msgs = stopStore.messages;
+        let lastAssistantId: string | null = null;
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].role === 'assistant') { lastAssistantId = msgs[i].id; break; }
+        }
+        if (lastAssistantId) {
+          stopStore.updateById(lastAssistantId, (m) => ({
+            ...m,
+            content: [...m.content, { type: 'text' as const, text: '\n\n---\n*Stopped*' }],
+          }));
         }
       }
     }
