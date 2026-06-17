@@ -980,7 +980,13 @@ export function useChatStreamingLifecycle(
           // drain or queued message. The "backend=IDLE + frontend=streaming"
           // state is INTENTIONAL during the drain gap (result arrived, drain
           // scheduled via setTimeout(0), new stream not yet started).
-          if (tabState.drainPending || tabState.queuedMessage) continue;
+          // EXCEPTION: if queue has been waiting >60s, the "drain gap"
+          // explanation no longer applies — SSE event was likely lost.
+          // Without this override, queuedMessage creates a deadlock:
+          // streaming(wrong) → queue msg → reconcile skips → never clears.
+          const queueAge = tabState._queuedAt ? Date.now() - tabState._queuedAt : 0;
+          if (tabState.drainPending) continue;  // drain is always brief (<1s)
+          if (tabState.queuedMessage && queueAge < 60_000) continue;
 
           const sid = tabState.sessionId;
           if (!sid) continue;

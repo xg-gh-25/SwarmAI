@@ -1394,6 +1394,7 @@ export default function ChatPage() {
           displayContent: combinedDisplayContent,
           messageId: existingQueued.messageId,
         };
+        activeTabForGuard._queuedAt = activeTabForGuard._queuedAt || Date.now(); // preserve original queue time
 
         setInputValue('');
         clearAttachments();
@@ -1423,6 +1424,7 @@ export default function ChatPage() {
         displayContent,
         messageId: queuedMessageId,
       };
+      activeTabForGuard._queuedAt = Date.now();
 
       setInputValue('');
       clearAttachments();
@@ -1629,6 +1631,7 @@ export default function ChatPage() {
 
     const queued = tabState.queuedMessage;
     tabState.queuedMessage = undefined; // clear BEFORE send (exactly-once)
+    tabState._queuedAt = undefined;     // clear queue timestamp (reconcile immunity ends)
     tabState.userStopped = false; // prevent stale flag from suppressing new stream errors
 
     // Remove the "queued" badge from the user message
