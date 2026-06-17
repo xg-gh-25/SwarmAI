@@ -36,6 +36,45 @@ VALID_TYPES = ("guideline", "pitfall", "decision", "model", "process",
                "principle", "correction")
 DEFAULT_TYPE = "guideline"
 
+# ── MEMORY.md Section Schema (Single Source of Truth) ─────────────────────────
+#
+# ALL consumers of MEMORY.md sections import from HERE. Never hardcode
+# section names elsewhere. If structure changes, change HERE only.
+#
+# Three layers: Meta-cognitive (top attention) → Cognitive → Operational
+MEMORY_SECTIONS: dict[str, dict] = {
+    "Principles":              {"type": "principle",  "layer": "meta-cognitive", "prefix": "PRI", "evergreen": True},
+    "Corrections":             {"type": "correction", "layer": "meta-cognitive", "prefix": "COR", "evergreen": True},
+    "Decisions":               {"type": "decision",   "layer": "cognitive",      "prefix": "DEC", "evergreen": False},
+    "Guidelines":              {"type": "guideline",  "layer": "operational",    "prefix": "GUI", "evergreen": False},
+    "Pitfalls":                {"type": "pitfall",    "layer": "operational",    "prefix": "PIT", "evergreen": False},
+    "Processes":               {"type": "process",    "layer": "operational",    "prefix": "PRC", "evergreen": False},
+    "Models":                  {"type": "model",      "layer": "cognitive",      "prefix": "MOD", "evergreen": False},
+    "COE Registry (Evergreen)": {"type": "pitfall",   "layer": "meta-cognitive", "prefix": "COE", "evergreen": True},
+    "Open Threads":            {"type": "process",    "layer": "operational",    "prefix": "OT",  "evergreen": True},
+    "Standing Preferences":    {"type": "guideline",  "layer": "meta-cognitive", "prefix": "SP",  "evergreen": True},
+}
+
+# Derived lookups (computed once, used by consumers)
+MEMORY_SECTION_NAMES = tuple(MEMORY_SECTIONS.keys())
+MEMORY_EVERGREEN_SECTIONS = frozenset(k for k, v in MEMORY_SECTIONS.items() if v["evergreen"])
+MEMORY_PERMANENT_SECTIONS = frozenset(k for k, v in MEMORY_SECTIONS.items() if v["layer"] == "meta-cognitive")
+MEMORY_ACTIVE_SECTIONS = frozenset(k for k, v in MEMORY_SECTIONS.items() if v["layer"] in ("cognitive", "operational"))
+MEMORY_PREFIX_MAP = {k: v["prefix"] for k, v in MEMORY_SECTIONS.items()}
+MEMORY_PREFIX_TO_SECTION = {v["prefix"]: k for k, v in MEMORY_SECTIONS.items()}
+# PRIMARY insertion target per type. When multiple sections share a type
+# (e.g. "guideline" → Guidelines AND Standing Preferences), this gives the
+# default destination for new entries. Explicitly defined, not computed.
+MEMORY_TYPE_TO_SECTION: dict[str, str] = {
+    "principle": "Principles",
+    "correction": "Corrections",
+    "decision": "Decisions",
+    "guideline": "Guidelines",
+    "pitfall": "Pitfalls",
+    "process": "Processes",
+    "model": "Models",
+}
+
 # Grace period: new entries are immune to decay
 GRACE_PERIOD_DAYS = 30
 

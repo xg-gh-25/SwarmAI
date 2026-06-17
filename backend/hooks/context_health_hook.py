@@ -644,10 +644,10 @@ class ContextHealthHook:
         content = memory_path.read_text(encoding="utf-8")
         today = date.today().isoformat()
 
-        # Find insertion section — use type-based section from new structure
-        # Default: Guidelines (most REFLECT lessons are guideline/pitfall)
-        # classify_entry_type determines which section each lesson goes to
-        insert_marker = "## Guidelines"
+        # Find insertion section — from single source of truth
+        from core.ddd_entry_lifecycle import MEMORY_TYPE_TO_SECTION
+        # Default target: Guidelines (most REFLECT lessons are guideline/pitfall)
+        insert_marker = f"## {MEMORY_TYPE_TO_SECTION.get('guideline', 'Guidelines')}"
         idx = content.find(insert_marker)
         if idx < 0:
             return
@@ -1322,7 +1322,8 @@ class ContextHealthHook:
             bumped = bump_references(entries, bump_text, today)
 
         # ── Decay: assess state transitions ──
-        evergreen = {"COE Registry", "Standing Preferences"}
+        from core.ddd_entry_lifecycle import MEMORY_EVERGREEN_SECTIONS
+        evergreen = MEMORY_EVERGREEN_SECTIONS
         transitions = assess_decay(entries, today, evergreen_sections=evergreen)
 
         # Only write if something changed
@@ -1835,7 +1836,9 @@ class ContextHealthHook:
         ]
         today = date.today()
 
-        for section_name in ("Decisions", "Guidelines", "Pitfalls", "Principles"):
+        from core.ddd_entry_lifecycle import MEMORY_ACTIVE_SECTIONS, MEMORY_PERMANENT_SECTIONS
+        _staleness_scan = [s for s in (*MEMORY_PERMANENT_SECTIONS, *MEMORY_ACTIVE_SECTIONS) if s != "Open Threads"]
+        for section_name in _staleness_scan:
             # Extract section body
             sec_match = re.search(
                 rf"## {section_name}\n(.*?)(?=\n## |\Z)", content, re.DOTALL

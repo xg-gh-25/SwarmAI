@@ -42,20 +42,18 @@ logger = logging.getLogger(__name__)
 MEMORY_INDEX_START = "<!-- MEMORY_INDEX_START -->"
 MEMORY_INDEX_END = "<!-- MEMORY_INDEX_END -->"
 
-# Sections whose entries never age out of the index (Permanent tier)
-# Updated 2026-06-17: MEMORY.md restructured to 7-type sections
-PERMANENT_SECTIONS = {
-    "COE Registry (Evergreen)", "Principles", "Corrections",
-    # Legacy names (for backward compat if old format encountered)
-    "COE Registry", "Key Decisions",
-}
+# ── Section definitions: imported from single source of truth ─────────
+from .ddd_entry_lifecycle import (
+    MEMORY_PERMANENT_SECTIONS,
+    MEMORY_ACTIVE_SECTIONS,
+    MEMORY_EVERGREEN_SECTIONS,
+    MEMORY_PREFIX_MAP,
+    MEMORY_PREFIX_TO_SECTION,
+)
 
-# Sections that appear in the Active tier
-ACTIVE_SECTIONS = {
-    "Decisions", "Guidelines", "Pitfalls", "Processes", "Models",
-    # Legacy names (backward compat)
-    "Recent Context", "Lessons Learned",
-}
+# Re-export for backward compat with existing callers
+PERMANENT_SECTIONS = MEMORY_PERMANENT_SECTIONS
+ACTIVE_SECTIONS = MEMORY_ACTIVE_SECTIONS
 
 # Section always loaded in L1 regardless of matching
 ALWAYS_LOAD_SECTIONS = {"Open Threads"}
@@ -75,21 +73,10 @@ FULL_INJECTION_THRESHOLD = 30_000
 # Scale up as MEMORY.md grows and token budget allows.
 MAX_REF_SECTIONS = 3
 
-# Prefix patterns for index entry keys
-# Updated 2026-06-17: maps new 7-type section names to index prefixes
+# Prefix patterns: derived from single source of truth
 SECTION_KEY_PREFIX = {
-    # New structure (7-type)
-    "Principles": "PRI",
-    "Corrections": "COR",
-    "Decisions": "DEC",
-    "Guidelines": "GUI",
-    "Pitfalls": "PIT",
-    "Processes": "PRC",
-    "Models": "MOD",
-    "COE Registry (Evergreen)": "COE",
-    "Open Threads": "OT",
-    "Standing Preferences": "SP",
-    # Legacy names (backward compat — old MEMORY.md format)
+    **MEMORY_PREFIX_MAP,
+    # Legacy names (backward compat — old MEMORY.md format still parseable)
     "Recent Context": "RC",
     "Key Decisions": "KD",
     "Lessons Learned": "LL",
@@ -262,23 +249,13 @@ def _extract_refs(entry_text: str, self_key: str) -> list[str]:
     return unique
 
 
-# Mapping from ref prefix → MEMORY.md section name
+# Mapping from ref prefix → MEMORY.md section name (from single source)
 _REF_PREFIX_TO_SECTION: dict[str, str] = {
-    # New structure (7-type)
-    "PRI": "Principles",
-    "COR": "Corrections",
-    "DEC": "Decisions",
-    "GUI": "Guidelines",
-    "PIT": "Pitfalls",
-    "PRC": "Processes",
-    "MOD": "Models",
-    "COE": "COE Registry (Evergreen)",
-    "OT": "Open Threads",
-    "SP": "Standing Preferences",
-    # Legacy prefixes (backward compat)
+    **MEMORY_PREFIX_TO_SECTION,
+    # Legacy prefixes (backward compat for old index entries)
     "KD": "Decisions",
-    "RC": "Guidelines",  # Recent Context merged into operational types
-    "LL": "Pitfalls",    # Lessons Learned merged into pitfall/guideline
+    "RC": "Guidelines",
+    "LL": "Pitfalls",
 }
 
 
