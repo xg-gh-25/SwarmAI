@@ -3674,8 +3674,12 @@ class SessionUnit:
             self.session_id,
             self.state.value if self.state else "None",
         )
-        if self.state == SessionState.STREAMING:
-            raise RuntimeError("Cannot refresh while streaming")
+        if self.state in (SessionState.STREAMING, SessionState.WAITING_INPUT):
+            raise RuntimeError(
+                "Cannot refresh while streaming"
+                if self.state == SessionState.STREAMING
+                else "Cannot refresh while waiting for user input"
+            )
         # If already COLD (no subprocess), nothing to kill — just return
         if self.state == SessionState.COLD:
             return

@@ -944,7 +944,10 @@ async def refresh_session(session_id: str):
 
     if result["success"]:
         return {"status": "refreshed", "message": result["message"]}
+    elif "not found" in result["message"].lower():
+        raise HTTPException(status_code=404, detail=result["message"])
     else:
+        # Session is busy (STREAMING or WAITING_INPUT)
         raise HTTPException(status_code=409, detail=result["message"])
 
 
