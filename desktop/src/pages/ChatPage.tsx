@@ -375,11 +375,28 @@ export default function ChatPage() {
   const loadGenRef = useRef(0);
   const loadSessionMessages = useCallback(async (sid: string) => {
     const thisGen = ++loadGenRef.current;
+    // ── Phase Gate (MessageStore) ──
+    // If the active tab's store is streaming, DB fetch would overwrite
+    // in-progress content. Skip entirely — reconcile will run on endStreaming().
+    const currentTabForGate = activeTabIdRef.current;
+    if (currentTabForGate) {
+      const tabForGate = tabMapRef.current.get(currentTabForGate);
+      if (tabForGate?.isStreaming) {
+        console.log('[ChatPage] loadSessionMessages skipped — tab is streaming', { sid });
+        return;
+      }
+    }
     setIsLoadingHistory(true);
     try {
       const sessionMessages = await chatService.getSessionMessagesPaginated(sid, INITIAL_MESSAGE_LOAD_LIMIT);
       // Async guard: discard if a newer load was started while we awaited
       if (loadGenRef.current !== thisGen) return;
+      // Phase guard (post-fetch): streaming may have started during the async fetch
+      const postFetchTab = activeTabIdRef.current ? tabMapRef.current.get(activeTabIdRef.current) : null;
+      if (postFetchTab?.isStreaming) {
+        console.log('[ChatPage] loadSessionMessages discarded (streaming started during fetch)', { sid });
+        return;
+      }
       const formattedMessages: Message[] = sessionMessages.map(toDisplayMessage);
       setMessages(formattedMessages);
       setSessionId(sid);
@@ -387,8 +404,6 @@ export default function ChatPage() {
       setHasMoreMessages(sessionMessages.length === INITIAL_MESSAGE_LOAD_LIMIT);
       // Sync loaded messages back into the tab map so subsequent tab switches
       // don't see empty messages and re-fetch unnecessarily.
-      // GUARD: Never overwrite a streaming tab's messages — the stream handler
-      // has newer content than the backend fetch (which returns last-committed state).
       const currentTabId = activeTabIdRef.current;
       if (currentTabId) {
         const tab = tabMapRef.current.get(currentTabId);
@@ -2110,13 +2125,14 @@ export default function ChatPage() {
           timestamp: new Date().toISOString(),
         },
       ]);
-    } catch (err) {
-      console.error('[handleRefreshContext] Failed:', err);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Refresh failed';
+      addToast({ severity: 'warning', message: msg.includes('active') ? 'Cannot refresh while the AI is busy. Stop or answer first.' : `Refresh failed: ${msg}`, autoDismiss: true });
     } finally {
       setIsRefreshing(false);
       setShowRefreshModal(false);
     }
-  }, [sessionId, isStreaming]);
+  }, [sessionId, isStreaming, addToast]);
 
 
   // Handle agent save
@@ -2428,7 +2444,7 @@ export default function ChatPage() {
                 sessionId={sessionId}
                 contextPct={contextWarning?.pct ?? null}
                 promptMetadata={promptMetadata}
-                disabled={health.status === 'disconnected' || isLimited('/chat') || isWaitingForBusy}
+                disabled={health.status === 'disconnected' || isLimited('/chat') || isWaitingForBusy || isRefreshing}
                 activeTabIdRef={activeTabIdRef}
                 inputValueMapRef={inputValueMapRef}
                 onInputValueChange={(tabId: string, value: string) => {
