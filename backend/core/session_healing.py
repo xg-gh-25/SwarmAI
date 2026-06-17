@@ -361,8 +361,12 @@ _canary_session_id: str | None = None
 def parse_self_heal_mode(env_value: str) -> str:
     """Parse SWARMAI_SELF_HEAL env var into mode.
 
+    Note: the env-unset default is applied by the caller (is_self_heal_enabled),
+    which defaults to "1"/all. This parser's fallback for empty/unknown input is
+    "off" (safe parse fallback, not the runtime default).
+
     Returns:
-        "off" — self-healing disabled (default)
+        "off" — self-healing disabled (also the fallback for empty/unknown input)
         "all" — enabled for all sessions
         "canary" — enabled for first non-channel session only
     """
@@ -384,7 +388,12 @@ def is_self_heal_enabled(session_id: str, is_channel: bool = False) -> bool:
     """
     global _canary_session_id
 
-    mode = parse_self_heal_mode(os.environ.get("SWARMAI_SELF_HEAL", "0"))
+    # Default "1" (all): self-heal is ON by default. The recovery path is now
+    # hardened — every kill→COLD respawn (voluntary self-heal AND involuntary
+    # RSS/stuck/watchdog kills) arms a rich continuation checkpoint, and the
+    # --resume fallback preserves context on timeout-abandon. Set SWARMAI_SELF_HEAL
+    # to "0" to disable or "canary" for first-session-only.
+    mode = parse_self_heal_mode(os.environ.get("SWARMAI_SELF_HEAL", "1"))
 
     if mode == "off":
         return False

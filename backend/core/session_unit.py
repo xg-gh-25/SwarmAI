@@ -891,11 +891,15 @@ class SessionUnit:
         # ── Layer 0: Advance generation + clear stale interrupt state ─
         # Must happen BEFORE anything else so a concurrent interrupt()
         # that resumes from an await sees the bumped counter and aborts.
-        # All three clears are synchronous (no await between them), so
+        # All four clears are synchronous (no await between them), so
         # no other coroutine can interleave and re-set them.
         self._send_generation += 1
         self._stop_event.clear()
         self._interrupted = False
+        # Clear stale recovery checkpoint from a prior aborted kill
+        # (e.g. RSS spike armed checkpoint → spike subsided → kill didn't fire).
+        # Prevents an unrelated later restart from injecting stale context.
+        self._heal_checkpoint = None
 
         # Store app_session_id for downstream use by _retry_with_resume's
         # abandon-fallback path (build_resume_context needs the stable
@@ -1154,8 +1158,9 @@ class SessionUnit:
             # If so, proactively heal (kill → respawn) so next turn starts fresh.
             # User sees nothing — this happens between turns, not mid-stream.
             #
-            # Gate: SWARMAI_SELF_HEAL=0 (off, default) | 1 (all) | canary (first tab only)
-            # Canary mode enables for ONE non-channel session, logs everything.
+            # Gate: SWARMAI_SELF_HEAL=1 (all, default) | 0 (off) | canary (first tab only)
+            # Default is ON now that the recovery path is hardened (rich checkpoint
+            # on every respawn + --resume context fallback). Set "0" to disable.
             _self_heal_enabled = is_self_heal_enabled(
                 self.session_id, is_channel=bool(getattr(self, "_channel_id", None))
             )
