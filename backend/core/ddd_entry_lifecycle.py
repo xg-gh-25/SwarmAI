@@ -50,7 +50,7 @@ MEMORY_SECTIONS: dict[str, dict] = {
     "Pitfalls":                {"type": "pitfall",    "layer": "operational",    "prefix": "PIT", "evergreen": False},
     "Processes":               {"type": "process",    "layer": "operational",    "prefix": "PRC", "evergreen": False},
     "Models":                  {"type": "model",      "layer": "cognitive",      "prefix": "MOD", "evergreen": False},
-    "COE Registry (Evergreen)": {"type": "pitfall",   "layer": "meta-cognitive", "prefix": "COE", "evergreen": True},
+    "COE Registry":             {"type": "pitfall",   "layer": "meta-cognitive", "prefix": "COE", "evergreen": True},
     "Open Threads":            {"type": "process",    "layer": "operational",    "prefix": "OT",  "evergreen": True},
     "Standing Preferences":    {"type": "guideline",  "layer": "meta-cognitive", "prefix": "SP",  "evergreen": True},
 }

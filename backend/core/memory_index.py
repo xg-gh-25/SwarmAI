@@ -348,7 +348,7 @@ def generate_memory_index(content: str) -> str:
     # ── Count entries per section ──
     # For Open Threads, only count active entries (exclude ✅ resolved).
     counts: dict[str, int] = {}
-    for sec_name in SECTION_KEY_PREFIX:
+    for sec_name in MEMORY_PREFIX_MAP:  # Only current sections (not legacy)
         sec_content = sections.get(sec_name, "")
         entries = _parse_entries(sec_content)
         if sec_name == "Open Threads":

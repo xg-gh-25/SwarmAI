@@ -644,42 +644,52 @@ class ContextHealthHook:
         content = memory_path.read_text(encoding="utf-8")
         today = date.today().isoformat()
 
-        # Find insertion section — from single source of truth
+        # Route each lesson to its correct section (type → section mapping)
         from core.ddd_entry_lifecycle import MEMORY_TYPE_TO_SECTION
-        # Default target: Guidelines (most REFLECT lessons are guideline/pitfall)
-        insert_marker = f"## {MEMORY_TYPE_TO_SECTION.get('guideline', 'Guidelines')}"
-        idx = content.find(insert_marker)
-        if idx < 0:
-            return
 
-        # Find the line after the header (skip blank line)
-        after_header = content[idx + len(insert_marker):]
-        newline_pos = after_header.find("\n")
-        if newline_pos < 0:
-            return
-        insert_pos = idx + len(insert_marker) + newline_pos + 1
-        # Skip one more blank line if present
-        if insert_pos < len(content) and content[insert_pos] == "\n":
-            insert_pos += 1
+        # Group lessons by target section
+        from collections import defaultdict
+        by_section: dict[str, list[str]] = defaultdict(list)
 
-        # Build entries for each lesson (max 3 per run to avoid flooding)
-        new_entries = []
         for lesson in lessons[:3]:
             if len(lesson) < 20:
-                continue  # Skip trivial
+                continue
             entry_type = classify_entry_type(lesson)
-            # Extract first sentence as title (max 60 chars)
+            target_section = MEMORY_TYPE_TO_SECTION.get(entry_type, "Guidelines")
             title = lesson.split("—")[0].strip() if "—" in lesson else lesson[:60]
             title = title.rstrip(".")
-            entry_line = f"- [{entry_type}] **{title}** — {lesson} ({today}, {run_id})\n"
-            meta_line = f"  <!-- ref:0 | last:{today} | decay:active -->\n"
-            new_entries.append(entry_line + meta_line)
+            entry_line = f"- [{entry_type}] **{title}** — {lesson} ({today}, {run_id})"
+            meta_line = f"  <!-- ref:0 | last:{today} | decay:active -->"
+            by_section[target_section].append(f"{entry_line}\n{meta_line}")
 
-        if new_entries:
-            # Insert after header
-            new_block = "\n".join(new_entries) + "\n"
+        if not by_section:
+            return
+
+        # Insert each group into its target section
+        for section_name, entries in by_section.items():
+            marker = f"## {section_name}"
+            idx = content.find(marker)
+            if idx < 0:
+                continue
+            # Find insertion point (after header + description line + blank)
+            after_header = content[idx + len(marker):]
+            # Skip to first entry (past description italic + blank lines)
+            lines_after = after_header.split("\n")
+            skip = 0
+            for line in lines_after[1:]:  # skip header line itself
+                skip += 1
+                if line.startswith("- [") or line.strip() == "":
+                    if line.startswith("- ["):
+                        break
+                    # blank line before first entry
+                    continue
+                # description line (italic) — skip it
+                continue
+            insert_pos = idx + len(marker) + sum(len(l) + 1 for l in lines_after[:skip + 1])
+            new_block = "\n".join(entries) + "\n"
             content = content[:insert_pos] + new_block + content[insert_pos:]
-            memory_path.write_text(content, encoding="utf-8")
+
+        memory_path.write_text(content, encoding="utf-8")
             logger.debug(
                 "context_health: extracted %d lessons to MEMORY.md from %s/%s",
                 len(new_entries), project, run_id,
@@ -1841,7 +1851,7 @@ class ContextHealthHook:
         for section_name in _staleness_scan:
             # Extract section body
             sec_match = re.search(
-                rf"## {section_name}\n(.*?)(?=\n## |\Z)", content, re.DOTALL
+                rf"## {re.escape(section_name)}\n(.*?)(?=\n## |\Z)", content, re.DOTALL
             )
             if not sec_match:
                 continue

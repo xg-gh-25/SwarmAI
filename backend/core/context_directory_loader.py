@@ -94,26 +94,56 @@ def _filter_dormant_entries(content: str) -> str:
     """Remove dormant/archived entries from MEMORY.md before injection.
 
     Entries with <!-- ref:N | last:date | decay:dormant --> or decay:archived
-    are stripped (entry line + metadata line). Active entries pass through.
-    This is the Darwinian selection pressure: unused knowledge fades from context.
+    are stripped (entire entry block: bullet + continuation lines + metadata).
+    Active entries pass through.
+
+    Handles multi-line entries: scans forward from each bullet to find its
+    metadata comment (up to 4 lines ahead). If metadata is dormant/archived,
+    the entire block from bullet to metadata (inclusive) is skipped.
     """
     import re
     lines = content.splitlines()
     result = []
     i = 0
     _dormant_re = re.compile(r"^\s*<!-- ref:\d+ \| last:[\w\-]+ \| decay:(dormant|archived)")
+    _entry_re = re.compile(r"^- \[")
 
     while i < len(lines):
-        # Check if NEXT line is a dormant/archived metadata comment
-        if i + 1 < len(lines) and _dormant_re.match(lines[i + 1]):
-            # Skip this entry line AND the metadata line
-            i += 2
-            continue
-        # Check if THIS line is a dormant metadata (orphaned)
-        if _dormant_re.match(lines[i]):
+        line = lines[i]
+
+        # If this is an entry bullet, look ahead for its metadata
+        if _entry_re.match(line):
+            # Scan up to 4 lines ahead for metadata comment
+            block_end = i + 1
+            found_meta = False
+            is_dormant = False
+            for j in range(i + 1, min(i + 5, len(lines))):
+                if _dormant_re.match(lines[j]):
+                    found_meta = True
+                    is_dormant = True
+                    block_end = j + 1
+                    break
+                elif lines[j].startswith("  <!-- ref:"):
+                    # Active metadata — entry is fine
+                    found_meta = True
+                    block_end = j + 1
+                    break
+                elif _entry_re.match(lines[j]) or lines[j].startswith("## "):
+                    # Next entry or section — no metadata for this entry
+                    break
+                # else: continuation line — keep scanning
+
+            if is_dormant:
+                # Skip entire block (bullet + continuations + metadata)
+                i = block_end
+                continue
+
+        # Check orphaned dormant metadata (shouldn't happen, but safety)
+        if _dormant_re.match(line):
             i += 1
             continue
-        result.append(lines[i])
+
+        result.append(line)
         i += 1
 
     return "\n".join(result)
