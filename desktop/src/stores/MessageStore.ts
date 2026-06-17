@@ -122,6 +122,12 @@ export class MessageStore {
     if (msg.role === 'system' && msg.id?.startsWith('resume-boundary')) {
       this._resumeBoundaryIdx = this._messages.length - 1;
     }
+    // Reset watchdog on append during streaming — prevents premature
+    // endStreaming() when session_cleared/boundary appends arrive during
+    // long tool execution gaps (adversarial finding #7).
+    if (this._phase === 'streaming') {
+      this._resetWatchdog();
+    }
     this._notify();
   }
 
@@ -212,6 +218,12 @@ export class MessageStore {
       return;
     }
 
+    // Invalidate any in-flight reconcile fetch — prevents stale DB data
+    // from overwriting these messages when the fetch resolves.
+    // Critical for error handlers: endStreaming() flushes reconcile thunk,
+    // then replace() sets error content. Without this, the flushed thunk's
+    // async result could overwrite the error content (adversarial finding).
+    this._reconcileGen++;
     this._messages = messages;
     this._initialLoadComplete = true;
     this._notify();

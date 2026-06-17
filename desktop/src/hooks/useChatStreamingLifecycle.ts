@@ -988,7 +988,18 @@ export function useChatStreamingLifecycle(
     const store = messageStoreRegistry.get(tabId);
     if (!store) return;
 
+    // Fix #3 (adversarial): Immediate sync on subscription — hydrate React state
+    // with current store contents. Without this, there's a gap between tab switch
+    // and first store notification where updates are invisible.
+    setMessages(store.getSnapshot());
+
     const unsub = store.subscribe(() => {
+      // Fix #2 (adversarial): Read ref INSIDE callback — not from closure.
+      // Between effect setup and callback fire, active tab may have changed.
+      // Guard BOTH writes to prevent flashing wrong-tab content during the
+      // rAF window between effect cleanup scheduling and actual unsub.
+      const currentActiveTabId = activeTabIdRef.current;
+      if (currentActiveTabId !== tabId) return; // stale subscription — skip
       // Sync store → React state (triggers render)
       setMessages(store.getSnapshot());
       // Sync store → tabState cache (for tab-switch instant display)
@@ -2314,10 +2325,13 @@ export function useChatStreamingLifecycle(
             ];
           };
 
-          // Apply error via store (single-writer) or fallback
+          // Apply error via store (single-writer) or fallback.
+          // CRITICAL (adversarial #1): endStreaming() MUST be called before replace()
+          // because replace() is NO-OP during streaming phase. The stream is
+          // definitively over at this point (error = terminal event).
           const errStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
           if (errStore) {
-            // Replace entire message array — applyError has complex multi-path logic
+            errStore.endStreaming(); // Transition to idle so replace() succeeds
             const errorResult = applyError(errStore.messages);
             errStore.replace(errorResult);
           } else {
@@ -2776,9 +2790,12 @@ export function useChatStreamingLifecycle(
           ];
         };
 
-        // Apply error via store (single-writer) or fallback
+        // Apply error via store (single-writer) or fallback.
+        // CRITICAL (adversarial #1): endStreaming() before replace() — stream is
+        // definitively over (SSE connection errored out).
         const errStore2 = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
         if (errStore2) {
+          errStore2.endStreaming(); // Transition to idle so replace() succeeds
           const beforeCount = errStore2.messages.find((m) => m.id === assistantMessageId)?.content.length ?? 0;
           const errorResult = applyError(errStore2.messages);
           errStore2.replace(errorResult);
