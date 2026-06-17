@@ -49,6 +49,7 @@ import { useChatStreamingLifecycle, formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS 
 import { useVoiceConversation } from '../hooks/useVoiceConversation';
 import { ChatHeader, ChatInput, MessageBubble, WelcomeScreen } from './chat/components';
 import { RadarSidebar } from './chat/components/RightSidebar';
+import RefreshContextModal from '../components/modals/RefreshContextModal';
 
 import { groupSessionsByTime, mergeOlderMessages } from './chat/utils';
 import { EXPLORER_ATTACH_FILE, EXPLORER_ASK_ABOUT_FILE } from '../constants/explorerEvents';
@@ -120,6 +121,8 @@ export default function ChatPage() {
 
   // File preview state
   const [previewFile, setPreviewFile] = useState<{ path: string; name: string } | null>(null);
+  const [showRefreshModal, setShowRefreshModal] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // LayoutContext — attachment state removed (now in useUnifiedAttachments)
 
@@ -416,10 +419,17 @@ export default function ChatPage() {
       if (!tabState) return;
       tabState.reconnectionAttempt = 0;
       tabState.isReconnecting = false;
-      if (tabState.sessionId) {
+      // Skip message refetch if the tab is actively streaming or has messages
+      // in-memory already. Refetching during/after streaming overwrites the
+      // accumulated content with DB history (which may include much older
+      // messages), causing "prior messages re-appear" bug.
+      // Only refetch for tabs that genuinely lost their message state.
+      if (tabState.sessionId && !tabState.isStreaming && (!tabState.messages || tabState.messages.length === 0)) {
         loadSessionMessages(tabState.sessionId);
+        console.log(`[ChatPage] Backend recovered — active tab ${activeId}, re-syncing messages (empty state)`);
+      } else {
+        console.log(`[ChatPage] Backend recovered — active tab ${activeId}, skipping refetch (messages in-memory)`);
       }
-      console.log(`[ChatPage] Backend recovered — active tab ${activeId}, re-syncing messages`);
     };
     window.addEventListener('swarm:backend-recovered', handleBackendRecovered);
     return () => window.removeEventListener('swarm:backend-recovered', handleBackendRecovered);
@@ -2083,6 +2093,31 @@ export default function ChatPage() {
     }
   };
 
+  // --- Context Refresh (Same-Tab Restart) ---
+  const handleRefreshContext = useCallback(async () => {
+    if (!sessionId || isStreaming) return;
+    setIsRefreshing(true);
+    try {
+      await chatService.refreshSession(sessionId);
+      // Append a system separator — existing lastResumeBoundaryIdx logic
+      // will auto-dim all messages above this point
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `refresh-${Date.now()}`,
+          role: 'system' as const,
+          content: [{ type: 'text' as const, text: 'Context refreshed' }],
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+    } catch (err) {
+      console.error('[handleRefreshContext] Failed:', err);
+    } finally {
+      setIsRefreshing(false);
+      setShowRefreshModal(false);
+    }
+  }, [sessionId, isStreaming]);
+
 
   // Handle agent save
   const handleSaveAgent = async (agent: Agent | AgentCreateRequest) => {
@@ -2189,13 +2224,18 @@ export default function ChatPage() {
                         />
                       );
                     }
-                    // System messages (resume boundary) render as divider lines
+                    // System messages (resume/refresh boundary) render as divider lines
                     if (msg.role === 'system') {
+                      const isRefresh = msg.id.startsWith('refresh-');
+                      const label = isRefresh ? 'Context Refreshed' : 'Session Resumed';
                       return (
                         <div key={msg.id} className="flex items-center gap-3 py-3 px-4 select-none">
                           <div className="flex-1 h-px bg-[var(--color-border)]" />
-                          <span className="text-xs text-[var(--color-text-muted)] whitespace-nowrap">
-                            Session Resumed
+                          <span className="text-xs text-[var(--color-text-muted)] whitespace-nowrap flex items-center gap-1.5">
+                            {isRefresh && (
+                              <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>refresh</span>
+                            )}
+                            {label}
                           </span>
                           <div className="flex-1 h-px bg-[var(--color-border)]" />
                         </div>
@@ -2395,6 +2435,7 @@ export default function ChatPage() {
                   inputValueMapRef.current.set(tabId, value);
                 }}
                 isLikelyStalled={isLikelyStalled}
+                onRefreshContext={() => setShowRefreshModal(true)}
                 skills={skills}
                 voiceConversationState={voiceConversation.state}
                 onVoiceConversationToggle={voiceConversation.toggle}
@@ -2421,6 +2462,12 @@ export default function ChatPage() {
       {/* Modals */}
       <FilePreviewModal isOpen={!!previewFile} onClose={() => setPreviewFile(null)} agentId={selectedAgentId || ''} file={previewFile} basePath={effectiveBasePath} />
       <AgentFormModal isOpen={isEditAgentOpen} onClose={() => setIsEditAgentOpen(false)} onSave={handleSaveAgent} agent={selectedAgent} />
+      <RefreshContextModal
+        isOpen={showRefreshModal}
+        onClose={() => setShowRefreshModal(false)}
+        onConfirm={handleRefreshContext}
+        isLoading={isRefreshing}
+      />
     </div>
     </ChatDropZone>
   );
