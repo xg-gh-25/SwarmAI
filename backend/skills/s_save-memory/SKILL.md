@@ -63,13 +63,29 @@ Use prepend (add at top of section) so newest entries appear first.
 If the target section doesn't exist in MEMORY.md, add it as a new `## <Section Name>`
 heading at the end of the file.
 
-#### Step 4: Confirm silently
+#### Step 4: Show What Was Saved (MANDATORY — transparency to user)
 
-After writing, briefly confirm to the user what was saved:
-- "Saved to MEMORY.md under Key Decisions."
-- "Remembered. Added to Lessons Learned."
+After writing, output a **structured receipt** showing exactly what was persisted and why.
+The user must be able to verify the extraction was accurate without reading MEMORY.md.
 
-Keep confirmation to one line. Don't repeat the content back.
+**Format:**
+
+```
+**Saved to MEMORY.md:**
+
+**[Section Name] (N entries):**
+> YYYY-MM-DD: **Bold title** — condensed content...
+> _(Why: one-sentence reason this is worth remembering)_
+
+> YYYY-MM-DD: **Bold title** — condensed content...
+> _(Why: one-sentence reason)_
+```
+
+**Rules for the receipt:**
+- Show EVERY entry saved (never summarize "and 3 more")
+- Include the "Why" line — explains what future value this memory provides
+- Use blockquote format so it's visually distinct from conversation
+- If multiple sections were written to, group by section with headers
 
 **If the user asks you to save a test entry**, save it, confirm it was saved, and then **immediately remove the test entry from MEMORY.md** after confirming — unless the user explicitly says to keep it. Always verify the removal was successful by reading the file back after deletion to ensure the test entry is completely gone.
 
@@ -99,3 +115,4 @@ Before marking this task complete, show evidence for each:
 - [ ] **Correct section targeted** — confirm the entry was placed under the appropriate `##` heading (e.g. Key Decisions, Lessons Learned)
 - [ ] **No duplicates** — verify the same content does not already exist elsewhere in MEMORY.md
 - [ ] **Newest first** — confirm the new entry appears at the top of its section, above older entries
+- [ ] **Receipt shown to user** — the structured "Saved to MEMORY.md" block with entries + Why lines was output to chat (Step 4)

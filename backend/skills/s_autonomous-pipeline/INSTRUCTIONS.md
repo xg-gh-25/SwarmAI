@@ -754,7 +754,45 @@ Report: .artifacts/runs/<run_id>/REPORT.md
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-3. **STOP.** Do not add explanatory text after the summary. Do not ask
+3. **OUTPUT EXECUTIVE SUMMARY (MANDATORY — immediately after the stage box):**
+
+   The stage box shows process. The executive summary shows **outcome**.
+   Without it, the user has to ask "so what changed?" every time.
+
+   ```
+   ## Executive Summary
+
+   **Before → After:**
+   | Aspect | Before | After |
+   |--------|--------|-------|
+   | <key dimension 1> | <old state> | <new state> |
+   | <key dimension 2> | <old state> | <new state> |
+
+   **Key Decisions:**
+   - <decision 1 — what was chosen and why (1 line)>
+   - <decision 2>
+
+   **Lessons Learned:**
+   - <lesson 1 — reusable insight (1 line)>
+   - <lesson 2>
+
+   **Next Steps:**
+   - <suggested action 1 — what to do next>
+   - <suggested action 2>
+   - <suggested action 3>
+   ```
+
+   **Rules for Executive Summary:**
+   - Before→After table: 2-4 rows, each showing a measurable change. No "N/A→implemented" filler.
+   - Key Decisions: only taste/judgment decisions (not mechanical). Max 3.
+   - Lessons: insights that apply beyond this specific task. Max 3.
+   - Next Steps: actionable prompts the user could type next. Always include 2-3.
+   - Total length: 10-20 lines. Not a report — a briefing.
+
+   **Skip Executive Summary ONLY for trivial/bugfix profiles** (they're too small to have
+   meaningful before/after or lessons).
+
+4. **STOP.** Do not add explanatory text after the executive summary. Do not ask
    "would you like me to push?" The summary is the terminal output.
    User will respond if they want more.
 
