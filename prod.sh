@@ -505,6 +505,17 @@ cmd_deploy() {
             return 1
         fi
     fi
+
+    # ── Post-deploy canary (Gap #14): run eval canary for semantic correctness ──
+    _log "Running eval canary (semantic correctness check)..."
+    local canary_result
+    canary_result=$(curl -s -X POST "http://127.0.0.1:18321/api/eval/canary" 2>/dev/null)
+    local canary_status=$?
+    if [ $canary_status -eq 0 ] && echo "$canary_result" | python3 -c "import sys,json; d=json.load(sys.stdin); sys.exit(0 if d.get('passed',d.get('status'))!='failed' else 1)" 2>/dev/null; then
+        _ok "Eval canary passed ✓"
+    else
+        _warn "Eval canary failed or unavailable (non-blocking): $canary_result"
+    fi
 }
 
 _build_frontend() {

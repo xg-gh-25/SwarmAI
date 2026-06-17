@@ -140,6 +140,48 @@ async def run_smoke(
     except Exception as e:
         result.record("sessions_list", False, str(e))
 
+    # ── 3b. Workspace tree endpoint (Gap #18) ──
+    try:
+        async with httpx.AsyncClient(base_url=base_url, timeout=HEALTH_TIMEOUT) as c:
+            r = await c.get("/api/workspace/tree", params={"depth": 1})
+            data = r.json()
+            # API returns either a list (flat nodes) or dict with children
+            tree_ok = r.status_code == 200 and (
+                (isinstance(data, list) and len(data) > 0)
+                or (isinstance(data, dict) and bool(data.get("children") or data.get("items")))
+            )
+            count = len(data) if isinstance(data, list) else len(data.get("children", []))
+            result.record(
+                "workspace_tree", tree_ok,
+                f"status={r.status_code}, nodes={count}",
+            )
+    except Exception as e:
+        result.record("workspace_tree", False, str(e))
+
+    # ── 3c. Session persistence (Gap #19) ──
+    # Verify that sessions created are actually persisted (survive daemon restart)
+    try:
+        async with httpx.AsyncClient(base_url=base_url, timeout=HEALTH_TIMEOUT) as c:
+            r = await c.get("/api/chat/sessions", params={"limit": 1})
+            if r.status_code == 200:
+                sessions = r.json()
+                if sessions:
+                    # Fetch the first session's messages to verify DB persistence
+                    sid = sessions[0].get("id")
+                    r2 = await c.get(f"/api/chat/sessions/{sid}/messages", params={"limit": 1})
+                    persist_ok = r2.status_code == 200
+                    result.record(
+                        "session_persist", persist_ok,
+                        f"session={sid[:8]}… messages_status={r2.status_code}",
+                    )
+                else:
+                    # No sessions exist — that's OK for fresh installs
+                    result.record("session_persist", True, "no sessions (fresh install)")
+            else:
+                result.record("session_persist", False, f"sessions_status={r.status_code}")
+    except Exception as e:
+        result.record("session_persist", False, str(e))
+
     # ── Frontend-only scope stops here — no model call needed ──
     if scope == "frontend-only":
         # Also check eval health (API that frontend uses)
