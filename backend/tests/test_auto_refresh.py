@@ -315,3 +315,148 @@ class TestRefreshLog:
 
         entries = read_refresh_log(log_path, since_days=1)
         assert len(entries) == 0
+
+
+# ── Layer 2: LLM Refresh Proposer Tests ──────────────────────────────────
+
+
+class TestLlmRefreshProposer:
+    def test_throttle_allows_first_run(self, swarmai_root, workspace):
+        from core.auto_refresh import LlmRefreshProposer
+
+        proposer = LlmRefreshProposer(swarmai_root, workspace)
+        assert proposer.should_run("SwarmAI", "TECH.md") is True
+
+    def test_throttle_blocks_after_record(self, swarmai_root, workspace):
+        from core.auto_refresh import LlmRefreshProposer
+
+        proposer = LlmRefreshProposer(swarmai_root, workspace)
+        proposer.record_run("SwarmAI", "TECH.md")
+
+        # Same pair should be blocked now
+        assert proposer.should_run("SwarmAI", "TECH.md") is False
+
+    def test_throttle_allows_different_pair(self, swarmai_root, workspace):
+        from core.auto_refresh import LlmRefreshProposer
+
+        proposer = LlmRefreshProposer(swarmai_root, workspace)
+        proposer.record_run("SwarmAI", "TECH.md")
+
+        # Different doc is allowed
+        assert proposer.should_run("SwarmAI", "PRODUCT.md") is True
+        # Different project is allowed
+        assert proposer.should_run("AIDLC", "TECH.md") is True
+
+    def test_throttle_state_persists(self, swarmai_root, workspace):
+        from core.auto_refresh import LlmRefreshProposer
+
+        proposer1 = LlmRefreshProposer(swarmai_root, workspace)
+        proposer1.record_run("SwarmAI", "TECH.md")
+
+        # New instance reads state from disk
+        proposer2 = LlmRefreshProposer(swarmai_root, workspace)
+        assert proposer2.should_run("SwarmAI", "TECH.md") is False
+
+    def test_parse_response_extracts_proposal(self, swarmai_root, workspace):
+        from core.auto_refresh import LlmRefreshProposer
+
+        proposer = LlmRefreshProposer(swarmai_root, workspace)
+
+        response = """Here is the updated section.
+
+PROPOSED:
+```
+## Pipeline
+9-stage autonomous pipeline with DDD/SDD/TDD. [source: stages/:9 files]
+Quality Convergence Loop with 6-layer push-ready gate. [source: deliver.md:373]
+```
+
+CITATIONS:
+- stages/:9 files
+- deliver.md:373
+"""
+        proposed, citations = proposer._parse_response(response)
+        assert "9-stage" in proposed
+        assert len(citations) >= 2
+
+    def test_parse_response_no_changes(self, swarmai_root, workspace):
+        from core.auto_refresh import LlmRefreshProposer
+
+        proposer = LlmRefreshProposer(swarmai_root, workspace)
+        proposed, citations = proposer._parse_response("NO_CHANGES_NEEDED")
+        assert proposed == ""
+        assert citations == []
+
+    def test_assess_factual_numbers(self, swarmai_root, workspace):
+        from core.auto_refresh import LlmRefreshProposer
+
+        proposer = LlmRefreshProposer(swarmai_root, workspace)
+
+        # Mostly numeric changes = factual
+        assert proposer._assess_factual(
+            "8-stage pipeline with 7 specialists",
+            "9-stage pipeline with 9 specialists",
+        ) is True
+
+    def test_assess_factual_prose(self, swarmai_root, workspace):
+        from core.auto_refresh import LlmRefreshProposer
+
+        proposer = LlmRefreshProposer(swarmai_root, workspace)
+
+        # Mostly prose changes = not factual
+        assert proposer._assess_factual(
+            "The system is designed to help users manage their workflow efficiently.",
+            "The platform provides an innovative approach to collaborative knowledge management.",
+        ) is False
+
+
+# ── E2E: Mechanical Refresh → Log → API Response ─────────────────────────
+
+
+class TestE2ERefreshLoop:
+    def test_mechanical_refresh_creates_log_entry(self, workspace, swarmai_root):
+        """E2E: detect drift → apply fix → log entry created."""
+        from core.auto_refresh import MechanicalRefresher, log_refresh_results, read_refresh_log
+
+        refresher = MechanicalRefresher(swarmai_root, workspace)
+        results = refresher.detect_and_fix()
+        applied = refresher.apply_fixes(results)
+
+        # Log the results
+        log_path = workspace / ".context" / ".auto_refresh_log.jsonl"
+        applied_results = [r for r in results if r.applied]
+        log_refresh_results(applied_results, log_path)
+
+        # Verify log is readable
+        entries = read_refresh_log(log_path, since_days=1)
+        assert len(entries) == applied
+        assert all(e["layer"] == 1 for e in entries)
+
+    def test_context_health_api_reads_log(self, workspace, swarmai_root):
+        """E2E: log entries appear in the context-health API response format."""
+        from core.auto_refresh import (
+            MechanicalRefresher, log_refresh_results, read_refresh_log,
+        )
+
+        # Create some log entries
+        refresher = MechanicalRefresher(swarmai_root, workspace)
+        results = refresher.detect_and_fix()
+        refresher.apply_fixes(results)
+
+        log_path = workspace / ".context" / ".auto_refresh_log.jsonl"
+        applied_results = [r for r in results if r.applied]
+        log_refresh_results(applied_results, log_path)
+
+        # Simulate what the API endpoint does
+        entries = read_refresh_log(log_path, since_days=56)
+
+        # Should have the structure the frontend expects
+        if entries:
+            entry = entries[0]
+            assert "timestamp" in entry
+            assert "target" in entry
+            assert "old" in entry
+            assert "new" in entry
+            assert "layer" in entry
+            assert "evidence" in entry
+            assert "confidence" in entry

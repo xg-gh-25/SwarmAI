@@ -107,6 +107,7 @@ class DddCultivationOrchestrator:
         "entry_lifecycle": 3.0,
         "mechanical_refresh": 3.0,
         "memory_refresh": 3.0,
+        "llm_refresh": 30.0,  # LLM call can take 10-20s
     }
 
     def _get_gate_manager(self, root: Path) -> "GateManager | None":
@@ -152,6 +153,9 @@ class DddCultivationOrchestrator:
             }),
             ("memory_refresh", self._ch_memory_refresh, {
                 EventType.GIT_COMMIT, EventType.TIMER_30MIN,
+            }),
+            ("llm_refresh", self._ch_llm_refresh, {
+                EventType.TIMER_30MIN,
             }),
         ]
 
@@ -927,4 +931,305 @@ class DddCultivationOrchestrator:
 
         return findings
 
+    # ── Channel 11: LLM-Proposed Refresh (Layer 2) ────────────────────────
+
+    def _ch_llm_refresh(self, root: Path, ws_path: str) -> list[str]:
+        """Layer 2: LLM-proposed section diff for stale DDD docs.
+
+        Runs on TIMER_30MIN but internally throttled to max 1x per (project, doc)
+        per 7 days. Uses Bedrock Sonnet. Evidence-mandatory prompt with citation
+        verification. Auto-applies HIGH/MEDIUM, escalates LOW.
+
+        Budget: ~50K tokens per call, max 3 calls per weekly cycle.
+        """
+        findings: list[str] = []
+
+        try:
+            from core.auto_refresh import (
+                LlmRefreshProposer, log_refresh_results, RefreshResult,
+            )
+            from core.ddd_cultivation import CultivationProposal, write_proposal
+
+            swarmai_root = _find_swarmai_root()
+            if not swarmai_root:
+                return findings
+
+            proposer = LlmRefreshProposer(swarmai_root, Path(root))
+            projects_dir = Path(root) / "Projects"
+            if not projects_dir.is_dir():
+                return findings
+
+            # First: check staleness (same logic as _ch_ddd_staleness, but we
+            # only act on projects that are ALREADY stale + throttle allows)
+            proposals_generated = 0
+            max_proposals_per_cycle = 3
+
+            for project_dir in sorted(projects_dir.iterdir()):
+                if not project_dir.is_dir():
+                    continue
+                if proposals_generated >= max_proposals_per_cycle:
+                    break
+
+                project_name = project_dir.name
+
+                for doc_name in ("TECH.md", "PRODUCT.md"):
+                    if proposals_generated >= max_proposals_per_cycle:
+                        break
+
+                    doc_path = project_dir / doc_name
+                    if not doc_path.exists():
+                        continue
+
+                    # Throttle check
+                    if not proposer.should_run(project_name, doc_name):
+                        continue
+
+                    # Check if actually stale (>14 days + recent commits)
+                    if not self._is_doc_stale_with_commits(
+                        project_dir, doc_path, swarmai_root, ws_path
+                    ):
+                        continue
+
+                    # Get recent commits for evidence
+                    commits = self._get_recent_commits_for_project(
+                        project_name, swarmai_root
+                    )
+                    if not commits:
+                        continue
+
+                    # Extract the main content section (first 3000 chars after frontmatter)
+                    try:
+                        content = doc_path.read_text(encoding="utf-8")
+                        # Skip maturity annotations at top
+                        section = self._extract_main_section(content)
+                    except (OSError, UnicodeDecodeError):
+                        continue
+
+                    # Get source excerpts from watched paths
+                    source_excerpts = self._get_source_excerpts(
+                        project_name, swarmai_root
+                    )
+
+                    # Generate proposal
+                    proposal = proposer.generate_proposal(
+                        project=project_name,
+                        doc_name=doc_name,
+                        section_name=self._guess_section_name(content),
+                        current_section=section,
+                        recent_commits=commits,
+                        source_excerpts=source_excerpts,
+                    )
+
+                    if proposal is None:
+                        continue
+
+                    # Record that we ran (throttle update)
+                    proposer.record_run(project_name, doc_name)
+                    proposals_generated += 1
+
+                    # Route by confidence
+                    if proposal.confidence >= 0.8:
+                        # HIGH: auto-apply
+                        applied = self._apply_llm_proposal(
+                            doc_path, proposal, root
+                        )
+                        if applied:
+                            findings.append(
+                                f"AUTO-REFRESH-L2: APPLIED {project_name}/{doc_name} "
+                                f"§{proposal.section_name} (confidence={proposal.confidence:.2f})"
+                            )
+                    elif proposal.confidence >= 0.5:
+                        # MEDIUM: auto-apply with log for review
+                        applied = self._apply_llm_proposal(
+                            doc_path, proposal, root
+                        )
+                        if applied:
+                            findings.append(
+                                f"AUTO-REFRESH-L2: APPLIED (REVIEW) {project_name}/{doc_name} "
+                                f"§{proposal.section_name} (confidence={proposal.confidence:.2f})"
+                            )
+                    else:
+                        # LOW: escalate via proposal system
+                        escalation = CultivationProposal(
+                            target_doc=doc_name,
+                            target_section=proposal.section_name,
+                            content=f"[Layer 2 LLM refresh] {proposal.proposed_text[:200]}...",
+                            source_run_id="auto_refresh_l2",
+                            confidence=proposal.confidence,
+                        )
+                        write_proposal(escalation, project_dir)
+                        findings.append(
+                            f"AUTO-REFRESH-L2: ESCALATED {project_name}/{doc_name} "
+                            f"§{proposal.section_name} (confidence={proposal.confidence:.2f})"
+                        )
+
+            if proposals_generated > 0:
+                logger.info(
+                    "ddd_orchestrator.llm_refresh: generated %d proposals",
+                    proposals_generated,
+                )
+
+        except Exception as exc:
+            logger.warning("ddd_orchestrator.llm_refresh failed: %s", exc)
+            findings.append(f"CHANNEL_ERROR: llm_refresh — {type(exc).__name__}: {exc}")
+
         return findings
+
+    def _is_doc_stale_with_commits(
+        self, project_dir: Path, doc_path: Path, swarmai_root: Path, ws_path: str,
+    ) -> bool:
+        """Check if doc is >14 days old AND has recent code commits."""
+        from datetime import datetime, timedelta
+
+        mtime = datetime.fromtimestamp(doc_path.stat().st_mtime)
+        if mtime > datetime.now() - timedelta(days=14):
+            return False
+
+        # Check watched paths for this project
+        project_name = project_dir.name
+        if project_name in _SOURCE_WATCH_PATHS:
+            for watch_path in _SOURCE_WATCH_PATHS[project_name]:
+                try:
+                    result = subprocess.run(
+                        ["git", "log", "--oneline", "--since=14 days ago",
+                         "--", watch_path],
+                        cwd=str(swarmai_root),
+                        capture_output=True, text=True,
+                        timeout=_GIT_TIMEOUT,
+                    )
+                    if result.stdout.strip():
+                        return True
+                except (subprocess.TimeoutExpired, OSError):
+                    pass
+
+        # Fallback: check workspace commits mentioning project name
+        try:
+            result = subprocess.run(
+                ["git", "log", "--oneline", "--since=14 days ago",
+                 "--grep", project_name, "--", "."],
+                cwd=ws_path, capture_output=True, text=True,
+                timeout=_GIT_TIMEOUT,
+            )
+            return bool(result.stdout.strip())
+        except (subprocess.TimeoutExpired, OSError):
+            return False
+
+    def _get_recent_commits_for_project(
+        self, project_name: str, swarmai_root: Path,
+    ) -> list[str]:
+        """Get recent commit subjects for a project's watched paths."""
+        commits: list[str] = []
+        if project_name in _SOURCE_WATCH_PATHS:
+            for watch_path in _SOURCE_WATCH_PATHS[project_name]:
+                try:
+                    result = subprocess.run(
+                        ["git", "log", "--oneline", "--since=14 days ago",
+                         "--max-count=10", "--", watch_path],
+                        cwd=str(swarmai_root),
+                        capture_output=True, text=True,
+                        timeout=_GIT_TIMEOUT,
+                    )
+                    if result.stdout.strip():
+                        commits.extend(result.stdout.strip().splitlines())
+                except (subprocess.TimeoutExpired, OSError):
+                    pass
+        # Deduplicate (same commit may appear in multiple paths)
+        seen = set()
+        unique = []
+        for c in commits:
+            h = c.split()[0] if c else ""
+            if h and h not in seen:
+                seen.add(h)
+                unique.append(c)
+        return unique[:10]
+
+    def _get_source_excerpts(self, project_name: str, swarmai_root: Path) -> str:
+        """Get key source file excerpts for LLM context (max 3000 chars)."""
+        excerpts: list[str] = []
+        max_total = 3000
+
+        if project_name not in _SOURCE_WATCH_PATHS:
+            return ""
+
+        for watch_path in _SOURCE_WATCH_PATHS[project_name][:3]:
+            full_path = swarmai_root / watch_path
+            if full_path.is_file():
+                try:
+                    content = full_path.read_text(encoding="utf-8")[:1500]
+                    excerpts.append(f"--- {watch_path} ---\n{content}\n")
+                except (OSError, UnicodeDecodeError):
+                    pass
+            elif full_path.is_dir():
+                # For directories, list files
+                try:
+                    files = sorted(f.name for f in full_path.iterdir() if f.suffix == ".md")
+                    excerpts.append(f"--- {watch_path} (files) ---\n" + "\n".join(files) + "\n")
+                except OSError:
+                    pass
+
+            if sum(len(e) for e in excerpts) > max_total:
+                break
+
+        return "\n".join(excerpts)[:max_total]
+
+    def _extract_main_section(self, content: str) -> str:
+        """Extract main body (skip frontmatter/maturity annotations)."""
+        lines = content.splitlines()
+        # Skip lines until first ## heading
+        start = 0
+        for i, line in enumerate(lines):
+            if line.startswith("## ") and "maturity:" not in line:
+                start = i
+                break
+        return "\n".join(lines[start:start + 80])  # ~80 lines = ~3000 chars
+
+    def _guess_section_name(self, content: str) -> str:
+        """Guess the primary section name from first ## heading."""
+        for line in content.splitlines():
+            if line.startswith("## ") and "maturity:" not in line:
+                return line.lstrip("# ").strip()
+        return "Main"
+
+    def _apply_llm_proposal(
+        self, doc_path: Path, proposal, root: Path,
+    ) -> bool:
+        """Apply LLM proposal to the DDD doc. Returns True if applied."""
+        from core.auto_refresh import RefreshResult, log_refresh_results
+
+        try:
+            content = doc_path.read_text(encoding="utf-8")
+
+            # Simple replacement: find current section text and replace
+            if proposal.current_text in content:
+                new_content = content.replace(
+                    proposal.current_text, proposal.proposed_text, 1
+                )
+                doc_path.write_text(new_content, encoding="utf-8")
+
+                # Log for weekly report
+                result = RefreshResult(
+                    target_file=str(doc_path.relative_to(root)),
+                    old_value=proposal.current_text[:80] + "...",
+                    new_value=proposal.proposed_text[:80] + "...",
+                    evidence=f"LLM refresh, {len(proposal.citations)} citations verified",
+                    layer=2,
+                    applied=True,
+                    confidence=proposal.confidence,
+                )
+                log_path = Path(root) / ".context" / ".auto_refresh_log.jsonl"
+                log_refresh_results([result], log_path)
+
+                logger.info(
+                    "auto_refresh.L2: applied to %s (confidence=%.2f)",
+                    doc_path.name, proposal.confidence,
+                )
+                return True
+            else:
+                logger.debug(
+                    "auto_refresh.L2: current_text not found in %s — skipping apply",
+                    doc_path.name,
+                )
+                return False
+        except Exception as exc:
+            logger.warning("auto_refresh.L2: apply failed for %s: %s", doc_path.name, exc)
+            return False

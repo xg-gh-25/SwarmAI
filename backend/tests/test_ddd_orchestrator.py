@@ -39,7 +39,7 @@ class TestOrchestratorExists:
 
         orch = DddCultivationOrchestrator()
         assert hasattr(orch, "channels")
-        assert len(orch.channels) == 10  # 8 original + mechanical_refresh + memory_refresh
+        assert len(orch.channels) == 11  # 8 original + mechanical_refresh + memory_refresh + llm_refresh
 
 
 class TestChannelIsolation:
