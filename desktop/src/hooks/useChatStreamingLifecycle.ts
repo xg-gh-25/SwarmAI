@@ -1019,22 +1019,22 @@ export function useChatStreamingLifecycle(
       // Between effect setup and callback fire, active tab may have changed.
       // Guard BOTH writes to prevent flashing wrong-tab content during the
       // rAF window between effect cleanup scheduling and actual unsub.
-      // Fix #4: Allow sync when store is actively streaming. After app restart,
-      // activeTabIdRef holds a stale default ID until restoreFromFile() completes.
-      // During that window, the guard incorrectly blocks sync for the real tab.
-      // Streaming phase = data guaranteed to belong to this tab (startStreaming
-      // only fires via handleSendMessage for the specific tab that sent).
-      // Trade-off: 1-frame flash possible on genuine tab switch during streaming
-      // — acceptable vs entire responses being invisible.
       const currentActiveTabId = activeTabIdRef.current;
-      if (currentActiveTabId !== tabId && store.phase !== 'streaming') return;
-      // Sync store → React state (triggers render)
-      setMessages(store.getSnapshot());
-      // Sync store → tabState cache (for tab-switch instant display)
+
+      // Always update tabState cache (for instant display on tab switch)
       const tabState = tabMapRef.current.get(tabId);
       if (tabState) {
         tabState.messages = store.messages;
       }
+
+      // STRICT tab identity check for React state writes.
+      // Never push a background tab's store into the displayed UI.
+      // The app-restart stale-ref case is handled by the tab-switch effect
+      // which calls setMessages(store.getSnapshot()) on subscribe (line above).
+      if (currentActiveTabId !== tabId) return;
+
+      // Sync store → React state (triggers render)
+      setMessages(store.getSnapshot());
     });
 
     return unsub;
@@ -1949,35 +1949,25 @@ export function useChatStreamingLifecycle(
           if (resultStore) {
             resultStore.endStreaming();
           }
+          // Sync final state to React — ONLY if this tab is active.
+          // Cross-tab isolation: never push a background tab's messages into
+          // the currently displayed React state. The tabState.messages cache
+          // is updated for both active and background (for instant display on
+          // tab switch), but setMessages must be gated.
           if (resultStore) {
-            // Force-sync: ensure React has the final authoritative state.
-            // Always sync from store regardless of isActiveTab — the store
-            // belongs to capturedTabId and its data is guaranteed correct.
-            // Without this, activeTabIdRef stale race (app restart) causes
-            // result to not sync, AND endStreaming() disables subscription
-            // sync (phase=idle) — double block = invisible response.
-            if (sid) setSessionId(sid);
-            setMessages(resultStore.getSnapshot());
+            // Always cache in tabState (for tab-switch instant display)
+            if (tabState) tabState.messages = resultStore.messages;
+            // Only sync to React if THIS tab is currently displayed
+            if (isActiveTab || capturedTabId === activeTabIdRef.current) {
+              if (sid) setSessionId(sid);
+              setMessages(resultStore.getSnapshot());
+            }
           } else if (isActiveTab) {
             if (sid) setSessionId(sid);
             // Fallback: no store — sync from tabState
             if (tabState) {
               setMessages(() => [...tabState.messages]);
             }
-          }
-          // Deferred re-sync for background tabs that become active
-          if (tabState && !isActiveTab) {
-            queueMicrotask(() => {
-              if (capturedTabId === activeTabIdRef.current) {
-                const store = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
-                if (store) {
-                  setMessages(store.getSnapshot());
-                } else {
-                  setMessages(() => [...tabState.messages]);
-                }
-                if (sid) setSessionId(sid);
-              }
-            });
           }
           queryClient.invalidateQueries({ queryKey: ['radar', 'wipTasks'] });
           queryClient.invalidateQueries({ queryKey: ['radar', 'completedTasks'] });
