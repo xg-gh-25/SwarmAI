@@ -490,6 +490,7 @@ class LifecycleManager:
                         rss // (1024 * 1024),
                         SessionUnit.STREAMING_RSS_KILL_THRESHOLD // (1024 * 1024),
                     )
+                    await unit._arm_recovery_checkpoint("rss_streaming")
                     await unit.kill()
                     return  # One kill per cycle to avoid cascade
 
@@ -508,6 +509,7 @@ class LifecycleManager:
                     self.MEMORY_EVICT_PCT,
                     rss_map[heaviest] // (1024 * 1024),
                 )
+                await heaviest._arm_recovery_checkpoint("rss_streaming")
                 await heaviest.kill()
 
         except Exception as exc:

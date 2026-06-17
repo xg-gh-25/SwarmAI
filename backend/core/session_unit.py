@@ -3607,6 +3607,9 @@ class SessionUnit:
             )
 
         # Step 2: kill → COLD (preserves _sdk_session_id for lazy resume)
+        # Arm the same rich recovery checkpoint the voluntary self-heal builds
+        # so the lazy --resume on next send() starts with structured context.
+        await self._arm_recovery_checkpoint("rss_proactive")
         await self.kill()
 
         self._last_proactive_restart = time.monotonic()
@@ -3689,6 +3692,7 @@ class SessionUnit:
                 pid, self.session_id,
             )
             if self.is_alive:
+                await self._arm_recovery_checkpoint("watchdog")
                 await self._crash_to_cold_async(clear_identity=False)
             return False
 
@@ -3963,6 +3967,76 @@ class SessionUnit:
             )
             return {}
 
+    async def _arm_recovery_checkpoint(
+        self, trigger: str, *, allow_wrapup: bool = False
+    ) -> None:
+        """Arm the rich recovery checkpoint before an INVOLUNTARY keep-resume kill.
+
+        Mirrors the voluntary self-heal checkpoint so that ANY ``kill → COLD``
+        path which preserves ``_sdk_session_id`` (RSS proactive restart,
+        streaming RSS kill, stuck-STREAMING / stuck-WAITING_INPUT recovery,
+        watchdog death) gives the next ``send()`` the same structured
+        "where I left off" context the gated self-heal already builds. This
+        adds NO new kill — it only enriches recovery on kills that already
+        happen, so any respawn (not just gated self-heal) resumes with context.
+
+        Idempotent + additive:
+        - Returns immediately if a checkpoint is already armed — never clobbers
+          a richer voluntary checkpoint that has not yet been consumed.
+        - Keyed ONLY by this session: ``_derive_heal_enrichment`` keys off
+          ``_app_session_id``. No new module-level state.
+        - Fully guarded: enrichment failure / missing app_session_id / build
+          failure all degrade to a no-op. NEVER raises into the kill path.
+        - ``allow_wrapup`` folds the agent's wrap-up conclusion into the
+          checkpoint when one exists; involuntary callers leave it False.
+
+        Mirrors the self-heal logging style: field names + lengths only,
+        never raw content/PII.
+        """
+        if self._heal_checkpoint is not None:
+            return  # Don't clobber a richer voluntary checkpoint
+        try:
+            enrich = await self._derive_heal_enrichment()
+            conclusion = (
+                self._wrapup_conclusion
+                if (allow_wrapup and getattr(self, "_wrapup_conclusion", ""))
+                else ""
+            )
+            _ws_dir = str(Path.home() / ".swarm-ai" / "SwarmWS")
+            _turn_count = getattr(
+                getattr(self, "_health_sensor", None), "turn_count", 0
+            )
+            self._heal_checkpoint = await build_rich_checkpoint(
+                original_request=getattr(self, "_last_user_query", "") or "",
+                working_dir=_ws_dir,
+                file_tracker_paths=list(getattr(self, "_files_touched", [])),
+                turn_count=_turn_count,
+                trigger=trigger,
+                agent_conclusion=conclusion,
+                completed_steps=enrich.get("completed_steps"),
+                pending_steps=enrich.get("pending_steps"),
+                key_findings=enrich.get("key_findings", ""),
+                pipeline_run_id=getattr(self, "_pipeline_run_id", None),
+                pipeline_stage=getattr(self, "_pipeline_stage", None),
+            )
+            _cp = self._heal_checkpoint
+            logger.info(
+                "session_unit.recovery_checkpoint_armed session_id=%s "
+                "trigger=%s fields=[completed=%d,pending=%d,findings=%d,"
+                "pipeline=%s,active_file=%d] conclusion_len=%d approx_chars=%d",
+                self.session_id, trigger,
+                len(_cp.completed_steps), len(_cp.pending_steps),
+                len(_cp.key_findings), bool(_cp.pipeline_run_id),
+                len(_cp.active_file_context), len(conclusion),
+                len(_cp.to_continuation_prompt()),
+            )
+        except Exception:
+            logger.debug(
+                "session_unit.recovery_checkpoint_arm_failed session_id=%s "
+                "trigger=%s", self.session_id, trigger, exc_info=True,
+            )
+            return
+
     async def _crash_to_cold_async(self, *, clear_identity: bool = False) -> None:
         """Async transition DEAD → COLD with proper wrapper cleanup.
 
@@ -4021,6 +4095,7 @@ class SessionUnit:
             self.pid,
             self.streaming_stall_seconds or 0,
         )
+        await self._arm_recovery_checkpoint("stuck_streaming")
         await self._crash_to_cold_async(clear_identity=False)
 
     async def force_unstick_waiting_input(self) -> None:
@@ -4042,6 +4117,7 @@ class SessionUnit:
             self.session_id,
             self.pid,
         )
+        await self._arm_recovery_checkpoint("stuck_waiting_input")
         await self._crash_to_cold_async(clear_identity=False)
 
     async def refresh_context(self) -> None:
