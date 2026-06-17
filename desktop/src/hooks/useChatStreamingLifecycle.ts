@@ -2031,18 +2031,6 @@ export function useChatStreamingLifecycle(
             });
           }
 
-          // DIAG (always-on for background tabs): L1 root cause tracking.
-          // If this fires but spinner persists, the bug is AFTER this line.
-          // If this never fires for a stuck background tab, event never arrived.
-          if (!isActiveTab) {
-            console.warn('[DIAG:result:background-tab]', {
-              capturedTabId,
-              sid,
-              isStreaming: tabState?.isStreaming,
-              hasQueuedMessage,
-              timestamp: Date.now(),
-            });
-          }
 
           if (!hasQueuedMessage) {
             // Normal completion — clear streaming state so spinner stops
@@ -2092,7 +2080,6 @@ export function useChatStreamingLifecycle(
           // can race with backend error delivery, producing a spurious
           // "An unknown error occurred" that forces a redundant resend.
           if (tabState?.userStopped) {
-            console.log('[StreamHandler] Suppressing error from user-stopped stream', { capturedTabId });
             // End store streaming phase + clean up React streaming state.
             const stoppedStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
             if (stoppedStore) stoppedStore.endStreaming();
@@ -2113,7 +2100,6 @@ export function useChatStreamingLifecycle(
             tabState.retryStreamFn &&
             (tabState.reconnectionAttempt ?? 0) < 1
           ) {
-            console.log('[StreamHandler] Post-stop silent retry — error before any data received', { capturedTabId });
             tabState.reconnectionAttempt = 1;
             const retryFn = tabState.retryStreamFn;
             setTimeout(() => {

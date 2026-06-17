@@ -254,20 +254,6 @@ def _kill_pids(pids: list[int]) -> int:
     return killed
 
 
-def _kill_child_pids(parent_pid: int) -> int:
-    """SIGKILL all descendants of *parent_pid* (recursive). Returns count killed.
-
-    Two-phase approach to prevent orphan creation:
-    1. SNAPSHOT: enumerate the entire tree via recursive pgrep -P
-    2. KILL: bottom-up in one sweep (leaves first, no reparenting race)
-
-    The old approach interleaved enum+kill per level, which caused children
-    to reparent to pid=1 when their parent was killed mid-enumeration.
-    """
-    tree = _snapshot_descendant_tree(parent_pid)
-    return _kill_pids(tree)
-
-
 # ---------------------------------------------------------------------------
 # OOM / SIGKILL detection
 # ---------------------------------------------------------------------------

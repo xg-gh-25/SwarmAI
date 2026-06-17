@@ -546,13 +546,21 @@ export default function ChatPage() {
     [setMessages],
   );
 
-  // Handle new chat
+  // Handle new chat — clear store first, then React state (subscription will sync)
   const handleNewChat = useCallback(() => {
+    const tabId = activeTabIdRef.current;
+    if (tabId) {
+      const store = messageStoreRegistry.get(tabId);
+      if (store) {
+        // End streaming phase first so replace() isn't a no-op
+        if (store.phase === 'streaming') store.endStreaming();
+        store.replace([]);
+      }
+    }
     setMessages([]);
     setSessionId(undefined);
     setPendingQuestion(null);
-    // Note: Sidebar visibility is now managed by toggle buttons, no need to collapse
-  }, []);
+  }, [activeTabIdRef]);
 
 
   // Handle new session - creates new tab with "New Session" title (Req 2.2, 2.3)
@@ -657,7 +665,6 @@ export default function ChatPage() {
         if (!tabState.isStreaming) {
           messageStoreRegistry.getOrCreate(tabId).replace(tabState.messages);
         }
-        console.log(`[TAB-SELECT] tab=${tabId}, msgs=${tabState.messages.length}, sessionId=${tabState.sessionId?.slice(0,8)}, streaming=${tabState.isStreaming}`);
         setMessages(tabState.messages);
         setSessionId(tabState.sessionId);
         setPendingQuestion(tabState.pendingQuestion);
@@ -875,10 +882,12 @@ export default function ChatPage() {
     userScrolledUpRef.current = !isNearBottom;
   }, [messages]);
 
-  // Log time-to-interactive when messagesReady becomes true (Req 8.4)
+  // Time-to-interactive logging (dev only)
   useEffect(() => {
     if (messagesReady && mountTimeRef.current) {
-      console.log(`[ChatPage] Time to interactive: ${(performance.now() - mountTimeRef.current).toFixed(0)}ms`);
+      if (import.meta.env.DEV) {
+        console.log(`[ChatPage] Time to interactive: ${(performance.now() - mountTimeRef.current).toFixed(0)}ms`);
+      }
       mountTimeRef.current = 0; // Only log once
     }
   }, [messagesReady]);
@@ -1191,7 +1200,6 @@ export default function ChatPage() {
     // sync directly from tabState — do NOT fetch from backend.
     // Backend fetch overwrites in-progress streaming content with stale data.
     if (activeTabState.messages.length > 0) {
-      console.log(`[SYNC-EFFECT] tab=${activeTabId}, msgs=${activeTabState.messages.length}, sessionId=${activeTabState.sessionId?.slice(0,8)}, first_msg_role=${activeTabState.messages[0]?.role}`);
       setMessages([...activeTabState.messages]);
       setSessionId(activeTabState.sessionId);
       setPendingQuestion(activeTabState.pendingQuestion ?? null);
@@ -1904,22 +1912,13 @@ export default function ChatPage() {
   const handleAnswerQuestion = (toolUseId: string, answers: Record<string, string>) => {
     const tabId = activeTabIdRef.current ?? undefined;
     const tabSessionId = tabId ? tabMapRef.current.get(tabId)?.sessionId : undefined;
-    console.log('[AskUserQuestion] handleAnswerQuestion called', {
-      toolUseId, answers, tabId, tabSessionId, selectedAgentId,
-    });
     if (!selectedAgentId || !tabSessionId) {
-      console.error('[AskUserQuestion] EARLY RETURN — missing agentId or sessionId', {
-        selectedAgentId, tabSessionId, tabId,
-      });
       return;
     }
 
     // Defensive guard: prevent double-submit if already streaming.
-    // The UI disables the button, but programmatic calls or rapid clicks
-    // could bypass it. Read tabMapRef directly (synchronous, authoritative).
     const tabState = tabId ? tabMapRef.current.get(tabId) : undefined;
     if (tabState?.isStreaming) {
-      console.warn('[AskUserQuestion] EARLY RETURN — tab is already streaming');
       return;
     }
 
