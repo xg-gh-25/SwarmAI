@@ -865,6 +865,11 @@ class SessionUnit:
         self._stop_event.clear()
         self._interrupted = False
 
+        # Store app_session_id for downstream use by _retry_with_resume's
+        # abandon-fallback path (build_resume_context needs the stable
+        # persistence key, not the transient sdk_session_id).
+        self._app_session_id: Optional[str] = app_session_id
+
         # Cancel any in-flight pipe flush from a prior SSE disconnect.
         # The flush sends a JSON "interrupt" control request to the CLI
         # subprocess (NOT an OS signal).  If the flush times out (5s), it
@@ -1411,6 +1416,9 @@ class SessionUnit:
         # Capture SDK session ID before cleanup for --resume
         resume_session_id = self._sdk_session_id
         _consecutive_timeouts = 0
+        # Once-only guard: prevents duplicate continuation injection across
+        # multiple retry iterations after the abandon transition (Property 3).
+        _continuation_injected = False
 
         _tb_str = initial_tb_str or ""
         while (
@@ -1507,11 +1515,20 @@ class SessionUnit:
 
             # After 2 consecutive timeouts with --resume, the resume target
             # is likely broken.  Abandon resume and start fresh.
+            # Before abandoning, attempt to inject an enriched conversation
+            # continuation into query_content so the blank respawn preserves
+            # context (Resume-Fallback Context Preservation fix).
             if _consecutive_timeouts >= 2 and resume_session_id:
+                injected = False
+                if not _continuation_injected and self._app_session_id:
+                    query_content, injected = await self._inject_abandon_continuation(
+                        query_content,
+                    )
+                    _continuation_injected = injected
                 logger.warning(
                     "session_unit: %d consecutive timeouts with --resume, "
-                    "abandoning resume for session %s",
-                    _consecutive_timeouts, self.session_id,
+                    "abandoning resume for session %s (context_injected=%s)",
+                    _consecutive_timeouts, self.session_id, injected,
                 )
                 resume_session_id = None
 
@@ -1682,6 +1699,83 @@ class SessionUnit:
             ),
         )
         yield {"_abort": True}
+
+    async def _inject_abandon_continuation(
+        self,
+        query_content: Any,
+    ) -> tuple[Any, bool]:
+        """Build enriched continuation and prepend to query_content (once).
+
+        Called when the retry loop abandons --resume after consecutive timeouts.
+        Reuses the same ``build_resume_context`` engine as Mechanism B (cold
+        resume) to build a conversation summary from DB messages.
+
+        Returns (possibly-modified query_content, injected: bool).
+        Never raises — on any failure returns (query_content, False) so the
+        retry loop degrades to today's blank respawn behavior.
+        """
+        try:
+            from .context_injector import build_resume_context
+
+            # Conservative budget: min(10% of model window, 30K tokens).
+            # We're injecting into the user-turn channel, not the system
+            # prompt, so keep it small to avoid hitting autocompact or
+            # approaching the circuit-breaker threshold.
+            model_window = 200_000  # safe default
+            if self._model_name:
+                # Attempt to resolve actual window from model name
+                try:
+                    from .prompt_builder import PromptBuilder
+                    model_window = PromptBuilder.get_model_context_window(
+                        self._model_name
+                    )
+                except Exception:
+                    pass  # use default
+            token_budget = min(int(model_window * 0.1), 30_000)
+
+            # Timeout guard: build_resume_context does async DB reads.
+            # If DB is locked/slow, we must not hang the retry loop.
+            continuation = await asyncio.wait_for(
+                build_resume_context(
+                    self._app_session_id,
+                    model_context_window=model_window,
+                    token_budget=token_budget,
+                ),
+                timeout=5.0,
+            )
+
+            if not continuation:
+                logger.info(
+                    "session_unit.abandon_continuation_empty session_id=%s",
+                    self.session_id,
+                )
+                return query_content, False  # no history → blank respawn (3.5)
+
+            logger.info(
+                "session_unit.abandon_continuation_injected session_id=%s "
+                "approx_tokens=%d",
+                self.session_id, len(continuation) // 4,
+            )
+
+            # Prepend continuation — mirrors _heal_checkpoint shape
+            if isinstance(query_content, str):
+                return f"{continuation}\n\n---\n\n{query_content}", True
+            # Multimodal list: prepend a text block
+            return [{"type": "text", "text": continuation}, *query_content], True
+
+        except asyncio.TimeoutError:
+            logger.warning(
+                "session_unit.abandon_continuation_timeout session_id=%s "
+                "— build_resume_context exceeded 5s",
+                self.session_id,
+            )
+            return query_content, False
+        except Exception as exc:
+            logger.warning(
+                "session_unit.abandon_continuation_failed session_id=%s err=%s",
+                self.session_id, str(exc)[:200],
+            )
+            return query_content, False
 
     def _emit_post_stream_metadata(
         self, usage: dict, *, num_turns: int = 1,
@@ -3230,12 +3324,19 @@ class SessionUnit:
     # Threshold: 1.8GB.  Normal steady-state is 1.4-1.6GB (verified from
     # lifecycle_manager logs 2026-04-12).  Old 1.2GB was below steady-state,
     # causing every session to be proactively killed after each response.
-    PROACTIVE_RSS_THRESHOLD: int = 1_800_000_000  # 1.8GB
+    # 2026-06-17: raised from 1.8GB→2.8GB. With task_budget=800K tokens,
+    # CLI steady-state after deep conversation = 1.5-2.5GB. 1.8GB caused
+    # proactive kills on normal IDLE sessions after long pipelines.
+    PROACTIVE_RSS_THRESHOLD: int = 2_800_000_000  # 2.8GB
     PROACTIVE_COOLDOWN: float = 180.0  # 3 minutes
     # STREAMING RSS kill threshold: if a STREAMING session exceeds this,
     # lifecycle_manager kills it immediately.  Closes the adaptive timeout
     # blind spot (up to 900s) where proactive_rss_restart can't act.
-    STREAMING_RSS_KILL_THRESHOLD: int = 3_000_000_000  # 3GB
+    # 2026-06-17: raised from 3GB→5GB. Claude CLI serializing 400-800K
+    # token context peaks at 3-4GB RSS during API calls — this is NORMAL
+    # Node.js JSON serialization behavior, not a leak. 3GB threshold was
+    # killing sessions mid-response. Only true leaks exceed 5GB.
+    STREAMING_RSS_KILL_THRESHOLD: int = 5_000_000_000  # 5GB
 
     async def _check_rss_and_proactive_restart(self) -> None:
         """Proactive restart: if tree RSS > threshold, compact → kill.

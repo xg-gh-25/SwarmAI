@@ -57,7 +57,7 @@ class TestAC1_ProactiveRestart:
 
         with patch(
             "core.resource_monitor.resource_monitor.process_tree_rss",
-            return_value=2_000_000_000,  # 2.0GB > 1.8GB
+            return_value=3_500_000_000,  # 3.5GB > 2.8GB threshold
         ):
             await unit._check_rss_and_proactive_restart()
 
@@ -95,7 +95,7 @@ class TestAC1_ProactiveRestart:
 
         with patch(
             "core.resource_monitor.resource_monitor.process_tree_rss",
-            return_value=2_000_000_000,  # 2.0GB > 1.8GB
+            return_value=3_500_000_000,  # 3.5GB > 2.8GB threshold
         ):
             await unit._check_rss_and_proactive_restart()
 
@@ -208,7 +208,7 @@ class TestAC3_Cooldown:
 
         with patch(
             "core.resource_monitor.resource_monitor.process_tree_rss",
-            return_value=2_000_000_000,  # 2.0GB > 1.8GB
+            return_value=3_500_000_000,  # 3.5GB > 2.8GB threshold
         ):
             # First call — should trigger
             await unit._check_rss_and_proactive_restart()
@@ -237,7 +237,7 @@ class TestAC3_Cooldown:
 
         with patch(
             "core.resource_monitor.resource_monitor.process_tree_rss",
-            return_value=2_000_000_000,  # 2.0GB > 1.8GB
+            return_value=3_500_000_000,  # 3.5GB > 2.8GB threshold
         ):
             # First call
             await unit._check_rss_and_proactive_restart()
@@ -282,7 +282,7 @@ class TestAC4_LazyRestart:
 
         with patch(
             "core.resource_monitor.resource_monitor.process_tree_rss",
-            return_value=2_000_000_000,  # 2.0GB > 1.8GB
+            return_value=3_500_000_000,  # 3.5GB > 2.8GB threshold
         ):
             await unit._check_rss_and_proactive_restart()
 
@@ -315,7 +315,7 @@ class TestLifecycleProactiveRestart:
 
         with patch(
             "core.resource_monitor.resource_monitor.process_tree_rss",
-            return_value=2_000_000_000,  # 2.0GB > 1.8GB
+            return_value=3_500_000_000,  # 3.5GB > 2.8GB threshold
         ):
             await mgr._proactive_rss_restart()
 
@@ -362,7 +362,7 @@ class TestLifecycleProactiveRestart:
 
         with patch(
             "core.resource_monitor.resource_monitor.process_tree_rss",
-            return_value=2_000_000_000,  # 2.0GB > 1.8GB
+            return_value=3_500_000_000,  # 3.5GB > 2.8GB threshold
         ):
             await mgr._proactive_rss_restart()
 
