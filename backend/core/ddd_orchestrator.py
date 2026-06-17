@@ -499,6 +499,27 @@ class DddCultivationOrchestrator:
                 except (json.JSONDecodeError, OSError) as exc:
                     logger.warning("Failed to log DDD auto-apply: %s", exc)
 
+        # ── Gap #11: Auto-commit after L2 auto-apply ──────────────────────
+        if applied_changes:
+            try:
+                changed_files = list({
+                    str(project_dir / c["doc"])
+                    for c in applied_changes
+                    for project_dir in [root / "Projects" / c["project"]]
+                })
+                subprocess.run(
+                    ["git", "add"] + changed_files,
+                    cwd=str(root), capture_output=True, timeout=10,
+                )
+                msg = f"chore(ddd): auto-apply {len(applied_changes)} mechanical refresh(es)"
+                subprocess.run(
+                    ["git", "commit", "-m", msg, "--no-verify"],
+                    cwd=str(root), capture_output=True, timeout=10,
+                )
+                logger.info("ddd_orchestrator: auto-committed %d DDD changes", len(applied_changes))
+            except (subprocess.TimeoutExpired, OSError) as exc:
+                logger.debug("ddd_orchestrator: auto-commit skipped: %s", exc)
+
     # ── Channel 3: DDD→KNOWLEDGE Injection ─────────────────────────────────
 
     def _ch_inject_knowledge(self, root: Path, ws_path: str) -> list[str]:
@@ -1064,6 +1085,16 @@ class DddCultivationOrchestrator:
                             f"AUTO-REFRESH-L2: ESCALATED {project_name}/{doc_name} "
                             f"§{proposal.section_name} (confidence={proposal.confidence:.2f})"
                         )
+                        # Gap #10: Auto-create Radar Todo for escalated proposals
+                        try:
+                            from core.proactive_intelligence import _create_health_todo
+                            _create_health_todo(
+                                f"DDD Escalation: {project_name}/{doc_name} §{proposal.section_name} "
+                                f"needs review (confidence={proposal.confidence:.2f})",
+                                severity="warning",
+                            )
+                        except Exception:
+                            pass  # Non-critical — todo creation is best-effort
 
             if proposals_generated > 0:
                 logger.info(

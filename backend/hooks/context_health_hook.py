@@ -162,6 +162,19 @@ class ContextHealthHook:
         except Exception as exc:
             logger.debug("context_health: MEMORY.md lifecycle skipped: %s", exc)
 
+        # ── KNOWLEDGE.md lifecycle: ref bump + decay (Gap #5) ──
+        # Same engine as MEMORY.md — extends coverage to KNOWLEDGE.md.
+        try:
+            self._run_knowledge_lifecycle(root)
+        except Exception as exc:
+            logger.debug("context_health: KNOWLEDGE.md lifecycle skipped: %s", exc)
+
+        # ── TTL proposals: archive stale queued proposals (Gap #22) ──
+        try:
+            self._expire_stale_proposals(root)
+        except Exception as exc:
+            logger.debug("context_health: proposal TTL skipped: %s", exc)
+
         # KNOWLEDGE.md text index refresh is git-gated (only reads git-tracked files)
         current_rev = self._git_rev(ws_path)
         if not (current_rev and current_rev == self._last_refresh_rev):
@@ -1346,6 +1359,97 @@ class ContextHealthHook:
                     bumped, len(transitions),
                     ", ".join(f"{t.entry.title[:30]}:{t.old_state}→{t.new_state}" for t in transitions[:3]),
                 )
+
+    def _run_knowledge_lifecycle(self, root: Path) -> None:
+        """Run DDD lifecycle engine on KNOWLEDGE.md: ref bump + decay (Gap #5).
+
+        Same engine as MEMORY.md. Extends ddd_entry_lifecycle to KNOWLEDGE.md
+        entries. Bumps refs from recent DailyActivity, decays unreferenced.
+        """
+        from core.ddd_entry_lifecycle import (
+            assess_decay,
+            bump_references,
+            inject_entry_metadata,
+            parse_entries,
+        )
+
+        knowledge_path = root / ".context" / "KNOWLEDGE.md"
+        if not knowledge_path.exists():
+            return
+
+        content = knowledge_path.read_text(encoding="utf-8")
+        entries = parse_entries(content)
+        if not entries:
+            return
+
+        today = date.today()
+
+        # Ref bump: scan recent DailyActivity for entry title mentions
+        daily_dir = root / "Knowledge" / "DailyActivity"
+        bump_text = ""
+        if daily_dir.is_dir():
+            cutoff = (today - timedelta(days=3)).isoformat()
+            for f in sorted(daily_dir.glob("*.md"), reverse=True)[:5]:
+                if f.stem < cutoff:
+                    break
+                try:
+                    bump_text += f.read_text(encoding="utf-8", errors="ignore")
+                except OSError:
+                    continue
+
+        bumped = 0
+        if bump_text:
+            bumped = bump_references(entries, bump_text, today)
+
+        # Decay: assess state transitions (no evergreen sections for KNOWLEDGE)
+        transitions = assess_decay(entries, today)
+
+        if bumped > 0 or transitions:
+            updated = inject_entry_metadata(content, entries)
+            knowledge_path.write_text(updated, encoding="utf-8")
+            if transitions:
+                logger.info(
+                    "context_health: KNOWLEDGE.md lifecycle — %d bumped, %d transitions",
+                    bumped, len(transitions),
+                )
+
+    def _expire_stale_proposals(self, root: Path) -> None:
+        """Archive proposals older than 14 days (Gap #22).
+
+        Prevents proposal queue from growing unbounded. Proposals that weren't
+        acted on within 14 days are likely no longer relevant (code has moved on).
+        """
+        proposals_dir = root / "Projects" / "SwarmAI" / ".artifacts" / "proposals"
+        if not proposals_dir.is_dir():
+            return
+
+        now = time.time()
+        ttl_seconds = 14 * 24 * 60 * 60  # 14 days
+        archived = 0
+
+        for proposal_file in proposals_dir.glob("*.json"):
+            try:
+                # Check file age (creation time)
+                file_age = now - proposal_file.stat().st_mtime
+                if file_age < ttl_seconds:
+                    continue
+
+                data = json.loads(proposal_file.read_text(encoding="utf-8"))
+                if data.get("status") not in ("pending", "queued"):
+                    continue
+
+                # Archive it
+                data["status"] = "expired"
+                data["expired_reason"] = "14-day TTL exceeded"
+                proposal_file.write_text(
+                    json.dumps(data, indent=2), encoding="utf-8"
+                )
+                archived += 1
+            except (OSError, json.JSONDecodeError):
+                continue
+
+        if archived:
+            logger.info("context_health: expired %d stale proposals (>14d)", archived)
 
     def _refresh_memory_index(self, root: Path) -> None:
         """Regenerate the compact index block in MEMORY.md.

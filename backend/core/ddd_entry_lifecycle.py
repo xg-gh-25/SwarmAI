@@ -646,12 +646,28 @@ STAGE_KNOWLEDGE_AFFINITY: dict[str, dict[str, int]] = {
     "reflect":  {"guideline": 3, "pitfall": 2},
 }
 
+# Gap #4: MEMORY.md stage-driven injection affinity.
+# Same concept as above but tuned for MEMORY.md content (heavier on
+# principles/corrections which are more common there). Used by pipeline
+# orchestrator to inject only relevant MEMORY entries per stage.
+MEMORY_STAGE_AFFINITY: dict[str, dict[str, int]] = {
+    "evaluate": {"decision": 8, "principle": 5, "correction": 3},
+    "think":    {"decision": 5, "principle": 5, "model": 3},
+    "plan":     {"decision": 5, "principle": 3, "model": 3},
+    "build":    {"guideline": 10, "pitfall": 8, "correction": 5},
+    "review":   {"pitfall": 10, "correction": 8, "guideline": 5},
+    "test":     {"pitfall": 8, "guideline": 5, "correction": 3},
+    "deliver":  {"process": 5, "principle": 3, "correction": 3},
+    "reflect":  {"principle": 5, "correction": 5, "guideline": 3},
+}
+
 
 def get_stage_knowledge(
     entries: list[EntryMetadata],
     stage: str,
     context_entities: list[str] | None = None,
     relations: list | None = None,
+    affinity_map: dict[str, dict[str, int]] | None = None,
 ) -> list[EntryMetadata]:
     """Get type-filtered, relevance-sorted entries for a pipeline stage.
 
@@ -672,7 +688,8 @@ def get_stage_knowledge(
     Returns:
         Filtered + sorted list of entries for injection into the stage context.
     """
-    affinity = STAGE_KNOWLEDGE_AFFINITY.get(stage.lower())
+    source = affinity_map if affinity_map is not None else STAGE_KNOWLEDGE_AFFINITY
+    affinity = source.get(stage.lower())
     if not affinity:
         return []
 

@@ -1010,6 +1010,47 @@ def _get_skill_health_highlights(ctx_dir: Path) -> list[str]:
         return []
 
 
+def _get_auto_apply_review_window(workspace: Path) -> list[str]:
+    """Surface recent DDD auto-applies within the 72h review window (Gap #21).
+
+    Reads the auto_refresh_log.jsonl and shows entries applied within the last
+    72 hours with a countdown timer. This gives the user visibility into what
+    was auto-changed and time to revert if something looks wrong.
+    """
+    log_path = workspace / ".context" / ".auto_refresh_log.jsonl"
+    if not log_path.exists():
+        return []
+
+    import time as _t
+    now = _t.time()
+    review_window = 72 * 60 * 60  # 72 hours
+    lines: list[str] = []
+
+    try:
+        for raw_line in log_path.read_text(encoding="utf-8").splitlines()[-20:]:
+            if not raw_line.strip():
+                continue
+            try:
+                entry = json.loads(raw_line)
+            except json.JSONDecodeError:
+                continue
+
+            applied_at = entry.get("applied_at", 0)
+            age = now - applied_at
+            if age > review_window or age < 0:
+                continue
+
+            hours_left = max(0, int((review_window - age) / 3600))
+            target = entry.get("target_file", "?")
+            change = entry.get("description", entry.get("old_value", ""))[:50]
+            lines.append(f"{target}: {change}… ({hours_left}h left to revert)")
+
+    except (OSError, ValueError):
+        pass
+
+    return lines[:5]  # Max 5 items in briefing
+
+
 def _get_health_highlights(working_directory: str) -> list[str]:
     """Read health_findings.json and return formatted alerts for session briefing.
 
@@ -1476,6 +1517,17 @@ def build_session_briefing(
                 )
         except Exception as exc:
             logger.debug("DDD trust summary failed: %s", exc)
+
+        # Gap #21: L2 review window — show recent auto-applies with revert countdown
+        try:
+            review_lines = _get_auto_apply_review_window(workspace)
+            if review_lines:
+                sections.append(
+                    "**DDD auto-applies (72h review window):**\n"
+                    + "\n".join(f"  - {line}" for line in review_lines)
+                )
+        except Exception as exc:
+            logger.debug("DDD review window failed: %s", exc)
 
         # L4: Self-Eval awareness (golden set health — lightweight, ~1 line)
         try:

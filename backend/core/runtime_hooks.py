@@ -256,6 +256,27 @@ def create_user_correction_detector(
             except Exception:
                 pass  # Non-blocking
 
+            # Gap #17: Immediate correction → MEMORY.md as [pitfall]
+            # Write the correction as a pitfall entry so it persists across sessions.
+            # Best-effort — failure must never break the hook chain.
+            try:
+                from pathlib import Path as _Path
+                from scripts.locked_write import locked_read_modify_write
+                ws = _Path.home() / ".swarm-ai" / "SwarmWS"
+                memory_path = ws / ".context" / "MEMORY.md"
+                if memory_path.exists():
+                    summary = prompt[:150].replace("\n", " ").strip()
+                    today = time.strftime("%Y-%m-%d")
+                    entry_text = (
+                        f"\n- [pitfall] **{summary}** — "
+                        f"({today}, {sid[:8]}, correction)\n"
+                    )
+                    locked_read_modify_write(
+                        memory_path, "## Pitfalls", entry_text, mode="append"
+                    )
+            except Exception:
+                pass  # Non-blocking — MEMORY write is best-effort
+
         return {}
 
     return _hook
