@@ -843,14 +843,18 @@ def _merge_consecutive_assistant_messages(messages: list[dict]) -> list[dict]:
                 prev["model"] = msg["model"]
         else:
             # New message (user, or first assistant after user)
-            merged.append({
+            entry = {
                 "id": msg.get("id"),
                 "session_id": msg.get("session_id"),
                 "role": role,
                 "content": msg.get("content", []),
                 "model": msg.get("model"),
                 "created_at": msg.get("created_at"),
-            })
+            }
+            # Preserve metadata (carries client_id for optimistic dedup)
+            if msg.get("metadata"):
+                entry["metadata"] = msg["metadata"]
+            merged.append(entry)
 
     return merged
 

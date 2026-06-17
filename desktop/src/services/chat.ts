@@ -121,6 +121,8 @@ const toMessageCamelCase = (data: Record<string, unknown>): ChatMessage => {
     content: toCamelCaseContent(data.content as unknown[]) as unknown as ChatMessage['content'],
     model: (data.model as string) || undefined,
     createdAt: data.created_at as string,
+    // Preserve metadata (carries client_id for optimistic message dedup)
+    ...(data.metadata ? { metadata: data.metadata as ChatMessage['metadata'] } : {}),
   };
 };
 

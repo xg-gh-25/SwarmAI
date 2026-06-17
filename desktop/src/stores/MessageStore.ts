@@ -466,12 +466,8 @@ export class MessageStore {
     const convert = this._toDisplayMessage || this._defaultToDisplay;
     const dbConverted = dbMessages.map(convert);
 
-    // Build clientId→dbIndex map from raw DB messages (before conversion loses metadata)
-    const dbClientIdToDbIdx = new Map<string, number>();
-    for (let i = 0; i < dbMessages.length; i++) {
-      const cid = dbMessages[i].metadata?.client_id;
-      if (cid) dbClientIdToDbIdx.set(cid, i);
-    }
+    // Note: clientId matching uses dbMessages[dbIdx] directly in the loop
+    // (indices are 1:1 with dbConverted since map() preserves order).
 
     // Boundary-aware filtering: if we have a resume boundary, identify
     // which local messages are "before boundary" (prior session content).
