@@ -46,6 +46,7 @@ import type {
 } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
 import { chatService } from '../services/chat';
+import { messageStoreRegistry } from '../stores/MessageStore';
 import type { UnifiedTab } from './useUnifiedTabState';
 import { type TabStatus } from './useUnifiedTabState';
 import { useToast } from '../contexts/ToastContext';
@@ -1023,28 +1024,30 @@ export function useChatStreamingLifecycle(
             }
 
             // Sync messages from DB for this tab (content is there, event was lost).
-            // MERGE: preserve local-only queued messages that DB doesn't have.
+            // Phase-gated via MessageStore.reconcile(): preserves local-only
+            // messages (queued, synthetic) and respects streaming gate.
             chatService.invalidateMessageCache(sid);
             chatService.getSessionMessages(sid).then((msgs) => {
               if (cancelled) return;
-              const mapped = msgs.map((m) => ({
-                id: m.id,
-                role: m.role as 'user' | 'assistant' | 'system',
-                content: m.content as ContentBlock[],
-                timestamp: m.createdAt || new Date().toISOString(),
-              }));
-              // Preserve queued messages — they exist only in frontend state,
-              // not in DB. Without this, reconcile refetch silently drops user input.
-              const localQueued = (tabState.messages || []).filter(
-                (m) => (m as Message & { isQueued?: boolean }).isQueued || m.id.startsWith('queued-')
-              );
-              const merged = localQueued.length > 0 ? [...mapped, ...localQueued] : mapped;
-              if (tabId === activeTabIdRef.current) {
-                setMessages(() => merged);
-              } else {
-                tabState.messages = merged;
+              // Route through store — reconcile handles:
+              // - Dedup by ID (no duplicates)
+              // - Preserve local-only queued messages natively
+              // - Phase gate (NO-OP if streaming restarted between fetch and resolve)
+              const store = messageStoreRegistry.getOrCreate(tabId, { sessionId: sid });
+              store.reconcile(msgs);
+              // Only sync back if reconcile actually executed (not queued).
+              // If streaming restarted, reconcile queued a thunk — don't overwrite
+              // live streaming messages with stale store snapshot.
+              if (store.phase === 'idle') {
+                if (tabId === activeTabIdRef.current) {
+                  setMessages(() => store.messages);
+                } else {
+                  tabState.messages = store.messages;
+                }
               }
-            }).catch(() => {});
+            }).catch((err) => {
+              console.warn('[useChatStreamingLifecycle] Recovery sync failed:', err);
+            });
           }
         }
 
@@ -2080,7 +2083,9 @@ export function useChatStreamingLifecycle(
                   return;
                 }
                 try {
-                  // Force fresh fetch by clearing ETag cache
+                  // READ-ONLY fetch — checks content length for completion detection.
+                  // Does NOT mutate message state; no store.reconcile() needed.
+                  // Phase-safe: only runs when isWaitingForBusy (not streaming).
                   chatService.invalidateMessageCache(pollSessionId);
                   const msgs = await chatService.getSessionMessages(pollSessionId);
 

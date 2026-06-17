@@ -28,6 +28,7 @@ import type { Message, ContentBlock, Agent, AgentCreateRequest, ChatSession } fr
 import { MAX_ATTACHMENTS } from '../types';
 import { DEFAULT_WORKSPACE_ID } from '../types/workspace-config';
 import { chatService } from '../services/chat';
+import { messageStoreRegistry } from '../stores/MessageStore';
 import { agentsService } from '../services/agents';
 import { skillsService } from '../services/skills';
 import { pluginsService } from '../services/plugins';
@@ -893,8 +894,9 @@ export default function ChatPage() {
         }
 
         // Task 2 fix: preload messages for non-active restored tabs.
-        // Writes directly to tabMapRef — NO React state changes — so tab
-        // switches are instant instead of showing empty → load → appear.
+        // Routes through MessageStore.reconcile() which respects streaming
+        // phase gate — if a tab starts streaming before preload resolves,
+        // reconcile queues the data for post-stream flush instead of overwriting.
         if (mounted) {
           const preloadPromises: Promise<void>[] = [];
           for (const [tabId, tab] of tabMapRef.current.entries()) {
@@ -907,8 +909,17 @@ export default function ChatPage() {
                 .then(msgs => {
                   if (!mounted) return;
                   const tabRef = tabMapRef.current.get(tabId);
-                  if (tabRef && tabRef.sessionId === sid && !tabRef.isStreaming) {
-                    tabRef.messages = msgs.map(toDisplayMessage);
+                  if (tabRef && tabRef.sessionId === sid) {
+                    // Phase-gated via store: reconcile() is NO-OP during streaming,
+                    // queues a thunk for execution on endStreaming().
+                    const store = messageStoreRegistry.getOrCreate(tabId, { sessionId: sid });
+                    store.reconcile(msgs);
+                    // Only sync back if reconcile actually executed (not queued).
+                    // During streaming, store.messages may not reflect the reconcile
+                    // result — the deferred thunk will update after endStreaming().
+                    if (store.phase === 'idle') {
+                      tabRef.messages = store.messages;
+                    }
                   }
                 })
                 .catch(err => {
