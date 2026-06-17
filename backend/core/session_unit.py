@@ -400,6 +400,12 @@ class SessionUnit:
         self._lock: asyncio.Lock = asyncio.Lock()
         self._sdk_session_id: Optional[str] = None
         self._interrupted: bool = False
+        # Durable "this turn was stopped by the user" flag. Unlike _interrupted
+        # (which _read_formatted_response clears mid-stream), this survives until
+        # the next send()'s Layer 0 reset, so the post-stream self-heal check can
+        # tell a user Stop apart from a clean completion. A user Stop must NEVER
+        # be followed by a proactive self-heal kill/respawn (that defeats Stop).
+        self._user_stopped_current_turn: bool = False
         self._retry_count: int = 0
         self._model_name: Optional[str] = None
 
@@ -896,6 +902,9 @@ class SessionUnit:
         self._send_generation += 1
         self._stop_event.clear()
         self._interrupted = False
+        # New user turn — clear the durable "stopped" flag so a prior Stop does
+        # not suppress self-heal on this genuinely new turn.
+        self._user_stopped_current_turn = False
         # Clear stale recovery checkpoint from a prior aborted kill
         # (e.g. RSS spike armed checkpoint → spike subsided → kill didn't fire).
         # Prevents an unrelated later restart from injecting stale context.
@@ -1169,7 +1178,7 @@ class SessionUnit:
             if not should_heal and self._graceful_wrap_pending:
                 self._graceful_wrap_pending = False
                 self._wrapup_conclusion = ""  # don't leak into a later heal
-            if should_heal and _self_heal_enabled:
+            if should_heal and _self_heal_enabled and not self._user_stopped_current_turn:
                 can_heal, reason = self._healing_loop.can_heal()
                 if can_heal:
                     # Graceful pre-kill for turn_approaching:
@@ -3277,6 +3286,10 @@ class SessionUnit:
 
         self._stop_event.set()
         self._interrupted = True
+        # Durable signal: this turn was stopped by the user. Survives until the
+        # next send()'s Layer 0 reset so the post-stream self-heal check can skip
+        # — a user Stop must never be followed by a proactive heal kill/respawn.
+        self._user_stopped_current_turn = True
         self._active_agent_tools = {}  # Clear stale sub-agent progress on interrupt
 
         if self._client is None:
