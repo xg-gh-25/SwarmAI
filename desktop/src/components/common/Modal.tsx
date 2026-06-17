@@ -16,7 +16,7 @@ const sizeClasses = {
   xl: 'max-w-xl',
   '2xl': 'max-w-2xl',
   '3xl': 'max-w-3xl',
-  fullscreen: 'w-[95vw] max-w-none',  // height managed by flex + overflow
+  fullscreen: 'w-[95vw] h-[calc(100vh-4rem)] max-w-none',
 };
 
 export default function Modal({

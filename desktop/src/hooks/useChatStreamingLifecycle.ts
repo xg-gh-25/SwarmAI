@@ -1108,6 +1108,7 @@ export function useChatStreamingLifecycle(
             setIsStreaming(false, tabId);
             tabState.isReconnecting = false;
             tabState.isResuming = false;
+            if (tabState._resumeTimeoutId) { clearTimeout(tabState._resumeTimeoutId); tabState._resumeTimeoutId = undefined; }
             anyCleared = true;
 
             // Auto-drain: if a queued message was waiting (deadlock scenario),
@@ -1590,6 +1591,7 @@ export function useChatStreamingLifecycle(
           // Clear "Resuming session..." indicator once data arrives
           if (tabState.isResuming) {
             tabState.isResuming = false;
+            if (tabState._resumeTimeoutId) { clearTimeout(tabState._resumeTimeoutId); tabState._resumeTimeoutId = undefined; }
           }
         }
 
@@ -1604,6 +1606,7 @@ export function useChatStreamingLifecycle(
           event.type === 'tool_result' || event.type === 'result'
         )) {
           tabState.isResuming = false;
+          if (tabState._resumeTimeoutId) { clearTimeout(tabState._resumeTimeoutId); tabState._resumeTimeoutId = undefined; }
         }
 
         // DEBUG: trace every SSE event through the handler
@@ -2411,27 +2414,55 @@ export function useChatStreamingLifecycle(
             : undefined;
           if (tabState) {
             tabState.isResuming = true;
+            // Safety timeout: if no data arrives within 60s, clear the
+            // resuming indicator so the user isn't stuck on a spinner forever.
+            // When resume actually succeeds, the clearing at line 1592/1606
+            // fires first and this timeout becomes a no-op.
+            const resumeTimeoutId = setTimeout(() => {
+              if (tabState.isResuming) {
+                tabState.isResuming = false;
+                const stillActive = capturedTabId === activeTabIdRef.current;
+                if (stillActive) {
+                  setIsStreaming(false, capturedTabId ?? undefined);
+                  const timeoutStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+                  if (timeoutStore) timeoutStore.endStreaming();
+                }
+                console.warn('[StreamHandler] Resume timeout — cleared isResuming after 60s', { capturedTabId });
+              }
+            }, 60_000);
+            // If isResuming is cleared normally (data arrives), cancel the timeout.
+            // We piggyback on the existing clear paths by storing the timeout ID.
+            tabState._resumeTimeoutId = resumeTimeoutId;
             // Inject synthetic resume boundary into local messages so the
             // divider renders immediately — before the stream completes and
             // the reconcile re-fetch picks up the DB-persisted marker.
-            const boundaryMsg = {
-              id: `resume-boundary-${Date.now()}`,
-              role: 'system' as const,
-              content: [{ type: 'text' as const, text: 'Session resumed' }],
-              timestamp: new Date().toISOString(),
-            };
-            // Append boundary via store (single-writer)
+            //
+            // DEDUP: If the last message is already a system boundary, skip.
+            // Self-healing can trigger multiple kill→resume cycles, each
+            // emitting session_resuming — without this guard, multiple
+            // "Session Resumed" dividers stack up.
             const boundaryStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
-            if (boundaryStore) {
-              boundaryStore.append(boundaryMsg as Message);
-            } else {
-              tabState.messages = [...(tabState.messages || []), boundaryMsg];
+            const currentMsgs = boundaryStore?.messages ?? tabState.messages ?? [];
+            const lastMsg = currentMsgs[currentMsgs.length - 1];
+            const alreadyHasBoundary = lastMsg?.role === 'system' &&
+              lastMsg?.id?.startsWith('resume-boundary');
+
+            if (!alreadyHasBoundary) {
+              const boundaryMsg = {
+                id: `resume-boundary-${Date.now()}`,
+                role: 'system' as const,
+                content: [{ type: 'text' as const, text: 'Session resumed' }],
+                timestamp: new Date().toISOString(),
+              };
+              // Append boundary via store (single-writer)
+              if (boundaryStore) {
+                boundaryStore.append(boundaryMsg as Message);
+              } else {
+                tabState.messages = [...(tabState.messages || []), boundaryMsg];
+              }
             }
             // Force re-render so ChatPage picks up isResuming from tabMapRef.
             const isActive = capturedTabId === activeTabIdRef.current;
-            if (isActive && !boundaryStore) {
-              setMessages((prev) => [...prev, boundaryMsg]);
-            }
             if (isActive) {
               setIsStreaming(true, capturedTabId ?? undefined);
             }
@@ -2916,6 +2947,7 @@ export function useChatStreamingLifecycle(
 
         // Clear resume indicator + sessionStorage (not part of streaming flag).
         tabState.isResuming = false;
+        if (tabState._resumeTimeoutId) { clearTimeout(tabState._resumeTimeoutId); tabState._resumeTimeoutId = undefined; }
         if (tabState.sessionId) {
           removePendingState(tabState.sessionId);
         }

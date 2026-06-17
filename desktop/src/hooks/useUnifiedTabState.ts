@@ -174,6 +174,9 @@ export interface UnifiedTab {
    *  Cleared by: (a) grace timeout expiry → show error, or
    *  (b) new stream data arrives → heal succeeded, continue silently. */
   _healGraceActive?: boolean;
+  /** Resume timeout handle — auto-clears isResuming after 60s if no data arrives.
+   *  Prevents permanent "Resuming session..." spinner when --resume hangs. */
+  _resumeTimeoutId?: ReturnType<typeof setTimeout>;
 }
 
 /** Fields persisted to ~/.swarm-ai/open_tabs.json (re-exported from tabPersistence service). */

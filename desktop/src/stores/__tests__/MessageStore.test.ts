@@ -542,3 +542,39 @@ describe('MessageStore single-writer behavior', () => {
     store.destroy();
   });
 });
+
+// ─── Regression: new-tab send must append placeholder to the store ───
+// Bug (2026-06-17): handleSendMessage inserted the optimistic user message +
+// assistant placeholder via setMessages/tabState ONLY, never the store. On a
+// fresh tab the store stayed empty, so streaming deltas — which target the
+// placeholder via updateLast(predicate id===assistantMessageId) — silently
+// no-op'd. Symptom: WelcomeScreen stuck, "Thinking…" spinner never fills.
+describe('MessageStore — streaming-delta target must exist (new-tab send invariant)', () => {
+  const appendTextUpdater = (text: string) => (msg: Message): Message => ({
+    ...msg,
+    content: [{ type: 'text' as const, text: ((msg.content[0] as { text?: string })?.text ?? '') + text }],
+  });
+
+  it('updateLast(byId) is a NO-OP when the placeholder is absent (documents the bug)', () => {
+    const store = new MessageStore();
+    // Fresh tab: nothing appended (the old buggy send path).
+    store.startStreaming('assistant-1');
+    // Streaming delta targets a placeholder that was never appended to the store.
+    store.updateLast(appendTextUpdater('hello'), (m) => m.id === 'assistant-1');
+    // Delta is dropped — store stays empty → UI never renders the response.
+    expect(store.messages).toHaveLength(0);
+    store.destroy();
+  });
+
+  it('appending the placeholder first makes streaming deltas land (the fix)', () => {
+    const store = new MessageStore();
+    // Correct send path: user message + assistant placeholder go through the store.
+    store.appendMany([makeMsg('user-1', 'user', 'hi'), makeMsg('assistant-1', 'assistant', '')]);
+    store.startStreaming('assistant-1');
+    store.updateLast(appendTextUpdater('hello'), (m) => m.id === 'assistant-1');
+    store.updateLast(appendTextUpdater(' world'), (m) => m.id === 'assistant-1');
+    expect(store.messages).toHaveLength(2);
+    expect((store.messages[1].content[0] as { text: string }).text).toBe('hello world');
+    store.destroy();
+  });
+});

@@ -1071,8 +1071,16 @@ class SessionUnit:
             # After successful stream, check if session health is degrading.
             # If so, proactively heal (kill → respawn) so next turn starts fresh.
             # User sees nothing — this happens between turns, not mid-stream.
+            #
+            # DISABLED (2026-06-17): Auto-kill between turns causes cascading
+            # failures when --resume is unreliable (timeout, interrupted, no
+            # response). Symptoms: multiple "Session Resumed" dividers, full
+            # conversation dimmed, minutes of silence. Re-enable once resume
+            # path is hardened with timeout + fallback.
+            # Gate: set SWARMAI_SELF_HEAL=1 to re-enable for testing.
+            _self_heal_enabled = os.environ.get("SWARMAI_SELF_HEAL", "0") == "1"
             should_heal, trigger = self._health_sensor.should_checkpoint()
-            if should_heal:
+            if should_heal and _self_heal_enabled:
                 can_heal, reason = self._healing_loop.can_heal()
                 if can_heal:
                     logger.info(
@@ -2594,9 +2602,9 @@ class SessionUnit:
                     # been its dying gasp), clear client refs so next send()
                     # respawns instead of writing to a dead pipe.
                     # _sdk_session_id is preserved for --resume on respawn.
-                    if self._pid:
+                    if self.pid:
                         try:
-                            os.kill(self._pid, 0)  # signal 0 = liveness check
+                            os.kill(self.pid, 0)  # signal 0 = liveness check
                         except (ProcessLookupError, OSError):
                             # Process is dead — clear refs
                             self._client = None
@@ -2737,7 +2745,7 @@ class SessionUnit:
                 # of _peak_tree_rss_bytes (which only updates every 60s via
                 # LifecycleManager). Falls back to peak if sampling returns 0.
                 turn_duration = getattr(message, "duration_ms", 0) or 0
-                fresh_rss = get_process_rss_mb(self._pid) if self._pid else 0
+                fresh_rss = get_process_rss_mb(self.pid) if self.pid else 0
                 turn_rss = fresh_rss or (self._peak_tree_rss_bytes // (1024 * 1024))
                 self._health_sensor.record_turn(
                     latency_ms=float(turn_duration),

@@ -322,10 +322,12 @@ export default function ChatPage() {
   );
 
   // Last resume boundary index — messages before this render dimmed (prior session).
-  // Currently only resume_boundary uses role='system'. If future system message
-  // types are added, filter on content[0].type === 'resume_boundary' here.
+  // Only TRUE resume boundaries trigger dimming — NOT refresh separators (which
+  // are same-session context refreshes that should not dim prior messages).
+  // Resume boundaries have id NOT starting with 'refresh-'.
   const lastResumeBoundaryIdx = useMemo(
-    () => messages.reduce((lastIdx, m, i) => m.role === 'system' ? i : lastIdx, -1),
+    () => messages.reduce((lastIdx, m, i) =>
+      m.role === 'system' && !m.id.startsWith('refresh-') ? i : lastIdx, -1),
     [messages],
   );
 
@@ -1535,7 +1537,10 @@ export default function ChatPage() {
     }
 
     const userMessage: Message = { id: Date.now().toString(), role: 'user', content: userMessageContent, timestamp: new Date().toISOString() };
-    setMessages((prev) => [...prev, userMessage]);
+    // NOTE: optimistic insertion is deferred — the user message is appended to
+    // the MessageStore (single source of truth) together with the assistant
+    // placeholder below, so the store→React sync effect doesn't clobber a
+    // setMessages-only write on a fresh tab (whose store starts empty).
     setInputValue('');
     clearAttachments();
     resetUserScroll(); // Fix 2: resume auto-scroll on new user message
@@ -1559,25 +1564,32 @@ export default function ChatPage() {
 
     const assistantMessageId = (Date.now() + 1).toString();
     const assistantPlaceholder: Message = { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() };
-    setMessages((prev) => [...prev, assistantPlaceholder]);
 
     // Tab registration — normally already done at the top of the send path
     // (before setIsStreaming). Kept as a defensive fallback for any path that
     // reaches here without prior registration. Idempotent: no-op if present.
+    // Also guarantees a MessageStore exists for the append below.
     if (currentActiveTabId && !tabMapRef.current.has(currentActiveTabId)) {
       initTabState(currentActiveTabId, messagesRef.current);
     }
 
-    // Sync user message + assistant placeholder to tabMapRef (authoritative store).
-    // Without this, the stream handler's updateMessages() can't find the
-    // assistantMessageId in tabState.messages, so streaming content is silently
-    // dropped for background tabs. When switching back, tabState.messages would
-    // be stale — missing the entire current conversation turn.
-    if (currentActiveTabId) {
-      const tabState = tabMapRef.current.get(currentActiveTabId);
-      if (tabState) {
-        tabState.messages = [...tabState.messages, userMessage, assistantPlaceholder];
-      }
+    // SINGLE-WRITER: insert the optimistic user message + assistant placeholder
+    // through the MessageStore — NOT setMessages/tabState directly. initTabState
+    // eagerly creates an (empty) store per tab, and the store→React sync effect
+    // treats the store as authoritative. A setMessages-only write gets clobbered
+    // by the empty snapshot, AND the placeholder never reaches the store — so
+    // updateLast() (keyed by assistantMessageId) silently no-ops every streaming
+    // delta, leaving the WelcomeScreen up and the spinner stuck. Appending to the
+    // store fixes both: the briefing clears and streamed tokens land. The sync
+    // effect propagates store → React state + tabState.messages cache.
+    const sendStore = currentActiveTabId
+      ? messageStoreRegistry.getOrCreate(currentActiveTabId)
+      : null;
+    if (sendStore) {
+      sendStore.appendMany([userMessage, assistantPlaceholder]);
+    } else {
+      // Degenerate fallback (no active tab id) — React state only.
+      setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
     }
 
     // Resolve sessionId: prefer tabMapRef (synchronously updated by
@@ -2368,7 +2380,14 @@ export default function ChatPage() {
                     ) : null;
                     // Messages before the last resume boundary are from prior
                     // session context — dim them to distinguish from current interaction.
-                    const isPriorSession = lastResumeBoundaryIdx >= 0 && idx < lastResumeBoundaryIdx;
+                    // ONLY dim when there are real (non-system) messages AFTER the
+                    // boundary. When the boundary is the last message (resume just
+                    // happened, user hasn't sent anything yet), dimming everything
+                    // is wrong — it looks like the whole window has a film over it.
+                    const hasContentAfterBoundary = lastResumeBoundaryIdx >= 0 &&
+                      lastResumeBoundaryIdx < messages.length - 1 &&
+                      messages.slice(lastResumeBoundaryIdx + 1).some(m => m.role !== 'system');
+                    const isPriorSession = hasContentAfterBoundary && idx < lastResumeBoundaryIdx;
                     return (
                       <React.Fragment key={msg.id}>
                         <div className={isPriorSession ? 'opacity-50' : undefined}>
