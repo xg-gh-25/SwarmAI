@@ -87,6 +87,38 @@ Saves ~3.5K tokens per channel response. Group channels get the stricter
 GROUP_CHANNEL_EXCLUDE instead (which also drops MEMORY.md and USER.md)."""
 
 
+# ── Lifecycle Filtering ─────────────────────────────────────────────────
+
+
+def _filter_dormant_entries(content: str) -> str:
+    """Remove dormant/archived entries from MEMORY.md before injection.
+
+    Entries with <!-- ref:N | last:date | decay:dormant --> or decay:archived
+    are stripped (entry line + metadata line). Active entries pass through.
+    This is the Darwinian selection pressure: unused knowledge fades from context.
+    """
+    import re
+    lines = content.splitlines()
+    result = []
+    i = 0
+    _dormant_re = re.compile(r"^\s*<!-- ref:\d+ \| last:[\w\-]+ \| decay:(dormant|archived)")
+
+    while i < len(lines):
+        # Check if NEXT line is a dormant/archived metadata comment
+        if i + 1 < len(lines) and _dormant_re.match(lines[i + 1]):
+            # Skip this entry line AND the metadata line
+            i += 2
+            continue
+        # Check if THIS line is a dormant metadata (orphaned)
+        if _dormant_re.match(lines[i]):
+            i += 1
+            continue
+        result.append(lines[i])
+        i += 1
+
+    return "\n".join(result)
+
+
 # ── Data Models ────────────────────────────────────────────────────────
 
 
@@ -654,6 +686,13 @@ class ContextDirectoryLoader:
             if spec.user_customized and self._is_empty_section_stubs(content):
                 logger.debug("Skipping empty template: %s", spec.filename)
                 continue
+
+            # ── Lifecycle filter: skip dormant/archived entries ──────────
+            # Entries with decay:dormant or decay:archived are not injected.
+            # They're still in the file (recoverable) but don't consume tokens.
+            # Same Darwinian logic as DDD docs — unused knowledge fades from active context.
+            if spec.filename == "MEMORY.md":
+                content = _filter_dormant_entries(content)
 
             # Smart Memory Injection: auto-selects full injection (<30K)
             # or selective mode (≥30K) based on MEMORY.md token count.

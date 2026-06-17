@@ -155,6 +155,13 @@ class ContextHealthHook:
         except Exception as exc:
             logger.warning("context_health: MEMORY.md index refresh failed: %s", exc)
 
+        # ── MEMORY.md lifecycle: ref bump + decay (same engine as DDD) ──
+        # Extends ddd_entry_lifecycle to MEMORY.md. Same parse/bump/decay.
+        try:
+            self._run_memory_lifecycle(root)
+        except Exception as exc:
+            logger.debug("context_health: MEMORY.md lifecycle skipped: %s", exc)
+
         # KNOWLEDGE.md text index refresh is git-gated (only reads git-tracked files)
         current_rev = self._git_rev(ws_path)
         if not (current_rev and current_rev == self._last_refresh_rev):
@@ -581,6 +588,19 @@ class ContextHealthHook:
                     if result.get("applied", 0) > 0:
                         any_applied = True
 
+                    # ── Event extraction: REFLECT → MEMORY.md (immediate) ──
+                    # Pipeline REFLECT lessons also go to MEMORY.md as
+                    # structured entries. Same engine, parallel destination.
+                    # Only extract high-confidence lessons (those that were
+                    # applied to DDD — if DDD accepted them, they're confident).
+                    if result.get("applied", 0) > 0:
+                        try:
+                            self._extract_lessons_to_memory(
+                                root, lessons, run_id, project_name
+                            )
+                        except Exception:
+                            pass  # Best-effort — DDD cultivation is primary
+
                     logger.info(
                         "context_health: auto-cultivated %s/%s — "
                         "applied=%d, escalated=%d, rejected=%d",
@@ -606,6 +626,62 @@ class ContextHealthHook:
             )
 
         return any_applied
+
+    def _extract_lessons_to_memory(
+        self, root: Path, lessons: list[str], run_id: str, project: str,
+    ) -> None:
+        """Extract confident REFLECT lessons to MEMORY.md with lifecycle metadata.
+
+        Only lessons that DDD cultivation accepted (confident) get promoted here.
+        Uses classify_entry_type for type assignment. Appends to Lessons Learned.
+        """
+        from core.ddd_entry_lifecycle import classify_entry_type
+
+        memory_path = root / ".context" / "MEMORY.md"
+        if not memory_path.exists():
+            return
+
+        content = memory_path.read_text(encoding="utf-8")
+        today = date.today().isoformat()
+
+        # Find "## Lessons Learned" section insertion point
+        insert_marker = "## Lessons Learned"
+        idx = content.find(insert_marker)
+        if idx < 0:
+            return
+
+        # Find the line after the header (skip blank line)
+        after_header = content[idx + len(insert_marker):]
+        newline_pos = after_header.find("\n")
+        if newline_pos < 0:
+            return
+        insert_pos = idx + len(insert_marker) + newline_pos + 1
+        # Skip one more blank line if present
+        if insert_pos < len(content) and content[insert_pos] == "\n":
+            insert_pos += 1
+
+        # Build entries for each lesson (max 3 per run to avoid flooding)
+        new_entries = []
+        for lesson in lessons[:3]:
+            if len(lesson) < 20:
+                continue  # Skip trivial
+            entry_type = classify_entry_type(lesson)
+            # Extract first sentence as title (max 60 chars)
+            title = lesson.split("—")[0].strip() if "—" in lesson else lesson[:60]
+            title = title.rstrip(".")
+            entry_line = f"- [{entry_type}] **{title}** — {lesson} ({today}, {run_id})\n"
+            meta_line = f"  <!-- ref:0 | last:{today} | decay:active -->\n"
+            new_entries.append(entry_line + meta_line)
+
+        if new_entries:
+            # Insert after header
+            new_block = "\n".join(new_entries) + "\n"
+            content = content[:insert_pos] + new_block + content[insert_pos:]
+            memory_path.write_text(content, encoding="utf-8")
+            logger.debug(
+                "context_health: extracted %d lessons to MEMORY.md from %s/%s",
+                len(new_entries), project, run_id,
+            )
 
     # ------------------------------------------------------------------
     # Auto-cultivation — promote session corrections + decisions into DDD
@@ -1199,6 +1275,64 @@ class ContextHealthHook:
 
         usage_path.parent.mkdir(parents=True, exist_ok=True)
         usage_path.write_text(json.dumps(usage, indent=2, sort_keys=True), encoding="utf-8")
+
+    def _run_memory_lifecycle(self, root: Path) -> None:
+        """Run DDD lifecycle engine on MEMORY.md: ref bump + decay.
+
+        Same engine as DDD IMPROVEMENT.md — extends coverage to MEMORY.md.
+        Uses existing parse_entries/bump_references/assess_decay/inject_entry_metadata.
+        Bumps refs from recent DailyActivity text. Decays unreferenced entries.
+        Evergreen: COE Registry, Standing Preferences (immune to decay).
+        """
+        from core.ddd_entry_lifecycle import (
+            assess_decay,
+            bump_references,
+            inject_entry_metadata,
+            parse_entries,
+        )
+
+        memory_path = root / ".context" / "MEMORY.md"
+        if not memory_path.exists():
+            return
+
+        content = memory_path.read_text(encoding="utf-8")
+        entries = parse_entries(content)
+        if not entries:
+            return
+
+        today = date.today()
+
+        # ── Ref bump: scan recent DailyActivity for entry title mentions ──
+        daily_dir = root / "Knowledge" / "DailyActivity"
+        bump_text = ""
+        if daily_dir.is_dir():
+            cutoff = (today - timedelta(days=3)).isoformat()
+            for f in sorted(daily_dir.glob("*.md"), reverse=True)[:5]:
+                if f.stem < cutoff:
+                    break
+                try:
+                    bump_text += f.read_text(encoding="utf-8", errors="ignore")
+                except OSError:
+                    continue
+
+        bumped = 0
+        if bump_text:
+            bumped = bump_references(entries, bump_text, today)
+
+        # ── Decay: assess state transitions ──
+        evergreen = {"COE Registry", "Standing Preferences"}
+        transitions = assess_decay(entries, today, evergreen_sections=evergreen)
+
+        # Only write if something changed
+        if bumped > 0 or transitions:
+            updated = inject_entry_metadata(content, entries)
+            memory_path.write_text(updated, encoding="utf-8")
+            if transitions:
+                logger.info(
+                    "context_health: MEMORY.md lifecycle — %d bumped, %d transitions (%s)",
+                    bumped, len(transitions),
+                    ", ".join(f"{t.entry.title[:30]}:{t.old_state}→{t.new_state}" for t in transitions[:3]),
+                )
 
     def _refresh_memory_index(self, root: Path) -> None:
         """Regenerate the compact index block in MEMORY.md.
