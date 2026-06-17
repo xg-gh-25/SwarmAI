@@ -690,10 +690,10 @@ class ContextHealthHook:
             content = content[:insert_pos] + new_block + content[insert_pos:]
 
         memory_path.write_text(content, encoding="utf-8")
-            logger.debug(
-                "context_health: extracted %d lessons to MEMORY.md from %s/%s",
-                len(new_entries), project, run_id,
-            )
+        logger.debug(
+            "context_health: extracted %d lessons to MEMORY.md from %s/%s",
+            len(by_section), project, run_id,
+        )
 
     # ------------------------------------------------------------------
     # Auto-cultivation — promote session corrections + decisions into DDD
