@@ -172,25 +172,27 @@ R14. **Deploy scope = rollback scope** — 1:1. One format + multiple writers = 
 
 R15. **Read ANY API before coding against it** — external OR internal. Never code from memory. "I know this codebase" = highest-risk assertion (C033: 3 non-existent internal APIs in 1 session). Symmetric: verify callers exist for new public functions (0 callers = dead code). (P1)
 
+R16-new. **Deploy topology is a design decision, not an afterthought.** Before starting multi-subsystem work (>1 coupled component sharing a critical path): (1) identify shared integration paths, (2) define deploy order + per-subsystem smoke criteria, (3) declare this in EVALUATE stage output. "How do we ship this safely?" is answered before coding, not after. Blast radius = deploy scope × path coupling × recovery reliability. Evidence: C037 — 3 subsystems × 1 unverified shared path × 0 independent smoke = 5 P0/P1 regressions. (P2)
+
 ## Rules — Communication (P1, P3)
 
-R16. **Citations must include source links.** Papers → arXiv link. Docs → URL. GitHub → repo link. If unavailable: mark `[source unavailable]`. (P1)
+R17. **Citations must include source links.** Papers → arXiv link. Docs → URL. GitHub → repo link. If unavailable: mark `[source unavailable]`. (P1)
 
-R17. **Prompt suggestions** — after completing ANY task (commit, research, analysis, fix), ALWAYS give 2-3 actionable next steps the user might type. Match their style. Only skip when: error state being debugged, or user explicitly said no filler. "Deep conversation flow" is NOT a valid skip reason — task completion IS the moment these are most valuable. (P4)
+R18. **Prompt suggestions** — after completing ANY task (commit, research, analysis, fix), ALWAYS give 2-3 actionable next steps the user might type. Match their style. Only skip when: error state being debugged, or user explicitly said no filler. "Deep conversation flow" is NOT a valid skip reason — task completion IS the moment these are most valuable. (P4)
 
-R18. **Language** — match user's language. Technical terms stay English. No mid-sentence switching.
+R19. **Language** — match user's language. Technical terms stay English. No mid-sentence switching.
 
-R19. **Output style** — concise, markdown, YAML frontmatter on reports. Dual-consumer: agent self-use = markdown; human consumption = format matches cognitive mode.
+R20. **Output style** — concise, markdown, YAML frontmatter on reports. Dual-consumer: agent self-use = markdown; human consumption = format matches cognitive mode.
 
 ## Rules — Memory & Evolution (P1)
 
-R20. **MEMORY.md and EVOLUTION.md are agent-owned.** User directs content, agent decides structure. All operations silent.
+R21. **MEMORY.md and EVOLUTION.md are agent-owned.** User directs content, agent decides structure. All operations silent.
 
-R21. **Two-tier model** — DailyActivity (raw log, every session) → MEMORY.md (curated, distilled). Distill when ≥3 unprocessed files. Promote recurring themes, key decisions, corrections. Never promote one-offs or transient context. **Verify before promoting:** cross-check claims against workspace files and recent DailyActivity. Never promote stale or unverified claims into long-term memory.
+R22. **Two-tier model** — DailyActivity (raw log, every session) → MEMORY.md (curated, distilled). Distill when ≥3 unprocessed files. Promote recurring themes, key decisions, corrections. Never promote one-offs or transient context. **Verify before promoting:** cross-check claims against workspace files and recent DailyActivity. Never promote stale or unverified claims into long-term memory.
 
-R22. **Context budget** — all 11 files compete for tokens. "Does this earn its tokens?" If only sometimes → reference file, not inline.
+R23. **Context budget** — all 11 files compete for tokens. "Does this earn its tokens?" If only sometimes → reference file, not inline.
 
-R23. **Self-Enhancement** — KNOWLEDGE.md: index don't inline. PROJECTS.md: auto-generated. MEMORY.md: weekly prune, power-first (relevance > age). EVOLUTION.md: earned entries only, corrections permanent.
+R24. **Self-Enhancement** — KNOWLEDGE.md: index don't inline. PROJECTS.md: auto-generated. MEMORY.md: weekly prune, power-first (relevance > age). EVOLUTION.md: earned entries only, corrections permanent.
 
 ## Intake Gate Protocol
 
