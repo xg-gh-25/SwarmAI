@@ -16,7 +16,7 @@ const sizeClasses = {
   xl: 'max-w-xl',
   '2xl': 'max-w-2xl',
   '3xl': 'max-w-3xl',
-  fullscreen: 'w-[95vw] h-[calc(100vh-4rem)] max-w-none',
+  fullscreen: 'w-[95vw] max-w-none',  // height managed by flex + max-h on card
 };
 
 export default function Modal({
@@ -67,7 +67,7 @@ export default function Modal({
       <div
         className={clsx(
           'w-full bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl shadow-2xl flex flex-col',
-          size === 'fullscreen' ? 'max-h-[calc(100vh-4rem)] overflow-hidden' : 'max-h-[90vh]',
+          size === 'fullscreen' ? 'h-[calc(100vh-4rem)]' : 'max-h-[90vh]',
           sizeClasses[size]
         )}
         // Stop event propagation to prevent overlay close when clicking inside modal
@@ -84,10 +84,10 @@ export default function Modal({
           </button>
         </div>
 
-        {/* Content - scrollable, fills remaining height */}
+        {/* Content - fills remaining height; fullscreen delegates scroll to children */}
         <div className={clsx(
-          "overflow-y-auto flex-1 min-h-0 relative",
-          size === 'fullscreen' ? 'p-0' : 'p-6'
+          "flex-1 min-h-0 relative",
+          size === 'fullscreen' ? 'overflow-hidden p-0' : 'overflow-y-auto p-6'
         )}>{children}</div>
       </div>
     </div>
