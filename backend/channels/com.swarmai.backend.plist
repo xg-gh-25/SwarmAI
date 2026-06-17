@@ -46,6 +46,9 @@
         <string>__HOME__/.toolbox/bin:__HOME__/.local/bin:__HOME__/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>SWARMAI_MODE</key>
         <string>daemon</string>
+        <!-- Self-heal: 0=off | 1=all sessions | canary=first non-channel session -->
+        <key>SWARMAI_SELF_HEAL</key>
+        <string>1</string>
     </dict>
 </dict>
 </plist>
