@@ -30,8 +30,12 @@ process.on('unhandledRejection', (reason: unknown) => {
  * Global fetch mock to prevent JSDOM from dispatching real HTTP requests
  * via its undici-based resource loader, which is the root trigger for the
  * "invalid onError method" rejections.
+ *
+ * Only applied in jsdom environment — contract tests use @vitest-environment node
+ * and need real fetch for HTTP fixture server communication.
  */
-if (typeof globalThis.fetch === 'undefined' || globalThis.fetch) {
+const isJSDOM = typeof globalThis.document !== 'undefined';
+if (isJSDOM && (typeof globalThis.fetch === 'undefined' || globalThis.fetch)) {
   globalThis.fetch = Object.assign(
     async (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> => {
       return new Response(null, { status: 200 });

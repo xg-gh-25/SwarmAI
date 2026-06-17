@@ -1,0 +1,16 @@
+{
+    "sessions": {
+        "88f2a3ab-c324-4e4f-b210-665293077771": {
+            "streaming": true,
+            "state": "streaming"
+        },
+        "02933278-4ad1-4104-8d12-47533fe15e5c": {
+            "streaming": true,
+            "state": "streaming"
+        },
+        "a0a533af-d49b-4365-bf42-9ddb4f5dbe42": {
+            "streaming": false,
+            "state": "idle"
+        }
+    }
+}

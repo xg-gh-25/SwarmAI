@@ -1,0 +1,11 @@
+{
+    "status": "healthy",
+    "version": "1.19.0",
+    "sdk": "claude-agent-sdk",
+    "sdk_version": "0.2.103",
+    "cli_version": "unknown",
+    "pending_hook_tasks": 1,
+    "boot_id": "4f082c5e5f38",
+    "db_healthy": true,
+    "channel_gateway": "started"
+}
