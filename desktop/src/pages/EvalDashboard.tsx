@@ -192,6 +192,7 @@ function useCaseDetail(caseId: string | null) {
 const TABS = [
   { id: 'overview', label: 'Overview', icon: 'monitoring' },
   { id: 'golden-set', label: 'Golden Set', icon: 'checklist' },
+  { id: 'context', label: 'Context Health', icon: 'sync' },
   { id: 'trends', label: 'Trends', icon: 'trending_up' },
   { id: 'guide', label: 'Guide', icon: 'menu_book' },
 ] as const;
@@ -229,6 +230,7 @@ export default function EvalDashboard() {
       <div className="flex-1 min-h-0 overflow-y-auto">
         {activeTab === 'overview' && <OverviewTab />}
         {activeTab === 'golden-set' && <GoldenSetTab />}
+        {activeTab === 'context' && <ContextHealthTab />}
         {activeTab === 'trends' && <TrendsTab />}
         {activeTab === 'guide' && <GuideTab />}
       </div>
@@ -559,6 +561,169 @@ function TrendsTab() {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// ─── Context Health Tab ──────────────────────────────────────────────────────
+
+interface ContextHealthData {
+  refresh_log: { timestamp: string; target: string; old: string; new: string; evidence: string; layer: number; confidence: number }[];
+  staleness: { project: string; doc: string; days_stale: number; recent_commits: number; raw?: string }[];
+  pending_proposals: { id: string; target_doc: string; target_section: string; content: string; created_at: string; confidence: number }[];
+  weeks_available: number;
+}
+
+function useContextHealth() {
+  return useQuery<ContextHealthData>({
+    queryKey: ['eval-context-health'],
+    queryFn: async () => (await api.get<ContextHealthData>('/eval/context-health')).data,
+    staleTime: 60_000,
+  });
+}
+
+function ContextHealthTab() {
+  const { data, isError } = useContextHealth();
+
+  if (isError) return <ErrorState message="Failed to load context health data." />;
+  if (!data) return <Loading />;
+
+  const hasActivity = data.refresh_log.length > 0 || data.staleness.length > 0 || data.pending_proposals.length > 0;
+
+  return (
+    <div className="max-w-5xl mx-auto p-6 space-y-6">
+      {/* Header */}
+      <div>
+        <h2 className="text-lg font-semibold text-[var(--color-text)]">Context Health</h2>
+        <p className="text-xs text-[var(--color-text-muted)] mt-1">
+          DDD & Memory freshness — auto-refresh activity, staleness signals, and pending decisions.
+          {data.weeks_available > 0 && ` Showing ${data.weeks_available} week(s) of history.`}
+        </p>
+      </div>
+
+      {!hasActivity && (
+        <div className="text-center py-12 text-[var(--color-text-muted)]">
+          <span className="material-symbols-outlined text-4xl mb-2 block opacity-40">check_circle</span>
+          <p className="text-sm">No context drift detected. Everything is fresh.</p>
+          <p className="text-xs mt-1 opacity-70">Auto-refresh runs on every code commit + every 30 minutes.</p>
+        </div>
+      )}
+
+      {/* Staleness Signals */}
+      {data.staleness.length > 0 && (
+        <section>
+          <h3 className="text-sm font-medium text-[var(--color-text)] mb-2 flex items-center gap-1.5">
+            <span className="material-symbols-outlined text-base text-amber-500">warning</span>
+            Stale Documents ({data.staleness.length})
+          </h3>
+          <div className="border border-amber-500/20 rounded-lg overflow-hidden">
+            <table className="w-full text-xs">
+              <thead className="bg-amber-500/5">
+                <tr>
+                  <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Project</th>
+                  <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Document</th>
+                  <th className="text-right px-3 py-2 font-medium text-[var(--color-text-muted)]">Days Stale</th>
+                  <th className="text-right px-3 py-2 font-medium text-[var(--color-text-muted)]">Recent Commits</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--color-border)]">
+                {data.staleness.map((s, i) => (
+                  <tr key={i} className="hover:bg-[var(--color-hover)]">
+                    <td className="px-3 py-2 text-[var(--color-text)]">{s.project}</td>
+                    <td className="px-3 py-2 text-[var(--color-text-muted)]">{s.doc}</td>
+                    <td className="px-3 py-2 text-right font-mono text-amber-500">{s.days_stale}d</td>
+                    <td className="px-3 py-2 text-right font-mono">{s.recent_commits}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-[10px] text-[var(--color-text-muted)] mt-1.5 italic">
+            Tip: Ask in chat "refresh AIDLC TECH.md" or "update DDD docs" to resolve.
+          </p>
+        </section>
+      )}
+
+      {/* Pending Proposals (Layer 3) */}
+      {data.pending_proposals.length > 0 && (
+        <section>
+          <h3 className="text-sm font-medium text-[var(--color-text)] mb-2 flex items-center gap-1.5">
+            <span className="material-symbols-outlined text-base text-blue-500">pending_actions</span>
+            Pending Decisions ({data.pending_proposals.length})
+          </h3>
+          <div className="space-y-2">
+            {data.pending_proposals.map((p) => (
+              <div key={p.id} className="border border-[var(--color-border)] rounded-lg p-3 hover:bg-[var(--color-hover)]">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-[var(--color-text)]">
+                    {p.target_doc} → {p.target_section}
+                  </span>
+                  <span className="text-[10px] text-[var(--color-text-muted)]">
+                    {new Date(p.created_at).toLocaleDateString()}
+                  </span>
+                </div>
+                <p className="text-xs text-[var(--color-text-muted)] mt-1 line-clamp-2">{p.content}</p>
+                <p className="text-[10px] text-[var(--color-text-muted)] mt-1.5 italic">
+                  Ask in chat: "approve proposal {p.id}" or "reject proposal {p.id}"
+                </p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Auto-Refresh Log (Layer 1) */}
+      {data.refresh_log.length > 0 && (
+        <section>
+          <h3 className="text-sm font-medium text-[var(--color-text)] mb-2 flex items-center gap-1.5">
+            <span className="material-symbols-outlined text-base text-green-500">auto_fix_high</span>
+            Auto-Applied Fixes ({data.refresh_log.length})
+          </h3>
+          <div className="border border-[var(--color-border)] rounded-lg overflow-hidden">
+            <table className="w-full text-xs">
+              <thead className="bg-[var(--color-bg)]">
+                <tr>
+                  <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Date</th>
+                  <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Target</th>
+                  <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Change</th>
+                  <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Layer</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--color-border)]">
+                {data.refresh_log.slice(0, 20).map((entry, i) => (
+                  <tr key={i} className="hover:bg-[var(--color-hover)]">
+                    <td className="px-3 py-2 text-[var(--color-text-muted)] whitespace-nowrap">
+                      {new Date(entry.timestamp).toLocaleDateString()}
+                    </td>
+                    <td className="px-3 py-2 text-[var(--color-text)] font-mono text-[11px] truncate max-w-[200px]">
+                      {entry.target}
+                    </td>
+                    <td className="px-3 py-2">
+                      <code className="text-red-400 line-through text-[10px]">{entry.old}</code>
+                      {' → '}
+                      <code className="text-green-400 text-[10px]">{entry.new}</code>
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                        entry.layer === 1
+                          ? 'bg-green-500/10 text-green-500'
+                          : 'bg-blue-500/10 text-blue-500'
+                      }`}>
+                        L{entry.layer}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          {data.refresh_log.length > 20 && (
+            <p className="text-[10px] text-[var(--color-text-muted)] mt-1">
+              Showing 20 of {data.refresh_log.length} entries.
+            </p>
+          )}
+        </section>
+      )}
     </div>
   );
 }

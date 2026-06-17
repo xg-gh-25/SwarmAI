@@ -197,3 +197,98 @@ async def reload_eval_data():
     svc = get_eval_service()
     svc.reload()
     return {"status": "reloaded", "cases": svc.case_count, "runs": svc.run_count}
+
+
+# ─── Context Health (DDD & Memory Auto-Refresh) ────────────────────────────
+
+
+@router.get("/context-health")
+async def get_context_health():
+    """Read-only context freshness report for the Eval dashboard.
+
+    Returns recent auto-refresh activity (Layer 1 applied fixes) +
+    DDD staleness signals + pending Layer 3 proposals.
+    """
+    from pathlib import Path
+    from core.initialization_manager import initialization_manager
+
+    ws_path = initialization_manager.get_cached_workspace_path()
+    if not ws_path:
+        return {"refresh_log": [], "staleness": [], "pending_proposals": [], "weeks_available": 0}
+
+    root = Path(ws_path)
+    result = {
+        "refresh_log": [],
+        "staleness": [],
+        "pending_proposals": [],
+        "weeks_available": 0,
+    }
+
+    # 1. Read auto-refresh log (last 8 weeks)
+    try:
+        from core.auto_refresh import read_refresh_log
+        log_path = root / ".context" / ".auto_refresh_log.jsonl"
+        result["refresh_log"] = read_refresh_log(log_path, since_days=56)
+        # Count distinct weeks
+        weeks = set()
+        for entry in result["refresh_log"]:
+            ts = entry.get("timestamp", "")[:10]  # YYYY-MM-DD
+            if ts:
+                from datetime import datetime
+                try:
+                    dt = datetime.fromisoformat(ts)
+                    weeks.add(dt.isocalendar()[:2])  # (year, week)
+                except ValueError:
+                    pass
+        result["weeks_available"] = len(weeks)
+    except Exception as exc:
+        logger.debug("context-health: refresh log read failed: %s", exc)
+
+    # 2. DDD staleness signals
+    try:
+        from core.ddd_orchestrator import DddCultivationOrchestrator
+        orch = DddCultivationOrchestrator()
+        staleness_findings = orch._ch_ddd_staleness(root, ws_path)
+        result["staleness"] = [
+            _parse_staleness_finding(f) for f in staleness_findings
+            if f.startswith("DDD-STALE:")
+        ]
+    except Exception as exc:
+        logger.debug("context-health: staleness check failed: %s", exc)
+
+    # 3. Pending proposals (Layer 3 escalations)
+    try:
+        from core.ddd_cultivation import read_pending_proposals
+        proposals = read_pending_proposals(root, "SwarmAI")
+        result["pending_proposals"] = [
+            {
+                "id": p.id,
+                "target_doc": p.target_doc,
+                "target_section": p.target_section,
+                "content": p.content[:200],
+                "created_at": p.created_at,
+                "confidence": p.confidence,
+            }
+            for p in proposals[:10]
+        ]
+    except Exception as exc:
+        logger.debug("context-health: proposals read failed: %s", exc)
+
+    return result
+
+
+def _parse_staleness_finding(finding: str) -> dict:
+    """Parse 'DDD-STALE: Project/Doc (Xd old, Y recent commits)' into dict."""
+    import re
+    m = re.match(
+        r"DDD-STALE:\s*(\w+)/(\w+\.md)\s*\((\d+)d old,\s*(\d+) recent commits?\)",
+        finding,
+    )
+    if m:
+        return {
+            "project": m.group(1),
+            "doc": m.group(2),
+            "days_stale": int(m.group(3)),
+            "recent_commits": int(m.group(4)),
+        }
+    return {"raw": finding}
