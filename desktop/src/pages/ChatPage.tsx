@@ -627,6 +627,9 @@ export default function ChatPage() {
         const sessionMessages = await chatService.getSessionMessages(tab.sessionId);
         // Async guard: only apply if user hasn't switched away during the load
         if (activeTabIdRef.current !== loadedTabId) return;
+        // Phase guard: streaming may have started during the async fetch
+        const tabAfterFetch = tabMapRef.current.get(loadedTabId);
+        if (tabAfterFetch?.isStreaming) return;
         const formattedMessages: Message[] = sessionMessages.map(toDisplayMessage);
         setMessages(formattedMessages);
         setSessionId(tab.sessionId);
