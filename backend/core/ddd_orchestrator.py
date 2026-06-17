@@ -826,6 +826,8 @@ class DddCultivationOrchestrator:
                         pass
                     lock_fd.close()
 
+        return findings
+
     # ── Channel 9: Mechanical Auto-Refresh (Layer 1) ──────────────────────
 
     def _ch_mechanical_refresh(self, root: Path, ws_path: str) -> list[str]:

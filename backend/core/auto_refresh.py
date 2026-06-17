@@ -481,8 +481,15 @@ class MechanicalRefresher:
 
         return files
 
+    # P0-P2 readonly context files that should NEVER be written by auto-refresh
+    _READONLY_CONTEXT_FILES = {"SWARMAI.md", "IDENTITY.md", "SOUL.md"}
+
     def apply_fixes(self, results: list[RefreshResult]) -> int:
-        """Apply mechanical fixes to files. Returns count of applied fixes."""
+        """Apply mechanical fixes to files. Returns count of applied fixes.
+
+        Uses locked_write for .context/ files (MEMORY.md concurrency safety).
+        Skips readonly P0-P2 files. Marks fix.applied=True only AFTER write succeeds.
+        """
         applied = 0
         # Group by file for efficiency
         by_file: dict[str, list[RefreshResult]] = {}
@@ -491,28 +498,66 @@ class MechanicalRefresher:
 
         for rel_path, fixes in by_file.items():
             abs_path = self._workspace_root / rel_path
+
+            # Skip readonly P0-P2 context files
+            if abs_path.name in self._READONLY_CONTEXT_FILES:
+                continue
+
             try:
                 content = abs_path.read_text(encoding="utf-8")
                 original = content
 
+                # Track which fixes will be applied (mark AFTER write succeeds)
+                pending_fixes: list[RefreshResult] = []
                 for fix in fixes:
-                    # Exact match replacement (not regex — safer)
                     if fix.old_value in content:
                         content = content.replace(fix.old_value, fix.new_value, 1)
-                        fix.applied = True
-                        applied += 1
+                        pending_fixes.append(fix)
 
                 # Only write if changed
                 if content != original:
-                    abs_path.write_text(content, encoding="utf-8")
+                    # Use locked_write for .context/ files (concurrency safety)
+                    if ".context/" in rel_path:
+                        self._write_with_lock(abs_path, content)
+                    else:
+                        # DDD docs in Projects/ — atomic write
+                        tmp_path = abs_path.with_suffix(".tmp")
+                        tmp_path.write_text(content, encoding="utf-8")
+                        os.replace(tmp_path, abs_path)
+
+                    # Mark applied ONLY after successful write (finding #3)
+                    for fix in pending_fixes:
+                        fix.applied = True
+                        applied += 1
+
                     logger.info(
                         "auto_refresh.L1: applied %d fixes to %s",
-                        sum(1 for f in fixes if f.applied), rel_path,
+                        len(pending_fixes), rel_path,
                     )
             except (OSError, UnicodeDecodeError) as exc:
                 logger.warning("auto_refresh.L1: failed to apply to %s: %s", rel_path, exc)
 
         return applied
+
+    @staticmethod
+    def _write_with_lock(file_path: Path, content: str) -> None:
+        """Write to a context file using locked_write (flock) for concurrency safety."""
+        try:
+            from scripts.locked_write import locked_write
+            # locked_write expects (path, section, content) but we want full-file write.
+            # Use the atomic write approach directly with flock instead.
+            import fcntl
+            with open(file_path, "r+", encoding="utf-8") as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                try:
+                    f.seek(0)
+                    f.write(content)
+                    f.truncate()
+                finally:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except ImportError:
+            # Fallback if locked_write not available (tests, standalone)
+            file_path.write_text(content, encoding="utf-8")
 
 
 # ── Memory Entry Refresher ─────────────────────────────────────────────────

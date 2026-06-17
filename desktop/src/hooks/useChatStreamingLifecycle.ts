@@ -1004,7 +1004,8 @@ export function useChatStreamingLifecycle(
 
             console.warn(
               '[StreamReconcile] Backend idle but tab streaming — forcing clear',
-              { tabId, sessionId: sid, backendState: backendState?.state ?? 'evicted' },
+              { tabId, sessionId: sid, backendState: backendState?.state ?? 'evicted',
+                hasQueuedMessage: !!tabState.queuedMessage },
             );
             // Use atomic primitive — handles flag + Set + re-render.
             // Direct mutation here was the root cause of background-tab hang.
@@ -1013,6 +1014,14 @@ export function useChatStreamingLifecycle(
             tabState.isResuming = false;
             anyCleared = true;
 
+            // Auto-drain: if a queued message was waiting (deadlock scenario),
+            // trigger drain now that streaming is cleared. Without this, the
+            // user is unstuck (can type) but the already-queued message stays unsent.
+            if (tabState.queuedMessage && deps.onDrainQueue) {
+              // Schedule drain after a tick to let React state settle
+              setTimeout(() => { if (!cancelled) deps.onDrainQueue?.(tabId); }, 100);
+            }
+
             // Sync messages from DB for this tab (content is there, event was lost).
             // MERGE: preserve local-only queued messages that DB doesn't have.
             chatService.invalidateMessageCache(sid);
@@ -1020,7 +1029,7 @@ export function useChatStreamingLifecycle(
               if (cancelled) return;
               const mapped = msgs.map((m) => ({
                 id: m.id,
-                role: m.role as 'user' | 'assistant',
+                role: m.role as 'user' | 'assistant' | 'system',
                 content: m.content as ContentBlock[],
                 timestamp: m.createdAt || new Date().toISOString(),
               }));
@@ -2096,7 +2105,7 @@ export function useChatStreamingLifecycle(
                       // Backend completed — map and render
                       const mapped = msgs.map((m) => ({
                         id: m.id,
-                        role: m.role as 'user' | 'assistant',
+                        role: m.role as 'user' | 'assistant' | 'system',
                         content: m.content as ContentBlock[],
                         timestamp: m.createdAt || new Date().toISOString(),
                       }));
