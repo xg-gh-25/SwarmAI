@@ -644,8 +644,10 @@ class ContextHealthHook:
         content = memory_path.read_text(encoding="utf-8")
         today = date.today().isoformat()
 
-        # Find "## Lessons Learned" section insertion point
-        insert_marker = "## Lessons Learned"
+        # Find insertion section — use type-based section from new structure
+        # Default: Guidelines (most REFLECT lessons are guideline/pitfall)
+        # classify_entry_type determines which section each lesson goes to
+        insert_marker = "## Guidelines"
         idx = content.find(insert_marker)
         if idx < 0:
             return
@@ -1833,7 +1835,7 @@ class ContextHealthHook:
         ]
         today = date.today()
 
-        for section_name in ("Recent Context", "Key Decisions"):
+        for section_name in ("Decisions", "Guidelines", "Pitfalls", "Principles"):
             # Extract section body
             sec_match = re.search(
                 rf"## {section_name}\n(.*?)(?=\n## |\Z)", content, re.DOTALL

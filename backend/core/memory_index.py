@@ -43,10 +43,19 @@ MEMORY_INDEX_START = "<!-- MEMORY_INDEX_START -->"
 MEMORY_INDEX_END = "<!-- MEMORY_INDEX_END -->"
 
 # Sections whose entries never age out of the index (Permanent tier)
-PERMANENT_SECTIONS = {"COE Registry", "Key Decisions"}
+# Updated 2026-06-17: MEMORY.md restructured to 7-type sections
+PERMANENT_SECTIONS = {
+    "COE Registry (Evergreen)", "Principles", "Corrections",
+    # Legacy names (for backward compat if old format encountered)
+    "COE Registry", "Key Decisions",
+}
 
 # Sections that appear in the Active tier
-ACTIVE_SECTIONS = {"Recent Context", "Lessons Learned"}
+ACTIVE_SECTIONS = {
+    "Decisions", "Guidelines", "Pitfalls", "Processes", "Models",
+    # Legacy names (backward compat)
+    "Recent Context", "Lessons Learned",
+}
 
 # Section always loaded in L1 regardless of matching
 ALWAYS_LOAD_SECTIONS = {"Open Threads"}
@@ -67,12 +76,24 @@ FULL_INJECTION_THRESHOLD = 30_000
 MAX_REF_SECTIONS = 3
 
 # Prefix patterns for index entry keys
+# Updated 2026-06-17: maps new 7-type section names to index prefixes
 SECTION_KEY_PREFIX = {
+    # New structure (7-type)
+    "Principles": "PRI",
+    "Corrections": "COR",
+    "Decisions": "DEC",
+    "Guidelines": "GUI",
+    "Pitfalls": "PIT",
+    "Processes": "PRC",
+    "Models": "MOD",
+    "COE Registry (Evergreen)": "COE",
+    "Open Threads": "OT",
+    "Standing Preferences": "SP",
+    # Legacy names (backward compat — old MEMORY.md format)
     "Recent Context": "RC",
     "Key Decisions": "KD",
     "Lessons Learned": "LL",
     "COE Registry": "COE",
-    "Open Threads": "OT",
 }
 
 # Common stop words to filter from keyword matching
@@ -232,19 +253,32 @@ def _extract_refs(entry_text: str, self_key: str) -> list[str]:
     Returns:
         Sorted list of unique reference IDs (e.g. ["COE02", "RC15"]).
     """
-    # Extract full reference IDs (e.g. "COE02", "KD01") from bracketed refs
-    full_refs = re.findall(r"\[(COE\d+|KD\d+|RC\d+|LL\d+|OT\d+)\]", entry_text)
+    # Extract full reference IDs (e.g. "COE02", "KD01", "PRI03") from bracketed refs
+    full_refs = re.findall(
+        r"\[(COE\d+|KD\d+|RC\d+|LL\d+|OT\d+|PRI\d+|COR\d+|DEC\d+|GUI\d+|PIT\d+|PRC\d+|MOD\d+|SP\d+)\]",
+        entry_text,
+    )
     unique = sorted(set(full_refs) - {self_key})
     return unique
 
 
 # Mapping from ref prefix → MEMORY.md section name
 _REF_PREFIX_TO_SECTION: dict[str, str] = {
-    "COE": "COE Registry",
-    "KD": "Key Decisions",
-    "RC": "Recent Context",
-    "LL": "Lessons Learned",
+    # New structure (7-type)
+    "PRI": "Principles",
+    "COR": "Corrections",
+    "DEC": "Decisions",
+    "GUI": "Guidelines",
+    "PIT": "Pitfalls",
+    "PRC": "Processes",
+    "MOD": "Models",
+    "COE": "COE Registry (Evergreen)",
     "OT": "Open Threads",
+    "SP": "Standing Preferences",
+    # Legacy prefixes (backward compat)
+    "KD": "Decisions",
+    "RC": "Guidelines",  # Recent Context merged into operational types
+    "LL": "Pitfalls",    # Lessons Learned merged into pitfall/guideline
 }
 
 
@@ -344,10 +378,11 @@ def generate_memory_index(content: str) -> str:
             entries = [e for e in entries if "\u2705" not in e["full_text"]]
         counts[sec_name] = len(entries)
 
-    # ── Build Permanent tier (COEs + Key Decisions) ──
+    # ── Build Permanent tier (meta-cognitive + COEs — never age out) ──
     permanent_lines: list[str] = []
-    for sec_name in ("COE Registry", "Key Decisions"):
-        prefix = SECTION_KEY_PREFIX[sec_name]
+    _permanent_scan = [s for s in PERMANENT_SECTIONS if sections.get(s)]
+    for sec_name in _permanent_scan:
+        prefix = SECTION_KEY_PREFIX.get(sec_name, "PRM")
         entries = _parse_entries(sections.get(sec_name, ""))
         for i, entry in enumerate(entries, 1):
             key = f"{prefix}{i:02d}"
@@ -363,13 +398,11 @@ def generate_memory_index(content: str) -> str:
                 line += f" | {alias_str}"
             permanent_lines.append(line)
 
-    # ── Build Active tier (Recent Context + Lessons — no age cutoff) ──
-    # Power-first: every entry stays in Active tier until explicitly
-    # archived by LLM maintenance (superseded by newer entry).
+    # ── Build Active tier (operational + cognitive — decay-managed) ──
     active_lines: list[str] = []
-
-    for sec_name in ("Recent Context", "Lessons Learned"):
-        prefix = SECTION_KEY_PREFIX[sec_name]
+    _active_scan = [s for s in ACTIVE_SECTIONS if sections.get(s)]
+    for sec_name in _active_scan:
+        prefix = SECTION_KEY_PREFIX.get(sec_name, "ACT")
         entries = _parse_entries(sections.get(sec_name, ""))
         for i, entry in enumerate(entries, 1):
             key = f"{prefix}{i:02d}"
