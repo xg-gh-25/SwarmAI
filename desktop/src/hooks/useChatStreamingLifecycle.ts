@@ -1019,8 +1019,19 @@ export function useChatStreamingLifecycle(
       // Between effect setup and callback fire, active tab may have changed.
       // Guard BOTH writes to prevent flashing wrong-tab content during the
       // rAF window between effect cleanup scheduling and actual unsub.
+      // Fix #4: Allow sync when activeTabIdRef points to a stale/non-existent
+      // tab (e.g., random default ID after app restart before restoreFromFile).
+      // If the ref points to a REAL tab that exists in the map, the mismatch
+      // is a genuine tab switch — block sync to prevent cross-tab flash.
       const currentActiveTabId = activeTabIdRef.current;
-      if (currentActiveTabId !== tabId) return; // stale subscription — skip
+      if (currentActiveTabId !== tabId) {
+        // Distinguish "stale ref" from "genuine tab switch":
+        // If currentActiveTabId exists in tabMap, user genuinely switched — block.
+        // If it doesn't exist (stale default ID), allow sync through.
+        const refPointsToRealTab = currentActiveTabId ? tabMapRef.current.has(currentActiveTabId) : false;
+        if (refPointsToRealTab) return; // genuine switch — skip to prevent flash
+        // Stale ref (app restart race) — fall through to sync
+      }
       // Sync store → React state (triggers render)
       setMessages(store.getSnapshot());
       // Sync store → tabState cache (for tab-switch instant display)
