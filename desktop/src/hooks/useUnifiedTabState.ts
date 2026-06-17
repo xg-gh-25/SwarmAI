@@ -33,6 +33,7 @@ import {
   type PersistedTab,
 } from '../services/tabPersistence';
 import api from '../services/api';
+import { messageStoreRegistry } from '../stores/MessageStore';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -558,9 +559,18 @@ export function useUnifiedTabState(
         // Tab already exists — just update messages if provided
         if (initialMessages) {
           existing.messages = initialMessages;
+          // Also seed the store so streaming handlers always find it
+          const store = messageStoreRegistry.getOrCreate(tabId);
+          store.replace(initialMessages);
           bump();
         }
         return;
+      }
+      // Eagerly create MessageStore for this tab — guarantees all streaming
+      // handlers will find a store (eliminates fallback dual-write paths).
+      const store = messageStoreRegistry.getOrCreate(tabId);
+      if (initialMessages && initialMessages.length > 0) {
+        store.replace(initialMessages);
       }
       const tab: UnifiedTab = {
         id: tabId,
@@ -598,6 +608,9 @@ export function useUnifiedTabState(
           // already aborted — safe to ignore
         }
       }
+
+      // Destroy the MessageStore for this tab (cleanup timers, listeners)
+      messageStoreRegistry.destroy(tabId);
 
       tabMapRef.current.delete(tabId);
       bump();

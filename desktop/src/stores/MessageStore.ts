@@ -64,6 +64,8 @@ export class MessageStore {
   private _initializeGen = 0;
   private _reconcileInFlight = 0;
   private _destroyed = false;
+  private _snapshot: Message[] | null = null;
+  private _snapshotSource: Message[] | null = null;
 
   // ─── Resume boundary tracking ───
   // Index of the last resume_boundary system message in _messages.
@@ -328,11 +330,17 @@ export class MessageStore {
   }
 
   /**
-   * Get a snapshot of messages (new array reference for React).
-   * Use in subscription callbacks to trigger React re-render.
+   * Get a memoized snapshot of messages for React.
+   * Returns the SAME array reference if no mutation occurred since last call.
+   * This avoids 60 allocations/second during streaming (rAF-gated subscription
+   * calls this every frame). React can bail out when reference is unchanged.
    */
   getSnapshot(): Message[] {
-    return [...this._messages];
+    if (this._snapshotSource !== this._messages) {
+      this._snapshot = [...this._messages];
+      this._snapshotSource = this._messages;
+    }
+    return this._snapshot!;
   }
 
   // ─── Private Methods ───

@@ -390,3 +390,155 @@ describe('messageStoreRegistry', () => {
     expect(messageStoreRegistry.size).toBe(0);
   });
 });
+
+// ─── Single-Writer Behavior (Phase 3+4) ───
+
+describe('MessageStore single-writer behavior', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('replace() after endStreaming() succeeds — error content renders', () => {
+    const store = new MessageStore({ watchdogTimeoutMs: 45000 });
+    store.append(makeMsg('a1', 'assistant', 'streaming content'));
+    store.startStreaming('a1');
+    expect(store.phase).toBe('streaming');
+
+    // Error arrives — endStreaming first, then replace
+    store.endStreaming();
+    const errorMsgs = [makeMsg('a1', 'assistant', 'streaming content + error')];
+    store.replace(errorMsgs);
+
+    expect(store.messages[0].content[0]).toEqual(
+      expect.objectContaining({ text: 'streaming content + error' }),
+    );
+    store.destroy();
+  });
+
+  it('replace() during streaming is NO-OP — does not lose content', () => {
+    const store = new MessageStore();
+    store.append(makeMsg('a1', 'assistant', 'live stream'));
+    store.startStreaming('a1');
+
+    // Attempt replace during streaming — should be ignored
+    store.replace([makeMsg('a1', 'assistant', 'stale replace')]);
+    expect((store.messages[0].content[0] as any).text).toBe('live stream');
+
+    store.endStreaming();
+    store.destroy();
+  });
+
+  it('replace() invalidates in-flight reconcile via _reconcileGen', async () => {
+    let fetchResolve: (msgs: ChatMessage[]) => void;
+    const fetchPromise = new Promise<ChatMessage[]>((resolve) => { fetchResolve = resolve; });
+    const store = new MessageStore({
+      sessionId: 'sess-1',
+      fetchMessages: () => fetchPromise,
+    });
+    store.append(makeMsg('a1', 'assistant', 'original'));
+    store.startStreaming('a1');
+
+    // Queue a reconcile thunk (NO-OP during streaming)
+    store.reconcile([makeChatMsg('a1', 'assistant', 'db version')]);
+
+    // endStreaming flushes the thunk (starts async fetch)
+    store.endStreaming();
+
+    // replace() immediately sets new content + increments reconcileGen
+    store.replace([makeMsg('a1', 'assistant', 'error annotated')]);
+
+    // Now the fetch resolves with stale data — should be discarded
+    fetchResolve!([makeChatMsg('a1', 'assistant', 'stale db')]);
+    await vi.waitFor(() => {}); // flush microtasks
+
+    // Store still has the replace'd content, not the stale fetch
+    expect((store.messages[0].content[0] as any).text).toBe('error annotated');
+    store.destroy();
+  });
+
+  it('append() resets watchdog during streaming', () => {
+    const store = new MessageStore({ watchdogTimeoutMs: 100 });
+    store.append(makeMsg('a1', 'assistant'));
+    store.startStreaming('a1');
+
+    // Advance 90ms — watchdog almost fires
+    vi.advanceTimersByTime(90);
+    expect(store.phase).toBe('streaming');
+
+    // Append resets watchdog
+    store.append(makeMsg('boundary', 'system', 'Session resumed'));
+    vi.advanceTimersByTime(90);
+    expect(store.phase).toBe('streaming'); // Still alive
+
+    // Now let it expire
+    vi.advanceTimersByTime(11);
+    expect(store.phase).toBe('idle');
+
+    store.destroy();
+  });
+
+  it('getSnapshot() returns memoized reference when no mutation', () => {
+    const store = new MessageStore();
+    store.append(makeMsg('1', 'user'));
+
+    const snap1 = store.getSnapshot();
+    const snap2 = store.getSnapshot();
+    expect(snap1).toBe(snap2); // Same reference — no allocation
+
+    // After mutation, new reference
+    store.append(makeMsg('2', 'user'));
+    const snap3 = store.getSnapshot();
+    expect(snap3).not.toBe(snap1);
+    expect(snap3).toHaveLength(2);
+
+    store.destroy();
+  });
+
+  it('subscription fires on store mutation and delivers correct snapshot', () => {
+    const store = new MessageStore();
+    store.append(makeMsg('a1', 'assistant'));
+
+    const snapshots: Message[][] = [];
+    store.subscribe(() => {
+      snapshots.push(store.getSnapshot());
+    });
+
+    // Trigger mutation
+    store.updateLast((msg) => ({ ...msg, content: [{ type: 'text', text: 'updated' }] }));
+
+    // rAF-gated — advance timer to flush
+    vi.advanceTimersByTime(16);
+
+    expect(snapshots.length).toBeGreaterThanOrEqual(1);
+    expect((snapshots[0][0].content[0] as any).text).toBe('updated');
+
+    store.destroy();
+  });
+
+  it('subscription does not fire after unsubscribe', () => {
+    const store = new MessageStore();
+    store.append(makeMsg('a1', 'assistant'));
+
+    let callCount = 0;
+    const unsub = store.subscribe(() => { callCount++; });
+
+    // First mutation — should fire
+    store.updateLast((msg) => ({ ...msg, content: [{ type: 'text', text: 'v1' }] }));
+    vi.advanceTimersByTime(16);
+    expect(callCount).toBe(1);
+
+    // Unsubscribe
+    unsub();
+
+    // Second mutation — should NOT fire
+    store.updateLast((msg) => ({ ...msg, content: [{ type: 'text', text: 'v2' }] }));
+    vi.advanceTimersByTime(16);
+    expect(callCount).toBe(1); // unchanged
+
+    store.destroy();
+  });
+});
