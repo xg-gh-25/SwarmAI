@@ -2259,11 +2259,22 @@ export function useChatStreamingLifecycle(
             : undefined;
           if (tabState) {
             tabState.isResuming = true;
+            // Inject synthetic resume boundary into local messages so the
+            // divider renders immediately — before the stream completes and
+            // the reconcile re-fetch picks up the DB-persisted marker.
+            const boundaryMsg = {
+              id: `resume-boundary-${Date.now()}`,
+              role: 'system' as const,
+              content: [{ type: 'text' as const, text: 'Session resumed' }],
+              timestamp: new Date().toISOString(),
+            };
+            tabState.messages = [...(tabState.messages || []), boundaryMsg];
             // Force re-render so ChatPage picks up isResuming from tabMapRef.
             // Same pattern as isReconnecting — ref mutations alone don't
             // trigger React re-renders.
             const isActive = capturedTabId === activeTabIdRef.current;
             if (isActive) {
+              setMessages((prev) => [...prev, boundaryMsg]);
               setIsStreaming(true, capturedTabId ?? undefined);
             }
           }

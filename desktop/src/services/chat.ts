@@ -116,7 +116,7 @@ const toMessageCamelCase = (data: Record<string, unknown>): ChatMessage => {
   return {
     id: data.id as string,
     sessionId: data.session_id as string,
-    role: data.role as 'user' | 'assistant',
+    role: data.role as 'user' | 'assistant' | 'system',
     // Content can be various block types - cast to unknown first then to ContentBlock[]
     content: toCamelCaseContent(data.content as unknown[]) as unknown as ChatMessage['content'],
     model: (data.model as string) || undefined,

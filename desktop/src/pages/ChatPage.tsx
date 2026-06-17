@@ -71,7 +71,7 @@ const INITIAL_MESSAGE_LOAD_LIMIT = 200;
 function toDisplayMessage(msg: { id: string; role: string; content: ContentBlock[]; createdAt: string; model?: string }): Message {
   return {
     id: msg.id,
-    role: msg.role as 'user' | 'assistant',
+    role: msg.role as 'user' | 'assistant' | 'system',
     // Mark DB-loaded text/thinking as confirmed — they are authoritative history.
     // Without this, a subsequent streaming assistant event would treat them as
     // provisional and WIPE them (structural reconciliation replaces unconfirmed blocks).
@@ -314,6 +314,14 @@ export default function ChatPage() {
   // Last assistant message index — memoized for Save-to-Memory button placement
   const lastAssistantIdx = useMemo(
     () => messages.reduce((lastIdx, m, i) => m.role === 'assistant' ? i : lastIdx, -1),
+    [messages],
+  );
+
+  // Last resume boundary index — messages before this render dimmed (prior session).
+  // Currently only resume_boundary uses role='system'. If future system message
+  // types are added, filter on content[0].type === 'resume_boundary' here.
+  const lastResumeBoundaryIdx = useMemo(
+    () => messages.reduce((lastIdx, m, i) => m.role === 'system' ? i : lastIdx, -1),
     [messages],
   );
 
@@ -2181,6 +2189,18 @@ export default function ChatPage() {
                         />
                       );
                     }
+                    // System messages (resume boundary) render as divider lines
+                    if (msg.role === 'system') {
+                      return (
+                        <div key={msg.id} className="flex items-center gap-3 py-3 px-4 select-none">
+                          <div className="flex-1 h-px bg-[var(--color-border)]" />
+                          <span className="text-xs text-[var(--color-text-muted)] whitespace-nowrap">
+                            Session Resumed
+                          </span>
+                          <div className="flex-1 h-px bg-[var(--color-border)]" />
+                        </div>
+                      );
+                    }
                     // Error messages get the structured error renderer
                     if (msg.isError) {
                       const textBlock = msg.content.find(b => b.type === 'text');
@@ -2270,21 +2290,26 @@ export default function ChatPage() {
                         )}
                       </>
                     ) : null;
+                    // Messages before the last resume boundary are from prior
+                    // session context — dim them to distinguish from current interaction.
+                    const isPriorSession = lastResumeBoundaryIdx >= 0 && idx < lastResumeBoundaryIdx;
                     return (
                       <React.Fragment key={msg.id}>
-                        <MessageBubble
-                          message={msg}
-                          onAnswerQuestion={handleAnswerQuestion}
-                          onPermissionDecision={handlePermissionDecision}
-                          onEscalationSelect={handleEscalationSelect}
-                          pendingToolUseId={pendingQuestion?.toolUseId}
-                          pendingPermissionRequestId={pendingPermissionRequestId ?? undefined}
-                          isStreaming={isLastAssistantForStreaming}
-                          sessionId={sessionId}
-                          isLastAssistant={idx === lastAssistantIdx}
-                          contextWarning={contextWarning}
-                          onCancelQueued={msg.isQueued && activeTabIdRef.current ? () => handleCancelQueued(activeTabIdRef.current!) : undefined}
-                        />
+                        <div className={isPriorSession ? 'opacity-50' : undefined}>
+                          <MessageBubble
+                            message={msg}
+                            onAnswerQuestion={handleAnswerQuestion}
+                            onPermissionDecision={handlePermissionDecision}
+                            onEscalationSelect={handleEscalationSelect}
+                            pendingToolUseId={pendingQuestion?.toolUseId}
+                            pendingPermissionRequestId={pendingPermissionRequestId ?? undefined}
+                            isStreaming={isLastAssistantForStreaming}
+                            sessionId={sessionId}
+                            isLastAssistant={idx === lastAssistantIdx}
+                            contextWarning={contextWarning}
+                            onCancelQueued={msg.isQueued && activeTabIdRef.current ? () => handleCancelQueued(activeTabIdRef.current!) : undefined}
+                          />
+                        </div>
                         {streamingIndicator}
                       </React.Fragment>
                     );

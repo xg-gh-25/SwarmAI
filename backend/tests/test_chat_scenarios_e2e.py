@@ -641,6 +641,73 @@ class TestScenario6_ResumePostTTL:
             assert "result" in types
 
     @pytest.mark.asyncio
+    async def test_cold_resume_inserts_boundary_marker(
+        self, async_client, _reset_session_infrastructure
+    ):
+        """Cold resume should insert a role='system' boundary marker into DB."""
+        from database import db
+
+        session_id = "test-boundary-marker-001"
+        await db.sessions.put({
+            "id": session_id,
+            "agent_id": "default",
+            "title": "Test Boundary Marker",
+            "created_at": "2026-03-24T00:00:00",
+        })
+        await db.messages.put({
+            "id": "msg-bm-prior-1",
+            "session_id": session_id,
+            "role": "user",
+            "content": [{"type": "text", "text": "Old message"}],
+            "created_at": "2026-03-24T00:00:01",
+        })
+        await db.messages.put({
+            "id": "msg-bm-prior-2",
+            "session_id": session_id,
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Old response"}],
+            "model": "test-model",
+            "created_at": "2026-03-24T00:00:02",
+        })
+
+        def capture_wrapper(options):
+            return FakeClientWrapper(options=options)
+
+        with patch(
+            "core.claude_environment._ClaudeClientWrapper",
+            side_effect=capture_wrapper,
+        ), patch(
+            "core.session_unit._spawn_lock", asyncio.Lock()
+        ), patch(
+            "core.claude_environment._env_lock", asyncio.Lock()
+        ), patch(
+            "core.resource_monitor.resource_monitor.spawn_budget",
+            return_value=MagicMock(can_spawn=True),
+        ):
+            response = await async_client.post(
+                "/api/chat/stream",
+                json={
+                    "agent_id": "default",
+                    "message": "New message after restart",
+                    "session_id": session_id,
+                },
+            )
+            assert response.status_code == 200
+
+        # Verify boundary marker was inserted
+        messages = await db.messages.list_by_session(session_id)
+        system_msgs = [m for m in messages if m.get("role") == "system"]
+        assert len(system_msgs) >= 1, (
+            f"Expected at least 1 system boundary marker. "
+            f"Got roles: {[m.get('role') for m in messages]}"
+        )
+        # Check the content shape
+        marker = system_msgs[0]
+        content = marker.get("content", [])
+        assert len(content) == 1
+        assert content[0].get("type") == "resume_boundary"
+
+    @pytest.mark.asyncio
     async def test_cold_resume_with_null_bytes_in_context(
         self, _reset_session_infrastructure
     ):

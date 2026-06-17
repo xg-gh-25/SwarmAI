@@ -1161,6 +1161,18 @@ class SessionRouter:
                 agent_config["needs_context_injection"] = True
                 agent_config["resume_app_session_id"] = resume_from
                 unit._channel_history_injected = True
+                # Insert resume boundary marker so frontend can render a
+                # divider between old messages and the new interaction.
+                # Without this, prior session messages appear as current
+                # blue bubbles — confusing the user (BUG: 2026-06-17).
+                await db.messages.put({
+                    "id": str(uuid4()),
+                    "session_id": session_id,
+                    "role": "system",
+                    "content": [{"type": "resume_boundary", "text": "Session resumed"}],
+                    "model": None,
+                    "created_at": datetime.now().isoformat(),
+                })
                 yield {"type": "session_resuming", "sessionId": session_id}
 
         # resume_session_id is the SDK's own session ID for Mechanism A (live

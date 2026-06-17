@@ -168,7 +168,7 @@ export interface ChatSession {
 export interface ChatMessage {
   id: string;
   sessionId: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: ContentBlock[];
   model?: string;
   createdAt: string;
@@ -260,7 +260,7 @@ export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | As
 
 export interface Message {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: ContentBlock[];
   timestamp: string;
   model?: string;
