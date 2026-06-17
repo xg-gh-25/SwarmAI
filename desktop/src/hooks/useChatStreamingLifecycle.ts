@@ -1528,6 +1528,17 @@ export function useChatStreamingLifecycle(
       // must be discarded to prevent cross-turn bleed.
       const capturedStreamGen = streamGenRef.current;
 
+      // ── Activate store phase gate ──
+      // This makes reconcile()/replace() structurally impossible during streaming.
+      // The single structural protection layer — no more relying on scattered
+      // `if (isStreaming) return` guards at each call site.
+      if (capturedTabId) {
+        const streamStore = messageStoreRegistry.get(capturedTabId);
+        if (streamStore) {
+          streamStore.startStreaming(assistantMessageId);
+        }
+      }
+
       return (event: StreamEvent) => {
         // Generation guard: discard events from a previous stream.
         // This prevents cross-turn bleed where stale SSE events from an
@@ -1816,6 +1827,9 @@ export function useChatStreamingLifecycle(
             setPendingQuestion(pq);
             if (event.sessionId) setSessionId(event.sessionId);
           }
+          // End store streaming phase — unblocks reconcile/replace
+          const auqEndStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+          if (auqEndStore) auqEndStore.endStreaming();
           setIsStreaming(false, capturedTabId ?? undefined);
           // Fix 1: Increment stream generation so the pending
           // createCompleteHandler from the SSE reader becomes a no-op.
@@ -1871,6 +1885,9 @@ export function useChatStreamingLifecycle(
             if (sid) setSessionId(sid);
             setPendingPermissionRequestId(requestId);
           }
+          // End store streaming phase — unblocks reconcile/replace
+          const permEndStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+          if (permEndStore) permEndStore.endStreaming();
           setIsStreaming(false, capturedTabId ?? undefined);
           incrementStreamGen();
 
@@ -1889,12 +1906,12 @@ export function useChatStreamingLifecycle(
           }
 
           // Result is the definitive signal that the conversation turn is
-          // complete. With single-writer store, the subscription handles
-          // React sync. We only need to:
-          // 1. Update sessionId in React state
-          // 2. Force a final snapshot sync as safety net (store may have
-          //    buffered updates in rAF that haven't flushed yet)
+          // complete. Transition store to idle — unblocks reconcile/replace
+          // and flushes any pending reconcile thunk.
           const resultStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+          if (resultStore) {
+            resultStore.endStreaming();
+          }
           if (resultStore && isActiveTab) {
             if (sid) setSessionId(sid);
             // Force-sync: ensure React has the final authoritative state.
@@ -2036,9 +2053,9 @@ export function useChatStreamingLifecycle(
           // "An unknown error occurred" that forces a redundant resend.
           if (tabState?.userStopped) {
             console.log('[StreamHandler] Suppressing error from user-stopped stream', { capturedTabId });
-            // Clean up streaming state — same as createErrorHandler suppression.
-            // Without this, a leaked error event could leave the tab in a
-            // half-streaming state (isStreaming=true but no UI indicators).
+            // End store streaming phase + clean up React streaming state.
+            const stoppedStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+            if (stoppedStore) stoppedStore.endStreaming();
             setIsStreaming(false, capturedTabId ?? undefined);
             incrementStreamGen();
             if (capturedTabId) updateTabStatus(capturedTabId, 'idle');
@@ -2078,6 +2095,8 @@ export function useChatStreamingLifecycle(
           // persistent warning with "New Tab" guidance. Not a transient error.
           if (event.code === 'CONTEXT_TOO_LARGE') {
             console.log('[StreamHandler] CONTEXT_TOO_LARGE — circuit breaker activated', { capturedTabId });
+            const ctlStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+            if (ctlStore) ctlStore.endStreaming();
             setIsStreaming(false, capturedTabId ?? undefined);
             incrementStreamGen();
             if (capturedTabId) updateTabStatus(capturedTabId, 'idle');
@@ -2107,6 +2126,8 @@ export function useChatStreamingLifecycle(
           // backend completes, new messages appear → auto-render + clear state.
           if (event.code === 'SESSION_BUSY') {
             console.log('[StreamHandler] SESSION_BUSY — starting poll recovery', { capturedTabId });
+            const busyEndStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+            if (busyEndStore) busyEndStore.endStreaming();
             setIsStreaming(false, capturedTabId ?? undefined);
             incrementStreamGen();
             if (capturedTabId) {
@@ -2903,6 +2924,14 @@ export function useChatStreamingLifecycle(
         return; // stale — no-op
       }
 
+      // End store streaming phase — unblocks reconcile/replace, flushes
+      // pending reconcile thunk. Must happen before setIsStreaming(false)
+      // so that the store is in idle state when any post-stream DB fetch fires.
+      if (capturedTabId) {
+        const completeStore = messageStoreRegistry.get(capturedTabId);
+        if (completeStore) completeStore.endStreaming();
+      }
+
       // Atomic clear — flag + pendingStreamTabs in one primitive. This is the
       // ONLY place streaming is cleared on the complete path, so the two
       // representations can never drift out of sync.
@@ -2956,15 +2985,11 @@ export function useChatStreamingLifecycle(
             if (currentTabState?.isReconnecting) {
               console.warn('[DisconnectHandler] Timeout — clearing reconnecting state', { capturedTabId });
               currentTabState.isReconnecting = false;
+              // End store streaming phase — unblocks reconcile/replace
+              const dcStore = messageStoreRegistry.get(capturedTabId);
+              if (dcStore) dcStore.endStreaming();
               // Clear via the atomic setIsStreaming(false) primitive for ALL
-              // tabs — not just the active one. Previously this mutated
-              // currentTabState.isStreaming = false directly and only called
-              // setIsStreaming(false) when stillActive. For a BACKGROUND tab
-              // that skipped the pendingStreamTabs update AND triggered no
-              // re-render, so the tab's message view never re-derived and the
-              // spinner stayed frozen on its last (true) render — even though
-              // the flag was false. setIsStreaming clears flag + Set together
-              // and bumps re-render, so it works regardless of active/background.
+              // tabs — not just the active one.
               setIsStreaming(false, capturedTabId);
             }
           }, DISCONNECT_TIMEOUT_MS);

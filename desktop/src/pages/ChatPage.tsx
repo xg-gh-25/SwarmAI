@@ -671,6 +671,9 @@ export default function ChatPage() {
     // Clean up per-tab draft text to prevent unbounded memory growth
     inputValueMapRef.current.delete(tabId);
 
+    // Destroy MessageStore for this tab (cleanup timers, listeners, prevent leak)
+    messageStoreRegistry.destroy(tabId);
+
     // Let closeTab handle map deletion + auto-create of last tab.
     // Do NOT call cleanupTabState before closeTab — it deletes the tab
     // from the map, causing closeTab to early-return and skip the

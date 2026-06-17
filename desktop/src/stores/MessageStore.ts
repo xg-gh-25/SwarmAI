@@ -249,6 +249,10 @@ export class MessageStore {
    */
   startStreaming(messageId: string): void {
     if (this._destroyed) return;
+    // Re-entrant call (reconnection retry) — old stream's queued reconcile is stale
+    if (this._phase === 'streaming') {
+      this._pendingReconcileThunk = null;
+    }
     this._streamingMessageId = messageId;
     this._phase = 'streaming';
     this._resetWatchdog();
