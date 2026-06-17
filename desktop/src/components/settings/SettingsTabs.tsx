@@ -21,8 +21,8 @@ import { isDesktop } from '../../services/tauri';
 /**
  * Width tiers:
  * - 'full'  — no max-width, own padding (data tables like Skills)
- * - '6xl'   — max-w-6xl 1152px (card grids: MCP, Hive, Engine)
- * - '4xl'   — max-w-4xl 896px  (forms: General, AI, Channels, etc.)
+ * - '6xl'   — max-w-5xl 1024px (card grids: MCP, Hive, Engine)
+ * - '4xl'   — max-w-3xl 768px  (forms: General, AI, Channels, etc.)
  */
 const ALL_TABS = [
   { id: 'general', label: 'General', icon: 'settings', width: '4xl' as const },
@@ -39,7 +39,7 @@ const ALL_TABS = [
 ] as const;
 
 const WIDTH_CLASSES = {
-  'full': '',
+  'full': 'p-6',
   '6xl': 'max-w-5xl mx-auto p-6',
   '4xl': 'max-w-3xl mx-auto p-6',
 } as const;
@@ -73,8 +73,8 @@ export default function SettingsTabs({ initialTab }: SettingsTabsProps) {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Tab bar — pinned at top */}
-      <div className="shrink-0 px-6 pt-4 border-b border-[var(--color-border)] overflow-x-auto">
+      {/* Tab bar — pinned at top, gradient hints when overflowing */}
+      <div className="shrink-0 px-6 pt-4 border-b border-[var(--color-border)] overflow-x-auto [mask-image:linear-gradient(to_right,transparent,black_16px,black_calc(100%-16px),transparent)] [-webkit-mask-image:linear-gradient(to_right,transparent,black_16px,black_calc(100%-16px),transparent)]">
         <div className="flex gap-1 justify-center">
           {TABS.map((tab) => (
             <button

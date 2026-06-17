@@ -6,7 +6,7 @@
  *
  * Data fetched from /api/eval/* endpoints via TanStack Query.
  */
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
 
@@ -226,7 +226,7 @@ export default function EvalDashboard() {
         </div>
       </div>
 
-      {/* Tab content — scrollable */}
+      {/* Tab content — scrollable (GoldenSetTab uses h-full + internal overflow, no nested scroll) */}
       <div className="flex-1 min-h-0 overflow-y-auto">
         {activeTab === 'overview' && <OverviewTab />}
         {activeTab === 'golden-set' && <GoldenSetTab />}
@@ -1338,7 +1338,7 @@ function GuideCard({ icon, title, desc }: { icon: string; title: string; desc: s
 
 function Loading() {
   return (
-    <div className="flex items-center justify-center h-40 text-sm text-[var(--color-text-muted)]">
+    <div className="flex items-center justify-center flex-1 min-h-[10rem] text-sm text-[var(--color-text-muted)]">
       Loading eval data...
     </div>
   );
@@ -1346,7 +1346,7 @@ function Loading() {
 
 function ErrorState({ message }: { message: string }) {
   return (
-    <div className="flex items-center justify-center h-40 text-sm text-red-400">
+    <div className="flex items-center justify-center flex-1 min-h-[10rem] text-sm text-red-400">
       {message}
     </div>
   );
@@ -1600,6 +1600,18 @@ function AddCaseModal({ onClose, categories }: { onClose: () => void; categories
     evaluators: 'file_contains',
     affected_by: '',
   });
+
+  // Intercept Escape before parent Modal's document-level handler fires
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopImmediatePropagation();
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', handleEscape, true); // capture phase
+    return () => document.removeEventListener('keydown', handleEscape, true);
+  }, [onClose]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
