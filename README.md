@@ -274,7 +274,7 @@ These projects optimize for one role. We're testing whether one system can compo
 
 <img src="./assets/platform-flywheel.svg" alt="Knowledge Compound Flywheel — 8 channels feed DDD, engines consume and reflect"/>
 
-<img src="./assets/pipeline-architecture.svg" alt="Autonomous Pipeline — 9 stages + convergence loop"/>
+<img src="./assets/pipeline-architecture.svg" alt="Autonomous Pipeline — 3 phases, 10 stages, 2 sub-agents, 2 gates"/>
 
 > 📖 Full docs: [Platform Overview](./docs/DDD-Platform-Overview.md) · [DDD Cultivation Engine](./docs/DDD-Cultivation-Engine-HLD.md) · [Autonomous Pipeline](./docs/Autonomous-Pipeline-Design.md) · [Goal Loop](./docs/Goal-Loop-Design.md) · [Pollinate Engine](./docs/Pollinate-Content-Engine.md)
 

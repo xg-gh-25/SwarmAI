@@ -272,7 +272,7 @@ SwarmAI 基于 Claude Code SDK 构建，向每一个认真的项目学习。差�
 
 <img src="./assets/platform-flywheel.svg" alt="知识复利飞轮 — 8 个 channel 喂养 DDD，引擎消费并反哺"/>
 
-<img src="./assets/pipeline-architecture.svg" alt="自主流水线 — 9 阶段 + 收敛循环"/>
+<img src="./assets/pipeline-architecture.svg" alt="自主流水线 — 3 阶段、10 步骤、2 个子代理、2 道门控"/>
 
 > 📖 完整文档：[平台总览](./docs/DDD-Platform-Overview.md) · [DDD 耕耘引擎](./docs/DDD-Cultivation-Engine-HLD.md) · [自主 Pipeline](./docs/Autonomous-Pipeline-Design.md) · [Goal Loop](./docs/Goal-Loop-Design.md) · [Pollinate 引擎](./docs/Pollinate-Content-Engine.md)
 
