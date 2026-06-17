@@ -34,7 +34,16 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 
 from .compaction_guard import EscalationLevel
-from .session_healing import HealthSensor, HealingLoop, TaskCheckpoint, get_process_rss_mb
+from .session_healing import (
+    WRAP_UP_PROMPT,
+    HealthSensor,
+    HealingLoop,
+    TaskCheckpoint,
+    build_rich_checkpoint,
+    get_process_rss_mb,
+    is_self_heal_enabled,
+    release_canary,
+)
 
 if TYPE_CHECKING:
     from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
@@ -509,6 +518,15 @@ class SessionUnit:
         # Checkpoint built before heal-kill, consumed by next spawn to
         # inject continuation context. None = no pending heal context.
         self._heal_checkpoint: TaskCheckpoint | None = None
+        # Graceful pre-kill: when turn_approaching fires, set this flag
+        # so next send() injects WRAP_UP_PROMPT before the actual kill.
+        # One turn of grace for the agent to finish its thought.
+        self._graceful_wrap_pending: bool = False
+
+        # ── Resume-fallback context preservation ─────────────────
+        # Stable app-level session ID for DB queries in the abandon-
+        # fallback path of _retry_with_resume.  Set at send() entry.
+        self._app_session_id: Optional[str] = None
 
         # ── OOM tracking (persists across send() calls) ───────────
         # Counts consecutive OOM kills for this session.  NOT reset in
