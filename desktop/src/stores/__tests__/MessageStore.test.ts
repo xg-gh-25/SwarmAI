@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * MessageStore unit tests — verifies core operations, phase gating,
  * watchdog timer, rAF notification, and merge algorithm.
@@ -575,6 +576,41 @@ describe('MessageStore — streaming-delta target must exist (new-tab send invar
     store.updateLast(appendTextUpdater(' world'), (m) => m.id === 'assistant-1');
     expect(store.messages).toHaveLength(2);
     expect((store.messages[1].content[0] as { text: string }).text).toBe('hello world');
+    store.destroy();
+  });
+});
+
+// ─── Regression: force-clear recovery must REPLACE, not reconcile ───
+// Bug (2026-06-17): when a stream is force-cleared (backend went unreachable
+// mid-stream) the view holds a temp placeholder with a PARTIAL response. The
+// backend-recovered retry must show the authoritative DB content WITHOUT
+// duplicating the frozen partial. reconcile() preserves local-only messages
+// (temp ids not in DB) → would show partial + full = duplicate. replace()
+// drops the placeholder → clean authoritative view. This locks that choice.
+describe('MessageStore — recovery uses replace (no duplicated frozen partial)', () => {
+  it('replace drops a temp streaming placeholder; reconcile would keep it', () => {
+    // Simulate post-force-clear state: a user msg + a temp partial placeholder.
+    const store = new MessageStore();
+    store.appendMany([
+      makeMsg('user-1', 'user', 'question'),
+      makeMsg('temp-assistant-partial', 'assistant', 'half of the answ'),
+    ]);
+    expect(store.messages).toHaveLength(2);
+
+    // Authoritative DB content for the SAME turn (real ids, complete text).
+    const dbMessages: ChatMessage[] = [
+      makeChatMsg('user-1', 'user', 'question'),
+      makeChatMsg('real-assistant-1', 'assistant', 'half of the answer — and the complete rest'),
+    ];
+
+    // replace() = recovery path: temp placeholder is gone, only authoritative remains.
+    store.replace(dbMessages.map((m) => ({
+      id: m.id, role: m.role, content: m.content as Message['content'], timestamp: m.createdAt,
+    })));
+    const ids = store.messages.map((m) => m.id);
+    expect(store.messages).toHaveLength(2);
+    expect(ids).toContain('real-assistant-1');
+    expect(ids).not.toContain('temp-assistant-partial'); // no duplicated frozen partial
     store.destroy();
   });
 });

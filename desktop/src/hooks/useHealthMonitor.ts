@@ -295,7 +295,7 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
     return () => {
       unlisteners.forEach((p) => p.then((unlisten) => unlisten()));
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- stable: all callbacks read from refs
+  }, []);  
 
   return { state: healthState, checkNow: performHealthCheck };
 }

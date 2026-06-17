@@ -195,9 +195,9 @@ export function ChatInput({
 
   // Cleanup transition timer and inline style on unmount
   useEffect(() => {
+    const el = textareaRef.current;
     return () => {
       if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
-      const el = textareaRef.current;
       if (el) el.style.transition = '';
     };
   }, []);

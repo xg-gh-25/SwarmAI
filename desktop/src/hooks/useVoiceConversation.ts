@@ -257,7 +257,7 @@ export function useVoiceConversation({
         startRecording();
       }
     }, 150);
-  }, [audioPlayer, startRecording]);
+  }, [audioPlayer, startRecording]); // eslint-disable-line react-hooks/exhaustive-deps -- latestTextContent.length omitted to avoid re-triggering
 
   // ─── Stream complete → flush remaining + re-open mic ──────────────
 

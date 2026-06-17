@@ -837,7 +837,7 @@ export default function FileEditorCore({
     // Clear diff comment state
     setActiveDiffPopoverIndex(null);
     setEditingDiffComment(null);
-  }, [initialContent, committedContent, filePath, review.resetReviewMode]);
+  }, [initialContent, committedContent, filePath, review.resetReviewMode]); // eslint-disable-line react-hooks/exhaustive-deps -- review object stable
 
   // Syntax highlighting
   useEffect(() => {

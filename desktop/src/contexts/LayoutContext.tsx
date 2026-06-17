@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useEffect, useState, useCallback, useMemo, ReactNode } from 'react';
 
 // Modal types that can be opened from the left sidebar

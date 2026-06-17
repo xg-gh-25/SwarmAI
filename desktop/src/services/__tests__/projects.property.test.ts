@@ -19,8 +19,6 @@ import {
   historyEntryToCamelCase,
 } from '../workspace';
 import type {
-  Project,
-  ProjectHistoryEntry,
   ProjectUpdateRequest,
 } from '../../types';
 

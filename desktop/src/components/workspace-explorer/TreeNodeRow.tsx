@@ -123,7 +123,7 @@ export function InlineRenameInput({
     const newName = inputRef.current?.value.trim() ?? '';
     // Validate illegal filename characters and reserved names
     if (newName && newName !== name) {
-      if (/[/:\\\0\x01-\x1f\x7f]/.test(newName) || newName === '.' || newName === '..') {
+      if (/[/:\\\0\x01-\x1f\x7f]/.test(newName) || newName === '.' || newName === '..') { // eslint-disable-line no-control-regex -- intentional: detect invalid filename chars
         // Shake the input briefly to signal invalid name, then let user retry
         inputRef.current?.classList.add('animate-shake');
         setTimeout(() => inputRef.current?.classList.remove('animate-shake'), 300);
@@ -234,7 +234,7 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
     document.body.appendChild(ghost);
     e.dataTransfer.setDragImage(ghost, 0, 0);
     requestAnimationFrame(() => document.body.removeChild(ghost));
-  }, [isDirectory, node]);
+  }, [node]);  
 
   /* ---- event handlers ---- */
 

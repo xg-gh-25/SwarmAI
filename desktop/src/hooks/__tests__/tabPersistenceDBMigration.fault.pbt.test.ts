@@ -39,7 +39,7 @@ const DEFAULT_AGENT = 'test-agent';
 // fast-check arbitrary: generate random saved tabs
 // ---------------------------------------------------------------------------
 
-const persistedTabArb = (index: number): fc.Arbitrary<PersistedTab> =>
+const persistedTabArb = (_index: number): fc.Arbitrary<PersistedTab> =>
   fc.record({
     id: fc.uuid(),
     agentId: fc.constant(DEFAULT_AGENT),

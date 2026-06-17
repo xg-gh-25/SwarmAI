@@ -25,7 +25,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
 import * as fc from 'fast-check';
-import { flattenTree, SEMANTIC_ZONES, ROOT_FILES } from './VirtualizedTree';
+import { flattenTree, ROOT_FILES } from './VirtualizedTree';
 import type { FlattenedRow } from './VirtualizedTree';
 import type { TreeNode } from '../../types';
 

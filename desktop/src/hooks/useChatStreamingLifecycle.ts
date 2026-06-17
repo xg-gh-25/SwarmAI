@@ -1140,9 +1140,15 @@ export function useChatStreamingLifecycle(
                 } else {
                   tabState.messages = store.messages;
                 }
+                // Recovery succeeded — clear any prior failure flag.
+                tabState._dbReconcileFailed = false;
               }
             }).catch((err) => {
               console.warn('[useChatStreamingLifecycle] Recovery sync failed:', err);
+              // Backend unreachable — the force-clear left a frozen partial.
+              // Flag for retry; the backend-recovered handler re-reconciles
+              // from DB once the daemon is back.
+              tabState._dbReconcileFailed = true;
             });
           }
         }
@@ -1256,7 +1262,7 @@ export function useChatStreamingLifecycle(
         return next;
       });
     },
-    [], // no dependencies — reads from refs
+    [], // eslint-disable-line react-hooks/exhaustive-deps -- reads from refs
   );
 
   /**
@@ -1275,7 +1281,7 @@ export function useChatStreamingLifecycle(
         tabState.streamGen = streamGenRef.current;
       }
     }
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- reads from refs
 
   // Derive streaming activity for spinner label
   const streamingActivity = useMemo(
@@ -1373,7 +1379,7 @@ export function useChatStreamingLifecycle(
       streamStartTimeRef.current = null;
       setElapsedSeconds(0);
     }
-  }, [isStreaming]); // eslint-disable-line react-hooks/exhaustive-deps — refs are stable
+  }, [isStreaming]); // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
 
   // --- Fix 9: Tick elapsed counter every second while streaming ---
   // Ticks for the entire streaming duration (both "Thinking..." and tool execution).
@@ -1394,7 +1400,7 @@ export function useChatStreamingLifecycle(
     }, 1000);
 
     return () => clearInterval(intervalId);
-  }, [isStreaming]); // eslint-disable-line react-hooks/exhaustive-deps — elapsedSeconds intentionally omitted to avoid restarting the interval on every tick
+  }, [isStreaming]);  
 
   // Long-stream timeout warning removed — the elapsed timer (Fix 9) already
   // shows "Thinking… Xs" when the agent hasn't produced content yet. A blanket
@@ -1428,7 +1434,7 @@ export function useChatStreamingLifecycle(
         }
       }
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps — mount-only
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- mount-only
 
   // --- Stream checkpoint recovery ---
   // If a stream checkpoint exists for the current session (persisted during
@@ -1485,7 +1491,7 @@ export function useChatStreamingLifecycle(
         // Non-fatal — checkpoint recovery is best-effort
       }
     }, 0);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps — mount-only
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- mount-only
 
   // --- Fix 5: Deferred stale entry cleanup ---
   // Scan sessionStorage for stale swarm_chat_pending_* entries on mount.
@@ -1501,7 +1507,7 @@ export function useChatStreamingLifecycle(
     }, STALE_CLEANUP_DELAY_MS);
 
     return () => clearTimeout(timerId);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps — mount-only
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- mount-only
 
   // --- Fix 6: Per-tab state management ---
   // Tab lifecycle methods (saveTabState, restoreTabState, initTabState,
@@ -2021,7 +2027,7 @@ export function useChatStreamingLifecycle(
             removePendingState(resultSessionId);
             // Also clean up streaming checkpoint (written during long runs).
             // Without this, sessionStorage fills with stale blobs over time.
-            try { window.sessionStorage.removeItem(`swarm_stream_checkpoint_${resultSessionId}`); } catch {}
+            try { window.sessionStorage.removeItem(`swarm_stream_checkpoint_${resultSessionId}`); } catch { /* best-effort cleanup */ }
           }
 
           if (!hasQueuedMessage) {
@@ -2624,7 +2630,7 @@ export function useChatStreamingLifecycle(
         // longer processed — TSCC fetches metadata from the endpoint instead.
       };
     },
-    [queryClient, setIsStreaming, incrementStreamGen, updateTabStatus, addToast],
+    [queryClient, setIsStreaming, incrementStreamGen, updateTabStatus, addToast], // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
   );
 
   const createErrorHandler = useCallback(
@@ -2899,7 +2905,7 @@ export function useChatStreamingLifecycle(
         }
       };
     },
-    [setIsStreaming, incrementStreamGen, addToast, updateTabStatus],
+    [setIsStreaming, incrementStreamGen, addToast, updateTabStatus], // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
   );
 
   /**
@@ -2969,7 +2975,7 @@ export function useChatStreamingLifecycle(
       // representations can never drift out of sync.
       setIsStreaming(false, capturedTabId ?? undefined);
     };
-  }, [setIsStreaming]);
+  }, [setIsStreaming]); // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
 
   /**
    * Create a handler for premature SSE disconnects (HTTP stream closed
@@ -3028,7 +3034,7 @@ export function useChatStreamingLifecycle(
         }
       }
     };
-  }, [setIsStreaming]);
+  }, [setIsStreaming]); // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
 
   /**
    * Remove a specific tab from ``pendingStreamTabs``. Called by ChatPage
@@ -3089,7 +3095,7 @@ export function useChatStreamingLifecycle(
 
     // Sync isWaitingForBusy for the new active tab
     setIsWaitingForBusy(tabState?.isWaitingForBusy ?? false);
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- reads from refs
 
   // --- Return lifecycle interface ---
   return {

@@ -60,10 +60,10 @@ describe('Bug 2: extractFilePath handles edit/search prefixes', () => {
     // For now, test the extractFilePath function if exported
     try {
       const mod = await import('../pages/chat/components/MergedToolBlock');
-      extractFilePath = (mod as any).extractFilePath;
+      extractFilePath = (mod as unknown as { extractFilePath: typeof extractFilePath }).extractFilePath;
     } catch {
       // If not exported, we'll test categories only
-      extractFilePath = null as any;
+      extractFilePath = null as unknown as typeof extractFilePath;
     }
   });
 

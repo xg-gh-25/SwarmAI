@@ -64,7 +64,7 @@ function createDefaultChatInputProps(overrides: Partial<Parameters<typeof ChatIn
   };
 }
 
-function createMockUnifiedAttachment(overrides: Partial<UnifiedAttachment> = {}): UnifiedAttachment {
+function _createMockUnifiedAttachment(overrides: Partial<UnifiedAttachment> = {}): UnifiedAttachment {
   return {
     id: `att-${Math.random().toString(36).substr(2, 6)}`,
     name: 'test-file.ts',

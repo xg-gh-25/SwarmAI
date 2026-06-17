@@ -30,14 +30,14 @@ export function SwarmOutputSection({ output }: SwarmOutputSectionProps) {
   const hasFiles = output.files.length > 0;
   const totalCount = output.builds.length + output.content.length + output.files.length;
 
-  if (totalCount === 0) return null;
-
   const tabs: OutputTab[] = [];
   if (hasBuild) tabs.push('builds');
   if (hasContent) tabs.push('content');
   if (hasFiles) tabs.push('files');
 
   const [activeTab, setActiveTab] = useState<OutputTab>(tabs[0]);
+
+  if (totalCount === 0) return null;
 
   // Guard: if active tab's data disappears on refresh, fall back to first available
   const effectiveTab = tabs.includes(activeTab) ? activeTab : tabs[0];

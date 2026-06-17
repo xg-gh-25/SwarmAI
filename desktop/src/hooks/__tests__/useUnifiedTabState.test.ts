@@ -19,9 +19,8 @@ import { renderHook, act } from '@testing-library/react';
 import {
   useUnifiedTabState,
   MAX_OPEN_TABS,
-  MAX_OPEN_TABS_FALLBACK,
 } from '../useUnifiedTabState';
-import type { UnifiedTab, TabStatus, SerializableTab } from '../useUnifiedTabState';
+import type { TabStatus } from '../useUnifiedTabState';
 
 // ---------------------------------------------------------------------------
 // API mock — provide a default /system/max-tabs response so the hook's
@@ -35,7 +34,7 @@ vi.mock('../../services/api', () => ({
   },
 }));
 
-import api from '../../services/api';
+import _api from '../../services/api';
 
 // ---------------------------------------------------------------------------
 // localStorage mock
@@ -78,7 +77,7 @@ beforeEach(() => {
 const DEFAULT_AGENT = 'test-agent';
 
 /** Render the hook with a fresh localStorage and fetch dynamic tab limits. */
-function renderUnifiedHook(agentId = DEFAULT_AGENT) {
+function _renderUnifiedHook(agentId = DEFAULT_AGENT) {
   return renderHook(() => useUnifiedTabState(agentId));
 }
 

@@ -28,11 +28,10 @@ import * as fc from 'fast-check';
 import {
   useChatStreamingLifecycle,
 } from '../hooks/useChatStreamingLifecycle';
-import type { UnifiedTab, TabStatus } from '../hooks/useUnifiedTabState';
-import type { Message } from '../types';
+import type { TabStatus } from '../hooks/useUnifiedTabState';
 import {
   testTabMap,
-  testTabMapRef,
+  testTabMapRef as _testTabMapRef,
   testActiveTabIdRef,
   createMockDeps,
   initTestTab,

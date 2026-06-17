@@ -475,7 +475,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     () => fileViewerFile
       ? { filePath: fileViewerFile.filePath, fileName: fileViewerFile.fileName }
       : null,
-    [fileViewerFile?.filePath, fileViewerFile?.fileName],
+    [fileViewerFile?.filePath, fileViewerFile?.fileName], // eslint-disable-line react-hooks/exhaustive-deps -- intentional subset deps
   );
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('swarm:editor-file-changed', {

@@ -47,7 +47,7 @@ function wouldReconcileClear(state: StreamingState, streamAgeMs: number): boolea
 describe('Drain lifecycle: STREAMING → RESULT_WITH_QUEUE', () => {
   it('result event with queuedMessage → sets drainPending, keeps isStreaming', () => {
     // Before: agent streaming, user queued a message
-    const before: StreamingState = {
+    const _before: StreamingState = {
       isStreaming: true,
       drainPending: false,
       queuedMessage: 'user follow-up',
@@ -72,7 +72,7 @@ describe('Drain lifecycle: STREAMING → RESULT_WITH_QUEUE', () => {
   });
 
   it('result event WITHOUT queuedMessage → clears isStreaming immediately', () => {
-    const before: StreamingState = {
+    const _before: StreamingState = {
       isStreaming: true,
       drainPending: false,
       queuedMessage: null,
@@ -100,7 +100,7 @@ describe('Drain lifecycle: STREAMING → RESULT_WITH_QUEUE', () => {
 
 describe('Drain lifecycle: DRAIN_PENDING → DRAIN_ACTIVE', () => {
   it('drain fires → clears drainPending, starts new stream', () => {
-    const before: StreamingState = {
+    const _before: StreamingState = {
       isStreaming: true,
       drainPending: true,
       queuedMessage: 'user follow-up',
@@ -145,7 +145,7 @@ describe('Drain lifecycle: DRAIN_PENDING → DRAIN_ACTIVE', () => {
 
 describe('Drain lifecycle: DRAIN_PENDING → DRAIN_FAILED', () => {
   it('drain throws → clears drainPending, restores queuedMessage, clears isStreaming', () => {
-    const before: StreamingState = {
+    const _before: StreamingState = {
       isStreaming: true,
       drainPending: true,
       queuedMessage: null,  // cleared before send attempt

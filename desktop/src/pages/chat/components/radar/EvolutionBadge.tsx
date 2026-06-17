@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 /**
  * Evolution session badge for the Swarm Radar panel.
  *
@@ -56,8 +57,6 @@ interface EvolutionBadgeProps {
 
 /** Compact badge showing evolution count with trigger-type breakdown on hover. */
 export function EvolutionBadge({ counts }: EvolutionBadgeProps) {
-  if (counts.total === 0) return null;
-
   const breakdown = useMemo(() => {
     const parts: string[] = [];
     if (counts.reactive > 0) parts.push(`⚡${counts.reactive}`);
@@ -65,6 +64,8 @@ export function EvolutionBadge({ counts }: EvolutionBadgeProps) {
     if (counts.stuck > 0) parts.push(`🔄${counts.stuck}`);
     return parts.join(' ');
   }, [counts.reactive, counts.proactive, counts.stuck]);
+
+  if (counts.total === 0) return null;
 
   return (
     <span

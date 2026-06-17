@@ -82,7 +82,7 @@ describe('extractSentences — CJK', () => {
 
 describe('extractSentences — abbreviations', () => {
   it('does not split on Mr.', () => {
-    const { sentences, remaining } = extractSentences(
+    const { sentences, remaining: _remaining } = extractSentences(
       'Mr. Smith went to the store. '
     );
     expect(sentences).toEqual(['Mr. Smith went to the store.']);
@@ -277,7 +277,7 @@ describe('extractSentences — edge cases', () => {
 
   it('handles multiple consecutive periods (ellipsis)', () => {
     // "..." should not create 3 sentence breaks
-    const { sentences, remaining } = extractSentences(
+    const { sentences, remaining: _remaining } = extractSentences(
       'Well... let me think about it. '
     );
     // The ellipsis might create issues, but should not crash

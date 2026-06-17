@@ -51,7 +51,7 @@ describe('Workspace Config Service - Unit Tests', () => {
 
     it('should handle undefined optional fields', () => {
       const data = { ...sampleBackendConfig, icon: undefined, context: undefined };
-      const result = configToCamelCase(data as any);
+      const result = configToCamelCase(data as Record<string, unknown>);
       expect(result.icon).toBeUndefined();
       expect(result.context).toBeUndefined();
     });

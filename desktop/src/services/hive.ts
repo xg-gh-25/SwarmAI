@@ -68,11 +68,11 @@ export interface VerifyResult {
 
 // ── snake_case → camelCase helper ──────────────────────────────────
 
-function toCamel(obj: Record<string, any>): any {
-  const result: Record<string, any> = {};
+function toCamel(obj: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(obj)) {
     const camelKey = k.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
-    result[camelKey] = v && typeof v === 'object' && !Array.isArray(v) ? toCamel(v) : v;
+    result[camelKey] = v && typeof v === 'object' && !Array.isArray(v) ? toCamel(v as Record<string, unknown>) : v;
   }
   return result;
 }

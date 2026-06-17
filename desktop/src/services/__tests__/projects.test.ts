@@ -77,25 +77,25 @@ describe('Project Service - Unit Tests', () => {
 
     it('should default description to empty string when missing', () => {
       const data = { ...sampleBackendProject, description: undefined };
-      const result = projectToCamelCase(data as any);
+      const result = projectToCamelCase(data as Record<string, unknown>);
       expect(result.description).toBe('');
     });
 
     it('should default path to empty string when missing', () => {
       const data = { ...sampleBackendProject, path: undefined };
-      const result = projectToCamelCase(data as any);
+      const result = projectToCamelCase(data as Record<string, unknown>);
       expect(result.path).toBe('');
     });
 
     it('should handle undefined priority', () => {
       const data = { ...sampleBackendProject, priority: undefined };
-      const result = projectToCamelCase(data as any);
+      const result = projectToCamelCase(data as Record<string, unknown>);
       expect(result.priority).toBeUndefined();
     });
 
     it('should handle undefined context fields', () => {
       const data = { ...sampleBackendProject, context_l0: undefined, context_l1: undefined };
-      const result = projectToCamelCase(data as any);
+      const result = projectToCamelCase(data as Record<string, unknown>);
       expect(result.contextL0).toBeUndefined();
       expect(result.contextL1).toBeUndefined();
     });

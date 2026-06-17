@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components, react-hooks/exhaustive-deps */
 /**
  * Main chat page component for SwarmAI.
  *
@@ -432,6 +433,38 @@ export default function ChatPage() {
     }
   }, [setMessages, setSessionId, setPendingQuestion, setIsLoadingHistory]);
 
+  // Re-reconcile a tab's view from the authoritative DB content. Used when a
+  // stream was force-cleared but the inline DB-recovery fetch failed (backend
+  // unreachable) — leaving a frozen partial response. Uses store.replace (not
+  // reconcile) so the temp streaming placeholder is dropped, not duplicated.
+  // Guarded against streaming (replace is a no-op mid-stream).
+  const reconcileTabFromDb = useCallback(async (tabId: string) => {
+    const tab = tabMapRef.current.get(tabId);
+    if (!tab || !tab.sessionId || tab.isStreaming) return;
+    const sid = tab.sessionId;
+    try {
+      const msgs = await chatService.getSessionMessagesPaginated(sid, INITIAL_MESSAGE_LOAD_LIMIT);
+      const tabNow = tabMapRef.current.get(tabId);
+      // Guards: tab gone, session changed, or streaming restarted during fetch.
+      if (!tabNow || tabNow.sessionId !== sid || tabNow.isStreaming) return;
+      const formatted: Message[] = msgs.map(toDisplayMessage);
+      const store = messageStoreRegistry.getOrCreate(tabId);
+      if (store.phase !== 'idle') return;
+      store.replace(formatted);
+      tabNow.messages = formatted;
+      tabNow._dbReconcileFailed = false;
+      if (tabId === activeTabIdRef.current) {
+        setMessages(formatted);
+        setSessionId(sid);
+      }
+      console.log(`[ChatPage] Recovery reconcile succeeded for tab ${tabId} (${formatted.length} msgs)`);
+    } catch (err) {
+      // Still unreachable — keep _dbReconcileFailed=true so the next
+      // backend-recovered event retries.
+      console.warn(`[ChatPage] Recovery reconcile retry failed for tab ${tabId}:`, err);
+    }
+  }, [tabMapRef, activeTabIdRef, setMessages, setSessionId]);
+
   // Backend recovery: when health transitions disconnected → connected,
   // useHealthMonitor dispatches 'swarm:backend-recovered'. We clear
   // any error state on the active tab and re-sync messages (the last
@@ -455,10 +488,19 @@ export default function ChatPage() {
       } else {
         console.log(`[ChatPage] Backend recovered — active tab ${activeId}, skipping refetch (messages in-memory)`);
       }
+      // Retry DB reconcile for ANY tab (active or background) whose force-clear
+      // recovery fetch previously failed — these have a frozen PARTIAL response
+      // (messages.length > 0), so the empty-state branch above skips them.
+      for (const [tabId, ts] of tabMapRef.current.entries()) {
+        if (ts._dbReconcileFailed && ts.sessionId && !ts.isStreaming) {
+          console.log(`[ChatPage] Backend recovered — retrying DB reconcile for frozen tab ${tabId}`);
+          reconcileTabFromDb(tabId);
+        }
+      }
     };
     window.addEventListener('swarm:backend-recovered', handleBackendRecovered);
     return () => window.removeEventListener('swarm:backend-recovered', handleBackendRecovered);
-  }, [loadSessionMessages]);
+  }, [loadSessionMessages, reconcileTabFromDb]);
 
   // Load older messages for infinite scroll (paginated)
   const loadOlderMessages = useCallback(async () => {
@@ -802,7 +844,7 @@ export default function ChatPage() {
       container.scrollTop = container.scrollHeight - prevScrollHeightRef.current;
       prevScrollHeightRef.current = 0;
     }
-  }, [messages]); // eslint-disable-line react-hooks/exhaustive-deps — fires after prepend
+  }, [messages]);
 
   // Tab-switch scroll restoration — fires synchronously after React commits
   // the new messages to the DOM but BEFORE the browser paints. This eliminates
@@ -829,7 +871,7 @@ export default function ChatPage() {
     const threshold = 100;
     const isNearBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - threshold;
     userScrolledUpRef.current = !isNearBottom;
-  }, [messages]); // eslint-disable-line react-hooks/exhaustive-deps — fires on messages change from tab switch
+  }, [messages]);
 
   // Log time-to-interactive when messagesReady becomes true (Req 8.4)
   useEffect(() => {
@@ -854,7 +896,7 @@ export default function ChatPage() {
       });
     }
     // Only fire once when messagesReady transitions to true — not on every message change
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [messagesReady]);
 
   // Register the initial/default tab in the per-tab state map on mount.
@@ -864,7 +906,7 @@ export default function ChatPage() {
     if (activeTabId && !tabMapRef.current.has(activeTabId)) {
       initTabState(activeTabId, messages.length > 0 ? messages : []);
     }
-  }, [activeTabId]); // eslint-disable-line react-hooks/exhaustive-deps — mount-only for initial tab
+  }, [activeTabId]);
 
   /**
    * File-based tab restore: load tab state from ~/.swarm-ai/open_tabs.json
@@ -983,7 +1025,7 @@ export default function ChatPage() {
 
     doRestore();
     return () => { mounted = false; };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps — mount-only
+  }, []);
 
   // ── Dynamic tab limit polling (Req 5.1, 6.4) ────────────────────────
   // Fetch max tabs on mount and poll every 30 seconds for memory pressure.

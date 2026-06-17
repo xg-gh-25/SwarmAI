@@ -50,7 +50,7 @@ vi.mock('../../contexts/ExplorerContext', () => ({
 // Mock HealthContext — we need a real React context for Provider to work.
 // vi.hoisted runs before vi.mock hoisting, so the context is available.
 const { _mockHealthCtx } = vi.hoisted(() => {
-  const { createContext } = require('react');
+  const { createContext } = require('react'); // eslint-disable-line @typescript-eslint/no-require-imports -- vi.hoisted runs before ESM imports
   return { _mockHealthCtx: createContext(undefined) };
 });
 vi.mock('../../contexts/HealthContext', () => ({

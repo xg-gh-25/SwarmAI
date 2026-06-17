@@ -149,7 +149,7 @@ function RateLimitCountdownInline({ retryAfterSec }: { retryAfterSec: number }) 
       });
     }, 1000);
     return () => clearInterval(timer);
-  }, [retryAfterSec]); // restart timer when retryAfterSec changes
+  }, [retryAfterSec]); // eslint-disable-line react-hooks/exhaustive-deps -- remaining omitted to avoid restarting interval
 
   if (remaining <= 0) {
     return (

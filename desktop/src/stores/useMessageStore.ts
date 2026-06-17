@@ -41,7 +41,7 @@ export function useMessageStore(
   const store = useMemo(() => {
     if (!tabId) return null;
     return messageStoreRegistry.getOrCreate(tabId, options);
-  }, [tabId]); // eslint-disable-line react-hooks/exhaustive-deps — options intentionally excluded (only used on creation)
+  }, [tabId]); // eslint-disable-line react-hooks/exhaustive-deps -- options intentionally excluded (only used on creation)
 
   // Reactive messages state — synced from store via subscription
   const [messages, setMessages] = useState<Message[]>(() => store?.messages ?? []);

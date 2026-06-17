@@ -163,7 +163,7 @@ describe('OnboardingPage — no dead-ends', () => {
 
     // Wait for any interval fires (3s+) — should NOT reset to step 2
     // The interval should have been cleared, so callCount should stay low
-    const countAfterAdvance = callCount;
+    const _countAfterAdvance = callCount;
 
     // Advance time by 4s to let any stale interval fire
     await act(async () => {

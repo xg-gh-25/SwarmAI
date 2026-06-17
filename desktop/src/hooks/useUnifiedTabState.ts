@@ -177,6 +177,10 @@ export interface UnifiedTab {
   /** Resume timeout handle — auto-clears isResuming after 60s if no data arrives.
    *  Prevents permanent "Resuming session..." spinner when --resume hangs. */
   _resumeTimeoutId?: ReturnType<typeof setTimeout>;
+  /** Set true when the reconcile loop force-cleared this tab but the DB-recovery
+   *  fetch failed (backend unreachable) — leaving a frozen partial response.
+   *  The backend-recovered handler retries the DB reconcile for flagged tabs. */
+  _dbReconcileFailed?: boolean;
 }
 
 /** Fields persisted to ~/.swarm-ai/open_tabs.json (re-exported from tabPersistence service). */
@@ -724,7 +728,7 @@ export function useUnifiedTabState(
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [renderCounter, activeTabId]);
 
   // ---- Return object ------------------------------------------------------

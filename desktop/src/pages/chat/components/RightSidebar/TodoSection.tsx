@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 /**
  * ToDo section for the Radar sidebar with lifecycle actions.
  *

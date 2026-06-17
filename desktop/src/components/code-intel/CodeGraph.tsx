@@ -74,6 +74,7 @@ export function CodeGraph({ project, limit = 300, onClose }: CodeGraphProps) {
   const [error, setError] = useState<string | null>(null);
   const [hoveredNode, setHoveredNode] = useState<ForceGraphNode | null>(null);
   const [focusedNode, setFocusedNode] = useState<ForceGraphNode | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- ForceGraph2D ref type requires complex generics
   const graphRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });

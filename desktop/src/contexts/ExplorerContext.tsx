@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 /**
  * Explorer context for the SwarmWS Workspace Explorer.
  *
@@ -270,7 +271,7 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
       setIsLoading(false);
     }
   // lastTreeRef is a stable ref — safe to omit from deps
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, []);
 
   const refreshTree = useCallback(async () => {
@@ -285,7 +286,7 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
       setError(message);
     }
   // lastTreeRef is a stable ref — safe to omit from deps
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, []);
 
   useEffect(() => {

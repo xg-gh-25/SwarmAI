@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 /**
  * VirtualizedTree — renders the workspace explorer as a virtualized flat list.
  *
@@ -525,6 +526,41 @@ function RowRenderer(props: {
   }
 
   // ── Normal node row ─────────────────────────────────────────────────
+  return (
+    <NodeRow
+      row={row}
+      selectedPath={selectedPath}
+      renamingPath={renamingPath}
+      dragOverPath={dragOverPath}
+      toggleExpand={toggleExpand}
+      setSelectedPath={setSelectedPath}
+      onFileDoubleClick={onFileDoubleClick}
+      onContextMenu={onContextMenu}
+      onRenameSubmit={onRenameSubmit}
+      onRenameCancel={onRenameCancel}
+      onDragOverPath={onDragOverPath}
+      onDropOnFolder={onDropOnFolder}
+      style={style}
+    />
+  );
+}
+
+/** Extracted node row component — hooks are always called unconditionally here. */
+function NodeRow({ row, selectedPath, renamingPath, dragOverPath, toggleExpand, setSelectedPath, onFileDoubleClick, onContextMenu, onRenameSubmit, onRenameCancel, onDragOverPath, onDropOnFolder, style }: {
+  row: Extract<FlattenedRow, { kind: 'node' }>;
+  selectedPath: string | null;
+  renamingPath: string | null;
+  dragOverPath: string | null;
+  toggleExpand: (path: string) => void;
+  setSelectedPath: (path: string | null) => void;
+  onFileDoubleClick?: (node: FileTreeItem) => void;
+  onContextMenu: (e: React.MouseEvent, node: TreeNode) => void;
+  onRenameSubmit: (oldPath: string, newName: string) => void;
+  onRenameCancel: () => void;
+  onDragOverPath: (path: string | null) => void;
+  onDropOnFolder: (targetDirPath: string, e: React.DragEvent) => void;
+  style: React.CSSProperties;
+}) {
   const { node, depth, isMatched, isExpanded } = row;
 
   /** Bridge TreeNode → FileTreeItem for the file editor modal. */
@@ -536,7 +572,7 @@ function RowRenderer(props: {
 
   const handleToggle = useCallback(() => toggleExpand(node.path), [toggleExpand, node.path]);
   const handleSelect = useCallback(() => setSelectedPath(node.path), [setSelectedPath, node.path]);
-  const handleContextMenu = useCallback(
+  const handleContextMenu_ = useCallback(
     (e: React.MouseEvent) => onContextMenu(e, node),
     [onContextMenu, node],
   );
@@ -590,7 +626,7 @@ function RowRenderer(props: {
       isDragOver={dragOverPath === node.path}
       onToggle={handleToggle}
       onSelect={handleSelect}
-      onContextMenu={handleContextMenu}
+      onContextMenu={handleContextMenu_}
       onDoubleClick={handleDoubleClick}
       onRenameSubmit={handleRenameSubmit}
       onRenameCancel={onRenameCancel}
@@ -638,7 +674,7 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
   const toggleSectionCollapse = useCallback((label: string) => {
     setSectionCollapsed((prev) => {
       const next = { ...prev, [label]: !prev[label] };
-      try { localStorage.setItem(`explorer-section-${label}`, String(next[label])); } catch {}
+      try { localStorage.setItem(`explorer-section-${label}`, String(next[label])); } catch { /* localStorage unavailable */ }
       return next;
     });
   }, []);

@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 /**
  * Merged tool call + result block — renders a tool_use summary with its
  * corresponding tool_result inline as a single visual unit.

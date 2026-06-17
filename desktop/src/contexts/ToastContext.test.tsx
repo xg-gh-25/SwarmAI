@@ -16,7 +16,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { type ReactNode } from 'react';
 import { ToastProvider, useToast } from './ToastContext';
-import type { ToastOptions } from '../types';
 
 // ---------------------------------------------------------------------------
 // Helpers

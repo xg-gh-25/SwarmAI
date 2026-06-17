@@ -13,8 +13,7 @@
  * 9. react-window virtualization performance preserved
  */
 
-import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { render, cleanup, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect } from 'vitest';
 import type { TreeNode } from '../../types';
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -53,8 +53,8 @@ export async function getCodeIntelSummary(project: string): Promise<CodeIntelSum
   try {
     const resp = await api.get<RawCodeIntelSummary>(`/code-intel/${encodeURIComponent(project)}/summary`);
     return toCamelCase(resp.data);
-  } catch (err: any) {
-    if (err?.response?.status === 404) return null;
+  } catch (err: unknown) {
+    if (err && typeof err === 'object' && 'response' in err && (err as { response?: { status?: number } }).response?.status === 404) return null;
     throw err;
   }
 }
@@ -98,8 +98,8 @@ export async function getCodeIntelGraph(project: string, limit: number = 300): P
       { params: { limit } }
     );
     return resp.data;
-  } catch (err: any) {
-    if (err?.response?.status === 404) return null;
+  } catch (err: unknown) {
+    if (err && typeof err === 'object' && 'response' in err && (err as { response?: { status?: number } }).response?.status === 404) return null;
     throw err;
   }
 }

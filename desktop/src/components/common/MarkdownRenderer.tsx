@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { useEffect, useRef, useState, useMemo, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { PluggableList } from 'unified';

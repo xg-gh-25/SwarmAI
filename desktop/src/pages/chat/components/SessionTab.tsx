@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { forwardRef } from 'react';
 import clsx from 'clsx';
 import type { OpenTab } from '../types';

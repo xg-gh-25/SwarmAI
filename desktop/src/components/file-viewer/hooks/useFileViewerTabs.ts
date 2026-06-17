@@ -64,7 +64,7 @@ export function useFileViewerTabs(): UseFileViewerTabsReturn {
         }
 
         // Overflow eviction
-        let next = [...prev];
+        const next = [...prev];
         if (next.length >= MAX_TABS) {
           const evictIdx = next.findIndex((t) => !t.isDirty);
           if (evictIdx === -1) {

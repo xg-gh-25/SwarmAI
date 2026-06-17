@@ -62,7 +62,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { renderHook, act, render, screen } from '@testing-library/react';
+import { renderHook, act, render } from '@testing-library/react';
 import {
   useChatStreamingLifecycle,
   deriveStreamingActivity,
@@ -79,10 +79,9 @@ import {
   PERSISTED_STATE_VERSION,
 } from '../hooks/useChatStreamingLifecycle';
 import { MAX_OPEN_TABS } from '../hooks/useUnifiedTabState';
-import type { UnifiedTab } from '../hooks/useUnifiedTabState';
+// UnifiedTab type removed — not directly referenced in tests
 import type { TabStatus } from '../hooks/useUnifiedTabState';
 import type {
-  ChatStreamingLifecycleDeps,
   PersistedPendingState,
 } from '../hooks/useChatStreamingLifecycle';
 import { TabStatusIndicator } from '../pages/chat/components/TabStatusIndicator';
@@ -92,7 +91,7 @@ import type { PendingQuestion } from '../pages/chat/types';
 import type { Message, ContentBlock } from '../types';
 import {
   testTabMap,
-  testTabMapRef,
+  testTabMapRef as _testTabMapRef,
   testActiveTabIdRef,
   createMockDeps,
   initTestTab,
@@ -732,7 +731,7 @@ describe('Fix 1: Stream generation counter', () => {
 describe('Fix 6: Per-tab state isolation', () => {
   describe('initTabState', () => {
     it('creates a new tab entry with defaults', () => {
-      const { result } = renderHook(() =>
+      const { result: _result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
 
@@ -752,7 +751,7 @@ describe('Fix 6: Per-tab state isolation', () => {
     });
 
     it('sets the new tab as active', () => {
-      const { result } = renderHook(() =>
+      const { result: _result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
 
@@ -764,7 +763,7 @@ describe('Fix 6: Per-tab state isolation', () => {
     });
 
     it('accepts initial messages', () => {
-      const { result } = renderHook(() =>
+      const { result: _result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
 
@@ -814,7 +813,7 @@ describe('Fix 6: Per-tab state isolation', () => {
     });
 
     it('restores tab state from per-tab map on switch back', () => {
-      const { result } = renderHook(() =>
+      const { result: _result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
 
@@ -882,7 +881,7 @@ describe('Fix 6: Per-tab state isolation', () => {
     });
 
     it('preserves per-tab isolation across round-trip switches', () => {
-      const { result } = renderHook(() =>
+      const { result: _result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
 
@@ -1077,7 +1076,7 @@ describe('Fix 6: Per-tab state isolation', () => {
 
   describe('per-tab abort controller isolation', () => {
     it('each tab has its own abort controller instance', () => {
-      const { result } = renderHook(() =>
+      const { result: _result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
 
@@ -1114,7 +1113,7 @@ describe('Fix 6: Per-tab state isolation', () => {
     });
 
     it('aborting active tab controller does not affect background tab', () => {
-      const { result } = renderHook(() =>
+      const { result: _result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
 
@@ -1199,7 +1198,7 @@ describe('Fix 6: Per-tab state isolation', () => {
 
   describe('per-tab pendingQuestion isolation', () => {
     it('switching tabs does not show source tab question in target', () => {
-      const { result } = renderHook(() =>
+      const { result: _result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
 
@@ -1256,7 +1255,7 @@ describe('Fix 6: Per-tab state isolation', () => {
 
   describe('tab close cleanup', () => {
     it('removes entry from tab map on cleanup', () => {
-      const { result } = renderHook(() =>
+      const { result: _result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
 
@@ -1308,7 +1307,7 @@ describe('Fix 6: Per-tab state isolation', () => {
     });
 
     it('handles cleanup of non-existent tab gracefully', () => {
-      const { result } = renderHook(() =>
+      const { result: _result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
 
@@ -2428,7 +2427,7 @@ describe('Fix 7: Tab limit enforcement', () => {
 
   describe('tab status cleanup on close', () => {
     it('removes tabStatuses entry when tab is closed', () => {
-      const { result } = renderHook(() =>
+      const { result: _result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
 
@@ -2460,7 +2459,7 @@ describe('Fix 8: Tab status indicators', () => {
   });
   describe('updateTabStatus', () => {
     it('updates tab map entry status in sync', () => {
-      const { result } = renderHook(() =>
+      const { result: _result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
 
@@ -2486,7 +2485,7 @@ describe('Fix 8: Tab status indicators', () => {
     });
 
     it('guard: no re-render when status has not changed', () => {
-      const { result } = renderHook(() =>
+      const { result: _result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
 
@@ -2523,7 +2522,7 @@ describe('Fix 8: Tab status indicators', () => {
 
   describe('tab status transitions', () => {
     it('idle → streaming', () => {
-      const { result } = renderHook(() =>
+      const { result: _result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
 
@@ -2542,7 +2541,7 @@ describe('Fix 8: Tab status indicators', () => {
     });
 
     it('streaming → waiting_input', () => {
-      const { result } = renderHook(() =>
+      const { result: _result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
 
@@ -2561,7 +2560,7 @@ describe('Fix 8: Tab status indicators', () => {
     });
 
     it('streaming → error', () => {
-      const { result } = renderHook(() =>
+      const { result: _result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
 
@@ -2577,7 +2576,7 @@ describe('Fix 8: Tab status indicators', () => {
     });
 
     it('streaming → complete_unread (background tab)', () => {
-      const { result } = renderHook(() =>
+      const { result: _result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
 
@@ -2593,7 +2592,7 @@ describe('Fix 8: Tab status indicators', () => {
     });
 
     it('complete_unread → idle (tab switch)', () => {
-      const { result } = renderHook(() =>
+      const { result: _result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
 
@@ -2611,7 +2610,7 @@ describe('Fix 8: Tab status indicators', () => {
     });
 
     it('streaming → permission_needed', () => {
-      const { result } = renderHook(() =>
+      const { result: _result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
 
@@ -2629,7 +2628,7 @@ describe('Fix 8: Tab status indicators', () => {
 
   describe('tab status initialization', () => {
     it('new tab starts with idle status', () => {
-      const { result } = renderHook(() =>
+      const { result: _result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
 
@@ -2646,7 +2645,7 @@ describe('Fix 8: Tab status indicators', () => {
 
   describe('tab status cleanup', () => {
     it('closing tab removes entry from tabStatuses', () => {
-      const { result } = renderHook(() =>
+      const { result: _result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
 

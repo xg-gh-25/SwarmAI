@@ -23,9 +23,7 @@ export default function SettingsModal({ isOpen, onClose, initialTab }: SettingsM
       title="Settings"
       size="fullscreen"
     >
-      <div className="absolute inset-0 flex flex-col">
-        <SettingsPage initialTab={initialTab} />
-      </div>
+      <SettingsPage initialTab={initialTab} />
     </Modal>
   );
 }

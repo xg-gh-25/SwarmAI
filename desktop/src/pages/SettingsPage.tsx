@@ -11,5 +11,9 @@ interface SettingsPageProps {
 }
 
 export default function SettingsPage({ initialTab }: SettingsPageProps) {
-  return <SettingsTabs initialTab={initialTab} />;
+  return (
+    <div className="flex flex-col flex-1 min-h-0">
+      <SettingsTabs initialTab={initialTab} />
+    </div>
+  );
 }

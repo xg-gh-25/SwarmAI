@@ -113,7 +113,7 @@ function WorkingFileItem({
         path: node.path,
         workspaceId: DEFAULT_WORKSPACE_ID,
         workspaceName: 'SwarmWS',
-        gitStatus: node.gitStatus as any,
+        gitStatus: node.gitStatus,
       });
     }
   };
