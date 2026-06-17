@@ -26,6 +26,12 @@ import '@fontsource-variable/material-symbols-outlined';
 import './i18n';  // Initialize i18n before App
 import App from './App';
 import './index.css';
+import { initLogForwarder } from './services/logForwarder';
+
+// Persist frontend console errors/warnings to ~/.swarm-ai/logs/frontend.log
+// so UI issues can be diagnosed from logs without opening DevTools. Must run
+// before render so early errors are captured. Idempotent + best-effort.
+initLogForwarder();
 
 const rootElement = document.getElementById('root');
 if (rootElement) {

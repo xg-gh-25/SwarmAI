@@ -14,7 +14,7 @@ import httpx
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from config import get_bedrock_model_id
+from config import get_bedrock_model_id, get_app_data_dir
 from jobs.paths import PORT_FILE
 from database import db
 from core.agent_defaults import build_agent_config, DEFAULT_AGENT_ID
@@ -1004,3 +1004,60 @@ async def restore_backup(body: RestoreBody):
             yield f"data: {_json.dumps(event)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+# ── Frontend log forwarding (observability) ──────────────────────
+# The production webview console is not persisted anywhere — diagnosing UI
+# issues required asking the user to open DevTools. This endpoint receives
+# batched console errors/warnings + uncaught errors from the frontend and
+# appends them to ~/.swarm-ai/logs/frontend.log so they can be grepped.
+
+_FRONTEND_LOG_MAX_BYTES = 5 * 1024 * 1024  # 5MB cap (truncate-from-head on exceed)
+
+
+class ClientLogEntry(BaseModel):
+    """A single forwarded frontend log line."""
+    level: str                      # "error" | "warn" | "log"
+    message: str
+    ts: Optional[str] = None        # ISO timestamp (frontend clock)
+    source: Optional[str] = None    # "file:line:col" or component hint
+
+
+class ClientLogBatch(BaseModel):
+    """A batch of frontend log entries (flushed periodically)."""
+    entries: list[ClientLogEntry]
+
+
+@router.post("/client-logs")
+async def ingest_client_logs(batch: ClientLogBatch) -> dict:
+    """Append forwarded frontend console logs to ~/.swarm-ai/logs/frontend.log.
+
+    Best-effort and defensive: never raises to the client, caps batch size,
+    truncates the file from the head when it grows past the size cap.
+    """
+    try:
+        log_path = get_app_data_dir() / "logs" / "frontend.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Size cap: keep the most recent half when the file exceeds the limit.
+        try:
+            if log_path.exists() and log_path.stat().st_size > _FRONTEND_LOG_MAX_BYTES:
+                tail = log_path.read_bytes()[-(_FRONTEND_LOG_MAX_BYTES // 2):]
+                log_path.write_bytes(tail)
+        except OSError:
+            pass  # rotation is best-effort
+
+        lines = []
+        for e in batch.entries[:200]:  # cap per request
+            ts = e.ts or datetime.now(timezone.utc).isoformat()
+            msg = (e.message or "")[:4000]
+            src = f" ({e.source})" if e.source else ""
+            lines.append(f"{ts} [{e.level.upper()}]{src} {msg}")
+
+        if lines:
+            with open(log_path, "a") as f:
+                f.write("\n".join(lines) + "\n")
+        return {"status": "ok", "written": len(lines)}
+    except Exception as exc:  # never break the client on a logging path
+        logger.debug("client-logs ingest failed (non-fatal): %s", exc)
+        return {"status": "error"}
