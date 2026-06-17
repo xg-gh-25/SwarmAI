@@ -504,60 +504,83 @@ class MechanicalRefresher:
                 continue
 
             try:
-                content = abs_path.read_text(encoding="utf-8")
-                original = content
+                is_context_file = ".context/" in rel_path
 
-                # Track which fixes will be applied (mark AFTER write succeeds)
-                pending_fixes: list[RefreshResult] = []
-                for fix in fixes:
-                    if fix.old_value in content:
-                        content = content.replace(fix.old_value, fix.new_value, 1)
-                        pending_fixes.append(fix)
+                if is_context_file:
+                    # Context files: read-modify-write under sidecar flock
+                    # (prevents race with save-memory / distillation / evolution)
+                    self._apply_fixes_locked(abs_path, fixes)
+                    applied += sum(1 for f in fixes if f.applied)
+                else:
+                    # DDD docs in Projects/: read, modify, atomic write (tmp+replace)
+                    content = abs_path.read_text(encoding="utf-8")
+                    original = content
 
-                # Only write if changed
-                if content != original:
-                    # Use locked_write for .context/ files (concurrency safety)
-                    if ".context/" in rel_path:
-                        self._write_with_lock(abs_path, content)
-                    else:
-                        # DDD docs in Projects/ — atomic write
+                    pending_fixes: list[RefreshResult] = []
+                    for fix in fixes:
+                        if fix.old_value in content:
+                            content = content.replace(fix.old_value, fix.new_value, 1)
+                            pending_fixes.append(fix)
+
+                    if content != original:
                         tmp_path = abs_path.with_suffix(".tmp")
                         tmp_path.write_text(content, encoding="utf-8")
                         os.replace(tmp_path, abs_path)
 
-                    # Mark applied ONLY after successful write (finding #3)
-                    for fix in pending_fixes:
-                        fix.applied = True
-                        applied += 1
+                        for fix in pending_fixes:
+                            fix.applied = True
+                            applied += 1
 
-                    logger.info(
-                        "auto_refresh.L1: applied %d fixes to %s",
-                        len(pending_fixes), rel_path,
-                    )
+                        logger.info(
+                            "auto_refresh.L1: applied %d fixes to %s",
+                            len(pending_fixes), rel_path,
+                        )
             except (OSError, UnicodeDecodeError) as exc:
                 logger.warning("auto_refresh.L1: failed to apply to %s: %s", rel_path, exc)
 
         return applied
 
-    @staticmethod
-    def _write_with_lock(file_path: Path, content: str) -> None:
-        """Write to a context file using locked_write (flock) for concurrency safety."""
+    def _apply_fixes_locked(self, abs_path: Path, fixes: list) -> None:
+        """Read-modify-write under sidecar flock (TOCTOU-safe for .context/ files).
+
+        Entire read + modify + write happens under the lock, so no concurrent
+        writer (save-memory, distillation, evolution) can interleave.
+        """
+        import fcntl
+        lock_path = abs_path.with_suffix(abs_path.suffix + ".lock")
+        lock_fd = None
         try:
-            from scripts.locked_write import locked_write
-            # locked_write expects (path, section, content) but we want full-file write.
-            # Use the atomic write approach directly with flock instead.
-            import fcntl
-            with open(file_path, "r+", encoding="utf-8") as f:
-                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            lock_fd = open(lock_path, "w")
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX)
+
+            # Read under lock (no TOCTOU)
+            content = abs_path.read_text(encoding="utf-8")
+            original = content
+
+            pending_fixes = []
+            for fix in fixes:
+                if fix.old_value in content:
+                    content = content.replace(fix.old_value, fix.new_value, 1)
+                    pending_fixes.append(fix)
+
+            if content != original:
+                abs_path.write_text(content, encoding="utf-8")
+
+                for fix in pending_fixes:
+                    fix.applied = True
+
+                logger.info(
+                    "auto_refresh.L1: applied %d fixes to %s (locked)",
+                    len(pending_fixes), abs_path.name,
+                )
+        finally:
+            if lock_fd is not None:
                 try:
-                    f.seek(0)
-                    f.write(content)
-                    f.truncate()
-                finally:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-        except ImportError:
-            # Fallback if locked_write not available (tests, standalone)
-            file_path.write_text(content, encoding="utf-8")
+                    fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+                except (OSError, IOError):
+                    pass
+                lock_fd.close()
+
 
 
 # ── Memory Entry Refresher ─────────────────────────────────────────────────
