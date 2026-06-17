@@ -34,7 +34,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 
 from .compaction_guard import EscalationLevel
-from .session_healing import HealthSensor, HealingLoop
+from .session_healing import HealthSensor, HealingLoop, TaskCheckpoint, get_process_rss_mb
 
 if TYPE_CHECKING:
     from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
@@ -506,6 +506,9 @@ class SessionUnit:
         # heals itself without user intervention.
         self._health_sensor: HealthSensor = HealthSensor(max_turns=500)
         self._healing_loop: HealingLoop = HealingLoop()
+        # Checkpoint built before heal-kill, consumed by next spawn to
+        # inject continuation context. None = no pending heal context.
+        self._heal_checkpoint: TaskCheckpoint | None = None
 
         # ── OOM tracking (persists across send() calls) ───────────
         # Counts consecutive OOM kills for this session.  NOT reset in
@@ -1049,6 +1052,15 @@ class SessionUnit:
         self._transition(SessionState.STREAMING)
         self._model_name = getattr(options, "model", None)
 
+        # ── Heal checkpoint injection (invisible to user) ─────────
+        # If a self-heal just happened, prepend continuation context to the
+        # user's query so the agent knows to continue seamlessly.
+        if self._heal_checkpoint is not None:
+            continuation = self._heal_checkpoint.to_continuation_prompt()
+            if isinstance(query_content, str):
+                query_content = f"{continuation}\n\n---\n\n{query_content}"
+            self._heal_checkpoint = None  # Consumed — don't re-inject
+
         try:
             async for event in self._stream_response(query_content):
                 yield event
@@ -1068,6 +1080,13 @@ class SessionUnit:
                         trigger, self.session_id, self._health_sensor.turn_count,
                     )
                     self._healing_loop.record_heal_start()
+                    # Build TaskCheckpoint before kill (captures current context)
+                    self._heal_checkpoint = TaskCheckpoint(
+                        original_request=str(query_content)[:500] if query_content else "",
+                        trigger=trigger,
+                        turn_count=self._health_sensor.turn_count,
+                        heal_attempt=self._healing_loop.heal_attempts,
+                    )
                     # Kill subprocess but keep _sdk_session_id (for --resume).
                     # _crash_to_cold_async(clear_identity=False) = kill + COLD
                     # so next send() re-spawns with --resume context.
@@ -1075,6 +1094,8 @@ class SessionUnit:
                     self._health_sensor.reset()
                     self._healing_loop.record_heal_success()
                     # Next send() will detect state=COLD → _ensure_spawned
+                    # The _heal_checkpoint is consumed by _ensure_spawned to
+                    # inject continuation context into the new subprocess.
                 elif self._healing_loop.should_escalate():
                     logger.warning(
                         "session_unit.self_heal_exhausted session_id=%s "
@@ -2711,10 +2732,13 @@ class SessionUnit:
                     yield meta_event
 
                 # ── Health sensor: record turn metrics ─────────────
-                # Duration and RSS feed the self-healing system.
-                # Errors are recorded separately (via error path above).
+                # Duration and fresh RSS feed the self-healing system.
+                # Uses get_process_rss_mb() for real-time sampling instead
+                # of _peak_tree_rss_bytes (which only updates every 60s via
+                # LifecycleManager). Falls back to peak if sampling returns 0.
                 turn_duration = getattr(message, "duration_ms", 0) or 0
-                turn_rss = self._peak_tree_rss_bytes // (1024 * 1024)  # bytes → MB
+                fresh_rss = get_process_rss_mb(self._pid) if self._pid else 0
+                turn_rss = fresh_rss or (self._peak_tree_rss_bytes // (1024 * 1024))
                 self._health_sensor.record_turn(
                     latency_ms=float(turn_duration),
                     rss_mb=turn_rss,

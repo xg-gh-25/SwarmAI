@@ -23,6 +23,7 @@ Key invariants:
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -31,6 +32,28 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     pass
+
+
+def get_process_rss_mb(pid: int | None = None) -> int:
+    """Get RSS (Resident Set Size) in MB for a process.
+
+    Tries /proc/{pid}/statm first (Linux, zero-cost), falls back to
+    psutil (macOS/Windows), falls back to 0 (never crash on monitoring).
+    """
+    target_pid = pid or os.getpid()
+    try:
+        # Fast path: Linux /proc (no library import)
+        with open(f"/proc/{target_pid}/statm") as f:
+            pages = int(f.read().split()[1])  # RSS in pages
+            return (pages * os.sysconf("SC_PAGE_SIZE")) // (1024 * 1024)
+    except (OSError, ValueError, AttributeError):
+        pass
+    try:
+        import psutil
+        proc = psutil.Process(target_pid)
+        return proc.memory_info().rss // (1024 * 1024)
+    except Exception:
+        return 0  # Never crash on monitoring failure
 
 logger = logging.getLogger(__name__)
 

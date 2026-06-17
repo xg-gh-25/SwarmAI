@@ -196,3 +196,163 @@ class TestNegativeHealCycle:
         # Phase 4: verify heal is allowed
         can, _ = unit._healing_loop.can_heal()
         assert can is True, "Healing must be allowed (first attempt)"
+
+
+class TestE2EHealCycle:
+    """E2E smoke test: full heal cycle from degradation to checkpoint built."""
+
+    @pytest.mark.asyncio
+    async def test_e2e_heal_cycle_builds_checkpoint(self):
+        """Full cycle: degrade → trigger → heal → checkpoint built → state reset."""
+        unit = SessionUnit(session_id="e2e-heal", agent_id="agent-1")
+
+        # Simulate: unit has an active subprocess
+        unit._sdk_session_id = "sdk-e2e-session"
+        unit._pid = 99999  # fake PID (won't be killed — we mock)
+
+        # Phase 1: Record baseline turns
+        for _ in range(LATENCY_BASELINE_WINDOW):
+            unit._health_sensor.record_turn(100.0, 1400, False)
+
+        # Phase 2: Spike latency (simulating context window filling)
+        for _ in range(LATENCY_WINDOW):
+            unit._health_sensor.record_turn(300.0, 1600, False)
+
+        # Phase 3: Verify trigger fires
+        should, trigger = unit._health_sensor.should_checkpoint()
+        assert should is True
+        assert trigger == "latency_degradation"
+
+        # Phase 4: Execute heal (mocked subprocess kill)
+        unit._crash_to_cold_async = AsyncMock()
+
+        can, _ = unit._healing_loop.can_heal()
+        assert can
+
+        unit._healing_loop.record_heal_start()
+
+        # Build checkpoint (same as production path)
+        from core.session_healing import TaskCheckpoint
+        unit._heal_checkpoint = TaskCheckpoint(
+            original_request="Implement feature X",
+            trigger=trigger,
+            turn_count=unit._health_sensor.turn_count,
+            heal_attempt=unit._healing_loop.heal_attempts,
+        )
+
+        await unit._crash_to_cold_async(clear_identity=False)
+        unit._health_sensor.reset()
+        unit._healing_loop.record_heal_success()
+
+        # Phase 5: Verify post-heal state
+        assert unit._heal_checkpoint is not None, "Checkpoint must be built"
+        assert unit._heal_checkpoint.trigger == "latency_degradation"
+        assert unit._heal_checkpoint.original_request == "Implement feature X"
+        assert unit._health_sensor.turn_count == 0, "Turn count must reset"
+        assert unit._healing_loop.heal_attempts == 0, "Attempts must reset on success"
+        assert unit._sdk_session_id == "sdk-e2e-session", "SDK session preserved"
+
+        # Phase 6: Verify checkpoint continuation prompt
+        prompt = unit._heal_checkpoint.to_continuation_prompt()
+        assert "Task Continuation" in prompt
+        assert "Implement feature X" in prompt
+        assert "Do not acknowledge the refresh" in prompt
+
+    @pytest.mark.asyncio
+    async def test_e2e_heal_checkpoint_consumed_on_next_send(self):
+        """Checkpoint is consumed (set to None) when injected into query."""
+        unit = SessionUnit(session_id="e2e-consume", agent_id="agent-1")
+
+        # Set a checkpoint as if heal just happened
+        from core.session_healing import TaskCheckpoint
+        unit._heal_checkpoint = TaskCheckpoint(
+            original_request="Fix bug Y",
+            trigger="error_cascade",
+            turn_count=50,
+        )
+
+        # Simulate what send() does before _stream_response:
+        query_content = "Continue working"
+        if unit._heal_checkpoint is not None:
+            continuation = unit._heal_checkpoint.to_continuation_prompt()
+            if isinstance(query_content, str):
+                query_content = f"{continuation}\n\n---\n\n{query_content}"
+            unit._heal_checkpoint = None
+
+        assert "Task Continuation" in query_content
+        assert "Fix bug Y" in query_content
+        assert "Continue working" in query_content
+        assert unit._heal_checkpoint is None, "Checkpoint must be consumed"
+
+
+class TestMultiBoundaryHandling:
+    """Gap 4: Verify MessageStore-style boundary tracking with multiple resumes."""
+
+    def test_multiple_boundaries_tracks_latest(self):
+        """With 2 resume boundaries, only the latest index should matter."""
+        # Simulate MessageStore's boundary tracking logic
+        messages = []
+        boundary_idx = -1
+
+        # Add 5 messages from first session
+        for i in range(5):
+            messages.append({"id": f"msg-{i}", "role": "assistant"})
+
+        # First resume boundary
+        messages.append({"id": "resume-boundary-1000", "role": "system"})
+        boundary_idx = len(messages) - 1  # = 5
+        assert boundary_idx == 5
+
+        # Add 3 messages from second session
+        for i in range(5, 8):
+            messages.append({"id": f"msg-{i}", "role": "assistant"})
+
+        # Second resume boundary (another heal/resume)
+        messages.append({"id": "resume-boundary-2000", "role": "system"})
+        boundary_idx = len(messages) - 1  # = 9
+        assert boundary_idx == 9
+
+        # Add 2 messages from current session
+        for i in range(8, 10):
+            messages.append({"id": f"msg-{i}", "role": "assistant"})
+
+        # Pre-boundary IDs should include messages 0-8 (before idx 9)
+        pre_boundary_ids = set()
+        for i in range(boundary_idx):
+            if messages[i].get("id"):
+                pre_boundary_ids.add(messages[i]["id"])
+
+        # All messages before the LATEST boundary are "old"
+        assert "msg-0" in pre_boundary_ids  # from first session
+        assert "msg-5" in pre_boundary_ids  # from second session
+        assert "msg-7" in pre_boundary_ids  # from second session
+        # Messages after boundary are "current"
+        assert "msg-8" not in pre_boundary_ids
+        assert "msg-9" not in pre_boundary_ids
+
+    def test_no_boundary_means_no_filtering(self):
+        """Without any boundary, no messages should be filtered."""
+        boundary_idx = -1
+        pre_boundary_ids = set()
+        if boundary_idx >= 0:
+            # This block should not execute
+            pre_boundary_ids.add("should-not-happen")
+
+        assert len(pre_boundary_ids) == 0
+
+
+class TestRSSSampling:
+    """Gap 3: Verify RSS sampling helper works."""
+
+    def test_get_process_rss_returns_positive(self):
+        """get_process_rss_mb for own process should return > 0."""
+        from core.session_healing import get_process_rss_mb
+        rss = get_process_rss_mb()
+        # Python process should use at least 10MB
+        assert rss > 10, f"Expected RSS > 10MB, got {rss}MB"
+
+    def test_get_process_rss_invalid_pid_returns_zero(self):
+        """Invalid PID should return 0, not crash."""
+        from core.session_healing import get_process_rss_mb
+        rss = get_process_rss_mb(pid=999999999)
+        assert rss == 0

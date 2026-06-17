@@ -1555,6 +1555,15 @@ export function useChatStreamingLifecycle(
         if (tabState && !tabState.hasReceivedData) {
           tabState.hasReceivedData = true;
 
+          // ── Self-heal grace: data arrived → heal succeeded silently ──
+          // If we were in a heal grace window (backend killed+respawned),
+          // receiving data proves the heal worked. Clear the flag so the
+          // grace timeout becomes a no-op. User saw nothing — just a pause.
+          if (tabState._healGraceActive) {
+            tabState._healGraceActive = false;
+            console.log(`[HealGrace] Tab ${capturedTabId}: data arrived during grace — heal succeeded silently`);
+          }
+
           // If we were reconnecting, the stream has successfully resumed.
           // Clear reconnection state and fire a success toast.
           if (tabState.isReconnecting) {
