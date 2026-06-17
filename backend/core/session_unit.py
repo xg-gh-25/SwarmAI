@@ -532,6 +532,11 @@ class SessionUnit:
         # ONLY — never module-level (3.5 / anti-pattern #1).
         self._wrapup_conclusion: str = ""
 
+        # ── Channel wrap-up (one-shot, Gap #13) ────────────────────
+        # Set to True after CHANNEL_WRAP_UP_PROMPT is injected. Prevents
+        # re-injection on every subsequent turn past the threshold.
+        self._channel_wrap_injected: bool = False
+
         # ── Resume-fallback context preservation ─────────────────
         # Stable app-level session ID for DB queries in the abandon-
         # fallback path of _retry_with_resume.  Set at send() entry.
@@ -1109,15 +1114,17 @@ class SessionUnit:
         # ── Channel budget-aware wrap-up (Gap #13) ─────────────────
         # For channel sessions approaching turn limit, inject wrap-up prompt
         # suggesting the user continue on desktop. Independent of self-heal
-        # (which may be disabled). Fires once at turn threshold.
+        # (which may be disabled). Fires ONCE (one-shot guard).
         if (
             self.is_channel_session
             and isinstance(query_content, str)
-            and not self._graceful_wrap_pending  # Don't double-inject
+            and not self._channel_wrap_injected  # One-shot: never re-inject
+            and not self._graceful_wrap_pending  # Don't conflict with self-heal
             and self._health_sensor.turn_count
             >= (self._health_sensor._max_turns - CHANNEL_WRAP_BUFFER)
         ):
             query_content = f"{query_content}\n\n---\n\n{CHANNEL_WRAP_UP_PROMPT}"
+            self._channel_wrap_injected = True  # One-shot consumed
             logger.info(
                 "session_unit.channel_wrap_injected session_id=%s turn=%d max=%d",
                 self.session_id,

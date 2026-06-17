@@ -2160,12 +2160,18 @@ export default function ChatPage() {
       }
     }
 
-    // 2. Update streaming state immediately — don't wait for backend
+    // 2. End store streaming FIRST — unblocks replace()/reconcile()
+    if (currentTabId) {
+      const stopStorePhase = messageStoreRegistry.get(currentTabId);
+      if (stopStorePhase) stopStorePhase.endStreaming();
+    }
+
+    // 3. Update streaming state immediately — don't wait for backend
     setIsStreaming(false, currentTabId ?? undefined);
     incrementStreamGen();
     if (currentTabId) updateTabStatus(currentTabId, 'idle');
 
-    // 3. Append "Stopped" indicator to messages (synchronous)
+    // 4. Append "Stopped" indicator to messages (synchronous)
     setMessages((prev) => {
       const lastAssistantIndex = prev.reduce(
         (lastIdx, m, i) => m.role === 'assistant' ? i : lastIdx, -1,
