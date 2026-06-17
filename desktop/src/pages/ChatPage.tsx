@@ -480,6 +480,25 @@ export default function ChatPage() {
     }
   }, [sessionId, hasMoreMessages, isLoadingOlderMessages]);
 
+  // Insert optimistic message(s) through the MessageStore — the single source
+  // of truth. initTabState eagerly creates a per-tab store and the store→React
+  // sync effect treats it as authoritative; a setMessages-only write gets
+  // clobbered by the (empty/stale) snapshot, AND the assistant placeholder
+  // never reaches the store, so streaming updateLast() (keyed by message id)
+  // silently no-ops every delta. Routing every optimistic insert through the
+  // store fixes both. Falls back to React state only when there is no tab id.
+  const insertOptimisticMessages = useCallback(
+    (tabId: string | null | undefined, msgs: Message[]) => {
+      const store = tabId ? messageStoreRegistry.getOrCreate(tabId) : null;
+      if (store) {
+        store.appendMany(msgs);
+      } else {
+        setMessages((prev) => [...prev, ...msgs]);
+      }
+    },
+    [setMessages],
+  );
+
   // Handle new chat
   const handleNewChat = useCallback(() => {
     setMessages([]);
@@ -1740,12 +1759,10 @@ export default function ChatPage() {
       const assistantMessageId = (Date.now() + 1).toString();
       const assistantPlaceholder: Message = { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() };
 
-      if (isActive) {
-        setMessages((prev) => [...prev, assistantPlaceholder]);
-      }
-      if (tabState.messages) {
-        tabState.messages = [...tabState.messages, assistantPlaceholder];
-      }
+      // SINGLE-WRITER: route through the store so streaming deltas land
+      // (see insertOptimisticMessages). A setMessages-only write left the
+      // placeholder out of the store → updateLast() no-op'd every token.
+      insertOptimisticMessages(tabId, [assistantPlaceholder]);
 
       // Resolve sessionId from tabMapRef (authoritative)
       const resolvedSessionId = tabState.sessionId || sessionIdRef.current;
@@ -1843,16 +1860,9 @@ export default function ChatPage() {
 
     const assistantMessageId = Date.now().toString();
     const assistantPlaceholder: Message = { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() };
-    setMessages((prev) => [...prev, assistantPlaceholder]);
-
-    // Sync assistant placeholder to tabMapRef so background stream handler
-    // can find assistantMessageId in tabState.messages (same fix as handleSendMessage).
-    if (tabId) {
-      const tabState = tabMapRef.current.get(tabId);
-      if (tabState) {
-        tabState.messages = [...tabState.messages, assistantPlaceholder];
-      }
-    }
+    // SINGLE-WRITER: route through the store so streaming deltas land
+    // (see insertOptimisticMessages).
+    insertOptimisticMessages(tabId, [assistantPlaceholder]);
 
     const abort = chatService.streamAnswerQuestion(
       { agentId: selectedAgentId, sessionId: tabSessionId, toolUseId, answers, enableSkills, enableMCP },
@@ -1912,11 +1922,14 @@ export default function ChatPage() {
 
     const assistantMessageId = Date.now().toString();
     const assistantPlaceholder: Message = { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() };
-    setMessages((prev) => [...prev, assistantPlaceholder]);
-
-    // Sync placeholder to tabMapRef
-    if (tabState) {
-      tabState.messages = [...tabState.messages.filter(m => !m.isError), assistantPlaceholder];
+    // SINGLE-WRITER: clear the error from the store, then append the placeholder
+    // so streaming deltas land (see insertOptimisticMessages).
+    const retryStore = tabId ? messageStoreRegistry.getOrCreate(tabId) : null;
+    if (retryStore) {
+      retryStore.remove((m) => !!m.isError);
+      retryStore.append(assistantPlaceholder);
+    } else {
+      setMessages((prev) => [...prev.filter(m => !m.isError), assistantPlaceholder]);
     }
 
     const abort = chatService.streamChat(
@@ -2021,16 +2034,9 @@ export default function ChatPage() {
 
     const assistantMessageId = (Date.now() + 1).toString();
     const assistantPlaceholder: Message = { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() };
-    setMessages((prev) => [...prev, assistantPlaceholder]);
-
-    // Sync assistant placeholder to tabMapRef so background stream handler
-    // can find assistantMessageId in tabState.messages (same fix as handleSendMessage).
-    if (tabId) {
-      const tabState = tabMapRef.current.get(tabId);
-      if (tabState) {
-        tabState.messages = [...tabState.messages, assistantPlaceholder];
-      }
-    }
+    // SINGLE-WRITER: route through the store so streaming deltas land
+    // (see insertOptimisticMessages).
+    insertOptimisticMessages(tabId, [assistantPlaceholder]);
 
     // Capture tabId for cleanup in async callbacks (closure safety).
     // Create the stream handler ONCE now (captures tabId at creation time)
@@ -2146,10 +2152,10 @@ export default function ChatPage() {
     setIsRefreshing(true);
     try {
       await chatService.refreshSession(sessionId);
-      // Append a system separator — existing lastResumeBoundaryIdx logic
-      // will auto-dim all messages above this point
-      setMessages((prev) => [
-        ...prev,
+      // Append a system separator (refresh- prefix → NOT a resume boundary, so
+      // it does not dim prior messages). Route through the MessageStore — a
+      // setMessages-only write would be clobbered by the store→React sync.
+      insertOptimisticMessages(activeTabIdRef.current, [
         {
           id: `refresh-${Date.now()}`,
           role: 'system' as const,
@@ -2164,7 +2170,7 @@ export default function ChatPage() {
       setIsRefreshing(false);
       setShowRefreshModal(false);
     }
-  }, [sessionId, isStreaming, addToast]);
+  }, [sessionId, isStreaming, addToast, insertOptimisticMessages, activeTabIdRef]);
 
 
   // Handle agent save
