@@ -852,10 +852,10 @@ CITATIONS:
         if "NO_CHANGES_NEEDED" in response:
             return ("", [])
 
-        # Extract PROPOSED block
+        # Extract PROPOSED block (allow optional language identifier after ```)
         proposed = ""
         proposed_match = re.search(
-            r"PROPOSED:\s*```\s*\n(.*?)```", response, re.DOTALL
+            r"PROPOSED:\s*```[^\n]*\n(.*?)```", response, re.DOTALL
         )
         if proposed_match:
             proposed = proposed_match.group(1).strip()
@@ -903,7 +903,7 @@ CITATIONS:
             or w in {"stage", "specialist", "gate", "layer", "channel", "pipeline"}
         )
 
-        return technical / len(changed) > 0.3  # Relaxed: >30% technical = factual
+        return technical / len(changed) > 0.5  # >50% technical words = factual change
 
     def _load_state(self) -> dict:
         """Load throttle state from JSON file."""

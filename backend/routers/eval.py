@@ -281,7 +281,7 @@ def _parse_staleness_finding(finding: str) -> dict:
     """Parse 'DDD-STALE: Project/Doc (Xd old, Y recent commits)' into dict."""
     import re
     m = re.match(
-        r"DDD-STALE:\s*(\w+)/(\w+\.md)\s*\((\d+)d old,\s*(\d+) recent commits?\)",
+        r"DDD-STALE:\s*([\w-]+)/([\w-]+\.md)\s*\((\d+)d old,\s*(\d+) recent commits?\)",
         finding,
     )
     if m:

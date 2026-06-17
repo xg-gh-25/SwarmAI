@@ -1193,18 +1193,40 @@ class DddCultivationOrchestrator:
     def _apply_llm_proposal(
         self, doc_path: Path, proposal, root: Path,
     ) -> bool:
-        """Apply LLM proposal to the DDD doc. Returns True if applied."""
+        """Apply LLM proposal to the DDD doc. Returns True if applied.
+
+        Safety guards:
+        - Length sanity: if proposed text differs >50% in length from current, skip
+          (prevents truncation mismatch from garbling docs)
+        - Exact match required: current_text must appear verbatim in doc
+        - Atomic write: write to .tmp then os.replace
+        """
         from core.auto_refresh import RefreshResult, log_refresh_results
 
         try:
             content = doc_path.read_text(encoding="utf-8")
 
-            # Simple replacement: find current section text and replace
+            # Length sanity check: catch truncation mismatch where LLM rewrites
+            # a truncated excerpt but the replacement would leave trailing content
+            current_len = len(proposal.current_text)
+            proposed_len = len(proposal.proposed_text)
+            if current_len > 0 and abs(proposed_len - current_len) / current_len > 0.5:
+                logger.warning(
+                    "auto_refresh.L2: length mismatch (current=%d, proposed=%d) "
+                    "— skipping to prevent garble. File: %s",
+                    current_len, proposed_len, doc_path.name,
+                )
+                return False
+
+            # Exact match replacement
             if proposal.current_text in content:
                 new_content = content.replace(
                     proposal.current_text, proposal.proposed_text, 1
                 )
-                doc_path.write_text(new_content, encoding="utf-8")
+                # Atomic write to prevent corruption on crash
+                tmp_path = doc_path.with_suffix(".tmp")
+                tmp_path.write_text(new_content, encoding="utf-8")
+                os.replace(tmp_path, doc_path)
 
                 # Log for weekly report
                 result = RefreshResult(
