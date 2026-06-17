@@ -1248,24 +1248,24 @@ class DddCultivationOrchestrator:
                     pass
                 lock_fd.close()
 
-                # Log for weekly report
-                result = RefreshResult(
-                    target_file=str(doc_path.relative_to(root)),
-                    old_value=proposal.current_text[:80] + "...",
-                    new_value=proposal.proposed_text[:80] + "...",
-                    evidence=f"LLM refresh, {len(proposal.citations)} citations verified",
-                    layer=2,
-                    applied=True,
-                    confidence=proposal.confidence,
-                )
-                log_path = Path(root) / ".context" / ".auto_refresh_log.jsonl"
-                log_refresh_results([result], log_path)
+            # Success path only (after lock released)
+            result = RefreshResult(
+                target_file=str(doc_path.relative_to(root)),
+                old_value=proposal.current_text[:80] + "...",
+                new_value=proposal.proposed_text[:80] + "...",
+                evidence=f"LLM refresh, {len(proposal.citations)} citations verified",
+                layer=2,
+                applied=True,
+                confidence=proposal.confidence,
+            )
+            log_path = Path(root) / ".context" / ".auto_refresh_log.jsonl"
+            log_refresh_results([result], log_path)
 
-                logger.info(
-                    "auto_refresh.L2: applied to %s (confidence=%.2f)",
-                    doc_path.name, proposal.confidence,
-                )
-                return True
+            logger.info(
+                "auto_refresh.L2: applied to %s (confidence=%.2f)",
+                doc_path.name, proposal.confidence,
+            )
+            return True
         except Exception as exc:
             logger.warning("auto_refresh.L2: apply failed for %s: %s", doc_path.name, exc)
             return False
