@@ -1949,11 +1949,14 @@ export function useChatStreamingLifecycle(
           if (resultStore) {
             resultStore.endStreaming();
           }
-          if (resultStore && isActiveTab) {
-            if (sid) setSessionId(sid);
+          if (resultStore) {
             // Force-sync: ensure React has the final authoritative state.
-            // The store subscription uses rAF which may not have flushed yet
-            // when result arrives in the same read() chunk as last text_delta.
+            // Always sync from store regardless of isActiveTab — the store
+            // belongs to capturedTabId and its data is guaranteed correct.
+            // Without this, activeTabIdRef stale race (app restart) causes
+            // result to not sync, AND endStreaming() disables subscription
+            // sync (phase=idle) — double block = invisible response.
+            if (sid) setSessionId(sid);
             setMessages(resultStore.getSnapshot());
           } else if (isActiveTab) {
             if (sid) setSessionId(sid);
