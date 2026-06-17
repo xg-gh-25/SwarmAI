@@ -511,6 +511,47 @@ export function appendThinkingDelta(
 }
 
 // ---------------------------------------------------------------------------
+// Per-message updaters — used by MessageStore.updateLast() for single-writer flow.
+// These transform a single Message (not an array), matching the store's updater API.
+// ---------------------------------------------------------------------------
+
+/**
+ * Append text token to a message's last unconfirmed text block.
+ * If no unconfirmed text block exists, creates a new one.
+ */
+export function applyTextDelta(msg: Message, text: string): Message {
+  const content = [...msg.content];
+  const lastBlock = content[content.length - 1];
+  if (lastBlock && lastBlock.type === 'text' && !lastBlock._confirmed) {
+    content[content.length - 1] = {
+      ...lastBlock,
+      text: (lastBlock.text ?? '') + text,
+    };
+  } else {
+    content.push({ type: 'text', text } as ContentBlock);
+  }
+  return { ...msg, content };
+}
+
+/**
+ * Append thinking token to a message's last unconfirmed thinking block.
+ * If no unconfirmed thinking block exists, creates a new one.
+ */
+export function applyThinkingDelta(msg: Message, thinking: string): Message {
+  const content = [...msg.content];
+  const lastBlock = content[content.length - 1];
+  if (lastBlock && lastBlock.type === 'thinking' && !lastBlock._confirmed) {
+    content[content.length - 1] = {
+      ...lastBlock,
+      thinking: ((lastBlock as { thinking?: string }).thinking ?? '') + thinking,
+    } as ContentBlock;
+  } else {
+    content.push({ type: 'thinking', thinking } as ContentBlock);
+  }
+  return { ...msg, content };
+}
+
+// ---------------------------------------------------------------------------
 // Fix 5: sessionStorage persistence helpers (exported for testability)
 // ---------------------------------------------------------------------------
 
@@ -936,6 +977,30 @@ export function useChatStreamingLifecycle(
   const pendingToolUseRef = useRef<boolean>(false);
   const [isLikelyStalled, setIsLikelyStalled] = useState(false);
 
+  // ── MessageStore subscription: store → React state bridge ──────────────
+  // When the active tab has a store, subscribe to it. On notify (rAF-gated),
+  // sync store.messages → setMessages (React render) + tabState.messages (cache).
+  // This is the SINGLE path from store to UI during streaming — stream handlers
+  // write to store only, never call setMessages() directly.
+  useEffect(() => {
+    const tabId = activeTabIdRef.current;
+    if (!tabId) return;
+    const store = messageStoreRegistry.get(tabId);
+    if (!store) return;
+
+    const unsub = store.subscribe(() => {
+      // Sync store → React state (triggers render)
+      setMessages(store.getSnapshot());
+      // Sync store → tabState cache (for tab-switch instant display)
+      const tabState = tabMapRef.current.get(tabId);
+      if (tabState) {
+        tabState.messages = store.messages;
+      }
+    });
+
+    return unsub;
+  }, [activeTabIdCurrent, tabMapRef, activeTabIdRef]); // re-subscribe on tab change
+
   // SESSION_BUSY recovery: polling state (intervals stored per-tab in UnifiedTab)
   const [isWaitingForBusy, setIsWaitingForBusy] = useState(false);
 
@@ -1334,14 +1399,19 @@ export function useChatStreamingLifecycle(
 
     const restored = restorePendingState(currentSessionId);
     if (restored) {
-      setMessages(restored.messages);
-      setPendingQuestion(restored.pendingQuestion);
-      // Also update the per-tab map if an active tab exists
+      // Restore via store (single-writer) or fallback
       const tabId = activeTabIdRef.current;
+      const restoreStore = tabId ? messageStoreRegistry.get(tabId) : null;
+      if (restoreStore) {
+        restoreStore.replace(restored.messages);
+      } else {
+        setMessages(restored.messages);
+      }
+      setPendingQuestion(restored.pendingQuestion);
       if (tabId) {
         const tabState = tabMapRef.current.get(tabId);
         if (tabState) {
-          tabState.messages = restored.messages;
+          tabState.messages = restoreStore ? restoreStore.messages : restored.messages;
           tabState.pendingQuestion = restored.pendingQuestion;
         }
       }
@@ -1384,12 +1454,16 @@ export function useChatStreamingLifecycle(
             currentLen: currentMessages.length,
             ageSeconds: Math.round(age / 1000),
           });
-          setMessages(checkpointMessages);
+          // Restore via store (single-writer) or fallback
           const tabId = activeTabIdRef.current;
-          if (tabId) {
-            const tabState = tabMapRef.current.get(tabId);
-            if (tabState) {
-              tabState.messages = checkpointMessages;
+          const cpStore = tabId ? messageStoreRegistry.get(tabId) : null;
+          if (cpStore) {
+            cpStore.replace(checkpointMessages);
+          } else {
+            setMessages(checkpointMessages);
+            if (tabId) {
+              const tabState = tabMapRef.current.get(tabId);
+              if (tabState) tabState.messages = checkpointMessages;
             }
           }
         }
@@ -1561,98 +1635,91 @@ export function useChatStreamingLifecycle(
           }
         } else if (event.type === 'session_cleared' && event.newSessionId) {
           // SDK compaction: session ID changed but conversation continues.
-          // CRITICAL: Do NOT clear messages — the user already sees streamed
-          // content (pipeline stages, tool results, text). Clearing here
-          // destroys 5-30 min of visible work if a disconnect follows.
-          // Only update session tracking and ensure the assistant placeholder
-          // exists for subsequent text_delta/assistant events.
+          // CRITICAL: Do NOT clear messages — only append placeholder if needed.
           if (tabState) {
             tabState.sessionId = event.newSessionId;
-            // Ensure assistantMessageId placeholder exists for post-compaction
-            // streaming. Append only if not already present — preserves all
-            // previously rendered content.
-            const hasPlaceholder = tabState.messages.some(
-              (m) => m.id === assistantMessageId,
-            );
+          }
+
+          const clearStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+          if (clearStore) {
+            // Append placeholder only if not already present
+            const hasPlaceholder = clearStore.messages.some(m => m.id === assistantMessageId);
             if (!hasPlaceholder) {
-              tabState.messages = [
-                ...tabState.messages,
-                {
-                  id: assistantMessageId,
-                  role: 'assistant' as const,
-                  content: [],
-                  timestamp: new Date().toISOString(),
-                },
-              ];
+              clearStore.append({
+                id: assistantMessageId,
+                role: 'assistant' as const,
+                content: [],
+                timestamp: new Date().toISOString(),
+              } as Message);
+            }
+          } else {
+            // Fallback: no store
+            if (tabState) {
+              const hasPlaceholder = tabState.messages.some(m => m.id === assistantMessageId);
+              if (!hasPlaceholder) {
+                tabState.messages = [...tabState.messages, {
+                  id: assistantMessageId, role: 'assistant' as const, content: [], timestamp: new Date().toISOString(),
+                }];
+              }
+            }
+            if (isActiveTab) {
+              setMessages((prev) => {
+                if (prev.some(m => m.id === assistantMessageId)) return prev;
+                return [...prev, { id: assistantMessageId, role: 'assistant' as const, content: [], timestamp: new Date().toISOString() }];
+              });
             }
           }
           if (isActiveTab) {
             setSessionId(event.newSessionId);
-            setMessages((prev) => {
-              const hasPlaceholder = prev.some(
-                (m) => m.id === assistantMessageId,
-              );
-              if (hasPlaceholder) return prev; // No change needed — keep existing content
-              return [
-                ...prev,
-                {
-                  id: assistantMessageId,
-                  role: 'assistant' as const,
-                  content: [],
-                  timestamp: new Date().toISOString(),
-                },
-              ];
-            });
             queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
           }
         } else if (event.type === 'text_delta' && event.text) {
           // --- Streaming text delta: append token incrementally ---
           // This is the HOT PATH — called once per token for real-time rendering.
-          // Update tab status on first delta if not already streaming.
+          // SINGLE-WRITER: writes to store only. Store subscription auto-syncs
+          // to React state (setMessages) and tabState.messages cache.
           if (capturedTabId && tabState && tabState.status !== 'streaming') {
             updateTabStatus(capturedTabId, 'streaming');
           }
           // Reset stall threshold to text-mode (60s) — thinking phase is over.
-          // Without this, pendingToolUseRef stays true from thinking_start and
-          // the stall detector uses the 180s tool threshold for the text phase.
           pendingToolUseRef.current = false;
 
-          if (tabState) {
-            tabState.messages = appendTextDelta(
-              tabState.messages,
-              assistantMessageId,
-              event.text,
+          // Write to store — subscription handles React sync + tabState cache
+          const textStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+          if (textStore) {
+            textStore.updateLast(
+              (msg) => applyTextDelta(msg, event.text!),
+              (msg) => msg.id === assistantMessageId,
             );
-          }
-
-          if (isActiveTab) {
-            setMessages((prev) => appendTextDelta(
-              prev,
-              assistantMessageId,
-              event.text!,
-            ));
+          } else {
+            // Fallback for initial tab before store exists (capturedTabId===null)
+            if (tabState) {
+              tabState.messages = appendTextDelta(tabState.messages, assistantMessageId, event.text);
+            }
+            if (isActiveTab) {
+              setMessages((prev) => appendTextDelta(prev, assistantMessageId, event.text!));
+            }
           }
         } else if (event.type === 'thinking_delta' && event.thinking) {
           // --- Streaming thinking delta: append thinking token incrementally ---
-          // Same pattern as text_delta but for extended thinking content.
+          // SINGLE-WRITER: same as text_delta — store is the sole writer.
           if (capturedTabId && tabState && tabState.status !== 'streaming') {
             updateTabStatus(capturedTabId, 'streaming');
           }
 
-          if (tabState) {
-            tabState.messages = appendThinkingDelta(
-              tabState.messages,
-              assistantMessageId,
-              event.thinking,
+          const thinkStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+          if (thinkStore) {
+            thinkStore.updateLast(
+              (msg) => applyThinkingDelta(msg, event.thinking!),
+              (msg) => msg.id === assistantMessageId,
             );
-          }
-
-          if (isActiveTab) {
-            setMessages((prev) => appendThinkingDelta(
-              prev,
-              assistantMessageId,
-              event.thinking!,
-            ));
+          } else {
+            if (tabState) {
+              tabState.messages = appendThinkingDelta(tabState.messages, assistantMessageId, event.thinking);
+            }
+            if (isActiveTab) {
+              setMessages((prev) => appendThinkingDelta(prev, assistantMessageId, event.thinking!));
+            }
           }
         } else if (event.type === 'thinking_start') {
           // Thinking block started — update tab status to streaming.
@@ -1666,39 +1733,28 @@ export function useChatStreamingLifecycle(
           pendingToolUseRef.current = true;
         } else if (event.type === 'assistant' && event.content) {
           // Full assistant message — the SDK's complete, authoritative content.
-          // When streaming is on, text was already rendered incrementally via
-          // text_delta events. This event reconciles with the final truth:
-          // tool_use/tool_result blocks are appended (they weren't streamed),
-          // and existing text blocks are left alone (deduped by blockKey).
+          // SINGLE-WRITER: store handles dedup + subscription syncs to React.
           // Fix 8: Update tab status to 'streaming' on first assistant event
           if (capturedTabId && tabState && tabState.status !== 'streaming') {
             updateTabStatus(capturedTabId, 'streaming');
           }
 
-          // Always update the per-tab map (even for background tabs)
-          if (tabState) {
-            tabState.messages = updateMessages(
-              tabState.messages,
-              assistantMessageId,
-              event.content,
-              event.model,
+          const assistStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+          if (assistStore) {
+            // Use updateMessages on the single matching message — reuses the
+            // complex dedup/confirm logic without rewriting it.
+            assistStore.updateLast(
+              (msg) => updateMessages([msg], assistantMessageId, event.content!, event.model)[0],
+              (msg) => msg.id === assistantMessageId,
             );
-          }
-
-          // Sync React state from the authoritative tabState (already deduped).
-          // CRITICAL: Do NOT use `setMessages((prev) => updateMessages(prev, ...))`
-          // here — React's `prev` can be stale if text_delta updaters haven't
-          // flushed yet, causing `existingKeys` to miss streamed text blocks
-          // and letting the assistant event's text through as a DUPLICATE.
-          // Using tabState.messages directly (spread for new reference) is safe
-          // because L1366 already ran updateMessages synchronously on it.
-          if (isActiveTab && tabState) {
-            const authoritative = [...tabState.messages];
-            setMessages(() => authoritative);
-          } else if (isActiveTab && !tabState) {
-            // Fallback: initial tab before registration (capturedTabId === null).
-            // No tabState exists yet — apply updateMessages directly to React state.
-            setMessages((prev) => updateMessages(prev, assistantMessageId, event.content!, event.model));
+          } else {
+            // Fallback: initial tab before store exists
+            if (tabState) {
+              tabState.messages = updateMessages(tabState.messages, assistantMessageId, event.content, event.model);
+            }
+            if (isActiveTab) {
+              setMessages((prev) => updateMessages(prev, assistantMessageId, event.content!, event.model));
+            }
           }
         } else if (
           event.type === 'ask_user_question' &&
@@ -1710,30 +1766,35 @@ export function useChatStreamingLifecycle(
             questions: event.questions,
           };
 
-          // Compute updated messages once — append ask_user_question block
+          // Append ask_user_question block via store (single-writer)
           const auqBlock = {
             type: 'ask_user_question' as const,
             toolUseId: event.toolUseId!,
             questions: event.questions!,
           };
-          const currentMsgs = tabState?.messages ?? messagesRef.current;
-          const auqMessages = currentMsgs.map((msg) =>
-            msg.id === assistantMessageId
-              ? { ...msg, content: [...msg.content, auqBlock] }
-              : msg,
-          );
+          const auqStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+          if (auqStore) {
+            auqStore.updateLast(
+              (msg) => ({ ...msg, content: [...msg.content, auqBlock] }),
+              (msg) => msg.id === assistantMessageId,
+            );
+          } else {
+            // Fallback: compute from tabState
+            const currentMsgs = tabState?.messages ?? messagesRef.current;
+            const auqMessages = currentMsgs.map((msg) =>
+              msg.id === assistantMessageId ? { ...msg, content: [...msg.content, auqBlock] } : msg,
+            );
+            if (tabState) tabState.messages = auqMessages;
+            if (isActiveTab) setMessages(auqMessages);
+          }
 
-          // Update per-tab map
           if (tabState) {
             tabState.pendingQuestion = pq;
             if (event.sessionId) tabState.sessionId = event.sessionId;
-            tabState.messages = auqMessages;
           }
-
           if (isActiveTab) {
             setPendingQuestion(pq);
             if (event.sessionId) setSessionId(event.sessionId);
-            setMessages(auqMessages);
           }
           setIsStreaming(false, capturedTabId ?? undefined);
           // Fix 1: Increment stream generation so the pending
@@ -1758,8 +1819,7 @@ export function useChatStreamingLifecycle(
           const toolName = (event.toolName || raw.tool_name) as string;
           const toolInput = (event.toolInput || raw.tool_input) as Record<string, unknown>;
 
-          // Append cmd_permission_request content block to assistant message
-          // (same pattern as ask_user_question — inline in chat stream)
+          // Append cmd_permission_request content block via store (single-writer)
           const permBlock = {
             type: 'cmd_permission_request' as const,
             requestId: requestId,
@@ -1768,22 +1828,26 @@ export function useChatStreamingLifecycle(
             reason: event.reason || '',
             options: event.options || ['approve', 'deny'],
           };
-          const currentMsgs = tabState?.messages ?? messagesRef.current;
-          const permMessages = currentMsgs.map((msg) =>
-            msg.id === assistantMessageId
-              ? { ...msg, content: [...msg.content, permBlock] }
-              : msg,
-          );
+          const permStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+          if (permStore) {
+            permStore.updateLast(
+              (msg) => ({ ...msg, content: [...msg.content, permBlock] }),
+              (msg) => msg.id === assistantMessageId,
+            );
+          } else {
+            const currentMsgs = tabState?.messages ?? messagesRef.current;
+            const permMessages = currentMsgs.map((msg) =>
+              msg.id === assistantMessageId ? { ...msg, content: [...msg.content, permBlock] } : msg,
+            );
+            if (tabState) tabState.messages = permMessages;
+            if (isActiveTab) setMessages(permMessages);
+          }
 
-          // Update per-tab map
           if (tabState) {
-            tabState.messages = permMessages;
             if (sid) tabState.sessionId = sid;
             tabState.pendingPermissionRequestId = requestId;
           }
-
           if (isActiveTab) {
-            setMessages(permMessages);
             if (sid) setSessionId(sid);
             setPendingPermissionRequestId(requestId);
           }
@@ -1805,35 +1869,35 @@ export function useChatStreamingLifecycle(
           }
 
           // Result is the definitive signal that the conversation turn is
-          // complete. Sync tabState.messages → React state as a safety net.
-          //
-          // CRITICAL: Use functional updater (not direct value) to avoid
-          // breaking React 18's batched update chain. When all SSE events
-          // arrive in a single reader.read() chunk (common for fast <200ms
-          // responses), text_delta functional updaters and this result sync
-          // execute in the same synchronous batch. A direct value like
-          // setMessages(tabState.messages) can cause React to skip the
-          // render if it considers the reference unchanged — leaving the
-          // UI stuck showing partial content until the next interaction
-          // forces a re-render. Using a functional updater that returns a
-          // NEW array guarantees React sees a state change.
-          if (isActiveTab && tabState) {
+          // complete. With single-writer store, the subscription handles
+          // React sync. We only need to:
+          // 1. Update sessionId in React state
+          // 2. Force a final snapshot sync as safety net (store may have
+          //    buffered updates in rAF that haven't flushed yet)
+          const resultStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+          if (resultStore && isActiveTab) {
             if (sid) setSessionId(sid);
-            // Spread creates a new reference — React always re-renders.
-            const authoritativeMessages = [...tabState.messages];
-            setMessages(() => authoritativeMessages);
+            // Force-sync: ensure React has the final authoritative state.
+            // The store subscription uses rAF which may not have flushed yet
+            // when result arrives in the same read() chunk as last text_delta.
+            setMessages(resultStore.getSnapshot());
           } else if (isActiveTab) {
             if (sid) setSessionId(sid);
+            // Fallback: no store — sync from tabState
+            if (tabState) {
+              setMessages(() => [...tabState.messages]);
+            }
           }
-          // Deferred re-sync: if isActiveTab was transiently false due to
-          // React batching or ref update lag, this microtask fires after the
-          // batch flushes and re-checks the live ref. Only syncs if this tab
-          // is ACTUALLY active — safe for multi-tab isolation.
+          // Deferred re-sync for background tabs that become active
           if (tabState && !isActiveTab) {
             queueMicrotask(() => {
               if (capturedTabId === activeTabIdRef.current) {
-                const deferred = [...tabState.messages];
-                setMessages(() => deferred);
+                const store = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+                if (store) {
+                  setMessages(store.getSnapshot());
+                } else {
+                  setMessages(() => [...tabState.messages]);
+                }
                 if (sid) setSessionId(sid);
               }
             });
@@ -2040,26 +2104,36 @@ export function useChatStreamingLifecycle(
                 // immediately before it. Backend already deleted the user
                 // msg from DB. Without this, orphans display for 6-9s until
                 // polling overwrites messages with DB truth.
-                const assistantIdx = tabState.messages.findIndex(
+                // Remove orphan messages via store or fallback
+                const removeStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+                const storeOrTab = removeStore?.messages ?? tabState.messages;
+                const assistantIdx = storeOrTab.findIndex(
                   (m) => m.id === assistantMessageId
                 );
                 if (assistantIdx >= 0) {
-                  // Remove assistant placeholder and the user msg before it (if exists)
                   const removeIds = new Set([assistantMessageId]);
-                  if (assistantIdx > 0 && tabState.messages[assistantIdx - 1].role === 'user') {
-                    removeIds.add(tabState.messages[assistantIdx - 1].id);
+                  if (assistantIdx > 0 && storeOrTab[assistantIdx - 1].role === 'user') {
+                    removeIds.add(storeOrTab[assistantIdx - 1].id);
                   }
-                  tabState.messages = tabState.messages.filter(m => !removeIds.has(m.id));
+                  if (removeStore) {
+                    removeStore.remove((m) => removeIds.has(m.id));
+                  } else {
+                    tabState.messages = tabState.messages.filter(m => !removeIds.has(m.id));
+                  }
                 }
               }
             }
             // Mirror to React state if this is the active tab
             if (!capturedTabId || capturedTabId === activeTabIdRef.current) {
               setIsWaitingForBusy(true);
-              // Also sync the orphan removal to React
-              const tabState = capturedTabId ? tabMapRef.current.get(capturedTabId) : undefined;
-              if (tabState) {
-                setMessages([...tabState.messages]);
+              // Force sync after remove — store subscription is rAF-deferred,
+              // so force immediate sync for UI responsiveness on orphan cleanup
+              const rmStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+              if (rmStore) {
+                setMessages(rmStore.getSnapshot());
+              } else {
+                const tabState = capturedTabId ? tabMapRef.current.get(capturedTabId) : undefined;
+                if (tabState) setMessages([...tabState.messages]);
               }
             }
 
@@ -2126,18 +2200,24 @@ export function useChatStreamingLifecycle(
                   if (contentLen > 0 && contentLen === prevContentLen) {
                     stableCount++;
                     if (stableCount >= 2) {
-                      // Backend completed — map and render
-                      const mapped = msgs.map((m) => ({
-                        id: m.id,
-                        role: m.role as 'user' | 'assistant' | 'system',
-                        content: m.content as ContentBlock[],
-                        timestamp: m.createdAt || new Date().toISOString(),
-                      }));
-                      currentTab.messages = mapped;
+                      // Backend completed — reconcile via store (single-writer)
+                      const busyStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+                      if (busyStore) {
+                        busyStore.reconcile(msgs);
+                        currentTab.messages = busyStore.messages;
+                      } else {
+                        const mapped = msgs.map((m) => ({
+                          id: m.id,
+                          role: m.role as 'user' | 'assistant' | 'system',
+                          content: m.content as ContentBlock[],
+                          timestamp: m.createdAt || new Date().toISOString(),
+                        }));
+                        currentTab.messages = mapped;
+                      }
                       clearBusyPoll(currentTab);
-                      // Mirror to React if active
                       if (capturedTabId === activeTabIdRef.current) {
-                        setMessages(mapped);
+                        const snapshot = busyStore?.getSnapshot() ?? currentTab.messages;
+                        setMessages(snapshot);
                         setIsWaitingForBusy(false);
                       }
                       updateTabStatus(capturedTabId, 'idle');
@@ -2234,18 +2314,22 @@ export function useChatStreamingLifecycle(
             ];
           };
 
-          if (tabState) {
-            tabState.messages = applyError(tabState.messages);
+          // Apply error via store (single-writer) or fallback
+          const errStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+          if (errStore) {
+            // Replace entire message array — applyError has complex multi-path logic
+            const errorResult = applyError(errStore.messages);
+            errStore.replace(errorResult);
+          } else {
+            if (tabState) tabState.messages = applyError(tabState.messages);
+            if (isActiveTab) setMessages((prev) => applyError(prev));
+          }
 
+          if (tabState) {
             // QUEUE_TIMEOUT: store retry payload so ChatPage can offer "Retry" button
             if (event.code === 'QUEUE_TIMEOUT' && event.retryPayload) {
               tabState.queueTimeoutRetry = event.retryPayload;
             }
-          }
-
-          if (isActiveTab) {
-            // Use functional updater to get latest state (avoids stale ref)
-            setMessages((prev) => applyError(prev));
           }
           // Tab-aware: clear only this tab's streaming state
           setIsStreaming(false, capturedTabId ?? undefined);
@@ -2292,13 +2376,19 @@ export function useChatStreamingLifecycle(
               content: [{ type: 'text' as const, text: 'Session resumed' }],
               timestamp: new Date().toISOString(),
             };
-            tabState.messages = [...(tabState.messages || []), boundaryMsg];
+            // Append boundary via store (single-writer)
+            const boundaryStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+            if (boundaryStore) {
+              boundaryStore.append(boundaryMsg as Message);
+            } else {
+              tabState.messages = [...(tabState.messages || []), boundaryMsg];
+            }
             // Force re-render so ChatPage picks up isResuming from tabMapRef.
-            // Same pattern as isReconnecting — ref mutations alone don't
-            // trigger React re-renders.
             const isActive = capturedTabId === activeTabIdRef.current;
-            if (isActive) {
+            if (isActive && !boundaryStore) {
               setMessages((prev) => [...prev, boundaryMsg]);
+            }
+            if (isActive) {
               setIsStreaming(true, capturedTabId ?? undefined);
             }
           }
@@ -2446,11 +2536,13 @@ export function useChatStreamingLifecycle(
             },
           };
 
-          if (tabState) {
-            tabState.messages = [...tabState.messages, evolutionMessage];
-          }
-          if (isActiveTab) {
-            setMessages((prev) => [...prev, evolutionMessage]);
+          // Append evolution message via store (single-writer)
+          const evoStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+          if (evoStore) {
+            evoStore.append(evolutionMessage);
+          } else {
+            if (tabState) tabState.messages = [...tabState.messages, evolutionMessage];
+            if (isActiveTab) setMessages((prev) => [...prev, evolutionMessage]);
           }
         }
         // Telemetry events (agent_activity, tool_invocation, etc.) are no
@@ -2651,27 +2743,27 @@ export function useChatStreamingLifecycle(
           ];
         };
 
-        if (tabState) {
-          const beforeCount = tabState.messages.find((m) => m.id === assistantMessageId)?.content.length ?? 0;
-          tabState.messages = applyError(tabState.messages);
-          const afterCount = tabState.messages.find((m) => m.id === assistantMessageId)?.content.length ?? 0;
-          // PRODUCTION DIAGNOSTIC: P0 content loss investigation.
-          // Only log when content may have been lost (beforeCount > 0 but
-          // afterCount didn't grow as expected) — avoids noise on routine errors.
+        // Apply error via store (single-writer) or fallback
+        const errStore2 = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
+        if (errStore2) {
+          const beforeCount = errStore2.messages.find((m) => m.id === assistantMessageId)?.content.length ?? 0;
+          const errorResult = applyError(errStore2.messages);
+          errStore2.replace(errorResult);
+          const afterCount = errStore2.messages.find((m) => m.id === assistantMessageId)?.content.length ?? 0;
           if (beforeCount > 0 && afterCount <= beforeCount) {
             console.warn('[ErrorHandler] Possible content loss:', {
-              assistantMessageId,
-              beforeCount,
-              afterCount,
-              totalMessages: tabState.messages.length,
-              tabId: capturedTabId,
+              assistantMessageId, beforeCount, afterCount,
+              totalMessages: errStore2.messages.length, tabId: capturedTabId,
               error: error.message?.slice(0, 80),
             });
           }
-        }
-
-        if (isActiveTab) {
-          setMessages((prev) => applyError(prev));
+        } else {
+          if (tabState) {
+            tabState.messages = applyError(tabState.messages);
+          }
+          if (isActiveTab) {
+            setMessages((prev) => applyError(prev));
+          }
         }
         // Tab-aware: clear only this tab's streaming state
         setIsStreaming(false, capturedTabId ?? undefined);
