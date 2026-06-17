@@ -657,6 +657,7 @@ export default function ChatPage() {
         if (!tabState.isStreaming) {
           messageStoreRegistry.getOrCreate(tabId).replace(tabState.messages);
         }
+        console.log(`[TAB-SELECT] tab=${tabId}, msgs=${tabState.messages.length}, sessionId=${tabState.sessionId?.slice(0,8)}, streaming=${tabState.isStreaming}`);
         setMessages(tabState.messages);
         setSessionId(tabState.sessionId);
         setPendingQuestion(tabState.pendingQuestion);
@@ -1190,6 +1191,7 @@ export default function ChatPage() {
     // sync directly from tabState — do NOT fetch from backend.
     // Backend fetch overwrites in-progress streaming content with stale data.
     if (activeTabState.messages.length > 0) {
+      console.log(`[SYNC-EFFECT] tab=${activeTabId}, msgs=${activeTabState.messages.length}, sessionId=${activeTabState.sessionId?.slice(0,8)}, first_msg_role=${activeTabState.messages[0]?.role}`);
       setMessages([...activeTabState.messages]);
       setSessionId(activeTabState.sessionId);
       setPendingQuestion(activeTabState.pendingQuestion ?? null);
@@ -1674,14 +1676,15 @@ export default function ChatPage() {
       setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
     }
 
-    // Resolve sessionId: prefer tabMapRef (synchronously updated by
-    // session_start handler) over sessionIdRef (async React state).
-    // Closes the race window where sessionIdRef hasn't been committed
-    // yet but tabMapRef already has the correct session ID.
-    const resolvedSessionId = (
-      (currentActiveTabId && tabMapRef.current.get(currentActiveTabId)?.sessionId)
-      || sessionIdRef.current
-    );
+    // Resolve sessionId STRICTLY from this tab's own state (tabMapRef, which the
+    // session_start handler updates synchronously). NEVER fall back to the shared
+    // sessionIdRef — that holds the *active tab's* id and would misroute a NEW
+    // tab's first send into the previously-active tab's session (cross-tab leak,
+    // Principle 4). A tab with no sessionId yet must send undefined → backend
+    // creates a fresh session for it.
+    const resolvedSessionId = currentActiveTabId
+      ? tabMapRef.current.get(currentActiveTabId)?.sessionId
+      : undefined;
 
     const abort = chatService.streamChat(
       {
@@ -1830,8 +1833,10 @@ export default function ChatPage() {
       // placeholder out of the store → updateLast() no-op'd every token.
       insertOptimisticMessages(tabId, [assistantPlaceholder]);
 
-      // Resolve sessionId from tabMapRef (authoritative)
-      const resolvedSessionId = tabState.sessionId || sessionIdRef.current;
+      // Resolve sessionId STRICTLY from this queued tab's own state — never
+      // fall back to the shared sessionIdRef (would misroute into another tab's
+      // session, Principle 4). No per-tab session yet → undefined (fresh session).
+      const resolvedSessionId = tabState.sessionId;
 
       const abort = chatService.streamChat(
         {
