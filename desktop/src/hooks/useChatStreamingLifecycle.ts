@@ -34,6 +34,8 @@
 
 import React, { useState, useReducer, useRef, useCallback, useMemo, useEffect } from 'react';
 import { streamingReducer, INITIAL_STATE, type StreamingState, type StreamingEvent } from './streaming-machine';
+// Re-export state machine utilities for consumers
+export { isActivelyStreaming, isInputBlocked, getStatusLabel, type StreamingMode } from './streaming-machine';
 import type {
   Message,
   ContentBlock,
@@ -1009,6 +1011,8 @@ export function useChatStreamingLifecycle(
   // Consumers can opt into `streamState.mode` checks instead of boolean combos.
   // Boolean flags remain authoritative until P3/P4 completes full migration.
   const [streamState, dispatch] = useReducer(streamingReducer, INITIAL_STATE);
+  const streamStateRef = useRef(streamState);
+  streamStateRef.current = streamState;
 
   // ── MessageStore subscription: store → React state bridge ──────────────
   // When the active tab has a store, subscribe to it. On notify (rAF-gated),
@@ -1271,6 +1275,24 @@ export function useChatStreamingLifecycle(
   const setIsStreaming = useCallback(
     (streaming: boolean, tabId?: string) => {
       const targetTabId = tabId ?? activeTabIdRef.current;
+
+      // ── State machine sync: dispatch transitions at the single write point ──
+      // setIsStreaming(true) = stream initiation (SEND_MESSAGE or resume)
+      // setIsStreaming(false) = stream termination (USER_STOP, RESULT, or ERROR)
+      // These are coarse dispatches — specific events (SESSION_START, RESULT,
+      // ASK_USER_QUESTION) dispatch more precisely at their semantic sites.
+      const currentMode = streamStateRef.current.mode;
+      if (streaming && currentMode === 'idle') {
+        dispatch({ type: 'SEND_MESSAGE' });
+      } else if (!streaming && currentMode !== 'idle' && currentMode !== 'error') {
+        // Only dispatch USER_STOP if no more specific event already transitioned.
+        // The specific dispatches (RESULT, ASK_USER_QUESTION, ERROR) fire first
+        // at their semantic sites. This catches the USER_STOP case where no
+        // specific event has fired yet.
+        if (currentMode !== 'waiting_input' && currentMode !== 'permission_needed') {
+          dispatch({ type: 'USER_STOP' });
+        }
+      }
 
       // Always update per-tab map
       if (targetTabId) {
