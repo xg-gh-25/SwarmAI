@@ -52,10 +52,10 @@ export default function Modal({
     <div
       ref={overlayRef}
       className={clsx(
-        "fixed inset-0 z-50 flex justify-center bg-black/50 backdrop-blur-sm",
+        "fixed inset-0 z-50 flex bg-black/50 backdrop-blur-sm",
         size === 'fullscreen'
-          ? 'items-start px-4 pb-4 pt-12'  // items-start + top padding clears macOS title bar
-          : 'items-center p-4'
+          ? 'flex-col items-center px-4 pb-4 pt-12'  // flex-col + padding: card fills safe zone without 100vh (which disagrees with visible area on macOS overlay title bar)
+          : 'justify-center items-center p-4'
       )}
       onMouseDown={(e) => {
         // Only close when clicking directly on the overlay background
@@ -67,7 +67,7 @@ export default function Modal({
       <div
         className={clsx(
           'w-full bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl shadow-2xl flex flex-col',
-          size === 'fullscreen' ? 'h-[calc(100vh-6rem)]' : 'max-h-[90vh]',
+          size === 'fullscreen' ? 'flex-1 min-h-0' : 'max-h-[90vh]',
           sizeClasses[size]
         )}
         // Stop event propagation to prevent overlay close when clicking inside modal

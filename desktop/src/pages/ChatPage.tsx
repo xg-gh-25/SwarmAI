@@ -1514,21 +1514,34 @@ export default function ChatPage() {
           });
         }
 
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === existingQueued.messageId
-              ? { ...m, content: combinedDisplayContent, timestamp: new Date().toISOString() }
-              : m
-          )
-        );
-        // Direct tabState write (synchronous — avoids rAF subscription race
-        // that can leak messages across tabs during tab switch).
-        if (activeTabForGuard.messages) {
-          activeTabForGuard.messages = activeTabForGuard.messages.map((m) =>
-            m.id === existingQueued.messageId
-              ? { ...m, content: combinedDisplayContent, timestamp: new Date().toISOString() }
-              : m
+        // SINGLE-WRITER: update queued message content through the store.
+        // updateById is not phase-gated — always succeeds during streaming.
+        // Store subscription propagates → setMessages + tabState.messages.
+        const appendStore = activeTabIdRef.current
+          ? messageStoreRegistry.get(activeTabIdRef.current)
+          : null;
+        if (appendStore) {
+          appendStore.updateById(existingQueued.messageId, (m) => ({
+            ...m,
+            content: combinedDisplayContent,
+            timestamp: new Date().toISOString(),
+          }));
+        } else {
+          // Fallback: no store
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === existingQueued.messageId
+                ? { ...m, content: combinedDisplayContent, timestamp: new Date().toISOString() }
+                : m
+            )
           );
+          if (activeTabForGuard.messages) {
+            activeTabForGuard.messages = activeTabForGuard.messages.map((m) =>
+              m.id === existingQueued.messageId
+                ? { ...m, content: combinedDisplayContent, timestamp: new Date().toISOString() }
+                : m
+            );
+          }
         }
 
         activeTabForGuard.queuedMessage = {
@@ -1554,11 +1567,24 @@ export default function ChatPage() {
         timestamp: new Date().toISOString(),
         isQueued: true,
       };
-      setMessages((prev) => [...prev, queuedUserMessage]);
 
-      // Direct tabState write (synchronous — avoids rAF cross-tab race)
-      if (activeTabForGuard.messages) {
-        activeTabForGuard.messages = [...activeTabForGuard.messages, queuedUserMessage];
+      // SINGLE-WRITER: route through store — append() is NOT phase-gated,
+      // so it succeeds during streaming. The store→React subscription effect
+      // propagates to setMessages + tabState.messages on the next rAF frame.
+      // Without this, the subscription overwrites the setMessages/tabState
+      // write with the store snapshot (which lacks the queued message),
+      // causing the user message to "disappear" during streaming.
+      const queueStore = activeTabIdRef.current
+        ? messageStoreRegistry.get(activeTabIdRef.current)
+        : null;
+      if (queueStore) {
+        queueStore.append(queuedUserMessage);
+      } else {
+        // Fallback: no store (should not happen in normal flow)
+        setMessages((prev) => [...prev, queuedUserMessage]);
+        if (activeTabForGuard.messages) {
+          activeTabForGuard.messages = [...activeTabForGuard.messages, queuedUserMessage];
+        }
       }
 
       activeTabForGuard.queuedMessage = {
@@ -1793,21 +1819,27 @@ export default function ChatPage() {
     tabState._queuedAt = undefined;     // clear queue timestamp (reconcile immunity ends)
     tabState.userStopped = false; // prevent stale flag from suppressing new stream errors
 
-    // Remove the "queued" badge from the user message
-    const isActive = activeTabIdRef.current === tabId;
-    if (isActive) {
-      setMessages((prev) =>
-        prev.map((m) =>
+    // Remove the "queued" badge from the user message — route through store
+    // for consistency (store subscription propagates to React + tabState).
+    const drainStore = messageStoreRegistry.get(tabId);
+    if (drainStore) {
+      drainStore.updateById(queued.messageId, (m) => ({ ...m, isQueued: false }));
+    } else {
+      // Fallback: no store (rare edge case)
+      const isActive = activeTabIdRef.current === tabId;
+      if (isActive) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === queued.messageId ? { ...m, isQueued: false } : m
+          )
+        );
+      }
+      const drainTab = tabMapRef.current.get(tabId);
+      if (drainTab?.messages) {
+        drainTab.messages = drainTab.messages.map((m) =>
           m.id === queued.messageId ? { ...m, isQueued: false } : m
-        )
-      );
-    }
-    // Direct tabState write (synchronous — avoids rAF cross-tab race)
-    const drainTab = tabMapRef.current.get(tabId);
-    if (drainTab?.messages) {
-      drainTab.messages = drainTab.messages.map((m) =>
-        m.id === queued.messageId ? { ...m, isQueued: false } : m
-      );
+        );
+      }
     }
 
     // Helper: clean up streaming state on drain failure.
@@ -1888,12 +1920,17 @@ export default function ChatPage() {
 
     const queued = tabState.queuedMessage;
 
-    // Remove from React state (display)
-    setMessages((prev) => prev.filter((m) => m.id !== queued.messageId));
-    // Direct tabState write (synchronous — avoids rAF cross-tab race)
-    const cancelTab = tabMapRef.current.get(tabId);
-    if (cancelTab?.messages) {
-      cancelTab.messages = cancelTab.messages.filter((m) => m.id !== queued.messageId);
+    // SINGLE-WRITER: remove through store (propagates via subscription).
+    const cancelStore = messageStoreRegistry.get(tabId);
+    if (cancelStore) {
+      cancelStore.remove((m) => m.id === queued.messageId);
+    } else {
+      // Fallback: no store
+      setMessages((prev) => prev.filter((m) => m.id !== queued.messageId));
+      const cancelTab = tabMapRef.current.get(tabId);
+      if (cancelTab?.messages) {
+        cancelTab.messages = cancelTab.messages.filter((m) => m.id !== queued.messageId);
+      }
     }
 
     // Clear queue
