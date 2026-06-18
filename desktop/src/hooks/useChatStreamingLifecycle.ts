@@ -33,7 +33,7 @@
  */
 
 import React, { useState, useReducer, useRef, useCallback, useMemo, useEffect } from 'react';
-import { streamingReducer, INITIAL_STATE, type StreamingState, type StreamingEvent } from './streaming-machine';
+import { streamingReducer, INITIAL_STATE, type StreamingEvent } from './streaming-machine';
 // Re-export state machine utilities for consumers
 export { isActivelyStreaming, isInputBlocked, getStatusLabel, type StreamingMode, type StreamingState, type StreamingEvent } from './streaming-machine';
 import type {
