@@ -87,6 +87,11 @@ def _make_unit(
     unit._recall_injected = False
     unit._pid_watchdog_task = None
     unit._send_generation = 0
+    # Extracted modules need to be instantiated for delegation stubs
+    from core.streaming_orchestrator import StreamingOrchestrator
+    from core.retry_manager import RetryManager
+    unit._streaming_orchestrator = StreamingOrchestrator(parent=unit)
+    unit._retry_manager = RetryManager(parent=unit)
     return unit
 
 
