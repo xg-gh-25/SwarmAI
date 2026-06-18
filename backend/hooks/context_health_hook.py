@@ -335,22 +335,25 @@ class ContextHealthHook:
                 canary_timeout = min(20, per_case)
 
         result = run_eval(golden_set_filtered, trigger, None, root,
-                          canary_timeout=canary_timeout)
+                          canary_timeout=canary_timeout,
+                          programmatic_only=True)
 
         # Persist canary result for session briefing
         canary_file = root / ".context" / ".eval-canary.json"
         import json as _json
+        cases_error = result.get("cases_error", 0)
         canary_data = {
             "timestamp": result["triggered_at"],
             "total": result["total_cases"],
             "passed": result["cases_passed"],
             "failed": result["cases_failed"],
+            "error": cases_error,
             "score": result["overall_score"],
             "duration_s": result["duration_seconds"],
         }
 
         if result["cases_failed"] > 0:
-            # Include failure details for briefing
+            # Include failure details for briefing (real regressions)
             canary_data["failures"] = [
                 {"id": c["id"], "notes": c["notes"]}
                 for c in result["cases"] if c["status"] == "failed"
@@ -358,6 +361,17 @@ class ContextHealthHook:
             logger.warning(
                 "context_health: eval canary FAILED %d/%d cases (score=%.1f%%)",
                 result["cases_failed"], result["total_cases"], result["overall_score"],
+            )
+        elif cases_error > 0:
+            # Config errors: surface as info, not warning (not a regression)
+            canary_data["config_errors"] = [
+                {"id": c["id"], "notes": c["notes"]}
+                for c in result["cases"] if c["status"] == "error"
+            ]
+            logger.info(
+                "context_health: eval canary %d/%d pass, %d config errors (%.1fs)",
+                result["cases_passed"], result["total_cases"], cases_error,
+                result["duration_seconds"],
             )
         else:
             logger.info(

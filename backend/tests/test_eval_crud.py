@@ -246,4 +246,4 @@ class TestCanaryRun:
         """Cases with LLM evaluators only are skipped in canary."""
         result = svc.run_canary()
         for case_result in result["cases"]:
-            assert case_result["status"] in ("passed", "failed", "skipped")
+            assert case_result["status"] in ("passed", "failed", "skipped", "error")

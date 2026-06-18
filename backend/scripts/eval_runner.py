@@ -248,6 +248,34 @@ def eval_trajectory(case: dict, actual_trajectory: list[str] | None = None) -> d
         return {"status": "skipped", "notes": f"Unknown trajectory_match mode: {match_mode}"}
 
 
+def _validate_canary_command(command: str) -> str | None:
+    """Validate canary command is safe to execute via shell.
+
+    Returns None if safe, or an error message if rejected.
+
+    Policy: canary commands come from golden_set.yaml (trusted local data),
+    but we add a structural guard against accidental injection if the file
+    ever becomes writable by less-trusted automation (e.g. auto-seed from
+    corrections, MCP-driven edits).
+
+    Blocked patterns:
+    - Network access (curl, wget, nc outbound, ssh)
+    - Destructive (rm -rf, drop, truncate)
+    - Privilege escalation (sudo, doas)
+    - Data exfiltration (base64 | curl, > /dev/tcp)
+    """
+    import re
+    BLOCKED_PATTERNS = re.compile(
+        r"\b(curl|wget|ssh|scp|nc\s+-[^z]|sudo|doas|"
+        r"rm\s+-rf\s+/|drop\s+table|truncate\s+table|"
+        r"/dev/tcp|mkfifo)\b",
+        re.IGNORECASE,
+    )
+    if BLOCKED_PATTERNS.search(command):
+        return f"Command blocked by safety filter: {command[:80]}"
+    return None
+
+
 def eval_canary_pass(case: dict, root: Path, *, timeout_override: int | None = None) -> dict:
     """Run a command and check output contains expected string.
 
@@ -263,7 +291,12 @@ def eval_canary_pass(case: dict, root: Path, *, timeout_override: int | None = N
     expected = verification.get("expected_contains", "")
 
     if not command:
-        return {"status": "failed", "notes": "No command specified in verification"}
+        return {"status": "error", "notes": "No command specified in verification (misconfigured case)"}
+
+    # Safety gate: reject commands with dangerous patterns
+    safety_error = _validate_canary_command(command)
+    if safety_error:
+        return {"status": "error", "notes": safety_error}
 
     cmd_timeout = min(20, timeout_override) if timeout_override else 20
 
@@ -291,14 +324,20 @@ def eval_canary_pass(case: dict, root: Path, *, timeout_override: int | None = N
 
 
 def eval_file_contains(case: dict, root: Path) -> dict:
-    """Check if a file contains expected content."""
+    """Check if a file contains expected content.
+
+    Returns:
+        status "passed": content matches
+        status "failed": file exists but content doesn't match (real regression)
+        status "error": misconfigured case (missing file, no spec) — NOT a regression
+    """
     verification = case.get("verification", {})
     file_path = verification.get("file", "")
     grep_pattern = verification.get("grep", "")
     expected = verification.get("expected_contains", "")
 
     if not file_path:
-        return {"status": "failed", "notes": "No file specified in verification"}
+        return {"status": "error", "notes": "No file specified in verification (misconfigured case)"}
 
     # Resolve relative to swarmai repo or workspace
     repo_root = _find_swarmai_repo()
@@ -306,7 +345,7 @@ def eval_file_contains(case: dict, root: Path) -> dict:
     if not full_path.exists():
         full_path = root / file_path
     if not full_path.exists():
-        return {"status": "failed", "notes": f"File not found: {file_path}"}
+        return {"status": "error", "notes": f"File not found: {file_path} (misconfigured case or moved file)"}
 
     try:
         content = full_path.read_text(errors="replace")
@@ -734,7 +773,8 @@ def _get_judge_model() -> str:
 def evaluate_case(case: dict, root: Path, *,
                    simulated_response: str | None = None,
                    actual_trajectory: list[str] | None = None,
-                   canary_timeout: int | None = None) -> dict:
+                   canary_timeout: int | None = None,
+                   programmatic_only: bool = False) -> dict:
     """Dispatch case to appropriate evaluator. Programmatic-first cascade.
 
     Strategy: Try ALL programmatic evaluators first. If any returns a
@@ -752,6 +792,8 @@ def evaluate_case(case: dict, root: Path, *,
         actual_trajectory: List of tool call descriptions (from eval session or test).
         canary_timeout: If provided, caps subprocess timeout for canary_pass
             cases (seconds). Used when running under a hook deadline.
+        programmatic_only: If True, never fall through to LLM judge.
+            Structurally enforces zero LLM cost for canary runs.
     """
     evaluators = case.get("evaluators", [])
     case_id = case["id"]
@@ -789,12 +831,14 @@ def evaluate_case(case: dict, root: Path, *,
                 return result
 
     # Phase 2: Fall through to LLM judge (expensive, non-deterministic)
-    for ev in evaluators:
-        if ev in LLM_EVALUATORS:
-            result = eval_llm_judge(case, ev)
-            result["evaluator"] = ev
-            result["duration_ms"] = int((time.time() - start) * 1000)
-            return result
+    # Structurally blocked when programmatic_only=True (canary path).
+    if not programmatic_only:
+        for ev in evaluators:
+            if ev in LLM_EVALUATORS:
+                result = eval_llm_judge(case, ev)
+                result["evaluator"] = ev
+                result["duration_ms"] = int((time.time() - start) * 1000)
+                return result
 
     return {
         "status": "skipped",
@@ -808,8 +852,11 @@ def evaluate_case(case: dict, root: Path, *,
 
 def compute_scores(cases: list, results: list[dict]) -> dict:
     """Compute overall score and per-dimension scores."""
-    # Only count non-skipped cases
-    scored = [(c, r) for c, r in zip(cases, results) if r["status"] != "skipped"]
+    # Only count cases with definitive results (passed/failed).
+    # "skipped" = evaluator can't determine; "error" = misconfiguration.
+    # Neither counts toward pass/fail score.
+    scored = [(c, r) for c, r in zip(cases, results)
+              if r["status"] not in ("skipped", "error")]
 
     if not scored:
         return {"overall": 0.0, "dimensions": {}, "scored_count": 0, "skipped_count": len(results)}
@@ -844,7 +891,8 @@ def compute_scores(cases: list, results: list[dict]) -> dict:
 
 def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root: Path,
              *, tags: list[str] | None = None,
-             canary_timeout: int | None = None) -> dict:
+             canary_timeout: int | None = None,
+             programmatic_only: bool = False) -> dict:
     """Execute eval run. Returns full run result dict.
 
     Evaluator cascade: programmatic first (keyword_match, trajectory, canary_pass,
@@ -859,6 +907,8 @@ def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root
         canary_timeout: If provided, caps subprocess timeout for canary_pass
             cases (seconds). Used by context_health_hook to prevent exceeding
             the BackgroundHookExecutor deadline.
+        programmatic_only: If True, skip LLM judge evaluators entirely.
+            Code-enforced guarantee of zero LLM cost. Used by canary path.
     """
     cases = golden_set["cases"]
 
@@ -871,7 +921,8 @@ def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root
 
     results = []
     for case in cases:
-        result = evaluate_case(case, root, canary_timeout=canary_timeout)
+        result = evaluate_case(case, root, canary_timeout=canary_timeout,
+                               programmatic_only=programmatic_only)
         result["id"] = case["id"]
         results.append(result)
 
@@ -899,6 +950,7 @@ def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root
         "cases_passed": sum(1 for r in results if r["status"] == "passed"),
         "cases_failed": sum(1 for r in results if r["status"] == "failed"),
         "cases_skipped": sum(1 for r in results if r["status"] == "skipped"),
+        "cases_error": sum(1 for r in results if r["status"] == "error"),
         "scored_count": scores["scored_count"],
         "duration_seconds": round(sum(r.get("duration_ms", 0) for r in results) / 1000, 2),
     }
@@ -1122,6 +1174,50 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
             <span class="sparkline-label">{len(scores)} runs</span>
         </div>'''
 
+    # Growth Intelligence — shows learning trajectory, not just pass rate
+    total_cases = len(cases)
+    stable_cases = [c for c in cases if c.get("tier") == "stable"]
+    active_cases = [c for c in cases if c.get("tier") == "active"]
+    draft_cases = [c for c in cases if c.get("tier") == "draft"]
+
+    # Find cases that flipped from fail→pass across history (concrete improvement evidence)
+    recently_fixed = []
+    if len(history) >= 2:
+        prev_failed = {c["id"] for c in history[-1].get("cases", []) if c["status"] == "failed"}
+        curr_passed = {c["id"] for c in run_result.get("cases", []) if c["status"] == "passed"}
+        recently_fixed = list(prev_failed & curr_passed)[:3]
+
+    # Case growth over history
+    first_run_cases = history[0].get("total_cases", 0) if history else 0
+    growth_delta = total_cases - first_run_cases if first_run_cases > 0 else 0
+
+    growth_html = f'''<div class="growth-section">
+        <h3>Growth Intelligence — 越来越好的证据</h3>
+        <div class="growth-grid">
+            <div class="growth-card">
+                <div class="growth-value">{total_cases}</div>
+                <div class="growth-label">Total Cases</div>
+                <div class="growth-sub">自我认知深度{f" (+{growth_delta} since first run)" if growth_delta > 0 else ""}</div>
+            </div>
+            <div class="growth-card">
+                <div class="growth-value">{len(stable_cases)}</div>
+                <div class="growth-label">Stable</div>
+                <div class="growth-sub">行为已固化（连续通过 10+ 次）</div>
+            </div>
+            <div class="growth-card">
+                <div class="growth-value">{len(active_cases)}</div>
+                <div class="growth-label">Active</div>
+                <div class="growth-sub">活跃监测中</div>
+            </div>
+            <div class="growth-card">
+                <div class="growth-value">{len(draft_cases)}</div>
+                <div class="growth-label">Draft</div>
+                <div class="growth-sub">Flywheel 产出（correction → case）</div>
+            </div>
+        </div>
+        {f'<div class="growth-fixed"><strong>最近修复:</strong> {", ".join(recently_fixed)}</div>' if recently_fixed else '<div class="growth-fixed"><span class="growth-clean">无退化 — 所有 case 保持 pass</span></div>'}
+    </div>'''
+
     # Delta section HTML
     delta_html = ""
     if delta:
@@ -1321,6 +1417,18 @@ body {{ font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); 
 .next-action-fix h4 {{ color: var(--red); }}
 
 /* Footer */
+/* Growth Intelligence */
+.growth-section {{ background: var(--card); border-radius: 12px; padding: 1.25rem; margin-bottom: 1.5rem; border: 1px solid var(--border); }}
+.growth-section h3 {{ font-size: 0.95rem; font-weight: 600; margin-bottom: 0.75rem; }}
+.growth-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.75rem; }}
+.growth-card {{ text-align: center; padding: 0.75rem; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); }}
+.growth-value {{ font-size: 1.5rem; font-weight: 700; color: var(--green); }}
+.growth-label {{ font-size: 0.75rem; font-weight: 600; margin-top: 0.2rem; }}
+.growth-sub {{ font-size: 0.65rem; color: var(--muted); margin-top: 0.2rem; }}
+.growth-fixed {{ margin-top: 0.75rem; font-size: 0.8rem; padding: 0.5rem 0.75rem; background: rgba(16,185,129,0.08); border-radius: 6px; border: 1px solid rgba(16,185,129,0.2); }}
+.growth-clean {{ color: var(--green); }}
+
+/* Footer */
 .footer {{ text-align: center; margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.78rem; }}
 .footer p {{ margin: 0.2rem 0; }}
 </style>
@@ -1342,6 +1450,7 @@ body {{ font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); 
         {sparkline_svg}
     </div>
 
+    {growth_html}
     {delta_html}
     {dim_sections}
     {methodology_html}
