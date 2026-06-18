@@ -1552,6 +1552,65 @@ def _run_evolution_cycle_locked(
                 skill_name, confidence,
             )
 
+    # ── Phase 3c: GOVERNANCE MINING (L1) ──
+    # Mine EVOLUTION.md for recurring judgment patterns and generate
+    # governance proposals (STEERING/AGENT rule candidates).
+    # Never writes to governance files — proposals only.
+    governance_proposals_count = 0
+    try:
+        from core.evolution.governance_miner import generate_governance_proposals
+        from pathlib import Path as _Path
+
+        # Locate context files relative to evals_dir
+        # evals_dir = ~/.swarm-ai/SwarmWS/.context/SkillEvals → parent = .context/
+        ctx_dir = evals_dir.parent
+        evolution_md_path = ctx_dir / "EVOLUTION.md"
+        steering_md_path = ctx_dir / "STEERING.md"
+
+        if evolution_md_path.exists():
+            gov_proposals = generate_governance_proposals(
+                evolution_md_path, steering_md_path, threshold=3
+            )
+            if gov_proposals:
+                # Write governance proposals to the same proposals file
+                proposals_path = ctx_dir / ".evolution_proposals.json"
+                existing_proposals = []
+                if proposals_path.exists():
+                    try:
+                        existing_proposals = json.loads(
+                            proposals_path.read_text(encoding="utf-8")
+                        )
+                    except (json.JSONDecodeError, OSError):
+                        pass
+
+                # Deduplicate: replace by gc_id or source_class
+                for gp in gov_proposals:
+                    gp_dict = gp.to_proposal_dict()
+                    # Remove previous entry with same identity
+                    existing_proposals = [
+                        p for p in existing_proposals
+                        if not (
+                            p.get("target") == "governance"
+                            and (
+                                (gp_dict.get("gc_id") and p.get("gc_id") == gp_dict["gc_id"])
+                                or (gp_dict.get("source_class") and p.get("source_class") == gp_dict["source_class"])
+                            )
+                        )
+                    ]
+                    existing_proposals.append(gp_dict)
+
+                proposals_path.write_text(
+                    json.dumps(existing_proposals, indent=2), encoding="utf-8"
+                )
+                governance_proposals_count = len(gov_proposals)
+                logger.info(
+                    "Evolution cycle: generated %d governance proposals (L1)",
+                    governance_proposals_count,
+                )
+    except Exception as exc:
+        errors.append(f"Governance mining failed: {exc}")
+        logger.warning("Governance mining error: %s", exc)
+
     # ── Phase 4: AUDIT ──
     duration = time.monotonic() - start_time
 

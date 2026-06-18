@@ -1180,6 +1180,32 @@ def _get_health_highlights(working_directory: str) -> list[str]:
     except Exception:
         pass  # Non-blocking — tracker absence must never break briefing
 
+    # L4.4: Evolution governance proposals (L1) pending review
+    evolution_proposals_path = (
+        Path(working_directory) / ".context" / ".evolution_proposals.json"
+    )
+    if evolution_proposals_path.exists():
+        try:
+            evo_proposals = json.loads(
+                evolution_proposals_path.read_text(encoding="utf-8")
+            )
+            gov_proposals = [
+                p for p in evo_proposals if p.get("target") == "governance"
+            ]
+            if gov_proposals:
+                for gp in gov_proposals[:3]:  # Cap at 3 to avoid briefing bloat
+                    gc_id = gp.get("gc_id") or ""
+                    source = gp.get("source_class") or ""
+                    rule = _sanitize_prompt_field(gp.get("proposed_rule") or "", 80)
+                    count = gp.get("occurrence_count", 0)
+                    label = gc_id or source or "unknown"
+                    lines.append(
+                        f"  - [evolution/governance] {label}: "
+                        f"\"{rule}\" ({count}x evidence)"
+                    )
+        except (json.JSONDecodeError, OSError, TypeError, KeyError):
+            pass  # Graceful — malformed proposals must never break briefing
+
     return lines
 
 
