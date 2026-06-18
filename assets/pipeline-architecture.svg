@@ -1,142 +1,173 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 520" font-family="sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 560" font-family="Inter, -apple-system, sans-serif">
   <defs>
-    <marker id="arrow1" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
-      <polygon points="0 0, 10 3.5, 0 7" fill="#58a6ff"/>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#58a6ff"/>
     </marker>
-    <marker id="arrow1g" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
-      <polygon points="0 0, 10 3.5, 0 7" fill="#7ee787"/>
+    <marker id="arrG" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#7ee787"/>
     </marker>
-    <marker id="arrow1o" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
-      <polygon points="0 0, 10 3.5, 0 7" fill="#f78166"/>
+    <marker id="arrO" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f78166"/>
+    </marker>
+    <marker id="arrP" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#d2a8ff"/>
     </marker>
   </defs>
-  <rect width="780" height="520" fill="#1a1a2e" rx="8"/>
+  <rect width="940" height="560" fill="#0d1117" rx="12"/>
 
   <!-- Title -->
-  <text x="390" y="30" text-anchor="middle" fill="#e6edf3" font-size="16" font-weight="bold">Autonomous Pipeline: Overall Architecture</text>
+  <text x="470" y="30" text-anchor="middle" fill="#e6edf3" font-size="15" font-weight="bold">Autonomous Pipeline v4 — 3 Phases × 2 Modes</text>
+  <text x="470" y="48" text-anchor="middle" fill="#8b949e" font-size="10">One requirement → push-ready code | One goal → measurable DoD achieved</text>
 
-  <!-- Task Input -->
-  <rect x="20" y="55" width="120" height="40" rx="8" fill="none" stroke="#d2a8ff" stroke-width="2"/>
-  <text x="80" y="80" text-anchor="middle" fill="#d2a8ff" font-size="12">Task Requirement</text>
+  <!-- ============ PHASE A: DECISION (shared by both modes) ============ -->
+  <rect x="20" y="62" width="250" height="250" rx="10" fill="none" stroke="#58a6ff" stroke-width="1.5" stroke-opacity="0.6"/>
+  <text x="145" y="82" text-anchor="middle" fill="#58a6ff" font-size="11" font-weight="bold">PHASE A: DECISION</text>
+  <text x="145" y="96" text-anchor="middle" fill="#8b949e" font-size="8">(shared by both modes)</text>
 
-  <!-- Arrow to stages -->
-  <line x1="140" y1="75" x2="170" y2="75" stroke="#58a6ff" stroke-width="2" marker-end="url(#arrow1)"/>
+  <rect x="40" y="108" width="210" height="30" rx="6" fill="#161b22" stroke="#58a6ff" stroke-width="1.2"/>
+  <text x="55" y="127" fill="#58a6ff" font-size="10" font-weight="bold">①</text>
+  <text x="72" y="127" fill="#e6edf3" font-size="10">EVALUATE</text>
+  <text x="210" y="127" fill="#8b949e" font-size="8" text-anchor="end">GO + profile select</text>
 
-  <!-- 9 Stages Block (the production line) -->
-  <rect x="175" y="48" width="380" height="380" rx="8" fill="none" stroke="#58a6ff" stroke-width="2" stroke-dasharray="6,3"/>
-  <text x="365" y="70" text-anchor="middle" fill="#58a6ff" font-size="11" font-weight="bold">9 STAGES — Production Line</text>
+  <line x1="145" y1="138" x2="145" y2="150" stroke="#58a6ff" stroke-width="1" marker-end="url(#arr)"/>
 
-  <!-- Individual stages -->
-  <rect x="195" y="82" width="100" height="30" rx="6" fill="#1e2a3a" stroke="#58a6ff" stroke-width="1.5"/>
-  <text x="245" y="101" text-anchor="middle" fill="#e6edf3" font-size="10">1. EVALUATE</text>
+  <rect x="40" y="153" width="210" height="30" rx="6" fill="#161b22" stroke="#58a6ff" stroke-width="1.2"/>
+  <text x="55" y="172" fill="#58a6ff" font-size="10" font-weight="bold">②</text>
+  <text x="72" y="172" fill="#e6edf3" font-size="10">THINK</text>
+  <text x="210" y="172" fill="#8b949e" font-size="8" text-anchor="end">alternatives + risk</text>
 
-  <line x1="245" y1="112" x2="245" y2="122" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow1)"/>
+  <line x1="145" y1="183" x2="145" y2="195" stroke="#58a6ff" stroke-width="1" marker-end="url(#arr)"/>
 
-  <rect x="195" y="125" width="100" height="30" rx="6" fill="#1e2a3a" stroke="#58a6ff" stroke-width="1.5"/>
-  <text x="245" y="144" text-anchor="middle" fill="#e6edf3" font-size="10">2. THINK</text>
+  <rect x="40" y="198" width="210" height="30" rx="6" fill="#161b22" stroke="#58a6ff" stroke-width="1.2"/>
+  <text x="55" y="217" fill="#58a6ff" font-size="10" font-weight="bold">③</text>
+  <text x="72" y="217" fill="#e6edf3" font-size="10">PLAN</text>
+  <text x="210" y="217" fill="#8b949e" font-size="8" text-anchor="end">spec + AC / DoD</text>
 
-  <line x1="245" y1="155" x2="245" y2="165" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow1)"/>
+  <line x1="145" y1="228" x2="145" y2="244" stroke="#d2a8ff" stroke-width="1.5" marker-end="url(#arrP)"/>
 
-  <rect x="195" y="168" width="100" height="30" rx="6" fill="#1e2a3a" stroke="#58a6ff" stroke-width="1.5"/>
-  <text x="245" y="187" text-anchor="middle" fill="#e6edf3" font-size="10">3. PLAN</text>
+  <!-- Gate 1 -->
+  <rect x="40" y="248" width="210" height="34" rx="8" fill="#1c1029" stroke="#d2a8ff" stroke-width="2"/>
+  <text x="55" y="269" fill="#d2a8ff" font-size="10" font-weight="bold">④ ★ GATE 1</text>
+  <text x="210" y="269" fill="#d2a8ff" font-size="8" text-anchor="end">Skeptic + SSA</text>
 
-  <line x1="245" y1="198" x2="245" y2="208" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow1)"/>
+  <!-- Mode split arrow -->
+  <line x1="270" y1="180" x2="295" y2="180" stroke="#58a6ff" stroke-width="2" marker-end="url(#arr)"/>
 
-  <rect x="195" y="211" width="100" height="30" rx="6" fill="#1e2a3a" stroke="#58a6ff" stroke-width="1.5"/>
-  <text x="245" y="230" text-anchor="middle" fill="#e6edf3" font-size="10">4. BUILD</text>
+  <!-- ============ MODE SPLIT ============ -->
+  <!-- Diamond: mode selector -->
+  <polygon points="320,180 350,160 380,180 350,200" fill="#161b22" stroke="#e6edf3" stroke-width="1.5"/>
+  <text x="350" y="184" text-anchor="middle" fill="#e6edf3" font-size="8">MODE</text>
 
-  <line x1="245" y1="241" x2="245" y2="251" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow1)"/>
+  <!-- Full mode arrow (top) -->
+  <line x1="380" y1="170" x2="410" y2="130" stroke="#7ee787" stroke-width="1.5" marker-end="url(#arrG)"/>
+  <text x="390" y="143" fill="#7ee787" font-size="8">full</text>
 
-  <rect x="195" y="254" width="100" height="30" rx="6" fill="#1e2a3a" stroke="#58a6ff" stroke-width="1.5"/>
-  <text x="245" y="273" text-anchor="middle" fill="#e6edf3" font-size="10">5. REVIEW</text>
+  <!-- Goal mode arrow (bottom) -->
+  <line x1="380" y1="190" x2="410" y2="320" stroke="#f78166" stroke-width="1.5" marker-end="url(#arrO)"/>
+  <text x="388" y="260" fill="#f78166" font-size="8">goal</text>
 
-  <line x1="245" y1="284" x2="245" y2="294" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow1)"/>
+  <!-- ============ FULL MODE (top) ============ -->
+  <rect x="415" y="62" width="300" height="170" rx="10" fill="none" stroke="#7ee787" stroke-width="1.5" stroke-opacity="0.6"/>
+  <text x="565" y="82" text-anchor="middle" fill="#7ee787" font-size="11" font-weight="bold">FULL MODE (one-shot)</text>
 
-  <rect x="195" y="297" width="100" height="30" rx="6" fill="#1e2a3a" stroke="#58a6ff" stroke-width="1.5"/>
-  <text x="245" y="316" text-anchor="middle" fill="#e6edf3" font-size="10">6. TEST</text>
+  <rect x="430" y="92" width="130" height="28" rx="5" fill="#161b22" stroke="#7ee787" stroke-width="1"/>
+  <text x="445" y="110" fill="#7ee787" font-size="9" font-weight="bold">⑤</text>
+  <text x="460" y="110" fill="#e6edf3" font-size="9">BUILD (TDD)</text>
 
-  <line x1="245" y1="327" x2="245" y2="337" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow1)"/>
+  <rect x="570" y="92" width="130" height="28" rx="5" fill="#161b22" stroke="#7ee787" stroke-width="1"/>
+  <text x="585" y="110" fill="#7ee787" font-size="9" font-weight="bold">⑥</text>
+  <text x="600" y="110" fill="#e6edf3" font-size="9">REVIEW (7 spec)</text>
 
-  <rect x="195" y="340" width="100" height="30" rx="6" fill="#1e2a3a" stroke="#f78166" stroke-width="1.5"/>
-  <text x="245" y="359" text-anchor="middle" fill="#f78166" font-size="10">7. ADVERSARIAL</text>
+  <rect x="430" y="130" width="130" height="28" rx="5" fill="#161b22" stroke="#7ee787" stroke-width="1"/>
+  <text x="445" y="148" fill="#7ee787" font-size="9" font-weight="bold">⑦</text>
+  <text x="460" y="148" fill="#e6edf3" font-size="9">TEST</text>
 
-  <line x1="245" y1="370" x2="245" y2="380" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow1)"/>
+  <text x="565" y="180" text-anchor="middle" fill="#8b949e" font-size="8">One pass: BUILD → REVIEW → TEST → done</text>
+  <text x="565" y="195" text-anchor="middle" fill="#7ee787" font-size="8">Profiles: full · trivial · bugfix · research · docs</text>
 
-  <rect x="195" y="383" width="100" height="30" rx="6" fill="#1e2a3a" stroke="#58a6ff" stroke-width="1.5"/>
-  <text x="245" y="402" text-anchor="middle" fill="#e6edf3" font-size="10">8. DELIVER</text>
+  <!-- Arrow from full to Phase C -->
+  <line x1="715" y1="130" x2="740" y2="130" stroke="#7ee787" stroke-width="1.5" marker-end="url(#arrG)"/>
 
-  <!-- Stage 9 to the right -->
-  <line x1="295" y1="398" x2="340" y2="398" stroke="#58a6ff" stroke-width="1.5" marker-end="url(#arrow1)"/>
+  <!-- ============ GOAL MODE (bottom) ============ -->
+  <rect x="415" y="260" width="300" height="200" rx="10" fill="none" stroke="#f78166" stroke-width="1.5" stroke-opacity="0.6"/>
+  <text x="565" y="280" text-anchor="middle" fill="#f78166" font-size="11" font-weight="bold">GOAL MODE (iterative)</text>
 
-  <rect x="345" y="383" width="100" height="30" rx="6" fill="#1e2a3a" stroke="#d2a8ff" stroke-width="1.5"/>
-  <text x="395" y="402" text-anchor="middle" fill="#d2a8ff" font-size="10">9. REFLECT</text>
+  <!-- Cycle visualization -->
+  <rect x="430" y="292" width="270" height="70" rx="8" fill="#1a1008" stroke="#f78166" stroke-width="0.8"/>
+  <text x="565" y="310" text-anchor="middle" fill="#f78166" font-size="9" font-weight="bold">GOAL CYCLE (repeats until DoD met)</text>
 
-  <!-- Delivery Candidate output -->
-  <rect x="345" y="82" width="190" height="60" rx="8" fill="#1e2a3a" stroke="#7ee787" stroke-width="2"/>
-  <text x="440" y="105" text-anchor="middle" fill="#7ee787" font-size="11" font-weight="bold">Delivery Candidate</text>
-  <text x="440" y="125" text-anchor="middle" fill="#e6edf3" font-size="9">(output of 9 stages)</text>
+  <rect x="440" y="318" width="80" height="24" rx="4" fill="#161b22" stroke="#7ee787" stroke-width="0.8"/>
+  <text x="480" y="334" text-anchor="middle" fill="#e6edf3" font-size="8">BUILD</text>
 
-  <!-- Arrow from stages to candidate -->
-  <line x1="295" y1="97" x2="340" y2="97" stroke="#7ee787" stroke-width="2" marker-end="url(#arrow1g)"/>
+  <text x="527" y="334" fill="#8b949e" font-size="9">→</text>
 
-  <!-- Arrow from candidate to convergence loop -->
-  <line x1="540" y1="112" x2="570" y2="112" stroke="#7ee787" stroke-width="2" marker-end="url(#arrow1g)"/>
+  <rect x="537" y="318" width="70" height="24" rx="4" fill="#161b22" stroke="#7ee787" stroke-width="0.8"/>
+  <text x="572" y="334" text-anchor="middle" fill="#e6edf3" font-size="8">TEST</text>
 
-  <!-- Quality Convergence Loop (right side) -->
-  <rect x="570" y="48" width="195" height="380" rx="8" fill="none" stroke="#7ee787" stroke-width="2" stroke-dasharray="6,3"/>
-  <text x="668" y="70" text-anchor="middle" fill="#7ee787" font-size="11" font-weight="bold">Quality Convergence Loop</text>
+  <text x="614" y="334" fill="#8b949e" font-size="9">→</text>
 
-  <!-- Gate check -->
-  <rect x="595" y="85" width="145" height="35" rx="6" fill="#1e2a3a" stroke="#7ee787" stroke-width="1.5"/>
-  <text x="668" y="100" text-anchor="middle" fill="#e6edf3" font-size="9">Push-Ready Gate</text>
-  <text x="668" y="113" text-anchor="middle" fill="#e6edf3" font-size="9">(6 layers)</text>
-
-  <line x1="668" y1="120" x2="668" y2="140" stroke="#7ee787" stroke-width="1.5" marker-end="url(#arrow1g)"/>
-
-  <!-- Self assessment -->
-  <rect x="595" y="143" width="145" height="35" rx="6" fill="#1e2a3a" stroke="#7ee787" stroke-width="1.5"/>
-  <text x="668" y="158" text-anchor="middle" fill="#e6edf3" font-size="9">Agent Self-Assessment</text>
-  <text x="668" y="171" text-anchor="middle" fill="#e6edf3" font-size="9">(quality bar met?)</text>
-
-  <line x1="668" y1="178" x2="668" y2="198" stroke="#7ee787" stroke-width="1.5" marker-end="url(#arrow1g)"/>
-
-  <!-- Goal alignment -->
-  <rect x="595" y="201" width="145" height="35" rx="6" fill="#1e2a3a" stroke="#7ee787" stroke-width="1.5"/>
-  <text x="668" y="216" text-anchor="middle" fill="#e6edf3" font-size="9">Task Goal Alignment</text>
-  <text x="668" y="229" text-anchor="middle" fill="#e6edf3" font-size="9">(solves what was asked?)</text>
-
-  <line x1="668" y1="236" x2="668" y2="256" stroke="#7ee787" stroke-width="1.5" marker-end="url(#arrow1g)"/>
-
-  <!-- Decision diamond -->
-  <polygon points="668,260 708,285 668,310 628,285" fill="none" stroke="#d2a8ff" stroke-width="2"/>
-  <text x="668" y="288" text-anchor="middle" fill="#d2a8ff" font-size="9">ALL PASS?</text>
-
-  <!-- YES path -->
-  <line x1="708" y1="285" x2="745" y2="285" stroke="#7ee787" stroke-width="2"/>
-  <text x="750" y="282" fill="#7ee787" font-size="9" font-weight="bold">YES</text>
-
-  <!-- NO path -->
-  <line x1="668" y1="310" x2="668" y2="330" stroke="#f78166" stroke-width="2" marker-end="url(#arrow1o)"/>
-  <text x="683" y="323" fill="#f78166" font-size="9">NO</text>
-
-  <!-- Targeted fix -->
-  <rect x="595" y="333" width="145" height="30" rx="6" fill="#1e2a3a" stroke="#f78166" stroke-width="1.5"/>
-  <text x="668" y="352" text-anchor="middle" fill="#f78166" font-size="9">Identify Gap + Fix</text>
+  <rect x="624" y="318" width="70" height="24" rx="4" fill="#161b22" stroke="#f78166" stroke-width="0.8"/>
+  <text x="659" y="334" text-anchor="middle" fill="#e6edf3" font-size="8">DoD?</text>
 
   <!-- Loop back arrow -->
-  <line x1="668" y1="363" x2="668" y2="380" stroke="#f78166" stroke-width="1.5"/>
-  <path d="M668,380 Q668,400 740,400 Q760,400 760,320 Q760,75 668,75" fill="none" stroke="#f78166" stroke-width="1.5" marker-end="url(#arrow1o)"/>
-  <text x="755" y="240" fill="#f78166" font-size="8" transform="rotate(-90,755,240)">re-verify</text>
+  <path d="M659,342 Q659,355 565,355 Q440,355 440,334" fill="none" stroke="#f78166" stroke-width="1" stroke-dasharray="3,2"/>
+  <text x="540" y="368" text-anchor="middle" fill="#f78166" font-size="7">not met → next cycle</text>
 
-  <!-- Push-Ready Output -->
-  <rect x="570" y="450" width="195" height="45" rx="8" fill="#1e2a3a" stroke="#7ee787" stroke-width="2.5"/>
-  <text x="668" y="468" text-anchor="middle" fill="#7ee787" font-size="12" font-weight="bold">PUSH-READY</text>
-  <text x="668" y="484" text-anchor="middle" fill="#e6edf3" font-size="9">Create PR (auto-merge if CI green)</text>
+  <!-- Goal annotations -->
+  <text x="565" y="395" text-anchor="middle" fill="#8b949e" font-size="8">Periodic REVIEW every N cycles</text>
+  <text x="565" y="410" text-anchor="middle" fill="#8b949e" font-size="8">Final ADVERSARIAL on total changeset when DoD met</text>
+  <text x="565" y="430" text-anchor="middle" fill="#f78166" font-size="8">Scheduled mode: job system runs cycles overnight</text>
+  <text x="565" y="445" text-anchor="middle" fill="#e6edf3" font-size="8" font-weight="bold">Exit: DoD met | max cycles | budget | stuck 3×</text>
 
-  <!-- Arrow from YES to push-ready -->
-  <path d="M745,285 Q760,285 760,450 Q760,473 765,473" fill="none" stroke="#7ee787" stroke-width="2"/>
-  <line x1="755" y1="473" x2="765" y2="473" stroke="#7ee787" stroke-width="2" marker-end="url(#arrow1g)"/>
+  <!-- Arrow from goal to Phase C -->
+  <line x1="715" y1="310" x2="740" y2="310" stroke="#f78166" stroke-width="1.5" marker-end="url(#arrO)"/>
 
-  <!-- Unified label -->
-  <text x="390" y="500" text-anchor="middle" fill="#e6edf3" font-size="10" font-style="italic">The Pipeline = 9 Stages + Quality Convergence Loop (unified system)</text>
+  <!-- ============ PHASE C: DELIVERY (shared) ============ -->
+  <rect x="745" y="62" width="175" height="460" rx="10" fill="none" stroke="#d2a8ff" stroke-width="1.5" stroke-opacity="0.6"/>
+  <text x="832" y="82" text-anchor="middle" fill="#d2a8ff" font-size="11" font-weight="bold">PHASE C</text>
+  <text x="832" y="96" text-anchor="middle" fill="#8b949e" font-size="8">(shared)</text>
+
+  <!-- Gate 2 -->
+  <rect x="760" y="110" width="145" height="36" rx="8" fill="#1c1029" stroke="#d2a8ff" stroke-width="2"/>
+  <text x="770" y="132" fill="#d2a8ff" font-size="9" font-weight="bold">⑧ ★ GATE 2</text>
+  <text x="895" y="132" fill="#d2a8ff" font-size="7" text-anchor="end">Adversarial</text>
+
+  <line x1="832" y1="146" x2="832" y2="162" stroke="#d2a8ff" stroke-width="1" marker-end="url(#arrP)"/>
+
+  <rect x="760" y="166" width="145" height="30" rx="6" fill="#161b22" stroke="#d2a8ff" stroke-width="1"/>
+  <text x="770" y="185" fill="#d2a8ff" font-size="9" font-weight="bold">⑨</text>
+  <text x="788" y="185" fill="#e6edf3" font-size="9">DELIVER</text>
+
+  <line x1="832" y1="196" x2="832" y2="212" stroke="#d2a8ff" stroke-width="1" marker-end="url(#arrP)"/>
+
+  <rect x="760" y="216" width="145" height="30" rx="6" fill="#161b22" stroke="#d2a8ff" stroke-width="1"/>
+  <text x="770" y="235" fill="#d2a8ff" font-size="9" font-weight="bold">⑩</text>
+  <text x="788" y="235" fill="#e6edf3" font-size="9">REFLECT</text>
+  <text x="895" y="235" fill="#8b949e" font-size="7" text-anchor="end">→ DDD</text>
+
+  <!-- Quality Convergence Loop -->
+  <rect x="760" y="265" width="145" height="95" rx="8" fill="#0d1f0d" stroke="#7ee787" stroke-width="1"/>
+  <text x="832" y="283" text-anchor="middle" fill="#7ee787" font-size="9" font-weight="bold">6-Layer Gate</text>
+  <text x="832" y="300" text-anchor="middle" fill="#e6edf3" font-size="7">L1 Tests</text>
+  <text x="832" y="312" text-anchor="middle" fill="#e6edf3" font-size="7">L2 Types · L3 Regression</text>
+  <text x="832" y="324" text-anchor="middle" fill="#e6edf3" font-size="7">L4 Adversarial · L5 DDD</text>
+  <text x="832" y="336" text-anchor="middle" fill="#e6edf3" font-size="7">L6 Decisions resolved</text>
+  <text x="832" y="352" text-anchor="middle" fill="#7ee787" font-size="8">× max 3 iterations</text>
+
+  <!-- Output -->
+  <rect x="760" y="380" width="145" height="36" rx="8" fill="#0d2818" stroke="#7ee787" stroke-width="2"/>
+  <text x="832" y="402" text-anchor="middle" fill="#7ee787" font-size="10" font-weight="bold">PUSH-READY</text>
+
+  <!-- OR escalate -->
+  <rect x="760" y="426" width="145" height="30" rx="6" fill="#1f1510" stroke="#f78166" stroke-width="1"/>
+  <text x="832" y="445" text-anchor="middle" fill="#f78166" font-size="9">or ESCALATE</text>
+
+  <!-- DDD feedback loop -->
+  <rect x="760" y="470" width="145" height="38" rx="6" fill="#0d1f0d" stroke="#7ee787" stroke-width="0.8"/>
+  <text x="832" y="487" text-anchor="middle" fill="#7ee787" font-size="8">REFLECT → DDD learns</text>
+  <text x="832" y="500" text-anchor="middle" fill="#7ee787" font-size="7">Next run starts smarter</text>
+
+  <!-- Bottom bar -->
+  <rect x="20" y="525" width="900" height="25" rx="6" fill="#161b22" stroke="#8b949e" stroke-width="0.4"/>
+  <text x="470" y="542" text-anchor="middle" fill="#e6edf3" font-size="9">72 runs · 69% completion · avg 230K tok/run · auto-resume on crash · meta-intelligence cross-run learning</text>
 </svg>
