@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 
 from .compaction_guard import EscalationLevel
+from .streaming_orchestrator import StreamingOrchestrator
 from .session_healing import (
     CHANNEL_WRAP_BUFFER,
     CHANNEL_WRAP_UP_PROMPT,
@@ -547,6 +548,12 @@ class SessionUnit:
         # Detects external kills (jetsam, OOM) that pipe can't detect.
         self._pid_watchdog_task: Optional[asyncio.Task] = None
         self._PID_WATCHDOG_INTERVAL: float = 5.0  # seconds between polls
+
+        # ── Streaming Orchestrator (Phase 1: pure delegation) ─────
+        # Facade for strangler-fig extraction of streaming logic.
+        # Phase 1: delegates to self._stream_response (no behavior change).
+        # Phase 2: will contain _read_formatted_response logic directly.
+        self._streaming_orchestrator = StreamingOrchestrator(parent=self)
 
     # ── Properties ────────────────────────────────────────────────
 
@@ -1141,7 +1148,7 @@ class SessionUnit:
             self._heal_checkpoint = None  # Consumed — don't re-inject
 
         try:
-            async for event in self._stream_response(query_content):
+            async for event in self._streaming_orchestrator.stream_query(query_content):
                 if _capturing_wrapup_turn:
                     self._capture_wrapup_text(event)
                 yield event
@@ -1500,7 +1507,7 @@ class SessionUnit:
             recovered_query = recovery_prefix + str(query_content)
 
         try:
-            async for event in self._stream_response(recovered_query):
+            async for event in self._streaming_orchestrator.stream_query(recovered_query):
                 yield event
             yield {"_recovered": True}
         except Exception as recovery_exc:
@@ -1815,7 +1822,7 @@ class SessionUnit:
             self._transition(SessionState.STREAMING)
 
             try:
-                async for event in self._stream_response(query_content):
+                async for event in self._streaming_orchestrator.stream_query(query_content):
                     yield event
                 # Success — reset OOM counter
                 self._consecutive_oom_kills = 0
@@ -3403,7 +3410,7 @@ class SessionUnit:
         self._transition(SessionState.STREAMING)
 
         try:
-            async for event in self._stream_response(
+            async for event in self._streaming_orchestrator.stream_query(
                 answer, parent_tool_use_id=tool_use_id,
             ):
                 yield event
