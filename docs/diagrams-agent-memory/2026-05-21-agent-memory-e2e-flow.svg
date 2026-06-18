@@ -62,7 +62,7 @@
 
   <text x="100" y="285" font-size="11" fill="#333">PromptBuilder.build_system_prompt() → load 11 files</text>
   <text x="100" y="305" font-size="11" fill="#333">MEMORY.md (~25K tokens &lt; 30K threshold) → <tspan font-weight="700" fill="#16a34a">FULL INJECTION</tspan></text>
-  <text x="100" y="325" font-size="11" fill="#333">[KD30] "ClientOrg forecast gap — MEAGS -12% (3单slip), RFHC +3%, ISV flat" <tspan font-weight="700" fill="#16a34a">✓ already in system prompt</tspan></text>
+  <text x="100" y="325" font-size="11" fill="#333">[KD30] "AcmeCorp forecast gap — MEAGS -12% (3单slip), RFHC +3%, ISV flat" <tspan font-weight="700" fill="#16a34a">✓ already in system prompt</tspan></text>
   <text x="100" y="350" font-size="10" fill="#666">+ PROJECTS.md → SalesIntel DDD pointer | + DailyActivity (today's jobs) | + Proactive Briefing</text>
 
   <!-- ===== TODAY: Layer 2 ===== -->

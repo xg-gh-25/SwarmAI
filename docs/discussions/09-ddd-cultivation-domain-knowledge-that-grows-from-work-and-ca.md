@@ -15,7 +15,7 @@ updated: 2026-05-18
 Every AI coding tool has the same failure mode:
 
 ```
-User: "Add a revenue report for ClientOrg"
+User: "Add a revenue report for AcmeCorp"
 AI: [generates technically correct code that violates every domain rule]
   - Wrong date filters (must partition by month_sequence, not calendar date)
   - Missing mandatory WHERE clauses (sh_l1='GCR' always required)

@@ -4,17 +4,17 @@
 
   <!-- Title -->
   <text x="390" y="28" fill="#e6edf3" font-size="15" font-weight="bold" text-anchor="middle">E2E: DDD Knowledge Retrieval During Pipeline Execution</text>
-  <text x="390" y="48" fill="#58a6ff" font-size="11" text-anchor="middle">Scenario: "Add retry with exponential backoff to ClientOrg DataProxy calls"</text>
+  <text x="390" y="48" fill="#58a6ff" font-size="11" text-anchor="middle">Scenario: "Add retry with exponential backoff to AcmeCorp ApiGateway calls"</text>
 
   <!-- Step 1: Task arrives -->
   <rect x="30" y="65" width="720" height="60" rx="8" fill="#1a1a2e" stroke="#58a6ff" stroke-width="1.5"/>
   <text x="45" y="85" fill="#58a6ff" font-size="12" font-weight="bold">1. TASK ARRIVES</text>
-  <text x="45" y="105" fill="#e6edf3" font-size="10">User: "DataProxy API 经常 timeout，加 retry with exponential backoff"</text>
-  <text x="45" y="118" fill="#e6edf3" font-size="10">Active project: ClientOrg_BIZ</text>
+  <text x="45" y="105" fill="#e6edf3" font-size="10">User: "ApiGateway API 经常 timeout，加 retry with exponential backoff"</text>
+  <text x="45" y="118" fill="#e6edf3" font-size="10">Active project: AcmeCorp_BIZ</text>
 
   <!-- Step 2: Session Start Load -->
   <rect x="30" y="138" width="720" height="95" rx="8" fill="#1a1a2e" stroke="#7ee787" stroke-width="1.5"/>
-  <text x="45" y="158" fill="#7ee787" font-size="12" font-weight="bold">2. SESSION START — Load ClientOrg_BIZ DDD + Entity Index</text>
+  <text x="45" y="158" fill="#7ee787" font-size="12" font-weight="bold">2. SESSION START — Load AcmeCorp_BIZ DDD + Entity Index</text>
   <rect x="50" y="168" width="155" height="30" rx="4" fill="#1a1a2e" stroke="#7ee787" stroke-width="1"/>
   <text x="127" y="187" fill="#e6edf3" font-size="9" text-anchor="middle">PRODUCT.md [Mature]</text>
   <rect x="215" y="168" width="155" height="30" rx="4" fill="#1a1a2e" stroke="#7ee787" stroke-width="1"/>
@@ -23,13 +23,13 @@
   <text x="457" y="187" fill="#e6edf3" font-size="9" text-anchor="middle">IMPROVEMENT.md [Mature]</text>
   <rect x="545" y="168" width="155" height="30" rx="4" fill="#1a1a2e" stroke="#7ee787" stroke-width="1"/>
   <text x="622" y="187" fill="#e6edf3" font-size="9" text-anchor="middle">PROJECT.md [Growing]</text>
-  <text x="45" y="222" fill="#e6edf3" font-size="10">+ Entity Index loaded: sees "API timeout: SwarmAI/IMPROVEMENT#subprocess-timeout, ClientOrg/IMPROVEMENT#dataproxy-500"</text>
+  <text x="45" y="222" fill="#e6edf3" font-size="10">+ Entity Index loaded: sees "API timeout: SwarmAI/IMPROVEMENT#subprocess-timeout, AcmeCorp/IMPROVEMENT#dataproxy-500"</text>
 
   <!-- Step 3: EVALUATE reads DDD -->
   <rect x="30" y="246" width="720" height="75" rx="8" fill="#1a1a2e" stroke="#d2a8ff" stroke-width="1.5"/>
   <text x="45" y="266" fill="#d2a8ff" font-size="12" font-weight="bold">3. EVALUATE — Reads PRODUCT.md + IMPROVEMENT.md</text>
-  <text x="45" y="284" fill="#e6edf3" font-size="10">PRODUCT.md: DataProxy is a core dependency, reliability is P1 priority → GO</text>
-  <text x="45" y="299" fill="#e6edf3" font-size="10">IMPROVEMENT.md [Mature]: "DataProxy timeout is 90s not 30s (verified 2026-05-02)" → already knows the real timeout value</text>
+  <text x="45" y="284" fill="#e6edf3" font-size="10">PRODUCT.md: ApiGateway is a core dependency, reliability is P1 priority → GO</text>
+  <text x="45" y="299" fill="#e6edf3" font-size="10">IMPROVEMENT.md [Mature]: "ApiGateway timeout is 90s not 30s (verified 2026-05-02)" → already knows the real timeout value</text>
   <text x="45" y="312" fill="#7ee787" font-size="10" font-weight="bold">Decision: GO — this aligns with product priorities, and we already have domain context about the real timeout</text>
 
   <!-- Step 4: THINK triggers cross-project pull -->
@@ -42,8 +42,8 @@
 
   <!-- Step 5: BUILD uses TECH.md -->
   <rect x="30" y="432" width="720" height="70" rx="8" fill="#1a1a2e" stroke="#58a6ff" stroke-width="1.5"/>
-  <text x="45" y="452" fill="#58a6ff" font-size="12" font-weight="bold">5. BUILD — Reads ClientOrg/TECH.md conventions</text>
-  <text x="45" y="470" fill="#e6edf3" font-size="10">TECH.md #data-sources [Growing]: "DataProxy base URL, auth header format, partition date requirement"</text>
+  <text x="45" y="452" fill="#58a6ff" font-size="12" font-weight="bold">5. BUILD — Reads AcmeCorp/TECH.md conventions</text>
+  <text x="45" y="470" fill="#e6edf3" font-size="10">TECH.md #data-sources [Growing]: "ApiGateway base URL, auth header format, partition date requirement"</text>
   <text x="45" y="485" fill="#e6edf3" font-size="10">TECH.md #error-handling [Sparse → PULL]: "HTTP 500 = retry, HTTP 400 = fail fast, timeout = 90s"</text>
   <text x="45" y="496" fill="#7ee787" font-size="10" font-weight="bold">Builds retry with correct 90s timeout (not guessed 30s), correct error classification, correct auth headers.</text>
 
@@ -56,8 +56,8 @@
   <!-- Step 7: REFLECT writes back -->
   <rect x="30" y="587" width="720" height="75" rx="8" fill="#1a1a2e" stroke="#7ee787" stroke-width="1.5"/>
   <text x="45" y="607" fill="#7ee787" font-size="12" font-weight="bold">7. REFLECT — Writes back to DDD via Cultivation Proposals</text>
-  <text x="45" y="625" fill="#e6edf3" font-size="10">Proposal 1 → ClientOrg/TECH.md #error-handling: "Retry config: max 3, backoff 1s/2s/4s, timeout 90s"</text>
-  <text x="45" y="640" fill="#e6edf3" font-size="10">Proposal 2 → ClientOrg/IMPROVEMENT.md: "DataProxy returns HTTP 500 on non-partition date ranges — always include partition filter"</text>
+  <text x="45" y="625" fill="#e6edf3" font-size="10">Proposal 1 → AcmeCorp/TECH.md #error-handling: "Retry config: max 3, backoff 1s/2s/4s, timeout 90s"</text>
+  <text x="45" y="640" fill="#e6edf3" font-size="10">Proposal 2 → AcmeCorp/IMPROVEMENT.md: "ApiGateway returns HTTP 500 on non-partition date ranges — always include partition filter"</text>
   <text x="45" y="655" fill="#e6edf3" font-size="10" font-style="italic">Both proposals enter queue → user approves in 30s → DDD grows → next task starts smarter</text>
 
   <!-- Result box -->

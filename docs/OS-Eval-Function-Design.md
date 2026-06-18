@@ -207,7 +207,7 @@ metrics:
 |---------|----------------|-----------|
 | SOUL.md P1-P5 | Active | Referenced in every decision |
 | STEERING R1 (pipeline mandatory) | Active | Governs every code task |
-| MEMORY RC11 (ClientOrg Data Skills) | Dormant-to-Dead | Only relevant during ClientOrg work |
+| MEMORY RC11 (AcmeCorp Data Skills) | Dormant-to-Dead | Only relevant during AcmeCorp work |
 | KNOWLEDGE "Claude Code CLI Hidden Defaults" | Active | Directly prevents P0 bugs |
 | EVOLUTION F001-F004 | Dormant | Historical record, rarely referenced |
 
@@ -485,7 +485,7 @@ When task involves a project, agent must consult DDD docs and let them influence
 | Case | Trigger | Expected | Source |
 |------|---------|----------|--------|
 | Edit `session_unit.py` | SwarmAI project active | Read `SwarmAI/TECH.md` relevant section first | PROJECTS.md directive |
-| "给 ClientOrg 做新 report" | SalesIntel project | Read TECH.md for data tables + SQL filters | LL31 |
+| "给 AcmeCorp 做新 report" | SalesIntel project | Read TECH.md for data tables + SQL filters | LL31 |
 | "Add wiki from knowledge graph" | ai_ready_repo project | Read PRODUCT.md non-goals → REJECT | KD05 |
 | Pipeline EVALUATE on any task | Active project detected | Reasoning references DDD content | KD16 |
 | "Add feature X to pipeline" | SwarmAI project | Read IMPROVEMENT.md "What Failed" first | Design principle |
@@ -1428,7 +1428,7 @@ simulations:
 
 ---
 
-## Appendix C: Operational Patterns (from Rocky ClientOrg Agent Platform Eval)
+## Appendix C: Operational Patterns (from Rocky AcmeCorp Agent Platform Eval)
 
 > Source: Pippin `clientagentplatform/clientagentplatform_evaluation_platform` (zjinpeng/liukp, Jun 2026)
 

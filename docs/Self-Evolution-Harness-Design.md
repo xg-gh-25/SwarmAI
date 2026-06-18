@@ -420,7 +420,7 @@ scripts:
 | Workspace Management | 7 | project-manager, radar-todo, workspace-finder, workspace-git |
 | Media and Content | 7 | image-gen, video-gen, podcast-gen, browser-agent, wireframe |
 | System and Automation | 8 | job-manager, scheduler, peekaboo, tmux, system-health |
-| Domain-Specific | 9 | client-data-proxy, weekly-report, meddpicc-scorecard, finance |
+| Domain-Specific | 9 | acme-data-query, acme-weekly-report, meddpicc-scorecard, finance |
 
 ### 6.4 Skill Self-Improvement Lifecycle
 

@@ -596,7 +596,7 @@ The reference implementation ships with 60 skills across 8 categories (full cata
 | Workspace & Project | 7 | project-manager, radar-todo, workspace-git |
 | Media & Content | 7 | image-gen, video-gen, browser-agent, wireframe |
 | System & Automation | 8 | job-manager, scheduler, tmux, peekaboo |
-| Domain-Specific | 8 | finance, meddpicc-scorecard, client-data-proxy |
+| Domain-Specific | 8 | finance, meddpicc-scorecard, acme-data-query |
 
 ---
 
@@ -1156,11 +1156,11 @@ Each skill links to its source in the [reference implementation](https://github.
 | [s_finance](https://github.com/xg-gh-25/SwarmAI/tree/main/backend/skills/s_finance) | Invoice generation, expense tracking, ROI |
 | [s_meddpicc-scorecard](https://github.com/xg-gh-25/SwarmAI/tree/main/backend/skills/s_meddpicc-scorecard) | MEDDPICC opportunity scoring framework |
 | [s_custom-agents](https://github.com/xg-gh-25/SwarmAI/tree/main/backend/skills/s_custom-agents) | Custom agent creation and configuration |
-| [s_client-data-proxy](https://github.com/xg-gh-25/SwarmAI/tree/main/backend/skills/s_client-data-proxy) | ClientOrg revenue, usage, and forecast data queries |
-| [s_weekly-report](https://github.com/xg-gh-25/SwarmAI/tree/main/backend/skills/s_weekly-report) | ClientOrg weekly revenue and usage reports |
-| [s_client-industry-gtm-analysis](https://github.com/xg-gh-25/SwarmAI/tree/main/backend/skills/s_client-industry-gtm-analysis) | Multi-level industry GTM analysis |
-| [s_client-gtm-report-gen](https://github.com/xg-gh-25/SwarmAI/tree/main/backend/skills/s_client-gtm-report-gen) | GTM report generation from pre-computed data |
-| [s_client-customer-ai-research](https://github.com/xg-gh-25/SwarmAI/tree/main/backend/skills/s_client-customer-ai-research) | Customer AI Agent scenario research |
+| [s_acme-data-query](https://github.com/xg-gh-25/SwarmAI/tree/main/backend/skills/s_acme-data-query) | Domain-specific revenue, usage, and forecast data queries |
+| [s_acme-weekly-report](https://github.com/xg-gh-25/SwarmAI/tree/main/backend/skills/s_acme-weekly-report) | Domain-specific weekly revenue and usage reports |
+| [s_acme-industry-analysis](https://github.com/xg-gh-25/SwarmAI/tree/main/backend/skills/s_acme-industry-analysis) | Multi-level industry GTM analysis |
+| [s_acme-report-gen](https://github.com/xg-gh-25/SwarmAI/tree/main/backend/skills/s_acme-report-gen) | Report generation from pre-computed data |
+| [s_acme-customer-research](https://github.com/xg-gh-25/SwarmAI/tree/main/backend/skills/s_acme-customer-research) | Customer AI scenario research |
 
 ---
 
