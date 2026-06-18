@@ -3066,8 +3066,17 @@ export function useChatStreamingLifecycle(
       // ONLY place streaming is cleared on the complete path, so the two
       // representations can never drift out of sync.
       setIsStreaming(false, capturedTabId ?? undefined);
+
+      // Reset tab status to idle — without this, tabs that ended with an
+      // error event (SSE disconnect, SDK error) would keep showing the red
+      // "!" indicator forever since no subsequent result event arrives to
+      // clear it.  The completeHandler is the definitive "stream is over"
+      // signal — if we reach here the tab is no longer active.
+      if (capturedTabId) {
+        updateTabStatus(capturedTabId, 'idle');
+      }
     };
-  }, [setIsStreaming]); // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
+  }, [setIsStreaming, updateTabStatus]); // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
 
   /**
    * Create a handler for premature SSE disconnects (HTTP stream closed
