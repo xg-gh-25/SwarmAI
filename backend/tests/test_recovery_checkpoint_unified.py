@@ -67,6 +67,8 @@ def _make_unit(state: SessionState = SessionState.STREAMING) -> SessionUnit:
     unit._wrapper = None  # pid property -> None
     unit._last_event_time = None
     unit._streaming_start_time = None
+    unit._consecutive_unstick_timeouts = 0
+    unit._UNSTICK_CIRCUIT_BREAKER_THRESHOLD = 3
     return unit
 
 

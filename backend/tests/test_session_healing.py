@@ -179,6 +179,42 @@ class TestHealthSensorHang:
         should, trigger = sensor.should_checkpoint()
         assert not should
 
+    def test_hang_suppressed_during_waiting_input(self, monkeypatch):
+        """hang_detected must NOT fire when session is in WAITING_INPUT.
+
+        The user may take arbitrarily long to answer a permission prompt.
+        Killing the session during WAITING_INPUT causes the 'streaming stops
+        mid-response' bug that forces users to re-send their message.
+        """
+        sensor = HealthSensor(max_turns=500)
+        sensor.record_turn(100.0, 1400, False)
+        # Simulate time passing well beyond hang threshold
+        monkeypatch.setattr(
+            time, "time", lambda: sensor._last_activity_time + HANG_TIMEOUT_S + 60
+        )
+        # Without state hint → hang fires (backward compat)
+        should, trigger = sensor.should_checkpoint()
+        assert should
+        assert trigger == "hang_detected"
+        # With waiting_input state → suppressed
+        should, trigger = sensor.should_checkpoint(session_state="waiting_input")
+        assert not should
+        assert trigger == ""
+
+    def test_hang_suppressed_during_streaming(self, monkeypatch):
+        """hang_detected must NOT fire when session is in STREAMING.
+
+        Extended thinking can take 5-10 minutes without SDK events.
+        """
+        sensor = HealthSensor(max_turns=500)
+        sensor.record_turn(100.0, 1400, False)
+        monkeypatch.setattr(
+            time, "time", lambda: sensor._last_activity_time + HANG_TIMEOUT_S + 60
+        )
+        should, trigger = sensor.should_checkpoint(session_state="streaming")
+        assert not should
+        assert trigger == ""
+
 
 class TestHealthSensorReset:
     """Test sensor reset after heal."""
