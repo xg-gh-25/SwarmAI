@@ -1292,28 +1292,22 @@ export function useChatStreamingLifecycle(
     (streaming: boolean, tabId?: string) => {
       const targetTabId = tabId ?? activeTabIdRef.current;
 
-      // ── State machine sync: dispatch transitions at the single write point ──
-      // setIsStreaming(true) = stream initiation (SEND_MESSAGE or resume)
-      // setIsStreaming(false) = stream termination (USER_STOP, RESULT, or ERROR)
-      // These are coarse dispatches — specific events (SESSION_START, RESULT,
-      // ASK_USER_QUESTION) dispatch more precisely at their semantic sites.
-      const currentMode = streamStateRef.current.mode;
-      if (streaming && currentMode === 'idle') {
-        dispatch({ type: 'SEND_MESSAGE' });
-      } else if (!streaming && currentMode !== 'idle' && currentMode !== 'error') {
-        // Only dispatch USER_STOP if no more specific event already transitioned.
-        // The specific dispatches (RESULT, ASK_USER_QUESTION, ERROR) fire first
-        // at their semantic sites. This catches the USER_STOP case where no
-        // specific event has fired yet.
-        if (currentMode !== 'waiting_input' && currentMode !== 'permission_needed') {
-          dispatch({ type: 'USER_STOP' });
-        }
-      }
-
       // Always update per-tab map
       if (targetTabId) {
         const tabState = tabMapRef.current.get(targetTabId);
         if (tabState) {
+          // ── Per-tab state machine dispatch (P5) ──
+          // Dispatch to the tab's own streamState. Coarse events: SEND_MESSAGE
+          // on true-from-idle, USER_STOP on false-from-active. More specific
+          // events (SESSION_START, RESULT, etc.) dispatch at their semantic sites.
+          const tabMode = tabState.streamState.mode;
+          if (streaming && tabMode === 'idle') {
+            tabState.streamState = streamingReducer(tabState.streamState, { type: 'SEND_MESSAGE' });
+          } else if (!streaming && tabMode !== 'idle' && tabMode !== 'error'
+            && tabMode !== 'waiting_input' && tabMode !== 'permission_needed') {
+            tabState.streamState = streamingReducer(tabState.streamState, { type: 'USER_STOP' });
+          }
+
           // AUTHORIZED WRITER: readonly bypass — this is the ONLY place
           // that may mutate isStreaming. All other paths get TS2540.
           (tabState as { isStreaming: boolean }).isStreaming = streaming;
@@ -1740,8 +1734,11 @@ export function useChatStreamingLifecycle(
         }
 
         if (event.type === 'session_start' && event.sessionId) {
-          // ── State machine dispatch: PENDING → STREAMING ──
+          // ── State machine dispatch: PENDING → STREAMING (global + per-tab) ──
           dispatch({ type: 'SESSION_START', sessionId: event.sessionId });
+          if (tabState) {
+            tabState.streamState = streamingReducer(tabState.streamState, { type: 'SESSION_START', sessionId: event.sessionId });
+          }
 
           // Update per-tab map. Keep isStreaming true — the tab is still
           // actively streaming after session_start. The pending phase ends
@@ -1892,8 +1889,11 @@ export function useChatStreamingLifecycle(
           event.questions &&
           event.toolUseId
         ) {
-          // ── State machine dispatch: STREAMING → WAITING_INPUT ──
+          // ── State machine dispatch: STREAMING → WAITING_INPUT (global + per-tab) ──
           dispatch({ type: 'ASK_USER_QUESTION' });
+          if (tabState) {
+            tabState.streamState = streamingReducer(tabState.streamState, { type: 'ASK_USER_QUESTION' });
+          }
 
           const pq: PendingQuestion = {
             toolUseId: event.toolUseId,
@@ -1999,9 +1999,12 @@ export function useChatStreamingLifecycle(
             updateTabStatus(capturedTabId, 'permission_needed');
           }
         } else if (event.type === 'result') {
-          // ── State machine dispatch: STREAMING → IDLE or DRAIN_PENDING ──
+          // ── State machine dispatch: STREAMING → IDLE or DRAIN_PENDING (global + per-tab) ──
           const hasQueued = !!(tabState?.queuedMessage);
           dispatch({ type: 'RESULT', hasQueuedMessage: hasQueued });
+          if (tabState) {
+            tabState.streamState = streamingReducer(tabState.streamState, { type: 'RESULT', hasQueuedMessage: hasQueued });
+          }
 
           const sid =
             event.sessionId ||
@@ -2730,15 +2733,18 @@ export function useChatStreamingLifecycle(
         }
 
         console.error('Stream error:', error);
-        // ── State machine dispatch: → ERROR or RECONNECTING ──
-        const hasData = capturedTabId
-          ? tabMapRef.current.get(capturedTabId)?.hasReceivedData ?? false
-          : false;
-        dispatch({
+        // ── State machine dispatch: → ERROR or RECONNECTING (global + per-tab) ──
+        const errorTabState = capturedTabId ? tabMapRef.current.get(capturedTabId) : undefined;
+        const hasData = errorTabState?.hasReceivedData ?? false;
+        const errorEvent: StreamingEvent = {
           type: 'ERROR',
           phase: hasData ? 'mid_stream' : 'connection',
           message: error.message,
-        });
+        };
+        dispatch(errorEvent);
+        if (errorTabState) {
+          errorTabState.streamState = streamingReducer(errorTabState.streamState, errorEvent);
+        }
 
         const tabState = capturedTabId
           ? tabMapRef.current.get(capturedTabId)

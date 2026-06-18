@@ -27,6 +27,7 @@ import { useState, useRef, useMemo, useCallback, useEffect } from 'react';
 import type { Message, UnifiedAttachment, ContentBlock, SystemPromptMetadata, CompactionGuardEvent } from '../types/index';
 import type { PendingQuestion, OpenTab } from '../pages/chat/types';
 import type { ContextWarning } from './useChatStreamingLifecycle';
+import { INITIAL_STATE, type StreamingState } from './streaming-machine';
 import {
   tabPersistenceService,
   type OpenTabsFileData,
@@ -181,6 +182,13 @@ export interface UnifiedTab {
    *  fetch failed (backend unreachable) — leaving a frozen partial response.
    *  The backend-recovered handler retries the DB reconcile for flagged tabs. */
   _dbReconcileFailed?: boolean;
+
+  // ── Per-tab Streaming State Machine (P5) ──────────────────────────
+  /** Explicit state machine tracking this tab's streaming mode.
+   *  Authoritative for mode queries (streamState.mode === 'streaming').
+   *  Boolean flags (isStreaming, isReconnecting, etc.) coexist for backward
+   *  compat — future P6 will remove them once all consumers migrate. */
+  streamState: StreamingState;
 }
 
 /** Fields persisted to ~/.swarm-ai/open_tabs.json (re-exported from tabPersistence service). */
@@ -262,6 +270,7 @@ function createDefaultTab(agentId: string): UnifiedTab {
     isResuming: false,
     reconnectionAttempt: 0,
     attachments: [],
+    streamState: { ...INITIAL_STATE },
   };
 }
 
@@ -293,6 +302,7 @@ function hydrateTab(s: PersistedTab): UnifiedTab {
     isResuming: false,
     reconnectionAttempt: 0,
     attachments: [],
+    streamState: { ...INITIAL_STATE },
   };
 }
 
@@ -595,6 +605,7 @@ export function useUnifiedTabState(
         compactionGuard: null,
         promptMetadata: null,
         attachments: [],
+        streamState: { ...INITIAL_STATE },
       };
       tabMapRef.current.set(tabId, tab);
       bump();

@@ -17,6 +17,7 @@ import { vi } from 'vitest';
 import type { UnifiedTab, TabStatus } from '../../hooks/useUnifiedTabState';
 import type { ChatStreamingLifecycleDeps } from '../../hooks/useChatStreamingLifecycle';
 import type { Message, ContentBlock } from '../../types';
+import { INITIAL_STATE } from '../../hooks/streaming-machine';
 import React from 'react';
 
 // ---------------------------------------------------------------------------
@@ -76,6 +77,7 @@ export function initTestTab(tabId: string, initialMessages?: Message[]): void {
     hasReceivedData: false,
     attachments: [],
     compactionGuard: null,
+    streamState: { ...INITIAL_STATE },
   });
   testActiveTabIdRef.current = tabId;
 }
