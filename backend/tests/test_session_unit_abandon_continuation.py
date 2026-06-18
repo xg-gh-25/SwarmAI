@@ -355,7 +355,7 @@ class TestAbandonBranchIntegration:
         call_count = 0
         injected_query = None
 
-        async def fake_stream(query):
+        async def fake_stream(query, **kwargs):
             nonlocal call_count, injected_query
             call_count += 1
             if call_count <= 2:
@@ -368,7 +368,7 @@ class TestAbandonBranchIntegration:
         fake_continuation = "## Resume Context\nPrior conversation summary"
 
         patches = self._resource_patches(unit) + [
-            patch.object(unit, "_stream_response", side_effect=fake_stream),
+            patch.object(unit._streaming_orchestrator, "_stream_response", side_effect=fake_stream),
             patch.object(unit, "_crash_to_cold_async", new_callable=AsyncMock),
             patch.object(unit, "_spawn", new_callable=AsyncMock),
             patch.object(unit, "_transition"),
@@ -412,7 +412,7 @@ class TestAbandonBranchIntegration:
         call_count = 0
         captured_queries = []
 
-        async def fake_stream(query):
+        async def fake_stream(query, **kwargs):
             nonlocal call_count
             call_count += 1
             captured_queries.append(query)
@@ -425,7 +425,7 @@ class TestAbandonBranchIntegration:
         mock_build = AsyncMock(return_value="should not appear")
 
         patches = self._resource_patches(unit) + [
-            patch.object(unit, "_stream_response", side_effect=fake_stream),
+            patch.object(unit._streaming_orchestrator, "_stream_response", side_effect=fake_stream),
             patch.object(unit, "_crash_to_cold_async", new_callable=AsyncMock),
             patch.object(unit, "_spawn", new_callable=AsyncMock),
             patch.object(unit, "_transition"),
@@ -467,7 +467,7 @@ class TestAbandonBranchIntegration:
 
         call_count = 0
 
-        async def fake_stream(query):
+        async def fake_stream(query, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count <= 2:
@@ -477,7 +477,7 @@ class TestAbandonBranchIntegration:
         mock_build = AsyncMock(return_value="should not be called")
 
         patches = self._resource_patches(unit) + [
-            patch.object(unit, "_stream_response", side_effect=fake_stream),
+            patch.object(unit._streaming_orchestrator, "_stream_response", side_effect=fake_stream),
             patch.object(unit, "_crash_to_cold_async", new_callable=AsyncMock),
             patch.object(unit, "_spawn", new_callable=AsyncMock),
             patch.object(unit, "_transition"),
@@ -519,7 +519,7 @@ class TestAbandonIdempotency:
         call_count = 0
         captured_queries = []
 
-        async def fake_stream(query):
+        async def fake_stream(query, **kwargs):
             nonlocal call_count
             call_count += 1
             captured_queries.append(query)
@@ -534,7 +534,7 @@ class TestAbandonIdempotency:
         mock_build = AsyncMock(return_value="INJECTED_CONTEXT")
 
         patches = [
-            patch.object(unit, "_stream_response", side_effect=fake_stream),
+            patch.object(unit._streaming_orchestrator, "_stream_response", side_effect=fake_stream),
             patch.object(unit, "_crash_to_cold_async", new_callable=AsyncMock),
             patch.object(unit, "_spawn", new_callable=AsyncMock),
             patch.object(unit, "_transition"),

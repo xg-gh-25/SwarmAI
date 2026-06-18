@@ -234,7 +234,7 @@ class TestPreservationAliveSubprocessReuse:
             return
             yield  # Make it an async generator
 
-        unit._stream_response = mock_stream_response
+        unit._streaming_orchestrator._stream_response = mock_stream_response
 
         # Build minimal options mock
         mock_options = MagicMock()

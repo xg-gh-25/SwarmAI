@@ -113,7 +113,7 @@ class TestAutoRecoverStallGuard:
             async def fake_stream(query):
                 yield {"type": "result", "session_id": "test-stuck"}
 
-            with patch.object(stuck_unit, "_stream_response", side_effect=fake_stream):
+            with patch.object(stuck_unit._streaming_orchestrator, "_stream_response", side_effect=fake_stream):
                 events = []
                 async for event in stuck_unit.send(
                     query_content="Recover me",
