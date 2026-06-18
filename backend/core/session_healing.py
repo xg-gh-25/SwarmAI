@@ -177,8 +177,11 @@ class HealthSensor:
         # SUPPRESSED during STREAMING: the model may be in extended thinking
         # (Opus can think for 5-10 minutes without emitting any SDK event).
         # The PID watchdog + MESSAGE_TIMEOUT handle genuine STREAMING hangs.
-        # hang_detected is only meaningful for IDLE/COLD/WAITING_INPUT states.
-        if session_state != "streaming":
+        # SUPPRESSED during WAITING_INPUT: the user may take arbitrarily long
+        # to respond to a permission prompt or ask_user_question. The PID
+        # watchdog already excludes WAITING_INPUT for the same reason.
+        # hang_detected is only meaningful for IDLE/COLD states.
+        if session_state not in ("streaming", "waiting_input"):
             elapsed = time.time() - self._last_activity_time
             if elapsed > HANG_TIMEOUT_S:
                 return True, "hang_detected"

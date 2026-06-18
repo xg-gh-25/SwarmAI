@@ -546,6 +546,21 @@ class LifecycleManager:
                 else self.STREAMING_TIMEOUT_SECONDS
             )
             if stall > effective_timeout:
+                # Circuit breaker: if this session has already been unstuck
+                # multiple times without success, don't keep trying — it's
+                # structurally doomed (context too large for timeout window).
+                unstick_count = getattr(unit, "_consecutive_unstick_timeouts", 0)
+                cb_threshold = getattr(unit, "_UNSTICK_CIRCUIT_BREAKER_THRESHOLD", 2)
+                if unstick_count > cb_threshold:
+                    logger.warning(
+                        "lifecycle_manager.streaming_timeout_circuit_break "
+                        "session_id=%s unstick_count=%d > threshold=%d "
+                        "— skipping (circuit breaker tripped)",
+                        unit.session_id,
+                        unstick_count,
+                        cb_threshold,
+                    )
+                    continue
                 logger.warning(
                     "lifecycle_manager.streaming_timeout session_id=%s "
                     "stall=%.0fs > timeout=%.0fs — forcing unstick",

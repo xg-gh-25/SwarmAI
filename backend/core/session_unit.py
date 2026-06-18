@@ -544,6 +544,12 @@ class SessionUnit:
         self._consecutive_oom_kills: int = 0
         self._OOM_KILL_LIMIT: int = 3  # After 3 consecutive OOMs, stop retrying
 
+        # Consecutive force_unstick_streaming() calls without a successful
+        # streaming response in between. Used as a circuit breaker to stop
+        # the dead loop: timeout → force_unstick → resume → timeout again.
+        # Reset on successful stream completion (alongside _consecutive_oom_kills).
+        self._consecutive_unstick_timeouts: int = 0
+
         # ── PID Watchdog (out-of-band subprocess death detection) ──
         # Polls os.kill(pid, 0) while STREAMING/WAITING_INPUT.
         # Detects external kills (jetsam, OOM) that pipe can't detect.
@@ -784,6 +790,11 @@ class SessionUnit:
                                 "timeout=%.0fs — killing subprocess",
                                 self.session_id, pid, silence, timeout,
                             )
+                            # Track timeout for circuit breaker — this is
+                            # another path that can form a dead loop just
+                            # like force_unstick_streaming(). Without this,
+                            # the watchdog kills bypass the circuit breaker.
+                            self._consecutive_unstick_timeouts += 1
                             # Prevent self-cancellation: _transition(DEAD)
                             # calls _stop_pid_watchdog() which would cancel
                             # THIS task before _force_kill() completes.
@@ -805,21 +816,34 @@ class SessionUnit:
     # ── Adaptive timeout ─────────────────────────────────────────
 
     def _compute_message_timeout(self) -> float:
-        """Timeout that scales with context size.
+        """Timeout that scales with context size and resume state.
 
         Empirical: Opus 4.6 TTFT scales roughly with context tokens.
         At 2M tokens, inference can take 400-600s — a fixed 300s guarantees
         timeout → retry → timeout dead loops.
 
         Formula: max(300, context_tokens / 3000), capped at 900s.
+        Resume multiplier: --resume sessions need extra time for context
+        deserialization + extended thinking on large conversation history.
+        Apply 2x multiplier when _sdk_session_id is set (cap at 1800s).
         """
         BASE_TIMEOUT = 300.0
         MAX_TIMEOUT = 900.0
+        RESUME_MULTIPLIER = 2.0
+        RESUME_MAX_TIMEOUT = 1800.0
         TOKENS_PER_SECOND = 3000  # Conservative model throughput estimate
 
         estimated_context = getattr(self, "_last_known_context_tokens", 0) or 0
         computed = max(BASE_TIMEOUT, estimated_context / TOKENS_PER_SECOND)
-        return min(computed, MAX_TIMEOUT)
+        computed = min(computed, MAX_TIMEOUT)
+
+        # Resume sessions: context deserialization + extended thinking on
+        # large conversation history takes significantly longer. The SDK
+        # replays the full conversation before inference begins.
+        if getattr(self, "_sdk_session_id", None):
+            computed = min(computed * RESUME_MULTIPLIER, RESUME_MAX_TIMEOUT)
+
+        return computed
 
     # ── Subprocess lifecycle ─────────────────────────────────────
 
@@ -1158,8 +1182,9 @@ class SessionUnit:
                 if _capturing_wrapup_turn:
                     self._capture_wrapup_text(event)
                 yield event
-            # Success — reset OOM counter (session is healthy)
+            # Success — reset counters (session is healthy)
             self._consecutive_oom_kills = 0
+            self._consecutive_unstick_timeouts = 0
 
             # ── Self-healing check (invisible to user) ────────────
             # After successful stream, check if session health is degrading.
@@ -1172,12 +1197,19 @@ class SessionUnit:
             _self_heal_enabled = is_self_heal_enabled(
                 self.session_id, is_channel=bool(getattr(self, "_channel_id", None))
             )
-            should_heal, trigger = self._health_sensor.should_checkpoint()
+            should_heal, trigger = self._health_sensor.should_checkpoint(
+                session_state=self.state.value
+            )
             # Fix #3: clear stale graceful flag if sensor no longer triggering
             if not should_heal and self._graceful_wrap_pending:
                 self._graceful_wrap_pending = False
                 self._wrapup_conclusion = ""  # don't leak into a later heal
-            if should_heal and _self_heal_enabled and not self._user_stopped_current_turn:
+            if (
+                should_heal
+                and _self_heal_enabled
+                and not self._user_stopped_current_turn
+                and self.state != SessionState.WAITING_INPUT
+            ):
                 can_heal, reason = self._healing_loop.can_heal()
                 if can_heal:
                     # Graceful pre-kill for turn_approaching:
@@ -2717,29 +2749,59 @@ class SessionUnit:
             return None
         return time.time() - self._last_event_time
 
+    # Circuit breaker threshold for force_unstick_streaming.
+    # After this many consecutive unstick attempts without a successful
+    # streaming response, stop preserving session identity (no more --resume).
+    # This breaks the dead loop: timeout → unstick → resume → same timeout.
+    _UNSTICK_CIRCUIT_BREAKER_THRESHOLD: int = 2
+
     async def force_unstick_streaming(self) -> None:
         """Force a stuck STREAMING session back to COLD.
 
-        Kills the subprocess and transitions STREAMING → DEAD → COLD,
-        preserving ``_sdk_session_id`` so the next ``send()`` can resume
-        the conversation via ``--resume``.
+        Kills the subprocess and transitions STREAMING → DEAD → COLD.
+        On first/second attempt, preserves ``_sdk_session_id`` so the next
+        ``send()`` can resume via ``--resume``.
+
+        Circuit breaker: after _UNSTICK_CIRCUIT_BREAKER_THRESHOLD consecutive
+        unstick attempts without a successful stream in between, clears
+        session identity (no --resume). This breaks the dead loop where
+        --resume sessions repeatedly time out on the same large context.
 
         Called by ``LifecycleManager._check_streaming_timeout()`` and
         by ``send()`` auto-recovery when the previous request left the
         unit stuck in STREAMING.
-
-        Uses ``_crash_to_cold_async()`` which calls
-        ``_force_kill()`` to properly close wrapper file descriptors
-        via ``__aexit__()``.
         """
         if self.state != SessionState.STREAMING:
             return
+
+        self._consecutive_unstick_timeouts += 1
+
+        # Circuit breaker: stop retrying with --resume if structurally doomed
+        if self._consecutive_unstick_timeouts > self._UNSTICK_CIRCUIT_BREAKER_THRESHOLD:
+            logger.warning(
+                "session_unit.force_unstick_circuit_breaker session_id=%s "
+                "consecutive_unsticks=%d > threshold=%d — "
+                "clearing identity (no more --resume)",
+                self.session_id,
+                self._consecutive_unstick_timeouts,
+                self._UNSTICK_CIRCUIT_BREAKER_THRESHOLD,
+            )
+            await self._arm_recovery_checkpoint("stuck_streaming_circuit_break")
+            await self._crash_to_cold_async(clear_identity=True)
+            # Reset counter after clearing identity — the next session starts
+            # fresh (no --resume), so it won't hit the same timeout loop.
+            # Without this reset, the lifecycle manager would permanently skip
+            # this session even after it gets a clean start.
+            self._consecutive_unstick_timeouts = 0
+            return
+
         logger.warning(
             "session_unit.force_unstick session_id=%s pid=%s "
-            "stall=%.0fs — forcing COLD for recovery",
+            "stall=%.0fs attempt=%d — forcing COLD for recovery",
             self.session_id,
             self.pid,
             self.streaming_stall_seconds or 0,
+            self._consecutive_unstick_timeouts,
         )
         await self._arm_recovery_checkpoint("stuck_streaming")
         await self._crash_to_cold_async(clear_identity=False)
