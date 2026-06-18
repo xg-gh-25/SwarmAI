@@ -478,17 +478,17 @@ class SwarmWorkspaceManager:
         depth = 0
 
         if first == "Knowledge" or normalized.startswith("Knowledge/"):
-            section_type = SECTION_KNOWLEDGE
+            section_type = "knowledge"
             depth = len(parts) - 1
         elif first == "Projects":
             if len(parts) < 3:
                 return (True, "")
             sub_path = parts[2:]
             if sub_path and sub_path[0] in PROJECT_SYSTEM_FOLDERS:
-                section_type = SECTION_PROJECT_SYSTEM
+                section_type = "project_system"
                 depth = len(sub_path) - 1
             else:
-                section_type = SECTION_PROJECT_USER
+                section_type = "project_user"
                 depth = len(sub_path) - 1
         else:
             return (True, "")
