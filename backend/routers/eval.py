@@ -274,7 +274,104 @@ async def get_context_health():
     except Exception as exc:
         logger.debug("context-health: proposals read failed: %s", exc)
 
+    # 4. Learning Dashboard — knowledge growth metrics (source:auto|manual)
+    try:
+        result["learning_dashboard"] = _build_learning_dashboard(root)
+    except Exception as exc:
+        logger.debug("context-health: learning dashboard failed: %s", exc)
+        result["learning_dashboard"] = None
+
     return result
+
+
+def _build_learning_dashboard(root) -> dict:
+    """Build learning metrics from DDD entry metadata (source tags + decay states).
+
+    Scans IMPROVEMENT.md and TECH.md for entries with metadata comments.
+    Returns counts for the OS Eval Context Health tab.
+    """
+    from pathlib import Path
+    from datetime import datetime, timedelta
+    from core.ddd_entry_lifecycle import parse_entries
+
+    seven_days_ago = datetime.now().date() - timedelta(days=7)
+    projects_dir = root / "Projects"
+
+    auto_count = 0
+    manual_count = 0
+    legacy_count = 0  # entries without source tag
+    distribution: dict[str, int] = {}
+    dormant_count = 0
+    archived_count = 0
+
+    # Scan project DDD docs
+    if projects_dir.is_dir():
+        for project_dir in sorted(projects_dir.iterdir()):
+            if not project_dir.is_dir() or project_dir.name.startswith("."):
+                continue
+            for doc_name in ("IMPROVEMENT.md", "TECH.md"):
+                doc_path = project_dir / doc_name
+                if not doc_path.exists():
+                    continue
+                try:
+                    content = doc_path.read_text(encoding="utf-8")
+                    entries = parse_entries(content)
+                    for entry in entries:
+                        # Count by source
+                        if entry.source == "auto":
+                            auto_count += 1
+                        elif entry.source == "manual":
+                            manual_count += 1
+                        else:
+                            legacy_count += 1
+                        # Count by doc (distribution)
+                        distribution[doc_name] = distribution.get(doc_name, 0) + 1
+                        # Decay activity
+                        if entry.decay_state == "dormant":
+                            dormant_count += 1
+                        elif entry.decay_state == "archived":
+                            archived_count += 1
+                except Exception:
+                    continue
+
+    # Scan cross-project files (MEMORY.md)
+    memory_path = root / ".context" / "MEMORY.md"
+    if memory_path.exists():
+        try:
+            content = memory_path.read_text(encoding="utf-8")
+            entries = parse_entries(content)
+            for entry in entries:
+                if entry.source == "auto":
+                    auto_count += 1
+                elif entry.source == "manual":
+                    manual_count += 1
+                else:
+                    legacy_count += 1
+                distribution["MEMORY.md"] = distribution.get("MEMORY.md", 0) + 1
+                if entry.decay_state == "dormant":
+                    dormant_count += 1
+                elif entry.decay_state == "archived":
+                    archived_count += 1
+        except Exception:
+            pass
+
+    # Count recent entries (created in last 7 days) — approximate from ref_count=0
+    # True "new" detection would need created_date parsing; ref_count=0 is a proxy
+    # (newly added entries haven't been referenced yet).
+
+    return {
+        "total_entries": auto_count + manual_count + legacy_count,
+        "by_source": {
+            "auto": auto_count,
+            "manual": manual_count,
+            "legacy": legacy_count,
+        },
+        "distribution": distribution,
+        "decay": {
+            "dormant": dormant_count,
+            "archived": archived_count,
+        },
+    }
 
 
 def _parse_staleness_finding(finding: str) -> dict:

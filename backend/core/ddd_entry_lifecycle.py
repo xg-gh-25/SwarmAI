@@ -132,8 +132,9 @@ _ENTRY_RE = re.compile(
 
 # Regex for inline metadata comment
 # Matches: "  <!-- ref:N | last:YYYY-MM-DD | decay:state -->"
+# Optional: "  <!-- ref:N | last:YYYY-MM-DD | decay:state | source:auto -->"
 _META_RE = re.compile(
-    r"^\s*<!-- ref:(\d+) \| last:([\w\-]+) \| decay:(\w+) -->$"
+    r"^\s*<!-- ref:(\d+) \| last:([\w\-]+) \| decay:(\w+)(?:\s*\|\s*source:(\w+))? -->$"
 )
 
 # Regex for date extraction from entry text "(YYYY-MM-DD, ...)"
@@ -155,6 +156,7 @@ class EntryMetadata:
     section: str = ""  # Which ## section this belongs to
     line_number: int = 0  # Line in the file (for injection)
     raw_text: str = ""  # Full bullet text (for archival)
+    source: str = ""  # "auto" | "manual" | "" (legacy entries without tag)
 
     def __post_init__(self):
         if self.entry_type not in VALID_TYPES:
@@ -169,7 +171,11 @@ class EntryMetadata:
             if self.last_referenced
             else "none"
         )
-        return f"  <!-- ref:{self.ref_count} | last:{last_str} | decay:{self.decay_state} -->"
+        base = f"  <!-- ref:{self.ref_count} | last:{last_str} | decay:{self.decay_state}"
+        if self.source:
+            base += f" | source:{self.source}"
+        base += " -->"
+        return base
 
 
 @dataclass
@@ -302,6 +308,7 @@ def parse_entries(content: str) -> list[EntryMetadata]:
             decay_state = "active"
 
             meta_line_idx = j
+            source = ""
             if meta_line_idx < len(lines):
                 meta_match = _META_RE.match(lines[meta_line_idx])
                 if meta_match:
@@ -313,6 +320,7 @@ def parse_entries(content: str) -> list[EntryMetadata]:
                         except ValueError:
                             last_referenced = None
                     decay_state = meta_match.group(3)
+                    source = meta_match.group(4) or ""
                     j = meta_line_idx + 1  # Skip the metadata line
 
             # Classify type if not explicitly tagged
@@ -329,6 +337,7 @@ def parse_entries(content: str) -> list[EntryMetadata]:
                 section=current_section,
                 line_number=i,
                 raw_text=raw_text,
+                source=source,
             ))
             i = j
         else:

@@ -1,0 +1,87 @@
+---
+name: persist
+description: "Persist knowledge to the correct destination — routes to DDD docs (PRODUCT/TECH/IMPROVEMENT/PROJECT), MEMORY.md, KNOWLEDGE.md, or EVOLUTION.md based on content type. Unified routing for both manual saves and auto hooks.\n  TRIGGER: \"remember\", \"save\", \"persist\", \"沉淀\", \"record this\", \"save to DDD\", \"save lessons\".\n  NOT FOR: save-context, save-activity, self-evolution (governance rules) use cases."
+tier: always
+---
+# Persist — Unified Knowledge Routing
+
+Persist knowledge to the correct destination. Routes content based on type and project context to the appropriate file and section. Replaces the old `s_save-memory` (which wrote everything to MEMORY.md).
+
+## Routing Decision Tree (2 steps)
+
+### Step 1: Is this a behavioral rule for SOUL/AGENT/STEERING?
+
+**Governance boundary:** If the content is a behavioral rule, standing rule, or gate that would change how the agent acts across ALL sessions — it's governance, not knowledge.
+
+**Signals:** "new rule for STEERING", "from now on always", "add to AGENT.md", "behavioral gate"
+
+**If YES → REDIRECT:** Tell the user: "This looks like a governance rule — use `s_self-evolution` PROMOTE operation instead." Do NOT write it here.
+
+**If NO → Continue to Step 2.**
+
+### Step 2: Route by content type + project context
+
+| Content type | Project-scoped? | Target |
+|---|---|---|
+| **Failure/bug/regression lesson** | Yes → `Projects/<X>/IMPROVEMENT.md` § What Failed | No → skip (always project-scoped) |
+| **Success/ROI/caught lesson** | Yes → `Projects/<X>/IMPROVEMENT.md` § What Worked | No → skip |
+| **Risk/watch-for/pattern** | Yes → `Projects/<X>/IMPROVEMENT.md` § What to Watch For | No → skip |
+| **Technical convention/rule** | Yes → `Projects/<X>/TECH.md` § Conventions | No → `.context/MEMORY.md` § Guidelines |
+| **Runtime trap/env issue** | Yes → `Projects/<X>/TECH.md` § Runtime Traps | No → `.context/MEMORY.md` § Guidelines |
+| **Architecture decision** | Yes → `Projects/<X>/TECH.md` § Architecture | No → `.context/MEMORY.md` § Models |
+| **Strategic priority** | Yes → `Projects/<X>/PRODUCT.md` § Strategic Priorities | No → skip |
+| **Non-goal/defer** | Yes → `Projects/<X>/PRODUCT.md` § Non-Goals | No → skip |
+| **Project decision** | Yes → `Projects/<X>/PROJECT.md` § Recent Decisions | No → skip |
+| **Cross-project principle** | — | `.context/MEMORY.md` § Principles |
+| **Self-correction/bias** | — | `.context/EVOLUTION.md` § Corrections Captured |
+| **Reference/fact/spec** | — | `KNOWLEDGE.md` or `Knowledge/Library/` |
+
+### The Key Question
+
+> "换一个项目，这条经验还有用吗？"
+> **YES → MEMORY.md** (cross-project cognitive knowledge)
+> **NO → Projects/<X>/...** (project-specific DDD doc)
+
+## How to Write
+
+### Entry format (all targets use same format)
+
+```markdown
+- [type] **Title** — concise description (YYYY-MM-DD)
+  <!-- ref:0 | last:none | decay:active | source:manual -->
+```
+
+Where `[type]` is one of: `guideline`, `pitfall`, `decision`, `principle`, `correction`, `process`, `model`.
+
+### Mechanics
+
+1. Read the target file to find the correct `## Section`
+2. Use the Edit tool to prepend the new entry at the top of the section
+3. Include the metadata comment with `source:manual`
+4. Show the structured receipt to the user
+
+### Receipt format (MANDATORY)
+
+```
+**Persisted:**
+
+> **[type] Title** → `Projects/SwarmAI/IMPROVEMENT.md` § What Failed
+> _(Why: one-sentence reason this knowledge compounds)_
+```
+
+## Rules
+
+- **Always use the Edit tool** — never use Bash scripts for file writes
+- **Always date-prefix** — every entry includes `(YYYY-MM-DD)` at the end
+- **Always add `source:manual` metadata** — distinguishes from auto-cultivated entries
+- **Newest first** — prepend to section, don't append
+- **Don't duplicate** — check if content already exists (match by title/content)
+- **Governance boundary** — if it's a behavioral rule → redirect to `s_self-evolution`
+- **Project detection** — infer from: current file being edited, pipeline context, user mention, or ask
+
+## Verification
+
+- [ ] Entry saved to correct file + section
+- [ ] `source:manual` metadata tag present
+- [ ] No duplicates (checked before writing)
+- [ ] Receipt shown to user with destination + why

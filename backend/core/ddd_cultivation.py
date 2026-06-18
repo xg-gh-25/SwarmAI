@@ -35,51 +35,20 @@ MAX_PROPOSALS_PER_RUN = 5
 # Minimum lesson length to be considered for DDD promotion
 MIN_LESSON_LENGTH = 30
 
-# Keywords that signal TECH.md relevance (patterns, conventions, rules)
-TECH_KEYWORDS = re.compile(
-    r"\b(pattern|convention|rule|always|never|must|prefer|use\s+\w+\s+instead|"
-    r"standing\s+rule|port|daemon|config|architecture|invariant|guard|"
-    r"nc\s+-z|lsof|asyncio|subprocess|Path\.home|"
-    # F1: verb-phrase patterns that express conventions without meta-words
-    r"separates|prevents|eliminates|enables|correct\s+\w+\s+for|"
-    r"safer\s+than|trivial\s+to|atomic|idempotent|"
-    r"should\s+be\s+stored|needs\s+\d+|include\s+a\s+\w+|"
-    r"skill.layer|CLI\s+bridge|content.addressable|"
-    r"polling|ETag|per.tab|stabilization)\b",
-    re.IGNORECASE,
+# ── Routing: single source of truth in persist_routing.py ────────────────────
+# Keywords, classification logic, and safe-append rules all live there.
+# This module only imports what it needs for the auto cultivation path.
+from core.persist_routing import (
+    ROUTING_TABLE,
+    classify_content,
+    _NOISE_PATTERNS as NOISE_PATTERNS,
 )
 
-# Keywords that signal IMPROVEMENT.md relevance (lessons, outcomes)
-IMPROVEMENT_KEYWORDS = re.compile(
-    r"\b(worked|failed|caught|missed|broke|bug|regression|crash|"
-    r"highest.ROI|anti-pattern|root.cause|fix|prevented|discovered|"
-    r"SMOKE|adversarial|PE.review|pipeline|"
-    # F1: verb-phrase patterns for lessons/outcomes
-    r"zero\s+regression|integration\s+gap|wiring\s+matters|"
-    r"reusing\s+existing|battle.tested|diagnostic|"
-    r"trivial\s+to\s+test|zero\s+mocking)\b",
-    re.IGNORECASE,
-)
-
-# Keywords that signal PRODUCT.md relevance (strategy, scope)
-PRODUCT_KEYWORDS = re.compile(
-    r"\b(priority|non-goal|scope|strategic|user.facing|phase|milestone|"
-    r"defer|roadmap|vision)\b",
-    re.IGNORECASE,
-)
-
-# Generic/noise patterns to reject
-NOISE_PATTERNS = re.compile(
-    r"^(tests?\s+pass|report\s+written|\d+\s+(lessons?|findings?)\s+captured|"
-    r"all\s+green|done|completed|shipped|fixed)\.?$",
-    re.IGNORECASE,
-)
-
-# Sections where additive append is safe (no escalation needed)
-SAFE_APPEND_SECTIONS = {
-    "IMPROVEMENT.md": {"What Worked", "What Failed", "What to Watch For"},
-    "TECH.md": {"Runtime Traps", "Conventions", "Architecture"},
-}
+# Derive SAFE_APPEND_SECTIONS from the routing table (single source of truth)
+SAFE_APPEND_SECTIONS: dict[str, set[str]] = {}
+for _route in ROUTING_TABLE.values():
+    if _route["safe_auto"] and _route.get("section"):
+        SAFE_APPEND_SECTIONS.setdefault(_route["doc"], set()).add(_route["section"])
 
 
 @dataclass
@@ -152,71 +121,31 @@ class CultivationProposal:
         return self.target_section in allowed
 
 
-def _classify_lesson(lesson: str) -> Optional[tuple]:
+def _classify_lesson(lesson: str, project: str = "SwarmAI") -> Optional[tuple]:
     """Classify a lesson into target_doc and target_section.
 
+    Delegates to the unified classify_content() from persist_routing.py.
     Returns (target_doc, target_section, confidence) or None if rejected.
     """
     stripped = lesson.strip()
 
-    # Reject empty, short, or noise
+    # Reject empty or too short
     if len(stripped) < MIN_LESSON_LENGTH:
         return None
-    if NOISE_PATTERNS.match(stripped):
+
+    result = classify_content(stripped, project=project)
+
+    # Governance content is not DDD — reject (handled by s_self-evolution)
+    if result.get("is_governance"):
         return None
 
-    # Count keyword matches per category
-    tech_hits = len(TECH_KEYWORDS.findall(stripped))
-    improvement_hits = len(IMPROVEMENT_KEYWORDS.findall(stripped))
-    product_hits = len(PRODUCT_KEYWORDS.findall(stripped))
-
-    total_hits = tech_hits + improvement_hits + product_hits
-
-    # Need at least 1 keyword match to be considered DDD-relevant
-    if total_hits == 0:
+    # Low confidence = noise or no keyword match.
+    # Threshold 0.35 ensures no-keyword content (confidence=0.3) is rejected here
+    # but caught by the PE-1 fallback in cultivate_from_corrections (→ "What Failed").
+    if result["confidence"] <= 0.3:
         return None
 
-    # F2: Tie-break uses section-level keywords, not just category hits.
-    # When tech == improvement, check if the lesson describes an OUTCOME
-    # (caught/found/review → Improvement) or a RULE (correct/always/use → Tech).
-    lower = stripped.lower()
-
-    if tech_hits > improvement_hits and tech_hits >= product_hits:
-        target_doc = "TECH.md"
-        if any(w in lower for w in ("trap", "daemon", "env", "path", "port", "launchd", "mode guard")):
-            target_section = "Runtime Traps"
-        elif any(w in lower for w in ("pattern", "convention", "prefer", "correct", "safer", "atomic", "idempotent")):
-            target_section = "Conventions"
-        else:
-            target_section = "Architecture"
-    elif tech_hits == improvement_hits and tech_hits > 0:
-        # F2: tie-break — outcome words → Improvement, rule words → Tech
-        outcome_signal = any(w in lower for w in ("caught", "found", "missed", "review", "discovered", "prevented"))
-        if outcome_signal:
-            target_doc = "IMPROVEMENT.md"
-            target_section = "What Worked" if any(w in lower for w in ("caught", "prevented", "found")) else "What to Watch For"
-        else:
-            target_doc = "TECH.md"
-            target_section = "Conventions"
-    elif improvement_hits >= product_hits:
-        target_doc = "IMPROVEMENT.md"
-        if any(w in lower for w in ("worked", "roi", "caught", "prevented", "highest", "effective")):
-            target_section = "What Worked"
-        elif any(w in lower for w in ("failed", "broke", "bug", "crash", "gap", "friction", "wrong")):
-            target_section = "What Failed"
-        # F3: positive keywords for "What to Watch For" (risks, warnings, subtle issues)
-        elif any(w in lower for w in ("risk", "watch", "careful", "subtle", "hidden", "invisible", "structurally cannot")):
-            target_section = "What to Watch For"
-        else:
-            target_section = "What to Watch For"
-    else:
-        target_doc = "PRODUCT.md"
-        target_section = "Strategic Priorities"
-
-    # Confidence: based on keyword density (more keywords = more relevant)
-    confidence = min(0.5 + (total_hits * 0.1), 0.95)
-
-    return (target_doc, target_section, confidence)
+    return (result["doc"], result["section"], result["confidence"])
 
 
 def filter_lessons_for_ddd(
