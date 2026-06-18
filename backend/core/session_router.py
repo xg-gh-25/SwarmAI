@@ -506,6 +506,7 @@ class SessionRouter:
     """
 
     QUEUE_TIMEOUT: float = 300.0  # 5 min — channel tasks can be complex
+    EVICTION_GRACE_SECONDS: int = 300  # 5 min — protect recently-active sessions
 
     def __init__(
         self,
@@ -832,6 +833,12 @@ class SessionRouter:
                             budget = resource_monitor.spawn_budget(alive_count=self.alive_count)
                             if budget.can_spawn:
                                 return "ready"
+                        # Grace period may have blocked eviction — force as last resort
+                        if await self._evict_idle(exclude=requesting_unit, force=True):
+                            resource_monitor.invalidate_cache()
+                            budget = resource_monitor.spawn_budget(alive_count=self.alive_count)
+                            if budget.can_spawn:
+                                return "ready"
                         from .exceptions import ResourceExhaustedException
                         raise ResourceExhaustedException(
                             message=budget.reason,
@@ -867,7 +874,9 @@ class SessionRouter:
             except asyncio.TimeoutError:
                 break  # deadline exceeded
 
-            # Re-check under lock after wake
+            # Re-check under lock after wake — use force=True because the user
+            # is already queued and waiting; grace period only protects the
+            # initial eviction attempt (the "polite" first try at line 848).
             async with self._slot_lock:
                 max_tabs = resource_monitor.compute_max_tabs()
                 chat_max = max_tabs - 1
@@ -875,9 +884,19 @@ class SessionRouter:
                     budget = resource_monitor.spawn_budget(alive_count=self.alive_count)
                     if budget.can_spawn:
                         return "queued"
-                if await self._evict_idle(exclude=requesting_unit):
+                if await self._evict_idle(exclude=requesting_unit, force=True):
                     return "queued"
             # Slot claimed by another coroutine — loop back to wait
+
+        # Queue timed out — last resort: force-evict the longest-idle session
+        # even if within grace period. Better than failing the user request.
+        async with self._slot_lock:
+            if await self._evict_idle(exclude=requesting_unit, force=True):
+                logger.info(
+                    "session_router: queue timeout force-evict succeeded for %s",
+                    requesting_unit.session_id,
+                )
+                return "queued"
 
         logger.warning(
             "session_router: queue timeout for session %s after %.0fs",
@@ -887,6 +906,7 @@ class SessionRouter:
 
     async def _evict_idle(
         self, exclude: SessionUnit, *, channel_only: bool = False,
+        force: bool = False,
     ) -> bool:
         """Evict the oldest IDLE unit to free a slot.
 
@@ -898,6 +918,15 @@ class SessionRouter:
         (used when acquiring a channel slot).  When False, only chat IDLE
         units are eligible — channel units are never evicted for chat
         (slot isolation guarantee).
+
+        Grace period (chat only, not channel):
+        - Sessions idle < EVICTION_GRACE_SECONDS are protected from eviction
+          unless *force* is True. This prevents ping-pong eviction when all
+          3 chat slots are occupied by recently-active tabs.
+        - *force=True* bypasses the grace period — used after queue timeout
+          as a last resort.
+        - Channel eviction (channel_only=True) always ignores grace period
+          because there's exactly 1 channel slot with no user-visible tab.
 
         Fires lifecycle hooks before killing (Gap 1 fix) so that
         DailyActivity extraction, auto-commit, and distillation run
@@ -911,6 +940,26 @@ class SessionRouter:
         ]
         if not idle_units:
             return False
+
+        # Grace period: for chat eviction (not channel), filter out
+        # sessions that have been idle less than EVICTION_GRACE_SECONDS
+        # unless force=True (queue timeout fallback).
+        now = time.time()
+        if not channel_only and not force:
+            stale_units = [
+                u for u in idle_units
+                if (now - u.last_used) >= self.EVICTION_GRACE_SECONDS
+            ]
+            if not stale_units:
+                # All sessions are "hot" (recently active) — refuse eviction.
+                # Caller should queue and retry, or use force=True.
+                logger.info(
+                    "session_router.evict_blocked: all %d idle sessions within "
+                    "grace period (%ds), refusing eviction",
+                    len(idle_units), self.EVICTION_GRACE_SECONDS,
+                )
+                return False
+            idle_units = stale_units
 
         # Resource-aware eviction: prefer the unit consuming the most
         # memory (RSS) so the freed slot gives maximum headroom for the
@@ -926,9 +975,10 @@ class SessionRouter:
         idle_units.sort(key=_eviction_key)
         victim = idle_units[0]
         logger.info(
-            "session_router.evict session_id=%s (idle %.0fs)",
+            "session_router.evict session_id=%s (idle %.0fs%s)",
             victim.session_id,
-            time.time() - victim.last_used,
+            now - victim.last_used,
+            ", forced" if force else "",
         )
 
         # Fire hooks before killing — Gap 1 fix
