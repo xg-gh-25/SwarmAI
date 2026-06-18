@@ -164,7 +164,7 @@ _GOVERNANCE_TARGET_KEYWORDS = re.compile(
     re.IGNORECASE,
 )
 
-_NOISE_PATTERNS = re.compile(
+NOISE_PATTERNS = re.compile(
     r"^(tests?\s+pass|report\s+written|\d+\s+(lessons?|findings?)\s+captured|"
     r"all\s+green|done|completed|shipped|fixed)\.?$",
     re.IGNORECASE,
@@ -204,7 +204,7 @@ def classify_content(
     stripped = text.strip()
 
     # Reject noise
-    if len(stripped) < _MIN_LENGTH or _NOISE_PATTERNS.match(stripped):
+    if len(stripped) < _MIN_LENGTH or NOISE_PATTERNS.match(stripped):
         return {
             "doc": "IMPROVEMENT.md",
             "section": "What to Watch For",
@@ -274,6 +274,13 @@ def classify_content(
             route_key = "runtime_trap"
         elif any(w in lower for w in ("architecture", "subsystem", "module", "layer")):
             route_key = "architecture"
+        else:
+            route_key = "convention"
+    elif tech_hits == improvement_hits and tech_hits > 0:
+        # Tie-break (F2): outcome words → IMPROVEMENT, rule words → TECH
+        outcome_signal = any(w in lower for w in ("caught", "found", "missed", "review", "discovered", "prevented"))
+        if outcome_signal:
+            route_key = "what_worked" if any(w in lower for w in ("caught", "prevented", "found")) else "watch_for"
         else:
             route_key = "convention"
     else:

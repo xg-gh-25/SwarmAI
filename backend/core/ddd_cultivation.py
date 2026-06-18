@@ -41,7 +41,7 @@ MIN_LESSON_LENGTH = 30
 from core.persist_routing import (
     ROUTING_TABLE,
     classify_content,
-    _NOISE_PATTERNS as NOISE_PATTERNS,
+    NOISE_PATTERNS,
 )
 
 # Derive SAFE_APPEND_SECTIONS from the routing table (single source of truth)
@@ -162,7 +162,7 @@ def filter_lessons_for_ddd(
         if not lesson or not isinstance(lesson, str):
             continue
 
-        classification = _classify_lesson(lesson)
+        classification = _classify_lesson(lesson, project=project)
         if classification is None:
             continue
 
