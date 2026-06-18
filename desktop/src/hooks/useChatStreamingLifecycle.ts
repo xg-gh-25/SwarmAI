@@ -902,11 +902,10 @@ export interface ChatStreamingLifecycle {
   // SESSION_BUSY recovery — true when polling for backend completion
   /** True when backend returned SESSION_BUSY and we're polling for the response. */
   isWaitingForBusy: boolean;
-  // ── State machine (shadow mode — P2) ──
-  /** Explicit streaming state machine. Coexists with boolean flags during migration. */
-  streamState: StreamingState;
-  /** Dispatch events to the streaming state machine. */
-  dispatch: React.Dispatch<StreamingEvent>;
+  // NOTE: Global streamState/dispatch intentionally NOT exposed here.
+  // The global reducer is single-tab (tracks active tab only) — exposing it
+  // would let consumers introduce cross-tab state bleed. Per-tab state lives
+  // on tabState.streamState (accessible via tabMapRef) which is tab-safe.
 }
 
 /** Context warning payload from the backend context monitor. */
@@ -3227,8 +3226,5 @@ export function useChatStreamingLifecycle(
     setCompactionGuard,
     isLikelyStalled,
     isWaitingForBusy,
-    // ── State machine (shadow mode — P2 integration) ──
-    streamState,
-    dispatch,
   };
 }
