@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import traceback
 from typing import TYPE_CHECKING, Any, AsyncIterator, Optional
 
 if TYPE_CHECKING:

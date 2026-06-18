@@ -863,6 +863,7 @@ class LifecycleManager:
                 ChannelExecutor, get_dispatcher,
             )
             from core.ddd_orchestrator import DddCultivationOrchestrator
+            from core.initialization_manager import initialization_manager
 
             dispatcher = get_dispatcher()
             events = await dispatcher.drain()

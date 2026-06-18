@@ -19,10 +19,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from typing import TYPE_CHECKING, Any, AsyncIterator, Optional, Protocol
 
 from .compaction_guard import EscalationLevel
+from .session_healing import get_process_rss_mb
 
 if TYPE_CHECKING:
     from .session_unit import SessionState, SessionUnit
