@@ -231,6 +231,146 @@ class ContextHealthHook:
         except Exception as exc:
             logger.debug("context_health: doc frontmatter auto-update skipped: %s", exc)
 
+        # OS Eval canary — run programmatic golden set cases every session.
+        # Zero LLM cost, <15s, surfaces regression in session briefing.
+        # Must respect cultivation deadline — canary runs LAST in _light_refresh.
+        try:
+            self._run_eval_canary(root, _deadline=_cultivation_deadline)
+        except Exception as exc:
+            logger.debug("context_health: eval canary skipped: %s", exc)
+
+    def _run_eval_canary(self, root: Path, *, _deadline: float = 0.0) -> None:
+        """Run programmatic golden set cases (OS Eval canary).
+
+        Two tiers for performance:
+        - file_contains cases: every session (<1s total, pure string grep)
+        - canary_pass cases: daily only (~10s, spawns Python subprocesses)
+
+        Zero LLM cost. Results persisted to .context/.eval-canary.json
+        so session briefing can surface failures as health signals.
+
+        On failure: logs warning + writes failure details.
+        On success: updates canary file with timestamp + score.
+        Never blocks session start — all errors are swallowed.
+
+        Args:
+            _deadline: monotonic clock deadline from _light_refresh. If
+                insufficient time remains, skip the canary to avoid being
+                killed by the BackgroundHookExecutor 30s timeout.
+        """
+        # Budget check: skip if insufficient time remaining in the hook timeout.
+        # _light_refresh has a 25s cultivation budget within a 30s hard timeout.
+        # Canary runs LAST — if cultivation consumed significant time, bail.
+        #
+        # Thresholds:
+        # - Daily tier (canary_pass + file_contains): needs ~12s for N subprocess
+        #   spawns at ~1-1.5s each. 15s threshold provides headroom.
+        # - Session-only tier (file_contains only): needs <1s (pure string grep).
+        #   3s threshold is conservative.
+        if _deadline > 0:
+            remaining = _deadline - time.monotonic()
+            # Determine threshold BEFORE loading golden set (avoid wasted work).
+            # Daily check uses the higher threshold because canary_pass spawns
+            # subprocesses; session-only uses the lower one (pure file reads).
+            is_daily = self._last_deep_date != date.today().isoformat()
+            min_budget = 15.0 if is_daily else 3.0
+            if remaining < min_budget:
+                logger.debug(
+                    "context_health: eval canary skipped — only %.1fs remaining (need ≥%.0fs for %s tier)",
+                    remaining, min_budget, "daily" if is_daily else "session",
+                )
+                return
+        import sys
+        # Import eval_runner from sibling scripts dir
+        scripts_dir = Path(__file__).parent.parent / "scripts"
+        if str(scripts_dir) not in sys.path:
+            sys.path.insert(0, str(scripts_dir))
+
+        try:
+            from eval_runner import load_golden_set, run_eval, _golden_set_path
+        except ImportError:
+            logger.debug("context_health: eval_runner not importable, skipping canary")
+            return
+
+        gs_path = _golden_set_path(root)
+        if not gs_path.exists():
+            return
+
+        golden_set = load_golden_set(gs_path)
+
+        # Determine which cases to run based on frequency tier:
+        # - file_contains: every session (fast, <1s)
+        # - canary_pass: daily (slow, spawns subprocesses ~10s)
+        all_programmatic = [
+            c for c in golden_set["cases"] if c.get("eval_method") == "programmatic"
+        ]
+
+        is_daily = self._last_deep_date != date.today().isoformat()
+        if is_daily:
+            # Full programmatic sweep (daily)
+            cases_to_run = all_programmatic
+        else:
+            # Fast tier only (every session): file_contains evaluator
+            cases_to_run = [
+                c for c in all_programmatic
+                if "file_contains" in c.get("evaluators", [])
+            ]
+
+        if not cases_to_run:
+            return
+
+        golden_set_filtered = dict(golden_set)
+        golden_set_filtered["cases"] = cases_to_run
+
+        trigger = "session_canary" if not is_daily else "daily_canary"
+
+        # Cap per-subprocess timeout to remaining budget (prevents blowing past
+        # the BackgroundHookExecutor 30s deadline even if entry check passed).
+        canary_timeout = None
+        if _deadline > 0:
+            remaining_for_cases = _deadline - time.monotonic()
+            if remaining_for_cases > 0:
+                # Divide remaining time across cases, min 3s per case
+                per_case = max(3, int(remaining_for_cases / max(len(cases_to_run), 1)))
+                canary_timeout = min(20, per_case)
+
+        result = run_eval(golden_set_filtered, trigger, None, root,
+                          canary_timeout=canary_timeout)
+
+        # Persist canary result for session briefing
+        canary_file = root / ".context" / ".eval-canary.json"
+        import json as _json
+        canary_data = {
+            "timestamp": result["triggered_at"],
+            "total": result["total_cases"],
+            "passed": result["cases_passed"],
+            "failed": result["cases_failed"],
+            "score": result["overall_score"],
+            "duration_s": result["duration_seconds"],
+        }
+
+        if result["cases_failed"] > 0:
+            # Include failure details for briefing
+            canary_data["failures"] = [
+                {"id": c["id"], "notes": c["notes"]}
+                for c in result["cases"] if c["status"] == "failed"
+            ]
+            logger.warning(
+                "context_health: eval canary FAILED %d/%d cases (score=%.1f%%)",
+                result["cases_failed"], result["total_cases"], result["overall_score"],
+            )
+        else:
+            logger.info(
+                "context_health: eval canary %d/%d pass (%.1fs)",
+                result["cases_passed"], result["total_cases"], result["duration_seconds"],
+            )
+
+        try:
+            canary_file.parent.mkdir(parents=True, exist_ok=True)
+            canary_file.write_text(_json.dumps(canary_data, indent=2), encoding="utf-8")
+        except OSError:
+            pass
+
     def _auto_update_doc_frontmatter(self, root: Path) -> None:
         """Auto-update `updated:` field in docs/*.md that were modified this session.
 
