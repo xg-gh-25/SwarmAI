@@ -549,10 +549,10 @@ class SessionUnit:
         self._pid_watchdog_task: Optional[asyncio.Task] = None
         self._PID_WATCHDOG_INTERVAL: float = 5.0  # seconds between polls
 
-        # ── Streaming Orchestrator (Phase 1: pure delegation) ─────
-        # Facade for strangler-fig extraction of streaming logic.
-        # Phase 1: delegates to self._stream_response (no behavior change).
-        # Phase 2: will contain _read_formatted_response logic directly.
+        # ── Streaming Orchestrator ─────────────────────────────────
+        # Owns _stream_response() and _read_formatted_response() logic.
+        # Accesses SessionUnit state via self._parent.X pattern.
+        # See: core/streaming_orchestrator.py
         self._streaming_orchestrator = StreamingOrchestrator(parent=self)
 
     # ── Properties ────────────────────────────────────────────────
@@ -2252,28 +2252,12 @@ class SessionUnit:
         if self.state == SessionState.COLD:
             self._transition(SessionState.IDLE)
 
-    async def _stream_response(
-        self,
-        query_content: Any,
-        parent_tool_use_id: str | None = None,
-    ) -> AsyncIterator[dict]:
-        """Send query and yield formatted SDK response events.
-
-        MIGRATED to StreamingOrchestrator (Phase 2).
-        This stub delegates to the orchestrator for backward compatibility
-        with continue_with_permission() which calls this directly.
-        """
-        async for event in self._streaming_orchestrator._stream_response(
-            query_content, parent_tool_use_id=parent_tool_use_id
-        ):
-            yield event
-
     async def _read_formatted_response(self) -> AsyncIterator[dict]:
         """Read SDK response stream and yield formatted SSE events.
 
-        MIGRATED to StreamingOrchestrator (Phase 2).
-        This stub delegates to the orchestrator for backward compatibility
-        with continue_with_permission() which calls _read_formatted_response.
+        Implementation lives in StreamingOrchestrator. This delegation method
+        exists because continue_with_permission() and several test files call
+        it directly on the SessionUnit instance.
         """
         async for event in self._streaming_orchestrator._read_formatted_response():
             yield event

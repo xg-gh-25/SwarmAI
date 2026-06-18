@@ -1,13 +1,16 @@
-"""Streaming Orchestrator — extracted streaming logic from session_unit.py.
+"""Streaming Orchestrator — owns SDK response streaming and event formatting.
 
-This module owns the streaming response reading and event formatting logic
-that was previously inside SessionUnit._stream_response and
-SessionUnit._read_formatted_response (~890 LOC).
+Extracted from session_unit.py as part of the strangler-fig refactoring.
+This module contains the core streaming loop (~890 LOC):
+- _stream_response(): sends query to SDK, reads response stream
+- _read_formatted_response(): parses SDK messages into SSE events
 
 Architecture:
 - StreamingOrchestrator holds a parent reference to SessionUnit
-- All field accesses go through self._parent.X (Phase 2 intermediate state)
-- Phase 3 will replace parent refs with callbacks for full decoupling
+- All SessionUnit state is accessed via self._parent.X
+- SessionUnit retains a thin delegation method for _read_formatted_response
+  (used by continue_with_permission and test files)
+- Future: replace self._parent.X with typed callbacks for full decoupling
 
 Design doc: Knowledge/Designs/2026-06-18-session-unit-strangler-fig-extraction-design.md
 """
@@ -57,21 +60,21 @@ class StreamingCallbacks(Protocol):
 
 
 class StreamingOrchestrator:
-    """Streaming orchestration logic extracted from SessionUnit.
+    """Owns SDK response streaming and event formatting logic.
 
-    Phase 2 architecture:
+    Architecture:
     - Holds a reference to the parent SessionUnit
     - _stream_response() and _read_formatted_response() live here
-    - All state access goes through self._parent.X
-    - stream_query() is the public entry point (replaces direct _stream_response calls)
+    - All SessionUnit state accessed via self._parent.X
+    - stream_query() is the public entry point
 
-    Phase 3 target:
-    - Replace self._parent.X with callback invocations
-    - Remove parent reference entirely
-    - Full decoupling achieved
+    Entry points:
+    - stream_query(): called by SessionUnit.send(), _retry_with_resume(),
+      _handle_buffer_overflow(), continue_with_answer()
+    - _read_formatted_response(): called via SessionUnit delegation stub
+      by continue_with_permission() and test files
 
-    Instantiated in SessionUnit.__init__. External callers (send, retry,
-    overflow, continue_with_answer) use self._streaming_orchestrator.stream_query().
+    Future: replace self._parent.X with typed callbacks for full decoupling.
     """
 
     # No __slots__ — allows unittest.mock.patch.object() on instances.
