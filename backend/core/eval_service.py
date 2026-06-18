@@ -537,7 +537,7 @@ class EvalService:
     def _execute_run(self, run_id: str, trigger: str, case_ids: list[str] | None) -> None:
         """Background execution of eval run."""
         try:
-            from scripts.eval_runner import run_eval
+            from scripts.eval_runner import run_eval, generate_html_report, load_golden_set
 
             cases_data = {"cases": [c for c in self._cases if c.get("tier") != "archived"]}
             result = run_eval(cases_data, trigger, case_ids, self._workspace_root)
@@ -546,6 +546,15 @@ class EvalService:
             self._write_run_result(result)
             with self._data_lock:
                 self._load_history()
+
+            # Generate HTML report alongside JSON (best-effort)
+            try:
+                gs_path = self._golden_set_path
+                if gs_path.exists():
+                    golden_set = load_golden_set(gs_path)
+                    generate_html_report(result, golden_set, self._workspace_root)
+            except Exception as html_err:
+                logger.debug("eval_service: HTML report generation skipped: %s", html_err)
 
             # Post-run: promote stable cases (best-effort)
             try:

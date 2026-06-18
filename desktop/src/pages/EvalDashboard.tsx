@@ -734,8 +734,8 @@ function ContextHealthTab() {
 const guideContent = {
   title: { en: 'OS Eval Methodology', zh: 'OS Eval 方法论' },
   subtitle: {
-    en: 'An AI OS without eval is an organism without proprioception — it doesn\'t know its own state until something breaks. This is SwarmAI\'s continuous self-awareness engine.',
-    zh: 'AI OS 没有 Eval 就像有机体失去本体感觉 — 直到出了问题才知道自身状态。这是 SwarmAI 的持续自我意识引擎。',
+    en: 'SwarmAI has a built-in self-evaluation system. Not external testing — proprioception. 115 behavioral cases define "in this scenario I must do X." Every session runs 31 mechanical checks (0.07s). Bi-weekly runs 84 LLM-judged behavioral tests. Core insight: eval and agent share the same environment, so the judge reads the agent\'s real rules files — zero maintenance, always fresh.',
+    zh: 'SwarmAI 有一个 built-in 的自我评估系统。不是外部测试 — 是 proprioception。115 个 behavioral cases 定义了"在这个场景下我必须怎样做"。每次 session 结束跑 31 个机械检查（0.07s），双周跑 84 个 LLM judge 判断力测试。核心 insight: eval 和 agent 在同一个环境，所以 judge 直接读 agent 的真实 rules 文件 — 零维护，永远新鲜。',
   },
   overview: {
     en: ['What it evaluates', 'Why it matters', 'How it works'],
