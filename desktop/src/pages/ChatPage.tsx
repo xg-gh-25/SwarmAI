@@ -2043,6 +2043,15 @@ export default function ChatPage() {
     handleSendMessage();
   }, [handleSendMessage, setMessages]);
 
+  // Handle Continue — sends "continue" as user message when model stopped prematurely.
+  // Matches Claude Code terminal /continue behavior.
+  // Sets both ref AND state to avoid stale ref if handleSendMessage returns early.
+  const handleContinue = useCallback(() => {
+    inputValueRef.current = 'continue';
+    setInputValue('continue');
+    handleSendMessage();
+  }, [handleSendMessage, setInputValue]);
+
   // Handle inline permission decision — called from InlinePermissionRequest component
   // via ContentBlockRenderer → AssistantMessageView → MessageBubble prop chain.
   const handlePermissionDecision = async (requestId: string, decision: 'approve' | 'deny') => {
@@ -2494,6 +2503,7 @@ export default function ChatPage() {
                             isLastAssistant={idx === lastAssistantIdx}
                             contextWarning={contextWarning}
                             onCancelQueued={msg.isQueued && activeTabIdRef.current ? () => handleCancelQueued(activeTabIdRef.current!) : undefined}
+                            onContinue={idx === lastAssistantIdx && !isStreaming ? handleContinue : undefined}
                           />
                         </div>
                         {streamingIndicator}

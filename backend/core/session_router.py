@@ -814,6 +814,7 @@ class SessionRouter:
         """
         from .resource_monitor import resource_monitor
 
+        _needs_queue = False
         async with self._slot_lock:
             max_tabs = resource_monitor.compute_max_tabs()
             chat_max = max_tabs - 1  # Reserve 1 for channel
@@ -833,32 +834,25 @@ class SessionRouter:
                             budget = resource_monitor.spawn_budget(alive_count=self.alive_count)
                             if budget.can_spawn:
                                 return "ready"
-                        # Grace period may have blocked eviction — force as last resort
-                        if await self._evict_idle(exclude=requesting_unit, force=True):
-                            resource_monitor.invalidate_cache()
-                            budget = resource_monitor.spawn_budget(alive_count=self.alive_count)
-                            if budget.can_spawn:
-                                return "ready"
-                        from .exceptions import ResourceExhaustedException
-                        raise ResourceExhaustedException(
-                            message=budget.reason,
-                            detail=(
-                                f"available={budget.available_mb:.0f}MB, "
-                                f"cost={budget.estimated_cost_mb:.0f}MB, "
-                                f"headroom={budget.headroom_mb:.0f}MB"
-                            ),
-                        )
-                return "ready"
+                        # Grace period blocked eviction — queue and wait for a
+                        # slot to free naturally before force-killing. Eviction
+                        # cost (800K token context lost) >> queue cost (60s wait).
+                        # Evidence: 28 exit-9 kills in 24h from immediate force.
+                        _needs_queue = True
+                if not _needs_queue:
+                    return "ready"
 
-            # Chat pool full — try evicting a chat IDLE unit
-            if await self._evict_idle(exclude=requesting_unit):
-                return "ready"
+            if not _needs_queue:
+                # Chat pool full — try evicting a chat IDLE unit
+                if await self._evict_idle(exclude=requesting_unit):
+                    return "ready"
 
-        # All chat slots occupied by protected units — queue with deadline
+        # All chat slots occupied OR budget-denied with grace block — queue with deadline
         deadline = time.monotonic() + self.QUEUE_TIMEOUT
+        reason = "budget_denied_grace_block" if _needs_queue else "all_slots_occupied"
         logger.info(
-            "session_router: all chat slots occupied, queuing session %s (timeout=%.0fs)",
-            requesting_unit.session_id, self.QUEUE_TIMEOUT,
+            "session_router: queuing session %s reason=%s (timeout=%.0fs)",
+            requesting_unit.session_id, reason, self.QUEUE_TIMEOUT,
         )
 
         while True:

@@ -58,6 +58,8 @@ export interface AssistantMessageViewProps {
   isLastAssistant?: boolean;
   /** Context warning from the backend context monitor (per-session, display mirror) */
   contextWarning?: ContextWarning | null;
+  /** Callback to send a continuation prompt when model stopped prematurely */
+  onContinue?: () => void;
 }
 
 /** Map of memory save status to Material Symbols icon names. */
@@ -80,6 +82,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   sessionId,
   isLastAssistant,
   contextWarning,
+  onContinue,
 }) => {
   const [copied, setCopied] = useState(false);
   const { addToast } = useToast();
@@ -323,6 +326,25 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
               {compactStatus === 'loading' ? 'Compacting...'
                 : compactStatus === 'done' ? 'Compacted!'
                 : 'Compact'}
+            </button>
+          )}
+
+          {/* Continue button — allows user to request continuation when model stopped prematurely.
+              Only shown on the last assistant message when not an error. */}
+          {isLastAssistant && onContinue && !message.isError && (
+            <button
+              type="button"
+              onClick={onContinue}
+              className="flex items-center gap-1 px-2 py-0.5 text-xs text-[var(--color-text-muted)]
+                         hover:text-[var(--color-accent)] rounded transition-colors"
+              title="Continue — ask the agent to continue its response"
+              aria-label="Continue response"
+              data-testid="continue-button"
+            >
+              <span className="material-symbols-outlined text-sm">
+                play_arrow
+              </span>
+              Continue
             </button>
           )}
         </div>

@@ -37,6 +37,8 @@ export interface MessageBubbleProps {
   contextWarning?: ContextWarning | null;
   /** Called when user cancels a queued message. Only relevant for user messages with isQueued=true. */
   onCancelQueued?: () => void;
+  /** Called when user clicks Continue to request agent continuation */
+  onContinue?: () => void;
 }
 
 export function MessageBubble({
@@ -51,6 +53,7 @@ export function MessageBubble({
   isLastAssistant,
   contextWarning,
   onCancelQueued,
+  onContinue,
 }: MessageBubbleProps) {
   if (message.role === 'user') {
     return (
@@ -73,6 +76,7 @@ export function MessageBubble({
       sessionId={sessionId}
       isLastAssistant={isLastAssistant}
       contextWarning={contextWarning}
+      onContinue={onContinue}
     />
   );
 }
