@@ -11,9 +11,13 @@ import { getApiBaseUrl } from './tauri';
  * this duration, the stream is considered stalled and the reader is cancelled,
  * triggering the onError path which feeds into the reconnection logic.
  *
+ * 90s (not 45s): kept in sync with MessageStore's watchdog. A cold tab's
+ * first-token latency can be ~38-45s due to Bedrock cache-creation of the
+ * large injected context; a 45s budget raced that and aborted valid streams.
+ *
  * @see Requirements 2.6 — Stall detection triggers reconnection
  */
-export const STALL_TIMEOUT_MS = 45_000;
+export const STALL_TIMEOUT_MS = 90_000;
 
 // ---------------------------------------------------------------------------
 // Voice transcription

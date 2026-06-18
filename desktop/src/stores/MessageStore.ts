@@ -41,8 +41,14 @@ export interface MessageStoreOptions {
 // Store Implementation
 // ---------------------------------------------------------------------------
 
-/** Default watchdog timeout — matches SSE STALL_TIMEOUT_MS */
-const DEFAULT_WATCHDOG_MS = 45_000;
+/** Default watchdog timeout — matches SSE STALL_TIMEOUT_MS.
+ *  90s (not 45s): a cold tab injects ~47K tokens of context, and Bedrock
+ *  cache-creation of that prompt makes first-token latency ~38-45s. A 45s
+ *  watchdog raced that latency and force-ended streaming before the first
+ *  token arrived, desyncing the lifecycle (stuck "thinking", phantom resume).
+ *  Non-content SSE events (session_start, tool_use) do NOT reset this
+ *  watchdog, so the full cold-start gap must fit inside the timeout. */
+const DEFAULT_WATCHDOG_MS = 90_000;
 
 export class MessageStore {
   // ─── State ───
