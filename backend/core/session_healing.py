@@ -82,8 +82,15 @@ ERROR_CASCADE_THRESHOLD = 3
 # Turn limit: trigger heal this many turns before max_turns
 TURN_APPROACH_BUFFER = 20
 
-# Hang: seconds without any SSE event before declaring hang
-HANG_TIMEOUT_S = 90
+# Hang: seconds without any SSE event before declaring hang.
+# 300s (not 90s): the agent legitimately runs long tool calls (test suites,
+# builds, large greps) where the CLI subprocess emits NO SDK events between
+# tool_use and tool_result for minutes. A 90s threshold false-triggered
+# hang_detected on those, killing healthy sessions mid-response (lost output,
+# spurious "Session Resumed"). Aligned with the 300s base output-liveness
+# timeout. record_activity() is now called on every SDK event so genuine
+# token/thinking activity keeps the timer fresh; only true silence trips this.
+HANG_TIMEOUT_S = 300
 
 # Healing loop constraints
 MAX_HEAL_ATTEMPTS = 3
@@ -131,8 +138,14 @@ class HealthSensor:
         """Record any activity (SSE event, heartbeat) to reset hang timer."""
         self._last_activity_time = time.time()
 
-    def should_checkpoint(self) -> tuple[bool, str]:
+    def should_checkpoint(self, session_state: str | None = None) -> tuple[bool, str]:
         """Evaluate whether healing is needed.
+
+        Args:
+            session_state: Current session state ("streaming", "idle", "cold", etc.).
+                When "streaming", hang_detected is suppressed because the model
+                may be in extended thinking (no SDK events emitted for minutes).
+                The PID watchdog handles genuine STREAMING liveness separately.
 
         Returns:
             (should_heal, trigger_name) — trigger_name is empty if healthy.
@@ -161,9 +174,14 @@ class HealthSensor:
             return True, "turn_approaching"
 
         # Signal 5: Hang detection (no activity for HANG_TIMEOUT_S)
-        elapsed = time.time() - self._last_activity_time
-        if elapsed > HANG_TIMEOUT_S:
-            return True, "hang_detected"
+        # SUPPRESSED during STREAMING: the model may be in extended thinking
+        # (Opus can think for 5-10 minutes without emitting any SDK event).
+        # The PID watchdog + MESSAGE_TIMEOUT handle genuine STREAMING hangs.
+        # hang_detected is only meaningful for IDLE/COLD/WAITING_INPUT states.
+        if session_state != "streaming":
+            elapsed = time.time() - self._last_activity_time
+            if elapsed > HANG_TIMEOUT_S:
+                return True, "hang_detected"
 
         return False, ""
 

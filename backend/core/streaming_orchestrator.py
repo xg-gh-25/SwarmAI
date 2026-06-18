@@ -199,6 +199,10 @@ class StreamingOrchestrator:
             self._parent.session_id,
         )
 
+        # Reset hang timer — stream just started; don't carry stale
+        # _last_activity_time from a previous turn that ended 90s+ ago.
+        self._parent._health_sensor.record_activity()
+
         # Read and format the SDK response stream
         async for event in self._read_formatted_response():
             yield event
@@ -362,7 +366,15 @@ class StreamingOrchestrator:
                 )
 
             # ── Heartbeat: track liveness for diagnostics ──────────
+            # Reset BOTH liveness timers on every SDK event:
+            #  - _last_event_time → pid_watchdog output-liveness check
+            #  - health_sensor.record_activity() → HealthSensor hang_detected
+            # Without the record_activity() call, the hang timer only advanced
+            # on per-tool record_turn(), so an active stream (tokens/thinking)
+            # or a single long tool call could trip the 90s hang detector and
+            # trigger a spurious self-heal mid-response.
             self._parent._last_event_time = time.time()
+            self._parent._health_sensor.record_activity()
 
             # Capture SDK session ID from init message
             if hasattr(message, "session_id") and message.session_id:
