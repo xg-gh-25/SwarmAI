@@ -84,9 +84,6 @@ cd ../desktop && npm install && npm run tauri:dev
 
 **一个 Builder + AI，能不能达到团队级产出？** 我们在实战验证。
 
-<details>
-<summary><strong>七条设计信念（点击展开）</strong></summary>
-
 1. **一次做对是真正的 token 优化。** 便宜模型迭代 5 次，成本比一次正确交付还高。编码/内容即黑盒：输入 → 有质量保证的输出。
 2. **分工是人类认知带宽的妥协，不是最优解。** 一个 Agent，多角色，一层知识。（对抗性审查 spawn 子 Agent ≠ 分工。）
 3. **知识必须自己淘汰自己。** 达尔文式衰减：90 天不引用 = 退场。能遗忘的系统 > 只能记住的系统。
@@ -96,8 +93,6 @@ cd ../desktop && npm install && npm run tauri:dev
 7. **测量不了的，等于没造。** OS Eval + Golden Set + 变更触发。用 git 里的数据证明收敛。
 
 **复利循环本身就是产品。** 你不能只取其中一块就得到同样效果。
-
-</details>
 
 > 📖 **完整论点 + CLASS A 案例 + 收敛证据：** [docs/THESIS.md](./docs/THESIS.md)
 >

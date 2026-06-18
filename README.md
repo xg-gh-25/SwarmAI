@@ -84,9 +84,6 @@ Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv), [Claude C
 
 **Can one builder + AI operate at team scale?** We're testing it live.
 
-<details>
-<summary><strong>Seven design convictions (click to expand)</strong></summary>
-
 1. **One-shot qualified delivery is the real token optimization.** Cheap models iterate 5×, cost more than one correct delivery. Code/content as black box: input → qualified output.
 2. **Division of labor is a compromise for limited human cognitive bandwidth — not an optimal design.** One agent, many roles, one knowledge layer. (Sub-agents for adversarial verification ≠ division of labor.)
 3. **Knowledge must eliminate itself.** Darwinian decay: 90d unreferenced = retirement. A system that can forget > one that can only remember.
@@ -96,8 +93,6 @@ Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv), [Claude C
 7. **If you can't measure it, you didn't build it.** OS Eval + golden set + change-triggered. Proves convergence in git.
 
 **The compound loop itself is the product.** You can't extract one piece and get the same effect.
-
-</details>
 
 > 📖 **Full thesis + CLASS A case study + convergence evidence:** [docs/THESIS.md](./docs/THESIS.md)
 >
