@@ -32,7 +32,8 @@
  * @module useChatStreamingLifecycle
  */
 
-import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useReducer, useRef, useCallback, useMemo, useEffect } from 'react';
+import { streamingReducer, INITIAL_STATE, type StreamingState, type StreamingEvent } from './streaming-machine';
 import type {
   Message,
   ContentBlock,
@@ -899,6 +900,11 @@ export interface ChatStreamingLifecycle {
   // SESSION_BUSY recovery — true when polling for backend completion
   /** True when backend returned SESSION_BUSY and we're polling for the response. */
   isWaitingForBusy: boolean;
+  // ── State machine (shadow mode — P2) ──
+  /** Explicit streaming state machine. Coexists with boolean flags during migration. */
+  streamState: StreamingState;
+  /** Dispatch events to the streaming state machine. */
+  dispatch: React.Dispatch<StreamingEvent>;
 }
 
 /** Context warning payload from the backend context monitor. */
@@ -997,6 +1003,12 @@ export function useChatStreamingLifecycle(
   const lastRealEventRef = useRef<number>(Date.now());
   const pendingToolUseRef = useRef<boolean>(false);
   const [isLikelyStalled, setIsLikelyStalled] = useState(false);
+
+  // ── Streaming State Machine (shadow mode — coexists with boolean flags) ──
+  // Phase 2 integration: reducer dispatches at lifecycle boundaries.
+  // Consumers can opt into `streamState.mode` checks instead of boolean combos.
+  // Boolean flags remain authoritative until P3/P4 completes full migration.
+  const [streamState, dispatch] = useReducer(streamingReducer, INITIAL_STATE);
 
   // ── MessageStore subscription: store → React state bridge ──────────────
   // When the active tab has a store, subscribe to it. On notify (rAF-gated),
@@ -1690,6 +1702,9 @@ export function useChatStreamingLifecycle(
         }
 
         if (event.type === 'session_start' && event.sessionId) {
+          // ── State machine dispatch: PENDING → STREAMING ──
+          dispatch({ type: 'SESSION_START', sessionId: event.sessionId });
+
           // Update per-tab map. Keep isStreaming true — the tab is still
           // actively streaming after session_start. The pending phase ends
           // (pendingStreamTabs removal below) but the tab remains streaming
@@ -1839,6 +1854,9 @@ export function useChatStreamingLifecycle(
           event.questions &&
           event.toolUseId
         ) {
+          // ── State machine dispatch: STREAMING → WAITING_INPUT ──
+          dispatch({ type: 'ASK_USER_QUESTION' });
+
           const pq: PendingQuestion = {
             toolUseId: event.toolUseId,
             questions: event.questions,
@@ -1943,6 +1961,10 @@ export function useChatStreamingLifecycle(
             updateTabStatus(capturedTabId, 'permission_needed');
           }
         } else if (event.type === 'result') {
+          // ── State machine dispatch: STREAMING → IDLE or DRAIN_PENDING ──
+          const hasQueued = !!(tabState?.queuedMessage);
+          dispatch({ type: 'RESULT', hasQueuedMessage: hasQueued });
+
           const sid =
             event.sessionId ||
             ((event as unknown as Record<string, unknown>)
@@ -2670,6 +2692,16 @@ export function useChatStreamingLifecycle(
         }
 
         console.error('Stream error:', error);
+        // ── State machine dispatch: → ERROR or RECONNECTING ──
+        const hasData = capturedTabId
+          ? tabMapRef.current.get(capturedTabId)?.hasReceivedData ?? false
+          : false;
+        dispatch({
+          type: 'ERROR',
+          phase: hasData ? 'mid_stream' : 'connection',
+          message: error.message,
+        });
+
         const tabState = capturedTabId
           ? tabMapRef.current.get(capturedTabId)
           : undefined;
@@ -3151,5 +3183,8 @@ export function useChatStreamingLifecycle(
     setCompactionGuard,
     isLikelyStalled,
     isWaitingForBusy,
+    // ── State machine (shadow mode — P2 integration) ──
+    streamState,
+    dispatch,
   };
 }
