@@ -22,6 +22,8 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, AsyncIterator, Optional, Protocol
 
+from .compaction_guard import EscalationLevel
+
 if TYPE_CHECKING:
     from .session_unit import SessionState, SessionUnit
 
