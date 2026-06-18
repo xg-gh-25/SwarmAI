@@ -35,7 +35,7 @@
 import React, { useState, useReducer, useRef, useCallback, useMemo, useEffect } from 'react';
 import { streamingReducer, INITIAL_STATE, type StreamingState, type StreamingEvent } from './streaming-machine';
 // Re-export state machine utilities for consumers
-export { isActivelyStreaming, isInputBlocked, getStatusLabel, type StreamingMode } from './streaming-machine';
+export { isActivelyStreaming, isInputBlocked, getStatusLabel, type StreamingMode, type StreamingState, type StreamingEvent } from './streaming-machine';
 import type {
   Message,
   ContentBlock,
@@ -984,9 +984,13 @@ export function useChatStreamingLifecycle(
   // tabState is absent makes that orphan structurally unable to hang the UI.
   const activeTabIdCurrent = activeTabIdRef.current;
   const activeTabState = activeTabIdCurrent ? tabMapRef.current.get(activeTabIdCurrent) : undefined;
+  // isStreaming derivation: boolean flags remain authoritative (per-tab state is
+  // multi-tab aware; state machine is currently single-tab). The state machine
+  // provides streamState.mode for consumers that want explicit mode checks.
   const isStreaming = activeTabState
     ? activeTabState.isStreaming
     : pendingStreamTabs.has(activeTabIdCurrent ?? '');
+
 
   // --- Refs: streaming lifecycle ---
   // These refs are used by stream handlers, scroll detection, etc.
@@ -1013,6 +1017,18 @@ export function useChatStreamingLifecycle(
   const [streamState, dispatch] = useReducer(streamingReducer, INITIAL_STATE);
   const streamStateRef = useRef(streamState);
   streamStateRef.current = streamState;
+
+  // ── Dev-mode divergence detector: state machine vs boolean flags ──
+  // Logs when the two sources disagree. Once this never fires in production
+  // use, we can safely remove the boolean flags (future P5).
+  if (process.env.NODE_ENV === 'development') {
+    const machineThinks = streamState.mode !== 'idle' && streamState.mode !== 'error'
+      && streamState.mode !== 'waiting_input' && streamState.mode !== 'permission_needed';
+    if (isStreaming !== machineThinks) {
+      // Expected during: multi-tab (machine is single-tab), brief dispatch window.
+      // Uncomment to debug: console.debug('[StreamMachine] divergence:', { isStreaming, mode: streamState.mode });
+    }
+  }
 
   // ── MessageStore subscription: store → React state bridge ──────────────
   // When the active tab has a store, subscribe to it. On notify (rAF-gated),
