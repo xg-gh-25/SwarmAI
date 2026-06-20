@@ -438,11 +438,20 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
                 return self._row_to_dict(row) if row else None
 
     async def cleanup_expired(self) -> int:
-        """Delete expired messages based on TTL. Returns count of deleted items."""
+        """Delete expired messages based on TTL. Returns count of deleted items.
+
+        Skips undelivered pending messages (``sent = 0``): a pending row carries
+        the same 90-day TTL as any message, but deleting it mid-flight would lose
+        an undelivered user message (violates the Root-1 F4 "never lose a message"
+        invariant). Only delivered rows (``sent = 1``) and legacy rows (``sent``
+        NULL on pre-v6 DBs) are TTL-reaped. A pending row is reaped only after it
+        is drained (becomes ``sent = 1``) or its session is explicitly deleted.
+        """
         current_time = int(time.time())
         async with self._get_connection() as conn:
             cursor = await conn.execute(
-                f"DELETE FROM {self.table_name} WHERE expires_at < ?",
+                f"DELETE FROM {self.table_name} "
+                f"WHERE expires_at < ? AND (sent IS NULL OR sent = 1)",
                 (current_time,)
             )
             await conn.commit()
@@ -2022,6 +2031,25 @@ class SQLiteDatabase(BaseDatabase):
             await conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_messages_pending "
                 "ON messages (session_id, sent, pending_seq)"
+            )
+            # Partial index for the startup reopen_dangling_claims sweep, which
+            # filters by (sent=0 AND claimed_at NOT NULL) WITHOUT a session_id —
+            # the composite index above (leading session_id) can't serve that, so
+            # without this the sweep is a full table scan on every daemon start.
+            # Partial = tiny (only dangling rows, normally ~0).
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_messages_dangling_claim "
+                "ON messages (claimed_at) WHERE sent = 0 AND claimed_at IS NOT NULL"
+            )
+            # Cross-process guard for pending_seq monotonicity: the per-session
+            # asyncio.Lock only serializes within one daemon process. A UNIQUE
+            # constraint makes a cross-process MAX+1 collision (deploy overlap,
+            # stray CLI) fail LOUDLY instead of silently duplicating the coalesce
+            # key. NULL pending_seq (every sent/non-pending row) is exempt —
+            # SQLite treats NULLs as distinct in UNIQUE indexes.
+            await conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_pending_seq_uniq "
+                "ON messages (session_id, pending_seq) WHERE pending_seq IS NOT NULL"
             )
             await conn.execute("PRAGMA user_version = 6")
             await conn.commit()

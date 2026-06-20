@@ -39,6 +39,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from uuid import uuid4
@@ -46,6 +47,44 @@ from uuid import uuid4
 import aiosqlite
 
 logger = logging.getLogger(__name__)
+
+# TTL for pending rows — mirrors SQLiteMessagesTable.TTL_SECONDS (90 days) so an
+# abandoned pending message (session never drained, never explicitly deleted) is
+# eventually TTL-reaped instead of leaking forever. The TTL sweeper is taught to
+# skip sent=0 rows (see SQLiteMessagesTable.cleanup_expired) so a slow-but-live
+# drain is never deleted mid-flight — only rows whose 90-day window fully elapses
+# are reaped, by which point the session is unambiguously dead.
+_PENDING_TTL_SECONDS = 90 * 24 * 60 * 60
+
+# Transient SQLite errors worth retrying (WAL checkpoint collision, concurrent
+# writers). Mirrors SQLiteTable.put's retry contract — the whole point of this
+# module is to NEVER lose a pending message, so a bare "database is locked" must
+# not drop it.
+_RETRY_DELAYS = (0.05, 0.2, 0.5)  # exponential-ish, total < 1s
+
+
+def _is_transient_db_error(exc: Exception) -> bool:
+    s = str(exc).lower()
+    return "database is locked" in s or "busy" in s
+
+
+async def _with_retry(coro_factory):
+    """Run an async DB operation with retry on transient lock/busy errors.
+
+    ``coro_factory`` is a zero-arg callable returning a fresh coroutine each
+    attempt (a coroutine can only be awaited once). Non-transient errors and the
+    final attempt propagate immediately.
+    """
+    last_error: Exception | None = None
+    for attempt in range(len(_RETRY_DELAYS) + 1):
+        try:
+            return await coro_factory()
+        except Exception as exc:  # noqa: BLE001 — re-raised below if not transient
+            last_error = exc
+            if not _is_transient_db_error(exc) or attempt >= len(_RETRY_DELAYS):
+                raise
+            await asyncio.sleep(_RETRY_DELAYS[attempt])
+    raise last_error  # pragma: no cover - loop always returns or raises
 
 # Per-session locks guarding pending_seq assignment (F6). Keyed by session_id.
 # Module-level so it survives across calls; cleared only in tests.
@@ -94,12 +133,27 @@ def _get_db_path() -> str:
 
 
 def _get_seq_lock(session_id: str) -> asyncio.Lock:
-    """Return the per-session pending_seq lock, creating one on first use."""
-    lock = _SEQ_LOCKS.get(session_id)
-    if lock is None:
-        lock = asyncio.Lock()
-        _SEQ_LOCKS[session_id] = lock
-    return lock
+    """Return the per-session lock guarding pending_seq assignment + lifecycle
+    transitions for one session.
+
+    ``setdefault`` is atomic under asyncio's single-threaded scheduling (no
+    ``await`` between read and write) AND self-documents the invariant: this
+    function MUST remain await-free, else two coroutines for the same new
+    session could hold divergent locks and break seq monotonicity.
+
+    NOTE (bounded growth): one Lock accrues per session_id and is pruned only by
+    :func:`forget_session` (called from session teardown in Phase 2) or tests.
+    Until Phase 2 wires teardown, growth is ~1 small Lock per session — bounded
+    by session churn, not unbounded data accumulation.
+    """
+    return _SEQ_LOCKS.setdefault(session_id, asyncio.Lock())
+
+
+def forget_session(session_id: str) -> None:
+    """Drop the per-session seq lock when a session is finalized (Phase 2
+    teardown hook). Idempotent. Prevents _SEQ_LOCKS from growing unbounded over
+    the daemon's lifetime."""
+    _SEQ_LOCKS.pop(session_id, None)
 
 
 def _row_to_pending(row: aiosqlite.Row | tuple) -> PendingMessage:
@@ -115,13 +169,25 @@ def _row_to_pending(row: aiosqlite.Row | tuple) -> PendingMessage:
     # Stored payload is either a text string or a list of content blocks.
     if isinstance(parsed, str):
         user_message = parsed
-    elif isinstance(parsed, list):
+    elif isinstance(parsed, list) and parsed:
         # A single [{"type":"text","text":...}] block is the text path's storage
-        # form; surface it as text when it's exactly that, else as content blocks.
-        if len(parsed) == 1 and parsed[0].get("type") == "text" and set(parsed[0]) <= {"type", "text"}:
-            user_message = parsed[0].get("text")
+        # form; surface it as text when it's EXACTLY that, else as content blocks.
+        # Guard every element access: a legacy/seed row stores '[]' (empty list,
+        # handled by the `and parsed` above) and a malformed row could store a
+        # non-dict first element — neither may crash peek/claim.
+        first = parsed[0]
+        if (
+            len(parsed) == 1
+            and isinstance(first, dict)
+            and first.get("type") == "text"
+            and set(first) <= {"type", "text"}
+        ):
+            user_message = first.get("text")
         else:
             content = parsed
+    # parsed is None (malformed/empty) or [] → both user_message and content stay
+    # None; the row is a degenerate pending message (persist_pending rejects
+    # fully-empty input, so this only arises from corrupt/legacy data).
     return PendingMessage(
         id=msg_id,
         session_id=session_id,
@@ -165,28 +231,36 @@ async def persist_pending(
 
     db_path = _get_db_path()
     now = datetime.now().isoformat()
+    expires_at = int(time.time()) + _PENDING_TTL_SECONDS
     msg_id = str(uuid4())
     payload = _payload_json(user_message, content)
 
-    async with _get_seq_lock(session_id):
-        async with aiosqlite.connect(db_path) as conn:
-            await conn.execute("PRAGMA busy_timeout=5000")
-            cursor = await conn.execute(
-                "SELECT COALESCE(MAX(pending_seq), 0) FROM messages "
-                "WHERE session_id = ?",
-                (session_id,),
-            )
-            max_seq = (await cursor.fetchone())[0]
-            next_seq = max_seq + 1
-            await conn.execute(
-                "INSERT INTO messages "
-                "(id, session_id, role, content, model, metadata, "
-                " sent, pending_seq, claimed_at, created_at, updated_at) "
-                "VALUES (?, ?, 'user', ?, NULL, '{}', 0, ?, NULL, ?, ?)",
-                (msg_id, session_id, payload, next_seq, now, now),
-            )
-            await conn.commit()
+    async def _do() -> int:
+        # SELECT MAX+INSERT held inside the per-session lock for monotonic
+        # pending_seq (F6). Retry wraps the whole thing so a transient
+        # "database is locked" never loses the message.
+        async with _get_seq_lock(session_id):
+            async with aiosqlite.connect(db_path) as conn:
+                await conn.execute("PRAGMA busy_timeout=5000")
+                cursor = await conn.execute(
+                    "SELECT COALESCE(MAX(pending_seq), 0) FROM messages "
+                    "WHERE session_id = ?",
+                    (session_id,),
+                )
+                max_seq = (await cursor.fetchone())[0]
+                next_seq = max_seq + 1
+                await conn.execute(
+                    "INSERT INTO messages "
+                    "(id, session_id, role, content, model, metadata, "
+                    " sent, pending_seq, claimed_at, expires_at, "
+                    " created_at, updated_at) "
+                    "VALUES (?, ?, 'user', ?, NULL, '{}', 0, ?, NULL, ?, ?, ?)",
+                    (msg_id, session_id, payload, next_seq, expires_at, now, now),
+                )
+                await conn.commit()
+                return next_seq
 
+    next_seq = await _with_retry(_do)
     return _row_to_pending((msg_id, session_id, next_seq, payload, now))
 
 
@@ -196,14 +270,19 @@ async def peek_pending_batch(session_id: str) -> list[PendingMessage]:
     Read-only. Empty list if none. This is the coalesce input set.
     """
     db_path = _get_db_path()
-    async with aiosqlite.connect(db_path) as conn:
-        cursor = await conn.execute(
-            "SELECT id, session_id, pending_seq, content, created_at "
-            "FROM messages WHERE session_id = ? AND sent = 0 "
-            "ORDER BY pending_seq ASC",
-            (session_id,),
-        )
-        rows = await cursor.fetchall()
+
+    async def _do() -> list:
+        async with aiosqlite.connect(db_path) as conn:
+            await conn.execute("PRAGMA busy_timeout=5000")
+            cursor = await conn.execute(
+                "SELECT id, session_id, pending_seq, content, created_at "
+                "FROM messages WHERE session_id = ? AND sent = 0 "
+                "ORDER BY pending_seq ASC",
+                (session_id,),
+            )
+            return await cursor.fetchall()
+
+    rows = await _with_retry(_do)
     return [_row_to_pending(r) for r in rows]
 
 
@@ -219,42 +298,59 @@ async def claim_pending_batch(session_id: str) -> list[PendingMessage]:
     """
     db_path = _get_db_path()
     now = datetime.now().isoformat()
-    async with _get_seq_lock(session_id):
-        async with aiosqlite.connect(db_path) as conn:
-            await conn.execute("PRAGMA busy_timeout=5000")
-            cursor = await conn.execute(
-                "SELECT id, session_id, pending_seq, content, created_at "
-                "FROM messages WHERE session_id = ? AND sent = 0 "
-                "AND claimed_at IS NULL ORDER BY pending_seq ASC",
-                (session_id,),
-            )
-            rows = await cursor.fetchall()
-            if not rows:
-                return []
-            await conn.execute(
-                "UPDATE messages SET claimed_at = ? "
-                "WHERE session_id = ? AND sent = 0 AND claimed_at IS NULL",
-                (now, session_id),
-            )
-            await conn.commit()
+
+    async def _do() -> list:
+        async with _get_seq_lock(session_id):
+            async with aiosqlite.connect(db_path) as conn:
+                await conn.execute("PRAGMA busy_timeout=5000")
+                cursor = await conn.execute(
+                    "SELECT id, session_id, pending_seq, content, created_at "
+                    "FROM messages WHERE session_id = ? AND sent = 0 "
+                    "AND claimed_at IS NULL ORDER BY pending_seq ASC",
+                    (session_id,),
+                )
+                rows = await cursor.fetchall()
+                if not rows:
+                    return []
+                await conn.execute(
+                    "UPDATE messages SET claimed_at = ? "
+                    "WHERE session_id = ? AND sent = 0 AND claimed_at IS NULL",
+                    (now, session_id),
+                )
+                await conn.commit()
+                return rows
+
+    rows = await _with_retry(_do)
     return [_row_to_pending(r) for r in rows]
 
 
 async def mark_sent_batch(session_id: str, pending_seqs: list[int]) -> None:
-    """Flip a claimed set claimed(sent=0)→sent(sent=1). Called ONLY after the
-    coalesced turn is confirmed delivered to the subprocess (F4)."""
+    """Flip a CLAIMED set claimed(sent=0)→sent(sent=1). Called ONLY after the
+    coalesced turn is confirmed delivered to the subprocess (F4).
+
+    Guarded by ``claimed_at IS NOT NULL`` so a stale/reopened seq (rolled back to
+    pending by a crash + reopen) becomes a no-op rather than silently marking an
+    undelivered message as sent. Held under the per-session lock so it serializes
+    with persist/claim/rollback on the same session's lifecycle columns.
+    """
     if not pending_seqs:
         return
     db_path = _get_db_path()
     placeholders = ",".join("?" for _ in pending_seqs)
-    async with aiosqlite.connect(db_path) as conn:
-        await conn.execute("PRAGMA busy_timeout=5000")
-        await conn.execute(
-            f"UPDATE messages SET sent = 1, claimed_at = NULL "
-            f"WHERE session_id = ? AND pending_seq IN ({placeholders})",
-            (session_id, *pending_seqs),
-        )
-        await conn.commit()
+
+    async def _do() -> None:
+        async with _get_seq_lock(session_id):
+            async with aiosqlite.connect(db_path) as conn:
+                await conn.execute("PRAGMA busy_timeout=5000")
+                await conn.execute(
+                    f"UPDATE messages SET sent = 1, claimed_at = NULL "
+                    f"WHERE session_id = ? AND sent = 0 AND claimed_at IS NOT NULL "
+                    f"AND pending_seq IN ({placeholders})",
+                    (session_id, *pending_seqs),
+                )
+                await conn.commit()
+
+    await _with_retry(_do)
 
 
 async def rollback_claim_batch(session_id: str, pending_seqs: list[int]) -> None:
@@ -267,14 +363,20 @@ async def rollback_claim_batch(session_id: str, pending_seqs: list[int]) -> None
         return
     db_path = _get_db_path()
     placeholders = ",".join("?" for _ in pending_seqs)
-    async with aiosqlite.connect(db_path) as conn:
-        await conn.execute("PRAGMA busy_timeout=5000")
-        await conn.execute(
-            f"UPDATE messages SET claimed_at = NULL "
-            f"WHERE session_id = ? AND sent = 0 AND pending_seq IN ({placeholders})",
-            (session_id, *pending_seqs),
-        )
-        await conn.commit()
+
+    async def _do() -> None:
+        async with _get_seq_lock(session_id):
+            async with aiosqlite.connect(db_path) as conn:
+                await conn.execute("PRAGMA busy_timeout=5000")
+                await conn.execute(
+                    f"UPDATE messages SET claimed_at = NULL "
+                    f"WHERE session_id = ? AND sent = 0 "
+                    f"AND pending_seq IN ({placeholders})",
+                    (session_id, *pending_seqs),
+                )
+                await conn.commit()
+
+    await _with_retry(_do)
 
 
 def combine_pending(

@@ -304,3 +304,128 @@ async def test_reopen_does_not_touch_sent_rows(pending, db_path: Path):
     await pending.reopen_dangling_claims()
     assert pending.count_pending("sess-s") == 0, "sent rows must not be reopened"
 
+
+# ---------------------------------------------------------------------------
+# Adversarial-review hardening (round 1)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_row_to_pending_survives_empty_and_nondict_payloads(pending, db_path: Path):
+    """CORR-MED: _row_to_pending must not crash on '[]' (legacy/seed shape) or a
+    non-dict first element — these must surface as degenerate rows, not propagate
+    IndexError/AttributeError out of peek/claim."""
+    # Insert raw pending rows with adversarial content payloads.
+    async with aiosqlite.connect(str(db_path)) as conn:
+        for i, payload in enumerate(["[]", '["just a string"]', "[123]", "not json"]):
+            await conn.execute(
+                "INSERT INTO messages (id, session_id, role, content, sent, "
+                "pending_seq, created_at, updated_at) "
+                "VALUES (?, 'sess-bad', 'user', ?, 0, ?, '2026-01-01', '2026-01-01')",
+                (f"bad-{i}", payload, i + 1),
+            )
+        await conn.commit()
+    # Must not raise.
+    rows = await pending.peek_pending_batch("sess-bad")
+    assert len(rows) == 4
+    claimed = await pending.claim_pending_batch("sess-bad")
+    assert len(claimed) == 4
+
+
+@pytest.mark.asyncio
+async def test_mark_sent_ignores_stale_unclaimed_seq(pending, db_path: Path):
+    """CONC/CORR: mark_sent_batch must NO-OP on a seq that is not currently
+    claimed (e.g. rolled back / reopened) — never mark an undelivered row sent."""
+    await pending.persist_pending("sess-stale", user_message="x", content=None, agent_id="a")
+    # Row is pending (claimed_at=NULL). Try to mark it sent WITHOUT claiming.
+    await pending.mark_sent_batch("sess-stale", [1])
+    # Must remain pending — the claimed_at guard blocked the flip.
+    assert pending.count_pending("sess-stale") == 1
+
+
+@pytest.mark.asyncio
+async def test_persist_sets_expires_at(pending, db_path: Path):
+    """OP: pending rows must carry expires_at so a drained row is eventually
+    TTL-reaped (no permanent leak once delivered)."""
+    msg = await pending.persist_pending("sess-exp", user_message="x", content=None, agent_id="a")
+    async with aiosqlite.connect(str(db_path)) as conn:
+        cur = await conn.execute("SELECT expires_at FROM messages WHERE id=?", (msg.id,))
+        expires_at = (await cur.fetchone())[0]
+    assert expires_at is not None and expires_at > 0
+
+
+@pytest.mark.asyncio
+async def test_ttl_cleanup_skips_pending_rows(pending, db_path: Path):
+    """OP-3 (F4 durability): cleanup_expired must NOT delete an undelivered
+    pending row even if its expires_at is in the past — only sent/legacy rows."""
+    from database.sqlite import SQLiteMessagesTable
+    # Pending row with a PAST expires_at (simulate a long-orphaned pending msg).
+    await pending.persist_pending("sess-ttl", user_message="keep-me", content=None, agent_id="a")
+    async with aiosqlite.connect(str(db_path)) as conn:
+        await conn.execute(
+            "UPDATE messages SET expires_at = 1 WHERE session_id='sess-ttl'"
+        )
+        # Also a delivered (sent=1) expired row that SHOULD be reaped.
+        await conn.execute(
+            "INSERT INTO messages (id, session_id, role, content, sent, "
+            "expires_at, created_at, updated_at) "
+            "VALUES ('sent-old', 'sess-ttl', 'user', '[]', 1, 1, '2026-01-01', '2026-01-01')"
+        )
+        await conn.commit()
+
+    table = SQLiteMessagesTable(table_name="messages", db_path=db_path)
+    await table.cleanup_expired()
+
+    # Pending row preserved; delivered expired row deleted.
+    assert pending.count_pending("sess-ttl") == 1, "pending row must survive TTL"
+    async with aiosqlite.connect(str(db_path)) as conn:
+        cur = await conn.execute("SELECT COUNT(*) FROM messages WHERE id='sent-old'")
+        assert (await cur.fetchone())[0] == 0, "delivered expired row should be reaped"
+
+
+@pytest.mark.asyncio
+async def test_with_retry_recovers_then_propagates():
+    """CONC-HIGH (STEERING #11): the retry wrapper must actually EXECUTE its
+    retry path — recover from transient lock/busy, but propagate non-transient
+    errors immediately and raise after exhausting retries."""
+    import core.session_pending as sp
+
+    # (a) transient → recovers
+    calls = {"n": 0}
+    async def flaky():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise Exception("database is locked")
+        return "ok"
+    assert await sp._with_retry(flaky) == "ok"
+    assert calls["n"] == 3  # proves retries ran, not just the happy path
+
+    # (b) non-transient → immediate propagate (no retries)
+    nt = {"n": 0}
+    async def hard():
+        nt["n"] += 1
+        raise ValueError("not a lock error")
+    with pytest.raises(ValueError):
+        await sp._with_retry(hard)
+    assert nt["n"] == 1  # did NOT retry a non-transient error
+
+    # (c) transient exhausted → raises
+    async def always():
+        raise Exception("busy")
+    with pytest.raises(Exception, match="busy"):
+        await sp._with_retry(always)
+
+
+@pytest.mark.asyncio
+async def test_unique_pending_seq_index_blocks_duplicate(pending, db_path: Path):
+    """CONC-LOW: a cross-process duplicate (session_id, pending_seq) must fail
+    loudly via the UNIQUE partial index, not silently duplicate the coalesce key."""
+    await pending.persist_pending("sess-uniq", user_message="a", content=None, agent_id="a")
+    async with aiosqlite.connect(str(db_path)) as conn:
+        with pytest.raises(aiosqlite.IntegrityError):
+            await conn.execute(
+                "INSERT INTO messages (id, session_id, role, content, sent, "
+                "pending_seq, created_at, updated_at) "
+                "VALUES ('dup', 'sess-uniq', 'user', '[]', 0, 1, '2026-01-01', '2026-01-01')"
+            )
+            await conn.commit()
+
