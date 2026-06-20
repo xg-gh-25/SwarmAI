@@ -13,3 +13,5 @@ export { AssistantMessageView } from './AssistantMessageView';
 export { AssistantHeader } from './AssistantHeader';
 export { InlinePermissionRequest } from './InlinePermissionRequest';
 export { WelcomeScreen } from './WelcomeScreen';
+export { TabView } from './TabView';
+export type { TabViewProps } from './TabView';

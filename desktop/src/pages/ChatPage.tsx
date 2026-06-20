@@ -21,7 +21,7 @@
  *
  * @module ChatPage
  */
-import React, { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffect } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
@@ -40,22 +40,20 @@ import { Spinner, ConfirmDialog, AgentFormModal, ErrorBoundary } from '../compon
 import { useToast } from '../contexts/ToastContext';
 import { useHealth } from '../contexts/HealthContext';
 import { useSessionMeta } from '../contexts/LayoutContext';
-import { EvolutionMessage, ChatErrorMessage } from '../components/chat';
 import { ChatDropZone } from '../components/chat/ChatDropZone';
-import type { EvolutionEventType } from '../services/evolution';
 import { FilePreviewModal } from '../components/workspace/FilePreviewModal';
 import { useRateLimiter, useRateLimitCountdown } from '../hooks';
 import { useUnifiedAttachments } from '../hooks/useUnifiedAttachments';
 import { useTSCCState } from '../hooks/useTSCCState';
 import { useUnifiedTabState } from '../hooks/useUnifiedTabState';
-import { useChatStreamingLifecycle, formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS } from '../hooks/useChatStreamingLifecycle';
+import { useChatStreamingLifecycle } from '../hooks/useChatStreamingLifecycle';
 import { shouldQueueSend } from '../hooks/streaming-guards';
 import { useVoiceConversation } from '../hooks/useVoiceConversation';
-import { ChatHeader, ChatInput, MessageBubble, WelcomeScreen } from './chat/components';
+import { ChatHeader, ChatInput, TabView } from './chat/components';
 import { RadarSidebar } from './chat/components/RightSidebar';
 import RefreshContextModal from '../components/modals/RefreshContextModal';
 
-import { groupSessionsByTime, mergeOlderMessages, resolvePendingToolUseId } from './chat/utils';
+import { groupSessionsByTime, mergeOlderMessages } from './chat/utils';
 import { EXPLORER_ATTACH_FILE, EXPLORER_ASK_ABOUT_FILE } from '../constants/explorerEvents';
 import { CLAUDE_NATIVE_IMAGE_MIMES } from '../utils/fileClassification';
 
@@ -367,21 +365,9 @@ export default function ChatPage() {
     isResponseComplete: !isStreaming,
   });
 
-  // Last assistant message index — memoized for Save-to-Memory button placement
-  const lastAssistantIdx = useMemo(
-    () => messages.reduce((lastIdx, m, i) => m.role === 'assistant' ? i : lastIdx, -1),
-    [messages],
-  );
-
-  // Last resume boundary index — messages before this render dimmed (prior session).
-  // Only TRUE resume boundaries trigger dimming — NOT refresh separators (which
-  // are same-session context refreshes that should not dim prior messages).
-  // Resume boundaries have id NOT starting with 'refresh-'.
-  const lastResumeBoundaryIdx = useMemo(
-    () => messages.reduce((lastIdx, m, i) =>
-      m.role === 'system' && !m.id.startsWith('refresh-') ? i : lastIdx, -1),
-    [messages],
-  );
+  // NOTE: `lastAssistantIdx` and `lastResumeBoundaryIdx` were removed here in
+  // Migration Step 1 — they are pure functions of `messages` and are now
+  // computed internally by `TabView` (the only consumer of those indices).
 
   // Refs for frequently-changing values — stabilizes useCallback identity for
   // handleSendMessage (Req 7.1, 7.3). Without these, the callback would need
@@ -2466,240 +2452,46 @@ export default function ChatPage() {
             </div>
           ) : (
             <>
-              {/* Messages */}
-              <div
-                ref={messagesContainerRef}
-                onScroll={handleMessagesScroll}
-                className={messages.length === 0
-                  ? 'flex-1 overflow-hidden flex flex-col'
-                  : 'flex-1 overflow-y-auto pl-2 pr-4 py-3.5 space-y-2.5 min-w-0'
-                }
-              >
-                {isLoadingOlderMessages && (
-                  <div className="flex justify-center py-2">
-                    <Spinner size="sm" />
-                  </div>
-                )}
-                {hasMoreMessages && !isLoadingOlderMessages && messages.length > 0 && (
-                  <button
-                    onClick={loadOlderMessages}
-                    className="w-full py-1.5 text-xs text-gray-400 hover:text-gray-300 transition-colors text-center"
-                  >
-                    ↑ Load earlier messages
-                  </button>
-                )}
-                {messages.length === 0 ? (
-                  <WelcomeScreen onFocusClick={handleFocusClick} onItemClick={handleItemClick} />
-                ) : (
-                  (() => {
-                  // Root 3 / 3A: derive the answerable question id from React state
-                  // with a fallback to the ACTIVE tab's per-tab cache. React
-                  // `pendingQuestion` is null when the question arrived on a
-                  // background tab or during the mid-stream stale-ref window
-                  // (setPendingQuestion is gated by isActiveTab). The cache is
-                  // always populated, so the question stays answerable.
-                  // Active-tab-only source → PIT71 cross-tab-leak safe (this loop
-                  // only ever renders the active tab's messages).
-                  const activeTabPending = activeTabIdRef.current
-                    ? tabMapRef.current.get(activeTabIdRef.current)?.pendingQuestion ?? null
-                    : null;
-                  const resolvedPendingToolUseId = resolvePendingToolUseId(pendingQuestion, activeTabPending);
-                  return messages.map((msg, idx) => {
-                    // Evolution events get their own renderer
-                    if (msg.evolutionEvent) {
-                      return (
-                        <EvolutionMessage
-                          key={msg.id}
-                          eventType={msg.evolutionEvent.eventType as EvolutionEventType}
-                          data={msg.evolutionEvent.data}
-                        />
-                      );
-                    }
-                    // System messages (resume/refresh boundary) render as divider lines
-                    if (msg.role === 'system') {
-                      const isRefresh = msg.id.startsWith('refresh-');
-                      const label = isRefresh ? 'Context Refreshed' : 'Session Resumed';
-                      return (
-                        <div key={msg.id} className="flex items-center gap-3 py-3 px-4 select-none">
-                          <div className="flex-1 h-px bg-[var(--color-border)]" />
-                          <span className="text-xs text-[var(--color-text-muted)] whitespace-nowrap flex items-center gap-1.5">
-                            {isRefresh && (
-                              <span className="material-symbols-outlined" style={{ fontSize: '14px' }}>refresh</span>
-                            )}
-                            {label}
-                          </span>
-                          <div className="flex-1 h-px bg-[var(--color-border)]" />
-                        </div>
-                      );
-                    }
-                    // Error messages get the structured error renderer
-                    if (msg.isError) {
-                      const textBlock = msg.content.find(b => b.type === 'text');
-                      const errorText = textBlock && 'text' in textBlock ? textBlock.text : 'An error occurred';
-                      const errorCode = (msg as unknown as Record<string, unknown>).errorCode as string | undefined;
-                      return (
-                        <ChatErrorMessage
-                          key={msg.id}
-                          error={{
-                            code: errorCode,
-                            message: errorText,
-                            detail: (msg as unknown as Record<string, unknown>).errorDetail as string | undefined,
-                            suggestedAction: (msg as unknown as Record<string, unknown>).suggestedAction as string | undefined,
-                            retryAfter: (msg as unknown as Record<string, unknown>).retryAfter as number | undefined,
-                          }}
-                          onRetry={errorCode === 'QUEUE_TIMEOUT' ? handleRetryQueueTimeout : undefined}
-                        />
-                      );
-                    }
-                    // Only pass isStreaming to the last assistant message.
-                    // Use lastAssistantIdx (not messages.length-1) so queued
-                    // user messages appended after the streaming assistant
-                    // don't strip the streaming indicators.
-                    const isLastAssistantForStreaming = isStreaming
-                      && msg.role === 'assistant'
-                      && idx === lastAssistantIdx;
-                    // Render streaming status indicators immediately after the
-                    // streaming assistant message so they stay visually attached
-                    // to the response — above any queued user messages.
-                    const activeTabForIndicator = activeTabIdRef.current ? tabMapRef.current.get(activeTabIdRef.current) : undefined;
-                    const streamingIndicator = isLastAssistantForStreaming ? (
-                      <>
-                        {activeTabForIndicator?.isReconnecting && (
-                          <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
-                            <Spinner size="sm" />
-                            <span className="text-sm">{t('chat.reconnecting', 'Reconnecting...')}</span>
-                          </div>
-                        )}
-                        {activeTabForIndicator?.isResuming && (
-                          <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
-                            <Spinner size="sm" />
-                            <span className="text-sm">{t('chat.resuming', 'Resuming session...')}</span>
-                          </div>
-                        )}
-                        {!activeTabForIndicator?.isResuming && (
-                          <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
-                            <Spinner size="sm" />
-                            <span className="text-sm">
-                              {displayedActivity?.toolName
-                                ? (displayedActivity.toolContext
-                                    ? (elapsedSeconds >= ELAPSED_DISPLAY_THRESHOLD_MS / 1000
-                                        ? t('chat.runningToolWithContextElapsed', {
-                                            tool: displayedActivity.toolName,
-                                            context: displayedActivity.toolContext,
-                                            count: displayedActivity.toolCount,
-                                            elapsed: formatElapsed(elapsedSeconds),
-                                          })
-                                        : t('chat.runningToolWithContext', {
-                                            tool: displayedActivity.toolName,
-                                            context: displayedActivity.toolContext,
-                                            count: displayedActivity.toolCount,
-                                          }))
-                                    : displayedActivity.toolCount > 1
-                                      ? (elapsedSeconds >= ELAPSED_DISPLAY_THRESHOLD_MS / 1000
-                                          ? t('chat.runningToolWithCountElapsed', {
-                                              tool: displayedActivity.toolName,
-                                              count: displayedActivity.toolCount,
-                                              elapsed: formatElapsed(elapsedSeconds),
-                                            })
-                                          : t('chat.runningToolWithCount', {
-                                              tool: displayedActivity.toolName,
-                                              count: displayedActivity.toolCount,
-                                            }))
-                                      : (elapsedSeconds >= ELAPSED_DISPLAY_THRESHOLD_MS / 1000
-                                          ? t('chat.runningToolElapsed', {
-                                              tool: displayedActivity.toolName,
-                                              elapsed: formatElapsed(elapsedSeconds),
-                                            })
-                                          : t('chat.runningTool', { tool: displayedActivity.toolName })))
-                                : displayedActivity?.hasContent
-                                  ? t('chat.processing')
-                                  : elapsedSeconds >= ELAPSED_DISPLAY_THRESHOLD_MS / 1000
-                                    ? t('chat.thinkingWithElapsed', { elapsed: formatElapsed(elapsedSeconds) })
-                                    : t('chat.thinking')}
-                            </span>
-                          </div>
-                        )}
-                      </>
-                    ) : null;
-                    // Messages before the last resume boundary are from prior
-                    // session context — dim them to distinguish from current interaction.
-                    // ONLY dim when there are real (non-system) messages AFTER the
-                    // boundary. When the boundary is the last message (resume just
-                    // happened, user hasn't sent anything yet), dimming everything
-                    // is wrong — it looks like the whole window has a film over it.
-                    const hasContentAfterBoundary = lastResumeBoundaryIdx >= 0 &&
-                      lastResumeBoundaryIdx < messages.length - 1 &&
-                      messages.slice(lastResumeBoundaryIdx + 1).some(m => m.role !== 'system');
-                    const isPriorSession = hasContentAfterBoundary && idx < lastResumeBoundaryIdx;
-                    return (
-                      <React.Fragment key={msg.id}>
-                        <div className={isPriorSession ? 'opacity-50' : undefined}>
-                          <MessageBubble
-                            message={msg}
-                            onAnswerQuestion={stableHandleAnswerQuestion}
-                            onPermissionDecision={stableHandlePermissionDecision}
-                            onEscalationSelect={handleEscalationSelect}
-                            pendingToolUseId={resolvedPendingToolUseId}
-                            pendingPermissionRequestId={pendingPermissionRequestId ?? undefined}
-                            isStreaming={isLastAssistantForStreaming}
-                            sessionId={sessionId}
-                            isLastAssistant={idx === lastAssistantIdx}
-                            contextWarning={idx === lastAssistantIdx ? contextWarning : null}
-                            onCancelQueued={msg.isQueued && activeTabIdRef.current ? () => handleCancelQueued(activeTabIdRef.current!) : undefined}
-                            onContinue={idx === lastAssistantIdx && !isStreaming ? handleContinue : undefined}
-                          />
-                        </div>
-                        {streamingIndicator}
-                      </React.Fragment>
-                    );
-                  });
-                  })()
-                )}
-                {/* Fallback streaming indicator — only when isStreaming is true but
-                    no assistant message exists yet (gap between setIsStreaming(true)
-                    and assistant placeholder being added to messages). */}
-                {isStreaming && lastAssistantIdx < 0 && (
-                  <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
-                    <Spinner size="sm" />
-                    <span className="text-sm">{t('chat.thinking')}</span>
-                  </div>
-                )}
-                {/* SESSION_BUSY recovery indicator — polling for backend completion */}
-                {isWaitingForBusy && !isStreaming && (
-                  <div className="flex items-center gap-2 text-[var(--color-text-muted)] py-2">
-                    <Spinner size="sm" />
-                    <span className="text-sm">{t('chat.waitingForResponse', 'Waiting for response...')}</span>
-                  </div>
-                )}
-                {/* Sticky streaming indicator — always visible when agent is working,
-                    regardless of scroll position. Uses CSS sticky to float at the
-                    bottom of the scroll viewport when user scrolls up. Click to
-                    scroll to the active streaming message. */}
-                {isStreaming && lastAssistantIdx >= 0 && (
-                  <div className="sticky bottom-0 z-10 flex items-center justify-center py-1.5">
-                    <button
-                      type="button"
-                      onClick={scrollToBottom}
-                      className="flex items-center gap-2 px-3 py-1.5 rounded-full
-                                    bg-[var(--color-bg-primary)]/95 backdrop-blur-sm
-                                    border border-[var(--color-border-subtle)]
-                                    shadow-sm text-[var(--color-text-muted)]
-                                    hover:border-[var(--color-border)] hover:text-[var(--color-text-secondary)]
-                                    transition-colors cursor-pointer">
-                      <Spinner size="sm" />
-                      <span className="text-xs font-medium">
-                        {displayedActivity?.toolName
-                          ? t('chat.runningTool', { tool: displayedActivity.toolName })
-                          : t('chat.thinking')}
-                      </span>
-                      {elapsedSeconds >= 5 && (
-                        <span className="text-xs opacity-60">{formatElapsed(elapsedSeconds)}</span>
-                      )}
-                    </button>
-                  </div>
-                )}
-                <div ref={messagesEndRef} />
-              </div>
+              {/* Messages — single active TabView (Migration Step 1).
+                  Renders the active tab's message list. Per-tab props are read
+                  from tabMapRef (authoritative) so behavior matches the prior
+                  inline list exactly. N keep-mounted TabViews arrive in task 4.1. */}
+              <TabView
+                tabId={activeTabId ?? ''}
+                messages={messages}
+                sessionId={sessionId}
+                isStreaming={isStreaming}
+                pendingQuestion={pendingQuestion}
+                activeTabPendingQuestion={activeTabIdRef.current
+                  ? tabMapRef.current.get(activeTabIdRef.current)?.pendingQuestion ?? null
+                  : null}
+                pendingPermissionRequestId={pendingPermissionRequestId}
+                contextWarning={contextWarning}
+                isReconnecting={activeTabIdRef.current
+                  ? tabMapRef.current.get(activeTabIdRef.current)?.isReconnecting
+                  : undefined}
+                isResuming={activeTabIdRef.current
+                  ? tabMapRef.current.get(activeTabIdRef.current)?.isResuming
+                  : undefined}
+                isWaitingForBusy={isWaitingForBusy}
+                displayedActivity={displayedActivity}
+                elapsedSeconds={elapsedSeconds}
+                hasMoreMessages={hasMoreMessages}
+                isLoadingOlderMessages={isLoadingOlderMessages}
+                messagesContainerRef={messagesContainerRef}
+                messagesEndRef={messagesEndRef}
+                onMessagesScroll={handleMessagesScroll}
+                onScrollToBottom={scrollToBottom}
+                onLoadOlder={loadOlderMessages}
+                onAnswerQuestion={stableHandleAnswerQuestion}
+                onPermissionDecision={stableHandlePermissionDecision}
+                onEscalationSelect={handleEscalationSelect}
+                onCancelQueued={handleCancelQueued}
+                onContinue={handleContinue}
+                onFocusClick={handleFocusClick}
+                onItemClick={handleItemClick}
+                onRetryQueueTimeout={handleRetryQueueTimeout}
+              />
 
               {/* Rate limit countdown indicator */}
               {isLimited('/chat') && chatRateLimitCountdown > 0 && (
