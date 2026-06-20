@@ -153,6 +153,27 @@ describe('queuedMessageFromRetryPayload', () => {
     expect(queuedMessageFromRetryPayload(null, 'queued-x')).toBeNull();
   });
 
+  it('Root-1 P2 (L7/2A): server-side pending → no retryPayload → no re-queue (no double-send)', () => {
+    // When the backend persists the message server-side (pendingSeq present), it
+    // OMITS retryPayload because the drain worker now owns delivery. The frontend
+    // re-queue helper must no-op so the message is not ALSO re-sent from the FE
+    // (which would double-deliver). This is the structural double-send guard:
+    // absent retryPayload → null → the SESSION_BUSY handler skips re-queue.
+    const busyEventWithPending = {
+      code: 'SESSION_BUSY',
+      pendingSeq: 7,
+      pendingId: 'msg-uuid',
+      retryPayload: undefined,  // server owns delivery — no FE re-send
+    };
+    const requeued = queuedMessageFromRetryPayload(
+      busyEventWithPending.retryPayload,
+      'queued-should-not-exist',
+    );
+    expect(requeued).toBeNull();  // ← no re-queue → no double-send
+    // The pending coordinates remain available for the mirror to show "queued".
+    expect(busyEventWithPending.pendingSeq).toBe(7);
+  });
+
   it('HIGH#2 regression: recovers text from content blocks when userMessage is null (the LIVE send path)', () => {
     // The frontend always sends `content` blocks, never `message`, so the
     // backend user_message is null and the text lives in content[].text.

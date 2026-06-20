@@ -464,13 +464,25 @@ export interface StreamEvent {
   code?: string;
   detail?: string;
   suggestedAction?: string;
-  // Queue timeout retry payload
+  // Queue timeout / SESSION_BUSY retry payload.
+  // Root-1 SSOT Phase 2 (L2/2A): the backend now PREFERS to persist the message
+  // server-side as pending (sent=0) and returns pendingSeq/pendingId instead of
+  // retryPayload. retryPayload is sent ONLY as the persist-failed fallback. When
+  // pendingSeq is present the frontend MUST NOT re-queue/re-send — the server-side
+  // drain worker delivers it (a re-send would double-deliver). The existing
+  // re-queue path no-ops safely on absent retryPayload.
   retryPayload?: {
     sessionId: string;
     agentId: string;
     userMessage: string | null;
     content: unknown[] | null;
   };
+  /** Server-side pending message sequence (SESSION_BUSY / QUEUE_TIMEOUT). When
+   *  present, the message is durably queued server-side and will auto-drain —
+   *  do NOT re-send from the frontend. */
+  pendingSeq?: number;
+  /** DB id of the server-side pending message (pairs with pendingSeq). */
+  pendingId?: string;
   // Context warning fields (context_warning event)
   level?: 'ok' | 'warn' | 'critical';
   pct?: number;
