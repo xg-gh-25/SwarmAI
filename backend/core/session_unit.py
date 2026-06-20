@@ -2243,16 +2243,13 @@ class SessionUnit:
                 f"(session_id={self.session_id})"
             )
 
-        # User responded — reset compaction guard's loop-detection state, but
-        # PRESERVE the per-turn tool-loop budget: an answer is a continuation of
-        # the SAME user turn, so a runaway must keep accumulating toward the
-        # budget instead of resetting to zero on every answer (Root 2 / AC6).
+        # User responded — reset compaction guard's loop-detection state.
         logger.info(
             "session_unit.continue_with_answer session_id=%s "
             "tool_use_id=%s answer_len=%d state=%s",
             self.session_id, tool_use_id, len(answer), self.state.value,
         )
-        self._compaction_guard.reset(preserve_turn_budget=True)
+        self._compaction_guard.reset()
         self._content_emitted = False  # Reset zombie detection for new stream
         self._active_agent_tools = {}  # Clear stale sub-agent progress
         # Root-1 SSOT Phase 2 (L4): the question is being answered — clear the
@@ -2308,11 +2305,8 @@ class SessionUnit:
             self.session_id, request_id, decision,
         )
 
-        # User responded — reset compaction guard's loop-detection state, but
-        # PRESERVE the per-turn tool-loop budget: a permission grant is a
-        # continuation of the SAME user turn, so a runaway that loops through a
-        # permission gate must keep accumulating toward the budget (Root 2 / AC6).
-        self._compaction_guard.reset(preserve_turn_budget=True)
+        # User responded — reset compaction guard's loop-detection state.
+        self._compaction_guard.reset()
         self._content_emitted = False  # Reset zombie detection for new stream
         self._active_agent_tools = {}  # Clear stale sub-agent progress
         # Root-1 SSOT Phase 2 (L4): permission resolved — clear the

@@ -144,27 +144,14 @@ _CONSEC_KILL_READONLY: int = 10
 _GRACE_WINDOW: int = 3
 """Calls after an escalation event before the next escalation is allowed."""
 
-# ── Per-turn tool-loop budget (Root 2 / AC6, G3 single-turn runaway) ──
-# A single user turn that fires an unusually large number of tool calls is a
-# runaway loop signal independent of the consecutive/diversity detectors (those
-# need repetition; a turn can run away with 60 *distinct* calls and never
-# repeat). This is a per-TURN budget — it MUST use counters that reset() clears,
-# because _tool_records is subprocess-cumulative (preserved across turns) and
-# would false-trigger a healthy multi-turn session.
-_TURN_TOOL_COUNT_BUDGET: int = 60
-"""Distinct tool calls within ONE user turn before the runaway budget escalates.
-
-# assumes: a normal heavy turn (read several files, run tests, edit) lands well
-# under 60 tool calls. 60+ in a single turn with no user-visible progress is a
-# runaway. Escalates ONE step on the shared ladder (NOT a new kill path)."""
-
-_TURN_DURATION_BUDGET_S: float = 600.0
-"""Wall-clock seconds within ONE turn's tool activity before escalating.
-
-# assumes: 10 min of continuous tool calls in a single turn is the runaway
-# signal. Legitimate long *single* tool calls (a 9-min test suite) don't trip
-# this — the budget measures time spanning MANY tool calls, and a lone long
-# call records only one timestamp. Soft-first: escalates one ladder step."""
+# NOTE: A per-turn raw tool-call count/duration budget (Root 2 / AC6) was
+# removed 2026-06-21. Counting total calls per turn cannot distinguish a
+# legitimate high-diversity deep-research turn (many *distinct* reads/searches)
+# from a runaway loop — it false-fired on healthy work and the resulting
+# interrupt poisoned the subprocess (instant error_during_execution on reuse).
+# Runaways are caught by the right signal — lack of progress — via the
+# consecutive-repeat (Layer 0) and diversity-stall (Layer 1) detectors below,
+# which fire on repetition/low information gain, not volume.
 
 
 # ── Escalation ordering (for strict one-step progression) ────────
@@ -222,11 +209,6 @@ class CompactionGuard:
 
         # Grace period — pause between escalation levels
         self._grace_calls_remaining: int = 0
-
-        # Per-turn tool-loop budget (Root 2 / AC6). Reset every user turn via
-        # reset() — distinct from _tool_records (subprocess-cumulative).
-        self._turn_tool_count: int = 0
-        self._turn_start_time: float | None = None
 
     @property
     def phase(self) -> GuardPhase:
@@ -413,12 +395,6 @@ class CompactionGuard:
             self._recent_calls.append(pair)
             if len(self._recent_calls) > _STALL_ESCALATION_WINDOW:
                 self._recent_calls = self._recent_calls[-_STALL_ESCALATION_WINDOW:]
-
-            # Per-turn tool-loop budget (Root 2 / AC6): count calls in THIS turn
-            # and stamp the turn's first-tool time for the duration budget.
-            if self._turn_start_time is None:
-                self._turn_start_time = record.timestamp
-            self._turn_tool_count += 1
 
         except Exception:
             logger.exception("compaction_guard.record_tool_call failed")
@@ -626,35 +602,6 @@ class CompactionGuard:
             return EscalationLevel.SOFT_WARN
         return EscalationLevel.MONITORING
 
-    def _is_turn_budget_exceeded(self) -> tuple[bool, str]:
-        """Per-turn runaway budget (Root 2 / AC6).
-
-        Fires when ONE user turn exceeds either the tool-call count budget or
-        the wall-clock duration of tool activity. Independent of repetition —
-        a turn can run away with many *distinct* calls. Uses per-turn counters
-        (reset() clears them) so a healthy multi-turn session never trips it.
-
-        Returns (exceeded, human-readable description). Does NOT mutate
-        self._escalation — the caller steps the shared ladder.
-        """
-        if self._turn_tool_count >= _TURN_TOOL_COUNT_BUDGET:
-            return True, (
-                f"Single turn fired {self._turn_tool_count} tool calls "
-                f"(budget {_TURN_TOOL_COUNT_BUDGET}) — possible runaway"
-            )
-        if self._turn_start_time is not None:
-            elapsed = time.time() - self._turn_start_time
-            # Only meaningful once the turn has made >1 tool call: a lone long
-            # tool call (legitimate 9-min test) records a single timestamp and
-            # MUST NOT trip this duration budget.
-            if self._turn_tool_count > 1 and elapsed >= _TURN_DURATION_BUDGET_S:
-                return True, (
-                    f"Single turn's tool activity spanned {elapsed:.0f}s "
-                    f"(budget {_TURN_DURATION_BUDGET_S:.0f}s) over "
-                    f"{self._turn_tool_count} calls — possible runaway"
-                )
-        return False, ""
-
     # ── check() ──────────────────────────────────────────────────
 
     def check(self) -> EscalationLevel:
@@ -715,27 +662,6 @@ class CompactionGuard:
                         f"{self._consec_count} consecutive times"
                     )
                     return consec_level
-
-            # ── Layer 0.5: Per-turn runaway budget (all phases) ──────
-            # A single turn firing a huge number of (even distinct) tool calls,
-            # or spanning a long wall-clock window of tool activity, is a
-            # runaway independent of repetition. Escalates ONE step on the
-            # SAME ladder — never a parallel kill path (PIT10).
-            budget_hit, budget_desc = self._is_turn_budget_exceeded()
-            if budget_hit:
-                current_idx = _ESCALATION_ORDER.index(self._escalation)
-                if current_idx < len(_ESCALATION_ORDER) - 1:
-                    new_level = _ESCALATION_ORDER[current_idx + 1]
-                    logger.warning(
-                        "compaction_guard.turn_budget %s → %s",
-                        budget_desc, new_level.value,
-                    )
-                    self._escalation = new_level
-                    self._grace_calls_remaining = _GRACE_WINDOW
-                    self._last_pattern_desc = budget_desc
-                    return new_level
-                # Already at KILL — stay (handled by the KILL short-circuit above)
-                return self._escalation
 
             # ── Layer 1: Diversity-based stall detection (all phases) ──
             stalled, window_sz, unique_ct, total_calls = self._is_stalled()
@@ -926,28 +852,17 @@ class CompactionGuard:
 
     # ── reset() and reset_all() ──────────────────────────────────
 
-    def reset(self, *, preserve_turn_budget: bool = False) -> None:
+    def reset(self) -> None:
         """Reset per-turn tracking for a new user message.
 
         Clears post-compaction sequence and grace counter but preserves
         escalation level, phase, pre-compaction baseline, context_pct,
         and tool_records.
-
-        ``preserve_turn_budget=True`` keeps the per-turn tool-loop counters
-        (Root 2 / AC6) across an intra-turn continuation boundary (permission
-        grant / question answer). A continuation is the SAME user turn, so a
-        runaway that periodically crosses a permission boundary must keep
-        accumulating toward the budget rather than resetting to zero each time.
-        Only a genuine new user message (``send()``) resets the budget.
         """
         try:
             self._post_compaction_sequence = []
             self._last_pattern_desc = ""
             self._grace_calls_remaining = 0
-            if not preserve_turn_budget:
-                # New user turn — reset the per-turn tool-loop budget (Root 2 / AC6).
-                self._turn_tool_count = 0
-                self._turn_start_time = None
         except Exception:
             logger.exception("compaction_guard.reset failed")
 
@@ -972,8 +887,6 @@ class CompactionGuard:
             self._last_pair = None
             self._consec_count = 0
             self._grace_calls_remaining = 0
-            self._turn_tool_count = 0
-            self._turn_start_time = None
         except Exception:
             logger.exception("compaction_guard.reset_all failed")
 
