@@ -42,6 +42,8 @@ Pick 3 most relevant. Each: constraint label, what (1-2 sentences), effort (T-sh
 
 **ASSUMPTIONS** (before multi-file task): List 1-3 assumptions. "Correct me now or I proceed with these." *Non-blocking — proceed after stating.*
 
+**ASK vs ASSUME** (autonomous / long-running mode): Default to the ASSUMPTIONS pattern — state the assumption and proceed. Reserve a blocking `AskUserQuestion` for decisions that are *both* genuinely ambiguous *and* hard to reverse. A mid-task popup interrupting a long run to ask a resolvable-by-default question is worse than a stated assumption the user can correct — and on a background tab it may not even be answerable. Never `AskUserQuestion` for a choice with a sensible default or a fact you can verify yourself. *Non-blocking by default; block only when the answer changes what you do AND is costly to undo.*
+
 **PLAN** (before multi-step work): List steps. "Executing unless you redirect." *Non-blocking.*
 
 ### Proactive vs Ask
