@@ -175,6 +175,13 @@ export interface UnifiedTab {
    *  Cleared by: (a) grace timeout expiry → show error, or
    *  (b) new stream data arrives → heal succeeded, continue silently. */
   _healGraceActive?: boolean;
+  /** Set on heal-grace expiry: the SSE connection is gone but the backend
+   *  subprocess may still be STREAMING (a long agent turn can outlive the
+   *  connection). While true, a follow-up send must be QUEUED (shouldQueueSend)
+   *  — never sent directly, or it escapes to SESSION_BUSY → orphan delete →
+   *  silent message loss. Cleared when a new stream starts (handleSendMessage)
+   *  or the reconcile loop confirms the backend is genuinely idle. */
+  _postDisconnectUncertain?: boolean;
   /** Resume timeout handle — auto-clears isResuming after 60s if no data arrives.
    *  Prevents permanent "Resuming session..." spinner when --resume hangs. */
   _resumeTimeoutId?: ReturnType<typeof setTimeout>;

@@ -48,6 +48,7 @@ import type {
   CompactionGuardEvent,
 } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
+import { queuedMessageFromRetryPayload } from './streaming-guards';
 import { chatService } from '../services/chat';
 import { messageStoreRegistry } from '../stores/MessageStore';
 import type { UnifiedTab } from './useUnifiedTabState';
@@ -2223,14 +2224,19 @@ export function useChatStreamingLifecycle(
           }
 
           // SESSION_BUSY: Backend rejected our send because the session is
-          // still actively streaming (SSE disconnect caused a race).
-          // Backend deletes the orphaned user message from DB on SESSION_BUSY,
-          // so no auto-retry is needed.  The message text stays in the input field.
+          // still actively streaming (SSE disconnect caused a race). The backend
+          // deletes the orphaned user message from DB (cold-resume hygiene) but
+          // hands the text back via event.retryPayload so we can RE-QUEUE it —
+          // the message is never silently lost. (The frontend send-guard
+          // shouldQueueSend should normally prevent the send from escaping in
+          // the first place; this re-queue is the backend safety net for the
+          // window where the guard didn't catch it.)
           // See: 2026-04-02 SSE disconnect kill chain diagnosis.
           //
-          // Recovery (2026-05-14): Instead of showing a toast and leaving the
-          // user in a dead state, start polling the messages endpoint. When
-          // backend completes, new messages appear → auto-render + clear state.
+          // Recovery (2026-05-14): poll the messages endpoint so the in-flight
+          // backend response renders when it completes. On completion we drain
+          // the re-queued message (single owner — the queue), so it is sent
+          // exactly once.
           if (event.code === 'SESSION_BUSY') {
             console.log('[StreamHandler] SESSION_BUSY — starting poll recovery', { capturedTabId });
             const busyEndStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
@@ -2241,17 +2247,34 @@ export function useChatStreamingLifecycle(
               updateTabStatus(capturedTabId, 'streaming');
               const tabState = tabMapRef.current.get(capturedTabId);
               if (tabState) {
+                // Re-queue the rejected message from retryPayload so it is sent
+                // when the current response completes — NEVER lose user input.
+                // Skip if a message is already queued (don't clobber an existing
+                // queue) — the existing one drains first, this is idempotent.
+                if (!tabState.queuedMessage) {
+                  const requeued = queuedMessageFromRetryPayload(
+                    event.retryPayload,
+                    `queued-${crypto.randomUUID()}`,
+                  );
+                  if (requeued) {
+                    tabState.queuedMessage = requeued;
+                    tabState._queuedAt = Date.now();
+                    console.log('[StreamHandler] SESSION_BUSY — re-queued message from retryPayload', { capturedTabId });
+                  }
+                }
                 // Atomic clear (flag + Set + re-render) instead of direct
                 // tabState.isStreaming = false. Direct mutation on a background
                 // tab triggers no re-render → spinner frozen true. See the
                 // disconnect-timeout fix for the same root cause.
                 setIsStreaming(false, capturedTabId);
                 tabState.isWaitingForBusy = true;
-                // Remove the orphan messages from this failed send:
+                // Remove the orphan DISPLAY messages from this failed send:
                 // the assistant placeholder (known ID) + the user message
-                // immediately before it. Backend already deleted the user
-                // msg from DB. Without this, orphans display for 6-9s until
-                // polling overwrites messages with DB truth.
+                // immediately before it. The backend deleted the user row from
+                // DB (cold-resume hygiene) — but we already preserved the text
+                // above via the retryPayload re-queue, so removing the stale
+                // display bubbles here loses nothing. Without this, orphans
+                // display for 6-9s until polling overwrites with DB truth.
                 // Remove orphan messages via store or fallback
                 const removeStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
                 const storeOrTab = removeStore?.messages ?? tabState.messages;
@@ -2369,6 +2392,13 @@ export function useChatStreamingLifecycle(
                         setIsWaitingForBusy(false);
                       }
                       updateTabStatus(capturedTabId, 'idle');
+                      // Drain the re-queued message (if any) now that the busy
+                      // response completed — single owner (the queue), sent
+                      // exactly once. clearBusyPoll cleared isWaitingForBusy, so
+                      // shouldQueueSend no longer blocks the drain's own send.
+                      if (currentTab.queuedMessage && deps.onDrainQueue) {
+                        setTimeout(() => deps.onDrainQueue?.(capturedTabId), 100);
+                      }
                     }
                   } else {
                     stableCount = 0; // Reset on any change
@@ -2389,6 +2419,13 @@ export function useChatStreamingLifecycle(
                   setIsWaitingForBusy(false);
                 }
                 updateTabStatus(capturedTabId, 'idle');
+                // Drain any re-queued message even on timeout — the user's
+                // message must not be stranded if the poll never detected
+                // completion. clearBusyPoll cleared isWaitingForBusy first.
+                const timeoutTab = tabMapRef.current.get(capturedTabId);
+                if (timeoutTab?.queuedMessage && deps.onDrainQueue) {
+                  setTimeout(() => deps.onDrainQueue?.(capturedTabId), 100);
+                }
               }, 30_000);
             } else {
               // No session ID — can't poll, clear immediately
@@ -2864,6 +2901,21 @@ export function useChatStreamingLifecycle(
               setIsStreaming(false, capturedTabId ?? undefined);
               incrementStreamGen();
               if (capturedTabId) updateTabStatus(capturedTabId, 'idle');
+              // ROOT-CAUSE FIX (SSE-disconnect message loss): the SSE connection
+              // is gone but the backend subprocess may still be STREAMING — a
+              // long agent turn can outlive the connection. Mark the tab as
+              // post-disconnect-uncertain so a follow-up send is QUEUED
+              // (shouldQueueSend) instead of escaping to a normal send →
+              // SESSION_BUSY → orphan delete → silent message loss. Also fire a
+              // best-effort stopSession so the backend transitions out of
+              // STREAMING; the 15s reconcile loop then confirms idle and drains
+              // any queued message. Cleared on next send (handleSendMessage).
+              currentTab._postDisconnectUncertain = true;
+              if (currentTab.sessionId) {
+                chatService.stopSession(currentTab.sessionId).catch(() => {
+                  // Best-effort — reconcile loop is the fallback
+                });
+              }
               // Toast is fine here (30s elapsed = real problem)
               addToast({ severity: 'warning', message: 'Connection lost after self-heal attempt. Send your message again to continue.', autoDismiss: true });
             }

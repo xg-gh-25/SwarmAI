@@ -48,6 +48,7 @@ import { useUnifiedAttachments } from '../hooks/useUnifiedAttachments';
 import { useTSCCState } from '../hooks/useTSCCState';
 import { useUnifiedTabState } from '../hooks/useUnifiedTabState';
 import { useChatStreamingLifecycle, formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS } from '../hooks/useChatStreamingLifecycle';
+import { shouldQueueSend } from '../hooks/streaming-guards';
 import { useVoiceConversation } from '../hooks/useVoiceConversation';
 import { ChatHeader, ChatInput, MessageBubble, WelcomeScreen } from './chat/components';
 import { RadarSidebar } from './chat/components/RightSidebar';
@@ -1471,11 +1472,15 @@ export default function ChatPage() {
     // re-adds to pendingStreamTabs (for re-render), silently swallowing user input.
     if (!activeTabForGuard?.sessionId && pendingStreamTabs.has(activeTabIdRef.current ?? '')) return;
 
-    // Hard guard: SESSION_BUSY recovery in progress — don't send (prevents duplicates)
-    if (activeTabForGuard?.isWaitingForBusy) return;
-
-    // ──── QUEUE PATH: user sends while streaming ────────────────────────
-    if (activeTabForGuard?.isStreaming) {
+    // ──── QUEUE PATH: session is busy or in an uncertain post-disconnect state ──
+    // shouldQueueSend covers ALL states where the backend session may still be
+    // busy: isStreaming, isWaitingForBusy (SESSION_BUSY poll), isReconnecting,
+    // _healGraceActive, and _postDisconnectUncertain (heal-grace expired but the
+    // backend subprocess may still be streaming a long agent turn). Previously
+    // isWaitingForBusy hit a `return` that DROPPED the message, and the queue
+    // path only fired on isStreaming — so a post-disconnect send escaped to a
+    // normal send → SESSION_BUSY → orphan delete → silent loss. Queue instead.
+    if (activeTabForGuard && shouldQueueSend(activeTabForGuard)) {
       const trimmedText = messageText.trim();
       if (!trimmedText && !hasAttachments) return;
 
@@ -1629,6 +1634,9 @@ export default function ChatPage() {
       activeTabForGuard.isReconnecting = false;
       activeTabForGuard.reconnectionAttempt = 0;
       activeTabForGuard.isResuming = false;
+      // A genuine new stream is starting — the post-disconnect uncertainty is
+      // resolved (this send opens a fresh SSE connection / session).
+      activeTabForGuard._postDisconnectUncertain = false;
     }
 
     if (messageText.trim().startsWith('/plugin')) {
