@@ -101,11 +101,14 @@ import {
 } from './helpers/streamingTestUtils';
 
 // ---------------------------------------------------------------------------
-// Mock useToast — the hook now calls useToast() for reconnection toasts
+// Mock useToast — the hook now calls useToast() for reconnection toasts.
+// Hoisted spy so individual tests can assert the toast payload shape
+// (e.g. the cross-tab AskUserQuestion toast must be persistent + actionable).
 // ---------------------------------------------------------------------------
+const mockAddToast = vi.hoisted(() => vi.fn());
 vi.mock('../contexts/ToastContext', () => ({
   useToast: () => ({
-    addToast: vi.fn(),
+    addToast: mockAddToast,
     removeToast: vi.fn(),
     toasts: [],
   }),
@@ -119,6 +122,7 @@ describe('useChatStreamingLifecycle', () => {
   // Clear shared test tab map between tests to prevent cross-contamination
   beforeEach(() => {
     resetTestState();
+    mockAddToast.mockClear();
   });
 
   // ── Hook return shape ───────────────────────────────────────────────────
@@ -2721,6 +2725,57 @@ describe('Fix 8: Tab status indicators', () => {
       });
 
       expect(testTabMap.get('tab-s')?.status).toBe('waiting_input');
+    });
+
+    it('cross-tab ask_user_question toast is persistent and actionable (jump-to-tab)', () => {
+      // A question arriving on a NON-active tab toasts the user to switch tabs.
+      // Regression: that toast must NOT auto-dismiss (it is an action, not an
+      // info ping) and MUST carry a clickable action that selects the asking tab.
+      const onSelectTab = vi.fn();
+      const msgId = 'msg-xtab-auq';
+      const { result } = renderHook(() =>
+        useChatStreamingLifecycle({ ...createMockDeps(), onSelectTab }),
+      );
+
+      act(() => {
+        initTestTab('tab-bg');           // the asking (background) tab
+        testTabMap.get('tab-bg')!.title = 'Background Work';
+        initTestTab('tab-active');       // initTestTab sets active = last created
+        result.current.setMessages([
+          makeMessage({ id: msgId, role: 'assistant', content: [] }),
+        ]);
+      });
+
+      // Handler bound to the BACKGROUND tab while 'tab-active' is active →
+      // isActiveTab is false → the cross-tab toast branch fires.
+      const handler = result.current.createStreamHandler(msgId, 'tab-bg');
+
+      act(() => {
+        handler({
+          type: 'ask_user_question',
+          toolUseId: 'tool-xtab',
+          questions: [{
+            question: 'Pick',
+            header: 'H',
+            options: [{ label: 'A', description: 'a' }],
+            multiSelect: false,
+          }],
+          sessionId: 'sess-bg',
+        });
+      });
+
+      const auqToast = mockAddToast.mock.calls
+        .map((c) => c[0])
+        .find((t) => typeof t.id === 'string' && t.id.startsWith('ask-uq-'));
+
+      expect(auqToast).toBeDefined();
+      // AC1: persistent — never auto-dismiss an actionable "go answer" prompt
+      expect(auqToast.autoDismiss).not.toBe(true);
+      // AC2: clickable action that jumps to the asking tab
+      expect(auqToast.action).toBeDefined();
+      expect(typeof auqToast.action.onClick).toBe('function');
+      auqToast.action.onClick();
+      expect(onSelectTab).toHaveBeenCalledWith('tab-bg');
     });
 
     it('error event sets status to error', () => {

@@ -942,6 +942,9 @@ export interface ChatStreamingLifecycleDeps {
   activeTabIdRef: React.RefObject<string | null>;
   /** Callback to drain a queued message after a stream completes or is stopped. */
   onDrainQueue?: (tabId: string) => void;
+  /** Callback to switch the active tab — used by the cross-tab AskUserQuestion
+   *  toast so the user can click straight to the tab that is asking. */
+  onSelectTab?: (tabId: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -957,6 +960,7 @@ export function useChatStreamingLifecycle(
     updateTabStatus,
     tabMapRef,
     activeTabIdRef,
+    onSelectTab,
   } = deps;
 
   // --- Toast for reconnection notifications ---
@@ -2028,13 +2032,20 @@ export function useChatStreamingLifecycle(
           // user is looking elsewhere and would never see it → toast them.
           // One-shot via a stable id keyed on toolUseId (addToast dedups by id),
           // so re-renders / repeated events don't stack toasts.
+          // The toast is an ACTION ("go answer"), not a transient info ping:
+          //   - it must NOT auto-dismiss (a 5s flash means the user misses it),
+          //   - it carries a clickable action that jumps to the asking tab.
           if (!isActiveTab && capturedTabId) {
             const bgTabTitle = tabMapRef.current.get(capturedTabId)?.title ?? 'another tab';
+            const askingTabId = capturedTabId;
             addToast({
               severity: 'info',
-              message: `Swarm is asking a question in "${bgTabTitle}" — switch to that tab to answer.`,
+              message: `Swarm is asking a question in "${bgTabTitle}".`,
               id: `ask-uq-${event.toolUseId}`,
-              autoDismiss: true,
+              autoDismiss: false,
+              action: onSelectTab
+                ? { label: 'Go to tab', onClick: () => onSelectTab(askingTabId) }
+                : undefined,
             });
           }
 

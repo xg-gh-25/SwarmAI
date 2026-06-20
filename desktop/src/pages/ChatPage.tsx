@@ -93,7 +93,7 @@ export default function ChatPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { addToast } = useToast();
+  const { addToast, removeToast } = useToast();
   const { health } = useHealth();
   const { setActiveSessionMeta } = useSessionMeta();
   const { isLimited, getRemainingSeconds } = useRateLimiter();
@@ -278,6 +278,7 @@ export default function ChatPage() {
     tabMapRef,
     activeTabIdRef,
     onDrainQueue: (tabId: string) => drainQueueRef.current(tabId),
+    onSelectTab: (tabId: string) => selectTab(tabId),
   });
 
   // TSCC state management — lifecycle state and UI preferences only.
@@ -1974,6 +1975,10 @@ export default function ChatPage() {
     if (tabState?.isStreaming) {
       return;
     }
+
+    // Clear the cross-tab "Swarm is asking…" toast (if one was raised because
+    // the question arrived on a background tab) now that it's been answered.
+    removeToast(`ask-uq-${toolUseId}`);
 
     setPendingQuestion(null);
     incrementStreamGen(); // Fix 1: new stream generation
