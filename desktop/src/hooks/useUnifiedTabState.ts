@@ -191,10 +191,6 @@ export interface UnifiedTab {
    *  during the window where the backend mirror may still report waiting_input
    *  before transitioning. Cleared by surfacePendingQuestion / a new question. */
   _answeredToolUseId?: string;
-  /** Root-1 SSOT Phase 3 (AC4): the server's pending_count from the last
-   *  reconcile poll — drives a session-level "N queued" indicator from
-   *  authoritative state (vs the per-message optimistic isQueued mirror). */
-  _serverPendingCount?: number;
   /** Root-1 SSOT Phase 3 (AC4): the last_drained_seqs the tab observed on the
    *  previous reconcile poll — compared against the current poll to detect a
    *  server drain and retire the local optimistic queue mirror. */

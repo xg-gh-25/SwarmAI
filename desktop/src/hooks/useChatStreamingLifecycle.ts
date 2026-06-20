@@ -1233,14 +1233,19 @@ export function useChatStreamingLifecycle(
             }
 
             // AC4: mirror the server's drain progress. Retire the local optimistic
-            // queue mirror once the server confirms it drained a tracked seq;
-            // surface pending_count for a session-level "queued" indicator.
+            // queue mirror once the server confirms it drained a tracked seq.
+            // NOTE: the session-level "N queued" badge DRIVEN BY pending_count is
+            // deferred to the chat-tab-view-isolation track (it owns TabView's
+            // indicator render — see PLAN boundaries.ask_first). We therefore do
+            // NOT store pending_count on tabState here — a written-but-unread field
+            // is dead code (GUI82). The functional half (drain retirement) uses
+            // drain.serverPendingCount locally below; the display half lands with
+            // the isolation track, which will add the field + write + reader atomically.
             const drain = computeDrainRetirement({
               priorDrainedSeqs: tabState._lastDrainedSeqs ?? [],
               currentDrainedSeqs: mirrorState.lastDrainedSeqs,
               serverPendingCount: mirrorState.pendingCount,
             });
-            tabState._serverPendingCount = drain.serverPendingCount;
             tabState._lastDrainedSeqs = mirrorState.lastDrainedSeqs;
             if (drain.retire && tabState.queuedMessage && drain.serverPendingCount === 0) {
               // Server drained everything it owned — the local optimistic queue
