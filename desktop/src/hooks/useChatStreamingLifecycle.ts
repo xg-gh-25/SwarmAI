@@ -1157,9 +1157,12 @@ export function useChatStreamingLifecycle(
             // must NEVER trigger force-clear. waiting_input = permission
             // prompt pending; streaming = actively generating (defense-in-depth,
             // backendIsStreaming should already be true but guard anyway).
+            // Time-capped at 120min to prevent infinite stuck state if the
+            // waiting_input SSE event was lost and user never answers.
             const ACTIVE_BACKEND_STATES = new Set(['waiting_input', 'streaming']);
             const reportedState = backendState?.state;
-            if (reportedState && ACTIVE_BACKEND_STATES.has(reportedState)) {
+            const activeGuardAge = Date.now() - (tabState._reconcileStreamStart ?? 0);
+            if (reportedState && ACTIVE_BACKEND_STATES.has(reportedState) && activeGuardAge < 7_200_000) {
               continue;  // Subprocess alive — not a stale stream
             }
 

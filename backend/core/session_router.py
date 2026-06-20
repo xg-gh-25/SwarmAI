@@ -962,6 +962,7 @@ class SessionRouter:
         idle_units = [
             u for u in self._units.values()
             if u.state == SessionState.IDLE
+            and not u.is_generating_after_disconnect
             and u is not exclude
             and u.is_channel_session == channel_only
         ]
