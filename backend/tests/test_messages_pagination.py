@@ -39,7 +39,10 @@ async def _init_schema(db_path: Path) -> None:
                 role TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT,
-                expires_at INTEGER
+                expires_at INTEGER,
+                sent INTEGER NOT NULL DEFAULT 1,
+                pending_seq INTEGER,
+                claimed_at TEXT
             )
         """)
         await conn.execute("""
@@ -50,14 +53,19 @@ async def _init_schema(db_path: Path) -> None:
 
 
 async def _insert_message(
-    db_path: Path, msg_id: str, session_id: str, created_at: str, content: str = "test"
+    db_path: Path, msg_id: str, session_id: str, created_at: str, content: str = "test",
+    sent: int = 1,
 ) -> None:
-    """Insert a message directly via SQL for test setup."""
+    """Insert a message directly via SQL for test setup.
+
+    ``sent`` defaults to 1 (delivered). ``sent=0`` simulates an unsent pending
+    row (Root-1 SSOT Phase 2) which the chokepoint readers must exclude by default.
+    """
     async with aiosqlite.connect(str(db_path)) as conn:
         await conn.execute(
-            "INSERT INTO messages (id, session_id, content, role, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (msg_id, session_id, content, "user", created_at),
+            "INSERT INTO messages (id, session_id, content, role, created_at, sent) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (msg_id, session_id, content, "user", created_at, sent),
         )
         await conn.commit()
 
@@ -180,3 +188,59 @@ async def test_empty_session(db_path, messages_table):
     assert await messages_table.list_by_session_paginated(sid) == []
     assert await messages_table.list_by_session_paginated(sid, limit=10) == []
     assert await messages_table.list_by_session_paginated(sid, limit=10, before_id="x") == []
+
+
+# ---------------------------------------------------------------------------
+# Root-1 SSOT Phase 2 — chokepoint sent=1 filter (default excludes pending)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_list_by_session_excludes_pending_by_default(db_path, messages_table):
+    """list_by_session default must drop sent=0 rows; include_pending=True keeps them."""
+    await _init_schema(db_path)
+    sid = "sess-chokepoint"
+    await _insert_message(db_path, "m-sent", sid, "2024-01-01T00:00:01", sent=1)
+    await _insert_message(db_path, "m-pend", sid, "2024-01-01T00:00:02", sent=0)
+
+    default = await messages_table.list_by_session(sid)
+    assert [m["id"] for m in default] == ["m-sent"]
+
+    with_pending = await messages_table.list_by_session(sid, include_pending=True)
+    assert {m["id"] for m in with_pending} == {"m-sent", "m-pend"}
+
+
+@pytest.mark.asyncio
+async def test_paginated_excludes_pending_all_modes(db_path, messages_table):
+    """All 3 paginated modes exclude sent=0 by default."""
+    await _init_schema(db_path)
+    sid = "sess-pg"
+    await _insert_message(db_path, "p1", sid, "2024-01-01T00:00:01", sent=1)
+    await _insert_message(db_path, "p2", sid, "2024-01-01T00:00:02", sent=0)
+    await _insert_message(db_path, "p3", sid, "2024-01-01T00:00:03", sent=1)
+
+    # neither param (delegates to list_by_session)
+    assert {m["id"] for m in await messages_table.list_by_session_paginated(sid)} == {"p1", "p3"}
+    # limit-only
+    limit_only = await messages_table.list_by_session_paginated(sid, limit=10)
+    assert {m["id"] for m in limit_only} == {"p1", "p3"}
+    # before_id + limit (cursor before p3) — p2 pending must not appear
+    page = await messages_table.list_by_session_paginated(sid, limit=10, before_id="p3")
+    assert {m["id"] for m in page} == {"p1"}
+    # include_pending=True restores p2
+    allrows = await messages_table.list_by_session_paginated(sid, limit=10, include_pending=True)
+    assert {m["id"] for m in allrows} == {"p1", "p2", "p3"}
+
+
+@pytest.mark.asyncio
+async def test_get_last_by_session_skips_pending(db_path, messages_table):
+    """get_last_by_session default returns last SENT row, not a newer pending one."""
+    await _init_schema(db_path)
+    sid = "sess-last"
+    await _insert_message(db_path, "L1", sid, "2024-01-01T00:00:01", sent=1)
+    await _insert_message(db_path, "L2", sid, "2024-01-01T00:00:02", sent=0)  # newer, pending
+
+    last = await messages_table.get_last_by_session(sid)
+    assert last is not None and last["id"] == "L1"
+
+    last_incl = await messages_table.get_last_by_session(sid, include_pending=True)
+    assert last_incl["id"] == "L2"

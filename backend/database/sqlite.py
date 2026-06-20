@@ -266,12 +266,30 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
 
         return await super().put(item)
 
-    async def list_by_session(self, session_id: str) -> list[T]:
-        """List all messages for a session, ordered by timestamp."""
+    # Root-1 SSOT Phase 2: a user message that arrives while the session is busy
+    # is persisted with sent=0 (pending) and drained later. EVERY reader that
+    # feeds cold-resume / history / analytics MUST exclude sent=0 rows or an
+    # un-delivered message phantom-injects as if the agent already saw it (P3).
+    # Rather than patch ~14 call sites, the filter lives here at the chokepoint:
+    # the 3 read methods default to sent-only. NULL is treated as sent (pre-v6
+    # rows). Callers that genuinely need pending rows pass include_pending=True
+    # (session_pending.py uses its own explicit sent=0 queries and is unaffected).
+    _PENDING_EXCLUDE_SQL = "(sent IS NULL OR sent != 0)"
+
+    async def list_by_session(
+        self, session_id: str, *, include_pending: bool = False,
+    ) -> list[T]:
+        """List all messages for a session, ordered by timestamp.
+
+        By default excludes unsent pending rows (sent=0). Pass
+        ``include_pending=True`` to return them too.
+        """
+        sent_clause = "" if include_pending else f" AND {self._PENDING_EXCLUDE_SQL}"
         async with self._get_connection() as conn:
             conn.row_factory = aiosqlite.Row
             async with conn.execute(
-                f"SELECT * FROM {self.table_name} WHERE session_id = ? ORDER BY created_at ASC",
+                f"SELECT * FROM {self.table_name} WHERE session_id = ?{sent_clause} "
+                f"ORDER BY created_at ASC",
                 (session_id,)
             ) as cursor:
                 rows = await cursor.fetchall()
@@ -282,6 +300,8 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
         session_id: str,
         limit: Optional[int] = None,
         before_id: Optional[str] = None,
+        *,
+        include_pending: bool = False,
     ) -> list[T]:
         """List messages for a session with optional cursor-based pagination.
 
@@ -310,7 +330,12 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
         """
         # --- Neither param: backward-compatible full fetch ---
         if limit is None and before_id is None:
-            return await self.list_by_session(session_id)
+            return await self.list_by_session(session_id, include_pending=include_pending)
+
+        # Root-1 SSOT Phase 2: exclude sent=0 pending rows by default (P3).
+        # NULL treated as sent (pre-v6). The before_id cursor subqueries look up
+        # a SPECIFIC row by id (positioning) and are intentionally unfiltered.
+        sent_clause = "" if include_pending else f" AND {self._PENDING_EXCLUDE_SQL}"
 
         async with self._get_connection() as conn:
             conn.row_factory = aiosqlite.Row
@@ -323,7 +348,7 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
                 #   (created_at = cursor_ca AND rowid < cursor_rowid)
                 query = (
                     f"SELECT *, rowid FROM {self.table_name} "
-                    f"WHERE session_id = ? "
+                    f"WHERE session_id = ?{sent_clause} "
                     f"  AND ("
                     f"    created_at < (SELECT created_at FROM {self.table_name} WHERE id = ?)"
                     f"    OR ("
@@ -339,7 +364,7 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
                 # Only limit: most recent N messages.
                 query = (
                     f"SELECT *, rowid FROM {self.table_name} "
-                    f"WHERE session_id = ? "
+                    f"WHERE session_id = ?{sent_clause} "
                     f"ORDER BY created_at DESC, rowid DESC "
                     f"LIMIT ?"
                 )
@@ -348,7 +373,7 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
                 # Only before_id without limit — fetch all older messages.
                 query = (
                     f"SELECT *, rowid FROM {self.table_name} "
-                    f"WHERE session_id = ? "
+                    f"WHERE session_id = ?{sent_clause} "
                     f"  AND ("
                     f"    created_at < (SELECT created_at FROM {self.table_name} WHERE id = ?)"
                     f"    OR ("
@@ -416,21 +441,27 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
 
     async def get_last_by_session(
         self, session_id: str, role: str | None = None,
+        *, include_pending: bool = False,
     ) -> dict | None:
-        """Return the most recent message for a session, optionally filtered by role."""
+        """Return the most recent message for a session, optionally filtered by role.
+
+        By default excludes unsent pending rows (sent=0). Pass
+        ``include_pending=True`` to consider them (Root-1 SSOT Phase 2).
+        """
+        sent_clause = "" if include_pending else f" AND {self._PENDING_EXCLUDE_SQL}"
         async with self._get_connection() as conn:
             conn.row_factory = aiosqlite.Row
             if role:
                 query = (
                     f"SELECT * FROM {self.table_name} "
-                    "WHERE session_id = ? AND role = ? "
+                    f"WHERE session_id = ? AND role = ?{sent_clause} "
                     "ORDER BY created_at DESC LIMIT 1"
                 )
                 params = (session_id, role)
             else:
                 query = (
                     f"SELECT * FROM {self.table_name} "
-                    "WHERE session_id = ? ORDER BY created_at DESC LIMIT 1"
+                    f"WHERE session_id = ?{sent_clause} ORDER BY created_at DESC LIMIT 1"
                 )
                 params = (session_id,)
             async with conn.execute(query, params) as cursor:
