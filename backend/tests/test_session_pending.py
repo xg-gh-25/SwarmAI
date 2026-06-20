@@ -106,3 +106,201 @@ async def test_legacy_rows_default_sent_1(db_path: Path):
         row = await cursor.fetchone()
         assert row is not None
         assert row[0] == 1, "legacy row must default to sent=1"
+
+
+# ---------------------------------------------------------------------------
+# session_pending module fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+async def pending(db_path: Path, monkeypatch):
+    """Migrated DB + a session_pending store bound to it.
+
+    session_pending reaches the messages table via its own _WALConnection on
+    db.messages.db_path, so we point the global db singleton at our tmp DB.
+    """
+    db = await _make_migrated_db(db_path)
+    import database
+    import core.session_pending as sp
+    monkeypatch.setattr(database, "db", db, raising=False)
+    monkeypatch.setattr(sp, "_db_path_override", str(db_path), raising=False)
+    # Fresh per-session locks each test to avoid cross-test contention.
+    sp._SEQ_LOCKS.clear()
+    return sp
+
+
+async def _seed_session_row(db_path: Path, session_id: str) -> None:
+    """Insert a 'sent' parent message so the session exists in history."""
+    async with aiosqlite.connect(str(db_path)) as conn:
+        await conn.execute(
+            "INSERT INTO messages (id, session_id, role, content, sent, created_at, updated_at) "
+            "VALUES (?, ?, 'user', '[]', 1, '2026-01-01', '2026-01-01')",
+            (f"seed-{session_id}", session_id),
+        )
+        await conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# AC3 — persist_pending: sent=0 + monotonic pending_seq under concurrency
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_persist_pending_writes_sent_0(pending, db_path: Path):
+    msg = await pending.persist_pending(
+        "sess-a", user_message="hello", content=None, agent_id="agent-1"
+    )
+    assert msg.session_id == "sess-a"
+    assert msg.user_message == "hello"
+    assert msg.pending_seq == 1  # first pending for this session
+
+    async with aiosqlite.connect(str(db_path)) as conn:
+        cursor = await conn.execute(
+            "SELECT sent, pending_seq, claimed_at FROM messages WHERE id = ?",
+            (msg.id,),
+        )
+        row = await cursor.fetchone()
+    assert row == (0, 1, None), f"expected (sent=0, seq=1, claimed_at=None), got {row}"
+
+
+@pytest.mark.asyncio
+async def test_persist_pending_monotonic_under_concurrency(pending):
+    """AC3: 5 concurrent persists to the SAME session get distinct, contiguous
+    pending_seq values (per-session seq lock serializes assignment)."""
+    results = await asyncio.gather(*[
+        pending.persist_pending("sess-c", user_message=f"m{i}", content=None, agent_id="a")
+        for i in range(5)
+    ])
+    seqs = sorted(r.pending_seq for r in results)
+    assert seqs == [1, 2, 3, 4, 5], f"expected contiguous 1..5, got {seqs}"
+
+
+@pytest.mark.asyncio
+async def test_count_pending(pending):
+    assert pending.count_pending("sess-cnt") == 0
+    await pending.persist_pending("sess-cnt", user_message="a", content=None, agent_id="a")
+    await pending.persist_pending("sess-cnt", user_message="b", content=None, agent_id="a")
+    assert pending.count_pending("sess-cnt") == 2
+
+
+# ---------------------------------------------------------------------------
+# AC4 — three-phase lifecycle: claim → mark_sent / rollback, exactly-once
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_peek_returns_fifo_order(pending):
+    await pending.persist_pending("sess-p", user_message="first", content=None, agent_id="a")
+    await pending.persist_pending("sess-p", user_message="second", content=None, agent_id="a")
+    rows = await pending.peek_pending_batch("sess-p")
+    assert [r.user_message for r in rows] == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_claim_then_mark_sent(pending, db_path: Path):
+    await pending.persist_pending("sess-m", user_message="x", content=None, agent_id="a")
+    claimed = await pending.claim_pending_batch("sess-m")
+    assert len(claimed) == 1
+
+    # claimed phase: sent still 0, claimed_at set
+    async with aiosqlite.connect(str(db_path)) as conn:
+        cur = await conn.execute("SELECT sent, claimed_at FROM messages WHERE session_id='sess-m'")
+        sent, claimed_at = await cur.fetchone()
+    assert sent == 0 and claimed_at is not None
+
+    await pending.mark_sent_batch("sess-m", [c.pending_seq for c in claimed])
+    async with aiosqlite.connect(str(db_path)) as conn:
+        cur = await conn.execute("SELECT sent FROM messages WHERE session_id='sess-m'")
+        assert (await cur.fetchone())[0] == 1
+    assert pending.count_pending("sess-m") == 0
+
+
+@pytest.mark.asyncio
+async def test_rollback_claim_returns_to_pending(pending, db_path: Path):
+    await pending.persist_pending("sess-r", user_message="x", content=None, agent_id="a")
+    claimed = await pending.claim_pending_batch("sess-r")
+    await pending.rollback_claim_batch("sess-r", [c.pending_seq for c in claimed])
+
+    async with aiosqlite.connect(str(db_path)) as conn:
+        cur = await conn.execute("SELECT sent, claimed_at FROM messages WHERE session_id='sess-r'")
+        sent, claimed_at = await cur.fetchone()
+    assert sent == 0 and claimed_at is None, "rollback must restore pending (sent=0, claimed_at=NULL)"
+    assert pending.count_pending("sess-r") == 1
+
+
+@pytest.mark.asyncio
+async def test_claim_is_exactly_once_under_concurrency(pending):
+    """AC4: two concurrent claim_pending_batch on the same session — exactly one
+    gets the rows, the other gets an empty set (no double-drain)."""
+    await pending.persist_pending("sess-x", user_message="a", content=None, agent_id="a")
+    await pending.persist_pending("sess-x", user_message="b", content=None, agent_id="a")
+
+    r1, r2 = await asyncio.gather(
+        pending.claim_pending_batch("sess-x"),
+        pending.claim_pending_batch("sess-x"),
+    )
+    sizes = sorted([len(r1), len(r2)])
+    assert sizes == [0, 2], f"exactly one claim wins the whole set, got sizes {sizes}"
+
+
+# ---------------------------------------------------------------------------
+# AC5 — combine_pending: FIFO coalesce
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_combine_pending_text_fifo_latest_last(pending):
+    await pending.persist_pending("sess-t", user_message="first", content=None, agent_id="a")
+    await pending.persist_pending("sess-t", user_message="second", content=None, agent_id="a")
+    rows = await pending.peek_pending_batch("sess-t")
+    text, content = pending.combine_pending(rows)
+    assert content is None
+    assert text == "first\n\nsecond", f"got {text!r}"
+
+
+@pytest.mark.asyncio
+async def test_combine_pending_multimodal_concatenates_blocks(pending):
+    await pending.persist_pending(
+        "sess-mm", user_message=None,
+        content=[{"type": "text", "text": "a"}], agent_id="a",
+    )
+    await pending.persist_pending(
+        "sess-mm", user_message=None,
+        content=[{"type": "image", "source": {"x": 1}}], agent_id="a",
+    )
+    rows = await pending.peek_pending_batch("sess-mm")
+    text, content = pending.combine_pending(rows)
+    assert content == [
+        {"type": "text", "text": "a"},
+        {"type": "image", "source": {"x": 1}},
+    ], f"got {content!r}"
+
+
+# ---------------------------------------------------------------------------
+# AC6 — reopen_dangling_claims: crash-window recovery
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_reopen_dangling_claims(pending, db_path: Path):
+    """AC6: a row stuck in 'claimed' (claimed_at set, sent=0) by a crash is
+    reopened to pending (claimed_at=NULL)."""
+    await pending.persist_pending("sess-d", user_message="x", content=None, agent_id="a")
+    await pending.claim_pending_batch("sess-d")  # now claimed, sent=0
+
+    reopened = await pending.reopen_dangling_claims()
+    assert reopened >= 1
+
+    async with aiosqlite.connect(str(db_path)) as conn:
+        cur = await conn.execute("SELECT sent, claimed_at FROM messages WHERE session_id='sess-d'")
+        sent, claimed_at = await cur.fetchone()
+    assert sent == 0 and claimed_at is None
+    assert pending.count_pending("sess-d") == 1
+
+
+@pytest.mark.asyncio
+async def test_reopen_does_not_touch_sent_rows(pending, db_path: Path):
+    """reopen must NOT resurrect already-sent rows."""
+    await pending.persist_pending("sess-s", user_message="x", content=None, agent_id="a")
+    claimed = await pending.claim_pending_batch("sess-s")
+    await pending.mark_sent_batch("sess-s", [c.pending_seq for c in claimed])
+
+    await pending.reopen_dangling_claims()
+    assert pending.count_pending("sess-s") == 0, "sent rows must not be reopened"
+

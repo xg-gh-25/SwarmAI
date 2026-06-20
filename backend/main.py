@@ -988,6 +988,17 @@ async def lifespan(app: FastAPI):
     logger.info("SessionRouter architecture initialized")
     await session_registry.start_lifecycle()
     logger.info("LifecycleManager started at startup")
+
+    # Root-1 SSOT: reopen any pending messages left in the 'claimed' phase by a
+    # crash (claimed_at set, sent=0) so they re-drain on the next IDLE instead of
+    # being stuck forever. Idempotent, DB-only, non-fatal — never blocks startup.
+    try:
+        from core.session_pending import reopen_dangling_claims
+        reopened = await reopen_dangling_claims()
+        if reopened:
+            logger.info("Reopened %d dangling pending-message claim(s)", reopened)
+    except Exception as exc:  # pragma: no cover - non-fatal startup guard
+        logger.warning("reopen_dangling_claims failed (non-fatal): %s", exc)
     # ─────────────────────────────────────────────────────────────────
 
     t_agent = time.monotonic()
