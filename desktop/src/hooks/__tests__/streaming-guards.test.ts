@@ -14,6 +14,8 @@ import {
   shouldQueueSend,
   queuedMessageFromRetryPayload,
   retryPayloadHasAttachments,
+  shouldResurfaceQuestion,
+  computeDrainRetirement,
   type QueueGuardState,
 } from '../streaming-guards';
 
@@ -228,5 +230,119 @@ describe('queuedMessageFromRetryPayload', () => {
         'queued-x',
       ),
     ).toBeNull();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// AC5 (Root-1 SSOT Phase 3): shouldResurfaceQuestion — the gated, idempotent
+// decision for re-surfacing a lost AskUserQuestion from the authoritative
+// streaming-state read API. The reconcile loop polls every 15s; an unguarded
+// re-surface would flap the question UI. Re-surface ONLY when the backend says
+// waiting_input AND carries a pending_question whose toolUseId is NOT already
+// the tab's current pending question (idempotent on toolUseId).
+// ═══════════════════════════════════════════════════════════════════
+describe('shouldResurfaceQuestion (AC5 — lost AskUserQuestion re-surface)', () => {
+  const pq = (id: string) => ({ toolUseId: id, questions: [{ q: 1 }] as unknown[] });
+
+  it('backend waiting_input + pending_question + tab has NO pending question → RESURFACE', () => {
+    expect(shouldResurfaceQuestion({
+      backendWaitingInput: true,
+      backendPendingQuestion: pq('tu-1'),
+      currentPendingToolUseId: null,
+    })).toBe(true);
+  });
+
+  it('idempotent: tab already shows the SAME toolUseId → NO resurface (prevents 15s flap)', () => {
+    expect(shouldResurfaceQuestion({
+      backendWaitingInput: true,
+      backendPendingQuestion: pq('tu-1'),
+      currentPendingToolUseId: 'tu-1',
+    })).toBe(false);
+  });
+
+  it('a DIFFERENT toolUseId replaces the stale one → RESURFACE', () => {
+    expect(shouldResurfaceQuestion({
+      backendWaitingInput: true,
+      backendPendingQuestion: pq('tu-2'),
+      currentPendingToolUseId: 'tu-1',
+    })).toBe(true);
+  });
+
+  it('backend NOT waiting_input → never resurface (even if a payload lingers)', () => {
+    expect(shouldResurfaceQuestion({
+      backendWaitingInput: false,
+      backendPendingQuestion: pq('tu-1'),
+      currentPendingToolUseId: null,
+    })).toBe(false);
+  });
+
+  it('waiting_input but NO pending_question payload → cannot resurface (nothing to render)', () => {
+    expect(shouldResurfaceQuestion({
+      backendWaitingInput: true,
+      backendPendingQuestion: null,
+      currentPendingToolUseId: null,
+    })).toBe(false);
+  });
+
+  it('answer-in-flight guard: an answer submitted for this toolUseId suppresses re-surface for one poll window', () => {
+    // After the user answers, local pendingQuestion clears but the backend mirror
+    // may still report waiting_input for one poll. Without this guard the just-
+    // answered question would re-appear. answeredToolUseId carries that signal.
+    expect(shouldResurfaceQuestion({
+      backendWaitingInput: true,
+      backendPendingQuestion: pq('tu-1'),
+      currentPendingToolUseId: null,
+      answeredToolUseId: 'tu-1',
+    })).toBe(false);
+  });
+
+  it('answer-in-flight guard does NOT block a genuinely different new question', () => {
+    expect(shouldResurfaceQuestion({
+      backendWaitingInput: true,
+      backendPendingQuestion: pq('tu-2'),
+      currentPendingToolUseId: null,
+      answeredToolUseId: 'tu-1',
+    })).toBe(true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// AC4 (Root-1 SSOT Phase 3): computeDrainRetirement — mirror the server's
+// pending_count and last_drained_seqs. The local optimistic queue mirror is
+// retired (the badge cleared) once the server reports it has drained the seqs
+// the tab was tracking. Keeps the local queuedMessage as an F7 optimistic
+// fallback; this only decides when the SERVER-side queue indicator clears.
+// ═══════════════════════════════════════════════════════════════════
+describe('computeDrainRetirement (AC4 — server pending_count / last_drained_seqs mirror)', () => {
+  it('server drained seqs that advance past the prior mark → retire local mirror', () => {
+    expect(computeDrainRetirement({
+      priorDrainedSeqs: [],
+      currentDrainedSeqs: [4, 5],
+      serverPendingCount: 0,
+    })).toEqual({ retire: true, serverPendingCount: 0 });
+  });
+
+  it('no new drain (seqs unchanged) and still pending → do NOT retire', () => {
+    expect(computeDrainRetirement({
+      priorDrainedSeqs: [4, 5],
+      currentDrainedSeqs: [4, 5],
+      serverPendingCount: 2,
+    })).toEqual({ retire: false, serverPendingCount: 2 });
+  });
+
+  it('server still has pending_count > 0 but drained a partial batch → retire the drained portion (retire=true) while surfacing remaining count', () => {
+    expect(computeDrainRetirement({
+      priorDrainedSeqs: [4],
+      currentDrainedSeqs: [4, 5],
+      serverPendingCount: 1,
+    })).toEqual({ retire: true, serverPendingCount: 1 });
+  });
+
+  it('empty everywhere → nothing to retire', () => {
+    expect(computeDrainRetirement({
+      priorDrainedSeqs: [],
+      currentDrainedSeqs: [],
+      serverPendingCount: 0,
+    })).toEqual({ retire: false, serverPendingCount: 0 });
   });
 });

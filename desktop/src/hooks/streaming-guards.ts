@@ -144,3 +144,82 @@ export function shouldQueueSend(tab: QueueGuardState): boolean {
     tab._postDisconnectUncertain === true
   );
 }
+
+// ── Root-1 SSOT Phase 3: AC5 — lost AskUserQuestion re-surface ──────
+
+/** Inputs to the re-surface decision (from the streaming-state read API +
+ *  the tab's current pending question). */
+export interface ResurfaceQuestionInput {
+  /** Backend reports state === 'waiting_input'. */
+  backendWaitingInput: boolean;
+  /** Authoritative pending question payload from the read API (or null). */
+  backendPendingQuestion: { toolUseId: string; questions: unknown[] } | null;
+  /** The toolUseId the tab currently shows as pending (null if none). */
+  currentPendingToolUseId: string | null;
+  /** toolUseId of a question the user JUST answered, if any. Suppresses
+   *  re-surface of that same question for the one poll window during which the
+   *  backend mirror may still report waiting_input before it transitions. */
+  answeredToolUseId?: string | null;
+}
+
+/**
+ * Decide whether to re-surface an AskUserQuestion from the authoritative
+ * backend mirror. The reconcile loop polls every 15s; this gate makes the
+ * re-surface idempotent (keyed on toolUseId) so a still-open question does not
+ * flap, and respects an answer-in-flight signal so a just-answered question is
+ * not re-injected before the backend transitions out of waiting_input.
+ *
+ * Re-surface ONLY when ALL hold:
+ *  - backend is waiting_input (the question is genuinely open server-side)
+ *  - a pending_question payload exists (there is something to render)
+ *  - the payload's toolUseId differs from what the tab already shows (idempotent)
+ *  - the payload's toolUseId is not the one the user just answered (no flap)
+ */
+export function shouldResurfaceQuestion(input: ResurfaceQuestionInput): boolean {
+  const { backendWaitingInput, backendPendingQuestion, currentPendingToolUseId, answeredToolUseId } = input;
+  if (!backendWaitingInput) return false;
+  if (!backendPendingQuestion) return false;
+  const id = backendPendingQuestion.toolUseId;
+  if (!id) return false;
+  if (id === currentPendingToolUseId) return false; // already shown — idempotent
+  if (answeredToolUseId && id === answeredToolUseId) return false; // answer-in-flight
+  return true;
+}
+
+// ── Root-1 SSOT Phase 3: AC4 — server pending_count / last_drained_seqs mirror ──
+
+/** Inputs to the drain-retirement decision. */
+export interface DrainRetirementInput {
+  /** The last_drained_seqs the tab observed on the previous poll. */
+  priorDrainedSeqs: number[];
+  /** The last_drained_seqs the backend reports now. */
+  currentDrainedSeqs: number[];
+  /** The backend's current pending_count (messages still unsent server-side). */
+  serverPendingCount: number;
+}
+
+/** Result of the drain-retirement decision. */
+export interface DrainRetirementResult {
+  /** True if the server drained a NEW seq since the prior observation — the
+   *  local optimistic queue mirror for the drained message(s) should retire. */
+  retire: boolean;
+  /** The server's current pending_count, surfaced for the "queued" badge. */
+  serverPendingCount: number;
+}
+
+/**
+ * Mirror the server's drain progress. The local optimistic queue mirror retires
+ * (the per-message "queued" affordance clears) once the server confirms it has
+ * drained a seq the tab was tracking — i.e. currentDrainedSeqs contains a seq
+ * not present in priorDrainedSeqs. serverPendingCount is passed through so the
+ * caller can drive a session-level "N queued" badge from authoritative state.
+ *
+ * This does NOT remove the local queuedMessage path (kept as the F7 optimistic
+ * fallback); it only decides when the SERVER-owned queue indicator clears.
+ */
+export function computeDrainRetirement(input: DrainRetirementInput): DrainRetirementResult {
+  const { priorDrainedSeqs, currentDrainedSeqs, serverPendingCount } = input;
+  const prior = new Set(priorDrainedSeqs);
+  const retire = currentDrainedSeqs.some((seq) => !prior.has(seq));
+  return { retire, serverPendingCount };
+}
