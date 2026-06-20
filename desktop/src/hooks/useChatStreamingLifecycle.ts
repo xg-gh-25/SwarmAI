@@ -1426,6 +1426,114 @@ export function useChatStreamingLifecycle(
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- reads from refs
 
+  /**
+   * Surface an AskUserQuestion into a tab — the single authoritative path for
+   * rendering a question, shared by the live SSE handler AND the reconcile-loop
+   * re-surface (Root-1 SSOT Phase 3, AC5). Extracting this (Gate-1 4a) prevents
+   * a partial re-implementation: a question is only answerable if ALL of these
+   * happen together, so the lost-SSE re-surface must do exactly what the live
+   * path does — not just set `pendingQuestion`.
+   *
+   * The 6 parts (each load-bearing):
+   *  1. state-machine transition STREAMING→WAITING_INPUT (global + per-tab)
+   *  2. append the `ask_user_question` content block to the assistant message
+   *     (ContentBlockRenderer renders the form FROM this block — it is NOT in
+   *     the DB, so a reconcile from getSessionMessages will not restore it)
+   *  3. ref write `tabState.pendingQuestion` (per-tab source of truth)
+   *  4. active-tab ONLY: `setPendingQuestion` (React render) — PIT76: never for
+   *     a background tab, or its question leaks into the active tab's state
+   *  5. end streaming phase + status → waiting_input
+   *  6. background tab → "go answer" toast; persist pending state to sessionStorage
+   */
+  const surfacePendingQuestion = useCallback(
+    (
+      tabId: string,
+      assistantMessageId: string,
+      pq: PendingQuestion,
+      opts: { isActive: boolean; sessionId?: string },
+    ) => {
+      const { isActive } = opts;
+      const tabState = tabMapRef.current.get(tabId);
+
+      // (1) State-machine transition (global only when active; per-tab always)
+      if (isActive) dispatch({ type: 'ASK_USER_QUESTION' });
+      if (tabState) {
+        tabState.streamState = streamingReducer(tabState.streamState, { type: 'ASK_USER_QUESTION' });
+      }
+
+      // (2) Append the ask_user_question block to the assistant message via the
+      // store (single-writer). The block is what ContentBlockRenderer renders.
+      const auqBlock = {
+        type: 'ask_user_question' as const,
+        toolUseId: pq.toolUseId,
+        questions: pq.questions,
+      };
+      const store = messageStoreRegistry.get(tabId);
+      if (store) {
+        // Idempotent: only append if this message doesn't already carry the block.
+        const alreadyHasBlock = store.messages.some(
+          (m) => m.id === assistantMessageId &&
+            m.content.some((b) => (b as { type?: string; toolUseId?: string }).type === 'ask_user_question'
+              && (b as { toolUseId?: string }).toolUseId === pq.toolUseId),
+        );
+        if (!alreadyHasBlock) {
+          store.updateLast(
+            (msg) => ({ ...msg, content: [...msg.content, auqBlock] }),
+            (msg) => msg.id === assistantMessageId,
+          );
+        }
+      } else if (tabState) {
+        const already = tabState.messages.some(
+          (m) => m.id === assistantMessageId &&
+            m.content.some((b) => (b as { type?: string; toolUseId?: string }).type === 'ask_user_question'
+              && (b as { toolUseId?: string }).toolUseId === pq.toolUseId),
+        );
+        if (!already) {
+          tabState.messages = tabState.messages.map((msg) =>
+            msg.id === assistantMessageId ? { ...msg, content: [...msg.content, auqBlock] } : msg,
+          );
+          if (isActive) setMessages(tabState.messages);
+        }
+      }
+
+      // (3) Per-tab ref write (always — even background tabs, so a later switch shows it)
+      if (tabState) {
+        tabState.pendingQuestion = pq;
+        if (opts.sessionId) tabState.sessionId = opts.sessionId;
+      }
+
+      // (4) Active-tab ONLY React render (PIT76: never setPendingQuestion for bg tab)
+      if (isActive) {
+        setPendingQuestion(pq);
+        if (opts.sessionId) setSessionId(opts.sessionId);
+      }
+
+      // (5) End streaming phase + status → waiting_input
+      if (store) store.endStreaming();
+      setIsStreaming(false, tabId);
+      incrementStreamGen();
+      updateTabStatus(tabId, 'waiting_input');
+
+      // (6) Background tab → "go answer" toast (action, not auto-dismiss); persist
+      if (!isActive) {
+        const bgTabTitle = tabMapRef.current.get(tabId)?.title ?? 'another tab';
+        addToast({
+          severity: 'info',
+          message: `Swarm is asking a question in "${bgTabTitle}".`,
+          id: `ask-uq-${pq.toolUseId}`,
+          autoDismiss: false,
+          action: onSelectTab ? { label: 'Go to tab', onClick: () => onSelectTab(tabId) } : undefined,
+        });
+      }
+      const persistSessionId = tabState?.sessionId ?? opts.sessionId;
+      if (persistSessionId && tabState) {
+        persistPendingState(persistSessionId, tabState.messages, pq);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refs + stable setters
+    [dispatch, setMessages, setPendingQuestion, setSessionId, setIsStreaming, incrementStreamGen, updateTabStatus, addToast, onSelectTab],
+  );
+
   // Derive streaming activity for spinner label
   const streamingActivity = useMemo(
     () => deriveStreamingActivity(isStreaming, messages),
@@ -1974,86 +2082,34 @@ export function useChatStreamingLifecycle(
           event.questions &&
           event.toolUseId
         ) {
-          // ── State machine dispatch: STREAMING → WAITING_INPUT (global + per-tab) ──
-          dispatch({ type: 'ASK_USER_QUESTION' });
-          if (tabState) {
-            tabState.streamState = streamingReducer(tabState.streamState, { type: 'ASK_USER_QUESTION' });
-          }
-
           const pq: PendingQuestion = {
             toolUseId: event.toolUseId,
             questions: event.questions,
           };
-
-          // Append ask_user_question block via store (single-writer)
-          const auqBlock = {
-            type: 'ask_user_question' as const,
-            toolUseId: event.toolUseId!,
-            questions: event.questions!,
-          };
-          const auqStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
-          if (auqStore) {
-            auqStore.updateLast(
-              (msg) => ({ ...msg, content: [...msg.content, auqBlock] }),
-              (msg) => msg.id === assistantMessageId,
-            );
+          if (capturedTabId) {
+            // ── Single authoritative surface path (shared with reconcile re-surface) ──
+            surfacePendingQuestion(capturedTabId, assistantMessageId, pq, {
+              isActive: isActiveTab,
+              sessionId: event.sessionId,
+            });
           } else {
-            // Fallback: compute from tabState
-            const currentMsgs = tabState?.messages ?? messagesRef.current;
+            // Edge case: no tab id yet (very first message before a tab exists).
+            // The helper requires a tabId; replicate the minimal no-store path.
+            dispatch({ type: 'ASK_USER_QUESTION' });
+            const auqBlock = {
+              type: 'ask_user_question' as const,
+              toolUseId: event.toolUseId,
+              questions: event.questions,
+            };
+            const currentMsgs = messagesRef.current;
             const auqMessages = currentMsgs.map((msg) =>
               msg.id === assistantMessageId ? { ...msg, content: [...msg.content, auqBlock] } : msg,
             );
-            if (tabState) tabState.messages = auqMessages;
-            if (isActiveTab) setMessages(auqMessages);
-          }
-
-          if (tabState) {
-            tabState.pendingQuestion = pq;
-            if (event.sessionId) tabState.sessionId = event.sessionId;
-          }
-          if (isActiveTab) {
+            setMessages(auqMessages);
             setPendingQuestion(pq);
             if (event.sessionId) setSessionId(event.sessionId);
-          }
-          // End store streaming phase — unblocks reconcile/replace
-          const auqEndStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
-          if (auqEndStore) auqEndStore.endStreaming();
-          setIsStreaming(false, capturedTabId ?? undefined);
-          // Fix 1: Increment stream generation so the pending
-          // createCompleteHandler from the SSE reader becomes a no-op.
-          incrementStreamGen();
-
-          // Fix 8: Update tab status to 'waiting_input'
-          if (capturedTabId) {
-            updateTabStatus(capturedTabId, 'waiting_input');
-          }
-
-          // Root 3 / 3A #3: if the question arrived on a NON-active tab, the
-          // user is looking elsewhere and would never see it → toast them.
-          // One-shot via a stable id keyed on toolUseId (addToast dedups by id),
-          // so re-renders / repeated events don't stack toasts.
-          // The toast is an ACTION ("go answer"), not a transient info ping:
-          //   - it must NOT auto-dismiss (a 5s flash means the user misses it),
-          //   - it carries a clickable action that jumps to the asking tab.
-          if (!isActiveTab && capturedTabId) {
-            const bgTabTitle = tabMapRef.current.get(capturedTabId)?.title ?? 'another tab';
-            const askingTabId = capturedTabId;
-            addToast({
-              severity: 'info',
-              message: `Swarm is asking a question in "${bgTabTitle}".`,
-              id: `ask-uq-${event.toolUseId}`,
-              autoDismiss: false,
-              action: onSelectTab
-                ? { label: 'Go to tab', onClick: () => onSelectTab(askingTabId) }
-                : undefined,
-            });
-          }
-
-          // Fix 5: Persist pending state to sessionStorage from per-tab map
-          // (authoritative source) so it survives component re-mounts.
-          const persistSessionId = tabState?.sessionId ?? event.sessionId;
-          if (persistSessionId && tabState) {
-            persistPendingState(persistSessionId, tabState.messages, pq);
+            setIsStreaming(false, undefined);
+            incrementStreamGen();
           }
         } else if (event.type === 'cmd_permission_request') {
           const raw = event as unknown as Record<string, unknown>;
