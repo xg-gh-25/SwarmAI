@@ -9,6 +9,7 @@ and ``DEFAULT_DANGEROUS_PATTERNS``.
 """
 
 import fnmatch
+import json
 
 import pytest
 from hypothesis import given, strategies as st, settings
@@ -40,9 +41,13 @@ class TestDangerousCommandGlobMatching:
         assert r1 == r2
 
     def test_known_dangerous_commands_detected(self):
-        """Known dangerous commands match at least one default pattern."""
+        """Known dangerous commands match at least one default pattern.
+
+        NOTE (fix #3): `rm -rf /tmp/old` was removed from this list — recursive
+        rm under a temp prefix is now handled by `_is_dangerous_rm` (allowed),
+        not the glob list. See TestDangerousRmPredicate.
+        """
         dangerous = [
-            "rm -rf /tmp/old",
             "sudo reboot",
             "chmod 777 /var",
             "kill -9 1234",
@@ -64,6 +69,83 @@ class TestDangerousCommandGlobMatching:
                 f"Expected '{cmd}' to NOT match any dangerous pattern"
             )
 
+
+class TestDangerousRmPredicate:
+    """Fix #3: narrow `rm -rf *` so harmless temp cleanups don't trigger approval.
+
+    The old glob `rm -rf *` matched EVERY recursive rm (including `rm -rf /tmp/x`),
+    forcing an approval prompt on harmless temp cleanup. A glob cannot express
+    "block / but allow /tmp", so detection moves to a fail-closed predicate:
+    dangerous UNLESS every rm target is under a known-safe temp prefix.
+    """
+
+    def test_dangerous_roots_blocked(self):
+        from core.security_hooks import _is_dangerous_rm
+        for cmd in [
+            "rm -rf /",
+            "rm -rf /*",
+            "rm -rf ~",
+            "rm -rf ~/",
+            "rm -rf ~/Documents",
+            "rm -rf $HOME",
+            "rm -rf $HOME/work",
+            "rm -fr /usr",
+            "rm -rf /etc/passwd",
+            "rm -rf .",          # cwd — unknown, fail closed
+            "rm -rf *",          # glob in cwd — unknown, fail closed
+            "rm -rf ./build ../other",  # one safe-ish + one unknown → blocked
+        ]:
+            assert _is_dangerous_rm(cmd) is True, f"Expected '{cmd}' to be dangerous"
+
+    def test_safe_temp_paths_allowed(self):
+        from core.security_hooks import _is_dangerous_rm
+        for cmd in [
+            "rm -rf /tmp/old",
+            "rm -rf /tmp/swarm-build-123",
+            "rm -rf /var/folders/xy/abc/T/tmpfile",
+            "rm -rf /private/var/folders/xy/abc/T/x",
+            "rm -rf /tmp/a /tmp/b",   # multiple, all safe
+            "rm -rf /tmp/*",
+        ]:
+            assert _is_dangerous_rm(cmd) is False, f"Expected '{cmd}' to be allowed"
+
+    def test_path_traversal_does_not_escape_safe_prefix(self):
+        """Adversarial CRITICAL: `..` inside a safe prefix must NOT be treated safe."""
+        from core.security_hooks import _is_dangerous_rm
+        for cmd in [
+            "rm -rf /tmp/../etc",
+            "rm -rf /tmp/../../etc",
+            "rm -rf /tmp/..",
+            "rm -rf /var/folders/../../../",
+            "rm -rf /tmp/foo /etc",          # one safe + one dangerous → dangerous
+            "rm -rf /tmp/x; rm -rf /",        # shlex keeps as operands incl ';'
+        ]:
+            assert _is_dangerous_rm(cmd) is True, f"Expected '{cmd}' to be dangerous (traversal/mixed)"
+
+    def test_env_and_glob_targets_fail_closed(self):
+        """$VARS and ~ are unexpanded here → unknown target → dangerous."""
+        from core.security_hooks import _is_dangerous_rm
+        assert _is_dangerous_rm("rm -rf $HOME") is True
+        assert _is_dangerous_rm("rm -rf $TMPDIR/x") is True   # unknown until expanded
+        assert _is_dangerous_rm("rm -rf ~/anything") is True
+
+    def test_non_rm_commands_not_classified_dangerous_by_predicate(self):
+        """The predicate only judges rm commands; non-rm is not its concern."""
+        from core.security_hooks import _is_dangerous_rm
+        # A non-rm command is never "dangerous rm" — other patterns handle those.
+        assert _is_dangerous_rm("ls -la /tmp") is False
+        assert _is_dangerous_rm("echo rm -rf /") is False  # not an actual rm invocation
+
+    def test_rm_without_recursive_force_not_flagged(self):
+        """Plain `rm file` (no -rf) is not the catastrophic pattern."""
+        from core.security_hooks import _is_dangerous_rm
+        assert _is_dangerous_rm("rm foo.txt") is False
+        assert _is_dangerous_rm("rm -i bar") is False
+
+    def test_default_patterns_no_longer_contain_bare_rm_glob(self):
+        """The blanket `rm -rf *` glob is removed (replaced by the predicate)."""
+        assert "rm -rf *" not in DEFAULT_DANGEROUS_PATTERNS
+
     def test_load_dangerous_patterns_returns_list(self, tmp_path, monkeypatch):
         """load_dangerous_patterns returns a list of strings."""
         monkeypatch.setattr("core.security_hooks.get_app_data_dir", lambda: tmp_path)
@@ -78,6 +160,20 @@ class TestDangerousCommandGlobMatching:
         patterns = load_dangerous_patterns()
         assert patterns == DEFAULT_DANGEROUS_PATTERNS
         assert (tmp_path / "dangerous_commands.json").exists()
+
+    def test_load_migrates_obsolete_rm_globs(self, tmp_path, monkeypatch):
+        """Existing installs with the old blanket rm globs get them stripped on
+        load (else the on-disk file silently overrides the fix — PIT38)."""
+        monkeypatch.setattr("core.security_hooks.get_app_data_dir", lambda: tmp_path)
+        f = tmp_path / "dangerous_commands.json"
+        f.write_text(json.dumps({"patterns": ["rm -rf *", "rm -rf /*", "rm -rf ~*", "sudo *"]}))
+        patterns = load_dangerous_patterns()
+        assert "rm -rf *" not in patterns
+        assert "rm -rf /*" not in patterns
+        assert "rm -rf ~*" not in patterns
+        assert "sudo *" in patterns  # unrelated patterns preserved
+        # migration persisted to disk
+        assert "rm -rf *" not in json.loads(f.read_text())["patterns"]
 
 
 # ---------------------------------------------------------------------------
@@ -171,3 +267,67 @@ class TestGovernanceFileGate:
         )
         assert result["decision"] == "approve"
         assert "additionalContext" not in result
+
+
+class TestDangerousCommandGateIntegration:
+    """SMOKE: drive the real dangerous_command_gate end-to-end (fix #3 + #2).
+
+    Proves the predicate is actually wired into the gate (not just unit-tested
+    in isolation) and that the timeout path emits a visibly-distinct reason.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolate_patterns(self, tmp_path, monkeypatch):
+        """Isolate from the real ~/.swarm-ai/dangerous_commands.json so the test
+        reflects shipped DEFAULT_DANGEROUS_PATTERNS, not a stale on-disk file."""
+        monkeypatch.setattr("core.security_hooks.get_app_data_dir", lambda: tmp_path)
+
+    def _make_gate(self, decision_to_return=None):
+        from core.permission_manager import PermissionManager
+        from core.security_hooks import create_dangerous_command_gate
+        pm = PermissionManager()
+        if decision_to_return is not None:
+            async def _fake_wait(request_id, timeout=300):
+                return decision_to_return
+            pm.wait_for_permission_decision = _fake_wait  # type: ignore
+        gate = create_dangerous_command_gate(
+            session_context={"sdk_session_id": "sess-smoke"},
+            session_key="sess-smoke",
+            permission_mgr=pm,
+            enable_human_approval=True,
+        )
+        return gate, pm
+
+    @pytest.mark.asyncio
+    async def test_harmless_tmp_rm_auto_approved_no_prompt(self):
+        """rm -rf /tmp/x sails through WITHOUT a permission prompt (the bug)."""
+        gate, _pm = self._make_gate()  # wait would block if reached
+        result = await gate(
+            {"tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/swarm-build-xyz"}},
+            None, None,
+        )
+        assert result == {"decision": "approve"}
+
+    @pytest.mark.asyncio
+    async def test_home_rm_requires_approval_then_denied(self):
+        """rm -rf ~ still goes through the approval gate (and we deny it)."""
+        gate, _pm = self._make_gate(decision_to_return="deny")
+        result = await gate(
+            {"tool_name": "Bash", "tool_input": {"command": "rm -rf ~/Documents"}},
+            None, None,
+        )
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "User denied" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+    @pytest.mark.asyncio
+    async def test_timeout_emits_visible_distinct_reason(self):
+        """A timeout denies but with a DISTINCT 审批超时 reason, not silent."""
+        gate, _pm = self._make_gate(decision_to_return="timeout")
+        result = await gate(
+            {"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}},
+            None, None,
+        )
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        reason = result["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "审批超时" in reason
+        assert "User denied" not in reason  # must be distinguishable

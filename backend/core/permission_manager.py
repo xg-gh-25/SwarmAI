@@ -82,19 +82,55 @@ class PermissionManager:
         """Remove a pending permission request after it's been resolved."""
         self._pending_requests.pop(request_id, None)
 
-    async def wait_for_permission_decision(self, request_id: str, timeout: int = 7200) -> str:
+    def get_pending_for_session(self, session_id: str) -> list[dict[str, Any]]:
+        """Return all still-pending permission requests for a session.
+
+        Used by the reconnect/resume re-surface path (chat.py streaming-state):
+        the durable store survives respawn, so when a session's transient
+        ``_pending_question`` is gone but a request is still ``status=='pending'``
+        and has a LIVE waiter, the frontend can re-render the approval prompt.
+
+        Filters to ``status == 'pending'`` only — expired/resolved requests must
+        never be re-surfaced. Returns a list (FIFO order of insertion).
+        """
+        return [
+            req
+            for req in self._pending_requests.values()
+            if req.get("session_id") == session_id
+            and req.get("status", "pending") == "pending"
+        ]
+
+    def has_live_waiter(self, request_id: str) -> bool:
+        """True iff a ``wait_for_permission_decision`` coroutine is currently
+        blocked on this request.
+
+        This is the respawn-immune liveness signal: the event is registered on
+        entry to ``wait_for_permission_decision`` and popped in its ``finally``
+        (on decision, timeout, OR cancellation when the subprocess is killed and
+        the hook task is torn down). So ``has_live_waiter`` is True only while a
+        real awaiting hook exists to receive the decision — re-surfacing a
+        request with no live waiter would let the user "approve" into the void.
+        """
+        return request_id in self._permission_events
+
+    async def wait_for_permission_decision(self, request_id: str, timeout: int = 300) -> str:
         """Wait for user permission decision.
 
         Args:
             request_id: The permission request ID
-            timeout: Timeout in seconds (default 2 hours).
-                     Long timeout because the user may be away (lunch,
-                     meeting) and should be able to approve on return.
-                     The subprocess stays alive in WAITING_INPUT state
-                     (protected from eviction).
+            timeout: Timeout in seconds (default 5 minutes).
+                     Bounded so an un-surfaced or unanswered prompt does not
+                     hang the subprocess for hours. The subprocess stays alive
+                     in WAITING_INPUT state (protected from eviction) until the
+                     decision arrives OR the timeout fires.
 
         Returns:
-            'approve' or 'deny'
+            'approve', 'deny', or 'timeout'. ``'timeout'`` is a DISTINCT
+            sentinel (not folded into 'deny') so the caller can emit a visible
+            "审批超时" message — a timeout is a different user-facing event than
+            an explicit denial. The caller is responsible for treating
+            'timeout' as deny-equivalent for the SDK decision while surfacing
+            the distinct reason.
         """
         event = asyncio.Event()
         self._permission_events[request_id] = event
@@ -105,7 +141,7 @@ class PermissionManager:
         except asyncio.TimeoutError:
             # Update in-memory pending request with expired status
             self.update_pending_request(request_id, {"status": "expired"})
-            return "deny"
+            return "timeout"
         finally:
             self._permission_events.pop(request_id, None)
             self._permission_results.pop(request_id, None)

@@ -23,6 +23,7 @@ import logging
 import os
 import platform
 import re
+import shlex
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -53,9 +54,10 @@ async def pre_tool_logger(
 # ---------------------------------------------------------------------------
 
 DEFAULT_DANGEROUS_PATTERNS: list[str] = [
-    "rm -rf *",
-    "rm -rf /*",
-    "rm -rf ~*",
+    # NOTE: the blanket "rm -rf *" glob was removed (fix #3). A glob cannot
+    # express "block / but allow /tmp", so recursive-rm danger is judged by the
+    # fail-closed `_is_dangerous_rm` predicate below — which allows harmless
+    # temp cleanups (/tmp, /var/folders) but blocks every other recursive rm.
     "sudo *",
     "chmod 777 *",
     "chmod -R 777 *",
@@ -75,6 +77,82 @@ DEFAULT_DANGEROUS_PATTERNS: list[str] = [
     ":()*{*:*|*:*&*}*;*:*",
 ]
 
+# Prefixes under which a recursive rm is considered harmless (OS temp dirs).
+# Everything else is fail-closed dangerous.  macOS per-user temp lives under
+# /var/folders (and the /private symlink); Linux/general temp is /tmp.
+_SAFE_RM_PREFIXES: tuple[str, ...] = (
+    "/tmp/",
+    "/var/folders/",
+    "/private/var/folders/",
+    "/private/tmp/",
+)
+_SAFE_RM_EXACT: frozenset[str] = frozenset({"/tmp", "/private/tmp"})
+
+
+def _is_dangerous_rm(command: str) -> bool:
+    """Fail-closed predicate: is this a *dangerous* recursive ``rm``?
+
+    Replaces the blanket ``rm -rf *`` glob (fix #3), which forced an approval
+    prompt on every recursive rm — including harmless temp cleanups like
+    ``rm -rf /tmp/build``.
+
+    Rules:
+    - Only ``rm`` invocations with BOTH recursive and force flags (``-rf`` /
+      ``-r -f`` / ``-fr`` etc.) are candidates. Plain ``rm file`` is not the
+      catastrophic pattern and is left to normal flow.
+    - Dangerous UNLESS *every* path operand resolves under a known-safe temp
+      prefix. Any operand that is a root/home/unknown/relative/glob target →
+      dangerous (fail closed). Zero path operands → dangerous (e.g. ``rm -rf *``
+      where the shell would expand cwd).
+    - Non-rm commands always return False (other patterns judge those).
+    """
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        # Unparseable (unbalanced quotes) → cannot prove safe → fail closed,
+        # but only if it actually looks like an rm command.
+        return command.strip().startswith("rm ")
+    if not tokens or tokens[0] != "rm":
+        return False
+
+    flags: set[str] = set()
+    operands: list[str] = []
+    for tok in tokens[1:]:
+        if tok.startswith("-") and tok != "-":
+            # collect single-letter flags (handles -rf, -fr, -r, -f, --recursive)
+            if tok.startswith("--"):
+                flags.add(tok)
+            else:
+                flags.update(tok[1:])
+        else:
+            operands.append(tok)
+
+    recursive = ("r" in flags) or ("R" in flags) or ("--recursive" in flags)
+    force = ("f" in flags) or ("--force" in flags)
+    if not (recursive and force):
+        # Not the `rm -rf` catastrophic shape — not this predicate's concern.
+        return False
+
+    if not operands:
+        # `rm -rf` with no explicit target (or only globs the shell expands in
+        # cwd) — cannot prove safe → dangerous.
+        return True
+
+    for op in operands:
+        # Fail closed on any path-traversal or env/glob token — a ".." segment
+        # can escape a safe prefix (rm -rf /tmp/../etc), and $VARS/globs are
+        # unexpanded here so their real target is unknown.
+        if ".." in op.split("/") or "$" in op or "~" in op:
+            return True
+        norm = os.path.normpath(op)
+        if norm in _SAFE_RM_EXACT:
+            continue
+        if norm.startswith(_SAFE_RM_PREFIXES):
+            continue
+        # root, home, relative paths, globs, unknown absolute → dangerous.
+        return True
+    return False
+
 
 def load_dangerous_patterns() -> list[str]:
     """Load glob patterns from ``~/.swarm-ai/dangerous_commands.json``.
@@ -92,6 +170,22 @@ def load_dangerous_patterns() -> list[str]:
         if not isinstance(data, dict) or "patterns" not in data:
             raise ValueError("missing 'patterns' key")
         patterns = list(data["patterns"])
+        # Migration (fix #3): existing installs persisted the obsolete blanket
+        # rm globs. They are now handled by _is_dangerous_rm (which allows /tmp).
+        # Strip them on load so the fix reaches users who already have the file —
+        # otherwise the on-disk file silently overrides the code change
+        # (default-propagation trap, PIT38).
+        _obsolete = {"rm -rf *", "rm -rf /*", "rm -rf ~*"}
+        if any(p in _obsolete for p in patterns):
+            patterns = [p for p in patterns if p not in _obsolete]
+            try:
+                patterns_path.write_text(
+                    json.dumps({"patterns": patterns}, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                logger.info("Migrated dangerous_commands.json — removed obsolete rm globs")
+            except OSError:
+                pass  # in-memory strip still takes effect this run
         logger.info("Loaded %d dangerous patterns from %s", len(patterns), patterns_path)
         return patterns
     except FileNotFoundError:
@@ -136,8 +230,12 @@ def create_dangerous_command_gate(
         if not command:
             return {"decision": "approve"}
 
-        # Check if command matches any dangerous pattern (glob)
-        is_dangerous = any(fnmatch.fnmatch(command, p) for p in patterns)
+        # Check if command matches any dangerous pattern (glob) OR is a
+        # dangerous recursive rm (predicate — fix #3, allows /tmp & /var/folders).
+        is_dangerous = (
+            any(fnmatch.fnmatch(command, p) for p in patterns)
+            or _is_dangerous_rm(command)
+        )
         if not is_dangerous:
             return {"decision": "approve"}
 
@@ -201,11 +299,24 @@ def create_dangerous_command_gate(
             permission_mgr.approve_command(session_key, command)
             return {"decision": "approve"}
 
+        # Distinguish an explicit user denial from a timeout (fix #2/#3). Both
+        # deny the command to the SDK, but the reason — surfaced to the user as
+        # the tool_result — must make a timeout visibly different from a denial,
+        # so a never-surfaced prompt reads as "审批超时" instead of a silent hang.
+        if decision == "timeout":
+            reason = (
+                "审批超时（Approval timed out after 5 minutes）: "
+                "the command was auto-denied because no decision was received. "
+                "Re-run if you still need it."
+            )
+        else:
+            reason = "User denied: Matches dangerous command pattern"
+
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
-                "permissionDecisionReason": "User denied: Matches dangerous command pattern",
+                "permissionDecisionReason": reason,
             }
         }
 

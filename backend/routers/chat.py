@@ -773,15 +773,53 @@ async def get_streaming_state_endpoint():
             pending_count = session_pending.count_pending(unit.session_id)
         except Exception:
             pending_count = 0
+
+        # The primary source is the transient _pending_question (set on the
+        # WAITING_INPUT emit). But that field — and state==waiting_input — are
+        # LOST if the surface SSE event never fired (the hang bug: the permission
+        # was enqueued but the orchestrator's surface block never ran) or after a
+        # respawn. Fix #1B: when _pending_question is None, fall back to the
+        # DURABLE permission store, but ONLY if a live waiter still exists for the
+        # request (has_live_waiter) — otherwise the hook is dead and re-surfacing
+        # would let the user "approve" into the void.
+        pending_question = (
+            getattr(unit, "_pending_question", None)
+            if unit.state.value == "waiting_input" else None
+        )
+        if pending_question is None:
+            try:
+                from core.permission_manager import permission_manager as _pm
+                for req in _pm.get_pending_for_session(unit.session_id):
+                    req_id = req.get("id")
+                    if req_id and _pm.has_live_waiter(req_id):
+                        raw_input = req.get("tool_input", {})
+                        # Durable store keeps tool_input as a JSON string
+                        # (security_hooks persist); _pending_question uses a dict.
+                        if isinstance(raw_input, str):
+                            try:
+                                raw_input = json.loads(raw_input)
+                            except (ValueError, TypeError):
+                                raw_input = {}
+                        pending_question = {
+                            "tool_use_id": req_id,
+                            "request_id": req_id,
+                            "tool_name": req.get("tool_name", "Bash"),
+                            "tool_input": raw_input,
+                            "reason": req.get("reason", ""),
+                            "options": req.get("options", ["approve", "deny"]),
+                        }
+                        break  # surface the oldest live pending request
+            except Exception:
+                pending_question = None
+
         result[unit.session_id] = {
             "streaming": is_streaming,
             "state": unit.state.value,
-            "waiting_input": unit.state.value == "waiting_input",
+            # waiting_input must also reflect a re-surfaced durable request, else
+            # the frontend won't render the prompt it was just handed.
+            "waiting_input": unit.state.value == "waiting_input" or pending_question is not None,
             "pending_count": pending_count,
-            "pending_question": (
-                getattr(unit, "_pending_question", None)
-                if unit.state.value == "waiting_input" else None
-            ),
+            "pending_question": pending_question,
             "last_drained_seqs": getattr(unit, "_last_drained_seqs", []),
         }
     return {"sessions": result}

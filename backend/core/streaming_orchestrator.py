@@ -369,6 +369,22 @@ class StreamingOrchestrator:
                     # Queue.get shouldn't fail, but be safe
                     continue
 
+                # The per-session queue survives respawn (keyed by session_id,
+                # only dropped on session end), so a stale request whose hook was
+                # cancelled can be replayed here. Surfacing it would let the user
+                # "approve" into a void with no awaiting hook. Drop any request
+                # with no live waiter (its wait_for_permission_decision already
+                # popped the event in its finally on cancellation/timeout).
+                from core.permission_manager import permission_manager as _pm_live
+                _req_id = perm_request.get("requestId")
+                if not _req_id or not _pm_live.has_live_waiter(_req_id):
+                    logger.info(
+                        "session_unit: dropping stale permission request %s "
+                        "(no live waiter) session_id=%s",
+                        _req_id, self._parent.session_id,
+                    )
+                    continue
+
                 logger.info(
                     "session_unit.permission_surfaced session_id=%s "
                     "request_id=%s command=%s",
@@ -596,8 +612,27 @@ class StreamingOrchestrator:
                                             )
                                             break
                                     else:
-                                        # perm_task won — ignore, keep draining
-                                        pass
+                                        # perm_task won the race. A permission
+                                        # request landed in the post-AskUserQuestion
+                                        # drain window. DO NOT discard it (fix #1A):
+                                        # the dangerous_command_gate hook is blocked
+                                        # awaiting this decision, and the durable
+                                        # _pending_requests entry expects it to be
+                                        # surfaced. Re-enqueue so the next read loop
+                                        # (or reconnect re-surface) delivers it.
+                                        try:
+                                            drained_perm = perm_task_drain.result()
+                                            if drained_perm is not None:
+                                                perm_queue.put_nowait(drained_perm)
+                                                logger.info(
+                                                    "session_unit: re-enqueued permission "
+                                                    "request %s caught in AskUserQuestion "
+                                                    "drain window (session=%s)",
+                                                    drained_perm.get("requestId", "?"),
+                                                    self._parent.session_id,
+                                                )
+                                        except Exception:
+                                            pass
                             except Exception as drain_err:
                                 logger.warning(
                                     "session_unit: drain after AskUserQuestion "
