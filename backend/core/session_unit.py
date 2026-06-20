@@ -1133,12 +1133,33 @@ class SessionUnit:
                 # After force_unstick, state is COLD — fall through to spawn
 
         if self.state == SessionState.WAITING_INPUT:
-            # Frontend crashed or user abandoned the question — auto-recover.
-            # Kill subprocess and transition to COLD so we can resume.
+            # Root-1 SSOT Phase 2 (L4, F3): a new message arriving while a
+            # tool_use (AskUserQuestion / cmd_permission) is OUTSTANDING must NOT
+            # be auto-treated as the answer, and must NOT kill→COLD→--resume (the
+            # abandoned-ask replay bug). Reject as SessionBusyError so the router
+            # converts it to a pending message (sent=0); the drain worker delivers
+            # it only AFTER the question is answered and the session returns to a
+            # clean IDLE with no outstanding tool_use (drain_pending precondition).
+            if self.has_outstanding_tool_use:
+                from .exceptions import SessionBusyError
+                logger.info(
+                    "session_unit.waiting_input_pending session_id=%s "
+                    "tool_use=%s — new message queued (not auto-answered, F3)",
+                    self.session_id, self._pending_tool_use_id,
+                )
+                raise SessionBusyError(
+                    detail=(
+                        f"Session {self.session_id} is waiting for an answer to a "
+                        f"pending question. Your message has been queued and will "
+                        f"be sent after the question is resolved."
+                    ),
+                )
+            # No outstanding tool_use but stuck in WAITING_INPUT (frontend crashed
+            # mid-question / stale state) — genuinely abandoned, recover to COLD.
             logger.warning(
                 "session_unit.auto_recover_waiting_input session_id=%s "
-                "— frontend sent new message while WAITING_INPUT, "
-                "forcing COLD for recovery (abandoned ask_user_question)",
+                "— WAITING_INPUT with no outstanding tool_use (abandoned), "
+                "forcing COLD for recovery",
                 self.session_id,
             )
             await self.force_unstick_waiting_input()
@@ -2170,6 +2191,11 @@ class SessionUnit:
         self._compaction_guard.reset()
         self._content_emitted = False  # Reset zombie detection for new stream
         self._active_agent_tools = {}  # Clear stale sub-agent progress
+        # Root-1 SSOT Phase 2 (L4): the question is being answered — clear the
+        # outstanding-tool_use guard so the drain worker may resume on the next
+        # clean IDLE (F3). Cleared on the proper answer path, never on a new send.
+        self._pending_tool_use_id = None
+        self._pending_question = None
         self._transition(SessionState.STREAMING)
 
         try:
@@ -2223,6 +2249,10 @@ class SessionUnit:
         self._compaction_guard.reset()
         self._content_emitted = False  # Reset zombie detection for new stream
         self._active_agent_tools = {}  # Clear stale sub-agent progress
+        # Root-1 SSOT Phase 2 (L4): permission resolved — clear the
+        # outstanding-tool_use guard so the drain worker may resume (F3).
+        self._pending_tool_use_id = None
+        self._pending_question = None
         self._transition(SessionState.STREAMING)
 
         try:

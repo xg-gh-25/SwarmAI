@@ -184,6 +184,42 @@ async def test_drain_rollback_on_send_failure(wired):
 
 
 @pytest.mark.asyncio
+async def test_waiting_input_send_raises_busy_when_tool_outstanding(wired):
+    """AC5/F3: a real SessionUnit in WAITING_INPUT with an outstanding tool_use
+    must reject a new send() as SessionBusyError (→ router converts to pending),
+    NOT kill→COLD (the abandoned-ask bug)."""
+    from core.session_unit import SessionUnit
+    from core.exceptions import SessionBusyError
+
+    unit = SessionUnit(session_id="sess-wi", agent_id="a")
+    # Simulate the orchestrator having emitted an AskUserQuestion.
+    unit.state = SessionState.WAITING_INPUT
+    unit._pending_tool_use_id = "tool-99"
+    unit._pending_question = {"tool_use_id": "tool-99", "questions": []}
+    unit._client = object()  # non-None so the guard path is reached
+
+    assert unit.has_outstanding_tool_use is True
+    with pytest.raises(SessionBusyError):
+        async for _ in unit.send("new msg while question open", MagicMock()):
+            pass
+    # The guard is NOT cleared by a rejected send — only the answer path clears it.
+    assert unit._pending_tool_use_id == "tool-99"
+
+
+@pytest.mark.asyncio
+async def test_has_outstanding_tool_use_property():
+    """has_outstanding_tool_use mirrors _pending_tool_use_id presence."""
+    from core.session_unit import SessionUnit
+
+    unit = SessionUnit(session_id="sess-prop", agent_id="a")
+    assert unit.has_outstanding_tool_use is False
+    unit._pending_tool_use_id = "x"
+    assert unit.has_outstanding_tool_use is True
+    unit._pending_tool_use_id = None
+    assert unit.has_outstanding_tool_use is False
+
+
+@pytest.mark.asyncio
 async def test_enqueue_drain_is_idempotent(wired):
     """enqueue_drain de-dupes: the same session queued twice yields one entry.
 

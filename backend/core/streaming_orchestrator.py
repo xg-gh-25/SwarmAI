@@ -333,6 +333,18 @@ class StreamingOrchestrator:
                     perm_request.get("requestId", "?"),
                     str(perm_request.get("toolInput", {}).get("command", ""))[:60],
                 )
+                # Root-1 SSOT Phase 2 (L4/F3): a permission prompt is also an
+                # outstanding tool_use — track it so the drain worker won't inject
+                # a turn while it's open. Keyed by requestId (the permission's id).
+                self._parent._pending_tool_use_id = perm_request["requestId"]
+                self._parent._pending_question = {
+                    "tool_use_id": perm_request["requestId"],
+                    "request_id": perm_request["requestId"],
+                    "tool_name": perm_request.get("toolName", "Bash"),
+                    "tool_input": perm_request.get("toolInput", {}),
+                    "reason": perm_request.get("reason", ""),
+                    "options": perm_request.get("options", ["approve", "deny"]),
+                }
                 yield {
                     "type": "cmd_permission_request",
                     "requestId": perm_request["requestId"],
@@ -463,6 +475,16 @@ class StreamingOrchestrator:
                                 _pending_file_changes[block.id] = _fp
                         if block.name == "AskUserQuestion":
                             questions = block.input.get("questions", [])
+                            # Root-1 SSOT Phase 2 (L4/F3): record the outstanding
+                            # tool_use BEFORE the transition so the drain worker
+                            # never injects a turn while this question is open, and
+                            # the read API (L5) can re-surface the question if its
+                            # SSE event is lost.
+                            self._parent._pending_tool_use_id = block.id
+                            self._parent._pending_question = {
+                                "tool_use_id": block.id,
+                                "questions": questions,
+                            }
                             yield {
                                 "type": "ask_user_question",
                                 "toolUseId": block.id,
