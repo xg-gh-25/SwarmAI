@@ -1152,6 +1152,17 @@ export function useChatStreamingLifecycle(
           const backendIsStreaming = backendState?.streaming ?? false;
 
           if (!backendIsStreaming) {
+            // ── Active-state guard (2026-06-20) ─────────────────────────
+            // Backend states that mean "subprocess is alive and doing work"
+            // must NEVER trigger force-clear. waiting_input = permission
+            // prompt pending; streaming = actively generating (defense-in-depth,
+            // backendIsStreaming should already be true but guard anyway).
+            const ACTIVE_BACKEND_STATES = new Set(['waiting_input', 'streaming']);
+            const reportedState = backendState?.state;
+            if (reportedState && ACTIVE_BACKEND_STATES.has(reportedState)) {
+              continue;  // Subprocess alive — not a stale stream
+            }
+
             // Race guard: _reconcileStreamStart is set only by setIsStreaming(true),
             // never cleared by elapsed-timer or selectTab — immune to dual-writer bug.
             const streamAge = Date.now() - (tabState._reconcileStreamStart ?? 0);
