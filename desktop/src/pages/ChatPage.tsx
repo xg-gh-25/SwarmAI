@@ -452,6 +452,37 @@ export default function ChatPage() {
     }
   }, [tabMapRef, activeTabIdRef, setMessages, setSessionId]);
 
+  // Content reconcile (no-loss): MERGE the tab's view with authoritative DB
+  // content using MessageStore.reconcile → _applyMerge. Unlike reconcileTabFromDb
+  // (store.replace, for frozen-partial recovery), this is boundary-aware and
+  // append-or-update by id, so it SURFACES responses the backend persisted while
+  // the SSE stream was detached (Stop / kill / cold-resume / daemon restart)
+  // WITHOUT re-introducing scrolled-past prior-session history (the regression the
+  // old `messages.length === 0` gate was guarding against — now handled by
+  // _applyMerge's resume-boundary + DB-wins-by-id logic). Idempotent; phase-gated
+  // (no-op while streaming); fully error-guarded (never aborts the live stream).
+  const mergeTabFromDb = useCallback(async (tabId: string) => {
+    const tab = tabMapRef.current.get(tabId);
+    if (!tab || !tab.sessionId || tab.isStreaming) return;
+    const sid = tab.sessionId;
+    try {
+      const msgs = await chatService.getSessionMessagesPaginated(sid, INITIAL_MESSAGE_LOAD_LIMIT);
+      const tabNow = tabMapRef.current.get(tabId);
+      // Re-guard: tab gone, session changed, or streaming restarted during fetch.
+      if (!tabNow || tabNow.sessionId !== sid || tabNow.isStreaming) return;
+      const store = messageStoreRegistry.getOrCreate(tabId);
+      // reconcile() is a no-op (queues a thunk) while phase==='streaming'.
+      store.reconcile(msgs);
+      // Bridge store → tabState cache for legacy readers.
+      tabNow.messages = store.messages;
+      if (tabId === activeTabIdRef.current) setMessages(store.messages);
+    } catch (err) {
+      // Keep current in-memory messages; the next backend-recovered / reconcile
+      // tick retries. Never clear the tab on a failed reconcile.
+      console.warn(`[ChatPage] mergeTabFromDb failed for tab ${tabId}:`, err);
+    }
+  }, [tabMapRef, activeTabIdRef, setMessages]);
+
   // Backend recovery: when health transitions disconnected → connected,
   // useHealthMonitor dispatches 'swarm:backend-recovered'. We clear
   // any error state on the active tab and re-sync messages (the last
@@ -464,30 +495,42 @@ export default function ChatPage() {
       if (!tabState) return;
       tabState.reconnectionAttempt = 0;
       tabState.isReconnecting = false;
-      // Skip message refetch if the tab is actively streaming or has messages
-      // in-memory already. Refetching during/after streaming overwrites the
-      // accumulated content with DB history (which may include much older
-      // messages), causing "prior messages re-appear" bug.
-      // Only refetch for tabs that genuinely lost their message state.
-      if (tabState.sessionId && !tabState.isStreaming && (!tabState.messages || tabState.messages.length === 0)) {
-        loadSessionMessages(tabState.sessionId);
-        console.log(`[ChatPage] Backend recovered — active tab ${activeId}, re-syncing messages (empty state)`);
-      } else {
-        console.log(`[ChatPage] Backend recovered — active tab ${activeId}, skipping refetch (messages in-memory)`);
+      // CONTENT RECONCILE (root-cause fix): on reconnect, the backend may have
+      // produced & persisted responses while the SSE stream was detached (it
+      // keeps running post-disconnect). Previously we SKIPPED refetch whenever a
+      // tab had any in-memory messages → those responses were stuck in the DB and
+      // never displayed ("前端好多没 response"). Now:
+      //   - empty tab → full load (loadSessionMessages)
+      //   - non-empty, non-streaming tab → safe MERGE (mergeTabFromDb / _applyMerge)
+      // The merge is boundary-aware, so it does NOT re-surface scrolled-past
+      // prior-session history (the bug the old gate guarded against).
+      if (tabState.sessionId && !tabState.isStreaming) {
+        if (!tabState.messages || tabState.messages.length === 0) {
+          loadSessionMessages(tabState.sessionId);
+          console.log(`[ChatPage] Backend recovered — active tab ${activeId}, full load (empty state)`);
+        } else {
+          mergeTabFromDb(activeId);
+          console.log(`[ChatPage] Backend recovered — active tab ${activeId}, content reconcile (merge)`);
+        }
       }
-      // Retry DB reconcile for ANY tab (active or background) whose force-clear
-      // recovery fetch previously failed — these have a frozen PARTIAL response
-      // (messages.length > 0), so the empty-state branch above skips them.
+      // Reconcile EVERY other non-streaming tab from DB too — background tabs also
+      // lose responses during a disconnect window.
       for (const [tabId, ts] of tabMapRef.current.entries()) {
-        if (ts._dbReconcileFailed && ts.sessionId && !ts.isStreaming) {
-          console.log(`[ChatPage] Backend recovered — retrying DB reconcile for frozen tab ${tabId}`);
+        if (tabId === activeId) continue; // handled above
+        if (!ts.sessionId || ts.isStreaming) continue;
+        if (ts._dbReconcileFailed) {
+          // Frozen-PARTIAL tab whose earlier force-clear fetch failed: use the
+          // replace-based recovery (drops the stale placeholder, clears the flag).
           reconcileTabFromDb(tabId);
+        } else {
+          // Otherwise: safe content merge (surfaces disconnect-window responses).
+          mergeTabFromDb(tabId);
         }
       }
     };
     window.addEventListener('swarm:backend-recovered', handleBackendRecovered);
     return () => window.removeEventListener('swarm:backend-recovered', handleBackendRecovered);
-  }, [loadSessionMessages, reconcileTabFromDb]);
+  }, [loadSessionMessages, reconcileTabFromDb, mergeTabFromDb]);
 
   // Load older messages for infinite scroll (paginated)
   const loadOlderMessages = useCallback(async () => {
