@@ -1266,12 +1266,13 @@ class SessionUnit:
 
         # ── Desktop hard-floor graceful wrap-up (Root 2 / AC3, G2) ─
         # Absolute last-resort stop for DESKTOP sessions at max_turns-5.
-        # Independent of self-heal (which may be OFF — exactly G2's gap):
-        # without this, a self-heal-OFF session runs silently to the CLI's
-        # error_max_turns and truncates. Inject a wrap-up so the agent
-        # delivers a non-empty conclusion before the hard limit. One-shot;
-        # skipped when self-heal already owns the wrap-up (_graceful_wrap_pending)
-        # or the channel path handled it.
+        # Fires when self-heal can't carry the wrap-up — OFF, exhausted, or in
+        # cooldown (not "unreachable when self-heal is ON"): without this, such a
+        # session runs silently to the CLI's error_max_turns and truncates. Inject
+        # a wrap-up so the agent delivers a non-empty conclusion before the hard
+        # limit. One-shot owned HERE (the predicate is read-only); skipped when
+        # self-heal already owns the wrap-up (_graceful_wrap_pending) or the
+        # channel path handled it.
         if self._should_inject_hard_floor_wrap() and isinstance(query_content, str):
             query_content = f"{query_content}\n\n---\n\n{WRAP_UP_PROMPT}"
             self._hard_floor_wrap_injected = True  # One-shot consumed
@@ -2242,14 +2243,16 @@ class SessionUnit:
                 f"(session_id={self.session_id})"
             )
 
-        # User responded — reset compaction guard so tool counts
-        # don't accumulate across the permission/answer boundary.
+        # User responded — reset compaction guard's loop-detection state, but
+        # PRESERVE the per-turn tool-loop budget: an answer is a continuation of
+        # the SAME user turn, so a runaway must keep accumulating toward the
+        # budget instead of resetting to zero on every answer (Root 2 / AC6).
         logger.info(
             "session_unit.continue_with_answer session_id=%s "
             "tool_use_id=%s answer_len=%d state=%s",
             self.session_id, tool_use_id, len(answer), self.state.value,
         )
-        self._compaction_guard.reset()
+        self._compaction_guard.reset(preserve_turn_budget=True)
         self._content_emitted = False  # Reset zombie detection for new stream
         self._active_agent_tools = {}  # Clear stale sub-agent progress
         # Root-1 SSOT Phase 2 (L4): the question is being answered — clear the
@@ -2305,9 +2308,11 @@ class SessionUnit:
             self.session_id, request_id, decision,
         )
 
-        # User responded — reset compaction guard so tool counts
-        # don't accumulate across the permission boundary.
-        self._compaction_guard.reset()
+        # User responded — reset compaction guard's loop-detection state, but
+        # PRESERVE the per-turn tool-loop budget: a permission grant is a
+        # continuation of the SAME user turn, so a runaway that loops through a
+        # permission gate must keep accumulating toward the budget (Root 2 / AC6).
+        self._compaction_guard.reset(preserve_turn_budget=True)
         self._content_emitted = False  # Reset zombie detection for new stream
         self._active_agent_tools = {}  # Clear stale sub-agent progress
         # Root-1 SSOT Phase 2 (L4): permission resolved — clear the
@@ -2532,12 +2537,16 @@ class SessionUnit:
     def _should_inject_hard_floor_wrap(self) -> bool:
         """AC3 (G2) predicate: should a desktop hard-floor wrap-up be injected?
 
-        Pure predicate (no mutation except the one-shot flag) so the self-heal-OFF
-        path is forced-testable (STEERING #11 — the floor is unreachable on the
-        self-heal-ON path, so a test must exercise this directly). True when, on a
-        DESKTOP session, turn_count has reached max_turns - HARD_FLOOR_BUFFER, the
-        wrap hasn't been injected yet, and self-heal isn't already wrapping up.
-        Sets the one-shot flag + arms wrap-up capture as a side effect when True.
+        TRULY pure (read-only) so it is forced-testable (STEERING #11) and safe to
+        evaluate more than once — the single caller (``send()``) owns the one-shot
+        commit + log. True when, on a DESKTOP session, turn_count has reached
+        max_turns - HARD_FLOOR_BUFFER, the wrap hasn't been injected yet, and
+        self-heal isn't already wrapping up.
+
+        Reachability: when self-heal is *succeeding*, turn_approaching (-20) heals +
+        resets turn_count before -5 is reached, so the floor stays dormant. It is a
+        last-resort net that DOES fire when self-heal is OFF, exhausted, or in
+        cooldown — not "unreachable on the self-heal-ON path."
         """
         if self.is_channel_session:
             return False
@@ -2549,15 +2558,6 @@ class SessionUnit:
             self._health_sensor._max_turns - HARD_FLOOR_BUFFER
         ):
             return False
-        # Commit: one-shot + arm conclusion capture (AC3: non-empty conclusion).
-        self._hard_floor_wrap_injected = True
-        self._wrapup_conclusion = ""
-        logger.info(
-            "session_unit.hard_floor_wrap_injected session_id=%s turn=%d max=%d",
-            self.session_id,
-            self._health_sensor.turn_count,
-            self._health_sensor._max_turns,
-        )
         return True
 
     def _maybe_build_elapsed_heartbeat(self) -> Optional[dict]:

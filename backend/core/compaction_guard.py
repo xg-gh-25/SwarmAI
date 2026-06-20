@@ -926,20 +926,28 @@ class CompactionGuard:
 
     # ── reset() and reset_all() ──────────────────────────────────
 
-    def reset(self) -> None:
+    def reset(self, *, preserve_turn_budget: bool = False) -> None:
         """Reset per-turn tracking for a new user message.
 
         Clears post-compaction sequence and grace counter but preserves
         escalation level, phase, pre-compaction baseline, context_pct,
         and tool_records.
+
+        ``preserve_turn_budget=True`` keeps the per-turn tool-loop counters
+        (Root 2 / AC6) across an intra-turn continuation boundary (permission
+        grant / question answer). A continuation is the SAME user turn, so a
+        runaway that periodically crosses a permission boundary must keep
+        accumulating toward the budget rather than resetting to zero each time.
+        Only a genuine new user message (``send()``) resets the budget.
         """
         try:
             self._post_compaction_sequence = []
             self._last_pattern_desc = ""
             self._grace_calls_remaining = 0
-            # Per-turn tool-loop budget resets each user turn (Root 2 / AC6).
-            self._turn_tool_count = 0
-            self._turn_start_time = None
+            if not preserve_turn_budget:
+                # New user turn — reset the per-turn tool-loop budget (Root 2 / AC6).
+                self._turn_tool_count = 0
+                self._turn_start_time = None
         except Exception:
             logger.exception("compaction_guard.reset failed")
 

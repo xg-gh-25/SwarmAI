@@ -397,8 +397,15 @@ class StreamingOrchestrator:
                 hb = self._parent._maybe_build_elapsed_heartbeat()
                 if hb is not None:
                     yield hb
-            except Exception:
-                pass  # heartbeat is best-effort — never break the stream
+            except Exception as hb_exc:
+                # Best-effort — never break the stream — but log so a
+                # persistently-throwing heartbeat (e.g. an attribute rename) is
+                # visible rather than silently swallowed for hours.
+                logger.debug(
+                    "streaming_orchestrator.heartbeat_failed session_id=%s: %s",
+                    getattr(self._parent, "session_id", "?"),
+                    f"{type(hb_exc).__name__}: {hb_exc}",
+                )
 
             # Capture SDK session ID from init message
             if hasattr(message, "session_id") and message.session_id:

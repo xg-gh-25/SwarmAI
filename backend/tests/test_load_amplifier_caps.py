@@ -124,8 +124,9 @@ class TestAC2HardNoticeExists:
 class TestAC3TurnHardFloor:
     """G2: at max_turns-5 the session stops gracefully with a conclusion.
 
-    The floor is ONLY reachable when self-heal is OFF — when ON, the
-    turn_approaching trigger (-20) heals + resets turn_count first.
+    The floor stays dormant while self-heal is SUCCEEDING — turn_approaching
+    (-20) heals + resets turn_count before -5 is reached. It still fires as a
+    last-resort net when self-heal is OFF, exhausted, or in cooldown.
     """
 
     def test_hard_floor_trigger_fires_at_max_minus_5(self):
@@ -250,3 +251,44 @@ class TestAC6ToolLoopBudget:
         guard.record_tool_call("ToolB", {"b": 2})
         # The budget path specifically should not be the reason for escalation.
         assert guard._turn_tool_count <= 2
+
+    def test_per_turn_budget_survives_continuation_boundary(self):
+        """reset(preserve_turn_budget=True) keeps the per-turn budget.
+
+        A permission grant / question answer is a CONTINUATION of the same user
+        turn (continue_with_permission / continue_with_answer call reset with
+        preserve_turn_budget=True). A runaway that loops through a permission gate
+        must keep accumulating toward the budget — NOT reset to zero each time.
+        Without this, the AC6 budget is trivially evaded by any loop that crosses
+        a permission boundary every <budget calls.
+        """
+        from core.compaction_guard import _TURN_TOOL_COUNT_BUDGET
+
+        guard = CompactionGuard()
+        # Accumulate just under the budget, then cross a continuation boundary.
+        for i in range(_TURN_TOOL_COUNT_BUDGET - 2):
+            guard.record_tool_call(f"Tool{i}", {"arg": i})
+        before = guard._turn_tool_count
+        guard.reset(preserve_turn_budget=True)  # permission/answer continuation
+        # Counter preserved across the boundary.
+        assert guard._turn_tool_count == before
+        # A few more calls now push it over → escalates (runaway caught).
+        for i in range(4):
+            guard.record_tool_call(f"More{i}", {"arg": i})
+        assert guard._turn_tool_count >= _TURN_TOOL_COUNT_BUDGET
+        assert guard.check() != EscalationLevel.MONITORING
+
+    def test_genuine_new_turn_still_resets_budget(self):
+        """reset() (default, no preserve) on a genuine new user turn clears it.
+
+        send() calls reset() with the default → the budget must zero, so a
+        healthy multi-turn session never false-triggers.
+        """
+        from core.compaction_guard import _TURN_TOOL_COUNT_BUDGET
+
+        guard = CompactionGuard()
+        for i in range(_TURN_TOOL_COUNT_BUDGET - 2):
+            guard.record_tool_call(f"Tool{i}", {"arg": i})
+        guard.reset()  # genuine new user turn (default preserve_turn_budget=False)
+        assert guard._turn_tool_count == 0
+        assert guard._turn_start_time is None

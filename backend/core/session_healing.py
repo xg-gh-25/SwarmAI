@@ -83,11 +83,13 @@ ERROR_CASCADE_THRESHOLD = 3
 TURN_APPROACH_BUFFER = 20
 
 # Hard graceful floor (Root 2 / AC3, G2): an absolute last-resort stop this many
-# turns before max_turns. This is the safety net for when self-heal is OFF/failed
-# — when self-heal is ON, turn_approaching (-20) heals + resets turn_count long
-# before -5 is reached, so this trigger is by-design unreachable on the heal path.
-# Its whole purpose is the self-heal-OFF path: a graceful wrap-up with a preserved
-# conclusion instead of a silent run to the CLI's hard error_max_turns (truncation).
+# turns before max_turns. Safety net for when self-heal cannot carry the wrap-up.
+# While self-heal is SUCCEEDING, turn_approaching (-20) heals + resets turn_count
+# before -5 is reached, so the floor stays dormant on that path. It still fires
+# when self-heal is OFF, has exhausted its attempts, or is in cooldown — delivering
+# a graceful wrap-up instead of a silent run to the CLI's hard error_max_turns
+# (truncation). On the self-heal-ON-but-failing path the heal consumer still kills
+# + --resumes with a rich checkpoint; the floor's added value is the OFF path.
 # MUST be < TURN_APPROACH_BUFFER (closer to the limit than the graceful trigger).
 HARD_FLOOR_BUFFER = 5
 
