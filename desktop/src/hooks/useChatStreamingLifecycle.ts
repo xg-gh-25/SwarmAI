@@ -964,7 +964,7 @@ export function useChatStreamingLifecycle(
   } = deps;
 
   // --- Toast for reconnection notifications ---
-  const { addToast } = useToast();
+  const { addToast, removeToast } = useToast();
 
   // --- Core chat state ---
   const [messages, setMessages] = useState<Message[]>([]);
@@ -1220,6 +1220,14 @@ export function useChatStreamingLifecycle(
                   { toolUseId: pqPayload.toolUseId, questions: pqPayload.questions },
                   { isActive, sessionId: mirrorSid },
                 );
+                // The inline form now hosts the question — retire any no-host
+                // discovery toast we raised on an earlier poll (else it coexists
+                // with the form). surfacePendingQuestion raises its OWN bg-tab
+                // toast, so only clear the no-host one we tracked here.
+                if (tabState._pendingQuestionToastId) {
+                  removeToast(tabState._pendingQuestionToastId);
+                  tabState._pendingQuestionToastId = undefined;
+                }
                 anyCleared = true;
               } else {
                 // No assistant bubble to host the block (question's SSE was lost
@@ -1227,25 +1235,37 @@ export function useChatStreamingLifecycle(
                 // host message, so we can't render the form inline — but the user
                 // must still be able to DISCOVER the pending question. Raise the
                 // persistent "Swarm is asking" toast (idempotent via stable id)
-                // so the tab is not a silent dead-end every 15s poll.
+                // so the tab is not a silent dead-end every 15s poll. Track its id
+                // so it can be retired when the form takes over or the question is
+                // abandoned (else the persistent toast leaks forever).
                 const askTabTitle = tabMapRef.current.get(tabId)?.title ?? 'another tab';
+                const toastId = `ask-uq-${pqPayload.toolUseId}`;
                 addToast({
                   severity: 'info',
                   message: `Swarm is asking a question in "${askTabTitle}".`,
-                  id: `ask-uq-${pqPayload.toolUseId}`,
+                  id: toastId,
                   autoDismiss: false,
                   action: onSelectTab ? { label: 'Go to tab', onClick: () => onSelectTab(tabId) } : undefined,
                 });
+                tabState._pendingQuestionToastId = toastId;
               }
-            } else if (!mirrorState.waitingInput && tabState.pendingQuestion) {
+            } else if (
+              !mirrorState.waitingInput &&
+              (tabState.pendingQuestion || tabState._pendingQuestionToastId)
+            ) {
               // SYMMETRIC RETIRE (mirror is authoritative both ways): the backend
               // is no longer waiting on a question, but the tab still shows one —
               // it was answered elsewhere, abandoned (new chat), or its
               // tool_use resolved. The loop must CLEAR stale questions, not only
               // ADD them, or a dismissed/answered question lingers as a phantom
-              // un-answerable prompt. Clear the ref (all tabs) + React state (active).
+              // un-answerable prompt. Clear the ref (all tabs) + React state (active)
+              // + any leaked no-host discovery toast.
               tabState.pendingQuestion = null;
               tabState._answeredToolUseId = undefined;
+              if (tabState._pendingQuestionToastId) {
+                removeToast(tabState._pendingQuestionToastId);
+                tabState._pendingQuestionToastId = undefined;
+              }
               if (tabId === activeTabIdRef.current) setPendingQuestion(null);
               anyCleared = true;
             } else if (

@@ -193,6 +193,12 @@ export interface UnifiedTab {
    *  loop once the backend transitions past the answered question (no longer
    *  waiting_input, or a different pending toolUseId). */
   _answeredToolUseId?: string;
+  /** Root-1 SSOT Phase 3 (AC5): toolUseId of a re-surfaced question for which a
+   *  discovery toast was raised because no assistant bubble existed to host the
+   *  inline form (no-host path). Tracked so the toast can be RETIRED when the
+   *  question later gets a host (inline form takes over) or is abandoned (backend
+   *  leaves waiting_input) — otherwise the persistent toast leaks forever. */
+  _pendingQuestionToastId?: string;
   /** Root-1 SSOT Phase 3 (AC4): the last_drained_seqs the tab observed on the
    *  previous reconcile poll — compared against the current poll to detect a
    *  server drain and retire the local optimistic queue mirror. */
