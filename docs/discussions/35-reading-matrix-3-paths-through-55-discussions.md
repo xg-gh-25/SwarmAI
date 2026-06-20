@@ -1,10 +1,13 @@
-# Reading Matrix — 3 Paths Through 46 Discussions (Builder / Architect / Leader)
-
-> 📎 [View on GitHub](https://github.com/xg-gh-25/SwarmAI/discussions/35) | Category: General | Published: 2026-05-21 | Updated: 2026-05-23
+---
+created: 2026-06-20
+updated: 2026-06-20
+---
+<!-- https://github.com/xg-gh-25/SwarmAI/discussions/35 -->
+# Reading Matrix — 3 Paths Through 55 Discussions (Builder / Architect / Leader)
 
 ---
 
-> 46 articles, 5 themes, 3 reader paths. Don't read everything. Pick your path.
+> 55 discussions, 5 themes, 3 reader paths. Don't read everything. Pick your path.
 
 **Base URL:** `https://github.com/xg-gh-25/SwarmAI/discussions/`
 
@@ -48,8 +51,13 @@ Then pick your path ↓
 **Optional deep dives:**
 - [The Hidden Defaults That Break Your AI Agent — Claude Code CLI's Undocumented Limits](https://github.com/xg-gh-25/SwarmAI/discussions/56) (if you're building on Claude Code SDK — the undocumented `maxTurns=100` and `task_budget=128K` that silently break autonomous pipelines)
 - [From Zero to Ship in One Session — Building an AI-Ready Engine](https://github.com/xg-gh-25/SwarmAI/discussions/55) (if you want to see "Coding as Black Box" in action — one sentence to shipped CLI tool in 4 hours)
+- [Your AI Agent Can't "Just Read" a 500K-Line Codebase](https://github.com/xg-gh-25/SwarmAI/discussions/49) (EN) / [中文版](https://github.com/xg-gh-25/SwarmAI/discussions/50) (if your agent is "understanding" code by reading README only)
+- [AI-Ready Repo Standard — Why CLAUDE.md Is Not Enough](https://github.com/xg-gh-25/SwarmAI/discussions/51) (EN) / [中文版](https://github.com/xg-gh-25/SwarmAI/discussions/52) (if you want to make your codebase genuinely AI-understood)
+- [Agent Harness 避坑指南](https://github.com/xg-gh-25/SwarmAI/discussions/54) (CN — if you're building a harness and want to avoid the top pitfalls)
+- [Autonomous Pipeline v3 — Dual-Mode Execution](https://github.com/xg-gh-25/SwarmAI/discussions/68) (if you want to see how "Coding as Black Box" evolved into a dual-mode pipeline architecture)
 - ["Dreaming" Is Just Note-Taking — The Real Evolution Happens Elsewhere](https://github.com/xg-gh-25/SwarmAI/discussions/45) (if you've heard about Claude Code's "dreaming" and wonder if it's magic — spoiler: it's L0 note-taking with an architectural gap)
 - [DDD Cultivation — domain knowledge that grows from work](https://github.com/xg-gh-25/SwarmAI/discussions/9) (intro) → [DDD Full Story — decisions, failures, evidence](https://github.com/xg-gh-25/SwarmAI/discussions/40) (deep dive) / [中文版](https://github.com/xg-gh-25/SwarmAI/discussions/41)
+- [DDD Knowledge Governance — Practical Ontology](https://github.com/xg-gh-25/SwarmAI/discussions/59) (if you want the code-level implementation of DDD governance with 7-type MECE ontology)
 - [Time Symmetry — session boundaries as learning boundaries](https://github.com/xg-gh-25/SwarmAI/discussions/14) (if you want smarter session lifecycle)
 - [Memory Architecture Poll — what's your pattern?](https://github.com/xg-gh-25/SwarmAI/discussions/17) (if you're choosing an approach)
 
@@ -78,8 +86,16 @@ Then pick your path ↓
 | 7 | [Adversarial Review — mechanical quality gates](https://github.com/xg-gh-25/SwarmAI/discussions/29) | Trust but verify, structurally | 8 |
 
 **Optional deep dives:**
+- [The Three Cracks in Multi-Agent](https://github.com/xg-gh-25/SwarmAI/discussions/44) (if you're still debating multi-agent — the 3 structural failure modes that more agents = worse judgment)
 - [The Hidden Defaults That Break Your AI Agent](https://github.com/xg-gh-25/SwarmAI/discussions/56) (if you're embedding Claude Code as SDK — maxTurns, task_budget, autoCompact pitfalls)
 - [From Zero to Ship in One Session](https://github.com/xg-gh-25/SwarmAI/discussions/55) (live case study: DDD + pipeline + adversarial review delivers a CLI tool from one sentence)
+- [Autonomous Pipeline v3 — Dual-Mode Execution](https://github.com/xg-gh-25/SwarmAI/discussions/68) (the pipeline architecture: AIDLC 10-stage + dual-mode + mechanical gates)
+- [Your AI Agent Can't "Just Read" a 500K-Line Codebase](https://github.com/xg-gh-25/SwarmAI/discussions/49) (EN) / [中文版](https://github.com/xg-gh-25/SwarmAI/discussions/50) (if you're solving code understanding at scale — graph-based vs RAG vs hybrid)
+- [AI-Ready Repo Standard](https://github.com/xg-gh-25/SwarmAI/discussions/51) (EN) / [中文版](https://github.com/xg-gh-25/SwarmAI/discussions/52) (the standard for making any codebase genuinely AI-understood)
+- [DDD Knowledge Governance — Practical Ontology](https://github.com/xg-gh-25/SwarmAI/discussions/59) (7-type MECE ontology + Darwinian decay + stage injection — with code samples)
+- [Skill Portability is a Distribution Problem](https://github.com/xg-gh-25/SwarmAI/discussions/61) (if you're thinking about skill/plugin ecosystems — why packaging isn't the hard part)
+- [OS Eval vs AgentCore Eval — Proprioception vs Diagnostic Imaging](https://github.com/xg-gh-25/SwarmAI/discussions/74) (agent self-evaluation architecture comparison: internal proprioception vs external testing)
+- [Karpathy's LLM Wiki Is a Manifesto for What We Already Built](https://github.com/xg-gh-25/SwarmAI/discussions/53) (if you're designing persistent knowledge — why Karpathy's vision maps 1:1 to DDD)
 - ["Dreaming" Is Just Note-Taking](https://github.com/xg-gh-25/SwarmAI/discussions/45) (if you're designing agent self-improvement — why L0 memory consolidation plateaus and what L1-L3 looks like)
 - [Agent Memory Architecture — 4-Layer Progressive System](https://github.com/xg-gh-25/SwarmAI/discussions/37) (if you're designing the memory subsystem — FTS5, vectors, distillation)
 - [AI Agent for Data — from hallucination to precision](https://github.com/xg-gh-25/SwarmAI/discussions/36) (if you're connecting agents to business data — semantic contracts, certified queries)
@@ -87,6 +103,7 @@ Then pick your path ↓
 - [No Neo4j — Lightweight Ontology in Practice](https://github.com/xg-gh-25/SwarmAI/discussions/20) (if you're choosing knowledge representation)
 - [Content as Black Box — message in, media out](https://github.com/xg-gh-25/SwarmAI/discussions/5) (if you want multi-engine delivery)
 - [Time Symmetry — session = learning boundary](https://github.com/xg-gh-25/SwarmAI/discussions/14) (if you're designing session lifecycle)
+- [Agent Harness 避坑指南](https://github.com/xg-gh-25/SwarmAI/discussions/54) (CN — common harness pitfalls from production experience)
 
 **After this path, you can:**
 - Design a harness architecture that separates engine from control plane
@@ -94,6 +111,7 @@ Then pick your path ↓
 - Implement a 3-layer governance model (principles → rules → mechanical gates)
 - Design a 4-layer memory system (injection → progressive → FTS5 recall → RAG)
 - Spot the compliance failure mode before it ships (personality trap)
+- Build an agent self-evaluation system (proprioception vs external diagnostic)
 
 ---
 
@@ -110,6 +128,7 @@ Then pick your path ↓
 | 5 | [Four Startup Stages — same stages, different bottlenecks](https://github.com/xg-gh-25/SwarmAI/discussions/16) | Where AI changes the game at each phase | 5 |
 | 6 | [Same Pattern at Every Scale — AI replaces routing, not people](https://github.com/xg-gh-25/SwarmAI/discussions/28) | The org design implication | 5 |
 | 7 | [Stop Selling, Start Showing — "Live Demo of Yourself" > pitch deck](https://github.com/xg-gh-25/SwarmAI/discussions/46) | How to actually communicate AI transformation to CXOs | 6 |
+| 8 | [One Builder + AI = One Team. Here's the Proof.](https://github.com/xg-gh-25/SwarmAI/discussions/47) | The thesis — one person + AI operating at team scale | 6 |
 
 **Optional:**
 - [AI Agent for Data — from hallucination to precision](https://github.com/xg-gh-25/SwarmAI/discussions/36) (if your team is connecting AI to business data — the accuracy/security/scalability tradeoffs)
@@ -122,6 +141,7 @@ Then pick your path ↓
 - Make a build-vs-buy decision on agent infrastructure with clear criteria
 - Explain to your team why "AI replaces routing, not people" — and what that means for org design
 - Pitch AI transformation to CXOs without a deck — using your own experience as proof
+- Articulate the "one builder + AI = one team" thesis with concrete evidence
 
 ---
 
@@ -148,12 +168,22 @@ Then pick your path ↓
 |---|-------|:----:|----------|---------|
 | [15](https://github.com/xg-gh-25/SwarmAI/discussions/15) | [Agent Harness Landscape](https://github.com/xg-gh-25/SwarmAI/discussions/15) | EN | Market map, different Qs not better As | → [#33](https://github.com/xg-gh-25/SwarmAI/discussions/33) |
 | [12](https://github.com/xg-gh-25/SwarmAI/discussions/12) | [Multi-Skill > Multi-Agent](https://github.com/xg-gh-25/SwarmAI/discussions/12) | EN | Role-switching beats coordination tax | ~ [#33](https://github.com/xg-gh-25/SwarmAI/discussions/33) |
+| [44](https://github.com/xg-gh-25/SwarmAI/discussions/44) | [The Three Cracks in Multi-Agent](https://github.com/xg-gh-25/SwarmAI/discussions/44) | EN | More agents = worse judgment (3 structural failure modes) | → [#12](https://github.com/xg-gh-25/SwarmAI/discussions/12), → [#43](https://github.com/xg-gh-25/SwarmAI/discussions/43) |
 | [10](https://github.com/xg-gh-25/SwarmAI/discussions/10) | [Compound Agent Intelligence](https://github.com/xg-gh-25/SwarmAI/discussions/10) | EN | Design beliefs as compiler guarantees | → [#7](https://github.com/xg-gh-25/SwarmAI/discussions/7), ~ [#8](https://github.com/xg-gh-25/SwarmAI/discussions/8) |
 | [8](https://github.com/xg-gh-25/SwarmAI/discussions/8) | [Six Self-X Properties](https://github.com/xg-gh-25/SwarmAI/discussions/8) | EN | Self-heal/learn/improve/observe/evolve/compound | → [#3](https://github.com/xg-gh-25/SwarmAI/discussions/3) |
 | [9](https://github.com/xg-gh-25/SwarmAI/discussions/9) | [DDD Cultivation](https://github.com/xg-gh-25/SwarmAI/discussions/9) | EN | Domain knowledge that grows from work | → [#6](https://github.com/xg-gh-25/SwarmAI/discussions/6) |
+| [59](https://github.com/xg-gh-25/SwarmAI/discussions/59) | [DDD Knowledge Governance — Practical Ontology](https://github.com/xg-gh-25/SwarmAI/discussions/59) | EN | 7-type MECE ontology + Darwinian decay + stage injection (with code) | → [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9), ~ [#40](https://github.com/xg-gh-25/SwarmAI/discussions/40) |
 | [14](https://github.com/xg-gh-25/SwarmAI/discussions/14) | [Time Symmetry](https://github.com/xg-gh-25/SwarmAI/discussions/14) | EN | Session = learning boundary, not idle boundary | → [#3](https://github.com/xg-gh-25/SwarmAI/discussions/3), ~ [#8](https://github.com/xg-gh-25/SwarmAI/discussions/8) |
 | [4](https://github.com/xg-gh-25/SwarmAI/discussions/4) | [Coding as Black Box](https://github.com/xg-gh-25/SwarmAI/discussions/4) | EN | Requirement → verified delivery, no hand-holding | ~ [#33](https://github.com/xg-gh-25/SwarmAI/discussions/33) |
+| [68](https://github.com/xg-gh-25/SwarmAI/discussions/68) | [Autonomous Pipeline v3 — Dual-Mode Execution](https://github.com/xg-gh-25/SwarmAI/discussions/68) | EN | AIDLC 10-stage + dual-mode + mechanical gates | → [#4](https://github.com/xg-gh-25/SwarmAI/discussions/4), ~ [#29](https://github.com/xg-gh-25/SwarmAI/discussions/29) |
 | [5](https://github.com/xg-gh-25/SwarmAI/discussions/5) | [Content as Black Box](https://github.com/xg-gh-25/SwarmAI/discussions/5) | EN | Message → published media, format follows | → [#4](https://github.com/xg-gh-25/SwarmAI/discussions/4) |
+| [49](https://github.com/xg-gh-25/SwarmAI/discussions/49) | [Your AI Agent Can't "Just Read" a 500K-Line Codebase](https://github.com/xg-gh-25/SwarmAI/discussions/49) | EN | Graph-based code intelligence at scale | ~ [#4](https://github.com/xg-gh-25/SwarmAI/discussions/4), ~ [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9) |
+| [50](https://github.com/xg-gh-25/SwarmAI/discussions/50) | [你的 AI Agent 读不懂 50 万行代码](https://github.com/xg-gh-25/SwarmAI/discussions/50) | CN | 同上中文版 | ~ [#4](https://github.com/xg-gh-25/SwarmAI/discussions/4), ~ [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9) |
+| [51](https://github.com/xg-gh-25/SwarmAI/discussions/51) | [AI-Ready Repo Standard — Why CLAUDE.md Is Not Enough](https://github.com/xg-gh-25/SwarmAI/discussions/51) | EN | The open standard for AI-understood codebases | ~ [#49](https://github.com/xg-gh-25/SwarmAI/discussions/49), ~ [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9) |
+| [52](https://github.com/xg-gh-25/SwarmAI/discussions/52) | [AI-Ready Repo 标准](https://github.com/xg-gh-25/SwarmAI/discussions/52) | CN | 同上中文版 | ~ [#50](https://github.com/xg-gh-25/SwarmAI/discussions/50), ~ [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9) |
+| [53](https://github.com/xg-gh-25/SwarmAI/discussions/53) | [Karpathy's LLM Wiki Is a Manifesto](https://github.com/xg-gh-25/SwarmAI/discussions/53) | EN | Karpathy's vision maps 1:1 to DDD — and the gap we closed | → [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9), ~ [#37](https://github.com/xg-gh-25/SwarmAI/discussions/37) |
+| [61](https://github.com/xg-gh-25/SwarmAI/discussions/61) | [Skill Portability is a Distribution Problem](https://github.com/xg-gh-25/SwarmAI/discussions/61) | EN | Why skill/plugin ecosystems fail at packaging, not capability | ~ [#4](https://github.com/xg-gh-25/SwarmAI/discussions/4), ~ [#12](https://github.com/xg-gh-25/SwarmAI/discussions/12) |
+| [74](https://github.com/xg-gh-25/SwarmAI/discussions/74) | [OS Eval vs AgentCore Eval — Proprioception vs Diagnostic](https://github.com/xg-gh-25/SwarmAI/discussions/74) | EN | Agent self-evaluation: internal proprioception vs external testing | ~ [#8](https://github.com/xg-gh-25/SwarmAI/discussions/8), ~ [#59](https://github.com/xg-gh-25/SwarmAI/discussions/59) |
 | [20](https://github.com/xg-gh-25/SwarmAI/discussions/20) | [No Neo4j — Lightweight Ontology](https://github.com/xg-gh-25/SwarmAI/discussions/20) | EN | Darwinian knowledge > graph database | → [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9) |
 | [19](https://github.com/xg-gh-25/SwarmAI/discussions/19) | [AI Agent 不需要 Neo4j](https://github.com/xg-gh-25/SwarmAI/discussions/19) | CN | 同上中文版 | → [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9) |
 | [36](https://github.com/xg-gh-25/SwarmAI/discussions/36) | [AI Agent for Data — 从幻觉到精准](https://github.com/xg-gh-25/SwarmAI/discussions/36) | Mix | Semantic contracts + certified queries for data agents | ~ [#4](https://github.com/xg-gh-25/SwarmAI/discussions/4), ~ [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9) |
@@ -162,6 +192,7 @@ Then pick your path ↓
 | [41](https://github.com/xg-gh-25/SwarmAI/discussions/41) | [DDD Cultivation — 完整故事](https://github.com/xg-gh-25/SwarmAI/discussions/41) | CN | 同上中文版 | → [#9](https://github.com/xg-gh-25/SwarmAI/discussions/9), ~ [#19](https://github.com/xg-gh-25/SwarmAI/discussions/19) |
 | [43](https://github.com/xg-gh-25/SwarmAI/discussions/43) | [Why We Chose Single-Agent](https://github.com/xg-gh-25/SwarmAI/discussions/43) | EN | CrewAI/LangGraph validate single-process | → [#12](https://github.com/xg-gh-25/SwarmAI/discussions/12) |
 | [45](https://github.com/xg-gh-25/SwarmAI/discussions/45) | ["Dreaming" Is Just Note-Taking](https://github.com/xg-gh-25/SwarmAI/discussions/45) | EN | L0 memory ≠ evolution, L1-L3 is where judgment improves | → [#3](https://github.com/xg-gh-25/SwarmAI/discussions/3), ~ [#37](https://github.com/xg-gh-25/SwarmAI/discussions/37) |
+| [54](https://github.com/xg-gh-25/SwarmAI/discussions/54) | [Agent Harness 避坑指南](https://github.com/xg-gh-25/SwarmAI/discussions/54) | CN | Production harness pitfalls and solutions | ~ [#33](https://github.com/xg-gh-25/SwarmAI/discussions/33), ~ [#29](https://github.com/xg-gh-25/SwarmAI/discussions/29) |
 | [55](https://github.com/xg-gh-25/SwarmAI/discussions/55) | [From Zero to Ship in One Session](https://github.com/xg-gh-25/SwarmAI/discussions/55) | EN | Live case: DDD + pipeline + adversarial delivers CLI from 1 sentence | → [#4](https://github.com/xg-gh-25/SwarmAI/discussions/4), ~ [#29](https://github.com/xg-gh-25/SwarmAI/discussions/29) |
 | [56](https://github.com/xg-gh-25/SwarmAI/discussions/56) | [The Hidden Defaults That Break Your AI Agent](https://github.com/xg-gh-25/SwarmAI/discussions/56) | EN | Claude Code SDK undocumented limits: maxTurns=100, task_budget=128K | ~ [#4](https://github.com/xg-gh-25/SwarmAI/discussions/4), ~ [#33](https://github.com/xg-gh-25/SwarmAI/discussions/33) |
 
@@ -186,6 +217,7 @@ Then pick your path ↓
 | [16](https://github.com/xg-gh-25/SwarmAI/discussions/16) | [Four Startup Stages](https://github.com/xg-gh-25/SwarmAI/discussions/16) | EN | Same stages, AI shifts the bottleneck | None |
 | [28](https://github.com/xg-gh-25/SwarmAI/discussions/28) | [Same Pattern at Every Scale](https://github.com/xg-gh-25/SwarmAI/discussions/28) | EN | AI replaces routing, not people | ~ [#11](https://github.com/xg-gh-25/SwarmAI/discussions/11) |
 | [46](https://github.com/xg-gh-25/SwarmAI/discussions/46) | [Stop Selling, Start Showing](https://github.com/xg-gh-25/SwarmAI/discussions/46) | EN | "Live Demo of Yourself" > pitch deck | ~ [#28](https://github.com/xg-gh-25/SwarmAI/discussions/28) |
+| [47](https://github.com/xg-gh-25/SwarmAI/discussions/47) | [One Builder + AI = One Team](https://github.com/xg-gh-25/SwarmAI/discussions/47) | EN | The thesis — proof that one person + AI = team-scale output | ~ [#46](https://github.com/xg-gh-25/SwarmAI/discussions/46) |
 
 ### Theme 5: Community / Interactive
 
@@ -218,8 +250,15 @@ Then pick your path ↓
   ┌──────┐  ┌──────┐ ┌──────┐ ┌──────┐  ┌──────────┐
   │#8 6X │  │#9 DDD│ │#12   │ │#10   │  │#7 Compound│
   │Props │  │Cultiv│ │Multi │ │Compnd│  │Intelligence│
-  └──┬───┘  └──────┘ │Skill │ │Intel │  └───────────┘
-     │               └──────┘ └──────┘
+  └──┬───┘  └──┬───┘ │Skill │ │Intel │  └───────────┘
+     │         │     └──┬───┘ └──────┘
+     │         │        │
+     │         ▼        ▼
+     │      ┌──────┐ ┌──────┐
+     │      │#59   │ │#43/44│
+     │      │Ontol │ │Single│
+     │      └──────┘ │Agent │
+     │               └──────┘
      ▼
   ┌──────────────────────────┐
   │ #26/27 Three-Layer Gov   │
@@ -231,7 +270,14 @@ Then pick your path ↓
    │#31/32││#29/30││#21/22│
    │Person││Adver ││Gov   │
    │Trap  ││Review││(long)│
-   └──────┘└──────┘└──────┘
+   └──────┘└──┬───┘└──────┘
+              │
+              ▼
+           ┌──────┐
+           │#68   │
+           │Pipeln│
+           │v3    │
+           └──────┘
 ```
 
 ---
@@ -278,28 +324,32 @@ Then pick your path ↓
 | [41](https://github.com/xg-gh-25/SwarmAI/discussions/41) | [DDD Cultivation — 完整故事](https://github.com/xg-gh-25/SwarmAI/discussions/41) | Architecture | CN |
 | [42](https://github.com/xg-gh-25/SwarmAI/discussions/42) | [100 ⭐ — Thank You (and What's Next)](https://github.com/xg-gh-25/SwarmAI/discussions/42) | Community | EN |
 | [43](https://github.com/xg-gh-25/SwarmAI/discussions/43) | [Why We Chose Single-Agent](https://github.com/xg-gh-25/SwarmAI/discussions/43) | Architecture | EN |
+| [44](https://github.com/xg-gh-25/SwarmAI/discussions/44) | [The Three Cracks in Multi-Agent](https://github.com/xg-gh-25/SwarmAI/discussions/44) | Architecture | EN |
 | [45](https://github.com/xg-gh-25/SwarmAI/discussions/45) | ["Dreaming" Is Just Note-Taking](https://github.com/xg-gh-25/SwarmAI/discussions/45) | Architecture | EN |
 | [46](https://github.com/xg-gh-25/SwarmAI/discussions/46) | [Stop Selling, Start Showing](https://github.com/xg-gh-25/SwarmAI/discussions/46) | Strategy | EN |
-| [47](https://github.com/xg-gh-25/SwarmAI/discussions/47) | [One Builder + AI = One Team. Here's the Proof.](https://github.com/xg-gh-25/SwarmAI/discussions/47) | Strategy | EN |
+| [47](https://github.com/xg-gh-25/SwarmAI/discussions/47) | [One Builder + AI = One Team](https://github.com/xg-gh-25/SwarmAI/discussions/47) | Strategy | EN |
 | [49](https://github.com/xg-gh-25/SwarmAI/discussions/49) | [Your AI Agent Can't "Just Read" a 500K-Line Codebase](https://github.com/xg-gh-25/SwarmAI/discussions/49) | Architecture | EN |
 | [50](https://github.com/xg-gh-25/SwarmAI/discussions/50) | [你的 AI Agent 读不懂 50 万行代码](https://github.com/xg-gh-25/SwarmAI/discussions/50) | Architecture | CN |
 | [51](https://github.com/xg-gh-25/SwarmAI/discussions/51) | [AI-Ready Repo Standard — Why CLAUDE.md Is Not Enough](https://github.com/xg-gh-25/SwarmAI/discussions/51) | Architecture | EN |
-| [52](https://github.com/xg-gh-25/SwarmAI/discussions/52) | [AI-Ready Repo 标准 — 为什么 CLAUDE.md 不够用](https://github.com/xg-gh-25/SwarmAI/discussions/52) | Architecture | CN |
-| [53](https://github.com/xg-gh-25/SwarmAI/discussions/53) | [Karpathy's LLM Wiki Is a Manifesto for What We Already Built](https://github.com/xg-gh-25/SwarmAI/discussions/53) | Architecture | EN |
+| [52](https://github.com/xg-gh-25/SwarmAI/discussions/52) | [AI-Ready Repo 标准](https://github.com/xg-gh-25/SwarmAI/discussions/52) | Architecture | CN |
+| [53](https://github.com/xg-gh-25/SwarmAI/discussions/53) | [Karpathy's LLM Wiki Is a Manifesto](https://github.com/xg-gh-25/SwarmAI/discussions/53) | Architecture | EN |
 | [54](https://github.com/xg-gh-25/SwarmAI/discussions/54) | [Agent Harness 避坑指南](https://github.com/xg-gh-25/SwarmAI/discussions/54) | Architecture | CN |
 | [55](https://github.com/xg-gh-25/SwarmAI/discussions/55) | [From Zero to Ship in One Session](https://github.com/xg-gh-25/SwarmAI/discussions/55) | Architecture | EN |
 | [56](https://github.com/xg-gh-25/SwarmAI/discussions/56) | [The Hidden Defaults That Break Your AI Agent](https://github.com/xg-gh-25/SwarmAI/discussions/56) | Architecture | EN |
+| [59](https://github.com/xg-gh-25/SwarmAI/discussions/59) | [DDD Knowledge Governance — Practical Ontology](https://github.com/xg-gh-25/SwarmAI/discussions/59) | Architecture | EN |
+| [61](https://github.com/xg-gh-25/SwarmAI/discussions/61) | [Skill Portability is a Distribution Problem](https://github.com/xg-gh-25/SwarmAI/discussions/61) | Architecture | EN |
+| [68](https://github.com/xg-gh-25/SwarmAI/discussions/68) | [Autonomous Pipeline v3 — Dual-Mode Execution](https://github.com/xg-gh-25/SwarmAI/discussions/68) | Architecture | EN |
+| [74](https://github.com/xg-gh-25/SwarmAI/discussions/74) | [OS Eval vs AgentCore Eval — Proprioception vs Diagnostic](https://github.com/xg-gh-25/SwarmAI/discussions/74) | Architecture | EN |
 
 ---
 
 ## Quick Stats
 
-- **Total discussions:** 54 (including Welcome + Reading Matrix)
-- **Bilingual pairs (EN+CN):** 10 pairs (20 discussions)
-- **English only:** 28
-- **Mixed/bilingual single:** 6
-- **Themes:** Foundations (8), Architecture (26), Governance (8), Strategy (6), Community (4)
+- **Total discussions:** 55 (including Welcome + Reading Matrix)
+- **Content articles:** 53
+- **Bilingual pairs (EN+CN):** 11 pairs (22 discussions)
+- **English only:** 26
+- **Mixed/bilingual single:** 5
+- **Themes:** Foundations (8), Architecture (31), Governance (8), Strategy (5), Community (4)
 - **Avg reading time per article:** ~5-8 min
-- **Path A total:** ~50 min | **Path B:** ~65 min | **Path C:** ~41 min
-
-
+- **Path A total:** ~50 min | **Path B:** ~65 min | **Path C:** ~47 min
