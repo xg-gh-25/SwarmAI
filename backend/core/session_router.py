@@ -1107,11 +1107,18 @@ class SessionRouter:
         # queued event immediately (user sees "Waiting..." not silence)
         from .resource_monitor import resource_monitor as _rm_check
         _current_max = _rm_check.compute_max_tabs()
+        # Mirror _evict_idle's candidate filter: a unit that is IDLE but still
+        # generating after an SSE disconnect is NOT evictable, so it must not
+        # count as a free-able slot here — otherwise we skip the "queued"
+        # indicator and then fail to evict, falling through to QUEUE_TIMEOUT
+        # without ever telling the user they were waiting.
         needs_queue = (
             not unit.is_alive
             and self.alive_count >= _current_max
             and not any(
-                u.state == SessionState.IDLE and u is not unit
+                u.state == SessionState.IDLE
+                and not u.is_generating_after_disconnect
+                and u is not unit
                 for u in self._units.values()
             )
         )

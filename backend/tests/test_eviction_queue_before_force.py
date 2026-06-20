@@ -41,6 +41,10 @@ def _make_unit(session_id: str, state: SessionState, idle_seconds: float = 0,
                               SessionState.WAITING_INPUT)
     unit._hooks_enqueued = False
     unit.kill = AsyncMock()
+    # Post-disconnect generating flag — real SessionUnit exposes this as a
+    # property returning bool; MagicMock would return a truthy Mock and be
+    # wrongly excluded from eviction candidates. Default False = evictable.
+    unit.is_generating_after_disconnect = False
     metrics = MagicMock()
     metrics.rss_bytes = rss_bytes
     unit._last_metrics = metrics
