@@ -944,12 +944,20 @@ class PromptBuilder:
 
         Returns a ThinkingConfig dict or None (which lets the SDK decide).
 
-        ⚠️ Do NOT add a ``display`` key to the dicts returned here. Although the
-        pinned SDK (>=0.2.87) would honor it, older SDK builds on some dev
-        machines silently drop unknown thinking-dict subfields (PIT59). Thinking
-        display is transported version-robustly via ``extra_args["thinking-display"]``
-        — see :meth:`_build_thinking_display`. Keeping display out of this dict also
-        guarantees no double-flag with the newer SDK's native forwarding.
+        ⚠️ KNOWN LIMITATION — desktop thinking renders EMPTY on Bedrock, and no
+        transport fixes it. The bundled ``claude`` CLI gates the thinking
+        ``display`` field behind a *provider allow-list* (first-party Anthropic
+        API, AWS-platform, Azure foundry) and STRIPS it for Bedrock + Vertex.
+        On our Bedrock path, neither a ``display`` key in this dict NOR
+        ``extra_args["thinking-display"]`` reaches the request body — the CLI
+        drops it before send. Verified empirically (CLI 2.1.183 AND 2.1.185):
+        dict-display, extra_args, and control all yield 0 thinking chars, while
+        raw boto3 with ``display="summarized"`` yields 187 chars. So this is an
+        UPSTREAM CLI BUG, not a Bedrock platform limitation (the backend returns
+        the summary when asked directly). Tracking: anthropics/claude-code#63358
+        (open). See SwarmAI/IMPROVEMENT.md. Until the CLI adds Bedrock to its
+        allow-list, do not bother adding ``display`` here — it is a dead write.
+        (Also keeps PIT59 satisfied: no unknown subfield for older SDKs to drop.)
         """
         # Defensive: config is contractually an AppConfigManager (always
         # truthy), so this only fires if a caller passes None. Using `is None`
@@ -1022,20 +1030,31 @@ class PromptBuilder:
         ``"summarized"`` (Opus 4.6) to ``"omitted"``. Under ``"omitted"`` the
         model still produces thinking blocks but streams them with EMPTY text —
         so the desktop UI shows a "Thinking…" spinner with no reasoning content.
-        Setting ``--thinking-display summarized`` restores the visible summary.
+        Setting ``--thinking-display summarized`` is *intended* to restore the
+        visible summary.
 
-        **Transport note (version-robust):** carried via
-        ``extra_args["thinking-display"]`` (rendered by the SDK as
-        ``--thinking-display <value>``), NOT via a ``display`` key in the thinking
-        config dict. Rationale: the pinned SDK (claude-agent-sdk >=0.2.87) DOES
-        support ``ThinkingConfigAdaptive.display`` and forwards it, but older SDK
-        builds (e.g. 0.1.x still present on some dev machines' global interpreter)
-        read only ``thinking["type"]`` and silently drop the ``display`` subfield
-        (PIT59). ``extra_args`` works identically on BOTH — version-agnostic and
-        downgrade-safe — at zero cost. The ``extra_args`` key MUST be dash-free
-        (``"thinking-display"``, not ``"--thinking-display"``): the SDK prepends
-        ``--``, so a dashed key renders as ``----thinking-display`` and silently
-        no-ops. We never set the dict ``display`` key, so there is no double-flag.
+        ⚠️ KNOWN LIMITATION (ineffective on Bedrock — upstream CLI bug):
+        On our Bedrock path this flag is a NO-OP. The bundled ``claude`` CLI
+        gates the thinking ``display`` field behind a provider allow-list
+        (first-party Anthropic API, AWS-platform, Azure foundry) and STRIPS it
+        for Bedrock + Vertex before building the request — so the value we emit
+        here never reaches the API. This is NOT a Bedrock platform limitation:
+        the Bedrock backend honors ``display="summarized"`` when sent via raw
+        boto3 (verified: 187 chars of summary). It is an upstream CLI omission
+        (Bedrock left off the allow-list). Tracking: anthropics/claude-code#63358
+        (open, no maintainer fix as of 2026-06-21; reproduced on CLI 2.1.183 AND
+        the 2.1.185 pre-release). We keep emitting the flag anyway because it is
+        free, harmless, and becomes correct the moment the CLI adds Bedrock to
+        its allow-list — no code change needed on our side when upstream lands.
+
+        **Transport:** carried via ``extra_args["thinking-display"]`` (rendered
+        by the SDK as ``--thinking-display <value>``), NOT via a ``display`` key
+        in the thinking config dict — see :meth:`_build_thinking_config`. The
+        ``extra_args`` key MUST be dash-free (``"thinking-display"``, not
+        ``"--thinking-display"``): the SDK prepends ``--``, so a dashed key
+        renders as ``----thinking-display`` and silently no-ops. (Neither
+        transport currently works on Bedrock per the limitation above; this note
+        documents the intended wiring for when the CLI is fixed.)
 
         Returns ``"summarized"`` for desktop sessions with thinking active, or
         ``None`` when no flag should be emitted:
