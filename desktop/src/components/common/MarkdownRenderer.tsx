@@ -470,7 +470,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
         {/* Diagram content */}
         <div
           ref={containerRef}
-          className="p-4 overflow-x-auto flex justify-center"
+          className="p-4 overflow-x-auto flex justify-center-safe"
           dangerouslySetInnerHTML={{ __html: svg }}
         />
       </div>
