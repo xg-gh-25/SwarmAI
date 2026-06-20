@@ -764,9 +764,26 @@ async def get_streaming_state_endpoint():
             unit.state.value == "streaming"
             or unit.is_generating_after_disconnect
         )
+        # Root-1 SSOT Phase 2 (L5): the frontend mirror reads these directly
+        # instead of inferring. waiting_input surfaces a (possibly SSE-lost)
+        # AskUserQuestion; pending_count drives the "queued" badge; pending_question
+        # lets the FE RE-RENDER the question from authoritative state even when the
+        # original ask_user_question SSE event was dropped (F5).
+        try:
+            from core import session_pending
+            pending_count = session_pending.count_pending(unit.session_id)
+        except Exception:
+            pending_count = 0
         result[unit.session_id] = {
             "streaming": is_streaming,
             "state": unit.state.value,
+            "waiting_input": unit.state.value == "waiting_input",
+            "pending_count": pending_count,
+            "pending_question": (
+                getattr(unit, "_pending_question", None)
+                if unit.state.value == "waiting_input" else None
+            ),
+            "last_drained_seqs": getattr(unit, "_last_drained_seqs", []),
         }
     return {"sessions": result}
 

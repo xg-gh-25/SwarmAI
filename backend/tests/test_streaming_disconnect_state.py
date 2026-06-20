@@ -197,6 +197,56 @@ class TestStreamingStateEndpoint:
 
         assert "prewarm-123" not in result["sessions"]
 
+    @pytest.mark.asyncio
+    async def test_read_api_surfaces_waiting_input_and_pending_question(self, mock_router):
+        """Root-1 SSOT Phase 2 (L5/AC6): a WAITING_INPUT session exposes
+        waiting_input=True + the pending_question payload (F5 — re-renderable even
+        if the ask_user_question SSE event was lost)."""
+        from core.session_unit import SessionState
+
+        unit = MagicMock()
+        unit.session_id = "session-wi"
+        unit.state = SessionState.WAITING_INPUT
+        unit.is_generating_after_disconnect = False
+        unit._pending_question = {"tool_use_id": "t1", "questions": [{"question": "Pick?"}]}
+        unit._last_drained_seqs = []
+
+        mock_router.list_units.return_value = [unit]
+
+        with patch("routers.chat._get_router", return_value=mock_router):
+            from routers.chat import get_streaming_state_endpoint
+            result = await get_streaming_state_endpoint()
+
+        entry = result["sessions"]["session-wi"]
+        assert entry["waiting_input"] is True
+        assert entry["state"] == "waiting_input"
+        assert entry["pending_question"]["tool_use_id"] == "t1"
+        assert "pending_count" in entry  # field present even when 0
+
+    @pytest.mark.asyncio
+    async def test_read_api_hides_pending_question_when_idle(self, mock_router):
+        """pending_question is None unless the session is WAITING_INPUT (no leak of
+        a stale question into an idle session's mirror)."""
+        from core.session_unit import SessionState
+
+        unit = MagicMock()
+        unit.session_id = "session-idle"
+        unit.state = SessionState.IDLE
+        unit.is_generating_after_disconnect = False
+        unit._pending_question = {"tool_use_id": "stale", "questions": []}
+        unit._last_drained_seqs = [3, 4]
+
+        mock_router.list_units.return_value = [unit]
+
+        with patch("routers.chat._get_router", return_value=mock_router):
+            from routers.chat import get_streaming_state_endpoint
+            result = await get_streaming_state_endpoint()
+
+        entry = result["sessions"]["session-idle"]
+        assert entry["waiting_input"] is False
+        assert entry["pending_question"] is None  # not surfaced when idle
+        assert entry["last_drained_seqs"] == [3, 4]  # drain hint surfaced
+
 
 class TestFlagClearingPaths:
     """Test that _generating_after_disconnect is cleared in all expected paths."""
