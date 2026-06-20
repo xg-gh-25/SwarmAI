@@ -30,7 +30,6 @@ import { MAX_ATTACHMENTS } from '../types';
 import { DEFAULT_WORKSPACE_ID } from '../types/workspace-config';
 import { chatService } from '../services/chat';
 import { messageStoreRegistry } from '../stores/MessageStore';
-import { useMessageStore } from '../stores/useMessageStore';
 import { agentsService } from '../services/agents';
 import { skillsService } from '../services/skills';
 import { pluginsService } from '../services/plugins';
@@ -281,54 +280,6 @@ export default function ChatPage() {
   // TSCC state management — lifecycle state and UI preferences only.
   // System prompt metadata is now delivered via SSE and managed by useChatStreamingLifecycle.
   useTSCCState(sessionId ?? null);
-
-  // ─── F7 Step-0 parity observer (TEMPORARY) ────────────────────────
-  // De-risks the design pivot onto `useMessageStore`, which is currently dead
-  // code (zero component callers). We mount the hook here purely as an OBSERVER
-  // of the active tab's store and compare its reactive `messages` snapshot
-  // against the existing hand-rolled bridge `messages` (the authoritative
-  // display source today). On divergence we console.warn ONCE per change of
-  // (length, last-message-id) so it does not spam every streamed token.
-  //
-  // This does NOT change what the rendered list reads from — the bridge
-  // `messages` remains the display source. The observer is inert when there is
-  // no active store (null/destroyed). It is removed/replaced when the real
-  // per-TabView subscription lands in Step 2.
-  const storeObservation = useMessageStore(activeTabId);
-  const parityLastSeenRef = useRef<string>('');
-  useEffect(() => {
-    // Dev-only: zero prod overhead, but still compiles/runs in tests.
-    if (!import.meta.env.DEV) return;
-    // Inert when there is no active store (null/destroyed tab).
-    if (!storeObservation) {
-      parityLastSeenRef.current = '';
-      return;
-    }
-    const storeMessages = storeObservation.messages;
-    // Throttle/dedupe: only evaluate when the bridge snapshot's shape changes
-    // (length or last-message id), not on every per-token content mutation.
-    const bridgeLastId = messages.length > 0 ? messages[messages.length - 1].id : '';
-    const signature = `${activeTabId ?? ''}|${messages.length}|${bridgeLastId}`;
-    if (signature === parityLastSeenRef.current) return;
-    parityLastSeenRef.current = signature;
-
-    const storeLastId =
-      storeMessages.length > 0 ? storeMessages[storeMessages.length - 1].id : '';
-    const lengthDiverged = storeMessages.length !== messages.length;
-    const lastIdDiverged = storeLastId !== bridgeLastId;
-    if (lengthDiverged || lastIdDiverged) {
-      console.warn(
-        '[F7 parity] useMessageStore snapshot diverges from bridge messages',
-        {
-          tabId: activeTabId,
-          storeLength: storeMessages.length,
-          bridgeLength: messages.length,
-          storeLastId,
-          bridgeLastId,
-        },
-      );
-    }
-  }, [storeObservation, messages, activeTabId]);
 
   // ─── Voice Conversation Mode ──────────────────────────────────────
   // Derive streaming text content from the last assistant message for TTS.
@@ -2139,7 +2090,24 @@ export default function ChatPage() {
   // Handle escalation option click — sends the chosen option as a chat message.
   // Marks the escalation block as resolved optimistically, then sends.
   const handleEscalationSelect = useCallback((escalationId: string, optionLabel: string) => {
-    // Optimistic UI: mark escalation as resolved
+    // Optimistic UI: mark escalation as resolved — in the active tab's STORE
+    // (the display source for the keep-mounted TabView) and the shared mirror.
+    const escTabId = activeTabIdRef.current;
+    const escStore = escTabId ? messageStoreRegistry.get(escTabId) : null;
+    if (escStore) {
+      const target = escStore.messages.find((m) =>
+        m.content.some((b) => b.type === 'escalation' && (b as { id: string }).id === escalationId));
+      if (target) {
+        escStore.updateById(target.id, (msg) => ({
+          ...msg,
+          content: msg.content.map((block) =>
+            block.type === 'escalation' && (block as { id: string }).id === escalationId
+              ? { ...block, status: 'resolved', resolution: optionLabel }
+              : block,
+          ),
+        }));
+      }
+    }
     setMessages((prev) => prev.map((msg) => ({
       ...msg,
       content: msg.content.map((block) =>
@@ -2151,7 +2119,7 @@ export default function ChatPage() {
     // Send the choice as a user message (same path as handleFocusClick)
     inputValueRef.current = optionLabel;
     handleSendMessage();
-  }, [handleSendMessage, setMessages]);
+  }, [handleSendMessage, setMessages, activeTabIdRef]);
 
   // Handle Continue — sends "continue" as user message when model stopped prematurely.
   // Matches Claude Code terminal /continue behavior.
@@ -2201,6 +2169,22 @@ export default function ChatPage() {
           ),
         }));
         tabState.pendingPermissionRequestId = null;
+      }
+      // Mirror the decided state into the STORE (display source for TabView).
+      const permStore = messageStoreRegistry.get(tabId);
+      if (permStore) {
+        const target = permStore.messages.find((m) =>
+          m.content.some((b) => b.type === 'cmd_permission_request' && b.requestId === requestId));
+        if (target) {
+          permStore.updateById(target.id, (msg) => ({
+            ...msg,
+            content: msg.content.map((block) =>
+              block.type === 'cmd_permission_request' && block.requestId === requestId
+                ? { ...block, decision }
+                : block,
+            ),
+          }));
+        }
       }
     }
 
@@ -2359,6 +2343,21 @@ export default function ChatPage() {
           updated[lastIdx] = lastMsg;
           tabState.messages = updated;
         }
+      }
+    }
+
+    // 4b. Mirror the Stopped marker into the per-tab STORE — the display source
+    // for the keep-mounted TabView. Safe now (post keep-mounted): each TabView
+    // subscribes to its OWN store, and the shared-messages bridge re-subscribes
+    // per active tab, so a late rAF notify cannot push this tab's content into
+    // another tab's view (the 2026-06-18 cross-tab leak vector no longer exists).
+    if (currentTabId) {
+      const stopStore = messageStoreRegistry.get(currentTabId);
+      if (stopStore && stopStore.messages.some((m) => m.role === 'assistant')) {
+        stopStore.updateLast(
+          (m) => ({ ...m, content: [...m.content, { type: 'text' as const, text: '\n\n---\n*Stopped*' }] }),
+          (m) => m.role === 'assistant',
+        );
       }
     }
 

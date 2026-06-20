@@ -26,7 +26,7 @@
  *
  * Validates: Requirements 1.1, 2.1
  */
-import React, { useMemo, useRef, useEffect, useCallback, memo } from 'react';
+import React, { useMemo, useRef, useEffect, useLayoutEffect, useCallback, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Message } from '../../../types';
 import { useMessageStore } from '../../../stores/useMessageStore';
@@ -183,6 +183,29 @@ function TabViewImpl({
       endRef.current?.scrollIntoView({ behavior: 'auto' });
     }
   }, [messages, isActive]);
+
+  // Preserve scroll position when OLDER messages are prepended (load-earlier),
+  // so the viewport doesn't jump. Runs before paint; compares scrollHeight
+  // across the prepend and offsets scrollTop by the added height. Only fires on
+  // a genuine top-prepend (first id changed AND list grew) — not on appends.
+  const prevFirstIdRef = useRef<string | null>(null);
+  const prevLenRef = useRef(0);
+  const prevScrollHeightRef = useRef(0);
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const firstId = messages[0]?.id ?? null;
+    const prepended =
+      prevFirstIdRef.current !== null &&
+      firstId !== prevFirstIdRef.current &&
+      messages.length > prevLenRef.current;
+    if (prepended && prevScrollHeightRef.current) {
+      el.scrollTop += el.scrollHeight - prevScrollHeightRef.current;
+    }
+    prevFirstIdRef.current = firstId;
+    prevLenRef.current = messages.length;
+    prevScrollHeightRef.current = el.scrollHeight;
+  }, [messages]);
 
   // ── Per-tab streaming activity (Migration Step 4.1) ────────────────
   // Activity label + elapsed timer derived from THIS tab's own state, gated to
