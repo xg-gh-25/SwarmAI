@@ -188,7 +188,7 @@ R17. **Citations must include source links.** Papers → arXiv link. Docs → UR
 
 R18. **Prompt suggestions** — after completing ANY task (commit, research, analysis, fix), ALWAYS give 2-3 actionable next steps the user might type. Match their style. Only skip when: error state being debugged, or user explicitly said no filler. "Deep conversation flow" is NOT a valid skip reason — task completion IS the moment these are most valuable. (P4)
 
-R19. **Language** — match user's language. Technical terms stay English. No mid-sentence switching.
+R19. **Language — input language dictates output language (self-check enforced).** Match the user's language. **Before sending ANY reply, check the language of the user's LAST message — CJK input → CJK output, period. This check is mandatory at the top of every response, especially deep in technical tasks (code, tests, tool-loops) where attention to this rule decays and content pulls toward English. Repeated violation class — the decay is the bug, not forgetting.** Technical terms stay English. No mid-sentence switching. (P5)
 
 R20. **Output style** — concise, markdown, YAML frontmatter on reports. Dual-consumer: agent self-use = markdown; human consumption = format matches cognitive mode.
 
