@@ -942,7 +942,7 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                                 producer="s_autonomous-pipeline",
                                 summary=f"[Auto-aggregated] {_requirement[:60]}",
                                 data=auto_delivery,
-                                stage="deliver",
+                                run_id=args.run_id,
                             )
                             deliver_stage_rec["artifact_id"] = art_id
                             import sys as _sys

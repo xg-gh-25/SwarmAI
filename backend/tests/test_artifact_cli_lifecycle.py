@@ -313,6 +313,44 @@ class TestAutoRecordStage:
         assert "stage_doc_consumed" not in build
 
 
+class TestAutoAggregateDelivery:
+    """Regression: the completion-time auto-aggregate of the delivery artifact
+    must call reg.publish() with VALID kwargs. A prior bug passed stage="deliver"
+    (not a publish() param) → TypeError → every bugfix/full run's auto-aggregate
+    silently failed → completion gate blocked on missing deliver artifact_id."""
+
+    def test_publish_accepts_auto_aggregate_kwargs(self, workspace):
+        """reg.publish must accept exactly the kwargs the auto-aggregate passes
+        (project, artifact_type, producer, summary, data, run_id) — and must NOT
+        require a 'stage' kwarg (the regressed argument)."""
+        from core.artifact_registry import ArtifactRegistry
+        import inspect
+
+        sig = inspect.signature(ArtifactRegistry.publish)
+        params = set(sig.parameters)
+        # The auto-aggregate call site (artifact_cli.py) uses these:
+        assert {"project", "artifact_type", "producer", "summary", "data", "run_id"} <= params
+        # The regressed kwarg must NOT be a parameter (it never was):
+        assert "stage" not in params
+
+        # And an actual publish with those kwargs must succeed + land in the run dir.
+        _create_run(workspace, "TestProject", "run_agg", "running", stages=[])
+        reg = ArtifactRegistry(workspace)
+        art_id = reg.publish(
+            project="TestProject",
+            artifact_type="delivery",
+            producer="s_autonomous-pipeline",
+            summary="[Auto-aggregated] test",
+            data={"adversarial_review": {"profile_tier": "bugfix", "findings": []},
+                  "completion_audit": {"all_green": True}, "push_ready": True},
+            run_id="run_agg",
+        )
+        assert art_id
+        run_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_agg"
+        # delivery artifact stored under the run dir (run_id routing)
+        assert any(p.name.startswith("delivery") for p in run_dir.iterdir())
+
+
 class TestAdvanceDriftGuard:
     """AC4: advancing past a completed stage with no artifact_id warns."""
 
