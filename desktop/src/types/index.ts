@@ -1127,7 +1127,7 @@ export interface StreamingStateEntry {
    * Authoritative AskUserQuestion payload — lets the frontend re-surface a
    * question whose original SSE event was lost. Null unless waiting_input.
    */
-  pendingQuestion: { toolUseId: string; questions: unknown[] } | null;
+  pendingQuestion: { toolUseId: string; questions: AskUserQuestion[] } | null;
   /** Pending-message seqs the server drained in its last drain pass. */
   lastDrainedSeqs: number[];
 }

@@ -1,12 +1,16 @@
-import type { ChatRequest, StreamEvent, ChatSession, ChatMessage, PermissionResponse, StreamingStateEntry } from '../types';
+import type { ChatRequest, StreamEvent, ChatSession, ChatMessage, PermissionResponse, StreamingStateEntry, AskUserQuestion } from '../types';
 
-/** Raw snake_case shape of a streaming-state entry as emitted by the backend. */
+/** Raw snake_case shape of a streaming-state entry as emitted by the backend.
+ *  `pending_question.questions` carries the SAME AskUserQuestion payload the
+ *  `ask_user_question` SSE event does (streaming_orchestrator.py:484), so it is
+ *  typed as AskUserQuestion[] — this is a serialization boundary, the backend
+ *  owns the shape. */
 interface RawStreamingStateEntry {
   streaming?: boolean;
   state?: string;
   waiting_input?: boolean;
   pending_count?: number;
-  pending_question?: { tool_use_id: string; questions?: unknown[] } | null;
+  pending_question?: { tool_use_id: string; questions?: AskUserQuestion[] } | null;
   last_drained_seqs?: number[];
 }
 import api from './api';

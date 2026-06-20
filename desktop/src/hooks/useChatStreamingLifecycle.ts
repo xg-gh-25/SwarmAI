@@ -48,7 +48,7 @@ import type {
   CompactionGuardEvent,
 } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
-import { queuedMessageFromRetryPayload, retryPayloadHasAttachments } from './streaming-guards';
+import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurfaceQuestion, computeDrainRetirement } from './streaming-guards';
 import { chatService } from '../services/chat';
 import { messageStoreRegistry } from '../stores/MessageStore';
 import type { UnifiedTab } from './useUnifiedTabState';
@@ -1187,6 +1187,71 @@ export function useChatStreamingLifecycle(
             }
             continue;  // handled (or backend still busy — wait for next poll)
           }
+
+          // ── Root-1 SSOT Phase 3: mirror the authoritative read API ──────────
+          // Runs for EVERY tab (including non-streaming) BEFORE the streaming-only
+          // guard below, because a lost AskUserQuestion leaves the tab NOT
+          // streaming (the SSE event that would set waiting_input was dropped).
+          const mirrorSid = tabState.sessionId;
+          const mirrorState = mirrorSid ? states[mirrorSid] : undefined;
+          if (mirrorState) {
+            // AC5: re-surface a lost AskUserQuestion from authoritative state.
+            // Gated + idempotent (shouldResurfaceQuestion) so the 15s poll can't
+            // flap the question UI, and an answer-in-flight is suppressed.
+            if (
+              shouldResurfaceQuestion({
+                backendWaitingInput: mirrorState.waitingInput,
+                backendPendingQuestion: mirrorState.pendingQuestion,
+                currentPendingToolUseId: tabState.pendingQuestion?.toolUseId ?? null,
+                answeredToolUseId: tabState._answeredToolUseId ?? null,
+              })
+            ) {
+              const pqPayload = mirrorState.pendingQuestion!;
+              // The assistant message to attach the block to: the last assistant
+              // bubble in this tab's store (or messages cache fallback).
+              const store = messageStoreRegistry.get(tabId);
+              const msgs = store?.messages ?? tabState.messages ?? [];
+              const lastAssistant = [...msgs].reverse().find((m) => m.role === 'assistant');
+              if (lastAssistant) {
+                const isActive = tabId === activeTabIdRef.current;
+                surfacePendingQuestion(
+                  tabId,
+                  lastAssistant.id,
+                  { toolUseId: pqPayload.toolUseId, questions: pqPayload.questions },
+                  { isActive, sessionId: mirrorSid },
+                );
+                anyCleared = true;
+              }
+            } else if (
+              // Clear the answer-in-flight guard once the backend has moved past
+              // the answered question (no longer waiting_input, or a different id).
+              tabState._answeredToolUseId &&
+              (!mirrorState.waitingInput ||
+                mirrorState.pendingQuestion?.toolUseId !== tabState._answeredToolUseId)
+            ) {
+              tabState._answeredToolUseId = undefined;
+            }
+
+            // AC4: mirror the server's drain progress. Retire the local optimistic
+            // queue mirror once the server confirms it drained a tracked seq;
+            // surface pending_count for a session-level "queued" indicator.
+            const drain = computeDrainRetirement({
+              priorDrainedSeqs: tabState._lastDrainedSeqs ?? [],
+              currentDrainedSeqs: mirrorState.lastDrainedSeqs,
+              serverPendingCount: mirrorState.pendingCount,
+            });
+            tabState._serverPendingCount = drain.serverPendingCount;
+            tabState._lastDrainedSeqs = mirrorState.lastDrainedSeqs;
+            if (drain.retire && tabState.queuedMessage && drain.serverPendingCount === 0) {
+              // Server drained everything it owned — the local optimistic queue
+              // mirror is now superseded by delivered DB content. Clear it (the
+              // reconcile DB sync below / the drained turn renders the real msg).
+              tabState.queuedMessage = undefined;
+              tabState._queuedAt = undefined;
+              anyCleared = true;
+            }
+          }
+
           if (!tabState.isStreaming) continue;  // only check streaming tabs
 
           // DRAIN/QUEUE IMMUNITY: never force-clear a tab that has a pending

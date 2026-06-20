@@ -186,6 +186,19 @@ export interface UnifiedTab {
    *  to time-cap the post-disconnect window (force-clear after 120min) so a
    *  failed stopSession + stuck backend can't brick the tab forever. */
   _postDisconnectAt?: number;
+  /** Root-1 SSOT Phase 3 (AC5): the toolUseId of a question the user just
+   *  answered. Suppresses the reconcile-loop re-surface of that SAME question
+   *  during the window where the backend mirror may still report waiting_input
+   *  before transitioning. Cleared by surfacePendingQuestion / a new question. */
+  _answeredToolUseId?: string;
+  /** Root-1 SSOT Phase 3 (AC4): the server's pending_count from the last
+   *  reconcile poll — drives a session-level "N queued" indicator from
+   *  authoritative state (vs the per-message optimistic isQueued mirror). */
+  _serverPendingCount?: number;
+  /** Root-1 SSOT Phase 3 (AC4): the last_drained_seqs the tab observed on the
+   *  previous reconcile poll — compared against the current poll to detect a
+   *  server drain and retire the local optimistic queue mirror. */
+  _lastDrainedSeqs?: number[];
   /** Resume timeout handle — auto-clears isResuming after 60s if no data arrives.
    *  Prevents permanent "Resuming session..." spinner when --resume hangs. */
   _resumeTimeoutId?: ReturnType<typeof setTimeout>;

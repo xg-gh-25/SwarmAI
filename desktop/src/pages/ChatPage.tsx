@@ -2015,6 +2015,13 @@ export default function ChatPage() {
     // the question arrived on a background tab) now that it's been answered.
     removeToast(`ask-uq-${toolUseId}`);
 
+    // Root-1 SSOT Phase 3 (AC5 answer-in-flight guard): record the answered
+    // toolUseId so the reconcile-loop re-surface does NOT re-inject this same
+    // question during the window where the backend mirror may still report
+    // waiting_input for it before transitioning out. Cleared by the helper /
+    // a genuinely different new question.
+    if (tabState) tabState._answeredToolUseId = toolUseId;
+
     setPendingQuestion(null);
     incrementStreamGen(); // Fix 1: new stream generation
     setIsStreaming(true, tabId);
