@@ -87,6 +87,10 @@ Before reporting ANY failure, try at least 2 alternative paths:
 - Permission denied → different path or tool
 - API error → different endpoint or scrape
 
+**A hang IS a failure (P4 blind-spot, earned 2026-06-21).** A command that never returns is the same failure class as one that errors — it just doesn't announce itself, so error-recovery rules never fire. If an interactive command runs ≫ its expected time with no output → KILL it and reroute. Never wait for the user to Stop. Two structural guards:
+- **Search via dedicated tools, never bare `find .` / `grep -r .`** — Glob (files) + Grep (content) skip node_modules/.git by default. Bare recursive Bash scans do NOT, and `| grep -v node_modules` filters output *without* stopping the traversal (every file still gets read). If Bash is unavoidable: `-maxdepth` + `-prune` to truly exclude, always wrapped in a timeout (`gtimeout` / `perl -e 'alarm'` on macOS — plain `timeout` doesn't exist). Evidence: 12-min hang on `find .` in a repo root with node_modules.
+- **Background tasks are not fire-and-forget** — every backgrounded command needs an expected duration + a poll + a give-up threshold that triggers kill+reroute. Backgrounding bypasses the foreground timeout; that makes monitoring YOUR job, not the harness's.
+
 Never say "I can't" or "you need to" on first failure. Never ask user to compensate for tool failure.
 
 ### Checkpoint — Measure, Don't Feel (P1)
