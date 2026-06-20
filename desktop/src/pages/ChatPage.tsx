@@ -541,7 +541,12 @@ export default function ChatPage() {
   // Load older messages for infinite scroll (paginated)
   const loadOlderMessages = useCallback(async () => {
     if (!sessionId || !hasMoreMessages || isLoadingOlderMessages) return;
-    const oldestMessage = messagesRef.current[0];
+    const activeId = activeTabIdRef.current;
+    const store = activeId ? messageStoreRegistry.get(activeId) : null;
+    // Current displayed messages — the store is authoritative for the active
+    // TabView; fall back to the shared mirror only if there is no store.
+    const current = store?.messages ?? messagesRef.current;
+    const oldestMessage = current[0];
     if (!oldestMessage) return;
 
     setIsLoadingOlderMessages(true);
@@ -550,13 +555,22 @@ export default function ChatPage() {
         sessionId, 50, oldestMessage.id
       );
       if (olderMessages.length < 50) setHasMoreMessages(false);
-      // Capture scroll height before prepending for position preservation
-      const container = messagesContainerRef.current;
-      if (container) prevScrollHeightRef.current = container.scrollHeight;
       // Seam merge: if the agent response straddles the page boundary, the
       // last older message and first current message are both assistant —
       // merge them so it renders as one bubble (backend can't merge across fetches).
-      setMessages(prev => mergeOlderMessages(olderMessages.map(toDisplayMessage), prev));
+      const merged = mergeOlderMessages(olderMessages.map(toDisplayMessage), current);
+      // Route the prepended history through the active tab's STORE — the
+      // keep-mounted TabView renders from its own store, not the shared
+      // `messages`. replace() is a no-op during streaming (guarded). Also keep
+      // the per-tab cache + shared mirror in sync for non-display consumers.
+      if (store && store.phase !== 'streaming') {
+        store.replace(merged);
+      }
+      if (activeId) {
+        const tab = tabMapRef.current.get(activeId);
+        if (tab) tab.messages = merged;
+      }
+      setMessages(merged);
     } finally {
       setIsLoadingOlderMessages(false);
     }
@@ -1389,7 +1403,9 @@ export default function ChatPage() {
       content: [{ type: 'text', text: command }],
       timestamp: new Date().toISOString(),
     };
-    setMessages((prev) => [...prev, userMessage]);
+    // SINGLE-WRITER: route through the store so the keep-mounted TabView (which
+    // reads its own store, not the shared `messages`) displays plugin output.
+    insertOptimisticMessages(activeTabIdRef.current, [userMessage]);
 
     const assistantMessageId = (Date.now() + 1).toString();
     let responseText = '';
@@ -1472,9 +1488,11 @@ export default function ChatPage() {
       responseText = `❌ **Error:** ${error instanceof Error ? error.message : 'An error occurred'}`;
     }
 
-    setMessages((prev) => [...prev, { id: assistantMessageId, role: 'assistant', content: [{ type: 'text', text: responseText }], timestamp: new Date().toISOString() }]);
+    insertOptimisticMessages(activeTabIdRef.current, [
+      { id: assistantMessageId, role: 'assistant', content: [{ type: 'text', text: responseText }], timestamp: new Date().toISOString() },
+    ]);
     return true;
-  }, [setMessages]);
+  }, [insertOptimisticMessages, activeTabIdRef]);
 
   // Handle send message (Req 7.1 — memoized with useCallback, volatile deps via refs)
   const handleSendMessage = useCallback(async () => {
