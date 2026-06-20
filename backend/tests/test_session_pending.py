@@ -343,6 +343,29 @@ async def test_mark_sent_ignores_stale_unclaimed_seq(pending, db_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_persist_threads_client_id_into_metadata(pending, db_path: Path):
+    """R1 (cross-track BLOCKER): client_id must land in metadata.client_id exactly
+    as the live send path does, or Phase-2 drain can't dedup the optimistic bubble
+    → duplicate user message. No client_id → metadata stays '{}'."""
+    msg = await pending.persist_pending(
+        "sess-cid", user_message="hi", content=None, agent_id="a", client_id="local-123"
+    )
+    async with aiosqlite.connect(str(db_path)) as conn:
+        cur = await conn.execute("SELECT metadata FROM messages WHERE id=?", (msg.id,))
+        meta = (await cur.fetchone())[0]
+    import json as _json
+    assert _json.loads(meta) == {"client_id": "local-123"}, f"got {meta!r}"
+
+    # No client_id → empty metadata (no spurious null client_id key).
+    msg2 = await pending.persist_pending(
+        "sess-cid2", user_message="hi", content=None, agent_id="a"
+    )
+    async with aiosqlite.connect(str(db_path)) as conn:
+        cur = await conn.execute("SELECT metadata FROM messages WHERE id=?", (msg2.id,))
+        assert (await cur.fetchone())[0] == "{}"
+
+
+@pytest.mark.asyncio
 async def test_persist_sets_expires_at(pending, db_path: Path):
     """OP: pending rows must carry expires_at so a drained row is eventually
     TTL-reaped (no permanent leak once delivered)."""

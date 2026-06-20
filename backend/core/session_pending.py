@@ -219,12 +219,20 @@ async def persist_pending(
     user_message: str | None,
     content: list[dict] | None,
     agent_id: str,
+    client_id: str | None = None,
 ) -> PendingMessage:
     """Persist an arriving user message with sent=0 and a fresh monotonic
     pending_seq, under the per-session seq lock (F6).
 
     Exactly one of ``user_message`` / ``content`` should be non-empty. No
     subprocess interaction — pure persistence.
+
+    ``client_id`` is the frontend's optimistic-message id. It MUST be threaded
+    into ``metadata.client_id`` exactly as the live send path does
+    (session_router persist-before-slot, ~line 1086) — otherwise when Phase 2
+    drains this row the frontend cannot dedup its optimistic bubble against the
+    persisted message and the user sees a duplicate. Stored in the existing
+    ``metadata`` JSON column (no schema change).
     """
     if not user_message and not content:
         raise ValueError("persist_pending requires user_message or content")
@@ -234,6 +242,7 @@ async def persist_pending(
     expires_at = int(time.time()) + _PENDING_TTL_SECONDS
     msg_id = str(uuid4())
     payload = _payload_json(user_message, content)
+    metadata_json = json.dumps({"client_id": client_id}) if client_id else "{}"
 
     async def _do() -> int:
         # SELECT MAX+INSERT held inside the per-session lock for monotonic
@@ -254,8 +263,9 @@ async def persist_pending(
                     "(id, session_id, role, content, model, metadata, "
                     " sent, pending_seq, claimed_at, expires_at, "
                     " created_at, updated_at) "
-                    "VALUES (?, ?, 'user', ?, NULL, '{}', 0, ?, NULL, ?, ?, ?)",
-                    (msg_id, session_id, payload, next_seq, expires_at, now, now),
+                    "VALUES (?, ?, 'user', ?, NULL, ?, 0, ?, NULL, ?, ?, ?)",
+                    (msg_id, session_id, payload, metadata_json, next_seq,
+                     expires_at, now, now),
                 )
                 await conn.commit()
                 return next_seq
