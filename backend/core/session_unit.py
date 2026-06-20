@@ -82,12 +82,17 @@ _subprocess_executor = subprocess_executor
 # climbing materially; compacting here keeps turns fast. Tune per model window.
 SOFT_COMPACT_PCT: int = 60
 
-# Long single-turn heartbeat: emit a "still working" notice once a turn's
-# wall-clock exceeds this, so a legitimately long turn reads as EXPECTED rather
-# than a hang (reduces frontend "mark idle" desync + SSE-blip disconnects).
-# # assumes: 300s aligns with the adaptive MESSAGE_TIMEOUT base — a turn past
-# 5 min is long enough that the user benefits from an explicit progress signal.
-LONG_TURN_HEARTBEAT_S: float = 300.0
+# Long single-turn heartbeat: emit a "still working" notice every interval once
+# a step's wall-clock exceeds this, so a legitimately long/slow step reads as
+# EXPECTED rather than a hang (reduces frontend "mark idle" desync + SSE-blip
+# disconnects), and the user can make an informed decision to Stop a genuine
+# hang in seconds instead of staring at a dead spinner.
+# # assumes: 60s is short enough that a stuck tool (e.g. an unbounded grep) is
+# visibly flagged quickly, but long enough that normal fast tools never bubble.
+# This is a VISIBILITY signal only — it never kills anything (no false-kill
+# risk). Auto-abort of provably-stuck tools (CPU/IO-silent) is a separate
+# follow-up for headless/autonomous modes where no human watches the spinner.
+LONG_TURN_HEARTBEAT_S: float = 60.0
 
 # Cooldown between context-ring SOFT compactions (seconds). Prevents back-to-back
 # compaction if context% stays high right after a compact.

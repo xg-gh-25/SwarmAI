@@ -256,6 +256,11 @@ class StreamingOrchestrator:
         # Single timeout for both fresh and resume — simpler, fewer states.
         INIT_TIMEOUT = 180.0    # First message: 180s (cross-region Bedrock)
         MESSAGE_TIMEOUT = self._parent._compute_message_timeout()  # Adaptive: scales with context
+        # Poll interval for surfacing "still working" heartbeats during a
+        # silent wait. Must be small enough to bubble a long/stuck step
+        # promptly; the heartbeat itself throttles to one notice per
+        # LONG_TURN_HEARTBEAT_S. Does NOT cancel the in-flight SDK read.
+        HEARTBEAT_POLL_S = 30.0
 
         is_resume = self._parent._sdk_session_id is not None
         is_first_message = True
@@ -300,10 +305,48 @@ class StreamingOrchestrator:
             perm_task = asyncio.ensure_future(perm_queue.get())
 
             try:
-                done, pending = await asyncio.wait(
-                    [sdk_task, perm_task],
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
+                # Heartbeat polling: wake every HEARTBEAT_POLL_S to surface a
+                # "still working" notice during a long or stuck wait, WITHOUT
+                # cancelling the in-flight sdk_task — cancelling it would abort
+                # the __anext__ read mid-message and could lose/corrupt a
+                # message. sdk_task and perm_task persist across ticks; only the
+                # tick timer is re-armed. This is what makes a silent hang
+                # visible (the heartbeat is otherwise event-driven and never
+                # fires when no SDK events arrive).
+                while True:
+                    tick_task = asyncio.ensure_future(asyncio.sleep(HEARTBEAT_POLL_S))
+                    try:
+                        done, pending = await asyncio.wait(
+                            [sdk_task, perm_task, tick_task],
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                    except Exception:
+                        tick_task.cancel()
+                        raise
+                    if tick_task in done and sdk_task not in done and perm_task not in done:
+                        # Neither a message nor a permission arrived this tick —
+                        # surface a heartbeat (throttled internally) and keep
+                        # waiting on the SAME sdk_task/perm_task.
+                        try:
+                            hb = self._parent._maybe_build_elapsed_heartbeat()
+                            if hb is not None:
+                                yield hb
+                        except Exception as hb_exc:
+                            logger.debug(
+                                "streaming_orchestrator.heartbeat_failed session_id=%s: %s",
+                                getattr(self._parent, "session_id", "?"),
+                                f"{type(hb_exc).__name__}: {hb_exc}",
+                            )
+                        continue
+                    # A real task finished — drop the tick timer and proceed.
+                    tick_task.cancel()
+                    try:
+                        await tick_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                    done.discard(tick_task)
+                    pending.discard(tick_task)
+                    break
             except Exception:
                 # Cleanup on unexpected errors
                 sdk_task.cancel()
