@@ -1211,7 +1211,9 @@ export function useChatStreamingLifecycle(
               // bubble in this tab's store (or messages cache fallback).
               const store = messageStoreRegistry.get(tabId);
               const msgs = store?.messages ?? tabState.messages ?? [];
-              const lastAssistant = [...msgs].reverse().find((m) => m.role === 'assistant');
+              // Use the file's findLast helper (line 174) — avoids the
+              // [...arr].reverse().find() copy-per-call the helper exists to prevent.
+              const lastAssistant = findLast(msgs, (m) => m.role === 'assistant');
               if (lastAssistant) {
                 const isActive = tabId === activeTabIdRef.current;
                 surfacePendingQuestion(
