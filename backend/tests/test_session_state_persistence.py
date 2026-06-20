@@ -140,8 +140,9 @@ class TestStatePersistence:
         result = load_persisted_state(state_file)
 
         assert result == {"session-1": "valid-sdk-id"}
-        # File consumed (deleted)
-        assert not state_file.exists()
+        # File NOT deleted — let next persist_session_state() overwrite atomically.
+        # This prevents crash-window data loss (adversarial F1).
+        assert state_file.exists()
 
     def test_missing_file_returns_empty(self, state_file):
         """No state file → empty dict, no error."""

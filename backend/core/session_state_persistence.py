@@ -11,7 +11,7 @@ Key invariants (PE-reviewed):
 - Only IDLE sessions are persisted (F1: STREAMING/WAITING_INPUT have incomplete state)
 - Atomic write via tmp+rename (crash-safe)
 - Staleness check: discard if >24hr old (F9)
-- Consumed on read (one-shot, unlinked after restore)
+- File NOT deleted on read — next persist cycle overwrites atomically (crash-safe)
 - Lazy injection at get_or_create_unit (not boot-time restore on empty dict)
 """
 
@@ -113,8 +113,12 @@ def load_persisted_state(state_file: Path) -> Dict[str, str]:
         state_file.unlink(missing_ok=True)
         return {}
 
-    # PE F9: Staleness check — discard if >24hr old
-    persisted_at = state.pop("_persisted_at", 0)
+    # PE F9: Staleness check — discard if >24hr old or missing timestamp
+    persisted_at = state.pop("_persisted_at", None)
+    if persisted_at is None:
+        logger.warning("Session state file missing _persisted_at timestamp, discarding")
+        state_file.unlink(missing_ok=True)
+        return {}
     age_seconds = time.time() - persisted_at
     if age_seconds > MAX_STATE_AGE_SECONDS:
         logger.warning(
@@ -136,6 +140,8 @@ def load_persisted_state(state_file: Path) -> Dict[str, str]:
         len(result), age_seconds,
     )
 
-    # Consumed — delete after use (one-shot)
-    state_file.unlink(missing_ok=True)
+    # Don't unlink — let the next persist_session_state() overwrite atomically.
+    # Unlinking here creates a crash window: if daemon dies after unlink but
+    # before any user reconnects, the persisted IDs (only in memory) are lost.
+    # The staleness check (24hr) + atomic overwrite handle lifecycle safely.
     return result
