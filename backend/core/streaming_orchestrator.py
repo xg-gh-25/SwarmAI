@@ -772,6 +772,50 @@ class StreamingOrchestrator:
                             )
                         return
 
+                    # ── Poisoned-subprocess self-heal (Layer 2) ───────
+                    # A subprocess that was previously interrupted (by the
+                    # CompactionGuard ladder or a user Stop) can be left in a
+                    # corrupt turn-state.  When the NEXT send() reuses it, it
+                    # returns an INSTANT error_during_execution with no error
+                    # detail and no streamed content (≈ms after query).  This is
+                    # the SAME failure as the zombie detector below (stream ended
+                    # instantly after interrupt) but shaped as an error
+                    # ResultMessage instead of an empty stream — so it bypassed
+                    # that guard, was treated as non-retriable (empty text), and
+                    # the dead subprocess was reused on every retry, producing
+                    # the "response stops half-way / must send several times"
+                    # loop.  Route it into the SAME kill + --resume respawn: a
+                    # fresh subprocess loads the conversation from disk, not the
+                    # poisoned in-memory state.  Guarded tightly (empty text +
+                    # no content + <2s) so a genuine mid-generation error — which
+                    # has real text or arrives after streamed content — is still
+                    # surfaced, never silently retried.
+                    streaming_dur = (
+                        time.time() - self._parent._streaming_start_time
+                        if self._parent._streaming_start_time else 0.0
+                    )
+                    if (
+                        subtype == "error_during_execution"
+                        and not error_text.strip()
+                        and not self._parent._content_emitted
+                        and streaming_dur < 2.0
+                    ):
+                        logger.warning(
+                            "session_unit.zombie_via_error session_id=%s "
+                            "duration=%.3fs subtype=%s error_text=empty "
+                            "content_emitted=False — killing for --resume respawn",
+                            self._parent.session_id, streaming_dur, subtype,
+                        )
+                        await self._parent.kill()
+                        # Same retriable signal as the empty-stream zombie path
+                        # (matches the r"Zombie subprocess detected" pattern in
+                        # _is_retriable_error) → send() respawns with --resume.
+                        raise RuntimeError(
+                            f"Zombie subprocess detected: error_during_execution "
+                            f"with no content in {streaming_dur:.1f}s "
+                            f"(session_id={self._parent.session_id})"
+                        )
+
                     if _is_retriable_error(error_text):
                         raise RuntimeError(f"Retriable SDK error: {error_text}")
 
