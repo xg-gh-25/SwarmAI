@@ -122,14 +122,16 @@ Root-1 Phase 3 (frontend mirror) shipped and explicitly LEFT two items for this 
    field + the reconcile write + the TabView reader **atomically** in one change.
    Source: `getStreamingState()` already returns `pendingCount` (chat.ts); consume it.
 
-2. **Step 4 (remove shared `messages` mirror): delete Root-1's parallel-writes.**
+2. **ONLY IF the descoped "remove shared `messages` mirror" cleanup is ever revisited:**
    Phase 3 added `tabState.messages = store.messages` parallel-writes in the reconcile
    loop (surfacePendingQuestion bg-tab path + drain-retire path) to keep tabState in
-   sync because the store→tabState bridge is active-tab-only. These become DEAD writes
-   once you remove the shared `messages` mirror in Step 4. Grep `tabState.messages =`
-   in `useChatStreamingLifecycle.ts` and remove the now-dead mirror writes as part of
-   Step 4 (the bg-tab ones are comment-tagged). Verify the store-less else-branch
-   (drain-retire) is unreachable or route it through `getOrCreate` before deleting the prop.
+   sync because the store→tabState bridge is active-tab-only. With the mirror RETAINED
+   (current descoped plan) these writes are correct and required — leave them. They
+   only become dead IF the optional mirror-elimination cleanup is later done; at that
+   point grep `tabState.messages =` in `useChatStreamingLifecycle.ts` and remove the
+   now-dead mirror writes (bg-tab ones are comment-tagged), and route the store-less
+   drain-retire else-branch through `getOrCreate` first. No action needed under the
+   current value-line scope.
 
 ## Task Dependency Graph
 
