@@ -40,7 +40,7 @@ to `capturedTabId`'s store.
 > changed ChatPage since commit `c099b420`).
 
 - [ ] 4. Per-tab streaming activity (safe now — no ChatPage edit)
-  - [ ] 4.1 Add `useStreamingActivity(tabId)` gated to streaming
+  - [x] 4.1 Add `useStreamingActivity(tabId)` gated to streaming
     - Create `desktop/src/hooks/useStreamingActivity.ts`: compute `displayedActivity`
       (debounced, `MIN_ACTIVITY_DISPLAY_MS`) + `elapsedSeconds` for a tab, running the
       timer/debounce ONLY while that tab's `isStreaming` is true (no timers for idle/
