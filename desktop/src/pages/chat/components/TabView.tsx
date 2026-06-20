@@ -8,13 +8,14 @@
  * thinking, the fallback spinner, the SESSION_BUSY recovery spinner, and the
  * sticky bottom indicator), and the `messagesEndRef` scroll anchor.
  *
- * Migration Step 2 (this revision): TabView now subscribes to its OWN per-tab
- * `MessageStore` via `useMessageStore(tabId)` as the primary message source
- * (per-tab isolation + reactivity foundation). The `messages` prop is retained
- * as a transitional fallback only (until Step 4 repoints the remaining
- * ChatPage-level writers through the store and removes the shared mirror). Refs,
- * scroll handlers, and the pagination callback are still passed in from
- * `ChatPage` and are not relocated here (that is task 3.2 / Step 2 cont.).
+ * Migration Step 5.1 (this revision): TabView is now rendered ONE PER OPEN TAB
+ * and kept mounted; only the active tab is visible (`display:none` otherwise).
+ * It owns its OWN scroll container + bottom anchor refs and its OWN auto-scroll,
+ * subscribes to its OWN per-tab `MessageStore` via `useMessageStore(tabId)`, and
+ * computes its own streaming activity. Switching tabs is a visibility toggle —
+ * zero remount, zero markdown re-parse. The `messages` prop is a transitional
+ * per-tab fallback; the store wins when populated. Exported memoized so
+ * background views skip re-render on unrelated ChatPage renders.
  *
  * Derived values that are pure functions of `messages` (`lastAssistantIdx`,
  * `lastResumeBoundaryIdx`, and the resolved pending tool-use id) are computed
@@ -25,10 +26,11 @@
  *
  * Validates: Requirements 1.1, 2.1
  */
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef, useEffect, useCallback, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Message } from '../../../types';
 import { useMessageStore } from '../../../stores/useMessageStore';
+import { useStreamingActivity } from '../../../hooks/useStreamingActivity';
 import type { StreamingActivity, ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
 import { formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS } from '../../../hooks/useChatStreamingLifecycle';
 import type { EvolutionEventType } from '../../../services/evolution';
@@ -69,18 +71,31 @@ export interface TabViewProps {
   isResuming?: boolean;
   /** SESSION_BUSY recovery polling flag (shows a waiting spinner). */
   isWaitingForBusy: boolean;
-  /** Debounced streaming activity label + elapsed seconds. */
-  displayedActivity: StreamingActivity | null;
-  elapsedSeconds: number;
+  /**
+   * @deprecated Migration Step "4.1": activity is now computed per-tab inside
+   * TabView via `useStreamingActivity(isStreaming, messages)`. These props are
+   * accepted (so ChatPage's call site still typechecks) but IGNORED. They are
+   * removed when ChatPage moves to the N-TabView render (task 5.1).
+   */
+  displayedActivity?: StreamingActivity | null;
+  elapsedSeconds?: number;
+  /** Whether this tab is the active/visible one. Inactive tabs stay mounted
+   *  (keep-mounted) but are hidden via display:none — zero remount on switch. */
+  isActive: boolean;
   /** Pagination state for the "Load earlier messages" control. */
   hasMoreMessages: boolean;
   isLoadingOlderMessages: boolean;
-  /** Scroll container + bottom anchor refs (owned by ChatPage this step). */
-  messagesContainerRef: React.RefObject<HTMLDivElement | null>;
-  messagesEndRef: React.RefObject<HTMLDivElement | null>;
-  /** Scroll handlers (owned by ChatPage this step). */
-  onMessagesScroll: () => void;
-  onScrollToBottom: () => void;
+  /**
+   * @deprecated Migration Step 5.1: TabView now owns its OWN scroll container +
+   * bottom-anchor refs and its OWN auto-scroll (each keep-mounted view needs its
+   * own DOM node). These ref/handler props are accepted for call-site
+   * compatibility but IGNORED.
+   */
+  messagesContainerRef?: React.RefObject<HTMLDivElement | null>;
+  messagesEndRef?: React.RefObject<HTMLDivElement | null>;
+  onMessagesScroll?: () => void;
+  onScrollToBottom?: () => void;
+  /** Load older messages for this tab (infinite scroll at top). */
   onLoadOlder: () => void;
   /** Stable callbacks threaded into MessageBubble (keep memo intact). */
   onAnswerQuestion: (toolUseId: string, answers: Record<string, string>) => void;
@@ -93,7 +108,7 @@ export interface TabViewProps {
   onRetryQueueTimeout: () => void;
 }
 
-export function TabView({
+function TabViewImpl({
   tabId,
   messages: messagesProp,
   sessionId,
@@ -105,14 +120,9 @@ export function TabView({
   isReconnecting,
   isResuming,
   isWaitingForBusy,
-  displayedActivity,
-  elapsedSeconds,
+  isActive,
   hasMoreMessages,
   isLoadingOlderMessages,
-  messagesContainerRef,
-  messagesEndRef,
-  onMessagesScroll,
-  onScrollToBottom,
   onLoadOlder,
   onAnswerQuestion,
   onPermissionDecision,
@@ -134,6 +144,52 @@ export function TabView({
   const storeMessages = sub?.messages;
   const messages = (storeMessages && storeMessages.length > 0) ? storeMessages : messagesProp;
 
+  // ── Per-tab scroll (Migration Step 5.1) ────────────────────────────
+  // Each keep-mounted TabView owns its OWN scroll container + bottom anchor and
+  // its OWN auto-scroll, so background views keep their scroll position and the
+  // active view scrolls independently. DOM is never destroyed on switch, so the
+  // browser preserves scrollTop natively (no save/restore needed).
+  const containerRef = useRef<HTMLDivElement>(null);
+  const endRef = useRef<HTMLDivElement>(null);
+  const userScrolledUpRef = useRef(false);
+
+  // ── Mount-on-first-activation (Step 5.2 / F2) ──────────────────────
+  // A tab that has never been visible renders a lightweight placeholder — no
+  // message list, no markdown parse — so opening the app with several restored
+  // tabs does NOT parse every tab's history up front. Once activated, content
+  // mounts and stays mounted (keep-mounted), so later switches are zero-parse.
+  const everActiveRef = useRef(false);
+  if (isActive) everActiveRef.current = true;
+
+  const scrollToBottom = useCallback(() => {
+    endRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, []);
+
+  const handleScroll = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const threshold = 100;
+    userScrolledUpRef.current =
+      !(el.scrollTop + el.clientHeight >= el.scrollHeight - threshold);
+    if (el.scrollTop === 0) onLoadOlder();
+  }, [onLoadOlder]);
+
+  // Auto-scroll to bottom on new content — only for the active (visible) view
+  // and only when the user has not scrolled up. Scrolling a hidden view is
+  // pointless (and scrollIntoView no-ops on display:none).
+  useEffect(() => {
+    if (!isActive) return;
+    if (!userScrolledUpRef.current) {
+      endRef.current?.scrollIntoView({ behavior: 'auto' });
+    }
+  }, [messages, isActive]);
+
+  // ── Per-tab streaming activity (Migration Step 4.1) ────────────────
+  // Activity label + elapsed timer derived from THIS tab's own state, gated to
+  // streaming (no timers for idle/background tabs). Replaces the former
+  // displayedActivity/elapsedSeconds props (now ignored).
+  const { displayedActivity, elapsedSeconds } = useStreamingActivity(isStreaming, messages);
+
   // Last assistant message index — used for Save-to-Memory button placement
   // and to scope streaming indicators to the final assistant bubble.
   const lastAssistantIdx = useMemo(
@@ -152,13 +208,17 @@ export function TabView({
 
   return (
     <div
-      ref={messagesContainerRef}
-      onScroll={onMessagesScroll}
+      ref={containerRef}
+      onScroll={handleScroll}
+      aria-hidden={!isActive}
+      style={isActive ? undefined : { display: 'none' }}
       className={messages.length === 0
         ? 'flex-1 overflow-hidden flex flex-col'
         : 'flex-1 overflow-y-auto pl-2 pr-4 py-3.5 space-y-2.5 min-w-0'
       }
     >
+      {everActiveRef.current ? (
+      <>
       {isLoadingOlderMessages && (
         <div className="flex justify-center py-2">
           <Spinner size="sm" />
@@ -359,7 +419,7 @@ export function TabView({
         <div className="sticky bottom-0 z-10 flex items-center justify-center py-1.5">
           <button
             type="button"
-            onClick={onScrollToBottom}
+            onClick={scrollToBottom}
             className="flex items-center gap-2 px-3 py-1.5 rounded-full
                           bg-[var(--color-bg-primary)]/95 backdrop-blur-sm
                           border border-[var(--color-border-subtle)]
@@ -378,7 +438,18 @@ export function TabView({
           </button>
         </div>
       )}
-      <div ref={messagesEndRef} />
+      <div ref={endRef} />
+      </>
+      ) : null}
     </div>
   );
 }
+
+/**
+ * Memoized export — background TabViews skip re-render when ChatPage re-renders
+ * with unchanged props. Each TabView still re-renders on its OWN store change
+ * via its internal `useMessageStore(tabId)` subscription. Effective because all
+ * props passed by ChatPage are referentially stable for non-changing tabs
+ * (stable callbacks + tabMapRef-derived values).
+ */
+export const TabView = memo(TabViewImpl);

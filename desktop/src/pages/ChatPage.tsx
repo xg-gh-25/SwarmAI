@@ -248,8 +248,6 @@ export default function ChatPage() {
     setPendingPermissionRequestId,
     isStreaming,
     setIsStreaming,
-    displayedActivity,
-    elapsedSeconds,
     pendingStreamTabs,
     clearPendingStreamTab,
     bumpStreamingDerivation,
@@ -863,20 +861,6 @@ export default function ChatPage() {
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
-
-  /** Fix 2: Detect user scroll-up to suppress auto-scroll during streaming. */
-  const handleMessagesScroll = useCallback(() => {
-    const el = messagesContainerRef.current;
-    if (!el) return;
-    const threshold = 100; // px from bottom
-    const isNearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
-    userScrolledUpRef.current = !isNearBottom;
-
-    // Infinite scroll: load older messages when scrolled to top
-    if (el.scrollTop === 0) {
-      loadOlderMessages();
-    }
-  }, [userScrolledUpRef, loadOlderMessages]);
 
   useEffect(() => {
     // Only auto-scroll if user hasn't scrolled up (Fix 2)
@@ -2467,46 +2451,44 @@ export default function ChatPage() {
             </div>
           ) : (
             <>
-              {/* Messages — single active TabView (Migration Step 1).
-                  Renders the active tab's message list. Per-tab props are read
-                  from tabMapRef (authoritative) so behavior matches the prior
-                  inline list exactly. N keep-mounted TabViews arrive in task 4.1. */}
-              <TabView
-                tabId={activeTabId ?? ''}
-                messages={messages}
-                sessionId={sessionId}
-                isStreaming={isStreaming}
-                pendingQuestion={pendingQuestion}
-                activeTabPendingQuestion={activeTabIdRef.current
-                  ? tabMapRef.current.get(activeTabIdRef.current)?.pendingQuestion ?? null
-                  : null}
-                pendingPermissionRequestId={pendingPermissionRequestId}
-                contextWarning={contextWarning}
-                isReconnecting={activeTabIdRef.current
-                  ? tabMapRef.current.get(activeTabIdRef.current)?.isReconnecting
-                  : undefined}
-                isResuming={activeTabIdRef.current
-                  ? tabMapRef.current.get(activeTabIdRef.current)?.isResuming
-                  : undefined}
-                isWaitingForBusy={isWaitingForBusy}
-                displayedActivity={displayedActivity}
-                elapsedSeconds={elapsedSeconds}
-                hasMoreMessages={hasMoreMessages}
-                isLoadingOlderMessages={isLoadingOlderMessages}
-                messagesContainerRef={messagesContainerRef}
-                messagesEndRef={messagesEndRef}
-                onMessagesScroll={handleMessagesScroll}
-                onScrollToBottom={scrollToBottom}
-                onLoadOlder={loadOlderMessages}
-                onAnswerQuestion={stableHandleAnswerQuestion}
-                onPermissionDecision={stableHandlePermissionDecision}
-                onEscalationSelect={handleEscalationSelect}
-                onCancelQueued={handleCancelQueued}
-                onContinue={handleContinue}
-                onFocusClick={handleFocusClick}
-                onItemClick={handleItemClick}
-                onRetryQueueTimeout={handleRetryQueueTimeout}
-              />
+              {/* Messages — one keep-mounted TabView per open tab (Step 5.1).
+                  Only the active tab is visible (display:none otherwise); each
+                  reads its OWN per-tab MessageStore, so switching is a pure
+                  visibility toggle — zero remount, zero markdown re-parse.
+                  Per-tab values come from tabMapRef (authoritative); the active
+                  tab additionally uses the freshest React-state values. */}
+              {openTabs.map((tab) => {
+                const ts = tabMapRef.current.get(tab.id);
+                const active = tab.id === activeTabId;
+                return (
+                  <TabView
+                    key={tab.id}
+                    tabId={tab.id}
+                    isActive={active}
+                    messages={ts?.messages ?? []}
+                    sessionId={active ? sessionId : ts?.sessionId}
+                    isStreaming={active ? isStreaming : !!ts?.isStreaming}
+                    pendingQuestion={active ? pendingQuestion : (ts?.pendingQuestion ?? null)}
+                    activeTabPendingQuestion={ts?.pendingQuestion ?? null}
+                    pendingPermissionRequestId={active ? pendingPermissionRequestId : (ts?.pendingPermissionRequestId ?? null)}
+                    contextWarning={active ? contextWarning : (ts?.contextWarning ?? null)}
+                    isReconnecting={ts?.isReconnecting}
+                    isResuming={ts?.isResuming}
+                    isWaitingForBusy={active ? isWaitingForBusy : false}
+                    hasMoreMessages={active ? hasMoreMessages : false}
+                    isLoadingOlderMessages={active ? isLoadingOlderMessages : false}
+                    onLoadOlder={loadOlderMessages}
+                    onAnswerQuestion={stableHandleAnswerQuestion}
+                    onPermissionDecision={stableHandlePermissionDecision}
+                    onEscalationSelect={handleEscalationSelect}
+                    onCancelQueued={handleCancelQueued}
+                    onContinue={handleContinue}
+                    onFocusClick={handleFocusClick}
+                    onItemClick={handleItemClick}
+                    onRetryQueueTimeout={handleRetryQueueTimeout}
+                  />
+                );
+              })}
 
               {/* Rate limit countdown indicator */}
               {isLimited('/chat') && chatRateLimitCountdown > 0 && (
