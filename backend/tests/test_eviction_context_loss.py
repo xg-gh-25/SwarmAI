@@ -446,17 +446,17 @@ class TestPreservationShutdownDisconnectAll:
         session_id_b=sdk_session_ids,
     )
     @PROPERTY_SETTINGS
-    def test_disconnect_all_clears_sdk_session_id_on_all_units(
+    def test_disconnect_all_preserves_sdk_session_id_for_fast_resume(
         self, session_id_a: str, session_id_b: str,
     ):
-        """After disconnect_all(), all units have _sdk_session_id=None.
+        """After disconnect_all(), units RETAIN _sdk_session_id for fast resume.
 
-        On unfixed code, ``kill()`` calls ``_cleanup_internal()`` which
-        clears ``_sdk_session_id``. After fix, ``disconnect_all()``
-        will explicitly clear it. Either way, the behavior is the same:
-        all units end up with ``_sdk_session_id=None``.
+        Design §2C (2026-06-20): sdk_session_id is intentionally preserved
+        after disconnect_all() so that session_state.json can persist them
+        for fast --resume on next daemon startup. The old contract (clear on
+        disconnect) is superseded by the session stability design.
 
-        **Validates: Requirements 3.5**
+        **Validates: Design §2C (Session Stability & Graceful Degradation)**
         """
         # Create a router with mock prompt_builder
         mock_pb = MagicMock()
@@ -491,13 +491,14 @@ class TestPreservationShutdownDisconnectAll:
         finally:
             loop.close()
 
-        # After disconnect_all, ALL units must have _sdk_session_id=None
-        assert unit_a._sdk_session_id is None, (
-            f"Expected unit_a._sdk_session_id=None after disconnect_all(), "
+        # After disconnect_all, units RETAIN _sdk_session_id (Design §2C).
+        # Identity is persisted to session_state.json for fast resume on restart.
+        assert unit_a._sdk_session_id == session_id_a, (
+            f"Expected unit_a._sdk_session_id preserved after disconnect_all(), "
             f"but got {unit_a._sdk_session_id!r}."
         )
-        assert unit_b._sdk_session_id is None, (
-            f"Expected unit_b._sdk_session_id=None after disconnect_all(), "
+        assert unit_b._sdk_session_id == session_id_b, (
+            f"Expected unit_b._sdk_session_id preserved after disconnect_all(), "
             f"but got {unit_b._sdk_session_id!r}."
         )
         # Both should be COLD

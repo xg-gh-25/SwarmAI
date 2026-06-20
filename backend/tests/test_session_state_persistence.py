@@ -314,13 +314,17 @@ class TestStaleSessionIdFallback:
     """AC4: If --resume fails with session-not-found, fall back to cold resume."""
 
     def test_session_not_found_clears_sdk_id(self):
-        """Stale sdk_session_id must be cleared on session-not-found error."""
+        """Stale sdk_session_id must be cleared on CLI resume-specific errors."""
         from core.session_utils import is_session_not_found_error
 
-        # Common error patterns for "session not found"
-        assert is_session_not_found_error("Session not found: abc123")
-        assert is_session_not_found_error("Error: session 'xyz' does not exist")
-        assert is_session_not_found_error("ENOENT: session file not found")
-        # Should NOT match regular errors
+        # CLI resume-specific error patterns (anchored)
+        assert is_session_not_found_error("failed to load session abc123")
+        assert is_session_not_found_error("Cannot resume: session file not found")
+        assert is_session_not_found_error("unable to restore session data")
+        assert is_session_not_found_error("ENOENT: /home/user/.claude/sessions/abc.json session")
+        assert is_session_not_found_error("resume session abc123 does not exist")
+        # Should NOT match generic errors containing "session"
         assert not is_session_not_found_error("Connection timeout")
         assert not is_session_not_found_error("Rate limit exceeded")
+        assert not is_session_not_found_error("Redis session not found")  # MCP error
+        assert not is_session_not_found_error("Session expired in user's app")  # tool error

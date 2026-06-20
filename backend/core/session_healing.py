@@ -108,6 +108,10 @@ class HealthSensor:
     Call should_checkpoint() to ask "should we heal?"
     """
 
+    # Time cap for young session immunity (PE HIGH-2): even with turn_count<3,
+    # immunity expires after 3 minutes so permanently-stuck sessions can be healed.
+    _YOUNG_IMMUNITY_MAX_AGE_S: float = 180.0
+
     def __init__(self, max_turns: int | None = 500):
         self._turn_latencies: deque[float] = deque(maxlen=50)
         self._rss_samples: deque[int] = deque(maxlen=RSS_WINDOW)
@@ -115,6 +119,7 @@ class HealthSensor:
         self._turn_count: int = 0
         self._max_turns: int = max_turns if max_turns is not None else 500
         self._last_activity_time: float = time.time()
+        self._created_at: float = time.time()
 
     @property
     def turn_count(self) -> int:
@@ -154,7 +159,12 @@ class HealthSensor:
         # Sessions with <3 turns haven't invested enough for latency/memory/turn
         # healing to provide value. BUT hang_detected and error_cascade MUST still
         # fire — a genuinely stuck subprocess needs recovery regardless of age.
-        _young = self._turn_count < 3
+        # PE HIGH-2: Time cap ensures permanently-stuck sessions (e.g., WAITING_INPUT
+        # that never gets a turn) don't stay immune forever.
+        _young = (
+            self._turn_count < 3
+            and (time.time() - self._created_at) < self._YOUNG_IMMUNITY_MAX_AGE_S
+        )
 
         # Signal 1: Latency degradation (context window filling up)
         if not _young and len(self._turn_latencies) >= LATENCY_BASELINE_WINDOW:

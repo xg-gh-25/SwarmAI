@@ -96,6 +96,8 @@ def restore_session_state(
         Number of sessions restored.
     """
     if not state_file.exists():
+        # Clean up orphaned .tmp from interrupted writes (MEDIUM-2)
+        state_file.with_suffix(".tmp").unlink(missing_ok=True)
         return 0
 
     # Parse file

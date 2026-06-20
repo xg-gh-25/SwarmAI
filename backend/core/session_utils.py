@@ -466,11 +466,13 @@ def read_owner_pid(pid: int) -> int | None:
 # ---------------------------------------------------------------------------
 
 _SESSION_NOT_FOUND_PATTERNS = [
-    re.compile(r"session\s+not\s+found", re.IGNORECASE),
-    re.compile(r"session\s+['\"]?\w+['\"]?\s+does\s+not\s+exist", re.IGNORECASE),
-    re.compile(r"ENOENT.*session", re.IGNORECASE),
-    re.compile(r"no\s+such\s+session", re.IGNORECASE),
-    re.compile(r"session\s+file\s+not\s+found", re.IGNORECASE),
+    # CLI-specific resume failure patterns (anchored to avoid false positives
+    # from MCP/tool errors that happen to contain "session" — PE HIGH-1).
+    re.compile(r"(?:failed to|cannot|unable to)\s+(?:load|resume|restore).*session", re.IGNORECASE),
+    re.compile(r"session\s+(?:file|data)\s+not\s+found", re.IGNORECASE),
+    re.compile(r"no\s+such\s+session\s+(?:file|id)", re.IGNORECASE),
+    re.compile(r"ENOENT.*\.claude[/\\].*session", re.IGNORECASE),
+    re.compile(r"resume.*session.*(?:not found|does not exist|missing)", re.IGNORECASE),
 ]
 
 
@@ -482,6 +484,9 @@ def is_session_not_found_error(error_str: str) -> bool:
     a "session not found" type error. In this case, the correct recovery is
     to clear ``_sdk_session_id`` and fall back to cold resume.
 
-    Returns True if the error matches a known "session not found" pattern.
+    Patterns are anchored to CLI resume-specific contexts (PE HIGH-1):
+    generic "session not found" from MCP servers or user tools will NOT match.
+
+    Returns True if the error matches a known CLI resume-failure pattern.
     """
     return any(p.search(error_str) for p in _SESSION_NOT_FOUND_PATTERNS)
