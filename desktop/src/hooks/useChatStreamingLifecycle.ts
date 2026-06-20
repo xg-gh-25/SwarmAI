@@ -1293,30 +1293,60 @@ export function useChatStreamingLifecycle(
               currentDrainedSeqs: mirrorState.lastDrainedSeqs,
               serverPendingCount: mirrorState.pendingCount,
             });
-            tabState._lastDrainedSeqs = mirrorState.lastDrainedSeqs;
-            if (drain.retire && tabState.queuedMessage && drain.serverPendingCount === 0) {
-              // Server drained everything it owned — the local optimistic queue
-              // mirror is now superseded by delivered DB content.
-              // Flip the rendered synthetic 'queued-<uuid>' message's badge OFF
-              // the same way drainQueuedMessage does (store.updateById). A
-              // non-streaming tab hits `if (!isStreaming) continue` right below,
-              // so the force-clear DB sync never runs for it — without this the
-              // synthetic message would keep a stale "queued" badge forever.
-              const retireId = tabState.queuedMessage.messageId;
-              const retireStore = messageStoreRegistry.get(tabId);
-              if (retireStore) {
-                retireStore.updateById(retireId, (m) => ({ ...m, isQueued: false }));
-                tabState.messages = retireStore.messages; // parallel-write (bg tab)
-                if (tabId === activeTabIdRef.current) setMessages(retireStore.messages);
+            if (drain.retire) {
+              // ── B1: server-side drain SURFACE (the missing wire) ───────────
+              // A server-side drain delivered a coalesced turn to the DB. Root-1
+              // DEFERRED live re-attach (design Scenario 7 / F8): drain_pending
+              // consumes and DISCARDS the live SSE events, so the drained turn's
+              // user+assistant content exists ONLY in the DB. The design's stated
+              // recovery — "completed content loads from DB via the existing
+              // message reconcile" — was never wired for this case: the only
+              // DB-fetch path below sits behind `if (!isStreaming) continue`, which
+              // a drained (idle) tab never reaches. Without this block the drained
+              // response is invisible until reload/tab-switch — the "queue doesn't
+              // auto-continue" dead-end. This block runs ABOVE the isStreaming gate
+              // so it fires for idle drained tabs, and is the authoritative mirror
+              // surface for server-owned drains (no local re-send → no double-send).
+              const drainSid = tabState.sessionId;
+              const observedSeqs = mirrorState.lastDrainedSeqs;
+              // The synthetic 'queued-<uuid>' optimistic bubble (if the local
+              // queue path created one) must be REMOVED, not merely un-badged:
+              // the DB reconcile below brings the canonical coalesced user row, so
+              // keeping the synthetic bubble would duplicate the user's text.
+              const retireId = (tabState.queuedMessage && drain.serverPendingCount === 0)
+                ? tabState.queuedMessage.messageId
+                : null;
+              if (drainSid) {
+                chatService.invalidateMessageCache(drainSid);
+                chatService.getSessionMessages(drainSid).then((msgs) => {
+                  if (cancelled) return;
+                  const s = messageStoreRegistry.getOrCreate(tabId, { sessionId: drainSid });
+                  // Remove the optimistic bubble only now (fetch succeeded) so a
+                  // failed fetch leaves it intact for the next tick to retry.
+                  if (retireId) s.remove((m) => m.id === retireId);
+                  // reconcile is phase-gated + dedups by id: NO-OP if streaming
+                  // restarted, preserves any other local-only messages.
+                  s.reconcile(msgs);
+                  if (s.phase === 'idle') {
+                    if (tabId === activeTabIdRef.current) setMessages(() => s.messages);
+                    else tabState.messages = s.messages;
+                  }
+                  // Mark surfaced ONLY on success — defer the prior-seqs update so a
+                  // failed fetch re-fires `drain.retire` next tick (retry, P2: no
+                  // drained response lost to a transient fetch error).
+                  tabState._lastDrainedSeqs = observedSeqs;
+                  if (retireId) {
+                    tabState.queuedMessage = undefined;
+                    tabState._queuedAt = undefined;
+                  }
+                }).catch(() => { /* best-effort; _lastDrainedSeqs NOT advanced → retry next tick */ });
               } else {
-                tabState.messages = tabState.messages.map((m) =>
-                  m.id === retireId ? { ...m, isQueued: false } : m,
-                );
-                if (tabId === activeTabIdRef.current) setMessages(tabState.messages);
+                // No session id to fetch from — nothing to surface; just advance.
+                tabState._lastDrainedSeqs = observedSeqs;
               }
-              tabState.queuedMessage = undefined;
-              tabState._queuedAt = undefined;
               anyCleared = true;
+            } else {
+              tabState._lastDrainedSeqs = mirrorState.lastDrainedSeqs;
             }
           }
 
@@ -2626,15 +2656,20 @@ export function useChatStreamingLifecycle(
                 tab.isWaitingForBusy = false;
               };
 
-              // Detection strategy: bypass ETag (which is count-based and won't
-              // change during streaming since the assistant message row already
-              // exists). Instead, invalidate cache before each poll and compare
-              // the last assistant message's content length across polls.
-              // Require 2 consecutive stable polls (6s) to avoid false positives
-              // during tool execution pauses.
-              let prevContentLen = -1;
-              let stableCount = 0;
-
+              // ── B1: drain-aware busy recovery (authoritative state) ────────
+              // The backend is the SOLE owner of the pending drain (Root-1 SSOT):
+              // the rejected send was persisted server-side (sent=0) and will be
+              // coalesce-drained at the next clean IDLE. We therefore do NOT
+              // re-send from here — a frontend re-send double-sends against the
+              // server drain AND spawns fresh SESSION_BUSY rows (the root of the
+              // "queue loops / never continues" symptom). Instead we POLL
+              // authoritative state and RECONCILE the DB each tick so the in-flight
+              // turn AND the drained turn surface progressively (Root-1 deferred
+              // live token re-attach — design Scenario 7/F8). getSessionMessages
+              // excludes sent=0 pending rows, so nothing flickers before the drain
+              // flips them sent=1. Finish only when the backend is genuinely idle
+              // with nothing pending. The always-on 15s reconcile tick is the
+              // backstop if this fast poll is cleared early.
               busyTab.busyPollInterval = setInterval(async () => {
                 // Guard: tab may have been closed during polling
                 const currentTab = tabMapRef.current.get(capturedTabId);
@@ -2643,86 +2678,64 @@ export function useChatStreamingLifecycle(
                   return;
                 }
                 try {
-                  // READ-ONLY fetch — checks content length for completion detection.
-                  // Does NOT mutate message state; no store.reconcile() needed.
-                  // Phase-safe: only runs when isWaitingForBusy (not streaming).
+                  const states = await chatService.getStreamingState();
+                  const auth = states[pollSessionId];
+                  // "Busy" = an in-flight turn (streaming/waiting) OR a coalesced
+                  // drain still queued/running (pendingCount > 0). Missing entry =
+                  // session GC'd/evicted = nothing running = not busy.
+                  const backendBusy =
+                    auth?.streaming === true ||
+                    auth?.state === 'streaming' ||
+                    auth?.state === 'waiting_input' ||
+                    (auth?.pendingCount ?? 0) > 0;
+
+                  // Surface current DB truth every tick (cheap; dedups by id;
+                  // phase-gated NO-OP if a live stream restarted).
                   chatService.invalidateMessageCache(pollSessionId);
                   const msgs = await chatService.getSessionMessages(pollSessionId);
-
-                  // Find the last assistant message
-                  const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant');
-                  if (!lastAssistant) return; // No assistant message yet
-
-                  // Measure content: count text blocks' total length
-                  const contentLen = lastAssistant.content.reduce((acc, block) => {
-                    if ('text' in block && typeof block.text === 'string') {
-                      return acc + block.text.length;
-                    }
-                    return acc + 1; // non-text blocks count as 1
-                  }, 0);
-
-                  // Completion heuristic: content is non-empty AND stable for
-                  // 2 consecutive polls (6s) — avoids false positives during
-                  // tool execution pauses
-                  if (contentLen > 0 && contentLen === prevContentLen) {
-                    stableCount++;
-                    if (stableCount >= 2) {
-                      // Backend completed — reconcile via store (single-writer)
-                      const busyStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
-                      if (busyStore) {
-                        busyStore.reconcile(msgs);
-                        currentTab.messages = busyStore.messages;
-                      } else {
-                        const mapped = msgs.map((m) => ({
-                          id: m.id,
-                          role: m.role as 'user' | 'assistant' | 'system',
-                          content: m.content as ContentBlock[],
-                          timestamp: m.createdAt || new Date().toISOString(),
-                        }));
-                        currentTab.messages = mapped;
-                      }
-                      clearBusyPoll(currentTab);
-                      if (capturedTabId === activeTabIdRef.current) {
-                        const snapshot = busyStore?.getSnapshot() ?? currentTab.messages;
-                        setMessages(snapshot);
-                        setIsWaitingForBusy(false);
-                      }
-                      updateTabStatus(capturedTabId, 'idle');
-                      // Drain the re-queued message (if any) now that the busy
-                      // response completed — single owner (the queue), sent
-                      // exactly once. clearBusyPoll cleared isWaitingForBusy, so
-                      // shouldQueueSend no longer blocks the drain's own send.
-                      if (currentTab.queuedMessage && deps.onDrainQueue) {
-                        setTimeout(() => deps.onDrainQueue?.(capturedTabId), 100);
-                      }
-                    }
-                  } else {
-                    stableCount = 0; // Reset on any change
+                  const busyStore = messageStoreRegistry.getOrCreate(capturedTabId, { sessionId: pollSessionId });
+                  busyStore.reconcile(msgs);
+                  if (busyStore.phase === 'idle') {
+                    currentTab.messages = busyStore.messages;
+                    if (capturedTabId === activeTabIdRef.current) setMessages(busyStore.getSnapshot());
                   }
-                  prevContentLen = contentLen;
+
+                  if (!backendBusy) {
+                    // In-flight turn + coalesced drain are all done. Retire the
+                    // optimistic queued bubble (the DB reconcile above already
+                    // brought the canonical drained rows, so the synthetic would
+                    // duplicate them) — then finish. NO re-send (single owner).
+                    if (currentTab.queuedMessage) {
+                      const qid = currentTab.queuedMessage.messageId;
+                      busyStore.remove((m) => m.id === qid);
+                      currentTab.queuedMessage = undefined;
+                      currentTab._queuedAt = undefined;
+                      if (busyStore.phase === 'idle') {
+                        currentTab.messages = busyStore.messages;
+                        if (capturedTabId === activeTabIdRef.current) setMessages(busyStore.getSnapshot());
+                      }
+                    }
+                    clearBusyPoll(currentTab);
+                    if (capturedTabId === activeTabIdRef.current) setIsWaitingForBusy(false);
+                    updateTabStatus(
+                      capturedTabId,
+                      capturedTabId === activeTabIdRef.current ? 'idle' : 'complete_unread',
+                    );
+                  }
                 } catch {
                   // Silently ignore poll errors — don't turn recovery into error
                 }
               }, 3000);
 
-              // Safety timeout: 30s max polling
+              // Safety cap: stop the fast poll after 10 min. The always-on 15s
+              // reconcile tick remains the backstop that surfaces any later drain.
+              // NO re-send on timeout (single owner — the backend drains).
               busyTab.busyPollTimeout = setTimeout(() => {
                 const currentTab = tabMapRef.current.get(capturedTabId);
-                if (currentTab) {
-                  clearBusyPoll(currentTab);
-                }
-                if (capturedTabId === activeTabIdRef.current) {
-                  setIsWaitingForBusy(false);
-                }
+                if (currentTab) clearBusyPoll(currentTab);
+                if (capturedTabId === activeTabIdRef.current) setIsWaitingForBusy(false);
                 updateTabStatus(capturedTabId, 'idle');
-                // Drain any re-queued message even on timeout — the user's
-                // message must not be stranded if the poll never detected
-                // completion. clearBusyPoll cleared isWaitingForBusy first.
-                const timeoutTab = tabMapRef.current.get(capturedTabId);
-                if (timeoutTab?.queuedMessage && deps.onDrainQueue) {
-                  setTimeout(() => deps.onDrainQueue?.(capturedTabId), 100);
-                }
-              }, 30_000);
+              }, 600_000);
             } else {
               // No session ID — can't poll, clear immediately
               if (capturedTabId) {
