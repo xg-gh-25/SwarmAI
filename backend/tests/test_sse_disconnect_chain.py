@@ -217,6 +217,60 @@ class TestSessionBusyErrorEvent:
         assert len(error_events) >= 1
         assert error_events[0].get("code") == "SESSION_BUSY"
 
+    @pytest.mark.asyncio
+    async def test_session_busy_preserves_message_via_retry_payload(self):
+        """SESSION_BUSY must (a) delete the orphan DB row for cold-resume hygiene
+        AND (b) hand the message text back to the frontend via retryPayload so the
+        user's message is never silently lost (AC1).
+
+        retryPayload uses camelCase to match the QUEUE_TIMEOUT precedent and the
+        SSE parser (parseSSEEvent only camelizes `content`, top-level keys pass
+        through verbatim).
+        """
+        from core.session_router import SessionRouter
+        from core.exceptions import SessionBusyError
+
+        mock_pb = MagicMock()
+        mock_pb.build_options = AsyncMock(return_value=MagicMock(
+            model="test", system_prompt="test",
+        ))
+        router = SessionRouter(prompt_builder=mock_pb, config=MagicMock())
+
+        unit = router.get_or_create_unit("test-busy-preserve", "default")
+        unit._transition(SessionState.IDLE)
+
+        with patch.object(unit, "send", side_effect=SessionBusyError(detail="actively streaming")), \
+             patch("core.agent_defaults.build_agent_config", new_callable=AsyncMock, return_value={"model": "test"}), \
+             patch("database.db") as mock_db, \
+             patch("core.session_manager.session_manager") as mock_sm:
+            mock_sm.store_session = AsyncMock()
+            mock_db.messages = MagicMock()
+            mock_db.messages.put = AsyncMock()
+            mock_db.messages.delete_last_user_message = AsyncMock(return_value=True)
+
+            events = []
+            async for event in router.run_conversation(
+                session_id="test-busy-preserve",
+                agent_id="default",
+                user_message="Don't lose me",
+            ):
+                events.append(event)
+
+        error_events = [e for e in events if e.get("type") == "error"]
+        assert len(error_events) >= 1
+        busy = error_events[0]
+        assert busy.get("code") == "SESSION_BUSY"
+
+        # (a) DB hygiene delete still happens (prevents cold-resume ghost)
+        mock_db.messages.delete_last_user_message.assert_awaited_once_with("test-busy-preserve")
+
+        # (b) message preserved via retryPayload (camelCase) so FE can re-queue
+        payload = busy.get("retryPayload")
+        assert payload is not None, "SESSION_BUSY must carry retryPayload so the message is recoverable"
+        assert payload.get("userMessage") == "Don't lose me"
+        assert payload.get("sessionId") == "test-busy-preserve"
+        assert payload.get("agentId") == "default"
+
 
 # ---------------------------------------------------------------------------
 # SessionBusyError exists in exceptions module

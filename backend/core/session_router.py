@@ -1377,7 +1377,16 @@ class SessionRouter:
                 )
                 # Delete the orphaned user message that was persisted before
                 # slot acquisition.  Without this, cold resume would inject
-                # a message that was never actually sent to the agent.
+                # a message that was never actually sent to the agent
+                # (context_injector._find_last_user_text has no answered-filter).
+                #
+                # The delete is DB hygiene — but it must NOT lose the user's
+                # message.  We hand the message back to the frontend via
+                # retryPayload (camelCase, matching the QUEUE_TIMEOUT precedent
+                # and parseSSEEvent which only camelizes `content`).  The
+                # frontend re-queues it so a busy-session send is never silently
+                # lost.  Single owner: the frontend owns re-send; the backend
+                # only deletes the un-answered orphan.
                 if user_content:
                     try:
                         await db.messages.delete_last_user_message(session_id)
@@ -1391,11 +1400,20 @@ class SessionRouter:
                             "session_id=%s: %s",
                             session_id, del_exc,
                         )
-                yield _build_error_event(
+                busy_event = _build_error_event(
                     code="SESSION_BUSY",
                     message=str(send_err.message),
                     suggested_action=str(send_err.suggested_action),
                 )
+                # Preserve the message so the frontend can re-queue it — never
+                # lose user input on a busy-session send (AC1).
+                busy_event["retryPayload"] = {
+                    "sessionId": session_id,
+                    "agentId": agent_id,
+                    "userMessage": user_message,
+                    "content": content,
+                }
+                yield busy_event
                 return
             raise  # Re-raise non-SessionBusyError exceptions
 
