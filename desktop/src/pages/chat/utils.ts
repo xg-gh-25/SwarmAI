@@ -1,5 +1,6 @@
 import type { ChatSession, Message, ContentBlock } from '../../types';
 import { MS_PER_DAY, type TimeGroup } from './constants';
+import type { PendingQuestion } from './types';
 
 /**
  * Concatenate a page of older messages in front of the current messages,
@@ -120,3 +121,28 @@ export const formatTimestamp = (timestamp: string | undefined): string => {
   if (diffDays < 7) return `${diffDays}d ago`;
   return date.toLocaleDateString();
 };
+
+/**
+ * Resolve the toolUseId of the question the active tab should render as
+ * answerable (Root 3 / 3A — AskUserQuestion surfacing fix).
+ *
+ * Background: `ContentBlockRenderer` enables the AskUserQuestion submit only
+ * when `pendingToolUseId === block.toolUseId`. That prop was sourced ONLY from
+ * React `pendingQuestion` state, which is null on background tabs and during the
+ * mid-stream stale-ref window (`setPendingQuestion` is gated by `isActiveTab` in
+ * useChatStreamingLifecycle). The per-tab cache (`tabState.pendingQuestion`) is
+ * populated regardless, so we fall back to it — the question stays answerable.
+ *
+ * PIT71/PIT74 cross-tab-leak guard: the caller MUST pass ONLY the ACTIVE tab's
+ * cache as `activeTabPending`. ChatPage renders only the active tab's messages,
+ * so a question from a different tab is never an input here and can never leak.
+ *
+ * Pure function. Returns `undefined` (never `''`) when there is no live question.
+ */
+export function resolvePendingToolUseId(
+  reactPending: PendingQuestion | null | undefined,
+  activeTabPending: PendingQuestion | null | undefined,
+): string | undefined {
+  const id = reactPending?.toolUseId || activeTabPending?.toolUseId;
+  return id ? id : undefined;
+}

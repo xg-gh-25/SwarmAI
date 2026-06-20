@@ -12,7 +12,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fc from 'fast-check';
 import type { ChatSession } from '../../types';
-import { groupSessionsByTime, formatTimestamp, mergeOlderMessages } from './utils';
+import { groupSessionsByTime, formatTimestamp, mergeOlderMessages, resolvePendingToolUseId } from './utils';
+import type { PendingQuestion } from './types';
 import { MS_PER_DAY } from './constants';
 import type { Message, ContentBlock } from '../../types';
 
@@ -397,5 +398,43 @@ describe('mergeOlderMessages', () => {
     expect(olderMsg.content).toBe(olderContent);
     expect(olderMsg.content).toHaveLength(1);
     expect(older).toHaveLength(1);
+  });
+});
+
+// ============== resolvePendingToolUseId (Root 3 / 3A — AskUserQuestion surfacing) ==============
+//
+// The bug: ChatPage sourced pendingToolUseId ONLY from React `pendingQuestion`
+// state, which is null on background tabs / mid-switch (setPendingQuestion gated
+// by isActiveTab in useChatStreamingLifecycle.ts:2001). The per-tab cache
+// (tabState.pendingQuestion) IS populated regardless. resolvePendingToolUseId
+// derives the renderer prop from the cache fallback so the question is answerable.
+//
+// PIT71 guard: it must source ONLY from the ACTIVE tab's cache — never another
+// tab's — because ChatPage renders only the active tab's messages.
+describe('resolvePendingToolUseId (Root 3 / 3A)', () => {
+  const q = (id: string): PendingQuestion => ({ toolUseId: id, questions: [] });
+
+  it('AC2: React state null but active-tab cache populated → returns cache toolUseId (form stays enabled)', () => {
+    expect(resolvePendingToolUseId(null, q('tu-cache-1'))).toBe('tu-cache-1');
+  });
+
+  it('prefers React state when present (live same-tab case)', () => {
+    expect(resolvePendingToolUseId(q('tu-react'), q('tu-cache'))).toBe('tu-react');
+  });
+
+  it('returns undefined when neither React state nor cache has a question', () => {
+    expect(resolvePendingToolUseId(null, null)).toBeUndefined();
+  });
+
+  it('AC5 (PIT71 guard): only the ACTIVE tab cache is passed in — a non-active tab question is never the source', () => {
+    // Caller passes ONLY the active tab's cache. Simulate active tab having no
+    // question while a (different) background tab does: the background question
+    // is simply not an argument, so it can never leak.
+    const activeTabCache = null; // active tab has no pending question
+    expect(resolvePendingToolUseId(null, activeTabCache)).toBeUndefined();
+  });
+
+  it('cache with empty toolUseId is treated as no question (undefined, not "")', () => {
+    expect(resolvePendingToolUseId(null, { toolUseId: '', questions: [] })).toBeUndefined();
   });
 });
