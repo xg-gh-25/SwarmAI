@@ -128,7 +128,7 @@ Skip for obvious actions (save-memory, workspace-git).
 
 `NO CODE CHANGE WITHOUT PIPELINE FIRST`
 
-R1. **Pipeline is mandatory** for ALL code changes. No escape hatch — even 1-line fixes get adversarial review (trivial profile: EVALUATE→BUILD→REVIEW→TEST→DELIVER→REFLECT, ~5min). User explicit override ("直接做", "just do it") is the ONLY bypass — and agent MUST strong-propose pipeline first with evidence why it's better. Evidence: 5 HIGH bugs found in "trivial" session fixes (2026-05-26). (P1)
+R1. **Pipeline is mandatory** for ALL code changes. No escape hatch — even 1-line fixes get adversarial review (trivial profile: EVALUATE→BUILD→REVIEW→TEST→DELIVER→REFLECT, ~5min). User explicit override ("直接做", "just do it") is the ONLY bypass — and agent MUST strong-propose pipeline first with evidence why it's better. **Adversarial is non-negotiable even in direct mode:** `NO COMMIT WITHOUT ADVERSARIAL REVIEW FIRST` — ANY code change, pipeline OR direct, MUST spawn an adversarial sub-agent BEFORE commit (sequence: code→test→adversarial→fix→commit). No profile/confidence/simplicity/token excuse bypasses this; "this is too simple for adversarial" IS the signal that it's needed. Cut ceremony, never cut gates. Evidence: 5 HIGH bugs in "trivial" fixes (2026-05-26); 11 skip-attempts, 0 self-corrections (CLASS A). (P1+P5)
 
 R2. **Pre-Implementation Checkpoint** (>1 file or new mechanism) — output before coding: (P1)
   1. Problem (one sentence)
@@ -172,7 +172,9 @@ R14. **Deploy scope = rollback scope** — 1:1. One format + multiple writers = 
 
 R15. **Read ANY API before coding against it** — external OR internal. Never code from memory. "I know this codebase" = highest-risk assertion (C033: 3 non-existent internal APIs in 1 session). Symmetric: verify callers exist for new public functions (0 callers = dead code). (P1)
 
-R16-new. **Deploy topology is a design decision, not an afterthought.** Before starting multi-subsystem work (>1 coupled component sharing a critical path): (1) identify shared integration paths, (2) define deploy order + per-subsystem smoke criteria, (3) declare this in EVALUATE stage output. "How do we ship this safely?" is answered before coding, not after. Blast radius = deploy scope × path coupling × recovery reliability. Evidence: C037 — 3 subsystems × 1 unverified shared path × 0 independent smoke = 5 P0/P1 regressions. (P2)
+R16. **Deploy topology is a design decision, not an afterthought.** Before starting multi-subsystem work (>1 coupled component sharing a critical path): (1) identify shared integration paths, (2) define deploy order + per-subsystem smoke criteria, (3) declare this in EVALUATE stage output. "How do we ship this safely?" is answered before coding, not after. Blast radius = deploy scope × path coupling × recovery reliability. Evidence: C037 — 3 subsystems × 1 unverified shared path × 0 independent smoke = 5 P0/P1 regressions. (P2)
+
+R16b. **Production/runtime change: observe before asserting.** Before declaring a production-state change done OR asserting runtime behavior ("next message uses X", "effective immediately", "no restart needed") → OBSERVE real behavior (logs, live endpoint, state query), not just read the code path. Reading code = mental model; observation = real behavior — orthogonal claims. Observe BEFORE "done", not after being challenged. Evidence: channel model override asserted "next msg = 4.8, no restart" from reading session_router.py — true only by luck (session was cold; a warm session locks model at spawn). (P1+P2)
 
 ## Rules — Communication (P1, P3)
 
