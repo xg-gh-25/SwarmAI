@@ -1369,8 +1369,10 @@ class SessionUnit:
         # OOM crash, streaming timeout) — not just the retry path.
         # This fixes an entire class of context-loss bugs where kill()
         # preserved _sdk_session_id but the next spawn didn't use it.
+        _attempted_resume = False
         if self._sdk_session_id:
             options = self._build_retry_options(options, self._sdk_session_id)
+            _attempted_resume = True
             # No fixed sleep needed here — _force_kill() now polls for
             # process exit via _await_process_exit() before returning.
             # The old 1.5s sleep was a timing guess that failed on slow
@@ -1382,6 +1384,31 @@ class SessionUnit:
         except Exception as exc:
             error_str = str(exc)
             spawn_tb_str = traceback.format_exc()
+
+        # ── Fallback chain (PE F11, Design §2B): stale sdk_session_id ──
+        # If --resume failed because the session file no longer exists on disk,
+        # clear the stale ID and retry as cold resume (no --resume flag).
+        # This prevents infinite retry loops on invalid session IDs.
+        if _attempted_resume:
+            from .session_utils import is_session_not_found_error
+            if is_session_not_found_error(error_str):
+                logger.warning(
+                    "Session %s: --resume failed (session not found), "
+                    "clearing stale sdk_session_id and falling back to cold resume",
+                    self.session_id,
+                )
+                self._sdk_session_id = None
+                # Retry without --resume: strip resume field from options
+                from claude_agent_sdk import ClaudeAgentOptions as _Opts
+                kwargs = dict(vars(options))
+                kwargs.pop("resume", None)
+                options_no_resume = _Opts(**kwargs)
+                try:
+                    await self._spawn(options_no_resume, config)
+                    return  # success — cold resume path
+                except Exception as fallback_exc:
+                    error_str = str(fallback_exc)
+                    spawn_tb_str = traceback.format_exc()
 
         if _is_retriable_error(error_str, spawn_tb_str):
             logger.warning(

@@ -1522,7 +1522,24 @@ class SessionRouter:
 
         Fires hooks before killing each unit so DailyActivity, auto-commit,
         and distillation run for every active conversation.
+
+        Design §2C: Persists session state BEFORE killing so that sdk_session_ids
+        survive daemon restart (enables fast --resume instead of cold resume).
+        clear_session_identity() is intentionally NOT called — identity is
+        preserved in the state file for restore on next startup.
         """
+        # Persist IDLE session identities for fast resume after restart (§2B/2C)
+        try:
+            from .session_state_persistence import persist_session_state
+            from jobs.paths import APP_DATA_DIR
+
+            state_file = APP_DATA_DIR / "session_state.json"
+            count = persist_session_state(self._units, state_file)
+            if count > 0:
+                logger.info("Persisted %d session identities before shutdown", count)
+        except Exception as exc:
+            logger.warning("Failed to persist session state on shutdown: %s", exc)
+
         alive = [u for u in self._units.values() if u.is_alive]
         logger.info("session_router.disconnect_all: killing %d alive units", len(alive))
         for unit in alive:
@@ -1532,7 +1549,8 @@ class SessionRouter:
                     await self._lifecycle_manager.enqueue_hooks_for_unit(unit)
                     unit._hooks_enqueued = True
                 await unit.kill()
-                unit.clear_session_identity()
+                # NOTE: clear_session_identity() intentionally REMOVED (Design §2C).
+                # sdk_session_id is preserved in session_state.json for fast resume.
             except Exception as exc:
                 logger.warning(
                     "Failed to kill unit %s during disconnect_all: %s",

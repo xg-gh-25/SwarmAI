@@ -150,8 +150,14 @@ class HealthSensor:
         Returns:
             (should_heal, trigger_name) — trigger_name is empty if healthy.
         """
+        # ── Scoped immunity for young sessions (PE F6, Design §3A) ──────
+        # Sessions with <3 turns haven't invested enough for latency/memory/turn
+        # healing to provide value. BUT hang_detected and error_cascade MUST still
+        # fire — a genuinely stuck subprocess needs recovery regardless of age.
+        _young = self._turn_count < 3
+
         # Signal 1: Latency degradation (context window filling up)
-        if len(self._turn_latencies) >= LATENCY_BASELINE_WINDOW:
+        if not _young and len(self._turn_latencies) >= LATENCY_BASELINE_WINDOW:
             baseline = list(self._turn_latencies)[:LATENCY_BASELINE_WINDOW]
             recent = list(self._turn_latencies)[-LATENCY_WINDOW:]
             baseline_avg = mean(baseline)
@@ -160,20 +166,20 @@ class HealthSensor:
                 return True, "latency_degradation"
 
         # Signal 2: Memory growth (RSS climbing)
-        if len(self._rss_samples) >= RSS_WINDOW:
+        if not _young and len(self._rss_samples) >= RSS_WINDOW:
             growth = self._rss_samples[-1] - self._rss_samples[0]
             if growth > RSS_GROWTH_THRESHOLD_MB:
                 return True, "memory_growth"
 
-        # Signal 3: Error cascade
+        # Signal 3: Error cascade — NOT immune (PE F6: genuine errors need recovery)
         if self._consecutive_errors >= ERROR_CASCADE_THRESHOLD:
             return True, "error_cascade"
 
         # Signal 4: Turn limit approaching
-        if self._turn_count >= (self._max_turns - TURN_APPROACH_BUFFER):
+        if not _young and self._turn_count >= (self._max_turns - TURN_APPROACH_BUFFER):
             return True, "turn_approaching"
 
-        # Signal 5: Hang detection (no activity for HANG_TIMEOUT_S)
+        # Signal 5: Hang detection — NOT immune (PE F6: stuck subprocess needs kill)
         # WHITELIST: hang_detected ONLY fires for IDLE and COLD states.
         # All other states have dedicated liveness mechanisms:
         # - STREAMING: PID watchdog + MESSAGE_TIMEOUT + circuit breaker

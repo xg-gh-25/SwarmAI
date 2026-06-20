@@ -246,6 +246,8 @@ class LifecycleManager:
                     await self._check_ttl()
                     await self._cleanup_dead()
                     await self._check_memory_pressure()
+                    # Persist session state every cycle (~60s) for crash recovery (§2B PE F7)
+                    await self._persist_session_state()
                     # Reap orphans every 3rd cycle (~3 min) — was 10th (~10 min).
                     # Reduced after zombie process incident (248% CPU, 2026-04-01).
                     if cycle % 3 == 0:
@@ -1004,6 +1006,28 @@ class LifecycleManager:
             logger.warning("lifecycle_manager.daily_backup failed: %s", exc)
 
     # ── Memory pressure relief ─────────────────────────────────────
+
+    # ── Session state persistence (Design §2B, PE F7) ──────────────────────
+    # Persist IDLE session sdk_session_ids every 60s for crash recovery.
+    # On daemon restart, restored IDs enable fast --resume instead of cold resume.
+
+    async def _persist_session_state(self) -> None:
+        """Persist IDLE session identities to disk for crash recovery.
+
+        Called every maintenance cycle (~60s). Atomic write ensures no
+        corruption if daemon crashes mid-write. Non-fatal — failures are
+        logged and skipped.
+        """
+        try:
+            from .session_state_persistence import persist_session_state
+            from jobs.paths import APP_DATA_DIR
+
+            state_file = APP_DATA_DIR / "session_state.json"
+            units = self._router._units if self._router else {}
+            persist_session_state(units, state_file)
+        except Exception as exc:
+            # Non-fatal: persistence is best-effort, never blocks maintenance
+            logger.debug("Session state persistence skipped: %s", exc)
 
     # Two-tier memory thresholds (defaults from MEMORY_EVICT_PCT / MEMORY_CIRCUIT_BREAKER_PCT):
     #  tier 1 → evict IDLE only (gentle — session can resume cheaply)

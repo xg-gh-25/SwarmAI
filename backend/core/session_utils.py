@@ -11,6 +11,7 @@ Public symbols:
 - ``_build_error_event``                 — Build a sanitized SSE error event dict.
 - ``fuzzy_title_matches_deliverable``    — Fuzzy text matching (shared by proactive + distillation).
 - ``read_owner_pid``                     — Read SWARMAI_OWNER_PID from a process's environment.
+- ``is_session_not_found_error``         — Detect stale --resume session ID failures.
 """
 from __future__ import annotations
 
@@ -458,3 +459,29 @@ def read_owner_pid(pid: int) -> int | None:
             pass
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Session-not-found detection — for stale --resume fallback (PE F11)
+# ---------------------------------------------------------------------------
+
+_SESSION_NOT_FOUND_PATTERNS = [
+    re.compile(r"session\s+not\s+found", re.IGNORECASE),
+    re.compile(r"session\s+['\"]?\w+['\"]?\s+does\s+not\s+exist", re.IGNORECASE),
+    re.compile(r"ENOENT.*session", re.IGNORECASE),
+    re.compile(r"no\s+such\s+session", re.IGNORECASE),
+    re.compile(r"session\s+file\s+not\s+found", re.IGNORECASE),
+]
+
+
+def is_session_not_found_error(error_str: str) -> bool:
+    """Detect if a spawn/resume error indicates a stale sdk_session_id.
+
+    When ``--resume`` is used with a session ID that no longer exists on disk
+    (e.g., after a long daemon downtime or OS temp cleanup), the CLI emits
+    a "session not found" type error. In this case, the correct recovery is
+    to clear ``_sdk_session_id`` and fall back to cold resume.
+
+    Returns True if the error matches a known "session not found" pattern.
+    """
+    return any(p.search(error_str) for p in _SESSION_NOT_FOUND_PATTERNS)
