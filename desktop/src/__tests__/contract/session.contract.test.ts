@@ -112,6 +112,35 @@ describe('Session Contract', () => {
     expect(hasDrained).toBe(true);
   });
 
+  it('AC6: backend liveness (/health) and session activity (streaming-state) are INDEPENDENT signals', async () => {
+    // The user-notice scenario: a long turn streams, the SSE blips, but the
+    // backend is up. /health must answer healthy (→ never "offline") AND the
+    // session must still report active in streaming-state (→ Reconnecting, not
+    // idle, and the follow-up is not lost). This asserts the two signals come
+    // from separate endpoints and do not conflate — the SSOT-divergence fix.
+    const [healthRes, stateRes] = await Promise.all([
+      fetch(`${baseUrl}/health`),
+      fetch(`${baseUrl}/api/chat/sessions/streaming-state`),
+    ]);
+    expect(healthRes.status).toBe(200);
+    const health = await healthRes.json();
+    // /health carries no per-session activity — it is pure backend liveness.
+    expect(health).not.toHaveProperty('sessions');
+
+    const state = await stateRes.json();
+    // streaming-state carries activity but no backend-offline concept.
+    const entries = Object.values(state.sessions) as Array<Record<string, unknown>>;
+    const hasActive = entries.some(
+      (e) => e.state === 'streaming' || e.state === 'waiting_input',
+    );
+    expect(hasActive).toBe(true);
+    for (const e of entries) {
+      // No entry can declare the backend "offline" — that is health's job alone.
+      expect(e).not.toHaveProperty('offline');
+      expect(e).not.toHaveProperty('disconnected');
+    }
+  });
+
   it('DELETE /api/chat/sessions/:id returns 204', async () => {
     const res = await fetch(`${baseUrl}/api/chat/sessions/fake-id-123`, {
       method: 'DELETE',
