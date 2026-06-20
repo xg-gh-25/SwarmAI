@@ -1,16 +1,28 @@
 import type { ChatRequest, StreamEvent, ChatSession, ChatMessage, PermissionResponse, StreamingStateEntry, AskUserQuestion } from '../types';
 
 /** Raw snake_case shape of a streaming-state entry as emitted by the backend.
- *  `pending_question.questions` carries the SAME AskUserQuestion payload the
- *  `ask_user_question` SSE event does (streaming_orchestrator.py:484), so it is
- *  typed as AskUserQuestion[] — this is a serialization boundary, the backend
- *  owns the shape. */
+ *
+ *  CRITICAL: the WAITING_INPUT state is SHARED by two different prompt kinds
+ *  (session_unit.py: one WAITING_INPUT state). The backend emits `pending_question`
+ *  for BOTH, with DIFFERENT shapes:
+ *    - AskUserQuestion (streaming_orchestrator.py:484): {tool_use_id, questions}
+ *    - command-permission prompt (streaming_orchestrator.py:340): {tool_use_id,
+ *      request_id, tool_name, tool_input, reason, options} — NO `questions` key.
+ *  The frontend mirror only re-surfaces AskUserQuestion (permission has its own
+ *  cmd_permission_request render path), so `questions` is optional here and the
+ *  mapper below treats a missing/empty `questions` as "not an AskUserQuestion". */
 interface RawStreamingStateEntry {
   streaming?: boolean;
   state?: string;
   waiting_input?: boolean;
   pending_count?: number;
-  pending_question?: { tool_use_id: string; questions?: AskUserQuestion[] } | null;
+  pending_question?: {
+    tool_use_id: string;
+    questions?: AskUserQuestion[];
+    // permission-prompt-only fields (present when this is NOT an AskUserQuestion):
+    request_id?: string;
+    options?: string[];
+  } | null;
   last_drained_seqs?: number[];
 }
 import api from './api';
@@ -466,13 +478,19 @@ export const chatService = {
     const out: Record<string, StreamingStateEntry> = {};
     for (const [sid, raw] of Object.entries(response.data.sessions ?? {})) {
       const rawPq = raw.pending_question;
+      // Only map an AskUserQuestion payload (non-empty `questions`). A
+      // command-permission prompt also sets pending_question on WAITING_INPUT but
+      // carries NO questions — it must map to null here so the mirror's AC5
+      // re-surface never mistakes it for a question (it has its own render path).
+      const isAskUserQuestion =
+        !!rawPq && Array.isArray(rawPq.questions) && rawPq.questions.length > 0;
       out[sid] = {
         streaming: raw.streaming ?? false,
         state: raw.state ?? 'idle',
         waitingInput: raw.waiting_input ?? false,
         pendingCount: raw.pending_count ?? 0,
-        pendingQuestion: rawPq
-          ? { toolUseId: rawPq.tool_use_id, questions: rawPq.questions ?? [] }
+        pendingQuestion: isAskUserQuestion
+          ? { toolUseId: rawPq!.tool_use_id, questions: rawPq!.questions! }
           : null,
         lastDrainedSeqs: raw.last_drained_seqs ?? [],
       };

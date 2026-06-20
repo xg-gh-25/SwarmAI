@@ -2020,7 +2020,15 @@ export default function ChatPage() {
     // question during the window where the backend mirror may still report
     // waiting_input for it before transitioning out. Cleared by the reconcile
     // loop once the backend moves past it (useChatStreamingLifecycle.ts re-surface block).
-    if (tabState) tabState._answeredToolUseId = toolUseId;
+    // Also clear the per-tab pendingQuestion REF (not just React state): the ref
+    // is what the reconcile loop reads as currentPendingToolUseId. If only React
+    // state is nulled, a subsequent tab-switch copies the (stale) ref back and the
+    // answered question's id is lost as the idempotency key — leaving _answeredToolUseId
+    // as the sole guard. Clearing the ref makes the answered state survive switches.
+    if (tabState) {
+      tabState._answeredToolUseId = toolUseId;
+      tabState.pendingQuestion = null;
+    }
 
     setPendingQuestion(null);
     incrementStreamGen(); // Fix 1: new stream generation

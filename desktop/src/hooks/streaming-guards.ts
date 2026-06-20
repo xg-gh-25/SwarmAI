@@ -179,6 +179,13 @@ export function shouldResurfaceQuestion(input: ResurfaceQuestionInput): boolean 
   const { backendWaitingInput, backendPendingQuestion, currentPendingToolUseId, answeredToolUseId } = input;
   if (!backendWaitingInput) return false;
   if (!backendPendingQuestion) return false;
+  // Defense-in-depth (the chat.ts boundary already maps permission prompts to
+  // null): an AskUserQuestion MUST have ≥1 question. A command-permission prompt
+  // shares the WAITING_INPUT state but carries no questions — it has its own
+  // render path and must never be re-surfaced as a question.
+  if (!Array.isArray(backendPendingQuestion.questions) || backendPendingQuestion.questions.length === 0) {
+    return false;
+  }
   const id = backendPendingQuestion.toolUseId;
   if (!id) return false;
   if (id === currentPendingToolUseId) return false; // already shown — idempotent
@@ -220,6 +227,15 @@ export interface DrainRetirementResult {
 export function computeDrainRetirement(input: DrainRetirementInput): DrainRetirementResult {
   const { priorDrainedSeqs, currentDrainedSeqs, serverPendingCount } = input;
   const prior = new Set(priorDrainedSeqs);
-  const retire = currentDrainedSeqs.some((seq) => !prior.has(seq));
-  return { retire, serverPendingCount };
+  // A drain is signalled by a NEW seq appearing...
+  const additive = currentDrainedSeqs.some((seq) => !prior.has(seq));
+  // ...OR by a RESET: the backend clears last_drained_seqs to [] at the start of
+  // each new turn (session_unit drops the stale hint) and REPLACES (not appends)
+  // per drain. So [4,5] → [] means the prior drain completed and a new turn began;
+  // a subsequent turn can even re-drain the same low seq numbers. Treating only
+  // additive changes as retire would leave a queue mirror stuck forever on a
+  // non-streaming tab (it can't reach the >60s force-clear). A shrink-to-empty
+  // after a non-empty prior is therefore also a retire signal.
+  const resetToEmpty = priorDrainedSeqs.length > 0 && currentDrainedSeqs.length === 0;
+  return { retire: additive || resetToEmpty, serverPendingCount };
 }

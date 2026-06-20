@@ -1221,13 +1221,38 @@ export function useChatStreamingLifecycle(
                   { isActive, sessionId: mirrorSid },
                 );
                 anyCleared = true;
+              } else {
+                // No assistant bubble to host the block (question's SSE was lost
+                // before any assistant content). surfacePendingQuestion needs a
+                // host message, so we can't render the form inline — but the user
+                // must still be able to DISCOVER the pending question. Raise the
+                // persistent "Swarm is asking" toast (idempotent via stable id)
+                // so the tab is not a silent dead-end every 15s poll.
+                const askTabTitle = tabMapRef.current.get(tabId)?.title ?? 'another tab';
+                addToast({
+                  severity: 'info',
+                  message: `Swarm is asking a question in "${askTabTitle}".`,
+                  id: `ask-uq-${pqPayload.toolUseId}`,
+                  autoDismiss: false,
+                  action: onSelectTab ? { label: 'Go to tab', onClick: () => onSelectTab(tabId) } : undefined,
+                });
               }
+            } else if (!mirrorState.waitingInput && tabState.pendingQuestion) {
+              // SYMMETRIC RETIRE (mirror is authoritative both ways): the backend
+              // is no longer waiting on a question, but the tab still shows one —
+              // it was answered elsewhere, abandoned (new chat), or its
+              // tool_use resolved. The loop must CLEAR stale questions, not only
+              // ADD them, or a dismissed/answered question lingers as a phantom
+              // un-answerable prompt. Clear the ref (all tabs) + React state (active).
+              tabState.pendingQuestion = null;
+              tabState._answeredToolUseId = undefined;
+              if (tabId === activeTabIdRef.current) setPendingQuestion(null);
+              anyCleared = true;
             } else if (
               // Clear the answer-in-flight guard once the backend has moved past
-              // the answered question (no longer waiting_input, or a different id).
+              // the answered question (still waiting_input but a DIFFERENT id).
               tabState._answeredToolUseId &&
-              (!mirrorState.waitingInput ||
-                mirrorState.pendingQuestion?.toolUseId !== tabState._answeredToolUseId)
+              mirrorState.pendingQuestion?.toolUseId !== tabState._answeredToolUseId
             ) {
               tabState._answeredToolUseId = undefined;
             }

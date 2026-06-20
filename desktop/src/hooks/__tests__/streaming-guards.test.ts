@@ -284,6 +284,18 @@ describe('shouldResurfaceQuestion (AC5 — lost AskUserQuestion re-surface)', ()
     })).toBe(false);
   });
 
+  it('Gate-2 HIGH: a permission prompt (empty questions, shares WAITING_INPUT) → NEVER resurface as a question', () => {
+    // A command-permission prompt sets state=waiting_input + pending_question with
+    // NO questions (it has its own cmd_permission_request render path). The guard
+    // must reject it so it is not mistaken for an AskUserQuestion (phantom side
+    // effects: state machine, setIsStreaming(false), toast).
+    expect(shouldResurfaceQuestion({
+      backendWaitingInput: true,
+      backendPendingQuestion: { toolUseId: 'perm-req-1', questions: [] },
+      currentPendingToolUseId: null,
+    })).toBe(false);
+  });
+
   it('answer-in-flight guard: an answer submitted for this toolUseId suppresses re-surface for one poll window', () => {
     // After the user answers, local pendingQuestion clears but the backend mirror
     // may still report waiting_input for one poll. Without this guard the just-
@@ -344,5 +356,25 @@ describe('computeDrainRetirement (AC4 — server pending_count / last_drained_se
       currentDrainedSeqs: [],
       serverPendingCount: 0,
     })).toEqual({ retire: false, serverPendingCount: 0 });
+  });
+
+  it('Gate-2 MED: server RESETS last_drained_seqs ([4,5] → []) on new turn → retire (not stuck)', () => {
+    // Backend clears last_drained_seqs to [] at the start of each new turn and
+    // REPLACES per drain. A pure additive check would miss this shrink and leave
+    // a non-streaming tab's queue mirror stuck forever. Reset-to-empty after a
+    // non-empty prior is a retire signal.
+    expect(computeDrainRetirement({
+      priorDrainedSeqs: [4, 5],
+      currentDrainedSeqs: [],
+      serverPendingCount: 0,
+    })).toEqual({ retire: true, serverPendingCount: 0 });
+  });
+
+  it('reset path does NOT false-fire when prior was already empty', () => {
+    expect(computeDrainRetirement({
+      priorDrainedSeqs: [],
+      currentDrainedSeqs: [],
+      serverPendingCount: 0,
+    }).retire).toBe(false);
   });
 });
