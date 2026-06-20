@@ -1669,6 +1669,11 @@ export function useChatStreamingLifecycle(
             console.log(`[Reconnect] Tab ${capturedTabId}: reconnection succeeded`);
             tabState.isReconnecting = false;
             tabState.reconnectionAttempt = 0;
+            // Clear disconnect timeout — recovery happened before it fired
+            if (tabState._disconnectTimeoutId) {
+              clearTimeout(tabState._disconnectTimeoutId);
+              tabState._disconnectTimeoutId = undefined;
+            }
             addToast({
               severity: 'info',
               message: 'Stream reconnected successfully.',
@@ -3117,21 +3122,42 @@ export function useChatStreamingLifecycle(
           }
 
           // Safety timeout: if no recovery within 30s, clear reconnecting
-          // state.  Without this, the user sees "Reconnecting..." forever
-          // when the backend finished processing but the SSE dropped.
-          setTimeout(() => {
+          // state and recover content from DB.  The backend persists assistant
+          // messages immediately during streaming (crash-safe), so any content
+          // generated after disconnect is in DB — we just need to fetch it.
+          const disconnectTimeoutId = setTimeout(async () => {
             const currentTabState = tabMapRef.current.get(capturedTabId);
-            if (currentTabState?.isReconnecting) {
-              console.warn('[DisconnectHandler] Timeout — clearing reconnecting state', { capturedTabId });
-              currentTabState.isReconnecting = false;
-              // End store streaming phase — unblocks reconcile/replace
-              const dcStore = messageStoreRegistry.get(capturedTabId);
-              if (dcStore) dcStore.endStreaming();
-              // Clear via the atomic setIsStreaming(false) primitive for ALL
-              // tabs — not just the active one.
-              setIsStreaming(false, capturedTabId);
+            if (!currentTabState?.isReconnecting) return; // Already recovered or tab closed
+
+            console.warn('[DisconnectHandler] Timeout — clearing reconnecting state and recovering from DB', { capturedTabId });
+            currentTabState.isReconnecting = false;
+            currentTabState._disconnectTimeoutId = undefined;
+            // End store streaming phase — unblocks reconcile/replace
+            const dcStore = messageStoreRegistry.get(capturedTabId);
+            if (!dcStore) return; // Tab was closed — don't re-create store
+            dcStore.endStreaming();
+            // Clear via the atomic setIsStreaming(false) primitive for ALL
+            // tabs — not just the active one.
+            setIsStreaming(false, capturedTabId);
+
+            // Recover content from DB: backend persists messages immediately
+            // during streaming, so content generated after SSE disconnect is
+            // available in DB.  Fetch and reconcile to display it.
+            const sid = currentTabState.sessionId;
+            if (sid) {
+              try {
+                chatService.invalidateMessageCache(sid);
+                const msgs = await chatService.getSessionMessages(sid);
+                // Guard: store may have been destroyed between await calls
+                const recoveryStore = messageStoreRegistry.get(capturedTabId);
+                if (recoveryStore) recoveryStore.reconcile(msgs);
+              } catch (err) {
+                console.warn('[DisconnectHandler] DB recovery failed:', err);
+              }
             }
           }, DISCONNECT_TIMEOUT_MS);
+          // Store timeout ID so it can be cleared on recovery or tab close
+          tabState._disconnectTimeoutId = disconnectTimeoutId;
         }
       }
     };

@@ -104,14 +104,23 @@ async def _cleanup_subprocess_after_disconnect(
     unit: "SessionUnit",  # noqa: F821 — forward ref, resolved at runtime
     session_id: str,
 ) -> None:
-    """Background task: flush subprocess pipe after SSE disconnect.
+    """Background task: attempt soft interrupt of subprocess after SSE disconnect.
 
     The state machine has already been transitioned to IDLE by
     ``recover_from_disconnect()``.  This delegates to the unit's
-    ``flush_subprocess_pipe()`` which handles interrupt + kill fallback.
+    ``flush_subprocess_pipe()`` which attempts a soft interrupt.
+
+    On timeout the subprocess is LEFT ALIVE (not killed) — it's likely
+    executing a tool call whose output will be persisted to DB by
+    session_router._persist_assistant_blocks. The frontend reconciliation
+    polling (every 15s) will recover the content from DB.
+
+    Timeout is generous (30s) to allow most tool calls to complete.
+    If the tool call takes longer, the subprocess stays alive — the
+    lifecycle_manager's 12hr TTL handles actual zombies.
     """
     try:
-        await unit.flush_subprocess_pipe(timeout=3.0)
+        await unit.flush_subprocess_pipe(timeout=30.0)
     except asyncio.CancelledError:
         pass  # App shutting down — don't log noise
     except Exception as e:

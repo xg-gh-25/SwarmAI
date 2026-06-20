@@ -954,36 +954,21 @@ class SessionUnit:
         # and at most 5s when flush is mid-timeout (rare, but prevents
         # user-visible error that forces resend).
         if self._pipe_flush_task and not self._pipe_flush_task.done():
-            # CRITICAL: Do NOT cancel — let the flush complete so the pipe
-            # is drained of stale response data.  Cancelling leaves old
-            # response bytes in the subprocess stdout pipe, which then get
-            # yielded as part of the NEW response (cross-turn bleed P0 bug).
+            # Cancel the flush task — it's safe now because flush no longer
+            # kills the subprocess (2026-06-20 SSE reliability fix).  The
+            # subprocess may still be executing a tool call; SDK turn
+            # serialization ensures our new send() is queued until the
+            # current turn completes.
             #
-            # The flush itself has a 5s internal timeout + generation guard,
-            # so worst case we wait ~5s here.  If it finishes faster (common
-            # case: <100ms when subprocess already idle), we proceed instantly.
+            # The old "cross-turn bleed P0" concern (stale pipe data) is
+            # no longer applicable: we're not interrupting/killing the
+            # subprocess, so its current turn will complete normally and
+            # the SDK manages turn boundaries.
+            self._pipe_flush_task.cancel()
             try:
-                await asyncio.wait_for(self._pipe_flush_task, timeout=5.0)
-            except asyncio.TimeoutError:
-                # Flush didn't complete in 5s — cancel and force-kill
-                # the subprocess for a clean slate on next spawn.
-                self._pipe_flush_task.cancel()
-                try:
-                    await self._pipe_flush_task
-                except (asyncio.CancelledError, Exception):
-                    pass
-                # Kill subprocess to ensure no stale pipe data remains
-                if self._client is not None:
-                    logger.warning(
-                        "session_unit.pipe_flush_timeout session_id=%s — "
-                        "killing subprocess for clean respawn",
-                        self.session_id,
-                    )
-                    await self.kill()
-            except asyncio.CancelledError:
-                raise  # Propagate — caller (HTTP request) was aborted
-            except Exception:
-                pass  # Task completed with error — pipe is clean either way
+                await self._pipe_flush_task
+            except (asyncio.CancelledError, Exception):
+                pass
             self._pipe_flush_task = None
 
         # ── STREAMING state handling — three cases ─────────────────────
@@ -1849,15 +1834,25 @@ class SessionUnit:
         self._pipe_flush_task = task
 
     async def flush_subprocess_pipe(self, timeout: float = 3.0) -> None:
-        """Interrupt the CLI subprocess to flush stale pipe events.
+        """Attempt a soft interrupt of the CLI subprocess after SSE disconnect.
 
         Called after ``recover_from_disconnect()`` as a background task.
         The unit is IDLE; the subprocess may still be running a tool
         whose stdout output would contaminate the next ``send()``.
 
-        Bypasses ``interrupt()`` which is state-gated on STREAMING.
-        If the client interrupt times out, kills the subprocess for
-        a clean respawn on next ``send()``.
+        **Critical design choice (2026-06-20):** On timeout, we do NOT kill
+        the subprocess. The subprocess is likely executing a tool call whose
+        output will be persisted to DB by session_router._persist_assistant_blocks
+        when it completes. Killing it destroys output that the frontend can
+        recover via reconciliation polling.
+
+        Instead: log and leave alive. The subprocess will either:
+        (a) finish the tool call → ResultMessage → transition happens normally, or
+        (b) become truly stuck → lifecycle_manager's 12hr TTL handles it.
+
+        If the user sends a new message before the tool finishes, send()
+        already handles the "subprocess busy" case (waits for current turn
+        to complete via SDK's built-in turn serialization).
 
         Generation-guarded: if ``send()`` starts (advancing
         ``_send_generation``) between our state check and the actual
@@ -1896,7 +1891,9 @@ class SessionUnit:
             )
             return
         except asyncio.TimeoutError:
-            # Only kill if no new send() has started
+            # Don't kill — subprocess is likely still executing a tool call.
+            # Its output will be persisted to DB when it finishes, and the
+            # frontend reconciliation will recover the content.
             if self._send_generation != gen_at_entry:
                 logger.info(
                     "session_unit.flush_pipe session_id=%s — timeout but "
@@ -1904,12 +1901,12 @@ class SessionUnit:
                     self.session_id, gen_at_entry, self._send_generation,
                 )
                 return
-            logger.warning(
+            logger.info(
                 "session_unit.flush_pipe session_id=%s — interrupt timed out, "
-                "killing for clean respawn",
+                "leaving subprocess alive (tool call likely in progress, "
+                "output will persist to DB for reconciliation recovery)",
                 self.session_id,
             )
-            await self.kill()
 
     # ── Interactive methods (task 3.3) ─────────────────────────────
 

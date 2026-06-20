@@ -178,6 +178,9 @@ export interface UnifiedTab {
   /** Resume timeout handle — auto-clears isResuming after 60s if no data arrives.
    *  Prevents permanent "Resuming session..." spinner when --resume hangs. */
   _resumeTimeoutId?: ReturnType<typeof setTimeout>;
+  /** Disconnect recovery timeout handle — clears reconnecting state after 30s
+   *  and triggers DB message recovery. Cleared on stream recovery or tab close. */
+  _disconnectTimeoutId?: ReturnType<typeof setTimeout>;
   /** Set true when the reconcile loop force-cleared this tab but the DB-recovery
    *  fetch failed (backend unreachable) — leaving a frozen partial response.
    *  The backend-recovered handler retries the DB reconcile for flagged tabs. */
