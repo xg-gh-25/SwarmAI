@@ -93,12 +93,18 @@ class SessionRecall:
             # Escape FTS5 special characters by quoting the query
             safe_query = '"' + query.replace('"', '""') + '"'
 
-            # Step 1-2: FTS5 search joined with messages
+            # Step 1-2: FTS5 search joined with messages.
+            # Root-1 SSOT Phase 2: the FTS insert trigger indexes ALL message
+            # rows including unsent pending ones (sent=0). This raw JOIN bypasses
+            # the SQLiteMessagesTable chokepoint, so it MUST filter sent != 0
+            # itself — otherwise a queued-but-undelivered message phantom-injects
+            # into recall context (P3). Treat NULL as sent (pre-v6 rows).
             rows = conn.execute("""
                 SELECT m.rowid as msg_rowid, m.session_id, m.role, m.content, m.created_at
                 FROM messages_fts fts
                 JOIN messages m ON m.rowid = fts.rowid
                 WHERE messages_fts MATCH ?
+                  AND (m.sent IS NULL OR m.sent != 0)
                 ORDER BY fts.rank
             """, (safe_query,)).fetchall()
 
@@ -189,11 +195,15 @@ class SessionRecall:
         if not match_rowids:
             return []
 
-        # Get all messages for this session ordered by created_at
+        # Get all messages for this session ordered by created_at.
+        # Root-1 SSOT Phase 2: exclude unsent pending rows (sent=0) from the
+        # context window too — they must never surface in recall (P3). Treat
+        # NULL as sent (pre-v6 rows).
         all_msgs = conn.execute("""
             SELECT rowid, role, content, created_at
             FROM messages
             WHERE session_id = ?
+              AND (sent IS NULL OR sent != 0)
             ORDER BY created_at
         """, (session_id,)).fetchall()
 

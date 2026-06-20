@@ -35,7 +35,10 @@ def db_path(tmp_path: Path) -> Path:
             metadata TEXT DEFAULT '{}',
             expires_at INTEGER,
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            updated_at TEXT NOT NULL,
+            sent INTEGER NOT NULL DEFAULT 1,
+            pending_seq INTEGER,
+            claimed_at TEXT
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id)")
@@ -74,13 +77,18 @@ def recall(db_path: Path) -> SessionRecall:
 
 
 def _insert_message(db_path: Path, session_id: str, role: str, content: str,
-                     created_at: str | None = None) -> None:
-    """Helper to insert a message directly."""
+                     created_at: str | None = None, sent: int = 1) -> None:
+    """Helper to insert a message directly.
+
+    ``sent`` defaults to 1 (delivered). Pass ``sent=0`` to simulate an
+    unsent pending message (Root-1 SSOT Phase 2) — these must NEVER surface
+    in recall (P3 phantom-injection guard).
+    """
     conn = sqlite3.connect(str(db_path))
     now = created_at or datetime.now().isoformat()
     conn.execute(
-        "INSERT INTO messages (id, session_id, role, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (str(uuid4()), session_id, role, content, now, now),
+        "INSERT INTO messages (id, session_id, role, content, created_at, updated_at, sent) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (str(uuid4()), session_id, role, content, now, now, sent),
     )
     conn.commit()
     conn.close()
@@ -191,3 +199,36 @@ def test_recall_about_empty(recall: SessionRecall):
     """No matches should return empty string."""
     text = recall.recall_about("nonexistent_xyz_99999")
     assert text == ""
+
+
+# ---------------------------------------------------------------------------
+# Root-1 SSOT Phase 2 — pending (sent=0) messages must NEVER surface in recall
+# ---------------------------------------------------------------------------
+
+def test_search_excludes_unsent_pending(db_path: Path, recall: SessionRecall):
+    """BLOCKER (Gate-1 F1): a sent=0 pending message is indexed into FTS by the
+    insert trigger, but the recall search JOIN must filter it out — otherwise an
+    un-delivered queued message phantom-injects into recall context (P3)."""
+    _insert_message(db_path, "sess-pending", "user",
+                    "zzzphantom unsent pending message", sent=0)
+    result = recall.search("zzzphantom")
+    assert result.total_matches == 0
+    assert result.sessions == []
+
+
+def test_search_mixed_sent_and_pending(db_path: Path, recall: SessionRecall):
+    """A sent=1 row matches; a sent=0 row with the same term does NOT — and the
+    pending row must not appear in the context window either."""
+    _insert_message(db_path, "sess-mix", "user",
+                    "qqterm delivered message", created_at="2026-04-08T10:00:00", sent=1)
+    _insert_message(db_path, "sess-mix", "user",
+                    "qqterm pending message", created_at="2026-04-08T10:01:00", sent=0)
+    result = recall.search("qqterm")
+    assert result.total_matches == 1  # only the sent=1 row
+    # the pending row's content must not leak via the context window
+    all_content = " ".join(
+        m.get("content", "")
+        for s in result.sessions
+        for m in s.key_messages
+    )
+    assert "pending message" not in all_content
