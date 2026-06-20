@@ -1956,6 +1956,15 @@ export function useChatStreamingLifecycle(
               setMessages((prev) => updateMessages(prev, assistantMessageId, event.content!, event.model));
             }
           }
+        } else if (event.type === 'ask_user_question' && !(event.questions && event.toolUseId)) {
+          // Root 3 / 3A #4: a malformed ask_user_question (missing questions or
+          // toolUseId) used to fall through ALL branches silently → the backend
+          // sits in WAITING_INPUT forever and the user sees nothing. Log it.
+          console.warn('[StreamHandler] ask_user_question event dropped — missing questions/toolUseId', {
+            toolUseId: event.toolUseId,
+            hasQuestions: !!event.questions,
+            capturedTabId,
+          });
         } else if (
           event.type === 'ask_user_question' &&
           event.questions &&
@@ -2013,6 +2022,20 @@ export function useChatStreamingLifecycle(
           // Fix 8: Update tab status to 'waiting_input'
           if (capturedTabId) {
             updateTabStatus(capturedTabId, 'waiting_input');
+          }
+
+          // Root 3 / 3A #3: if the question arrived on a NON-active tab, the
+          // user is looking elsewhere and would never see it → toast them.
+          // One-shot via a stable id keyed on toolUseId (addToast dedups by id),
+          // so re-renders / repeated events don't stack toasts.
+          if (!isActiveTab && capturedTabId) {
+            const bgTabTitle = tabMapRef.current.get(capturedTabId)?.title ?? 'another tab';
+            addToast({
+              severity: 'info',
+              message: `Swarm is asking a question in "${bgTabTitle}" — switch to that tab to answer.`,
+              id: `ask-uq-${event.toolUseId}`,
+              autoDismiss: true,
+            });
           }
 
           // Fix 5: Persist pending state to sessionStorage from per-tab map

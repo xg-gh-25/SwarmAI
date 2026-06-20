@@ -54,7 +54,7 @@ import { ChatHeader, ChatInput, MessageBubble, WelcomeScreen } from './chat/comp
 import { RadarSidebar } from './chat/components/RightSidebar';
 import RefreshContextModal from '../components/modals/RefreshContextModal';
 
-import { groupSessionsByTime, mergeOlderMessages } from './chat/utils';
+import { groupSessionsByTime, mergeOlderMessages, resolvePendingToolUseId } from './chat/utils';
 import { EXPLORER_ATTACH_FILE, EXPLORER_ASK_ABOUT_FILE } from '../constants/explorerEvents';
 import { CLAUDE_NATIVE_IMAGE_MIMES } from '../utils/fileClassification';
 
@@ -638,7 +638,10 @@ export default function ChatPage() {
         // overwrite in-flight content with stale DB data.
         if (tabState.sessionId && tabState.messages.length === 0 && !tabState.isStreaming) {
           setSessionId(tabState.sessionId);
-          setPendingQuestion(null);
+          // Root 3 / 3A: restore the tab's own pending question (not null) — a
+          // hydrated background tab that received an AskUserQuestion must stay
+          // answerable on switch-back, not be silently cleared.
+          setPendingQuestion(tabState.pendingQuestion ?? null);
           setContextWarning(tabState.contextWarning ?? null);
           setPromptMetadata(tabState.promptMetadata ?? null);
           setIsExpanded(tabState.isExpanded ?? false);
@@ -2434,7 +2437,20 @@ export default function ChatPage() {
                 {messages.length === 0 ? (
                   <WelcomeScreen onFocusClick={handleFocusClick} onItemClick={handleItemClick} />
                 ) : (
-                  messages.map((msg, idx) => {
+                  (() => {
+                  // Root 3 / 3A: derive the answerable question id from React state
+                  // with a fallback to the ACTIVE tab's per-tab cache. React
+                  // `pendingQuestion` is null when the question arrived on a
+                  // background tab or during the mid-stream stale-ref window
+                  // (setPendingQuestion is gated by isActiveTab). The cache is
+                  // always populated, so the question stays answerable.
+                  // Active-tab-only source → PIT71 cross-tab-leak safe (this loop
+                  // only ever renders the active tab's messages).
+                  const activeTabPending = activeTabIdRef.current
+                    ? tabMapRef.current.get(activeTabIdRef.current)?.pendingQuestion ?? null
+                    : null;
+                  const resolvedPendingToolUseId = resolvePendingToolUseId(pendingQuestion, activeTabPending);
+                  return messages.map((msg, idx) => {
                     // Evolution events get their own renderer
                     if (msg.evolutionEvent) {
                       return (
@@ -2569,7 +2585,7 @@ export default function ChatPage() {
                             onAnswerQuestion={stableHandleAnswerQuestion}
                             onPermissionDecision={stableHandlePermissionDecision}
                             onEscalationSelect={handleEscalationSelect}
-                            pendingToolUseId={pendingQuestion?.toolUseId}
+                            pendingToolUseId={resolvedPendingToolUseId}
                             pendingPermissionRequestId={pendingPermissionRequestId ?? undefined}
                             isStreaming={isLastAssistantForStreaming}
                             sessionId={sessionId}
@@ -2582,7 +2598,8 @@ export default function ChatPage() {
                         {streamingIndicator}
                       </React.Fragment>
                     );
-                  })
+                  });
+                  })()
                 )}
                 {/* Fallback streaming indicator — only when isStreaming is true but
                     no assistant message exists yet (gap between setIsStreaming(true)

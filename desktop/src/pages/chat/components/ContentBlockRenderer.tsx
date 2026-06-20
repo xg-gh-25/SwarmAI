@@ -90,6 +90,13 @@ export function ContentBlockRenderer({
     // Guard: skip rendering if questions payload is missing/malformed
     // (prevents crash when DB returns incomplete ask_user_question blocks)
     if (!block.questions || !Array.isArray(block.questions) || block.questions.length === 0) {
+      // Root 3 / 3A #4: log the silent drop — a question block with no
+      // questions means the user can never answer; surfacing it in the console
+      // turns an invisible dead-end into a debuggable signal.
+      console.warn('[ContentBlockRenderer] ask_user_question block dropped — empty/malformed questions', {
+        toolUseId: block.toolUseId,
+        questions: block.questions,
+      });
       return null;
     }
     const isPending = pendingToolUseId === block.toolUseId;
