@@ -274,6 +274,61 @@ async def persist_pending(
     return _row_to_pending((msg_id, session_id, next_seq, payload, now))
 
 
+async def mark_pending_by_id(session_id: str, message_id: str) -> int | None:
+    """Convert an already-persisted live row (sent=1) into a pending row (sent=0)
+    with a fresh monotonic pending_seq, preserving its id and metadata.
+
+    This is the Phase-2 L2 entry: the send() path persists the arriving user
+    message *before* slot acquisition (with its ``client_id`` in metadata). When
+    the slot check yields SESSION_BUSY / QUEUE_TIMEOUT, that row must NOT be
+    deleted — it becomes a pending message owned by the drain worker. Flipping the
+    existing row (rather than delete + re-:func:`persist_pending`) preserves:
+      - the row id (stable across the conversion),
+      - ``metadata.client_id`` (frontend optimistic-bubble dedup, R1),
+      - a single FTS-trigger insertion (no duplicate index entry).
+
+    Returns the assigned ``pending_seq``, or ``None`` if no matching row exists
+    (defensive — e.g. the pre-slot persist failed). Idempotent-ish: a row already
+    sent=0 keeps its existing seq (we never reassign a pending row).
+    """
+    db_path = _get_db_path()
+    now = datetime.now().isoformat()
+
+    async def _do() -> int | None:
+        # MAX(pending_seq)+1 + UPDATE held under the per-session lock so the seq
+        # stays monotonic against concurrent persist_pending on the same session.
+        async with _get_seq_lock(session_id):
+            async with aiosqlite.connect(db_path) as conn:
+                await conn.execute("PRAGMA busy_timeout=5000")
+                # Already pending? keep its seq (don't reassign / don't clobber).
+                cursor = await conn.execute(
+                    "SELECT sent, pending_seq FROM messages "
+                    "WHERE id = ? AND session_id = ?",
+                    (message_id, session_id),
+                )
+                existing = await cursor.fetchone()
+                if existing is None:
+                    return None
+                if existing[0] == 0:
+                    return existing[1]  # already pending — no-op, return its seq
+
+                cursor = await conn.execute(
+                    "SELECT COALESCE(MAX(pending_seq), 0) FROM messages "
+                    "WHERE session_id = ?",
+                    (session_id,),
+                )
+                next_seq = (await cursor.fetchone())[0] + 1
+                await conn.execute(
+                    "UPDATE messages SET sent = 0, pending_seq = ?, claimed_at = NULL, "
+                    "updated_at = ? WHERE id = ? AND session_id = ?",
+                    (next_seq, now, message_id, session_id),
+                )
+                await conn.commit()
+                return next_seq
+
+    return await _with_retry(_do)
+
+
 async def peek_pending_batch(session_id: str) -> list[PendingMessage]:
     """Return ALL unsent rows for the session, ordered by pending_seq (FIFO).
 

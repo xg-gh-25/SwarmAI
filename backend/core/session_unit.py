@@ -507,6 +507,19 @@ class SessionUnit:
         # Used by streaming-state endpoint to report truth to frontend.
         self._generating_after_disconnect: bool = False
 
+        # ── Root-1 SSOT Phase 2: outstanding tool_use + pending question ──
+        # When the agent emits an AskUserQuestion / cmd_permission tool_use the
+        # SDK conversation is WAITING for that tool_use's result. While one is
+        # outstanding, the drain worker MUST NOT inject a new turn (F3 — that is
+        # the abandoned-ask bug). The streaming-orchestrator (L4) sets
+        # _pending_tool_use_id + _pending_question on the WAITING_INPUT emit, and
+        # the answer/permission-continue path clears them.
+        self._pending_tool_use_id: Optional[str] = None
+        self._pending_question: Optional[dict] = None
+        # Seqs of the most recently drained pending set, surfaced to the frontend
+        # mirror by the streaming-state read API (L5/2A). Best-effort hint.
+        self._last_drained_seqs: list[int] = []
+
         # ── Send generation counter (stale-interrupt guard) ────────
         # Monotonically incremented at the start of each send().
         # interrupt() captures this at entry and skips state
@@ -586,6 +599,19 @@ class SessionUnit:
             SessionState.STREAMING,
             SessionState.WAITING_INPUT,
         )
+
+    @property
+    def has_outstanding_tool_use(self) -> bool:
+        """True when the agent emitted a tool_use (AskUserQuestion /
+        cmd_permission) that is still awaiting its tool_result.
+
+        Root-1 SSOT Phase 2 (F3): the drain worker must NOT start a new turn
+        while a tool_use is outstanding — injecting a fresh user message then
+        would corrupt the conversation (the abandoned-ask → --resume replay bug).
+        Set on the WAITING_INPUT emit, cleared when the answer/permission result
+        is delivered.
+        """
+        return self._pending_tool_use_id is not None
 
     @property
     def is_generating_after_disconnect(self) -> bool:

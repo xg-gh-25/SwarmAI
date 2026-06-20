@@ -522,6 +522,16 @@ class SessionRouter:
         self._slot_lock: asyncio.Lock = asyncio.Lock()
         self._queue: list[asyncio.Future] = []
 
+        # Root-1 SSOT Phase 2 (L3): serial drain worker. Session ids whose
+        # transition reached a clean IDLE are pushed here; a single long-lived
+        # consumer coalesce-drains each session's pending messages ONE turn at a
+        # time, OUTSIDE any transition stack (F1 — never re-enter send() from
+        # within _transition / _on_unit_state_change). Lazily started on first
+        # enqueue so it binds to the running event loop.
+        self._drain_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._drain_worker_task: Optional[asyncio.Task] = None
+        self._drain_enqueued: set[str] = set()  # de-dupe: at most one pending entry/session
+
         # Load persisted sdk_session_ids for lazy injection at unit creation.
         # Design §2B fix: old restore_session_state() iterated _units which is
         # empty at boot. This caches the mapping; get_or_create_unit() injects.
@@ -1029,6 +1039,120 @@ class SessionRouter:
             if new_state in (SessionState.IDLE, SessionState.COLD, SessionState.DEAD):
                 self._slot_available.set()
 
+        # Root-1 SSOT Phase 2 (L3): a transition INTO a clean IDLE is the trigger
+        # to drain any pending messages that arrived while the session was busy.
+        # Enqueue is non-blocking (put_nowait) and takes NO lock — this runs on
+        # the streaming/hook stack, so we must NEVER drain (call send()) inline
+        # here (F1 deadlock/recursion). The serial worker does the actual drain.
+        if new_state == SessionState.IDLE:
+            self.enqueue_drain(session_id)
+
+    # ── Drain worker (Root-1 SSOT Phase 2, L3) ────────────────────
+
+    def enqueue_drain(self, session_id: str) -> None:
+        """Signal that ``session_id`` may have pending messages to drain.
+
+        Non-blocking, lock-free, idempotent (a session already queued is not
+        re-added). Lazily starts the serial drain worker on first call so it
+        binds to the running loop. Safe to call from inside ``_transition``.
+        """
+        if session_id in self._drain_enqueued:
+            return
+        try:
+            self._drain_enqueued.add(session_id)
+            self._drain_queue.put_nowait(session_id)
+        except Exception:
+            self._drain_enqueued.discard(session_id)
+            return
+        if self._drain_worker_task is None or self._drain_worker_task.done():
+            try:
+                self._drain_worker_task = asyncio.ensure_future(self._drain_worker())
+            except RuntimeError:
+                # No running loop (e.g. unit tests calling enqueue synchronously
+                # without a loop) — the worker will be started on a later enqueue
+                # from within an async context.
+                self._drain_worker_task = None
+
+    async def _drain_worker(self) -> None:
+        """Long-lived single consumer: drains ONE session at a time, serially,
+        OUTSIDE any transition stack (F1). Never raises out — a per-session drain
+        failure is logged and the loop continues."""
+        while True:
+            session_id = await self._drain_queue.get()
+            self._drain_enqueued.discard(session_id)
+            try:
+                await self.drain_pending(session_id)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning(
+                    "session_router.drain_worker_error session_id=%s: %s",
+                    session_id, exc,
+                )
+            finally:
+                self._drain_queue.task_done()
+
+    async def drain_pending(self, session_id: str) -> None:
+        """Coalesce-drain the whole pending set for one session as ONE turn.
+
+        Precondition (ALL must hold, else no-op — re-driven on the next IDLE edge):
+          - the unit exists, is alive, and is in a clean IDLE
+          - NO outstanding tool_use (F3 — never start a new turn while an
+            AskUserQuestion / cmd_permission awaits its tool_result)
+
+        The whole pending set is CLAIMED atomically (claim_pending_batch: sent
+        stays 0, claimed_at set). Outside any lock, combine_pending merges the set
+        into one payload and send() delivers it; on success mark_sent_batch flips
+        the set to sent=1, on failure rollback_claim_batch returns it to pending
+        so it re-coalesces on the next IDLE (F4 — no message lost).
+        """
+        from . import session_pending
+
+        unit = self._units.get(session_id)
+        if unit is None or not unit.is_alive or unit.state != SessionState.IDLE:
+            return
+        if unit.has_outstanding_tool_use:
+            return  # F3: a question is awaiting its answer — do not inject a turn
+
+        claimed = await session_pending.claim_pending_batch(session_id)
+        if not claimed:
+            return
+
+        user_text, content = session_pending.combine_pending(claimed)
+        seqs = [c.pending_seq for c in claimed]
+        try:
+            # Deliver the coalesced turn. The rows already exist in the DB
+            # (sent=0, claimed); run_conversation re-persisting a user row is
+            # acceptable here because the claimed rows are flipped to sent=1 on
+            # success — the drained turn IS this conversation turn.
+            agen = self.run_conversation(
+                agent_id=unit.agent_id,
+                user_message=user_text,
+                content=content,
+                session_id=session_id,
+                _drained_pending=True,
+            )
+            async for _evt in agen:
+                pass  # drain the stream to completion server-side
+            await session_pending.mark_sent_batch(session_id, seqs)
+            logger.info(
+                "session_router.drained session_id=%s count=%d seqs=%s",
+                session_id, len(seqs), seqs,
+            )
+            # Record the drained seqs on the unit so the streaming-state read API
+            # (L5) can surface "these pending rows were delivered" to the frontend
+            # mirror (2A), which then retires its optimistic queued bubble without
+            # a re-send. Best-effort: the mirror also learns via pending_count→0.
+            try:
+                unit._last_drained_seqs = list(seqs)
+            except Exception:
+                pass
+        except Exception as exc:
+            await session_pending.rollback_claim_batch(session_id, seqs)
+            logger.warning(
+                "session_router.drain_send_failed session_id=%s seqs=%s: %s — "
+                "rolled back to pending",
+                session_id, seqs, exc,
+            )
+
     # ── Public API ────────────────────────────────────────────────
 
     async def run_conversation(
@@ -1043,8 +1167,14 @@ class SessionRouter:
         editor_context: Optional[dict] = None,
         agent_config: Optional[dict] = None,
         client_id: Optional[str] = None,
+        _drained_pending: bool = False,
     ) -> AsyncIterator[dict]:
         """Entry point for chat requests.
+
+        ``_drained_pending`` (internal): set by the drain worker when delivering
+        a coalesced pending turn. The rows already exist in the DB (sent=0,
+        claimed); the worker flips them to sent=1 after delivery, so the pre-slot
+        re-persist below is skipped to avoid a duplicate user row.
 
         1. Get or create SessionUnit
         2. Build options via PromptBuilder
@@ -1079,13 +1209,19 @@ class SessionRouter:
         user_content = content if content else (
             [{"type": "text", "text": user_message}] if user_message else None
         )
-        if user_content:
+        # Track the persisted row id so that, if the slot check rejects this
+        # send (QUEUE_TIMEOUT / SESSION_BUSY), we can convert THIS exact row to a
+        # pending message (Root-1 SSOT Phase 2 L2) instead of deleting it — the
+        # drain worker then delivers it when the session next reaches IDLE.
+        persisted_msg_id: Optional[str] = None
+        if user_content and not _drained_pending:
             title = (user_message or "Chat")[:50]
             try:
                 await session_manager.store_session(session_id, agent_id, title)
                 _msg_metadata = {"client_id": client_id} if client_id else None
+                persisted_msg_id = str(uuid4())
                 await db.messages.put({
-                    "id": str(uuid4()),
+                    "id": persisted_msg_id,
                     "session_id": session_id,
                     "role": "user",
                     "content": user_content,
@@ -1094,6 +1230,7 @@ class SessionRouter:
                     **({"metadata": _msg_metadata} if _msg_metadata else {}),
                 })
             except Exception as exc:
+                persisted_msg_id = None
                 # Non-fatal: proceed even if persist fails.  The message
                 # will still be sent to the agent (just not in DB for
                 # future cold resume).  Log at ERROR so it's visible.
@@ -1130,15 +1267,35 @@ class SessionRouter:
             error_event = _build_error_event(
                 code="QUEUE_TIMEOUT",
                 message="All chat slots are busy. Please wait a moment and try again.",
-                suggested_action="Your message is saved. Send again when a slot opens.",
+                suggested_action="Your message is saved and will be sent automatically when a slot opens.",
             )
-            # Include retry payload so frontend can re-send the exact message
-            error_event["retryPayload"] = {
-                "sessionId": session_id,
-                "agentId": agent_id,
-                "userMessage": user_message,
-                "content": content,
-            }
+            # Root-1 SSOT Phase 2 (L2): unify QUEUE_TIMEOUT with SESSION_BUSY onto
+            # the same pending-message path. Convert the pre-slot persisted row to
+            # pending (sent=0) so the drain worker delivers it when a slot frees —
+            # the message is durably queued server-side, not just handed back to
+            # the frontend. retryPayload retained ONLY as the persist-failed fallback.
+            queue_pending_seq: Optional[int] = None
+            if user_content and persisted_msg_id:
+                try:
+                    from . import session_pending
+                    queue_pending_seq = await session_pending.mark_pending_by_id(
+                        session_id, persisted_msg_id,
+                    )
+                except Exception as pend_exc:
+                    logger.warning(
+                        "session_router.queue_mark_pending_failed session_id=%s: %s",
+                        session_id, pend_exc,
+                    )
+            if queue_pending_seq is not None:
+                error_event["pendingSeq"] = queue_pending_seq
+                error_event["pendingId"] = persisted_msg_id
+            else:
+                error_event["retryPayload"] = {
+                    "sessionId": session_id,
+                    "agentId": agent_id,
+                    "userMessage": user_message,
+                    "content": content,
+                }
             yield error_event
             return
 
@@ -1375,44 +1532,52 @@ class SessionRouter:
                     "yielding SESSION_BUSY error to frontend",
                     session_id,
                 )
-                # Delete the orphaned user message that was persisted before
-                # slot acquisition.  Without this, cold resume would inject
-                # a message that was never actually sent to the agent
-                # (context_injector._find_last_user_text has no answered-filter).
-                #
-                # The delete is DB hygiene — but it must NOT lose the user's
-                # message.  We hand the message back to the frontend via
-                # retryPayload (camelCase, matching the QUEUE_TIMEOUT precedent
-                # and parseSSEEvent which only camelizes `content`).  The
-                # frontend re-queues it so a busy-session send is never silently
-                # lost.  Single owner: the frontend owns re-send; the backend
-                # only deletes the un-answered orphan.
-                if user_content:
+                # Root-1 SSOT Phase 2 (L2): the message is NO LONGER deleted.
+                # The row persisted before slot acquisition (persisted_msg_id) is
+                # converted to a pending message (sent=0) owned by the server-side
+                # drain worker, which delivers it when the session next reaches a
+                # clean IDLE. This makes the SessionBusyError text TRUE ("saved and
+                # will be sent automatically") and removes the frontend's burden of
+                # being the durability owner. The cold-resume sent=1 filter (L0/L1)
+                # keeps the pending row out of replayed context until it drains.
+                pending_seq: Optional[int] = None
+                if user_content and persisted_msg_id:
                     try:
-                        await db.messages.delete_last_user_message(session_id)
-                        logger.info(
-                            "session_router.deleted_orphan_msg session_id=%s",
-                            session_id,
+                        from . import session_pending
+                        pending_seq = await session_pending.mark_pending_by_id(
+                            session_id, persisted_msg_id,
                         )
-                    except Exception as del_exc:
+                        logger.info(
+                            "session_router.session_busy_pending session_id=%s "
+                            "msg=%s seq=%s",
+                            session_id, persisted_msg_id, pending_seq,
+                        )
+                    except Exception as pend_exc:
                         logger.warning(
-                            "session_router.orphan_msg_delete_failed "
-                            "session_id=%s: %s",
-                            session_id, del_exc,
+                            "session_router.mark_pending_failed session_id=%s: %s",
+                            session_id, pend_exc,
                         )
                 busy_event = _build_error_event(
                     code="SESSION_BUSY",
                     message=str(send_err.message),
                     suggested_action=str(send_err.suggested_action),
                 )
-                # Preserve the message so the frontend can re-queue it — never
-                # lose user input on a busy-session send (AC1).
-                busy_event["retryPayload"] = {
-                    "sessionId": session_id,
-                    "agentId": agent_id,
-                    "userMessage": user_message,
-                    "content": content,
-                }
+                # Truthful: the message is durably queued server-side and will be
+                # auto-drained. We surface the pending id/seq so the mirror can
+                # show "queued" deterministically. retryPayload is retained as a
+                # last-resort fallback ONLY when the pending persist failed
+                # (pending_seq is None) — otherwise the server owns delivery and
+                # a frontend re-send would double-deliver (the drain handles it).
+                if pending_seq is not None:
+                    busy_event["pendingSeq"] = pending_seq
+                    busy_event["pendingId"] = persisted_msg_id
+                else:
+                    busy_event["retryPayload"] = {
+                        "sessionId": session_id,
+                        "agentId": agent_id,
+                        "userMessage": user_message,
+                        "content": content,
+                    }
                 yield busy_event
                 return
             raise  # Re-raise non-SessionBusyError exceptions
@@ -1587,6 +1752,16 @@ class SessionRouter:
         clear_session_identity() is intentionally NOT called — identity is
         preserved in the state file for restore on next startup.
         """
+        # Root-1 SSOT Phase 2 (L3): cancel the serial drain worker so it doesn't
+        # outlive the event loop on shutdown (a forever-blocking queue.get()).
+        if self._drain_worker_task is not None and not self._drain_worker_task.done():
+            self._drain_worker_task.cancel()
+            try:
+                await self._drain_worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._drain_worker_task = None
+
         # Persist IDLE session identities for fast resume after restart (§2B/2C)
         try:
             from .session_state_persistence import persist_session_state

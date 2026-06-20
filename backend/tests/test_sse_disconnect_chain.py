@@ -218,14 +218,15 @@ class TestSessionBusyErrorEvent:
         assert error_events[0].get("code") == "SESSION_BUSY"
 
     @pytest.mark.asyncio
-    async def test_session_busy_preserves_message_via_retry_payload(self):
-        """SESSION_BUSY must (a) delete the orphan DB row for cold-resume hygiene
-        AND (b) hand the message text back to the frontend via retryPayload so the
-        user's message is never silently lost (AC1).
+    async def test_session_busy_converts_message_to_pending(self):
+        """Root-1 SSOT Phase 2 (L2): SESSION_BUSY must NO LONGER delete the row.
 
-        retryPayload uses camelCase to match the QUEUE_TIMEOUT precedent and the
-        SSE parser (parseSSEEvent only camelizes `content`, top-level keys pass
-        through verbatim).
+        The persisted user message is converted to a server-side pending message
+        (mark_pending_by_id, sent=0) owned by the drain worker, and the error
+        carries pendingSeq/pendingId (NOT retryPayload — the server now owns
+        durability + delivery, so a frontend re-send would double-deliver). This
+        makes the SessionBusyError text ("saved and will be sent automatically")
+        finally TRUE.
         """
         from core.session_router import SessionRouter
         from core.exceptions import SessionBusyError
@@ -242,10 +243,12 @@ class TestSessionBusyErrorEvent:
         with patch.object(unit, "send", side_effect=SessionBusyError(detail="actively streaming")), \
              patch("core.agent_defaults.build_agent_config", new_callable=AsyncMock, return_value={"model": "test"}), \
              patch("database.db") as mock_db, \
+             patch("core.session_pending.mark_pending_by_id", new_callable=AsyncMock, return_value=7) as mock_mark, \
              patch("core.session_manager.session_manager") as mock_sm:
             mock_sm.store_session = AsyncMock()
             mock_db.messages = MagicMock()
             mock_db.messages.put = AsyncMock()
+            # delete_last_user_message must NOT be called any more.
             mock_db.messages.delete_last_user_message = AsyncMock(return_value=True)
 
             events = []
@@ -261,15 +264,18 @@ class TestSessionBusyErrorEvent:
         busy = error_events[0]
         assert busy.get("code") == "SESSION_BUSY"
 
-        # (a) DB hygiene delete still happens (prevents cold-resume ghost)
-        mock_db.messages.delete_last_user_message.assert_awaited_once_with("test-busy-preserve")
+        # (a) the orphan DELETE is gone — the row is preserved, not deleted.
+        mock_db.messages.delete_last_user_message.assert_not_awaited()
 
-        # (b) message preserved via retryPayload (camelCase) so FE can re-queue
-        payload = busy.get("retryPayload")
-        assert payload is not None, "SESSION_BUSY must carry retryPayload so the message is recoverable"
-        assert payload.get("userMessage") == "Don't lose me"
-        assert payload.get("sessionId") == "test-busy-preserve"
-        assert payload.get("agentId") == "default"
+        # (b) the persisted row was converted to pending (sent=0) for the drain worker.
+        mock_mark.assert_awaited_once()
+        assert mock_mark.await_args.args[0] == "test-busy-preserve"
+
+        # (c) error carries the pending id/seq, NOT retryPayload (server owns delivery).
+        assert busy.get("pendingSeq") == 7
+        assert busy.get("pendingId") is not None
+        assert busy.get("retryPayload") is None, \
+            "with server-side pending, retryPayload would cause a double-send"
 
 
 # ---------------------------------------------------------------------------

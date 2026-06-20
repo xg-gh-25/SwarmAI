@@ -183,6 +183,65 @@ async def test_count_pending(pending):
 
 
 # ---------------------------------------------------------------------------
+# Phase 2 L2 — mark_pending_by_id: convert an already-persisted live row to
+# pending (used by send() on SESSION_BUSY/QUEUE_TIMEOUT instead of deleting it).
+# The row already exists with its client_id metadata; we flip it sent=0 and
+# assign a monotonic pending_seq, preserving id + metadata (no re-insert, so
+# no double FTS trigger and the frontend dedup key survives).
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_mark_pending_by_id_converts_existing_row(pending, db_path: Path):
+    """An existing sent=1 row flips to sent=0 with a fresh monotonic seq;
+    id and metadata are preserved (R1 client_id dedup)."""
+    async with aiosqlite.connect(str(db_path)) as conn:
+        await conn.execute(
+            "INSERT INTO messages (id, session_id, role, content, metadata, sent, created_at, updated_at) "
+            "VALUES ('live-1', 'sess-mp', 'user', '[{\"type\":\"text\",\"text\":\"hi\"}]', "
+            "'{\"client_id\": \"local-42\"}', 1, '2026-01-01', '2026-01-01')",
+        )
+        await conn.commit()
+
+    seq = await pending.mark_pending_by_id("sess-mp", "live-1")
+    assert seq == 1  # first pending for this session
+
+    async with aiosqlite.connect(str(db_path)) as conn:
+        cursor = await conn.execute(
+            "SELECT sent, pending_seq, claimed_at, metadata FROM messages WHERE id = 'live-1'"
+        )
+        row = await cursor.fetchone()
+    assert row[0] == 0          # sent flipped to pending
+    assert row[1] == 1          # monotonic seq assigned
+    assert row[2] is None       # not claimed
+    assert "local-42" in row[3]  # client_id metadata preserved
+
+    # And it is now visible to the pending pipeline.
+    assert pending.count_pending("sess-mp") == 1
+
+
+@pytest.mark.asyncio
+async def test_mark_pending_by_id_monotonic_after_existing_pending(pending, db_path: Path):
+    """A converted row gets MAX(pending_seq)+1, coexisting with prior pendings."""
+    await pending.persist_pending("sess-mp2", user_message="first", content=None, agent_id="a")
+    async with aiosqlite.connect(str(db_path)) as conn:
+        await conn.execute(
+            "INSERT INTO messages (id, session_id, role, content, sent, created_at, updated_at) "
+            "VALUES ('live-2', 'sess-mp2', 'user', '[]', 1, '2026-01-02', '2026-01-02')",
+        )
+        await conn.commit()
+
+    seq = await pending.mark_pending_by_id("sess-mp2", "live-2")
+    assert seq == 2  # after the existing seq=1 pending
+
+
+@pytest.mark.asyncio
+async def test_mark_pending_by_id_missing_row_returns_none(pending):
+    """No matching row → returns None, no crash (defensive)."""
+    seq = await pending.mark_pending_by_id("sess-none", "does-not-exist")
+    assert seq is None
+
+
+# ---------------------------------------------------------------------------
 # AC4 — three-phase lifecycle: claim → mark_sent / rollback, exactly-once
 # ---------------------------------------------------------------------------
 
