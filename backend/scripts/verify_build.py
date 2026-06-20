@@ -210,6 +210,18 @@ def verify_binary(binary_path: str) -> tuple[list[str], list[str], list[str]]:
         # Verify capabilities via the binary's Python environment
         passed, failed_critical, failed_important = _verify_capabilities(port)
 
+        # Guard the --thinking-display CLI flag (Opus 4.8 thinking-summary fix
+        # depends on it; flag is .hideHelp() hidden and silently droppable).
+        cli = _find_bundled_claude_cli(binary_path)
+        if cli is None:
+            failed_important.append("thinking_display_flag")
+            print("  🟡 thinking_display_flag       bundled claude CLI not found (dev?)")
+        else:
+            ok, detail = _check_thinking_display_flag(str(cli))
+            bucket = passed if ok else failed_critical
+            bucket.append("thinking_display_flag")
+            print(f"  {'✅' if ok else '🔴'} thinking_display_flag       {detail}")
+
         return passed, failed_critical, failed_important
 
     finally:
@@ -308,6 +320,71 @@ def _check_native_via_import(port: int, native_path: str) -> tuple[bool, str]:
             return data.get("loadable", False), data.get("detail", "")
     except Exception:
         return False, "endpoint unavailable"
+
+
+def _find_bundled_claude_cli(binary_path: str) -> Path | None:
+    """Locate the bundled `claude` CLI shipped inside the SDK in the frozen bundle.
+
+    PyInstaller lays the onedir bundle out as `{binary_dir}/_internal/...`, so the
+    CLI lives at `{binary_dir}/_internal/claude_agent_sdk/_bundled/claude`. In a
+    dev/test context (no frozen binary), fall back to the installed SDK package.
+    """
+    binary_dir = Path(binary_path).resolve().parent
+    frozen = binary_dir / "_internal" / "claude_agent_sdk" / "_bundled" / "claude"
+    if frozen.exists():
+        return frozen
+    # Dev fallback: the SDK package's own bundled CLI.
+    try:
+        import claude_agent_sdk
+
+        candidate = Path(claude_agent_sdk.__file__).parent / "_bundled" / "claude"
+        if candidate.exists():
+            return candidate
+    except Exception:
+        pass
+    return None
+
+
+def _check_thinking_display_flag(cli_path: str) -> tuple[bool, str]:
+    """Guard the `--thinking-display` CLI flag the Opus 4.8 thinking fix depends on.
+
+    The flag is `.hideHelp()` hidden, so we cannot grep `--help`. The Claude CLI
+    also *silently tolerates unknown flags* (exit 0 + version output) and exits 0
+    even on an enum-validation error — so neither a positive probe nor the exit
+    code can distinguish flag-present from flag-absent.
+
+    The only falsifiable signal is a NEGATIVE probe: pass a bogus value and look
+    for the enum-validation error that names the allowed choices. That error is
+    emitted ONLY when the flag exists and validates its enum. If the flag is gone,
+    the bogus value rides along on a tolerated unknown flag → no choices in output.
+
+    Returns (ok, detail). ok=False means the contract the Opus 4.8 thinking fix
+    relies on is broken — the build would silently regress to blank thinking.
+    See run_4108aeef (the fix) + run_a972318c (this guard).
+    """
+    if not Path(cli_path).exists():
+        return False, f"bundled claude CLI not found at {cli_path}"
+    try:
+        proc = subprocess.run(
+            [cli_path, "--thinking-display", "__verify_build_bogus__", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "bundled CLI timed out on --thinking-display probe"
+    except OSError as e:
+        return False, f"could not spawn bundled CLI: {e}"
+
+    output = (proc.stdout or "") + (proc.stderr or "")
+    # The enum-validation error names BOTH choices when the flag is recognized.
+    if "summarized" in output and "omitted" in output:
+        return True, "flag validates enum (summarized, omitted)"
+    return False, (
+        "--thinking-display NOT recognized by bundled CLI — Opus 4.8 thinking "
+        "summary would silently regress to blank. Probe output: "
+        f"{output.strip()[:200]!r}"
+    )
 
 
 def main():
