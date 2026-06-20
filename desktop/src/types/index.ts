@@ -1103,6 +1103,35 @@ export interface ToastItem extends ToastOptions {
   createdAt: number;
 }
 
+// ============== Streaming-State Read API (Root-1 SSOT Phase 3) ==============
+
+/**
+ * Per-session entry from `GET /api/chat/sessions/streaming-state` — the
+ * authoritative backend mirror the frontend reads instead of inferring.
+ *
+ * Backend source: `chat.py:776-786` (snake_case). This is the camelCase mirror.
+ * Phase 3 widened this from `{streaming, state}` to carry the 4 SSOT fields the
+ * backend has emitted since Phase 2 but the frontend previously dropped:
+ * `waitingInput`, `pendingCount`, `pendingQuestion`, `lastDrainedSeqs`.
+ */
+export interface StreamingStateEntry {
+  /** True iff backend state === 'streaming'. */
+  streaming: boolean;
+  /** Raw backend state value: 'cold' | 'idle' | 'streaming' | 'waiting_input'. */
+  state: string;
+  /** True iff state === 'waiting_input' (an AskUserQuestion / permission is open). */
+  waitingInput: boolean;
+  /** Count of server-side persisted-but-unsent (pending) messages for this session. */
+  pendingCount: number;
+  /**
+   * Authoritative AskUserQuestion payload — lets the frontend re-surface a
+   * question whose original SSE event was lost. Null unless waiting_input.
+   */
+  pendingQuestion: { toolUseId: string; questions: unknown[] } | null;
+  /** Pending-message seqs the server drained in its last drain pass. */
+  lastDrainedSeqs: number[];
+}
+
 // ============== Health Monitor Types ==============
 
 export type BackendStatus = 'connected' | 'disconnected' | 'initializing';

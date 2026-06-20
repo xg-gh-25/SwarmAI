@@ -1,4 +1,14 @@
-import type { ChatRequest, StreamEvent, ChatSession, ChatMessage, PermissionResponse } from '../types';
+import type { ChatRequest, StreamEvent, ChatSession, ChatMessage, PermissionResponse, StreamingStateEntry } from '../types';
+
+/** Raw snake_case shape of a streaming-state entry as emitted by the backend. */
+interface RawStreamingStateEntry {
+  streaming?: boolean;
+  state?: string;
+  waiting_input?: boolean;
+  pending_count?: number;
+  pending_question?: { tool_use_id: string; questions?: unknown[] } | null;
+  last_drained_seqs?: number[];
+}
 import api from './api';
 import { getApiBaseUrl } from './tauri';
 
@@ -439,12 +449,31 @@ export const chatService = {
     return response.data.map(toSessionCamelCase);
   },
 
-  // Get streaming state for all sessions (reconciliation endpoint)
-  async getStreamingState(): Promise<Record<string, { streaming: boolean; state: string }>> {
-    const response = await api.get<{ sessions: Record<string, { streaming: boolean; state: string }> }>(
+  // Get streaming state for all sessions (reconciliation endpoint).
+  // Root-1 SSOT Phase 3: widened from {streaming,state} to the full
+  // StreamingStateEntry. The backend (chat.py:776-786) emits 4 extra fields
+  // (waiting_input/pending_count/pending_question/last_drained_seqs) that the
+  // frontend mirror consumes; the prior narrow type silently dropped them.
+  // snake_case → camelCase conversion stays in this services layer (convention).
+  async getStreamingState(): Promise<Record<string, StreamingStateEntry>> {
+    const response = await api.get<{ sessions: Record<string, RawStreamingStateEntry> }>(
       '/chat/sessions/streaming-state',
     );
-    return response.data.sessions;
+    const out: Record<string, StreamingStateEntry> = {};
+    for (const [sid, raw] of Object.entries(response.data.sessions ?? {})) {
+      const rawPq = raw.pending_question;
+      out[sid] = {
+        streaming: raw.streaming ?? false,
+        state: raw.state ?? 'idle',
+        waitingInput: raw.waiting_input ?? false,
+        pendingCount: raw.pending_count ?? 0,
+        pendingQuestion: rawPq
+          ? { toolUseId: rawPq.tool_use_id, questions: rawPq.questions ?? [] }
+          : null,
+        lastDrainedSeqs: raw.last_drained_seqs ?? [],
+      };
+    }
+    return out;
   },
 
   // Get sub-agent progress for a session (polls while Agent tool running)

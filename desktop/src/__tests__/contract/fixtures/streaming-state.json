@@ -2,15 +2,48 @@
     "sessions": {
         "88f2a3ab-c324-4e4f-b210-665293077771": {
             "streaming": true,
-            "state": "streaming"
+            "state": "streaming",
+            "waiting_input": false,
+            "pending_count": 0,
+            "pending_question": null,
+            "last_drained_seqs": []
         },
         "02933278-4ad1-4104-8d12-47533fe15e5c": {
-            "streaming": true,
-            "state": "streaming"
+            "streaming": false,
+            "state": "waiting_input",
+            "waiting_input": true,
+            "pending_count": 1,
+            "pending_question": {
+                "tool_use_id": "toolu_01ABC",
+                "questions": [
+                    {
+                        "question": "Which approach?",
+                        "header": "Approach",
+                        "options": [
+                            { "label": "A", "description": "first" },
+                            { "label": "B", "description": "second" }
+                        ],
+                        "multiSelect": false
+                    }
+                ]
+            },
+            "last_drained_seqs": []
         },
         "a0a533af-d49b-4365-bf42-9ddb4f5dbe42": {
             "streaming": false,
-            "state": "idle"
+            "state": "idle",
+            "waiting_input": false,
+            "pending_count": 2,
+            "pending_question": null,
+            "last_drained_seqs": [4, 5]
+        },
+        "c1d2e3f4-0000-4000-8000-000000000001": {
+            "streaming": false,
+            "state": "cold",
+            "waiting_input": false,
+            "pending_count": 0,
+            "pending_question": null,
+            "last_drained_seqs": []
         }
     }
 }
