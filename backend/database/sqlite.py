@@ -1236,7 +1236,7 @@ class SQLiteChatMessagesTable(SQLiteTable[T], Generic[T]):
 # 3 — add hive_accounts + hive_instances tables (2026-04-28)
 # 4 — add messages_fts virtual table + triggers (2026-04-28)
 # 5 — extend messages TTL from 7 days to 90 days (2026-05-02)
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 
 
 class SQLiteDatabase(BaseDatabase):
@@ -1987,6 +1987,47 @@ class SQLiteDatabase(BaseDatabase):
             logger.info(
                 "DB migration v5 (TTL 7d→90d) complete: %d messages extended",
                 updated,
+            )
+
+        if current_version < 6:
+            # Version 6: Pending-message contract columns on `messages` (2026-06-20)
+            # Root-1 SSOT Phase 1 — PURELY ADDITIVE, zero behavior change.
+            # A user message that arrives while a session is busy is persisted
+            # with sent=0 and a per-session monotonic pending_seq, then drained
+            # server-side later (Phase 2). claimed_at supports the three-phase
+            # row lifecycle (pending → claimed → sent) so a crash mid-drain
+            # never loses the message.
+            #
+            # `sent` defaults to 1 so EVERY existing row is treated as
+            # already-sent — no backfill, no phantom replay of historical
+            # messages in cold-resume context injection.
+            #
+            # Idempotent: ADD COLUMN guarded by PRAGMA table_info check so a
+            # manually-reverted user_version re-runs safely.
+            cursor = await conn.execute("PRAGMA table_info(messages)")
+            messages_cols = {col[1] for col in await cursor.fetchall()}
+            if "sent" not in messages_cols:
+                await conn.execute(
+                    "ALTER TABLE messages ADD COLUMN sent INTEGER NOT NULL DEFAULT 1"
+                )
+            if "pending_seq" not in messages_cols:
+                await conn.execute(
+                    "ALTER TABLE messages ADD COLUMN pending_seq INTEGER"
+                )
+            if "claimed_at" not in messages_cols:
+                await conn.execute(
+                    "ALTER TABLE messages ADD COLUMN claimed_at TEXT"
+                )
+            # Drain order + fast "has pending?" check.
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_messages_pending "
+                "ON messages (session_id, sent, pending_seq)"
+            )
+            await conn.execute("PRAGMA user_version = 6")
+            await conn.commit()
+            logger.info(
+                "DB migration v6 (pending-message contract: sent/pending_seq/"
+                "claimed_at + idx_messages_pending) complete"
             )
 
     async def _run_legacy_migrations(self, conn: aiosqlite.Connection) -> None:
