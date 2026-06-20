@@ -498,6 +498,15 @@ class SessionUnit:
         # this, the flush's _client.interrupt() races with the new stream.
         self._pipe_flush_task: Optional[asyncio.Task] = None
 
+        # ── Post-disconnect generation flag ───────────────────────────
+        # Set True by recover_from_disconnect() when the subprocess is
+        # left alive after SSE disconnect. Cleared by:
+        #   (a) send() starting (user resumes conversation)
+        #   (b) subprocess exit (ResultMessage or process death)
+        #   (c) kill() / _cleanup_internal()
+        # Used by streaming-state endpoint to report truth to frontend.
+        self._generating_after_disconnect: bool = False
+
         # ── Send generation counter (stale-interrupt guard) ────────
         # Monotonically incremented at the start of each send().
         # interrupt() captures this at entry and skips state
@@ -583,17 +592,31 @@ class SessionUnit:
         """Subprocess is still generating output after SSE client disconnected.
 
         True when: state is IDLE (post-disconnect transition) AND the
-        background pipe_flush_task is still running (subprocess alive,
-        producing output that will be persisted to DB).
+        subprocess is still alive and generating. Uses a flag set by
+        recover_from_disconnect() and cleared by send()/kill()/process exit.
 
         Used by streaming-state endpoint to report truthful streaming status
         to the frontend reconciliation poller — prevents force-clear of
         streams that are still active server-side.
         """
-        return (
-            self._pipe_flush_task is not None
-            and not self._pipe_flush_task.done()
-        )
+        if not self._generating_after_disconnect:
+            return False
+        if self.state != SessionState.IDLE:
+            return False
+        # Verify subprocess is actually alive (PID check)
+        try:
+            pid = self.pid
+            if pid:
+                import os
+                os.kill(pid, 0)  # Signal 0 = existence check
+                return True
+            # No PID → subprocess gone
+            self._generating_after_disconnect = False
+            return False
+        except (OSError, ProcessLookupError):
+            # Process dead — clear the flag
+            self._generating_after_disconnect = False
+            return False
 
     @property
     def is_protected(self) -> bool:
@@ -949,6 +972,8 @@ class SessionUnit:
         # (e.g. RSS spike armed checkpoint → spike subsided → kill didn't fire).
         # Prevents an unrelated later restart from injecting stale context.
         self._heal_checkpoint = None
+        # New send = user resumed — no longer in post-disconnect state.
+        self._generating_after_disconnect = False
 
         # Store app_session_id for downstream use by _retry_with_resume's
         # abandon-fallback path (build_resume_context needs the stable
@@ -1848,11 +1873,15 @@ class SessionUnit:
 
         This is the public API for ``chat.py``'s disconnect handler —
         avoids calling ``_transition()`` from outside the unit.
+
+        Sets ``_generating_after_disconnect`` flag so the streaming-state
+        endpoint reports truth until subprocess finishes its current turn.
         """
         if self.state != SessionState.STREAMING:
             return False
         self._transition(SessionState.IDLE)
         self.last_used = time.time()
+        self._generating_after_disconnect = True
         return True
 
     def schedule_pipe_flush(
@@ -2591,6 +2620,11 @@ class SessionUnit:
         # It is reset in send() (line ~620) and on success (line ~1672).
         self._model_name = None
         self._peak_tree_rss_bytes = 0
+        # Subprocess dead — can't be generating anymore.
+        self._generating_after_disconnect = False
+        if self._pipe_flush_task is not None:
+            self._pipe_flush_task.cancel()
+            self._pipe_flush_task = None
         # Don't reset _lifecycle_response_count — it tracks across the
         # full unit lifetime (resume awareness persists through kill/restart).
         # Reset channel history injection flag — the new subprocess

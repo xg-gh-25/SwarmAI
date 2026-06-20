@@ -1,67 +1,115 @@
 """Tests for SSE disconnect state desync fix.
 
 Verifies that streaming-state endpoint reports streaming=true while
-subprocess is still generating after an SSE disconnect (pipe_flush_task active),
-preventing frontend reconcile from force-clearing active streams.
+subprocess is still generating after an SSE disconnect, preventing
+frontend reconcile from force-clearing active streams.
 
 Key invariant: state reported to frontend must reflect streaming REALITY,
 not just the internal unit.state enum.
 """
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+import os
+from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
-
-
-@pytest.fixture
-def mock_session_unit():
-    """Create a minimal SessionUnit mock with pipe_flush_task support."""
-    from core.session_unit import SessionState
-
-    unit = MagicMock()
-    unit.session_id = "test-session-123"
-    unit.state = SessionState.IDLE
-    unit._pipe_flush_task = None
-    # Wire up the property we're about to implement
-    type(unit).is_generating_after_disconnect = property(
-        lambda self: (
-            self._pipe_flush_task is not None
-            and not self._pipe_flush_task.done()
-        )
-    )
-    return unit
 
 
 class TestIsGeneratingAfterDisconnect:
     """Test the is_generating_after_disconnect property on SessionUnit."""
 
-    def test_false_when_no_pipe_flush_task(self, mock_session_unit):
-        """No pipe flush task = not generating after disconnect."""
-        mock_session_unit._pipe_flush_task = None
-        assert not mock_session_unit.is_generating_after_disconnect
+    @pytest.fixture
+    def unit(self):
+        """Create a minimal real-ish SessionUnit for property testing."""
+        from core.session_unit import SessionState, SessionUnit
 
-    def test_true_when_pipe_flush_task_active(self, mock_session_unit):
-        """Active pipe flush task = still generating after disconnect."""
-        task = MagicMock()
-        task.done.return_value = False
-        mock_session_unit._pipe_flush_task = task
-        assert mock_session_unit.is_generating_after_disconnect
+        # Use MagicMock but wire up the real property
+        unit = MagicMock(spec=SessionUnit)
+        unit.state = SessionState.IDLE
+        unit._generating_after_disconnect = False
+        unit._pipe_flush_task = None
 
-    def test_false_when_pipe_flush_task_done(self, mock_session_unit):
-        """Completed pipe flush task = no longer generating."""
-        task = MagicMock()
-        task.done.return_value = True
-        mock_session_unit._pipe_flush_task = task
-        assert not mock_session_unit.is_generating_after_disconnect
+        # Wire the real property implementation
+        type(unit).is_generating_after_disconnect = SessionUnit.is_generating_after_disconnect
+        return unit
 
-    def test_false_when_state_is_streaming(self, mock_session_unit):
-        """If state IS streaming, the property should still only check pipe_flush."""
+    def test_false_when_flag_not_set(self, unit):
+        """No disconnect recovery = not generating."""
+        unit._generating_after_disconnect = False
+        assert not unit.is_generating_after_disconnect
+
+    def test_true_when_flag_set_and_pid_alive(self, unit):
+        """Flag set + subprocess alive = generating."""
+        unit._generating_after_disconnect = True
+        unit.pid = os.getpid()  # Use current process (always alive)
+        with patch("os.kill") as mock_kill:
+            mock_kill.return_value = None  # Signal 0 succeeds
+            assert unit.is_generating_after_disconnect
+
+    def test_false_when_flag_set_but_pid_dead(self, unit):
+        """Flag set but subprocess dead = not generating (auto-clears)."""
+        unit._generating_after_disconnect = True
+        unit.pid = 99999999  # Non-existent PID
+        with patch("os.kill", side_effect=ProcessLookupError):
+            result = unit.is_generating_after_disconnect
+        assert result is False
+        # Flag auto-cleared
+        assert unit._generating_after_disconnect is False
+
+    def test_false_when_flag_set_but_no_pid(self, unit):
+        """Flag set but no PID = not generating (auto-clears)."""
+        unit._generating_after_disconnect = True
+        unit.pid = None
+        assert not unit.is_generating_after_disconnect
+        assert unit._generating_after_disconnect is False
+
+    def test_false_when_state_not_idle(self, unit):
+        """Only reports during IDLE state (post-disconnect transition)."""
         from core.session_unit import SessionState
 
-        mock_session_unit.state = SessionState.STREAMING
-        mock_session_unit._pipe_flush_task = None
-        # Property only checks pipe_flush_task — state is handled by caller
-        assert not mock_session_unit.is_generating_after_disconnect
+        unit._generating_after_disconnect = True
+        unit.state = SessionState.STREAMING  # Not IDLE
+        unit.pid = os.getpid()
+        assert not unit.is_generating_after_disconnect
+
+    def test_false_when_state_is_cold(self, unit):
+        """COLD state = subprocess not running = not generating."""
+        from core.session_unit import SessionState
+
+        unit._generating_after_disconnect = True
+        unit.state = SessionState.COLD
+        assert not unit.is_generating_after_disconnect
+
+
+class TestRecoverFromDisconnectSetsFlag:
+    """Test that recover_from_disconnect sets _generating_after_disconnect."""
+
+    def test_flag_set_on_successful_recovery(self):
+        """recover_from_disconnect sets the flag when transitioning."""
+        from core.session_unit import SessionState
+
+        unit = MagicMock()
+        unit.state = SessionState.STREAMING
+        unit._generating_after_disconnect = False
+        unit.last_used = 0
+
+        # Import and call the real method
+        from core.session_unit import SessionUnit
+        result = SessionUnit.recover_from_disconnect(unit)
+
+        assert result is True
+        assert unit._generating_after_disconnect is True
+
+    def test_flag_not_set_when_not_streaming(self):
+        """No-op when not in STREAMING state."""
+        from core.session_unit import SessionState, SessionUnit
+
+        unit = MagicMock()
+        unit.state = SessionState.IDLE
+        unit._generating_after_disconnect = False
+
+        result = SessionUnit.recover_from_disconnect(unit)
+
+        assert result is False
+        assert unit._generating_after_disconnect is False
 
 
 class TestStreamingStateEndpoint:
@@ -69,38 +117,33 @@ class TestStreamingStateEndpoint:
 
     @pytest.fixture
     def mock_router(self):
-        """Mock session router with units."""
         router = MagicMock()
         return router
 
     @pytest.mark.asyncio
-    async def test_reports_streaming_during_pipe_flush(self, mock_router):
+    async def test_reports_streaming_during_post_disconnect_generation(self, mock_router):
         """Endpoint reports streaming=true when subprocess still generating."""
         from core.session_unit import SessionState
 
         unit = MagicMock()
         unit.session_id = "session-abc"
         unit.state = SessionState.IDLE  # State says IDLE...
-        # ...but pipe_flush_task still running (subprocess alive)
-        unit.is_generating_after_disconnect = True
+        unit.is_generating_after_disconnect = True  # ...but still generating
 
         mock_router.list_units.return_value = [unit]
 
-        # Import and test the endpoint logic
         with patch("routers.chat._get_router", return_value=mock_router):
             from routers.chat import get_streaming_state_endpoint
-
             result = await get_streaming_state_endpoint()
 
         sessions = result["sessions"]
         assert "session-abc" in sessions
-        # Must report streaming=true even though state is IDLE
         assert sessions["session-abc"]["streaming"] is True
         assert sessions["session-abc"]["state"] == "idle"
 
     @pytest.mark.asyncio
-    async def test_reports_idle_after_pipe_flush_done(self, mock_router):
-        """Endpoint reports streaming=false after pipe flush completes."""
+    async def test_reports_idle_after_generation_done(self, mock_router):
+        """Endpoint reports streaming=false after subprocess finishes."""
         from core.session_unit import SessionState
 
         unit = MagicMock()
@@ -112,7 +155,6 @@ class TestStreamingStateEndpoint:
 
         with patch("routers.chat._get_router", return_value=mock_router):
             from routers.chat import get_streaming_state_endpoint
-
             result = await get_streaming_state_endpoint()
 
         sessions = result["sessions"]
@@ -126,13 +168,12 @@ class TestStreamingStateEndpoint:
         unit = MagicMock()
         unit.session_id = "session-ghi"
         unit.state = SessionState.STREAMING
-        unit.is_generating_after_disconnect = False  # No disconnect happened
+        unit.is_generating_after_disconnect = False
 
         mock_router.list_units.return_value = [unit]
 
         with patch("routers.chat._get_router", return_value=mock_router):
             from routers.chat import get_streaming_state_endpoint
-
             result = await get_streaming_state_endpoint()
 
         sessions = result["sessions"]
@@ -152,7 +193,30 @@ class TestStreamingStateEndpoint:
 
         with patch("routers.chat._get_router", return_value=mock_router):
             from routers.chat import get_streaming_state_endpoint
-
             result = await get_streaming_state_endpoint()
 
         assert "prewarm-123" not in result["sessions"]
+
+
+class TestFlagClearingPaths:
+    """Test that _generating_after_disconnect is cleared in all expected paths."""
+
+    def test_send_clears_flag(self):
+        """send() entry clears the flag (user resumed conversation)."""
+        from core.session_unit import SessionUnit
+
+        # We can't easily test the full send(), but verify the flag is
+        # in the clear-block by checking the source code pattern
+        import inspect
+        source = inspect.getsource(SessionUnit.send)
+        assert "_generating_after_disconnect = False" in source
+
+    def test_cleanup_internal_clears_flag(self):
+        """_cleanup_internal clears flag (subprocess died)."""
+        from core.session_unit import SessionUnit
+
+        import inspect
+        source = inspect.getsource(SessionUnit._cleanup_internal)
+        assert "_generating_after_disconnect = False" in source
+        # Also clears _pipe_flush_task
+        assert "_pipe_flush_task = None" in source
