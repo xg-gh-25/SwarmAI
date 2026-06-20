@@ -183,6 +183,54 @@ class TestStatePersistence:
         assert result == {}
         assert not state_file.exists()
 
+    def test_persist_merges_pending_ids(self, state_file):
+        """pending_ids for unopened sessions survive persist overwrite.
+
+        Scenario: boot loads {A,B,C}. User opens A only. 60s later persist
+        runs with units={A(IDLE)} and pending={B,C}. Output file must have
+        A (from live unit) + B,C (from pending). Without merge, B/C are lost.
+        """
+        from core.session_unit import SessionState
+        from core.session_state_persistence import persist_session_state
+
+        # Live unit A — IDLE with fresh sdk_session_id
+        unit_a = MagicMock()
+        unit_a.state = SessionState.IDLE
+        unit_a._sdk_session_id = "sdk-a-live"
+        unit_a.last_used = time.time()
+        unit_a._health_sensor = MagicMock(turn_count=5)
+
+        units = {"session-a": unit_a}
+        pending = {"session-b": "sdk-b-cached", "session-c": "sdk-c-cached"}
+
+        count = persist_session_state(units, state_file, pending_ids=pending)
+
+        assert count == 3  # A + B + C
+        data = json.loads(state_file.read_text())
+        assert data["session-a"]["sdk_session_id"] == "sdk-a-live"
+        assert data["session-b"]["sdk_session_id"] == "sdk-b-cached"
+        assert data["session-c"]["sdk_session_id"] == "sdk-c-cached"
+
+    def test_persist_live_unit_takes_precedence_over_pending(self, state_file):
+        """If session is both live IDLE and in pending, live wins."""
+        from core.session_unit import SessionState
+        from core.session_state_persistence import persist_session_state
+
+        unit = MagicMock()
+        unit.state = SessionState.IDLE
+        unit._sdk_session_id = "sdk-fresh-from-cli"
+        unit.last_used = time.time()
+        unit._health_sensor = MagicMock(turn_count=10)
+
+        units = {"session-x": unit}
+        pending = {"session-x": "sdk-stale-from-cache"}
+
+        persist_session_state(units, state_file, pending_ids=pending)
+
+        data = json.loads(state_file.read_text())
+        # Live unit's fresh ID wins, not the stale cached one
+        assert data["session-x"]["sdk_session_id"] == "sdk-fresh-from-cli"
+
 
 # ─── Lazy-Inject Integration Test (fixes the original restore bug) ───
 

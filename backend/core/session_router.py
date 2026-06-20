@@ -1567,7 +1567,10 @@ class SessionRouter:
             from jobs.paths import APP_DATA_DIR
 
             state_file = APP_DATA_DIR / "session_state.json"
-            count = persist_session_state(self._units, state_file)
+            # Merge unconsumed cached IDs so they survive a second restart.
+            count = persist_session_state(
+                self._units, state_file, pending_ids=self._persisted_sdk_ids,
+            )
             if count > 0:
                 logger.info("Persisted %d session identities before shutdown", count)
         except Exception as exc:

@@ -1015,8 +1015,9 @@ class LifecycleManager:
         """Persist IDLE session identities to disk for crash recovery.
 
         Called every maintenance cycle (~60s). Atomic write ensures no
-        corruption if daemon crashes mid-write. Non-fatal — failures are
-        logged and skipped.
+        corruption if daemon crashes mid-write. Merges unconsumed cached IDs
+        so sessions not yet re-opened survive a second restart. Non-fatal —
+        failures are logged and skipped.
         """
         try:
             from .session_state_persistence import persist_session_state
@@ -1024,7 +1025,9 @@ class LifecycleManager:
 
             state_file = APP_DATA_DIR / "session_state.json"
             units = self._router._units if self._router else {}
-            persist_session_state(units, state_file)
+            # Pass unconsumed cached IDs so they survive overwrite (PE gap fix).
+            pending = getattr(self._router, "_persisted_sdk_ids", None) or {}
+            persist_session_state(units, state_file, pending_ids=pending)
         except Exception as exc:
             # Non-fatal: persistence is best-effort, never blocks maintenance
             logger.debug("Session state persistence skipped: %s", exc)

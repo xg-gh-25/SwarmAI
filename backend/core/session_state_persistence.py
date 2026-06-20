@@ -32,12 +32,15 @@ MAX_STATE_AGE_SECONDS = 86400  # 24 hours
 def persist_session_state(
     units: Dict[str, Any],
     state_file: Path,
+    pending_ids: Optional[Dict[str, str]] = None,
 ) -> int:
     """Persist IDLE session metadata to disk for crash/restart recovery.
 
     Args:
         units: Dict of session_id → SessionUnit (or mock with same interface).
         state_file: Path to write the state JSON.
+        pending_ids: Unconsumed cached sdk_session_ids (from router._persisted_sdk_ids).
+            Merged into the output so sessions not yet re-opened survive a second restart.
 
     Returns:
         Number of sessions persisted.
@@ -60,6 +63,19 @@ def persist_session_state(
                 "last_used": getattr(unit, "last_used", 0),
             }
             count += 1
+
+    # Merge unconsumed cached IDs for sessions not yet re-opened.
+    # Without this, the first persist (overwrite semantics) would drop B,C
+    # if only A was re-opened — losing their fast-resume on a second restart.
+    if pending_ids:
+        for sid, sdk_id in pending_ids.items():
+            if sid not in state:  # live unit takes precedence
+                state[sid] = {
+                    "sdk_session_id": sdk_id,
+                    "turn_count": 0,
+                    "last_used": 0,
+                }
+                count += 1
 
     if count == 0:
         # Nothing to persist — don't write empty file
