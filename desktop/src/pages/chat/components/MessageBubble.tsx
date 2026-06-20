@@ -19,6 +19,7 @@
  * Validates: Requirements 1.1, 1.2, 2.1, 3.1, 3.2, 6.1, 6.2
  */
 
+import { memo } from 'react';
 import type { Message } from '../../../types';
 import type { ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
 import { UserMessageView } from './UserMessageView';
@@ -41,7 +42,7 @@ export interface MessageBubbleProps {
   onContinue?: () => void;
 }
 
-export function MessageBubble({
+function MessageBubbleImpl({
   message,
   onAnswerQuestion,
   onPermissionDecision,
@@ -80,3 +81,19 @@ export function MessageBubble({
     />
   );
 }
+
+/**
+ * Memoized export. Skips re-render when props are referentially unchanged.
+ *
+ * This is the primary defense against per-token full-list re-render during
+ * streaming: ``MessageStore.updateLast`` produces a new array reference but
+ * keeps the same object reference for every NON-streaming message, so shallow
+ * prop comparison short-circuits all historical bubbles — only the streaming
+ * bubble (whose ``message`` ref changes each token) re-renders.
+ *
+ * Effective ONLY when callers pass stable props:
+ * - callbacks must be stable (useCallback / latest-ref) — see ChatPage
+ * - ``contextWarning`` should be scoped to the last assistant (it mutates
+ *   periodically during streaming and would otherwise break every bubble)
+ */
+export const MessageBubble = memo(MessageBubbleImpl);

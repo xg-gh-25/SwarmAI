@@ -2195,6 +2195,29 @@ export default function ChatPage() {
     }
   };
 
+  // ── Stable callback identities for memoized MessageBubble ──────────────
+  // handleAnswerQuestion and handlePermissionDecision are intentionally NOT
+  // useCallback-wrapped (their bodies close over many values and live in a
+  // regression-prone area). To let React.memo(MessageBubble) short-circuit
+  // historical bubbles, we expose stable wrappers via the latest-ref pattern:
+  // identity never changes, but each call invokes the freshest impl — zero
+  // stale-closure risk and no dependency array to get wrong.
+  const handleAnswerQuestionRef = useRef(handleAnswerQuestion);
+  handleAnswerQuestionRef.current = handleAnswerQuestion;
+  const stableHandleAnswerQuestion = useCallback(
+    (toolUseId: string, answers: Record<string, string>) =>
+      handleAnswerQuestionRef.current(toolUseId, answers),
+    [],
+  );
+
+  const handlePermissionDecisionRef = useRef(handlePermissionDecision);
+  handlePermissionDecisionRef.current = handlePermissionDecision;
+  const stableHandlePermissionDecision = useCallback(
+    (requestId: string, decision: 'approve' | 'deny') =>
+      handlePermissionDecisionRef.current(requestId, decision),
+    [],
+  );
+
   // Handle stop — UI feedback is SYNCHRONOUS (no waiting for backend).
   // Backend stop is fire-and-forget (best effort). This eliminates the
   // race window where error events from the interrupted stream leak
@@ -2543,15 +2566,15 @@ export default function ChatPage() {
                         <div className={isPriorSession ? 'opacity-50' : undefined}>
                           <MessageBubble
                             message={msg}
-                            onAnswerQuestion={handleAnswerQuestion}
-                            onPermissionDecision={handlePermissionDecision}
+                            onAnswerQuestion={stableHandleAnswerQuestion}
+                            onPermissionDecision={stableHandlePermissionDecision}
                             onEscalationSelect={handleEscalationSelect}
                             pendingToolUseId={pendingQuestion?.toolUseId}
                             pendingPermissionRequestId={pendingPermissionRequestId ?? undefined}
                             isStreaming={isLastAssistantForStreaming}
                             sessionId={sessionId}
                             isLastAssistant={idx === lastAssistantIdx}
-                            contextWarning={contextWarning}
+                            contextWarning={idx === lastAssistantIdx ? contextWarning : null}
                             onCancelQueued={msg.isQueued && activeTabIdRef.current ? () => handleCancelQueued(activeTabIdRef.current!) : undefined}
                             onContinue={idx === lastAssistantIdx && !isStreaming ? handleContinue : undefined}
                           />
