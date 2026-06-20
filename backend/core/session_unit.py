@@ -1158,6 +1158,12 @@ class SessionUnit:
         self._compaction_guard.reset()  # New user turn — reset tool tracking
         self._content_emitted = False   # Track if meaningful content is emitted
         self._active_agent_tools = {}  # Clear stale sub-agent progress on new turn
+        # Gate-2 F3 (belt-and-suspenders): a fresh user turn never carries a stale
+        # outstanding-tool_use guard. Gate-2 F4: drop the stale last-drained hint so
+        # the read API doesn't surface seqs from a previous turn indefinitely.
+        self._pending_tool_use_id = None
+        self._pending_question = None
+        self._last_drained_seqs = []
 
         # Spawn if needed (COLD → IDLE under _spawn_lock + _env_lock)
         # Also respawn if IDLE but client is gone (CLI exited after
@@ -2657,6 +2663,15 @@ class SessionUnit:
         # It is reset in send() (line ~620) and on success (line ~1672).
         self._model_name = None
         self._peak_tree_rss_bytes = 0
+        # CRITICAL (Gate-2 F3): clear the outstanding-tool_use guard on EVERY
+        # teardown (kill / crash / force_unstick / eviction all route through here),
+        # not just the proper answer paths. A WAITING_INPUT session that is
+        # abandoned (120-min force_unstick) or crashed would otherwise keep
+        # _pending_tool_use_id set → has_outstanding_tool_use stuck True →
+        # drain_pending no-ops for that session FOREVER (every queued message
+        # silently never delivered). Clearing here makes the guard self-heal.
+        self._pending_tool_use_id = None
+        self._pending_question = None
         if self._pipe_flush_task is not None:
             self._pipe_flush_task.cancel()
             self._pipe_flush_task = None

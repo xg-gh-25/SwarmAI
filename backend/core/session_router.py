@@ -1118,6 +1118,22 @@ class SessionRouter:
 
         user_text, content = session_pending.combine_pending(claimed)
         seqs = [c.pending_seq for c in claimed]
+
+        # Degenerate guard (Gate-2 F1): a corrupt/empty pending row combines to
+        # (None, None). Delivering it hits run_conversation's EMPTY_MESSAGE branch,
+        # which would roll back → re-claim → same corrupt row → infinite drain loop.
+        # Drop such rows as terminally undeliverable (mark sent so they leave the
+        # queue) with a loud log — never silently, never loop.
+        if not user_text and not content:
+            await session_pending.mark_sent_batch(session_id, seqs)
+            logger.error(
+                "session_router.drain_dropped_corrupt session_id=%s seqs=%s — "
+                "pending rows combined to empty payload; marked sent to avoid a "
+                "drain loop (message content was unrecoverable)",
+                session_id, seqs,
+            )
+            return
+
         try:
             # Deliver the coalesced turn. The rows already exist in the DB
             # (sent=0, claimed); run_conversation re-persisting a user row is
@@ -1130,21 +1146,44 @@ class SessionRouter:
                 session_id=session_id,
                 _drained_pending=True,
             )
+            # CRITICAL (Gate-2 F1): run_conversation reports many failures as
+            # YIELDED error events (SESSION_BUSY on a drain-vs-user race,
+            # EMPTY_MESSAGE on a degenerate combine), not raised exceptions — it
+            # yields and returns normally. We must NOT mark_sent on those: doing so
+            # flips claimed→sent for a turn that never reached the subprocess →
+            # permanent message loss. Gate mark_sent on an observed terminal
+            # `result` AND the absence of any `error` event; otherwise roll back so
+            # the set re-coalesces on the next clean IDLE (F4 — never lose a msg).
+            delivered_ok = False
+            saw_error: Optional[str] = None
             async for _evt in agen:
-                pass  # drain the stream to completion server-side
-            await session_pending.mark_sent_batch(session_id, seqs)
-            logger.info(
-                "session_router.drained session_id=%s count=%d seqs=%s",
-                session_id, len(seqs), seqs,
-            )
-            # Record the drained seqs on the unit so the streaming-state read API
-            # (L5) can surface "these pending rows were delivered" to the frontend
-            # mirror (2A), which then retires its optimistic queued bubble without
-            # a re-send. Best-effort: the mirror also learns via pending_count→0.
-            try:
-                unit._last_drained_seqs = list(seqs)
-            except Exception:
-                pass
+                _t = _evt.get("type") if isinstance(_evt, dict) else None
+                if _t == "error":
+                    saw_error = (_evt.get("code") or "error") if isinstance(_evt, dict) else "error"
+                elif _t == "result":
+                    delivered_ok = True
+            if delivered_ok and saw_error is None:
+                await session_pending.mark_sent_batch(session_id, seqs)
+                logger.info(
+                    "session_router.drained session_id=%s count=%d seqs=%s",
+                    session_id, len(seqs), seqs,
+                )
+                # Record the drained seqs on the unit so the streaming-state read
+                # API (L5) can surface "these pending rows were delivered" to the
+                # frontend mirror (2A). Best-effort; FE also learns via count→0.
+                try:
+                    unit._last_drained_seqs = list(seqs)
+                except Exception:
+                    pass
+            else:
+                # Not actually delivered (error event or no result) — roll back to
+                # pending so it re-coalesces, exactly like the raised-exception path.
+                await session_pending.rollback_claim_batch(session_id, seqs)
+                logger.warning(
+                    "session_router.drain_not_delivered session_id=%s seqs=%s "
+                    "error=%s delivered_ok=%s — rolled back to pending",
+                    session_id, seqs, saw_error, delivered_ok,
+                )
         except Exception as exc:
             await session_pending.rollback_claim_batch(session_id, seqs)
             logger.warning(

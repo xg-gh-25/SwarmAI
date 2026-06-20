@@ -83,8 +83,9 @@ async def test_drain_coalesces_pending_into_one_turn(wired):
         calls.append(kwargs)
 
         async def _agen():
-            if False:
-                yield {}  # make this an async generator
+            # A real delivered turn yields a terminal `result` — mark_sent is now
+            # gated on observing it (Gate-2 F1 fix).
+            yield {"type": "result", "sessionId": sid}
 
         return _agen()
 
@@ -99,6 +100,105 @@ async def test_drain_coalesces_pending_into_one_turn(wired):
     assert calls[0]["_drained_pending"] is True
     # Both rows flipped to sent=1 — nothing left pending.
     assert sp.count_pending(sid) == 0
+
+
+@pytest.mark.asyncio
+async def test_drain_rolls_back_on_yielded_error_event(wired):
+    """Gate-2 F1 (CRITICAL): run_conversation reports SESSION_BUSY / EMPTY_MESSAGE
+    as a YIELDED error event (not a raised exception). The drain must NOT mark the
+    rows sent in that case — it must roll back so the message is never lost."""
+    router, sp = wired
+    sid = "sess-err-event"
+    router._units[sid] = _make_idle_unit(sid)
+    await sp.persist_pending(sid, user_message="must survive an error event", content=None, agent_id="a")
+
+    def _error_event_run_conversation(**kwargs):
+        async def _agen():
+            # mimic run_conversation losing the slot to a real user mid-drain:
+            # it yields a SESSION_BUSY error and RETURNS normally (no raise).
+            yield {"type": "error", "code": "SESSION_BUSY", "message": "busy"}
+        return _agen()
+
+    router.run_conversation = _error_event_run_conversation  # type: ignore[assignment]
+
+    await router.drain_pending(sid)  # must not raise
+
+    # The row must NOT be marked sent — it must remain pending + re-claimable.
+    assert sp.count_pending(sid) == 1, "error-event drain wrongly marked the message sent (data loss!)"
+    reclaim = await sp.claim_pending_batch(sid)
+    assert len(reclaim) == 1
+
+
+@pytest.mark.asyncio
+async def test_drain_marks_sent_only_on_result_event(wired):
+    """Gate-2 F1: mark_sent fires only when a terminal `result` event is observed
+    with no error — the happy path stays correct."""
+    router, sp = wired
+    sid = "sess-ok-event"
+    router._units[sid] = _make_idle_unit(sid)
+    await sp.persist_pending(sid, user_message="deliver me", content=None, agent_id="a")
+
+    def _ok_run_conversation(**kwargs):
+        async def _agen():
+            yield {"type": "assistant", "content": []}
+            yield {"type": "result", "sessionId": sid}
+        return _agen()
+
+    router.run_conversation = _ok_run_conversation  # type: ignore[assignment]
+    await router.drain_pending(sid)
+    assert sp.count_pending(sid) == 0, "happy-path drain should mark the message sent"
+
+
+@pytest.mark.asyncio
+async def test_drain_drops_corrupt_empty_payload_without_loop(wired):
+    """Gate-2 F1: a pending row that combines to an empty payload is dropped
+    (marked sent + logged), NOT routed through EMPTY_MESSAGE → rollback → reclaim
+    → infinite loop."""
+    router, sp = wired
+    sid = "sess-corrupt"
+    router._units[sid] = _make_idle_unit(sid)
+    # Insert a degenerate pending row directly (empty content list → (None,None)).
+    async with aiosqlite.connect(sp._get_db_path()) as conn:
+        await conn.execute(
+            "INSERT INTO messages (id, session_id, role, content, sent, pending_seq, created_at, updated_at) "
+            "VALUES ('corrupt-1', ?, 'user', '[]', 0, 1, '2026-01-01', '2026-01-01')",
+            (sid,),
+        )
+        await conn.commit()
+    assert sp.count_pending(sid) == 1
+
+    called = False
+    def _run_conversation(**kwargs):
+        nonlocal called
+        called = True
+        async def _agen():
+            if False:
+                yield {}
+        return _agen()
+    router.run_conversation = _run_conversation  # type: ignore[assignment]
+
+    await router.drain_pending(sid)  # must terminate, not loop
+    assert called is False, "corrupt row should be dropped before delivery, not sent"
+    assert sp.count_pending(sid) == 0, "corrupt row should be cleared from the queue"
+
+
+@pytest.mark.asyncio
+async def test_cleanup_internal_clears_outstanding_tool_use(wired):
+    """Gate-2 F3 (CRITICAL): _cleanup_internal (kill/crash/force_unstick path)
+    clears _pending_tool_use_id so an abandoned WAITING_INPUT session does not
+    leave has_outstanding_tool_use stuck True → drains blocked forever."""
+    from core.session_unit import SessionUnit
+
+    unit = SessionUnit(session_id="sess-cleanup", agent_id="a")
+    unit._pending_tool_use_id = "tool-abandoned"
+    unit._pending_question = {"tool_use_id": "tool-abandoned", "questions": []}
+    assert unit.has_outstanding_tool_use is True
+
+    unit._cleanup_internal()
+
+    assert unit.has_outstanding_tool_use is False, \
+        "abandoned tool_use guard must clear on teardown or drains hang forever"
+    assert unit._pending_question is None
 
 
 @pytest.mark.asyncio
