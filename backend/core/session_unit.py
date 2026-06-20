@@ -41,6 +41,7 @@ from .session_healing import (
     CHANNEL_WRAP_BUFFER,
     CHANNEL_WRAP_UP_PROMPT,
     DESKTOP_MAX_TURNS,
+    HARD_FLOOR_BUFFER,
     WRAP_UP_PROMPT,
     HealthSensor,
     HealingLoop,
@@ -71,6 +72,26 @@ subprocess_executor = ThreadPoolExecutor(
 )
 # Legacy alias for internal callers
 _subprocess_executor = subprocess_executor
+
+# ── Load-amplifier caps (Root 2) ───────────────────────────────────
+# Context-ring SOFT compaction threshold: when measured context% crosses this,
+# proactively compact at the next IDLE — BEFORE the slow turn. Soft-first
+# (compact, never kill). The HARD notice (~85%, "start a new tab") already lives
+# in prompt_builder.build_context_warning (AC2).
+# # assumes: 60% of a 1M window (~600K tokens) is where per-turn latency starts
+# climbing materially; compacting here keeps turns fast. Tune per model window.
+SOFT_COMPACT_PCT: int = 60
+
+# Long single-turn heartbeat: emit a "still working" notice once a turn's
+# wall-clock exceeds this, so a legitimately long turn reads as EXPECTED rather
+# than a hang (reduces frontend "mark idle" desync + SSE-blip disconnects).
+# # assumes: 300s aligns with the adaptive MESSAGE_TIMEOUT base — a turn past
+# 5 min is long enough that the user benefits from an explicit progress signal.
+LONG_TURN_HEARTBEAT_S: float = 300.0
+
+# Cooldown between context-ring SOFT compactions (seconds). Prevents back-to-back
+# compaction if context% stays high right after a compact.
+SOFT_COMPACT_COOLDOWN: float = 180.0
 
 # Module-level lock that serializes subprocess spawn operations.
 # Held during _configure_claude_environment + wrapper.__aenter__() to
@@ -481,6 +502,11 @@ class SessionUnit:
         # can be < PROACTIVE_COOLDOWN on freshly booted CI runners).
         self._last_proactive_restart: float = float("-inf")
 
+        # Monotonic timestamp of last context-ring SOFT compaction (Root 2 / AC1).
+        # Separate from _last_proactive_restart: AC1 compacts WITHOUT killing,
+        # so it has its own cooldown to avoid back-to-back compactions.
+        self._last_soft_compact: float = float("-inf")
+
         # ── Resource observability ─────────────────────────────────
         self._last_error_type: Optional[str] = None  # FailureType.value: "oom" | "rate_limit" | "api_error" | "timeout" | "unknown"
         self._last_metrics: Optional[Any] = None      # ProcessMetrics from health_check
@@ -545,6 +571,16 @@ class SessionUnit:
         # Set to True after CHANNEL_WRAP_UP_PROMPT is injected. Prevents
         # re-injection on every subsequent turn past the threshold.
         self._channel_wrap_injected: bool = False
+
+        # ── Desktop hard-floor wrap-up (one-shot, Root 2 / AC3) ────
+        # Set after the hard-floor WRAP_UP_PROMPT is injected on a desktop
+        # session at max_turns - HARD_FLOOR_BUFFER. Independent of self-heal.
+        self._hard_floor_wrap_injected: bool = False
+
+        # ── Long-turn heartbeat throttle (Root 2 / AC5) ────────────
+        # Last elapsed-seconds value at which a "still_working" notice was
+        # emitted for the current turn. Reset on STREAMING entry.
+        self._last_heartbeat_elapsed: float = 0.0
 
         # ── Resume-fallback context preservation ─────────────────
         # Stable app-level session ID for DB queries in the abandon-
@@ -700,6 +736,8 @@ class SessionUnit:
             self._hooks_enqueued = False
             self._streaming_start_time = time.time()
             self._last_event_time = time.time()
+            # Root 2 / AC5: fresh heartbeat throttle for this turn.
+            self._last_heartbeat_elapsed = 0.0
             # Start PID watchdog for out-of-band death detection
             self._start_pid_watchdog()
 
@@ -1226,6 +1264,28 @@ class SessionUnit:
                 self._health_sensor._max_turns,
             )
 
+        # ── Desktop hard-floor graceful wrap-up (Root 2 / AC3, G2) ─
+        # Absolute last-resort stop for DESKTOP sessions at max_turns-5.
+        # Independent of self-heal (which may be OFF — exactly G2's gap):
+        # without this, a self-heal-OFF session runs silently to the CLI's
+        # error_max_turns and truncates. Inject a wrap-up so the agent
+        # delivers a non-empty conclusion before the hard limit. One-shot;
+        # skipped when self-heal already owns the wrap-up (_graceful_wrap_pending)
+        # or the channel path handled it.
+        if self._should_inject_hard_floor_wrap() and isinstance(query_content, str):
+            query_content = f"{query_content}\n\n---\n\n{WRAP_UP_PROMPT}"
+            self._hard_floor_wrap_injected = True  # One-shot consumed
+            # Capture the agent's wrap-up text so the conclusion is non-empty
+            # (AC3: no conclusion_len=0). Mirrors the self-heal capture path.
+            _capturing_wrapup_turn = True
+            self._wrapup_conclusion = ""
+            logger.info(
+                "session_unit.hard_floor_wrap_injected session_id=%s turn=%d max=%d",
+                self.session_id,
+                self._health_sensor.turn_count,
+                self._health_sensor._max_turns,
+            )
+
         # ── Heal checkpoint injection (invisible to user) ─────────
         # If a self-heal just happened, prepend continuation context to the
         # user's query so the agent knows to continue seamlessly.
@@ -1624,14 +1684,27 @@ class SessionUnit:
         # Track context size for adaptive timeout (L1 resilience)
         if input_tokens and input_tokens > 0:
             self._last_known_context_tokens = input_tokens
-        logger.info(
+        # Root 2 / AC4: observability — log context-ring size + turn count, and
+        # escalate to WARN when context% is near the soft cap so the amplifier is
+        # visible BEFORE it bites (vs. the INFO debug line that's easy to miss).
+        _ctx_pct = 0.0
+        if input_tokens and input_tokens > 0:
+            try:
+                _win = PromptBuilder.get_model_context_window(self._model_name)
+                _ctx_pct = (input_tokens / _win) * 100 if _win > 0 else 0.0
+            except Exception:
+                _ctx_pct = 0.0
+        _log = logger.warning if _ctx_pct >= SOFT_COMPACT_PCT else logger.info
+        _log(
             "session_unit.context_ring_debug session_id=%s "
-            "usage_keys=%s raw_total=%s per_turn_est=%s "
-            "num_turns=%d model=%s",
+            "usage_keys=%s raw_total=%s per_turn_est=%s pct=%.0f%% "
+            "turn_count=%d num_turns=%d model=%s",
             self.session_id,
             list(usage.keys()) if usage else "NO_USAGE",
             PromptBuilder.sum_usage_input_tokens(usage) if usage else 0,
             input_tokens,
+            _ctx_pct,
+            self._health_sensor.turn_count,
             num_turns,
             self._model_name,
         )
@@ -2405,6 +2478,120 @@ class SessionUnit:
         await self.kill()
 
         self._last_proactive_restart = time.monotonic()
+
+    async def _check_context_soft_compact(self) -> None:
+        """Context-ring soft cap (Root 2 / AC1, G1): compact at IDLE if large.
+
+        Called from the post-turn IDLE hook (alongside the RSS check). When the
+        last measured context% crosses SOFT_COMPACT_PCT, proactively compact the
+        conversation BEFORE the next (slow) turn. Soft-first: compact only, NEVER
+        kill (that distinguishes it from the RSS proactive restart).
+
+        Preconditions enforced here:
+        - state must be IDLE (compact() requires it; the hook runs post-IDLE)
+        - own cooldown (SOFT_COMPACT_COOLDOWN) to avoid back-to-back compactions
+        Non-fatal — any failure is swallowed (must never block the stream).
+        """
+        if self.state != SessionState.IDLE:
+            return
+        tokens = getattr(self, "_last_known_context_tokens", 0) or 0
+        if tokens <= 0:
+            return
+        if time.monotonic() - self._last_soft_compact < SOFT_COMPACT_COOLDOWN:
+            return
+        try:
+            from .prompt_builder import PromptBuilder
+            window = PromptBuilder.get_model_context_window(self._model_name)
+        except Exception:
+            return
+        if window <= 0:
+            return
+        pct = (tokens / window) * 100
+        if pct < SOFT_COMPACT_PCT:
+            return
+        logger.info(
+            "session_unit.context_soft_compact session_id=%s pct=%.0f%% "
+            "tokens=%d window=%d — compacting (no kill)",
+            self.session_id, pct, tokens, window,
+        )
+        try:
+            await asyncio.wait_for(self.compact(), timeout=30.0)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "session_unit.context_soft_compact timed out session_id=%s",
+                self.session_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "session_unit.context_soft_compact failed session_id=%s: %s",
+                self.session_id, exc,
+            )
+        # Stamp cooldown even on failure — don't hammer a failing compact.
+        self._last_soft_compact = time.monotonic()
+
+    def _should_inject_hard_floor_wrap(self) -> bool:
+        """AC3 (G2) predicate: should a desktop hard-floor wrap-up be injected?
+
+        Pure predicate (no mutation except the one-shot flag) so the self-heal-OFF
+        path is forced-testable (STEERING #11 — the floor is unreachable on the
+        self-heal-ON path, so a test must exercise this directly). True when, on a
+        DESKTOP session, turn_count has reached max_turns - HARD_FLOOR_BUFFER, the
+        wrap hasn't been injected yet, and self-heal isn't already wrapping up.
+        Sets the one-shot flag + arms wrap-up capture as a side effect when True.
+        """
+        if self.is_channel_session:
+            return False
+        if self._hard_floor_wrap_injected:
+            return False
+        if self._graceful_wrap_pending:
+            return False
+        if self._health_sensor.turn_count < (
+            self._health_sensor._max_turns - HARD_FLOOR_BUFFER
+        ):
+            return False
+        # Commit: one-shot + arm conclusion capture (AC3: non-empty conclusion).
+        self._hard_floor_wrap_injected = True
+        self._wrapup_conclusion = ""
+        logger.info(
+            "session_unit.hard_floor_wrap_injected session_id=%s turn=%d max=%d",
+            self.session_id,
+            self._health_sensor.turn_count,
+            self._health_sensor._max_turns,
+        )
+        return True
+
+    def _maybe_build_elapsed_heartbeat(self) -> Optional[dict]:
+        """AC5 (G3): build a 'still working' notice for a long-running turn.
+
+        Event-driven (called when an SDK event arrives during STREAMING): if the
+        current turn's wall-clock exceeds LONG_TURN_HEARTBEAT_S and we haven't
+        emitted a notice for this interval, return a notice event. Returns None
+        otherwise. One notice per LONG_TURN_HEARTBEAT_S interval (no spam).
+
+        The notice is an SSE/UI event — never written to the system prompt
+        (byte-stability invariant). Reset _last_heartbeat_elapsed on STREAMING
+        entry so each turn starts fresh.
+        """
+        if self.state != SessionState.STREAMING:
+            return None
+        if self._streaming_start_time is None:
+            return None
+        elapsed = time.time() - self._streaming_start_time
+        if elapsed < LONG_TURN_HEARTBEAT_S:
+            return None
+        # One notice per heartbeat interval: only emit if we've crossed into a
+        # new multiple of the interval since the last emission.
+        interval_idx = int(elapsed // LONG_TURN_HEARTBEAT_S)
+        last_idx = int(self._last_heartbeat_elapsed // LONG_TURN_HEARTBEAT_S)
+        if interval_idx <= last_idx:
+            return None
+        self._last_heartbeat_elapsed = elapsed
+        minutes = int(elapsed // 60)
+        return {
+            "type": "still_working",
+            "elapsedSeconds": int(elapsed),
+            "message": f"Still working — {minutes}m elapsed on this step.",
+        }
 
     async def compact(self, instructions: Optional[str] = None) -> dict:
         """Trigger /compact on the subprocess.

@@ -105,6 +105,11 @@ class PromptBuilder:
     _DEFAULT_CONTEXT_WINDOW: int = 1_000_000
 
     # ── Context warning thresholds (percentage of context window) ──
+    # # assumes a 1M-token window (our default models). These are PERCENTAGES,
+    # so they scale correctly across window sizes — but the UX intent ("start a
+    # new tab" at 85%) was tuned for 1M. The hard notice (critical@85) is the
+    # Root 2 AC2 hard signal: it is informational ONLY — it never auto-kills or
+    # auto-discards the session (the user chooses to start a fresh tab).
     _CONTEXT_WARN_PCT: int = 70
     _CONTEXT_CRITICAL_PCT: int = 85
 

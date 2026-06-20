@@ -82,6 +82,15 @@ ERROR_CASCADE_THRESHOLD = 3
 # Turn limit: trigger heal this many turns before max_turns
 TURN_APPROACH_BUFFER = 20
 
+# Hard graceful floor (Root 2 / AC3, G2): an absolute last-resort stop this many
+# turns before max_turns. This is the safety net for when self-heal is OFF/failed
+# — when self-heal is ON, turn_approaching (-20) heals + resets turn_count long
+# before -5 is reached, so this trigger is by-design unreachable on the heal path.
+# Its whole purpose is the self-heal-OFF path: a graceful wrap-up with a preserved
+# conclusion instead of a silent run to the CLI's hard error_max_turns (truncation).
+# MUST be < TURN_APPROACH_BUFFER (closer to the limit than the graceful trigger).
+HARD_FLOOR_BUFFER = 5
+
 # Per-platform CLI turn ceilings. Single source of truth within the healing
 # module so the HealthSensor threshold can never drift from the real limit the
 # CLI enforces (prompt_builder applies the SAME values: desktop 500, channel 100).
@@ -207,6 +216,15 @@ class HealthSensor:
         # Signal 3: Error cascade — NOT immune (PE F6: genuine errors need recovery)
         if self._consecutive_errors >= ERROR_CASCADE_THRESHOLD:
             return True, "error_cascade"
+
+        # Signal 4a: Hard graceful floor (Root 2 / AC3) — checked BEFORE
+        # turn_approaching so the more-urgent floor wins when both apply.
+        # At max_turns-5 we are past the graceful window; this is the absolute
+        # last-resort stop. Primary value on the self-heal-OFF path (where
+        # turn_approaching never healed): a graceful wrap-up with a preserved
+        # conclusion instead of a silent run to CLI error_max_turns.
+        if not _young and self._turn_count >= (self._max_turns - HARD_FLOOR_BUFFER):
+            return True, "turn_hard_floor"
 
         # Signal 4: Turn limit approaching
         if not _young and self._turn_count >= (self._max_turns - TURN_APPROACH_BUFFER):

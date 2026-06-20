@@ -388,6 +388,18 @@ class StreamingOrchestrator:
             self._parent._last_event_time = time.time()
             self._parent._health_sensor.record_activity()
 
+            # ── Long-turn heartbeat (Root 2 / AC5) ─────────────────
+            # If this turn has been running a long time, surface a "still
+            # working" notice so the FE reads it as expected, not a hang.
+            # Event-driven (fires on the next SDK event after the threshold);
+            # one notice per interval. Never written to the system prompt.
+            try:
+                hb = self._parent._maybe_build_elapsed_heartbeat()
+                if hb is not None:
+                    yield hb
+            except Exception:
+                pass  # heartbeat is best-effort — never break the stream
+
             # Capture SDK session ID from init message
             if hasattr(message, "session_id") and message.session_id:
                 self._parent._sdk_session_id = message.session_id
@@ -1042,6 +1054,19 @@ class StreamingOrchestrator:
                     logger.debug(
                         "session_unit.post_turn_rss_check failed "
                         "(non-fatal): %s", rss_exc,
+                    )
+
+                # ── Context-ring soft compaction (Root 2 / AC1) ───
+                # Also in IDLE — if the context ring is large (>SOFT_COMPACT_PCT),
+                # compact BEFORE the next slow turn. Soft-first (compact, no kill).
+                # Skipped automatically if the RSS path above already killed
+                # (state would no longer be IDLE).
+                try:
+                    await self._parent._check_context_soft_compact()
+                except Exception as soft_exc:
+                    logger.debug(
+                        "session_unit.post_turn_soft_compact failed "
+                        "(non-fatal): %s", soft_exc,
                     )
 
                 return
