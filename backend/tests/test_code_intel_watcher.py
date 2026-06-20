@@ -64,6 +64,38 @@ class TestWatcherFilter:
         assert watcher._filter("modified", "/tmp/repo/.venv/lib/site-packages/foo.py") is False
         assert watcher._filter("modified", "/tmp/repo/venv/lib/bar.py") is False
 
+    def test_watcher_filter_rejects_knowledge_dirs(self):
+        """Non-source workspace dirs (Knowledge, .context, DailyActivity) are excluded.
+
+        These directories contain markdown/JSON written by hooks, not source code.
+        Bulk writes (200+ files from context_health_hook) previously caused memory
+        spikes that killed the daemon via jetsam.
+        """
+        watcher = self._make_watcher()
+        # Knowledge directories — hooks write DailyActivity, Signals, etc.
+        assert watcher._filter("modified", "/tmp/repo/Knowledge/DailyActivity/2026-06-20.md") is False
+        assert watcher._filter("modified", "/tmp/repo/Knowledge/Signals/signal.md") is False
+        assert watcher._filter("modified", "/tmp/repo/Knowledge/DailyBriefs/2026-06-20.md") is False
+        assert watcher._filter("modified", "/tmp/repo/Knowledge/JobResults/result.md") is False
+        # .context directory — context_health_hook refreshes these
+        assert watcher._filter("modified", "/tmp/repo/.context/MEMORY.md") is False
+        assert watcher._filter("modified", "/tmp/repo/.context/KNOWLEDGE.md") is False
+        # Attachments — user uploads
+        assert watcher._filter("modified", "/tmp/repo/Attachments/2026-06-20/image.png") is False
+        # .artifacts — pipeline artifacts
+        assert watcher._filter("modified", "/tmp/repo/.artifacts/runs/run_123/run.json") is False
+        # Services — job configs
+        assert watcher._filter("modified", "/tmp/repo/Services/swarm-jobs/state.json") is False
+        # .swarm-ai — data directory
+        assert watcher._filter("modified", "/Users/gawan/.swarm-ai/data.db") is False
+
+    def test_watcher_filter_still_accepts_source_in_projects(self):
+        """Source code inside Projects/ subdirs still passes (only non-source dirs blocked)."""
+        watcher = self._make_watcher()
+        # Python source in project directories should still be watched
+        assert watcher._filter("modified", "/tmp/repo/backend/core/session_unit.py") is True
+        assert watcher._filter("modified", "/tmp/repo/desktop/src/App.tsx") is True
+
 
 # ── Start/Stop lifecycle tests ──────────────────────────────────────────────
 
@@ -113,6 +145,103 @@ class TestWatcherLifecycle:
                 await watcher._watch_loop()
                 # After import failure, running should be False
                 assert watcher.is_running is False
+
+
+# ── Batch size and chunking tests ──────────────────────────────────────────
+
+class TestWatcherBatchHandling:
+    """Tests for batch size gating and chunked processing."""
+
+    @pytest.mark.asyncio
+    async def test_watcher_processes_large_batch_with_warning(self):
+        """Large batches (>_MAX_BATCH_SIZE) are still processed (not dropped).
+
+        The filter excludes non-source dirs, so anything reaching the batch gate
+        IS source code. We log a warning but don't drop legitimate refactors.
+        Previously this skipped entirely — adversarial review (H1) caught that
+        legitimate large refactors would be silently dropped.
+        """
+        from core.code_intel.watcher import CodeIntelWatcher, _MAX_BATCH_SIZE
+
+        graph = MagicMock()
+        watcher = CodeIntelWatcher("test-project", Path("/tmp/repo"), graph)
+
+        # Create a batch larger than _MAX_BATCH_SIZE (all .py = pass filter)
+        large_batch = [
+            ("modified", f"/tmp/repo/src/file_{i}.py")
+            for i in range(_MAX_BATCH_SIZE + 10)
+        ]
+
+        mock_watchfiles = MagicMock()
+
+        async def mock_awatch(*args, **kwargs):
+            yield large_batch
+
+        mock_watchfiles.awatch = mock_awatch
+
+        with patch.dict("sys.modules", {"watchfiles": mock_watchfiles}):
+            watcher._running = True
+            # _trigger_incremental SHOULD be called (not skipped)
+            with patch.object(watcher, '_trigger_incremental', new_callable=AsyncMock) as mock_trigger:
+                await watcher._watch_loop()
+                mock_trigger.assert_called_once()
+                # Verify all 60 source files are passed through
+                called_files = mock_trigger.call_args[0][0]
+                assert len(called_files) == _MAX_BATCH_SIZE + 10
+
+    @pytest.mark.asyncio
+    async def test_watcher_processes_small_batch(self):
+        """Batches within _MAX_BATCH_SIZE are processed normally."""
+        from core.code_intel.watcher import CodeIntelWatcher, _MAX_BATCH_SIZE
+
+        graph = MagicMock()
+        watcher = CodeIntelWatcher("test-project", Path("/tmp/repo"), graph)
+
+        # Create a small batch (within limit)
+        small_batch = [
+            ("modified", f"/tmp/repo/src/file_{i}.py")
+            for i in range(5)
+        ]
+
+        mock_watchfiles = MagicMock()
+
+        async def mock_awatch(*args, **kwargs):
+            yield small_batch
+
+        mock_watchfiles.awatch = mock_awatch
+
+        with patch.dict("sys.modules", {"watchfiles": mock_watchfiles}):
+            watcher._running = True
+            with patch.object(watcher, '_trigger_incremental', new_callable=AsyncMock) as mock_trigger:
+                await watcher._watch_loop()
+                mock_trigger.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_watcher_chunks_route_extraction(self):
+        """Route extraction is chunked (_CHUNK_SIZE), graph update is single call."""
+        from core.code_intel.watcher import CodeIntelWatcher, _CHUNK_SIZE
+
+        graph = MagicMock()
+        graph.incremental_update = MagicMock()
+        watcher = CodeIntelWatcher("test-project", Path("/tmp/repo"), graph)
+        watcher._running = True
+
+        # Create 35 files — route extraction should be 2 chunks (20 + 15)
+        changed_files = [Path(f"/tmp/repo/src/file_{i}.py") for i in range(35)]
+
+        with patch.object(watcher, '_extract_routes_only') as mock_routes:
+            await watcher._trigger_incremental(changed_files)
+            # Graph update called ONCE (single FTS rebuild)
+            graph.incremental_update.assert_called_once()
+            assert len(graph.incremental_update.call_args[0][1]) == 35
+            # Route extraction chunked: ceil(35/20) = 2 calls
+            assert mock_routes.call_count == 2
+            # First chunk: 20 files
+            first_call_rel = mock_routes.call_args_list[0][0][0]
+            assert len(first_call_rel) == _CHUNK_SIZE
+            # Second chunk: 15 files
+            second_call_rel = mock_routes.call_args_list[1][0][0]
+            assert len(second_call_rel) == 15
 
 
 # ── Registry / capacity tests ───────────────────────────────────────────────

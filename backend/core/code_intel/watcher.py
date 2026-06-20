@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 # Max concurrent watchers (memory budget: ~50KB each)
 _MAX_WATCHERS = 4
 _DEBOUNCE_MS = 2000  # 2 seconds
+_MAX_BATCH_SIZE = 50  # Skip incremental when too many files change at once
+_CHUNK_SIZE = 20  # Process files in chunks to limit memory spikes
 
 # File extensions worth watching (from parser.py LANGUAGE_MAP)
 _WATCHED_EXTENSIONS = {
@@ -33,6 +35,14 @@ _SKIP_DIRS = {
     "node_modules", ".git", "__pycache__", "venv", ".venv",
     "dist", "build", ".tox", ".mypy_cache", ".pytest_cache",
     ".eggs", "egg-info", ".next", ".nuxt",
+}
+
+# Path segments that indicate non-source directories (never contain indexable code)
+# These are workspace/knowledge dirs whose bulk writes trigger jetsam kills
+_SKIP_PATH_SEGMENTS = {
+    "Knowledge", "DailyActivity", ".context", ".swarm-ai",
+    "Attachments", "DailyBriefs", "JobResults", "Signals",
+    "EvalHistory", ".artifacts", "Services",
 }
 
 
@@ -90,8 +100,18 @@ class CodeIntelWatcher:
                     break
                 changed_files = [Path(path) for _, path in changes]
                 source_changes = [f for f in changed_files if f.suffix in _WATCHED_EXTENSIONS]
-                if source_changes:
-                    await self._trigger_incremental(source_changes)
+                if not source_changes:
+                    continue
+                # Gate: large batches of source changes are unusual (typically a
+                # git checkout/rebase). Process them but with extra chunking and
+                # a warning log. The _filter already excluded non-source dirs, so
+                # anything here IS source code — don't drop it.
+                if len(source_changes) > _MAX_BATCH_SIZE:
+                    logger.warning(
+                        f"CodeIntelWatcher: large batch of {len(source_changes)} source "
+                        f"changes for {self._project_name} — processing in chunks"
+                    )
+                await self._trigger_incremental(source_changes)
         except asyncio.CancelledError:
             pass
         except Exception as e:
@@ -102,43 +122,73 @@ class CodeIntelWatcher:
     def _filter(self, change, path: str) -> bool:
         """Only watch parseable source files, skip noise directories."""
         p = Path(path)
-        # Skip noise directories
-        if any(part in _SKIP_DIRS for part in p.parts):
+        parts = p.parts
+        # Skip noise directories (build artifacts, caches)
+        if any(part in _SKIP_DIRS for part in parts):
+            return False
+        # Skip non-source workspace directories (knowledge, context, attachments)
+        if any(part in _SKIP_PATH_SEGMENTS for part in parts):
             return False
         return p.suffix in _WATCHED_EXTENSIONS
 
     async def _trigger_incremental(self, changed_files: list[Path]):
-        """Run incremental reindex + route extraction in thread pool."""
+        """Run incremental reindex + route extraction in thread pool.
+
+        Two-phase approach to balance memory and performance:
+        1. Graph update (incremental_update) runs ONCE for all files — single FTS rebuild
+        2. Route extraction runs in chunks of _CHUNK_SIZE — limits tree-sitter memory
+        """
         try:
             relative_files = []
+            abs_files_valid = []
             for f in changed_files:
                 try:
                     relative_files.append(str(f.relative_to(self._root)))
+                    abs_files_valid.append(f)
                 except ValueError:
                     continue
 
-            if relative_files:
+            if not relative_files:
+                return
+
+            # Phase 1: Single graph update (one FTS rebuild, not per-chunk)
+            await asyncio.to_thread(
+                self._graph.incremental_update,
+                self._root,
+                relative_files,
+            )
+
+            # Phase 2: Route extraction in chunks (tree-sitter parsing is memory-heavy)
+            for i in range(0, len(relative_files), _CHUNK_SIZE):
+                if not self._running:
+                    break
+                chunk_rel = relative_files[i:i + _CHUNK_SIZE]
+                chunk_abs = abs_files_valid[i:i + _CHUNK_SIZE]
                 await asyncio.to_thread(
-                    self._incremental_with_routes,
-                    relative_files,
-                    changed_files,
+                    self._extract_routes_only,
+                    chunk_rel,
+                    chunk_abs,
                 )
-                logger.debug(
-                    f"CodeIntelWatcher: incremental reindex for {self._project_name} "
-                    f"({len(relative_files)} files)"
-                )
+                # Yield between chunks to avoid event loop starvation
+                if i + _CHUNK_SIZE < len(relative_files):
+                    await asyncio.sleep(0.1)
+
+            logger.debug(
+                f"CodeIntelWatcher: incremental reindex for {self._project_name} "
+                f"({len(relative_files)} files)"
+            )
         except Exception as e:
             logger.warning(f"CodeIntelWatcher incremental reindex failed: {e}")
 
-    def _incremental_with_routes(self, relative_files: list[str], abs_files: list[Path]):
-        """Incremental update + re-extract routes for changed files (runs in thread)."""
+    def _extract_routes_only(self, relative_files: list[str], abs_files: list[Path]):
+        """Extract routes for changed files (runs in thread, chunked).
+
+        Separated from graph update so that graph update (single FTS rebuild)
+        runs once, while route extraction (memory-heavy tree-sitter) is chunked.
+        """
         from . import extract_and_store_routes
         from .parser import LANGUAGE_MAP
 
-        # Step 1: normal incremental (nodes + edges)
-        self._graph.incremental_update(self._root, relative_files)
-
-        # Step 2: re-extract routes for changed files
         for abs_path, rel_path in zip(abs_files, relative_files):
             if abs_path.suffix in LANGUAGE_MAP and abs_path.exists():
                 try:
