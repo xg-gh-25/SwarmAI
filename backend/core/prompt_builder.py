@@ -996,6 +996,11 @@ class PromptBuilder:
                 "Invalid thinking_effort %r — falling back to 'high'", effort
             )
             return "high"
+
+        # Channel sessions cap at "high" for cost/latency — desktop uses full config.
+        if channel_context is not None and effort in ("xhigh", "max"):
+            return "high"
+
         return effort
 
     # ------------------------------------------------------------------
