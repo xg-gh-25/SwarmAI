@@ -30,6 +30,7 @@ import { MAX_ATTACHMENTS } from '../types';
 import { DEFAULT_WORKSPACE_ID } from '../types/workspace-config';
 import { chatService } from '../services/chat';
 import { messageStoreRegistry } from '../stores/MessageStore';
+import { useMessageStore } from '../stores/useMessageStore';
 import { agentsService } from '../services/agents';
 import { skillsService } from '../services/skills';
 import { pluginsService } from '../services/plugins';
@@ -284,6 +285,54 @@ export default function ChatPage() {
   // TSCC state management — lifecycle state and UI preferences only.
   // System prompt metadata is now delivered via SSE and managed by useChatStreamingLifecycle.
   useTSCCState(sessionId ?? null);
+
+  // ─── F7 Step-0 parity observer (TEMPORARY) ────────────────────────
+  // De-risks the design pivot onto `useMessageStore`, which is currently dead
+  // code (zero component callers). We mount the hook here purely as an OBSERVER
+  // of the active tab's store and compare its reactive `messages` snapshot
+  // against the existing hand-rolled bridge `messages` (the authoritative
+  // display source today). On divergence we console.warn ONCE per change of
+  // (length, last-message-id) so it does not spam every streamed token.
+  //
+  // This does NOT change what the rendered list reads from — the bridge
+  // `messages` remains the display source. The observer is inert when there is
+  // no active store (null/destroyed). It is removed/replaced when the real
+  // per-TabView subscription lands in Step 2.
+  const storeObservation = useMessageStore(activeTabId);
+  const parityLastSeenRef = useRef<string>('');
+  useEffect(() => {
+    // Dev-only: zero prod overhead, but still compiles/runs in tests.
+    if (!import.meta.env.DEV) return;
+    // Inert when there is no active store (null/destroyed tab).
+    if (!storeObservation) {
+      parityLastSeenRef.current = '';
+      return;
+    }
+    const storeMessages = storeObservation.messages;
+    // Throttle/dedupe: only evaluate when the bridge snapshot's shape changes
+    // (length or last-message id), not on every per-token content mutation.
+    const bridgeLastId = messages.length > 0 ? messages[messages.length - 1].id : '';
+    const signature = `${activeTabId ?? ''}|${messages.length}|${bridgeLastId}`;
+    if (signature === parityLastSeenRef.current) return;
+    parityLastSeenRef.current = signature;
+
+    const storeLastId =
+      storeMessages.length > 0 ? storeMessages[storeMessages.length - 1].id : '';
+    const lengthDiverged = storeMessages.length !== messages.length;
+    const lastIdDiverged = storeLastId !== bridgeLastId;
+    if (lengthDiverged || lastIdDiverged) {
+      console.warn(
+        '[F7 parity] useMessageStore snapshot diverges from bridge messages',
+        {
+          tabId: activeTabId,
+          storeLength: storeMessages.length,
+          bridgeLength: messages.length,
+          storeLastId,
+          bridgeLastId,
+        },
+      );
+    }
+  }, [storeObservation, messages, activeTabId]);
 
   // ─── Voice Conversation Mode ──────────────────────────────────────
   // Derive streaming text content from the last assistant message for TTS.
