@@ -498,14 +498,6 @@ class SessionUnit:
         # this, the flush's _client.interrupt() races with the new stream.
         self._pipe_flush_task: Optional[asyncio.Task] = None
 
-        # ── Post-disconnect generation flag ───────────────────────────
-        # Set True by recover_from_disconnect() when the subprocess is
-        # left alive after SSE disconnect. Cleared by:
-        #   (a) send() starting (user resumes conversation)
-        #   (b) subprocess exit (ResultMessage or process death)
-        #   (c) kill() / _cleanup_internal()
-        # Used by streaming-state endpoint to report truth to frontend.
-        self._generating_after_disconnect: bool = False
 
         # ── Root-1 SSOT Phase 2: outstanding tool_use + pending question ──
         # When the agent emits an AskUserQuestion / cmd_permission tool_use the
@@ -613,36 +605,23 @@ class SessionUnit:
         """
         return self._pending_tool_use_id is not None
 
+    # Root-1 SSOT Phase 2 (L6, Option B): is_generating_after_disconnect (the
+    # post-disconnect "still generating" limbo property) is DELETED. A disconnect
+    # now yields a clean IDLE — there is no flag to consult. The streaming-state
+    # mirror reports streaming = (state == STREAMING).
+
     @property
-    def is_generating_after_disconnect(self) -> bool:
-        """Subprocess is still generating output after SSE client disconnected.
+    def is_post_disconnect_flushing(self) -> bool:
+        """True while a post-disconnect pipe-flush task is still running — i.e.
+        the subprocess was left alive after an SSE disconnect (Option B-soft, 1A)
+        and is finishing a long tool-loop whose output persists to DB.
 
-        True when: state is IDLE (post-disconnect transition) AND the
-        subprocess is still alive and generating. Uses a flag set by
-        recover_from_disconnect() and cleared by send()/kill()/process exit.
-
-        Used by streaming-state endpoint to report truthful streaming status
-        to the frontend reconciliation poller — prevents force-clear of
-        streams that are still active server-side.
-        """
-        if not self._generating_after_disconnect:
-            return False
-        if self.state != SessionState.IDLE:
-            return False
-        # Verify subprocess is actually alive (PID check)
-        try:
-            pid = self.pid
-            if pid:
-                import os
-                os.kill(pid, 0)  # Signal 0 = existence check
-                return True
-            # No PID → subprocess gone
-            self._generating_after_disconnect = False
-            return False
-        except (OSError, ProcessLookupError):
-            # Process dead — clear the flag
-            self._generating_after_disconnect = False
-            return False
+        Eviction/slot logic uses this so a clean-IDLE-but-still-flushing unit is
+        not killed mid-turn (replaces the deleted is_generating_after_disconnect
+        guard at the eviction sites — same protection, derived from the real task
+        instead of a manually-managed flag)."""
+        t = self._pipe_flush_task
+        return t is not None and not t.done()
 
     @property
     def is_protected(self) -> bool:
@@ -998,8 +977,6 @@ class SessionUnit:
         # (e.g. RSS spike armed checkpoint → spike subsided → kill didn't fire).
         # Prevents an unrelated later restart from injecting stale context.
         self._heal_checkpoint = None
-        # New send = user resumed — no longer in post-disconnect state.
-        self._generating_after_disconnect = False
 
         # Store app_session_id for downstream use by _retry_with_resume's
         # abandon-fallback path (build_resume_context needs the stable
@@ -1914,21 +1891,25 @@ class SessionUnit:
             yield event
 
     def recover_from_disconnect(self) -> bool:
-        """Transition STREAMING → IDLE after SSE client disconnect.
+        """Transition STREAMING → a CLEAN IDLE after SSE client disconnect.
 
         Returns True if the transition happened.  No-op if not STREAMING.
 
-        This is the public API for ``chat.py``'s disconnect handler —
-        avoids calling ``_transition()`` from outside the unit.
-
-        Sets ``_generating_after_disconnect`` flag so the streaming-state
-        endpoint reports truth until subprocess finishes its current turn.
+        Root-1 SSOT Phase 2 (L6, Option B-soft): there is NO post-disconnect
+        "generating" limbo flag any more. The transition produces a TRUE IDLE,
+        which (a) fires _on_unit_state_change → enqueue_drain, so any messages the
+        user queued during the turn coalesce-drain once the subprocess is free, and
+        (b) lets the streaming-state mirror report state==IDLE without a special
+        case. The subprocess is NOT killed here: the caller (chat.py) still
+        schedules ``flush_subprocess_pipe`` which soft-interrupts and — on timeout —
+        LEAVES THE SUBPROCESS ALIVE so a legitimate long tool-loop finishes and its
+        output persists to DB for reconciliation (1A: long turns survive a transient
+        SSE blip; lifecycle TTL handles a truly-stuck process).
         """
         if self.state != SessionState.STREAMING:
             return False
         self._transition(SessionState.IDLE)
         self.last_used = time.time()
-        self._generating_after_disconnect = True
         return True
 
     def schedule_pipe_flush(
@@ -2676,8 +2657,6 @@ class SessionUnit:
         # It is reset in send() (line ~620) and on success (line ~1672).
         self._model_name = None
         self._peak_tree_rss_bytes = 0
-        # Subprocess dead — can't be generating anymore.
-        self._generating_after_disconnect = False
         if self._pipe_flush_task is not None:
             self._pipe_flush_task.cancel()
             self._pipe_flush_task = None

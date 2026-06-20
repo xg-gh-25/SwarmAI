@@ -972,7 +972,7 @@ class SessionRouter:
         idle_units = [
             u for u in self._units.values()
             if u.state == SessionState.IDLE
-            and not u.is_generating_after_disconnect
+            and not u.is_post_disconnect_flushing  # Option B-soft: don't kill a long turn finishing post-disconnect
             and u is not exclude
             and u.is_channel_session == channel_only
         ]
@@ -1254,7 +1254,7 @@ class SessionRouter:
             and self.alive_count >= _current_max
             and not any(
                 u.state == SessionState.IDLE
-                and not u.is_generating_after_disconnect
+                and not u.is_post_disconnect_flushing
                 and u is not unit
                 for u in self._units.values()
             )

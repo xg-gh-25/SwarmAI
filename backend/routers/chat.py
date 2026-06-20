@@ -757,13 +757,12 @@ async def get_streaming_state_endpoint():
     for unit in sr.list_units():
         if not unit.session_id or unit.session_id.startswith("prewarm"):
             continue
-        # Report streaming=true if EITHER:
-        # 1. State is actually STREAMING (normal case), OR
-        # 2. State is IDLE but subprocess still generating after disconnect
-        is_streaming = (
-            unit.state.value == "streaming"
-            or unit.is_generating_after_disconnect
-        )
+        # Root-1 SSOT Phase 2 (L6, Option B): streaming is now simply
+        # state==STREAMING. A disconnect yields a CLEAN IDLE (no generating-limbo
+        # flag), so there is no special case. If the subprocess is still finishing
+        # a long turn post-disconnect (is_post_disconnect_flushing), the mirror
+        # shows IDLE and the completed content loads from DB on the next reconcile.
+        is_streaming = unit.state.value == "streaming"
         # Root-1 SSOT Phase 2 (L5): the frontend mirror reads these directly
         # instead of inferring. waiting_input surfaces a (possibly SSE-lost)
         # AskUserQuestion; pending_count drives the "queued" badge; pending_question
