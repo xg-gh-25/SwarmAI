@@ -1,7 +1,8 @@
 /**
  * Settings page tab layout wrapper.
  *
- * 7 tabs: General, AI & Models, Channels, Skills, MCP Servers, System, About.
+ * 11 tabs (10 in non-desktop builds — Hive is desktop-only): General, AI & Models,
+ * Channels, Skills, MCP Servers, Hive, Backup, Core Engine, System, Capabilities, About.
  * Supports initialTab prop so sidebar icons can deep-link to a specific tab.
  */
 import { useState, useEffect, useMemo } from 'react';
@@ -75,7 +76,7 @@ export default function SettingsTabs({ initialTab }: SettingsTabsProps) {
     <div className="flex flex-col h-full">
       {/* Tab bar — pinned at top, gradient hints when overflowing */}
       <div className="shrink-0 px-6 pt-4 border-b border-[var(--color-border)] overflow-x-auto [mask-image:linear-gradient(to_right,transparent,black_16px,black_calc(100%-16px),transparent)] [-webkit-mask-image:linear-gradient(to_right,transparent,black_16px,black_calc(100%-16px),transparent)]">
-        <div className="flex gap-1 justify-center">
+        <div className="flex gap-1 justify-center-safe">
           {TABS.map((tab) => (
             <button
               key={tab.id}

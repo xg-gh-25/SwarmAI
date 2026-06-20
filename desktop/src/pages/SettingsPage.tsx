@@ -1,7 +1,7 @@
 /**
  * Settings page — thin wrapper over SettingsTabs.
  *
- * 7-tab layout: General, AI & Models, Channels, Skills, MCP Servers, System, About.
+ * 11-tab layout (10 in non-desktop builds — Hive is desktop-only). See SettingsTabs.
  * Supports initialTab prop so sidebar icons can deep-link to Skills or MCP tabs.
  */
 import SettingsTabs from '../components/settings/SettingsTabs';
