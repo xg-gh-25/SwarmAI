@@ -295,7 +295,7 @@ class EvalService:
 
         cases_data = {"cases": [c for c in self._cases if c.get("tier") != "archived"]}
 
-        result = run_eval(cases_data, "canary", None, self._workspace_root)
+        result = run_eval(cases_data, "canary", None, self._workspace_root, programmatic_only=True)
         short_id = uuid.uuid4().hex[:6]
         result["run_id"] = f"eval_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{short_id}_canary"
 
