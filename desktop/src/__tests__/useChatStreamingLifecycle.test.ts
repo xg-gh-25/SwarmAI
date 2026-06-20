@@ -89,6 +89,7 @@ import React from 'react';
 import type { StreamEvent } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
 import type { Message, ContentBlock } from '../types';
+import { messageStoreRegistry } from '../stores/MessageStore';
 import {
   testTabMap,
   testTabMapRef as _testTabMapRef,
@@ -1033,6 +1034,66 @@ describe('Fix 6: Per-tab state isolation', () => {
       expect(result.current.messages[0].content).toHaveLength(1);
       const mapState = testTabMap.get('tab-a');
       expect(mapState!.messages[0].content).toHaveLength(1);
+    });
+
+    // Root-1 SSOT Phase 3 (AC5) — adversarial HIGH regression guard:
+    // surfacePendingQuestion's `if (store)` branch must mirror the
+    // ask_user_question block into tabState.messages too, NOT just the store.
+    // For a BACKGROUND tab the store→tabState bridge doesn't run, so without the
+    // parallel-write the block is absent from tabState.messages → handleSelectTab's
+    // store.replace(tabState.messages) clobbers it on switch-back → the
+    // re-surfaced question vanishes (the form renders FROM the block). This test
+    // seeds a store for a background tab and asserts the block lands in BOTH.
+    it('AC5: ask_user_question on a background tab WITH a store writes the block to BOTH store and tabState.messages (no clobber on switch-back)', () => {
+      const { result } = renderHook(() =>
+        useChatStreamingLifecycle(createMockDeps()),
+      );
+
+      const bgMsgId = 'bg-auq-msg';
+      const bgMsg = makeMessage({ id: bgMsgId, role: 'assistant', content: [] });
+
+      act(() => {
+        testTabMap.set('tab-bg', {
+          id: 'tab-bg', title: 'BG', agentId: 'default', isNew: false,
+          messages: [bgMsg],
+          sessionId: 'sess-bg',
+          pendingQuestion: null,
+          abortController: null,
+          isStreaming: false, streamState: { mode: "idle", streamGen: 0, reconnectAttempt: 0, maxReconnectAttempts: 3, drainQueued: false, isStalled: false, toolExecuting: false, error: null, sessionId: null },
+          streamGen: 0,
+          status: 'streaming',
+        });
+        initTestTab('tab-fg');
+        testActiveTabIdRef.current = 'tab-fg'; // tab-bg is BACKGROUND
+        const store = messageStoreRegistry.getOrCreate('tab-bg', { sessionId: 'sess-bg' });
+        store.replace([bgMsg]);
+      });
+
+      const bgHandler = result.current.createStreamHandler(bgMsgId, 'tab-bg');
+
+      act(() => {
+        bgHandler({
+          type: 'ask_user_question',
+          toolUseId: 'tool-bg-1',
+          questions: [{ question: 'Pick', header: 'H', options: [{ label: 'A', description: 'a' }], multiSelect: false }],
+          sessionId: 'sess-bg',
+        });
+      });
+
+      const hasBlock = (msgs: Message[]) =>
+        msgs.some((m) => m.id === bgMsgId &&
+          m.content.some((b) => (b as { type?: string }).type === 'ask_user_question'));
+
+      // Store carries the block (the surface helper appended it)...
+      const store = messageStoreRegistry.get('tab-bg');
+      expect(store).not.toBeNull();
+      expect(hasBlock(store!.messages)).toBe(true);
+      // ...AND tabState.messages carries it too (the parallel-write fix). Without
+      // this, switch-back replace(tabState.messages) would destroy the block.
+      const bgState = testTabMap.get('tab-bg');
+      expect(hasBlock(bgState!.messages)).toBe(true);
+      // Foreground React state must NOT carry the bg tab's question (no cross-tab leak).
+      expect(hasBlock(result.current.messages)).toBe(false);
     });
 
     it('is a no-op when tab has been closed', () => {
@@ -2460,6 +2521,14 @@ describe('Fix 7: Tab limit enforcement', () => {
 describe('Fix 8: Tab status indicators', () => {
   beforeEach(() => {
     resetTestState();
+    // This describe asserts toast emission (cross-tab AskUserQuestion toast).
+    // mockAddToast is a module-hoisted shared spy whose calls accumulate across
+    // ALL tests; without clearing it here, a toast from an earlier describe (e.g.
+    // a background-tab AskUserQuestion that built a toast with no onSelectTab →
+    // action:undefined) leaks into this describe's `.find(id startsWith ask-uq-)`
+    // lookup and fails the action assertion. Clear it so toast assertions here
+    // only see toasts THIS describe produced.
+    mockAddToast.mockClear();
   });
   describe('updateTabStatus', () => {
     it('updates tab map entry status in sync', () => {

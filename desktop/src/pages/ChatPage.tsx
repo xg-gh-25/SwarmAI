@@ -2018,8 +2018,8 @@ export default function ChatPage() {
     // Root-1 SSOT Phase 3 (AC5 answer-in-flight guard): record the answered
     // toolUseId so the reconcile-loop re-surface does NOT re-inject this same
     // question during the window where the backend mirror may still report
-    // waiting_input for it before transitioning out. Cleared by the helper /
-    // a genuinely different new question.
+    // waiting_input for it before transitioning out. Cleared by the reconcile
+    // loop once the backend moves past it (useChatStreamingLifecycle.ts re-surface block).
     if (tabState) tabState._answeredToolUseId = toolUseId;
 
     setPendingQuestion(null);

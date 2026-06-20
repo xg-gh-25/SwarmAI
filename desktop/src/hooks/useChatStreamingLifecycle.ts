@@ -1249,8 +1249,24 @@ export function useChatStreamingLifecycle(
             tabState._lastDrainedSeqs = mirrorState.lastDrainedSeqs;
             if (drain.retire && tabState.queuedMessage && drain.serverPendingCount === 0) {
               // Server drained everything it owned — the local optimistic queue
-              // mirror is now superseded by delivered DB content. Clear it (the
-              // reconcile DB sync below / the drained turn renders the real msg).
+              // mirror is now superseded by delivered DB content.
+              // Flip the rendered synthetic 'queued-<uuid>' message's badge OFF
+              // the same way drainQueuedMessage does (store.updateById). A
+              // non-streaming tab hits `if (!isStreaming) continue` right below,
+              // so the force-clear DB sync never runs for it — without this the
+              // synthetic message would keep a stale "queued" badge forever.
+              const retireId = tabState.queuedMessage.messageId;
+              const retireStore = messageStoreRegistry.get(tabId);
+              if (retireStore) {
+                retireStore.updateById(retireId, (m) => ({ ...m, isQueued: false }));
+                tabState.messages = retireStore.messages; // parallel-write (bg tab)
+                if (tabId === activeTabIdRef.current) setMessages(retireStore.messages);
+              } else {
+                tabState.messages = tabState.messages.map((m) =>
+                  m.id === retireId ? { ...m, isQueued: false } : m,
+                );
+                if (tabId === activeTabIdRef.current) setMessages(tabState.messages);
+              }
               tabState.queuedMessage = undefined;
               tabState._queuedAt = undefined;
               anyCleared = true;
@@ -1551,6 +1567,15 @@ export function useChatStreamingLifecycle(
             (msg) => ({ ...msg, content: [...msg.content, auqBlock] }),
             (msg) => msg.id === assistantMessageId,
           );
+          // CRITICAL parallel-write (matches the SSE handlers' store+cache writes):
+          // mirror the block into tabState.messages too. The store→tabState bridge
+          // only syncs the ACTIVE tab, so for a BACKGROUND tab tabState.messages
+          // would stay block-less → on switch-back handleSelectTab does
+          // store.replace(tabState.messages) (ChatPage.tsx:706) which clobbers the
+          // store, destroying the just-re-surfaced block (the form renders FROM the
+          // block, not pendingQuestion) → the question vanishes. persistPendingState
+          // below also serializes tabState.messages, so the mount-restore needs it.
+          if (tabState) tabState.messages = store.messages;
         }
       } else if (tabState) {
         const already = tabState.messages.some(

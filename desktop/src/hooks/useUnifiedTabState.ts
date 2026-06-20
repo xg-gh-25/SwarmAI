@@ -189,7 +189,9 @@ export interface UnifiedTab {
   /** Root-1 SSOT Phase 3 (AC5): the toolUseId of a question the user just
    *  answered. Suppresses the reconcile-loop re-surface of that SAME question
    *  during the window where the backend mirror may still report waiting_input
-   *  before transitioning. Cleared by surfacePendingQuestion / a new question. */
+   *  before transitioning. Set in handleAnswerQuestion; cleared by the reconcile
+   *  loop once the backend transitions past the answered question (no longer
+   *  waiting_input, or a different pending toolUseId). */
   _answeredToolUseId?: string;
   /** Root-1 SSOT Phase 3 (AC4): the last_drained_seqs the tab observed on the
    *  previous reconcile poll — compared against the current poll to detect a

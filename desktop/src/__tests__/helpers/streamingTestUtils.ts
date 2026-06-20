@@ -18,6 +18,7 @@ import type { UnifiedTab, TabStatus } from '../../hooks/useUnifiedTabState';
 import type { ChatStreamingLifecycleDeps } from '../../hooks/useChatStreamingLifecycle';
 import type { Message, ContentBlock } from '../../types';
 import { INITIAL_STATE } from '../../hooks/streaming-machine';
+import { messageStoreRegistry } from '../../stores/MessageStore';
 import React from 'react';
 
 // ---------------------------------------------------------------------------
@@ -110,8 +111,13 @@ export function makeToolUse(name: string, id?: string): ContentBlock {
   };
 }
 
-/** Reset shared test state — call in beforeEach. */
+/** Reset shared test state — call in beforeEach.
+ *  Also clears the module-level MessageStore registry: stores are keyed by tabId
+ *  and survive across tests (module singleton), so a store seeded in one test
+ *  would leak into a later test that reuses the same tabId, silently flipping the
+ *  surface/stream handlers from the no-store branch to the store branch. */
 export function resetTestState(): void {
   testTabMap.clear();
   testActiveTabIdRef.current = null;
+  messageStoreRegistry.clear();
 }
