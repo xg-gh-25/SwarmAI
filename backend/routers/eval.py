@@ -374,6 +374,62 @@ def _build_learning_dashboard(root) -> dict:
     }
 
 
+# ─── Reports (HTML) ───────────────────────────────────────────────────────
+
+
+@router.get("/reports")
+async def list_reports():
+    """List available HTML eval reports (newest first)."""
+    from pathlib import Path
+    from core.initialization_manager import initialization_manager
+
+    ws_path = initialization_manager.get_cached_workspace_path()
+    if not ws_path:
+        return []
+
+    reports_dir = Path(ws_path) / "Projects" / "SwarmAI" / "EvalHistory"
+    if not reports_dir.is_dir():
+        return []
+
+    reports = []
+    for f in sorted(reports_dir.glob("*.html"), reverse=True):
+        stat = f.stat()
+        reports.append({
+            "filename": f.name,
+            "sizeBytes": stat.st_size,
+            "modified": stat.st_mtime,
+        })
+    return reports
+
+
+@router.get("/reports/{filename}")
+async def get_report(filename: str):
+    """Return HTML content of a specific eval report."""
+    from pathlib import Path
+    from fastapi.responses import HTMLResponse
+    from core.initialization_manager import initialization_manager
+
+    # Safety: only allow .html files, no path traversal
+    if not filename.endswith(".html") or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    ws_path = initialization_manager.get_cached_workspace_path()
+    if not ws_path:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    reports_dir = Path(ws_path) / "Projects" / "SwarmAI" / "EvalHistory"
+    report_path = reports_dir / filename
+
+    # Defense in depth: resolve symlinks and verify path stays within reports_dir
+    if not report_path.is_file():
+        raise HTTPException(status_code=404, detail=f"Report '{filename}' not found")
+    if report_path.is_symlink() or not report_path.resolve().is_relative_to(reports_dir.resolve()):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    content = report_path.read_text(encoding="utf-8")
+    return HTMLResponse(content=content)
+
+
 def _parse_staleness_finding(finding: str) -> dict:
     """Parse 'DDD-STALE: Project/Doc (Xd old, Y recent commits)' into dict."""
     import re

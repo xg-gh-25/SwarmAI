@@ -194,6 +194,7 @@ const TABS = [
   { id: 'golden-set', label: 'Golden Set', icon: 'checklist' },
   { id: 'context', label: 'Context Health', icon: 'sync' },
   { id: 'trends', label: 'Trends', icon: 'trending_up' },
+  { id: 'reports', label: 'Reports', icon: 'description' },
   { id: 'guide', label: 'Guide', icon: 'menu_book' },
 ] as const;
 
@@ -232,6 +233,7 @@ export default function EvalDashboard() {
         {activeTab === 'golden-set' && <GoldenSetTab />}
         {activeTab === 'context' && <ContextHealthTab />}
         {activeTab === 'trends' && <TrendsTab />}
+        {activeTab === 'reports' && <ReportsTab />}
         {activeTab === 'guide' && <GuideTab />}
       </div>
     </div>
@@ -399,7 +401,7 @@ function GoldenSetTab() {
   return (
     <div className="flex h-full">
       {/* Main table */}
-      <div className={`flex-1 p-6 overflow-y-auto flex flex-col ${selectedCaseId ? 'pr-3' : ''}`}>
+      <div className={`flex-1 p-6 overflow-hidden flex flex-col ${selectedCaseId ? 'pr-3' : ''}`}>
         {/* Filter bar (matches mockup) */}
         <div className="flex items-center gap-2 mb-3">
           <input
@@ -434,9 +436,9 @@ function GoldenSetTab() {
         </div>
 
         {/* Table */}
-        <div className="border border-[var(--color-border)] rounded-lg overflow-hidden flex-1 min-h-0">
+        <div className="border border-[var(--color-border)] rounded-lg overflow-y-auto flex-1 min-h-0">
           <table className="w-full text-xs">
-            <thead>
+            <thead className="sticky top-0 z-10 bg-[var(--color-bg)]">
               <tr className="bg-[var(--color-bg)] border-b border-[var(--color-border)]">
                 <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">ID</th>
                 <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Title</th>
@@ -727,6 +729,128 @@ function ContextHealthTab() {
     </div>
   );
 }
+
+// ─── Reports Tab ─────────────────────────────────────────────────────────────
+
+interface EvalReport {
+  filename: string;
+  sizeBytes: number;
+  modified: number;
+}
+
+function useEvalReports() {
+  return useQuery<EvalReport[]>({
+    queryKey: ['eval-reports'],
+    queryFn: async () => (await api.get<EvalReport[]>('/eval/reports')).data,
+    staleTime: 60_000,
+  });
+}
+
+function ReportsTab() {
+  const { data: reports, isLoading } = useEvalReports();
+  const [selectedReport, setSelectedReport] = useState<string | null>(null);
+  const [reportHtml, setReportHtml] = useState<string | null>(null);
+  const [loadingReport, setLoadingReport] = useState(false);
+
+  const loadReport = async (filename: string) => {
+    setSelectedReport(filename);
+    setLoadingReport(true);
+    try {
+      const res = await api.get(`/eval/reports/${filename}`, { responseType: 'text' });
+      setReportHtml(typeof res.data === 'string' ? res.data : String(res.data));
+    } catch {
+      setReportHtml('<p style="color:red;padding:20px;">Failed to load report.</p>');
+    } finally {
+      setLoadingReport(false);
+    }
+  };
+
+  if (isLoading) return <Loading />;
+  if (!reports || reports.length === 0) {
+    return (
+      <div className="max-w-5xl mx-auto p-6">
+        <p className="text-sm text-[var(--color-text-muted)]">
+          No HTML eval reports found. Run a full eval sweep to generate reports.
+        </p>
+      </div>
+    );
+  }
+
+  // If viewing a report, show it full-screen in iframe
+  if (selectedReport && reportHtml !== null) {
+    return (
+      <div className="flex flex-col h-full">
+        <div className="shrink-0 flex items-center gap-3 px-6 py-3 border-b border-[var(--color-border)]">
+          <button
+            onClick={() => { setSelectedReport(null); setReportHtml(null); }}
+            className="flex items-center gap-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+          >
+            <span className="material-symbols-outlined text-sm">arrow_back</span>
+            Back to list
+          </button>
+          <span className="text-xs font-mono text-[var(--color-text)]">{selectedReport}</span>
+        </div>
+        <div className="flex-1 min-h-0">
+          {loadingReport ? (
+            <Loading />
+          ) : (
+            <iframe
+              srcDoc={reportHtml}
+              className="w-full h-full border-0"
+              sandbox="allow-scripts"
+              title={selectedReport}
+            />
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-5xl mx-auto p-6">
+      <h3 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-4">
+        Eval Reports ({reports.length})
+      </h3>
+      <div className="border border-[var(--color-border)] rounded-lg overflow-hidden">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="bg-[var(--color-bg)] border-b border-[var(--color-border)]">
+              <th className="text-left px-4 py-2.5 font-medium text-[var(--color-text-muted)]">Report</th>
+              <th className="text-left px-4 py-2.5 font-medium text-[var(--color-text-muted)]">Date</th>
+              <th className="text-right px-4 py-2.5 font-medium text-[var(--color-text-muted)]">Size</th>
+            </tr>
+          </thead>
+          <tbody>
+            {reports.map((r) => {
+              const date = new Date(r.modified * 1000);
+              const dateStr = date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+              const sizeKb = (r.sizeBytes / 1024).toFixed(0);
+              // Parse a friendly name from filename
+              const label = r.filename.replace('.html', '').replace(/_/g, ' ');
+              return (
+                <tr
+                  key={r.filename}
+                  onClick={() => loadReport(r.filename)}
+                  className="border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-hover)] cursor-pointer transition-colors"
+                >
+                  <td className="px-4 py-2.5">
+                    <div className="flex items-center gap-2">
+                      <span className="material-symbols-outlined text-sm text-[var(--color-primary)]">description</span>
+                      <span className="font-medium">{label}</span>
+                    </div>
+                  </td>
+                  <td className="px-4 py-2.5 text-[var(--color-text-muted)] font-mono">{dateStr}</td>
+                  <td className="px-4 py-2.5 text-right text-[var(--color-text-muted)]">{sizeKb} KB</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 
 // ─── Guide Tab ────────────────────────────────────────────────────────────────
 

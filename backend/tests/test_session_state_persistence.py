@@ -103,7 +103,7 @@ class TestStatePersistence:
 
     def test_stale_state_file_discarded(self, state_file):
         """AC3: State file older than 24hr must be discarded."""
-        from core.session_state_persistence import restore_session_state
+        from core.session_state_persistence import load_persisted_state
 
         # Write a state file from 25 hours ago
         old_state = {
@@ -116,18 +116,16 @@ class TestStatePersistence:
         }
         state_file.write_text(json.dumps(old_state))
 
-        units = {"session-old": MagicMock(_sdk_session_id=None)}
-        restored = restore_session_state(units, state_file)
+        result = load_persisted_state(state_file)
 
-        # Should be discarded — no restoration
-        assert restored == 0
-        assert units["session-old"]._sdk_session_id is None
+        # Should be discarded — empty result
+        assert result == {}
         # File should be cleaned up
         assert not state_file.exists()
 
-    def test_recent_state_file_restores(self, state_file):
-        """AC1/AC2: Fresh state file restores sdk_session_ids."""
-        from core.session_state_persistence import restore_session_state
+    def test_recent_state_file_loads(self, state_file):
+        """AC1/AC2: Fresh state file returns session_id → sdk_session_id mapping."""
+        from core.session_state_persistence import load_persisted_state
 
         state = {
             "_persisted_at": time.time() - 30,  # 30 seconds ago
@@ -139,33 +137,18 @@ class TestStatePersistence:
         }
         state_file.write_text(json.dumps(state))
 
-        unit = MagicMock(_sdk_session_id=None)
-        units = {"session-1": unit}
-        restored = restore_session_state(units, state_file, validate_db=False)
+        result = load_persisted_state(state_file)
 
-        assert restored == 1
-        assert unit._sdk_session_id == "valid-sdk-id"
+        assert result == {"session-1": "valid-sdk-id"}
         # File consumed (deleted)
         assert not state_file.exists()
 
-    def test_missing_unit_skipped(self, state_file):
-        """State references a session not in _units → skip gracefully."""
-        from core.session_state_persistence import restore_session_state
+    def test_missing_file_returns_empty(self, state_file):
+        """No state file → empty dict, no error."""
+        from core.session_state_persistence import load_persisted_state
 
-        state = {
-            "_persisted_at": time.time() - 10,
-            "session-gone": {
-                "sdk_session_id": "orphan-sdk",
-                "turn_count": 5,
-                "last_used": time.time() - 100,
-            },
-        }
-        state_file.write_text(json.dumps(state))
-
-        units = {}  # No matching unit
-        restored = restore_session_state(units, state_file, validate_db=False)
-
-        assert restored == 0
+        result = load_persisted_state(state_file)
+        assert result == {}
 
     def test_atomic_write(self, state_file):
         """Persist uses tmp+rename for crash safety."""
@@ -189,16 +172,84 @@ class TestStatePersistence:
         assert not state_file.with_suffix(".tmp").exists()
 
     def test_corrupt_state_file_handled(self, state_file):
-        """Corrupt JSON → discard gracefully, no crash."""
-        from core.session_state_persistence import restore_session_state
+        """Corrupt JSON → discard gracefully, return empty dict."""
+        from core.session_state_persistence import load_persisted_state
 
         state_file.write_text("not valid json {{{")
 
-        units = {"s1": MagicMock(_sdk_session_id=None)}
-        restored = restore_session_state(units, state_file, validate_db=False)
+        result = load_persisted_state(state_file)
 
-        assert restored == 0
+        assert result == {}
         assert not state_file.exists()
+
+
+# ─── Lazy-Inject Integration Test (fixes the original restore bug) ───
+
+
+class TestLazyInjectAtSessionCreation:
+    """The REAL test: session created AFTER boot gets injected sdk_session_id.
+
+    This tests the production path that was broken:
+    - Daemon boots (units={})
+    - State file has sdk_session_ids from prior run
+    - User opens tab → get_or_create_unit("session-1", "agent-1")
+    - The new unit MUST have the persisted sdk_session_id injected
+    """
+
+    def test_get_or_create_unit_injects_persisted_id(self, state_file):
+        """Production path: new unit gets sdk_session_id from cached state."""
+        from core.session_router import SessionRouter
+        from core.session_state_persistence import load_persisted_state
+
+        # Setup: write state file as if daemon previously persisted it
+        state = {
+            "_persisted_at": time.time() - 10,
+            "session-abc": {
+                "sdk_session_id": "sdk-from-prior-run",
+                "turn_count": 8,
+                "last_used": time.time() - 30,
+            },
+        }
+        state_file.write_text(json.dumps(state))
+
+        # Load state (simulating what SessionRouter.__init__ now does)
+        cached = load_persisted_state(state_file)
+        assert cached == {"session-abc": "sdk-from-prior-run"}
+
+        # Create router with cached state
+        router = SessionRouter(prompt_builder=MagicMock(), config=MagicMock())
+        router._persisted_sdk_ids = cached
+
+        # Simulate user opening a tab — this is the lazy-inject moment
+        unit = router.get_or_create_unit("session-abc", "agent-1")
+
+        # The unit MUST have the injected sdk_session_id
+        assert unit._sdk_session_id == "sdk-from-prior-run"
+
+    def test_get_or_create_unit_no_match_leaves_none(self, state_file):
+        """New session with no persisted state → sdk_session_id stays None."""
+        from core.session_router import SessionRouter
+
+        router = SessionRouter(prompt_builder=MagicMock(), config=MagicMock())
+        router._persisted_sdk_ids = {}
+
+        unit = router.get_or_create_unit("brand-new-session", "agent-1")
+        assert unit._sdk_session_id is None
+
+    def test_persisted_id_consumed_once(self, state_file):
+        """Injected id is removed from cache after use (no stale reuse)."""
+        from core.session_router import SessionRouter
+
+        router = SessionRouter(prompt_builder=MagicMock(), config=MagicMock())
+        router._persisted_sdk_ids = {"session-x": "sdk-x"}
+
+        # First create — injects
+        unit = router.get_or_create_unit("session-x", "agent-1")
+        assert unit._sdk_session_id == "sdk-x"
+
+        # Second create for same session — should NOT re-inject (unit already exists)
+        unit2 = router.get_or_create_unit("session-x", "agent-1")
+        assert unit2 is unit  # Same object returned
 
 
 # ─── Subsystem 2C: Preserve sdk_session_id on shutdown ───

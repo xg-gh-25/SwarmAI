@@ -522,6 +522,24 @@ class SessionRouter:
         self._slot_lock: asyncio.Lock = asyncio.Lock()
         self._queue: list[asyncio.Future] = []
 
+        # Load persisted sdk_session_ids for lazy injection at unit creation.
+        # Design §2B fix: old restore_session_state() iterated _units which is
+        # empty at boot. This caches the mapping; get_or_create_unit() injects.
+        self._persisted_sdk_ids: dict[str, str] = {}
+        try:
+            from .session_state_persistence import load_persisted_state
+            from jobs.paths import APP_DATA_DIR
+
+            state_file = APP_DATA_DIR / "session_state.json"
+            self._persisted_sdk_ids = load_persisted_state(state_file)
+            if self._persisted_sdk_ids:
+                logger.info(
+                    "Cached %d persisted session identities for lazy injection",
+                    len(self._persisted_sdk_ids),
+                )
+        except Exception as exc:
+            logger.debug("Could not load persisted session state: %s", exc)
+
     # ── Unit management ───────────────────────────────────────────
 
     @staticmethod
@@ -571,7 +589,13 @@ class SessionRouter:
     def get_or_create_unit(
         self, session_id: str, agent_id: str,
     ) -> SessionUnit:
-        """Get existing or create new COLD SessionUnit."""
+        """Get existing or create new COLD SessionUnit.
+
+        On creation, injects any persisted sdk_session_id from the cache
+        (loaded at __init__ from session_state.json). This enables fast
+        --resume after daemon restart without requiring boot-time restore
+        on an empty _units dict.
+        """
         unit = self._units.get(session_id)
         if unit is None:
             unit = SessionUnit(
@@ -579,6 +603,15 @@ class SessionRouter:
                 agent_id=agent_id,
                 on_state_change=self._on_unit_state_change,
             )
+            # Lazy-inject persisted sdk_session_id (Design §2B fix).
+            # pop() ensures one-shot consumption — no stale reuse.
+            persisted_id = self._persisted_sdk_ids.pop(session_id, None)
+            if persisted_id:
+                unit._sdk_session_id = persisted_id
+                logger.info(
+                    "Injected persisted sdk_session_id for session %s (fast --resume enabled)",
+                    session_id,
+                )
             self._units[session_id] = unit
             logger.info(
                 "session_router.create_unit session_id=%s agent_id=%s",

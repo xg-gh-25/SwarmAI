@@ -1,8 +1,8 @@
 """Session state persistence for fast resume after daemon restart.
 
 Persists IDLE session sdk_session_ids to disk every 60s (lifecycle loop)
-and on graceful shutdown. On startup, restores them so sessions use fast
-``--resume`` instead of cold resume (50K summary → 5s full replay).
+and on graceful shutdown. On startup, ``load_persisted_state()`` returns the
+mapping; SessionRouter injects sdk_session_ids lazily at unit creation time.
 
 Design reference:
     Knowledge/Designs/2026-06-20-session-stability-graceful-degradation-design.md §2B
@@ -12,6 +12,7 @@ Key invariants (PE-reviewed):
 - Atomic write via tmp+rename (crash-safe)
 - Staleness check: discard if >24hr old (F9)
 - Consumed on read (one-shot, unlinked after restore)
+- Lazy injection at get_or_create_unit (not boot-time restore on empty dict)
 """
 
 from __future__ import annotations
@@ -79,26 +80,29 @@ def persist_session_state(
     return count
 
 
-def restore_session_state(
-    units: Dict[str, Any],
-    state_file: Path,
-    validate_db: bool = True,
-) -> int:
-    """Restore sdk_session_ids from state file for fast --resume.
+def load_persisted_state(state_file: Path) -> Dict[str, str]:
+    """Load persisted session state and return session_id → sdk_session_id mapping.
+
+    This is the READ side of state persistence. Called once at startup by
+    SessionRouter.__init__ to cache the mapping. Individual sessions get their
+    sdk_session_id injected lazily when get_or_create_unit() is called.
+
+    Design insight (PE review): The old ``restore_session_state(units, ...)``
+    was broken because it iterated ``units`` which is EMPTY at boot (sessions
+    are lazy-created). This function simply returns the mapping; the router
+    injects at creation time.
 
     Args:
-        units: Dict of session_id → SessionUnit to restore into.
-        state_file: Path to read the state JSON from.
-        validate_db: If True, validate sdk_session_id against DB message count.
-            Set False in tests.
+        state_file: Path to the persisted state JSON.
 
     Returns:
-        Number of sessions restored.
+        Dict mapping session_id → sdk_session_id. Empty dict if file missing,
+        corrupt, or stale (>24hr).
     """
     if not state_file.exists():
         # Clean up orphaned .tmp from interrupted writes (MEDIUM-2)
         state_file.with_suffix(".tmp").unlink(missing_ok=True)
-        return 0
+        return {}
 
     # Parse file
     try:
@@ -107,7 +111,7 @@ def restore_session_state(
     except (json.JSONDecodeError, OSError) as exc:
         logger.warning("Corrupt session state file, discarding: %s", exc)
         state_file.unlink(missing_ok=True)
-        return 0
+        return {}
 
     # PE F9: Staleness check — discard if >24hr old
     persisted_at = state.pop("_persisted_at", 0)
@@ -118,28 +122,20 @@ def restore_session_state(
             age_seconds / 3600,
         )
         state_file.unlink(missing_ok=True)
-        return 0
+        return {}
 
-    # Restore sdk_session_ids
-    restored = 0
+    # Extract session_id → sdk_session_id mapping
+    result: Dict[str, str] = {}
     for sid, meta in state.items():
-        if sid not in units:
-            continue
-
-        unit = units[sid]
-        sdk_id = meta.get("sdk_session_id")
-        if not sdk_id:
-            continue
-
-        # Assign sdk_session_id for fast --resume path
-        unit._sdk_session_id = sdk_id
-        restored += 1
+        sdk_id = meta.get("sdk_session_id") if isinstance(meta, dict) else None
+        if sdk_id:
+            result[sid] = sdk_id
 
     logger.info(
-        "Restored %d/%d session identities from state file (age=%.0fs)",
-        restored, len(state), age_seconds,
+        "Loaded %d persisted session identities from state file (age=%.0fs)",
+        len(result), age_seconds,
     )
 
     # Consumed — delete after use (one-shot)
     state_file.unlink(missing_ok=True)
-    return restored
+    return result
