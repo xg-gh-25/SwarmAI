@@ -938,6 +938,13 @@ class PromptBuilder:
         thinking off) and the channel override must NOT resurrect it.
 
         Returns a ThinkingConfig dict or None (which lets the SDK decide).
+
+        ⚠️ Do NOT add a ``display`` key to the dicts returned here. Although the
+        pinned SDK (>=0.2.87) would honor it, older SDK builds on some dev
+        machines silently drop unknown thinking-dict subfields (PIT59). Thinking
+        display is transported version-robustly via ``extra_args["thinking-display"]``
+        — see :meth:`_build_thinking_display`. Keeping display out of this dict also
+        guarantees no double-flag with the newer SDK's native forwarding.
         """
         # Defensive: config is contractually an AppConfigManager (always
         # truthy), so this only fires if a caller passes None. Using `is None`
@@ -1002,6 +1009,56 @@ class PromptBuilder:
             return "high"
 
         return effort
+
+    def _build_thinking_display(self, channel_context: dict | None = None) -> str | None:
+        """Resolve the thinking ``display`` mode → CLI ``--thinking-display`` flag.
+
+        Opus 4.8 silently changed the thinking ``display`` default from
+        ``"summarized"`` (Opus 4.6) to ``"omitted"``. Under ``"omitted"`` the
+        model still produces thinking blocks but streams them with EMPTY text —
+        so the desktop UI shows a "Thinking…" spinner with no reasoning content.
+        Setting ``--thinking-display summarized`` restores the visible summary.
+
+        **Transport note (version-robust):** carried via
+        ``extra_args["thinking-display"]`` (rendered by the SDK as
+        ``--thinking-display <value>``), NOT via a ``display`` key in the thinking
+        config dict. Rationale: the pinned SDK (claude-agent-sdk >=0.2.87) DOES
+        support ``ThinkingConfigAdaptive.display`` and forwards it, but older SDK
+        builds (e.g. 0.1.x still present on some dev machines' global interpreter)
+        read only ``thinking["type"]`` and silently drop the ``display`` subfield
+        (PIT59). ``extra_args`` works identically on BOTH — version-agnostic and
+        downgrade-safe — at zero cost. The ``extra_args`` key MUST be dash-free
+        (``"thinking-display"``, not ``"--thinking-display"``): the SDK prepends
+        ``--``, so a dashed key renders as ``----thinking-display`` and silently
+        no-ops. We never set the dict ``display`` key, so there is no double-flag.
+
+        Returns ``"summarized"`` for desktop sessions with thinking active, or
+        ``None`` when no flag should be emitted:
+
+        - ``None`` if thinking is globally ``disabled`` — no thinking, no display.
+        - ``None`` for channel sessions — zero-streaming human-like delivery
+          (the thinking summary is never rendered to Slack), and channels
+          already force adaptive + cap effort. Mirrors :meth:`_build_effort`'s
+          channel handling.
+
+        ``channel_context`` is accepted for call-site symmetry with
+        :meth:`_build_thinking_config` and :meth:`_build_effort`.
+        """
+        # Defensive: see _build_thinking_config — `is None`, not falsy, so an
+        # empty-dict test config falls through to the default.
+        if self._config is None:
+            return "summarized"
+
+        # No thinking → no display to show.
+        if self._config.get("thinking_mode") == "disabled":
+            return None
+
+        # Channel sessions skip display: zero-streaming delivery never renders
+        # the thinking summary, so emitting the flag would only add cost.
+        if channel_context is not None:
+            return None
+
+        return "summarized"
 
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
@@ -1253,6 +1310,15 @@ class PromptBuilder:
         # Supports: "adaptive" (default), "enabled" (with budget), "disabled"
         thinking_config = self._build_thinking_config(channel_context=channel_context)
         effort = self._build_effort(channel_context=channel_context)
+
+        # Thinking display: Opus 4.8 defaults display to "omitted" (empty thinking
+        # blocks → "Thinking…" spinner with no content). Restore the summary via the
+        # CLI flag. Carried in extra_args (rendered as `--<key> <value>`), NOT in
+        # thinking_config — version-robust across SDK builds that drop unknown
+        # thinking-dict subfields (PIT59). Key is dash-free; SDK prepends `--`.
+        thinking_display = self._build_thinking_display(channel_context=channel_context)
+        if thinking_display is not None:
+            extra_args["thinking-display"] = thinking_display
 
         # ── Max turns: per-message API roundtrip limit ─────────────
         #

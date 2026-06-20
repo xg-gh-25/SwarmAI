@@ -185,3 +185,96 @@ class TestSessionAwareThinking:
         # Channel forces adaptive even with the real (always-truthy) manager.
         assert pb._build_thinking_config(channel_context={"is_owner": True}) == {"type": "adaptive"}
         assert pb._build_effort(channel_context={"is_owner": True}) == "high"
+
+
+class TestThinkingDisplay:
+    """Tests for thinking-display resolution.
+
+    Opus 4.8 changed the thinking `display` default from "summarized" (4.6) to
+    "omitted" — the model streams empty thinking blocks, so the desktop UI shows
+    a "Thinking…" spinner with no reasoning content. The fix sets the CLI flag
+    `--thinking-display summarized` via extra_args. It does NOT go in the thinking
+    dict — the Python claude_agent_sdk silently drops any subfield other than
+    `type`/`budget_tokens` (subprocess_cli.py L300-313), and ThinkingConfigAdaptive
+    has no `display` field. extra_args is the correct transport.
+
+    Policy: desktop gets `summarized`; channel sessions skip it (zero-streaming,
+    thinking summary not rendered to Slack) — mirrors the _build_effort channel cap.
+    Disabled thinking → no display (no thinking to show).
+    """
+
+    def test_desktop_default_returns_summarized(self):
+        """AC1: desktop session, thinking active → summarized."""
+        pb = PromptBuilder({"thinking_mode": "adaptive"})
+        assert pb._build_thinking_display(channel_context=None) == "summarized"
+
+    def test_desktop_enabled_returns_summarized(self):
+        """AC1: desktop session, enabled mode → still summarized."""
+        pb = PromptBuilder({"thinking_mode": "enabled", "thinking_budget_tokens": 12000})
+        assert pb._build_thinking_display(channel_context=None) == "summarized"
+
+    def test_desktop_disabled_returns_none(self):
+        """AC2: thinking disabled → no display (no thinking to show)."""
+        pb = PromptBuilder({"thinking_mode": "disabled"})
+        assert pb._build_thinking_display(channel_context=None) is None
+
+    def test_channel_returns_none(self):
+        """AC3: channel session → no display (zero-streaming, not rendered)."""
+        pb = PromptBuilder({"thinking_mode": "adaptive"})
+        assert pb._build_thinking_display(channel_context={"is_owner": True}) is None
+
+    def test_channel_disabled_returns_none(self):
+        """AC3+AC2: channel + disabled → None (both reasons agree)."""
+        pb = PromptBuilder({"thinking_mode": "disabled"})
+        assert pb._build_thinking_display(channel_context={"is_owner": True}) is None
+
+    def test_none_config_returns_summarized(self):
+        """Defensive: None config falls through to summarized (matches _build_effort)."""
+        pb = PromptBuilder({})
+        pb._config = None
+        assert pb._build_thinking_display(channel_context=None) == "summarized"
+
+    @pytest.mark.asyncio
+    async def test_build_options_emits_dash_free_key_desktop(self):
+        """AC4 + Gate-1 PIT59 guard: build_options must put the flag in extra_args
+        under the dash-free key 'thinking-display'. The SDK renders extra_args as
+        f'--{key}', so a key of '--thinking-display' would emit '----thinking-display'
+        and silently fail — the exact silent-drop class this fix exists to defeat.
+
+        Exercises the real async build_options path (integration) and asserts the
+        extra_args KEY is dash-free (the SDK adds the '--'). The wire-level rendering
+        itself (cmd.extend([f'--{k}', v])) is verified separately by the BUILD-stage
+        smoke test, not re-invoked here.
+        """
+        from core.app_config_manager import AppConfigManager
+
+        mgr = AppConfigManager()
+        mgr._cache = dict(mgr.load())
+        mgr._cache["thinking_mode"] = "adaptive"
+        pb = PromptBuilder(mgr)
+        opts = await pb.build_options(
+            agent_config={},
+            enable_skills=False,
+            enable_mcp=False,
+            channel_context=None,
+        )
+        assert "thinking-display" in opts.extra_args
+        assert "--thinking-display" not in opts.extra_args  # dashes are the SDK's job
+        assert opts.extra_args["thinking-display"] == "summarized"
+
+    @pytest.mark.asyncio
+    async def test_build_options_omits_display_for_channel(self):
+        """AC4: channel session → no thinking-display key in extra_args."""
+        from core.app_config_manager import AppConfigManager
+
+        mgr = AppConfigManager()
+        mgr._cache = dict(mgr.load())
+        mgr._cache["thinking_mode"] = "adaptive"
+        pb = PromptBuilder(mgr)
+        opts = await pb.build_options(
+            agent_config={},
+            enable_skills=False,
+            enable_mcp=False,
+            channel_context={"is_owner": True},
+        )
+        assert "thinking-display" not in opts.extra_args
