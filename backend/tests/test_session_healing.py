@@ -6,12 +6,15 @@ pre-kill injection, and canary mode gating. Pure unit tests — no
 subprocess spawning or SessionUnit integration.
 """
 
+import inspect
 import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from core.session_healing import (
+    CHANNEL_MAX_TURNS,
+    DESKTOP_MAX_TURNS,
     ERROR_CASCADE_THRESHOLD,
     HANG_TIMEOUT_S,
     HEAL_COOLDOWN_S,
@@ -155,6 +158,88 @@ class TestHealthSensorTurnLimit:
             sensor.record_turn(100.0, 1400, False)
         should, trigger = sensor.should_checkpoint()
         assert not should
+
+
+class TestHealthSensorMaxTurnsSync:
+    """Test max_turns threshold sourcing + post-construction sync.
+
+    Regression guard for the max_turns propagation bug: HealthSensor was
+    hardcoded to 500 while channel sessions actually run the CLI at 100, so
+    turn_approaching fired at 480 — beyond the 100 the CLI enforces — i.e.
+    structurally unreachable. The fix sources the default from DESKTOP_MAX_TURNS
+    and adds set_max_turns() so SessionRouter can sync channel sessions to 100.
+    """
+
+    def test_platform_constants_values(self):
+        """AC1/AC3: platform constants have the expected values."""
+        assert DESKTOP_MAX_TURNS == 500
+        assert CHANNEL_MAX_TURNS == 100
+
+    def test_prompt_builder_shares_the_same_constants(self):
+        """Drift guard: prompt_builder MUST import the SAME constants, not its
+        own literals. Otherwise the CLI limit and the heal threshold can drift
+        apart silently — re-introducing the unreachable-trigger bug class.
+        """
+        from core import prompt_builder
+
+        src = inspect.getsource(prompt_builder.PromptBuilder.build_options)
+        # The max_turns block must reference the named constants, never bare
+        # 100/500 literals for the platform defaults.
+        assert "CHANNEL_MAX_TURNS" in src, (
+            "prompt_builder must use CHANNEL_MAX_TURNS, not a literal 100"
+        )
+        assert "DESKTOP_MAX_TURNS" in src, (
+            "prompt_builder must use DESKTOP_MAX_TURNS, not a literal 500"
+        )
+
+    def test_default_uses_desktop_constant(self):
+        """AC3: a fresh desktop sensor must threshold at DESKTOP_MAX_TURNS (500)."""
+        sensor = HealthSensor()
+        assert sensor._max_turns == DESKTOP_MAX_TURNS
+
+    def test_set_max_turns_makes_channel_threshold_reachable(self):
+        """AC2: after set_max_turns(100), turn_approaching fires at 100-buffer.
+
+        This is the core bug: before the fix the threshold stayed at 500 so a
+        channel session (real limit 100) could never reach turn_approaching.
+        Force execution of the heal path at the channel boundary.
+        """
+        sensor = HealthSensor(max_turns=DESKTOP_MAX_TURNS)
+        sensor.set_max_turns(CHANNEL_MAX_TURNS)
+        assert sensor._max_turns == CHANNEL_MAX_TURNS
+        # Record turns up to the channel approach boundary (100 - 20 = 80)
+        for _ in range(CHANNEL_MAX_TURNS - TURN_APPROACH_BUFFER):
+            sensor.record_turn(100.0, 1400, False)
+        should, trigger = sensor.should_checkpoint()
+        assert should
+        assert trigger == "turn_approaching"
+
+    def test_set_max_turns_no_premature_trigger_below_boundary(self):
+        """AC2: one turn before the channel boundary must NOT trigger."""
+        sensor = HealthSensor(max_turns=DESKTOP_MAX_TURNS)
+        sensor.set_max_turns(CHANNEL_MAX_TURNS)
+        # 79 turns: still below 80 boundary
+        for _ in range(CHANNEL_MAX_TURNS - TURN_APPROACH_BUFFER - 1):
+            sensor.record_turn(100.0, 1400, False)
+        should, trigger = sensor.should_checkpoint()
+        assert not should
+
+    def test_reset_still_zeroes_turn_count_after_sync(self):
+        """AC4: reset() must still zero turn_count even after set_max_turns().
+
+        The heal regression guard: respawned subprocess = fresh turn counter.
+        Preserving count would re-trigger turn_approaching immediately (infinite
+        loop). Verify the setter doesn't break reset semantics.
+        """
+        sensor = HealthSensor(max_turns=DESKTOP_MAX_TURNS)
+        sensor.set_max_turns(CHANNEL_MAX_TURNS)
+        for _ in range(50):
+            sensor.record_turn(100.0, 1400, False)
+        assert sensor.turn_count == 50
+        sensor.reset()
+        assert sensor.turn_count == 0
+        # Threshold persists across reset (reset only clears per-subprocess counters)
+        assert sensor._max_turns == CHANNEL_MAX_TURNS
 
 
 class TestHealthSensorHang:

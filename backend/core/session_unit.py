@@ -40,6 +40,7 @@ from .streaming_orchestrator import StreamingOrchestrator
 from .session_healing import (
     CHANNEL_WRAP_BUFFER,
     CHANNEL_WRAP_UP_PROMPT,
+    DESKTOP_MAX_TURNS,
     WRAP_UP_PROMPT,
     HealthSensor,
     HealingLoop,
@@ -524,7 +525,7 @@ class SessionUnit:
         # degradation is detected. HealingLoop orchestrates the refresh
         # cycle. Together they prevent sessions from crashing — the system
         # heals itself without user intervention.
-        self._health_sensor: HealthSensor = HealthSensor(max_turns=500)
+        self._health_sensor: HealthSensor = HealthSensor(max_turns=DESKTOP_MAX_TURNS)
         self._healing_loop: HealingLoop = HealingLoop()
         # Checkpoint built before heal-kill, consumed by next spawn to
         # inject continuation context. None = no pending heal context.

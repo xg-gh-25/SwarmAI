@@ -82,6 +82,16 @@ ERROR_CASCADE_THRESHOLD = 3
 # Turn limit: trigger heal this many turns before max_turns
 TURN_APPROACH_BUFFER = 20
 
+# Per-platform CLI turn ceilings. Single source of truth within the healing
+# module so the HealthSensor threshold can never drift from the real limit the
+# CLI enforces (prompt_builder applies the SAME values: desktop 500, channel 100).
+# Desktop = generous (long pipeline runs); channel = unattended safety cap.
+# These MUST match prompt_builder.py's platform defaults — if you change one,
+# change both. (Root cause of the original bug: HealthSensor hardcoded 500 while
+# the CLI actually ran at 100, making turn_approaching structurally unreachable.)
+DESKTOP_MAX_TURNS = 500
+CHANNEL_MAX_TURNS = 100
+
 # Hang: seconds without any SSE event before declaring hang.
 # 300s (not 90s): the agent legitimately runs long tool calls (test suites,
 # builds, large greps) where the CLI subprocess emits NO SDK events between
@@ -112,12 +122,12 @@ class HealthSensor:
     # immunity expires after 3 minutes so permanently-stuck sessions can be healed.
     _YOUNG_IMMUNITY_MAX_AGE_S: float = 180.0
 
-    def __init__(self, max_turns: int | None = 500):
+    def __init__(self, max_turns: int | None = DESKTOP_MAX_TURNS):
         self._turn_latencies: deque[float] = deque(maxlen=50)
         self._rss_samples: deque[int] = deque(maxlen=RSS_WINDOW)
         self._consecutive_errors: int = 0
         self._turn_count: int = 0
-        self._max_turns: int = max_turns if max_turns is not None else 500
+        self._max_turns: int = max_turns if max_turns is not None else DESKTOP_MAX_TURNS
         self._last_activity_time: float = time.time()
         self._created_at: float = time.time()
 
@@ -142,6 +152,19 @@ class HealthSensor:
     def record_activity(self) -> None:
         """Record any activity (SSE event, heartbeat) to reset hang timer."""
         self._last_activity_time = time.time()
+
+    def set_max_turns(self, max_turns: int) -> None:
+        """Re-point the turn-limit threshold after construction.
+
+        Needed because ``is_channel_session`` is set on the SessionUnit AFTER
+        ``__init__`` (by SessionRouter on the first real send), so the sensor is
+        born with the desktop default and must be synced to the channel ceiling
+        once the session is tagged. ``_max_turns`` is the single shared source for
+        BOTH ``turn_approaching`` (here, :max_turns-TURN_APPROACH_BUFFER) and the
+        channel wrap-up (session_unit.py, :max_turns-CHANNEL_WRAP_BUFFER), so this
+        one setter keeps both consumers correct.
+        """
+        self._max_turns = max_turns
 
     def should_checkpoint(self, session_state: str | None = None) -> tuple[bool, str]:
         """Evaluate whether healing is needed.

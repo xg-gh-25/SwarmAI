@@ -52,6 +52,39 @@ class TestGetDefaultAgent:
         assert "updated_at" in data
 
 
+class TestDefaultAgentMaxTurns:
+    """AC1 regression guard: default agent must NOT pin max_turns.
+
+    The original bug: default-agent.json hardcoded ``max_turns: 100``, so
+    ``base.get("max_turns")`` returned 100 instead of None. prompt_builder's
+    ``elif max_turns is None`` branch (which sets desktop=500 / channel=100)
+    never fired, and the CLI ran every session at 100 turns. The fix deletes
+    the JSON key so build_agent_config returns None → prompt_builder applies the
+    correct platform default. This test locks that contract.
+    """
+
+    async def test_default_agent_max_turns_is_none(self):
+        """build_agent_config(default) must yield max_turns=None (→ platform default)."""
+        from core.agent_defaults import DEFAULT_AGENT_ID, build_agent_config
+
+        cfg = await build_agent_config(DEFAULT_AGENT_ID)
+        assert cfg is not None
+        assert cfg["max_turns"] is None, (
+            "default-agent.json must not pin max_turns — prompt_builder applies "
+            "the platform default (500 desktop / 100 channel). A non-None value "
+            "here re-introduces the propagation bug (CLI capped at that value)."
+        )
+
+    def test_default_agent_json_has_no_max_turns_key(self):
+        """The resource file itself must not contain a max_turns key."""
+        import json
+        from core.agent_defaults import _get_resources_dir
+
+        path = _get_resources_dir() / "default-agent.json"
+        data = json.loads(path.read_text())
+        assert "max_turns" not in data
+
+
 class TestGetAgent:
     """Tests for GET /api/agents/{agent_id} endpoint."""
 

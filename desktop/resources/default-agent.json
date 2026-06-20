@@ -3,7 +3,6 @@
   "name": "SwarmAI",
   "description": "SwarmAI \u2014 Human directs. AI delivers.",
   "permission_mode": "bypassPermissions",
-  "max_turns": 100,
   "is_default": true,
   "enable_bash_tool": true,
   "enable_file_tools": true,

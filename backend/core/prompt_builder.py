@@ -1329,25 +1329,29 @@ class PromptBuilder:
         # ResultMessage(is_error=True, subtype="error_max_turns") and
         # exits — causing "Interrupted" in the UI mid-pipeline.
         #
-        # FIX: Explicit 200 for desktop (covers 99% of pipeline runs).
-        # Channel keeps 15 (unattended safety cap).
+        # FIX: Explicit DESKTOP_MAX_TURNS (500) for desktop, CHANNEL_MAX_TURNS
+        # (100) for channels. Both sourced from session_healing so the CLI limit
+        # and the HealthSensor turn_approaching/wrap-up thresholds share ONE
+        # definition — they MUST stay equal or the heal triggers become
+        # unreachable (the original bug). See session_healing.py.
         # Evidence: run_bbe3f167 hit exactly 101 turns at pipeline stage 7/8.
         #
-        # Safety: task_budget=800K is the independent cost cap.
-        # 200 turns × ~400 output tokens/turn = ~80K output, well within budget.
-        # User can always press Stop for true runaway scenarios.
+        # Safety: task_budget (800K desktop / 400K channel) is the independent
+        # cost cap. User can always press Stop for true runaway scenarios.
+        from .session_healing import CHANNEL_MAX_TURNS, DESKTOP_MAX_TURNS
+
         max_turns = agent_config.get("max_turns") or None
-        if channel_context and (max_turns is None or max_turns > 100):
+        if channel_context and (max_turns is None or max_turns > CHANNEL_MAX_TURNS):
             # Channel: generous limit for skill execution (was 15, too small).
             # Real safety comes from task_budget=400K, not turn count.
             # 100 covers all skills (max observed: ~60 turns for complex research).
-            max_turns = 100
+            max_turns = CHANNEL_MAX_TURNS
         elif not channel_context and max_turns is None:
             # Desktop: override CLI default (100) with generous limit.
             # Pipeline full-profile runs need 150-300 turns typically;
             # complex goal-profile or multi-milestone work can exceed 400.
             # Self-healing triggers at max_turns-20 for seamless refresh.
-            max_turns = 500
+            max_turns = DESKTOP_MAX_TURNS
 
         # ── Task budget: per-task token limit for CLI autocompact ─────
         #
