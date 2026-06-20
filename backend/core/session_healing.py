@@ -174,14 +174,16 @@ class HealthSensor:
             return True, "turn_approaching"
 
         # Signal 5: Hang detection (no activity for HANG_TIMEOUT_S)
-        # SUPPRESSED during STREAMING: the model may be in extended thinking
-        # (Opus can think for 5-10 minutes without emitting any SDK event).
-        # The PID watchdog + MESSAGE_TIMEOUT handle genuine STREAMING hangs.
-        # SUPPRESSED during WAITING_INPUT: the user may take arbitrarily long
-        # to respond to a permission prompt or ask_user_question. The PID
-        # watchdog already excludes WAITING_INPUT for the same reason.
-        # hang_detected is only meaningful for IDLE/COLD states.
-        if session_state not in ("streaming", "waiting_input"):
+        # WHITELIST: hang_detected ONLY fires for IDLE and COLD states.
+        # All other states have dedicated liveness mechanisms:
+        # - STREAMING: PID watchdog + MESSAGE_TIMEOUT + circuit breaker
+        # - WAITING_INPUT: user takes arbitrary time for permission prompts
+        # - DEAD: already dead, nothing to detect
+        # - None (no state passed): backward compat — allow detection
+        # Whitelist is future-proof: adding new states won't accidentally
+        # trigger hang detection (blacklist would require updating on every
+        # new state addition).
+        if session_state in ("idle", "cold", None):
             elapsed = time.time() - self._last_activity_time
             if elapsed > HANG_TIMEOUT_S:
                 return True, "hang_detected"
@@ -296,6 +298,9 @@ class HealingLoop:
         self._heal_attempts: int = 0
         self._last_heal_time: float = 0.0
         self._total_heals: int = 0
+        # Observability: per-trigger breakdown for monitoring false positive rate
+        self._trigger_counts: dict[str, int] = {}
+        self._last_triggers: deque[tuple[float, str]] = deque(maxlen=20)
 
     @property
     def heal_attempts(self) -> int:
@@ -304,6 +309,16 @@ class HealingLoop:
     @property
     def total_heals(self) -> int:
         return self._total_heals
+
+    @property
+    def trigger_counts(self) -> dict[str, int]:
+        """Per-trigger-type count for observability dashboard."""
+        return dict(self._trigger_counts)
+
+    @property
+    def recent_triggers(self) -> list[tuple[float, str]]:
+        """Last 20 heal triggers (timestamp, trigger_name) for rate analysis."""
+        return list(self._last_triggers)
 
     def can_heal(self) -> tuple[bool, str]:
         """Check if healing is allowed (attempts + cooldown)."""
@@ -316,16 +331,29 @@ class HealingLoop:
 
         return True, ""
 
-    def record_heal_start(self) -> None:
-        """Record that a heal cycle is starting."""
+    def record_heal_start(self, trigger: str = "") -> None:
+        """Record that a heal cycle is starting.
+
+        Args:
+            trigger: The trigger name (e.g. "hang_detected", "latency_degradation").
+                Used for observability — tracks per-trigger frequency to detect
+                false positive patterns.
+        """
         self._heal_attempts += 1
         self._last_heal_time = time.time()
         self._total_heals += 1
+        # Observability: track per-trigger breakdown
+        if trigger:
+            self._trigger_counts[trigger] = self._trigger_counts.get(trigger, 0) + 1
+            self._last_triggers.append((time.time(), trigger))
         logger.info(
-            "Self-heal starting (attempt %d/%d, total heals: %d)",
+            "self_heal.start attempt=%d/%d total_heals=%d trigger=%s "
+            "trigger_history=%s",
             self._heal_attempts,
             MAX_HEAL_ATTEMPTS,
             self._total_heals,
+            trigger or "unknown",
+            {k: v for k, v in self._trigger_counts.items()},
         )
 
     def record_heal_success(self) -> None:

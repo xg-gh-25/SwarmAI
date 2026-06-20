@@ -433,3 +433,71 @@ class TestPidTrackingProperties:
             asyncio.run(mgr._kill_tracked_pids())
 
         assert len(mgr._tracked_child_pids) == 0
+
+
+# ── WAITING_INPUT Timeout Tests ──────────────────────────────────────────
+
+
+class TestWaitingInputTimeout:
+    """Verify lifecycle_manager recovers stuck WAITING_INPUT sessions."""
+
+    def test_waiting_input_timeout_fires_after_threshold(self):
+        """Session in WAITING_INPUT beyond 120min gets force-unstuck."""
+        from core.session_unit import SessionState
+
+        router = MagicMock()
+        unit = MagicMock()
+        unit.state = SessionState.WAITING_INPUT
+        unit.session_id = "test-session-123"
+        # last_used 121 minutes ago (beyond 120min threshold)
+        unit.last_used = __import__("time").time() - 7260
+        unit.force_unstick_waiting_input = AsyncMock()
+        router.list_units.return_value = [unit]
+
+        mgr = LifecycleManager(router=router)
+        asyncio.run(mgr._check_waiting_input_timeout())
+
+        unit.force_unstick_waiting_input.assert_called_once()
+
+    def test_waiting_input_within_timeout_not_touched(self):
+        """Session in WAITING_INPUT within 120min is left alone."""
+        from core.session_unit import SessionState
+
+        router = MagicMock()
+        unit = MagicMock()
+        unit.state = SessionState.WAITING_INPUT
+        unit.session_id = "test-session-456"
+        # last_used 30 minutes ago (well within threshold)
+        unit.last_used = __import__("time").time() - 1800
+        unit.force_unstick_waiting_input = AsyncMock()
+        router.list_units.return_value = [unit]
+
+        mgr = LifecycleManager(router=router)
+        asyncio.run(mgr._check_waiting_input_timeout())
+
+        unit.force_unstick_waiting_input.assert_not_called()
+
+    def test_non_waiting_input_sessions_ignored(self):
+        """Only WAITING_INPUT sessions are checked (not IDLE, STREAMING, etc)."""
+        from core.session_unit import SessionState
+
+        router = MagicMock()
+        idle_unit = MagicMock()
+        idle_unit.state = SessionState.IDLE
+        idle_unit.session_id = "idle-session"
+        idle_unit.last_used = __import__("time").time() - 99999
+        idle_unit.force_unstick_waiting_input = AsyncMock()
+
+        streaming_unit = MagicMock()
+        streaming_unit.state = SessionState.STREAMING
+        streaming_unit.session_id = "streaming-session"
+        streaming_unit.last_used = __import__("time").time() - 99999
+        streaming_unit.force_unstick_waiting_input = AsyncMock()
+
+        router.list_units.return_value = [idle_unit, streaming_unit]
+
+        mgr = LifecycleManager(router=router)
+        asyncio.run(mgr._check_waiting_input_timeout())
+
+        idle_unit.force_unstick_waiting_input.assert_not_called()
+        streaming_unit.force_unstick_waiting_input.assert_not_called()

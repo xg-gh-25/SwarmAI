@@ -54,6 +54,7 @@ class LifecycleManager:
     LOOP_INTERVAL: float = 60.0  # Check every 60 seconds
     IDLE_HOOK_GRACE: float = 120.0  # Fire hooks after 120s idle (grace period)
     STREAMING_TIMEOUT_SECONDS: float = 300.0  # 5 min no SDK events → stuck stream
+    WAITING_INPUT_TIMEOUT_SECONDS: float = 7200.0  # 120 min — user may be in a meeting
     STARTUP_BACKLOG_CAP: int = 5  # Max sessions to process on startup scan
 
     # Memory pressure thresholds (configurable via env vars).
@@ -240,6 +241,7 @@ class LifecycleManager:
                     await self._proactive_rss_restart()
                     await self._streaming_rss_check()
                     await self._check_streaming_timeout()
+                    await self._check_waiting_input_timeout()
                     await self._fire_idle_hooks()
                     await self._check_ttl()
                     await self._cleanup_dead()
@@ -569,6 +571,43 @@ class LifecycleManager:
                     effective_timeout,
                 )
                 await unit.force_unstick_streaming()
+
+    async def _check_waiting_input_timeout(self) -> None:
+        """Recover WAITING_INPUT sessions stuck beyond timeout.
+
+        When a session enters WAITING_INPUT (permission prompt), the hang
+        detector and PID watchdog correctly exclude it. But if the user
+        disappears (closes laptop, browser tab crashes, frontend disconnect),
+        the session stays in WAITING_INPUT permanently — consuming a slot
+        (max_tabs=2 → 50% capacity loss) until the 12h TTL kills it.
+
+        This check provides a 120-minute fallback: long enough for a user
+        to think about a permission or attend a meeting, short enough to
+        reclaim stuck slots within the same workday.
+
+        Uses unit.last_used (set on state transitions) as the activity marker.
+
+        Race safety: force_unstick_waiting_input() has an internal state guard
+        (returns immediately if state != WAITING_INPUT). If the user answers
+        the permission between our check and the call, the unit will already
+        be in STREAMING → unstick is a no-op. No lock needed because this is
+        cooperative async (no await between state check and transition in
+        continue_with_permission).
+        """
+        now = time.time()
+        for unit in self._router.list_units():
+            if unit.state != SessionState.WAITING_INPUT:
+                continue
+            waiting_seconds = now - unit.last_used
+            if waiting_seconds > self.WAITING_INPUT_TIMEOUT_SECONDS:
+                logger.warning(
+                    "lifecycle_manager.waiting_input_timeout session_id=%s "
+                    "waiting=%.0fs > timeout=%.0fs — forcing unstick",
+                    unit.session_id,
+                    waiting_seconds,
+                    self.WAITING_INPUT_TIMEOUT_SECONDS,
+                )
+                await unit.force_unstick_waiting_input()
 
     async def _fire_idle_hooks(self) -> None:
         """Fire hooks for IDLE units past the grace period (Gap 2 fix).

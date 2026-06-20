@@ -568,3 +568,150 @@ class TestCanaryMode:
         """Invalid values default to off (safe default)."""
         assert parse_self_heal_mode("yes") == "off"
         assert parse_self_heal_mode("true") == "off"
+
+
+# ─── Whitelist Hang Detection Tests ─────────────────────────────────────────
+
+
+class TestHangDetectionWhitelist:
+    """Verify hang detection uses whitelist (only IDLE/COLD/None trigger)."""
+
+    def test_idle_triggers_hang(self, monkeypatch):
+        """IDLE state should trigger hang_detected after timeout."""
+        sensor = HealthSensor(max_turns=500)
+        sensor.record_turn(100.0, 1400, False)
+        monkeypatch.setattr(
+            time, "time", lambda: sensor._last_activity_time + HANG_TIMEOUT_S + 60
+        )
+        should, trigger = sensor.should_checkpoint(session_state="idle")
+        assert should
+        assert trigger == "hang_detected"
+
+    def test_cold_triggers_hang(self, monkeypatch):
+        """COLD state should trigger hang_detected after timeout."""
+        sensor = HealthSensor(max_turns=500)
+        sensor.record_turn(100.0, 1400, False)
+        monkeypatch.setattr(
+            time, "time", lambda: sensor._last_activity_time + HANG_TIMEOUT_S + 60
+        )
+        should, trigger = sensor.should_checkpoint(session_state="cold")
+        assert should
+        assert trigger == "hang_detected"
+
+    def test_none_triggers_hang_backward_compat(self, monkeypatch):
+        """None state (no arg) should trigger — backward compatibility."""
+        sensor = HealthSensor(max_turns=500)
+        sensor.record_turn(100.0, 1400, False)
+        monkeypatch.setattr(
+            time, "time", lambda: sensor._last_activity_time + HANG_TIMEOUT_S + 60
+        )
+        should, trigger = sensor.should_checkpoint(session_state=None)
+        assert should
+        assert trigger == "hang_detected"
+
+    def test_streaming_never_triggers_hang(self, monkeypatch):
+        """STREAMING state must NEVER trigger hang_detected."""
+        sensor = HealthSensor(max_turns=500)
+        sensor.record_turn(100.0, 1400, False)
+        monkeypatch.setattr(
+            time, "time", lambda: sensor._last_activity_time + HANG_TIMEOUT_S + 600
+        )
+        should, trigger = sensor.should_checkpoint(session_state="streaming")
+        assert not should or trigger != "hang_detected"
+
+    def test_waiting_input_never_triggers_hang(self, monkeypatch):
+        """WAITING_INPUT state must NEVER trigger hang_detected."""
+        sensor = HealthSensor(max_turns=500)
+        sensor.record_turn(100.0, 1400, False)
+        monkeypatch.setattr(
+            time, "time", lambda: sensor._last_activity_time + HANG_TIMEOUT_S + 600
+        )
+        should, trigger = sensor.should_checkpoint(session_state="waiting_input")
+        assert not should or trigger != "hang_detected"
+
+    def test_dead_never_triggers_hang(self, monkeypatch):
+        """DEAD state must NEVER trigger hang_detected (nothing to heal)."""
+        sensor = HealthSensor(max_turns=500)
+        sensor.record_turn(100.0, 1400, False)
+        monkeypatch.setattr(
+            time, "time", lambda: sensor._last_activity_time + HANG_TIMEOUT_S + 600
+        )
+        should, trigger = sensor.should_checkpoint(session_state="dead")
+        assert not should or trigger != "hang_detected"
+
+    def test_unknown_future_state_never_triggers_hang(self, monkeypatch):
+        """Any unknown/future state must NOT trigger hang_detected (whitelist)."""
+        sensor = HealthSensor(max_turns=500)
+        sensor.record_turn(100.0, 1400, False)
+        monkeypatch.setattr(
+            time, "time", lambda: sensor._last_activity_time + HANG_TIMEOUT_S + 600
+        )
+        should, trigger = sensor.should_checkpoint(session_state="some_future_state")
+        assert not should or trigger != "hang_detected"
+
+    def test_all_session_states_accounted_for(self, monkeypatch):
+        """Every SessionState value must be explicitly covered by hang detection.
+
+        This test FAILS if a new state is added to SessionState without updating
+        the whitelist in should_checkpoint(). Prevents silent detection gaps.
+        """
+        from core.session_unit import SessionState
+
+        # States where hang_detected SHOULD fire
+        detect_states = {"idle", "cold"}
+        # States where hang_detected MUST NOT fire (have their own liveness)
+        excluded_states = {"streaming", "waiting_input", "dead"}
+        # None = backward compat (no state passed)
+
+        all_states = {s.value for s in SessionState}
+        covered = detect_states | excluded_states
+        uncovered = all_states - covered
+
+        assert not uncovered, (
+            f"New SessionState(s) {uncovered} added but not accounted for in "
+            f"hang detection whitelist (session_healing.py). Add them to either "
+            f"detect_states or excluded_states in this test AND update "
+            f"should_checkpoint() accordingly."
+        )
+
+
+# ─── Observability Tests ─────────────────────────────────────────────────────
+
+
+class TestHealingLoopObservability:
+    """Verify observability counters and structured logging."""
+
+    def test_trigger_counts_tracked(self):
+        """record_heal_start with trigger name increments per-trigger count."""
+        loop = HealingLoop()
+        loop.record_heal_start(trigger="hang_detected")
+        loop.record_heal_start(trigger="hang_detected")
+        loop.record_heal_start(trigger="latency_degradation")
+        assert loop.trigger_counts == {"hang_detected": 2, "latency_degradation": 1}
+
+    def test_recent_triggers_capped_at_20(self):
+        """recent_triggers deque never exceeds 20 entries."""
+        loop = HealingLoop()
+        # Reset attempts counter between calls to avoid max_attempts
+        for i in range(25):
+            loop._heal_attempts = 0  # Reset to allow more heals
+            loop.record_heal_start(trigger=f"trigger_{i}")
+        assert len(loop.recent_triggers) == 20
+        # Most recent should be trigger_24
+        assert loop.recent_triggers[-1][1] == "trigger_24"
+
+    def test_trigger_counts_empty_trigger_not_tracked(self):
+        """Empty trigger string should not be tracked."""
+        loop = HealingLoop()
+        loop.record_heal_start(trigger="")
+        assert loop.trigger_counts == {}
+        assert len(loop.recent_triggers) == 0
+
+    def test_total_heals_still_increments(self):
+        """total_heals increments regardless of trigger tracking."""
+        loop = HealingLoop()
+        loop.record_heal_start(trigger="test_trigger")
+        assert loop.total_heals == 1
+        loop._heal_attempts = 0  # Allow next
+        loop.record_heal_start(trigger="")
+        assert loop.total_heals == 2

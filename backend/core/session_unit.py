@@ -1214,7 +1214,7 @@ class SessionUnit:
                             "session_unit.self_heal trigger=%s session_id=%s turn=%d",
                             trigger, self.session_id, self._health_sensor.turn_count,
                         )
-                        self._healing_loop.record_heal_start()
+                        self._healing_loop.record_heal_start(trigger=trigger)
                         # Build rich TaskCheckpoint (git floor + history enrichment).
                         # Workspace dir from standard path (same as context_injector)
                         _ws_dir = str(Path.home() / ".swarm-ai" / "SwarmWS")
