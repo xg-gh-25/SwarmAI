@@ -862,6 +862,22 @@ class StreamingOrchestrator:
 
                 stop_reason = getattr(message, "stop_reason", None) or ""
                 subtype = getattr(message, "subtype", "") or ""
+
+                # Log stop_reason for observability — especially important
+                # for detecting max_tokens truncation (model forced to stop
+                # mid-sentence). Distinct from end_turn (model chose to stop).
+                if stop_reason and stop_reason != "end_turn":
+                    logger.warning(
+                        "session_unit.non_standard_stop session_id=%s "
+                        "stop_reason=%s subtype=%s output_tokens=%s "
+                        "content_emitted=%s",
+                        self._parent.session_id,
+                        stop_reason,
+                        subtype,
+                        (usage.get("output_tokens") or 0) if usage else 0,
+                        self._parent._content_emitted,
+                    )
+
                 yield {
                     "type": "result",
                     "subtype": subtype,
