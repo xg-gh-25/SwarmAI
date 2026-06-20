@@ -579,6 +579,23 @@ class SessionUnit:
         )
 
     @property
+    def is_generating_after_disconnect(self) -> bool:
+        """Subprocess is still generating output after SSE client disconnected.
+
+        True when: state is IDLE (post-disconnect transition) AND the
+        background pipe_flush_task is still running (subprocess alive,
+        producing output that will be persisted to DB).
+
+        Used by streaming-state endpoint to report truthful streaming status
+        to the frontend reconciliation poller — prevents force-clear of
+        streams that are still active server-side.
+        """
+        return (
+            self._pipe_flush_task is not None
+            and not self._pipe_flush_task.done()
+        )
+
+    @property
     def is_protected(self) -> bool:
         """Cannot be evicted (STREAMING or WAITING_INPUT)."""
         return self.state in (

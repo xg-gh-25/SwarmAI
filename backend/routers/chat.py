@@ -742,6 +742,13 @@ async def get_streaming_state_endpoint():
     stale isStreaming state when SSE events are lost. Returns all non-prewarm
     sessions — frontend iterates its own tab map and indexes by session ID.
 
+    **State desync fix (2026-06-20):** After SSE disconnect, unit transitions
+    STREAMING→IDLE immediately (so next send() works), but subprocess may still
+    be generating (pipe_flush_task active). We report streaming=true in this
+    case to prevent frontend reconcile from force-clearing an active stream.
+    The subprocess output persists to DB; when pipe_flush_task completes,
+    we report idle and frontend reconciles from DB.
+
     Must be registered BEFORE /sessions/{session_id} to avoid path parameter
     capturing 'streaming-state' as a session ID.
     """
@@ -750,8 +757,15 @@ async def get_streaming_state_endpoint():
     for unit in sr.list_units():
         if not unit.session_id or unit.session_id.startswith("prewarm"):
             continue
+        # Report streaming=true if EITHER:
+        # 1. State is actually STREAMING (normal case), OR
+        # 2. State is IDLE but subprocess still generating after disconnect
+        is_streaming = (
+            unit.state.value == "streaming"
+            or unit.is_generating_after_disconnect
+        )
         result[unit.session_id] = {
-            "streaming": unit.state.value == "streaming",
+            "streaming": is_streaming,
             "state": unit.state.value,
         }
     return {"sessions": result}
