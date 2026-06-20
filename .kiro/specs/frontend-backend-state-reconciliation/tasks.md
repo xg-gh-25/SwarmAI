@@ -10,64 +10,59 @@ overlap in-flight work in a parallel Swarm session.
 
 ## Tasks
 
+> **Status (2026-06-21):** Tasks 3/4/5 landed by a parallel Swarm session
+> (commit `46309b03`, 35 tests green). Task 2 landed by Kiro (commit `003ba8f1`).
+> Task 1 deviated — see note. Task 6 partially done (tsc + targeted tests; real-app
+> E2E still pending).
+
 > Collision note: a parallel Swarm session may be editing `security_hooks.py`,
 > `permission_manager.py`, `routers/chat.py`, `streaming_orchestrator.py` and the
 > two test files (auto-commit ~1/min). Confirm it is paused/converged before
 > starting tasks 3 and 4. Tasks 1–2 (new endpoints + frontend merge) have the
 > least overlap — start there.
 
-- [ ] 1. Backend: incremental message endpoint
-  - [ ] 1.1 Add `GET /chat/sessions/{id}/messages?since_seq=<n>` returning messages
-    with stable `id` + monotonic `seq`/`created_at`, reusing the consecutive-assistant
-    merge helper. Register BEFORE `/sessions/{session_id}` to avoid path capture.
-  - [ ] 1.2 Unit tests: returns only `seq > since_seq`, ordered, merged; empty when
-    none newer.
+- [~] 1. Backend: incremental message endpoint  — DEVIATED (not implemented)
+  - Reason: merged-assistant bubbles use the FIRST raw-row id and GROW as the
+    backend appends consecutive assistant rows, so a raw `after_id`/`since_seq`
+    cursor would split bubbles and mis-key the merge. Instead Task 2 reuses the
+    existing `GET /sessions/{id}/messages` (ETag → 304 when unchanged, cheap) and
+    merges by id on the frontend. The since-cursor remains a possible future
+    optimization for very large sessions but is NOT required for correctness.
+  - [ ] 1.1 (optional, deferred) add `after_id` only if full-fetch cost becomes a
+    problem; must be merge-layer-aware (return whole bubbles, not raw rows).
   - _Requirements: 1.1, 1.2, 5.1, 5.2_
 
-- [ ] 2. Frontend: incremental content reconcile
-  - [ ] 2.1 Replace the `messages.length === 0` gate in `ChatPage.tsx` reconnect path
-    with an incremental merge that calls the since-cursor endpoint using the tab's
-    highest known `seq`/`id`.
-  - [ ] 2.2 Merge via `MessageStore.append`/`updateById` (append-or-update by id);
-    never `replace()`. Skip ids that match an in-flight streaming/optimistic message.
-  - [ ] 2.3 Wire the merge into: active-tab reconnect, stream-resume, and the 15s
-    `/streaming-state` reconcile tick.
-  - [ ] 2.4 Tests: appends newer, updates by id, ignores older (no history re-appear),
-    idempotent on double-run, does not clobber a live streaming message.
+- [x] 2. Frontend: incremental content reconcile  — DONE (commit `003ba8f1`)
+  - [x] 2.1 Replaced the `messages.length === 0` gate in `handleBackendRecovered`:
+    empty tab → full load; non-empty non-streaming tab → merge.
+  - [x] 2.2 Added `mergeTabFromDb()` → `MessageStore.reconcile` (`_applyMerge`):
+    append-or-update by id, DB wins for completed, streaming message protected,
+    resume-boundary respected. Never `replace()`.
+  - [x] 2.3 Wired into backend-recovered for active + all background non-streaming
+    tabs. (15s tick + post-Stop trigger deferred — see Notes.)
+  - [x] 2.4 Relies on existing `_applyMerge` tests (49 MessageStore/resume green);
+    tsc clean.
   - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 5.2_
 
-- [ ] 3. Pending-approval re-surface
-  - [ ] 3.1 Backend: `GET /chat/sessions/{id}/pending-permissions` returning unresolved
-    `_pending_requests` for the session.
-  - [ ] 3.2 Frontend: on (re)connect (after content reconcile), inject a
-    `cmd_permission_request` block per pending request via the store; dedup by
-    `requestId`; reuse `InlinePermissionRequest`.
-  - [ ] 3.3 Tests: surfaces once on connect, deduped by requestId, skips resolved.
+- [x] 3. Pending-approval re-surface  — DONE by Swarm (commit `46309b03`)
+  - `/sessions/streaming-state` now falls back to the durable permission store
+    (`get_pending_for_session` + `has_live_waiter`) and surfaces `pending_question`
+    so the 15s reconcile re-renders the prompt even if the original SSE was lost.
   - _Requirements: 2.1, 2.2, 2.3, 2.4_
 
-- [ ] 4. Bounded + visible permission wait  (overlaps in-flight "fix #2")
-  - [ ] 4.1 `wait_for_permission_decision`: return a distinct `"timeout"` outcome;
-    caller `security_hooks.py` passes bounded interactive timeout (300s) and emits a
-    visible "approval timed out — auto-denied" message on timeout.
-  - [ ] 4.2 Tests: bounded at configured seconds; timeout → visible message + deny;
-    decision path unchanged.
+- [x] 4. Bounded + visible permission wait  — DONE by Swarm (commit `46309b03`)
   - _Requirements: 3.1, 3.2, 3.3_
 
-- [ ] 5. Narrow dangerous rm pattern  (overlaps in-flight "fix #3", currently FAILING)
-  - [ ] 5.1 Make the dangerous-command gate target-aware: auto-allow `rm -rf` when all
-    targets are under OS temp (`/tmp/`, `/var/folders/`, `$TMPDIR`); still gate
-    dangerous roots and temp-escaping globs.
-  - [ ] 5.2 Make `test_harmless_tmp_rm_auto_approved_no_prompt` pass WITHOUT hanging;
-    keep a dangerous-root rm test still prompting.
+- [x] 5. Narrow dangerous rm pattern  — DONE by Swarm (commit `46309b03`)
+  - `test_harmless_tmp_rm_auto_approved_no_prompt` now PASSES (previously hung 60s).
   - _Requirements: 4.1, 4.2, 4.3_
 
-- [ ] 6. End-to-end verification
-  - [ ] 6.1 Disconnect-window integration test: persist N assistant rows while
-    "disconnected", reconnect, assert all N surface exactly once and the spinner clears.
-  - [ ] 6.2 Run targeted single-process only (`-n0 --timeout=60`); NEVER full xdist
-    suite (deadlock observed). Confirm the two touched test files green before commit.
-  - [ ] 6.3 Commit per-file immediately after editing (repo auto-commit sweeps
-    uncommitted work). Co-Authored-By: Swarm <swarm@swarmai.dev>.
+- [~] 6. End-to-end verification  — PARTIAL
+  - [ ] 6.1 Disconnect-window integration test (persist N rows while "disconnected",
+    reconnect, assert N surface once + spinner clears) — NOT yet written.
+  - [x] 6.2 Targeted single-process tests only: backend 35 green (`-n0`), frontend
+    49 green, tsc clean. Full xdist suite deliberately NOT run (deadlock observed).
+  - [x] 6.3 Committed per-file with `Co-Authored-By: Swarm <swarm@swarmai.dev>`.
   - _Requirements: 1.*, 5.*_
 
 ## Task Dependency Graph
