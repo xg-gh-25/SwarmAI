@@ -145,11 +145,15 @@ describe('Layout viewport lock — EXPECTED behavior (must happen)', () => {
 
 describe('Layout viewport lock — MUST NOT CHANGE (preserved behaviors)', () => {
   it('messages container must remain scrollable (overflow-y-auto)', () => {
-    const chatPageFile = readFileSync(
-      resolve(PROJECT_ROOT, 'src/pages/ChatPage.tsx'), 'utf-8'
+    // Migration Step 5.1: the scrollable messages container relocated from
+    // ChatPage.tsx into the per-tab TabView (keep-mounted N-TabView render).
+    // The behavior is unchanged — the messages list is still overflow-y-auto —
+    // but the container now lives in TabView, so this guard greps there.
+    const tabViewFile = readFileSync(
+      resolve(PROJECT_ROOT, 'src/pages/chat/components/TabView.tsx'), 'utf-8'
     );
     // Messages container uses overflow-y-auto for internal scrolling
-    expect(chatPageFile).toMatch(/overflow-y-auto/);
+    expect(tabViewFile).toMatch(/overflow-y-auto/);
   });
 
   it('TopBar must remain fixed height and unshrinkable', () => {
