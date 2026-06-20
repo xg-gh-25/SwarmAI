@@ -182,6 +182,10 @@ export interface UnifiedTab {
    *  silent message loss. Cleared when a new stream starts (handleSendMessage)
    *  or the reconcile loop confirms the backend is genuinely idle. */
   _postDisconnectUncertain?: boolean;
+  /** Timestamp when _postDisconnectUncertain was set. Used by the reconcile loop
+   *  to time-cap the post-disconnect window (force-clear after 120min) so a
+   *  failed stopSession + stuck backend can't brick the tab forever. */
+  _postDisconnectAt?: number;
   /** Resume timeout handle — auto-clears isResuming after 60s if no data arrives.
    *  Prevents permanent "Resuming session..." spinner when --resume hangs. */
   _resumeTimeoutId?: ReturnType<typeof setTimeout>;

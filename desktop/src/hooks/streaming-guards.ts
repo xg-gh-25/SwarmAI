@@ -39,22 +39,69 @@ export interface QueuedMessage {
   messageId: string;
 }
 
+/** Extract the user's text from retryPayload, falling back to content blocks.
+ *
+ * CRITICAL: the live send path transmits `content` blocks, NOT `message`
+ * (see chat.ts streamChat — it uses requestBody.content for any real message
+ * and only uses requestBody.message as a legacy fallback). So on the SESSION_BUSY
+ * path the backend's `user_message` is almost always null and the text lives in
+ * `content[].text`. Reading only `userMessage` would silently lose every real
+ * message — the exact failure this fix exists to prevent. We therefore prefer
+ * userMessage but fall back to joining the text-type content blocks.
+ */
+function extractRetryText(payload: SessionBusyRetryPayload): string {
+  const direct = (payload.userMessage ?? '').trim();
+  if (direct) return direct;
+  if (Array.isArray(payload.content)) {
+    const joined = payload.content
+      .map((block) => {
+        if (block && typeof block === 'object' && 'text' in block) {
+          const t = (block as { text?: unknown }).text;
+          return typeof t === 'string' ? t : '';
+        }
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n');
+    return joined.trim();
+  }
+  return '';
+}
+
+/** True if the retryPayload carried non-text content blocks (image/document).
+ *  On the SESSION_BUSY re-queue path the original send already left the client,
+ *  so the composer no longer holds these — the caller should WARN the user that
+ *  an attachment couldn't be auto-recovered (text IS recovered; blobs are not). */
+export function retryPayloadHasAttachments(
+  payload: SessionBusyRetryPayload | null | undefined,
+): boolean {
+  if (!payload || !Array.isArray(payload.content)) return false;
+  return payload.content.some(
+    (block) =>
+      block != null &&
+      typeof block === 'object' &&
+      'type' in block &&
+      (block as { type?: unknown }).type !== 'text',
+  );
+}
+
 /**
  * Build a queuedMessage from a SESSION_BUSY retryPayload so a busy-session send
  * is never lost. Returns null when there is nothing recoverable (payload absent
  * — e.g. the chat.py "Cannot send() in state" SESSION_BUSY carries none — or no
- * non-empty text). Callers MUST null-guard.
+ * non-empty text in either userMessage or content). Callers MUST null-guard.
  *
- * Note: attachments are not recoverable from the payload (the backend doesn't
- * round-trip binary blobs), so re-queue preserves text only. Text is the part
- * that was silently destroyed before; attachments remain in the composer.
+ * Recovers TEXT only. Binary attachments (image/document blocks) are NOT
+ * recovered — the backend round-trips text-path hints, not blobs, and on this
+ * path the composer was already cleared by the original send. Callers should use
+ * retryPayloadHasAttachments() to warn the user when blobs were dropped.
  */
 export function queuedMessageFromRetryPayload(
   payload: SessionBusyRetryPayload | null | undefined,
   messageId: string,
 ): QueuedMessage | null {
   if (!payload) return null;
-  const text = (payload.userMessage ?? '').trim();
+  const text = extractRetryText(payload);
   if (!text) return null;
   return {
     text,

@@ -48,7 +48,7 @@ import type {
   CompactionGuardEvent,
 } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
-import { queuedMessageFromRetryPayload } from './streaming-guards';
+import { queuedMessageFromRetryPayload, retryPayloadHasAttachments } from './streaming-guards';
 import { chatService } from '../services/chat';
 import { messageStoreRegistry } from '../stores/MessageStore';
 import type { UnifiedTab } from './useUnifiedTabState';
@@ -1130,6 +1130,59 @@ export function useChatStreamingLifecycle(
 
         // Check ALL tabs, not just active — background tabs can hang too
         for (const [tabId, tabState] of tabMapRef.current.entries()) {
+          // POST-DISCONNECT RECOVERY: a tab whose SSE dropped on a long turn is
+          // NOT streaming (heal-grace expiry cleared isStreaming) but is pinned
+          // into queue-only mode via _postDisconnectUncertain. The backend
+          // subprocess may still be finishing. Reconcile is the ONLY owner that
+          // can clear this flag — the normal-send clear (ChatPage) is unreachable
+          // because the flag itself forces the queue path. So: when the backend
+          // confirms the session is genuinely idle, clear the flag and drain any
+          // queued message. Without this the tab is bricked (queues forever).
+          if (!tabState.isStreaming && tabState._postDisconnectUncertain && !tabState.isWaitingForBusy) {
+            // Time cap (matches the streaming-path 120min cap): if stopSession
+            // failed AND the backend never transitions out of streaming
+            // (is_generating_after_disconnect stuck), the flag would never clear
+            // and the tab would be bricked. After the cap, force-clear regardless
+            // of reported backend state.
+            const pdAge = Date.now() - (tabState._postDisconnectAt ?? 0);
+            const pdCapExceeded = pdAge > 7_200_000; // 120 min
+
+            const pdSid = tabState.sessionId;
+            const pdBackend = pdSid ? states[pdSid] : undefined;
+            const pdStreaming = pdBackend?.streaming ?? false;
+            const pdActive = pdBackend?.state === 'waiting_input' || pdBackend?.state === 'streaming';
+
+            if ((!pdStreaming && !pdActive) || pdCapExceeded) {
+              // Backend idle (or evicted, or cap exceeded) — uncertainty resolved.
+              // CRITICAL: only clear _postDisconnectUncertain when there is NO
+              // queued message to drain. When a message IS queued, leave the flag
+              // set and let drainQueuedMessage clear it on SUCCESS — so a failed
+              // drain (which restores the queue) keeps the flag set and this block
+              // retries on the next tick instead of orphaning the restored queue.
+              if (pdSid) {
+                chatService.invalidateMessageCache(pdSid);
+                chatService.getSessionMessages(pdSid).then((msgs) => {
+                  if (cancelled) return;
+                  const store = messageStoreRegistry.getOrCreate(tabId, { sessionId: pdSid });
+                  store.reconcile(msgs);
+                  if (store.phase === 'idle') {
+                    if (tabId === activeTabIdRef.current) setMessages(() => store.messages);
+                    else tabState.messages = store.messages;
+                  }
+                }).catch(() => { /* best-effort DB sync */ });
+              }
+              if (tabState.queuedMessage && deps.onDrainQueue) {
+                // Flag stays set; drainQueuedMessage clears it on success.
+                tabState.drainPending = true;
+                setTimeout(() => { if (!cancelled) deps.onDrainQueue?.(tabId); }, 100);
+              } else {
+                // Nothing queued — pure idle recovery, safe to clear now.
+                tabState._postDisconnectUncertain = false;
+              }
+              anyCleared = true;
+            }
+            continue;  // handled (or backend still busy — wait for next poll)
+          }
           if (!tabState.isStreaming) continue;  // only check streaming tabs
 
           // DRAIN/QUEUE IMMUNITY: never force-clear a tab that has a pending
@@ -2260,6 +2313,17 @@ export function useChatStreamingLifecycle(
                     tabState.queuedMessage = requeued;
                     tabState._queuedAt = Date.now();
                     console.log('[StreamHandler] SESSION_BUSY — re-queued message from retryPayload', { capturedTabId });
+                    // Text is recovered, but binary attachments are not (composer
+                    // already cleared on the original send). Warn so the user can
+                    // re-attach rather than silently losing the file.
+                    if (retryPayloadHasAttachments(event.retryPayload)) {
+                      addToast({
+                        severity: 'warning',
+                        message: 'Your message text was recovered, but an attachment could not be — please re-attach it.',
+                        id: `requeue-attach-${capturedTabId ?? 'global'}`,
+                        autoDismiss: true,
+                      });
+                    }
                   }
                 }
                 // Atomic clear (flag + Set + re-render) instead of direct
@@ -2431,7 +2495,14 @@ export function useChatStreamingLifecycle(
               // No session ID — can't poll, clear immediately
               if (capturedTabId) {
                 const tabState = tabMapRef.current.get(capturedTabId);
-                if (tabState) tabState.isWaitingForBusy = false;
+                if (tabState) {
+                  tabState.isWaitingForBusy = false;
+                  // Drain any message re-queued above — without a poll there is
+                  // no other owner to send it, so it would be stranded forever.
+                  if (tabState.queuedMessage && deps.onDrainQueue) {
+                    setTimeout(() => deps.onDrainQueue?.(capturedTabId), 100);
+                  }
+                }
               }
               setIsWaitingForBusy(false);
             }
@@ -2911,6 +2982,7 @@ export function useChatStreamingLifecycle(
               // STREAMING; the 15s reconcile loop then confirms idle and drains
               // any queued message. Cleared on next send (handleSendMessage).
               currentTab._postDisconnectUncertain = true;
+              currentTab._postDisconnectAt = Date.now(); // for reconcile time-cap
               if (currentTab.sessionId) {
                 chatService.stopSession(currentTab.sessionId).catch(() => {
                   // Best-effort — reconcile loop is the fallback

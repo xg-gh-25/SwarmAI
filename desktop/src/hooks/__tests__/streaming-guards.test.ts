@@ -13,6 +13,7 @@ import { describe, it, expect } from 'vitest';
 import {
   shouldQueueSend,
   queuedMessageFromRetryPayload,
+  retryPayloadHasAttachments,
   type QueueGuardState,
 } from '../streaming-guards';
 
@@ -150,6 +151,47 @@ describe('queuedMessageFromRetryPayload', () => {
   it('returns null when payload is missing (chat.py SESSION_BUSY carries none) — null-guard', () => {
     expect(queuedMessageFromRetryPayload(undefined, 'queued-x')).toBeNull();
     expect(queuedMessageFromRetryPayload(null, 'queued-x')).toBeNull();
+  });
+
+  it('HIGH#2 regression: recovers text from content blocks when userMessage is null (the LIVE send path)', () => {
+    // The frontend always sends `content` blocks, never `message`, so the
+    // backend user_message is null and the text lives in content[].text.
+    // Reading only userMessage would silently lose every real message.
+    const q = queuedMessageFromRetryPayload(
+      {
+        sessionId: 's1',
+        agentId: 'default',
+        userMessage: null,
+        content: [{ type: 'text', text: 'recover me from content' }],
+      },
+      'queued-c1',
+    );
+    expect(q).not.toBeNull();
+    expect(q!.text).toBe('recover me from content');
+  });
+
+  it('joins multiple text content blocks', () => {
+    const q = queuedMessageFromRetryPayload(
+      {
+        sessionId: 's1',
+        agentId: 'default',
+        userMessage: null,
+        content: [
+          { type: 'text', text: 'line one' },
+          { type: 'image', source: {} },
+          { type: 'text', text: 'line two' },
+        ] as unknown[],
+      },
+      'queued-c2',
+    );
+    expect(q!.text).toBe('line one\nline two');
+  });
+
+  it('retryPayloadHasAttachments detects non-text blocks (warn the user)', () => {
+    expect(retryPayloadHasAttachments({ sessionId: 's', agentId: 'a', userMessage: null, content: [{ type: 'text', text: 'hi' }] })).toBe(false);
+    expect(retryPayloadHasAttachments({ sessionId: 's', agentId: 'a', userMessage: null, content: [{ type: 'text', text: 'hi' }, { type: 'image', source: {} }] as unknown[] })).toBe(true);
+    expect(retryPayloadHasAttachments({ sessionId: 's', agentId: 'a', userMessage: 'hi', content: null })).toBe(false);
+    expect(retryPayloadHasAttachments(undefined)).toBe(false);
   });
 
   it('returns null when there is no recoverable text (nothing to preserve)', () => {

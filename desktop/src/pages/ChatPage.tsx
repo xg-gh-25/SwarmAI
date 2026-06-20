@@ -1906,8 +1906,13 @@ export default function ChatPage() {
       tabState.hasReceivedData = false;
       tabState.isReconnecting = false;
       tabState.reconnectionAttempt = 0;
-      // Drain started successfully — reconcile can resume normal checks
+      // Drain started successfully — reconcile can resume normal checks.
       tabState.drainPending = false;
+      // Post-disconnect recovery succeeded — the queued message is now a live
+      // stream, so the uncertainty is resolved. Cleared HERE (on success) not in
+      // the reconcile block, so a FAILED drain (catch restores the queue) leaves
+      // the flag set and reconcile retries instead of orphaning the message.
+      tabState._postDisconnectUncertain = false;
     } catch (e) {
       // Send failed — restore queue so user doesn't lose their message
       tabState.queuedMessage = queued;
