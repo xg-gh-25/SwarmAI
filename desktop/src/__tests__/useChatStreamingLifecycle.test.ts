@@ -68,6 +68,7 @@ import {
   deriveStreamingActivity,
   formatElapsed,
   ELAPSED_DISPLAY_THRESHOLD_MS,
+  HEAL_GRACE_PERIOD_MS,
   MIN_ACTIVITY_DISPLAY_MS,
   persistPendingState,
   restorePendingState,
@@ -474,6 +475,47 @@ describe('useChatStreamingLifecycle', () => {
         expect(stopSpy).not.toHaveBeenCalled();
       } finally {
         stopSpy.mockRestore();
+      }
+    });
+
+    it('does NOT call chatService.stopSession when heal-grace expires (2nd poison site)', () => {
+      // Covers the OTHER deleted stop site: the heal-grace-expiry branch fires
+      // inside a setTimeout that only arms when _healGraceActive was FALSE at
+      // entry. The terminal-branch test above (with _healGraceActive=true)
+      // skips this path, so without this test a revert of the heal-grace stop
+      // would pass green. Adversarial Gate 2 LOW finding (run_1a45cfe9).
+      vi.useFakeTimers();
+      const stopSpy = vi
+        .spyOn(chatService, 'stopSession')
+        .mockResolvedValue({ status: 'ok', message: '' });
+      try {
+        const msgId = 'msg-heal';
+        const tabId = 'tab-heal';
+        initTestTab(tabId, [
+          makeMessage({ id: msgId, role: 'assistant', content: [] }),
+        ]);
+        const tab = testTabMap.get(tabId)!;
+        tab.sessionId = 'sess-heal';
+        tab.hasReceivedData = true; // mid-stream
+        tab.reconnectionAttempt = 0; // NOT exhausted → enters heal-grace, not terminal
+        // _healGraceActive intentionally left false → heal-grace branch arms.
+
+        const { result } = renderHook(() =>
+          useChatStreamingLifecycle(createMockDeps()),
+        );
+        const errorHandler = result.current.createErrorHandler(msgId, tabId);
+        act(() => {
+          errorHandler(new Error('Premature SSE disconnect'));
+        });
+        // Grace timer armed; advance past it to fire the expiry branch.
+        act(() => {
+          vi.advanceTimersByTime(HEAL_GRACE_PERIOD_MS + 100);
+        });
+
+        expect(stopSpy).not.toHaveBeenCalled();
+      } finally {
+        stopSpy.mockRestore();
+        vi.useRealTimers();
       }
     });
   });
