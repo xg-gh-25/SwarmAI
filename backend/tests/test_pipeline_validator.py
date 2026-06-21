@@ -2884,3 +2884,49 @@ class TestValidationEventErrored:
         ev = run["validation_events"][-1]
         assert ev.get("errored") == ["smoke"], f"errored not persisted: {ev}"
         assert ev.get("errored_count") == 1, f"errored_count wrong: {ev}"
+
+
+class TestCheckGuardSafety:
+    """Adversarial-review safety fixes (run_55710438 Gate 2)."""
+
+    def test_crash_after_passed_still_errored_and_blocks(self, workspace):
+        """MED-8: a HARD check that crashes AFTER calling passed() must still
+        record ERRORED and block — never silently fall through on stale PASSED."""
+        import scripts.pipeline_validator as pv
+        errors, warnings, cr = [], [], []
+        try:
+            with pv._CheckGuard("x", pv.SEVERITY_HARD, errors, warnings, cr) as g:
+                g.passed()              # declare PASSED first
+                raise RuntimeError("late boom")  # then crash
+        except RuntimeError:
+            pytest.fail("guard must swallow ordinary Exception")
+        # ERRORED must OVERWRITE the stale PASSED, and the hard gate must block
+        assert len(cr) == 1 and cr[0]["status"] == pv.CHECK_ERRORED, cr
+        assert len(errors) == 1, f"hard crash-after-passed must append a blocking error: {errors}"
+
+    def test_control_flow_exceptions_propagate(self, workspace):
+        """MED-9: KeyboardInterrupt/SystemExit must NOT be swallowed."""
+        import scripts.pipeline_validator as pv
+        errors, warnings, cr = [], [], []
+        with pytest.raises(KeyboardInterrupt):
+            with pv._CheckGuard("x", pv.SEVERITY_HARD, errors, warnings, cr):
+                raise KeyboardInterrupt()
+        with pytest.raises(SystemExit):
+            with pv._CheckGuard("y", pv.SEVERITY_ADVISORY, errors, warnings, cr):
+                raise SystemExit(1)
+
+    def test_advisory_errored_keeps_checks_passed_consistent(self, workspace, monkeypatch):
+        """LOW-8: an advisory crash must still credit checks_passed so a valid
+        run reports checks_passed == checks_total."""
+        artifacts = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts / "runs" / "run_test1"
+        _make_run(runs_dir, stages=[_stage_record("evaluate", status="completed", artifact_id="art_eval")])
+        _make_artifact(artifacts, "run_test1", "art_eval", "evaluation",
+                       {"recommendation": "GO", "scope": "standard", "summary": "x", "acceptance_criteria": ["a"]})
+        import scripts.pipeline_validator as pv
+        monkeypatch.setattr(pv, "check_ddd_consistency",
+                            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+        result = validate("TestProject", "run_test1", "evaluate")
+        assert result["valid"] is True
+        assert result["checks_passed"] == result["checks_total"], \
+            f"advisory crash must not desync the metric: {result['checks_passed']}/{result['checks_total']}"

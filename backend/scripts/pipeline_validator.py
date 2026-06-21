@@ -119,9 +119,22 @@ class _CheckGuard:
         self._check_results = check_results
         self._recorded = False
 
-    def _record(self, status: str, detail: str = "") -> None:
-        if self._recorded:
+    # True after __exit__ converts a crash into an ERRORED outcome. The caller
+    # reads this to credit checks_passed for a non-blocking advisory ERROR so
+    # the checks_passed==checks_total invariant holds on a valid run.
+    errored_nonblocking = False
+
+    def _record(self, status: str, detail: str = "", force: bool = False) -> None:
+        # `force` lets an ERRORED outcome OVERWRITE a prior PASSED/FAILED record.
+        # C037 safety guarantee: a hard check that crashes AFTER declaring an
+        # outcome must STILL be recorded as ERRORED (and block) — never silently
+        # fall through on a stale PASSED record (Correctness review MED-8).
+        if self._recorded and not force:
             return
+        if force:
+            self._check_results[:] = [
+                c for c in self._check_results if c.get("name") != self.name
+            ]
         self._recorded = True
         self._check_results.append({
             "name": self.name,
@@ -147,9 +160,16 @@ class _CheckGuard:
             if not self._recorded:
                 self._record(CHECK_PASSED)
             return False
-        # The check itself crashed → ERRORED, classified by severity.
+        # NEVER swallow control-flow / process-exit signals — only ordinary
+        # check faults become ERRORED (Correctness review MED-9). KeyboardInterrupt,
+        # SystemExit, GeneratorExit must propagate so Ctrl-C and sys.exit() work.
+        if not issubclass(exc_type, Exception):
+            return False
+        # The check itself crashed → ERRORED, classified by severity. force=True
+        # so a crash after a prior passed()/failed() still records ERRORED and
+        # (for hard) still blocks — the hard gate can never silently fail open.
         msg = f"{type(exc).__name__}: {exc}"
-        self._record(CHECK_ERRORED, msg)
+        self._record(CHECK_ERRORED, msg, force=True)
         if self.severity == SEVERITY_HARD:
             # Fail-closed: a hard check that cannot run BLOCKS, with a clear
             # diagnostic that distinguishes "check crashed" from "content bad".
@@ -164,6 +184,10 @@ class _CheckGuard:
                 f"Check '{self.name}' ERRORED (could not run): {msg}. "
                 f"Advisory gate — not blocking, but the check did not execute."
             )
+            # The advisory check did not block, so it counts as "passed" for the
+            # checks_passed/checks_total metric (it would have incremented had it
+            # not crashed). Signal the caller to credit it (Correctness review LOW-8).
+            self.errored_nonblocking = True
         return True  # swallow: one check's crash must not abort the others
 
 
@@ -1599,6 +1623,10 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
         else:
             checks_passed += 1  # Auto-pass for non-evaluate stages
             _g.passed()
+    if _g.errored_nonblocking:
+        # Advisory check crashed but did not block — credit it so
+        # checks_passed == checks_total holds on a valid run (Correctness LOW-8).
+        checks_passed += 1
 
     # --- Check 8: Smoke tests executed (WARN, build stage only) ---
     # When build touches >1 file, smoke tests must exercise new code paths

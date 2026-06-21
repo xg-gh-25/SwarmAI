@@ -422,6 +422,18 @@ def _auto_validate_before_advance(project: str, next_state: str) -> None:
             capture_output=True, text=True, timeout=10,
             cwd=str(Path(__file__).parent.parent),
         )
+        # FAIL-CLOSED on validator crash (Operational review HIGH-8): an
+        # UNWRAPPED check that raises makes the validator exit non-zero with
+        # EMPTY stdout (traceback on stderr). Without this guard, `if result.stdout`
+        # would be False, the whole block would be skipped, and advance would
+        # proceed = the hard gate fails OPEN. A crashed validator can NEVER verify
+        # a stage, so it must block — matching the TimeoutExpired/JSONDecodeError
+        # handlers below and the _CheckGuard hard-fail-closed contract.
+        if result.returncode != 0 and not result.stdout.strip():
+            raise RuntimeError(
+                f"Pipeline validator crashed (exit {result.returncode}, no output) — "
+                f"cannot verify stage '{current_stage}'. stderr: {result.stderr.strip()[:500]}"
+            )
         if result.stdout:
             validation = json.loads(result.stdout)
             # errored[] (run_55710438): checks that could NOT run, distinct from
@@ -1022,13 +1034,22 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                             stage="deliver",
                         )
                     except Exception as _verr:
-                        # Crash-handling principle (run_55710438): a HARD gate that
-                        # ERRORS fails closed at ADVANCE time (cmd_advance L315). At
-                        # COMPLETION time we deliberately fail OPEN on a validator
-                        # *internal* crash — a validator bug must not permanently
-                        # block every pipeline from completing. But NEVER silently:
-                        # the crash is logged + classified (it is an ERRORED check,
-                        # not a clean pass) so the divergence is intentional, not hidden.
+                        # Crash-handling principle (run_55710438), corrected per
+                        # Operational review MED-8:
+                        #  - WRAPPED hard checks (_CheckGuard) NO LONGER reach this
+                        #    except — they fail closed INSIDE validate() by appending
+                        #    to errors[], so a wrapped hard-check crash BLOCKS
+                        #    completion (the synthetic "ERRORED (could not run)"
+                        #    message does not match _INFRA_PHRASES → survives as a
+                        #    blocking validator_error below). Same fail-closed
+                        #    direction as ADVANCE (cmd_advance) — intentional.
+                        #  - This except now catches only a validator that crashes
+                        #    BEFORE returning a dict (import error, or a crash in one
+                        #    of the still-UNWRAPPED checks). For THAT residual case we
+                        #    fail OPEN at completion — a validator bug that prevents
+                        #    any dict from being produced must not permanently block
+                        #    every pipeline from completing. NEVER silently: the crash
+                        #    is logged + classified as ERRORED below.
                         result = None
                         import sys as _sys
                         print(json.dumps({
