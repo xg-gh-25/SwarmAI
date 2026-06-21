@@ -230,10 +230,13 @@ export function deriveStreamingActivity(
 
   // Stable per-invocation id — lets the elapsed timer re-anchor on each distinct
   // tool_use block even when the tool NAME repeats (Read → think → Read).
-  const toolId =
+  // Coerce empty string → null so a degenerate id behaves like the Thinking
+  // path (keep anchor) rather than a stable non-null sentinel.
+  const rawToolId =
     lastToolUse && 'id' in lastToolUse
-      ? (lastToolUse as { id?: string }).id ?? null
+      ? (lastToolUse as { id?: string }).id
       : null;
+  const toolId = rawToolId ? rawToolId : null;
 
   return { hasContent, toolName, toolContext, toolCount, toolId };
 }
