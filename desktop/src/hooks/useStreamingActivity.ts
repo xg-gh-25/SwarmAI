@@ -94,18 +94,36 @@ export function useStreamingActivity(
   }, [streamingActivity, isStreaming]);
 
   // ── Elapsed seconds — timer runs ONLY while streaming (F4 gate) ──
+  // The elapsed counter measures how long the CURRENT activity has been
+  // displayed, NOT the whole stream. It re-anchors whenever the debounced
+  // `displayedActivity.toolName` changes, so the rendered "{tool} · {elapsed}"
+  // reads correctly (e.g. "adversarial · 2m" = this tool ran 2 min). Anchoring
+  // to the DEBOUNCED label value (not raw `streamingActivity`) keeps the label
+  // and timer in lock-step — anchoring to the raw value would let them diverge
+  // by the debounce window, re-introducing the very staleness this fixes.
+  // The "total wait" signal is still carried by the no-tool "Thinking… {elapsed}"
+  // path (toolName === null → anchor stays at stream start). (run_81a580ba)
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const startRef = useRef<number | null>(null);
+  // The toolName the timer is currently anchored to — change ⇒ re-anchor.
+  const anchoredToolNameRef = useRef<string | null>(null);
+  const activeToolName = displayedActivity?.toolName ?? null;
 
   useEffect(() => {
     if (!isStreaming) {
       startRef.current = null;
+      anchoredToolNameRef.current = null;
       setElapsedSeconds(0);
       return;
     }
-    // Stream started — anchor the start time and tick once per second.
-    if (startRef.current === null) {
+    // (Re-)anchor when the stream just started OR the displayed tool changed.
+    // toolName === null (Thinking…) keeps the existing anchor — there is no
+    // tool boundary to reset on, so elapsed reflects time since thinking began.
+    const toolChanged =
+      activeToolName !== null && activeToolName !== anchoredToolNameRef.current;
+    if (startRef.current === null || toolChanged) {
       startRef.current = Date.now();
+      anchoredToolNameRef.current = activeToolName;
       setElapsedSeconds(0);
     }
     const interval = setInterval(() => {
@@ -114,7 +132,7 @@ export function useStreamingActivity(
       }
     }, 1000);
     return () => clearInterval(interval);
-  }, [isStreaming]);
+  }, [isStreaming, activeToolName]);
 
   return { displayedActivity, elapsedSeconds };
 }
