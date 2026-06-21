@@ -616,3 +616,32 @@ class TestCompletionFailsClosedOnValidatorCrash:
         assert "validator gate ERRORED" in combined or "could not be verified" in combined.lower() \
             or "completion cannot be verified" in combined.lower(), \
             f"outer crash must be surfaced as blocking: {combined[:400]}"
+
+    def test_transient_io_error_blocks_with_retryable_message(self, workspace, capsys, monkeypatch):
+        """Adversarial MED: a transient OSError from validate()'s internal read
+        still BLOCKS (fail-closed) but is surfaced as RETRYABLE, not 'fix the validator'."""
+        cli, reg, rf = self._setup(workspace)
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        import importlib.util as _ilu
+        real_from_spec = _ilu.module_from_spec
+
+        def io_module(spec):
+            mod = real_from_spec(spec)
+            if spec.name == "pipeline_validator":
+                orig_exec = spec.loader.exec_module
+                def exec_and_stub(m):
+                    orig_exec(m)
+                    def _io_crash(*a, **k):
+                        raise OSError("simulated transient file lock")
+                    m.validate = _io_crash
+                spec.loader.exec_module = exec_and_stub
+            return mod
+        monkeypatch.setattr(_ilu, "module_from_spec", io_module)
+
+        cli.cmd_run_update(self._args(), reg)
+        out = capsys.readouterr()
+        data = _read_run(rf)
+        assert data["status"] != "completed", "transient I/O must still block (fail-closed)"
+        combined = (out.out + out.err).lower()
+        assert "retry" in combined or "transient" in combined, \
+            f"transient error must be surfaced as retryable, not 'fix the validator': {combined[:400]}"

@@ -1051,12 +1051,28 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                         # actionable response — the user fixes the validator, same
                         # as advance. No silent fail-open at the final gate.
                         result = None
-                        validator_errors.append(
-                            f"[deliver] validator ERRORED (could not run): "
-                            f"{type(_verr).__name__}: {_verr}. Cannot verify deliver "
-                            f"stage — fix the validator or input before completing "
-                            f"(fail-closed, symmetric with the advance path)."
-                        )
+                        # Distinguish a TRANSIENT I/O hiccup (file lock, partial
+                        # read, concurrent writer) from a real validator code fault.
+                        # Both fail closed — completion cannot be verified either way
+                        # — but the message must be accurate: a transient error is
+                        # RETRYABLE (re-run completion), not "fix the validator".
+                        # (Adversarial review MED: validate()'s internal run.json
+                        # re-read can raise OSError/JSONDecodeError on a benign hiccup.)
+                        if isinstance(_verr, (OSError, json.JSONDecodeError)):
+                            validator_errors.append(
+                                f"[deliver] validator could not verify deliver stage "
+                                f"(transient I/O error: {type(_verr).__name__}: {_verr}). "
+                                f"Completion blocked — RETRY; if it persists, check the "
+                                f"run.json file and filesystem (fail-closed, symmetric "
+                                f"with the advance path)."
+                            )
+                        else:
+                            validator_errors.append(
+                                f"[deliver] validator ERRORED (could not run): "
+                                f"{type(_verr).__name__}: {_verr}. Cannot verify deliver "
+                                f"stage — fix the validator or input before completing "
+                                f"(fail-closed, symmetric with the advance path)."
+                            )
                     if result and result.get("errors"):
                         # Filter infrastructure errors (test env, stale data, missing files).
                         # Only keep SEMANTIC errors (wrong tier, unresolved findings, etc.)
