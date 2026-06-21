@@ -3082,3 +3082,51 @@ class TestNinebCreditOnCrash:
         assert "agent_tool_audit" in result["errored"], result.get("errored")
         assert result["checks_passed"] == result["checks_total"], \
             f"9b crash must keep metric consistent: {result['checks_passed']}/{result['checks_total']}"
+
+
+class TestQualityGateAuditAccuracy:
+    """Adversarial LOW-1 (run_61413085): quality_gate check_results must record
+    FAILED on content failure, not a blanket PASSED."""
+
+    def test_quality_gate_records_failed_on_content_failure(self, workspace):
+        """build with >1 code file but smoke_tests=0 → content failure → quality_gate
+        check_result status must be 'failed', not 'passed'."""
+        artifacts = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts / "runs" / "run_test1"
+        _make_run(runs_dir, profile="bugfix", stages=[
+            _stage_record("evaluate", status="completed"),
+            _stage_record("think", status="completed"),
+            _stage_record("plan", status="completed"),
+            _stage_record("build", status="running", artifact_id="art_b"),
+        ])
+        # >1 code file, smoke_tests=0 → triggers the SMOKE content error
+        _make_artifact(artifacts, "run_test1", "art_b", "changeset",
+                       {"branch": "x", "commits": ["c"],
+                        "files_changed": ["a.py", "b.py"],
+                        "tdd": {"green_pass": True, "smoke_tests": 0},
+                        "ac_coverage": [{"ac": "A", "impl": "a.py::f", "test": "t.py::t", "verified": True}]})
+        result = validate("TestProject", "run_test1", "build")
+        qg = [c for c in result["check_results"] if c["name"] == "quality_gate"]
+        assert qg, "quality_gate must appear in check_results"
+        assert qg[0]["status"] == "failed", \
+            f"content failure must record FAILED not {qg[0]['status']}"
+        assert result["valid"] is False
+
+    def test_quality_gate_records_passed_when_clean(self, workspace):
+        """build with smoke_tests>0 and full ac_coverage → quality_gate PASSED."""
+        artifacts = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts / "runs" / "run_test1"
+        _make_run(runs_dir, profile="bugfix", stages=[
+            _stage_record("evaluate", status="completed"),
+            _stage_record("think", status="completed"),
+            _stage_record("plan", status="completed"),
+            _stage_record("build", status="running", artifact_id="art_b"),
+        ])
+        _make_artifact(artifacts, "run_test1", "art_b", "changeset",
+                       {"branch": "x", "commits": ["c"], "files_changed": ["a.py"],
+                        "tdd": {"green_pass": True, "smoke_tests": 2},
+                        "ac_coverage": [{"ac": "A", "impl": "a.py::f", "test": "t.py::t", "verified": True}]})
+        result = validate("TestProject", "run_test1", "build")
+        qg = [c for c in result["check_results"] if c["name"] == "quality_gate"]
+        assert qg and qg[0]["status"] == "passed", \
+            f"clean build must record PASSED: {qg}"

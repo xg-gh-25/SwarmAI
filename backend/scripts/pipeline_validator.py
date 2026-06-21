@@ -1651,9 +1651,11 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
     #     review integration/ux/findings/litmus, test layers) — HARD ---
     # Wrapped so a crash in any stage-branch becomes ERRORED+blocks (was the
     # largest unwrapped region; run_61413085 closes the asymmetry).
+    _qg_errors_before = len(errors)
     with _CheckGuard("quality_gate", SEVERITY_HARD, errors, warnings, check_results) as _g8:
-        _g8.passed()  # records PASSED unless a branch crashes (ERRORED) — content
-        #            fail/pass is already tracked via errors[]/checks_passed inside.
+        # Outcome recorded at the END of the block (below) by comparing errors[]
+        # length — so check_results reflects content FAILED vs PASSED accurately,
+        # not a blanket PASSED. A crash still overrides to ERRORED via __exit__.
         if stage == "build":
             smoke_ok = True
             # Use pre-loaded artifact_data (F1/F2 fix — don't re-load)
@@ -2061,6 +2063,12 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
                 checks_passed += 1
         else:
             checks_passed += 1  # Auto-pass for other stages
+        # Record content outcome: FAILED if this gate added any blocking error,
+        # else PASSED. (A crash inside still overrides to ERRORED via __exit__.)
+        if len(errors) > _qg_errors_before:
+            _g8.failed()
+        else:
+            _g8.passed()
 
     # --- Check 9: Depth validation (L2) — field values indicate real work ---
     # Only runs when artifact data is available (L0/L1 catch missing data)
@@ -2127,8 +2135,12 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
                     for old_f in AGENT_AUDIT_DIR.iterdir():
                         if old_f.suffix == ".marker" and old_f.stat().st_mtime < cutoff:
                             old_f.unlink(missing_ok=True)
-            except OSError:
-                pass  # Non-critical cleanup
+            except Exception:
+                # Best-effort cleanup AFTER checks_passed was already credited.
+                # Broadened from OSError so a non-OSError here cannot escape into
+                # __exit__ and trigger the errored_nonblocking credit a SECOND time
+                # (would over-count checks_passed). Cleanup failure is never fatal.
+                pass
     if _g.errored_nonblocking and stage == "deliver" and profile in ("full", "bugfix"):
         # 9b crashed after its checks_total += 1 but before crediting checks_passed.
         # Credit it so checks_passed == checks_total holds on a valid run (advisory
