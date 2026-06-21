@@ -1906,7 +1906,9 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> None:
             eval_table_lines.append(f"| {dim.capitalize()} | {score:.2f} | |")
     roi = eval_scores.get("roi")
     if roi is not None:
-        eval_table_lines.append(f"| **ROI** | **{roi:.3f}** | **{eval_recommendation}** |")
+        # roi may be numeric (3.2) or a qualitative string ("high") — format both.
+        roi_str = f"{roi:.3f}" if isinstance(roi, (int, float)) else str(roi)
+        eval_table_lines.append(f"| **ROI** | **{roi_str}** | **{eval_recommendation}** |")
 
     # ── Section 3: Design & Approach ──────────────────────────────────
     # PRIMARY: stage-json (think/plan records), FALLBACK: published artifacts
