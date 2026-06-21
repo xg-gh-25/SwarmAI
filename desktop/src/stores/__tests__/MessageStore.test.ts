@@ -675,6 +675,50 @@ describe('MessageStore H2 — empty assistant placeholder cleanup on reconcile',
     expect(store.messages.some(m => m.id === 'local-asst-real')).toBe(true);
     store.destroy();
   });
+
+  it('drops NON-EMPTY numeric-id placeholder (continuation/drain) when real DB row arrived', () => {
+    // Adversarial HIGH (run_af36e709): continuation/drain paths
+    // (answer-question, queue-drain, permission, retry-timeout) keep NUMERIC
+    // placeholder ids and stream content INTO them, so at turn-end the
+    // placeholder is non-empty. The H2 turn-end reconcile then fetches the DB
+    // assistant row (UUID, no client_id) → the empty-only cleanup left BOTH =
+    // duplicate bubble. A numeric-id assistant message is provably always an
+    // uncorrelated optimistic placeholder (verified: all 8 numeric-id sites in
+    // ChatPage are assistant placeholders; no system/boundary marker is numeric),
+    // so once a real DB assistant row exists it is safe to drop.
+    const store = new MessageStore();
+    store.replace([
+      makeMsg('local-1-u', 'user', 'Q'),
+      // Continuation placeholder: NUMERIC id, content streamed in (non-empty).
+      { id: '1718999', role: 'assistant', content: [{ type: 'text', text: 'streamed reply' }], timestamp: new Date().toISOString() },
+    ]);
+    store.reconcile([
+      { id: 'u1', sessionId: 'sess-1', role: 'user', content: [{ type: 'text', text: 'Q' }] as any, createdAt: new Date().toISOString(), metadata: { client_id: 'local-1-u' } },
+      // DB assistant row: UUID, NO client_id (continuation persists with None).
+      { id: 'a1', sessionId: 'sess-1', role: 'assistant', content: [{ type: 'text', text: 'streamed reply' }] as any, createdAt: new Date().toISOString() },
+    ]);
+    // Exactly 2 — the numeric placeholder is gone, only the DB row remains.
+    // Pre-fix: 3 (user + numeric placeholder + DB row) = duplicate bubble.
+    expect(store.messages.map(m => m.id)).toEqual(['u1', 'a1']);
+    expect(store.messages.filter(m => m.role === 'assistant')).toHaveLength(1);
+    store.destroy();
+  });
+
+  it('KEEPS numeric-id placeholder when no real DB assistant row exists yet', () => {
+    // Same premature-blank guard as the empty case: a numeric placeholder must
+    // survive until a real assistant row is present, so a slow persist never
+    // blanks the in-flight continuation turn.
+    const store = new MessageStore();
+    store.replace([
+      makeMsg('local-1-u', 'user', 'Q'),
+      { id: '1718999', role: 'assistant', content: [{ type: 'text', text: 'streamed reply' }], timestamp: new Date().toISOString() },
+    ]);
+    store.reconcile([
+      { id: 'u1', sessionId: 'sess-1', role: 'user', content: [{ type: 'text', text: 'Q' }] as any, createdAt: new Date().toISOString(), metadata: { client_id: 'local-1-u' } },
+    ]);
+    expect(store.messages.some(m => m.id === '1718999')).toBe(true);
+    store.destroy();
+  });
 });
 
 describe('MessageStore assistant clientId correlation (P4 streaming-never-finalizes)', () => {

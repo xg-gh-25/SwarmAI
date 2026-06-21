@@ -560,14 +560,27 @@ export class MessageStore {
     // Skip messages already matched by clientId (they were replaced by DB version in Pass 1)
     for (const local of this._messages) {
       if (!dbIds.has(local.id) && !matchedByClientId.has(local.id)) {
-        // H2: drop a stale empty assistant placeholder once real content exists.
-        // Never drop the streaming message (defensive — reconcile is idle-gated).
-        if (
+        // H2: drop a STALE assistant placeholder once a real DB assistant row
+        // exists, so the turn-end reconcile finalizes to a single bubble.
+        // Two cases — both gated on hasRealAssistant (never blank an in-flight
+        // turn) and never the streaming message (defensive — reconcile is
+        // idle-gated):
+        //   (a) EMPTY placeholder — the original "Thinking forever" hang.
+        //   (b) NON-EMPTY placeholder with a NUMERIC id — the continuation/drain
+        //       paths (answer-question, queue-drain, permission, retry-timeout)
+        //       keep numeric ids and stream content in, so at turn-end they are
+        //       non-empty AND uncorrelated; without this they duplicate the DB
+        //       row (adversarial HIGH, run_af36e709). A numeric-id assistant
+        //       message is provably always an optimistic placeholder — every
+        //       numeric-id site in ChatPage is an assistant placeholder, and no
+        //       real DB id (UUID) or local id (local-*) is purely numeric — so
+        //       it is safe to drop in favor of the canonical DB row.
+        const isStalePlaceholder =
           hasRealAssistant &&
           local.role === 'assistant' &&
-          local.content.length === 0 &&
-          local.id !== this._streamingMessageId
-        ) {
+          local.id !== this._streamingMessageId &&
+          (local.content.length === 0 || /^\d+$/.test(local.id));
+        if (isStalePlaceholder) {
           continue;
         }
         // Local-only: insert at chronological position in merged
