@@ -719,3 +719,33 @@ class TestCompletionFailsClosedOnValidatorCrash:
         data = _read_run(rf)
         assert data["status"] == "completed", \
             f"environmental 'not found' must stay filtered (no block), got {data['status']}"
+
+    def test_environmental_no_stage_record_still_filtered(self, workspace, capsys, monkeypatch):
+        """AC4 (second retained phrase): 'no stage record' must also remain filtered.
+        Spec review flagged it as retained-but-untested. Proves the narrowed filter
+        kept BOTH environmental phrases, not just 'not found'."""
+        cli, reg, rf = self._setup(workspace)
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        import importlib.util as _ilu
+        real_from_spec = _ilu.module_from_spec
+
+        def env_module(spec):
+            mod = real_from_spec(spec)
+            if spec.name == "pipeline_validator":
+                orig_exec = spec.loader.exec_module
+                def exec_and_stub(m):
+                    orig_exec(m)
+                    m.validate = lambda *a, **k: {
+                        "valid": False, "stage": "deliver",
+                        "errors": ["no stage record for deliver in this context"],
+                        "warnings": [], "errored": [], "check_results": [],
+                        "checks_passed": 0, "checks_total": 1,
+                    }
+                spec.loader.exec_module = exec_and_stub
+            return mod
+        monkeypatch.setattr(_ilu, "module_from_spec", env_module)
+
+        cli.cmd_run_update(self._args(), reg)
+        data = _read_run(rf)
+        assert data["status"] == "completed", \
+            f"environmental 'no stage record' must stay filtered (no block), got {data['status']}"
