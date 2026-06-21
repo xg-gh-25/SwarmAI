@@ -588,3 +588,31 @@ class TestCompletionFailsClosedOnValidatorCrash:
         data = _read_run(rf)
         assert data["status"] != "completed", \
             f"validator content errors must block, got {data['status']}"
+
+    def test_completion_blocked_on_validator_import_failure(self, workspace, capsys, monkeypatch):
+        """AC2: outer except — validator IMPORT/load failure → completion BLOCKED.
+        Covers the outer `except exc` path (was untested; spec review gap)."""
+        cli, reg, rf = self._setup(workspace)
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        # Make the validator module fail to LOAD (exec_module raises) → outer except.
+        import importlib.util as _ilu
+        real_from_spec = _ilu.module_from_spec
+
+        def fail_load(spec):
+            mod = real_from_spec(spec)
+            if spec.name == "pipeline_validator":
+                def boom_exec(m):
+                    raise ImportError("simulated validator import failure")
+                spec.loader.exec_module = boom_exec
+            return mod
+        monkeypatch.setattr(_ilu, "module_from_spec", fail_load)
+
+        cli.cmd_run_update(self._args(), reg)
+        out = capsys.readouterr()
+        data = _read_run(rf)
+        assert data["status"] != "completed", \
+            f"validator import failure must block completion, got {data['status']}"
+        combined = out.out + out.err
+        assert "validator gate ERRORED" in combined or "could not be verified" in combined.lower() \
+            or "completion cannot be verified" in combined.lower(), \
+            f"outer crash must be surfaced as blocking: {combined[:400]}"
