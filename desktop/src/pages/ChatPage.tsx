@@ -1723,7 +1723,14 @@ export default function ChatPage() {
       }
     }
 
-    const assistantMessageId = (Date.now() + 1).toString();
+    // Assistant placeholder id shares the turn's clientId with an "-asst" suffix
+    // so MessageStore._applyMerge can correlate it to the persisted DB assistant
+    // row (whose metadata.client_id is `{clientId}-asst`). A numeric id (the old
+    // Date.now()+1) never started with "local-" → never correlated → empty bubble
+    // stayed and the stream never finalized (P4, run_af36e709). The "-asst" suffix
+    // keeps it distinct from the user placeholder (id === clientId) so each row
+    // maps to its own placeholder.
+    const assistantMessageId = `${clientId}-asst`;
     const assistantPlaceholder: Message = { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() };
 
     // Tab registration — normally already done at the top of the send path

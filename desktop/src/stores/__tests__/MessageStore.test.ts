@@ -618,6 +618,79 @@ describe('MessageStore — recovery uses replace (no duplicated frozen partial)'
 
 // ─── ClientId Dedup (AC4/AC5) ───
 
+describe('MessageStore assistant clientId correlation (P4 streaming-never-finalizes)', () => {
+  // Incident (run_af36e709): the assistant placeholder id was numeric
+  // (Date.now()+1), so it never started with "local-" and could not be
+  // correlated to its persisted DB row → empty bubble stayed, stream never
+  // finalized. Fix: assistant placeholder id = `local-{clientId}-asst`, and the
+  // assistant DB row carries metadata.client_id = `{clientId}-asst` (distinct
+  // from the user row's `{clientId}` so each placeholder maps to its OWN row).
+
+  it('correlates assistant placeholder to DB row via -asst client_id (no orphan, no dup)', () => {
+    const store = new MessageStore();
+    const cid = 'local-1718700000-abc123';
+
+    // Optimistic: user message (local-{cid}) + EMPTY assistant placeholder
+    // (local-{cid}-asst). This is exactly what ChatPage inserts on send.
+    store.replace([
+      makeMsg(cid, 'user', 'Hello'),
+      { id: `${cid}-asst`, role: 'assistant', content: [], timestamp: new Date().toISOString() },
+    ]);
+    expect(store.messages).toHaveLength(2);
+
+    // Backend persisted BOTH rows with their own correlation keys.
+    const dbMessages: ChatMessage[] = [
+      {
+        id: 'uuid-user-001', sessionId: 'sess-1', role: 'user',
+        content: [{ type: 'text', text: 'Hello' }] as any,
+        createdAt: new Date().toISOString(),
+        metadata: { client_id: cid },
+      },
+      {
+        id: 'uuid-asst-001', sessionId: 'sess-1', role: 'assistant',
+        content: [{ type: 'text', text: 'Hi there!' }] as any,
+        createdAt: new Date().toISOString(),
+        metadata: { client_id: `${cid}-asst` },
+      },
+    ];
+
+    store.reconcile(dbMessages);
+
+    // Exactly 2: each placeholder replaced by its OWN DB row. The empty
+    // assistant placeholder is GONE (correlated), the real content rendered.
+    expect(store.messages).toHaveLength(2);
+    expect(store.messages[0].id).toBe('uuid-user-001');
+    expect(store.messages[1].id).toBe('uuid-asst-001');
+    // The orphan empty placeholder must not survive.
+    expect(store.messages.some(m => m.id === `${cid}-asst`)).toBe(false);
+    // Real assistant content is present.
+    const asst = store.messages[1];
+    expect((asst.content[0] as any).text).toBe('Hi there!');
+    store.destroy();
+  });
+
+  it('distinct -asst key prevents the assistant row matching the USER placeholder', () => {
+    // Regression guard: if the assistant DB row carried the bare clientId
+    // (not -asst), it would match the user placeholder's map entry and the
+    // assistant placeholder would survive into Pass 2 = duplicate bubble.
+    const store = new MessageStore();
+    const cid = 'local-42-xy';
+    store.replace([
+      makeMsg(cid, 'user', 'Q'),
+      { id: `${cid}-asst`, role: 'assistant', content: [], timestamp: new Date().toISOString() },
+    ]);
+    const dbMessages: ChatMessage[] = [
+      { id: 'u1', sessionId: 'sess-1', role: 'user', content: [{ type: 'text', text: 'Q' }] as any, createdAt: new Date().toISOString(), metadata: { client_id: cid } },
+      { id: 'a1', sessionId: 'sess-1', role: 'assistant', content: [{ type: 'text', text: 'A' }] as any, createdAt: new Date().toISOString(), metadata: { client_id: `${cid}-asst` } },
+    ];
+    store.reconcile(dbMessages);
+    // No duplicate: exactly 2, no leftover -asst placeholder.
+    expect(store.messages).toHaveLength(2);
+    expect(store.messages.filter(m => m.role === 'assistant')).toHaveLength(1);
+    store.destroy();
+  });
+});
+
 describe('MessageStore clientId dedup', () => {
   it('reconcile deduplicates optimistic message via metadata.client_id', () => {
     const store = new MessageStore();

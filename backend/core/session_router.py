@@ -1605,13 +1605,16 @@ class SessionRouter:
                 config=self._config,
             ):
                 # Persist assistant content blocks immediately — crash-safe.
-                # Pass the turn's client_id so the persisted assistant row
-                # carries the correlation key the frontend placeholder shares
-                # (local-{client_id}-asst) — see _persist_assistant_blocks.
+                # The assistant row's correlation key is the turn client_id with
+                # an "-asst" suffix, matching the frontend's assistant placeholder
+                # id (local-{client_id}-asst). The suffix is REQUIRED: the user
+                # row already carries the bare client_id, so a bare key here would
+                # collide with the user placeholder in MessageStore._applyMerge,
+                # leaving the assistant placeholder unmatched → duplicate bubble.
                 if event.get("type") == "assistant" and event.get("content"):
                     await self._persist_assistant_blocks(
                         session_id, event["content"], event.get("model"),
-                        client_id=client_id,
+                        client_id=f"{client_id}-asst" if client_id else None,
                     )
 
                 # Echo client_id in result event for frontend dedup (AC2)
