@@ -507,6 +507,14 @@ class SessionRouter:
 
     QUEUE_TIMEOUT: float = 300.0  # 5 min — channel tasks can be complex
     EVICTION_GRACE_SECONDS: int = 300  # 5 min — protect recently-active sessions
+    # Max time a queued waker sleeps before re-evaluating, even if no _slot_available
+    # wake arrives. Bounds two hazards exposed once the wake path became
+    # grace-respecting (force=False): (1) a lost wakeup on the shared _slot_available
+    # Event (a peer waker's clear() can swallow a set()), and (2) the case where a
+    # within-grace idle becomes STALE while the waker sleeps — without re-polling it
+    # would wait the full QUEUE_TIMEOUT instead of evicting the now-stale unit.
+    # Re-polling turns "stall up to 300s" into "re-check every WAKE_REPOLL_SECONDS".
+    WAKE_REPOLL_SECONDS: float = 5.0
 
     def __init__(
         self,
@@ -905,11 +913,21 @@ class SessionRouter:
 
             try:
                 self._slot_available.clear()
+                # Cap the wait at WAKE_REPOLL_SECONDS so a lost wakeup (shared
+                # Event clear/set race) or a within-grace idle that ages into
+                # stale does not leave the waker asleep until the full deadline.
+                # On repoll timeout we loop and re-evaluate the slot/evict state
+                # rather than giving up — only the OUTER deadline (remaining<=0)
+                # breaks to the force=True last resort.
                 await asyncio.wait_for(
-                    self._slot_available.wait(), timeout=remaining,
+                    self._slot_available.wait(),
+                    timeout=min(remaining, self.WAKE_REPOLL_SECONDS),
                 )
             except asyncio.TimeoutError:
-                break  # deadline exceeded
+                # Inner repoll elapsed but outer deadline may remain — loop back
+                # to re-check. The top-of-loop `remaining <= 0` guard handles the
+                # true deadline; this except no longer means "give up".
+                continue
 
             # Re-check under lock after wake. Use force=FALSE here: a wake fires
             # whenever ANY session goes idle (_on_unit_state_change sets

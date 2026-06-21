@@ -178,6 +178,55 @@ class TestWakeGraceProtection:
         assert result in ("ready", "queued")
 
     @pytest.mark.asyncio
+    async def test_waker_makes_progress_at_timeout_not_killed_on_wake(self, router):
+        """AC3+AC5 (combined, adversarial-driven) — In the within-grace-churn
+        case the waker must NOT kill on wake but MUST still get a slot via the
+        force=True last-resort. Proves both 'protected during grace' AND
+        'progress at timeout' in one path, and that the bounded re-poll
+        (WAKE_REPOLL_SECONDS) does not cause an infinite stall.
+        """
+        user_tab = _make_unit("user-tab", SessionState.IDLE,
+                             idle_seconds=0, rss_bytes=1_500_000_000)
+        waker = _make_unit("waker", SessionState.COLD, idle_seconds=0)
+        router._units = {"user-tab": user_tab, "waker": waker}
+        router.QUEUE_TIMEOUT = 0.3
+        router.WAKE_REPOLL_SECONDS = 0.05  # force several re-poll cycles
+
+        mock_budget = MagicMock()
+        mock_budget.can_spawn = False
+        mock_budget.reason = "all_slots_occupied"
+        mock_budget.available_mb = 1000
+        mock_budget.estimated_cost_mb = 1500
+        mock_budget.headroom_mb = 500
+
+        mock_resource = MagicMock()
+        mock_resource.compute_max_tabs.return_value = 4
+        mock_resource.spawn_budget.return_value = mock_budget
+        mock_resource.invalidate_cache = MagicMock()
+
+        with patch("core.resource_monitor.resource_monitor", mock_resource):
+            with patch.object(type(router), "_chat_alive_count",
+                              new_callable=lambda: property(lambda self: 3)):
+                with patch.object(type(router), "alive_count",
+                                  new_callable=lambda: property(lambda self: 3)):
+                    # Fire several spurious wakes within grace — each must return
+                    # False (no kill) and re-poll, never spinning forever.
+                    async def _spurious_wakes():
+                        for _ in range(3):
+                            await asyncio.sleep(0.04)
+                            router._slot_available.set()
+                    asyncio.get_event_loop().call_soon(
+                        lambda: asyncio.ensure_future(_spurious_wakes())
+                    )
+                    result = await router._acquire_chat_slot(waker)
+
+        # The waker eventually progressed (timeout last-resort force-evicted).
+        assert result in ("ready", "queued")
+        # And the kill happened via the last-resort (force=True), proving no
+        # infinite stall and that within-grace churn does not block forever.
+        user_tab.kill.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_stale_idle_evicted_on_wake_without_timeout(self, router):
         """AC5 — A waker gets a slot promptly when a STALE (>grace) idle exists:
         the wake-path force=False eviction still evicts stale units (they pass
