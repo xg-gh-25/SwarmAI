@@ -1001,10 +1001,24 @@ class TestPipelineAutoResume:
         """After 3 attempts, shows informational warning, not directive."""
         self._make_run(tmp_path, resume_attempts=3)
         result = _get_paused_pipeline_highlights(tmp_path)
-        assert len(result) == 1
-        assert "AUTO-RESUME" not in result[0]
-        assert "exhausted" in result[0]
-        assert "Manual intervention" in result[0]
+        # Filter by substring (robust) rather than positional [0] — the exhausted
+        # summary is appended after any directives.
+        summaries = [ln for ln in result if "Manual intervention" in ln]
+        assert len(summaries) == 1
+        assert "AUTO-RESUME" not in summaries[0]
+        assert "exhausted" in summaries[0]
+
+    def test_exhausted_id_list_bounded(self, tmp_path):
+        """Summary caps displayed ids at 10 (+N more) but count stays exact."""
+        for i in range(14):
+            self._make_run(tmp_path, project=f"Ex{i:02d}", run_id=f"run_ex{i:02d}",
+                           resume_attempts=3)
+        result = _get_paused_pipeline_highlights(tmp_path)
+        summary = next(ln for ln in result if "Manual intervention" in ln)
+        assert "14 pipeline" in summary  # exact count, regardless of cap
+        assert "+4 more" in summary  # 14 - 10 cap
+        # Exactly 10 ids rendered (iterdir order is arbitrary — count, don't name)
+        assert summary.count("run_ex") == 10
 
     def test_running_orphan_transitions_to_paused(self, tmp_path):
         """A 'running' pipeline in a new session gets marked 'paused' first."""
@@ -1086,3 +1100,44 @@ class TestPipelineAutoResume:
             self._make_run(tmp_path, project=f"Proj{i}", run_id=f"run_{i}")
         result = _get_paused_pipeline_highlights(tmp_path, max_items=2)
         assert len(result) == 2
+
+    def test_exhausted_not_dropped_by_max_items(self, tmp_path):
+        """All exhausted runs surface in ONE summary line, never truncated by max_items.
+
+        Regression: directives and exhausted runs shared the [:max_items] cap,
+        so exhausted stale runs vanished from the briefing (14 existed, 3 shown).
+        """
+        for i in range(5):  # 5 > default max_items=3
+            self._make_run(
+                tmp_path, project=f"Ex{i}", run_id=f"run_ex{i}", resume_attempts=3
+            )
+        result = _get_paused_pipeline_highlights(tmp_path)
+        # No directives → exactly one collapsed summary line
+        assert len(result) == 1
+        summary = result[0]
+        assert "exhausted" in summary
+        assert "Manual intervention" in summary
+        assert "5 pipeline" in summary  # count is reported
+        # Every exhausted run id is listed — none silently dropped
+        for i in range(5):
+            assert f"run_ex{i}" in summary
+
+    def test_exhausted_summary_coexists_with_capped_directives(self, tmp_path):
+        """Directives stay capped at max_items AND exhausted summary still appears.
+
+        Proves the two concerns are decoupled: rate-limiting directives (STEERING #1)
+        does not cause exhausted stale to be dropped.
+        """
+        for i in range(4):  # 4 directives > max_items=2
+            self._make_run(tmp_path, project=f"Dir{i}", run_id=f"run_dir{i}",
+                           resume_attempts=0)
+        for i in range(3):  # 3 exhausted
+            self._make_run(tmp_path, project=f"Ex{i}", run_id=f"run_ex{i}",
+                           resume_attempts=3)
+        result = _get_paused_pipeline_highlights(tmp_path, max_items=2)
+        directives = [ln for ln in result if "AUTO-RESUME" in ln]
+        summaries = [ln for ln in result if "Manual intervention" in ln]
+        assert len(directives) == 2  # directives capped
+        assert len(summaries) == 1  # one collapsed summary
+        for i in range(3):
+            assert f"run_ex{i}" in summaries[0]  # all exhausted listed

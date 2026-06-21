@@ -719,8 +719,13 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
         now = time.time()
         max_age_seconds = 24 * 3600  # Only surface runs from last 24h
 
-        # (priority, mtime, line) — directives sort before informational
-        candidates: list[tuple[int, float, str]] = []
+        # Directives (auto-resume) are rate-limited via [:max_items] (STEERING #1).
+        # Exhausted runs are NOT — they collapse into one summary line so no stale
+        # run is ever silently dropped from the briefing.
+        # candidates: (mtime, line) for directives only.
+        candidates: list[tuple[float, str]] = []
+        # exhausted: (project_name, run_id) — collapsed into one line below.
+        exhausted: list[tuple[str, str]] = []
 
         for project_dir in projects_dir.iterdir():
             if not project_dir.is_dir():
@@ -848,25 +853,35 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
                         f"then invoke `s_autonomous-pipeline` with "
                         f"`--resume --run-id {run_id} --project {project_name}`."
                     )
-                    priority = 0  # Directives first
+                    mtime = run_file.stat().st_mtime
+                    candidates.append((mtime, line))
                 else:
-                    # EXHAUSTED: informational only
-                    reason = run_data.get("checkpoint", {}).get("reason", "")
-                    line = (
-                        f"  - ⚠️ [{project_name}] \"{requirement}\" — "
-                        f"exhausted {_MAX_PIPELINE_RESUME_ATTEMPTS} auto-resume attempts. "
-                        f"Last stage: {resume_stage}"
-                        f"{f' ({reason[:40]})' if reason else ''}. "
-                        f"Manual intervention needed."
-                    )
-                    priority = 1  # Informational after directives
+                    # EXHAUSTED: collapse into one summary line below (NOT capped by
+                    # max_items — every stale run must stay visible).
+                    exhausted.append((project_name, run_id))
 
-                mtime = run_file.stat().st_mtime
-                candidates.append((priority, mtime, line))
+        # Directives: rate-limited (STEERING #1), newest first, capped at max_items.
+        # NOTE: max_items caps ONLY directives by design. The exhausted summary is
+        # always appended (even at max_items=0) — stale runs must never be hidden.
+        candidates.sort(key=lambda x: -x[0])
+        lines = [line for _, line in candidates[:max_items]]
 
-        # Sort: directives first (priority 0), then by freshness (newest first)
-        candidates.sort(key=lambda x: (x[0], -x[1]))
-        lines = [line for _, _, line in candidates[:max_items]]
+        # Exhausted: ONE collapsed summary line. The COUNT is always exact; the id
+        # list is bounded (first N) so the briefing line can't grow unbounded as
+        # stale runs accumulate. Preserves "exhausted"/"Manual intervention"
+        # substrings the briefing reader (and tests) key off.
+        if exhausted:
+            _ID_CAP = 10
+            shown = exhausted[:_ID_CAP]
+            run_refs = ", ".join(f"{rid} [{proj}]" for proj, rid in shown)
+            overflow = len(exhausted) - len(shown)
+            if overflow > 0:
+                run_refs += f", +{overflow} more"
+            lines.append(
+                f"  - ⚠️ {len(exhausted)} pipeline(s) exhausted "
+                f"{_MAX_PIPELINE_RESUME_ATTEMPTS} auto-resume attempts — "
+                f"Manual intervention needed: {run_refs}."
+            )
 
     except Exception as exc:
         logger.debug("Paused pipeline scan failed: %s", exc)
