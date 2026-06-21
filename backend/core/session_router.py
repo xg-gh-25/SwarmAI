@@ -566,11 +566,22 @@ class SessionRouter:
         blocks: list[dict],
         model: str | None,
         label: str = "",
+        client_id: str | None = None,
     ) -> bool:
         """Save accumulated assistant content blocks to DB.
 
         Called from ``finally`` blocks in streaming methods to ensure
         partial content is persisted even on abort or error.
+
+        When ``client_id`` is provided, it is written into the row's
+        ``metadata`` (mirroring the user-row path) so the frontend can
+        correlate the persisted assistant row back to its optimistic
+        placeholder during reconcile (MessageStore._applyMerge keys on the
+        ``local-{client_id}-asst`` placeholder id). Without this key the
+        placeholder can never be matched and the bubble never finalizes
+        (P4 streaming-never-finalizes, run_af36e709). Continuation paths
+        that have no client_id in scope pass None and rely on the H2
+        turn-end reconcile backstop.
 
         The DB layer retries transient errors (SQLITE_BUSY) up to 3 times.
         If all retries fail, logs at ERROR level and returns False so the
@@ -583,6 +594,7 @@ class SessionRouter:
             return True
         from database import db
         try:
+            _metadata = {"client_id": client_id} if client_id else None
             await db.messages.put({
                 "id": str(uuid4()),
                 "session_id": session_id,
@@ -590,6 +602,7 @@ class SessionRouter:
                 "content": blocks,
                 "model": model,
                 "created_at": datetime.now().isoformat(),
+                **({"metadata": _metadata} if _metadata else {}),
             })
             return True
         except Exception as exc:
@@ -1591,10 +1604,14 @@ class SessionRouter:
                 app_session_id=session_id,
                 config=self._config,
             ):
-                # Persist assistant content blocks immediately — crash-safe
+                # Persist assistant content blocks immediately — crash-safe.
+                # Pass the turn's client_id so the persisted assistant row
+                # carries the correlation key the frontend placeholder shares
+                # (local-{client_id}-asst) — see _persist_assistant_blocks.
                 if event.get("type") == "assistant" and event.get("content"):
                     await self._persist_assistant_blocks(
                         session_id, event["content"], event.get("model"),
+                        client_id=client_id,
                     )
 
                 # Echo client_id in result event for frontend dedup (AC2)
