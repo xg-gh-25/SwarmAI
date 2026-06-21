@@ -2930,3 +2930,118 @@ class TestCheckGuardSafety:
         assert result["valid"] is True
         assert result["checks_passed"] == result["checks_total"], \
             f"advisory crash must not desync the metric: {result['checks_passed']}/{result['checks_total']}"
+
+
+class TestRemainingChecksErrored:
+    """run_61413085: the other 10 checks wrapped in _CheckGuard.
+    Each check crash → ERRORED classified by severity (hard blocks, advisory passes)."""
+
+    def _eval_run(self, workspace):
+        artifacts = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts / "runs" / "run_test1"
+        _make_run(runs_dir, stages=[_stage_record("evaluate", status="completed", artifact_id="art_eval")])
+        _make_artifact(artifacts, "run_test1", "art_eval", "evaluation",
+                       {"recommendation": "GO", "scope": "standard", "summary": "x", "acceptance_criteria": ["a"]})
+
+    def test_artifact_exists_crash_blocks(self, workspace, monkeypatch):
+        """Check 2 (hard): crash → ERRORED + blocks."""
+        self._eval_run(workspace)
+        import scripts.pipeline_validator as pv
+        monkeypatch.setattr(pv, "_check_artifact_exists",
+                            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom2")))
+        result = validate("TestProject", "run_test1", "evaluate")
+        assert result["valid"] is False
+        assert "artifact_exists" in result["errored"], result.get("errored")
+
+    def test_artifact_schema_crash_blocks(self, workspace, monkeypatch):
+        """Check 3 (hard): crash → ERRORED + blocks."""
+        self._eval_run(workspace)
+        import scripts.pipeline_validator as pv
+        monkeypatch.setattr(pv, "_check_artifact_schema",
+                            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom3")))
+        result = validate("TestProject", "run_test1", "evaluate")
+        assert result["valid"] is False
+        assert "artifact_schema" in result["errored"], result.get("errored")
+
+    def test_budget_recorded_crash_does_not_block(self, workspace, monkeypatch):
+        """Check 5 (advisory): crash → ERRORED, does NOT block, credits checks_passed."""
+        self._eval_run(workspace)
+        import scripts.pipeline_validator as pv
+        monkeypatch.setattr(pv, "_check_budget_recorded",
+                            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom5")))
+        result = validate("TestProject", "run_test1", "evaluate")
+        assert result["valid"] is True, "advisory crash must not block"
+        assert "budget_recorded" in result["errored"], result.get("errored")
+        assert result["checks_passed"] == result["checks_total"], \
+            f"advisory crash must credit checks_passed: {result['checks_passed']}/{result['checks_total']}"
+
+    def test_decision_logged_crash_does_not_block(self, workspace, monkeypatch):
+        """Check 4 (advisory): crash → ERRORED, does NOT block."""
+        self._eval_run(workspace)
+        import scripts.pipeline_validator as pv
+        monkeypatch.setattr(pv, "_check_decision_logged",
+                            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom4")))
+        result = validate("TestProject", "run_test1", "evaluate")
+        assert result["valid"] is True
+        assert "decision_logged" in result["errored"], result.get("errored")
+        assert result["checks_passed"] == result["checks_total"]
+
+    def test_depth_crash_blocks(self, workspace, monkeypatch):
+        """Check 9 (hard): crash → ERRORED + blocks. Depth runs on build stage."""
+        artifacts = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts / "runs" / "run_test1"
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate", status="completed"),
+            _stage_record("think", status="completed"),
+            _stage_record("plan", status="completed"),
+            _stage_record("build", status="running", artifact_id="art_b"),
+        ])
+        _make_artifact(artifacts, "run_test1", "art_b", "changeset",
+                       {"branch": "x", "commits": ["c"], "files_changed": ["a.py"],
+                        "tdd": {"green_pass": True, "smoke_tests": 1},
+                        "ac_coverage": [{"ac": "A", "impl": "a.py::f", "test": "t.py::t", "verified": True}]})
+        import scripts.pipeline_validator as pv
+        monkeypatch.setattr(pv, "_check_depth",
+                            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom9")))
+        result = validate("TestProject", "run_test1", "build")
+        assert result["valid"] is False
+        assert "depth" in result["errored"], result.get("errored")
+
+    def test_semantic_crash_does_not_block(self, workspace, monkeypatch):
+        """Check 11 (advisory): crash → ERRORED, does NOT block.
+        Check 11 only runs on review/deliver, so use a deliver-stage run."""
+        artifacts = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts / "runs" / "run_test1"
+        _make_run(runs_dir, profile="bugfix", stages=[
+            _stage_record("evaluate", status="completed"),
+            _stage_record("think", status="completed"),
+            _stage_record("plan", status="completed"),
+            _stage_record("build", status="completed"),
+            _stage_record("review", status="completed"),
+            _stage_record("test", status="completed"),
+            _stage_record("deliver", status="running", artifact_id="art_d"),
+        ])
+        _make_artifact(artifacts, "run_test1", "art_d", "delivery",
+                       {"title": "x", "quality": {"tests_pass": True, "regressions": 0, "smoke_pass": True},
+                        "adversarial_review": {"spawned": True, "profile_tier": "bugfix",
+                                               "findings_total": 0, "findings_fixed": 0, "findings_remaining": 0, "findings": []},
+                        "completion_audit": {"all_green": True}, "convergence": {"final_status": "push-ready"},
+                        "push_ready": True})
+        import scripts.pipeline_validator as pv
+        monkeypatch.setattr(pv, "_check_semantic_depth",
+                            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom11")))
+        result = validate("TestProject", "run_test1", "deliver")
+        assert result["valid"] is True, f"advisory crash must not block: {result['errors']}"
+        assert "semantic" in result["errored"], result.get("errored")
+
+    def test_all_checks_wrapped(self):
+        """AC5: every check in validate() is wrapped in _CheckGuard — zero
+        fail-direction asymmetry remains. 14 logical checks: 1,2,3,4,5,6,7,8,
+        9,9b,10,11,12,13 (check 8 = the stage-specific quality gate)."""
+        import pathlib
+        src = pathlib.Path("scripts/pipeline_validator.py").read_text()
+        vstart = src.index("def validate(")
+        vend = src.index("\ndef ", vstart + 10)
+        vbody = src[vstart:vend]
+        count = vbody.count("_CheckGuard(")
+        assert count == 14, f"expected 14 wrapped checks in validate(), found {count}"

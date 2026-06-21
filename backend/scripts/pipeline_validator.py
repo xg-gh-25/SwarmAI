@@ -1531,50 +1531,69 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
                 errors.append(f"Stage order violation: '{stage}' position invalid in profile '{profile}'")
 
     # --- Check 2: Artifact exists ---
-    if _check_artifact_exists(stage, stage_record):
-        checks_passed += 1
-    else:
-        if stage in NO_ARTIFACT_STAGES:
-            checks_passed += 1  # Never required
-        elif stage in ARTIFACT_OPTIONAL_FOR_PROFILES.get(profile or "", set()):
-            # Optional for this profile — warn, don't block
-            warnings.append(
-                f"No artifact for '{stage}' (optional in {profile} profile)"
-            )
+    with _CheckGuard("artifact_exists", SEVERITY_HARD, errors, warnings, check_results) as _g:
+        if _check_artifact_exists(stage, stage_record):
             checks_passed += 1
+            _g.passed()
         else:
-            errors.append(
-                f"No artifact published for '{stage}' — "
-                f"artifact_id is missing or empty in stage record"
-            )
+            if stage in NO_ARTIFACT_STAGES:
+                checks_passed += 1  # Never required
+                _g.passed()
+            elif stage in ARTIFACT_OPTIONAL_FOR_PROFILES.get(profile or "", set()):
+                # Optional for this profile — warn, don't block
+                warnings.append(
+                    f"No artifact for '{stage}' (optional in {profile} profile)"
+                )
+                checks_passed += 1
+                _g.passed()
+            else:
+                _g.failed()
+                errors.append(
+                    f"No artifact published for '{stage}' — "
+                    f"artifact_id is missing or empty in stage record"
+                )
 
     # --- Check 3: Artifact schema ---
-    schema_result = _check_artifact_schema(stage, stage_record, project, run_id)
-    if schema_result["passed"]:
-        checks_passed += 1
-    errors.extend(schema_result.get("errors", []))
-    warnings.extend(schema_result.get("warnings", []))
+    with _CheckGuard("artifact_schema", SEVERITY_HARD, errors, warnings, check_results) as _g:
+        schema_result = _check_artifact_schema(stage, stage_record, project, run_id)
+        if schema_result["passed"]:
+            checks_passed += 1
+            _g.passed()
+        else:
+            _g.failed()
+        errors.extend(schema_result.get("errors", []))
+        warnings.extend(schema_result.get("warnings", []))
 
     # --- Check 4: Decision logged (WARN only — doesn't block) ---
-    if _check_decision_logged(stage, stage_record):
+    with _CheckGuard("decision_logged", SEVERITY_ADVISORY, errors, warnings, check_results) as _g:
+        if _check_decision_logged(stage, stage_record):
+            checks_passed += 1
+            _g.passed()
+        else:
+            checks_passed += 1  # Warnings don't reduce checks_passed
+            _g.passed()
+            if stage not in DECISION_OPTIONAL_STAGES:
+                warnings.append(
+                    f"No decisions classified for '{stage}' — "
+                    f"classify at least one decision (mechanical/taste/judgment)"
+                )
+    if _g.errored_nonblocking:
         checks_passed += 1
-    else:
-        checks_passed += 1  # Warnings don't reduce checks_passed
-        if stage not in DECISION_OPTIONAL_STAGES:
-            warnings.append(
-                f"No decisions classified for '{stage}' — "
-                f"classify at least one decision (mechanical/taste/judgment)"
-            )
 
     # --- Check 5: Budget recorded (WARN only — doesn't block) ---
-    if _check_budget_recorded(stage_record):
+    with _CheckGuard("budget_recorded", SEVERITY_ADVISORY, errors, warnings, check_results) as _g:
+        if _check_budget_recorded(stage_record):
+            checks_passed += 1
+            _g.passed()
+        else:
+            checks_passed += 1  # Warnings don't reduce checks_passed
+            _g.passed()
+            warnings.append(
+                f"token_cost is 0 for '{stage}' — "
+                f"estimate the token cost for budget calibration"
+            )
+    if _g.errored_nonblocking:
         checks_passed += 1
-    else:
-        checks_passed += 1  # Warnings don't reduce checks_passed
-        warnings.append(
-            f"token_cost is 0 for '{stage}' — "
-            f"estimate the token cost for budget calibration"
-        )
 
     # --- Check 6: Profile respected ---
     with _CheckGuard("profile_respected", SEVERITY_HARD, errors, warnings, check_results) as _g:
@@ -1628,587 +1647,617 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
         # checks_passed == checks_total holds on a valid run (Correctness LOW-8).
         checks_passed += 1
 
-    # --- Check 8: Smoke tests executed (WARN, build stage only) ---
-    # When build touches >1 file, smoke tests must exercise new code paths
-    # with real objects (not mocks) to catch AttributeError/NameError.
-    # This check prevented 2 HIGH findings in the RecallEngine activation
-    # where MagicMock masked a missing attribute on SessionUnit.
-    if stage == "build":
-        smoke_ok = True
-        # Use pre-loaded artifact_data (F1/F2 fix — don't re-load)
-        if artifact_data:
-            tdd = artifact_data.get("tdd", {})
-            files_changed = artifact_data.get("files_changed", [])
-            code_files = [f for f in files_changed
-                          if any(f.endswith(ext) for ext in _CODE_EXTS)]
-            smoke_count = tdd.get("smoke_tests", 0) if isinstance(tdd, dict) else 0
-            if len(code_files) > 1 and smoke_count == 0:
-                smoke_ok = False
-                errors.append(
-                    f"SMOKE step skipped: build touched {len(code_files)} code files "
-                    f"but smoke_tests=0 — runtime crashes (AttributeError, NameError) "
-                    f"may be hidden by mocks. Run smoke tests with real objects "
-                    f"before advancing to REVIEW."
-                )
-        if smoke_ok:
-            checks_passed += 1
-
-        # Check 8f: AC Coverage Matrix — every PLAN AC must have impl+test in BUILD
-        checks_total += 1
-        ac_ok = True
-        if artifact_data:
-            ac_coverage = artifact_data.get("ac_coverage", [])
-            files_changed = artifact_data.get("files_changed", [])
-
-            # Structural: ac_coverage must be a non-empty list
-            if not isinstance(ac_coverage, list) or len(ac_coverage) == 0:
-                ac_ok = False
-                errors.append(
-                    "BUILD ac_coverage missing or empty: must map every PLAN acceptance "
-                    "criterion to its implementation file and test file. Publish ac_coverage "
-                    "as [{ac, impl, test, verified}] before advancing to REVIEW."
-                )
-            else:
-                # Validate each entry has required fields
-                for i, entry in enumerate(ac_coverage):
-                    if not isinstance(entry, dict):
-                        ac_ok = False
-                        errors.append(f"ac_coverage[{i}] must be a dict, got {type(entry).__name__}")
-                        continue
-                    ac_name = entry.get("ac", "")
-                    impl = entry.get("impl", "")
-                    test = entry.get("test", "")
-                    verified = entry.get("verified")
-
-                    if not ac_name:
-                        ac_ok = False
-                        errors.append(f"ac_coverage[{i}] missing 'ac' field (criterion text)")
-                    if not impl:
-                        ac_ok = False
-                        errors.append(
-                            f"ac_coverage[{i}] ('{ac_name[:50]}') missing 'impl' — "
-                            f"must reference implementation file::function"
-                        )
-                    if not test:
-                        ac_ok = False
-                        errors.append(
-                            f"ac_coverage[{i}] ('{ac_name[:50]}') missing 'test' — "
-                            f"must reference test file::test_function"
-                        )
-                    if verified is not True:
-                        ac_ok = False
-                        errors.append(
-                            f"ac_coverage[{i}] ('{ac_name[:50]}') not verified — "
-                            f"'verified' must be boolean true (test must pass before publish)"
-                        )
-
-                    # Cross-check impl file against files_changed (anti-fabrication)
-                    if impl and files_changed:
-                        impl_file = impl.split("::")[0].strip()
-                        if impl_file and not any(
-                            impl_file in fc or fc.endswith(impl_file)
-                            for fc in files_changed
-                        ):
-                            warnings.append(
-                                f"ac_coverage[{i}] impl '{impl_file}' not found in "
-                                f"files_changed — verify the reference is correct."
-                            )
-
-                # Cross-reference: load PLAN artifact ACs and check coverage
-                plan_stage = next(
-                    (s for s in stages_list if s.get("stage", s.get("name")) == "plan"),
-                    None,
-                )
-                if plan_stage and plan_stage.get("artifact_id"):
-                    plan_data = _load_artifact_data(project, run_id, plan_stage["artifact_id"])
-                    if plan_data:
-                        plan_acs = plan_data.get("acceptance_criteria", [])
-                        if plan_acs:
-                            # Build lookup: support plan_ac_ref (explicit), AC ID
-                            # (extracted prefix if unique), and text matching (substring fallback)
-                            covered_refs = {
-                                entry.get("plan_ac_ref", "").strip()
-                                for entry in ac_coverage if entry.get("plan_ac_ref")
-                            }
-                            # Extract AC IDs from BUILD ac_coverage "ac" field text
-                            covered_ac_ids = set()
-                            for entry in ac_coverage:
-                                entry_ac = entry.get("ac", "").strip()
-                                m = re.match(r"^(AC\d+)", entry_ac)
-                                if m:
-                                    covered_ac_ids.add(m.group(1))
-                            covered_texts = {entry.get("ac", "").strip() for entry in ac_coverage}
-
-                            # Detect duplicate AC IDs in PLAN (AC ID match unsafe if dupes)
-                            plan_id_counts: dict[str, int] = {}
-                            for p in plan_acs:
-                                p_str = p.strip() if isinstance(p, str) else str(p).strip()
-                                m = re.match(r"^(AC\d+)", p_str)
-                                if m:
-                                    plan_id_counts[m.group(1)] = plan_id_counts.get(m.group(1), 0) + 1
-                            # AC IDs that appear exactly once in PLAN (safe for ID-based match)
-                            unique_plan_ids = {k for k, v in plan_id_counts.items() if v == 1}
-
-                            for i, pac in enumerate(plan_acs):
-                                pac_str = pac.strip() if isinstance(pac, str) else str(pac).strip()
-
-                                # Strategy 1: identifier match (AC1, AC2, etc.)
-                                # Extract "ACN:" prefix from plan AC
-                                ac_id_match = re.match(r"^(AC\d+)", pac_str)
-                                ac_id = ac_id_match.group(1) if ac_id_match else None
-
-                                matched = False
-                                # Check by plan_ac_ref first (preferred, unambiguous)
-                                if ac_id and ac_id in covered_refs:
-                                    matched = True
-                                # Check by extracted AC ID — only if ID is unique in PLAN
-                                # (duplicate IDs like "AC1: X" and "AC1: Y" require text match)
-                                if not matched and ac_id and ac_id in unique_plan_ids and ac_id in covered_ac_ids:
-                                    matched = True
-                                # Fallback: text matching (exact, or bidirectional substring)
-                                if not matched:
-                                    matched = any(
-                                        pac_str == cac or pac_str in cac or cac in pac_str
-                                        for cac in covered_texts
-                                    )
-
-                                if not matched:
-                                    ac_ok = False
-                                    errors.append(
-                                        f"AC not covered in BUILD: '{pac_str[:80]}' — "
-                                        f"appears in PLAN but has no ac_coverage entry. "
-                                        f"Every PLAN AC must be implemented and tested. "
-                                        f"Tip: add 'plan_ac_ref': '{ac_id or f'AC{i+1}'}' "
-                                        f"to the coverage entry for unambiguous matching."
-                                    )
-                            # F7: Reverse check — warn on scope creep
-                            # Pre-extract plan AC identifiers for efficient lookup
-                            plan_ac_ids = set()
-                            plan_ac_texts = set()
-                            for p in plan_acs:
-                                p_str = p.strip() if isinstance(p, str) else str(p).strip()
-                                plan_ac_texts.add(p_str)
-                                m = re.match(r"^(AC\d+)", p_str)
-                                if m:
-                                    plan_ac_ids.add(m.group(1))
-
-                            for entry in ac_coverage:
-                                entry_ac = entry.get("ac", "").strip()
-                                entry_ref = entry.get("plan_ac_ref", "").strip()
-                                reverse_matched = False
-                                # Match by plan_ac_ref identifier
-                                if entry_ref and entry_ref in plan_ac_ids:
-                                    reverse_matched = True
-                                # Match by extracted AC ID from BUILD entry text
-                                if not reverse_matched:
-                                    entry_id_match = re.match(r"^(AC\d+)", entry_ac)
-                                    if entry_id_match and entry_id_match.group(1) in plan_ac_ids:
-                                        reverse_matched = True
-                                # Fallback: bidirectional text matching
-                                if not reverse_matched:
-                                    reverse_matched = any(
-                                        p in entry_ac or entry_ac in p
-                                        for p in plan_ac_texts
-                                    )
-                                if not reverse_matched and entry_ac:
-                                    warnings.append(
-                                        f"Scope creep: ac_coverage entry '{entry_ac[:60]}' "
-                                        f"has no matching PLAN AC. BUILD may have added "
-                                        f"scope beyond what was planned."
-                                    )
-                    else:
-                        # Plan artifact exists but couldn't be loaded
-                        warnings.append(
-                            "Could not load PLAN artifact for AC cross-reference — "
-                            "structural checks passed but completeness not verified."
-                        )
-        else:
-            # artifact_data is None but artifact_id exists — corrupt/missing file
-            if _art_id:
-                ac_ok = False
-                errors.append(
-                    "BUILD artifact data could not be loaded — ac_coverage check failed. "
-                    "Verify the artifact file exists and contains valid JSON."
-                )
-        if ac_ok:
-            checks_passed += 1
-    elif stage == "review":
-        # Check 8b: Integration trace must be present in review artifact
-        # Use pre-loaded artifact_data (F1/F2 fix)
-        trace_ok = True
-        if artifact_data:
-            trace = artifact_data.get("integration_trace", {})
-            checked = trace.get("checked", 0) if isinstance(trace, dict) else 0
-            if checked == 0:
-                trace_ok = False
-                errors.append(
-                    "Integration trace missing: review must include "
-                    "'integration_trace' with checked > 0. Verify every new "
-                    "public symbol has a production caller, and every removed "
-                    "call site doesn't orphan old code."
-                )
-        if trace_ok:
-            checks_passed += 1
-
-        # Check 8c: UX review when frontend files are in the changeset (WARN only)
-        _FRONTEND_EXTS = (".tsx", ".jsx", ".css", ".html", ".svelte", ".vue")
-        has_frontend = False
-        build_data = None  # PE-1 fix: initialize before conditional assignment
-        # Look for frontend files in the build stage's changeset artifact
-        build_stage = next(
-            (s for s in stages_list if s.get("stage", s.get("name")) == "build"),
-            None,
-        )
-        if build_stage and build_stage.get("artifact_id"):
-            build_data = _load_artifact_data(project, run_id, build_stage["artifact_id"])
-            if build_data:
-                has_frontend = any(
-                    any(f.endswith(ext) for ext in _FRONTEND_EXTS)
-                    for f in build_data.get("files_changed", [])
-                )
-        if has_frontend and artifact_data:
-            ux = artifact_data.get("ux_review", {})
-            triggered = ux.get("triggered", False) if isinstance(ux, dict) else False
-            if not triggered:
-                warnings.append(
-                    "UX review not triggered: changeset includes frontend files "
-                    "but review artifact has no 'ux_review' section. Run the 5-point "
-                    "UX checklist (discoverability, feedback, behavioral contracts, "
-                    "escape/click-outside, scroll tracking)."
-                )
-        # Check 8d: Review completeness — large changesets with zero findings are suspicious
-        # Reuse build_data from 8c (F2 fix — don't re-load)
-        if build_data:
-                tdd = build_data.get("tdd", {})
-                tests_gen = tdd.get("tests_generated", 0) if isinstance(tdd, dict) else 0
-                code_files = [
-                    f for f in build_data.get("files_changed", [])
-                    if any(f.endswith(ext) for ext in _CODE_EXTS)
-                ]
-                is_large_changeset = len(code_files) > 3 or tests_gen > 10
-
-                if is_large_changeset and artifact_data:
-                        findings_count = artifact_data.get("findings_count", -1)
-                        if findings_count == -1:
-                            # No findings_count field at all — review artifact is incomplete
-                            errors.append(
-                                f"Review completeness: build touched {len(code_files)} code files "
-                                f"with {tests_gen} tests, but review artifact has no "
-                                f"'findings_count' field. A real review must report findings "
-                                f"(even if 0) with justification."
-                            )
-                        elif findings_count == 0:
-                            # 0 findings on a large changeset — suspicious but not blocking
-                            warnings.append(
-                                f"Review reported 0 findings on {len(code_files)} code files / "
-                                f"{tests_gen} tests. Verify this is genuine — large changesets "
-                                f"with zero findings often indicate a skipped review."
-                            )
-                elif is_large_changeset and not _art_id:  # PE-2 fix: was `artifact_id` (NameError)
+    # --- Check 8: Quality gate (stage-specific: build smoke/ac_coverage,
+    #     review integration/ux/findings/litmus, test layers) — HARD ---
+    # Wrapped so a crash in any stage-branch becomes ERRORED+blocks (was the
+    # largest unwrapped region; run_61413085 closes the asymmetry).
+    with _CheckGuard("quality_gate", SEVERITY_HARD, errors, warnings, check_results) as _g8:
+        _g8.passed()  # records PASSED unless a branch crashes (ERRORED) — content
+        #            fail/pass is already tracked via errors[]/checks_passed inside.
+        if stage == "build":
+            smoke_ok = True
+            # Use pre-loaded artifact_data (F1/F2 fix — don't re-load)
+            if artifact_data:
+                tdd = artifact_data.get("tdd", {})
+                files_changed = artifact_data.get("files_changed", [])
+                code_files = [f for f in files_changed
+                              if any(f.endswith(ext) for ext in _CODE_EXTS)]
+                smoke_count = tdd.get("smoke_tests", 0) if isinstance(tdd, dict) else 0
+                if len(code_files) > 1 and smoke_count == 0:
+                    smoke_ok = False
                     errors.append(
-                        f"Review completeness: build touched {len(code_files)} code files "
-                        f"but REVIEW stage has no artifact_id. The review was skipped entirely."
+                        f"SMOKE step skipped: build touched {len(code_files)} code files "
+                        f"but smoke_tests=0 — runtime crashes (AttributeError, NameError) "
+                        f"may be hidden by mocks. Run smoke tests with real objects "
+                        f"before advancing to REVIEW."
                     )
+            if smoke_ok:
+                checks_passed += 1
 
-        # Check 8e: Litmus gate must be present, structurally valid, and semantically consistent
-        checks_total += 1
-        litmus_ok = True
-        if artifact_data:
-            litmus = artifact_data.get("litmus_gate", {})
-            if not isinstance(litmus, dict):
-                litmus_ok = False
-                errors.append(
-                    "Litmus gate missing: review artifact must include 'litmus_gate' with "
-                    "verdict (PASS/BORDERLINE/FAIL), hf_checked (4 booleans), and evidence."
-                )
-            else:
-                verdict = litmus.get("verdict", "")
-                hf_checked = litmus.get("hf_checked", [])
-                evidence = litmus.get("evidence", "")
-                weak_areas = litmus.get("weak_areas", [])
+            # Check 8f: AC Coverage Matrix — every PLAN AC must have impl+test in BUILD
+            checks_total += 1
+            ac_ok = True
+            if artifact_data:
+                ac_coverage = artifact_data.get("ac_coverage", [])
+                files_changed = artifact_data.get("files_changed", [])
 
-                # --- Structural checks ---
-                if verdict not in ("PASS", "BORDERLINE", "FAIL"):
-                    litmus_ok = False
+                # Structural: ac_coverage must be a non-empty list
+                if not isinstance(ac_coverage, list) or len(ac_coverage) == 0:
+                    ac_ok = False
                     errors.append(
-                        f"Litmus gate invalid verdict: '{verdict}'. Must be PASS, BORDERLINE, or FAIL."
+                        "BUILD ac_coverage missing or empty: must map every PLAN acceptance "
+                        "criterion to its implementation file and test file. Publish ac_coverage "
+                        "as [{ac, impl, test, verified}] before advancing to REVIEW."
                     )
-                if not isinstance(hf_checked, list) or len(hf_checked) != 4:
-                    litmus_ok = False
-                    errors.append(
-                        f"Litmus gate hf_checked must be a list of exactly 4 booleans "
-                        f"(HF1-HF4). Got: {hf_checked!r}"
-                    )
-                elif not all(isinstance(x, bool) for x in hf_checked):
-                    litmus_ok = False
-                    errors.append(
-                        f"Litmus gate hf_checked elements must all be booleans. "
-                        f"Got: {hf_checked!r}"
-                    )
-                if not evidence or len(str(evidence)) < 20:
-                    litmus_ok = False
-                    errors.append(
-                        "Litmus gate evidence too short: must provide per-criterion "
-                        "reasoning (>20 chars). Empty verdicts are not auditable."
-                    )
-
-                # --- Semantic consistency checks ---
-                # FAIL verdict must not coexist with approved=true
-                if verdict == "FAIL" and artifact_data.get("approved", False):
-                    litmus_ok = False
-                    errors.append(
-                        "Litmus FAIL verdict contradicts approved=true. Cannot approve "
-                        "review when litmus gate failed — must return to BUILD for rework."
-                    )
-                # FAIL verdict must have at least one hf_checked=False
-                if verdict == "FAIL" and isinstance(hf_checked, list) and len(hf_checked) == 4:
-                    if all(hf_checked):
-                        litmus_ok = False
-                        errors.append(
-                            "Litmus FAIL verdict but all hf_checked are True — contradiction. "
-                            "A FAIL must identify which hard-failure criterion triggered it."
-                        )
-                # BORDERLINE verdict must have non-empty weak_areas
-                if verdict == "BORDERLINE":
-                    if not isinstance(weak_areas, list) or len(weak_areas) == 0:
-                        litmus_ok = False
-                        errors.append(
-                            "Litmus BORDERLINE verdict requires non-empty 'weak_areas' list "
-                            "for adversarial focus injection. Cannot declare BORDERLINE without "
-                            "identifying which soft signals triggered it."
-                        )
-                # Evidence must reference at least 2 of HF1-HF4 by name (anti-generic)
-                if evidence and verdict in ("PASS", "BORDERLINE", "FAIL"):
-                    hf_refs = sum(1 for tag in ("HF1", "HF2", "HF3", "HF4") if tag in str(evidence))
-                    if hf_refs < 2:
-                        litmus_ok = False
-                        errors.append(
-                            f"Litmus evidence must reference at least 2 of HF1/HF2/HF3/HF4 "
-                            f"by name to demonstrate per-criterion analysis. Found {hf_refs} "
-                            f"references. Generic evidence is not auditable."
-                        )
-        if litmus_ok:
-            checks_passed += 1
-    elif stage == "test":
-        # Check 8g: TEST layers must have ac_driven.run=true for non-trivial profiles
-        checks_total += 1
-        test_layers_ok = True
-        _skip_profiles = ("trivial", "research", "docs")
-        _block_profiles = ("full", "bugfix")  # F11: BLOCK not WARN for quality profiles
-        if artifact_data and profile not in _skip_profiles:
-            layers = artifact_data.get("layers", {})
-            if not isinstance(layers, dict) or not layers:
-                test_layers_ok = False
-                msg = ("TEST artifact missing 'layers' — 3-layer test strategy "
-                       "(ac_driven, dependency_scoped, import_smoke) not evidenced. "
-                       "Run AC-driven tests from BUILD ac_coverage before advancing.")
-                if profile in _block_profiles:
-                    errors.append(msg)
                 else:
-                    warnings.append(msg)
+                    # Validate each entry has required fields
+                    for i, entry in enumerate(ac_coverage):
+                        if not isinstance(entry, dict):
+                            ac_ok = False
+                            errors.append(f"ac_coverage[{i}] must be a dict, got {type(entry).__name__}")
+                            continue
+                        ac_name = entry.get("ac", "")
+                        impl = entry.get("impl", "")
+                        test = entry.get("test", "")
+                        verified = entry.get("verified")
+
+                        if not ac_name:
+                            ac_ok = False
+                            errors.append(f"ac_coverage[{i}] missing 'ac' field (criterion text)")
+                        if not impl:
+                            ac_ok = False
+                            errors.append(
+                                f"ac_coverage[{i}] ('{ac_name[:50]}') missing 'impl' — "
+                                f"must reference implementation file::function"
+                            )
+                        if not test:
+                            ac_ok = False
+                            errors.append(
+                                f"ac_coverage[{i}] ('{ac_name[:50]}') missing 'test' — "
+                                f"must reference test file::test_function"
+                            )
+                        if verified is not True:
+                            ac_ok = False
+                            errors.append(
+                                f"ac_coverage[{i}] ('{ac_name[:50]}') not verified — "
+                                f"'verified' must be boolean true (test must pass before publish)"
+                            )
+
+                        # Cross-check impl file against files_changed (anti-fabrication)
+                        if impl and files_changed:
+                            impl_file = impl.split("::")[0].strip()
+                            if impl_file and not any(
+                                impl_file in fc or fc.endswith(impl_file)
+                                for fc in files_changed
+                            ):
+                                warnings.append(
+                                    f"ac_coverage[{i}] impl '{impl_file}' not found in "
+                                    f"files_changed — verify the reference is correct."
+                                )
+
+                    # Cross-reference: load PLAN artifact ACs and check coverage
+                    plan_stage = next(
+                        (s for s in stages_list if s.get("stage", s.get("name")) == "plan"),
+                        None,
+                    )
+                    if plan_stage and plan_stage.get("artifact_id"):
+                        plan_data = _load_artifact_data(project, run_id, plan_stage["artifact_id"])
+                        if plan_data:
+                            plan_acs = plan_data.get("acceptance_criteria", [])
+                            if plan_acs:
+                                # Build lookup: support plan_ac_ref (explicit), AC ID
+                                # (extracted prefix if unique), and text matching (substring fallback)
+                                covered_refs = {
+                                    entry.get("plan_ac_ref", "").strip()
+                                    for entry in ac_coverage if entry.get("plan_ac_ref")
+                                }
+                                # Extract AC IDs from BUILD ac_coverage "ac" field text
+                                covered_ac_ids = set()
+                                for entry in ac_coverage:
+                                    entry_ac = entry.get("ac", "").strip()
+                                    m = re.match(r"^(AC\d+)", entry_ac)
+                                    if m:
+                                        covered_ac_ids.add(m.group(1))
+                                covered_texts = {entry.get("ac", "").strip() for entry in ac_coverage}
+
+                                # Detect duplicate AC IDs in PLAN (AC ID match unsafe if dupes)
+                                plan_id_counts: dict[str, int] = {}
+                                for p in plan_acs:
+                                    p_str = p.strip() if isinstance(p, str) else str(p).strip()
+                                    m = re.match(r"^(AC\d+)", p_str)
+                                    if m:
+                                        plan_id_counts[m.group(1)] = plan_id_counts.get(m.group(1), 0) + 1
+                                # AC IDs that appear exactly once in PLAN (safe for ID-based match)
+                                unique_plan_ids = {k for k, v in plan_id_counts.items() if v == 1}
+
+                                for i, pac in enumerate(plan_acs):
+                                    pac_str = pac.strip() if isinstance(pac, str) else str(pac).strip()
+
+                                    # Strategy 1: identifier match (AC1, AC2, etc.)
+                                    # Extract "ACN:" prefix from plan AC
+                                    ac_id_match = re.match(r"^(AC\d+)", pac_str)
+                                    ac_id = ac_id_match.group(1) if ac_id_match else None
+
+                                    matched = False
+                                    # Check by plan_ac_ref first (preferred, unambiguous)
+                                    if ac_id and ac_id in covered_refs:
+                                        matched = True
+                                    # Check by extracted AC ID — only if ID is unique in PLAN
+                                    # (duplicate IDs like "AC1: X" and "AC1: Y" require text match)
+                                    if not matched and ac_id and ac_id in unique_plan_ids and ac_id in covered_ac_ids:
+                                        matched = True
+                                    # Fallback: text matching (exact, or bidirectional substring)
+                                    if not matched:
+                                        matched = any(
+                                            pac_str == cac or pac_str in cac or cac in pac_str
+                                            for cac in covered_texts
+                                        )
+
+                                    if not matched:
+                                        ac_ok = False
+                                        errors.append(
+                                            f"AC not covered in BUILD: '{pac_str[:80]}' — "
+                                            f"appears in PLAN but has no ac_coverage entry. "
+                                            f"Every PLAN AC must be implemented and tested. "
+                                            f"Tip: add 'plan_ac_ref': '{ac_id or f'AC{i+1}'}' "
+                                            f"to the coverage entry for unambiguous matching."
+                                        )
+                                # F7: Reverse check — warn on scope creep
+                                # Pre-extract plan AC identifiers for efficient lookup
+                                plan_ac_ids = set()
+                                plan_ac_texts = set()
+                                for p in plan_acs:
+                                    p_str = p.strip() if isinstance(p, str) else str(p).strip()
+                                    plan_ac_texts.add(p_str)
+                                    m = re.match(r"^(AC\d+)", p_str)
+                                    if m:
+                                        plan_ac_ids.add(m.group(1))
+
+                                for entry in ac_coverage:
+                                    entry_ac = entry.get("ac", "").strip()
+                                    entry_ref = entry.get("plan_ac_ref", "").strip()
+                                    reverse_matched = False
+                                    # Match by plan_ac_ref identifier
+                                    if entry_ref and entry_ref in plan_ac_ids:
+                                        reverse_matched = True
+                                    # Match by extracted AC ID from BUILD entry text
+                                    if not reverse_matched:
+                                        entry_id_match = re.match(r"^(AC\d+)", entry_ac)
+                                        if entry_id_match and entry_id_match.group(1) in plan_ac_ids:
+                                            reverse_matched = True
+                                    # Fallback: bidirectional text matching
+                                    if not reverse_matched:
+                                        reverse_matched = any(
+                                            p in entry_ac or entry_ac in p
+                                            for p in plan_ac_texts
+                                        )
+                                    if not reverse_matched and entry_ac:
+                                        warnings.append(
+                                            f"Scope creep: ac_coverage entry '{entry_ac[:60]}' "
+                                            f"has no matching PLAN AC. BUILD may have added "
+                                            f"scope beyond what was planned."
+                                        )
+                        else:
+                            # Plan artifact exists but couldn't be loaded
+                            warnings.append(
+                                "Could not load PLAN artifact for AC cross-reference — "
+                                "structural checks passed but completeness not verified."
+                            )
             else:
-                ac_driven = layers.get("ac_driven", {})
-                if not isinstance(ac_driven, dict) or not ac_driven.get("run"):
+                # artifact_data is None but artifact_id exists — corrupt/missing file
+                if _art_id:
+                    ac_ok = False
+                    errors.append(
+                        "BUILD artifact data could not be loaded — ac_coverage check failed. "
+                        "Verify the artifact file exists and contains valid JSON."
+                    )
+            if ac_ok:
+                checks_passed += 1
+        elif stage == "review":
+            # Check 8b: Integration trace must be present in review artifact
+            # Use pre-loaded artifact_data (F1/F2 fix)
+            trace_ok = True
+            if artifact_data:
+                trace = artifact_data.get("integration_trace", {})
+                checked = trace.get("checked", 0) if isinstance(trace, dict) else 0
+                if checked == 0:
+                    trace_ok = False
+                    errors.append(
+                        "Integration trace missing: review must include "
+                        "'integration_trace' with checked > 0. Verify every new "
+                        "public symbol has a production caller, and every removed "
+                        "call site doesn't orphan old code."
+                    )
+            if trace_ok:
+                checks_passed += 1
+
+            # Check 8c: UX review when frontend files are in the changeset (WARN only)
+            _FRONTEND_EXTS = (".tsx", ".jsx", ".css", ".html", ".svelte", ".vue")
+            has_frontend = False
+            build_data = None  # PE-1 fix: initialize before conditional assignment
+            # Look for frontend files in the build stage's changeset artifact
+            build_stage = next(
+                (s for s in stages_list if s.get("stage", s.get("name")) == "build"),
+                None,
+            )
+            if build_stage and build_stage.get("artifact_id"):
+                build_data = _load_artifact_data(project, run_id, build_stage["artifact_id"])
+                if build_data:
+                    has_frontend = any(
+                        any(f.endswith(ext) for ext in _FRONTEND_EXTS)
+                        for f in build_data.get("files_changed", [])
+                    )
+            if has_frontend and artifact_data:
+                ux = artifact_data.get("ux_review", {})
+                triggered = ux.get("triggered", False) if isinstance(ux, dict) else False
+                if not triggered:
+                    warnings.append(
+                        "UX review not triggered: changeset includes frontend files "
+                        "but review artifact has no 'ux_review' section. Run the 5-point "
+                        "UX checklist (discoverability, feedback, behavioral contracts, "
+                        "escape/click-outside, scroll tracking)."
+                    )
+            # Check 8d: Review completeness — large changesets with zero findings are suspicious
+            # Reuse build_data from 8c (F2 fix — don't re-load)
+            if build_data:
+                    tdd = build_data.get("tdd", {})
+                    tests_gen = tdd.get("tests_generated", 0) if isinstance(tdd, dict) else 0
+                    code_files = [
+                        f for f in build_data.get("files_changed", [])
+                        if any(f.endswith(ext) for ext in _CODE_EXTS)
+                    ]
+                    is_large_changeset = len(code_files) > 3 or tests_gen > 10
+
+                    if is_large_changeset and artifact_data:
+                            findings_count = artifact_data.get("findings_count", -1)
+                            if findings_count == -1:
+                                # No findings_count field at all — review artifact is incomplete
+                                errors.append(
+                                    f"Review completeness: build touched {len(code_files)} code files "
+                                    f"with {tests_gen} tests, but review artifact has no "
+                                    f"'findings_count' field. A real review must report findings "
+                                    f"(even if 0) with justification."
+                                )
+                            elif findings_count == 0:
+                                # 0 findings on a large changeset — suspicious but not blocking
+                                warnings.append(
+                                    f"Review reported 0 findings on {len(code_files)} code files / "
+                                    f"{tests_gen} tests. Verify this is genuine — large changesets "
+                                    f"with zero findings often indicate a skipped review."
+                                )
+                    elif is_large_changeset and not _art_id:  # PE-2 fix: was `artifact_id` (NameError)
+                        errors.append(
+                            f"Review completeness: build touched {len(code_files)} code files "
+                            f"but REVIEW stage has no artifact_id. The review was skipped entirely."
+                        )
+
+            # Check 8e: Litmus gate must be present, structurally valid, and semantically consistent
+            checks_total += 1
+            litmus_ok = True
+            if artifact_data:
+                litmus = artifact_data.get("litmus_gate", {})
+                if not isinstance(litmus, dict):
+                    litmus_ok = False
+                    errors.append(
+                        "Litmus gate missing: review artifact must include 'litmus_gate' with "
+                        "verdict (PASS/BORDERLINE/FAIL), hf_checked (4 booleans), and evidence."
+                    )
+                else:
+                    verdict = litmus.get("verdict", "")
+                    hf_checked = litmus.get("hf_checked", [])
+                    evidence = litmus.get("evidence", "")
+                    weak_areas = litmus.get("weak_areas", [])
+
+                    # --- Structural checks ---
+                    if verdict not in ("PASS", "BORDERLINE", "FAIL"):
+                        litmus_ok = False
+                        errors.append(
+                            f"Litmus gate invalid verdict: '{verdict}'. Must be PASS, BORDERLINE, or FAIL."
+                        )
+                    if not isinstance(hf_checked, list) or len(hf_checked) != 4:
+                        litmus_ok = False
+                        errors.append(
+                            f"Litmus gate hf_checked must be a list of exactly 4 booleans "
+                            f"(HF1-HF4). Got: {hf_checked!r}"
+                        )
+                    elif not all(isinstance(x, bool) for x in hf_checked):
+                        litmus_ok = False
+                        errors.append(
+                            f"Litmus gate hf_checked elements must all be booleans. "
+                            f"Got: {hf_checked!r}"
+                        )
+                    if not evidence or len(str(evidence)) < 20:
+                        litmus_ok = False
+                        errors.append(
+                            "Litmus gate evidence too short: must provide per-criterion "
+                            "reasoning (>20 chars). Empty verdicts are not auditable."
+                        )
+
+                    # --- Semantic consistency checks ---
+                    # FAIL verdict must not coexist with approved=true
+                    if verdict == "FAIL" and artifact_data.get("approved", False):
+                        litmus_ok = False
+                        errors.append(
+                            "Litmus FAIL verdict contradicts approved=true. Cannot approve "
+                            "review when litmus gate failed — must return to BUILD for rework."
+                        )
+                    # FAIL verdict must have at least one hf_checked=False
+                    if verdict == "FAIL" and isinstance(hf_checked, list) and len(hf_checked) == 4:
+                        if all(hf_checked):
+                            litmus_ok = False
+                            errors.append(
+                                "Litmus FAIL verdict but all hf_checked are True — contradiction. "
+                                "A FAIL must identify which hard-failure criterion triggered it."
+                            )
+                    # BORDERLINE verdict must have non-empty weak_areas
+                    if verdict == "BORDERLINE":
+                        if not isinstance(weak_areas, list) or len(weak_areas) == 0:
+                            litmus_ok = False
+                            errors.append(
+                                "Litmus BORDERLINE verdict requires non-empty 'weak_areas' list "
+                                "for adversarial focus injection. Cannot declare BORDERLINE without "
+                                "identifying which soft signals triggered it."
+                            )
+                    # Evidence must reference at least 2 of HF1-HF4 by name (anti-generic)
+                    if evidence and verdict in ("PASS", "BORDERLINE", "FAIL"):
+                        hf_refs = sum(1 for tag in ("HF1", "HF2", "HF3", "HF4") if tag in str(evidence))
+                        if hf_refs < 2:
+                            litmus_ok = False
+                            errors.append(
+                                f"Litmus evidence must reference at least 2 of HF1/HF2/HF3/HF4 "
+                                f"by name to demonstrate per-criterion analysis. Found {hf_refs} "
+                                f"references. Generic evidence is not auditable."
+                            )
+            if litmus_ok:
+                checks_passed += 1
+        elif stage == "test":
+            # Check 8g: TEST layers must have ac_driven.run=true for non-trivial profiles
+            checks_total += 1
+            test_layers_ok = True
+            _skip_profiles = ("trivial", "research", "docs")
+            _block_profiles = ("full", "bugfix")  # F11: BLOCK not WARN for quality profiles
+            if artifact_data and profile not in _skip_profiles:
+                layers = artifact_data.get("layers", {})
+                if not isinstance(layers, dict) or not layers:
                     test_layers_ok = False
-                    msg = ("TEST layers.ac_driven.run is not true — AC-driven verification "
-                           "did not execute. BUILD's ac_coverage claims are unverified.")
+                    msg = ("TEST artifact missing 'layers' — 3-layer test strategy "
+                           "(ac_driven, dependency_scoped, import_smoke) not evidenced. "
+                           "Run AC-driven tests from BUILD ac_coverage before advancing.")
                     if profile in _block_profiles:
                         errors.append(msg)
                     else:
                         warnings.append(msg)
+                else:
+                    ac_driven = layers.get("ac_driven", {})
+                    if not isinstance(ac_driven, dict) or not ac_driven.get("run"):
+                        test_layers_ok = False
+                        msg = ("TEST layers.ac_driven.run is not true — AC-driven verification "
+                               "did not execute. BUILD's ac_coverage claims are unverified.")
+                        if profile in _block_profiles:
+                            errors.append(msg)
+                        else:
+                            warnings.append(msg)
 
-                # F5: Cross-verify ac_driven.pass count against BUILD ac_coverage count
-                if ac_driven.get("run"):
-                    ac_pass_count = ac_driven.get("pass", 0)
-                    # Load BUILD artifact to get ac_coverage count
-                    build_stage = next(
-                        (s for s in stages_list if s.get("stage", s.get("name")) == "build"),
-                        None,
-                    )
-                    if build_stage and build_stage.get("artifact_id"):
-                        build_data = _load_artifact_data(project, run_id, build_stage["artifact_id"])
-                        if build_data:
-                            ac_count = len(build_data.get("ac_coverage", []))
-                            if ac_count > 0 and ac_pass_count < ac_count:
-                                test_layers_ok = False
-                                errors.append(
-                                    f"TEST ac_driven.pass ({ac_pass_count}) < BUILD ac_coverage "
-                                    f"count ({ac_count}). Not all AC tests passed — "
-                                    f"BUILD's coverage claims are not fully verified."
-                                )
-        if test_layers_ok:
-            checks_passed += 1
-    else:
-        checks_passed += 1  # Auto-pass for other stages
+                    # F5: Cross-verify ac_driven.pass count against BUILD ac_coverage count
+                    if ac_driven.get("run"):
+                        ac_pass_count = ac_driven.get("pass", 0)
+                        # Load BUILD artifact to get ac_coverage count
+                        build_stage = next(
+                            (s for s in stages_list if s.get("stage", s.get("name")) == "build"),
+                            None,
+                        )
+                        if build_stage and build_stage.get("artifact_id"):
+                            build_data = _load_artifact_data(project, run_id, build_stage["artifact_id"])
+                            if build_data:
+                                ac_count = len(build_data.get("ac_coverage", []))
+                                if ac_count > 0 and ac_pass_count < ac_count:
+                                    test_layers_ok = False
+                                    errors.append(
+                                        f"TEST ac_driven.pass ({ac_pass_count}) < BUILD ac_coverage "
+                                        f"count ({ac_count}). Not all AC tests passed — "
+                                        f"BUILD's coverage claims are not fully verified."
+                                    )
+            if test_layers_ok:
+                checks_passed += 1
+        else:
+            checks_passed += 1  # Auto-pass for other stages
 
     # --- Check 9: Depth validation (L2) — field values indicate real work ---
     # Only runs when artifact data is available (L0/L1 catch missing data)
-    if artifact_data and stage in ("review", "deliver", "build", "test"):
-        depth_errors = _check_depth(stage, artifact_data, profile, run_id=run_id)
-        errors.extend(depth_errors)
-        if not depth_errors:
-            checks_passed += 1
-        checks_total += 1
+    with _CheckGuard("depth", SEVERITY_HARD, errors, warnings, check_results) as _g:
+        if artifact_data and stage in ("review", "deliver", "build", "test"):
+            depth_errors = _check_depth(stage, artifact_data, profile, run_id=run_id)
+            errors.extend(depth_errors)
+            if not depth_errors:
+                checks_passed += 1
+                _g.passed()
+            else:
+                _g.failed()
+            checks_total += 1
 
     # --- Check 9b: Gate 2 Agent Tool Audit (marker file verification) ---
     # Written by SubagentStop hook when Agent tool completes during a pipeline run.
     # Primary: <run_id>.marker (exact match). Fallback: session_*_<ts>.marker
     # with timestamp within the run's execution window.
     # If no marker found and profile requires adversarial → WARN (future: BLOCK).
-    if stage == "deliver" and profile in ("full", "bugfix"):
-        checks_total += 1
-        marker_found = False
-        # Primary: exact run_id marker
-        marker_file = AGENT_AUDIT_DIR / f"{run_id}.marker"
-        if marker_file.exists():
-            marker_found = True
-        elif AGENT_AUDIT_DIR.exists():
-            # Fallback: any session marker written after run started
-            run_created = run.get("created_at", "")
-            run_start_ts = 0.0
-            if run_created:
-                try:
-                    from datetime import datetime, timezone
-                    dt = datetime.fromisoformat(run_created.replace("Z", "+00:00"))
-                    run_start_ts = dt.timestamp()
-                except (ValueError, TypeError):
-                    pass
-            for f in AGENT_AUDIT_DIR.iterdir():
-                if f.name.startswith("session_") and f.suffix == ".marker":
+    # Advisory: emits WARN only (never errors.append) → a crash must not block.
+    with _CheckGuard("agent_tool_audit", SEVERITY_ADVISORY, errors, warnings, check_results) as _g:
+        _g.passed()
+        if stage == "deliver" and profile in ("full", "bugfix"):
+            checks_total += 1
+            marker_found = False
+            # Primary: exact run_id marker
+            marker_file = AGENT_AUDIT_DIR / f"{run_id}.marker"
+            if marker_file.exists():
+                marker_found = True
+            elif AGENT_AUDIT_DIR.exists():
+                # Fallback: any session marker written after run started
+                run_created = run.get("created_at", "")
+                run_start_ts = 0.0
+                if run_created:
                     try:
-                        data = json.loads(f.read_text(encoding="utf-8"))
-                        if data.get("ts", 0) > run_start_ts:
-                            marker_found = True
-                            break
-                    except (json.JSONDecodeError, OSError):
-                        continue
-        if marker_found:
-            checks_passed += 1
-        else:
-            warnings.append(
-                "Agent tool audit: no SubagentStop marker file found for this run. "
-                "This suggests the Agent tool was never invoked for adversarial review. "
-                "Ensure the runtime hook is active and the Agent tool was actually spawned."
-            )
+                        from datetime import datetime, timezone
+                        dt = datetime.fromisoformat(run_created.replace("Z", "+00:00"))
+                        run_start_ts = dt.timestamp()
+                    except (ValueError, TypeError):
+                        pass
+                for f in AGENT_AUDIT_DIR.iterdir():
+                    if f.name.startswith("session_") and f.suffix == ".marker":
+                        try:
+                            data = json.loads(f.read_text(encoding="utf-8"))
+                            if data.get("ts", 0) > run_start_ts:
+                                marker_found = True
+                                break
+                        except (json.JSONDecodeError, OSError):
+                            continue
+            if marker_found:
+                checks_passed += 1
+            else:
+                warnings.append(
+                    "Agent tool audit: no SubagentStop marker file found for this run. "
+                    "This suggests the Agent tool was never invoked for adversarial review. "
+                    "Ensure the runtime hook is active and the Agent tool was actually spawned."
+                )
 
-        # Opportunistic cleanup: remove markers older than 7 days
-        try:
-            if AGENT_AUDIT_DIR.exists():
-                import time as _time
-                cutoff = _time.time() - 7 * 86400
-                for old_f in AGENT_AUDIT_DIR.iterdir():
-                    if old_f.suffix == ".marker" and old_f.stat().st_mtime < cutoff:
-                        old_f.unlink(missing_ok=True)
-        except OSError:
-            pass  # Non-critical cleanup
+            # Opportunistic cleanup: remove markers older than 7 days
+            try:
+                if AGENT_AUDIT_DIR.exists():
+                    import time as _time
+                    cutoff = _time.time() - 7 * 86400
+                    for old_f in AGENT_AUDIT_DIR.iterdir():
+                        if old_f.suffix == ".marker" and old_f.stat().st_mtime < cutoff:
+                            old_f.unlink(missing_ok=True)
+            except OSError:
+                pass  # Non-critical cleanup
 
     # --- Check 10: Push-Ready gate (L3) — binary verdict ---
     # V2: reads `quality.push_ready` (boolean) or infers from quality fields.
     # V1 compat: reads `confidence_score.score < 7`.
-    if stage == "deliver" and artifact_data:
-        quality = artifact_data.get("quality", {})
-        conf = artifact_data.get("confidence_score", {})
-        has_override = run.get("human_override", False)
+    with _CheckGuard("push_ready", SEVERITY_HARD, errors, warnings, check_results) as _g:
+        _g.passed()  # default; demoted to failed below if the gate error fires
+        if stage == "deliver" and artifact_data:
+            quality = artifact_data.get("quality", {})
+            conf = artifact_data.get("confidence_score", {})
+            has_override = run.get("human_override", False)
 
-        # F12: human_override must have audit trail
-        if has_override:
-            override_reason = run.get("override_reason", "")
-            if not override_reason or len(str(override_reason)) < 20:
-                warnings.append(
-                    "human_override is set but 'override_reason' is missing or too short "
-                    "(< 20 chars). Override should include justification for audit trail."
-                )
-
-        if isinstance(quality, dict) and "push_ready" in quality:
-            # V2 path: explicit binary gate
-            if not quality["push_ready"]:
-                blockers = quality.get("blockers", [])
-                if not has_override:
-                    errors.append(
-                        f"Push-ready gate: NOT-PUSH-READY. "
-                        f"Blockers: {blockers}"
-                    )
-                else:
+            # F12: human_override must have audit trail
+            if has_override:
+                override_reason = run.get("override_reason", "")
+                if not override_reason or len(str(override_reason)) < 20:
                     warnings.append(
-                        f"Push-ready gate: NOT-PUSH-READY — "
+                        "human_override is set but 'override_reason' is missing or too short "
+                        "(< 20 chars). Override should include justification for audit trail."
+                    )
+
+            if isinstance(quality, dict) and "push_ready" in quality:
+                # V2 path: explicit binary gate
+                if not quality["push_ready"]:
+                    blockers = quality.get("blockers", [])
+                    if not has_override:
+                        errors.append(
+                            f"Push-ready gate: NOT-PUSH-READY. "
+                            f"Blockers: {blockers}"
+                        )
+                    else:
+                        warnings.append(
+                            f"Push-ready gate: NOT-PUSH-READY — "
+                            f"OVERRIDDEN by human_override flag."
+                        )
+            elif isinstance(quality, dict) and quality.get("tests_pass"):
+                # V2 inferred: quality has tests_pass=true + regressions=0 → push-ready
+                # This handles artifacts that provide quality evidence without explicit push_ready
+                regressions = quality.get("regressions", 0)
+                if regressions > 0 and not has_override:
+                    errors.append(
+                        f"Push-ready gate: quality.regressions={regressions} > 0."
+                    )
+                # Otherwise: inferred push-ready (tests pass, no regressions)
+            elif isinstance(conf, dict) and conf.get("score") is not None:
+                # V1 compat: numeric confidence score
+                score = conf.get("score", 0)
+                if score < 7 and not has_override:
+                    errors.append(
+                        f"Confidence gate: score={score}/12 (< 7). "
+                        f"Fix penalties or add human_override to run.json."
+                    )
+                elif score < 7 and has_override:
+                    warnings.append(
+                        f"Confidence gate: score={score}/12 (< 7) — "
                         f"OVERRIDDEN by human_override flag."
                     )
-        elif isinstance(quality, dict) and quality.get("tests_pass"):
-            # V2 inferred: quality has tests_pass=true + regressions=0 → push-ready
-            # This handles artifacts that provide quality evidence without explicit push_ready
-            regressions = quality.get("regressions", 0)
-            if regressions > 0 and not has_override:
-                errors.append(
-                    f"Push-ready gate: quality.regressions={regressions} > 0."
-                )
-            # Otherwise: inferred push-ready (tests pass, no regressions)
-        elif isinstance(conf, dict) and conf.get("score") is not None:
-            # V1 compat: numeric confidence score
-            score = conf.get("score", 0)
-            if score < 7 and not has_override:
-                errors.append(
-                    f"Confidence gate: score={score}/12 (< 7). "
-                    f"Fix penalties or add human_override to run.json."
-                )
-            elif score < 7 and has_override:
-                warnings.append(
-                    f"Confidence gate: score={score}/12 (< 7) — "
-                    f"OVERRIDDEN by human_override flag."
-                )
-        # No quality and no confidence_score → skip gate (depth checks are sufficient)
+            # No quality and no confidence_score → skip gate (depth checks are sufficient)
 
-        checks_total += 1
-        if not any("push-ready gate" in e.lower() or "confidence gate" in e.lower() for e in errors):
-            checks_passed += 1
+            checks_total += 1
+            if not any("push-ready gate" in e.lower() or "confidence gate" in e.lower() for e in errors):
+                checks_passed += 1
+            else:
+                _g.failed()
 
     # --- Check 11: Semantic depth (L2.5) — content quality heuristics (WARN) ---
-    if artifact_data and stage in ("review", "deliver"):
-        sem_warnings = _check_semantic_depth(stage, artifact_data, run, project, run_id)
-        warnings.extend(sem_warnings)
+    with _CheckGuard("semantic", SEVERITY_ADVISORY, errors, warnings, check_results) as _g:
+        _g.passed()
+        if artifact_data and stage in ("review", "deliver"):
+            sem_warnings = _check_semantic_depth(stage, artifact_data, run, project, run_id)
+            warnings.extend(sem_warnings)
+    # Check 11 has no checks_passed increment (pure WARN, not counted) — so on a
+    # crash there is no missed credit; errored_nonblocking would over-count. Skip.
 
     # --- Check 12: Anti-rationalization gate (skipped stages) ---
-    if stage_record.get("status") == "skipped":
-        checks_total += 1
-        skip_errors = _check_skip_justification(stage_record)
-        errors.extend(skip_errors)
-        if not skip_errors:
-            checks_passed += 1
+    with _CheckGuard("anti_rationalization", SEVERITY_HARD, errors, warnings, check_results) as _g:
+        if stage_record.get("status") == "skipped":
+            checks_total += 1
+            skip_errors = _check_skip_justification(stage_record)
+            errors.extend(skip_errors)
+            if not skip_errors:
+                checks_passed += 1
+                _g.passed()
+            else:
+                _g.failed()
+        else:
+            _g.passed()
 
     # --- Check 13: Output routing — consume/produce enforcement ---
-    if stage in STAGE_ROUTING and stage_record.get("status") != "skipped":
-        checks_total += 1
-        routing_errors, routing_warnings = _check_output_routing(
-            stage, stage_record, run, project
-        )
-        errors.extend(routing_errors)
-        warnings.extend(routing_warnings)
-        if not routing_errors:
-            checks_passed += 1
+    # HARD on the routing errors; the freshness sub-check inside emits WARN only.
+    with _CheckGuard("output_routing", SEVERITY_HARD, errors, warnings, check_results) as _g:
+        if stage in STAGE_ROUTING and stage_record.get("status") != "skipped":
+            checks_total += 1
+            routing_errors, routing_warnings = _check_output_routing(
+                stage, stage_record, run, project
+            )
+            errors.extend(routing_errors)
+            warnings.extend(routing_warnings)
+            if not routing_errors:
+                checks_passed += 1
+                _g.passed()
+            else:
+                _g.failed()
 
-        # Freshness sub-check: warn on stale consumed artifacts
-        # F3 fix: look up full artifact metadata from manifest (consumed_artifacts
-        # entries typically only have type+id, not created_at/freshness).
-        consumed = stage_record.get("consumed_artifacts", [])
-        if isinstance(consumed, list):
-            for c in consumed:
-                if not isinstance(c, dict):
-                    continue
-                art_id = c.get("id")
-                # Try to get full metadata from manifest for richer freshness check
-                art_meta = c  # fallback to inline entry
-                if art_id:
-                    full_meta = _load_artifact_meta_from_manifest(project, art_id)
-                    if full_meta:
-                        art_meta = full_meta
-                freshness_result = check_artifact_freshness(art_meta, project)
-                if not freshness_result["fresh"]:
-                    warnings.append(
-                        f"STALE: Stage '{stage}' consuming stale artifact "
-                        f"'{c.get('id', '?')}' (type: {c.get('type', '?')}, "
-                        f"age: {freshness_result['age_hours']:.0f}h, "
-                        f"reason: {freshness_result['stale_reason']}). "
-                        f"Consider re-running the producing stage."
-                    )
+            # Freshness sub-check: warn on stale consumed artifacts
+            # F3 fix: look up full artifact metadata from manifest (consumed_artifacts
+            # entries typically only have type+id, not created_at/freshness).
+            consumed = stage_record.get("consumed_artifacts", [])
+            if isinstance(consumed, list):
+                for c in consumed:
+                    if not isinstance(c, dict):
+                        continue
+                    art_id = c.get("id")
+                    # Try to get full metadata from manifest for richer freshness check
+                    art_meta = c  # fallback to inline entry
+                    if art_id:
+                        full_meta = _load_artifact_meta_from_manifest(project, art_id)
+                        if full_meta:
+                            art_meta = full_meta
+                    freshness_result = check_artifact_freshness(art_meta, project)
+                    if not freshness_result["fresh"]:
+                        warnings.append(
+                            f"STALE: Stage '{stage}' consuming stale artifact "
+                            f"'{c.get('id', '?')}' (type: {c.get('type', '?')}, "
+                            f"age: {freshness_result['age_hours']:.0f}h, "
+                            f"reason: {freshness_result['stale_reason']}). "
+                            f"Consider re-running the producing stage."
+                        )
+        else:
+            _g.passed()
 
     return {
         "valid": len(errors) == 0,
