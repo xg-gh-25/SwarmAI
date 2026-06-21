@@ -53,12 +53,52 @@ def _run_cli(workspace: Path, *args: str) -> dict:
         pytest.fail(f"CLI output not valid JSON: {output}\nstderr: {result.stderr}")
 
 
+def _publish_valid_deliver(workspace: Path, run_id: str) -> str:
+    """Publish a REAL, loadable deliver artifact and return its artifact_id.
+
+    The completion gate deep-loads the deliver artifact (pipeline_validator
+    L1509): an artifact_id that points at no published artifact is a BLOCK —
+    "could not be loaded". Fabricating `artifact_id="art_deliver"` without a
+    real publish used to slip through because the completion gate's
+    _INFRA_PHRASES filter masked the load error; that fail-open seam was
+    removed (run_95fc9b6a). Tests must now publish a genuine deliver artifact.
+
+    Fields are the minimal valid deliver artifact:
+      - title + quality (schema required)
+      - quality.push_ready=true, tests_pass, regressions=0 (push-ready gate)
+      - adversarial_review{profile_tier, findings} (depth check, full/bugfix)
+      - completion_audit.all_green + ac_verification.status (depth check)
+    """
+    data = {
+        "title": "Test delivery",
+        "quality": {"push_ready": True, "tests_pass": True, "regressions": 0,
+                    "smoke_pass": True},
+        "adversarial_review": {
+            "spawned": True, "profile_tier": "full",
+            "findings_total": 0, "findings_fixed": 0, "findings": [],
+            "evidence": "Agent tool: adversarial reviewer",
+        },
+        "completion_audit": {"all_green": True},
+        "ac_verification": {"status": "verified"},
+        "meta_review": {"blind_spots": [], "verdict": "none found"},
+        "convergence": {"iterations": 1, "final_status": "push-ready"},
+    }
+    result = _run_cli(
+        workspace, "publish", "--project", "TestProject", "--run-id", run_id,
+        "--type", "delivery", "--producer", "test", "--summary", "test deliver",
+        "--stage", "deliver", "--data", json.dumps(data),
+    )
+    return result["artifact_id"]
+
+
 def _complete_all_stages(workspace: Path, run_id: str, profile: str = "full",
                          skip_existing: bool = True):
     """Add all profile stages as completed so the run can be marked done.
 
     If skip_existing=True, won't overwrite stages already in run.json.
     Also creates REPORT.md (required by completion gate).
+    The deliver stage gets a REAL published artifact (completion gate
+    deep-loads it — a fabricated id is now a BLOCK, see _publish_valid_deliver).
     """
     from core.pipeline_profiles import PIPELINE_PROFILES
     profiles = PIPELINE_PROFILES
@@ -76,11 +116,18 @@ def _complete_all_stages(workspace: Path, run_id: str, profile: str = "full",
     for stg in profiles.get(profile, profiles["full"]):
         if stg in existing_stages:
             continue
+        # deliver needs a genuinely loadable artifact (completion gate deep-loads it)
+        if stg == "deliver":
+            deliver_aid = _publish_valid_deliver(workspace, run_id)
         stage_json: dict = {
             "stage": stg, "status": "completed",
             "stage_doc_consumed": True,
             "token_cost": 2000,
-            "artifact_id": f"art_{stg}" if stg not in ("reflect", "goal_cycle") else None,
+            "artifact_id": (
+                deliver_aid if stg == "deliver"
+                else f"art_{stg}" if stg not in ("reflect", "goal_cycle")
+                else None
+            ),
             "decisions": [],
         }
         if stg == "reflect":
@@ -200,13 +247,16 @@ class TestRunUpdate:
                              "decisions": [],
                          }))
             else:
+                # deliver needs a real published artifact (completion gate deep-loads it)
+                aid = (_publish_valid_deliver(workspace, run_id) if stg == "deliver"
+                       else f"art_{stg}" if stg != "reflect" else None)
                 _run_cli(workspace, "run-update",
                          "--project", "TestProject", "--run-id", run_id,
                          "--stage-json", json.dumps({
                              "stage": stg, "status": "completed",
                              "stage_doc_consumed": True,
                              "token_cost": 1000,
-                             "artifact_id": f"art_{stg}" if stg != "reflect" else None,
+                             "artifact_id": aid,
                              "lessons": ["Skipped stages with explicit reason pass the completion gate"] if stg == "reflect" else None,
                              "decisions": [],
                          }))
@@ -454,13 +504,16 @@ class TestPipelineRunIntegration:
 
         # Remaining stages (completion gate requires ALL profile stages)
         for stg in ["plan", "build", "review", "test", "deliver", "reflect"]:
+            # deliver needs a real published artifact (completion gate deep-loads it)
+            aid = (_publish_valid_deliver(workspace, run_id) if stg == "deliver"
+                   else f"art_{stg}" if stg != "reflect" else None)
             _run_cli(workspace, "run-update", "--project", "TestProject",
                      "--run-id", run_id,
                      "--stage-json", json.dumps({
                          "stage": stg, "status": "completed",
                          "stage_doc_consumed": True,
                          "token_cost": 3000,
-                         "artifact_id": f"art_{stg}" if stg != "reflect" else None,
+                         "artifact_id": aid,
                          "lessons": ["httpx built-in retry is simpler than tenacity"] if stg == "reflect" else None,
                          "decisions": [],
                      }))
