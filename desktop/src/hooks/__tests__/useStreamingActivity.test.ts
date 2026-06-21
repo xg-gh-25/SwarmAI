@@ -110,4 +110,31 @@ describe('useStreamingActivity — elapsed re-anchoring', () => {
     act(() => { rerender({ streaming: false }); });
     expect(result.current.elapsedSeconds).toBe(0);
   });
+
+  it('AC4: two concurrent keep-mounted tabs track independent elapsed/labels', () => {
+    // Each TabView calls useStreamingActivity with ITS OWN (isStreaming, messages).
+    // Keep-mounted tabs are hidden via CSS, not unmounted — switching is a
+    // visibility toggle, so each hook instance retains its own anchor. This
+    // models that isolation: tab A (Read, streaming) vs tab B (Bash, streaming).
+    const tabA = renderHook(
+      ({ s, m }) => useStreamingActivity(s, m),
+      { initialProps: { s: true, m: [assistantMsg([toolUse('a1', 'Read')])] } },
+    );
+    // Tab A streams for 6s before tab B even starts.
+    act(() => { vi.advanceTimersByTime(6000); });
+
+    const tabB = renderHook(
+      ({ s, m }) => useStreamingActivity(s, m),
+      { initialProps: { s: true, m: [assistantMsg([toolUse('b1', 'Bash')])] } },
+    );
+    act(() => { vi.advanceTimersByTime(2000); });
+
+    // A and B carry independent labels and independent elapsed anchors —
+    // switching focus between them does not bleed one tab's timer into the other.
+    expect(tabA.result.current.displayedActivity?.toolName).toBe('Read');
+    expect(tabB.result.current.displayedActivity?.toolName).toBe('Bash');
+    expect(tabA.result.current.elapsedSeconds).toBeGreaterThanOrEqual(7); // 6+2
+    expect(tabB.result.current.elapsedSeconds).toBeGreaterThanOrEqual(1);
+    expect(tabB.result.current.elapsedSeconds).toBeLessThan(tabA.result.current.elapsedSeconds);
+  });
 });
