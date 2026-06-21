@@ -58,6 +58,116 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from core.pipeline_profiles import get_profile_stages
 
 # ---------------------------------------------------------------------------
+# Check outcome taxonomy (run_55710438)
+# A check has THREE possible outcomes, not two:
+#   - PASSED:  the check ran and the content satisfied it
+#   - FAILED:  the check ran and the content did NOT satisfy it (content fault)
+#   - ERRORED: the check itself could not run (exception, missing tool, bad
+#              input) — this is a CHECK fault, NOT a content fault
+#
+# Severity is derived MECHANICALLY from which accumulator a check writes to,
+# never hand-assigned: a check that appends to errors[] is HARD (its failure
+# blocks); a check that appends only to warnings[] is ADVISORY (its failure
+# warns). This is the EXISTING contract — we are surfacing it, not changing it.
+#
+# Crash handling preserves the existing valid=len(errors)==0 semantics EXACTLY:
+#   - HARD check crash  → synthetic string appended to errors[]   → still BLOCKS
+#   - ADVISORY check crash → synthetic string appended to warnings[] → does NOT block
+# The FAILED-vs-ERRORED distinction is purely ADDITIVE: it lives in
+# check_results[] and errored[], leaving errors[]/warnings[]/valid untouched.
+#
+# CRITICAL (C037 / CLASS A): a HARD check that errors STILL fails closed. A
+# crash never silently opens a hard gate. Only advisory gates fail open, and
+# even then the ERRORED outcome is recorded in the audit trail.
+# ---------------------------------------------------------------------------
+
+CHECK_PASSED = "passed"
+CHECK_FAILED = "failed"
+CHECK_ERRORED = "errored"
+
+SEVERITY_HARD = "hard"          # failure/crash appends to errors[] → blocks
+SEVERITY_ADVISORY = "advisory"  # failure/crash appends to warnings[] → warns
+
+
+class _CheckGuard:
+    """Context manager that isolates one check so a crash becomes an ERRORED
+    outcome instead of aborting the whole validate() run.
+
+    Usage::
+
+        with _CheckGuard("stage_order", SEVERITY_HARD, errors, warnings,
+                         check_results) as g:
+            if _check_stage_order(...):
+                g.passed()
+            else:
+                g.failed()
+                errors.append("...")
+
+    On a clean exit the caller declares passed()/failed(). If the block raises,
+    __exit__ swallows the exception (returns True), records an ERRORED
+    CheckResult, and appends a synthetic message to the severity-appropriate
+    accumulator (errors[] for hard, warnings[] for advisory).
+    """
+
+    def __init__(self, name: str, severity: str,
+                 errors: list[str], warnings: list[str],
+                 check_results: list[dict]):
+        self.name = name
+        self.severity = severity
+        self._errors = errors
+        self._warnings = warnings
+        self._check_results = check_results
+        self._recorded = False
+
+    def _record(self, status: str, detail: str = "") -> None:
+        if self._recorded:
+            return
+        self._recorded = True
+        self._check_results.append({
+            "name": self.name,
+            "severity": self.severity,
+            "status": status,
+            "detail": detail,
+        })
+
+    def passed(self, detail: str = "") -> None:
+        self._record(CHECK_PASSED, detail)
+
+    def failed(self, detail: str = "") -> None:
+        self._record(CHECK_FAILED, detail)
+
+    def __enter__(self) -> "_CheckGuard":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        if exc_type is None:
+            # Caller may not have declared an outcome (some blocks only act on
+            # one branch). Default to PASSED — a clean run with no failure
+            # recorded means the check did not object.
+            if not self._recorded:
+                self._record(CHECK_PASSED)
+            return False
+        # The check itself crashed → ERRORED, classified by severity.
+        msg = f"{type(exc).__name__}: {exc}"
+        self._record(CHECK_ERRORED, msg)
+        if self.severity == SEVERITY_HARD:
+            # Fail-closed: a hard check that cannot run BLOCKS, with a clear
+            # diagnostic that distinguishes "check crashed" from "content bad".
+            self._errors.append(
+                f"Check '{self.name}' ERRORED (could not run): {msg}. "
+                f"Hard gate fails closed — fix the validator or input before advancing."
+            )
+        else:
+            # Fail-open for advisory checks only, but never silently — the
+            # ERRORED outcome is in check_results[] and surfaced as a warning.
+            self._warnings.append(
+                f"Check '{self.name}' ERRORED (could not run): {msg}. "
+                f"Advisory gate — not blocking, but the check did not execute."
+            )
+        return True  # swallow: one check's crash must not abort the others
+
+
+# ---------------------------------------------------------------------------
 # Gate 2 Agent Tool Audit — marker file directory
 # Written by SubagentStop hook, verified by depth check on DELIVER.
 # ---------------------------------------------------------------------------
@@ -1325,6 +1435,7 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
     """
     errors: list[str] = []
     warnings: list[str] = []
+    check_results: list[dict] = []
     checks_total = 8
     checks_passed = 0
 
@@ -1336,6 +1447,8 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
             "stage": stage,
             "errors": [f"Pipeline run {run_id} not found for project {project}"],
             "warnings": [],
+            "errored": [],
+            "check_results": [],
             "checks_passed": 0,
             "checks_total": checks_total,
         }
@@ -1355,6 +1468,8 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
             "stage": stage,
             "errors": [f"No stage record found for '{stage}' in run {run_id}"],
             "warnings": [],
+            "errored": [],
+            "check_results": [],
             "checks_passed": 0,
             "checks_total": checks_total,
         }
@@ -1374,19 +1489,22 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
             )
 
     # --- Check 1: Stage order ---
-    if _check_stage_order(stage, profile, stages_list):
-        checks_passed += 1
-    else:
-        profile_stages = get_profile_stages(profile)
-        expected_idx = profile_stages.index(stage) if stage in profile_stages else -1
-        if expected_idx > 0:
-            expected_prev = profile_stages[expected_idx - 1]
-            errors.append(
-                f"Stage order violation: '{stage}' requires '{expected_prev}' "
-                f"to be completed first (profile: {profile})"
-            )
+    with _CheckGuard("stage_order", SEVERITY_HARD, errors, warnings, check_results) as _g:
+        if _check_stage_order(stage, profile, stages_list):
+            checks_passed += 1
+            _g.passed()
         else:
-            errors.append(f"Stage order violation: '{stage}' position invalid in profile '{profile}'")
+            _g.failed()
+            profile_stages = get_profile_stages(profile)
+            expected_idx = profile_stages.index(stage) if stage in profile_stages else -1
+            if expected_idx > 0:
+                expected_prev = profile_stages[expected_idx - 1]
+                errors.append(
+                    f"Stage order violation: '{stage}' requires '{expected_prev}' "
+                    f"to be completed first (profile: {profile})"
+                )
+            else:
+                errors.append(f"Stage order violation: '{stage}' position invalid in profile '{profile}'")
 
     # --- Check 2: Artifact exists ---
     if _check_artifact_exists(stage, stage_record):
@@ -1435,46 +1553,52 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
         )
 
     # --- Check 6: Profile respected ---
-    if _check_profile_respected(stage, profile):
-        checks_passed += 1
-    else:
-        errors.append(
-            f"Profile violation: '{stage}' is not in the '{profile}' profile. "
-            f"Expected stages: {get_profile_stages(profile)}"
-        )
+    with _CheckGuard("profile_respected", SEVERITY_HARD, errors, warnings, check_results) as _g:
+        if _check_profile_respected(stage, profile):
+            checks_passed += 1
+            _g.passed()
+        else:
+            _g.failed()
+            errors.append(
+                f"Profile violation: '{stage}' is not in the '{profile}' profile. "
+                f"Expected stages: {get_profile_stages(profile)}"
+            )
 
     # --- Check 7: DDD cross-document consistency (WARN only) ---
     # Runs on evaluate stage — that's when DDD docs are first consulted.
     # On other stages, auto-pass (DDD was already validated at evaluate).
-    if stage == "evaluate":
-        # Build context text from the evaluation artifact for cross-check
-        # Use pre-loaded artifact_data (don't re-load — F1/F2 fix)
-        context_text = None
-        if artifact_data:
-            parts = [
-                str(artifact_data.get("recommendation", "")),
-                str(artifact_data.get("scope", "")),
-                str(artifact_data.get("summary", "")),
-                str(artifact_data.get("approach", "")),
-            ]
-            context_text = " ".join(parts)
+    with _CheckGuard("ddd_consistency", SEVERITY_ADVISORY, errors, warnings, check_results) as _g:
+        if stage == "evaluate":
+            # Build context text from the evaluation artifact for cross-check
+            # Use pre-loaded artifact_data (don't re-load — F1/F2 fix)
+            context_text = None
+            if artifact_data:
+                parts = [
+                    str(artifact_data.get("recommendation", "")),
+                    str(artifact_data.get("scope", "")),
+                    str(artifact_data.get("summary", "")),
+                    str(artifact_data.get("approach", "")),
+                ]
+                context_text = " ".join(parts)
 
-        ddd_result = check_ddd_consistency(project, context_text)
-        warnings.extend(ddd_result["warnings"])
+            ddd_result = check_ddd_consistency(project, context_text)
+            warnings.extend(ddd_result["warnings"])
 
-        # Staleness check: warn if DDD docs changed since last completed run
-        staleness = check_ddd_staleness(project)
-        if staleness["stale_runs"]:
-            latest_stale = staleness["stale_runs"][-1]  # most recent
-            changed_docs = ", ".join(latest_stale["stale_docs"])
-            warnings.append(
-                f"DDD staleness: {changed_docs} changed since last pipeline run "
-                f"({latest_stale['run_id']}). Prior evaluations may need review."
-            )
+            # Staleness check: warn if DDD docs changed since last completed run
+            staleness = check_ddd_staleness(project)
+            if staleness["stale_runs"]:
+                latest_stale = staleness["stale_runs"][-1]  # most recent
+                changed_docs = ", ".join(latest_stale["stale_docs"])
+                warnings.append(
+                    f"DDD staleness: {changed_docs} changed since last pipeline run "
+                    f"({latest_stale['run_id']}). Prior evaluations may need review."
+                )
 
-        checks_passed += 1  # WARN only — never blocks
-    else:
-        checks_passed += 1  # Auto-pass for non-evaluate stages
+            checks_passed += 1  # WARN only — never blocks
+            _g.passed()
+        else:
+            checks_passed += 1  # Auto-pass for non-evaluate stages
+            _g.passed()
 
     # --- Check 8: Smoke tests executed (WARN, build stage only) ---
     # When build touches >1 file, smoke tests must exercise new code paths
@@ -2063,6 +2187,11 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
         "stage": stage,
         "errors": errors,
         "warnings": warnings,
+        # Additive: FAILED-vs-ERRORED distinction (run_55710438). errored[] names
+        # the checks that could NOT run (crashed), distinct from content failures
+        # in errors[]. check_results[] carries the per-check {name,severity,status}.
+        "errored": [c["name"] for c in check_results if c["status"] == CHECK_ERRORED],
+        "check_results": check_results,
         "checks_passed": checks_passed,
         "checks_total": checks_total,
     }

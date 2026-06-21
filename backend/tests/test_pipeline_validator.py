@@ -2779,3 +2779,108 @@ class TestAgentToolAudit:
         audit_msgs = [e for e in result["errors"] + result["warnings"]
                      if "agent tool" in e.lower() or "audit marker" in e.lower()]
         assert not audit_msgs, f"Trivial should skip audit: {audit_msgs}"
+
+
+# ---------------------------------------------------------------------------
+# FAILED-vs-ERRORED distinction (run_55710438)
+# A check that CRASHES (raises) must be distinguishable from a check whose
+# CONTENT fails. Hard-check crash → still blocks (fail-closed). Advisory-check
+# crash → does not block (fail-open), but is recorded as ERRORED in the audit.
+# ---------------------------------------------------------------------------
+
+class TestCheckErrored:
+    """Per-check try/except: crash → ERRORED outcome classified by severity."""
+
+    def _setup_evaluate_run(self, workspace):
+        artifacts = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts / "runs" / "run_test1"
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate", status="completed", artifact_id="art_eval"),
+        ])
+        _make_artifact(artifacts, "run_test1", "art_eval", "evaluation",
+                       {"recommendation": "GO", "scope": "standard",
+                        "summary": "x", "acceptance_criteria": ["a"]})
+
+    def test_hard_check_crash_blocks(self, workspace, monkeypatch):
+        """AC1: a HARD check that raises → ERRORED that STILL blocks (valid=False)."""
+        self._setup_evaluate_run(workspace)
+        import scripts.pipeline_validator as pv
+
+        def boom(*a, **k):
+            raise RuntimeError("injected hard-check crash")
+        # Check 1 (stage order) is HARD — writes to errors[]
+        monkeypatch.setattr(pv, "_check_stage_order", boom)
+
+        result = validate("TestProject", "run_test1", "evaluate")
+
+        assert result["valid"] is False, "hard check crash must block (fail-closed)"
+        # The crash must be classified ERRORED, not silently FAILED
+        cr = result.get("check_results", [])
+        errored = [c for c in cr if c.get("status") == "errored"]
+        assert any(c.get("severity") == "hard" for c in errored), \
+            f"expected a hard errored check_result, got {cr}"
+
+    def test_advisory_check_crash_does_not_block(self, workspace, monkeypatch):
+        """AC2: an ADVISORY check that raises → does NOT block (valid=True), recorded ERRORED."""
+        self._setup_evaluate_run(workspace)
+        import scripts.pipeline_validator as pv
+
+        def boom(*a, **k):
+            raise RuntimeError("injected advisory-check crash")
+        # Check 7 (DDD consistency) is ADVISORY — writes only to warnings[]
+        monkeypatch.setattr(pv, "check_ddd_consistency", boom)
+
+        result = validate("TestProject", "run_test1", "evaluate")
+
+        assert result["valid"] is True, "advisory check crash must NOT block (fail-open)"
+        cr = result.get("check_results", [])
+        errored = [c for c in cr if c.get("status") == "errored"]
+        assert any(c.get("severity") == "advisory" for c in errored), \
+            f"expected an advisory errored check_result, got {cr}"
+
+    def test_failed_vs_errored_distinct(self, workspace, monkeypatch):
+        """AC3: content-FAILED and crash-ERRORED are distinguishable in check_results."""
+        # Content failure: stage order genuinely wrong (build before think/plan)
+        artifacts = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts / "runs" / "run_test1"
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate", status="completed"),
+            _stage_record("build", status="running", artifact_id="art_b"),
+        ])
+        result = validate("TestProject", "run_test1", "build")
+        cr = result.get("check_results", [])
+        # stage_order should be FAILED (content), not ERRORED (crash)
+        order = [c for c in cr if c.get("name") == "stage_order"]
+        assert order and order[0]["status"] == "failed", \
+            f"genuine content failure must be FAILED not ERRORED: {order}"
+        assert all(c["status"] != "errored" for c in cr), \
+            "no check should be ERRORED on a clean (non-crash) run"
+
+    def test_errored_surfaced_in_result(self, workspace, monkeypatch):
+        """AC3/AC4: errored[] list names the checks that could not run."""
+        self._setup_evaluate_run(workspace)
+        import scripts.pipeline_validator as pv
+        monkeypatch.setattr(pv, "_check_profile_respected",
+                            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+        result = validate("TestProject", "run_test1", "evaluate")
+        assert "errored" in result, "result must expose an errored[] list"
+        assert "profile_respected" in result["errored"], \
+            f"errored check name must appear: {result.get('errored')}"
+
+
+class TestValidationEventErrored:
+    """AC4: _record_validation_event persists the errored distinction."""
+
+    def test_record_validation_event_accepts_errored(self, workspace):
+        artifacts = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts / "runs" / "run_test1"
+        _make_run(runs_dir)
+        _record_validation_event(
+            "TestProject", "run_test1", "build",
+            passed=False, errors=["content failed"], warnings=[],
+            errored=["smoke"],
+        )
+        run = json.loads((runs_dir / "run.json").read_text())
+        ev = run["validation_events"][-1]
+        assert ev.get("errored") == ["smoke"], f"errored not persisted: {ev}"
+        assert ev.get("errored_count") == 1, f"errored_count wrong: {ev}"

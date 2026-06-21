@@ -424,6 +424,10 @@ def _auto_validate_before_advance(project: str, next_state: str) -> None:
         )
         if result.stdout:
             validation = json.loads(result.stdout)
+            # errored[] (run_55710438): checks that could NOT run, distinct from
+            # content failures. Surfaced in the audit + stderr so a blocked
+            # advance tells the user WHY (bad content vs broken check).
+            errored = validation.get("errored", [])
             if not validation.get("valid", True):
                 errors = validation.get("errors", [])
                 # Record validation block event in run.json
@@ -431,16 +435,21 @@ def _auto_validate_before_advance(project: str, next_state: str) -> None:
                     project, run_id, current_stage,
                     passed=False, errors=errors,
                     warnings=validation.get("warnings", []),
+                    errored=errored,
                 )
                 print(json.dumps({
                     "validation_blocked": True,
                     "stage": current_stage,
                     "errors": errors,
+                    "errored": errored,
                 }, indent=2), file=sys.stderr)
                 sys.exit(1)
             warnings = validation.get("warnings", [])
-            if warnings:
-                print(json.dumps({"validation_warnings": warnings}), file=sys.stderr)
+            if warnings or errored:
+                print(json.dumps({
+                    "validation_warnings": warnings,
+                    "errored_checks": errored,
+                }), file=sys.stderr)
     except subprocess.TimeoutExpired:
         # FAIL-CLOSED: validator timeout → block advancement (F3 fix)
         raise RuntimeError("Pipeline validator timed out (>10s) — cannot verify stage")
@@ -1012,8 +1021,23 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                             run_id=args.run_id,
                             stage="deliver",
                         )
-                    except Exception:
-                        result = None  # Validator crash → skip, don't block
+                    except Exception as _verr:
+                        # Crash-handling principle (run_55710438): a HARD gate that
+                        # ERRORS fails closed at ADVANCE time (cmd_advance L315). At
+                        # COMPLETION time we deliberately fail OPEN on a validator
+                        # *internal* crash — a validator bug must not permanently
+                        # block every pipeline from completing. But NEVER silently:
+                        # the crash is logged + classified (it is an ERRORED check,
+                        # not a clean pass) so the divergence is intentional, not hidden.
+                        result = None
+                        import sys as _sys
+                        print(json.dumps({
+                            "warning": f"deliver validator ERRORED (could not run): "
+                                       f"{type(_verr).__name__}: {_verr}. Completion "
+                                       f"fails open on validator-internal crash (see "
+                                       f"cmd_advance for the fail-closed advance path).",
+                            "errored_check": "deliver_validate",
+                        }), file=_sys.stderr)
                     if result and result.get("errors"):
                         # Filter infrastructure errors (test env, stale data, missing files).
                         # Only keep SEMANTIC errors (wrong tier, unresolved findings, etc.)
@@ -2249,12 +2273,18 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> None:
 def _record_validation_event(
     project: str, run_id: str, stage: str,
     passed: bool, errors: list[str], warnings: list[str],
+    errored: list[str] | None = None,
 ) -> None:
     """Append a validation event to run.json.validation_events[].
 
     Non-critical — failures are silently ignored (metrics are best-effort).
+
+    ``errored`` (run_55710438) names checks that could NOT run (crashed),
+    distinct from content failures in ``errors``. Additive + optional so
+    existing callers are unaffected.
     """
     from datetime import datetime, timezone
+    errored = errored or []
     try:
         run_file = _run_dir(project, run_id) / "run.json"
         if not run_file.exists():
@@ -2266,7 +2296,9 @@ def _record_validation_event(
             "passed": passed,
             "error_count": len(errors),
             "warning_count": len(warnings),
+            "errored_count": len(errored),
             "errors": errors[:5],  # Cap at 5 to avoid bloat
+            "errored": errored[:5],  # checks that could not run
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
         run_file.write_text(json.dumps(run_state, indent=2), encoding="utf-8")
