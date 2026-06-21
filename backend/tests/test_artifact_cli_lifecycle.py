@@ -645,3 +645,77 @@ class TestCompletionFailsClosedOnValidatorCrash:
         combined = (out.out + out.err).lower()
         assert "retry" in combined or "transient" in combined, \
             f"transient error must be surfaced as retryable, not 'fix the validator': {combined[:400]}"
+
+    def test_corrupt_deliver_artifact_blocks_completion(self, workspace, capsys, monkeypatch):
+        """run_95fc9b6a (deferred LOW from run_84316b42): when validate() RETURNS a
+        dict (no crash) whose errors[] contains 'could not be loaded' for the deliver
+        artifact, that is a REAL block — a missing/corrupt deliver artifact means the
+        deliver stage cannot be verified. The _INFRA_PHRASES filter must NOT suppress
+        it (it previously did → fail-open at the LAST gate, C037/CLASS A). Result-dict
+        path, not the crash path."""
+        cli, reg, rf = self._setup(workspace)
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        import importlib.util as _ilu
+        real_from_spec = _ilu.module_from_spec
+
+        def err_module(spec):
+            mod = real_from_spec(spec)
+            if spec.name == "pipeline_validator":
+                orig_exec = spec.loader.exec_module
+                def exec_and_stub(m):
+                    orig_exec(m)
+                    # Exactly the message pipeline_validator emits at L1511 when the
+                    # deliver artifact is None (file missing or corrupt).
+                    m.validate = lambda *a, **k: {
+                        "valid": False, "stage": "deliver",
+                        "errors": ["Artifact a_d for 'deliver' could not be loaded — file missing or corrupt"],
+                        "warnings": [], "errored": [], "check_results": [],
+                        "checks_passed": 0, "checks_total": 1,
+                    }
+                spec.loader.exec_module = exec_and_stub
+            return mod
+        monkeypatch.setattr(_ilu, "module_from_spec", err_module)
+
+        cli.cmd_run_update(self._args(), reg)
+        out = capsys.readouterr()
+        data = _read_run(rf)
+        # MUST NOT complete — a corrupt deliver artifact is a real verification failure.
+        assert data["status"] != "completed", \
+            f"corrupt deliver artifact must block completion, got status={data['status']}"
+        # And the error must actually reach the user (not be silently filtered).
+        combined = (out.out + out.err).lower()
+        assert "could not be loaded" in combined, \
+            f"the corrupt-artifact error must be surfaced, not filtered: {combined[:400]}"
+
+    def test_environmental_not_found_still_filtered(self, workspace, capsys, monkeypatch):
+        """AC4 regression guard: genuinely-environmental phrases ('not found') remain
+        filtered. A run-not-found style error (validator couldn't locate the run/stage
+        in a test env) must NOT, on its own, manufacture a block — it is the kind of
+        infra noise the filter legitimately suppresses. Pairs with the test above to
+        prove the filter narrowed correctly, not collapsed entirely."""
+        cli, reg, rf = self._setup(workspace)
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        import importlib.util as _ilu
+        real_from_spec = _ilu.module_from_spec
+
+        def env_module(spec):
+            mod = real_from_spec(spec)
+            if spec.name == "pipeline_validator":
+                orig_exec = spec.loader.exec_module
+                def exec_and_stub(m):
+                    orig_exec(m)
+                    # valid=False but the ONLY error is environmental noise → filtered → no block.
+                    m.validate = lambda *a, **k: {
+                        "valid": False, "stage": "deliver",
+                        "errors": ["Pipeline run run_crash not found for project TestProject"],
+                        "warnings": [], "errored": [], "check_results": [],
+                        "checks_passed": 0, "checks_total": 1,
+                    }
+                spec.loader.exec_module = exec_and_stub
+            return mod
+        monkeypatch.setattr(_ilu, "module_from_spec", env_module)
+
+        cli.cmd_run_update(self._args(), reg)
+        data = _read_run(rf)
+        assert data["status"] == "completed", \
+            f"environmental 'not found' must stay filtered (no block), got {data['status']}"

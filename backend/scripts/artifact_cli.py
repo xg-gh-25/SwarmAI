@@ -1074,9 +1074,22 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                                 f"(fail-closed, symmetric with the advance path)."
                             )
                     if result and result.get("errors"):
-                        # Filter infrastructure errors (test env, stale data, missing files).
-                        # Only keep SEMANTIC errors (wrong tier, unresolved findings, etc.)
-                        _INFRA_PHRASES = ("not found", "could not be loaded", "no stage record")
+                        # Filter genuinely-ENVIRONMENTAL errors (the run/stage doesn't
+                        # exist in this context — test env, stale lookup). Keep ALL
+                        # SEMANTIC errors (wrong tier, unresolved findings, etc.).
+                        #
+                        # "could not be loaded" was REMOVED from this filter
+                        # (run_95fc9b6a, deferred LOW from run_84316b42). It is NOT
+                        # environmental: pipeline_validator emits it (L1511) only when
+                        # the deliver artifact_id is set but the file is missing/corrupt.
+                        # We reach this branch only inside the `deliver_rec.artifact_id`
+                        # guard above — so a claimed-but-unloadable deliver artifact
+                        # means the deliver stage CANNOT be verified, which must BLOCK
+                        # completion, not be suppressed as noise (fail-open at the last
+                        # gate = C037/CLASS A). "not found" / "no stage record" stay:
+                        # those mean the run/stage doesn't exist, which is legitimately
+                        # environmental for the completion gate.
+                        _INFRA_PHRASES = ("not found", "no stage record")
                         errors_list = [
                             e for e in result["errors"]
                             if not any(phrase in e.lower() for phrase in _INFRA_PHRASES)
