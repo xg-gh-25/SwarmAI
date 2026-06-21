@@ -576,11 +576,13 @@ describe('Streaming Lifecycle Preservation Tests (Property 10)', () => {
     /**
      * **Validates: Requirements 3.2, 3.7**
      *
-     * Return type shape is always { hasContent, toolName, toolContext, toolCount }
-     * when non-null. The extended shape includes operational context and tool count
-     * fields added by Fix 4.
+     * Return type shape is always
+     * { hasContent, toolName, toolContext, toolCount, toolId } when non-null.
+     * The extended shape includes operational context + tool count (Fix 4) and
+     * the per-invocation toolId added by the elapsed re-anchor fix (run_81a580ba),
+     * which lets the timer re-anchor per distinct tool_use block.
      */
-    it('P10g: return shape is { hasContent, toolName, toolContext, toolCount } with 4 fields', () => {
+    it('P10g: return shape is { hasContent, toolName, toolContext, toolCount, toolId } with 5 fields', () => {
       fc.assert(
         fc.property(
           fc.array(arbContentBlock(), { minLength: 1, maxLength: 5 }),
@@ -595,17 +597,19 @@ describe('Streaming Lifecycle Preservation Tests (Property 10)', () => {
             if (result === null) return true;
 
             const keys = Object.keys(result).sort();
-            // Fixed code returns { hasContent, toolContext, toolCount, toolName }
+            // Returns { hasContent, toolContext, toolCount, toolId, toolName }
             return (
-              keys.length === 4 &&
+              keys.length === 5 &&
               keys[0] === 'hasContent' &&
               keys[1] === 'toolContext' &&
               keys[2] === 'toolCount' &&
-              keys[3] === 'toolName' &&
+              keys[3] === 'toolId' &&
+              keys[4] === 'toolName' &&
               typeof result.hasContent === 'boolean' &&
               (result.toolName === null || typeof result.toolName === 'string') &&
               (result.toolContext === null || typeof result.toolContext === 'string') &&
-              typeof result.toolCount === 'number'
+              typeof result.toolCount === 'number' &&
+              (result.toolId === null || typeof result.toolId === 'string')
             );
           }
         ),

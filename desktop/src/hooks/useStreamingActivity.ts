@@ -105,25 +105,32 @@ export function useStreamingActivity(
   // path (toolName === null → anchor stays at stream start). (run_81a580ba)
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const startRef = useRef<number | null>(null);
-  // The toolName the timer is currently anchored to — change ⇒ re-anchor.
-  const anchoredToolNameRef = useRef<string | null>(null);
-  const activeToolName = displayedActivity?.toolName ?? null;
+  // The tool_use block id the timer is currently anchored to — change ⇒
+  // re-anchor. Keyed on the per-invocation id (NOT the tool NAME): a recurring
+  // name (Read → think → Read, or two Bash calls) is a distinct invocation and
+  // must re-anchor, else the timer shows the cumulative run of all calls with
+  // that name. Anchoring on the DEBOUNCED displayedActivity.toolId keeps the
+  // label and timer in lock-step (anchoring on the raw value would let them
+  // diverge by the debounce window). (run_81a580ba)
+  const anchoredToolIdRef = useRef<string | null>(null);
+  const activeToolId = displayedActivity?.toolId ?? null;
 
   useEffect(() => {
     if (!isStreaming) {
       startRef.current = null;
-      anchoredToolNameRef.current = null;
+      anchoredToolIdRef.current = null;
       setElapsedSeconds(0);
       return;
     }
-    // (Re-)anchor when the stream just started OR the displayed tool changed.
-    // toolName === null (Thinking…) keeps the existing anchor — there is no
-    // tool boundary to reset on, so elapsed reflects time since thinking began.
+    // (Re-)anchor when the stream just started OR the displayed tool_use block
+    // changed. toolId === null (Thinking…) keeps the existing anchor — there is
+    // no tool boundary to reset on, so elapsed reflects time since the current
+    // activity (thinking, or the stream) began.
     const toolChanged =
-      activeToolName !== null && activeToolName !== anchoredToolNameRef.current;
+      activeToolId !== null && activeToolId !== anchoredToolIdRef.current;
     if (startRef.current === null || toolChanged) {
       startRef.current = Date.now();
-      anchoredToolNameRef.current = activeToolName;
+      anchoredToolIdRef.current = activeToolId;
       setElapsedSeconds(0);
     }
     const interval = setInterval(() => {
@@ -132,7 +139,7 @@ export function useStreamingActivity(
       }
     }, 1000);
     return () => clearInterval(interval);
-  }, [isStreaming, activeToolName]);
+  }, [isStreaming, activeToolId]);
 
   return { displayedActivity, elapsedSeconds };
 }

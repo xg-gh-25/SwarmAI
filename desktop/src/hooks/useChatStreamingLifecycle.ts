@@ -161,6 +161,14 @@ export interface StreamingActivity {
   toolContext: string | null;
   /** Count of all tool_use blocks in the last assistant message. */
   toolCount: number;
+  /**
+   * Stable id of the current (last) tool_use block. Distinct invocations of the
+   * SAME tool (two `Read`s, or `Read` → think → `Read`) get distinct ids, so the
+   * elapsed-timer anchor can re-anchor per invocation rather than per tool-name —
+   * a name-keyed anchor wrongly treats a recurring name as one continuous run.
+   * ``null`` when there is no tool_use block (Thinking…).
+   */
+  toolId: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -220,7 +228,14 @@ export function deriveStreamingActivity(
       ? (lastToolUse as { summary?: string }).summary ?? null
       : null;
 
-  return { hasContent, toolName, toolContext, toolCount };
+  // Stable per-invocation id — lets the elapsed timer re-anchor on each distinct
+  // tool_use block even when the tool NAME repeats (Read → think → Read).
+  const toolId =
+    lastToolUse && 'id' in lastToolUse
+      ? (lastToolUse as { id?: string }).id ?? null
+      : null;
+
+  return { hasContent, toolName, toolContext, toolCount, toolId };
 }
 
 // ---------------------------------------------------------------------------

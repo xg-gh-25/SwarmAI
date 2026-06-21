@@ -63,7 +63,10 @@ describe('useStreamingActivity — elapsed re-anchoring', () => {
     expect(result.current.elapsedSeconds).toBeGreaterThanOrEqual(3);
   });
 
-  it('AC5: does NOT reset when toolCount increments but toolName is unchanged', () => {
+  it('AC5: does NOT reset while the SAME tool_use block keeps running (stable id)', () => {
+    // The current tool (last tool_use id t1) keeps streaming — re-renders with
+    // the same last-tool id (e.g. its result/summary fills in) must NOT reset
+    // the timer; elapsed reflects how long THIS invocation has run.
     const msgs1 = [assistantMsg([toolUse('t1', 'Bash')])];
     const { result, rerender } = renderHook(
       ({ streaming, messages }) => useStreamingActivity(streaming, messages),
@@ -72,14 +75,14 @@ describe('useStreamingActivity — elapsed re-anchoring', () => {
     act(() => { vi.advanceTimersByTime(5000); });
     expect(result.current.elapsedSeconds).toBeGreaterThanOrEqual(4);
 
-    // Second Bash tool_use (same name) → toolCount 1→2, toolName still "Bash".
-    const msgs2 = [assistantMsg([toolUse('t1', 'Bash'), toolUse('t2', 'Bash')])];
+    // Same tool_use id t1, just more context on the block — still the SAME
+    // running invocation, so no re-anchor.
+    const msgs2 = [assistantMsg([toolUse('t1', 'Bash', 'running tests')])];
     act(() => { rerender({ streaming: true, messages: msgs2 }); });
     act(() => { vi.advanceTimersByTime(300); });
 
     expect(result.current.displayedActivity?.toolName).toBe('Bash');
-    expect(result.current.displayedActivity?.toolCount).toBe(2);
-    // Same tool name → NO reset; elapsed keeps the original anchor (~5s+).
+    // Same invocation (id t1) → NO reset; elapsed keeps the original anchor.
     expect(result.current.elapsedSeconds).toBeGreaterThanOrEqual(5);
   });
 
@@ -109,6 +112,53 @@ describe('useStreamingActivity — elapsed re-anchoring', () => {
     expect(result.current.elapsedSeconds).toBeGreaterThanOrEqual(3);
     act(() => { rerender({ streaming: false }); });
     expect(result.current.elapsedSeconds).toBe(0);
+  });
+
+  it('AC6: re-anchors when the SAME tool name recurs after a Thinking gap (adversarial MED)', () => {
+    // Read(5s) → think(null, 3s) → a NEW Read tool_use. A name-keyed anchor
+    // would suppress the reset (name unchanged across the null gap) and show
+    // elapsed≈8s — the exact stale symptom. Id-keyed anchor re-anchors → ~0.
+    const read1 = [assistantMsg([toolUse('t1', 'Read')])];
+    const { result, rerender } = renderHook(
+      ({ s, m }) => useStreamingActivity(s, m),
+      { initialProps: { s: true, m: read1 } },
+    );
+    act(() => { vi.advanceTimersByTime(5000); });
+    expect(result.current.elapsedSeconds).toBeGreaterThanOrEqual(4);
+
+    // Thinking gap (assistant emits text, no tool) for 3s — anchor kept.
+    const thinking = [assistantMsg([toolUse('t1', 'Read'), textBlock('pondering')])];
+    act(() => { rerender({ s: true, m: thinking }); });
+    act(() => { vi.advanceTimersByTime(3000); });
+
+    // A NEW Read invocation (distinct id t2, same name).
+    const read2 = [assistantMsg([toolUse('t1', 'Read'), textBlock('pondering'), toolUse('t2', 'Read')])];
+    act(() => { rerender({ s: true, m: read2 }); });
+    act(() => { vi.advanceTimersByTime(300); });
+
+    expect(result.current.displayedActivity?.toolName).toBe('Read');
+    // Must re-anchor for the NEW Read invocation, not show the cumulative ~8s.
+    expect(result.current.elapsedSeconds).toBeLessThan(2);
+  });
+
+  it('AC6b: re-anchors on a second same-name tool in sequence (Read→Read)', () => {
+    const read1 = [assistantMsg([toolUse('t1', 'Read')])];
+    const { result, rerender } = renderHook(
+      ({ s, m }) => useStreamingActivity(s, m),
+      { initialProps: { s: true, m: read1 } },
+    );
+    act(() => { vi.advanceTimersByTime(5000); });
+    expect(result.current.elapsedSeconds).toBeGreaterThanOrEqual(4);
+
+    // Second distinct Read (t2) becomes the LAST tool_use → new invocation.
+    const read2 = [assistantMsg([toolUse('t1', 'Read'), toolUse('t2', 'Read')])];
+    act(() => { rerender({ s: true, m: read2 }); });
+    act(() => { vi.advanceTimersByTime(300); });
+
+    // toolCount is 2, name same — but it's a DISTINCT invocation (new id) so
+    // the CURRENT-activity timer must re-anchor (distinct from the AC5 case,
+    // which asserts no-reset when the displayed last-tool id is unchanged).
+    expect(result.current.elapsedSeconds).toBeLessThan(2);
   });
 
   it('AC4: two concurrent keep-mounted tabs track independent elapsed/labels', () => {
