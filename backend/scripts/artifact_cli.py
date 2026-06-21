@@ -1034,31 +1034,29 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                             stage="deliver",
                         )
                     except Exception as _verr:
-                        # Crash-handling principle (run_55710438), corrected per
-                        # Operational review MED-8:
-                        #  - WRAPPED hard checks (_CheckGuard) NO LONGER reach this
-                        #    except — they fail closed INSIDE validate() by appending
-                        #    to errors[], so a wrapped hard-check crash BLOCKS
-                        #    completion (the synthetic "ERRORED (could not run)"
-                        #    message does not match _INFRA_PHRASES → survives as a
-                        #    blocking validator_error below). Same fail-closed
-                        #    direction as ADVANCE (cmd_advance) — intentional.
-                        #  - This except now catches only a validator that crashes
-                        #    BEFORE returning a dict (import error, or a crash in one
-                        #    of the still-UNWRAPPED checks). For THAT residual case we
-                        #    fail OPEN at completion — a validator bug that prevents
-                        #    any dict from being produced must not permanently block
-                        #    every pipeline from completing. NEVER silently: the crash
-                        #    is logged + classified as ERRORED below.
+                        # FAIL-CLOSED on validator-internal crash (run_84316b42,
+                        # reverses run_55710438 MED-8). If validate() raises before
+                        # returning a dict (crash in the pre-load block, an import
+                        # error, or any unwrapped path), the validator could NOT
+                        # produce a verdict — so completion cannot be verified and
+                        # MUST block, exactly like the ADVANCE path (cmd_advance).
+                        #
+                        # The prior fail-open rationale ("a validator bug must not
+                        # permanently block every pipeline") does NOT hold: ADVANCE
+                        # is hit on every stage transition and already fails closed
+                        # on this same condition, so a real validator bug already
+                        # blocks upstream. Failing open here only opened a hole at
+                        # the LAST gate before status=completed (C037/CLASS A).
+                        # Surfacing the crash as a blocking error is the correct,
+                        # actionable response — the user fixes the validator, same
+                        # as advance. No silent fail-open at the final gate.
                         result = None
-                        import sys as _sys
-                        print(json.dumps({
-                            "warning": f"deliver validator ERRORED (could not run): "
-                                       f"{type(_verr).__name__}: {_verr}. Completion "
-                                       f"fails open on validator-internal crash (see "
-                                       f"cmd_advance for the fail-closed advance path).",
-                            "errored_check": "deliver_validate",
-                        }), file=_sys.stderr)
+                        validator_errors.append(
+                            f"[deliver] validator ERRORED (could not run): "
+                            f"{type(_verr).__name__}: {_verr}. Cannot verify deliver "
+                            f"stage — fix the validator or input before completing "
+                            f"(fail-closed, symmetric with the advance path)."
+                        )
                     if result and result.get("errors"):
                         # Filter infrastructure errors (test env, stale data, missing files).
                         # Only keep SEMANTIC errors (wrong tier, unresolved findings, etc.)
@@ -1079,14 +1077,22 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                     }))
                     return
             except Exception as exc:
-                # Validator crash should not block completion — log warning and continue.
-                # Better to complete with a warning than to permanently block all pipelines
-                # due to a validator bug. The warning is visible in output.
-                import sys as _sys
+                # FAIL-CLOSED on validator-gate crash (run_84316b42, reverses
+                # run_55710438 MED-8). This wraps the validator IMPORT + the gate
+                # logic. If the validator module cannot even load, or the gate
+                # itself raises, we cannot verify the run — so block, do not
+                # complete. Symmetric with ADVANCE. Returning here (not falling
+                # through) is what makes it fail closed: the status=completed
+                # write below is never reached.
                 print(json.dumps({
-                    "warning": f"Validator gate failed (non-blocking): {exc}",
+                    "error": "Cannot mark completed: pipeline validator gate ERRORED "
+                             "(could not run) — completion cannot be verified. Fix the "
+                             "validator before declaring the run done (fail-closed, "
+                             "symmetric with the advance path).",
                     "pipeline_id": args.run_id,
-                }), file=_sys.stderr)
+                    "validator_error": f"{type(exc).__name__}: {exc}",
+                }))
+                return
 
             # ── GOAL PROFILE: Adversarial Review Gate (BLOCKING) ──
             # Goal profile has no DELIVER stage, so the artifact_id gate above

@@ -461,32 +461,43 @@ class TestCompletionFailsClosedOnValidatorCrash:
             sys.path.insert(0, _scripts_dir)
         import scripts.artifact_cli as cli
         from core.artifact_registry import ArtifactRegistry
-        # bugfix run with a completed deliver stage carrying an artifact_id
+        # Substantive lessons (>20 chars, actionable) so the REFLECT gate passes
+        # and the run reaches the VALIDATOR gate — the path under test.
+        _L = "The completion gate must fail closed on validator crash, symmetric with advance"
         _create_run(workspace, "TestProject", "run_crash", "running", stages=[
-            {"stage": "evaluate", "status": "completed", "stage_doc_consumed": True, "artifact_id": "a_e"},
-            {"stage": "think", "status": "completed", "stage_doc_consumed": True, "artifact_id": "a_t"},
-            {"stage": "plan", "status": "completed", "stage_doc_consumed": True, "artifact_id": "a_p"},
-            {"stage": "build", "status": "completed", "stage_doc_consumed": True, "artifact_id": "a_b"},
-            {"stage": "review", "status": "completed", "stage_doc_consumed": True, "artifact_id": "a_r"},
-            {"stage": "test", "status": "completed", "stage_doc_consumed": True, "artifact_id": "a_te"},
-            {"stage": "deliver", "status": "completed", "stage_doc_consumed": True, "artifact_id": "a_d"},
+            {"stage": "evaluate", "status": "completed", "stage_doc_consumed": True, "artifact_id": "a_e", "token_cost": 5000},
+            {"stage": "think", "status": "completed", "stage_doc_consumed": True, "artifact_id": "a_t", "token_cost": 5000},
+            {"stage": "plan", "status": "completed", "stage_doc_consumed": True, "artifact_id": "a_p", "token_cost": 5000},
+            {"stage": "build", "status": "completed", "stage_doc_consumed": True, "artifact_id": "a_b", "token_cost": 5000},
+            {"stage": "review", "status": "completed", "stage_doc_consumed": True, "artifact_id": "a_r", "token_cost": 5000},
+            {"stage": "test", "status": "completed", "stage_doc_consumed": True, "artifact_id": "a_te", "token_cost": 5000},
+            {"stage": "deliver", "status": "completed", "stage_doc_consumed": True, "artifact_id": "a_d", "token_cost": 5000,
+             "adversarial_review": {"spawned": True, "profile_tier": "bugfix",
+                                    "findings_total": 0, "findings_fixed": 0, "findings_remaining": 0, "findings": []}},
             {"stage": "reflect", "status": "completed", "stage_doc_consumed": True,
-             "lessons": ["a real lesson about the gate"]},
+             "token_cost": 5000, "lessons": [_L, _L + " (two)"]},
         ])
-        # set profile=bugfix
         rf = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_crash" / "run.json"
         d = _read_run(rf); d["profile"] = "bugfix"; rf.write_text(json.dumps(d))
+        # REPORT.md must exist + be >500 bytes (completion gate checks it)
+        (rf.parent / "REPORT.md").write_text("# Pipeline Report\n\n" + ("detail. " * 100))
         return cli, ArtifactRegistry(workspace), rf
 
     def _args(self):
-        class _Args:
-            project = "TestProject"
-            run_id = "run_crash"
-            status = "completed"
-            stage_json = None
-            profile = None
-            ddd_checksums = None
-        return _Args()
+        import argparse
+        # All attrs cmd_run_update may read, defaulted None; override what matters.
+        attrs = ("active_only actual_effort adversarial_count alternatives backend "
+                 "categories command context data ddd_checksums dismissed escalated "
+                 "evaluation_id event files_estimated fixed frontend full indicators "
+                 "lessons limit modules outcome overlap partial probes producer profile "
+                 "project reason requirement resolved retries review_count rp_violations "
+                 "run_id scope stage stage_json state status summary taste_decision "
+                 "timestamp tokens_consumed topic type types user_override").split()
+        ns = argparse.Namespace(**{a: None for a in attrs})
+        ns.project = "TestProject"
+        ns.run_id = "run_crash"
+        ns.status = "completed"
+        return ns
 
     def test_completion_blocked_when_validator_raises(self, workspace, capsys, monkeypatch):
         """validate() raising mid-gate → completion BLOCKED, run NOT marked completed."""
@@ -519,3 +530,61 @@ class TestCompletionFailsClosedOnValidatorCrash:
         combined = out.out + out.err
         assert "ERRORED" in combined or "could not" in combined.lower() or "crash" in combined.lower(), \
             f"crash must be surfaced: {combined[:400]}"
+
+    def test_normal_completion_still_succeeds(self, workspace, capsys, monkeypatch):
+        """AC4 no-regression: when validate() returns a clean dict (no crash),
+        completion proceeds — the fail-closed change must NOT block healthy runs."""
+        cli, reg, rf = self._setup(workspace)
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        # Make the in-process validator return a clean valid result (no crash).
+        import importlib.util as _ilu
+        real_from_spec = _ilu.module_from_spec
+
+        def clean_module(spec):
+            mod = real_from_spec(spec)
+            if spec.name == "pipeline_validator":
+                orig_exec = spec.loader.exec_module
+                def exec_and_stub(m):
+                    orig_exec(m)
+                    m.validate = lambda *a, **k: {
+                        "valid": True, "stage": "deliver", "errors": [],
+                        "warnings": [], "errored": [], "check_results": [],
+                        "checks_passed": 1, "checks_total": 1,
+                    }
+                spec.loader.exec_module = exec_and_stub
+            return mod
+        monkeypatch.setattr(_ilu, "module_from_spec", clean_module)
+
+        cli.cmd_run_update(self._args(), reg)
+        data = _read_run(rf)
+        assert data["status"] == "completed", \
+            f"clean validator result must complete, got {data['status']}"
+
+    def test_genuine_validator_errors_still_block(self, workspace, capsys, monkeypatch):
+        """AC5 no-regression: a validator that RETURNS valid=False (content error,
+        not a crash) still blocks — unchanged behavior on the result path."""
+        cli, reg, rf = self._setup(workspace)
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        import importlib.util as _ilu
+        real_from_spec = _ilu.module_from_spec
+
+        def err_module(spec):
+            mod = real_from_spec(spec)
+            if spec.name == "pipeline_validator":
+                orig_exec = spec.loader.exec_module
+                def exec_and_stub(m):
+                    orig_exec(m)
+                    m.validate = lambda *a, **k: {
+                        "valid": False, "stage": "deliver",
+                        "errors": ["Depth: adversarial_review has 1 unresolved HIGH finding(s)"],
+                        "warnings": [], "errored": [], "check_results": [],
+                        "checks_passed": 0, "checks_total": 1,
+                    }
+                spec.loader.exec_module = exec_and_stub
+            return mod
+        monkeypatch.setattr(_ilu, "module_from_spec", err_module)
+
+        cli.cmd_run_update(self._args(), reg)
+        data = _read_run(rf)
+        assert data["status"] != "completed", \
+            f"validator content errors must block, got {data['status']}"
