@@ -2356,6 +2356,40 @@ export function useChatStreamingLifecycle(
           if (resultStore) {
             resultStore.endStreaming();
           }
+
+          // ── H2: unconditional turn-end reconcile-from-DB (backstop) ──
+          // Even when H1 correlation succeeds, fetch the canonical DB rows once
+          // per turn so any turn whose placeholder could NOT be correlated
+          // (continuation paths pass no client_id) still finalizes: the empty
+          // placeholder is replaced/cleaned by reconcile (MessageStore Pass 2
+          // drops a stale empty assistant placeholder once a real DB assistant
+          // row is present). This is the safety net for the "Thinking forever"
+          // hang — it runs on EVERY result (not only when a thunk was queued).
+          // Debounced + guarded: only at turn-end (result), NEVER on the delta
+          // path; phase-gated inside store.reconcile() (NO-OP if streaming
+          // restarted). Fire-and-forget — failure is non-fatal (retry next turn).
+          if (resultStore && sid) {
+            if (tabState?._turnEndReconcileTimer) {
+              clearTimeout(tabState._turnEndReconcileTimer);
+            }
+            const reconcileSid = sid;
+            const reconcileTabId = capturedTabId;
+            const timer = setTimeout(() => {
+              chatService.invalidateMessageCache(reconcileSid);
+              chatService.getSessionMessages(reconcileSid).then((msgs) => {
+                const s = reconcileTabId ? messageStoreRegistry.get(reconcileTabId) : null;
+                if (!s) return;
+                s.reconcile(msgs);
+                // Sync to React only if this tab is still the active one.
+                if (reconcileTabId === activeTabIdRef.current) {
+                  setMessages(s.getSnapshot());
+                }
+                const ts = reconcileTabId ? tabMapRef.current.get(reconcileTabId) : null;
+                if (ts) ts.messages = s.messages;
+              }).catch(() => { /* non-fatal: next turn re-reconciles */ });
+            }, 200);
+            if (tabState) tabState._turnEndReconcileTimer = timer;
+          }
           // Sync final state to React — ONLY if this tab is active.
           // Cross-tab isolation: never push a background tab's messages into
           // the currently displayed React state. The tabState.messages cache

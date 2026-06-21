@@ -209,6 +209,11 @@ export interface UnifiedTab {
   /** Disconnect recovery timeout handle — clears reconnecting state after 30s
    *  and triggers DB message recovery. Cleared on stream recovery or tab close. */
   _disconnectTimeoutId?: ReturnType<typeof setTimeout>;
+  /** H2 turn-end reconcile debounce handle — fires an unconditional
+   *  reconcile-from-DB 200ms after a `result` event so any turn whose
+   *  placeholder could not be correlated still finalizes (no "Thinking forever").
+   *  Cleared/re-armed on each result; NEVER set on the delta path. */
+  _turnEndReconcileTimer?: ReturnType<typeof setTimeout>;
   /** Set true when the reconcile loop force-cleared this tab but the DB-recovery
    *  fetch failed (backend unreachable) — leaving a frozen partial response.
    *  The backend-recovered handler retries the DB reconcile for flagged tabs. */
@@ -656,6 +661,13 @@ export function useUnifiedTabState(
         } catch {
           // already aborted — safe to ignore
         }
+      }
+
+      // Clear the H2 turn-end reconcile debounce so it can't fire after close.
+      // (Defensive — the timer body also no-ops when the store is destroyed.)
+      if (tab._turnEndReconcileTimer) {
+        clearTimeout(tab._turnEndReconcileTimer);
+        tab._turnEndReconcileTimer = undefined;
       }
 
       // Destroy the MessageStore for this tab (cleanup timers, listeners)

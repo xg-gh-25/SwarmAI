@@ -618,6 +618,65 @@ describe('MessageStore — recovery uses replace (no duplicated frozen partial)'
 
 // ─── ClientId Dedup (AC4/AC5) ───
 
+describe('MessageStore H2 — empty assistant placeholder cleanup on reconcile', () => {
+  // H2 backstop (run_af36e709): continuation paths (continue_with_answer/
+  // permission) pass no client_id, so their assistant rows have no correlation
+  // key and their placeholders keep numeric ids. Without cleanup, reconcile adds
+  // the real DB assistant row (Pass 1) AND preserves the orphan empty placeholder
+  // (Pass 2) = a ghost empty bubble next to the real one. Empirically verified.
+  // Fix: Pass 2 drops an empty assistant placeholder ONLY when the merged set
+  // already contains a real (non-empty) assistant message — so a slow-persist
+  // race never blanks the turn (the placeholder survives until real content
+  // exists somewhere).
+
+  it('drops orphan empty assistant placeholder when a real DB assistant row arrived', () => {
+    const store = new MessageStore();
+    store.replace([
+      makeMsg('local-1-u', 'user', 'Q'),
+      { id: '1718999', role: 'assistant', content: [], timestamp: new Date().toISOString() },
+    ]);
+    store.reconcile([
+      { id: 'u1', sessionId: 'sess-1', role: 'user', content: [{ type: 'text', text: 'Q' }] as any, createdAt: new Date().toISOString(), metadata: { client_id: 'local-1-u' } },
+      { id: 'a1', sessionId: 'sess-1', role: 'assistant', content: [{ type: 'text', text: 'A' }] as any, createdAt: new Date().toISOString() },
+    ]);
+    // Exactly 2 — the orphan empty placeholder ('1718999') is gone.
+    expect(store.messages.map(m => m.id)).toEqual(['u1', 'a1']);
+    expect(store.messages.filter(m => m.role === 'assistant')).toHaveLength(1);
+    store.destroy();
+  });
+
+  it('KEEPS empty assistant placeholder when no real assistant row exists yet (no premature blank)', () => {
+    const store = new MessageStore();
+    store.replace([
+      makeMsg('local-1-u', 'user', 'Q'),
+      { id: '1718999', role: 'assistant', content: [], timestamp: new Date().toISOString() },
+    ]);
+    // DB has only the user row (assistant persist hasn't landed yet — race).
+    store.reconcile([
+      { id: 'u1', sessionId: 'sess-1', role: 'user', content: [{ type: 'text', text: 'Q' }] as any, createdAt: new Date().toISOString(), metadata: { client_id: 'local-1-u' } },
+    ]);
+    // Placeholder MUST survive — dropping it would blank the in-flight turn.
+    expect(store.messages.some(m => m.id === '1718999')).toBe(true);
+    store.destroy();
+  });
+
+  it('does not drop a NON-empty assistant message during reconcile', () => {
+    // A real local assistant message (content present) is never dropped.
+    const store = new MessageStore();
+    store.replace([
+      makeMsg('local-1-u', 'user', 'Q'),
+      { id: 'local-asst-real', role: 'assistant', content: [{ type: 'text', text: 'already streamed' }], timestamp: new Date().toISOString() },
+    ]);
+    store.reconcile([
+      { id: 'u1', sessionId: 'sess-1', role: 'user', content: [{ type: 'text', text: 'Q' }] as any, createdAt: new Date().toISOString(), metadata: { client_id: 'local-1-u' } },
+      { id: 'a1', sessionId: 'sess-1', role: 'assistant', content: [{ type: 'text', text: 'A' }] as any, createdAt: new Date().toISOString() },
+    ]);
+    // The non-empty local assistant survives (local-only preservation intact).
+    expect(store.messages.some(m => m.id === 'local-asst-real')).toBe(true);
+    store.destroy();
+  });
+});
+
 describe('MessageStore assistant clientId correlation (P4 streaming-never-finalizes)', () => {
   // Incident (run_af36e709): the assistant placeholder id was numeric
   // (Date.now()+1), so it never started with "local-" and could not be

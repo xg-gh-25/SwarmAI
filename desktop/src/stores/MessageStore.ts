@@ -543,11 +543,33 @@ export class MessageStore {
       }
     }
 
+    // H2 backstop: does the merged (DB-derived) set already contain a real,
+    // non-empty assistant message? If so, any leftover EMPTY assistant
+    // placeholder is stale — its content either arrived via DB or never will.
+    // Dropping it prevents the ghost-empty-bubble that appears beside the real
+    // reply on paths where the placeholder couldn't be correlated (continuation
+    // turns pass no client_id, keep numeric placeholder ids). We require a real
+    // assistant row to exist FIRST so a slow assistant-persist race never blanks
+    // an in-flight turn — the placeholder survives until real content exists.
+    const hasRealAssistant = merged.some(
+      (m) => m.role === 'assistant' && m.content.length > 0,
+    );
+
     // Pass 2: Preserve local-only messages not in DB
     // (queued messages, synthetic boundaries, resume markers)
     // Skip messages already matched by clientId (they were replaced by DB version in Pass 1)
     for (const local of this._messages) {
       if (!dbIds.has(local.id) && !matchedByClientId.has(local.id)) {
+        // H2: drop a stale empty assistant placeholder once real content exists.
+        // Never drop the streaming message (defensive — reconcile is idle-gated).
+        if (
+          hasRealAssistant &&
+          local.role === 'assistant' &&
+          local.content.length === 0 &&
+          local.id !== this._streamingMessageId
+        ) {
+          continue;
+        }
         // Local-only: insert at chronological position in merged
         const insertIdx = this._findChronologicalPosition(merged, local.timestamp);
         merged.splice(insertIdx, 0, local);
