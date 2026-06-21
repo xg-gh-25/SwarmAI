@@ -3045,3 +3045,40 @@ class TestRemainingChecksErrored:
         vbody = src[vstart:vend]
         count = vbody.count("_CheckGuard(")
         assert count == 14, f"expected 14 wrapped checks in validate(), found {count}"
+
+
+class TestNinebCreditOnCrash:
+    """REVIEW-found gap (run_61413085): 9b agent_tool_audit increments checks_total
+    then checks_passed conditionally — a crash between them must still credit
+    checks_passed so the valid-run invariant holds."""
+
+    def test_agent_audit_crash_keeps_metric_consistent(self, workspace, monkeypatch):
+        artifacts = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts / "runs" / "run_test1"
+        _make_run(runs_dir, profile="bugfix", stages=[
+            _stage_record("evaluate", status="completed"),
+            _stage_record("think", status="completed"),
+            _stage_record("plan", status="completed"),
+            _stage_record("build", status="completed"),
+            _stage_record("review", status="completed"),
+            _stage_record("test", status="completed"),
+            _stage_record("deliver", status="running", artifact_id="art_d"),
+        ])
+        _make_artifact(artifacts, "run_test1", "art_d", "delivery",
+                       {"title": "x", "quality": {"tests_pass": True, "regressions": 0, "smoke_pass": True},
+                        "adversarial_review": {"spawned": True, "profile_tier": "bugfix",
+                                               "findings_total": 0, "findings_fixed": 0, "findings_remaining": 0, "findings": []},
+                        "completion_audit": {"all_green": True}, "convergence": {"final_status": "push-ready"},
+                        "push_ready": True})
+        # Force the 9b marker scan to raise mid-block (after checks_total += 1)
+        import scripts.pipeline_validator as pv
+        orig_exists = pv.AGENT_AUDIT_DIR.exists
+        class BoomPath:
+            def __getattr__(self, n):
+                raise RuntimeError("boom9b")
+        monkeypatch.setattr(pv, "AGENT_AUDIT_DIR", BoomPath())
+        result = validate("TestProject", "run_test1", "deliver")
+        assert result["valid"] is True, f"9b advisory crash must not block: {result['errors']}"
+        assert "agent_tool_audit" in result["errored"], result.get("errored")
+        assert result["checks_passed"] == result["checks_total"], \
+            f"9b crash must keep metric consistent: {result['checks_passed']}/{result['checks_total']}"

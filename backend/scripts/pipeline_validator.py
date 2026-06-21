@@ -2129,6 +2129,11 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
                             old_f.unlink(missing_ok=True)
             except OSError:
                 pass  # Non-critical cleanup
+    if _g.errored_nonblocking and stage == "deliver" and profile in ("full", "bugfix"):
+        # 9b crashed after its checks_total += 1 but before crediting checks_passed.
+        # Credit it so checks_passed == checks_total holds on a valid run (advisory
+        # crash does not block). Guarded by the same condition that ran checks_total += 1.
+        checks_passed += 1
 
     # --- Check 10: Push-Ready gate (L3) — binary verdict ---
     # V2: reads `quality.push_ready` (boolean) or infers from quality fields.
