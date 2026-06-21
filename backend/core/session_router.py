@@ -911,9 +911,17 @@ class SessionRouter:
             except asyncio.TimeoutError:
                 break  # deadline exceeded
 
-            # Re-check under lock after wake — use force=True because the user
-            # is already queued and waiting; grace period only protects the
-            # initial eviction attempt (the "polite" first try at line 848).
+            # Re-check under lock after wake. Use force=FALSE here: a wake fires
+            # whenever ANY session goes idle (_on_unit_state_change sets
+            # _slot_available on streaming→idle). If we forced here, a queued
+            # waker would force-kill a peer that *just* went idle (within grace)
+            # the instant it answered — the 2026-06-21 incident: a queued
+            # reconnect session force-killed a user's warm tab 66ms after it
+            # answered (idle 0s), then the user waited 2m28s to re-acquire.
+            # force=False lets the grace filter protect freshly-idled tabs; the
+            # waker still progresses by evicting any STALE (>grace) idle, or via
+            # the timeout last-resort below. Eviction cost (warm context lost +
+            # cold resume) >> a bounded wait.
             async with self._slot_lock:
                 max_tabs = resource_monitor.compute_max_tabs()
                 chat_max = max_tabs - 1
@@ -921,12 +929,14 @@ class SessionRouter:
                     budget = resource_monitor.spawn_budget(alive_count=self.alive_count)
                     if budget.can_spawn:
                         return "queued"
-                if await self._evict_idle(exclude=requesting_unit, force=True):
+                if await self._evict_idle(exclude=requesting_unit, force=False):
                     return "queued"
             # Slot claimed by another coroutine — loop back to wait
 
         # Queue timed out — last resort: force-evict the longest-idle session
         # even if within grace period. Better than failing the user request.
+        # MUST stay force=True — this is the SOLE anti-starvation guarantee once
+        # the per-wake path (above) was made grace-respecting. Do not soften.
         async with self._slot_lock:
             if await self._evict_idle(exclude=requesting_unit, force=True):
                 logger.info(
