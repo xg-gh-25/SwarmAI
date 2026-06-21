@@ -735,9 +735,10 @@ class TestCompletionFailsClosedOnValidatorCrash:
                 orig_exec = spec.loader.exec_module
                 def exec_and_stub(m):
                     orig_exec(m)
+                    # Exact validator sentinel (pipeline_validator L1493).
                     m.validate = lambda *a, **k: {
                         "valid": False, "stage": "deliver",
-                        "errors": ["no stage record for deliver in this context"],
+                        "errors": ["No stage record found for 'deliver' in run run_crash"],
                         "warnings": [], "errored": [], "check_results": [],
                         "checks_passed": 0, "checks_total": 1,
                     }
@@ -749,3 +750,43 @@ class TestCompletionFailsClosedOnValidatorCrash:
         data = _read_run(rf)
         assert data["status"] == "completed", \
             f"environmental 'no stage record' must stay filtered (no block), got {data['status']}"
+
+    def test_substring_not_found_in_real_error_still_blocks(self, workspace, capsys, monkeypatch):
+        """Adversarial MED (run_95fc9b6a): the filter must ANCHOR on the full
+        environmental sentinel, not loosely match 'not found'. A fail-CLOSED
+        crash message like a hard-check ERRORED with 'FileNotFoundError: ...
+        not found' contains the substring 'not found' but is a REAL block — it
+        must NOT be suppressed. Proves the anchored match closed the substring-
+        collision fail-open hole."""
+        cli, reg, rf = self._setup(workspace)
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        import importlib.util as _ilu
+        real_from_spec = _ilu.module_from_spec
+
+        def err_module(spec):
+            mod = real_from_spec(spec)
+            if spec.name == "pipeline_validator":
+                orig_exec = spec.loader.exec_module
+                def exec_and_stub(m):
+                    orig_exec(m)
+                    # A hard-check crash string that happens to contain "not found"
+                    # but is NOT the environmental run/stage-missing sentinel.
+                    m.validate = lambda *a, **k: {
+                        "valid": False, "stage": "deliver",
+                        "errors": ["Check 'artifact_exists' ERRORED (could not run): "
+                                   "FileNotFoundError: [Errno 2] deliver data file not found"],
+                        "warnings": [], "errored": [], "check_results": [],
+                        "checks_passed": 0, "checks_total": 1,
+                    }
+                spec.loader.exec_module = exec_and_stub
+            return mod
+        monkeypatch.setattr(_ilu, "module_from_spec", err_module)
+
+        cli.cmd_run_update(self._args(), reg)
+        out = capsys.readouterr()
+        data = _read_run(rf)
+        assert data["status"] != "completed", \
+            f"a real error merely containing 'not found' must still block, got {data['status']}"
+        combined = (out.out + out.err).lower()
+        assert "errored" in combined or "filenotfounderror" in combined, \
+            f"the real crash error must be surfaced, not filtered: {combined[:400]}"

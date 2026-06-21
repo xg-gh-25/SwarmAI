@@ -1086,13 +1086,24 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                         # guard above — so a claimed-but-unloadable deliver artifact
                         # means the deliver stage CANNOT be verified, which must BLOCK
                         # completion, not be suppressed as noise (fail-open at the last
-                        # gate = C037/CLASS A). "not found" / "no stage record" stay:
-                        # those mean the run/stage doesn't exist, which is legitimately
-                        # environmental for the completion gate.
-                        _INFRA_PHRASES = ("not found", "no stage record")
+                        # gate = C037/CLASS A).
+                        #
+                        # ANCHORED match, not loose substring (adversarial MED,
+                        # run_95fc9b6a): these are the validator's two EXACT
+                        # early-return sentinels for "run/stage does not exist"
+                        # (pipeline_validator L1472 + L1493). A loose "not found"
+                        # substring would also swallow a fail-CLOSED crash message
+                        # like "...ERRORED: FileNotFoundError: ... not found",
+                        # re-opening the very fail-open hole this fix closes. Anchor
+                        # on the full sentinel phrasing so only the genuinely-
+                        # environmental run/stage-missing cases are suppressed.
+                        _INFRA_SENTINELS = (
+                            "not found for project",       # "Pipeline run X not found for project Y"
+                            "no stage record found for",   # "No stage record found for 'S' in run X"
+                        )
                         errors_list = [
                             e for e in result["errors"]
-                            if not any(phrase in e.lower() for phrase in _INFRA_PHRASES)
+                            if not any(s in e.lower() for s in _INFRA_SENTINELS)
                         ]
                         for err in errors_list:
                             validator_errors.append(f"[deliver] {err}")
