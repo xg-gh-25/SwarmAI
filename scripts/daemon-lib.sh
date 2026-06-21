@@ -118,8 +118,16 @@ _deploy_daemon_binary() {
 
     mkdir -p "$DAEMON_DIR"
 
-    # Deploy onedir bundle via rsync (fast incremental sync)
-    rsync -a --delete "$BACKEND_BUNDLE_DIR/" "$DAEMON_DIR/"
+    # Deploy onedir bundle via rsync (fast incremental sync).
+    # Exclude resources/ and .version from --delete: they live in $DAEMON_DIR
+    # but NOT in the binary bundle, so a bare --delete would wipe them ~50s
+    # before they are re-copied below (L139)/rewritten (L132). A daemon that
+    # KeepAlive restarts inside that window can't find default-agent.json and
+    # silently falls back to DB defaults. Excluding them from --delete means
+    # they are never momentarily absent. --delete still prunes stale _internal
+    # files (the exclude is surgical, not a blanket --delete removal).
+    rsync -a --delete --exclude='resources' --exclude='.version' \
+        "$BACKEND_BUNDLE_DIR/" "$DAEMON_DIR/"
     chmod +x "$DAEMON_BINARY"
     _ok "Daemon bundle deployed: $(du -sh "$DAEMON_DIR" | cut -f1)"
 
