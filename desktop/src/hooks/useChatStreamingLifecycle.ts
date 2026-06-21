@@ -3256,17 +3256,18 @@ export function useChatStreamingLifecycle(
               // long agent turn can outlive the connection. Mark the tab as
               // post-disconnect-uncertain so a follow-up send is QUEUED
               // (shouldQueueSend) instead of escaping to a normal send →
-              // SESSION_BUSY → orphan delete → silent message loss. Also fire a
-              // best-effort stopSession so the backend transitions out of
-              // STREAMING; the 15s reconcile loop then confirms idle and drains
-              // any queued message. Cleared on next send (handleSendMessage).
+              // SESSION_BUSY → orphan delete → silent message loss. Cleared on
+              // next send (handleSendMessage).
               currentTab._postDisconnectUncertain = true;
               currentTab._postDisconnectAt = Date.now(); // for reconcile time-cap
-              if (currentTab.sessionId) {
-                chatService.stopSession(currentTab.sessionId).catch(() => {
-                  // Best-effort — reconcile loop is the fallback
-                });
-              }
+              // NOTE (2026-06-21, zombie-poison fix): do NOT POST /stop here.
+              // (Same fix as the terminal mid-stream-failure branch below.)
+              // /stop → interrupt_session → kill-on-timeout POISONS the
+              // subprocess → next send zombie_via_error → manual-Continue loop.
+              // The backend's _recover_streaming_on_disconnect already
+              // transitions STREAMING → IDLE and soft-interrupts (leaves the
+              // subprocess alive so a long tool-loop finishes → output persists
+              // to DB). The 15s reconcile loop then drains any queued message.
               // Toast is fine here (30s elapsed = real problem)
               addToast({ severity: 'warning', message: 'Connection lost after self-heal attempt. Send your message again to continue.', autoDismiss: true });
             }
@@ -3292,22 +3293,21 @@ export function useChatStreamingLifecycle(
           }
         }
 
-        // --- Gap 2 fix: explicitly stop backend session ---
-        // The backend's disconnect recovery (_recover_streaming_on_disconnect)
-        // may not have fired yet — the frontend stall timer (45s) can detect
-        // the problem before the backend's heartbeat loop (15s interval)
-        // notices the dead TCP connection.  Without this, the user sends a
-        // new message while the backend is still in STREAMING → force_unstick
-        // → kill → --resume → replays old output.
+        // NOTE (2026-06-21, zombie-poison fix): do NOT POST /stop here.
+        // This was a stale "Gap 2 fix" that explicitly stopped the backend
+        // session on mid-stream disconnect. But /stop → interrupt_session →
+        // kill-on-timeout POISONS the subprocess turn-state, so the next
+        // send() reused a poisoned subprocess → instant empty
+        // error_during_execution → zombie_via_error → kill+--resume → the
+        // "response stops half-way, must click Continue" loop.
         //
-        // Fire-and-forget: if stop fails, the backend disconnect recovery
-        // or the force_unstick fallback in send() still handles it.
-        const stopSessionId = tabState?.sessionId;
-        if (stopSessionId) {
-          chatService.stopSession(stopSessionId).catch(() => {
-            // Best-effort — backend disconnect recovery is the fallback
-          });
-        }
+        // The backend already handles SSE disconnect gracefully via
+        // _recover_streaming_on_disconnect: it transitions STREAMING → IDLE
+        // (so the next send() takes the normal IDLE path, NOT force_unstick)
+        // and soft-interrupts the subprocess, LEAVING IT ALIVE on timeout so
+        // a long tool-loop finishes and its output persists to DB for
+        // reconciliation recovery. The frontend stop was both redundant and
+        // the actual source of the poison. Trust the backend recovery.
 
         // If this was a successful reconnection that then failed mid-stream,
         // fire the toast for the reconnection success (handled by stream handler).

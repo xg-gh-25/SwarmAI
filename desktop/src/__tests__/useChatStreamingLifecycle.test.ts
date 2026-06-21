@@ -90,6 +90,7 @@ import type { StreamEvent } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
 import type { Message, ContentBlock } from '../types';
 import { messageStoreRegistry } from '../stores/MessageStore';
+import { chatService } from '../services/chat';
 import {
   testTabMap,
   testTabMapRef as _testTabMapRef,
@@ -435,6 +436,45 @@ describe('useChatStreamingLifecycle', () => {
       expect((content[0] as { text: string }).text).toContain(
         'Connection interrupted',
       );
+    });
+
+    it('does NOT call chatService.stopSession on mid-stream disconnect (zombie-poison fix)', () => {
+      // ROOT CAUSE (2026-06-21): a stale "Gap 2 fix" in the error handler
+      // POSTed /stop on mid-stream disconnect → backend interrupt_session →
+      // kill → poisoned subprocess → next send zombie_via_error → manual
+      // Continue loop. The backend's _recover_streaming_on_disconnect already
+      // transitions STREAMING → IDLE (soft-interrupt, leaves subprocess alive),
+      // so the frontend stop is both redundant AND harmful. The error handler
+      // must NOT call stopSession.
+      const stopSpy = vi
+        .spyOn(chatService, 'stopSession')
+        .mockResolvedValue({ status: 'ok', message: '' });
+      try {
+        const msgId = 'msg-disc';
+        const tabId = 'tab-disc';
+        initTestTab(tabId, [
+          makeMessage({ id: msgId, role: 'assistant', content: [] }),
+        ]);
+        // Mid-stream disconnect state: data already received + heal grace
+        // already elapsed so the terminal "mid-stream failure" branch runs.
+        const tab = testTabMap.get(tabId)!;
+        tab.sessionId = 'sess-disc';
+        tab.hasReceivedData = true;
+        tab.reconnectionAttempt = 3; // exhausted
+        (tab as unknown as { _healGraceActive: boolean })._healGraceActive = true;
+
+        const { result } = renderHook(() =>
+          useChatStreamingLifecycle(createMockDeps()),
+        );
+        const errorHandler = result.current.createErrorHandler(msgId, tabId);
+        act(() => {
+          errorHandler(new Error('Premature SSE disconnect'));
+        });
+
+        expect(stopSpy).not.toHaveBeenCalled();
+      } finally {
+        stopSpy.mockRestore();
+      }
     });
   });
 });
