@@ -59,19 +59,25 @@ def test_daemon_lib_exists():
     assert DAEMON_LIB.is_file(), f"daemon-lib.sh not found at {DAEMON_LIB}"
 
 
-def test_ac1_rsync_excludes_resources():
-    """AC1: the deploy rsync must exclude 'resources' from --delete."""
+def test_ac1_rsync_excludes_resources_anchored():
+    """AC1: deploy rsync must exclude resources from --delete, ANCHORED (/resources).
+
+    Anchoring matters: a non-anchored 'resources' would also protect a nested
+    bundle dir like _internal/limits/resources (which really ships in the
+    bundle), silently freezing it. The pattern MUST be '/resources'.
+    """
     line = _deploy_rsync_line()
-    assert re.search(r"--exclude(=|\s+)['\"]?resources['\"]?", line), (
-        f"rsync --delete must --exclude resources to avoid the deploy-window wipe. Got: {line}"
+    assert re.search(r"--exclude(=|\s+)['\"]?/resources['\"]?", line), (
+        f"rsync --delete must --exclude '/resources' (anchored, leading slash) so it "
+        f"protects only top-level $DAEMON_DIR/resources, not nested bundle dirs. Got: {line}"
     )
 
 
-def test_ac2_rsync_excludes_version():
-    """AC2: the deploy rsync must exclude '.version' from --delete."""
+def test_ac2_rsync_excludes_version_anchored():
+    """AC2: deploy rsync must exclude .version from --delete, ANCHORED (/.version)."""
     line = _deploy_rsync_line()
-    assert re.search(r"--exclude(=|\s+)['\"]?\.version['\"]?", line), (
-        f"rsync --delete must --exclude .version (rewritten separately). Got: {line}"
+    assert re.search(r"--exclude(=|\s+)['\"]?/\.version['\"]?", line), (
+        f"rsync --delete must --exclude '/.version' (anchored). Got: {line}"
     )
 
 
@@ -87,17 +93,26 @@ def test_ac5_execution_resources_survive_real_rsync(tmp_path):
     This reproduces the deploy and proves the fix on the real (possibly
     openrsync on macOS) binary — not the man page (P1: verify, don't infer).
     """
-    src = tmp_path / "bundle"          # binary bundle — NO resources/
+    src = tmp_path / "bundle"          # binary bundle — NO top-level resources/
     dst = tmp_path / "daemon"          # daemon dir — HAS resources/.version
     (src / "_internal").mkdir(parents=True)
     (src / "python-backend").write_text("new-binary")
     (src / "_internal" / "lib_new.so").write_text("new")
+    # A NESTED 'resources' dir that legitimately ships in the bundle
+    # (real example: _internal/limits/resources/redis/lua_scripts). The exclude
+    # must be anchored so this STILL syncs — non-anchored would freeze it.
+    (src / "_internal" / "limits" / "resources").mkdir(parents=True)
+    (src / "_internal" / "limits" / "resources" / "script.lua").write_text("new-lua")
 
     (dst / "resources").mkdir(parents=True)
     (dst / "_internal").mkdir(parents=True)
     (dst / "resources" / "default-agent.json").write_text('{"behavior":"x"}')
     (dst / ".version").write_text("1.20.1 abc123 2026-06-21")
     (dst / "_internal" / "lib_stale.so").write_text("stale")  # must be pruned
+    # Stale file inside a nested resources dir — must ALSO be pruned (proves the
+    # exclude is anchored to top-level only, not protecting nested resources).
+    (dst / "_internal" / "limits" / "resources").mkdir(parents=True)
+    (dst / "_internal" / "limits" / "resources" / "stale.lua").write_text("stale-lua")
 
     # Extract the actual flags the shell uses, so the test tracks the source.
     line = _deploy_rsync_line()
@@ -120,6 +135,36 @@ def test_ac5_execution_resources_survive_real_rsync(tmp_path):
     # --delete must still prune stale bundle files (exclude is surgical):
     assert not (dst / "_internal" / "lib_stale.so").exists(), \
         "stale _internal file not pruned — exclude is too broad"
+    # Anchoring proof: a NESTED resources dir must sync + prune normally —
+    # non-anchored '--exclude resources' would freeze these (HIGH finding).
+    assert (dst / "_internal" / "limits" / "resources" / "script.lua").read_text() == "new-lua", \
+        "nested _internal/.../resources NOT synced — exclude is non-anchored (matches at any depth)"
+    assert not (dst / "_internal" / "limits" / "resources" / "stale.lua").exists(), \
+        "stale file in nested resources NOT pruned — exclude is non-anchored"
+
+
+def test_ac6_upgrade_endpoint_also_protects_resources():
+    """AC6: /api/system/upgrade in main.py runs the SAME destructive rsync into
+    the daemon dir but NEVER re-copies resources — so it must ALSO exclude
+    /resources and /.version, or it permanently wipes them. (Same bug class —
+    STEERING #10: grep ALL consumers of the pattern, not just the one reported.)
+    """
+    main_py = PROJECT_ROOT / "backend" / "main.py"
+    text = main_py.read_text(encoding="utf-8")
+    # The rsync call is a Python list literal that may span multiple physical
+    # lines. Match the whole subprocess.run([...]) list that contains "rsync"
+    # and --delete and daemon_dir, then assert the excludes are inside it.
+    spans = re.findall(
+        r'\[\s*"rsync".*?daemon_dir\s*\+\s*"/"\s*\]',
+        text, flags=re.DOTALL,
+    )
+    delete_spans = [re.sub(r"\s+", " ", s) for s in spans if "--delete" in s]
+    assert delete_spans, "Could not find the upgrade-endpoint rsync --delete list in main.py"
+    for span in delete_spans:
+        assert '"/resources"' in span and '"/.version"' in span, (
+            f"upgrade-endpoint rsync must exclude '/resources' and '/.version' "
+            f"(it never re-copies resources → permanent wipe). Got: {span}"
+        )
 
 
 @pytest.mark.skipif(shutil.which("rsync") is None, reason="rsync not available")

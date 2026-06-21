@@ -126,7 +126,10 @@ _deploy_daemon_binary() {
     # silently falls back to DB defaults. Excluding them from --delete means
     # they are never momentarily absent. --delete still prunes stale _internal
     # files (the exclude is surgical, not a blanket --delete removal).
-    rsync -a --delete --exclude='resources' --exclude='.version' \
+    # Patterns are ANCHORED with a leading '/' so they match ONLY the top-level
+    # $DAEMON_DIR/resources and $DAEMON_DIR/.version — NOT a nested 'resources'
+    # dir that legitimately ships inside the bundle (e.g. _internal/limits/resources).
+    rsync -a --delete --exclude='/resources' --exclude='/.version' \
         "$BACKEND_BUNDLE_DIR/" "$DAEMON_DIR/"
     chmod +x "$DAEMON_BINARY"
     _ok "Daemon bundle deployed: $(du -sh "$DAEMON_DIR" | cut -f1)"

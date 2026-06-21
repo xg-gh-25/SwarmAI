@@ -1701,8 +1701,15 @@ try:
         time.sleep(2)
 
     # Step 3: rsync bundle → daemon dir (safe — daemon is dead)
+    # Anchored --exclude '/resources' '/.version': the bundle has no resources/
+    # or .version, so a bare --delete would PERMANENTLY wipe them (this upgrader
+    # never re-copies resources, unlike daemon-lib.sh). Preserve the existing
+    # daemon resources/ + .version across the upgrade. Leading '/' anchors to the
+    # transfer root so a nested bundle 'resources' dir (_internal/limits/resources)
+    # still syncs normally.
     r = subprocess.run(
-        ["rsync", "-a", "--delete", bundle_src + "/", daemon_dir + "/"],
+        ["rsync", "-a", "--delete", "--exclude", "/resources", "--exclude", "/.version",
+         bundle_src + "/", daemon_dir + "/"],
         capture_output=True, text=True, timeout=60, env=env,
     )
     if r.returncode != 0:
