@@ -387,6 +387,51 @@ class TestAdvanceDriftGuard:
         captured = capsys.readouterr()
         assert "no artifact_id" not in captured.err
 
+    def test_run_report_survives_qualitative_dimension_score(self, workspace, capsys, monkeypatch):
+        """run-report must not crash when an eval dimension score is a string.
+
+        Regression: cmd_run_report formatted dimension scores with f"{score:.2f}".
+        roi (line 1910) already guarded isinstance, but dimension scores (line 1906)
+        read from the SAME untyped eval_scores dict were not — a string score like
+        "high" raised `ValueError: Unknown format code 'f' for object of type 'str'`,
+        crashing report generation. Same bug class as the roi crash (b5730fd9).
+        """
+        import scripts.artifact_cli as cli
+        from datetime import datetime, timezone
+
+        # Build a run created "today" so the date-scoped artifact loader matches.
+        today = datetime.now(timezone.utc)
+        run_id = "run_qualscore"
+        run_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "run.json").write_text(json.dumps({
+            "id": run_id, "project": "TestProject",
+            "requirement": "x", "profile": "trivial", "status": "running",
+            "stages": [{"stage": "evaluate", "status": "completed"}],
+            "created_at": today.isoformat(), "updated_at": today.isoformat(),
+        }))
+
+        # Date-scoped evaluation artifact with a QUALITATIVE (string) dimension score.
+        date_str = today.isoformat()[:10].replace("-", "")
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        (artifacts_dir / f"evaluation-{date_str}.json").write_text(json.dumps({
+            "scores": {"strategic": "high", "priority": 3.0, "roi": "high — strong fit"},
+            "recommendation": "GO",
+        }))
+
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        args = type("A", (), {"project": "TestProject", "run_id": run_id, "force": True})()
+
+        # On buggy code this raises ValueError before REPORT.md is written.
+        cli.cmd_run_report(args, None)
+
+        report_path = run_dir / "REPORT.md"
+        assert report_path.exists(), "REPORT.md should be written"
+        body = report_path.read_text()
+        # String score rendered as-is; numeric score still formatted with .2f.
+        assert "high" in body
+        assert "3.00" in body
+
     def test_advance_no_warn_for_goal_cycle(self, workspace, capsys, monkeypatch):
         """goal_cycle commits incrementally and has no artifact — no drift warning."""
         import scripts.artifact_cli as cli
@@ -401,3 +446,76 @@ class TestAdvanceDriftGuard:
         cli._auto_validate_before_advance("TestProject", "complete")
         captured = capsys.readouterr()
         assert "no artifact_id" not in captured.err
+
+
+class TestCompletionFailsClosedOnValidatorCrash:
+    """run_84316b42: the DELIVER completion gate must FAIL CLOSED when the
+    validator crashes (cannot produce a verdict), symmetric with the ADVANCE
+    path. Reverses run_55710438 MED-8 fail-open. C037/CLASS A."""
+
+    def _setup(self, workspace):
+        import sys
+        from pathlib import Path as _P
+        _scripts_dir = str(_P(__file__).resolve().parent.parent / "scripts")
+        if _scripts_dir not in sys.path:
+            sys.path.insert(0, _scripts_dir)
+        import scripts.artifact_cli as cli
+        from core.artifact_registry import ArtifactRegistry
+        # bugfix run with a completed deliver stage carrying an artifact_id
+        _create_run(workspace, "TestProject", "run_crash", "running", stages=[
+            {"stage": "evaluate", "status": "completed", "stage_doc_consumed": True, "artifact_id": "a_e"},
+            {"stage": "think", "status": "completed", "stage_doc_consumed": True, "artifact_id": "a_t"},
+            {"stage": "plan", "status": "completed", "stage_doc_consumed": True, "artifact_id": "a_p"},
+            {"stage": "build", "status": "completed", "stage_doc_consumed": True, "artifact_id": "a_b"},
+            {"stage": "review", "status": "completed", "stage_doc_consumed": True, "artifact_id": "a_r"},
+            {"stage": "test", "status": "completed", "stage_doc_consumed": True, "artifact_id": "a_te"},
+            {"stage": "deliver", "status": "completed", "stage_doc_consumed": True, "artifact_id": "a_d"},
+            {"stage": "reflect", "status": "completed", "stage_doc_consumed": True,
+             "lessons": ["a real lesson about the gate"]},
+        ])
+        # set profile=bugfix
+        rf = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / "run_crash" / "run.json"
+        d = _read_run(rf); d["profile"] = "bugfix"; rf.write_text(json.dumps(d))
+        return cli, ArtifactRegistry(workspace), rf
+
+    def _args(self):
+        class _Args:
+            project = "TestProject"
+            run_id = "run_crash"
+            status = "completed"
+            stage_json = None
+            profile = None
+            ddd_checksums = None
+        return _Args()
+
+    def test_completion_blocked_when_validator_raises(self, workspace, capsys, monkeypatch):
+        """validate() raising mid-gate → completion BLOCKED, run NOT marked completed."""
+        cli, reg, rf = self._setup(workspace)
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        # Force the in-process validator load to raise on validate()
+        import importlib.util as _ilu
+        real_from_spec = _ilu.module_from_spec
+
+        def boom_module(spec):
+            mod = real_from_spec(spec)
+            if spec.name == "pipeline_validator":
+                # replace validate with a crasher after the module loads
+                orig_exec = spec.loader.exec_module
+                def exec_and_poison(m):
+                    orig_exec(m)
+                    def _crash(*a, **k):
+                        raise RuntimeError("injected validate crash (pre-dict)")
+                    m.validate = _crash
+                spec.loader.exec_module = exec_and_poison
+            return mod
+        monkeypatch.setattr(_ilu, "module_from_spec", boom_module)
+
+        cli.cmd_run_update(self._args(), reg)
+        out = capsys.readouterr()
+        data = _read_run(rf)
+        # MUST NOT be completed — the gate failed closed
+        assert data["status"] != "completed", \
+            f"validator crash must block completion, got status={data['status']}"
+        combined = out.out + out.err
+        assert "ERRORED" in combined or "could not" in combined.lower() or "crash" in combined.lower(), \
+            f"crash must be surfaced: {combined[:400]}"

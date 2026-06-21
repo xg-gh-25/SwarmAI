@@ -1903,7 +1903,10 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> None:
     for dim in ["strategic", "priority", "historical", "feasibility"]:
         score = eval_scores.get(dim)
         if score is not None:
-            eval_table_lines.append(f"| {dim.capitalize()} | {score:.2f} | |")
+            # score may be numeric (3.0) or qualitative ("high") — same untyped
+            # eval_scores dict as roi below; format both safely (see roi guard).
+            score_str = f"{score:.2f}" if isinstance(score, (int, float)) else str(score)
+            eval_table_lines.append(f"| {dim.capitalize()} | {score_str} | |")
     roi = eval_scores.get("roi")
     if roi is not None:
         # roi may be numeric (3.2) or a qualitative string ("high") — format both.
