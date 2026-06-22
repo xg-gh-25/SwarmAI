@@ -68,6 +68,11 @@ class _MockToolResultBlock:
     pass
 
 
+class _MockUserMessage:
+    """Mock for claude_agent_sdk.UserMessage."""
+    pass
+
+
 class _MockStreamEvent:
     """Mock for claude_agent_sdk.types.StreamEvent."""
     pass
@@ -87,6 +92,7 @@ def _build_mock_sdk_module():
         TextBlock=_MockTextBlock,
         ToolUseBlock=_MockToolUseBlock,
         ToolResultBlock=_MockToolResultBlock,
+        UserMessage=_MockUserMessage,
     )
     types_mod = SimpleNamespace(
         StreamEvent=_MockStreamEvent,
@@ -198,6 +204,7 @@ class TestNameErrorBugCondition:
                 "TextBlock": _MockTextBlock,
                 "ToolUseBlock": _MockToolUseBlock,
                 "ToolResultBlock": _MockToolResultBlock,
+                "UserMessage": _MockUserMessage,
             }),
             "claude_agent_sdk.types": MagicMock(**{
                 "StreamEvent": _MockStreamEvent,
@@ -247,6 +254,7 @@ class TestNameErrorBugCondition:
                 "TextBlock": _MockTextBlock,
                 "ToolUseBlock": _MockToolUseBlock,
                 "ToolResultBlock": _MockToolResultBlock,
+                "UserMessage": _MockUserMessage,
             }),
             "claude_agent_sdk.types": MagicMock(**{
                 "StreamEvent": _MockStreamEvent,
@@ -286,6 +294,7 @@ class TestNameErrorBugCondition:
                 "TextBlock": _MockTextBlock,
                 "ToolUseBlock": _MockToolUseBlock,
                 "ToolResultBlock": _MockToolResultBlock,
+                "UserMessage": _MockUserMessage,
             }),
             "claude_agent_sdk.types": MagicMock(**{
                 "StreamEvent": _MockStreamEvent,

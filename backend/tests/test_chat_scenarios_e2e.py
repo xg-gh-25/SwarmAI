@@ -98,6 +98,10 @@ class _FakeToolResultBlock:
     pass
 
 
+class _FakeUserMessage:
+    pass
+
+
 class _FakeThinkingBlock:
     pass
 
@@ -110,6 +114,7 @@ _sdk_mock = MagicMock(**{
     "TextBlock": _FakeTextBlock,
     "ToolUseBlock": _FakeToolUseBlock,
     "ToolResultBlock": _FakeToolResultBlock,
+    "UserMessage": _FakeUserMessage,
     "ClaudeAgentOptions": MagicMock,
     "ClaudeSDKClient": MagicMock,
 })

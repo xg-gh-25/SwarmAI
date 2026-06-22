@@ -55,6 +55,11 @@ class _MockToolResultBlock:
     pass
 
 
+class _MockUserMessage:
+    """Mock for claude_agent_sdk.UserMessage (carries sub-agent tool results)."""
+    pass
+
+
 class _MockStreamEvent:
     """Mock for claude_agent_sdk.types.StreamEvent."""
     pass
@@ -82,6 +87,7 @@ class _patch_sdk_modules:
                 "TextBlock": _MockTextBlock,
                 "ToolUseBlock": _MockToolUseBlock,
                 "ToolResultBlock": _MockToolResultBlock,
+                "UserMessage": _MockUserMessage,
             }),
             "claude_agent_sdk.types": MagicMock(**{
                 "StreamEvent": _MockStreamEvent,

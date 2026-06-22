@@ -54,6 +54,9 @@ class _MockToolUseBlock:
 class _MockToolResultBlock:
     pass
 
+class _MockUserMessage:
+    pass
+
 class _MockStreamEvent:
     pass
 
@@ -71,6 +74,7 @@ def _patch_sdk_modules():
             "TextBlock": _MockTextBlock,
             "ToolUseBlock": _MockToolUseBlock,
             "ToolResultBlock": _MockToolResultBlock,
+            "UserMessage": _MockUserMessage,
         }),
         "claude_agent_sdk.types": MagicMock(**{
             "StreamEvent": _MockStreamEvent,

@@ -847,14 +847,19 @@ async def get_sub_agent_progress(session_id: str):
     if not active_tools or not is_streaming:
         return {"active": False, "elapsed_s": 0, "label": None, "count": 0}
 
-    # Report the oldest (longest-running) sub-agent for elapsed display
-    oldest_id = min(active_tools, key=lambda k: active_tools[k]["start_time"])
-    oldest = active_tools[oldest_id]
+    # elapsed_s tracks the OLDEST (longest-running) sub-agent — this is the
+    # "is something stuck?" signal that drives the tiered awareness banner.
+    # label tracks the NEWEST sub-agent — so the banner reflects CURRENT
+    # activity instead of freezing on the first-spawned one. With parallel
+    # reviewers (Gate 2 spawns several), anchoring both on the oldest made
+    # the label stick on "Spec compliance review" for the whole run.
+    oldest = active_tools[min(active_tools, key=lambda k: active_tools[k]["start_time"])]
+    newest = active_tools[max(active_tools, key=lambda k: active_tools[k]["start_time"])]
     elapsed = _time.time() - oldest["start_time"]
     return {
         "active": True,
         "elapsed_s": round(elapsed, 1),
-        "label": oldest.get("label"),
+        "label": newest.get("label"),
         "count": len(active_tools),
     }
 

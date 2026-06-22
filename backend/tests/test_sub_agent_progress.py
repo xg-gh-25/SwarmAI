@@ -98,8 +98,11 @@ class TestSubAgentProgressEndpoint:
         # Even if _active_agent_tools is set, if session isn't streaming, report inactive
         assert data["active"] is False
 
-    def test_concurrent_agents_reports_oldest(self, client, mock_session_unit):
-        """When multiple Agent tools run concurrently, report the oldest one."""
+    def test_concurrent_agents_elapsed_oldest_label_newest(self, client, mock_session_unit):
+        """AC2: with multiple concurrent Agent tools, elapsed_s tracks the
+        OLDEST (stuck-detection), but label reflects the NEWEST active
+        sub-agent (so the banner shows current activity, not the
+        first-spawned one frozen — the 'Spec compliance review' bug)."""
         now = time.time()
         mock_session_unit._active_agent_tools = {
             "tu_first": {
@@ -123,8 +126,8 @@ class TestSubAgentProgressEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert data["active"] is True
-        assert 298 <= data["elapsed_s"] <= 305  # ~300s (oldest)
-        assert data["label"] == "Research phase"  # oldest agent's label
+        assert 298 <= data["elapsed_s"] <= 305  # ~300s — elapsed from OLDEST (stuck signal)
+        assert data["label"] == "Test generation"  # label from NEWEST (current activity)
         assert data["count"] == 3
 
     def test_partial_completion_removes_finished_agent(self, client, mock_session_unit):
