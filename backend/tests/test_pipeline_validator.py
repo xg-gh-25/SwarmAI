@@ -2709,6 +2709,23 @@ class TestBuildAcCoverage:
 class TestAgentToolAudit:
     """Validate that the agent tool audit marker file is checked on DELIVER."""
 
+    @pytest.fixture(autouse=True)
+    def _sandbox_audit_dir(self, tmp_path, monkeypatch):
+        """Redirect AGENT_AUDIT_DIR to a per-test tmp dir.
+
+        The validator reads markers from a machine-global path
+        (~/.swarm-ai/state/pipeline_agent_audit). Without this sandbox the
+        "no marker" assertion is non-deterministic: a developer machine that
+        has run real pipelines carries leftover session_*.marker files whose
+        timestamps satisfy the fallback window (the fixture run's hardcoded
+        created_at is 2026-03-24), so marker_found flips True and the expected
+        warning is suppressed. Pinning AGENT_AUDIT_DIR to an empty tmp dir makes
+        every test in this class self-contained and stops the marker-writing
+        test from polluting the real global directory.
+        """
+        import scripts.pipeline_validator as pv
+        monkeypatch.setattr(pv, "AGENT_AUDIT_DIR", tmp_path / "pipeline_agent_audit")
+
     def _setup_deliver_run(self, workspace, profile="full", run_id="run_test1"):
         """Helper: create a valid deliver artifact + run for audit testing."""
         artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
