@@ -1004,6 +1004,32 @@ def _check_depth(stage: str, artifact_data: dict, profile: str,
                         f"unresolved HIGH finding(s) — fix before delivery"
                     )
 
+            # Two-field (spawned + evidence) enforcement at COMPLETION time.
+            # Mirrors validate_artifact_data:423-445 (publish-time), closing the
+            # fail-open hole found by adversarial review of run_45ab67c7: the
+            # completion gate (validate()->_check_depth) previously checked only
+            # profile_tier, so a spawned=false self-review artifact passed
+            # completion. This makes the gate_spawn_blocked guarantee structural
+            # on EVERY path to status:completed, not just `publish --stage deliver`.
+            # (C037/CLASS-A fail-open-at-last-gate pattern.)
+            if isinstance(ar, dict) and profile in ("full", "bugfix", ""):
+                spawned = ar.get("spawned")
+                if spawned is True or spawned == "true" or spawned == 1:
+                    evidence = ar.get("evidence", "")
+                    if not evidence or not str(evidence).strip():
+                        errors.append(
+                            "Depth: adversarial_review.spawned=true but 'evidence' field is "
+                            "missing or empty. Rule 23 requires describing HOW the sub-agent "
+                            "was spawned. This prevents self-review disguised as adversarial."
+                        )
+                else:
+                    errors.append(
+                        f"Depth: adversarial_review.spawned={spawned} but profile='{profile}' "
+                        f"requires the sub-agent to be actually spawned (spawned=true). "
+                        f"Self-review after a rejected spawn is the CLASS A bypass — "
+                        f"CHECKPOINT reason=gate_spawn_blocked instead."
+                    )
+
         # completion_audit: MUST exist for full/bugfix profiles
         ca = artifact_data.get("completion_audit")
         if ca is None and profile in ("full", "bugfix", ""):

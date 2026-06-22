@@ -1122,11 +1122,19 @@ class TestL2DepthValidation:
         assert len(adv_errors) >= 1, f"Expected skipped-on-bugfix error, got: {result['errors']}"
 
     # ── gate_spawn_blocked fail-closed backstop (design run_0bd15278) ──
-    # These lock the two-field enforcement in validate_artifact_data (the
-    # publish-time gate). It is the structural reason a rejected Gate-2 spawn
-    # can NEVER be laundered into a completed run via self-review: a fabricated
-    # review cannot produce a genuine spawned=true + Agent-tool evidence pair.
+    # The two-field (spawned + evidence) enforcement exists at BOTH gates:
+    #   - validate_artifact_data (publish-time, `publish --stage deliver`)
+    #   - _check_depth via validate() (completion-time, `run-update --status
+    #     completed`) — added after adversarial review of run_45ab67c7 found the
+    #     completion gate previously checked only profile_tier, leaving a
+    #     fail-open hole (a spawned=false self-review artifact passed completion,
+    #     and the auto-aggregate path bypasses validate_artifact_data entirely).
+    # Together they are the structural reason a rejected Gate-2 spawn can NEVER
+    # be laundered into a completed run via self-review.
     # STEERING#11: a recovery/guarantee path must have a test that FORCES it.
+    # NOTE: the retry-once→checkpoint DECISION LOGIC itself is instruction-only
+    # (Rule 23 / build.md / deliver.md) and has no code, hence no unit test — it
+    # is exercised live each time a pipeline spawns its gate sub-agents.
 
     def test_gate_spawn_self_review_without_spawn_blocks(self):
         """spawned=false (self-review masquerade after a rejected spawn) on a
@@ -1186,6 +1194,49 @@ class TestL2DepthValidation:
                        and ("spawned" in e or "evidence" in e)]
         assert gate_errors == [], (
             f"Genuine spawn+evidence must NOT be blocked, got: {gate_errors}")
+
+    def test_gate_spawn_self_review_blocks_at_COMPLETION_path(self, workspace):
+        """The path that actually guards status:completed is validate()->
+        _check_depth, NOT validate_artifact_data (which only runs at publish).
+        Adversarial review of run_45ab67c7 proved _check_depth ignored 'spawned',
+        so a spawned=false self-review artifact passed completion. This test
+        FORCES the completion path and asserts the hole is closed (STEERING#11)."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        # A polished self-review delivery artifact: valid profile_tier + specific
+        # findings + real confidence dict, but spawned=false (never spawned).
+        _make_artifact(artifacts_dir, "run_test1", "art_del", "delivery",
+                       {"title": "X", "status": "delivered",
+                        "confidence_score": {"score": 8, "breakdown": [], "penalties": []},
+                        "completion_audit": {"all_green": True, "gaps": 0},
+                        "adversarial_review": {
+                            "profile_tier": "full",
+                            "spawned": False,  # self-review masquerade
+                            "findings": [{"severity": "LOW", "resolved": True}],
+                        }})
+        _make_run(runs_dir, profile="bugfix", stages=[
+            _stage_record("evaluate", artifact_id="art_e"),
+            _stage_record("plan", artifact_id="art_p"),
+            _stage_record("build", artifact_id="art_b"),
+            _stage_record("review", artifact_id="art_r"),
+            _stage_record("test", artifact_id="art_t"),
+            _stage_record("deliver", artifact_id="art_del"),
+        ])
+        for aid, atype, data in [
+            ("art_e", "evaluation", {"recommendation": "GO", "scope": "bugfix"}),
+            ("art_p", "plan", {"acceptance_criteria": ["x"]}),
+            ("art_b", "build", {"files_changed": ["a.py"], "tdd": {"green_pass": True}}),
+            ("art_r", "review", {"approved": True, "integration_trace": {"checked": 1}, "runtime_patterns": {"checked": 1, "patterns": [{"id": "RP1", "result": "N/A"}]}, "findings_count": 0}),
+            ("art_t", "test", {"passed": 10}),
+        ]:
+            _make_artifact(artifacts_dir, "run_test1", aid, atype, data)
+
+        result = validate("TestProject", "run_test1", "deliver")
+        spawn_errors = [e for e in result["errors"]
+                        if "adversarial_review" in e and "spawned" in e]
+        assert len(spawn_errors) >= 1, (
+            f"COMPLETION path must BLOCK spawned=false self-review (fail-closed), "
+            f"got: {result['errors']}")
 
 
 class TestL3ConfidenceGate:
@@ -3107,6 +3158,7 @@ class TestRemainingChecksErrored:
         _make_artifact(artifacts, "run_test1", "art_d", "delivery",
                        {"title": "x", "quality": {"tests_pass": True, "regressions": 0, "smoke_pass": True},
                         "adversarial_review": {"spawned": True, "profile_tier": "bugfix",
+                                               "evidence": "Agent tool: correctness + security specialists",
                                                "findings_total": 0, "findings_fixed": 0, "findings_remaining": 0, "findings": []},
                         "completion_audit": {"all_green": True}, "convergence": {"final_status": "push-ready"},
                         "push_ready": True})
@@ -3150,6 +3202,7 @@ class TestNinebCreditOnCrash:
         _make_artifact(artifacts, "run_test1", "art_d", "delivery",
                        {"title": "x", "quality": {"tests_pass": True, "regressions": 0, "smoke_pass": True},
                         "adversarial_review": {"spawned": True, "profile_tier": "bugfix",
+                                               "evidence": "Agent tool: correctness + security specialists",
                                                "findings_total": 0, "findings_fixed": 0, "findings_remaining": 0, "findings": []},
                         "completion_audit": {"all_green": True}, "convergence": {"final_status": "push-ready"},
                         "push_ready": True})
