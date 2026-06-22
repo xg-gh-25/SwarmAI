@@ -1647,12 +1647,18 @@ export function useChatStreamingLifecycle(
           const s = messageStoreRegistry.get(reconcileTabId);
           if (!s) return;
           s.reconcile(msgs);
-          // Sync to React only if this tab is still the active one.
-          if (reconcileTabId === activeTabIdRef.current) {
-            setMessages(s.getSnapshot());
+          // Only sync React/cache if reconcile actually executed (phase=idle).
+          // If a new stream restarted in the 200ms window, reconcile() queued a
+          // thunk (NO-OP now) and the snapshot is mid-stream — pushing it would
+          // be a stale render. Matches the phase-gate used at every other
+          // reconcile sync site in this file.
+          if (s.phase === 'idle') {
+            if (reconcileTabId === activeTabIdRef.current) {
+              setMessages(s.getSnapshot());
+            }
+            const ts = tabMapRef.current.get(reconcileTabId);
+            if (ts) ts.messages = s.messages;
           }
-          const ts = tabMapRef.current.get(reconcileTabId);
-          if (ts) ts.messages = s.messages;
         }).catch(() => { /* non-fatal: next turn re-reconciles */ });
       }, 200);
       if (tabState) tabState._turnEndReconcileTimer = timer;

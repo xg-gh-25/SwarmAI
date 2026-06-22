@@ -473,8 +473,15 @@ export class MessageStore {
    * own SSE event types (ask_user_question / cmd_permission_request / escalation).
    * They are NEVER inside an `assistant` event, so the backend never persists
    * them. A client_id-matched DB row therefore lacks them — and a blind replace
-   * would erase the live question/permission form. _applyMerge carries these
-   * forward when the DB version of a matched assistant message omits them.
+   * would erase the live question/permission/escalation form. _applyMerge carries
+   * these forward when the DB version of a matched assistant message omits them.
+   *
+   * Note on `escalation`: unlike question/permission, an escalation does NOT have
+   * its own turn-end schedule call — it is raised via the compaction_guard flow,
+   * which triggers a backend interrupt() and thus a SUBSEQUENT `result` event.
+   * So escalation blocks are protected here against the RESULT-path reconcile
+   * (the result handler schedules a reconcile that would otherwise drop the
+   * synthesized escalation block). It is load-bearing, not dead.
    */
   private static readonly _INTERACTIVE_BLOCK_TYPES = new Set([
     'ask_user_question',
