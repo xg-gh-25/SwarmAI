@@ -239,13 +239,13 @@ def create_user_correction_detector(
             ctx["_corrections_count"] = ctx.get("_corrections_count", 0) + 1
             ctx["_correction_just_detected"] = True  # Signal for observation DDD event
 
-            # Evolution v3: record to correction class tracker
-            try:
-                from core.evolution.correction_tracker import CorrectionClassTracker
-                tracker = CorrectionClassTracker()
-                tracker.record("UNCLASSIFIED", evidence=prompt[:200])
-            except Exception:
-                pass  # Non-blocking — tracker failure must never break the hook
+            # Evolution v3 Phase 1: classification + counting moved to the
+            # post-session judgment classifier (governance_router.classify_new_corrections),
+            # which assigns a REAL class (CLASS_A/B/C) instead of "UNCLASSIFIED" and
+            # gates on a watermark. Counting here was a premature blind increment that
+            # (a) double-counted against the post-session record() and (b) left every
+            # entry stuck at UNCLASSIFIED (never promoted). The corrections.jsonl append
+            # above is the durable signal the classifier consumes. (Gate-1 fix, run_7a8f9866.)
 
             # P4: Auto-seed golden set case from correction (best-effort)
             try:

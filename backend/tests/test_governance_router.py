@@ -22,7 +22,10 @@ from unittest.mock import MagicMock
 import pytest
 
 from core.evolution.judgment_classifier import JudgmentClassification
-from core.evolution.governance_router import route_classification
+from core.evolution.governance_router import (
+    classify_new_corrections,
+    route_classification,
+)
 
 
 def _cognitive(class_name="CLASS_A", principle="P1"):
@@ -134,3 +137,80 @@ def test_none_classification_is_noop(pending_path):
     brief = route_classification(None, tracker, pending_path=pending_path)
     assert brief is None
     tracker.record.assert_not_called()
+
+
+# --- Watermark gating (Gate-1 fix: no re-processing, no double-count) ---
+
+def _write_corpus(path, records):
+    path.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
+
+
+def test_watermark_only_processes_new_records(tmp_path):
+    """Gate-1 fix: a second run with no new records processes nothing."""
+    corpus = tmp_path / "corrections.jsonl"
+    wm = tmp_path / "wm.json"
+    pending = tmp_path / "pending.json"
+    tracker = MagicMock()
+    _write_corpus(corpus, [
+        {"ts": 100.0, "session_id": "a", "type": "tool_failure", "tool": "Bash", "error": "boom"},
+        {"ts": 200.0, "session_id": "b", "type": "tool_failure", "tool": "Glob", "error": "boom2"},
+    ])
+    s1 = classify_new_corrections(
+        corrections_path=corpus, watermark_path=wm, pending_path=pending, tracker=tracker
+    )
+    assert s1["processed"] == 2
+    assert s1["operational"] == 2
+    # Second run: no new records past watermark -> zero processed, zero new record() calls.
+    tracker.reset_mock()
+    s2 = classify_new_corrections(
+        corrections_path=corpus, watermark_path=wm, pending_path=pending, tracker=tracker
+    )
+    assert s2["processed"] == 0
+    tracker.record.assert_not_called()
+
+
+def test_watermark_picks_up_appended_records(tmp_path):
+    """After watermark advances, only a newly-appended record is processed."""
+    corpus = tmp_path / "corrections.jsonl"
+    wm = tmp_path / "wm.json"
+    pending = tmp_path / "pending.json"
+    tracker = MagicMock()
+    _write_corpus(corpus, [{"ts": 100.0, "session_id": "a", "type": "tool_failure", "tool": "Bash", "error": "x"}])
+    classify_new_corrections(corrections_path=corpus, watermark_path=wm, pending_path=pending, tracker=tracker)
+    # Append a newer record.
+    _write_corpus(corpus, [
+        {"ts": 100.0, "session_id": "a", "type": "tool_failure", "tool": "Bash", "error": "x"},
+        {"ts": 300.0, "session_id": "c", "type": "tool_failure", "tool": "Read", "error": "y"},
+    ])
+    tracker.reset_mock()
+    s = classify_new_corrections(corrections_path=corpus, watermark_path=wm, pending_path=pending, tracker=tracker)
+    assert s["processed"] == 1
+    tracker.record.assert_called_once()
+
+
+def test_classify_new_corrections_missing_corpus_is_safe(tmp_path):
+    """No corpus file -> safe empty summary, no crash."""
+    s = classify_new_corrections(
+        corrections_path=tmp_path / "nope.jsonl",
+        watermark_path=tmp_path / "wm.json",
+        pending_path=tmp_path / "p.json",
+        tracker=MagicMock(),
+    )
+    assert s["processed"] == 0
+
+
+def test_classify_new_corrections_caps_records(tmp_path):
+    """max_records caps how many are processed in one run (rest next run)."""
+    corpus = tmp_path / "corrections.jsonl"
+    _write_corpus(corpus, [
+        {"ts": float(i), "session_id": str(i), "type": "tool_failure", "tool": "Bash", "error": "e"}
+        for i in range(1, 11)
+    ])
+    s = classify_new_corrections(
+        corrections_path=corpus,
+        watermark_path=tmp_path / "wm.json",
+        pending_path=tmp_path / "p.json",
+        tracker=MagicMock(),
+        max_records=3,
+    )
+    assert s["processed"] == 3

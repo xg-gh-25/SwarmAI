@@ -284,6 +284,26 @@ class EvolutionMaintenanceHook:
         except Exception as exc:
             logger.debug("Correction tracker auto-resolve skipped: %s", exc)
 
+        # Evolution v3 Phase 1: classify + route NEW corrections (watermark-gated).
+        # Operational (tool_failure) auto-counts; cognitive (user_correction) parks
+        # in the pending-confirm queue for the human Intake Gate. Degrade-to-log.
+        try:
+            from core.evolution.governance_router import classify_new_corrections
+
+            # Closed taxonomy (SOUL/EVOLUTION.md). Reserved for Phase-2 recurrence
+            # matching; Phase 1 passes it for a stable signature.
+            summary = classify_new_corrections(
+                evolution_classes=["CLASS_A", "CLASS_B", "CLASS_C"]
+            )
+            if summary.get("processed"):
+                logger.info(
+                    "judgment classifier: %d processed (%d operational, %d cognitive, %d skipped)",
+                    summary["processed"], summary["operational"],
+                    summary["cognitive"], summary["skipped"],
+                )
+        except Exception as exc:
+            logger.debug("judgment classifier skipped: %s", exc)
+
         # Run evolution cycle weekly (check last run date)
         await self._maybe_run_evolution(ctx_dir)
 
