@@ -1608,6 +1608,59 @@ export function useChatStreamingLifecycle(
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- reads from refs
 
   /**
+   * Schedule a turn-end DB reconcile — the single authoritative backstop that
+   * corrects a streamed buffer against the canonical DB rows at turn end.
+   *
+   * WHY this is shared: the streamed display buffer can drop a tail block (rAF
+   * coalescing, a lost text_delta/assistant SSE event). The backend persists
+   * every assistant block immediately (crash-safe), so the DB always holds the
+   * complete content. Fetching + reconciling at turn-end repairs any truncation.
+   *
+   * THIS MUST FIRE ON EVERY TERMINAL PATH, not just `result`. A turn that ends
+   * via ask_user_question (waiting_input) or cmd_permission_request
+   * (permission_needed) emits NO `result` event — before this was extracted, those
+   * paths had no backstop, so a truncated reply stayed truncated with an idle
+   * Continue button (reconcile-gap, 2026-06-22).
+   *
+   * Properties:
+   *  - 200ms-debounced per tab (timer stored on tabState._turnEndReconcileTimer)
+   *  - phase-gated inside store.reconcile() → NO-OP if streaming restarted
+   *  - fetches FRESH (invalidateMessageCache first), fire-and-forget (non-fatal)
+   *  - syncs React state only if the tab is still active (cross-tab isolation)
+   *  - preserves local-only interactive blocks via _applyMerge (the question /
+   *    permission form is frontend-synthesized, never in the DB — see PART 1)
+   */
+  const scheduleTurnEndReconcile = useCallback(
+    (sid: string | undefined, tabId: string | null | undefined) => {
+      if (!sid || !tabId) return;
+      const store = messageStoreRegistry.get(tabId);
+      if (!store) return;
+      const tabState = tabMapRef.current.get(tabId);
+      if (tabState?._turnEndReconcileTimer) {
+        clearTimeout(tabState._turnEndReconcileTimer);
+      }
+      const reconcileSid = sid;
+      const reconcileTabId = tabId;
+      const timer = setTimeout(() => {
+        chatService.invalidateMessageCache(reconcileSid);
+        chatService.getSessionMessages(reconcileSid).then((msgs) => {
+          const s = messageStoreRegistry.get(reconcileTabId);
+          if (!s) return;
+          s.reconcile(msgs);
+          // Sync to React only if this tab is still the active one.
+          if (reconcileTabId === activeTabIdRef.current) {
+            setMessages(s.getSnapshot());
+          }
+          const ts = tabMapRef.current.get(reconcileTabId);
+          if (ts) ts.messages = s.messages;
+        }).catch(() => { /* non-fatal: next turn re-reconciles */ });
+      }, 200);
+      if (tabState) tabState._turnEndReconcileTimer = timer;
+    },
+    [setMessages], // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
+  );
+
+  /**
    * Surface an AskUserQuestion into a tab — the single authoritative path for
    * rendering a question, shared by the live SSE handler AND the reconcile-loop
    * re-surface (Root-1 SSOT Phase 3, AC5). Extracting this (Gate-1 4a) prevents
@@ -1704,6 +1757,13 @@ export function useChatStreamingLifecycle(
       incrementStreamGen();
       updateTabStatus(tabId, 'waiting_input');
 
+      // (5b) Turn-end DB reconcile (reconcile-gap): this terminal path emits NO
+      // `result` event, so without this the streamed buffer (possibly missing a
+      // tail block) is never corrected against the complete DB rows. The
+      // synthesized ask_user_question block appended in (2) survives reconcile —
+      // _applyMerge carries forward local-only interactive blocks (PART 1).
+      scheduleTurnEndReconcile(tabState?.sessionId ?? opts.sessionId, tabId);
+
       // (6) Background tab → "go answer" toast (action, not auto-dismiss); persist
       if (!isActive) {
         const bgTabTitle = tabMapRef.current.get(tabId)?.title ?? 'another tab';
@@ -1721,7 +1781,7 @@ export function useChatStreamingLifecycle(
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- refs + stable setters
-    [dispatch, setMessages, setPendingQuestion, setSessionId, setIsStreaming, incrementStreamGen, updateTabStatus, addToast, onSelectTab],
+    [dispatch, setMessages, setPendingQuestion, setSessionId, setIsStreaming, incrementStreamGen, updateTabStatus, addToast, onSelectTab, scheduleTurnEndReconcile],
   );
 
   // Derive streaming activity for spinner label
@@ -2346,6 +2406,13 @@ export function useChatStreamingLifecycle(
           setIsStreaming(false, capturedTabId ?? undefined);
           incrementStreamGen();
 
+          // Turn-end DB reconcile (reconcile-gap): like ask_user_question, this
+          // terminal path emits NO `result` event — without this the streamed
+          // buffer is never repaired from the DB. The synthesized
+          // cmd_permission_request block survives reconcile via _applyMerge
+          // local-only interactive carry-forward (PART 1).
+          scheduleTurnEndReconcile(sid, capturedTabId);
+
           // Fix 8: Update tab status to 'permission_needed'
           if (capturedTabId) {
             updateTabStatus(capturedTabId, 'permission_needed');
@@ -2378,35 +2445,12 @@ export function useChatStreamingLifecycle(
           // ── H2: unconditional turn-end reconcile-from-DB (backstop) ──
           // Even when H1 correlation succeeds, fetch the canonical DB rows once
           // per turn so any turn whose placeholder could NOT be correlated
-          // (continuation paths pass no client_id) still finalizes: the empty
-          // placeholder is replaced/cleaned by reconcile (MessageStore Pass 2
-          // drops a stale empty assistant placeholder once a real DB assistant
-          // row is present). This is the safety net for the "Thinking forever"
-          // hang — it runs on EVERY result (not only when a thunk was queued).
-          // Debounced + guarded: only at turn-end (result), NEVER on the delta
-          // path; phase-gated inside store.reconcile() (NO-OP if streaming
-          // restarted). Fire-and-forget — failure is non-fatal (retry next turn).
+          // (continuation paths pass no client_id) still finalizes, AND any
+          // turn whose streamed buffer dropped a tail block is repaired from
+          // the DB. Shared with the ask_user_question / cmd_permission_request
+          // terminal paths (reconcile-gap) — see scheduleTurnEndReconcile.
           if (resultStore && sid) {
-            if (tabState?._turnEndReconcileTimer) {
-              clearTimeout(tabState._turnEndReconcileTimer);
-            }
-            const reconcileSid = sid;
-            const reconcileTabId = capturedTabId;
-            const timer = setTimeout(() => {
-              chatService.invalidateMessageCache(reconcileSid);
-              chatService.getSessionMessages(reconcileSid).then((msgs) => {
-                const s = reconcileTabId ? messageStoreRegistry.get(reconcileTabId) : null;
-                if (!s) return;
-                s.reconcile(msgs);
-                // Sync to React only if this tab is still the active one.
-                if (reconcileTabId === activeTabIdRef.current) {
-                  setMessages(s.getSnapshot());
-                }
-                const ts = reconcileTabId ? tabMapRef.current.get(reconcileTabId) : null;
-                if (ts) ts.messages = s.messages;
-              }).catch(() => { /* non-fatal: next turn re-reconciles */ });
-            }, 200);
-            if (tabState) tabState._turnEndReconcileTimer = timer;
+            scheduleTurnEndReconcile(sid, capturedTabId);
           }
           // Sync final state to React — ONLY if this tab is active.
           // Cross-tab isolation: never push a background tab's messages into

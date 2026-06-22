@@ -1178,6 +1178,101 @@ describe('Fix 6: Per-tab state isolation', () => {
       expect(hasBlock(result.current.messages)).toBe(false);
     });
 
+    // reconcile-gap (2026-06-22): the turn-end DB reconcile backstop used to
+    // fire ONLY on the `result` event. A turn that ends via ask_user_question
+    // (waiting_input) or cmd_permission_request (permission_needed) emits NO
+    // `result`, so a streamed buffer that dropped a tail block was never
+    // corrected against the complete DB rows → truncated reply + Continue
+    // button. Fix: scheduleTurnEndReconcile is wired to those terminal paths.
+    // These tests assert the reconcile is SCHEDULED (getSessionMessages fetched
+    // after the debounce). Content-merge correctness is covered by the
+    // MessageStore _applyMerge tests.
+    describe('reconcile-gap: turn-end reconcile on non-result terminal paths', () => {
+      beforeEach(() => { vi.useFakeTimers(); });
+      afterEach(() => { vi.useRealTimers(); });
+
+      it('AC3: ask_user_question terminal path schedules a DB reconcile', async () => {
+        const getSpy = vi.spyOn(chatService, 'getSessionMessages').mockResolvedValue([]);
+        const invSpy = vi.spyOn(chatService, 'invalidateMessageCache').mockImplementation(() => {});
+
+        const { result } = renderHook(() =>
+          useChatStreamingLifecycle(createMockDeps()),
+        );
+        const msgId = 'auq-reconcile-msg';
+        act(() => {
+          initTestTab('tab-q');
+          testActiveTabIdRef.current = 'tab-q';
+          const ts = testTabMap.get('tab-q')!;
+          ts.sessionId = 'sess-q';
+          result.current.setSessionId('sess-q');
+          result.current.setIsStreaming(true);
+          result.current.setMessages([makeMessage({ id: msgId, role: 'assistant', content: [] })]);
+          messageStoreRegistry.getOrCreate('tab-q', { sessionId: 'sess-q' })
+            .replace([makeMessage({ id: msgId, role: 'assistant', content: [] })]);
+        });
+
+        const handler = result.current.createStreamHandler(msgId, 'tab-q');
+        act(() => {
+          handler({
+            type: 'ask_user_question',
+            toolUseId: 'tool-q-1',
+            questions: [{ question: 'Pick', header: 'H', options: [{ label: 'A', description: 'a' }], multiSelect: false }],
+            sessionId: 'sess-q',
+          });
+        });
+
+        // Before the debounce window: no fetch yet.
+        expect(getSpy).not.toHaveBeenCalled();
+        // Advance past the 200ms debounce + flush the async reconcile.
+        await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+
+        expect(invSpy).toHaveBeenCalledWith('sess-q');
+        expect(getSpy).toHaveBeenCalledWith('sess-q');
+        getSpy.mockRestore();
+        invSpy.mockRestore();
+      });
+
+      it('AC3: cmd_permission_request terminal path schedules a DB reconcile', async () => {
+        const getSpy = vi.spyOn(chatService, 'getSessionMessages').mockResolvedValue([]);
+        const invSpy = vi.spyOn(chatService, 'invalidateMessageCache').mockImplementation(() => {});
+
+        const { result } = renderHook(() =>
+          useChatStreamingLifecycle(createMockDeps()),
+        );
+        const msgId = 'perm-reconcile-msg';
+        act(() => {
+          initTestTab('tab-p');
+          testActiveTabIdRef.current = 'tab-p';
+          const ts = testTabMap.get('tab-p')!;
+          ts.sessionId = 'sess-p';
+          result.current.setSessionId('sess-p');
+          result.current.setIsStreaming(true);
+          result.current.setMessages([makeMessage({ id: msgId, role: 'assistant', content: [] })]);
+          messageStoreRegistry.getOrCreate('tab-p', { sessionId: 'sess-p' })
+            .replace([makeMessage({ id: msgId, role: 'assistant', content: [] })]);
+        });
+
+        const handler = result.current.createStreamHandler(msgId, 'tab-p');
+        act(() => {
+          handler({
+            type: 'cmd_permission_request',
+            sessionId: 'sess-p',
+            requestId: 'req-1',
+            toolName: 'Bash',
+            toolInput: { command: 'ls' },
+            reason: 'needs approval',
+            options: ['approve', 'deny'],
+          } as unknown as StreamEvent);
+        });
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+
+        expect(getSpy).toHaveBeenCalledWith('sess-p');
+        getSpy.mockRestore();
+        invSpy.mockRestore();
+      });
+    });
+
     it('is a no-op when tab has been closed', () => {
       const { result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
