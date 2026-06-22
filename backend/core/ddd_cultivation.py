@@ -10,7 +10,7 @@ Zero LLM calls — pure keyword heuristic filtering.
 Public API:
     CultivationProposal  — data model for a single proposal
     filter_lessons_for_ddd(lessons, run_id, project) → List[CultivationProposal]
-    apply_to_ddd(proposal, project_dir) → bool
+    apply_to_ddd(proposal, project_dir) → str (applied|duplicate|section_not_found|not_safe|doc_missing|locked)
     log_application(proposal, project_dir) → None
     write_proposal(proposal, project_dir) → Path  (escalation path only)
     read_pending_proposals(workspace_dir, project) → List[CultivationProposal]
@@ -20,6 +20,7 @@ Public API:
 """
 
 import json
+import logging
 import os
 import re
 import tempfile
@@ -43,6 +44,8 @@ from core.persist_routing import (
     classify_content,
     NOISE_PATTERNS,
 )
+
+logger = logging.getLogger(__name__)
 
 # Derive SAFE_APPEND_SECTIONS from the routing table (single source of truth)
 SAFE_APPEND_SECTIONS: dict[str, set[str]] = {}
@@ -183,21 +186,32 @@ def filter_lessons_for_ddd(
     return proposals
 
 
-def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> bool:
+def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
     """Apply an additive proposal directly to the target DDD document.
 
     Appends a bullet point under the target section (newest first).
     Only works for safe_append sections (IMPROVEMENT.md and TECH.md).
     Uses fcntl advisory lock to prevent concurrent write corruption.
 
-    Returns True if applied, False if section not found, not safe, or duplicate.
+    Returns a status string (NOT a bool — callers must compare explicitly):
+      - "applied"           — entry written successfully
+      - "duplicate"         — benign no-op, exact content already present
+      - "section_not_found" — DRIFT BUG: the (whitelisted) target section does
+                              not exist as a heading in the doc. Loud signal,
+                              never silently bucketed with "duplicate". This is
+                              the run_45ab67c7 root cause (ROUTING_TABLE section
+                              name drifted from the actual TECH.md heading →
+                              lessons silently dropped).
+      - "not_safe"          — target doc/section not in SAFE_APPEND_SECTIONS
+      - "doc_missing"       — target document file does not exist
+      - "locked"            — another process holds the write lock (retry later)
     """
     if not proposal.is_safe_append():
-        return False
+        return "not_safe"
 
     doc_path = project_dir / proposal.target_doc
     if not doc_path.exists():
-        return False
+        return "doc_missing"
 
     import fcntl
 
@@ -211,7 +225,7 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> bool:
         # Another process holds the lock — skip this write, it'll retry next run
         if lock_fd:
             lock_fd.close()
-        return False
+        return "locked"
 
     try:
         content = doc_path.read_text(encoding="utf-8")
@@ -222,7 +236,7 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> bool:
         )
         match = section_re.search(content)
         if not match:
-            return False
+            return "section_not_found"
 
         # H2: insert after header + blank lines = newest entry first (documented)
         line_end = content.find("\n", match.start())
@@ -240,14 +254,14 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> bool:
 
         # M3 fix: full content substring check instead of 40-char prefix
         if proposal.content in content:
-            return False  # Already exists (exact match)
+            return "duplicate"  # Already exists (exact match)
 
         # Atomic write: write to temp, rename over original
         new_content = content[:insert_pos] + entry + content[insert_pos:]
         tmp_path = doc_path.with_suffix(".tmp")
         tmp_path.write_text(new_content, encoding="utf-8")
         os.replace(str(tmp_path), str(doc_path))
-        return True
+        return "applied"
     finally:
         fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
         lock_fd.close()
@@ -361,11 +375,17 @@ def _cultivate_proposals(
     circuit breaker, and conflict checks on top of is_safe_append().
 
     Returns:
-        {"applied": N, "escalated": M, "rejected": K}
+        {"applied": N, "escalated": M, "rejected": K, "drift_errors": [...]}
+
+    drift_errors surfaces section-name drift LOUDLY (a config bug where a
+    whitelisted routing section has no matching heading in the doc) instead of
+    silently counting it as a benign "rejected". See apply_to_ddd docstring /
+    run_45ab67c7 root cause.
     """
     applied = 0
     escalated = 0
     rejected = 0
+    drift_errors: List[str] = []
 
     for proposal in proposals:
         if proposal.is_safe_append():
@@ -391,19 +411,40 @@ def _cultivate_proposals(
             except (ImportError, Exception):
                 pass  # Auto-approval module unavailable or errored — allow through
 
-            success = apply_to_ddd(proposal, project_dir)
-            if success:
+            status = apply_to_ddd(proposal, project_dir)
+            if status == "applied":
                 proposal.status = "applied"
                 log_application(proposal, project_dir)
                 applied += 1
+            elif status == "section_not_found":
+                # DRIFT BUG, not a benign rejection: a whitelisted section has
+                # no matching heading in the doc → lesson would be silently
+                # dropped. Surface it loudly (logged + returned) so it gets fixed,
+                # never buried in the "rejected" count. (run_45ab67c7 root cause.)
+                msg = (
+                    f"DDD drift: '{proposal.target_doc} § {proposal.target_section}' "
+                    f"is whitelisted in SAFE_APPEND_SECTIONS but no matching '## ' "
+                    f"heading exists in the doc — lesson dropped (run "
+                    f"{proposal.source_run_id}). Fix the heading or the routing table."
+                )
+                logger.error(msg)
+                drift_errors.append(msg)
+                proposal.status = "rejected"
+                rejected += 1
             else:
-                rejected += 1  # Section not found or duplicate
+                # Benign no-op: "duplicate", "doc_missing", "locked", "not_safe".
+                rejected += 1
         else:
             proposal.status = "escalated"
             write_proposal(proposal, project_dir)
             escalated += 1
 
-    return {"applied": applied, "escalated": escalated, "rejected": rejected}
+    return {
+        "applied": applied,
+        "escalated": escalated,
+        "rejected": rejected,
+        "drift_errors": drift_errors,
+    }
 
 
 def cultivate_from_reflect(

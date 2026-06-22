@@ -776,6 +776,10 @@ class ContextHealthHook:
                         result.get("escalated", 0),
                         result.get("rejected", 0),
                     )
+                    # Section-name drift = config bug (lesson dropped), not a
+                    # benign rejection — log at error level so it surfaces.
+                    for _drift in result.get("drift_errors", []):
+                        logger.error("context_health: %s", _drift)
                 except Exception as exc:
                     logger.warning(
                         "context_health: auto-cultivate failed for %s/%s: %s",

@@ -311,7 +311,7 @@ class TestApplyToDDD:
                 confidence=0.7,
             )
             result = apply_to_ddd(p, project_dir)
-            assert result is True
+            assert result == "applied"
 
             content = doc.read_text()
             assert "New pattern discovered during pipeline run" in content
@@ -340,7 +340,7 @@ class TestApplyToDDD:
                 confidence=0.7,
             )
             result = apply_to_ddd(p, project_dir)
-            assert result is False  # Full content substring match
+            assert result == "duplicate"  # Full content substring match
 
     def test_rejects_unsafe_target(self):
         from core.ddd_cultivation import CultivationProposal, apply_to_ddd
@@ -355,7 +355,90 @@ class TestApplyToDDD:
                 confidence=0.9,
             )
             result = apply_to_ddd(p, project_dir)
-            assert result is False
+            assert result == "not_safe"
+
+    def test_section_not_found_distinct_from_duplicate(self):
+        """Drift bug: a whitelisted section that does NOT exist as a heading in
+        the target doc must return 'section_not_found' (a LOUD drift signal),
+        NOT be silently collapsed with 'duplicate' (a benign no-op). This is the
+        run_45ab67c7 root cause: ROUTING_TABLE 'Runtime Traps' drifted from the
+        doc heading and lessons were dropped as 'rejected' with zero visibility."""
+        from core.ddd_cultivation import CultivationProposal, apply_to_ddd
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            doc = project_dir / "IMPROVEMENT.md"
+            # Doc exists, but the whitelisted section heading is absent (drift).
+            doc.write_text("# Lessons\n\n## What Failed\n\n- old failure\n")
+            p = CultivationProposal(
+                target_doc="IMPROVEMENT.md",
+                target_section="What Worked",  # whitelisted, but missing here
+                content="A genuinely new lesson",
+                source_run_id="run_drift",
+                confidence=0.7,
+            )
+            assert apply_to_ddd(p, project_dir) == "section_not_found"
+
+            # Contrast: duplicate content in an EXISTING section = benign no-op.
+            doc.write_text(
+                "# Lessons\n\n## What Worked\n\n"
+                "- dup lesson (2026-01-01, run_x, auto-cultivated)\n"
+            )
+            p2 = CultivationProposal(
+                target_doc="IMPROVEMENT.md",
+                target_section="What Worked",
+                content="dup lesson",
+                source_run_id="run_dup2",
+                confidence=0.7,
+            )
+            assert apply_to_ddd(p2, project_dir) == "duplicate"
+
+    def test_applied_returns_status_string(self):
+        """Successful append returns 'applied' (status contract, not bool True)."""
+        from core.ddd_cultivation import CultivationProposal, apply_to_ddd
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            doc = project_dir / "IMPROVEMENT.md"
+            doc.write_text("# Lessons\n\n## What Worked\n\n- existing\n")
+            p = CultivationProposal(
+                target_doc="IMPROVEMENT.md",
+                target_section="What Worked",
+                content="brand new lesson text",
+                source_run_id="run_ok",
+                confidence=0.7,
+            )
+            assert apply_to_ddd(p, project_dir) == "applied"
+
+
+class TestSafeAppendSectionsExistInDocs:
+    """Drift guard (AC3, PIT28 single-source pattern): every section the
+    cultivation engine is allowed to auto-append to MUST exist as a real
+    '## ' heading in its target doc — otherwise lessons route to a phantom
+    section and get silently dropped. Derives the assertion from
+    SAFE_APPEND_SECTIONS, never hardcoded, so it can't rot."""
+
+    def test_every_safe_append_section_exists_as_heading(self):
+        import re
+        from core.ddd_cultivation import SAFE_APPEND_SECTIONS
+
+        workspace = Path("/Users/gawan/.swarm-ai/SwarmWS")
+        project_dir = workspace / "Projects" / "SwarmAI"
+        missing = []
+        for doc_name, sections in SAFE_APPEND_SECTIONS.items():
+            doc_path = project_dir / doc_name
+            if not doc_path.exists():
+                continue
+            content = doc_path.read_text(encoding="utf-8")
+            for section in sections:
+                section_re = re.compile(
+                    r"^## " + re.escape(section) + r"\s*$", re.MULTILINE
+                )
+                if not section_re.search(content):
+                    missing.append(f"{doc_name} § '{section}'")
+        assert not missing, (
+            "SAFE_APPEND_SECTIONS routes to headings that don't exist (drift — "
+            f"lessons would be silently dropped): {missing}")
 
 
 class TestLogApplication:
@@ -494,7 +577,7 @@ class TestCultivateFromCorrections:
             result = cultivate_from_corrections(
                 [], "session_empty", "SwarmAI", project_dir
             )
-            assert result == {"applied": 0, "escalated": 0, "rejected": 0}
+            assert result == {"applied": 0, "escalated": 0, "rejected": 0, "drift_errors": []}
 
 
 class TestCultivateFromDecisions:
@@ -554,7 +637,7 @@ class TestCultivateFromDecisions:
             result = cultivate_from_decisions(
                 [], "session_empty", "SwarmAI", project_dir
             )
-            assert result == {"applied": 0, "escalated": 0, "rejected": 0}
+            assert result == {"applied": 0, "escalated": 0, "rejected": 0, "drift_errors": []}
 
     def test_real_corrections_without_keywords_still_classify(self):
         """PE-1: Real production corrections lack keywords but should still classify."""

@@ -2806,6 +2806,10 @@ def cmd_run_cultivate(args, reg: ArtifactRegistry) -> None:
 
     result = cultivate_from_reflect(lessons, args.run_id, args.project, project_dir)
     print(json.dumps(result, indent=2))
+    # Surface section-name drift LOUDLY — a dropped lesson is a config bug, not
+    # a benign rejection (run_45ab67c7 root cause). stderr so it can't be missed.
+    for _drift in result.get("drift_errors", []):
+        print(f"⚠️  DDD DRIFT: {_drift}", file=sys.stderr)
 
 
 def cmd_run_observe(args, reg: ArtifactRegistry) -> None:

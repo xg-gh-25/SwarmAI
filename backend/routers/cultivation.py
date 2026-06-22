@@ -65,13 +65,26 @@ async def approve_proposal(proposal_id: str, project: str = Query(default="Swarm
     if not proposal:
         raise HTTPException(status_code=404, detail=f"Proposal '{proposal_id}' not found")
 
-    # Apply to DDD document
-    success = apply_to_ddd(proposal, project_dir)
-    if not success:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to apply proposal to {proposal.target_doc}#{proposal.target_section}",
-        )
+    # Apply to DDD document (returns a status string, not a bool)
+    status = apply_to_ddd(proposal, project_dir)
+    if status != "applied":
+        if status == "section_not_found":
+            detail = (
+                f"DDD drift: section '{proposal.target_section}' does not exist as a "
+                f"'## ' heading in {proposal.target_doc}. Fix the heading or the "
+                f"routing table before approving."
+            )
+        elif status == "duplicate":
+            detail = (
+                f"Proposal content already present in "
+                f"{proposal.target_doc}#{proposal.target_section} (duplicate)."
+            )
+        else:
+            detail = (
+                f"Failed to apply proposal to "
+                f"{proposal.target_doc}#{proposal.target_section} (status: {status})."
+            )
+        raise HTTPException(status_code=500, detail=detail)
 
     # Update status in file
     _update_proposal_status(project_dir, proposal_id, "applied")
