@@ -223,6 +223,10 @@ class CorrectionClassTracker:
         entry = self._state.get(class_name)
         return dict(entry) if entry is not None else None
 
+    def class_names(self) -> list[str]:
+        """List all tracked class names (for escalation iteration)."""
+        return list(self._state.keys())
+
     def briefing_lines(self) -> list[str]:
         """Generate status lines for session briefing.
 

@@ -1583,9 +1583,13 @@ def _run_evolution_cycle_locked(
                     except (json.JSONDecodeError, OSError):
                         pass
 
-                # Deduplicate: replace by gc_id or source_class
+                # Deduplicate: replace by gc_id or (source_class, proposal_kind).
+                # v3 Phase 2: identity includes proposal_kind so a rule proposal and a
+                # gate proposal for the SAME class do NOT collide — the rule->gate
+                # escalation must keep both, not overwrite one with the other.
                 for gp in gov_proposals:
                     gp_dict = gp.to_proposal_dict()
+                    gp_kind = gp_dict.get("proposal_kind", "rule")
                     # Remove previous entry with same identity
                     existing_proposals = [
                         p for p in existing_proposals
@@ -1593,7 +1597,11 @@ def _run_evolution_cycle_locked(
                             p.get("target") == "governance"
                             and (
                                 (gp_dict.get("gc_id") and p.get("gc_id") == gp_dict["gc_id"])
-                                or (gp_dict.get("source_class") and p.get("source_class") == gp_dict["source_class"])
+                                or (
+                                    gp_dict.get("source_class")
+                                    and p.get("source_class") == gp_dict["source_class"]
+                                    and p.get("proposal_kind", "rule") == gp_kind
+                                )
                             )
                         )
                     ]

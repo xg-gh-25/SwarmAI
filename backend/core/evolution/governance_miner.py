@@ -52,6 +52,10 @@ class GovernanceProposal:
     proposed_rule: str = ""
     evidence: list[str] = field(default_factory=list)
     confidence: float = 0.0
+    # v3 Phase 2: distinguishes a rule proposal from a gate proposal so the
+    # rule->gate escalation for the SAME class does not dedup-collide (the
+    # dedup identity must include kind — see evolution_optimizer dedup).
+    proposal_kind: str = "rule"
 
     def to_proposal_dict(self) -> dict:
         """Serialize to the format expected by .evolution_proposals.json."""
@@ -63,6 +67,7 @@ class GovernanceProposal:
             "proposed_rule": self.proposed_rule,
             "evidence": self.evidence,
             "confidence": self.confidence,
+            "proposal_kind": self.proposal_kind,
         }
 
 

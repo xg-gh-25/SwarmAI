@@ -304,6 +304,24 @@ class EvolutionMaintenanceHook:
         except Exception as exc:
             logger.debug("judgment classifier skipped: %s", exc)
 
+        # Evolution v3 Phase 2: escalation ladder. For each tracked class, decide
+        # whether a recurring pattern (count>=3, no existing structural fix) warrants
+        # a RULE proposal. Writes proposal DATA to .evolution_proposals.json only —
+        # NEVER auto-writes SOUL/AGENT/STEERING. Degrade-to-log.
+        try:
+            from core.evolution.correction_tracker import CorrectionClassTracker
+            from core.evolution.governance_router import escalate_class
+
+            esc_tracker = CorrectionClassTracker()
+            proposed = 0
+            for cls in esc_tracker.class_names():
+                if escalate_class(cls, esc_tracker):
+                    proposed += 1
+            if proposed:
+                logger.info("escalation ladder: %d rule proposal(s) surfaced", proposed)
+        except Exception as exc:
+            logger.debug("escalation ladder skipped: %s", exc)
+
         # Run evolution cycle weekly (check last run date)
         await self._maybe_run_evolution(ctx_dir)
 

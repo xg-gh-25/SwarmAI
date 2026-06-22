@@ -254,6 +254,96 @@ def classify_new_corrections(
         lock_fd.close()
 
 
+def _default_proposals_path() -> Path:
+    # Existing governance-proposal sink, read by proactive_intelligence -> briefing.
+    return Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / ".evolution_proposals.json"
+
+
+def _append_proposal(proposal: dict, proposals_path: Path) -> None:
+    """Append a governance proposal under an exclusive lock, kind-aware dedup.
+
+    Identity = (source_class, proposal_kind) so a rule and a gate proposal for the
+    same class coexist (never overwrite each other). Re-reads under lock.
+    """
+    proposals_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = proposals_path.with_suffix(".json.lock")
+    fd = open(lock_path, "w")
+    try:
+        _flock(fd)
+        existing: list = []
+        if proposals_path.exists():
+            try:
+                loaded = json.loads(proposals_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, list):
+                    existing = loaded
+            except (json.JSONDecodeError, OSError):
+                existing = []
+        src = proposal.get("source_class")
+        kind = proposal.get("proposal_kind", "rule")
+        existing = [
+            p
+            for p in existing
+            if not (
+                p.get("target") == "governance"
+                and p.get("source_class") == src
+                and p.get("proposal_kind", "rule") == kind
+            )
+        ]
+        existing.append(proposal)
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", dir=proposals_path.parent, suffix=".tmp", delete=False, encoding="utf-8"
+        )
+        try:
+            json.dump(existing, tmp, indent=2, ensure_ascii=False)
+            tmp.close()
+            Path(tmp.name).replace(proposals_path)
+        except Exception:
+            tmp.close()
+            Path(tmp.name).unlink(missing_ok=True)
+            raise
+    finally:
+        _funlock(fd)
+        fd.close()
+
+
+def escalate_class(
+    class_name: str,
+    tracker,
+    proposals_path: Path | None = None,
+) -> dict | None:
+    """Run the escalation ladder for one correction class; write a proposal if due.
+
+    Reads the class's tracker state, asks the ladder for a decision, and on
+    kind in ("rule", "gate") writes a GovernanceProposal to the existing
+    .evolution_proposals.json sink (kind-aware dedup). kind="none" -> no write.
+
+    NEVER writes SOUL/AGENT/STEERING. Degrade-to-log on any failure.
+
+    Returns the proposal dict written, or None.
+    """
+    from core.evolution.escalation_ladder import decide_escalation
+
+    try:
+        state = tracker.get_class(class_name)
+        if not state:
+            return None
+        decision = decide_escalation(state, class_name=class_name)
+        if decision.kind == "none" or not decision.proposal:
+            return None
+        proposals_path = proposals_path or _default_proposals_path()
+        _append_proposal(decision.proposal, proposals_path)
+        logger.info(
+            "escalation: %s -> propose %s (%dx)",
+            class_name,
+            decision.kind,
+            state.get("count", 0),
+        )
+        return decision.proposal
+    except Exception as exc:  # noqa: BLE001 — degrade-to-log
+        logger.debug("escalate_class degraded for %s: %s", class_name, exc)
+        return None
+
+
 def route_classification(jc, tracker, pending_path: Path | None = None) -> dict | None:
     """Route one classification by its counter_state.
 

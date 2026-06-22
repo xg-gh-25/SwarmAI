@@ -231,3 +231,83 @@ def test_classify_new_corrections_caps_records(tmp_path):
         max_records=3,
     )
     assert s["processed"] == 3
+
+
+# === Phase 2: escalate_class (escalation ladder wiring) ===
+
+from core.evolution.governance_router import escalate_class
+
+
+class _FakeTracker:
+    """Minimal tracker stub: get_class returns injected state; record is spied."""
+    def __init__(self, state):
+        self._state = state
+        self.recorded = []
+    def get_class(self, name):
+        return dict(self._state) if self._state else None
+    def record(self, name, evidence=""):
+        self.recorded.append((name, evidence))
+
+
+def test_ac4_threshold_no_fix_writes_rule_proposal(tmp_path):
+    """AC4: count>=3 + no active_gate -> a rule proposal is written to the sink."""
+    proposals = tmp_path / "proposals.json"
+    tracker = _FakeTracker({"count": 5, "active_gate": None, "resolved": False})
+    p = escalate_class("CLASS_B", tracker, proposals_path=proposals)
+    assert p is not None
+    assert p["proposal_kind"] == "rule"
+    written = json.loads(proposals.read_text())
+    assert len(written) == 1
+    assert written[0]["source_class"] == "CLASS_B"
+    # escalation must NOT increment the counter
+    assert tracker.recorded == []
+
+
+def test_existing_fix_writes_nothing(tmp_path):
+    """A class with an existing structural fix (active_gate) -> no proposal, no file."""
+    proposals = tmp_path / "proposals.json"
+    tracker = _FakeTracker({"count": 11, "active_gate": "GC12", "resolved": False})
+    p = escalate_class("CLASS_A", tracker, proposals_path=proposals)
+    assert p is None
+    assert not proposals.exists() or json.loads(proposals.read_text()) == []
+
+
+def test_below_threshold_writes_nothing(tmp_path):
+    """AC2: count<3 -> no proposal written."""
+    proposals = tmp_path / "proposals.json"
+    tracker = _FakeTracker({"count": 2, "active_gate": None})
+    assert escalate_class("CLASS_C", tracker, proposals_path=proposals) is None
+    assert not proposals.exists() or json.loads(proposals.read_text()) == []
+
+
+def test_ac3_never_touches_governance_files(tmp_path, monkeypatch):
+    """AC3 (NEGATIVE): escalate_class writes ONLY the proposal file, never SOUL/AGENT/STEERING."""
+    proposals = tmp_path / "proposals.json"
+    # Create decoy governance files; assert they are byte-identical after escalation.
+    gov = {}
+    for name in ("SOUL.md", "AGENT.md", "STEERING.md"):
+        f = tmp_path / name
+        f.write_text("ORIGINAL governance content\n")
+        gov[name] = f.read_text()
+    tracker = _FakeTracker({"count": 9, "active_gate": None})
+    escalate_class("CLASS_B", tracker, proposals_path=proposals)
+    for name, original in gov.items():
+        assert (tmp_path / name).read_text() == original, f"{name} was mutated!"
+    assert proposals.exists()  # only the proposal file changed
+
+
+def test_escalate_missing_class_is_noop(tmp_path):
+    """A class not in the tracker -> None, no file."""
+    proposals = tmp_path / "proposals.json"
+    tracker = _FakeTracker(None)
+    assert escalate_class("CLASS_Z", tracker, proposals_path=proposals) is None
+
+
+def test_proposal_dedup_kind_aware(tmp_path):
+    """Re-escalating the same class+kind replaces (not duplicates) the proposal."""
+    proposals = tmp_path / "proposals.json"
+    tracker = _FakeTracker({"count": 5, "active_gate": None})
+    escalate_class("CLASS_B", tracker, proposals_path=proposals)
+    escalate_class("CLASS_B", tracker, proposals_path=proposals)
+    written = json.loads(proposals.read_text())
+    assert len(written) == 1  # deduped by (source_class, kind)
