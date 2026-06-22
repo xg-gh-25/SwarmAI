@@ -107,3 +107,7 @@ pytest-of-gawan/
 backend/skills/s_cmhk-*/
 backend/skills/_shared/
 Services/cmhk-quick-mcp/
+
+# Test-leak guard: a mock whose .db_path/.path attr auto-vivifies to a MagicMock
+# gets its repr written as a filename when passed to open()/Path. 0-byte junk.
+*MagicMock name=*
