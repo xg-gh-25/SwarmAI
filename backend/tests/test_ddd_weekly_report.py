@@ -123,6 +123,94 @@ class TestDDDWeeklyReport:
         # Shows line counts
         assert "L" in report  # e.g., "5L"
 
+    def test_surfaces_created_section_drift(self, tmp_path):
+        """When changelog entries have created_section=true, the report must
+        surface them (Health Dashboard line + Next Week reconcile action) so the
+        operator knows a DDD doc template drifted from ROUTING_TABLE and a section
+        was auto-created. Without this, drift auto-heals silently forever."""
+        from jobs.handlers.ddd_weekly_report import run_ddd_weekly_report
+
+        projects = tmp_path / "Projects"
+        projects.mkdir()
+        p = projects / "SwarmAI"
+        p.mkdir()
+        (p / "TECH.md").write_text("# Tech\n\n## Architecture\n\n- a\n## Runtime Traps\n\n- t\n")
+        (p / "IMPROVEMENT.md").write_text("# L\n\n## What Worked\n\n- w\n")
+        artifacts = p / ".artifacts"
+        artifacts.mkdir()
+        now = datetime.now(timezone.utc)
+        # Neutral content/run-id so the assertion can't be satisfied by the
+        # fixture's own wording leaking into the Change Log table (true RED).
+        entries = [
+            {"id": "c1", "action": "applied", "created_section": True,
+             "target_doc": "TECH.md", "target_section": "Runtime Traps",
+             "content": "lesson alpha", "source_run_id": "run_aaa",
+             "timestamp": now.isoformat()},
+            {"id": "c2", "action": "applied", "created_section": False,
+             "target_doc": "IMPROVEMENT.md", "target_section": "What Worked",
+             "content": "lesson beta", "source_run_id": "run_bbb",
+             "timestamp": now.isoformat()},
+        ]
+        (artifacts / "ddd-changelog.jsonl").write_text(
+            "\n".join(json.dumps(e) for e in entries) + "\n")
+
+        with patch("jobs.handlers.ddd_weekly_report.PROJECTS_DIR", projects), \
+             patch("jobs.handlers.ddd_weekly_report.SWARMWS", tmp_path):
+            result = run_ddd_weekly_report()
+
+        report = Path(result["output_path"]).read_text()
+        # A dedicated drift line must be emitted (structural marker, not incidental
+        # content). It names the auto-created section so the operator can reconcile.
+        assert "auto-created section" in report.lower(), (
+            "Report must emit a dedicated 'auto-created section' drift line")
+        assert "TECH.md" in report and "Runtime Traps" in report, (
+            "Drift line must name the doc + section to reconcile")
+        # Only the created_section=true entry counts toward drift, not the normal one.
+        assert "1 section" in report.lower() or "1 auto-created" in report.lower(), (
+            "Report should count exactly 1 auto-created section")
+
+    def test_created_section_markdown_sanitized(self, tmp_path):
+        """A corrupted changelog with a pipe/backtick/newline in the section name
+        must not break the markdown table/bullet (adversarial LOW). _read_changelog
+        does not re-validate against the whitelist, so render must sanitize."""
+        from jobs.handlers.ddd_weekly_report import run_ddd_weekly_report
+
+        projects = tmp_path / "Projects"
+        projects.mkdir()
+        p = projects / "SwarmAI"
+        p.mkdir()
+        (p / "TECH.md").write_text("# T\n\n## Architecture\n\n- a\n")
+        artifacts = p / ".artifacts"
+        artifacts.mkdir()
+        now = datetime.now(timezone.utc)
+        entry = {"id": "c1", "action": "applied", "created_section": True,
+                 "target_doc": "TECH.md", "target_section": "Evil | Pipe`tick",
+                 "content": "x", "source_run_id": "run_x", "timestamp": now.isoformat()}
+        (artifacts / "ddd-changelog.jsonl").write_text(json.dumps(entry) + "\n")
+
+        with patch("jobs.handlers.ddd_weekly_report.PROJECTS_DIR", projects), \
+             patch("jobs.handlers.ddd_weekly_report.SWARMWS", tmp_path):
+            result = run_ddd_weekly_report()
+
+        report = Path(result["output_path"]).read_text()
+        # Raw pipe must be escaped in the drift bullet (no unescaped '| Pipe').
+        assert "Evil \\| Pipe" in report, "pipe must be escaped in drift line"
+        # Backtick neutralized (no stray backtick from the section name).
+        assert "Pipe`tick" not in report, "backtick must be neutralized"
+
+    def test_no_created_section_line_when_none(self, workspace):
+        """The drift line must NOT appear when no section was auto-created
+        (avoid noise — the shared fixture has created_section absent/false)."""
+        from jobs.handlers.ddd_weekly_report import run_ddd_weekly_report
+
+        with patch("jobs.handlers.ddd_weekly_report.PROJECTS_DIR", workspace / "Projects"), \
+             patch("jobs.handlers.ddd_weekly_report.SWARMWS", workspace):
+            result = run_ddd_weekly_report()
+
+        report = Path(result["output_path"]).read_text()
+        assert "auto-created section" not in report.lower(), (
+            "No drift line should appear when nothing was auto-created")
+
     def test_skips_when_no_projects_dir(self):
         from jobs.handlers.ddd_weekly_report import run_ddd_weekly_report
 

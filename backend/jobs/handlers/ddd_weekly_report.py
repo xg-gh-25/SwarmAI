@@ -28,6 +28,24 @@ DDD_DOCS = ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
 REPORT_WINDOW_DAYS = 7
 
 
+def _md_cell(value: object) -> str:
+    """Sanitize a changelog-sourced string for safe inline markdown rendering.
+
+    Values normally come from SAFE_APPEND_SECTIONS/ROUTING_TABLE (trusted), but
+    _read_changelog re-parses the on-disk JSONL with no whitelist re-validation —
+    a corrupted/hand-edited ddd-changelog.jsonl could carry a section name with a
+    pipe (breaks tables), backtick, or newline. Neutralize those. (Mirrors the
+    _safe() sanitizer ddd_cultivation.py already applies to the same fields.)
+    """
+    return (
+        str(value)
+        .replace("\n", " ")
+        .replace("\r", " ")
+        .replace("|", "\\|")
+        .replace("`", "'")
+    )
+
+
 def run_ddd_weekly_report(config: dict | None = None) -> dict:
     """Generate the weekly DDD cultivation report.
 
@@ -205,6 +223,14 @@ def _generate_report(
         p for p, docs in health.items()
         if any(d.get("stale") for d in docs.values() if isinstance(d, dict))
     ]
+    # Auto-created sections (DDD drift self-healed): a whitelisted section was
+    # absent from the doc so cultivation created it. Safe, but signals the doc
+    # template / ROUTING_TABLE drifted — surface it so it can be reconciled
+    # instead of auto-healing silently forever. Dedup by (project, doc, section).
+    created_sections = sorted({
+        (proj, e.get("target_doc", "?"), e.get("target_section", "?"))
+        for proj, e in applied if e.get("created_section")
+    })
     total_sections = sum(
         d.get("sections", 0) for docs in health.values()
         for d in docs.values() if isinstance(d, dict)
@@ -265,11 +291,11 @@ def _generate_report(
         sorted_applied = sorted(applied, key=lambda x: x[1].get("confidence", 0), reverse=True)
         top_3 = sorted_applied[:3]
         for i, (proj, entry) in enumerate(top_3, 1):
-            doc = entry.get("target_doc", "?").replace(".md", "")
-            section = entry.get("target_section", "?")
-            content = entry.get("content", "")
-            source = entry.get("source_run_id", "?")
-            lines.append(f"**[HL{i}] {proj}/{doc} — {section}**")
+            doc = _md_cell(entry.get("target_doc", "?").replace(".md", ""))
+            section = _md_cell(entry.get("target_section", "?"))
+            content = _md_cell(entry.get("content", ""))
+            source = _md_cell(entry.get("source_run_id", "?"))
+            lines.append(f"**[HL{i}] {_md_cell(proj)}/{doc} — {section}**")
             lines.append(f"> {content[:200]}")
             lines.append(f"> _Learned from: {source}_")
             lines.append("")
@@ -340,6 +366,21 @@ def _generate_report(
         lines.append(f"| **{proj_name}** | {' | '.join(cells)} | {status} |")
     lines.append("")
 
+    # ─── DDD Drift: auto-created sections ───
+    if created_sections:
+        n = len(created_sections)
+        lines.append(
+            f"**⚠️ {n} auto-created section{'s' if n != 1 else ''} (template drift):** "
+            f"a whitelisted section was missing from the doc, so cultivation created "
+            f"it automatically. The lesson was NOT lost — but the doc template drifted "
+            f"from ROUTING_TABLE. Reconcile to stop recurring auto-creates:"
+        )
+        for proj, doc, section in created_sections:
+            lines.append(
+                f"- `{_md_cell(proj)}` — {_md_cell(doc)} § **{_md_cell(section)}**"
+            )
+        lines.append("")
+
     # ─── What Changed (detailed log) ───
     if applied:
         lines.append("## Change Log (auto-applied)")
@@ -349,11 +390,11 @@ def _generate_report(
         for i, (proj, entry) in enumerate(
             sorted(applied, key=lambda x: x[1].get("timestamp", ""), reverse=True), 1
         ):
-            doc = entry.get("target_doc", "?")
-            section = entry.get("target_section", "?")
-            content = entry.get("content", "")[:60]
-            source = entry.get("source_run_id", "?")
-            lines.append(f"| {i} | {proj} | {doc} | {section} | {content}… | {source} |")
+            doc = _md_cell(entry.get("target_doc", "?"))
+            section = _md_cell(entry.get("target_section", "?"))
+            content = _md_cell(entry.get("content", "")[:60])
+            source = _md_cell(entry.get("source_run_id", "?"))
+            lines.append(f"| {i} | {_md_cell(proj)} | {doc} | {section} | {content}… | {source} |")
         lines.append("")
 
     # ─── Next Week ───
@@ -361,6 +402,12 @@ def _generate_report(
     lines.append("")
     if stale_projects:
         lines.append(f"- **Action:** Review stale DDD docs in {', '.join(stale_projects)}")
+    if created_sections:
+        lines.append(
+            f"- **Action:** Reconcile {len(created_sections)} auto-created section(s) — "
+            f"add the section to the project's DDD template (or update ROUTING_TABLE) "
+            f"so cultivation appends in place instead of re-creating"
+        )
     if escalations:
         lines.append(f"- **Action:** Resolve {total_escalated} pending escalation(s)")
     if not applied and not escalations:
