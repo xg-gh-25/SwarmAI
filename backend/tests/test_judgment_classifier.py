@@ -142,6 +142,49 @@ def test_ac5_malformed_llm_response_degrades_to_none():
     assert jc is None
 
 
+def test_cognitive_with_invalid_class_degrades_to_none():
+    """Adversarial #3: axis=cognitive but invalid class_name -> None, NOT a silent
+    downgrade to operational+counted (which would mis-count in the wrong direction)."""
+    client = _fake_bedrock_returning({
+        "axis": "cognitive",
+        "class_name": "CLASS_D",  # not in valid set
+        "parent_principle": "P1",
+        "confidence": 0.7,
+    })
+    jc = classify_correction(
+        REAL_USER_CORRECTION, evolution_classes=["CLASS_A"], bedrock_client=client
+    )
+    assert jc is None
+
+
+def test_operational_axis_with_null_class_still_counts():
+    """LLM judging a user_correction as NOT a real correction (axis=operational,
+    class=null) is honored as operational/counted — not degraded."""
+    client = _fake_bedrock_returning({"axis": "operational", "class_name": None})
+    jc = classify_correction(
+        REAL_USER_CORRECTION, evolution_classes=["CLASS_A"], bedrock_client=client
+    )
+    assert jc is not None
+    assert jc.axis == "operational"
+    assert jc.counter_state == "counted"
+
+
+def test_parse_label_ignores_trailing_object():
+    """Adversarial #4: a multi-object LLM response parses the FIRST object cleanly."""
+    client = MagicMock()
+    client.converse.return_value = {
+        "output": {"message": {"content": [
+            {"text": '{"axis":"cognitive","class_name":"CLASS_B","parent_principle":"P2"} extra {"junk":1}'}
+        ]}},
+        "usage": {},
+    }
+    jc = classify_correction(
+        REAL_USER_CORRECTION, evolution_classes=["CLASS_B"], bedrock_client=client
+    )
+    assert jc is not None
+    assert jc.class_name == "CLASS_B"
+
+
 def test_ac5_unknown_record_type_returns_none():
     """A record type the classifier doesn't handle (subagent_finding) -> None, no crash."""
     rec = {"ts": 1.0, "session_id": "x", "type": "subagent_finding", "summary": "Error: rg"}

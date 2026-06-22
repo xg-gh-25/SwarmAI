@@ -199,6 +199,23 @@ def test_classify_new_corrections_missing_corpus_is_safe(tmp_path):
     assert s["processed"] == 0
 
 
+def test_watermark_never_regresses(tmp_path):
+    """Adversarial #1/#2: a stale concurrent write cannot move the watermark
+    backwards — the monotonic re-read under lock guards it."""
+    corpus = tmp_path / "corrections.jsonl"
+    wm = tmp_path / "wm.json"
+    pending = tmp_path / "pending.json"
+    _write_corpus(corpus, [{"ts": 100.0, "session_id": "a", "type": "tool_failure", "tool": "Bash", "error": "x"}])
+    classify_new_corrections(corrections_path=corpus, watermark_path=wm, pending_path=pending, tracker=MagicMock())
+    assert json.loads(wm.read_text())["last_ts"] == 100.0
+    # Simulate a concurrent run that already advanced the watermark to 500 on disk.
+    wm.write_text(json.dumps({"last_ts": 500.0}))
+    # Our run sees only ts=100 in corpus (already processed); must NOT regress to 100.
+    s = classify_new_corrections(corrections_path=corpus, watermark_path=wm, pending_path=pending, tracker=MagicMock())
+    assert json.loads(wm.read_text())["last_ts"] == 500.0
+    assert s["processed"] == 0
+
+
 def test_classify_new_corrections_caps_records(tmp_path):
     """max_records caps how many are processed in one run (rest next run)."""
     corpus = tmp_path / "corrections.jsonl"

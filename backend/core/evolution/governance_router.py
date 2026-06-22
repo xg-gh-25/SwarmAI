@@ -130,6 +130,17 @@ def _default_watermark_path() -> Path:
     return Path.home() / ".swarm-ai" / "state" / "judgment_classifier_watermark.json"
 
 
+def _read_watermark(watermark_path: Path) -> float:
+    """Read last_ts from the watermark file. Missing/corrupt -> 0.0."""
+    try:
+        if watermark_path.exists():
+            data = json.loads(watermark_path.read_text(encoding="utf-8"))
+            return float(data.get("last_ts", 0.0))
+    except (json.JSONDecodeError, OSError, ValueError):
+        pass
+    return 0.0
+
+
 def classify_new_corrections(
     *,
     corrections_path: Path | None = None,
@@ -162,75 +173,85 @@ def classify_new_corrections(
 
         tracker = CorrectionClassTracker()
 
-    # Read watermark (last processed ts). Missing/corrupt -> 0.0 (process all).
-    last_ts = 0.0
-    try:
-        if watermark_path.exists():
-            last_ts = float(json.loads(watermark_path.read_text(encoding="utf-8")).get("last_ts", 0.0))
-    except (json.JSONDecodeError, OSError, ValueError):
-        last_ts = 0.0
-
     if not corrections_path.exists():
-        summary["watermark"] = last_ts
         return summary
 
-    # Load only records strictly newer than the watermark, oldest-first, capped.
-    new_records = []
+    # Adversarial #1 (CRITICAL): the ENTIRE read-watermark / process / write-watermark
+    # span runs under a single exclusive lock. This hook fires at session close across
+    # concurrent sessions on the same shared state/ dir; without one lock spanning the
+    # whole span, two runs interleave and the watermark write regresses (B writes 150
+    # after A writes 200) -> re-processing + double-count, or permanent skips.
+    # Adversarial #2 (HIGH): we also re-read the on-disk watermark UNDER the lock and
+    # take max(...) before writing, so the watermark can never move backwards even if
+    # the lock is somehow bypassed (defense in depth).
+    watermark_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = watermark_path.with_suffix(".json.lock")
+    lock_fd = open(lock_path, "w")
     try:
-        for line in corrections_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
+        _flock(lock_fd)
+
+        last_ts = _read_watermark(watermark_path)
+
+        new_records = []
+        try:
+            for line in corrections_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if float(rec.get("ts", 0.0)) > last_ts:
+                    new_records.append(rec)
+        except OSError as exc:
+            logger.debug("classify_new_corrections read failed: %s", exc)
+            summary["watermark"] = last_ts
+            return summary
+
+        new_records.sort(key=lambda r: float(r.get("ts", 0.0)))
+        if len(new_records) > max_records:
+            logger.info(
+                "classify_new_corrections: capping %d new records to %d (rest next run)",
+                len(new_records),
+                max_records,
+            )
+            new_records = new_records[:max_records]
+
+        max_seen = last_ts
+        for rec in new_records:
+            max_seen = max(max_seen, float(rec.get("ts", 0.0)))
+            jc = classify_correction(
+                rec, evolution_classes=evolution_classes, bedrock_client=bedrock_client
+            )
+            if jc is None:
+                summary["skipped"] += 1
                 continue
-            try:
-                rec = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if float(rec.get("ts", 0.0)) > last_ts:
-                new_records.append(rec)
-    except OSError as exc:
-        logger.debug("classify_new_corrections read failed: %s", exc)
-        summary["watermark"] = last_ts
+            route_classification(jc, tracker, pending_path=pending_path)
+            summary["processed"] += 1
+            if jc.axis == "cognitive":
+                summary["cognitive"] += 1
+            else:
+                summary["operational"] += 1
+
+        # Monotonic write: never regress below what's already on disk.
+        on_disk = _read_watermark(watermark_path)
+        max_seen = max(max_seen, on_disk)
+        try:
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", dir=watermark_path.parent, suffix=".tmp", delete=False, encoding="utf-8"
+            )
+            json.dump({"last_ts": max_seen}, tmp)
+            tmp.close()
+            Path(tmp.name).replace(watermark_path)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("watermark write degraded: %s", exc)
+
+        summary["watermark"] = max_seen
         return summary
-
-    new_records.sort(key=lambda r: float(r.get("ts", 0.0)))
-    if len(new_records) > max_records:
-        logger.info(
-            "classify_new_corrections: capping %d new records to %d (rest next run)",
-            len(new_records),
-            max_records,
-        )
-        new_records = new_records[:max_records]
-
-    max_seen = last_ts
-    for rec in new_records:
-        ts = float(rec.get("ts", 0.0))
-        max_seen = max(max_seen, ts)
-        jc = classify_correction(rec, evolution_classes=evolution_classes, bedrock_client=bedrock_client)
-        if jc is None:
-            summary["skipped"] += 1
-            continue
-        route_classification(jc, tracker, pending_path=pending_path)
-        summary["processed"] += 1
-        if jc.axis == "cognitive":
-            summary["cognitive"] += 1
-        else:
-            summary["operational"] += 1
-
-    # Advance the watermark to the newest ts we actually saw (even skipped ones,
-    # so we never re-attempt an unclassifiable record forever).
-    try:
-        watermark_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = tempfile.NamedTemporaryFile(
-            mode="w", dir=watermark_path.parent, suffix=".tmp", delete=False, encoding="utf-8"
-        )
-        json.dump({"last_ts": max_seen}, tmp)
-        tmp.close()
-        Path(tmp.name).replace(watermark_path)
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("watermark write degraded: %s", exc)
-
-    summary["watermark"] = max_seen
-    return summary
+    finally:
+        _funlock(lock_fd)
+        lock_fd.close()
 
 
 def route_classification(jc, tracker, pending_path: Path | None = None) -> dict | None:

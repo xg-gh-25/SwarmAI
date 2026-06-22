@@ -146,10 +146,15 @@ def _parse_label(raw: str) -> dict:
         text = text.split("```", 2)[1] if text.count("```") >= 2 else text
         if text.lstrip().startswith("json"):
             text = text.lstrip()[4:]
-    start, end = text.find("{"), text.rfind("}")
-    if start == -1 or end == -1:
+    start = text.find("{")
+    if start == -1:
         raise ValueError("no JSON object in LLM response")
-    return json.loads(text[start : end + 1])
+    # raw_decode parses the FIRST balanced object from `start`, ignoring any
+    # trailing prose or a second object (multi-object / streamed responses).
+    obj, _ = json.JSONDecoder().raw_decode(text[start:])
+    if not isinstance(obj, dict):
+        raise ValueError("LLM response is not a JSON object")
+    return obj
 
 
 def _classify_cognitive(record: dict, bedrock_client) -> JudgmentClassification | None:
@@ -167,11 +172,23 @@ def _classify_cognitive(record: dict, bedrock_client) -> JudgmentClassification 
 
     axis = label.get("axis", "cognitive")
     class_name = label.get("class_name")
-    if class_name not in _VALID_CLASSES:
+    raw_class_valid = class_name in _VALID_CLASSES
+    if not raw_class_valid:
         class_name = None
     principle = label.get("parent_principle")
     if principle not in _VALID_PRINCIPLES:
         principle = None
+
+    # Adversarial #3: a genuinely-cognitive correction with a MALFORMED class
+    # (LLM returned axis=cognitive but class_name not in the valid set) must NOT
+    # be silently downgraded to operational + auto-counted. Degrade to None so it
+    # is skipped + logged, not mis-counted in the wrong direction.
+    if axis == "cognitive" and not raw_class_valid:
+        logger.debug(
+            "cognitive correction with invalid class_name %r -> degrade to None",
+            label.get("class_name"),
+        )
+        return None
 
     # If the LLM judged this not a real behavioral correction, it returns
     # axis=operational/class=null. Honor that — operational auto-counts.
