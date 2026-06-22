@@ -1121,6 +1121,72 @@ class TestL2DepthValidation:
         adv_errors = [e for e in result["errors"] if "adversarial_review" in e and "skipped" in e]
         assert len(adv_errors) >= 1, f"Expected skipped-on-bugfix error, got: {result['errors']}"
 
+    # ── gate_spawn_blocked fail-closed backstop (design run_0bd15278) ──
+    # These lock the two-field enforcement in validate_artifact_data (the
+    # publish-time gate). It is the structural reason a rejected Gate-2 spawn
+    # can NEVER be laundered into a completed run via self-review: a fabricated
+    # review cannot produce a genuine spawned=true + Agent-tool evidence pair.
+    # STEERING#11: a recovery/guarantee path must have a test that FORCES it.
+
+    def test_gate_spawn_self_review_without_spawn_blocks(self):
+        """spawned=false (self-review masquerade after a rejected spawn) on a
+        strict profile → validate_artifact_data emits a blocking error."""
+        from scripts.pipeline_validator import validate_artifact_data
+        errors = validate_artifact_data("deliver", {
+            "title": "X",
+            "quality": {"tests_pass": True, "regressions": 0, "smoke_pass": True},
+            "completion_audit": {"all_green": True, "gaps": 0},
+            "adversarial_review": {
+                "profile_tier": "full",
+                "spawned": False,  # self-review masquerade
+                "findings": [],
+            },
+        }, profile="bugfix")
+        spawn_errors = [e for e in errors
+                        if "adversarial_review" in e and "spawned" in e]
+        assert len(spawn_errors) >= 1, (
+            f"Expected spawned=false to BLOCK (fail-closed), got: {errors}")
+
+    def test_gate_spawn_fabricated_evidence_empty_blocks(self):
+        """spawned=true but empty/whitespace evidence (the fabrication path a
+        rejected-spawn agent might try) → blocking error. Two-field gate holds."""
+        from scripts.pipeline_validator import validate_artifact_data
+        errors = validate_artifact_data("deliver", {
+            "title": "X",
+            "quality": {"tests_pass": True, "regressions": 0, "smoke_pass": True},
+            "completion_audit": {"all_green": True, "gaps": 0},
+            "adversarial_review": {
+                "profile_tier": "full",
+                "spawned": True,
+                "evidence": "   ",  # whitespace-only = no genuine spawn evidence
+                "findings": [],
+            },
+        }, profile="bugfix")
+        ev_errors = [e for e in errors
+                     if "adversarial_review" in e and "evidence" in e]
+        assert len(ev_errors) >= 1, (
+            f"Expected empty-evidence to BLOCK, got: {errors}")
+
+    def test_gate_spawn_genuine_evidence_passes(self):
+        """Positive control: genuine spawned=true + non-empty evidence → no
+        spawn/evidence error (the gate doesn't false-block a real review)."""
+        from scripts.pipeline_validator import validate_artifact_data
+        errors = validate_artifact_data("deliver", {
+            "title": "X",
+            "quality": {"tests_pass": True, "regressions": 0, "smoke_pass": True},
+            "completion_audit": {"all_green": True, "gaps": 0},
+            "adversarial_review": {
+                "profile_tier": "full",
+                "spawned": True,
+                "evidence": "Agent tool invocation: correctness + security specialists",
+                "findings": [],
+            },
+        }, profile="bugfix")
+        gate_errors = [e for e in errors if "adversarial_review" in e
+                       and ("spawned" in e or "evidence" in e)]
+        assert gate_errors == [], (
+            f"Genuine spawn+evidence must NOT be blocked, got: {gate_errors}")
+
 
 class TestL3ConfidenceGate:
     """Layer 3: confidence < 7 blocks delivery unless human_override."""

@@ -1160,6 +1160,41 @@ A: ①GO ②3alt ③4AC ④★PASS | B: ⑤3R3G ⑥clean ⑦28/0 | C: ⑧★2fix
     equivalent to skipping the gate. If spawning is infeasible (token budget
     exhaustion, context limit), CHECKPOINT — don't fake it.
 
+    **Spawn REJECTION is fail-closed (gate_spawn_blocked).** Distinct from
+    "infeasible" above: the harness/tool layer can REJECT an Agent-tool spawn
+    mid-turn ("The user doesn't want to proceed with this tool use" / "does not
+    want to take this action"). This is a transient tool-layer signal (PIT01:
+    a prior `interrupt()` poisons the warm subprocess), NOT a structural ban on
+    spawning, and it is INVISIBLE to the backend (zero records in daemon.log —
+    only the orchestrating agent sees it as a tool_result). Required behavior —
+    a strict decision tree, no deviation:
+
+    ```
+    Gate-1 or Gate-2 Agent spawn REJECTED
+      → retry EXACTLY ONCE (a fresh Agent call this same turn)
+        → succeeds → proceed normally
+        → rejected again → CHECKPOINT, reason="gate_spawn_blocked"
+                           (resume re-enters on a fresh subprocess — the
+                            poisoning clears across the process boundary)
+    ```
+
+    **NEVER** fall back to self-review. "The spawn failed, so I'll review it
+    myself" is the CLASS A bypass (R1/STEERING#13) — it is the exact thing this
+    gate exists to prevent. There is no "review it myself" branch in the tree.
+
+    **Why retry-once and not a retry loop:** STEERING #1 + commit `d32c3e9b`/PIT03
+    — an in-turn retry LOOP on a poisoned subprocess loops harmfully (it reuses
+    the same poisoned process). The ONLY safe retry crosses a checkpoint→resume
+    process boundary. One fresh in-turn attempt handles the benign-flake case;
+    anything past that goes to checkpoint, never a loop.
+
+    **Structural backstop (already code-enforced):** even if an agent ignored
+    this rule and tried to self-review, the two-field evidence gate below makes
+    `status: completed` impossible without a genuine spawn — a fabricated review
+    has no valid `spawned=true` + Agent-tool `evidence`. The instruction names
+    the legal exit; the validator enforces it. `gate_spawn_blocked` is a VALID
+    non-completion outcome (a resumable checkpoint), never scored as failure.
+
     **Two-field enforcement (code-enforced):** The validator requires BOTH:
     - `adversarial_review.spawned: true` — declares spawn happened
     - `adversarial_review.evidence: "<description>"` — describes HOW (non-empty)

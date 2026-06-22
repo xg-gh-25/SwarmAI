@@ -403,6 +403,22 @@ and how to fix it. Vague findings ("could be improved") are rejected.
 - If any specialist fails or times out, log the failure and continue with
   results from successful ones. Partial results > no results.
 
+**Spawn-rejection discriminator (fail-closed — BLOCKING):** "Partial results >
+no results" applies ONLY when **≥1 specialist actually spawned**. It does NOT
+cover spawn REJECTION by the harness ("user doesn't want to proceed with this
+tool use" / "does not want to take this action"):
+
+- **≥1 specialist spawned**, others failed/timed out → partial results OK (note
+  the uncovered domains in the gate outcome).
+- **ZERO specialists spawned (all rejected)** → this is NOT "partial results,"
+  it is a BLOCKED gate. Follow INSTRUCTIONS.md Rule 23: retry the spawn batch
+  EXACTLY ONCE → still all-rejected → **CHECKPOINT, reason="gate_spawn_blocked"**.
+  Resume re-enters on a fresh subprocess (the PIT01 poisoning clears across the
+  process boundary).
+
+**NEVER** treat an all-rejected spawn as license to self-review — that is the
+CLASS A bypass this gate exists to prevent. There is no self-review branch.
+
 ---
 
 #### Step 3: Collect, Merge, and Deduplicate

@@ -224,6 +224,17 @@ Overall: [PASS — proceed to BUILD | WARN — proceed with noted concerns | BLO
 3. Parse the verdict from sub-agent response
 4. **Handle verdict:**
 
+> **Spawn rejected? Fail closed (gate_spawn_blocked).** If the Agent-tool spawn
+> in step 2 is REJECTED by the harness ("user doesn't want to proceed with this
+> tool use" / "does not want to take this action"), apply INSTRUCTIONS.md Rule 23:
+> retry the spawn EXACTLY ONCE → still rejected → **CHECKPOINT,
+> reason="gate_spawn_blocked"**, do NOT proceed to BUILD. Resume re-enters on a
+> fresh subprocess (clears the PIT01 poisoning). NEVER self-review the plan in
+> place of the Skeptic+SSA spawn — an unverified BUILD direction is exactly what
+> Gate 1 exists to prevent. (Unlike Gate 2, Gate 1 has no code-enforced evidence
+> field; this instruction is the guard, and a blocked Gate 1 is recoverable at
+> Gate 2 — so instruction-only is sufficient here.)
+
 **PASS:**
 ```
 ✅ GATE 1: PASS — direction validated, proceed to BUILD.
