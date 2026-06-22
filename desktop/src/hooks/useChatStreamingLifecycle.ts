@@ -2625,6 +2625,15 @@ export function useChatStreamingLifecycle(
             setIsStreaming(false, capturedTabId ?? undefined);
             incrementStreamGen();
             if (capturedTabId) updateTabStatus(capturedTabId, 'idle');
+            // Terminal idle path with no following `result` event — the 15s
+            // reconcile loop is gated to streaming tabs, so an idle circuit-breaker
+            // tab is skipped. Schedule a turn-end reconcile so any assistant content
+            // the backend persisted before tripping the breaker is repaired from DB
+            // (reconcile-gap; phase-gated + debounced, harmless if nothing to fix).
+            {
+              const ctlSid = event.sessionId || (event as unknown as Record<string, unknown>).session_id as string;
+              scheduleTurnEndReconcile(ctlSid, capturedTabId);
+            }
             // Surface as a persistent context warning (reuses existing banner infra)
             const warningForTooLarge: ContextWarning = {
               level: 'critical',

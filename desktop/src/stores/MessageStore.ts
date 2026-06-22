@@ -644,6 +644,35 @@ export class MessageStore {
           local.id !== this._streamingMessageId &&
           (local.content.length === 0 || /^\d+$/.test(local.id));
         if (isStalePlaceholder) {
+          // Before dropping, rescue any local-only interactive block this
+          // placeholder carries. On answer-question / permission CONTINUATION
+          // turns the placeholder has a NUMERIC id + no client_id (uncorrelated
+          // in Pass 1), and the synthesized ask_user_question / cmd_permission_request
+          // block lives ONLY here — never in the DB. A blind drop would erase the
+          // live question/permission form (adversarial HIGH, run_59f8f5ad). Carry
+          // the interactive blocks onto the LAST real DB assistant message so the
+          // form survives in the canonical bubble (text content stays the DB's).
+          const interactiveBlocks = local.content.filter((b) =>
+            MessageStore._INTERACTIVE_BLOCK_TYPES.has(b.type),
+          );
+          if (interactiveBlocks.length > 0) {
+            for (let i = merged.length - 1; i >= 0; i--) {
+              if (merged[i].role === 'assistant' && merged[i].content.length > 0) {
+                const existingKeys = new Set(
+                  merged[i].content
+                    .filter((b) => MessageStore._INTERACTIVE_BLOCK_TYPES.has(b.type))
+                    .map((b) => MessageStore._interactiveBlockKey(b)),
+                );
+                const toAdd = interactiveBlocks.filter(
+                  (b) => !existingKeys.has(MessageStore._interactiveBlockKey(b)),
+                );
+                if (toAdd.length > 0) {
+                  merged[i] = { ...merged[i], content: [...merged[i].content, ...toAdd] };
+                }
+                break;
+              }
+            }
+          }
           continue;
         }
         // Local-only: insert at chronological position in merged

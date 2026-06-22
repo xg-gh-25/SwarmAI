@@ -870,6 +870,50 @@ describe('MessageStore reconcile preserves local-only interactive blocks', () =>
     store.destroy();
   });
 
+  it('continuation turn (numeric-id placeholder) — keeps ask_user_question block when Pass 2 would drop it', () => {
+    // Adversarial HIGH (run_59f8f5ad): on answer-question / permission CONTINUATION
+    // turns, ChatPage creates the assistant placeholder with a NUMERIC id
+    // (Date.now().toString()) and NO client_id. So _applyMerge cannot correlate it
+    // in Pass 1 → it falls to Pass 2, where isStalePlaceholder drops any numeric-id
+    // assistant message once a real DB row exists. The synthesized ask_user_question
+    // block lives ONLY on that numeric placeholder → it gets ERASED. The new
+    // turn-end reconcile on the question path is what triggers this drop, so the fix
+    // must carry the interactive block forward onto the real DB assistant row.
+    const store = new MessageStore();
+    store.replace([
+      makeMsg('u-prev', 'user', 'first question answer'),
+      // Continuation placeholder: NUMERIC id, text + a NEW ask_user_question block.
+      {
+        id: '1782092600000', role: 'assistant', timestamp: '2026-06-22T09:50:00',
+        content: [
+          { type: 'text', text: 'Follow-up reply...' },
+          { type: 'ask_user_question', toolUseId: 'tu-followup', questions: [{ question: 'Second Q', header: 'Y', options: [] }] },
+        ] as any,
+      },
+    ]);
+
+    // DB has the real assistant row for this continuation turn: UUID, full text,
+    // NO client_id (continuation persists with None), and NO ask_user_question block.
+    const dbMessages: ChatMessage[] = [
+      { id: 'u-uuid', sessionId: 'sess-1', role: 'user', content: [{ type: 'text', text: 'first question answer' }] as any, createdAt: '2026-06-22T09:49:00' },
+      { id: 'a-uuid-cont', sessionId: 'sess-1', role: 'assistant', content: [{ type: 'text', text: 'Follow-up reply with the FULL TAIL.' }] as any, createdAt: '2026-06-22T09:50:00' },
+    ];
+
+    store.reconcile(dbMessages);
+
+    // The ask_user_question form must survive somewhere in the merged set.
+    const allBlocks = store.messages.flatMap(m => m.content);
+    const auq = allBlocks.find(b => (b as any).type === 'ask_user_question') as any;
+    expect(auq).toBeDefined();
+    expect(auq.toolUseId).toBe('tu-followup');
+    // Full DB text present (truncation repaired).
+    const hasFullText = allBlocks.some(b => (b as any).type === 'text' && (b as any).text.includes('FULL TAIL'));
+    expect(hasFullText).toBe(true);
+    // No duplicate assistant bubble (numeric placeholder text not duplicated alongside DB).
+    expect(store.messages.filter(m => m.role === 'assistant')).toHaveLength(1);
+    store.destroy();
+  });
+
   it('does NOT duplicate an interactive block already present in both local and DB', () => {
     // Defensive: if a future change DID persist the block, carry-forward must
     // not double it. Match interactive blocks by their stable id.
