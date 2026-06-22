@@ -186,3 +186,68 @@ class TestSubAgentLifecycleReset:
         unit._active_agent_tools = {}
 
         assert unit._active_agent_tools == {}
+
+
+class TestUserMessageCleanup:
+    """AC1/AC3: sub-agent (Agent tool) ToolResultBlocks arrive via UserMessage,
+    not AssistantMessage. The streaming loop must clear the matching
+    _active_agent_tools entry when that UserMessage is processed — otherwise
+    entries accumulate (count frozen, timer climbs forever, label stale).
+
+    These force-execute the cleanup path (STEERING #11) using REAL SDK
+    UserMessage + ToolResultBlock objects, not mocks.
+    """
+
+    def _make_orchestrator(self):
+        """Build a StreamingOrchestrator with a stand-in parent carrying
+        an _active_agent_tools dict — no SDK client, no subprocess."""
+        from core.streaming_orchestrator import StreamingOrchestrator
+
+        parent = MagicMock()
+        parent.session_id = "test-session-cleanup"
+        parent._active_agent_tools = {}
+        orch = StreamingOrchestrator(parent)
+        return orch, parent
+
+    def test_user_message_tool_result_removes_matching_entry(self):
+        """AC1: a UserMessage carrying a ToolResultBlock pops the matching
+        Agent entry keyed by the original Agent ToolUseBlock.id == ToolResultBlock.tool_use_id."""
+        from claude_agent_sdk import UserMessage, ToolResultBlock
+
+        orch, parent = self._make_orchestrator()
+        # Seed: an Agent sub-agent was spawned (keyed by its ToolUseBlock.id)
+        parent._active_agent_tools = {
+            "tu_agent_1": {"label": "Spec compliance review", "start_time": time.time() - 600},
+            "tu_agent_2": {"label": "Adversarial review", "start_time": time.time() - 60},
+        }
+
+        # The closing UserMessage delivers the sub-agent's result. The SDK
+        # sets ToolResultBlock.tool_use_id == the original Agent ToolUseBlock.id.
+        msg = UserMessage(content=[ToolResultBlock(tool_use_id="tu_agent_1", content="done")])
+        orch._clear_completed_sub_agents(msg)
+
+        assert "tu_agent_1" not in parent._active_agent_tools  # completed → removed
+        assert "tu_agent_2" in parent._active_agent_tools      # still running → kept
+
+    def test_user_message_string_content_is_noop(self):
+        """AC3: a UserMessage with plain string content (no blocks) must not crash."""
+        from claude_agent_sdk import UserMessage
+
+        orch, parent = self._make_orchestrator()
+        parent._active_agent_tools = {"tu_x": {"label": "x", "start_time": time.time()}}
+        msg = UserMessage(content="just text, no tool results")
+        orch._clear_completed_sub_agents(msg)  # must not raise
+        assert parent._active_agent_tools == {"tu_x": {"label": "x", "start_time": parent._active_agent_tools["tu_x"]["start_time"]}}
+
+    def test_user_message_unrelated_tool_result_is_noop(self):
+        """AC3: a ToolResultBlock whose id is NOT a tracked Agent (e.g. a
+        parent's own Edit/Write result) must be a no-op pop — never affects
+        tracking or rendering."""
+        from claude_agent_sdk import UserMessage, ToolResultBlock
+
+        orch, parent = self._make_orchestrator()
+        parent._active_agent_tools = {"tu_agent_1": {"label": "review", "start_time": time.time()}}
+        # tu_edit_99 is a parent Edit result, never tracked in _active_agent_tools
+        msg = UserMessage(content=[ToolResultBlock(tool_use_id="tu_edit_99", content="ok")])
+        orch._clear_completed_sub_agents(msg)
+        assert "tu_agent_1" in parent._active_agent_tools  # untouched

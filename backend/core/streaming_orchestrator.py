@@ -121,6 +121,37 @@ class StreamingOrchestrator:
         """Proxy to parent's streaming_stall_seconds."""
         return self._parent.streaming_stall_seconds
 
+    def _clear_completed_sub_agents(self, message: Any) -> None:
+        """Remove tracking entries for sub-agents (Agent tool) that completed.
+
+        Sub-agent (Agent tool) results are delivered by the SDK in a
+        parent-level ``UserMessage`` (tool_result blocks live in user-typed
+        turns per the Anthropic protocol), NOT in the ``AssistantMessage``
+        that the main loop's ToolResultBlock branch handles. Because the loop
+        had no UserMessage handler, ``_active_agent_tools`` entries were never
+        popped — leaving ``count`` frozen, the elapsed timer climbing forever,
+        and the progress label stale (the "Spec compliance review" bug).
+
+        This is CLEANUP ONLY — it never yields events and never renders
+        content. ``_active_agent_tools`` only ever holds **Agent-tool** ids
+        (populated under ``block.name == "Agent"``), so ``pop(id, None)`` is a
+        safe no-op for any unrelated tool_result (e.g. a parent's own
+        Edit/Write result) — those are rendered by the AssistantMessage
+        branch and are untouched here.
+
+        Args:
+            message: An SDK message (typically UserMessage). Its ``content``
+                may be a plain string or a list of content blocks.
+        """
+        from claude_agent_sdk import ToolResultBlock
+
+        content = getattr(message, "content", None)
+        if not isinstance(content, list):
+            return  # string content (or none) carries no tool_result blocks
+        for block in content:
+            if isinstance(block, ToolResultBlock):
+                self._parent._active_agent_tools.pop(block.tool_use_id, None)
+
     # ═══════════════════════════════════════════════════════════════
     # Migrated from session_unit.py — _stream_response
     # ═══════════════════════════════════════════════════════════════
@@ -234,6 +265,7 @@ class StreamingOrchestrator:
             TextBlock,
             ToolUseBlock,
             ToolResultBlock,
+            UserMessage,
         )
         from claude_agent_sdk.types import StreamEvent, ThinkingBlock
 
@@ -499,6 +531,15 @@ class StreamingOrchestrator:
                         yield {"type": "text_start", "index": event_data.get("index", 0)}
                 elif event_type == "content_block_stop":
                     yield {"type": "content_block_stop", "index": event_data.get("index", 0)}
+                continue
+
+            # ── UserMessage: sub-agent tool results (cleanup only) ─
+            # Agent (sub-agent) tool_result blocks arrive here, NOT in
+            # AssistantMessage. Clear their progress-tracking entries so
+            # count/timer/label don't freeze. No yield, no rendering —
+            # the parent's own tool_results render via AssistantMessage.
+            if isinstance(message, UserMessage):
+                self._clear_completed_sub_agents(message)
                 continue
 
             # ── AssistantMessage: full content blocks ─────────────
