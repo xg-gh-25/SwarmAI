@@ -68,23 +68,20 @@ async def approve_proposal(proposal_id: str, project: str = Query(default="Swarm
     # Apply to DDD document (returns a status string, not a bool)
     status = apply_to_ddd(proposal, project_dir)
     if status != "applied":
-        if status == "section_not_found":
-            detail = (
-                f"DDD drift: section '{proposal.target_section}' does not exist as a "
-                f"'## ' heading in {proposal.target_doc}. Fix the heading or the "
-                f"routing table before approving."
-            )
-        elif status == "duplicate":
-            detail = (
-                f"Proposal content already present in "
-                f"{proposal.target_doc}#{proposal.target_section} (duplicate)."
-            )
-        else:
-            detail = (
-                f"Failed to apply proposal to "
-                f"{proposal.target_doc}#{proposal.target_section} (status: {status})."
-            )
-        raise HTTPException(status_code=500, detail=detail)
+        # Rich diagnostic goes to the SERVER log (includes doc/section names);
+        # the client gets a generic message so the API does not disclose the
+        # internal DDD filesystem structure / section taxonomy to callers — the
+        # cultivation router has no auth dependency (adversarial security MED).
+        logger.warning(
+            "Cultivation approve failed: proposal %s → %s#%s (status: %s)",
+            proposal_id, proposal.target_doc, proposal.target_section, status,
+        )
+        client_detail = {
+            "section_not_found": "Target section no longer exists in the document "
+                                 "(documentation drift). See server logs.",
+            "duplicate": "Proposal content is already present (duplicate).",
+        }.get(status, f"Could not apply proposal (status: {status}).")
+        raise HTTPException(status_code=500, detail=client_detail)
 
     # Update status in file
     _update_proposal_status(project_dir, proposal_id, "applied")

@@ -422,20 +422,34 @@ class TestSafeAppendSectionsExistInDocs:
         import re
         from core.ddd_cultivation import SAFE_APPEND_SECTIONS
 
-        workspace = Path("/Users/gawan/.swarm-ai/SwarmWS")
+        import pytest
+        # Resolve the workspace the SAME way production does — never hardcode a
+        # developer-machine path (that makes the guard pass VACUOUSLY in CI where
+        # the path is absent: every doc 'continue's, missing stays empty, assert
+        # passes — the exact drift it guards goes undetected). Adversarial MED.
+        from core.initialization_manager import initialization_manager
+        workspace = Path(initialization_manager.get_cached_workspace_path())
         project_dir = workspace / "Projects" / "SwarmAI"
+        if not project_dir.exists():
+            pytest.skip(f"SwarmAI project dir not present at {project_dir} — "
+                        "drift guard cannot run (skip != vacuous pass)")
         missing = []
+        checked = 0  # non-vacuous guard: at least one section must be verified
         for doc_name, sections in SAFE_APPEND_SECTIONS.items():
             doc_path = project_dir / doc_name
             if not doc_path.exists():
                 continue
             content = doc_path.read_text(encoding="utf-8")
             for section in sections:
+                checked += 1
                 section_re = re.compile(
                     r"^## " + re.escape(section) + r"\s*$", re.MULTILINE
                 )
                 if not section_re.search(content):
                     missing.append(f"{doc_name} § '{section}'")
+        assert checked > 0, (
+            "Drift guard verified ZERO sections — vacuous pass. SAFE_APPEND_SECTIONS "
+            f"({SAFE_APPEND_SECTIONS}) or the target docs are missing under {project_dir}.")
         assert not missing, (
             "SAFE_APPEND_SECTIONS routes to headings that don't exist (drift — "
             f"lessons would be silently dropped): {missing}")

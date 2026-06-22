@@ -421,11 +421,19 @@ def _cultivate_proposals(
                 # no matching heading in the doc → lesson would be silently
                 # dropped. Surface it loudly (logged + returned) so it gets fixed,
                 # never buried in the "rejected" count. (run_45ab67c7 root cause.)
+                # Sanitize proposal-derived fields (they originate from on-disk
+                # proposal JSON / reflect lessons = untrusted) before they reach
+                # log/stderr/HTTP sinks — prevents CRLF log-injection (adversarial
+                # security LOW): a forged source_run_id with newlines could forge
+                # log records or break log parsers.
+                def _safe(v: str) -> str:
+                    return str(v).replace("\n", "\\n").replace("\r", "\\r")
                 msg = (
-                    f"DDD drift: '{proposal.target_doc} § {proposal.target_section}' "
-                    f"is whitelisted in SAFE_APPEND_SECTIONS but no matching '## ' "
-                    f"heading exists in the doc — lesson dropped (run "
-                    f"{proposal.source_run_id}). Fix the heading or the routing table."
+                    f"DDD drift: '{_safe(proposal.target_doc)} § "
+                    f"{_safe(proposal.target_section)}' is whitelisted in "
+                    f"SAFE_APPEND_SECTIONS but no matching '## ' heading exists in "
+                    f"the doc — lesson dropped (run {_safe(proposal.source_run_id)}). "
+                    f"Fix the heading or the routing table."
                 )
                 logger.error(msg)
                 drift_errors.append(msg)

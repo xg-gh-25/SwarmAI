@@ -979,6 +979,8 @@ class ContextHealthHook:
                         )
                         total_applied += result.get("applied", 0)
                         total_escalated += result.get("escalated", 0)
+                        for _drift in result.get("drift_errors", []):
+                            logger.error("context_health: %s", _drift)
                     except Exception as exc:
                         logger.debug(
                             "context_health: session correction cultivation failed "
@@ -1000,6 +1002,8 @@ class ContextHealthHook:
                             )
                             total_applied += result.get("applied", 0)
                             total_escalated += result.get("escalated", 0)
+                            for _drift in result.get("drift_errors", []):
+                                logger.error("context_health: %s", _drift)
                         except Exception as exc:
                             logger.debug(
                                 "context_health: session decision cultivation failed "
