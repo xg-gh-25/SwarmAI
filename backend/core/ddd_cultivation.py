@@ -186,6 +186,25 @@ def filter_lessons_for_ddd(
     return proposals
 
 
+def _extract_bullet_content(line: str) -> str:
+    """Extract the lesson content from a cultivated bullet line, for duplicate
+    detection. Cultivated entries have the shape:
+        "- <content> (YYYY-MM-DD, run_xxx, label)"
+    Strip the leading "- " and the trailing "(date, run, label)" attribution so
+    duplicate matching compares the actual lesson text, not the attribution.
+    Lines without the attribution suffix fall back to the de-bulleted text.
+    """
+    text = line.lstrip()
+    if text.startswith("- "):
+        text = text[2:]
+    text = text.strip()
+    # Remove a trailing attribution parenthetical: "(2026-..., run_..., ...)"
+    m = re.search(r"\s*\((?:\d{4}-\d{2}-\d{2}|[0-9a-f]{6,}|run_)[^)]*\)\s*$", text)
+    if m:
+        text = text[: m.start()].strip()
+    return text
+
+
 def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
     """Apply an additive proposal directly to the target DDD document.
 
@@ -194,17 +213,24 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
     Uses fcntl advisory lock to prevent concurrent write corruption.
 
     Returns a status string (NOT a bool — callers must compare explicitly):
-      - "applied"           — entry written successfully
+      - "applied"           — entry written under a pre-existing section heading
+      - "created_section"   — the whitelisted section heading was ABSENT, so it
+                              was auto-created at end-of-doc and the entry written
+                              under it. This makes section-name drift structurally
+                              harmless: a lesson is NEVER dropped just because the
+                              doc heading is missing. The section name is TRUSTED
+                              (sourced from ROUTING_TABLE via SAFE_APPEND_SECTIONS,
+                              never user input), so creating it is safe. Surfaced
+                              (logged) so latent drift is still visible.
+                              (run_45ab67c7 root cause — structural fix.)
       - "duplicate"         — benign no-op, exact content already present
-      - "section_not_found" — DRIFT BUG: the (whitelisted) target section does
-                              not exist as a heading in the doc. Loud signal,
-                              never silently bucketed with "duplicate". This is
-                              the run_45ab67c7 root cause (ROUTING_TABLE section
-                              name drifted from the actual TECH.md heading →
-                              lessons silently dropped).
       - "not_safe"          — target doc/section not in SAFE_APPEND_SECTIONS
       - "doc_missing"       — target document file does not exist
       - "locked"            — another process holds the write lock (retry later)
+
+    Note: "section_not_found" is NO LONGER returned — a missing whitelisted
+    section is auto-created rather than treated as a drop. The drift is still
+    observable via the "created_section" status (logged by callers).
     """
     if not proposal.is_safe_append():
         return "not_safe"
@@ -230,38 +256,65 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
     try:
         content = doc_path.read_text(encoding="utf-8")
 
-        # M1 fix: match section header at line start (## level only, not ###)
-        section_re = re.compile(
-            r"^## " + re.escape(proposal.target_section) + r"\s*$", re.MULTILINE
-        )
-        match = section_re.search(content)
-        if not match:
-            return "section_not_found"
-
-        # H2: insert after header + blank lines = newest entry first (documented)
-        line_end = content.find("\n", match.start())
-        if line_end == -1:
-            line_end = len(content)
-
-        insert_pos = line_end + 1
-        while insert_pos < len(content) and content[insert_pos] == "\n":
-            insert_pos += 1
-
         # M2 fix: match existing entry format — plain bullet with trailing attribution
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         source_label = f"{proposal.source_stage}" if proposal.source_stage != "reflect" else "auto-cultivated"
         entry = f"- {proposal.content} ({date_str}, {proposal.source_run_id}, {source_label})\n"
 
-        # M3 fix: full content substring check instead of 40-char prefix
-        if proposal.content in content:
-            return "duplicate"  # Already exists (exact match)
+        # M1 fix: match section header at line start (## level only, not ###)
+        section_re = re.compile(
+            r"^## " + re.escape(proposal.target_section) + r"\s*$", re.MULTILINE
+        )
+        match = section_re.search(content)
+
+        if match:
+            # Compute the target section's text span [body_start, body_end) so the
+            # duplicate check is SCOPED to this section, not the whole document.
+            # (Adversarial HIGH: a whole-doc substring match dropped legit lessons
+            # when the same text appeared in a DIFFERENT section, and dropped short
+            # lessons that were substrings of a longer unrelated entry.)
+            line_end = content.find("\n", match.start())
+            if line_end == -1:
+                line_end = len(content)
+            body_start = line_end + 1
+            while body_start < len(content) and content[body_start] == "\n":
+                body_start += 1
+            # Section body ends at the next '## ' heading (or EOF).
+            next_h = re.compile(r"^## ", re.MULTILINE).search(content, body_start)
+            body_end = next_h.start() if next_h else len(content)
+            section_body = content[body_start:body_end]
+
+            # Duplicate detection scoped to THIS section, matched on whole bullet
+            # lines (not raw substring) — a shorter lesson that is a substring of a
+            # longer existing bullet is NOT a duplicate.
+            existing_contents = {
+                _extract_bullet_content(ln)
+                for ln in section_body.splitlines()
+                if ln.lstrip().startswith("- ")
+            }
+            if proposal.content.strip() in existing_contents:
+                return "duplicate"
+
+            new_content = content[:body_start] + entry + content[body_start:]
+            result_status = "applied"
+        else:
+            # Structural drift fix (run_45ab67c7): the whitelisted section is
+            # absent (doc heading drifted from / never matched the routing table).
+            # CREATE it at end-of-doc rather than DROP the lesson. The section
+            # name is TRUSTED — is_safe_append() already confirmed the (doc,
+            # section) PAIR is in SAFE_APPEND_SECTIONS (derived from ROUTING_TABLE),
+            # not user input. Makes section-name drift structurally harmless across
+            # ALL projects, not just ones whose headings happen to match.
+            base = content.rstrip("\n")
+            prefix = f"{base}\n\n" if base else ""
+            new_content = f"{prefix}## {proposal.target_section}\n\n{entry}"
+            result_status = "created_section"
 
         # Atomic write: write to temp, rename over original
-        new_content = content[:insert_pos] + entry + content[insert_pos:]
         tmp_path = doc_path.with_suffix(".tmp")
         tmp_path.write_text(new_content, encoding="utf-8")
         os.replace(str(tmp_path), str(doc_path))
-        return "applied"
+        return result_status
     finally:
         fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
         lock_fd.close()
@@ -272,10 +325,18 @@ def apply_to_ddd(proposal: CultivationProposal, project_dir: Path) -> str:
             pass
 
 
-def log_application(proposal: CultivationProposal, project_dir: Path) -> None:
+def log_application(
+    proposal: CultivationProposal, project_dir: Path, *, created_section: bool = False
+) -> None:
     """Log an applied change to the DDD changelog (append-only JSONL).
 
     Changelog is used by the weekly report to summarize DDD changes.
+
+    created_section: when True, records that the target section heading was
+    absent and auto-created (drift auto-healed). This keeps the drift signal in
+    the DURABLE record — not just a transient log line — so the weekly report
+    can surface "N sections auto-created (reconcile templates)" instead of drift
+    recurring silently every run. (Adversarial observability MED.)
     """
     changelog_path = project_dir / ".artifacts" / "ddd-changelog.jsonl"
     changelog_path.parent.mkdir(parents=True, exist_ok=True)
@@ -283,6 +344,7 @@ def log_application(proposal: CultivationProposal, project_dir: Path) -> None:
     entry = {
         "id": proposal.id,
         "action": "applied",
+        "created_section": created_section,
         "target_doc": proposal.target_doc,
         "target_section": proposal.target_section,
         "content": proposal.content[:200],
@@ -416,29 +478,28 @@ def _cultivate_proposals(
                 proposal.status = "applied"
                 log_application(proposal, project_dir)
                 applied += 1
-            elif status == "section_not_found":
-                # DRIFT BUG, not a benign rejection: a whitelisted section has
-                # no matching heading in the doc → lesson would be silently
-                # dropped. Surface it loudly (logged + returned) so it gets fixed,
-                # never buried in the "rejected" count. (run_45ab67c7 root cause.)
-                # Sanitize proposal-derived fields (they originate from on-disk
-                # proposal JSON / reflect lessons = untrusted) before they reach
-                # log/stderr/HTTP sinks — prevents CRLF log-injection (adversarial
-                # security LOW): a forged source_run_id with newlines could forge
-                # log records or break log parsers.
+            elif status == "created_section":
+                # The lesson WAS applied (not dropped) — the whitelisted section
+                # heading was absent so it was auto-created. Count as applied, but
+                # surface the drift as observable (latent doc/table divergence) so
+                # it can be reconciled. NOT an error — the lesson is safe.
+                # Sanitize proposal-derived fields (untrusted: from on-disk
+                # proposal JSON / reflect lessons) before they reach log/stderr/
+                # HTTP sinks — prevents CRLF log-injection (a forged source_run_id
+                # with newlines could forge log records or break log parsers).
                 def _safe(v: str) -> str:
                     return str(v).replace("\n", "\\n").replace("\r", "\\r")
                 msg = (
-                    f"DDD drift: '{_safe(proposal.target_doc)} § "
-                    f"{_safe(proposal.target_section)}' is whitelisted in "
-                    f"SAFE_APPEND_SECTIONS but no matching '## ' heading exists in "
-                    f"the doc — lesson dropped (run {_safe(proposal.source_run_id)}). "
-                    f"Fix the heading or the routing table."
+                    f"DDD drift (auto-healed): created missing whitelisted section "
+                    f"'{_safe(proposal.target_doc)} § {_safe(proposal.target_section)}' "
+                    f"(run {_safe(proposal.source_run_id)}). Lesson applied to the new "
+                    f"section. Reconcile the doc template / ROUTING_TABLE to avoid drift."
                 )
-                logger.error(msg)
+                logger.warning(msg)
                 drift_errors.append(msg)
-                proposal.status = "rejected"
-                rejected += 1
+                proposal.status = "applied"
+                log_application(proposal, project_dir, created_section=True)
+                applied += 1
             else:
                 # Benign no-op: "duplicate", "doc_missing", "locked", "not_safe".
                 rejected += 1

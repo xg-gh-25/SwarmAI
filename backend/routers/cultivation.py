@@ -65,9 +65,11 @@ async def approve_proposal(proposal_id: str, project: str = Query(default="Swarm
     if not proposal:
         raise HTTPException(status_code=404, detail=f"Proposal '{proposal_id}' not found")
 
-    # Apply to DDD document (returns a status string, not a bool)
+    # Apply to DDD document (returns a status string, not a bool).
+    # "applied" and "created_section" both mean the lesson landed successfully
+    # (created_section = the whitelisted heading was absent and auto-created).
     status = apply_to_ddd(proposal, project_dir)
-    if status != "applied":
+    if status not in ("applied", "created_section"):
         # Rich diagnostic goes to the SERVER log (includes doc/section names);
         # the client gets a generic message so the API does not disclose the
         # internal DDD filesystem structure / section taxonomy to callers — the
@@ -77,11 +79,14 @@ async def approve_proposal(proposal_id: str, project: str = Query(default="Swarm
             proposal_id, proposal.target_doc, proposal.target_section, status,
         )
         client_detail = {
-            "section_not_found": "Target section no longer exists in the document "
-                                 "(documentation drift). See server logs.",
             "duplicate": "Proposal content is already present (duplicate).",
         }.get(status, f"Could not apply proposal (status: {status}).")
         raise HTTPException(status_code=500, detail=client_detail)
+    if status == "created_section":
+        logger.warning(
+            "Cultivation approve auto-created missing section: %s#%s (proposal %s)",
+            proposal.target_doc, proposal.target_section, proposal_id,
+        )
 
     # Update status in file
     _update_proposal_status(project_dir, proposal_id, "applied")

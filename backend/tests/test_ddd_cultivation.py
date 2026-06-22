@@ -357,18 +357,18 @@ class TestApplyToDDD:
             result = apply_to_ddd(p, project_dir)
             assert result == "not_safe"
 
-    def test_section_not_found_distinct_from_duplicate(self):
-        """Drift bug: a whitelisted section that does NOT exist as a heading in
-        the target doc must return 'section_not_found' (a LOUD drift signal),
-        NOT be silently collapsed with 'duplicate' (a benign no-op). This is the
-        run_45ab67c7 root cause: ROUTING_TABLE 'Runtime Traps' drifted from the
-        doc heading and lessons were dropped as 'rejected' with zero visibility."""
+    def test_missing_whitelisted_section_is_auto_created(self):
+        """Structural drift fix (run_45ab67c7, user-chosen): when a whitelisted
+        section heading is ABSENT, apply_to_ddd CREATES it at end-of-doc and
+        writes the entry — the lesson is NEVER dropped. The section name is
+        trusted (from ROUTING_TABLE via SAFE_APPEND_SECTIONS), so creating it is
+        safe. Returns 'created_section' (observable, not silent)."""
         from core.ddd_cultivation import CultivationProposal, apply_to_ddd
 
         with tempfile.TemporaryDirectory() as tmpdir:
             project_dir = Path(tmpdir)
             doc = project_dir / "IMPROVEMENT.md"
-            # Doc exists, but the whitelisted section heading is absent (drift).
+            # Doc exists, but the whitelisted 'What Worked' heading is absent.
             doc.write_text("# Lessons\n\n## What Failed\n\n- old failure\n")
             p = CultivationProposal(
                 target_doc="IMPROVEMENT.md",
@@ -377,9 +377,14 @@ class TestApplyToDDD:
                 source_run_id="run_drift",
                 confidence=0.7,
             )
-            assert apply_to_ddd(p, project_dir) == "section_not_found"
+            assert apply_to_ddd(p, project_dir) == "created_section"
+            content = doc.read_text()
+            # Heading was created AND the lesson written under it (not dropped).
+            assert "## What Worked" in content
+            assert "A genuinely new lesson" in content
+            assert "- old failure" in content  # existing content preserved
 
-            # Contrast: duplicate content in an EXISTING section = benign no-op.
+            # Duplicate content in an EXISTING section = benign no-op.
             doc.write_text(
                 "# Lessons\n\n## What Worked\n\n"
                 "- dup lesson (2026-01-01, run_x, auto-cultivated)\n"
@@ -392,6 +397,75 @@ class TestApplyToDDD:
                 confidence=0.7,
             )
             assert apply_to_ddd(p2, project_dir) == "duplicate"
+
+    def test_duplicate_check_is_section_scoped_not_whole_doc(self):
+        """Adversarial HIGH: duplicate detection must be scoped to the TARGET
+        section, not the whole document. The same text in a DIFFERENT section is
+        NOT a duplicate for this section — dropping it would lose a real lesson."""
+        from core.ddd_cultivation import CultivationProposal, apply_to_ddd
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            doc = project_dir / "IMPROVEMENT.md"
+            # Same text already exists, but under a DIFFERENT section.
+            doc.write_text(
+                "# L\n\n## What Failed\n\n"
+                "- shared insight text (2026-01-01, run_x, auto-cultivated)\n\n"
+                "## What Worked\n\n- unrelated\n"
+            )
+            p = CultivationProposal(
+                target_doc="IMPROVEMENT.md",
+                target_section="What Worked",  # different section than the match
+                content="shared insight text",
+                source_run_id="run_new",
+                confidence=0.7,
+            )
+            # Must NOT be treated as duplicate — it's new to 'What Worked'.
+            assert apply_to_ddd(p, project_dir) == "applied"
+            assert doc.read_text().count("shared insight text") == 2
+
+    def test_duplicate_check_not_fooled_by_substring(self):
+        """Adversarial MED: a short lesson that is a SUBSTRING of an existing
+        longer bullet is a distinct lesson, not a duplicate."""
+        from core.ddd_cultivation import CultivationProposal, apply_to_ddd
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            doc = project_dir / "IMPROVEMENT.md"
+            doc.write_text(
+                "# L\n\n## What Worked\n\n"
+                "- invalidate the cache on write because stale reads corrupt state "
+                "(2026-01-01, run_x, auto-cultivated)\n"
+            )
+            p = CultivationProposal(
+                target_doc="IMPROVEMENT.md",
+                target_section="What Worked",
+                content="invalidate the cache on write",  # substring of existing
+                source_run_id="run_new",
+                confidence=0.7,
+            )
+            assert apply_to_ddd(p, project_dir) == "applied"
+
+    def test_exact_duplicate_in_section_still_detected(self):
+        """Regression: a genuinely-identical lesson in the SAME section is still
+        a duplicate (idempotency preserved after the scoping fix)."""
+        from core.ddd_cultivation import CultivationProposal, apply_to_ddd
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_dir = Path(tmpdir)
+            doc = project_dir / "IMPROVEMENT.md"
+            doc.write_text(
+                "# L\n\n## What Worked\n\n"
+                "- exact same lesson (2026-01-01, run_x, auto-cultivated)\n"
+            )
+            p = CultivationProposal(
+                target_doc="IMPROVEMENT.md",
+                target_section="What Worked",
+                content="exact same lesson",
+                source_run_id="run_dup",
+                confidence=0.7,
+            )
+            assert apply_to_ddd(p, project_dir) == "duplicate"
 
     def test_applied_returns_status_string(self):
         """Successful append returns 'applied' (status contract, not bool True)."""
