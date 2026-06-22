@@ -794,6 +794,106 @@ describe('MessageStore assistant clientId correlation (P4 streaming-never-finali
   });
 });
 
+describe('MessageStore reconcile preserves local-only interactive blocks', () => {
+  // reconcile-gap (2026-06-22): the turn-end DB reconcile is now wired to the
+  // ask_user_question / cmd_permission_request terminal paths (not just result).
+  // BUT those interactive blocks are frontend-synthesized — they are emitted as
+  // their OWN SSE event types, never inside an `assistant` event, so the backend
+  // NEVER persists them. A blind client_id-match replace (merged.push(dbMsg))
+  // would therefore ERASE the live question/permission form when reconcile runs.
+  // The merge must carry forward any local-only interactive block the DB lacks.
+
+  it('keeps the ask_user_question block when DB row (correlated) lacks it', () => {
+    const store = new MessageStore();
+    const cid = 'local-1782092539495-v14mh7';
+    // Streaming assistant message: 1 streamed text block (possibly truncated)
+    // + the synthesized ask_user_question block appended by surfacePendingQuestion.
+    store.replace([
+      makeMsg(cid, 'user', 'Q'),
+      {
+        id: `${cid}-asst`, role: 'assistant', timestamp: new Date().toISOString(),
+        content: [
+          { type: 'text', text: 'Partial reply...' },
+          { type: 'ask_user_question', toolUseId: 'tu-99', questions: [{ question: 'Pick one', header: 'X', options: [] }] },
+        ] as any,
+      },
+    ]);
+
+    // DB returns the coalesced assistant row by client_id correlation, with the
+    // FULL text (the fix) — but WITHOUT the ask_user_question block (never persisted).
+    const dbMessages: ChatMessage[] = [
+      { id: 'u-uuid', sessionId: 'sess-1', role: 'user', content: [{ type: 'text', text: 'Q' }] as any, createdAt: new Date().toISOString(), metadata: { client_id: cid } },
+      {
+        id: 'a-uuid', sessionId: 'sess-1', role: 'assistant',
+        content: [{ type: 'text', text: 'Partial reply... and the FULL TAIL that was truncated.' }] as any,
+        createdAt: new Date().toISOString(), metadata: { client_id: `${cid}-asst` },
+      },
+    ];
+
+    store.reconcile(dbMessages);
+
+    const asst = store.messages.find(m => m.role === 'assistant')!;
+    // Truncation fixed: full text from DB present.
+    const textBlock = asst.content.find(b => b.type === 'text') as any;
+    expect(textBlock.text).toContain('FULL TAIL');
+    // Regression guard: the synthesized question block MUST survive (not in DB).
+    const auq = asst.content.find(b => (b as any).type === 'ask_user_question') as any;
+    expect(auq).toBeDefined();
+    expect(auq.toolUseId).toBe('tu-99');
+    // No duplicate assistant bubble.
+    expect(store.messages.filter(m => m.role === 'assistant')).toHaveLength(1);
+    store.destroy();
+  });
+
+  it('keeps the cmd_permission_request block when DB row (correlated) lacks it', () => {
+    const store = new MessageStore();
+    const cid = 'local-perm-1';
+    store.replace([
+      makeMsg(cid, 'user', 'run cmd'),
+      {
+        id: `${cid}-asst`, role: 'assistant', timestamp: new Date().toISOString(),
+        content: [
+          { type: 'text', text: 'I will run...' },
+          { type: 'cmd_permission_request', requestId: 'req-7', toolName: 'Bash', toolInput: {}, reason: '', options: ['approve', 'deny'] },
+        ] as any,
+      },
+    ]);
+    const dbMessages: ChatMessage[] = [
+      { id: 'u-uuid', sessionId: 'sess-1', role: 'user', content: [{ type: 'text', text: 'run cmd' }] as any, createdAt: new Date().toISOString(), metadata: { client_id: cid } },
+      { id: 'a-uuid', sessionId: 'sess-1', role: 'assistant', content: [{ type: 'text', text: 'I will run the full command sequence here.' }] as any, createdAt: new Date().toISOString(), metadata: { client_id: `${cid}-asst` } },
+    ];
+    store.reconcile(dbMessages);
+    const asst = store.messages.find(m => m.role === 'assistant')!;
+    const perm = asst.content.find(b => (b as any).type === 'cmd_permission_request') as any;
+    expect(perm).toBeDefined();
+    expect(perm.requestId).toBe('req-7');
+    store.destroy();
+  });
+
+  it('does NOT duplicate an interactive block already present in both local and DB', () => {
+    // Defensive: if a future change DID persist the block, carry-forward must
+    // not double it. Match interactive blocks by their stable id.
+    const store = new MessageStore();
+    const cid = 'local-dup-1';
+    store.replace([
+      makeMsg(cid, 'user', 'Q'),
+      {
+        id: `${cid}-asst`, role: 'assistant', timestamp: new Date().toISOString(),
+        content: [{ type: 'ask_user_question', toolUseId: 'tu-1', questions: [] }] as any,
+      },
+    ]);
+    const dbMessages: ChatMessage[] = [
+      { id: 'u-uuid', sessionId: 'sess-1', role: 'user', content: [{ type: 'text', text: 'Q' }] as any, createdAt: new Date().toISOString(), metadata: { client_id: cid } },
+      { id: 'a-uuid', sessionId: 'sess-1', role: 'assistant', content: [{ type: 'ask_user_question', toolUseId: 'tu-1', questions: [] }] as any, createdAt: new Date().toISOString(), metadata: { client_id: `${cid}-asst` } },
+    ];
+    store.reconcile(dbMessages);
+    const asst = store.messages.find(m => m.role === 'assistant')!;
+    const auqs = asst.content.filter(b => (b as any).type === 'ask_user_question');
+    expect(auqs).toHaveLength(1);
+    store.destroy();
+  });
+});
+
 describe('MessageStore clientId dedup', () => {
   it('reconcile deduplicates optimistic message via metadata.client_id', () => {
     const store = new MessageStore();

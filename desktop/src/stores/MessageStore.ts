@@ -468,6 +468,58 @@ export class MessageStore {
    * - Local-only messages (queued, synthetic) preserved and re-inserted chronologically
    * - Messages in local but not in DB and not local-only: kept (DB may be paginated)
    */
+  /**
+   * Interactive content block types that the FRONTEND synthesizes from their
+   * own SSE event types (ask_user_question / cmd_permission_request / escalation).
+   * They are NEVER inside an `assistant` event, so the backend never persists
+   * them. A client_id-matched DB row therefore lacks them — and a blind replace
+   * would erase the live question/permission form. _applyMerge carries these
+   * forward when the DB version of a matched assistant message omits them.
+   */
+  private static readonly _INTERACTIVE_BLOCK_TYPES = new Set([
+    'ask_user_question',
+    'cmd_permission_request',
+    'escalation',
+  ]);
+
+  /**
+   * Stable identity for an interactive block (used to avoid double-adding a
+   * block that the DB row DID happen to contain). Falls back to type when no
+   * id field is present.
+   */
+  private static _interactiveBlockKey(block: ContentBlock): string {
+    const b = block as unknown as Record<string, unknown>;
+    const id = b.toolUseId ?? b.requestId ?? b.id;
+    return `${block.type}:${id ?? ''}`;
+  }
+
+  /**
+   * Merge a canonical DB assistant message with the local one it replaces,
+   * carrying forward any local-only interactive blocks the DB version lacks.
+   * The DB message wins for all persisted content (text/thinking/tool); only
+   * the unpersisted interactive blocks are appended (preserving their order
+   * relative to each other, at the end — they are always the trailing
+   * turn-terminal block in practice).
+   */
+  private static _mergePreservingInteractive(dbMsg: Message, localMsg: Message): Message {
+    const localInteractive = localMsg.content.filter((b) =>
+      MessageStore._INTERACTIVE_BLOCK_TYPES.has(b.type),
+    );
+    if (localInteractive.length === 0) return dbMsg;
+
+    const dbKeys = new Set(
+      dbMsg.content
+        .filter((b) => MessageStore._INTERACTIVE_BLOCK_TYPES.has(b.type))
+        .map((b) => MessageStore._interactiveBlockKey(b)),
+    );
+    const carryForward = localInteractive.filter(
+      (b) => !dbKeys.has(MessageStore._interactiveBlockKey(b)),
+    );
+    if (carryForward.length === 0) return dbMsg;
+
+    return { ...dbMsg, content: [...dbMsg.content, ...carryForward] };
+  }
+
   private _applyMerge(dbMessages: ChatMessage[]): void {
     const convert = this._toDisplayMessage || this._defaultToDisplay;
     const dbConverted = dbMessages.map(convert);
@@ -519,8 +571,10 @@ export class MessageStore {
         if (this._streamingMessageId && localMatch.id === this._streamingMessageId) {
           merged.push(localMatch);
         } else {
-          // DB is source of truth for completed messages (server-side edits propagate)
-          merged.push(dbMsg);
+          // DB is source of truth for completed messages (server-side edits propagate),
+          // but carry forward local-only interactive blocks the DB never persisted
+          // (ask_user_question / cmd_permission_request / escalation).
+          merged.push(MessageStore._mergePreservingInteractive(dbMsg, localMatch));
         }
       } else {
         // No direct ID match — try clientId correlation (AC4).
@@ -529,9 +583,11 @@ export class MessageStore {
         const dbClientId = dbMessages[dbIdx]?.metadata?.client_id;
         if (dbClientId && clientIdToLocalIdx.has(dbClientId)) {
           // Match found — DB message replaces the optimistic local message.
-          // DB wins (has real ID, persisted content).
+          // DB wins (has real ID, persisted content), but carry forward any
+          // local-only interactive blocks the DB never persisted.
           matchedByClientId.add(dbClientId);
-          merged.push(dbMsg);
+          const localIdx = clientIdToLocalIdx.get(dbClientId)!;
+          merged.push(MessageStore._mergePreservingInteractive(dbMsg, this._messages[localIdx]));
         } else {
           // New from DB — but skip if it belongs to pre-boundary content
           // (prevents old messages from "leaking" into current view after resume)
