@@ -487,26 +487,26 @@ class TestApplyToDDD:
 
 class TestSafeAppendSectionsExistInDocs:
     """Drift guard (AC3, PIT28 single-source pattern): every section the
-    cultivation engine is allowed to auto-append to MUST exist as a real
-    '## ' heading in its target doc — otherwise lessons route to a phantom
-    section and get silently dropped. Derives the assertion from
-    SAFE_APPEND_SECTIONS, never hardcoded, so it can't rot."""
+    cultivation engine appends to. Since apply_to_ddd now AUTO-CREATES a missing
+    whitelisted section (drift is self-healing, no longer a silent drop), this is
+    a HYGIENE check for the PRIMARY project (SwarmAI): its canonical sections
+    should already exist so cultivation appends in place rather than triggering a
+    surprise auto-create. Derived from SAFE_APPEND_SECTIONS, never hardcoded."""
 
-    def test_every_safe_append_section_exists_as_heading(self):
+    def test_swarmai_canonical_sections_present_no_surprise_autocreate(self):
         import re
         from core.ddd_cultivation import SAFE_APPEND_SECTIONS
 
         import pytest
         # Resolve the workspace the SAME way production does — never hardcode a
-        # developer-machine path (that makes the guard pass VACUOUSLY in CI where
-        # the path is absent: every doc 'continue's, missing stays empty, assert
-        # passes — the exact drift it guards goes undetected). Adversarial MED.
+        # developer-machine path (that would make the check pass VACUOUSLY in CI
+        # where the path is absent). Adversarial MED.
         from core.initialization_manager import initialization_manager
         workspace = Path(initialization_manager.get_cached_workspace_path())
         project_dir = workspace / "Projects" / "SwarmAI"
         if not project_dir.exists():
             pytest.skip(f"SwarmAI project dir not present at {project_dir} — "
-                        "drift guard cannot run (skip != vacuous pass)")
+                        "hygiene check cannot run (skip != vacuous pass)")
         missing = []
         checked = 0  # non-vacuous guard: at least one section must be verified
         for doc_name, sections in SAFE_APPEND_SECTIONS.items():
@@ -522,11 +522,14 @@ class TestSafeAppendSectionsExistInDocs:
                 if not section_re.search(content):
                     missing.append(f"{doc_name} § '{section}'")
         assert checked > 0, (
-            "Drift guard verified ZERO sections — vacuous pass. SAFE_APPEND_SECTIONS "
+            "Hygiene check verified ZERO sections — vacuous. SAFE_APPEND_SECTIONS "
             f"({SAFE_APPEND_SECTIONS}) or the target docs are missing under {project_dir}.")
+        # SwarmAI is the primary project — its canonical sections should exist so
+        # cultivation appends in place (a miss here = a surprise auto-create, which
+        # is safe but signals the SwarmAI template drifted from ROUTING_TABLE).
         assert not missing, (
-            "SAFE_APPEND_SECTIONS routes to headings that don't exist (drift — "
-            f"lessons would be silently dropped): {missing}")
+            f"SwarmAI is missing canonical sections {missing} — cultivation will "
+            "auto-create them (safe, but reconcile the template/ROUTING_TABLE).")
 
 
 class TestLogApplication:
