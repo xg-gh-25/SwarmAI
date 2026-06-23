@@ -15,6 +15,7 @@ lives in :mod:`channels.streaming` — extracted for independent testability.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re as _re
 import time
@@ -1386,18 +1387,31 @@ class ChannelGateway:
                 if event_type == "ask_user_question":
                     questions = event.get("questions", [])
                     ask_tool_use_id = event.get("toolUseId")
-                    auto_answer = "; ".join(
-                        q.get("question", "yes") if isinstance(q, dict) else str(q)
-                        for q in questions
-                    ) if questions else "yes"
-                    answer_text = (
-                        f"[Auto-answered by channel gateway] "
-                        f"Proceeding with default: {auto_answer}"
-                    )
+                    # Build a proper answers dict keyed on the EXACT question text
+                    # (the shape the CLI's AskUserQuestion call() and the
+                    # ask_question_gate hook's updatedInput.answers expect — same
+                    # as the desktop frontend's finalAnswers[q.question]). Channels
+                    # are unattended, so auto-pick the first option per question
+                    # (falling back to a generic default). A JSON-encoded dict is
+                    # REQUIRED: continue_with_answer does json.loads(answer) and an
+                    # un-parseable free-text string would degrade to empty answers.
+                    answers: dict[str, str] = {}
+                    for q in questions:
+                        if not isinstance(q, dict):
+                            continue
+                        q_text = q.get("question", "")
+                        if not q_text:
+                            continue
+                        opts = q.get("options", [])
+                        first_label = None
+                        if opts and isinstance(opts[0], dict):
+                            first_label = opts[0].get("label")
+                        answers[q_text] = first_label or "Proceed with default"
+                    answer_text = json.dumps(answers) if answers else ""
                     logger.info(
                         "Channel %s: auto-answering AskUserQuestion "
-                        "(session=%s, questions=%d)",
-                        channel_id, session_id, len(questions),
+                        "(session=%s, questions=%d, answers=%d)",
+                        channel_id, session_id, len(questions), len(answers),
                     )
                     try:
                         async for follow_event in (
