@@ -980,8 +980,16 @@ class SessionUnit:
     # NEVER interrupted.
     TOOL_HANG_SOFT_S: float = 120.0       # surface "still running, Stop to recover"
     TOOL_HANG_OPEN_S: float = 600.0       # quick tools: probe CPU after this long
-    TOOL_HANG_OPEN_S_LONG: float = 1800.0 # Agent/Bash: legitimately long, longer window
-    _LONG_TOOLS: frozenset = frozenset({"Agent", "Bash"})
+    TOOL_HANG_OPEN_S_LONG: float = 1800.0 # long-window tools (see below)
+    # Tools that get the LONG window. Two reasons a tool belongs here:
+    #   (1) legitimately CPU-heavy and long — Agent (sub-agent), Bash (builds)
+    #   (2) I/O-WAIT tools — they sit at CPU=0 while blocked on the network, so
+    #       the CPU-liveness probe CANNOT prove they're alive (option A: the CPU
+    #       signal can't distinguish "wedged" from "waiting on a slow endpoint";
+    #       widen the window so a healthy network wait isn't interrupted early).
+    #       Covers WebFetch and ALL MCP tools (dynamic names: mcp__server__tool).
+    _LONG_TOOLS: frozenset = frozenset({"Agent", "Bash", "WebFetch", "WebSearch"})
+    _LONG_TOOL_PREFIXES: tuple = ("mcp__",)
     CPU_PROBE_INTERVAL_S: float = 2.0     # tree-CPU sampling window
     CPU_LIVE_EPSILON: float = 0.05        # cpu-seconds delta above which = "working"
     _TOOL_HANG_EPISODE_LIMIT: int = 2     # warm interrupts before force-kill escalation
@@ -1016,8 +1024,15 @@ class SessionUnit:
         return (time.time() - start, name, oldest_id)
 
     def _tool_open_window(self, tool_name: str) -> float:
-        """Per-tool open window before CPU-liveness probing kicks in."""
+        """Per-tool open window before CPU-liveness probing kicks in.
+
+        Long window for CPU-heavy tools (Agent/Bash) AND I/O-wait tools
+        (WebFetch, MCP) — the latter sit at CPU=0 while blocked on the
+        network, where the CPU probe can't tell "waiting" from "wedged".
+        """
         if tool_name in self._LONG_TOOLS:
+            return self.TOOL_HANG_OPEN_S_LONG
+        if tool_name.startswith(self._LONG_TOOL_PREFIXES):
             return self.TOOL_HANG_OPEN_S_LONG
         return self.TOOL_HANG_OPEN_S
 

@@ -392,6 +392,20 @@ class TestHelpers:
         assert unit._tool_open_window("Bash") == unit.TOOL_HANG_OPEN_S_LONG
         assert unit._tool_open_window("Read") == unit.TOOL_HANG_OPEN_S
 
+    def test_io_wait_tools_get_long_window(self):
+        """I/O-wait tools (MCP, WebFetch) sit at CPU=0 while waiting on the
+        network — CPU cannot prove they're alive, so they MUST get the long
+        window to avoid premature interrupt (option A: tolerate the CPU blind
+        spot by widening the window for known network tools)."""
+        unit = _make_unit()
+        # MCP tools have dynamic names: mcp__<server>__<tool>
+        assert unit._tool_open_window("mcp__slack__post_message") == unit.TOOL_HANG_OPEN_S_LONG
+        assert unit._tool_open_window("mcp__aws-outlook-mcp__email_send") == unit.TOOL_HANG_OPEN_S_LONG
+        assert unit._tool_open_window("WebFetch") == unit.TOOL_HANG_OPEN_S_LONG
+        # Pure-compute / fast local tools keep the short window.
+        assert unit._tool_open_window("Read") == unit.TOOL_HANG_OPEN_S
+        assert unit._tool_open_window("Edit") == unit.TOOL_HANG_OPEN_S
+
 
 # ── v2 adversarial fixes: episode reset, hard ceiling, stale-tool ───────
 
