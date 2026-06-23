@@ -430,6 +430,54 @@ class TestDriftMigration:
         assert op["active_rule"] == "RULE_OP"
 
 
+    def test_gate2_mixed_type_dates_still_merge_not_degrade(self, tmp_path):
+        """Gate-2 HIGH: a legacy entry with a non-string (int) date must NOT make
+        the merge raise — that would degrade _load to raw state and silently
+        RE-BURY the drift this fix exists to cure. The merge must SUCCEED."""
+        sp = tmp_path / "t.json"
+        sp.write_text(json.dumps({
+            "operational": {
+                "count": 743, "last": "2026-06-01", "active_rule": None,
+                "rule_deployed": None, "post_rule_count": 0, "active_gate": None,
+                "gate_deployed": None, "post_gate_count": 0, "resolved": False,
+                "evidence": [{"date": 20260601, "text": "int-dated evidence"}],
+            },
+            "OPERATIONAL": {
+                "count": 5, "last": 20260620, "active_rule": "RULE_OP",  # int last!
+                "rule_deployed": 20260620, "post_rule_count": 0, "active_gate": None,
+                "gate_deployed": None, "post_gate_count": 0, "resolved": False,
+                "evidence": [],
+            },
+        }))
+        tr = CorrectionClassTracker(state_path=sp)
+        # MUST have merged (not degraded to raw — which would keep 'operational').
+        assert tr.class_names() == ["OPERATIONAL"], "merge must succeed despite int dates"
+        assert tr.get_class("OPERATIONAL")["count"] == 748
+
+    def test_gate2_merge_clears_non_winner_rule_fields(self, tmp_path):
+        """Gate-2 LOW-3 follow-on: copying members[0] must NOT leak a stale
+        active_rule when members[0] is not the rule winner."""
+        sp = tmp_path / "t.json"
+        sp.write_text(json.dumps({
+            # members[0] has NO rule
+            "operational": {
+                "count": 100, "last": "2026-06-01", "active_rule": None,
+                "rule_deployed": None, "post_rule_count": 0, "active_gate": None,
+                "gate_deployed": None, "post_gate_count": 0, "resolved": False,
+                "evidence": [],
+            },
+            "OPERATIONAL": {
+                "count": 2, "last": "2026-06-20", "active_rule": "RULE_OP",
+                "rule_deployed": "2026-06-20", "post_rule_count": 0, "active_gate": None,
+                "gate_deployed": None, "post_gate_count": 0, "resolved": False,
+                "evidence": [],
+            },
+        }))
+        tr = CorrectionClassTracker(state_path=sp)
+        op = tr.get_class("OPERATIONAL")
+        assert op["active_rule"] == "RULE_OP"  # winner's rule, regardless of order
+
+
 class TestLadderReconnect:
     """AC4: the actual bug — record->register_rule->record x2 reaches the gate rung."""
 

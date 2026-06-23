@@ -99,40 +99,64 @@ def _merge_drift(raw_state: dict) -> dict:
             merged[ckey] = members[0]
             continue
 
+        # Gate-2 LOW-3: start from a shallow copy of the first member, not a bare
+        # template, so any field outside _fresh_entry() (future schema growth) is
+        # preserved instead of silently amputated for drifted classes only.
         out = _fresh_entry()
+        out.update(dict(members[0]))
         out["count"] = sum(int(m.get("count", 0) or 0) for m in members)
 
         # resolved = AND (any unresolved -> unresolved)
         out["resolved"] = all(bool(m.get("resolved", False)) for m in members)
 
-        # last = max date string (ISO dates sort lexicographically); ignore None.
-        last_dates = [m.get("last") for m in members if m.get("last")]
+        # last = max date string. str() coercion (Gate-2 HIGH): legacy/corrupt
+        # entries may hold non-string dates (int) — mixed-type max() raises, which
+        # _load would swallow and silently RE-BURY the very drift we heal. Coercing
+        # makes _merge_drift truly total. Secondary key is identity-stable, but a
+        # single deserialized file has stable order so this is belt-and-suspenders.
+        last_dates = [str(m["last"]) for m in members if m.get("last")]
         out["last"] = max(last_dates) if last_dates else None
 
         # Rule winner: member with a non-empty active_rule and the latest
         # rule_deployed. None deploy date sorts earliest (Gate-1 #2: no max(None)).
+        # Secondary key active_rule makes equal-date ties deterministic (Gate-2 LOW-2).
         rule_members = [m for m in members if m.get("active_rule")]
         if rule_members:
-            winner = max(rule_members, key=lambda m: (m.get("rule_deployed") or ""))
+            winner = max(
+                rule_members,
+                key=lambda m: (str(m.get("rule_deployed") or ""), str(m.get("active_rule") or "")),
+            )
             out["active_rule"] = winner.get("active_rule")
             out["rule_deployed"] = winner.get("rule_deployed")
             out["post_rule_count"] = int(winner.get("post_rule_count", 0) or 0)
+        else:
+            # No rule among members — clear the template-copied fields from members[0].
+            out["active_rule"] = None
+            out["rule_deployed"] = None
+            out["post_rule_count"] = 0
 
         # Gate winner: same pattern, independent of the rule winner.
         gate_members = [m for m in members if m.get("active_gate")]
         if gate_members:
-            gwinner = max(gate_members, key=lambda m: (m.get("gate_deployed") or ""))
+            gwinner = max(
+                gate_members,
+                key=lambda m: (str(m.get("gate_deployed") or ""), str(m.get("active_gate") or "")),
+            )
             out["active_gate"] = gwinner.get("active_gate")
             out["gate_deployed"] = gwinner.get("gate_deployed")
             out["post_gate_count"] = int(gwinner.get("post_gate_count", 0) or 0)
+        else:
+            out["active_gate"] = None
+            out["gate_deployed"] = None
+            out["post_gate_count"] = 0
 
-        # Evidence: concat all members, sort by date (stable), keep last N.
+        # Evidence: concat all members, sort by date (str-coerced, stable), keep last N.
         all_evidence = []
         for m in members:
             ev = m.get("evidence")
             if isinstance(ev, list):
                 all_evidence.extend(e for e in ev if isinstance(e, dict))
-        all_evidence.sort(key=lambda e: e.get("date", ""))
+        all_evidence.sort(key=lambda e: str(e.get("date", "")))
         out["evidence"] = all_evidence[-_MAX_EVIDENCE:]
 
         merged[ckey] = out
