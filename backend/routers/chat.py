@@ -650,6 +650,24 @@ async def answer_question(request: Request):
         try:
             logger.info(f"Answering question for agent {answer_request.agent_id}, session {answer_request.session_id}")
 
+            # Defensive guard (AC5): never inject an empty answers dict. An empty
+            # submission would unblock the ask_question_gate hook with {} answers —
+            # indistinguishable from a real "no option selected" — and consume the
+            # question. Reject it instead so the hook stays blocked (live waiter
+            # intact) and the user can resubmit a real answer.
+            if not answer_request.answers:
+                logger.warning(
+                    "answer-question: empty answers for session %s tool_use %s — rejecting",
+                    answer_request.session_id, answer_request.tool_use_id,
+                )
+                yield _build_error_event(
+                    code="EMPTY_ANSWER",
+                    message="No answer was provided",
+                    detail="The answer submission was empty. Select an option and resubmit.",
+                    suggested_action="Choose an answer to the question and submit again.",
+                )
+                return
+
             answer_text = json.dumps(answer_request.answers) if answer_request.answers else ""
             async for msg in _get_router().continue_with_answer(
                 session_id=answer_request.session_id,

@@ -209,19 +209,6 @@ class StreamingOrchestrator:
                 yield msg
 
             await self._parent._client.query(_multimodal_gen())
-        elif parent_tool_use_id:
-            # Tool result response (e.g. AskUserQuestion answer) — must use
-            # the streaming protocol with parent_tool_use_id so the CLI treats
-            # it as a tool result, not a new user message.
-            async def _tool_result_gen():
-                msg = {
-                    "type": "user",
-                    "message": {"role": "user", "content": query_content},
-                    "parent_tool_use_id": parent_tool_use_id,
-                }
-                yield msg
-
-            await self._parent._client.query(_tool_result_gen())
         else:
             await self._parent._client.query(query_content)
 
@@ -393,13 +380,57 @@ class StreamingOrchestrator:
                 except (asyncio.CancelledError, StopAsyncIteration, asyncio.TimeoutError):
                     pass
 
-            # ── Permission request won the race ───────────────────
+            # ── Permission request OR ask_user_question won the race ──
             if perm_task in done:
                 try:
                     perm_request = perm_task.result()
                 except Exception:
                     # Queue.get shouldn't fail, but be safe
                     continue
+
+                # ── AskUserQuestion item (kind-discriminated) ─────────
+                # The ask_question_gate hook enqueues {kind:"ask_user_question",
+                # tool_use_id, questions} on the SAME per-session queue. It blocks
+                # awaiting ask_question_manager.wait_for_answer(tool_use_id). Surface
+                # the question to the frontend; the answer arrives via
+                # continue_with_answer → set_answer(tool_use_id) which unblocks the
+                # hook (the hook then injects answers via updatedInput).
+                if perm_request.get("kind") == "ask_user_question":
+                    from core.ask_question_manager import ask_question_manager as _aqm
+                    _tuid = perm_request.get("tool_use_id")
+                    # Kind-aware drop-guard: an ask item's waiter lives in the
+                    # AskQuestionManager, NOT permission_manager. A stale item whose
+                    # hook was cancelled (respawn/timeout) has no live waiter — drop
+                    # it so the user can't "answer into a void".
+                    if not _tuid or not _aqm.has_live_waiter(_tuid):
+                        logger.info(
+                            "session_unit: dropping stale ask_user_question %s "
+                            "(no live waiter) session_id=%s",
+                            _tuid, self._parent.session_id,
+                        )
+                        continue
+                    questions = perm_request.get("questions", [])
+                    logger.info(
+                        "session_unit.ask_question_surfaced session_id=%s "
+                        "tool_use_id=%s questions=%d",
+                        self._parent.session_id, _tuid, len(questions),
+                    )
+                    # Track the outstanding tool_use so the drain worker won't
+                    # inject a turn while the question is open (keyed on block.id).
+                    self._parent._pending_tool_use_id = _tuid
+                    self._parent._pending_question = {
+                        "tool_use_id": _tuid,
+                        "questions": questions,
+                    }
+                    yield {
+                        "type": "ask_user_question",
+                        "toolUseId": _tuid,
+                        "questions": questions,
+                        "sessionId": self._parent.session_id,
+                    }
+                    self._parent._transition(SessionState.WAITING_INPUT)
+                    self._parent.last_used = time.time()
+                    return
 
                 # The per-session queue survives respawn (keyed by session_id,
                 # only dropped on session end), so a stale request whose hook was
@@ -593,94 +624,18 @@ class StreamingOrchestrator:
                             if _fp:
                                 _pending_file_changes[block.id] = _fp
                         if block.name == "AskUserQuestion":
-                            questions = block.input.get("questions", [])
-                            # Root-1 SSOT Phase 2 (L4/F3): record the outstanding
-                            # tool_use BEFORE the transition so the drain worker
-                            # never injects a turn while this question is open, and
-                            # the read API (L5) can re-surface the question if its
-                            # SSE event is lost.
-                            self._parent._pending_tool_use_id = block.id
-                            self._parent._pending_question = {
-                                "tool_use_id": block.id,
-                                "questions": questions,
-                            }
-                            yield {
-                                "type": "ask_user_question",
-                                "toolUseId": block.id,
-                                "questions": questions,
-                                "sessionId": self._parent.session_id,
-                            }
-                            self._parent._transition(SessionState.WAITING_INPUT)
-                            self._parent.last_used = time.time()
-                            # Drain remaining messages until ResultMessage
-                            # so the shared message queue is clean for the
-                            # next receive_response() call in continue_with_answer.
-                            # Without this, the stale ResultMessage from this
-                            # turn would terminate the next response immediately.
-                            try:
-                                while True:
-                                    drain_timeout = 5.0
-                                    sdk_task = asyncio.ensure_future(
-                                        asyncio.wait_for(
-                                            _next_or_sentinel(),
-                                            timeout=drain_timeout,
-                                        )
-                                    )
-                                    # Cancel perm_task race — we only care about SDK
-                                    perm_task_drain = asyncio.ensure_future(perm_queue.get())
-                                    done, pending = await asyncio.wait(
-                                        [sdk_task, perm_task_drain],
-                                        return_when=asyncio.FIRST_COMPLETED,
-                                    )
-                                    for t in pending:
-                                        t.cancel()
-                                        try:
-                                            await t
-                                        except (asyncio.CancelledError, asyncio.TimeoutError):
-                                            pass
-                                    if sdk_task in done:
-                                        try:
-                                            drain_msg = sdk_task.result()
-                                        except (asyncio.TimeoutError, Exception):
-                                            break
-                                        if drain_msg is _STREAM_EXHAUSTED:
-                                            break
-                                        if isinstance(drain_msg, ResultMessage):
-                                            logger.debug(
-                                                "session_unit: drained ResultMessage "
-                                                "after AskUserQuestion (session=%s)",
-                                                self._parent.session_id,
-                                            )
-                                            break
-                                    else:
-                                        # perm_task won the race. A permission
-                                        # request landed in the post-AskUserQuestion
-                                        # drain window. DO NOT discard it (fix #1A):
-                                        # the dangerous_command_gate hook is blocked
-                                        # awaiting this decision, and the durable
-                                        # _pending_requests entry expects it to be
-                                        # surfaced. Re-enqueue so the next read loop
-                                        # (or reconnect re-surface) delivers it.
-                                        try:
-                                            drained_perm = perm_task_drain.result()
-                                            if drained_perm is not None:
-                                                perm_queue.put_nowait(drained_perm)
-                                                logger.info(
-                                                    "session_unit: re-enqueued permission "
-                                                    "request %s caught in AskUserQuestion "
-                                                    "drain window (session=%s)",
-                                                    drained_perm.get("requestId", "?"),
-                                                    self._parent.session_id,
-                                                )
-                                        except Exception:
-                                            pass
-                            except Exception as drain_err:
-                                logger.warning(
-                                    "session_unit: drain after AskUserQuestion "
-                                    "failed: %s (session=%s)",
-                                    drain_err, self._parent.session_id,
-                                )
-                            return
+                            # The ask_question_gate PreToolUse hook intercepts this
+                            # tool call BEFORE the CLI self-resolves it: it enqueues
+                            # {kind:"ask_user_question", tool_use_id, questions} on the
+                            # per-session queue and BLOCKS on wait_for_answer. The
+                            # perm_task branch above surfaces the question SSE and
+                            # transitions to WAITING_INPUT; continue_with_answer →
+                            # set_answer unblocks the hook, which injects answers via
+                            # updatedInput. So here we only SKIP the tool_use block —
+                            # do NOT render it as a content widget, do NOT self-resolve
+                            # or drain (the old headless self-resolution bug). The hook
+                            # owns the lifecycle; the stream continues normally.
+                            continue
                         if _has_tool_summarizer:
                             summary = summarize_tool_use(block.name, block.input)
                             category = get_tool_category(block.name)

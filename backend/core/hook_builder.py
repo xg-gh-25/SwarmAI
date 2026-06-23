@@ -24,9 +24,11 @@ from claude_agent_sdk import HookMatcher
 from .security_hooks import (
     pre_tool_logger,
     create_dangerous_command_gate,
+    create_ask_question_gate,
     create_governance_file_gate,
     create_skill_access_checker,
 )
+from .ask_question_manager import ask_question_manager
 from .agent_defaults import expand_allowed_skills_with_plugins
 
 logger = logging.getLogger(__name__)
@@ -189,6 +191,17 @@ async def build_hooks(
     )
     registry.register("PreToolUse", gate, "dangerous_command_gate", matcher="Bash")
     logger.info(f"Dangerous command gate attached for session_key: {session_key}")
+
+    # ── PreToolUse: AskUserQuestion gate (AskUserQuestion-scoped) ──
+    # Intercepts AskUserQuestion before the CLI self-resolves it in headless
+    # mode, blocks for the user's answer, then injects answers via updatedInput.
+    ask_gate = create_ask_question_gate(
+        session_key=session_key,
+        session_context=hook_session_context,
+        ask_question_mgr=ask_question_manager,
+    )
+    registry.register("PreToolUse", ask_gate, "ask_question_gate", matcher="AskUserQuestion")
+    logger.info(f"AskUserQuestion gate attached for session_key: {session_key}")
 
     # ── PreToolUse: governance file gate (Edit/Write-scoped) ──
     governance_gate = create_governance_file_gate()

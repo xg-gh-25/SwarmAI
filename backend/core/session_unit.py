@@ -24,6 +24,7 @@ Design reference:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import signal
@@ -2243,11 +2244,13 @@ class SessionUnit:
         Yields raw SDK messages for the router to format.
 
         Args:
-            answer: JSON-encoded answer text from the user.
-            tool_use_id: The AskUserQuestion tool_use block ID. When provided,
-                the answer is sent with ``parent_tool_use_id`` so the CLI links
-                it back to the correct tool call (required for the SDK to treat
-                the answer as a tool result rather than a new user message).
+            answer: JSON-encoded answer dict from the user.
+            tool_use_id: The AskUserQuestion tool_use block ID (== SDK block.id).
+                Used to signal ``ask_question_manager.set_answer(tool_use_id, ...)``,
+                which unblocks the ask_question_gate PreToolUse hook awaiting this
+                exact id. The hook then injects the answers via ``updatedInput`` and
+                the SAME SDK stream continues (resumed below via
+                ``_read_formatted_response``). Falls back to ``_pending_tool_use_id``.
         """
         if self.state != SessionState.WAITING_INPUT:
             raise RuntimeError(
@@ -2269,17 +2272,51 @@ class SessionUnit:
         self._compaction_guard.reset()
         self._content_emitted = False  # Reset zombie detection for new stream
         self._active_agent_tools = {}  # Clear stale sub-agent progress
+
+        # Signal the blocked ask_question_gate hook with the user's answers.
+        # The hook is blocked inside PreToolUse awaiting
+        # ask_question_manager.wait_for_answer(tool_use_id). Setting the answer
+        # unblocks it; the hook returns permissionDecision:"allow" +
+        # updatedInput.answers, the CLI's AskUserQuestion call() returns the real
+        # answers, and the SAME SDK stream continues — which we resume reading via
+        # _read_formatted_response() below (mirrors continue_with_permission).
+        #
+        # This REPLACES the old stream_query(answer, parent_tool_use_id=...) path,
+        # which started a SEPARATE query as a tool_result — that path raced the
+        # CLI's headless self-resolution and lost (the answer landed on an
+        # already-resolved tool). There is now ONE answer-delivery path (no dual
+        # path / COE10 class).
+        from core.ask_question_manager import ask_question_manager as _aqm
+        try:
+            parsed_answers = json.loads(answer) if answer else {}
+            if not isinstance(parsed_answers, dict):
+                parsed_answers = {}
+        except (json.JSONDecodeError, TypeError):
+            logger.warning(
+                "session_unit.continue_with_answer: answer is not valid JSON "
+                "(session=%s) — passing empty answers", self.session_id,
+            )
+            parsed_answers = {}
+
         # Root-1 SSOT Phase 2 (L4): the question is being answered — clear the
         # outstanding-tool_use guard so the drain worker may resume on the next
         # clean IDLE (F3). Cleared on the proper answer path, never on a new send.
+        # NOTE: read tool_use_id for set_answer BEFORE clearing the guard.
+        _answer_tool_use_id = tool_use_id or self._pending_tool_use_id
         self._pending_tool_use_id = None
         self._pending_question = None
         self._transition(SessionState.STREAMING)
 
+        if _answer_tool_use_id:
+            _aqm.set_answer(_answer_tool_use_id, parsed_answers)
+        else:
+            logger.warning(
+                "session_unit.continue_with_answer: no tool_use_id to signal "
+                "(session=%s) — hook may time out", self.session_id,
+            )
+
         try:
-            async for event in self._streaming_orchestrator.stream_query(
-                answer, parent_tool_use_id=tool_use_id,
-            ):
+            async for event in self._read_formatted_response():
                 yield event
         except Exception:
             await self._crash_to_cold_async(clear_identity=False)
