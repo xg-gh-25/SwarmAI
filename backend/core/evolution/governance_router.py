@@ -278,6 +278,10 @@ def _append_proposal(proposal: dict, proposals_path: Path) -> None:
                     existing = loaded
             except (json.JSONDecodeError, OSError):
                 existing = []
+        # Dedup identity: gc_id (if present) OR (source_class, proposal_kind).
+        # Mirrors the optimizer's identity so both writers converge — a rule and a
+        # gate proposal for the same class coexist; same-identity replaces.
+        gc_id = proposal.get("gc_id")
         src = proposal.get("source_class")
         kind = proposal.get("proposal_kind", "rule")
         existing = [
@@ -285,8 +289,14 @@ def _append_proposal(proposal: dict, proposals_path: Path) -> None:
             for p in existing
             if not (
                 p.get("target") == "governance"
-                and p.get("source_class") == src
-                and p.get("proposal_kind", "rule") == kind
+                and (
+                    (gc_id and p.get("gc_id") == gc_id)
+                    or (
+                        src
+                        and p.get("source_class") == src
+                        and p.get("proposal_kind", "rule") == kind
+                    )
+                )
             )
         ]
         existing.append(proposal)
@@ -321,13 +331,13 @@ def escalate_class(
 
     Returns the proposal dict written, or None.
     """
-    from core.evolution.escalation_ladder import decide_escalation
+    from core.evolution.escalation_ladder import canonical_class_key, decide_escalation
 
     try:
         state = tracker.get_class(class_name)
         if not state:
             return None
-        decision = decide_escalation(state, class_name=class_name)
+        decision = decide_escalation(state, class_name=canonical_class_key(class_name))
         if decision.kind == "none" or not decision.proposal:
             return None
         proposals_path = proposals_path or _default_proposals_path()

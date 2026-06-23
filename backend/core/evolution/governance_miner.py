@@ -234,10 +234,15 @@ def generate_governance_proposals(
         # Calculate confidence based on occurrence count and evidence
         confidence = min(0.9, 0.5 + (cls.occurrence_count - threshold) * 0.05)
 
+        # Canonical key so a miner proposal ("CLASS A: ...") and a tracker-ladder
+        # proposal ("CLASS_A") for the SAME logical class dedup together, not twice
+        # (adversarial HIGH). The human-readable name is preserved in proposed_rule.
+        from core.evolution.escalation_ladder import canonical_class_key
+
         proposals.append(
             GovernanceProposal(
                 target="governance",
-                source_class=cls.name,
+                source_class=canonical_class_key(cls.name),
                 occurrence_count=cls.occurrence_count,
                 proposed_rule=cls.pattern or f"Address recurring {cls.name} pattern",
                 evidence=cls.evidence_chain[:5],  # Cap at 5

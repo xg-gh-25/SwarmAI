@@ -106,3 +106,23 @@ def test_decision_dataclass_shape():
     d = EscalationDecision(kind="rule", proposal={"proposal_kind": "rule"})
     assert d.kind == "rule"
     assert d.proposal["proposal_kind"] == "rule"
+
+
+# === Adversarial Gate-2 fixes ===
+
+from core.evolution.escalation_ladder import canonical_class_key
+
+
+def test_canonical_class_key_normalizes_miner_and_tracker_forms():
+    """HIGH-2: miner 'CLASS A: desc' and tracker 'CLASS_A' must canonicalize equal."""
+    assert canonical_class_key("CLASS A: Confidence → Skip Process") == "CLASS_A"
+    assert canonical_class_key("CLASS_A") == "CLASS_A"
+    assert canonical_class_key("CLASS B: x") == canonical_class_key("CLASS_B")
+    assert canonical_class_key("") == ""
+
+
+@pytest.mark.parametrize("bad", ["abc", [1], {"x": 1}, object()])
+def test_totality_on_non_numeric_count(bad):
+    """MED: decide_escalation must NOT raise on a malformed count — total function."""
+    d = decide_escalation({"count": bad})
+    assert d.kind == "none"  # degrades to 0 -> below threshold

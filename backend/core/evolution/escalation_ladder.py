@@ -40,6 +40,20 @@ from dataclasses import dataclass
 _PROPOSE_THRESHOLD = 3
 
 
+def canonical_class_key(name: str) -> str:
+    """Normalize a correction-class name to a stable dedup key.
+
+    The EVOLUTION.md miner emits "CLASS A: Confidence → Skip Process" while the
+    tracker stores "CLASS_A". Both must dedup to the SAME key or the same logical
+    class surfaces twice (adversarial HIGH). Canonical = the leading CLASS token,
+    spaces→underscores, description dropped: "CLASS_A".
+    """
+    if not name:
+        return ""
+    head = name.split(":", 1)[0].strip()  # drop ": description"
+    return "_".join(head.split()).upper()  # "CLASS A" -> "CLASS_A"
+
+
 @dataclass
 class EscalationDecision:
     """The ladder's verdict for one correction class.
@@ -68,7 +82,13 @@ def decide_escalation(class_state: dict, class_name: str = "") -> EscalationDeci
         ("none" | "rule"); never raises.
     """
     state = class_state if isinstance(class_state, dict) else {}
-    count = int(state.get("count", 0) or 0)
+    # Total function: a malformed count must degrade to 0, never raise (the stated
+    # invariant — adversarial MED). The caller's try/except masks a raise, but the
+    # function itself must honor totality.
+    try:
+        count = int(state.get("count", 0) or 0)
+    except (TypeError, ValueError):
+        count = 0
     active_gate = state.get("active_gate")
     resolved = bool(state.get("resolved", False))
 
