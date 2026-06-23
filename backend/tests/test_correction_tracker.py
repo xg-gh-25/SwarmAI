@@ -301,3 +301,160 @@ def test_record_no_keyerror_on_legacy_state_without_rule_fields(tmp_path):
     tr = CorrectionClassTracker(state_path=sp)
     tr.record("CLASS_A")  # must not raise
     assert tr.get_class("CLASS_A")["count"] == 12
+
+
+# === Bugfix run_40fad09e: canonical class-key drift fix ===
+#
+# The v3 escalation ladder gate rung could never fire for axis-named classes
+# because record()/get_class() used the RAW key (lowercase "operational") while
+# escalate_class + the dashboard accept path used the CANONICAL key
+# ("OPERATIONAL"). The same logical class split into two entries; the accepted
+# rule landed on a count=0 phantom while real recurrence accumulated under a
+# key whose active_rule stayed null forever.
+
+
+def _drift_state():
+    """The exact live-drift shape: operational(743,no-rule) + OPERATIONAL(0,rule)."""
+    return {
+        "operational": {
+            "count": 743, "last": "2026-06-22", "active_rule": None,
+            "rule_deployed": None, "post_rule_count": 0, "active_gate": None,
+            "gate_deployed": None, "post_gate_count": 0, "resolved": False,
+            "evidence": [{"date": "2026-06-20", "text": "old slip"}],
+        },
+        "OPERATIONAL": {
+            "count": 0, "last": None, "active_rule": "RULE_OPERATIONAL",
+            "rule_deployed": "2026-06-23", "post_rule_count": 0, "active_gate": None,
+            "gate_deployed": None, "post_gate_count": 0, "resolved": False,
+            "evidence": [],
+        },
+        "CLASS_A": {
+            "count": 4, "last": "2026-06-23", "active_rule": None, "rule_deployed": None,
+            "post_rule_count": 0, "active_gate": None, "gate_deployed": None,
+            "post_gate_count": 0, "resolved": False, "evidence": [],
+        },
+    }
+
+
+class TestCanonicalKeyConvergence:
+    """AC1: mixed-case record/register/get all hit ONE canonical entry."""
+
+    def test_record_lowercase_then_get_canonical(self, tmp_path):
+        tr = CorrectionClassTracker(state_path=tmp_path / "t.json")
+        tr.record("operational", evidence="slip")
+        # Both spellings resolve to the same single entry.
+        assert tr.get_class("operational")["count"] == 1
+        assert tr.get_class("OPERATIONAL")["count"] == 1
+        assert tr.class_names() == ["OPERATIONAL"]
+
+    def test_register_rule_canonical_record_lowercase_same_entry(self, tmp_path):
+        tr = CorrectionClassTracker(state_path=tmp_path / "t.json")
+        tr.register_rule("OPERATIONAL", "RULE_OPERATIONAL")
+        tr.record("operational")  # lowercase axis name from router
+        st = tr.get_class("OPERATIONAL")
+        assert st["active_rule"] == "RULE_OPERATIONAL"
+        assert st["post_rule_count"] == 1  # the lowercase record hit the ruled entry
+
+
+class TestDriftMigration:
+    """AC2 + AC3: idempotent self-healing merge, no data loss."""
+
+    def test_merge_collapses_drift_into_canonical(self, tmp_path):
+        sp = tmp_path / "t.json"
+        sp.write_text(json.dumps(_drift_state()))
+        tr = CorrectionClassTracker(state_path=sp)
+        # operational + OPERATIONAL merged into ONE canonical entry.
+        names = set(tr.class_names())
+        assert "operational" not in names
+        assert names == {"OPERATIONAL", "CLASS_A"}
+        op = tr.get_class("OPERATIONAL")
+        assert op["count"] == 743  # summed (743 + 0)
+        assert op["active_rule"] == "RULE_OPERATIONAL"  # OR-merged from the ruled member
+        assert op["rule_deployed"] == "2026-06-23"
+
+    def test_merge_preserves_single_member_classes_unchanged(self, tmp_path):
+        sp = tmp_path / "t.json"
+        sp.write_text(json.dumps(_drift_state()))
+        tr = CorrectionClassTracker(state_path=sp)
+        ca = tr.get_class("CLASS_A")
+        assert ca["count"] == 4  # untouched
+
+    def test_merge_is_idempotent(self, tmp_path):
+        """AC2: running the merge twice yields identical state."""
+        sp = tmp_path / "t.json"
+        sp.write_text(json.dumps(_drift_state()))
+        tr1 = CorrectionClassTracker(state_path=sp)
+        tr1.record("OPERATIONAL")  # forces a _save of the merged state
+        first = json.loads(sp.read_text())
+        tr2 = CorrectionClassTracker(state_path=sp)  # re-loads + re-merges
+        tr2.record("OPERATIONAL")
+        second = json.loads(sp.read_text())
+        # Drop the count delta from the two extra records; compare structure/keys.
+        assert set(first.keys()) == set(second.keys())
+        assert first["OPERATIONAL"]["active_rule"] == second["OPERATIONAL"]["active_rule"]
+
+    def test_merge_preserves_evidence(self, tmp_path):
+        sp = tmp_path / "t.json"
+        sp.write_text(json.dumps(_drift_state()))
+        tr = CorrectionClassTracker(state_path=sp)
+        op = tr.get_class("OPERATIONAL")
+        texts = [e["text"] for e in op["evidence"]]
+        assert "old slip" in texts  # evidence from the lowercase member survived
+
+    def test_gate1_loser_postcount_and_none_deploy_no_crash(self, tmp_path):
+        """AC6 (Gate-1): loser member has non-zero post_rule_count AND None
+        rule_deployed — must NOT crash _load, and the merged counter must come
+        from the rule-WINNER only (not summed across members)."""
+        sp = tmp_path / "t.json"
+        sp.write_text(json.dumps({
+            # loser: stale post_rule_count against a rule with None deploy date
+            "operational": {
+                "count": 10, "last": "2026-06-01", "active_rule": None,
+                "rule_deployed": None, "post_rule_count": 5, "active_gate": None,
+                "gate_deployed": None, "post_gate_count": 0, "resolved": False,
+                "evidence": [],
+            },
+            # winner: owns the active rule
+            "OPERATIONAL": {
+                "count": 3, "last": "2026-06-20", "active_rule": "RULE_OP",
+                "rule_deployed": "2026-06-20", "post_rule_count": 1, "active_gate": None,
+                "gate_deployed": None, "post_gate_count": 0, "resolved": False,
+                "evidence": [],
+            },
+        }))
+        tr = CorrectionClassTracker(state_path=sp)  # must not raise
+        op = tr.get_class("OPERATIONAL")
+        assert op["count"] == 13  # counts summed
+        # post_rule_count carried from the rule-WINNER only (1), NOT summed (would be 6).
+        assert op["post_rule_count"] == 1
+        assert op["active_rule"] == "RULE_OP"
+
+
+class TestLadderReconnect:
+    """AC4: the actual bug — record->register_rule->record x2 reaches the gate rung."""
+
+    def test_full_reconnect_chain_reaches_gate(self, tmp_path):
+        from core.evolution.escalation_ladder import canonical_class_key, decide_escalation
+        tr = CorrectionClassTracker(state_path=tmp_path / "t.json")
+        # accumulate under the raw axis name (as the router does)
+        for _ in range(3):
+            tr.record("operational")
+        # accept a rule (dashboard passes the canonical source_class)
+        tr.register_rule("OPERATIONAL", "RULE_OPERATIONAL")
+        # class recurs twice MORE (raw axis name again)
+        tr.record("operational")
+        tr.record("operational")
+        st = tr.get_class("OPERATIONAL")
+        assert st["post_rule_count"] == 2, "recurrence post-rule must land on the ruled entry"
+        decision = decide_escalation(st, class_name=canonical_class_key("operational"))
+        assert decision.kind == "gate", "ladder must escalate rule->gate after RED recurrence"
+
+
+class TestEmptyClassName:
+    """AC5: empty/whitespace class name must not crash."""
+
+    def test_record_empty_name_no_crash(self, tmp_path):
+        tr = CorrectionClassTracker(state_path=tmp_path / "t.json")
+        tr.record("", evidence="x")  # must not raise
+        tr.record("   ")  # whitespace -> canonical "" — must not raise
+        assert tr.get_class("") is None or isinstance(tr.get_class(""), dict)

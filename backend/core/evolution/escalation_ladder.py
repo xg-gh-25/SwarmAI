@@ -35,26 +35,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# canonical_class_key now lives in class_key.py (single normalization home, shared
+# with correction_tracker). Re-exported here for back-compat: governance_router,
+# governance_miner, and tests import it from this module.
+from core.evolution.class_key import canonical_class_key  # noqa: F401  (re-export)
+
 # Mirror correction_tracker's promotion threshold. A class must recur >=3 times
 # before any governance proposal is worth a human's attention.
 _PROPOSE_THRESHOLD = 3
 # Recurrences AFTER a rule is accepted that mean "the rule failed -> escalate to a
 # gate". Mirrors correction_tracker._RED_THRESHOLD (kept in sync; both = 2).
 _RED_THRESHOLD = 2
-
-
-def canonical_class_key(name: str) -> str:
-    """Normalize a correction-class name to a stable dedup key.
-
-    The EVOLUTION.md miner emits "CLASS A: Confidence → Skip Process" while the
-    tracker stores "CLASS_A". Both must dedup to the SAME key or the same logical
-    class surfaces twice (adversarial HIGH). Canonical = the leading CLASS token,
-    spaces→underscores, description dropped: "CLASS_A".
-    """
-    if not name:
-        return ""
-    head = name.split(":", 1)[0].strip()  # drop ": description"
-    return "_".join(head.split()).upper()  # "CLASS A" -> "CLASS_A"
 
 
 @dataclass

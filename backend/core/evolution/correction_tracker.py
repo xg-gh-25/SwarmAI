@@ -27,6 +27,8 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from core.evolution.class_key import canonical_class_key
+
 logger = logging.getLogger(__name__)
 
 _DEFAULT_STATE_PATH = Path.home() / ".swarm-ai" / "state" / "correction_tracker.json"
@@ -35,6 +37,107 @@ _RESOLVE_DAYS = 30  # Days of silence after gate to mark resolved
 _AMBER_THRESHOLD = 1  # post_gate_count for ⚠️
 _RED_THRESHOLD = 2  # post_gate_count for 🔴
 _MAX_EVIDENCE = 10  # Keep last N evidence entries per class
+
+
+def _fresh_entry() -> dict:
+    """A blank class-state entry (single template — was duplicated 3x inline)."""
+    return {
+        "count": 0,
+        "last": None,
+        "active_rule": None,
+        "rule_deployed": None,
+        "post_rule_count": 0,
+        "active_gate": None,
+        "gate_deployed": None,
+        "post_gate_count": 0,
+        "resolved": False,
+        "evidence": [],
+    }
+
+
+def _merge_drift(raw_state: dict) -> dict:
+    """Collapse drifted duplicate keys onto their canonical key. Self-healing.
+
+    The bug: the same logical class lived under multiple raw keys (lowercase
+    "operational" accumulating real recurrence; "OPERATIONAL" holding the
+    accepted rule on a count=0 phantom). This groups every raw key by
+    ``canonical_class_key`` and merges each group into ONE entry.
+
+    Merge rules (Gate-1 hardened):
+      - count / post_rule_count / post_gate_count: see below — NOT a blind sum.
+      - active_rule / active_gate: carried from a single WINNER member (the one
+        with the most-recent deploy date); the winner's post_*_count rides along.
+        post_*_count is NEVER summed across members — summing would fabricate
+        failures against a rule/gate that the losing members' recurrences never
+        post-dated (Gate-1 must-fix #1).
+      - count: summed (every recurrence is real regardless of which key it hit).
+      - evidence: concat, sorted by date, last _MAX_EVIDENCE kept (deterministic
+        => idempotent — Gate-1 must-fix #3).
+      - resolved: AND (any unresolved member => merged unresolved).
+      - last: max date across members.
+
+    Idempotent: a single-member group passes through unchanged, so running this
+    on already-merged state yields identical output. Total: never raises on
+    sparse/legacy entries or None deploy dates (Gate-1 must-fix #2).
+    """
+    groups: dict[str, list[dict]] = {}
+    for raw_key, entry in raw_state.items():
+        if not isinstance(entry, dict):
+            continue
+        ckey = canonical_class_key(raw_key)
+        groups.setdefault(ckey, []).append(entry)
+
+    merged: dict[str, dict] = {}
+    for ckey, members in groups.items():
+        if not ckey:
+            # Defensive: an empty canonical key (blank/whitespace raw key) — drop
+            # it rather than create a "" entry. record() guards against creating
+            # these going forward; this cleans any legacy stragglers.
+            continue
+        if len(members) == 1:
+            # Fast path: no drift. Pass through unchanged (idempotency anchor).
+            merged[ckey] = members[0]
+            continue
+
+        out = _fresh_entry()
+        out["count"] = sum(int(m.get("count", 0) or 0) for m in members)
+
+        # resolved = AND (any unresolved -> unresolved)
+        out["resolved"] = all(bool(m.get("resolved", False)) for m in members)
+
+        # last = max date string (ISO dates sort lexicographically); ignore None.
+        last_dates = [m.get("last") for m in members if m.get("last")]
+        out["last"] = max(last_dates) if last_dates else None
+
+        # Rule winner: member with a non-empty active_rule and the latest
+        # rule_deployed. None deploy date sorts earliest (Gate-1 #2: no max(None)).
+        rule_members = [m for m in members if m.get("active_rule")]
+        if rule_members:
+            winner = max(rule_members, key=lambda m: (m.get("rule_deployed") or ""))
+            out["active_rule"] = winner.get("active_rule")
+            out["rule_deployed"] = winner.get("rule_deployed")
+            out["post_rule_count"] = int(winner.get("post_rule_count", 0) or 0)
+
+        # Gate winner: same pattern, independent of the rule winner.
+        gate_members = [m for m in members if m.get("active_gate")]
+        if gate_members:
+            gwinner = max(gate_members, key=lambda m: (m.get("gate_deployed") or ""))
+            out["active_gate"] = gwinner.get("active_gate")
+            out["gate_deployed"] = gwinner.get("gate_deployed")
+            out["post_gate_count"] = int(gwinner.get("post_gate_count", 0) or 0)
+
+        # Evidence: concat all members, sort by date (stable), keep last N.
+        all_evidence = []
+        for m in members:
+            ev = m.get("evidence")
+            if isinstance(ev, list):
+                all_evidence.extend(e for e in ev if isinstance(e, dict))
+        all_evidence.sort(key=lambda e: e.get("date", ""))
+        out["evidence"] = all_evidence[-_MAX_EVIDENCE:]
+
+        merged[ckey] = out
+
+    return merged
 
 
 def _flock_exclusive(fd):
@@ -73,12 +176,21 @@ class CorrectionClassTracker:
         self._state: dict[str, dict] = self._load()
 
     def _load(self) -> dict[str, dict]:
-        """Load state from disk. Returns empty dict on missing/corrupt file."""
+        """Load state from disk, merging drifted duplicate keys. Empty on corrupt.
+
+        Drift merge is self-healing (runs every load) and idempotent. If the
+        merge itself raises on some pathological entry, degrade to the raw loaded
+        state rather than bricking every tracker construction (Gate-1 must-fix #2).
+        """
         try:
             if self._state_path.exists():
                 data = json.loads(self._state_path.read_text(encoding="utf-8"))
                 if isinstance(data, dict):
-                    return data
+                    try:
+                        return _merge_drift(data)
+                    except Exception as exc:  # noqa: BLE001 — never brick construction
+                        logger.warning("drift merge degraded, using raw state: %s", exc)
+                        return data
         except (json.JSONDecodeError, OSError) as exc:
             logger.warning("Correction tracker state corrupt/unreadable, resetting: %s", exc)
         return {}
@@ -125,25 +237,19 @@ class CorrectionClassTracker:
 
     def record(self, class_name: str, evidence: str = "") -> None:
         """Record a correction event for a class."""
+        ckey = canonical_class_key(class_name)
+        if not ckey:
+            # Blank/whitespace class name -> nothing to record (Gate-1 AC5: no crash).
+            logger.debug("record() ignoring empty class name: %r", class_name)
+            return
 
         def _mutate():
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-            if class_name not in self._state:
-                self._state[class_name] = {
-                    "count": 0,
-                    "last": None,
-                    "active_rule": None,
-                    "rule_deployed": None,
-                    "post_rule_count": 0,
-                    "active_gate": None,
-                    "gate_deployed": None,
-                    "post_gate_count": 0,
-                    "resolved": False,
-                    "evidence": [],
-                }
+            if ckey not in self._state:
+                self._state[ckey] = _fresh_entry()
 
-            entry = self._state[class_name]
+            entry = self._state[ckey]
             entry["count"] += 1
             entry["last"] = today
 
@@ -179,24 +285,18 @@ class CorrectionClassTracker:
         deferred: accepting a rule proposal in the dashboard calls this.
         """
 
+        ckey = canonical_class_key(class_name)
+        if not ckey:
+            logger.debug("register_rule() ignoring empty class name: %r", class_name)
+            return
+
         def _mutate():
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-            if class_name not in self._state:
-                self._state[class_name] = {
-                    "count": 0,
-                    "last": None,
-                    "active_rule": None,
-                    "rule_deployed": None,
-                    "post_rule_count": 0,
-                    "active_gate": None,
-                    "gate_deployed": None,
-                    "post_gate_count": 0,
-                    "resolved": False,
-                    "evidence": [],
-                }
+            if ckey not in self._state:
+                self._state[ckey] = _fresh_entry()
 
-            entry = self._state[class_name]
+            entry = self._state[ckey]
             entry["active_rule"] = rule_id
             entry["rule_deployed"] = today
             entry["post_rule_count"] = 0  # Reset counter on new rule
@@ -206,24 +306,18 @@ class CorrectionClassTracker:
     def register_gate(self, class_name: str, gate_id: str, description: str = "") -> None:
         """Register a structural fix (code gate) for a correction class."""
 
+        ckey = canonical_class_key(class_name)
+        if not ckey:
+            logger.debug("register_gate() ignoring empty class name: %r", class_name)
+            return
+
         def _mutate():
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-            if class_name not in self._state:
-                self._state[class_name] = {
-                    "count": 0,
-                    "last": None,
-                    "active_rule": None,
-                    "rule_deployed": None,
-                    "post_rule_count": 0,
-                    "active_gate": None,
-                    "gate_deployed": None,
-                    "post_gate_count": 0,
-                    "resolved": False,
-                    "evidence": [],
-                }
+            if ckey not in self._state:
+                self._state[ckey] = _fresh_entry()
 
-            entry = self._state[class_name]
+            entry = self._state[ckey]
             entry["active_gate"] = gate_id
             entry["gate_deployed"] = today
             entry["post_gate_count"] = 0  # Reset counter on new gate
@@ -264,8 +358,12 @@ class CorrectionClassTracker:
         return resolved_classes
 
     def get_class(self, class_name: str) -> dict | None:
-        """Get state for a specific class. Returns a copy (safe from mutation)."""
-        entry = self._state.get(class_name)
+        """Get state for a specific class. Returns a copy (safe from mutation).
+
+        Canonicalizes the lookup key so "operational" and "OPERATIONAL" resolve
+        to the same merged entry.
+        """
+        entry = self._state.get(canonical_class_key(class_name))
         return dict(entry) if entry is not None else None
 
     def class_names(self) -> list[str]:
