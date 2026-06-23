@@ -1405,9 +1405,22 @@ export function useChatStreamingLifecycle(
               continue;  // Subprocess alive — not a stale stream
             }
 
-            // Race guard: _reconcileStreamStart is set only by setIsStreaming(true),
-            // never cleared by elapsed-timer or selectTab — immune to dual-writer bug.
-            const streamAge = Date.now() - (tabState._reconcileStreamStart ?? 0);
+            // Hard-deadline backstop — anchored to the ABSOLUTE turn start
+            // (streamStartTime), NOT the re-armable _reconcileStreamStart.
+            //
+            // Why the asymmetry: the active-backend guard ABOVE intentionally uses
+            // _reconcileStreamStart, which setIsStreaming(true) re-arms on every
+            // reconnect/heal-grace — a freshly-reconnected, genuinely-active backend
+            // is not stale, so re-arming its grace window is correct. But this
+            // backstop must fire even when the backend is idle and reconnects keep
+            // looping: a daemon restart mid-thinking calls setIsStreaming(true) on
+            // each onError → re-arming _reconcileStreamStart would postpone this
+            // 30s deadline FOREVER (observed: "Thinking…" stuck at 6m16s). streamStartTime
+            // is set once per turn (line ~1569, guarded by !streamStartTime) and is
+            // never reset by reconnect, so it is immune to the re-arm loop. Fallback
+            // to _reconcileStreamStart only in the (unreachable) case streamStartTime
+            // is unset — both are written together in setIsStreaming(true).
+            const streamAge = Date.now() - (tabState.streamStartTime ?? tabState._reconcileStreamStart ?? 0);
             if (streamAge < 30_000) continue;  // too fresh — let it settle (was 10s, raised to 30s to avoid killing pipeline tool calls)
 
             console.warn(
