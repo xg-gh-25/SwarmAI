@@ -331,3 +331,99 @@ class TestDangerousCommandGateIntegration:
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "审批超时" in reason
         assert "User denied" not in reason  # must be distinguishable
+
+
+class TestAskQuestionGate:
+    """create_ask_question_gate — PreToolUse hook that blocks AskUserQuestion in
+    headless mode and injects the user's answers via updatedInput, instead of
+    letting the CLI self-resolve it with an is_error "Answer questions?" result.
+
+    Validates the AskUserQuestion block-hook fix (run_594233bb):
+    - AC1: hook blocks (does not self-resolve) until an answer is set
+    - AC2: hook returns permissionDecision:allow + updatedInput.answers (the real answer)
+    - AC3: hook is scoped to AskUserQuestion only — other tools pass through untouched
+    """
+
+    def _make_gate(self, answer_to_return=None):
+        from core.ask_question_manager import AskQuestionManager
+        from core.security_hooks import create_ask_question_gate
+        mgr = AskQuestionManager()
+        if answer_to_return is not None:
+            async def _fake_wait(tool_use_id, timeout=300):
+                return answer_to_return
+            mgr.wait_for_answer = _fake_wait  # type: ignore
+        gate = create_ask_question_gate(
+            session_key="sess-askq",
+            session_context={"sdk_session_id": "sess-askq"},
+            ask_question_mgr=mgr,
+        )
+        return gate, mgr
+
+    @pytest.mark.asyncio
+    async def test_non_askquestion_tool_passes_through(self):
+        """AC3: Bash/Read/etc are not intercepted — immediate allow, no block."""
+        gate, _mgr = self._make_gate()  # wait would block if reached
+        result = await gate(
+            {"tool_name": "Bash", "tool_input": {"command": "ls"}},
+            "toolu_bash1", None,
+        )
+        assert result == {"decision": "allow"}
+
+    @pytest.mark.asyncio
+    async def test_askquestion_injects_answers_as_updated_input(self):
+        """AC1+AC2: hook blocks for the answer, then returns allow + updatedInput.answers."""
+        answers = {"Pick a color": "Red"}
+        gate, _mgr = self._make_gate(answer_to_return=answers)
+        questions = [{"question": "Pick a color", "header": "Color",
+                      "options": [{"label": "Red", "description": "r"},
+                                  {"label": "Blue", "description": "b"}]}]
+        result = await gate(
+            {"tool_name": "AskUserQuestion", "tool_input": {"questions": questions}},
+            "toolu_askq1", None,
+        )
+        hso = result["hookSpecificOutput"]
+        assert hso["hookEventName"] == "PreToolUse"
+        assert hso["permissionDecision"] == "allow"
+        # The user's real answers must be injected into the tool input.
+        assert hso["updatedInput"]["answers"] == answers
+        # Original questions preserved alongside the injected answers.
+        assert hso["updatedInput"]["questions"] == questions
+
+    @pytest.mark.asyncio
+    async def test_askquestion_enqueues_with_kind_and_tool_use_id(self):
+        """The surfaced queue item must carry kind + tool_use_id so the
+        orchestrator's kind-aware drop-guard + SSE branch can route it."""
+        answers = {"q": "a"}
+        gate, mgr = self._make_gate(answer_to_return=answers)
+        # Use the real permission_manager session queue (the surfacing channel).
+        from core.permission_manager import permission_manager as pm
+        # Drain any pre-existing items for isolation.
+        q = pm.get_session_queue("sess-askq")
+        while not q.empty():
+            q.get_nowait()
+        await gate(
+            {"tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "q"}]}},
+            "toolu_askq2", None,
+        )
+        assert not q.empty(), "hook must enqueue a surfacing item"
+        item = q.get_nowait()
+        assert item["kind"] == "ask_user_question"
+        assert item["tool_use_id"] == "toolu_askq2"
+        assert "questions" in item
+
+    @pytest.mark.asyncio
+    async def test_askquestion_timeout_does_not_inject_empty_answers(self):
+        """A timeout must NOT silently inject empty answers — distinct outcome."""
+        from core.ask_question_manager import TIMEOUT_SENTINEL
+        gate, _mgr = self._make_gate(answer_to_return=TIMEOUT_SENTINEL)
+        result = await gate(
+            {"tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "q"}]}},
+            "toolu_askq3", None,
+        )
+        hso = result["hookSpecificOutput"]
+        # Still allow (the tool must resolve), but answers must be empty AND
+        # the reason must mark it as un-answered, not a real empty selection.
+        assert hso["permissionDecision"] == "allow"
+        assert hso["updatedInput"]["answers"] == {}
+        assert "timeout" in hso.get("permissionDecisionReason", "").lower() or \
+               "超时" in hso.get("permissionDecisionReason", "")

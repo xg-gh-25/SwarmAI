@@ -30,9 +30,11 @@ from typing import TYPE_CHECKING, Any, Callable
 from uuid import uuid4
 
 from config import get_app_data_dir
+from .ask_question_manager import TIMEOUT_SENTINEL as ASK_TIMEOUT_SENTINEL
 
 if TYPE_CHECKING:
     from .permission_manager import PermissionManager
+    from .ask_question_manager import AskQuestionManager
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +202,108 @@ def load_dangerous_patterns() -> list[str]:
     except OSError as exc:
         logger.warning("Cannot read dangerous_commands.json (%s) — using defaults", exc)
         return list(DEFAULT_DANGEROUS_PATTERNS)
+
+
+def create_ask_question_gate(
+    session_key: str,
+    session_context: dict[str, Any],
+    ask_question_mgr: "AskQuestionManager",
+) -> Callable[..., Any]:
+    """Factory: returns an async PreToolUse hook for AskUserQuestion.
+
+    The Claude CLI's AskUserQuestion tool self-resolves with an
+    ``is_error:true, "Answer questions?"`` tool_result in headless/SDK mode
+    (no interactive UI to satisfy its ``behavior:"ask"`` permission). This hook
+    intercepts the tool call at PreToolUse — BEFORE the CLI self-resolves it —
+    BLOCKS on ``ask_question_mgr.wait_for_answer(tool_use_id)`` until the user
+    answers, then returns ``permissionDecision:"allow"`` with the user's answers
+    injected into ``updatedInput.answers``. The CLI's ``call()`` then returns the
+    real answers rather than the synthetic error.
+
+    Correlation: the waiter is keyed on the ``tool_use_id`` arg (the SDK
+    AskUserQuestion block.id), which is also what the ``ask_user_question`` SSE
+    event surfaces as ``toolUseId`` and what ``continue_with_answer`` passes back.
+    """
+
+    async def ask_question_gate(
+        input_data: dict[str, Any],
+        tool_use_id: str | None,
+        context: Any,
+    ) -> dict[str, Any]:
+        # Scoped to AskUserQuestion only — every other tool passes through (AC3).
+        if input_data.get("tool_name") != "AskUserQuestion":
+            return {"decision": "allow"}
+
+        tool_input = input_data.get("tool_input", {}) or {}
+        questions = tool_input.get("questions", [])
+
+        # Defensive: without a tool_use_id we cannot correlate the answer back.
+        # Allow with empty answers so the tool resolves rather than hangs.
+        if not tool_use_id:
+            logger.warning(
+                "ask_question_gate: missing tool_use_id, cannot block for answer "
+                "(session=%s)", session_key,
+            )
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow",
+                    "updatedInput": {**tool_input, "answers": {}},
+                    "permissionDecisionReason": "No tool_use_id — answers unavailable",
+                }
+            }
+
+        # Surface the question to the frontend via the per-session queue that the
+        # streaming orchestrator races. The item carries `kind` + `tool_use_id`
+        # so the orchestrator's kind-aware drop-guard + SSE branch can route it.
+        # Lazy import avoids a hard module-load cycle (permission_manager is the
+        # surfacing channel, shared with the dangerous_command_gate path).
+        from .permission_manager import permission_manager as _pm
+        actual_session_id = session_context.get("sdk_session_id") or session_key
+        await _pm.enqueue_permission_request(actual_session_id, {
+            "kind": "ask_user_question",
+            "sessionId": actual_session_id,
+            "tool_use_id": tool_use_id,
+            "questions": questions,
+        })
+
+        logger.info(
+            "ask_question_gate: blocking for answer session=%s tool_use_id=%s "
+            "questions=%d", actual_session_id, tool_use_id, len(questions),
+        )
+
+        answer = await ask_question_mgr.wait_for_answer(tool_use_id)
+
+        # Timeout: a DISTINCT outcome from an explicit empty selection (mirrors
+        # the permission timeout sentinel). The tool still resolves (allow) so
+        # the subprocess is not wedged, but answers are empty and the reason
+        # marks it as un-answered — never a silent empty injection.
+        if answer == ASK_TIMEOUT_SENTINEL:
+            logger.warning(
+                "ask_question_gate: question timed out session=%s tool_use_id=%s",
+                actual_session_id, tool_use_id,
+            )
+            return {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow",
+                    "updatedInput": {**tool_input, "answers": {}},
+                    "permissionDecisionReason": (
+                        "提问超时（Question timed out）: no answer received in time."
+                    ),
+                }
+            }
+
+        # answer is the user's answers dict.
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "updatedInput": {**tool_input, "answers": answer},
+            }
+        }
+
+    return ask_question_gate
 
 
 def create_dangerous_command_gate(
