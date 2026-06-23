@@ -446,6 +446,7 @@ class RetryManager:
                     return
 
             self._parent._active_agent_tools = {}  # Clear ghost entries from crashed attempt
+            self._parent._open_tool_uses = {}  # Clear stale open-tool tracking (run_fb6e94a9)
             self._parent._transition(SessionState.STREAMING)
 
             try:

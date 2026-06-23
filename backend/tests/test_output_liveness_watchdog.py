@@ -48,6 +48,13 @@ def _make_unit(session_id: str = "test-session", pid: int | None = None) -> Sess
     unit._last_proactive_restart = 0
     unit._pid_watchdog_task = None
     unit._last_known_context_tokens = 0
+    # Tool-hang tracking (run_fb6e94a9) — real __init__ sets these; the
+    # watchdog reads them every tick.
+    unit._open_tool_uses = {}
+    unit._tool_hang_interrupted = False
+    unit._tool_hang_interrupt_at = None
+    unit._consecutive_unstick_timeouts = 0
+    unit.interrupt = AsyncMock()
     unit._PID_WATCHDOG_INTERVAL = 0.05  # Fast for tests
     unit.last_used = time.time()
     unit.is_channel_session = False

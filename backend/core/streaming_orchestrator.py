@@ -151,6 +151,12 @@ class StreamingOrchestrator:
         for block in content:
             if isinstance(block, ToolResultBlock):
                 self._parent._active_agent_tools.pop(block.tool_use_id, None)
+                # Agent-tool results arrive HERE (UserMessage), not in the
+                # AssistantMessage ToolResultBlock branch (PIT03). Clear the
+                # open-tool tracker on this path too, else a sub-agent id
+                # lingers and could false-trip the tool-hang tier (run_fb6e94a9).
+                self._parent._open_tool_uses.pop(block.tool_use_id, None)
+                self._parent._tool_hang_interrupted = False
 
     # ═══════════════════════════════════════════════════════════════
     # Migrated from session_unit.py — _stream_response
@@ -611,6 +617,14 @@ class StreamingOrchestrator:
                             # answered.
                             self._parent._content_emitted = True
                     elif isinstance(block, ToolUseBlock):
+                        # ── Track EVERY open tool_use for hang detection (run_fb6e94a9) ──
+                        # Records emission time; cleared when the matching
+                        # ToolResultBlock arrives. The PID watchdog reads this
+                        # to tell a stuck tool from genuine thinking. Skip
+                        # AskUserQuestion — it intentionally blocks on the user
+                        # (the hook owns its lifecycle) and would false-trip.
+                        if block.name != "AskUserQuestion":
+                            self._parent._open_tool_uses[block.id] = time.time()
                         # ── Track sub-agent (Agent tool) for progress observability ──
                         if block.name == "Agent" and isinstance(block.input, dict):
                             _agent_label = block.input.get("description") or block.input.get("prompt") or ""
@@ -678,6 +692,12 @@ class StreamingOrchestrator:
                     elif isinstance(block, ToolResultBlock):
                         # ── Clear sub-agent progress when Agent tool completes ──
                         self._parent._active_agent_tools.pop(block.tool_use_id, None)
+                        # ── Clear open-tool tracking; the tool produced a result ──
+                        # (run_fb6e94a9). A completed tool resets the once-per-
+                        # episode interrupt guard so a LATER stuck tool in the
+                        # same turn can still be escaped.
+                        self._parent._open_tool_uses.pop(block.tool_use_id, None)
+                        self._parent._tool_hang_interrupted = False
                         block_content = str(block.content) if block.content else ""
                         if _has_tool_summarizer:
                             truncated, was_truncated = truncate_tool_result(block_content)
