@@ -127,3 +127,30 @@ def test_unknown_id_returns_not_found(svc):
 
 def test_invalid_decision_errors(svc):
     assert svc.decide_governance("CLASS_B:rule", "frobnicate")["status"] == "error"
+
+
+# === Adversarial Gate-2 HIGH/LOW fixes ===
+
+def test_remove_governance_proposal_is_flock_safe_single(tmp_path):
+    """HIGH-1/LOW-2: remove_governance_proposal removes exactly ONE matching id,
+    under flock, preserving non-governance + other governance rows."""
+    from core.evolution.governance_router import remove_governance_proposal
+    p = tmp_path / "props.json"
+    p.write_text(json.dumps([
+        {"skill_name": "x"},  # non-gov preserved
+        {"target": "governance", "source_class": "CLASS_A", "proposal_kind": "rule", "id": "CLASS_A:rule"},
+        {"target": "governance", "source_class": "CLASS_B", "proposal_kind": "gate", "id": "CLASS_B:gate"},
+    ]))
+    assert remove_governance_proposal("CLASS_A:rule", p) is True
+    rows = json.loads(p.read_text())
+    ids = [r.get("id") for r in rows if r.get("target") == "governance"]
+    assert ids == ["CLASS_B:gate"]  # only CLASS_A:rule removed
+    assert any("skill_name" in r for r in rows)  # skill-opt row preserved
+
+
+def test_remove_governance_proposal_missing_returns_false(tmp_path):
+    from core.evolution.governance_router import remove_governance_proposal
+    p = tmp_path / "props.json"
+    p.write_text(json.dumps([{"target": "governance", "source_class": "CLASS_A", "proposal_kind": "rule", "id": "CLASS_A:rule"}]))
+    assert remove_governance_proposal("NOPE:rule", p) is False
+    assert len(json.loads(p.read_text())) == 1  # nothing removed

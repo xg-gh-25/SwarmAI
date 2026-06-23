@@ -320,6 +320,63 @@ def _append_proposal(proposal: dict, proposals_path: Path) -> None:
         fd.close()
 
 
+def remove_governance_proposal(proposal_id: str, proposals_path: Path | None = None) -> bool:
+    """Remove ONE governance proposal by id, under the SHARED flock.
+
+    The dashboard accept/reject path must mutate .evolution_proposals.json through
+    the SAME lock escalate_class/_append_proposal use — otherwise an unlocked
+    read-modify-write races the escalation writer and loses a write (adversarial
+    HIGH, a regression of the Phase-2 HIGH-3 fix). Re-reads under the lock, removes
+    exactly the first id match (not all — adversarial LOW), atomic tmp+replace.
+
+    Non-governance rows (skill-optimization) and other governance rows are preserved.
+    Returns True if a row was removed.
+    """
+    proposals_path = proposals_path or _default_proposals_path()
+    if not proposals_path.exists():
+        return False
+    lock_path = proposals_path.with_suffix(".json.lock")
+    fd = open(lock_path, "w")
+    removed = False
+    try:
+        _flock(fd)
+        try:
+            rows = json.loads(proposals_path.read_text(encoding="utf-8"))
+            if not isinstance(rows, list):
+                rows = []
+        except (json.JSONDecodeError, OSError):
+            rows = []
+        # Remove exactly the FIRST matching id (governance row), preserve the rest.
+        out, dropped = [], False
+        for r in rows:
+            if (
+                not dropped
+                and isinstance(r, dict)
+                and r.get("target") == "governance"
+                and (r.get("id") or f"{r.get('source_class')}:{r.get('proposal_kind', 'rule')}") == proposal_id
+            ):
+                dropped = True
+                removed = True
+                continue
+            out.append(r)
+        if removed:
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", dir=proposals_path.parent, suffix=".tmp", delete=False, encoding="utf-8"
+            )
+            try:
+                json.dump(out, tmp, indent=2, ensure_ascii=False)
+                tmp.close()
+                Path(tmp.name).replace(proposals_path)
+            except Exception:
+                tmp.close()
+                Path(tmp.name).unlink(missing_ok=True)
+                raise
+    finally:
+        _funlock(fd)
+        fd.close()
+    return removed
+
+
 def escalate_class(
     class_name: str,
     tracker,

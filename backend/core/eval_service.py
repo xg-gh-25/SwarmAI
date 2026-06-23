@@ -671,35 +671,6 @@ class EvalService:
         proposals = self._read_governance_proposals()
         return {"proposals": proposals, "total": len(proposals)}
 
-    def _rewrite_governance_proposals(self, keep: list[dict]) -> None:
-        """Atomically rewrite the proposals file preserving non-governance rows.
-
-        Only governance rows are managed here; skill-opt rows pass through untouched.
-        """
-        p = self._proposals_path()
-        all_rows: list = []
-        if p.exists():
-            try:
-                loaded = json.loads(p.read_text(encoding="utf-8"))
-                if isinstance(loaded, list):
-                    all_rows = loaded
-            except (json.JSONDecodeError, OSError):
-                all_rows = []
-        non_gov = [r for r in all_rows if not (isinstance(r, dict) and r.get("target") == "governance")]
-        merged = non_gov + keep
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = tempfile.NamedTemporaryFile(
-            mode="w", dir=p.parent, suffix=".tmp", delete=False, encoding="utf-8"
-        )
-        try:
-            json.dump(merged, tmp, indent=2, ensure_ascii=False)
-            tmp.close()
-            Path(tmp.name).replace(p)
-        except Exception:
-            tmp.close()
-            Path(tmp.name).unlink(missing_ok=True)
-            raise
-
     def decide_governance(self, proposal_id: str, decision: str) -> dict:
         """Accept / reject / defer a governance proposal.
 
@@ -737,10 +708,12 @@ class EvalService:
                     tracker.register_rule(cls, f"RULE_{cls}", "accepted via governance dashboard")
                     action_taken = "registered_rule"
 
-        # reject + accept both remove the proposal from the queue
-        keep = [p for p in proposals if p.get("id") != proposal_id]
-        self._rewrite_governance_proposals(keep)
-        return {"status": decision + "ed" if decision == "reject" else "accepted",
+        # reject + accept both remove the proposal — via the SHARED flock writer
+        # (adversarial HIGH: must not race escalate_class's flocked append).
+        from core.evolution.governance_router import remove_governance_proposal
+
+        remove_governance_proposal(proposal_id, self._proposals_path())
+        return {"status": "rejected" if decision == "reject" else "accepted",
                 "proposal_id": proposal_id, "action_taken": action_taken}
 
 
