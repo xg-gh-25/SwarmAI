@@ -74,11 +74,18 @@ function reconcileDecision(
   // L1371: only check streaming tabs
   if (!tabState.isStreaming) return 'skip_not_streaming';
 
-  // drain/queue immunity
-  if (tabState.drainPending || tabState.queuedMessage) return 'skip_drain_or_queue';
+  // drain/queue immunity — NOT the stuck condition, so reset the backstop clock
+  // (mirrors production: clock must not age through a drain/queue gap).
+  if (tabState.drainPending || tabState.queuedMessage) {
+    tabState._idleStreamingSince = undefined;
+    return 'skip_drain_or_queue';
+  }
 
-  // L1385-1386: need session ID
-  if (!tabState.sessionId) return 'skip_no_session';
+  // L1385-1386: need session ID — also resets clock (not stuck).
+  if (!tabState.sessionId) {
+    tabState._idleStreamingSince = undefined;
+    return 'skip_no_session';
+  }
 
   // L1391: backend still streaming → clear backstop clock + skip
   if (backendIsStreaming) {
@@ -355,6 +362,25 @@ describe('Reconcile force-clear — reconcile-owned backstop immune to reconnect
     expect(tab._idleStreamingSince).toBe(t0 + 25_000);
   });
 
+  it('Test 11c (adversarial MED #2): clock does NOT age through a queue-immunity gap', () => {
+    const t0 = Date.now();
+    const tab: MockTabState = { isStreaming: true, sessionId: 'sess-q', messages: [] };
+    // Poll 1: stuck observed → stamp t0.
+    expect(reconcileDecision(tab, false, t0, undefined)).toBe('skip_too_fresh');
+    expect(tab._idleStreamingSince).toBe(t0);
+    // User queues a message → immunity guard skips AND resets the clock.
+    tab.queuedMessage = makeQueuedMessage('follow-up');
+    tab._queuedAt = t0 + 1_000;
+    expect(reconcileDecision(tab, false, t0 + 5_000, undefined)).toBe('skip_drain_or_queue');
+    expect(tab._idleStreamingSince).toBeUndefined(); // reset — does not age through gap
+    // Queue drains; tab still stuck at t0+70s. Without the reset this would
+    // instantly force-clear (70s > 30s). With it, a FRESH stamp + settle window.
+    tab.queuedMessage = undefined;
+    tab._queuedAt = undefined;
+    expect(reconcileDecision(tab, false, t0 + 70_000, undefined)).toBe('skip_too_fresh');
+    expect(tab._idleStreamingSince).toBe(t0 + 70_000);
+  });
+
   it('Test 12 (AC3): a Stopped tab is skip_not_streaming — Stop clear is terminal, never re-armed', () => {
     const now = Date.now();
     const tab: MockTabState = {
@@ -386,6 +412,11 @@ describe('Reconcile force-clear — reconcile-owned backstop immune to reconnect
     expect(src).not.toMatch(/const streamAge = Date\.now\(\)\s*-\s*\(tabState\._reconcileStreamStart/);
     // The clock must be stamped once when stuck is first observed.
     expect(src).toMatch(/tabState\._idleStreamingSince === undefined/);
+    // Turn-boundary reset (adversarial HIGH #4): the result handler must clear
+    // the clock so a stale stuck-since from this turn can't leak into the next.
+    // Assert ≥2 reset sites exist (result handler + immunity/force-clear paths).
+    const resetCount = (src.match(/_idleStreamingSince = undefined/g) ?? []).length;
+    expect(resetCount).toBeGreaterThanOrEqual(4);
   });
 });
 

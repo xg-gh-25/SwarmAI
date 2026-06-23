@@ -1379,11 +1379,16 @@ export function useChatStreamingLifecycle(
           // Without this override, queuedMessage creates a deadlock:
           // streaming(wrong) → queue msg → reconcile skips → never clears.
           const queueAge = tabState._queuedAt ? Date.now() - tabState._queuedAt : 0;
-          if (tabState.drainPending) continue;  // drain is always brief (<1s)
-          if (tabState.queuedMessage && queueAge < 60_000) continue;
+          // Immunity guards: a drain/queue gap is NOT the stuck condition, so the
+          // backstop clock must NOT keep aging through it (else the first poll
+          // after the immunity window force-clears with no settle window — adversarial
+          // MED #2). Reset it here so a genuine stall AFTER the gap restarts the 30s
+          // window from a fresh stamp.
+          if (tabState.drainPending) { tabState._idleStreamingSince = undefined; continue; }  // drain is always brief (<1s)
+          if (tabState.queuedMessage && queueAge < 60_000) { tabState._idleStreamingSince = undefined; continue; }
 
           const sid = tabState.sessionId;
-          if (!sid) continue;
+          if (!sid) { tabState._idleStreamingSince = undefined; continue; }
 
           const backendState = states[sid];
           // Missing from backend = session GC'd/evicted = certainly not streaming.
@@ -2612,6 +2617,16 @@ export function useChatStreamingLifecycle(
             // Normal completion — clear streaming state so spinner stops
             // and input re-enables.
             setIsStreaming(false, capturedTabId ?? undefined);
+          }
+          // Turn boundary: clear the reconcile-owned backstop clock so a stale
+          // stuck-since timestamp from THIS turn cannot leak into the NEXT turn
+          // on the same tab (adversarial HIGH #4). This is deterministic at turn
+          // end — it does NOT depend on the reconcile poll happening to run, and
+          // it is NOT in setIsStreaming (which reconnect churns), so it cannot
+          // re-introduce the re-arm-loop bug.
+          if (capturedTabId) {
+            const resultTab = tabMapRef.current.get(capturedTabId);
+            if (resultTab) resultTab._idleStreamingSince = undefined;
           }
           // Always bump generation so the old completeHandler no-ops.
           incrementStreamGen();
