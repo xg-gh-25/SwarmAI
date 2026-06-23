@@ -934,6 +934,51 @@ _RESUME_CACHE_MAX = 10  # 10 sessions × ~600KB ≈ 6MB max (was 50 = 30MB)
 _resume_cache: OrderedDict[str, tuple[int, str]] = OrderedDict()
 
 
+# ─── Resume-context observability counters (R1: fail-loud not fail-hard) ──
+# Every build_resume_context() outcome bumps a DISTINCT key here. The whole
+# point: a data-loss EXCEPTION (failed_exception) must never be conflated with
+# a legitimate-empty result (empty_*). All four used to return "" identically —
+# silent data loss masquerading as "no context to inject". This counter makes
+# the failure observable + distinguishable WITHOUT changing the return contract
+# (still str, empty-string semantics preserved — startup is never blocked).
+# Mirrors _resume_cache: module-level, advisory (never gates control flow).
+# int += under the GIL is atomic for these single-op increments.
+_resume_stats: dict[str, int] = {
+    "cache_hit": 0,
+    "enriched_success": 0,
+    "legacy_success": 0,
+    "empty_no_session": 0,
+    "empty_no_messages": 0,
+    "empty_legacy": 0,
+    "failed_exception": 0,
+    # Enrichment helpers (checkpoint/conclusions/tool-results/git) raised and we
+    # fell back to legacy raw-history. NOT a clean build — the rich context was
+    # LOST and silently degraded. Distinct from failed_exception (loses
+    # everything) and enriched_success (clean build). Without this key a degraded
+    # build is indistinguishable from a clean one — the same conflation R1 fixes
+    # at the top level, one layer down (adversarial MED, run_fe0122b5).
+    "enrichment_degraded": 0,
+}
+
+
+def get_resume_stats() -> dict[str, int]:
+    """Return a COPY of the resume-context outcome counters (observability).
+
+    Backend can grep/expose these to tell "resume produced no context because
+    there was nothing to inject" (empty_*) apart from "resume FAILED and we lost
+    the context" (failed_exception) — the distinction the silent "" hid.
+    """
+    return dict(_resume_stats)
+
+
+def reset_resume_stats() -> None:
+    """Zero all counters. Used for test isolation (no daemon caller — counters
+    are cumulative over process lifetime; Python ints are arbitrary-precision so
+    unbounded growth is not an overflow/memory risk)."""
+    for k in _resume_stats:
+        _resume_stats[k] = 0
+
+
 # ─── Public API ──────────────────────────────────────────────────────
 
 async def build_resume_context(
@@ -980,6 +1025,7 @@ async def build_resume_context(
     max_messages = max_messages if max_messages is not None else auto_max
     db_fetch_limit = db_fetch_limit if db_fetch_limit is not None else auto_fetch
     if app_session_id is None:
+        _resume_stats["empty_no_session"] += 1
         return ""
 
     try:
@@ -990,6 +1036,7 @@ async def build_resume_context(
         cached = _resume_cache.get(app_session_id)
         if cached and cached[0] == msg_count:
             _resume_cache.move_to_end(app_session_id)  # LRU touch
+            _resume_stats["cache_hit"] += 1
             logger.info("Resume context cache hit: session=%s count=%d",
                         app_session_id[:12], msg_count)
             return cached[1]
@@ -999,6 +1046,7 @@ async def build_resume_context(
         )
 
         if not raw_messages:
+            _resume_stats["empty_no_messages"] += 1
             logger.info("Resume context skipped: no messages for session %s",
                         app_session_id)
             return ""
@@ -1033,7 +1081,14 @@ async def build_resume_context(
             ws_dir = working_directory or str(_swarmws_ci)
             uncommitted = await _extract_uncommitted_state(ws_dir)
         except Exception:
-            logger.warning("Structured checkpoint extraction failed",
+            # Enrichment failed → we'll fall through to legacy raw-history (or
+            # empty). Count it: a degraded build (rich context LOST) must be
+            # distinguishable from a clean enriched_success or a legitimate
+            # empty_legacy — else the conflation R1 fixes recurs here.
+            _resume_stats["enrichment_degraded"] += 1
+            logger.warning("Structured checkpoint extraction failed — resume "
+                           "context degraded to legacy raw-history (rich "
+                           "context lost for this session)",
                            exc_info=True)
 
         has_content = any([checkpoint, recent, conclusions_text,
@@ -1071,6 +1126,7 @@ async def build_resume_context(
             _resume_cache[app_session_id] = (msg_count, result)
             if len(_resume_cache) > _RESUME_CACHE_MAX:
                 _resume_cache.popitem(last=False)  # evict oldest
+            _resume_stats["enriched_success"] += 1
             logger.info(
                 "Resume context built (enriched): checkpoint=%d "
                 "conclusions=%d tool_results=%d recent=%d "
@@ -1089,17 +1145,28 @@ async def build_resume_context(
             _resume_cache[app_session_id] = (msg_count, result)
             if len(_resume_cache) > _RESUME_CACHE_MAX:
                 _resume_cache.popitem(last=False)  # evict oldest
+            _resume_stats["legacy_success"] += 1
             logger.info(
                 "Resume context built (legacy fallback): ~%d tokens",
                 len(result) // 4,
             )
         else:
+            _resume_stats["empty_legacy"] += 1
             logger.info("Resume context skipped: no injectable messages")
         return result
 
     except Exception:
-        logger.warning(
-            "Failed to build resume context for session %s",
+        # fail-LOUD (ERROR, not WARNING) + fail-SOFT (still return "" so the
+        # KNOWLEDGE.md law holds: context-load failure NEVER blocks agent
+        # startup). The counter is what makes this distinguishable from the
+        # legitimate-empty paths above — that conflation WAS the silent
+        # data-loss bug (R1). We return "" exactly as before; only the
+        # observability (ERROR log + failed_exception counter) is new.
+        _resume_stats["failed_exception"] += 1
+        logger.error(
+            "Resume context BUILD FAILED for session %s — context lost, "
+            "session will resume with NO prior context (fail-soft). This is a "
+            "data-loss event, not a legitimate-empty result.",
             app_session_id,
             exc_info=True,
         )
