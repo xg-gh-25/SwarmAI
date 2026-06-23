@@ -1402,25 +1402,34 @@ export function useChatStreamingLifecycle(
             const reportedState = backendState?.state;
             const activeGuardAge = Date.now() - (tabState._reconcileStreamStart ?? 0);
             if (reportedState && ACTIVE_BACKEND_STATES.has(reportedState) && activeGuardAge < 7_200_000) {
-              continue;  // Subprocess alive — not a stale stream
+              // Subprocess alive — not a stale stream. The stuck condition does
+              // NOT hold, so clear the backstop clock: a genuinely-active backend
+              // (e.g. a long deep-research tool turn that reports streaming
+              // between tool calls) must get a FRESH grace window each time it
+              // is observed active, never accumulate toward force-clear.
+              tabState._idleStreamingSince = undefined;
+              continue;
             }
 
-            // Hard-deadline backstop — anchored to the ABSOLUTE turn start
-            // (streamStartTime), NOT the re-armable _reconcileStreamStart.
+            // ── Hard-deadline backstop — RECONCILE-OWNED clock (re-arm-immune) ──
+            // The stuck condition now holds: frontend=streaming, backend NOT
+            // streaming, and NOT an active backend state. Anchor the deadline to
+            // a timestamp OWNED BY THIS POLL (_idleStreamingSince), stamped the
+            // first time we observe the condition and cleared above whenever it
+            // doesn't hold.
             //
-            // Why the asymmetry: the active-backend guard ABOVE intentionally uses
-            // _reconcileStreamStart, which setIsStreaming(true) re-arms on every
-            // reconnect/heal-grace — a freshly-reconnected, genuinely-active backend
-            // is not stale, so re-arming its grace window is correct. But this
-            // backstop must fire even when the backend is idle and reconnects keep
-            // looping: a daemon restart mid-thinking calls setIsStreaming(true) on
-            // each onError → re-arming _reconcileStreamStart would postpone this
-            // 30s deadline FOREVER (observed: "Thinking…" stuck at 6m16s). streamStartTime
-            // is set once per turn (line ~1569, guarded by !streamStartTime) and is
-            // never reset by reconnect, so it is immune to the re-arm loop. Fallback
-            // to _reconcileStreamStart only in the (unreachable) case streamStartTime
-            // is unset — both are written together in setIsStreaming(true).
-            const streamAge = Date.now() - (tabState.streamStartTime ?? tabState._reconcileStreamStart ?? 0);
+            // Why NOT streamStartTime or _reconcileStreamStart: BOTH are written
+            // by setIsStreaming, which the reconnect machinery churns. A daemon
+            // restart mid-thinking emits error → setIsStreaming(false) (clears
+            // streamStartTime) → reconnecting → setIsStreaming(true) (re-arms
+            // BOTH clocks). Anchoring to either lets a restart loop postpone the
+            // deadline forever (observed: "Thinking…" stuck at 6m16s). This clock
+            // is touched ONLY by the reconcile loop, so no reconnect/heal-grace/
+            // elapsed-timer write can reset it — the deadline always advances.
+            if (tabState._idleStreamingSince === undefined) {
+              tabState._idleStreamingSince = Date.now();
+            }
+            const streamAge = Date.now() - tabState._idleStreamingSince;
             if (streamAge < 30_000) continue;  // too fresh — let it settle (was 10s, raised to 30s to avoid killing pipeline tool calls)
 
             console.warn(
@@ -1433,6 +1442,7 @@ export function useChatStreamingLifecycle(
             setIsStreaming(false, tabId);
             tabState.isReconnecting = false;
             tabState.isResuming = false;
+            tabState._idleStreamingSince = undefined;  // condition resolved
             if (tabState._resumeTimeoutId) { clearTimeout(tabState._resumeTimeoutId); tabState._resumeTimeoutId = undefined; }
             anyCleared = true;
 
@@ -1475,6 +1485,10 @@ export function useChatStreamingLifecycle(
               // from DB once the daemon is back.
               tabState._dbReconcileFailed = true;
             });
+          } else {
+            // Backend IS streaming — the stuck condition does not hold. Clear the
+            // backstop clock so a later genuine stall starts its 30s window fresh.
+            tabState._idleStreamingSince = undefined;
           }
         }
 

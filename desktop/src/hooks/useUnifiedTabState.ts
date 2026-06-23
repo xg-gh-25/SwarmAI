@@ -159,6 +159,13 @@ export interface UnifiedTab {
   /** Reconciliation race guard: set ONLY by setIsStreaming(true). Never touched by
    *  elapsed-timer effects or selectTab. Used by reconcile loop to skip fresh streams. */
   _reconcileStreamStart?: number;
+  /** Reconcile-OWNED backstop clock. Stamped by the 15s reconcile poll the FIRST
+   *  time it observes the stuck condition (frontend=streaming + backend NOT
+   *  streaming + NOT an active backend state). Reset to undefined by the same poll
+   *  whenever that condition does not hold. Because ONLY the reconcile loop writes
+   *  it — never setIsStreaming / reconnect / elapsed-timer — a daemon-restart
+   *  reconnect loop cannot postpone it. This is the re-arm-immune hard deadline. */
+  _idleStreamingSince?: number;
   /** True between result-event (hasQueuedMessage) and drain completion.
    *  Signals reconcile poll: "backend is IDLE but drain is intentionally
    *  holding streaming state — do NOT force-clear." */

@@ -35,8 +35,10 @@ interface MockTabState {
   drainPending?: boolean;
   queuedMessage?: { text: string; attachments: never[]; displayContent: ContentBlock[]; messageId: string };
   _reconcileStreamStart?: number;
-  /** Absolute turn start — set once per turn, NOT reset by reconnect re-arm. */
+  /** Absolute turn start — set by setIsStreaming, re-armable on reconnect. */
   streamStartTime?: number;
+  /** Reconcile-OWNED backstop clock. ONLY the poll writes it. */
+  _idleStreamingSince?: number;
   messages: Message[];
   isReconnecting?: boolean;
   isResuming?: boolean;
@@ -49,16 +51,19 @@ const ACTIVE_BACKEND_STATES = new Set(['waiting_input', 'streaming']);
 
 /**
  * Pure function that mirrors the reconcile decision logic
- * (useChatStreamingLifecycle.ts L1371-1411).
+ * (useChatStreamingLifecycle.ts L1371-1488).
  *
- * Two clocks with DIFFERENT semantics:
- * - `_reconcileStreamStart` — re-armed on every setIsStreaming(true) (incl.
- *   reconnect/heal-grace). Correct for the ACTIVE-backend guard: a freshly
- *   reconnected, genuinely-active backend is not stale.
- * - `streamStartTime` — absolute turn start, set once (never reset by reconnect).
- *   Correct for the hard-deadline BACKSTOP: a daemon-restart loop that keeps
- *   re-arming _reconcileStreamStart must NOT be able to postpone the backstop
- *   forever.
+ * The backstop clock `_idleStreamingSince` is OWNED by this poll:
+ * - stamped (set to `now`) the first time the stuck condition is observed
+ *   (frontend=streaming + backend NOT streaming + NOT an active backend state),
+ * - cleared (set undefined) whenever that condition does NOT hold (backend
+ *   streaming, backend active, or after force-clear).
+ *
+ * Because setIsStreaming / reconnect / heal-grace / elapsed-timer NEVER write
+ * this field, a daemon-restart reconnect loop (which churns streamStartTime and
+ * _reconcileStreamStart) cannot postpone the deadline. The mirror MUTATES
+ * tabState._idleStreamingSince exactly like the production poll so tests can
+ * assert the stamp/clear lifecycle across successive polls.
  */
 function reconcileDecision(
   tabState: MockTabState,
@@ -75,21 +80,29 @@ function reconcileDecision(
   // L1385-1386: need session ID
   if (!tabState.sessionId) return 'skip_no_session';
 
-  // L1391: backend still streaming → skip
-  if (backendIsStreaming) return 'skip_backend_streaming';
+  // L1391: backend still streaming → clear backstop clock + skip
+  if (backendIsStreaming) {
+    tabState._idleStreamingSince = undefined;
+    return 'skip_backend_streaming';
+  }
 
   // L1401-1406: active-backend guard — re-armable clock is CORRECT here.
+  // Active backend → condition does not hold → clear backstop clock.
   const activeGuardAge = now - (tabState._reconcileStreamStart ?? 0);
   if (backendState && ACTIVE_BACKEND_STATES.has(backendState) && activeGuardAge < 7_200_000) {
+    tabState._idleStreamingSince = undefined;
     return 'skip_active_backend';
   }
 
-  // L1410: hard-deadline backstop — anchored to ABSOLUTE turn start so a
-  // reconnect re-arm of _reconcileStreamStart cannot postpone it forever.
-  const streamAge = now - (tabState.streamStartTime ?? tabState._reconcileStreamStart ?? 0);
+  // Stuck condition holds → stamp the reconcile-owned clock on first observation.
+  if (tabState._idleStreamingSince === undefined) {
+    tabState._idleStreamingSince = now;
+  }
+  const streamAge = now - tabState._idleStreamingSince;
   if (streamAge < 30_000) return 'skip_too_fresh';
 
-  // All guards passed → force clear
+  // All guards passed → force clear (production also clears _idleStreamingSince here)
+  tabState._idleStreamingSince = undefined;
   return 'clear';
 }
 
@@ -158,13 +171,16 @@ describe('Reconcile race condition — drain gap immunity', () => {
     expect(action).toBe('skip_drain_or_queue');
   });
 
-  it('Test 3: genuinely stuck tab (no queue, no drain, >30s) → reconcile clears', () => {
+  it('Test 3: genuinely stuck tab (no queue, no drain, stuck-since >30s) → reconcile clears', () => {
     const tab: MockTabState = {
       isStreaming: true,
       sessionId: 'sess-789',
       drainPending: false,
       queuedMessage: undefined,
-      _reconcileStreamStart: Date.now() - 35_000, // 35s old, past threshold
+      // The reconcile-owned backstop clock has observed the stuck condition for
+      // 35s (set on a prior poll) → past the 30s deadline.
+      _idleStreamingSince: Date.now() - 35_000,
+      _reconcileStreamStart: Date.now() - 35_000,
       messages: [],
     };
 
@@ -222,53 +238,79 @@ describe('Reconcile race condition — drain gap immunity', () => {
   });
 });
 
-describe('Reconcile force-clear — absolute deadline immune to reconnect re-arm', () => {
-  // Bug: daemon restart mid-thinking → onError → setIsStreaming(true) re-arms
-  // _reconcileStreamStart every reconnect → the 30s hard-deadline is postponed
-  // forever → "Thinking..." stuck (observed 6m16s). Fix: hard-deadline anchors
-  // to absolute streamStartTime, not the re-armable _reconcileStreamStart.
+describe('Reconcile force-clear — reconcile-owned backstop immune to reconnect re-arm', () => {
+  // Bug: daemon restart mid-thinking → error→reconnecting → setIsStreaming(false)
+  // then (true) re-arms BOTH streamStartTime AND _reconcileStreamStart every
+  // reconnect → any setIsStreaming-written clock postpones the 30s deadline
+  // forever → "Thinking..." stuck (observed 6m16s). Fix: the backstop clock
+  // _idleStreamingSince is OWNED by the reconcile poll — no setIsStreaming /
+  // reconnect / heal-grace write can reset it, so the deadline always advances.
+  // (Adversarial Gate-2 HIGH: the prior streamStartTime anchor was ALSO
+  // re-armable via the error→reconnecting path — this is the structural fix.)
 
-  it('Test 7 (RED→GREEN): re-arm loop — old turn (60s) but _reconcileStreamStart just re-armed (2s) → clears via absolute deadline', () => {
+  it('Test 7 (RED→GREEN): both setIsStreaming clocks fresh (2s) but stuck-since is old → clears', () => {
     const now = Date.now();
     const tab: MockTabState = {
       isStreaming: true,
       sessionId: 'sess-rearm',
       drainPending: false,
       queuedMessage: undefined,
-      streamStartTime: now - 60_000,        // absolute turn start: 60s ago (genuinely stuck)
-      _reconcileStreamStart: now - 2_000,   // re-armed 2s ago by a reconnect
-      messages: [],
-    };
-    // backend idle, no active state → must force-clear despite fresh _reconcileStreamStart.
-    // Against the OLD logic (streamAge = now - _reconcileStreamStart = 2s) this
-    // returned 'skip_too_fresh' — the stuck-forever bug.
-    const action = reconcileDecision(tab, false, now, undefined);
-    expect(action).toBe('clear');
-  });
-
-  it('Test 8: repeated re-arms over minutes still clear (absolute clock unaffected)', () => {
-    const now = Date.now();
-    const tab: MockTabState = {
-      isStreaming: true,
-      sessionId: 'sess-rearm-loop',
-      streamStartTime: now - 360_000,       // 6 minutes (matches the screenshot)
-      _reconcileStreamStart: now - 500,     // just re-armed half a second ago
+      // BOTH re-armable clocks just re-armed by a reconnect (the case the prior
+      // streamStartTime-anchored fix could NOT handle):
+      streamStartTime: now - 2_000,
+      _reconcileStreamStart: now - 2_000,
+      // The poll has been observing the stuck condition for 60s:
+      _idleStreamingSince: now - 60_000,
       messages: [],
     };
     expect(reconcileDecision(tab, false, now, undefined)).toBe('clear');
   });
 
-  it('Test 9 (AC2): backend reports active state (streaming) → NOT cleared even if absolute age is old', () => {
+  it('Test 8 (the real fix): multi-poll re-arm loop — deadline advances despite reconnect churn', () => {
+    // Simulate a daemon-restart loop: every "poll" the reconnect machinery has
+    // just re-armed BOTH setIsStreaming clocks, but the reconcile-owned clock is
+    // only written by the poll itself. Across successive polls it must advance to
+    // 30s and force-clear — proving immunity to the re-arm loop end-to-end.
+    const t0 = Date.now();
+    const tab: MockTabState = {
+      isStreaming: true,
+      sessionId: 'sess-loop',
+      messages: [],
+    };
+    // Poll 1 @ t0: stuck observed for first time → stamp, too fresh.
+    let r = reconcileDecision(tab, false, t0, undefined);
+    expect(r).toBe('skip_too_fresh');
+    expect(tab._idleStreamingSince).toBe(t0);
+    // Between polls a reconnect re-arms BOTH setIsStreaming clocks:
+    tab.streamStartTime = t0 + 10_000;
+    tab._reconcileStreamStart = t0 + 10_000;
+    // Poll 2 @ t0+15s: still stuck, clock NOT reset by the re-arm → 15s, too fresh.
+    r = reconcileDecision(tab, false, t0 + 15_000, undefined);
+    expect(r).toBe('skip_too_fresh');
+    expect(tab._idleStreamingSince).toBe(t0); // unchanged by reconnect churn
+    // Another reconnect re-arms again:
+    tab.streamStartTime = t0 + 28_000;
+    tab._reconcileStreamStart = t0 + 28_000;
+    // Poll 3 @ t0+31s: deadline (from t0) exceeded → force-clear despite both
+    // setIsStreaming clocks being only 3s old.
+    r = reconcileDecision(tab, false, t0 + 31_000, undefined);
+    expect(r).toBe('clear');
+    expect(tab._idleStreamingSince).toBeUndefined(); // cleared on force-clear
+  });
+
+  it('Test 9 (AC2): backend reports active state (streaming) → NOT cleared, backstop clock reset', () => {
     const now = Date.now();
     const tab: MockTabState = {
       isStreaming: true,
       sessionId: 'sess-active-long',
-      streamStartTime: now - 300_000,       // 5 min old absolute
+      _idleStreamingSince: now - 300_000,   // had been stuck-since 5 min (stale)
       _reconcileStreamStart: now - 300_000,
       messages: [],
     };
-    // Genuinely-active backend (long tool turn) — active-backend guard wins.
+    // Genuinely-active backend (long tool turn) — active-backend guard wins AND
+    // resets the backstop clock so the next genuine stall starts fresh.
     expect(reconcileDecision(tab, false, now, 'streaming')).toBe('skip_active_backend');
+    expect(tab._idleStreamingSince).toBeUndefined();
   });
 
   it('Test 10 (AC2): waiting_input active state → NOT cleared (permission prompt pending)', () => {
@@ -276,70 +318,74 @@ describe('Reconcile force-clear — absolute deadline immune to reconnect re-arm
     const tab: MockTabState = {
       isStreaming: true,
       sessionId: 'sess-waiting',
-      streamStartTime: now - 120_000,
       _reconcileStreamStart: now - 120_000,
       messages: [],
     };
     expect(reconcileDecision(tab, false, now, 'waiting_input')).toBe('skip_active_backend');
   });
 
-  it('Test 11 (AC2): fresh absolute stream (<30s) → NOT cleared (settle window preserved)', () => {
+  it('Test 11 (AC2): first stuck observation always settles (30s window from stamp)', () => {
     const now = Date.now();
     const tab: MockTabState = {
       isStreaming: true,
       sessionId: 'sess-fresh',
-      streamStartTime: now - 15_000,        // 15s absolute — within settle window
-      _reconcileStreamStart: now - 15_000,
+      streamStartTime: now - 300_000,       // old absolute clock — irrelevant now
+      _reconcileStreamStart: now - 300_000,
+      _idleStreamingSince: undefined,        // never observed stuck before
       messages: [],
     };
+    // Even though the setIsStreaming clocks are 5 min old, the FIRST time the
+    // poll sees the stuck condition it stamps now and waits 30s — a turn that
+    // just transitioned to stuck gets a fair settle window.
     expect(reconcileDecision(tab, false, now, undefined)).toBe('skip_too_fresh');
+    expect(tab._idleStreamingSince).toBe(now);
+  });
+
+  it('Test 11b (AC2): backend recovers mid-stall → clock resets → no accumulation across blips', () => {
+    const t0 = Date.now();
+    const tab: MockTabState = { isStreaming: true, sessionId: 'sess-blip', messages: [] };
+    // Poll 1: stuck → stamp.
+    expect(reconcileDecision(tab, false, t0, undefined)).toBe('skip_too_fresh');
+    expect(tab._idleStreamingSince).toBe(t0);
+    // Poll 2 @ +20s: backend back to streaming → clock cleared.
+    expect(reconcileDecision(tab, true, t0 + 20_000, 'streaming')).toBe('skip_backend_streaming');
+    expect(tab._idleStreamingSince).toBeUndefined();
+    // Poll 3 @ +25s: stuck again → fresh stamp (NOT t0), so only 0s elapsed.
+    expect(reconcileDecision(tab, false, t0 + 25_000, undefined)).toBe('skip_too_fresh');
+    expect(tab._idleStreamingSince).toBe(t0 + 25_000);
   });
 
   it('Test 12 (AC3): a Stopped tab is skip_not_streaming — Stop clear is terminal, never re-armed', () => {
     const now = Date.now();
-    // After handleStop: setIsStreaming(false) → isStreaming=false. The force-clear
-    // path is never even reached; reconcile leaves it alone.
     const tab: MockTabState = {
       isStreaming: false,
       sessionId: 'sess-stopped',
-      streamStartTime: now - 90_000,
+      _idleStreamingSince: now - 90_000,
       messages: [],
     };
     expect(reconcileDecision(tab, false, now, undefined)).toBe('skip_not_streaming');
   });
 
-  it('Test 13 (defensive): streamStartTime unset falls back to _reconcileStreamStart', () => {
-    const now = Date.now();
-    const tab: MockTabState = {
-      isStreaming: true,
-      sessionId: 'sess-fallback',
-      streamStartTime: undefined,           // somehow unset
-      _reconcileStreamStart: now - 45_000,  // 45s via fallback
-      messages: [],
-    };
-    expect(reconcileDecision(tab, false, now, undefined)).toBe('clear');
-  });
-
   // GUARD against the mirror-vs-production gap (spec-review WARNING): the tests
   // above exercise a hand-copied reconcileDecision mirror, NOT the real hook.
   // This test reads the PRODUCTION source and asserts the structural invariant
-  // the fix depends on, so a future regression (reverting the backstop to the
-  // re-armable clock, or dropping the set-once guard) fails CI even though the
-  // mirror tests would still pass.
-  it('Test 14 (production source guard): hard-deadline streamAge anchors to absolute streamStartTime', () => {
+  // the fix depends on. Robust to formatting (flexible whitespace) so a benign
+  // prettier reflow can't false-fail it (adversarial security MED), but anchored
+  // tightly enough that reverting to a re-armable clock fails CI.
+  it('Test 14 (production source guard): backstop anchors to reconcile-owned _idleStreamingSince', () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const src = readFileSync(
       resolve(here, '../hooks/useChatStreamingLifecycle.ts'),
       'utf8',
     );
-    // The force-clear backstop must compute streamAge from streamStartTime
-    // (absolute, re-arm-immune), with _reconcileStreamStart only as fallback.
-    expect(src).toMatch(
-      /const streamAge = Date\.now\(\) - \(tabState\.streamStartTime \?\? tabState\._reconcileStreamStart \?\? 0\)/,
-    );
-    // And streamStartTime must remain set-once-per-turn (guarded), or the
-    // "absolute" property the backstop relies on would silently break.
-    expect(src).toMatch(/if \(!tabState\.streamStartTime\)/);
+    // The force-clear backstop MUST compute streamAge from the reconcile-owned
+    // clock, NOT from any setIsStreaming-written clock.
+    expect(src).toMatch(/const streamAge = Date\.now\(\)\s*-\s*tabState\._idleStreamingSince/);
+    // Negative guard: the backstop must NOT be anchored to a re-armable clock.
+    expect(src).not.toMatch(/const streamAge = Date\.now\(\)\s*-\s*\(tabState\.streamStartTime/);
+    expect(src).not.toMatch(/const streamAge = Date\.now\(\)\s*-\s*\(tabState\._reconcileStreamStart/);
+    // The clock must be stamped once when stuck is first observed.
+    expect(src).toMatch(/tabState\._idleStreamingSince === undefined/);
   });
 });
 
