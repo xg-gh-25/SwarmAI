@@ -381,8 +381,9 @@ class TestHelpers:
             "b": (now - 100, "Bash"),
             "c": (now - 50, "Edit"),
         }
-        age, name = unit._oldest_open_tool()
+        age, name, tool_id = unit._oldest_open_tool()
         assert name == "Bash"
+        assert tool_id == "b"
         assert 95 < age < 105
 
     def test_tool_open_window_long_for_agent_bash(self):
@@ -390,3 +391,92 @@ class TestHelpers:
         assert unit._tool_open_window("Agent") == unit.TOOL_HANG_OPEN_S_LONG
         assert unit._tool_open_window("Bash") == unit.TOOL_HANG_OPEN_S_LONG
         assert unit._tool_open_window("Read") == unit.TOOL_HANG_OPEN_S
+
+
+# ── v2 adversarial fixes: episode reset, hard ceiling, stale-tool ───────
+
+
+class TestEpisodeReset:
+    @pytest.mark.asyncio
+    async def test_episode_counter_resets_on_tool_result(self):
+        """A completed tool (ToolResultBlock) resets _tool_hang_episodes so the
+        limit counts CONSECUTIVE unrecovered wedges, not lifetime-separate ones.
+
+        Mirrors the orchestrator's ToolResultBlock handler behavior; verified
+        here at the unit level since that's where the reset must land.
+        """
+        unit = _make_unit()
+        unit._tool_hang_episodes = 2
+        # Simulate the orchestrator ToolResultBlock clear sequence.
+        unit._open_tool_uses.pop("none", None)
+        unit._tool_hang_interrupted = False
+        unit._tool_hang_interrupt_at = None
+        unit._tool_hang_episodes = 0
+        assert unit._tool_hang_episodes == 0
+
+
+class TestHardCeiling:
+    @pytest.mark.asyncio
+    async def test_cpu_busy_tool_force_killed_at_ceiling(self):
+        """A tool open past the absolute ceiling is force-killed even if CPU is
+        live (the infinite-CPU-loop case the warm tier never escapes)."""
+        unit = _make_unit()
+        unit.state = SessionState.STREAMING
+        unit._last_event_time = time.time() - 4000
+        unit._open_tool_uses = _open_tool(
+            "Read", age=unit.TOOL_HANG_HARD_CEILING_S + 60
+        )
+
+        # CPU probe would say "live" (rising), but ceiling overrides.
+        with patch("os.kill", return_value=None), \
+             patch("core.resource_monitor.resource_monitor.tree_cpu_seconds",
+                   side_effect=[10.0, 20.0]):
+            task = asyncio.create_task(unit._pid_watchdog_loop(12345))
+            await asyncio.sleep(0.2)
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        unit._force_kill.assert_called_once()
+        unit.interrupt.assert_not_called()
+        assert unit.state == SessionState.DEAD
+
+
+class TestStaleToolDuringProbe:
+    @pytest.mark.asyncio
+    async def test_no_interrupt_if_tool_completed_during_probe(self):
+        """If the sampled tool completes during the CPU probe sleep, do not
+        interrupt (it would be attributed to a now-gone tool)."""
+        unit = _make_unit()
+        unit.state = SessionState.STREAMING
+        unit._last_event_time = time.time() - 700
+        unit._open_tool_uses = _open_tool("Read", age=unit.TOOL_HANG_OPEN_S + 60)
+
+        # During the probe sleep, simulate the tool completing by clearing it.
+        async def _clear_after(_pid):
+            unit._open_tool_uses.clear()
+
+        with patch("os.kill", return_value=None), \
+             patch("core.resource_monitor.resource_monitor.tree_cpu_seconds",
+                   return_value=5.0), \
+             patch.object(unit, "_oldest_open_tool",
+                          wraps=unit._oldest_open_tool):
+            # Pop the tool mid-sleep via a background task.
+            async def popper():
+                await asyncio.sleep(0.01)
+                unit._open_tool_uses.clear()
+            task = asyncio.create_task(unit._pid_watchdog_loop(12345))
+            pop = asyncio.create_task(popper())
+            await asyncio.sleep(0.2)
+            task.cancel()
+            pop.cancel()
+            for t in (task, pop):
+                try:
+                    await t
+                except asyncio.CancelledError:
+                    pass
+
+        # Tool gone during probe → re-verify bails → no interrupt.
+        unit.interrupt.assert_not_called()

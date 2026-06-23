@@ -161,6 +161,10 @@ class StreamingOrchestrator:
                 # interrupt; unrelated tool completion must not keep the
                 # destructive backstop suppressed (adversarial v1 MED).
                 self._parent._tool_hang_interrupt_at = None
+                # A completed tool = the session recovered + made progress, so
+                # reset the escalation counter — it must count CONSECUTIVE
+                # unrecovered wedges, not lifetime-separate ones (adversarial v2 MED).
+                self._parent._tool_hang_episodes = 0
 
     # ═══════════════════════════════════════════════════════════════
     # Migrated from session_unit.py — _stream_response
@@ -709,6 +713,8 @@ class StreamingOrchestrator:
                         self._parent._open_tool_uses.pop(block.tool_use_id, None)
                         self._parent._tool_hang_interrupted = False
                         self._parent._tool_hang_interrupt_at = None
+                        # Recovery + progress → reset escalation counter (v2 MED).
+                        self._parent._tool_hang_episodes = 0
                         block_content = str(block.content) if block.content else ""
                         if _has_tool_summarizer:
                             truncated, was_truncated = truncate_tool_result(block_content)

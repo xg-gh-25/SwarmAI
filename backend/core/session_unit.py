@@ -915,11 +915,11 @@ class SessionUnit:
                             oldest is not None
                             and not self._tool_hang_interrupted
                         ):
-                            tool_age, tool_name = oldest
+                            tool_age, tool_name, tool_id = oldest
                             window = self._tool_open_window(tool_name)
                             if tool_age > window:
                                 await self._maybe_escape_wedged_tool(
-                                    pid, tool_age, tool_name
+                                    pid, tool_age, tool_name, tool_id
                                 )
                                 continue
 
@@ -985,18 +985,25 @@ class SessionUnit:
     CPU_PROBE_INTERVAL_S: float = 2.0     # tree-CPU sampling window
     CPU_LIVE_EPSILON: float = 0.05        # cpu-seconds delta above which = "working"
     _TOOL_HANG_EPISODE_LIMIT: int = 2     # warm interrupts before force-kill escalation
+    # Absolute ceiling: a single tool open longer than this is force-killed
+    # regardless of CPU liveness — the last-resort bound for a tool that pegs
+    # CPU forever (infinite loop in user code) which the CPU probe would never
+    # flag as wedged. Generous (> longest legit Agent/Bash run) to avoid killing
+    # genuine long work; the user-facing soft signal fires long before this.
+    TOOL_HANG_HARD_CEILING_S: float = 3600.0  # 1 hour
     # After a SUCCESSFUL warm interrupt, suppress the destructive force-kill
     # backstop this long to let interrupt() end the turn (STREAMING → IDLE).
     TOOL_HANG_INTERRUPT_GRACE_S: float = 60.0
 
     # ── Tool-hang helpers (run_fb6e94a9) ─────────────────────────
 
-    def _oldest_open_tool(self) -> Optional[tuple[float, str]]:
-        """(age_seconds, tool_name) of the oldest currently-open tool_use.
+    def _oldest_open_tool(self) -> Optional[tuple[float, str, str]]:
+        """(age_seconds, tool_name, tool_id) of the oldest open tool_use.
 
         Returns None when no tool is open. The watchdog uses age to decide
-        WHEN to probe CPU liveness, and tool_name to pick a per-tool open
-        window (Agent/Bash run legitimately long).
+        WHEN to probe CPU liveness, tool_name to pick a per-tool open window
+        (Agent/Bash run legitimately long), and tool_id to re-verify identity
+        after the probe sleep.
         """
         if not self._open_tool_uses:
             return None
@@ -1006,7 +1013,7 @@ class SessionUnit:
             key=lambda k: self._open_tool_uses[k][0],
         )
         start, name = self._open_tool_uses[oldest_id]
-        return (time.time() - start, name)
+        return (time.time() - start, name, oldest_id)
 
     def _tool_open_window(self, tool_name: str) -> float:
         """Per-tool open window before CPU-liveness probing kicks in."""
@@ -1015,7 +1022,7 @@ class SessionUnit:
         return self.TOOL_HANG_OPEN_S
 
     async def _maybe_escape_wedged_tool(
-        self, pid: int, tool_age: float, tool_name: str,
+        self, pid: int, tool_age: float, tool_name: str, tool_id: str,
     ) -> None:
         """Probe tree CPU; warm-interrupt ONLY a genuinely wedged (0-CPU) tool.
 
@@ -1031,8 +1038,28 @@ class SessionUnit:
         - CPU unreadable (None) → FAIL SAFE: cannot prove dead → do nothing.
           The existing _compute_message_timeout force-kill backstop still
           owns a true API hang as the last resort.
+
+        ``tool_id`` is the tool_use id sampled at call time; after the probe
+        sleep we re-verify it is STILL the oldest open tool, else a tool that
+        completed mid-sleep could be falsely attributed an interrupt (v2 MED).
         """
         from .resource_monitor import resource_monitor
+
+        # Absolute hard ceiling: a tool open this long is force-killed REGARDLESS
+        # of CPU (v2 MED — a tool pegging CPU forever, e.g. an infinite loop in
+        # user code, would otherwise never be escaped since busy-CPU suppresses
+        # both the warm tier and the open-tool backstop gate).
+        if tool_age > self.TOOL_HANG_HARD_CEILING_S:
+            logger.error(
+                "session_unit.tool_hang_ceiling session_id=%s pid=%d tool=%s "
+                "age=%.0fs > ceiling=%.0fs — force-killing regardless of CPU",
+                self.session_id, pid, tool_name, tool_age,
+                self.TOOL_HANG_HARD_CEILING_S,
+            )
+            self._pid_watchdog_task = None  # prevent self-cancel
+            self._transition(SessionState.DEAD)
+            await self._force_kill()
+            return
 
         cpu0 = resource_monitor.tree_cpu_seconds(pid)
         if cpu0 is None:
@@ -1040,6 +1067,11 @@ class SessionUnit:
         await asyncio.sleep(self.CPU_PROBE_INTERVAL_S)
         # State may have changed during the sleep (turn ended, killed).
         if self.state != SessionState.STREAMING:
+            return
+        # The sampled tool may have completed during the sleep — re-verify it
+        # is still open AND still the oldest, else bail (v2 MED stale-tool race).
+        current = self._oldest_open_tool()
+        if current is None or tool_id not in self._open_tool_uses:
             return
         cpu1 = resource_monitor.tree_cpu_seconds(pid)
         if cpu1 is None:
@@ -2860,7 +2892,7 @@ class SessionUnit:
         # spinner into an actionable signal.
         oldest = self._oldest_open_tool()
         if oldest is not None and oldest[0] > self.TOOL_HANG_SOFT_S:
-            tool_age, tool_name = oldest
+            tool_age, tool_name, _tool_id = oldest
             tmin = int(tool_age // 60)
             return {
                 "type": "still_working",
