@@ -2180,6 +2180,18 @@ class SessionUnit:
             # could contaminate the next send()'s _read_formatted_response if
             # it somehow checks before send()'s Layer 0 clears it.
             self._interrupted = False
+            # Release the outstanding-tool_use guard (GAP2, audit 2026-06-23).
+            # A Stop during WAITING_INPUT leaves the subprocess alive → IDLE, but
+            # without clearing these the drain worker's `if has_outstanding_tool_use:
+            # return` no-ops forever (a message queued after the Stop never
+            # delivers until the next kill/TTL). Cleared ONLY here in the
+            # success→IDLE branch: the stale-interrupt guard above returns before
+            # reaching this point (so a concurrent new send's state is preserved),
+            # and the timeout/error branches kill()→_cleanup_internal which already
+            # clears. Mirrors the _active_agent_tools clear above + the 4 other
+            # _pending_tool_use_id teardown sites.
+            self._pending_tool_use_id = None
+            self._pending_question = None
             logger.info(
                 "session_unit.interrupt succeeded session_id=%s pid=%s",
                 self.session_id, self.pid,

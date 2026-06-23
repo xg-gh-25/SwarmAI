@@ -451,8 +451,8 @@ class LifecycleManager:
         only touches IDLE sessions.
 
         Two triggers (either one fires):
-        - Per-session: tree RSS > STREAMING_RSS_KILL_THRESHOLD (3GB)
-        - System-wide: memory pressure > 85% → kill heaviest STREAMING session
+        - Per-session: tree RSS > STREAMING_RSS_KILL_THRESHOLD (7GB)
+        - System-wide: memory pressure > MEMORY_EVICT_PCT (90%) → kill heaviest STREAMING session
 
         Non-fatal — failures logged and skipped.
         """
@@ -480,7 +480,7 @@ class LifecycleManager:
                 if tree_rss > 0:
                     rss_map[unit] = tree_rss
 
-            # Trigger 1: Per-session threshold (3GB)
+            # Trigger 1: Per-session threshold (7GB, STREAMING_RSS_KILL_THRESHOLD)
             for unit, rss in rss_map.items():
                 if rss > SessionUnit.STREAMING_RSS_KILL_THRESHOLD:
                     # Re-check state: session may have completed between

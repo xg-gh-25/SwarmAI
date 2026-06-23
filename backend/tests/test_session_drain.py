@@ -372,3 +372,62 @@ async def test_enqueue_drain_is_idempotent(wired):
             await router._drain_worker_task
         except BaseException:
             pass
+
+
+@pytest.mark.asyncio
+async def test_interrupt_clears_outstanding_tool_use_on_success():
+    """GAP2 (audit 2026-06-23): interrupt() of a WAITING_INPUT session whose
+    SDK interrupt SUCCEEDS (subprocess stays alive → IDLE) must clear
+    _pending_tool_use_id + _pending_question. Otherwise has_outstanding_tool_use
+    stays True and drain_pending no-ops forever — a queued message after a Stop
+    on an open question never delivers until the next kill/TTL.
+    """
+    from unittest.mock import AsyncMock
+    from core.session_unit import SessionUnit
+
+    unit = SessionUnit(session_id="sess-int-clear", agent_id="a")
+    unit.state = SessionState.WAITING_INPUT
+    unit._pending_tool_use_id = "tool-open"
+    unit._pending_question = {"tool_use_id": "tool-open", "questions": []}
+    # Mock the SDK client so interrupt() succeeds and the subprocess "stays alive".
+    unit._client = MagicMock()
+    unit._client.interrupt = AsyncMock(return_value=None)
+    assert unit.has_outstanding_tool_use is True
+
+    result = await unit.interrupt(timeout=1.0)
+
+    assert result is True, "interrupt should report subprocess stayed alive (IDLE)"
+    assert unit.state == SessionState.IDLE
+    assert unit.has_outstanding_tool_use is False, \
+        "interrupt success must release the outstanding-tool_use guard or drains hang"
+    assert unit._pending_question is None
+
+
+@pytest.mark.asyncio
+async def test_interrupt_stale_preserves_pending():
+    """GAP2 companion: when a new send() bumps _send_generation DURING the
+    interrupt await (stale-interrupt path), interrupt() must NOT clear the
+    pending state — the new turn owns it. The clear belongs ONLY to the
+    success→IDLE branch, which the stale guard returns before reaching.
+    """
+    from unittest.mock import AsyncMock
+    from core.session_unit import SessionUnit
+
+    unit = SessionUnit(session_id="sess-int-stale", agent_id="a")
+    unit.state = SessionState.WAITING_INPUT
+    unit._pending_tool_use_id = "tool-new-turn"
+    unit._pending_question = {"tool_use_id": "tool-new-turn", "questions": []}
+
+    async def _bump_then_return():
+        # Simulate a concurrent send() starting while we await the SDK interrupt.
+        unit._send_generation += 1
+
+    unit._client = MagicMock()
+    unit._client.interrupt = AsyncMock(side_effect=_bump_then_return)
+
+    await unit.interrupt(timeout=1.0)
+
+    # Stale branch returned early — pending state must survive (new send owns it).
+    assert unit._pending_tool_use_id == "tool-new-turn", \
+        "stale interrupt must NOT wipe pending state owned by the new turn"
+    assert unit._pending_question is not None
