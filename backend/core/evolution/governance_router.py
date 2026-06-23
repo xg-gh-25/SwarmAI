@@ -284,6 +284,10 @@ def _append_proposal(proposal: dict, proposals_path: Path) -> None:
         gc_id = proposal.get("gc_id")
         src = proposal.get("source_class")
         kind = proposal.get("proposal_kind", "rule")
+        # Stamp a stable id = the dedup identity itself (gc_id, or source:kind).
+        # Derived-but-persisted: stable across reads (Gate-1 Phase-3 Check-1 — the
+        # accept/reject API targets this id; the raw items had no unique key).
+        proposal["id"] = gc_id or f"{src}:{kind}"
         existing = [
             p
             for p in existing

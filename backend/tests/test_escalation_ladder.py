@@ -126,3 +126,32 @@ def test_totality_on_non_numeric_count(bad):
     """MED: decide_escalation must NOT raise on a malformed count — total function."""
     d = decide_escalation({"count": bad})
     assert d.kind == "none"  # degrades to 0 -> below threshold
+
+
+# === v3 Phase 3: gate rung now reachable (register_rule exists) ===
+
+def test_gate_rung_reachable_rule_failed():
+    """AC4: active_rule set + post_rule_count>=2 + no gate -> kind=gate (rule failed)."""
+    d = decide_escalation(
+        {"count": 8, "active_rule": "RULE_CLASS_A_x", "post_rule_count": 2, "active_gate": None},
+        class_name="CLASS_A",
+    )
+    assert d.kind == "gate"
+    assert d.proposal is not None
+    assert d.proposal["proposal_kind"] == "gate"
+
+
+def test_rule_active_below_red_is_none():
+    """A rule that hasn't failed enough (post_rule_count<2) -> none, don't escalate yet."""
+    d = decide_escalation(
+        {"count": 5, "active_rule": "R1", "post_rule_count": 1, "active_gate": None}
+    )
+    assert d.kind == "none"
+
+
+def test_gate_present_still_none():
+    """A class that already has a gate -> none (terminal, no further escalation)."""
+    d = decide_escalation(
+        {"count": 20, "active_rule": "R1", "post_rule_count": 5, "active_gate": "G1", "post_gate_count": 3}
+    )
+    assert d.kind == "none"

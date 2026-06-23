@@ -133,6 +133,9 @@ class CorrectionClassTracker:
                 self._state[class_name] = {
                     "count": 0,
                     "last": None,
+                    "active_rule": None,
+                    "rule_deployed": None,
+                    "post_rule_count": 0,
                     "active_gate": None,
                     "gate_deployed": None,
                     "post_gate_count": 0,
@@ -151,13 +154,52 @@ class CorrectionClassTracker:
                 entry["evidence"].append({"date": today, "text": evidence[:500]})
                 entry["evidence"] = entry["evidence"][-_MAX_EVIDENCE:]
 
-            # If a gate is active, increment post-gate counter
-            if entry["active_gate"]:
-                entry["post_gate_count"] += 1
+            # Escalation counters. .get() is mandatory — legacy state entries predate
+            # the rule fields (Gate-1 Phase-2 lesson). A gate SUPERSEDES a rule: once a
+            # gate is active the class is past the rule stage, so post_rule_count freezes
+            # and only post_gate_count advances (mutual exclusion).
+            if entry.get("active_gate"):
+                entry["post_gate_count"] = entry.get("post_gate_count", 0) + 1
+            elif entry.get("active_rule"):
+                entry["post_rule_count"] = entry.get("post_rule_count", 0) + 1
 
             # Un-resolve if it was previously resolved (class recurred)
             if entry["resolved"]:
                 entry["resolved"] = False
+
+        self._locked_mutate(_mutate)
+
+    def register_rule(self, class_name: str, rule_id: str, description: str = "") -> None:
+        """Register an L1 rule (AGENT/STEERING) accepted for a correction class.
+
+        Mirror of register_gate. Marks that a rule now exists, so a recurrence
+        AFTER this point advances post_rule_count — and once post_rule_count
+        crosses the threshold the escalation ladder proposes a GATE (rule failed
+        -> escalate the enforcement mechanism). This is the caller Phase 2
+        deferred: accepting a rule proposal in the dashboard calls this.
+        """
+
+        def _mutate():
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+            if class_name not in self._state:
+                self._state[class_name] = {
+                    "count": 0,
+                    "last": None,
+                    "active_rule": None,
+                    "rule_deployed": None,
+                    "post_rule_count": 0,
+                    "active_gate": None,
+                    "gate_deployed": None,
+                    "post_gate_count": 0,
+                    "resolved": False,
+                    "evidence": [],
+                }
+
+            entry = self._state[class_name]
+            entry["active_rule"] = rule_id
+            entry["rule_deployed"] = today
+            entry["post_rule_count"] = 0  # Reset counter on new rule
 
         self._locked_mutate(_mutate)
 
@@ -171,6 +213,9 @@ class CorrectionClassTracker:
                 self._state[class_name] = {
                     "count": 0,
                     "last": None,
+                    "active_rule": None,
+                    "rule_deployed": None,
+                    "post_rule_count": 0,
                     "active_gate": None,
                     "gate_deployed": None,
                     "post_gate_count": 0,
@@ -268,8 +313,19 @@ class CorrectionClassTracker:
                     f"\U0001f9ec {class_name}: {count} total, "
                     f"{post_gate} since gate ({gate}, {days_str}) {status}"
                 )
+            elif entry.get("active_rule"):
+                # Rule accepted but no gate yet. Show rule state — a rule-active
+                # class is NOT "no fix" (Gate-1 Check-5). post_rule_count crossing
+                # RED means the rule failed -> a gate proposal is due.
+                rule = entry.get("active_rule")
+                post_rule = entry.get("post_rule_count", 0)
+                status = "\U0001f534" if post_rule >= _RED_THRESHOLD else "✅"
+                lines.append(
+                    f"\U0001f9ec {class_name}: {count} total, "
+                    f"{post_rule} since rule ({rule}) {status}"
+                )
             else:
-                # No gate — just show count
-                lines.append(f"\U0001f9ec {class_name}: {count} total, no gate")
+                # No structural fix at all — just show count.
+                lines.append(f"\U0001f9ec {class_name}: {count} total, no fix")
 
         return lines

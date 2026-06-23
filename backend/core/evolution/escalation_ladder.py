@@ -38,6 +38,9 @@ from dataclasses import dataclass
 # Mirror correction_tracker's promotion threshold. A class must recur >=3 times
 # before any governance proposal is worth a human's attention.
 _PROPOSE_THRESHOLD = 3
+# Recurrences AFTER a rule is accepted that mean "the rule failed -> escalate to a
+# gate". Mirrors correction_tracker._RED_THRESHOLD (kept in sync; both = 2).
+_RED_THRESHOLD = 2
 
 
 def canonical_class_key(name: str) -> str:
@@ -90,7 +93,13 @@ def decide_escalation(class_state: dict, class_name: str = "") -> EscalationDeci
     except (TypeError, ValueError):
         count = 0
     active_gate = state.get("active_gate")
+    active_rule = state.get("active_rule")
+    try:
+        post_rule_count = int(state.get("post_rule_count", 0) or 0)
+    except (TypeError, ValueError):
+        post_rule_count = 0
     resolved = bool(state.get("resolved", False))
+    evidence = [e.get("text", "") for e in state.get("evidence", []) if isinstance(e, dict)][:5]
 
     # Resolved classes are dormant — never re-propose.
     if resolved:
@@ -100,10 +109,30 @@ def decide_escalation(class_state: dict, class_name: str = "") -> EscalationDeci
     if count < _PROPOSE_THRESHOLD:
         return EscalationDecision(kind="none")
 
-    # A structural fix already exists. Re-proposing a rule for a class that already
-    # has one is the "4th rule" anti-pattern (SOUL Escalation Rule). The "fix failed
-    # -> escalate to gate" rung is Phase 3 (needs the dashboard's register caller).
+    # A code gate already exists — terminal. The gate IS the strongest enforcement;
+    # there is no rung above it. No further proposal.
     if active_gate:
+        return EscalationDecision(kind="none")
+
+    # GATE RUNG (Phase 3, now reachable): a rule was accepted (active_rule set) and the
+    # class RECURRED past the threshold anyway (post_rule_count >= RED). The rule failed
+    # to stop the pattern — escalate the ENFORCEMENT MECHANISM to a code gate, NOT a 4th
+    # rule. This is the CLASS-A lesson: "rules don't stop it, only gates do."
+    if active_rule and post_rule_count >= _RED_THRESHOLD:
+        proposal = {
+            "target": "governance",
+            "proposal_kind": "gate",
+            "source_class": class_name,
+            "occurrence_count": count,
+            "proposed_rule": f"{class_name or 'correction'}: rule {active_rule} failed "
+            f"({post_rule_count}x recurrence post-rule) — escalate to a CODE GATE.",
+            "evidence": evidence,
+            "confidence": min(0.95, 0.7 + (post_rule_count - _RED_THRESHOLD) * 0.05),
+        }
+        return EscalationDecision(kind="gate", proposal=proposal)
+
+    # A rule is active but hasn't failed enough yet (post_rule_count < RED) -> wait.
+    if active_rule:
         return EscalationDecision(kind="none")
 
     # count >= threshold AND no structural fix yet -> propose a rule.
@@ -114,7 +143,7 @@ def decide_escalation(class_state: dict, class_name: str = "") -> EscalationDeci
         "occurrence_count": count,
         "proposed_rule": f"Recurring {class_name or 'correction'} pattern "
         f"({count}x) with no structural fix — propose an L1 rule.",
-        "evidence": [e.get("text", "") for e in state.get("evidence", []) if isinstance(e, dict)][:5],
+        "evidence": evidence,
         "confidence": min(0.9, 0.5 + (count - _PROPOSE_THRESHOLD) * 0.05),
     }
     return EscalationDecision(kind="rule", proposal=proposal)

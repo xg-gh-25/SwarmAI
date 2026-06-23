@@ -445,3 +445,40 @@ def _parse_staleness_finding(finding: str) -> dict:
             "recent_commits": int(m.group(4)),
         }
     return {"raw": finding}
+
+
+# --- v3 Phase 3: Governance proposal review ---
+
+class GovernanceDecisionRequest(BaseModel):
+    """Accept / reject / defer a governance proposal."""
+
+    proposal_id: str = Field(..., min_length=1)
+    decision: str = Field(..., pattern="^(accept|reject|defer)$")
+    notes: Optional[str] = None
+
+
+@router.get("/governance/pending")
+async def get_pending_governance():
+    """List governance proposals (rule/gate) awaiting human decision.
+
+    Reads .evolution_proposals.json filtered to target=='governance'. Each item
+    carries a stable `id` (gc_id or source_class:proposal_kind) for accept/reject.
+    """
+    svc = get_eval_service()
+    return svc.get_pending_governance()
+
+
+@router.post("/governance/decision")
+async def decide_governance(req: GovernanceDecisionRequest):
+    """Accept (-> register_rule/register_gate), reject (-> remove), or defer a proposal.
+
+    NEVER writes SOUL/AGENT/STEERING — accept only records the fix in the tracker,
+    which makes the rule->gate escalation reachable on the next recurrence.
+    """
+    svc = get_eval_service()
+    result = svc.decide_governance(req.proposal_id, req.decision)
+    if result.get("status") == "not_found":
+        raise HTTPException(status_code=404, detail=f"proposal {req.proposal_id} not found")
+    if result.get("status") == "error":
+        raise HTTPException(status_code=400, detail=result.get("error", "bad request"))
+    return result

@@ -249,3 +249,55 @@ class TestEdgeCases:
         # Internal state should be unchanged
         actual = tracker.get_class("CLASS_A")
         assert actual["count"] == 1
+
+
+# === v3 Phase 3: register_rule + post_rule_count mutual exclusion ===
+
+def test_register_rule_sets_active_rule(tmp_path):
+    """AC2: register_rule mirrors register_gate — sets active_rule, resets post_rule_count."""
+    tr = CorrectionClassTracker(state_path=tmp_path / "t.json")
+    tr.register_rule("CLASS_X", "RULE_CLASS_X_2026-06-23", "test rule")
+    st = tr.get_class("CLASS_X")
+    assert st["active_rule"] == "RULE_CLASS_X_2026-06-23"
+    assert st["rule_deployed"] is not None
+    assert st["post_rule_count"] == 0
+
+
+def test_register_rule_creates_entry_if_absent(tmp_path):
+    tr = CorrectionClassTracker(state_path=tmp_path / "t.json")
+    tr.register_rule("NEW_CLASS", "R1")
+    assert tr.get_class("NEW_CLASS") is not None
+
+
+def test_post_rule_count_increments_when_rule_active_no_gate(tmp_path):
+    """AC3: record() increments post_rule_count only when active_rule set AND no gate."""
+    tr = CorrectionClassTracker(state_path=tmp_path / "t.json")
+    tr.register_rule("CLASS_X", "R1")
+    tr.record("CLASS_X")
+    tr.record("CLASS_X")
+    assert tr.get_class("CLASS_X")["post_rule_count"] == 2
+
+
+def test_gate_supersedes_rule_freezes_post_rule_count(tmp_path):
+    """AC3: once a gate is registered, post_rule_count FREEZES (gate supersedes rule)."""
+    tr = CorrectionClassTracker(state_path=tmp_path / "t.json")
+    tr.register_rule("CLASS_X", "R1")
+    tr.record("CLASS_X")  # post_rule_count -> 1
+    tr.register_gate("CLASS_X", "G1")  # gate now supersedes
+    tr.record("CLASS_X")  # should bump post_gate_count, NOT post_rule_count
+    st = tr.get_class("CLASS_X")
+    assert st["post_rule_count"] == 1, "post_rule_count must freeze once gate active"
+    assert st["post_gate_count"] == 1
+
+
+def test_record_no_keyerror_on_legacy_state_without_rule_fields(tmp_path):
+    """AC3: legacy entries (no active_rule key) must not KeyError on record()."""
+    sp = tmp_path / "t.json"
+    sp.write_text(json.dumps({
+        "CLASS_A": {"count": 11, "last": "2026-06-01", "active_gate": "GC12",
+                    "gate_deployed": "2026-06-01", "post_gate_count": 0,
+                    "resolved": False, "evidence": []}  # NO active_rule/post_rule_count
+    }))
+    tr = CorrectionClassTracker(state_path=sp)
+    tr.record("CLASS_A")  # must not raise
+    assert tr.get_class("CLASS_A")["count"] == 12

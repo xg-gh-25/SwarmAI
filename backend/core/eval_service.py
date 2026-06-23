@@ -634,6 +634,115 @@ class EvalService:
             "direction": "up" if delta > 0 else ("down" if delta < 0 else "stable"),
         }
 
+    # --- v3 Phase 3: governance proposal review (accept / reject / defer) ---
+
+    def _proposals_path(self) -> Path:
+        return self._workspace_root / ".context" / ".evolution_proposals.json"
+
+    def _read_governance_proposals(self) -> list[dict]:
+        """Read .evolution_proposals.json, filtered to target=='governance' ONLY.
+
+        The file is MIXED (skill-optimization rows + governance rows) — Gate-1
+        Check-3. We must filter, mirroring proactive_intelligence's briefing filter,
+        or a skill-opt row would surface as an acceptable governance rule.
+        """
+        p = self._proposals_path()
+        if not p.exists():
+            return []
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return []
+        if not isinstance(data, list):
+            return []
+        out = []
+        for item in data:
+            if isinstance(item, dict) and item.get("target") == "governance":
+                # Defensive id backfill for any pre-id proposal on disk.
+                if not item.get("id"):
+                    item["id"] = item.get("gc_id") or (
+                        f"{item.get('source_class')}:{item.get('proposal_kind', 'rule')}"
+                    )
+                out.append(item)
+        return out
+
+    def get_pending_governance(self) -> dict:
+        """List governance proposals awaiting human decision."""
+        proposals = self._read_governance_proposals()
+        return {"proposals": proposals, "total": len(proposals)}
+
+    def _rewrite_governance_proposals(self, keep: list[dict]) -> None:
+        """Atomically rewrite the proposals file preserving non-governance rows.
+
+        Only governance rows are managed here; skill-opt rows pass through untouched.
+        """
+        p = self._proposals_path()
+        all_rows: list = []
+        if p.exists():
+            try:
+                loaded = json.loads(p.read_text(encoding="utf-8"))
+                if isinstance(loaded, list):
+                    all_rows = loaded
+            except (json.JSONDecodeError, OSError):
+                all_rows = []
+        non_gov = [r for r in all_rows if not (isinstance(r, dict) and r.get("target") == "governance")]
+        merged = non_gov + keep
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", dir=p.parent, suffix=".tmp", delete=False, encoding="utf-8"
+        )
+        try:
+            json.dump(merged, tmp, indent=2, ensure_ascii=False)
+            tmp.close()
+            Path(tmp.name).replace(p)
+        except Exception:
+            tmp.close()
+            Path(tmp.name).unlink(missing_ok=True)
+            raise
+
+    def decide_governance(self, proposal_id: str, decision: str) -> dict:
+        """Accept / reject / defer a governance proposal.
+
+        accept: branch on proposal_kind — rule -> register_rule, gate -> register_gate
+                (Gate-1 Check-4: a gate proposal must be answerable, not a dead rung).
+                Then remove the proposal from the file.
+        reject: remove the proposal. NO register call, NO counter increment.
+        defer:  leave the proposal in place (no-op on the file).
+
+        NEVER writes SOUL/AGENT/STEERING (Gate-1 Check-7).
+        """
+        if decision not in ("accept", "reject", "defer"):
+            return {"status": "error", "error": f"invalid decision: {decision}"}
+
+        proposals = self._read_governance_proposals()
+        target = next((p for p in proposals if p.get("id") == proposal_id), None)
+        if target is None:
+            return {"status": "not_found", "proposal_id": proposal_id}
+
+        if decision == "defer":
+            return {"status": "deferred", "proposal_id": proposal_id}
+
+        action_taken = "removed"
+        if decision == "accept":
+            from core.evolution.correction_tracker import CorrectionClassTracker
+
+            cls = target.get("source_class")
+            kind = target.get("proposal_kind", "rule")
+            if cls:
+                tracker = CorrectionClassTracker()
+                if kind == "gate":
+                    tracker.register_gate(cls, f"GATE_{cls}", "accepted via governance dashboard")
+                    action_taken = "registered_gate"
+                else:
+                    tracker.register_rule(cls, f"RULE_{cls}", "accepted via governance dashboard")
+                    action_taken = "registered_rule"
+
+        # reject + accept both remove the proposal from the queue
+        keep = [p for p in proposals if p.get("id") != proposal_id]
+        self._rewrite_governance_proposals(keep)
+        return {"status": decision + "ed" if decision == "reject" else "accepted",
+                "proposal_id": proposal_id, "action_taken": action_taken}
+
 
 def _class_to_affected_by(class_name: str) -> str:
     """Map correction class to the governance file it relates to."""
