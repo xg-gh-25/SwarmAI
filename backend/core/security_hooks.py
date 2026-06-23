@@ -30,7 +30,10 @@ from typing import TYPE_CHECKING, Any, Callable
 from uuid import uuid4
 
 from config import get_app_data_dir
-from .ask_question_manager import TIMEOUT_SENTINEL as ASK_TIMEOUT_SENTINEL
+from .ask_question_manager import (
+    TIMEOUT_SENTINEL as ASK_TIMEOUT_SENTINEL,
+    ASK_ANSWER_TIMEOUT_SECONDS,
+)
 
 if TYPE_CHECKING:
     from .permission_manager import PermissionManager
@@ -274,22 +277,26 @@ def create_ask_question_gate(
 
         answer = await ask_question_mgr.wait_for_answer(tool_use_id)
 
-        # Timeout: a DISTINCT outcome from an explicit empty selection (mirrors
-        # the permission timeout sentinel). The tool still resolves (allow) so
-        # the subprocess is not wedged, but answers are empty and the reason
-        # marks it as un-answered — never a silent empty injection.
+        # Timeout (default 4h): the user never answered. DENY the tool — do NOT
+        # inject a fabricated empty answer and proceed. Injecting {} + allowing
+        # was the original bug: after the user stepped away, the agent would
+        # "proceed with no selection". A deny tells the agent the question
+        # expired so it can re-ask, never guess. The deny path carries NO
+        # updatedInput.answers — there is no answer to inject.
         if answer == ASK_TIMEOUT_SENTINEL:
             logger.warning(
-                "ask_question_gate: question timed out session=%s tool_use_id=%s",
-                actual_session_id, tool_use_id,
+                "ask_question_gate: question expired (no answer in %ds) "
+                "session=%s tool_use_id=%s",
+                ASK_ANSWER_TIMEOUT_SECONDS, actual_session_id, tool_use_id,
             )
             return {
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
-                    "permissionDecision": "allow",
-                    "updatedInput": {**tool_input, "answers": {}},
+                    "permissionDecision": "deny",
                     "permissionDecisionReason": (
-                        "提问超时（Question timed out）: no answer received in time."
+                        "提问超时（Question expired）: no answer was received within "
+                        "the wait window. The question was NOT answered — re-ask "
+                        "the user rather than proceeding with a guessed default."
                     ),
                 }
             }

@@ -46,6 +46,16 @@ logger = logging.getLogger(__name__)
 # "timeout" string sentinel.
 TIMEOUT_SENTINEL = "timeout"
 
+# How long a blocked AskUserQuestion hook waits for the user's answer before
+# giving up. 4 hours — a human may leave a question open across a meal, a
+# meeting, or a nap. The old value (300s, copied from permission_manager) was
+# far too short: it resolved before the user returned, reviving the original
+# "agent proceeds without the answer" bug. On expiry the hook DENIES the tool
+# (question expired → agent re-asks), never injecting a fabricated empty answer.
+# Upper bound is still the session's 12h TTL; 4h leaves ample headroom while
+# not pinning a blocked subprocess for the session's entire lifetime.
+ASK_ANSWER_TIMEOUT_SECONDS = 14400
+
 
 class AskQuestionManager:
     """Block/signal store for AskUserQuestion answers, keyed on SDK tool_use_id.
@@ -73,16 +83,18 @@ class AskQuestionManager:
         return tool_use_id in self._answer_events
 
     async def wait_for_answer(
-        self, tool_use_id: str, timeout: int = 300
+        self, tool_use_id: str, timeout: int = ASK_ANSWER_TIMEOUT_SECONDS
     ) -> Union[dict[str, Any], str]:
         """Wait for the user's answers to an AskUserQuestion.
 
         Args:
             tool_use_id: The AskUserQuestion tool_use block id (== SDK block.id).
-            timeout: Seconds to wait (default 5 minutes). Bounded so an
-                un-surfaced or unanswered question does not block the subprocess
-                for hours. The subprocess stays alive in WAITING_INPUT (protected
-                from eviction) until the answer arrives OR the timeout fires.
+            timeout: Seconds to wait (default 4 hours — see
+                ASK_ANSWER_TIMEOUT_SECONDS). A human may step away (meal, meeting,
+                nap); the subprocess stays alive in WAITING_INPUT (protected from
+                eviction) until the answer arrives OR the timeout fires. On
+                timeout the caller DENIES the tool (question expired), never
+                injecting a fabricated empty answer.
 
         Returns:
             The answers dict on success, or ``TIMEOUT_SENTINEL`` ("timeout") if no

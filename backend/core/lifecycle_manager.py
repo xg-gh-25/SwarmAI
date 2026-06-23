@@ -54,7 +54,14 @@ class LifecycleManager:
     LOOP_INTERVAL: float = 60.0  # Check every 60 seconds
     IDLE_HOOK_GRACE: float = 120.0  # Fire hooks after 120s idle (grace period)
     STREAMING_TIMEOUT_SECONDS: float = 300.0  # 5 min no SDK events → stuck stream
-    WAITING_INPUT_TIMEOUT_SECONDS: float = 7200.0  # 120 min — user may be in a meeting
+    # Must stay STRICTLY GREATER than ask_question_manager.ASK_ANSWER_TIMEOUT_SECONDS
+    # (4h) so a blocked AskUserQuestion expires GRACEFULLY (hook denies → "question
+    # expired, re-ask") before this watchdog force-kills the whole session. 14700s
+    # = 4h05m: 5 min of headroom above the 4h hook wait, comfortably clearing the
+    # 60s watchdog loop granularity. Guarded by test_lifecycle_watchdog.py
+    # ::TestWaitingInputTimeoutVsAskTimeout. (Was 120 min — too short, killed the
+    # session before the answer-wait could even fire.)
+    WAITING_INPUT_TIMEOUT_SECONDS: float = 14700.0  # 4h05m — see note above
     STARTUP_BACKLOG_CAP: int = 5  # Max sessions to process on startup scan
 
     # Memory pressure thresholds (configurable via env vars).

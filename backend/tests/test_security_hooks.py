@@ -412,8 +412,11 @@ class TestAskQuestionGate:
         assert "questions" in item
 
     @pytest.mark.asyncio
-    async def test_askquestion_timeout_does_not_inject_empty_answers(self):
-        """A timeout must NOT silently inject empty answers — distinct outcome."""
+    async def test_askquestion_timeout_denies_not_empty_answers(self):
+        """A timeout must DENY the tool (question expired) — NOT inject empty
+        answers and proceed. Injecting {} and allowing was the original bug: the
+        agent would 'proceed with no selection' after the user stepped away. A
+        deny tells the agent the question expired and to re-ask, never to guess."""
         from core.ask_question_manager import TIMEOUT_SENTINEL
         gate, _mgr = self._make_gate(answer_to_return=TIMEOUT_SENTINEL)
         result = await gate(
@@ -421,9 +424,10 @@ class TestAskQuestionGate:
             "toolu_askq3", None,
         )
         hso = result["hookSpecificOutput"]
-        # Still allow (the tool must resolve), but answers must be empty AND
-        # the reason must mark it as un-answered, not a real empty selection.
-        assert hso["permissionDecision"] == "allow"
-        assert hso["updatedInput"]["answers"] == {}
-        assert "timeout" in hso.get("permissionDecisionReason", "").lower() or \
-               "超时" in hso.get("permissionDecisionReason", "")
+        # MUST deny — the agent must NOT receive a fabricated empty selection.
+        assert hso["permissionDecision"] == "deny"
+        # Must NOT inject an answers dict at all on the deny path.
+        assert "updatedInput" not in hso or "answers" not in hso.get("updatedInput", {})
+        # Reason must mark it as expired/timed-out so the agent can re-ask.
+        reason = hso.get("permissionDecisionReason", "")
+        assert "timeout" in reason.lower() or "超时" in reason or "expired" in reason.lower() or "过期" in reason

@@ -442,15 +442,19 @@ class TestWaitingInputTimeout:
     """Verify lifecycle_manager recovers stuck WAITING_INPUT sessions."""
 
     def test_waiting_input_timeout_fires_after_threshold(self):
-        """Session in WAITING_INPUT beyond 120min gets force-unstuck."""
+        """Session in WAITING_INPUT beyond the threshold gets force-unstuck."""
         from core.session_unit import SessionState
 
         router = MagicMock()
         unit = MagicMock()
         unit.state = SessionState.WAITING_INPUT
         unit.session_id = "test-session-123"
-        # last_used 121 minutes ago (beyond 120min threshold)
-        unit.last_used = __import__("time").time() - 7260
+        # last_used just beyond the threshold (derive from the constant so this
+        # test survives threshold changes — was hardcoded 7260s for the old 120min).
+        unit.last_used = (
+            __import__("time").time()
+            - (LifecycleManager.WAITING_INPUT_TIMEOUT_SECONDS + 60)
+        )
         unit.force_unstick_waiting_input = AsyncMock()
         router.list_units.return_value = [unit]
 
@@ -501,3 +505,39 @@ class TestWaitingInputTimeout:
 
         idle_unit.force_unstick_waiting_input.assert_not_called()
         streaming_unit.force_unstick_waiting_input.assert_not_called()
+
+
+class TestWaitingInputTimeoutVsAskTimeout:
+    """The WAITING_INPUT watchdog (force-kill) must NOT fire before the
+    AskUserQuestion answer-wait hook times out gracefully.
+
+    Two independent timers govern a blocked AskUserQuestion:
+    - ask_question_manager.ASK_ANSWER_TIMEOUT_SECONDS (hook waits for the answer,
+      then DENIES gracefully — "question expired, re-ask")
+    - LifecycleManager.WAITING_INPUT_TIMEOUT_SECONDS (force-unsticks/kills a
+      WAITING_INPUT session to reclaim its slot)
+
+    If the watchdog fires FIRST, it kills the whole session (user loses the
+    conversation) instead of letting the hook expire cleanly (user just re-asks
+    the one question). The watchdog MUST be >= the hook timeout so the graceful
+    path always wins. This guard prevents a future edit to one constant from
+    silently re-introducing the early-kill regression.
+    """
+
+    def test_watchdog_timeout_at_least_ask_answer_timeout(self):
+        from core.lifecycle_manager import LifecycleManager
+        from core.ask_question_manager import ASK_ANSWER_TIMEOUT_SECONDS
+
+        assert LifecycleManager.WAITING_INPUT_TIMEOUT_SECONDS >= ASK_ANSWER_TIMEOUT_SECONDS, (
+            "WAITING_INPUT watchdog must be >= the AskUserQuestion answer-wait "
+            "timeout, else the watchdog force-kills the session before the hook "
+            "can expire gracefully (early-kill regression)."
+        )
+
+    def test_watchdog_strictly_greater_so_graceful_path_wins(self):
+        # Strictly greater (not just equal) so the hook's graceful deny reliably
+        # fires before the 60s-granularity watchdog loop catches the session.
+        from core.lifecycle_manager import LifecycleManager
+        from core.ask_question_manager import ASK_ANSWER_TIMEOUT_SECONDS
+
+        assert LifecycleManager.WAITING_INPUT_TIMEOUT_SECONDS > ASK_ANSWER_TIMEOUT_SECONDS

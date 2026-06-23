@@ -83,9 +83,14 @@ class TestHasLiveWaiter:
 class TestTimeout:
     """Timeout returns a DISTINCT sentinel — never silently an empty answers dict."""
 
-    def test_default_timeout_is_300(self):
+    def test_default_timeout_is_4_hours(self):
+        # 4 hours — a human may leave the question open over a meal, meeting, or
+        # nap. 5 minutes (the old value, copied from permission_manager) was far
+        # too short and let the hook resolve before the user returned.
+        from core.ask_question_manager import ASK_ANSWER_TIMEOUT_SECONDS
+        assert ASK_ANSWER_TIMEOUT_SECONDS == 14400
         sig = inspect.signature(AskQuestionManager.wait_for_answer)
-        assert sig.parameters["timeout"].default == 300
+        assert sig.parameters["timeout"].default == ASK_ANSWER_TIMEOUT_SECONDS
 
     @pytest.mark.asyncio
     async def test_timeout_returns_distinct_sentinel(self):
