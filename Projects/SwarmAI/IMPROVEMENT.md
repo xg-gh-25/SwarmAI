@@ -1,4 +1,16 @@
 
+### 2026-06-23: Session Isolation Audit + interrupt() pending-clear gap (run_2238b50b)
+
+**What Worked:**
+- **3-parallel-sub-agent audit (isolation / lifecycle / resume) with COE history fed in** — each agent verified prior incident fixes against live code + cited file:line, then I verified every flagged GAP myself. Isolation verdict: SOLID (agent actively hunted the cross-tab leak path, couldn't find one — every `setMessages` is behind a strict active-tab gate). High signal-to-noise: 3 maps of a hot zone in parallel, ~10min wall.
+- **Verify-the-sub-agent rule paid off** — the lifecycle agent reported a "NameError: exc unbound" GAP1 that did NOT exist (it hallucinated `logger.debug(..., exc)`; real code is `exc_info=True`). Reading the actual lines killed a fake finding before it became a fix. Never trust a sub-agent's claim about your own code without reading the cited line.
+- **Placement reasoning before coding** — the interrupt() fix had a real trap: clearing `_pending_tool_use_id` at the top would wipe state a concurrent new-send turn owns (stale-interrupt path). Tracing the 3 exit paths FIRST located the only safe spot (success→IDLE branch, after the stale guard returns). The companion `test_interrupt_stale_preserves_pending` locks that invariant.
+
+**What Failed (the gap itself):**
+- **Symmetric-cleanup miss** — `interrupt()` cleared `_active_agent_tools` but not `_pending_tool_use_id`/`_pending_question`, while `_cleanup_internal` + 3 other teardown sites cleared all of them. A guard set at emit-time (AskUserQuestion) must be cleared on EVERY teardown path, not just the kill paths. This is GC15 (`_content_emitted` reset-list) generalized: when you add a per-turn guard, grep ALL the places its siblings get cleared and match them.
+
+**Pattern:** Stop-during-WAITING_INPUT is a teardown path that keeps the subprocess ALIVE (→IDLE), so it bypasses `_cleanup_internal` (which only runs on kill). Any "release the guard" logic must therefore be duplicated into the alive-stays-alive interrupt success branch, not assumed to ride on cleanup.
+
 ### 2026-06-07: Streaming P0 Cluster — 5 Bugs, 1 Root Cause Pattern
 
 **What Worked:**
