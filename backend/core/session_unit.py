@@ -500,6 +500,21 @@ class SessionUnit:
         # Frontend polls via GET /sessions/{id}/sub-agent-progress.
         self._active_agent_tools: dict[str, dict] = {}
 
+        # ── Tool-hang tracking (run_fb6e94a9) ─────────────────────
+        # tool_use_id → monotonic-ish start time (time.time()) for EVERY tool
+        # the model emits, cleared when its ToolResultBlock arrives. The PID
+        # watchdog reads this to distinguish a stuck tool from live thinking.
+        # _tool_hang_interrupted is the once-per-episode guard so the watchdog
+        # interrupts a stuck tool exactly once (cleared on STREAMING entry and
+        # on any ToolResultBlock). Reset at every turn boundary alongside
+        # _active_agent_tools (GC15 matched-cleanup clist).
+        self._open_tool_uses: dict[str, float] = {}
+        self._tool_hang_interrupted: bool = False
+        # Wall-clock of the last warm tool-hang interrupt; gates the
+        # force-kill backstop for TOOL_HANG_INTERRUPT_GRACE_S so interrupt()
+        # can land before the destructive path fires. None = no pending grace.
+        self._tool_hang_interrupt_at: Optional[float] = None
+
         # ── Proactive RSS restart cooldown ────────────────────────
         # Monotonic timestamp of last proactive compact→kill cycle.
         # Prevents repeated restarts within the PROACTIVE_COOLDOWN window.
@@ -744,6 +759,9 @@ class SessionUnit:
             self._last_event_time = time.time()
             # Root 2 / AC5: fresh heartbeat throttle for this turn.
             self._last_heartbeat_elapsed = 0.0
+            # Fresh tool-hang episode for this turn (run_fb6e94a9).
+            self._tool_hang_interrupted = False
+            self._tool_hang_interrupt_at = None
             # Start PID watchdog for out-of-band death detection
             self._start_pid_watchdog()
 
@@ -873,7 +891,69 @@ class SessionUnit:
                     if last_event is not None:
                         silence = time.time() - last_event
                         timeout = self._compute_message_timeout()
-                        if silence > timeout:
+
+                        # ── Tool-aware hang tier (run_fb6e94a9) ───────
+                        # A stuck tool = an OPEN tool_use that has been
+                        # silent (no SDK events) past the hard threshold.
+                        # Gating on _oldest_open_tool_age() makes this safe:
+                        # genuine extended thinking emits thinking_delta
+                        # events that refresh _last_event_time, so `silence`
+                        # never accumulates; and a tool-free API hang has no
+                        # open tool_use, so this tier skips and the
+                        # force-kill backstop below owns it. Escape is
+                        # interrupt() (warm — subprocess preserved, model
+                        # gets a turn-abort and can reroute), NOT _force_kill.
+                        tool_age = self._oldest_open_tool_age()
+                        if (
+                            tool_age is not None
+                            and tool_age > self.TOOL_HANG_HARD_S
+                            and silence > self.TOOL_HANG_SOFT_S
+                            and not self._tool_hang_interrupted
+                        ):
+                            logger.warning(
+                                "session_unit.tool_hang_interrupt "
+                                "session_id=%s pid=%d tool_age=%.0fs "
+                                "silence=%.0fs — interrupting turn (warm) "
+                                "so the model can reroute",
+                                self.session_id, pid, tool_age, silence,
+                            )
+                            # Once-per-episode guard: cleared on STREAMING
+                            # entry and on any ToolResultBlock.
+                            self._tool_hang_interrupted = True
+                            # Arm the backstop grace window so the destructive
+                            # force-kill below doesn't fire before interrupt()
+                            # lands (would defeat the warm-preserve intent).
+                            self._tool_hang_interrupt_at = time.time()
+                            # Feed the SAME circuit breaker as force_unstick
+                            # so repeated same-episode hangs escalate to a
+                            # hard error (should_circuit_break_timeout) rather
+                            # than silently re-running the stuck tool (AC4).
+                            self._consecutive_unstick_timeouts += 1
+                            try:
+                                await self.interrupt()
+                            except Exception as exc:
+                                logger.error(
+                                    "session_unit.tool_hang_interrupt_failed "
+                                    "session_id=%s: %s",
+                                    self.session_id,
+                                    f"{type(exc).__name__}: {exc}",
+                                )
+                            # Do NOT kill or transition — interrupt() ends the
+                            # turn; the stream reader returns and STREAMING
+                            # exits to IDLE naturally. Keep polling for the
+                            # death/backstop checks on the next tick.
+                            continue
+
+                        # Suppress the destructive backstop during the grace
+                        # window after a warm tool-hang interrupt (run_fb6e94a9)
+                        # — give interrupt() time to end the turn before we
+                        # resort to killing the subprocess.
+                        in_interrupt_grace = (
+                            self._tool_hang_interrupt_at is not None
+                            and (time.time() - self._tool_hang_interrupt_at)
+                            < self.TOOL_HANG_INTERRUPT_GRACE_S
+                        )
+                        if silence > timeout and not in_interrupt_grace:
                             logger.error(
                                 "session_unit.output_liveness_timeout "
                                 "session_id=%s pid=%d silence=%.0fs "
@@ -902,6 +982,37 @@ class SessionUnit:
     MAX_RETRY_ATTEMPTS: int = 3
     RETRY_BACKOFF_SECONDS: float = 5.0
     STREAMING_TIMEOUT_SECONDS: float = 300.0  # 5 min base (adaptive via _compute_message_timeout)
+
+    # ── Tool-aware hang tiers (run_fb6e94a9) ──────────────────────
+    # A single tool_use that was emitted but produced no ToolResultBlock for
+    # this long is "stuck". Distinct from the _compute_message_timeout()
+    # force-kill backstop: this tier gates on an OPEN tool_use + event silence,
+    # so it can NEVER fire during genuine extended thinking (thinking_delta
+    # events keep _last_event_time fresh) or a tool-free API hang (no open
+    # tool_use → tier skips, backstop owns it). Escape is interrupt() (warm,
+    # subprocess preserved), not _force_kill().
+    TOOL_HANG_SOFT_S: float = 120.0  # surface a user-visible "still running" signal
+    TOOL_HANG_HARD_S: float = 420.0  # interrupt the turn so the model can reroute
+    # After a warm tool-hang interrupt, suppress the destructive force-kill
+    # backstop this long to let interrupt() actually end the turn (STREAMING →
+    # IDLE). If the turn STILL hasn't ended after the grace, the backstop fires
+    # as the last resort. Without this, the next watchdog tick (silence already
+    # > _compute_message_timeout) would force-kill the very subprocess the warm
+    # interrupt was preserving.
+    TOOL_HANG_INTERRUPT_GRACE_S: float = 60.0
+
+    # ── Tool-hang helpers (run_fb6e94a9) ─────────────────────────
+
+    def _oldest_open_tool_age(self) -> Optional[float]:
+        """Seconds since the oldest currently-open tool_use was emitted.
+
+        Returns None when no tool is open. Used by the PID watchdog to gate
+        the tool-aware hang tier on an actual executing tool — never on raw
+        event silence (which can be legitimate extended thinking).
+        """
+        if not self._open_tool_uses:
+            return None
+        return time.time() - min(self._open_tool_uses.values())
 
     # ── Adaptive timeout ─────────────────────────────────────────
 
@@ -1203,6 +1314,7 @@ class SessionUnit:
         self._compaction_guard.reset()  # New user turn — reset tool tracking
         self._content_emitted = False   # Track if meaningful content is emitted
         self._active_agent_tools = {}  # Clear stale sub-agent progress on new turn
+        self._open_tool_uses = {}  # Clear stale open-tool tracking (run_fb6e94a9)
         # Gate-2 F3 (belt-and-suspenders): a fresh user turn never carries a stale
         # outstanding-tool_use guard. Gate-2 F4: drop the stale last-drained hint so
         # the read API doesn't surface seqs from a previous turn indefinitely.
@@ -2136,6 +2248,7 @@ class SessionUnit:
         # — a user Stop must never be followed by a proactive heal kill/respawn.
         self._user_stopped_current_turn = True
         self._active_agent_tools = {}  # Clear stale sub-agent progress on interrupt
+        self._open_tool_uses = {}  # Clear stale open-tool tracking (run_fb6e94a9)
 
         if self._client is None:
             # No client — just transition to DEAD (no race: no subprocess)
@@ -2272,6 +2385,7 @@ class SessionUnit:
         self._compaction_guard.reset()
         self._content_emitted = False  # Reset zombie detection for new stream
         self._active_agent_tools = {}  # Clear stale sub-agent progress
+        self._open_tool_uses = {}  # Clear stale open-tool tracking (run_fb6e94a9)
 
         # Signal the blocked ask_question_gate hook with the user's answers.
         # The hook is blocked inside PreToolUse awaiting
@@ -2308,6 +2422,13 @@ class SessionUnit:
         self._transition(SessionState.STREAMING)
 
         if _answer_tool_use_id:
+            # NOTE on empty parsed_answers: we do NOT reject here. The UX-level
+            # empty-answer rejection (EMPTY_ANSWER) lives at the HTTP edge
+            # (routers/chat.py) where the user can resubmit. By this chokepoint
+            # the answer is committed; resolving the hook with whatever we have
+            # (even {}) lets the agent proceed ("no selection") rather than
+            # WEDGING the session on a blocked hook until the 300s timeout. The
+            # channel gateway builds a non-empty answers dict before calling this.
             _aqm.set_answer(_answer_tool_use_id, parsed_answers)
         else:
             logger.warning(
@@ -2369,6 +2490,7 @@ class SessionUnit:
         self._compaction_guard.reset()
         self._content_emitted = False  # Reset zombie detection for new stream
         self._active_agent_tools = {}  # Clear stale sub-agent progress
+        self._open_tool_uses = {}  # Clear stale open-tool tracking (run_fb6e94a9)
         # Root-1 SSOT Phase 2 (L4): permission resolved — clear the
         # outstanding-tool_use guard so the drain worker may resume (F3).
         self._pending_tool_use_id = None
