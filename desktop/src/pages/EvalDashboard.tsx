@@ -193,6 +193,7 @@ const TABS = [
   { id: 'overview', label: 'Overview', icon: 'monitoring' },
   { id: 'golden-set', label: 'Golden Set', icon: 'checklist' },
   { id: 'context', label: 'Context Health', icon: 'sync' },
+  { id: 'governance', label: 'Governance', icon: 'gavel' },
   { id: 'trends', label: 'Trends', icon: 'trending_up' },
   { id: 'reports', label: 'Reports', icon: 'description' },
   { id: 'guide', label: 'Guide', icon: 'menu_book' },
@@ -232,6 +233,7 @@ export default function EvalDashboard() {
         {activeTab === 'overview' && <OverviewTab />}
         {activeTab === 'golden-set' && <GoldenSetTab />}
         {activeTab === 'context' && <ContextHealthTab />}
+        {activeTab === 'governance' && <GovernanceTab />}
         {activeTab === 'trends' && <TrendsTab />}
         {activeTab === 'reports' && <ReportsTab />}
         {activeTab === 'guide' && <GuideTab />}
@@ -513,6 +515,121 @@ function GoldenSetTab() {
       {showAddForm && (
         <AddCaseModal onClose={() => setShowAddForm(false)} categories={gs.categories || []} />
       )}
+    </div>
+  );
+}
+
+// ─── Governance Tab (v3 Phase 3) ───────────────────────────────────────────────
+
+interface GovProposal {
+  id: string;
+  source_class: string;
+  proposal_kind: 'rule' | 'gate';
+  occurrence_count: number;
+  proposed_rule: string;
+  confidence: number;
+  evidence?: string[];
+}
+
+interface GovPendingResponse {
+  proposals: GovProposal[];
+  total: number;
+}
+
+function useGovernancePending() {
+  return useQuery<GovPendingResponse>({
+    queryKey: ['eval-governance-pending'],
+    queryFn: async () => (await api.get<GovPendingResponse>('/eval/governance/pending')).data,
+    staleTime: 30_000,
+  });
+}
+
+function useGovernanceDecision() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ proposalId, decision }: { proposalId: string; decision: string }) => {
+      return (await api.post('/eval/governance/decision', {
+        proposal_id: proposalId,
+        decision,
+      })).data;
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['eval-governance-pending'] }); },
+  });
+}
+
+function GovernanceTab() {
+  const { data, isLoading } = useGovernancePending();
+  const decide = useGovernanceDecision();
+  const proposals = data?.proposals ?? [];
+
+  const act = (proposalId: string, decision: 'accept' | 'reject' | 'defer') => {
+    decide.mutate({ proposalId, decision });
+  };
+
+  return (
+    <div className="p-6 max-w-3xl mx-auto">
+      <div className="mb-4">
+        <h2 className="text-base font-semibold text-[var(--color-text)] flex items-center gap-1.5">
+          <span className="material-symbols-outlined text-lg text-[var(--color-primary)]">gavel</span>
+          Governance Proposals
+        </h2>
+        <p className="text-xs text-[var(--color-text-muted)] mt-1">
+          Recurring judgment patterns the system flagged. Accept a <b>rule</b> to record it
+          (a class that recurs after a rule escalates to a <b>gate</b>). Accept never edits
+          SOUL/AGENT/STEERING — it only records the decision in the tracker.
+        </p>
+      </div>
+
+      {isLoading && <div className="text-sm text-[var(--color-text-muted)]">Loading…</div>}
+
+      {!isLoading && proposals.length === 0 && (
+        <div className="text-sm text-[var(--color-text-muted)] border border-dashed border-[var(--color-border)] rounded-lg p-6 text-center">
+          No pending governance proposals. The escalation ladder surfaces them here when a
+          correction class recurs ≥3× without a structural fix.
+        </div>
+      )}
+
+      <div className="space-y-2">
+        {proposals.map((p) => (
+          <div key={p.id} className="border border-[var(--color-border)] rounded-lg p-3">
+            <div className="flex items-center gap-2 mb-1.5">
+              <span className={`px-1.5 py-0.5 text-[10px] font-semibold rounded ${
+                p.proposal_kind === 'gate'
+                  ? 'bg-red-500/10 text-red-600'
+                  : 'bg-blue-500/10 text-blue-600'
+              }`}>
+                {p.proposal_kind.toUpperCase()}
+              </span>
+              <span className="text-sm font-medium text-[var(--color-text)]">{p.source_class}</span>
+              <span className="text-[10px] text-[var(--color-text-muted)]">{p.occurrence_count}×</span>
+            </div>
+            <p className="text-xs text-[var(--color-text)] mb-2">{p.proposed_rule}</p>
+            <div className="flex gap-1.5 items-center">
+              <button
+                onClick={() => act(p.id, 'accept')}
+                disabled={decide.isPending}
+                className="px-2 py-1 text-xs rounded bg-green-500/10 text-green-600 hover:bg-green-500/20 disabled:opacity-50"
+              >
+                Accept
+              </button>
+              <button
+                onClick={() => act(p.id, 'reject')}
+                disabled={decide.isPending}
+                className="px-2 py-1 text-xs rounded bg-red-500/10 text-red-600 hover:bg-red-500/20 disabled:opacity-50"
+              >
+                Reject
+              </button>
+              <button
+                onClick={() => act(p.id, 'defer')}
+                disabled={decide.isPending}
+                className="px-2 py-1 text-xs rounded border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
+              >
+                Defer
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
