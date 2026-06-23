@@ -508,12 +508,19 @@ class SessionUnit:
         # interrupts a stuck tool exactly once (cleared on STREAMING entry and
         # on any ToolResultBlock). Reset at every turn boundary alongside
         # _active_agent_tools (GC15 matched-cleanup clist).
-        self._open_tool_uses: dict[str, float] = {}
+        # tool_use_id → (start_time, tool_name). Value is a tuple so the
+        # watchdog can apply a per-tool-type open window (Agent/Bash run long).
+        self._open_tool_uses: dict[str, tuple[float, str]] = {}
         self._tool_hang_interrupted: bool = False
-        # Wall-clock of the last warm tool-hang interrupt; gates the
+        # Wall-clock of the last SUCCESSFUL warm tool-hang interrupt; gates the
         # force-kill backstop for TOOL_HANG_INTERRUPT_GRACE_S so interrupt()
         # can land before the destructive path fires. None = no pending grace.
         self._tool_hang_interrupt_at: Optional[float] = None
+        # Dedicated tool-hang escalation counter (run_fb6e94a9). Separate from
+        # _consecutive_unstick_timeouts (which is context-token gated and reset
+        # by the send() success path) so repeated wedged-tool episodes actually
+        # accumulate toward a hard-error escalation (AC4).
+        self._tool_hang_episodes: int = 0
 
         # ── Proactive RSS restart cooldown ────────────────────────
         # Monotonic timestamp of last proactive compact→kill cycle.
@@ -892,57 +899,29 @@ class SessionUnit:
                         silence = time.time() - last_event
                         timeout = self._compute_message_timeout()
 
-                        # ── Tool-aware hang tier (run_fb6e94a9) ───────
-                        # A stuck tool = an OPEN tool_use that has been
-                        # silent (no SDK events) past the hard threshold.
-                        # Gating on _oldest_open_tool_age() makes this safe:
-                        # genuine extended thinking emits thinking_delta
-                        # events that refresh _last_event_time, so `silence`
-                        # never accumulates; and a tool-free API hang has no
-                        # open tool_use, so this tier skips and the
-                        # force-kill backstop below owns it. Escape is
-                        # interrupt() (warm — subprocess preserved, model
-                        # gets a turn-abort and can reroute), NOT _force_kill.
-                        tool_age = self._oldest_open_tool_age()
+                        # ── Tool-aware hang tier v2 (run_fb6e94a9) ────
+                        # A genuinely stuck tool = an OPEN tool_use past its
+                        # per-tool open window WHOSE PROCESS TREE IS BURNING
+                        # ~0 CPU. event-silence ALONE is NOT proof of a hang:
+                        # a single long tool (Bash build, Agent sub-agent)
+                        # emits no SDK events whether wedged or healthy. The
+                        # tree-CPU-delta probe is the discriminator — a busy
+                        # tool (incl. a healthy Agent sub-agent running its
+                        # own CLI child) shows CPU > epsilon and is NEVER
+                        # interrupted. Escape is interrupt(autonomous=True)
+                        # (warm, subprocess preserved), NOT _force_kill.
+                        oldest = self._oldest_open_tool()
                         if (
-                            tool_age is not None
-                            and tool_age > self.TOOL_HANG_HARD_S
-                            and silence > self.TOOL_HANG_SOFT_S
+                            oldest is not None
                             and not self._tool_hang_interrupted
                         ):
-                            logger.warning(
-                                "session_unit.tool_hang_interrupt "
-                                "session_id=%s pid=%d tool_age=%.0fs "
-                                "silence=%.0fs — interrupting turn (warm) "
-                                "so the model can reroute",
-                                self.session_id, pid, tool_age, silence,
-                            )
-                            # Once-per-episode guard: cleared on STREAMING
-                            # entry and on any ToolResultBlock.
-                            self._tool_hang_interrupted = True
-                            # Arm the backstop grace window so the destructive
-                            # force-kill below doesn't fire before interrupt()
-                            # lands (would defeat the warm-preserve intent).
-                            self._tool_hang_interrupt_at = time.time()
-                            # Feed the SAME circuit breaker as force_unstick
-                            # so repeated same-episode hangs escalate to a
-                            # hard error (should_circuit_break_timeout) rather
-                            # than silently re-running the stuck tool (AC4).
-                            self._consecutive_unstick_timeouts += 1
-                            try:
-                                await self.interrupt()
-                            except Exception as exc:
-                                logger.error(
-                                    "session_unit.tool_hang_interrupt_failed "
-                                    "session_id=%s: %s",
-                                    self.session_id,
-                                    f"{type(exc).__name__}: {exc}",
+                            tool_age, tool_name = oldest
+                            window = self._tool_open_window(tool_name)
+                            if tool_age > window:
+                                await self._maybe_escape_wedged_tool(
+                                    pid, tool_age, tool_name
                                 )
-                            # Do NOT kill or transition — interrupt() ends the
-                            # turn; the stream reader returns and STREAMING
-                            # exits to IDLE naturally. Keep polling for the
-                            # death/backstop checks on the next tick.
-                            continue
+                                continue
 
                         # Suppress the destructive backstop during the grace
                         # window after a warm tool-hang interrupt (run_fb6e94a9)
@@ -953,7 +932,15 @@ class SessionUnit:
                             and (time.time() - self._tool_hang_interrupt_at)
                             < self.TOOL_HANG_INTERRUPT_GRACE_S
                         )
-                        if silence > timeout and not in_interrupt_grace:
+                        # The force-kill backstop owns ONLY tool-FREE API hangs.
+                        # While a tool is open, liveness is governed by the
+                        # CPU-probe tier above (which never destroys a working
+                        # tool). Killing here would resurrect v1's bug: a healthy
+                        # long tool (event-silent but CPU-busy) force-killed at
+                        # the 300s silence mark. So skip the backstop whenever a
+                        # tool is still open (run_fb6e94a9).
+                        tool_open = bool(self._open_tool_uses)
+                        if silence > timeout and not in_interrupt_grace and not tool_open:
                             logger.error(
                                 "session_unit.output_liveness_timeout "
                                 "session_id=%s pid=%d silence=%.0fs "
@@ -983,36 +970,130 @@ class SessionUnit:
     RETRY_BACKOFF_SECONDS: float = 5.0
     STREAMING_TIMEOUT_SECONDS: float = 300.0  # 5 min base (adaptive via _compute_message_timeout)
 
-    # ── Tool-aware hang tiers (run_fb6e94a9) ──────────────────────
-    # A single tool_use that was emitted but produced no ToolResultBlock for
-    # this long is "stuck". Distinct from the _compute_message_timeout()
-    # force-kill backstop: this tier gates on an OPEN tool_use + event silence,
-    # so it can NEVER fire during genuine extended thinking (thinking_delta
-    # events keep _last_event_time fresh) or a tool-free API hang (no open
-    # tool_use → tier skips, backstop owns it). Escape is interrupt() (warm,
-    # subprocess preserved), not _force_kill().
-    TOOL_HANG_SOFT_S: float = 120.0  # surface a user-visible "still running" signal
-    TOOL_HANG_HARD_S: float = 420.0  # interrupt the turn so the model can reroute
-    # After a warm tool-hang interrupt, suppress the destructive force-kill
-    # backstop this long to let interrupt() actually end the turn (STREAMING →
-    # IDLE). If the turn STILL hasn't ended after the grace, the backstop fires
-    # as the last resort. Without this, the next watchdog tick (silence already
-    # > _compute_message_timeout) would force-kill the very subprocess the warm
-    # interrupt was preserving.
+    # ── Tool-aware hang tiers v2 — CPU-liveness gated (run_fb6e94a9) ──
+    # v1's event-silence discriminator was UNSOUND: _last_event_time refreshes
+    # only per-message, so a single long tool (Bash build, Agent sub-agent) is
+    # event-silent whether wedged OR healthy. v2 adds a SECONDARY liveness
+    # signal — tree CPU delta — and ONLY interrupts a tool whose entire process
+    # tree is burning ~0 CPU (a genuine deadlock). A busy tool (incl. a healthy
+    # Agent sub-agent running its own CLI child) shows CPU > epsilon and is
+    # NEVER interrupted.
+    TOOL_HANG_SOFT_S: float = 120.0       # surface "still running, Stop to recover"
+    TOOL_HANG_OPEN_S: float = 600.0       # quick tools: probe CPU after this long
+    TOOL_HANG_OPEN_S_LONG: float = 1800.0 # Agent/Bash: legitimately long, longer window
+    _LONG_TOOLS: frozenset = frozenset({"Agent", "Bash"})
+    CPU_PROBE_INTERVAL_S: float = 2.0     # tree-CPU sampling window
+    CPU_LIVE_EPSILON: float = 0.05        # cpu-seconds delta above which = "working"
+    _TOOL_HANG_EPISODE_LIMIT: int = 2     # warm interrupts before force-kill escalation
+    # After a SUCCESSFUL warm interrupt, suppress the destructive force-kill
+    # backstop this long to let interrupt() end the turn (STREAMING → IDLE).
     TOOL_HANG_INTERRUPT_GRACE_S: float = 60.0
 
     # ── Tool-hang helpers (run_fb6e94a9) ─────────────────────────
 
-    def _oldest_open_tool_age(self) -> Optional[float]:
-        """Seconds since the oldest currently-open tool_use was emitted.
+    def _oldest_open_tool(self) -> Optional[tuple[float, str]]:
+        """(age_seconds, tool_name) of the oldest currently-open tool_use.
 
-        Returns None when no tool is open. Used by the PID watchdog to gate
-        the tool-aware hang tier on an actual executing tool — never on raw
-        event silence (which can be legitimate extended thinking).
+        Returns None when no tool is open. The watchdog uses age to decide
+        WHEN to probe CPU liveness, and tool_name to pick a per-tool open
+        window (Agent/Bash run legitimately long).
         """
         if not self._open_tool_uses:
             return None
-        return time.time() - min(self._open_tool_uses.values())
+        # value = (start_time, name); oldest = smallest start_time.
+        oldest_id = min(
+            self._open_tool_uses,
+            key=lambda k: self._open_tool_uses[k][0],
+        )
+        start, name = self._open_tool_uses[oldest_id]
+        return (time.time() - start, name)
+
+    def _tool_open_window(self, tool_name: str) -> float:
+        """Per-tool open window before CPU-liveness probing kicks in."""
+        if tool_name in self._LONG_TOOLS:
+            return self.TOOL_HANG_OPEN_S_LONG
+        return self.TOOL_HANG_OPEN_S
+
+    async def _maybe_escape_wedged_tool(
+        self, pid: int, tool_age: float, tool_name: str,
+    ) -> None:
+        """Probe tree CPU; warm-interrupt ONLY a genuinely wedged (0-CPU) tool.
+
+        Called from the PID watchdog when an open tool_use has exceeded its
+        per-tool open window. Samples cumulative tree CPU twice over
+        CPU_PROBE_INTERVAL_S:
+
+        - delta >= CPU_LIVE_EPSILON → the tool (or a descendant — Bash child,
+          Agent sub-agent CLI) is actively working → DO NOTHING. This is the
+          healthy-long-tool case v1 wrongly killed.
+        - delta <  CPU_LIVE_EPSILON → nothing in the tree is doing work →
+          genuine deadlock → interrupt(autonomous=True) (warm).
+        - CPU unreadable (None) → FAIL SAFE: cannot prove dead → do nothing.
+          The existing _compute_message_timeout force-kill backstop still
+          owns a true API hang as the last resort.
+        """
+        from .resource_monitor import resource_monitor
+
+        cpu0 = resource_monitor.tree_cpu_seconds(pid)
+        if cpu0 is None:
+            return  # fail-safe: cannot measure → never interrupt
+        await asyncio.sleep(self.CPU_PROBE_INTERVAL_S)
+        # State may have changed during the sleep (turn ended, killed).
+        if self.state != SessionState.STREAMING:
+            return
+        cpu1 = resource_monitor.tree_cpu_seconds(pid)
+        if cpu1 is None:
+            return
+        delta = cpu1 - cpu0
+        if delta >= self.CPU_LIVE_EPSILON:
+            # Tool is actively working — not a hang. Leave it alone.
+            logger.debug(
+                "session_unit.tool_live session_id=%s tool=%s age=%.0fs "
+                "cpu_delta=%.3f — working, not interrupting",
+                self.session_id, tool_name, tool_age, delta,
+            )
+            return
+
+        logger.warning(
+            "session_unit.tool_hang_interrupt session_id=%s pid=%d tool=%s "
+            "age=%.0fs cpu_delta=%.3f (< %.2f) — wedged, interrupting (warm)",
+            self.session_id, pid, tool_name, tool_age, delta,
+            self.CPU_LIVE_EPSILON,
+        )
+        # Once-per-episode guard (cleared on STREAMING entry + ToolResultBlock).
+        self._tool_hang_interrupted = True
+        # Dedicated escalation counter (NOT the context-gated unstick counter).
+        self._tool_hang_episodes += 1
+
+        # AC4 escalation: if warm interrupts keep failing to clear the hang
+        # (the model reroutes straight back into a wedging tool), a warm
+        # interrupt is no longer helping — escalate to the destructive
+        # force-kill so the retry path can respawn fresh, instead of looping.
+        if self._tool_hang_episodes > self._TOOL_HANG_EPISODE_LIMIT:
+            logger.error(
+                "session_unit.tool_hang_escalate session_id=%s episodes=%d "
+                "> limit=%d — force-killing for fresh respawn",
+                self.session_id, self._tool_hang_episodes,
+                self._TOOL_HANG_EPISODE_LIMIT,
+            )
+            self._pid_watchdog_task = None  # prevent self-cancel (see backstop)
+            self._transition(SessionState.DEAD)
+            await self._force_kill()
+            return
+
+        try:
+            ok = await self.interrupt(autonomous=True)
+        except Exception as exc:
+            logger.error(
+                "session_unit.tool_hang_interrupt_failed session_id=%s: %s",
+                self.session_id, f"{type(exc).__name__}: {exc}",
+            )
+            return
+        # Arm the backstop grace window ONLY on a SUCCESSFUL interrupt — a
+        # failed interrupt must not suppress the force-kill backstop
+        # (adversarial v1 MED).
+        if ok:
+            self._tool_hang_interrupt_at = time.time()
 
     # ── Adaptive timeout ─────────────────────────────────────────
 
@@ -2210,8 +2291,16 @@ class SessionUnit:
 
     # ── Interactive methods (task 3.3) ─────────────────────────────
 
-    async def interrupt(self, timeout: float = 5.0) -> bool:
+    async def interrupt(self, timeout: float = 5.0, autonomous: bool = False) -> bool:
         """Interrupt active query. SDK interrupt() with kill fallback.
+
+        ``autonomous`` (run_fb6e94a9): when True, this is a system-initiated
+        interrupt (e.g. the watchdog escaping a wedged tool), NOT a user Stop.
+        In that case we do NOT set ``_user_stopped_current_turn`` — a user Stop
+        suppresses the post-turn self-heal, but an autonomous tool-hang escape
+        is exactly a turn that MIGHT still need healing, so self-heal must stay
+        eligible. Default False preserves the user-Stop semantics for all
+        existing callers.
 
         State transitions:
 
@@ -2246,7 +2335,10 @@ class SessionUnit:
         # Durable signal: this turn was stopped by the user. Survives until the
         # next send()'s Layer 0 reset so the post-stream self-heal check can skip
         # — a user Stop must never be followed by a proactive heal kill/respawn.
-        self._user_stopped_current_turn = True
+        # Autonomous interrupts (watchdog tool-hang escape) skip this: the hung
+        # turn should remain eligible for self-heal (run_fb6e94a9).
+        if not autonomous:
+            self._user_stopped_current_turn = True
         self._active_agent_tools = {}  # Clear stale sub-agent progress on interrupt
         self._open_tool_uses = {}  # Clear stale open-tool tracking (run_fb6e94a9)
 
@@ -2763,6 +2855,22 @@ class SessionUnit:
             return None
         self._last_heartbeat_elapsed = elapsed
         minutes = int(elapsed // 60)
+        # AC1 (run_fb6e94a9): if a specific tool has been open a long time,
+        # name it and tell the user they can Stop to recover — turns a silent
+        # spinner into an actionable signal.
+        oldest = self._oldest_open_tool()
+        if oldest is not None and oldest[0] > self.TOOL_HANG_SOFT_S:
+            tool_age, tool_name = oldest
+            tmin = int(tool_age // 60)
+            return {
+                "type": "still_working",
+                "elapsedSeconds": int(elapsed),
+                "toolName": tool_name,
+                "message": (
+                    f"⏳ {tool_name} has been running {tmin}m with no output. "
+                    f"Still working — press Stop to recover if this looks stuck."
+                ),
+            }
         return {
             "type": "still_working",
             "elapsedSeconds": int(elapsed),

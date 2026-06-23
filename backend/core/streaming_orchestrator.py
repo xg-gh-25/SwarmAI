@@ -157,6 +157,10 @@ class StreamingOrchestrator:
                 # lingers and could false-trip the tool-hang tier (run_fb6e94a9).
                 self._parent._open_tool_uses.pop(block.tool_use_id, None)
                 self._parent._tool_hang_interrupted = False
+                # Clear the grace window too — it was armed for a specific
+                # interrupt; unrelated tool completion must not keep the
+                # destructive backstop suppressed (adversarial v1 MED).
+                self._parent._tool_hang_interrupt_at = None
 
     # ═══════════════════════════════════════════════════════════════
     # Migrated from session_unit.py — _stream_response
@@ -624,7 +628,13 @@ class StreamingOrchestrator:
                         # AskUserQuestion — it intentionally blocks on the user
                         # (the hook owns its lifecycle) and would false-trip.
                         if block.name != "AskUserQuestion":
-                            self._parent._open_tool_uses[block.id] = time.time()
+                            # Store (start_time, tool_name) so the watchdog can
+                            # apply a per-tool-type open window (run_fb6e94a9):
+                            # Agent/Bash legitimately run long, so they get a
+                            # longer window before the CPU-liveness probe.
+                            self._parent._open_tool_uses[block.id] = (
+                                time.time(), block.name,
+                            )
                         # ── Track sub-agent (Agent tool) for progress observability ──
                         if block.name == "Agent" and isinstance(block.input, dict):
                             _agent_label = block.input.get("description") or block.input.get("prompt") or ""
@@ -698,6 +708,7 @@ class StreamingOrchestrator:
                         # same turn can still be escaped.
                         self._parent._open_tool_uses.pop(block.tool_use_id, None)
                         self._parent._tool_hang_interrupted = False
+                        self._parent._tool_hang_interrupt_at = None
                         block_content = str(block.content) if block.content else ""
                         if _has_tool_summarizer:
                             truncated, was_truncated = truncate_tool_result(block_content)

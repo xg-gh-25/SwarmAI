@@ -53,8 +53,9 @@ def _make_unit(session_id: str = "test-session", pid: int | None = None) -> Sess
     unit._open_tool_uses = {}
     unit._tool_hang_interrupted = False
     unit._tool_hang_interrupt_at = None
+    unit._tool_hang_episodes = 0
     unit._consecutive_unstick_timeouts = 0
-    unit.interrupt = AsyncMock()
+    unit.interrupt = AsyncMock(return_value=True)
     unit._PID_WATCHDOG_INTERVAL = 0.05  # Fast for tests
     unit.last_used = time.time()
     unit.is_channel_session = False

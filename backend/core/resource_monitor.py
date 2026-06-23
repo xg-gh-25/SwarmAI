@@ -518,6 +518,73 @@ class ResourceMonitor:
         except Exception:
             return 0
 
+    def tree_cpu_seconds(self, pid: int) -> Optional[float]:
+        """Sum cumulative CPU seconds (user+system) over a process tree.
+
+        Used as a LIVENESS signal to distinguish a wedged tool from a slow
+        one (run_fb6e94a9): sample this twice over a short interval — a
+        positive delta means the CLI subprocess OR any of its descendants
+        (a Bash child, an Agent sub-agent's own CLI) is actively burning
+        CPU, i.e. *working*, not hung. A near-zero delta over the interval
+        means nothing in the tree is doing work — a genuine deadlock.
+
+        Returns the cumulative CPU seconds across the tree, or ``None`` when
+        the value cannot be obtained (psutil missing, process gone, or
+        platform fallback unavailable). Callers MUST treat ``None`` as
+        "cannot prove dead" and fail SAFE — never interrupt on ``None``.
+        """
+        if not _HAS_PSUTIL:
+            return self._tree_cpu_seconds_fallback(pid)
+        try:
+            parent = psutil.Process(pid)
+            t = parent.cpu_times()
+            total = float(t.user + t.system)
+            for child in parent.children(recursive=True):
+                try:
+                    ct = child.cpu_times()
+                    total += float(ct.user + ct.system)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+            return total
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return None
+        except Exception as exc:
+            logger.debug("tree_cpu_seconds failed for pid %d: %s", pid, exc)
+            return None
+
+    def _tree_cpu_seconds_fallback(self, pid: int) -> Optional[float]:
+        """macOS/no-psutil fallback: cumulative CPU seconds via ``ps``.
+
+        ``ps -o cputime=`` reports cumulative CPU time as ``[dd-]hh:mm:ss``
+        for the single PID. Children are NOT summed in the fallback (``ps``
+        has no cheap recursive-tree sum), so this is a conservative
+        UNDER-estimate of tree CPU — which is the safe direction: it can
+        only make a busy tree look less busy, biasing toward NOT interrupting.
+        Returns ``None`` on any failure (caller fails safe).
+        """
+        try:
+            result = subprocess.run(
+                ["ps", "-o", "cputime=", "-p", str(pid)],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode != 0:
+                return None
+            raw = result.stdout.strip()
+            if not raw:
+                return None
+            # Parse [dd-]hh:mm:ss or mm:ss into seconds.
+            days = 0
+            if "-" in raw:
+                d, raw = raw.split("-", 1)
+                days = int(d)
+            parts = [float(p) for p in raw.split(":")]
+            secs = 0.0
+            for p in parts:
+                secs = secs * 60 + p
+            return secs + days * 86400
+        except Exception:
+            return None
+
 
 # ── Module-level singleton ──────────────────────────────────────────
 
