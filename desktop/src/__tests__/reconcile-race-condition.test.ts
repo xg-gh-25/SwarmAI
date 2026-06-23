@@ -19,6 +19,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 import type { ContentBlock, Message } from '../types';
 
 // ---------------------------------------------------------------------------
@@ -315,6 +318,28 @@ describe('Reconcile force-clear — absolute deadline immune to reconnect re-arm
       messages: [],
     };
     expect(reconcileDecision(tab, false, now, undefined)).toBe('clear');
+  });
+
+  // GUARD against the mirror-vs-production gap (spec-review WARNING): the tests
+  // above exercise a hand-copied reconcileDecision mirror, NOT the real hook.
+  // This test reads the PRODUCTION source and asserts the structural invariant
+  // the fix depends on, so a future regression (reverting the backstop to the
+  // re-armable clock, or dropping the set-once guard) fails CI even though the
+  // mirror tests would still pass.
+  it('Test 14 (production source guard): hard-deadline streamAge anchors to absolute streamStartTime', () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const src = readFileSync(
+      resolve(here, '../hooks/useChatStreamingLifecycle.ts'),
+      'utf8',
+    );
+    // The force-clear backstop must compute streamAge from streamStartTime
+    // (absolute, re-arm-immune), with _reconcileStreamStart only as fallback.
+    expect(src).toMatch(
+      /const streamAge = Date\.now\(\) - \(tabState\.streamStartTime \?\? tabState\._reconcileStreamStart \?\? 0\)/,
+    );
+    // And streamStartTime must remain set-once-per-turn (guarded), or the
+    // "absolute" property the backstop relies on would silently break.
+    expect(src).toMatch(/if \(!tabState\.streamStartTime\)/);
   });
 });
 
