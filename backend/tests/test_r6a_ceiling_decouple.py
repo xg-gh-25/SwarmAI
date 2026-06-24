@@ -242,5 +242,33 @@ class TestFirstTabSacred:
             result = await router._acquire_slot(requesting)
 
         assert result == "ready", (
-            f"First tab (alive_count==0) must always be granted, got '{result}'"
+            f"First chat tab must always be granted, got '{result}'"
+        )
+
+    @pytest.mark.asyncio
+    async def test_first_chat_tab_sacred_even_with_live_channel(self):
+        """REVIEW 4.1: a lone alive CHANNEL session must NOT subject the first
+        CHAT tab to budget denial. First-tab-sacred is keyed on the CHAT pool
+        (_chat_alive_count == 0), mirroring the channel slot's own first-tab
+        rule — otherwise _evict_idle (chat-scoped) can't rescue the chat tab
+        from a channel-induced budget denial and it queues to timeout."""
+        from unittest.mock import patch
+        router = _make_router()
+        # A channel session is alive (background listener).
+        chan = _add_unit(router, "channel", SessionState.IDLE)
+        chan.is_channel_session = True
+        # First CHAT tab requests a slot.
+        requesting = _add_unit(router, "first-chat", SessionState.COLD)
+
+        with patch("core.resource_monitor.resource_monitor") as mock_rm:
+            # Budget DENIES (memory pressure). Without pool-scoped first-tab,
+            # the chat tab would queue→timeout because the channel can't be
+            # evicted by the chat-scoped _evict_idle.
+            mock_rm.spawn_budget.return_value = _budget(False, "memory at 91%")
+            mock_rm.invalidate_cache.return_value = None
+            result = await router._acquire_slot(requesting)
+
+        assert result == "ready", (
+            f"First CHAT tab must be granted even with a live channel and a "
+            f"denying budget (_chat_alive_count==0), got '{result}'"
         )

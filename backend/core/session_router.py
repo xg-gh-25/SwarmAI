@@ -890,9 +890,16 @@ class SessionRouter:
             # still bounds tab COUNT via MAX_TABS_HARD_CEILING; the backend only
             # answers "is there RAM to spawn."
             #
-            # First tab is sacred — always allow at least one session, regardless
-            # of budget (pessimistic budget must never deadlock the only tab).
-            if self.alive_count == 0:
+            # First CHAT tab is sacred — always allow at least one chat session,
+            # regardless of budget (pessimistic budget must never deadlock the
+            # user's only chat tab). Keyed on the CHAT pool, mirroring
+            # _acquire_channel_slot's `_channel_alive_count == 0`: a lone alive
+            # CHANNEL session must NOT subject the first chat tab to budget
+            # denial, because _evict_idle (chat-scoped) cannot evict the channel
+            # to rescue it — the chat tab would queue to QUEUE_TIMEOUT for
+            # nothing. Pool-scoped first-tab restores the reserved-chat-slot
+            # intent of the old chat_max = max_tabs - 1 logic (REVIEW 4.1).
+            if self._chat_alive_count == 0:
                 return "ready"
 
             # spawn_budget is the UNCONDITIONAL gate. There is no budget-free

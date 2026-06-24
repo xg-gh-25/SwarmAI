@@ -27,6 +27,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Pessimistic peer count used for the spawn_budget concurrent-peak penalty when
+# the live session count cannot be read (registry unavailable). Must be > 0 so a
+# retry storm with a broken registry still gets OOM-penalized rather than each
+# session resuming penalty-free (REVIEW 5.2, run_6ea35431). Sized to the historic
+# tab ceiling so the penalty matches a realistically-full machine.
+_PESSIMISTIC_ALIVE_FALLBACK = 4
+
 
 class RetryManager:
     """Owns retry, OOM recovery, and buffer overflow logic.
@@ -374,14 +381,23 @@ class RetryManager:
                 from .resource_monitor import resource_monitor
 
                 # Count alive sessions for the spawn_budget concurrent penalty.
-                _alive = 0
+                # Pessimistic default: if we CANNOT count peers, assume the
+                # configured max rather than 0 — "can't count" must not collapse
+                # the COE05 simultaneous-peak penalty to penalty-free (REVIEW 5.2).
+                # During a retry storm with the registry unavailable, a
+                # penalty-free budget would let every retrying session resume at
+                # once (each believing alive=0) — the exact 2026-04-12 cascade.
+                _alive = _PESSIMISTIC_ALIVE_FALLBACK
                 try:
                     from . import session_registry
                     router = session_registry.session_router
                     if router:
                         _alive = router.alive_count
                 except Exception as exc:
-                    logger.warning("Retry alive-count unavailable: %s", exc)
+                    logger.warning(
+                        "Retry alive-count unavailable, assuming %d peers for "
+                        "OOM penalty: %s", _PESSIMISTIC_ALIVE_FALLBACK, exc,
+                    )
 
                 budget = resource_monitor.spawn_budget(alive_count=_alive)
                 if not budget.can_spawn:
