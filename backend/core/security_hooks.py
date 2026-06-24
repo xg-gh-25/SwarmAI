@@ -263,12 +263,27 @@ def create_ask_question_gate(
         # surfacing channel, shared with the dangerous_command_gate path).
         from .permission_manager import permission_manager as _pm
         actual_session_id = session_context.get("sdk_session_id") or session_key
-        await _pm.enqueue_permission_request(actual_session_id, {
-            "kind": "ask_user_question",
-            "sessionId": actual_session_id,
-            "tool_use_id": tool_use_id,
-            "questions": questions,
-        })
+        # F3: register the waiter BEFORE surfacing. Surfacing (enqueue) then
+        # awaiting wait_for_answer left a window where a fast non-human
+        # auto-answer (channel gateway) arrived before the waiter existed and was
+        # dropped. register_waiter is synchronous + idempotent — after this,
+        # set_answer always has a live target.
+        ask_question_mgr.register_waiter(tool_use_id)
+        # The surface→await span must reap the waiter if it throws/cancels before
+        # wait_for_answer is entered — otherwise the registered event leaks and
+        # has_live_waiter() lies True with no coroutine blocked (ghost question /
+        # answer-into-void). wait_for_answer's own finally covers the post-entry
+        # case; this try only covers the enqueue/cancel window before it.
+        try:
+            await _pm.enqueue_permission_request(actual_session_id, {
+                "kind": "ask_user_question",
+                "sessionId": actual_session_id,
+                "tool_use_id": tool_use_id,
+                "questions": questions,
+            })
+        except BaseException:
+            ask_question_mgr.discard_waiter(tool_use_id)
+            raise
 
         logger.info(
             "ask_question_gate: blocking for answer session=%s tool_use_id=%s "

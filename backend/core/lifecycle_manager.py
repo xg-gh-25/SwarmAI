@@ -549,6 +549,23 @@ class LifecycleManager:
             stall = unit.streaming_stall_seconds
             if stall is None:
                 continue
+            # Open-tool guard (mirrors session_unit output-liveness backstop,
+            # ~line 950): while a tool is open, event-silence is EXPECTED — a
+            # healthy long tool (Bash build, Agent sub-agent) is CPU-busy but
+            # emits no SDK events. Killing here on silence alone resurrects the
+            # bug run_fb6e94a9 fixed: a healthy long tool force-killed at the
+            # 300s silence mark, before the in-session 1800s CPU-liveness probe
+            # ever runs. Tool-liveness is judged by the in-session PID watchdog
+            # (CPU probe + 1h hard ceiling), which OWNS the wedged-open-tool
+            # case. The lifecycle loop has no CPU probe, so it must not judge
+            # tool liveness — only the pure-API-hang case (no open tool) below.
+            if getattr(unit, "_open_tool_uses", None):
+                logger.debug(
+                    "lifecycle_manager.streaming_timeout_skip session_id=%s "
+                    "stall=%.0fs — tool open, deferring to in-session CPU probe",
+                    unit.session_id, stall,
+                )
+                continue
             # Use adaptive timeout from the unit (context-aware) if available,
             # otherwise fall back to static threshold.
             effective_timeout = (

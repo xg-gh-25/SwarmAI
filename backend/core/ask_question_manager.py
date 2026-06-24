@@ -71,14 +71,18 @@ class AskQuestionManager:
         self._answer_results: dict[str, dict[str, Any]] = {}
 
     def has_live_waiter(self, tool_use_id: str) -> bool:
-        """True iff a ``wait_for_answer`` coroutine is currently blocked on this id.
+        """True iff a waiter event exists for this id (a hook is — or is about to
+        be — blocked on the answer).
 
-        The respawn-immune liveness signal: the event is registered on entry to
-        ``wait_for_answer`` and popped in its ``finally`` (on answer, timeout, OR
-        cancellation when the subprocess is killed and the hook task is torn down).
-        So this is True only while a real awaiting hook exists to receive the
-        answer — surfacing a question with no live waiter would let the user
-        "answer into the void" (mirrors PermissionManager.has_live_waiter).
+        The respawn-immune liveness signal. The event is registered either by
+        ``register_waiter`` (synchronously, just before the question is surfaced)
+        or on entry to ``wait_for_answer``, and popped in ``wait_for_answer``'s
+        ``finally`` (answer, timeout, OR cancellation when the subprocess is
+        killed). If the surface→await span throws before ``wait_for_answer`` is
+        entered, the caller MUST ``discard_waiter`` to reap the event — otherwise
+        this returns True with no coroutine blocked, defeating the orchestrator's
+        stale-item drop-guard (→ "answer into the void"). Mirrors
+        PermissionManager.has_live_waiter.
         """
         return tool_use_id in self._answer_events
 
@@ -102,8 +106,18 @@ class AskQuestionManager:
             dict so the caller can emit a visible expiry outcome rather than
             silently injecting empty answers.
         """
-        event = asyncio.Event()
-        self._answer_events[tool_use_id] = event
+        # Reuse a pre-registered event if register_waiter() was called before the
+        # question was surfaced (F3) — otherwise create one now. Creating here
+        # only on first await opened a window: the hook surfaced the question
+        # (enqueue) BEFORE this coroutine ran, so a fast non-human set_answer
+        # arriving in between found no waiter and dropped. register_waiter closes
+        # that window; this reuse makes wait_for_answer idempotent with it.
+        event = self._answer_events.get(tool_use_id)
+        if event is None:
+            event = asyncio.Event()
+            self._answer_events[tool_use_id] = event
+        # An answer may have ALREADY arrived between register_waiter and this
+        # await — set_answer would have set the event; wait returns immediately.
 
         try:
             await asyncio.wait_for(event.wait(), timeout=timeout)
@@ -113,6 +127,30 @@ class AskQuestionManager:
         finally:
             self._answer_events.pop(tool_use_id, None)
             self._answer_results.pop(tool_use_id, None)
+
+    def register_waiter(self, tool_use_id: str) -> None:
+        """Synchronously register a waiter BEFORE the question is surfaced (F3).
+
+        The ask_question_gate hook surfaces the question (enqueue) and only then
+        awaits wait_for_answer — which previously created the event on its first
+        line. A fast non-human auto-answer (channel gateway) arriving in that
+        window found no live waiter and was dropped by set_answer. Calling this
+        before surfacing guarantees the waiter exists, so set_answer always has a
+        target. Idempotent: re-registering reuses the existing event."""
+        if tool_use_id not in self._answer_events:
+            self._answer_events[tool_use_id] = asyncio.Event()
+
+    def discard_waiter(self, tool_use_id: str) -> None:
+        """Reap a registered waiter when wait_for_answer will NEVER be entered
+        (the surface→await window threw or was cancelled). Without this, a
+        register_waiter() whose wait_for_answer never runs leaks the Event in
+        _answer_events forever — and a leaked entry makes has_live_waiter() return
+        True with no coroutine blocked, defeating the orchestrator's stale-item
+        drop-guard (→ ghost question / answer-into-void). wait_for_answer's own
+        finally already covers the case where it WAS entered; this covers the gap
+        before it. Idempotent."""
+        self._answer_events.pop(tool_use_id, None)
+        self._answer_results.pop(tool_use_id, None)
 
     def set_answer(self, tool_use_id: str, answers: dict[str, Any]) -> None:
         """Record the user's answers and signal the waiting hook."""

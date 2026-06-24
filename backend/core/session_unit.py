@@ -1115,9 +1115,13 @@ class SessionUnit:
             self.session_id, pid, tool_name, tool_age, delta,
             self.CPU_LIVE_EPSILON,
         )
-        # Once-per-episode guard (cleared on STREAMING entry + ToolResultBlock).
-        self._tool_hang_interrupted = True
         # Dedicated escalation counter (NOT the context-gated unstick counter).
+        # Incremented BEFORE the interrupt: escalation must fire even if a prior
+        # interrupt failed (a wedged tool that ignores warm interrupts must still
+        # reach the force-kill escalation). The tier-gating LATCH, by contrast, is
+        # set only AFTER a SUCCESSFUL interrupt (below) — a failed interrupt must
+        # not latch the tier off, or the hard-ceiling + escalation become
+        # unreachable for a still-wedged tool (F2).
         self._tool_hang_episodes += 1
 
         # AC4 escalation: if warm interrupts keep failing to clear the hang
@@ -1144,11 +1148,16 @@ class SessionUnit:
                 self.session_id, f"{type(exc).__name__}: {exc}",
             )
             return
-        # Arm the backstop grace window ONLY on a SUCCESSFUL interrupt — a
-        # failed interrupt must not suppress the force-kill backstop
-        # (adversarial v1 MED).
+        # Arm the backstop grace window AND the once-per-episode latch ONLY on a
+        # SUCCESSFUL interrupt — a failed interrupt must not suppress the
+        # force-kill backstop (adversarial v1 MED) NOR latch the tier off (F2:
+        # the latch gates the whole tier via `not self._tool_hang_interrupted`
+        # in the watchdog; latching it on a failed interrupt makes the hard
+        # ceiling + escalation unreachable for a still-wedged tool).
         if ok:
             self._tool_hang_interrupt_at = time.time()
+            # Once-per-episode guard (cleared on STREAMING entry + ToolResultBlock).
+            self._tool_hang_interrupted = True
 
     # ── Adaptive timeout ─────────────────────────────────────────
 
