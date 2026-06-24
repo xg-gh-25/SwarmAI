@@ -186,46 +186,45 @@ class TestComputeMaxTabsPessimisticFallback:
 # ---------------------------------------------------------------------------
 
 class TestRouterRespectsDynamicLimit:
-    """Property 2: Router respects dynamic limit.
+    """Property 2 (R6a-revised): Router admits based on spawn_budget, not a ceiling.
 
-    # Feature: dynamic-tab-scaling, Property 2: Router respects dynamic limit
+    # Feature: dynamic-tab-scaling, Property 2
 
-    *For any* value N returned by ``compute_max_tabs()`` and any
-    ``alive_count`` < chat_max (= N - 1), ``_acquire_chat_slot()`` should
-    grant the slot without queueing (assuming ``spawn_budget().can_spawn``
-    is true).  Conversely, for any ``alive_count`` >= chat_max with no
-    IDLE sessions to evict, it should queue and timeout.
+    R6a (design §9) decoupled backend admission from ``compute_max_tabs`` (a
+    frontend UX ceiling). ``_acquire_chat_slot`` now grants a slot whenever
+    ``spawn_budget().can_spawn`` is true (real RAM), regardless of how many
+    peers are alive — the count ceiling no longer gates the backend. When
+    budget is denied and no IDLE peer is evictable, it queues and times out.
 
-    **Validates: Requirements 2.1, 2.3**
+    The first tab (alive_count == 0) is always granted regardless of budget.
+
+    **Validates: Requirements 2.1, 2.3 (post-R6a)**
     """
 
     @given(
-        max_tabs=st.integers(min_value=2, max_value=4),
+        can_spawn=st.booleans(),
         alive_count=st.integers(min_value=0, max_value=6),
     )
     @PROPERTY_SETTINGS
     @pytest.mark.asyncio
-    async def test_acquire_slot_respects_dynamic_limit(
-        self, max_tabs: int, alive_count: int,
+    async def test_acquire_slot_gated_by_budget_not_ceiling(
+        self, can_spawn: bool, alive_count: int,
     ):
-        """_acquire_slot() grants/denies based on chat_max (max_tabs - 1) vs alive_count."""
-        # Build a SessionRouter with a mocked PromptBuilder
+        """_acquire_slot() grants/denies based on spawn_budget, not a tab ceiling."""
         mock_prompt_builder = MagicMock()
         router = SessionRouter(prompt_builder=mock_prompt_builder)
 
-        # Create alive units (STREAMING state — protected, not evictable)
+        # Create alive units (STREAMING state — protected, not evictable, so
+        # budget-denied cannot be rescued by eviction).
         for i in range(alive_count):
             unit = SessionUnit(
                 session_id=f"alive-{i}",
                 agent_id="test-agent",
                 on_state_change=router._on_unit_state_change,
             )
-            # Manually set state to STREAMING (protected, alive, not IDLE)
-            # Use object.__setattr__ to bypass enum validation in _transition
             unit.state = SessionState.STREAMING
             router._units[f"alive-{i}"] = unit
 
-        # Create the requesting unit (COLD — not alive, needs a slot)
         requesting_unit = SessionUnit(
             session_id="requesting",
             agent_id="test-agent",
@@ -233,43 +232,40 @@ class TestRouterRespectsDynamicLimit:
         )
         router._units["requesting"] = requesting_unit
 
-        # Mock resource_monitor.compute_max_tabs() and spawn_budget()
         mock_budget = SpawnBudget(
-            can_spawn=True,
-            reason="ok",
-            available_mb=8000.0,
+            can_spawn=can_spawn,
+            reason="ok" if can_spawn else "memory at 92%",
+            available_mb=8000.0 if can_spawn else 100.0,
             estimated_cost_mb=500.0,
         )
 
-        with patch(
-            "core.resource_monitor.resource_monitor"
-        ) as mock_rm:
-            mock_rm.compute_max_tabs.return_value = max_tabs
+        with patch("core.resource_monitor.resource_monitor") as mock_rm:
             mock_rm.spawn_budget.return_value = mock_budget
+            mock_rm.invalidate_cache.return_value = None
 
-            # Chat slots = max_tabs - 1 (1 reserved for channel)
-            chat_max = max_tabs - 1
-
-            if alive_count < chat_max:
-                # Slot should be granted immediately
+            if alive_count == 0:
+                # First tab is sacred — granted even if budget would deny.
                 result = await router._acquire_slot(requesting_unit)
                 assert result == "ready", (
-                    f"Expected 'ready' when alive_count={alive_count} < "
-                    f"chat_max={chat_max} (max_tabs={max_tabs}), got '{result}'"
+                    f"First tab must always be granted, got '{result}'"
+                )
+            elif can_spawn:
+                # RAM permits → granted regardless of peer count (no ceiling).
+                result = await router._acquire_slot(requesting_unit)
+                assert result == "ready", (
+                    f"Expected 'ready' when spawn_budget permits (alive="
+                    f"{alive_count}), got '{result}' — backend must not gate on count"
                 )
             else:
-                # All chat slots occupied by protected (STREAMING) units,
-                # no IDLE units to evict → should queue and timeout.
-                # Use a very short timeout to avoid slow tests.
+                # Budget denied + only protected peers (no evictable idle)
+                # → queue and timeout.
                 original_timeout = router.QUEUE_TIMEOUT
-                router.QUEUE_TIMEOUT = 0.01  # 10ms timeout
-
+                router.QUEUE_TIMEOUT = 0.01
                 result = await router._acquire_slot(requesting_unit)
                 assert result == "timeout", (
-                    f"Expected 'timeout' when alive_count={alive_count} >= "
-                    f"chat_max={chat_max} (max_tabs={max_tabs}) with no IDLE units, got '{result}'"
+                    f"Expected 'timeout' when budget denies + no evictable "
+                    f"idle (alive={alive_count}), got '{result}'"
                 )
-
                 router.QUEUE_TIMEOUT = original_timeout
 
 

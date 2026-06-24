@@ -361,44 +361,35 @@ class RetryManager:
 
             await asyncio.sleep(backoff)
 
-            # Re-check spawn budget AND slot availability after backoff.
-            # Retries bypass session_router._acquire_slot(), so we must
-            # enforce the concurrency limit here to prevent OOM cascades
-            # from 3+ simultaneous CLI processes (COE: 2026-04-12).
+            # Re-check spawn budget after backoff. Retries bypass
+            # session_router._acquire_slot(), so we must re-enforce the OOM
+            # guard here to prevent cascades from simultaneous CLI processes
+            # (COE: 2026-04-12).
+            # R6a: the guard is spawn_budget (real RAM), NOT compute_max_tabs
+            # (a frontend UX ceiling). A crashed tab must resume whenever RAM
+            # allows, regardless of how many peers are alive — refusing resume
+            # on peer count was a direct context-loss source (design §9.3).
+            # spawn_budget's alive_count penalty remains the COE05 floor.
             try:
                 from .resource_monitor import resource_monitor
-                max_tabs = resource_monitor.compute_max_tabs()
 
-                # Count alive sessions from the registry (if available).
-                # This prevents retries from spawning beyond the slot limit.
-                alive_exceeds_limit = False
+                # Count alive sessions for the spawn_budget concurrent penalty.
                 _alive = 0
                 try:
                     from . import session_registry
                     router = session_registry.session_router
                     if router:
                         _alive = router.alive_count
-                    if router and _alive >= max_tabs:
-                        alive_exceeds_limit = True
-                        logger.warning(
-                            "Retry %d aborted: alive_count=%d >= max_tabs=%d "
-                            "session_id=%s — retry would exceed slot limit",
-                            self._parent._retry_count, router.alive_count,
-                            max_tabs, self._parent.session_id,
-                        )
                 except Exception as exc:
-                    logger.warning("Retry slot guard unavailable: %s", exc)
+                    logger.warning("Retry alive-count unavailable: %s", exc)
 
                 budget = resource_monitor.spawn_budget(alive_count=_alive)
-                if not budget.can_spawn or alive_exceeds_limit:
-                    reason = (
-                        f"alive_count >= max_tabs ({max_tabs})"
-                        if alive_exceeds_limit else budget.reason
-                    )
+                if not budget.can_spawn:
                     logger.warning(
                         "Retry %d aborted: %s "
                         "post-backoff session_id=%s",
-                        self._parent._retry_count, reason, self._parent.session_id,
+                        self._parent._retry_count, budget.reason,
+                        self._parent.session_id,
                     )
                     await self._parent._crash_to_cold_async(clear_identity=True)
                     yield _build_error_event(

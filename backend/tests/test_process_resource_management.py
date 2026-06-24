@@ -197,19 +197,20 @@ class TestC3SlotRaceCondition:
 
     @pytest.mark.asyncio
     async def test_acquire_slot_respects_max_tabs_with_protected_units(self):
-        """When max_tabs slots are occupied by STREAMING units, new requests timeout.
+        """When RAM is exhausted and all peers are protected (STREAMING, can't
+        evict), a new request times out.
 
-        This verifies the lock + re-check loop works: the 3rd request cannot
-        get a slot because all slots are occupied by protected (STREAMING)
-        units that cannot be evicted.
+        R6a: admission is gated by spawn_budget (real RAM), NOT a tab-count
+        ceiling. The over-allocation guard is now "budget denied + no evictable
+        idle" rather than "count >= max_tabs". This still verifies the lock +
+        re-check loop: the new request cannot get a slot because RAM can't admit
+        it and the only peers are un-evictable STREAMING units.
         """
         from core.session_unit import SessionUnit, SessionState
         from core.session_router import SessionRouter
 
         router = SessionRouter(prompt_builder=MagicMock())
         router.QUEUE_TIMEOUT = 0.3  # short timeout for test
-
-        max_tabs_value = 2
 
         # Create 2 STREAMING units (protected, can't evict)
         for i in range(2):
@@ -230,27 +231,28 @@ class TestC3SlotRaceCondition:
         )
         router._units[cold_unit.session_id] = cold_unit
 
+        # RAM exhausted → spawn_budget denies. With only protected peers (no
+        # evictable idle), the request must time out.
         mock_budget = MagicMock()
-        mock_budget.can_spawn = True
-        mock_budget.reason = "ok"
-        mock_budget.available_mb = 8000.0
-        mock_budget.estimated_cost_mb = 500.0
-        mock_budget.headroom_mb = 512.0
+        mock_budget.can_spawn = False
+        mock_budget.reason = "memory at 92%"
+        mock_budget.available_mb = 100.0
+        mock_budget.estimated_cost_mb = 600.0
+        mock_budget.headroom_mb = 0.0
 
         with patch(
             "core.resource_monitor.resource_monitor"
         ) as mock_rm:
-            mock_rm.compute_max_tabs.return_value = max_tabs_value
             mock_rm.spawn_budget.return_value = mock_budget
             mock_rm.invalidate_cache = MagicMock()
 
             result = await router._acquire_slot(cold_unit)
 
-        # The 3rd request should timeout since all slots are protected
+        # The request should timeout: RAM denied + no evictable peer.
         assert result == "timeout", (
-            f"Expected 'timeout' when all {max_tabs_value} slots are occupied "
-            f"by STREAMING units, got '{result}'. The lock should prevent "
-            f"over-allocation beyond max_tabs."
+            f"Expected 'timeout' when spawn_budget denies and all peers are "
+            f"protected STREAMING units, got '{result}'. The lock should "
+            f"prevent over-allocation when RAM is exhausted."
         )
 
 
@@ -459,7 +461,8 @@ class TestP6QueueTimeout:
 
     @pytest.mark.asyncio
     async def test_queue_timeout_returns_timeout(self):
-        """_acquire_slot() returns 'timeout' when all slots are STREAMING."""
+        """_acquire_slot() returns 'timeout' when RAM is exhausted and all
+        peers are protected STREAMING units (R6a: budget-gated, not count-gated)."""
         from core.session_unit import SessionUnit, SessionState
         from core.session_router import SessionRouter
 
@@ -484,12 +487,13 @@ class TestP6QueueTimeout:
         cold_unit.state = SessionState.COLD
         router._units[cold_unit.session_id] = cold_unit
 
-        # Mock compute_max_tabs to return 2 (all slots occupied)
+        # R6a: spawn_budget denies (RAM exhausted) → with only protected peers,
+        # the request must time out.
         mock_budget = MagicMock()
-        mock_budget.can_spawn = True
+        mock_budget.can_spawn = False
+        mock_budget.reason = "memory at 92%"
 
         with patch("core.resource_monitor.resource_monitor") as mock_rm:
-            mock_rm.compute_max_tabs.return_value = 2
             mock_rm.spawn_budget.return_value = mock_budget
             mock_rm.invalidate_cache = MagicMock()
 

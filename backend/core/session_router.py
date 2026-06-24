@@ -1,9 +1,11 @@
-"""SessionRouter — thin routing layer with dynamic concurrency cap enforcement.
+"""SessionRouter — thin routing layer with RAM-based spawn admission.
 
 Routes chat requests to the correct ``SessionUnit`` by session ID.
-Enforces a dynamic concurrency cap computed from available system RAM
-via ``ResourceMonitor.compute_max_tabs()`` by evicting idle units or
-queuing requests when all slots are occupied by protected units.
+Spawn/resume admission is gated SOLELY by ``ResourceMonitor.spawn_budget()``
+(real available RAM, with a concurrent-peak penalty) — NOT by a tab-count
+ceiling. When RAM is exhausted, requests evict an idle peer or queue until a
+slot frees naturally. (R6a, design §9: the ``compute_max_tabs`` UX ceiling is
+a frontend concern, no longer consulted for backend arbitration.)
 
 This module contains ONLY routing and cap logic.  No subprocess lifecycle,
 prompt building, or hook execution lives here.
@@ -489,10 +491,11 @@ async def _convert_unsupported_blocks_to_path_hints(
 
 
 class SessionRouter:
-    """Routes chat requests to SessionUnits with dynamic concurrency cap.
+    """Routes chat requests to SessionUnits with RAM-based spawn admission.
 
-    The concurrency limit is computed at runtime from available system RAM
-    via ``ResourceMonitor.compute_max_tabs()`` (range [1, 4]).
+    Spawn admission is gated by ``ResourceMonitor.spawn_budget()`` (real RAM)
+    rather than a fixed tab-count ceiling (R6a, design §9). The first tab is
+    always granted (alive_count == 0); subsequent spawns require budget.
 
     Public API surface consumed by ``routers/chat.py``.
 
@@ -880,36 +883,45 @@ class SessionRouter:
 
         _needs_queue = False
         async with self._slot_lock:
-            max_tabs = resource_monitor.compute_max_tabs()
-            chat_max = max_tabs - 1  # Reserve 1 for channel
+            # R6a (§9.5): backend admission is gated SOLELY by spawn_budget
+            # (real RAM), NOT by compute_max_tabs (a frontend UX constant).
+            # spawn_budget's alive_count penalty (_CONCURRENT_PENALTY_FACTOR)
+            # remains the COE05 simultaneous-peak floor — unchanged. The frontend
+            # still bounds tab COUNT via MAX_TABS_HARD_CEILING; the backend only
+            # answers "is there RAM to spawn."
+            #
+            # First tab is sacred — always allow at least one session, regardless
+            # of budget (pessimistic budget must never deadlock the only tab).
+            if self.alive_count == 0:
+                return "ready"
 
-            if self._chat_alive_count < chat_max:
-                # First tab is sacred — always allow at least one session
-                if self.alive_count > 0:
-                    budget = resource_monitor.spawn_budget(alive_count=self.alive_count)
-                    if not budget.can_spawn:
-                        logger.warning(
-                            "session_router: slot available but spawn budget denied "
-                            "session_id=%s reason=%s",
-                            requesting_unit.session_id, budget.reason,
-                        )
-                        if await self._evict_idle(exclude=requesting_unit):
-                            resource_monitor.invalidate_cache()
-                            budget = resource_monitor.spawn_budget(alive_count=self.alive_count)
-                            if budget.can_spawn:
-                                return "ready"
-                        # Grace period blocked eviction — queue and wait for a
-                        # slot to free naturally before force-killing. Eviction
-                        # cost (800K token context lost) >> queue cost (60s wait).
-                        # Evidence: 28 exit-9 kills in 24h from immediate force.
-                        _needs_queue = True
-                if not _needs_queue:
-                    return "ready"
+            # spawn_budget is the UNCONDITIONAL gate. There is no budget-free
+            # spawn path: every "evict → ready" branch re-checks budget after
+            # eviction (Gate-1 WARN, run_6ea35431 — the old chat_max-full
+            # fall-through returned 'ready' without re-validating budget).
+            budget = resource_monitor.spawn_budget(alive_count=self.alive_count)
+            if budget.can_spawn:
+                return "ready"
 
-            if not _needs_queue:
-                # Chat pool full — try evicting a chat IDLE unit
-                if await self._evict_idle(exclude=requesting_unit):
+            logger.warning(
+                "session_router: spawn budget denied "
+                "session_id=%s reason=%s",
+                requesting_unit.session_id, budget.reason,
+            )
+            # Budget denied — try to free RAM by evicting an IDLE peer, then
+            # RE-CHECK budget before granting. Eviction within grace is refused
+            # here (force=False); the queue+timeout path below is the only
+            # escalation to force=True.
+            if await self._evict_idle(exclude=requesting_unit):
+                resource_monitor.invalidate_cache()
+                budget = resource_monitor.spawn_budget(alive_count=self.alive_count)
+                if budget.can_spawn:
                     return "ready"
+            # Grace period blocked eviction, or eviction didn't free enough RAM —
+            # queue and wait for a slot to free naturally before force-killing.
+            # Eviction cost (800K token context lost) >> queue cost (60s wait).
+            # Evidence: 28 exit-9 kills in 24h from immediate force.
+            _needs_queue = True
 
         # All chat slots occupied OR budget-denied with grace block — queue with deadline
         deadline = time.monotonic() + self.QUEUE_TIMEOUT
@@ -954,12 +966,10 @@ class SessionRouter:
             # the timeout last-resort below. Eviction cost (warm context lost +
             # cold resume) >> a bounded wait.
             async with self._slot_lock:
-                max_tabs = resource_monitor.compute_max_tabs()
-                chat_max = max_tabs - 1
-                if self._chat_alive_count < chat_max:
-                    budget = resource_monitor.spawn_budget(alive_count=self.alive_count)
-                    if budget.can_spawn:
-                        return "queued"
+                # R6a: budget is the sole gate (no compute_max_tabs ceiling).
+                budget = resource_monitor.spawn_budget(alive_count=self.alive_count)
+                if budget.can_spawn:
+                    return "queued"
                 if await self._evict_idle(exclude=requesting_unit, force=False):
                     return "queued"
             # Slot claimed by another coroutine — loop back to wait
@@ -1336,15 +1346,20 @@ class SessionRouter:
         # Check if we need to queue BEFORE blocking, so we can emit the
         # queued event immediately (user sees "Waiting..." not silence)
         from .resource_monitor import resource_monitor as _rm_check
-        _current_max = _rm_check.compute_max_tabs()
+        # R6a: the queued-indicator precheck mirrors _acquire_chat_slot's real
+        # gate — spawn_budget (RAM), not the compute_max_tabs UX ceiling. We will
+        # need to queue iff: not already alive, RAM can't admit a fresh spawn,
+        # AND no evictable IDLE peer exists to free a slot.
         # Mirror _evict_idle's candidate filter: a unit that is IDLE but still
         # generating after an SSE disconnect is NOT evictable, so it must not
         # count as a free-able slot here — otherwise we skip the "queued"
         # indicator and then fail to evict, falling through to QUEUE_TIMEOUT
         # without ever telling the user they were waiting.
+        _precheck_budget = _rm_check.spawn_budget(alive_count=self.alive_count)
         needs_queue = (
             not unit.is_alive
-            and self.alive_count >= _current_max
+            and self.alive_count > 0
+            and not _precheck_budget.can_spawn
             and not any(
                 u.state == SessionState.IDLE
                 and not u.is_post_disconnect_flushing
