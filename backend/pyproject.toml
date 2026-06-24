@@ -13,7 +13,7 @@ dependencies = [
     "pydantic>=2.10.0",
     "pydantic-settings>=2.6.0",
     # Claude Agent SDK
-    "claude-agent-sdk>=0.2.87,<0.3.0",
+    "claude-agent-sdk==0.2.109",
     # SQLite
     "aiosqlite>=0.20.0",
     # Authentication
