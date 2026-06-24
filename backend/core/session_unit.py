@@ -2772,8 +2772,25 @@ class SessionUnit:
         Non-fatal — if compact() fails, kill() still proceeds.
         If RSS measurement fails, silently skips.
         """
-        if time.monotonic() - self._last_proactive_restart < self.PROACTIVE_COOLDOWN:
-            return
+        # R3a: the cooldown DECISION now routes through the one recovery
+        # authority (CooldownThresholdPolicy). The Coordinator owns the
+        # cooldown verdict; this method still owns the RSS threshold
+        # measurement + the compact/kill mechanics + the timestamp write.
+        # enabled=True/user_stopped=False: RSS-proactive is not gated by the
+        # self-heal env flag and runs post-turn (no user turn in flight). The
+        # threshold check below is the RSS-specific gate the policy intentionally
+        # does not model.
+        from .session_healing import RecoveryVerdict
+        _rss_decision = self._recovery_coordinator.decide_rss(
+            now=time.monotonic(),
+            last_recovery=self._last_proactive_restart,
+            cooldown_s=self.PROACTIVE_COOLDOWN,
+            enabled=True,
+            user_stopped=False,
+            state=self.state.value,
+        )
+        if _rss_decision.verdict is not RecoveryVerdict.PROCEED_KILL:
+            return  # DEFER (cooling down) or SKIP — no proactive restart this tick
 
         pid = self.pid
         if not pid:

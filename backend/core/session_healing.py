@@ -449,12 +449,24 @@ from enum import Enum
 
 
 class RecoveryVerdict(Enum):
-    """What the Coordinator decided about a recovery request."""
+    """What the Coordinator decided about a recovery request.
+
+    Seven verdicts cover the four decision shapes across all 8 kill paths
+    (validated R3a). The original five (R3) are unchanged; the two additions are
+    the verdicts the un-migrated triggers will need — declared now so R3b–g add
+    policies, not re-touch this enum (additive, zero risk to shipped self-heal).
+    """
     SKIP = "skip"                      # guard failed (disabled / user-stopped / protected state)
     DEFER = "defer"                    # allowed eventually, but cooling down — try later
     PROCEED_GRACEFUL = "proceed_graceful"  # heal, but inject wrap-up first (two-phase)
-    PROCEED_KILL = "proceed_kill"      # heal now (immediate kill → COLD → resume)
+    PROCEED_KILL = "proceed_kill"      # heal now (kill → COLD → --resume PRESERVED)
     ESCALATE = "escalate"              # breaker tripped — recovery itself is failing
+    # ── R3a additions (not yet emitted by a migrated trigger; R3b–g use them) ──
+    PROCEED_INTERRUPT = "proceed_interrupt"  # warm, non-destructive (tool-hang tier 1)
+    PROCEED_KILL_HARD = "proceed_kill_hard"  # kill + DROP --resume identity
+    #                                          (streaming-timeout circuit-break, OOM limit).
+    #   The PROCEED_KILL vs PROCEED_KILL_HARD split is the single most
+    #   safety-relevant distinction in recovery: keep vs drop conversation context.
 
 
 @dataclass
@@ -463,12 +475,133 @@ class RecoveryDecision:
     reason: str = ""
 
 
+@dataclass
+class RecoveryContext:
+    """Inputs a policy needs to decide. Superset across shapes — a given policy
+    reads only the fields its shape uses (attempt-breaker ignores now/last_recovery;
+    cooldown-threshold ignores graceful_pending). Decision-in-coordinator,
+    state-in-caller: the caller passes timestamps it owns; the policy is stateless
+    w.r.t. cooldown (it reads now/last_recovery, never writes them)."""
+    trigger: str
+    enabled: bool
+    user_stopped: bool
+    state: str
+    graceful_pending: bool = False
+    now: float = 0.0
+    last_recovery: float = 0.0
+    cooldown_s: float = 0.0
+
+
 # Triggers that get the graceful two-phase wrap-up (subprocess still healthy,
-# turn buffer exists). Everything else heals immediately. This per-trigger policy
-# is centralized HERE — future migrated triggers declare their policy to this one
-# authority instead of scattering it across call sites.
+# turn buffer exists). Everything else heals immediately.
 _GRACEFUL_TRIGGERS = frozenset({"turn_approaching"})
-_PROTECTED_STATES = frozenset({"waiting_input"})
+
+
+def _universal_guard(ctx: "RecoveryContext") -> "RecoveryDecision | None":
+    """The ONLY truly cross-policy guards: never recover if self-heal is disabled
+    or the user stopped this turn. Protected-STATES are NOT here — they are
+    policy-specific (self-heal protects WAITING_INPUT; stuck-WAITING TARGETS it),
+    so each policy declares its own state eligibility. Returns a SKIP decision to
+    short-circuit, or None to let the policy decide."""
+    if not ctx.enabled:
+        # Reason kept verbatim from R3 ("self_heal_disabled") for strict parity —
+        # though no current consumer reads decision.reason on the SKIP path.
+        return RecoveryDecision(RecoveryVerdict.SKIP, "self_heal_disabled")
+    if ctx.user_stopped:
+        return RecoveryDecision(RecoveryVerdict.SKIP, "user_stopped_current_turn")
+    return None
+
+
+class RecoveryPolicy:
+    """A recovery decision shape. decide(ctx) -> RecoveryDecision.
+
+    Each policy owns its gate (attempt-breaker / cooldown-threshold / bare-threshold
+    / graceful-escalation) AND its state eligibility. The Coordinator dispatches to
+    the trigger's policy; the universal guard (enabled/user_stopped) is applied by
+    the Coordinator before dispatch. Four shapes were validated against all 8 kill
+    paths (R3a); R3a implements two, R3b–g add the other two."""
+
+    def decide(self, ctx: "RecoveryContext") -> "RecoveryDecision":  # pragma: no cover - interface
+        raise NotImplementedError
+
+
+_ATTEMPT_BREAKER_PROTECTED_STATES = frozenset({"waiting_input"})
+
+
+class AttemptBreakerPolicy(RecoveryPolicy):
+    """Self-heal's shape: attempt-breaker (max N + cooldown) + escalate-to-user.
+    A PURE EXTRACT of the R3 decide() logic — same HealingLoop calls, same order,
+    same verdicts. Protects WAITING_INPUT (user is mid-answer). Holds the breaker
+    + the one-shot terminal signal (moved here verbatim from the Coordinator)."""
+
+    def __init__(self, healing_loop: "HealingLoop"):
+        self._loop = healing_loop
+        self._terminal_reached: bool = False
+        self._terminal_signal_count: int = 0
+
+    @property
+    def terminal_reached(self) -> bool:
+        return self._terminal_reached
+
+    @property
+    def terminal_signal_count(self) -> int:
+        return self._terminal_signal_count
+
+    def on_success(self) -> None:
+        self._terminal_reached = False
+
+    def decide(self, ctx: "RecoveryContext") -> "RecoveryDecision":
+        guard = _universal_guard(ctx)
+        if guard is not None:
+            return guard
+        # Policy-specific state guard (NOT a coordinator constant).
+        if ctx.state in _ATTEMPT_BREAKER_PROTECTED_STATES:
+            return RecoveryDecision(RecoveryVerdict.SKIP, f"protected_state:{ctx.state}")
+
+        can_heal, reason = self._loop.can_heal()
+        if not can_heal:
+            if self._loop.should_escalate():
+                if not self._terminal_reached:
+                    self._terminal_reached = True
+                    self._terminal_signal_count += 1
+                    logger.warning(
+                        "recovery_coordinator.terminal_reached trigger=%s "
+                        "attempts=%d/%d — recovery exhausted, escalate to user",
+                        ctx.trigger, self._loop.heal_attempts, MAX_HEAL_ATTEMPTS,
+                    )
+                return RecoveryDecision(RecoveryVerdict.ESCALATE, reason)
+            return RecoveryDecision(RecoveryVerdict.DEFER, reason)
+
+        if ctx.trigger in _GRACEFUL_TRIGGERS and not ctx.graceful_pending:
+            return RecoveryDecision(RecoveryVerdict.PROCEED_GRACEFUL, "graceful_phase_1")
+        return RecoveryDecision(RecoveryVerdict.PROCEED_KILL, "")
+
+
+class CooldownThresholdPolicy(RecoveryPolicy):
+    """RSS-proactive's shape: cooldown-gated threshold. No attempt-breaker, no
+    escalation, no graceful — within cooldown → DEFER, past cooldown → PROCEED_KILL.
+    Stateless w.r.t. the cooldown timestamp: reads ctx.now/ctx.last_recovery, the
+    caller owns + writes the timestamp. Does NOT impose a protected-state set (RSS
+    fires in IDLE; the threshold check that gates it lives in the caller)."""
+
+    def __init__(self, cooldown_s: float = 0.0):
+        # Default cooldown for callers that construct with a fixed value + pass a
+        # context without cooldown_s. The context value wins when provided (>0),
+        # keeping the policy stateless across differing-cooldown callers.
+        self._default_cooldown_s = cooldown_s
+
+    def decide(self, ctx: "RecoveryContext") -> "RecoveryDecision":
+        guard = _universal_guard(ctx)
+        if guard is not None:
+            return guard
+        cooldown_s = ctx.cooldown_s if ctx.cooldown_s > 0 else self._default_cooldown_s
+        elapsed = ctx.now - ctx.last_recovery
+        if elapsed < cooldown_s:
+            return RecoveryDecision(
+                RecoveryVerdict.DEFER,
+                f"cooldown active ({cooldown_s - elapsed:.0f}s remaining)",
+            )
+        return RecoveryDecision(RecoveryVerdict.PROCEED_KILL, "")
 
 
 class RecoveryCoordinator:
@@ -483,23 +616,29 @@ class RecoveryCoordinator:
 
     def __init__(self, healing_loop: "HealingLoop"):
         self._loop = healing_loop
-        self._terminal_reached: bool = False
-        self._terminal_signal_count: int = 0
+        # R3a: the self-heal decision now lives in a policy (per-trigger dispatch).
+        # AttemptBreakerPolicy is a pure extract of the R3 decide() logic + owns
+        # the one-shot terminal signal. The Coordinator stays the single authority
+        # and keeps the SAME public API (decide / terminal_* / record_* / heal_attempts).
+        self._attempt_policy = AttemptBreakerPolicy(healing_loop)
+        # RSS-proactive shape (R3a). Cooldown value is passed per-call (the unit
+        # owns PROACTIVE_COOLDOWN), so this policy is reusable/stateless.
+        self._cooldown_policy = CooldownThresholdPolicy(cooldown_s=0.0)
 
     # ── observability (decision #3 backend half — UI-ready, no SSE yet) ──
     @property
     def terminal_recovery_reached(self) -> bool:
         """True once the breaker has tripped (recovery itself is failing).
         R4 maps this to a user-facing inline `recovery_exhausted` SSE event."""
-        return self._terminal_reached
+        return self._attempt_policy.terminal_reached
 
     @property
     def terminal_signal_count(self) -> int:
         """How many times the terminal signal fired (must be exactly 1 per
         exhaustion episode — never spam the user)."""
-        return self._terminal_signal_count
+        return self._attempt_policy.terminal_signal_count
 
-    # ── the decision ──
+    # ── the decision (self-heal — dispatches to the attempt-breaker policy) ──
     def decide(
         self,
         trigger: str,
@@ -509,41 +648,35 @@ class RecoveryCoordinator:
         state: str,
         graceful_pending: bool,
     ) -> RecoveryDecision:
-        """Single recovery decision. Pure function of (trigger, guards, breaker
-        state) → verdict. Performs NO mutation except firing the one-shot terminal
-        signal on escalation."""
-        # Guard: never recover if disabled, user-stopped this turn, or in a
-        # protected state (WAITING_INPUT = user is mid-answer).
-        if not enabled:
-            return RecoveryDecision(RecoveryVerdict.SKIP, "self_heal_disabled")
-        if user_stopped:
-            return RecoveryDecision(RecoveryVerdict.SKIP, "user_stopped_current_turn")
-        if state in _PROTECTED_STATES:
-            return RecoveryDecision(RecoveryVerdict.SKIP, f"protected_state:{state}")
+        """Self-heal recovery decision. Unchanged public API (R3). Now dispatches
+        to AttemptBreakerPolicy — behavior is identical (pure extract)."""
+        ctx = RecoveryContext(
+            trigger=trigger, enabled=enabled, user_stopped=user_stopped,
+            state=state, graceful_pending=graceful_pending,
+        )
+        return self._attempt_policy.decide(ctx)
 
-        # Breaker: may we heal at all?
-        can_heal, reason = self._loop.can_heal()
-        if not can_heal:
-            if self._loop.should_escalate():
-                # Breaker tripped — recovery is failing. Fire the terminal signal
-                # exactly once until a success resets it.
-                if not self._terminal_reached:
-                    self._terminal_reached = True
-                    self._terminal_signal_count += 1
-                    logger.warning(
-                        "recovery_coordinator.terminal_reached trigger=%s "
-                        "attempts=%d/%d — recovery exhausted, escalate to user",
-                        trigger, self._loop.heal_attempts, MAX_HEAL_ATTEMPTS,
-                    )
-                return RecoveryDecision(RecoveryVerdict.ESCALATE, reason)
-            # Not exhausted → just cooling down.
-            return RecoveryDecision(RecoveryVerdict.DEFER, reason)
-
-        # Allowed — pick the kind. Graceful two-phase for turn_approaching's first
-        # pass; immediate kill otherwise (or on the second pass when pending).
-        if trigger in _GRACEFUL_TRIGGERS and not graceful_pending:
-            return RecoveryDecision(RecoveryVerdict.PROCEED_GRACEFUL, "graceful_phase_1")
-        return RecoveryDecision(RecoveryVerdict.PROCEED_KILL, "")
+    # ── RSS-proactive decision (R3a — dispatches to the cooldown policy) ──
+    def decide_rss(
+        self,
+        *,
+        now: float,
+        last_recovery: float,
+        cooldown_s: float,
+        enabled: bool,
+        user_stopped: bool,
+        state: str,
+    ) -> RecoveryDecision:
+        """RSS-proactive recovery decision: cooldown-gated. The caller still owns
+        the RSS threshold measurement + the cooldown timestamp; the Coordinator
+        owns only the cooldown DECISION (within → DEFER, past → PROCEED_KILL).
+        No attempt-breaker, no escalation imposed — RSS never had them.
+        cooldown passed via context (stateless policy — no per-call mutation)."""
+        ctx = RecoveryContext(
+            trigger="rss_proactive", enabled=enabled, user_stopped=user_stopped,
+            state=state, now=now, last_recovery=last_recovery, cooldown_s=cooldown_s,
+        )
+        return self._cooldown_policy.decide(ctx)
 
     # ── breaker lifecycle passthroughs (delegate to the ONE held loop) ──
     def record_heal_start(self, trigger: str = "") -> None:
@@ -551,7 +684,7 @@ class RecoveryCoordinator:
 
     def record_heal_success(self) -> None:
         self._loop.record_heal_success()
-        self._terminal_reached = False  # fresh budget — clear terminal state
+        self._attempt_policy.on_success()  # fresh budget — clear terminal state
 
     def record_heal_failure(self, reason: str) -> None:
         self._loop.record_heal_failure(reason)
