@@ -114,8 +114,11 @@ export default function AskUserQuestion({
             const chosen = submittedAnswers[q.question];
             // Multi-select answers are persisted as a ", "-joined string. Split
             // them back into individual chips so the summary is structurally
-            // faithful to what was chosen — and unambiguous when an option label
-            // itself contains a comma (a flat string would be unparseable).
+            // faithful to what was chosen. Caveat: an option label that itself
+            // contains the substring ", " would over-split into extra chips —
+            // a cosmetic display-only issue (the answer sent to the backend is
+            // the unsplit string and is unaffected). A fully robust fix would
+            // persist multi-select as a string[]; out of scope for this UX run.
             const picks = chosen
               ? q.multiSelect
                 ? chosen.split(', ').filter(Boolean)

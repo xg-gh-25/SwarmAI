@@ -2060,6 +2060,18 @@ export default function ChatPage() {
         );
       const store = messageStoreRegistry.get(tabId);
       if (store) {
+        const matched = store.messages.some(hasBlock);
+        if (!matched && import.meta.env.DEV) {
+          // Silent answer-loss guard: if no block matches the just-submitted
+          // toolUseId, updateLast no-ops → the optimistic "Answered" summary is
+          // skipped AND (since the backend doesn't persist ask_user_question
+          // blocks) reconcile carry-forward also lacks answers → the form
+          // silently reverts. Surface it in dev so a toolUseId drift is visible.
+          console.warn(
+            '[ChatPage] answer submitted but no ask_user_question block matched toolUseId — summary will not render',
+            { toolUseId, tabId },
+          );
+        }
         store.updateLast(writeAnswersOntoBlock, hasBlock);
         if (tabState) tabState.messages = store.messages;
       } else if (tabState) {

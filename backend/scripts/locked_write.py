@@ -278,11 +278,20 @@ def _set_field(
         field_name: Field name (e.g. "Status").
         value: New value to set.
 
+    Upsert semantics: if the field line does not exist yet (legacy/seed
+    entries written before the field convention), it is inserted right
+    after the entry header. This mirrors the read path, which treats an
+    absent field as a default value — so a field-less entry can still be
+    deprecated (the original bug: set-field raised on entries lacking a
+    Status line, silently failing every maintenance run).
+
     Returns:
-        Modified content string with the field updated.
+        Modified content string with the field updated, or inserted if
+        the field line was absent.
 
     Raises:
-        ValueError: If entry not found or field not found.
+        ValueError: If the entry is not found, or the entry block has no
+            ``###`` header line.
     """
     entry_range = _find_entry_in_section(content, section, entry_id)
     if entry_range is None:
@@ -300,11 +309,22 @@ def _set_field(
     )
     field_match = field_pattern.search(entry_block)
     if field_match is None:
-        raise ValueError(
-            f"Field '{field_name}' not found in entry '{entry_id}'"
+        # Upsert: insert the field line immediately after the header so the
+        # write path tolerates an absent field exactly as the read path does.
+        header_match = re.match(r"^###[^\n]*", entry_block)
+        if header_match is None:
+            raise ValueError(
+                f"Entry '{entry_id}' in section '{section}' has no header line"
+            )
+        insert_at = header_match.end()
+        new_entry_block = (
+            entry_block[:insert_at]
+            + f"\n- **{field_name}**: {value}"
+            + entry_block[insert_at:]
         )
+        return content[:entry_start] + new_entry_block + content[entry_end:]
 
-    # Replace the value portion
+    # Replace the value portion of the existing field line
     new_entry_block = (
         entry_block[: field_match.start(2)]
         + value

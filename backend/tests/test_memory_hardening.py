@@ -340,6 +340,70 @@ class TestLockedFieldModifyGuard:
 
         assert "deprecated" in evo_file.read_text()
 
+    def test_set_field_upserts_missing_field(self, tmp_path):
+        """set-field on an entry that lacks the field inserts it (upsert).
+
+        Regression: legacy/seed entries (e.g. K001-K014) carry only a
+        ``- **Competence**:`` line, no ``- **Status**:``. The read path
+        defaults a missing Status to "active" (deprecation-eligible), but
+        set-field used to raise "Field 'Status' not found", so the
+        maintenance hook could never deprecate them and warned every run.
+        Upsert closes that read/write asymmetry. This test ENTERS the
+        previously-broken path.
+        """
+        from scripts.locked_write import locked_field_modify
+
+        evo_file = tmp_path / "EVOLUTION.md"
+        evo_file.write_text(
+            "## Competence Learned\n\n"
+            "### K008 | 2026-03-24\n"
+            "- **Competence**: Project DDD System\n"
+        )
+
+        # Must NOT raise even though the Status line is absent.
+        locked_field_modify(
+            evo_file,
+            "Competence Learned",
+            "K008",
+            "Status",
+            "set-field",
+            "deprecated",
+        )
+
+        text = evo_file.read_text()
+        # Field was inserted, original field preserved, header intact.
+        assert "- **Status**: deprecated" in text
+        assert "- **Competence**: Project DDD System" in text
+        assert "### K008 | 2026-03-24" in text
+        # Inserted directly after the header (newest-first, before Competence).
+        assert text.index("- **Status**") < text.index("- **Competence**")
+
+    def test_set_field_updates_existing_field_not_duplicated(self, tmp_path):
+        """Upsert must still UPDATE (not duplicate) when the field exists."""
+        from scripts.locked_write import locked_field_modify
+
+        evo_file = tmp_path / "EVOLUTION.md"
+        evo_file.write_text(
+            "## Competence Learned\n\n"
+            "### K001 | 2026-03-15\n"
+            "- **Status**: active\n"
+            "- **Competence**: SSE streaming pipeline\n"
+        )
+
+        locked_field_modify(
+            evo_file,
+            "Competence Learned",
+            "K001",
+            "Status",
+            "set-field",
+            "deprecated",
+        )
+
+        text = evo_file.read_text()
+        assert text.count("- **Status**:") == 1
+        assert "- **Status**: deprecated" in text
+        assert "- **Status**: active" not in text
+
 
 class TestUTF8CorruptionResilience:
     """locked_write survives corrupted UTF-8 files."""
