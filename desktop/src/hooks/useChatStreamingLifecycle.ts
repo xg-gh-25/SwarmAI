@@ -2119,6 +2119,42 @@ export function useChatStreamingLifecycle(
       }
 
       return (event: StreamEvent) => {
+        // recovery_exhausted is a pure side-channel signal (toast only — no
+        // store/streamState writes) and is yielded from the self-heal block
+        // AFTER the turn's `result` event, which has already bumped streamGen.
+        // It MUST be handled BEFORE the generation guard below, or the guard
+        // discards it as a stale-generation event and the toast never shows
+        // (the feature would be dead for the foreground tab — adversarial #1,
+        // run_d8dce02a). Handle-before-guard mirrors how file_changed-class
+        // side-channel events must bypass the cross-turn-bleed guard.
+        if (event.type === 'recovery_exhausted') {
+          // Only actionable for a real, still-open tab: handleNewChat clears
+          // the ACTIVE tab, so a 'Start fresh' on a closed/unknown tab would
+          // wipe the wrong live tab (adversarial #3/#4). Require capturedTabId
+          // to still exist before offering the action.
+          const rexTabId = capturedTabId;
+          const tabStillOpen = !!rexTabId && tabMapRef.current.has(rexTabId);
+          const rexToastId = `recovery-exhausted-${rexTabId ?? 'global'}`;
+          const msg = event.message
+            ?? 'Automatic recovery for this session has stopped. Start a fresh session to continue.';
+          addToast({
+            severity: 'warning',
+            message: msg,
+            id: rexToastId,
+            autoDismiss: false,
+            action: (tabStillOpen && onStartFresh)
+              ? {
+                  label: 'Start fresh session',
+                  onClick: () => {
+                    removeToast(rexToastId);
+                    onStartFresh(rexTabId);
+                  },
+                }
+              : undefined,
+          });
+          return; // side-channel handled; never falls through to stream logic
+        }
+
         // Generation guard: discard events from a previous stream.
         // This prevents cross-turn bleed where stale SSE events from an
         // interrupted response arrive after a new stream has started.
@@ -3266,35 +3302,6 @@ export function useChatStreamingLifecycle(
             severity: 'warning',
             message: msg,
             id: `mcp-health-${capturedTabId ?? 'global'}`,
-          });
-        }
-        // recovery_exhausted: the backend's self-heal breaker tripped — automatic
-        // recovery has given up, so the session is otherwise a silent dead-end.
-        // Surface a persistent, actionable toast (decision #3). The action is
-        // "Start fresh session" (the SAFE recovery — re-sending into a session
-        // that failed N heals risks re-wedging it; a clean session always works).
-        // GUI28: a persistent (autoDismiss:false) toast MUST have a paired clear
-        // path — we clear on the action click AND as a backstop on the next
-        // session_start for this tab (see SESSION_START handler).
-        else if (event.type === 'recovery_exhausted') {
-          const rexTabId = capturedTabId ?? 'global';
-          const rexToastId = `recovery-exhausted-${rexTabId}`;
-          const msg = event.message
-            ?? 'Automatic recovery for this session has stopped. Start a fresh session to continue.';
-          addToast({
-            severity: 'warning',
-            message: msg,
-            id: rexToastId,
-            autoDismiss: false,
-            action: onStartFresh
-              ? {
-                  label: 'Start fresh session',
-                  onClick: () => {
-                    removeToast(rexToastId);
-                    onStartFresh(rexTabId);
-                  },
-                }
-              : undefined,
           });
         }
         // Evolution SSE events — inject as standalone messages in the stream

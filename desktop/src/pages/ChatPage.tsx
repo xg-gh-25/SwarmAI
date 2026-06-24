@@ -811,6 +811,11 @@ export default function ChatPage() {
     // Destroy MessageStore for this tab (cleanup timers, listeners, prevent leak)
     messageStoreRegistry.destroy(tabId);
 
+    // GUI28: clear any persistent recovery_exhausted toast for this tab — else
+    // it outlives the tab and its "Start fresh" action would clear the WRONG
+    // (now-active) tab (adversarial #3/#4, run_d8dce02a).
+    removeToast(`recovery-exhausted-${tabId}`);
+
     // Let closeTab handle map deletion + auto-create of last tab.
     // Do NOT call cleanupTabState before closeTab — it deletes the tab
     // from the map, causing closeTab to early-return and skip the
@@ -838,7 +843,7 @@ export default function ChatPage() {
         setIsExpanded(false);
       }
     }
-  }, [closeTab, clearPendingStreamTab, pendingStreamTabs, tabMapRef, activeTabIdRef, setMessages, setSessionId, setPendingQuestion, setContextWarning]);
+  }, [closeTab, clearPendingStreamTab, pendingStreamTabs, tabMapRef, activeTabIdRef, setMessages, setSessionId, setPendingQuestion, setContextWarning, removeToast]);
 
   // Handle session selection
   const handleSelectSession = useCallback(async (session: ChatSession) => {

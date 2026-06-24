@@ -3301,7 +3301,6 @@ class SessionUnit:
                 # self.session_id is ALWAYS set; _sdk_session_id is None until a
                 # spawn assigns it (Gate-1 #5 correction).
                 "sessionId": self.session_id,
-                "trigger": trigger,
                 "message": (
                     "Automatic recovery for this session has failed repeatedly "
                     "and has stopped. Start a fresh session to continue — your "

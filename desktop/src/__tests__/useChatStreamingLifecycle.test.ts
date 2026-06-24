@@ -389,6 +389,85 @@ describe('useChatStreamingLifecycle', () => {
     });
   });
 
+  describe('recovery_exhausted toast (run_d8dce02a)', () => {
+    // Adversarial #1 (CRITICAL): recovery_exhausted is yielded AFTER the turn's
+    // `result` event, which bumps streamGen. If it were handled after the
+    // generation guard it would be discarded as stale and the toast would never
+    // show. These tests pin that it is handled BEFORE the guard.
+    it('surfaces the toast even after result bumped streamGen (survives the guard)', () => {
+      const msgId = 'msg-rex';
+      const onStartFresh = vi.fn();
+      const { result } = renderHook(() =>
+        useChatStreamingLifecycle({ ...createMockDeps(), onStartFresh }),
+      );
+      act(() => {
+        initTestTab('tab-1');
+        result.current.setIsStreaming(true);
+        result.current.setMessages([
+          makeMessage({ id: msgId, role: 'assistant', content: [] }),
+        ]);
+      });
+
+      const handler = result.current.createStreamHandler(msgId, 'tab-1');
+      const genBefore = result.current.streamGenRef.current;
+
+      // result completes the turn → bumps streamGen (the stale-event trap).
+      act(() => {
+        handler({ type: 'result', sessionId: 'sess-rex' });
+      });
+      expect(result.current.streamGenRef.current).toBeGreaterThan(genBefore);
+
+      mockAddToast.mockClear();
+      // recovery_exhausted arrives AFTER result, on the bumped generation.
+      act(() => {
+        handler({
+          type: 'recovery_exhausted',
+          sessionId: 'sess-rex',
+          message: 'Automatic recovery has stopped.',
+        });
+      });
+
+      // The toast MUST be raised despite the generation bump.
+      expect(mockAddToast).toHaveBeenCalledTimes(1);
+      const toast = mockAddToast.mock.calls[0][0];
+      expect(toast.severity).toBe('warning');
+      expect(toast.autoDismiss).toBe(false);
+      expect(toast.id).toBe('recovery-exhausted-tab-1');
+      expect(toast.action?.label).toBe('Start fresh session');
+    });
+
+    it('action triggers onStartFresh for the tab', () => {
+      const onStartFresh = vi.fn();
+      const { result } = renderHook(() =>
+        useChatStreamingLifecycle({ ...createMockDeps(), onStartFresh }),
+      );
+      act(() => { initTestTab('tab-1'); });
+      const handler = result.current.createStreamHandler('m', 'tab-1');
+      act(() => {
+        handler({ type: 'recovery_exhausted', sessionId: 's', message: 'x' });
+      });
+      const toast = mockAddToast.mock.calls.at(-1)![0];
+      act(() => { toast.action!.onClick(); });
+      expect(onStartFresh).toHaveBeenCalledWith('tab-1');
+    });
+
+    it('offers NO action when the tab is no longer open (would clear the wrong tab)', () => {
+      // Adversarial #3/#4: a toast outliving its tab must not offer an action
+      // that clears the now-active tab.
+      const onStartFresh = vi.fn();
+      const { result } = renderHook(() =>
+        useChatStreamingLifecycle({ ...createMockDeps(), onStartFresh }),
+      );
+      // tab-gone is NOT in the tab map (never init'd / already closed).
+      const handler = result.current.createStreamHandler('m', 'tab-gone');
+      act(() => {
+        handler({ type: 'recovery_exhausted', sessionId: 's', message: 'x' });
+      });
+      const toast = mockAddToast.mock.calls.at(-1)![0];
+      expect(toast.action).toBeUndefined();
+    });
+  });
+
   describe('createCompleteHandler', () => {
     it('returns a function that sets isStreaming to false', () => {
       initTestTab('tab-ch-1');
