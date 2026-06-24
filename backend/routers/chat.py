@@ -1049,7 +1049,10 @@ async def release_session(session_id: str, body: Optional[dict] = None):
         Without force, an active session is left untouched (``skipped_active``)
         because the SSE-disconnect recovery path already handles it.
     """
-    force = bool(body.get("force")) if body else False
+    # Strict: only an explicit JSON boolean true enables force. Avoid
+    # truthiness-coercion — {"force": "false"} (string) must NOT enable the
+    # destructive interrupt-active branch on this public endpoint.
+    force = bool(body.get("force") is True) if isinstance(body, dict) else False
     logger.info("Received release request for session %s (force=%s)", session_id, force)
     result = await _get_router().release_session(session_id, force=force)
     return result

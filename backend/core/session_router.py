@@ -1736,7 +1736,6 @@ class SessionRouter:
         session_id: str,
         *,
         force: bool = False,
-        expected_generation: int | None = None,
     ) -> dict:
         """Free a session's concurrency slot on tab close (R6b).
 
@@ -1745,22 +1744,26 @@ class SessionRouter:
         and clear per-session module state.  It does **NOT** delete DB messages,
         so the conversation survives and the user can reopen it from history.
 
-        Safety (Gate-1 findings — see test_session_release.py):
+        Safety (Gate-1 + adversarial findings — see test_session_release.py):
 
+        - **Channel sessions** → ``skipped_channel``.  They persist for the
+          daemon's life and are not owned by any chat tab; mirror ``_check_ttl``.
         - **IDLE unit** → kill + ``_release_session_state``.  This is the orphan
           the feature fixes (a closed idle tab that would otherwise hold a slot
           until the 12h TTL).
-        - **Generation stale-guard (2a/2c)** — if ``expected_generation`` is
-          supplied and no longer matches ``unit._send_generation``, a new
-          ``send()`` re-adopted this session between the close and the release.
-          Abort (``skipped_stale``) — never kill a re-adopted session-instance.
         - **Active state (STREAMING / WAITING_INPUT)** — never raw-``kill()``:
           that races ``_recover_streaming_on_disconnect`` (which the SSE abort on
           tab close already triggers) and could destroy a freshly-reused slot.
           Without ``force`` → ``skipped_active`` (leave it alone — the abort path
           handles the slot).  With ``force=True`` (user confirmed closing a
-          streaming tab) → route through the generation-safe ``interrupt()``
-          primitive, then free state if it settled IDLE.
+          streaming tab) → ``interrupt()`` (generation-safe), then ``kill()`` the
+          settled-IDLE unit to actually free the slot.
+
+        Re-adopt protection (a new ``send()`` reclaiming the slot between close and
+        release): the active-state check above skips a re-adopted STREAMING unit,
+        and ``interrupt()`` carries its OWN ``_send_generation`` stale-guard that
+        bails if the generation advanced mid-interrupt.  No router-level generation
+        token is needed (and the frontend has none to pass at close time).
 
         Returns a status dict; always best-effort (never raises to the caller).
         """
@@ -1778,28 +1781,26 @@ class SessionRouter:
         if unit.is_channel_session:
             return {"status": "skipped_channel", "alive_count": self.alive_count}
 
-        # Generation stale-guard: the slot was re-adopted by a new turn.
-        if (
-            expected_generation is not None
-            and unit._send_generation != expected_generation
-        ):
-            logger.info(
-                "session_router.release stale (gen %s≠%s) session_id=%s — "
-                "slot re-adopted, skipping",
-                expected_generation, unit._send_generation, session_id,
-            )
-            return {"status": "skipped_stale", "alive_count": self.alive_count}
-
         # Active states are never raw-killed (races disconnect recovery).
         if unit.state in (SessionState.STREAMING, SessionState.WAITING_INPUT):
             if not force:
                 return {"status": "skipped_active", "alive_count": self.alive_count}
-            # Confirmed close of an active tab → generation-safe interrupt.
+            # Confirmed close of an active tab → generation-safe interrupt
+            # FIRST (it bails out if a new send() bumped the generation while
+            # awaiting, protecting a re-adopted slot).  interrupt()'s success
+            # path transitions STREAMING→IDLE but leaves the subprocess ALIVE —
+            # so it does NOT free the slot on its own.  We must kill the now-idle
+            # unit to actually release the concurrency slot (the whole point of
+            # R6b).  kill() is idempotent: if interrupt already killed (timeout
+            # fallback → COLD), this short-circuits.
             await unit.interrupt()
+            if unit.is_alive:
+                await unit.kill()
             LifecycleManager._release_session_state(session_id)
             logger.info(
-                "session_router.release interrupted active session_id=%s",
-                session_id,
+                "session_router.release interrupted+freed active session_id=%s "
+                "alive_count=%d",
+                session_id, self.alive_count,
             )
             return {"status": "released", "alive_count": self.alive_count}
 

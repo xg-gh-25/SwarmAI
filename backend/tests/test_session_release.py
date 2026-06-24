@@ -179,17 +179,24 @@ async def test_release_streaming_unit_without_force_does_not_kill():
 
 
 @pytest.mark.asyncio
-async def test_release_streaming_unit_with_force_routes_through_interrupt():
-    """Gate-1 5a: a confirmed (force=True) release of a STREAMING unit uses the
-    generation-safe interrupt() primitive, NOT a raw kill()."""
+async def test_release_streaming_unit_with_force_frees_the_slot():
+    """Gate-2 HIGH (adversarial): a confirmed (force=True) release of a STREAMING
+    unit MUST actually free the slot. interrupt() alone leaves the subprocess
+    alive in IDLE — so release must kill after interrupt settles. Asserting only
+    interrupt.await_count (as the original test did) masks the orphan-slot bug:
+    the slot stays held, defeating the entire purpose of R6b on the streaming
+    path. We assert alive_count DROPS, not just that interrupt was called."""
     router = _make_router()
-    s = _add_unit(router, "sess-S", SessionState.STREAMING)
+    _add_unit(router, "sess-S", SessionState.STREAMING)
+    _add_unit(router, "sess-keep", SessionState.IDLE)
+    assert router.alive_count == 2
 
     result = await router.release_session("sess-S", force=True)
 
-    assert s.interrupt.await_count == 1
-    assert s.kill.await_count == 0  # never a raw kill on an active unit
-    assert result["status"] in ("released", "interrupted")
+    assert result["status"] == "released"
+    # The slot MUST be freed — interrupt-then-still-alive is the bug.
+    assert router.alive_count == 1, "force-release of a streaming tab must free the slot"
+    assert not router.get_unit("sess-S").is_alive
 
 
 @pytest.mark.asyncio
@@ -203,31 +210,6 @@ async def test_release_waiting_input_without_force_does_not_kill():
     assert result["status"] == "skipped_active"
     assert w.kill.await_count == 0
     assert w.is_alive
-
-
-# ── Gate-1 2a: generation stale-guard on the IDLE path ────────────────────
-
-@pytest.mark.asyncio
-async def test_release_idle_aborts_if_generation_advanced():
-    """Gate-1 2a (temporal aliasing): if a new send() bumps _send_generation
-    between the release request and the kill, release must NOT kill — the slot
-    was re-adopted by a new turn."""
-    router = _make_router()
-    a = _add_unit(router, "sess-A", SessionState.IDLE)
-    gen_at_request = a._send_generation
-
-    # Simulate a concurrent send() that advanced the generation AND moved the
-    # unit back to STREAMING after the caller captured intent to release.
-    async def _fake_kill_with_race():
-        # by the time kill is reached, a new send has happened
-        raise AssertionError("kill() must not be called when generation advanced")
-    a.kill = AsyncMock(side_effect=_fake_kill_with_race)
-
-    result = await router.release_session(
-        "sess-A", expected_generation=gen_at_request + 5
-    )
-    assert result["status"] in ("skipped_stale", "skipped_active")
-    assert a.kill.await_count == 0
 
 
 # ── AC1/AC4: POST /api/chat/release/{session_id} endpoint ─────────────────
@@ -270,6 +252,33 @@ async def test_release_endpoint_passes_force_flag(monkeypatch):
 
     await chat_mod.release_session("sess-X", body={"force": True})
 
+    _, kwargs = fake_router.release_session.call_args
+    assert kwargs.get("force") is True
+
+
+@pytest.mark.asyncio
+async def test_release_endpoint_force_is_strict_boolean(monkeypatch):
+    """Adversarial LOW: force must be enabled ONLY by an explicit JSON `true`.
+    Truthiness-coercion (bool(body.get('force'))) would let {"force":"false"}
+    (a STRING) enable the destructive interrupt-active branch on this public
+    endpoint. Verify non-boolean truthy values do NOT force."""
+    import routers.chat as chat_mod
+
+    fake_router = MagicMock()
+    fake_router.release_session = AsyncMock(
+        return_value={"status": "released", "alive_count": 0}
+    )
+    monkeypatch.setattr(chat_mod, "_get_router", lambda: fake_router)
+
+    for bad in ({"force": "false"}, {"force": "true"}, {"force": 1}, {"force": "1"}, {}):
+        fake_router.release_session.reset_mock()
+        await chat_mod.release_session("sess-X", body=bad)
+        _, kwargs = fake_router.release_session.call_args
+        assert kwargs.get("force") is False, f"non-bool {bad!r} must not force"
+
+    # Only an explicit boolean True forces.
+    fake_router.release_session.reset_mock()
+    await chat_mod.release_session("sess-X", body={"force": True})
     _, kwargs = fake_router.release_session.call_args
     assert kwargs.get("force") is True
 
