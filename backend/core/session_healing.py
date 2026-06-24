@@ -434,6 +434,133 @@ class HealingLoop:
         return self._heal_attempts >= MAX_HEAL_ATTEMPTS
 
 
+# ─── RecoveryCoordinator (R3) ────────────────────────────────────────────────
+# Single recovery DECISION authority. The hang-class audit (run_d73c3e9a) found
+# 8 kill paths each owning their own breaker and deciding independently. This is
+# the one brain they will all eventually route through. R3 migrates the first,
+# highest-frequency trigger (self-heal) — the other 7 follow one per run (R3a–g).
+#
+# Strangler-fig (STEERING #4): this DELEGATES to a HealingLoop it holds; it does
+# NOT replace it. HealingLoop is unchanged so its 5 test files stay green. The
+# Coordinator owns the DECISION (may-we-recover + what-kind + escalation); the
+# kill MECHANICS stay in SessionUnit (unified later in R4 RecoveryTransaction).
+
+from enum import Enum
+
+
+class RecoveryVerdict(Enum):
+    """What the Coordinator decided about a recovery request."""
+    SKIP = "skip"                      # guard failed (disabled / user-stopped / protected state)
+    DEFER = "defer"                    # allowed eventually, but cooling down — try later
+    PROCEED_GRACEFUL = "proceed_graceful"  # heal, but inject wrap-up first (two-phase)
+    PROCEED_KILL = "proceed_kill"      # heal now (immediate kill → COLD → resume)
+    ESCALATE = "escalate"              # breaker tripped — recovery itself is failing
+
+
+@dataclass
+class RecoveryDecision:
+    verdict: RecoveryVerdict
+    reason: str = ""
+
+
+# Triggers that get the graceful two-phase wrap-up (subprocess still healthy,
+# turn buffer exists). Everything else heals immediately. This per-trigger policy
+# is centralized HERE — future migrated triggers declare their policy to this one
+# authority instead of scattering it across call sites.
+_GRACEFUL_TRIGGERS = frozenset({"turn_approaching"})
+_PROTECTED_STATES = frozenset({"waiting_input"})
+
+
+class RecoveryCoordinator:
+    """Thin decision authority over recovery. Delegates breaker state to a
+    HealingLoop (injected, not created) — so existing HealingLoop tests are
+    untouched and there is exactly ONE breaker per session, never two.
+
+    decide() answers "may I recover, and what kind?"; SessionUnit still performs
+    the checkpoint + kill (mechanics). record_*() passthroughs keep the single
+    breaker authoritative regardless of who calls them.
+    """
+
+    def __init__(self, healing_loop: "HealingLoop"):
+        self._loop = healing_loop
+        self._terminal_reached: bool = False
+        self._terminal_signal_count: int = 0
+
+    # ── observability (decision #3 backend half — UI-ready, no SSE yet) ──
+    @property
+    def terminal_recovery_reached(self) -> bool:
+        """True once the breaker has tripped (recovery itself is failing).
+        R4 maps this to a user-facing inline `recovery_exhausted` SSE event."""
+        return self._terminal_reached
+
+    @property
+    def terminal_signal_count(self) -> int:
+        """How many times the terminal signal fired (must be exactly 1 per
+        exhaustion episode — never spam the user)."""
+        return self._terminal_signal_count
+
+    # ── the decision ──
+    def decide(
+        self,
+        trigger: str,
+        *,
+        enabled: bool,
+        user_stopped: bool,
+        state: str,
+        graceful_pending: bool,
+    ) -> RecoveryDecision:
+        """Single recovery decision. Pure function of (trigger, guards, breaker
+        state) → verdict. Performs NO mutation except firing the one-shot terminal
+        signal on escalation."""
+        # Guard: never recover if disabled, user-stopped this turn, or in a
+        # protected state (WAITING_INPUT = user is mid-answer).
+        if not enabled:
+            return RecoveryDecision(RecoveryVerdict.SKIP, "self_heal_disabled")
+        if user_stopped:
+            return RecoveryDecision(RecoveryVerdict.SKIP, "user_stopped_current_turn")
+        if state in _PROTECTED_STATES:
+            return RecoveryDecision(RecoveryVerdict.SKIP, f"protected_state:{state}")
+
+        # Breaker: may we heal at all?
+        can_heal, reason = self._loop.can_heal()
+        if not can_heal:
+            if self._loop.should_escalate():
+                # Breaker tripped — recovery is failing. Fire the terminal signal
+                # exactly once until a success resets it.
+                if not self._terminal_reached:
+                    self._terminal_reached = True
+                    self._terminal_signal_count += 1
+                    logger.warning(
+                        "recovery_coordinator.terminal_reached trigger=%s "
+                        "attempts=%d/%d — recovery exhausted, escalate to user",
+                        trigger, self._loop.heal_attempts, MAX_HEAL_ATTEMPTS,
+                    )
+                return RecoveryDecision(RecoveryVerdict.ESCALATE, reason)
+            # Not exhausted → just cooling down.
+            return RecoveryDecision(RecoveryVerdict.DEFER, reason)
+
+        # Allowed — pick the kind. Graceful two-phase for turn_approaching's first
+        # pass; immediate kill otherwise (or on the second pass when pending).
+        if trigger in _GRACEFUL_TRIGGERS and not graceful_pending:
+            return RecoveryDecision(RecoveryVerdict.PROCEED_GRACEFUL, "graceful_phase_1")
+        return RecoveryDecision(RecoveryVerdict.PROCEED_KILL, "")
+
+    # ── breaker lifecycle passthroughs (delegate to the ONE held loop) ──
+    def record_heal_start(self, trigger: str = "") -> None:
+        self._loop.record_heal_start(trigger=trigger)
+
+    def record_heal_success(self) -> None:
+        self._loop.record_heal_success()
+        self._terminal_reached = False  # fresh budget — clear terminal state
+
+    def record_heal_failure(self, reason: str) -> None:
+        self._loop.record_heal_failure(reason)
+
+    @property
+    def heal_attempts(self) -> int:
+        return self._loop.heal_attempts
+
+
 # ─── Graceful Pre-Kill ──────────────────────────────────────────────────────
 
 WRAP_UP_PROMPT = (

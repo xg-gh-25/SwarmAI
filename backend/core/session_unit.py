@@ -46,6 +46,8 @@ from .session_healing import (
     WRAP_UP_PROMPT,
     HealthSensor,
     HealingLoop,
+    RecoveryCoordinator,
+    RecoveryVerdict,
     TaskCheckpoint,
     build_rich_checkpoint,
     get_process_rss_mb,
@@ -581,6 +583,12 @@ class SessionUnit:
         # heals itself without user intervention.
         self._health_sensor: HealthSensor = HealthSensor(max_turns=DESKTOP_MAX_TURNS)
         self._healing_loop: HealingLoop = HealingLoop()
+        # R3: route the self-heal DECISION through the one recovery authority.
+        # Delegates to _healing_loop (the breaker) — strangler-fig, HealingLoop
+        # unchanged. Other 7 kill paths migrate one per run (R3a–g).
+        self._recovery_coordinator: RecoveryCoordinator = RecoveryCoordinator(
+            self._healing_loop
+        )
         # Checkpoint built before heal-kill, consumed by next spawn to
         # inject continuation context. None = no pending heal context.
         self._heal_checkpoint: TaskCheckpoint | None = None
@@ -1569,100 +1577,112 @@ class SessionUnit:
             if not should_heal and self._graceful_wrap_pending:
                 self._graceful_wrap_pending = False
                 self._wrapup_conclusion = ""  # don't leak into a later heal
-            if (
-                should_heal
-                and _self_heal_enabled
-                and not self._user_stopped_current_turn
-                and self.state != SessionState.WAITING_INPUT
-            ):
-                can_heal, reason = self._healing_loop.can_heal()
-                if can_heal:
-                    # Graceful pre-kill for turn_approaching:
-                    # First time: set flag so next send() injects wrap-up prompt.
-                    # Second time (flag already set): proceed with actual kill.
-                    if trigger == "turn_approaching" and not self._graceful_wrap_pending:
-                        self._graceful_wrap_pending = True
-                        logger.info(
-                            "session_unit.self_heal_graceful_pending "
-                            "trigger=%s session_id=%s turn=%d "
-                            "(will inject wrap-up prompt on next send)",
-                            trigger, self.session_id, self._health_sensor.turn_count,
+            # R3: the self-heal DECISION now goes through the one recovery
+            # authority. The Coordinator encapsulates the guard (enabled /
+            # user-stopped / protected-state) + breaker (can_heal) + graceful
+            # policy + escalation. It DELEGATES to _healing_loop, so behavior is
+            # identical — this is a decision-routing change, not a behavior change.
+            if should_heal:
+                decision = self._recovery_coordinator.decide(
+                    trigger,
+                    enabled=_self_heal_enabled,
+                    user_stopped=self._user_stopped_current_turn,
+                    state=self.state.value,
+                    graceful_pending=self._graceful_wrap_pending,
+                )
+                if decision.verdict is RecoveryVerdict.PROCEED_GRACEFUL:
+                    # turn_approaching phase 1: set flag so next send() injects
+                    # wrap-up prompt; the actual kill happens on the phase-2 pass.
+                    self._graceful_wrap_pending = True
+                    logger.info(
+                        "session_unit.self_heal_graceful_pending "
+                        "trigger=%s session_id=%s turn=%d "
+                        "(will inject wrap-up prompt on next send)",
+                        trigger, self.session_id, self._health_sensor.turn_count,
+                    )
+                elif decision.verdict is RecoveryVerdict.PROCEED_KILL:
+                    # Actual heal: checkpoint → kill → respawn on next send()
+                    logger.info(
+                        "session_unit.self_heal trigger=%s session_id=%s turn=%d",
+                        trigger, self.session_id, self._health_sensor.turn_count,
+                    )
+                    # Route lifecycle through the Coordinator (delegates to the
+                    # same HealingLoop + manages terminal-signal state). Parity:
+                    # identical breaker effect, plus the terminal flag stays in sync.
+                    self._recovery_coordinator.record_heal_start(trigger=trigger)
+                    # Build rich TaskCheckpoint (git floor + history enrichment).
+                    # Workspace dir from standard path (same as context_injector)
+                    _ws_dir = str(Path.home() / ".swarm-ai" / "SwarmWS")
+                    # ── Per-trigger wrap-up policy (intentional) ──────
+                    # turn_approaching → graceful two-phase wrap-up (handled
+                    #   above: subprocess still healthy, ~20-turn buffer exists).
+                    # latency_degradation / memory_growth / error_cascade /
+                    #   hang_detected → immediate kill (an extra turn would be
+                    #   slow, risk OOM, likely also fail, or go unanswered).
+                    # For EVERY trigger the checkpoint is still enriched from
+                    # history here (2.1, 2.4) before the kill.
+                    _enrichment = await self._derive_heal_enrichment()
+                    _conclusion = self._wrapup_conclusion
+                    self._heal_checkpoint = await build_rich_checkpoint(
+                        original_request=_original_user_query,
+                        working_dir=_ws_dir,
+                        file_tracker_paths=list(getattr(self, "_files_touched", [])),
+                        turn_count=self._health_sensor.turn_count,
+                        trigger=trigger,
+                        heal_attempt=self._recovery_coordinator.heal_attempts,
+                        agent_conclusion=_conclusion,
+                        completed_steps=_enrichment.get("completed_steps"),
+                        pending_steps=_enrichment.get("pending_steps"),
+                        key_findings=_enrichment.get("key_findings", ""),
+                        pipeline_run_id=getattr(self, "_pipeline_run_id", None),
+                        pipeline_stage=getattr(self, "_pipeline_stage", None),
+                    )
+                    # Observability: field names + lengths only (no content/PII)
+                    _cp = self._heal_checkpoint
+                    logger.info(
+                        "session_unit.self_heal_checkpoint session_id=%s "
+                        "trigger=%s fields=[completed=%d,pending=%d,findings=%d,"
+                        "pipeline=%s,active_file=%d] conclusion_len=%d "
+                        "approx_chars=%d",
+                        self.session_id, trigger,
+                        len(_cp.completed_steps), len(_cp.pending_steps),
+                        len(_cp.key_findings), bool(_cp.pipeline_run_id),
+                        len(_cp.active_file_context), len(_conclusion),
+                        len(_cp.to_continuation_prompt()),
+                    )
+                    logger.info(
+                        "session_unit.self_heal_wrap_outcome session_id=%s "
+                        "captured=%s len=%d",
+                        self.session_id, bool(_conclusion), len(_conclusion),
+                    )
+                    self._graceful_wrap_pending = False
+                    self._wrapup_conclusion = ""  # one-shot: consumed
+                    # Kill subprocess but keep _sdk_session_id (for --resume).
+                    # Fix #9: wrap in try/except to prevent inconsistent state
+                    try:
+                        await self._crash_to_cold_async(clear_identity=False)
+                        self._health_sensor.reset()
+                        self._recovery_coordinator.record_heal_success()
+                    except Exception as heal_exc:
+                        self._heal_checkpoint = None  # Discard unusable
+                        self._wrapup_conclusion = ""  # don't leak into a later heal
+                        self._recovery_coordinator.record_heal_failure(str(heal_exc))
+                        logger.error(
+                            "session_unit.self_heal_failed session_id=%s: %s",
+                            self.session_id, str(heal_exc)[:200],
                         )
-                    else:
-                        # Actual heal: checkpoint → kill → respawn on next send()
-                        logger.info(
-                            "session_unit.self_heal trigger=%s session_id=%s turn=%d",
-                            trigger, self.session_id, self._health_sensor.turn_count,
-                        )
-                        self._healing_loop.record_heal_start(trigger=trigger)
-                        # Build rich TaskCheckpoint (git floor + history enrichment).
-                        # Workspace dir from standard path (same as context_injector)
-                        _ws_dir = str(Path.home() / ".swarm-ai" / "SwarmWS")
-                        # ── Per-trigger wrap-up policy (intentional) ──────
-                        # turn_approaching → graceful two-phase wrap-up (handled
-                        #   above: subprocess still healthy, ~20-turn buffer exists).
-                        # latency_degradation / memory_growth / error_cascade /
-                        #   hang_detected → immediate kill (an extra turn would be
-                        #   slow, risk OOM, likely also fail, or go unanswered).
-                        # For EVERY trigger the checkpoint is still enriched from
-                        # history here (2.1, 2.4) before the kill.
-                        _enrichment = await self._derive_heal_enrichment()
-                        _conclusion = self._wrapup_conclusion
-                        self._heal_checkpoint = await build_rich_checkpoint(
-                            original_request=_original_user_query,
-                            working_dir=_ws_dir,
-                            file_tracker_paths=list(getattr(self, "_files_touched", [])),
-                            turn_count=self._health_sensor.turn_count,
-                            trigger=trigger,
-                            heal_attempt=self._healing_loop.heal_attempts,
-                            agent_conclusion=_conclusion,
-                            completed_steps=_enrichment.get("completed_steps"),
-                            pending_steps=_enrichment.get("pending_steps"),
-                            key_findings=_enrichment.get("key_findings", ""),
-                            pipeline_run_id=getattr(self, "_pipeline_run_id", None),
-                            pipeline_stage=getattr(self, "_pipeline_stage", None),
-                        )
-                        # Observability: field names + lengths only (no content/PII)
-                        _cp = self._heal_checkpoint
-                        logger.info(
-                            "session_unit.self_heal_checkpoint session_id=%s "
-                            "trigger=%s fields=[completed=%d,pending=%d,findings=%d,"
-                            "pipeline=%s,active_file=%d] conclusion_len=%d "
-                            "approx_chars=%d",
-                            self.session_id, trigger,
-                            len(_cp.completed_steps), len(_cp.pending_steps),
-                            len(_cp.key_findings), bool(_cp.pipeline_run_id),
-                            len(_cp.active_file_context), len(_conclusion),
-                            len(_cp.to_continuation_prompt()),
-                        )
-                        logger.info(
-                            "session_unit.self_heal_wrap_outcome session_id=%s "
-                            "captured=%s len=%d",
-                            self.session_id, bool(_conclusion), len(_conclusion),
-                        )
-                        self._graceful_wrap_pending = False
-                        self._wrapup_conclusion = ""  # one-shot: consumed
-                        # Kill subprocess but keep _sdk_session_id (for --resume).
-                        # Fix #9: wrap in try/except to prevent inconsistent state
-                        try:
-                            await self._crash_to_cold_async(clear_identity=False)
-                            self._health_sensor.reset()
-                            self._healing_loop.record_heal_success()
-                        except Exception as heal_exc:
-                            self._heal_checkpoint = None  # Discard unusable
-                            self._wrapup_conclusion = ""  # don't leak into a later heal
-                            self._healing_loop.record_heal_failure(str(heal_exc))
-                            logger.error(
-                                "session_unit.self_heal_failed session_id=%s: %s",
-                                self.session_id, str(heal_exc)[:200],
-                            )
-                        # Next send() will detect state=COLD → _ensure_spawned
-                elif self._healing_loop.should_escalate():
+                    # Next send() will detect state=COLD → _ensure_spawned
+                elif decision.verdict is RecoveryVerdict.ESCALATE:
+                    # Breaker tripped — recovery itself is failing. The Coordinator
+                    # has fired its one-shot terminal signal (R4 maps it to a
+                    # user-facing inline recovery_exhausted SSE event).
                     logger.warning(
                         "session_unit.self_heal_exhausted session_id=%s "
-                        "trigger=%s attempts=%d",
+                        "trigger=%s attempts=%d terminal=%s",
                         self.session_id, trigger, self._healing_loop.heal_attempts,
+                        self._recovery_coordinator.terminal_recovery_reached,
                     )
+                # DEFER (cooldown) and SKIP (guard) → no action this tick.
         except Exception as exc:
             error_str = str(exc)
             tb_str = traceback.format_exc()
