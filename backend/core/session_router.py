@@ -890,16 +890,31 @@ class SessionRouter:
             # still bounds tab COUNT via MAX_TABS_HARD_CEILING; the backend only
             # answers "is there RAM to spawn."
             #
-            # First CHAT tab is sacred — always allow at least one chat session,
-            # regardless of budget (pessimistic budget must never deadlock the
-            # user's only chat tab). Keyed on the CHAT pool, mirroring
-            # _acquire_channel_slot's `_channel_alive_count == 0`: a lone alive
-            # CHANNEL session must NOT subject the first chat tab to budget
-            # denial, because _evict_idle (chat-scoped) cannot evict the channel
-            # to rescue it — the chat tab would queue to QUEUE_TIMEOUT for
-            # nothing. Pool-scoped first-tab restores the reserved-chat-slot
-            # intent of the old chat_max = max_tabs - 1 logic (REVIEW 4.1).
+            # First CHAT tab is sacred — always grant the user's only chat
+            # session (a pessimistic budget must never deadlock it). Keyed on the
+            # CHAT pool: a lone alive CHANNEL session must NOT send the first
+            # chat tab to budget-denied→queue→QUEUE_TIMEOUT, because the
+            # chat-scoped _evict_idle cannot evict the channel to rescue it
+            # (REVIEW 4.1). This mirrors _acquire_channel_slot's
+            # `_channel_alive_count == 0` branch EXACTLY: still check budget,
+            # try to reclaim same-pool RAM by evicting a chat-idle peer if
+            # denied, then grant unconditionally — but LOG when granting under a
+            # denied budget so the (accepted) OOM door is observable, never
+            # silent (adversarial #2). Chat-scoped eviction can't touch the
+            # channel, so we never force the user's first tab to wait for RAM it
+            # cannot free.
             if self._chat_alive_count == 0:
+                budget = resource_monitor.spawn_budget(alive_count=self.alive_count)
+                if not budget.can_spawn and self.alive_count > 0:
+                    if await self._evict_idle(exclude=requesting_unit):
+                        resource_monitor.invalidate_cache()
+                    else:
+                        logger.warning(
+                            "session_router: granting first chat tab under "
+                            "denied budget (no chat-idle to evict) "
+                            "session_id=%s reason=%s",
+                            requesting_unit.session_id, budget.reason,
+                        )
                 return "ready"
 
             # spawn_budget is the UNCONDITIONAL gate. There is no budget-free

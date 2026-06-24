@@ -484,6 +484,43 @@ class TestRetrySlotGuard:
             "how many peers are alive (R6a §9.3)"
         )
 
+    @pytest.mark.asyncio
+    async def test_retry_router_none_resumes_without_pessimism(self):
+        """REVIEW adversarial #4: a None registry (startup/restart window) means
+        FEW peers exist — the retry must resume with _alive=0 (no phantom OOM
+        penalty), NOT assume a full machine. Otherwise a transient crash during
+        a daemon restart on a large-RAM box would be wrongly aborted."""
+        unit = SessionUnit(session_id="test-retry-none", agent_id="default")
+
+        # spawn_budget is asserted to be called with alive_count=0 (no penalty),
+        # and permits → spawn proceeds.
+        captured = {}
+
+        def _fake_budget(alive_count=0):
+            captured["alive_count"] = alive_count
+            mb = MagicMock(); mb.can_spawn = True; mb.reason = "ok"
+            return mb
+
+        import core.session_registry as _sr_mod
+        with patch.object(_sr_mod, "session_router", None):  # registry not up
+            with patch("core.resource_monitor.resource_monitor") as mock_rm:
+                mock_rm.spawn_budget.side_effect = _fake_budget
+                with patch.object(unit, "_spawn", new_callable=AsyncMock) as mock_spawn:
+                    with patch("asyncio.sleep", new_callable=AsyncMock):
+                        mock_spawn.side_effect = Exception("spawn attempted")
+                        async for _ in unit._retry_with_resume(
+                            query_content="test", options=MagicMock(), config=MagicMock(),
+                            initial_error_str="Command failed with exit code -9 (exit code: -9)",
+                            initial_tb_str="",
+                        ):
+                            pass
+
+        assert captured.get("alive_count") == 0, (
+            f"None router → _alive must be 0 (few peers at startup), "
+            f"got {captured.get('alive_count')}"
+        )
+        assert mock_spawn.called, "Resume must proceed when router is None + RAM ok"
+
 
 # ---------------------------------------------------------------------------
 # Property 20: WAITING_INPUT crash transitions to DEAD

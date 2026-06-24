@@ -381,21 +381,29 @@ class RetryManager:
                 from .resource_monitor import resource_monitor
 
                 # Count alive sessions for the spawn_budget concurrent penalty.
-                # Pessimistic default: if we CANNOT count peers, assume the
-                # configured max rather than 0 — "can't count" must not collapse
-                # the COE05 simultaneous-peak penalty to penalty-free (REVIEW 5.2).
-                # During a retry storm with the registry unavailable, a
-                # penalty-free budget would let every retrying session resume at
-                # once (each believing alive=0) — the exact 2026-04-12 cascade.
-                _alive = _PESSIMISTIC_ALIVE_FALLBACK
+                # Two distinct "can't read the count" cases need OPPOSITE defaults
+                # (REVIEW 5.2 + adversarial #4):
+                #   • router is None → the registry isn't initialized yet
+                #     (daemon startup / restart window). Peers are necessarily
+                #     FEW (~0) at that point, so _alive=0 is correct. Defaulting
+                #     to pessimistic-4 here triples the spawn cost and WRONGLY
+                #     aborts a healthy resume on a large-RAM box during a restart.
+                #   • router.alive_count RAISES → genuine mid-operation fault; we
+                #     truly don't know the count, so apply the pessimistic floor
+                #     so a retry storm can't collapse the COE05 penalty to
+                #     penalty-free (each session resuming believing alive=0 =
+                #     the 2026-04-12 cascade).
+                _alive = 0
                 try:
                     from . import session_registry
                     router = session_registry.session_router
-                    if router:
+                    if router is not None:
                         _alive = router.alive_count
+                    # router is None → registry not up → _alive stays 0 (few peers)
                 except Exception as exc:
+                    _alive = _PESSIMISTIC_ALIVE_FALLBACK
                     logger.warning(
-                        "Retry alive-count unavailable, assuming %d peers for "
+                        "Retry alive-count read failed, assuming %d peers for "
                         "OOM penalty: %s", _PESSIMISTIC_ALIVE_FALLBACK, exc,
                     )
 
