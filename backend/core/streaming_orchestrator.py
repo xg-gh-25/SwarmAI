@@ -587,6 +587,35 @@ class StreamingOrchestrator:
                 content_blocks = []
                 for block in message.content:
                     if isinstance(block, TextBlock):
+                        # ── Tool-call XML leak guard ──────────────────────
+                        # The model occasionally emits tool-call SYNTAX (a
+                        # "call" line + <invoke name=...>) as plain text instead
+                        # of a real tool_use block. The SDK hands it over as a
+                        # TextBlock, so without this guard the raw XML persists
+                        # to the messages DB, renders as half-finished XML, and
+                        # the turn ends with no tool execution ("response
+                        # stopped mid-way"). This is the DB-persist gate — drop
+                        # the block (don't append/yield it), then kill + raise a
+                        # retriable error so send() respawns with --resume and
+                        # the model re-attempts with a proper tool_use. The
+                        # double-condition matcher is false-positive-safe on
+                        # prose that merely discusses <invoke> inline.
+                        from .session_utils import detect_tool_call_leak
+
+                        if detect_tool_call_leak(block.text):
+                            logger.warning(
+                                "session_unit.tool_call_leak_detected "
+                                "session_id=%s — model emitted tool-call XML as "
+                                "text (block_len=%d); dropping block + "
+                                "killing for --resume respawn",
+                                self._parent.session_id, len(block.text),
+                            )
+                            await self._parent.kill()
+                            raise RuntimeError(
+                                f"Tool-call XML leaked into text channel "
+                                f"(session_id={self._parent.session_id}) — "
+                                f"retrying with --resume for a proper tool_use"
+                            )
                         content_blocks.append({"type": "text", "text": block.text})
                     elif isinstance(block, ThinkingBlock):
                         # Skip content-free thinking blocks. Bedrock CAN emit

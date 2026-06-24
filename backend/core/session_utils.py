@@ -325,11 +325,77 @@ def _is_retriable_error(raw_error: str, tb_str: str = "") -> bool:
         # attempt gets a cache hit and completes within timeout.
         # Circuit breaker stops after 2 consecutive timeouts + >1M context.
         r"operation timed out",
+        # Tool-call XML leaked into the text channel — the model emitted
+        # tool-call syntax (a "call" line + <invoke name=...>) as plain text
+        # instead of a real tool_use block, so the turn ends with no tool
+        # execution.  Kill + --resume gives the model a fresh attempt to
+        # emit a proper tool_use.  See detect_tool_call_leak() below.
+        r"Tool-call XML leaked into text channel",
     ]
     for pattern in retriable_patterns:
         if re.search(pattern, raw_error, re.IGNORECASE):
             return True
     return False
+
+
+# ---------------------------------------------------------------------------
+# Tool-call XML leak detection
+# ---------------------------------------------------------------------------
+#
+# Under long / meta-heavy sessions the model occasionally emits the harness
+# tool-call SYNTAX as plain text instead of a real tool_use block.  The SDK
+# parses it as a TextBlock, so the raw XML is persisted to the messages DB and
+# rendered on screen as a half-finished tag, and the turn ends with no tool
+# execution (user sees "response stopped mid-way").  Empirically (8 DB-confirmed
+# cases, 2026-06-24) the leak ALWAYS takes the harness's literal call shape:
+#
+#     call
+#     <invoke name="Bash">
+#     <parameter name="command">...
+#
+# i.e. a line that is exactly the token ``call`` immediately followed by a line
+# that STARTS with ``<invoke name=``.  The DOUBLE condition (the ``call`` prefix
+# line + the line-anchored ``<invoke name=``) is what distinguishes a real leak
+# from prose that merely DISCUSSES the syntax — the latter is backtick-wrapped
+# and inline (e.g. ``my reply stopped at `<invoke name="Bash">` ``), which has no
+# bare ``call`` line in front of a line-start tag.  This matcher was validated
+# against all 8 DB cases: 7 real leaks matched, 1 inline-discussion rejected.
+#
+# Anchored, no nested quantifiers → no catastrophic backtracking.  ``\s*`` only
+# spans the inter-line whitespace between the two anchors.
+_TOOL_CALL_LEAK_RE = re.compile(
+    r"(?:^|\n)[ \t]*call[ \t]*\n[ \t]*<invoke name=",
+    re.MULTILINE,
+)
+
+# Cap how much text we scan — a leak signature, if present, appears within the
+# first few hundred chars of the block (the "call\n<invoke" prefix leads the
+# tool call).  Scanning a bounded prefix keeps this O(1) on the hottest path
+# (every assistant text block) even for very large blocks.
+_TOOL_CALL_LEAK_SCAN_LIMIT = 4000
+
+
+def detect_tool_call_leak(text: str) -> bool:
+    """Return True if ``text`` contains leaked tool-call XML in the text channel.
+
+    Detects the harness tool-call signature — a bare ``call`` line immediately
+    followed by a line-anchored ``<invoke name=`` — emitted as plain assistant
+    text instead of a real tool_use block.  Designed to be false-positive-safe
+    on prose that merely mentions ``<invoke name=`` inline (no leading ``call``
+    line), which is common in this meta-heavy codebase.
+
+    Pure function (str -> bool) so it can be unit-tested in isolation.  Called
+    from the StreamingOrchestrator TextBlock branch (the DB-persist gate).
+
+    Args:
+        text: The assistant text block content to inspect.
+
+    Returns:
+        True if a tool-call leak signature is present, else False.
+    """
+    if not text:
+        return False
+    return _TOOL_CALL_LEAK_RE.search(text[:_TOOL_CALL_LEAK_SCAN_LIMIT]) is not None
 
 
 def _build_error_event(
