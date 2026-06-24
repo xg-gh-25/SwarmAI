@@ -97,7 +97,6 @@ class StreamingOrchestrator:
     async def stream_query(
         self,
         query_content: Any,
-        parent_tool_use_id: Optional[str] = None,
     ) -> AsyncIterator[dict]:
         """Stream a query through the SDK and yield formatted SSE events.
 
@@ -106,14 +105,11 @@ class StreamingOrchestrator:
 
         Args:
             query_content: User message text (str) or multimodal blocks (list).
-            parent_tool_use_id: When set, message is a tool result response.
 
         Yields:
             Formatted SSE event dicts (text_delta, thinking_delta, tool_use, etc.)
         """
-        async for event in self._stream_response(
-            query_content, parent_tool_use_id=parent_tool_use_id
-        ):
+        async for event in self._stream_response(query_content):
             yield event
 
     @property
@@ -173,7 +169,6 @@ class StreamingOrchestrator:
     async def _stream_response(
         self,
         query_content: Any,
-        parent_tool_use_id: str | None = None,
     ) -> AsyncIterator[dict]:
         """Send query and yield raw SDK messages.
 
@@ -190,10 +185,6 @@ class StreamingOrchestrator:
 
         Args:
             query_content: User message text (str) or multimodal blocks (list).
-            parent_tool_use_id: When set, the message is linked to a prior
-                tool_use block (e.g. AskUserQuestion response). The CLI uses
-                this to route the answer as a tool result rather than a new
-                conversation turn.
         """
         if self._parent._client is None:
             raise RuntimeError(
@@ -218,7 +209,10 @@ class StreamingOrchestrator:
                 msg = {
                     "type": "user",
                     "message": {"role": "user", "content": query_content},
-                    "parent_tool_use_id": parent_tool_use_id,
+                    # Always None — the tool-result routing path was removed when
+                    # continue_with_answer migrated to _read_formatted_response().
+                    # Key retained to preserve the exact SDK message shape.
+                    "parent_tool_use_id": None,
                 }
                 yield msg
 
