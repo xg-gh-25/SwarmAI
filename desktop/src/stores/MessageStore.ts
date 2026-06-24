@@ -514,17 +514,44 @@ export class MessageStore {
     );
     if (localInteractive.length === 0) return dbMsg;
 
+    // Index local interactive blocks by key so we can both (a) carry forward the
+    // ones the DB lacks, and (b) merge local-only fields (e.g. ask_user_question
+    // `answers`) onto a DB block that shares the key. Backend does NOT persist
+    // ask_user_question blocks today, so in practice they're carried forward —
+    // but this guards against silent answer-loss if persistence ever changes
+    // (Gate-1 latent-risk hardening, run_b549e8ca).
+    const localByKey = new Map(
+      localInteractive.map((b) => [MessageStore._interactiveBlockKey(b), b] as const),
+    );
     const dbKeys = new Set(
       dbMsg.content
         .filter((b) => MessageStore._INTERACTIVE_BLOCK_TYPES.has(b.type))
         .map((b) => MessageStore._interactiveBlockKey(b)),
     );
+
+    // (a) Merge local-only `answers` onto matching DB interactive blocks.
+    let mergedContent = dbMsg.content;
+    let didMerge = false;
+    mergedContent = mergedContent.map((b) => {
+      if (!MessageStore._INTERACTIVE_BLOCK_TYPES.has(b.type)) return b;
+      const local = localByKey.get(MessageStore._interactiveBlockKey(b));
+      const localAnswers = (local as { answers?: Record<string, string> } | undefined)?.answers;
+      const dbAnswers = (b as { answers?: Record<string, string> }).answers;
+      if (localAnswers && !dbAnswers) {
+        didMerge = true;
+        return { ...b, answers: localAnswers } as typeof b;
+      }
+      return b;
+    });
+
+    // (b) Carry forward local interactive blocks the DB version lacks entirely.
     const carryForward = localInteractive.filter(
       (b) => !dbKeys.has(MessageStore._interactiveBlockKey(b)),
     );
-    if (carryForward.length === 0) return dbMsg;
 
-    return { ...dbMsg, content: [...dbMsg.content, ...carryForward] };
+    if (carryForward.length === 0 && !didMerge) return dbMsg;
+
+    return { ...dbMsg, content: [...mergedContent, ...carryForward] };
   }
 
   private _applyMerge(dbMessages: ChatMessage[]): void {

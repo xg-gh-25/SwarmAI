@@ -19,7 +19,7 @@ import type { ContentBlock, ToolResultContent } from '../../../../types';
 
 const emptyResultMap = new Map<string, ToolResultContent>();
 
-function questionBlock(toolUseId: string): ContentBlock {
+function questionBlock(toolUseId: string, answers?: Record<string, string>): ContentBlock {
   return {
     type: 'ask_user_question',
     toolUseId,
@@ -34,6 +34,7 @@ function questionBlock(toolUseId: string): ContentBlock {
         ],
       },
     ],
+    ...(answers ? { answers } : {}),
   } as ContentBlock;
 }
 
@@ -75,6 +76,51 @@ describe('ContentBlockRenderer — ask_user_question (Root 3 / 3A)', () => {
     );
     const optionA = screen.getByText('Option A').closest('button')!;
     expect(optionA.disabled).toBe(true);
+  });
+
+  it('AC1+AC2: answered block (answers present) → read-only summary with the actual selection, NO option buttons', () => {
+    // The fix: after the user submits, the block carries `answers`. The renderer
+    // must show a compact summary of what was chosen — NOT a disabled full form.
+    const block = questionBlock('tu-1', { 'Which approach?': 'Option B' });
+    render(
+      <ContentBlockRenderer
+        block={block}
+        resultMap={emptyResultMap}
+        allBlocks={[block]}
+        onAnswerQuestion={vi.fn()}
+        pendingToolUseId={undefined}  // answered, not pending
+        isStreaming={false}
+      />,
+    );
+    // The actual selected answer must be visible (AC2 — user would notice).
+    expect(screen.getByText(/Option B/)).toBeTruthy();
+    // The question text is still shown for context.
+    expect(screen.getByText(/Which approach/)).toBeTruthy();
+    // No interactive option buttons in the answered summary (it is read-only).
+    const optionButtons = screen.queryAllByRole('button').filter(
+      (b) => /Option A|Option B/.test(b.textContent || '') && b.tagName === 'BUTTON',
+    );
+    // Option A (an UNSELECTED option) must NOT appear as a clickable button.
+    expect(screen.queryByText('Option A')).toBeNull();
+    // No Submit button on an answered question.
+    expect(screen.queryByText(/Submit/i)).toBeNull();
+    void optionButtons;
+  });
+
+  it('AC3: pending (no answers) → option buttons ENABLED — answered-state change does not regress pending', () => {
+    const block = questionBlock('tu-1');  // no answers
+    render(
+      <ContentBlockRenderer
+        block={block}
+        resultMap={emptyResultMap}
+        allBlocks={[block]}
+        onAnswerQuestion={vi.fn()}
+        pendingToolUseId="tu-1"
+        isStreaming={false}
+      />,
+    );
+    const optionA = screen.getByText('Option A').closest('button')!;
+    expect(optionA.disabled).toBe(false);
   });
 
   it('AC4: empty questions block logs a warning and renders nothing', () => {

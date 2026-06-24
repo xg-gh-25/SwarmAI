@@ -7,6 +7,13 @@ interface AskUserQuestionProps {
   toolUseId: string;
   onSubmit: (toolUseId: string, answers: Record<string, string>) => void;
   disabled?: boolean;
+  /**
+   * The user's submitted answers (question text → selected label(s)). When
+   * present, the component renders a compact read-only summary of what was
+   * chosen instead of the interactive (or disabled) form. Sourced from the
+   * persisted block, so it survives tab-switch + reconcile.
+   */
+  answers?: Record<string, string>;
 }
 
 export default function AskUserQuestion({
@@ -14,6 +21,7 @@ export default function AskUserQuestion({
   toolUseId,
   onSubmit,
   disabled = false,
+  answers: submittedAnswers,
 }: AskUserQuestionProps) {
   // Defensive: questions may arrive as undefined/non-array from malformed
   // DB history or SSE events — guard to prevent crash (t.every is not a function).
@@ -87,6 +95,36 @@ export default function AskUserQuestion({
   // Nothing to render — don't show empty shell with a Submit button.
   // (Placed after hooks to comply with Rules of Hooks.)
   if (questions.length === 0) return null;
+
+  // ── Answered state: read-only summary ──────────────────────────────────
+  // Once the user submits, the block carries `submittedAnswers`. Render a
+  // compact summary of WHAT WAS CHOSEN instead of a disabled, selection-less
+  // form (the old bug: a greyed-out shell with a dead Submit and no record of
+  // the answer). Placed after hooks + the empty guard to comply with Rules of
+  // Hooks. Has its own answers → never shows the interactive option grid.
+  if (submittedAnswers && Object.keys(submittedAnswers).length > 0) {
+    return (
+      <div className="bg-[var(--color-card)] border border-primary/20 rounded-lg p-4 my-3">
+        <div className="flex items-center gap-2 mb-3">
+          <span className="material-symbols-outlined text-primary text-base">check_circle</span>
+          <span className="font-medium text-[var(--color-text)]">Answered</span>
+        </div>
+        <div className="space-y-2">
+          {questions.map((q, qIndex) => {
+            const chosen = submittedAnswers[q.question];
+            return (
+              <div key={qIndex} className="flex flex-col gap-0.5">
+                <p className="text-[var(--color-text-muted)] text-xs">{q.question}</p>
+                <p className="text-[var(--color-text)] text-sm font-medium">
+                  {chosen || <span className="text-[var(--color-text-muted)] italic">(no selection)</span>}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="bg-[var(--color-card)] border border-primary/30 rounded-lg p-4 my-3">

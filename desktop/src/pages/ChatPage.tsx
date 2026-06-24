@@ -2033,6 +2033,40 @@ export default function ChatPage() {
       tabState.pendingQuestion = null;
     }
 
+    // Persist the submitted answers ONTO the ask_user_question block so the
+    // renderer shows a read-only "Answered: …" summary instead of a disabled,
+    // selection-less form. Written on the block (not component state) so it
+    // survives tab-switch + store reconcile. Mirror into tabState.messages too:
+    // handleSelectTab does store.replace(tabState.messages) on switch-back, which
+    // would otherwise clobber a store-only write (same parallel-write contract as
+    // the auqBlock append in useChatStreamingLifecycle.ts:1783-1791).
+    if (tabId) {
+      const writeAnswersOntoBlock = (msg: Message): Message => {
+        let touched = false;
+        const content = msg.content.map((b) => {
+          const blk = b as { type?: string; toolUseId?: string };
+          if (blk.type === 'ask_user_question' && blk.toolUseId === toolUseId) {
+            touched = true;
+            return { ...b, answers } as typeof b;
+          }
+          return b;
+        });
+        return touched ? { ...msg, content } : msg;
+      };
+      const hasBlock = (msg: Message) =>
+        msg.content.some(
+          (b) => (b as { type?: string; toolUseId?: string }).type === 'ask_user_question' &&
+            (b as { toolUseId?: string }).toolUseId === toolUseId,
+        );
+      const store = messageStoreRegistry.get(tabId);
+      if (store) {
+        store.updateLast(writeAnswersOntoBlock, hasBlock);
+        if (tabState) tabState.messages = store.messages;
+      } else if (tabState) {
+        tabState.messages = tabState.messages.map(writeAnswersOntoBlock);
+      }
+    }
+
     setPendingQuestion(null);
     incrementStreamGen(); // Fix 1: new stream generation
     setIsStreaming(true, tabId);

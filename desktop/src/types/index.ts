@@ -216,6 +216,14 @@ export interface AskUserQuestionContent {
   type: 'ask_user_question';
   toolUseId: string;
   questions: AskUserQuestion[];
+  /**
+   * The user's submitted answers, keyed by question text → selected label(s).
+   * Written onto the block at submit time (ChatPage.handleAnswerQuestion) so the
+   * renderer can show a read-only "answered" summary instead of a disabled form.
+   * Absent while the question is still pending. Persisted on the block (not in
+   * component state) so the summary survives tab-switch + store reconcile.
+   */
+  answers?: Record<string, string>;
 }
 
 export interface ThinkingContent {

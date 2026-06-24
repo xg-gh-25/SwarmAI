@@ -100,14 +100,22 @@ export function ContentBlockRenderer({
       return null;
     }
     const isPending = pendingToolUseId === block.toolUseId;
-    const isAnswered = !isPending && !isStreaming;
+    // Answered = the block carries the user's submitted answers. This is the
+    // authoritative signal (persisted on the block), distinct from "not pending"
+    // — a question can be non-pending yet unanswered (e.g. mid-stream). When
+    // answered, AskUserQuestion renders its read-only summary (ignores disabled).
+    const hasAnswers = !!block.answers && Object.keys(block.answers).length > 0;
+    // Disable the interactive form when it's not the live pending question or
+    // while streaming — unchanged behavior for the still-unanswered case.
+    const disabled = !isPending || !!isStreaming;
 
     return (
       <AskUserQuestion
         questions={block.questions}
         toolUseId={block.toolUseId}
         onSubmit={onAnswerQuestion || (() => {})}
-        disabled={isAnswered || !!isStreaming}
+        disabled={disabled && !hasAnswers}
+        answers={block.answers}
       />
     );
   }

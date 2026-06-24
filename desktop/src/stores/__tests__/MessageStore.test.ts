@@ -356,6 +356,55 @@ describe('MessageStore reconcile', () => {
     expect((store.messages[0].content[0] as any).text).toBe('partial stream content');
     store.endStreaming();
   });
+
+  it('AC5: ask_user_question answers survive reconcile when DB lacks the block (carry-forward)', () => {
+    // Local assistant message carries an answered ask_user_question block.
+    // The DB row for the same message has NO ask_user_question block (backend
+    // never persists them) — the local block + its answers must be carried forward.
+    const local: Message = {
+      id: 'm1', role: 'assistant', timestamp: new Date().toISOString(),
+      content: [
+        { type: 'text', text: 'ok' } as any,
+        { type: 'ask_user_question', toolUseId: 'tu-1',
+          questions: [{ question: 'Pick a color', header: 'Color', multiSelect: false,
+            options: [{ label: 'Red', description: '' }, { label: 'Blue', description: '' }] }],
+          answers: { 'Pick a color': 'Blue' } } as any,
+      ],
+    };
+    store.append(local);
+    store.reconcile([makeChatMsg('m1', 'assistant', 'ok')]); // DB lacks the auq block
+    const auq = store.messages[0].content.find((b: any) => b.type === 'ask_user_question') as any;
+    expect(auq).toBeTruthy();
+    expect(auq.answers).toEqual({ 'Pick a color': 'Blue' });
+  });
+
+  it('AC5b: ask_user_question answers are merged onto a DB block that shares the key (hardening)', () => {
+    // Defensive: if the DB row DID carry the ask_user_question block (key match)
+    // but without answers, the local answers must be merged onto it — not dropped.
+    const local: Message = {
+      id: 'm1', role: 'assistant', timestamp: new Date().toISOString(),
+      content: [
+        { type: 'ask_user_question', toolUseId: 'tu-1',
+          questions: [{ question: 'Pick a color', header: 'Color', multiSelect: false,
+            options: [{ label: 'Red', description: '' }] }],
+          answers: { 'Pick a color': 'Red' } } as any,
+      ],
+    };
+    store.append(local);
+    const dbMsg: ChatMessage = {
+      id: 'm1', sessionId: 'sess-1', role: 'assistant', createdAt: new Date().toISOString(),
+      content: [
+        { type: 'ask_user_question', toolUseId: 'tu-1',
+          questions: [{ question: 'Pick a color', header: 'Color', multiSelect: false,
+            options: [{ label: 'Red', description: '' }] }] } as any, // DB block, NO answers
+      ] as any,
+    };
+    store.reconcile([dbMsg]);
+    const auqs = store.messages[0].content.filter((b: any) => b.type === 'ask_user_question') as any[];
+    // Exactly one block (no duplicate), and it carries the local answers.
+    expect(auqs).toHaveLength(1);
+    expect(auqs[0].answers).toEqual({ 'Pick a color': 'Red' });
+  });
 });
 
 // ─── Registry ───
