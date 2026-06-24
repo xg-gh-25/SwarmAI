@@ -52,7 +52,9 @@ class SystemMemory:
     IMPORTANT: On macOS, ``used`` (active + wired) significantly
     underestimates real memory pressure.  For resource gating decisions
     (spawn budget, tab limits) always use ``effective_used`` which equals
-    ``total - available`` — the metric macOS jetsam actually considers.
+    ``total - available`` — the best proxy for the memory-pressure signal
+    jetsam responds to (jetsam tracks the kernel pressure signal, not a fixed
+    %-of-total, but this metric correlates with it far better than ``used``).
     """
     total: int
     available: int
@@ -66,10 +68,11 @@ class SystemMemory:
         On macOS, ``psutil.virtual_memory().used`` returns only
         active + wired pages (~39% on a typical 36GB machine), while
         ``percent`` reports ~72% because it uses ``(total - available) / total``.
-        Jetsam kills based on the latter, so our spawn gates must too.
+        The pressure signal jetsam responds to correlates with the latter, so
+        our spawn gates use it too.
 
         ``effective_used = total - available`` aligns with ``percent_used``
-        and matches what macOS considers real memory pressure.
+        and is our best proxy for real macOS memory pressure.
         """
         return self.total - self.available
 

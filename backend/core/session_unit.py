@@ -2729,7 +2729,7 @@ class SessionUnit:
     # │   L4: macOS jetsam — OS-level kill at memory crisis        │
     # │                                                             │
     # │ 36 GB machine: 3.5 GB = 10%. Two sessions at threshold =  │
-    # │ 20%. Jetsam fires at ~85%. Massive headroom.               │
+    # │ 20%. macOS reclaims caches first; huge headroom.           │
     # └─────────────────────────────────────────────────────────────┘
     PROACTIVE_RSS_THRESHOLD: int = 3_500_000_000  # 3.5GB
     PROACTIVE_COOLDOWN: float = 180.0  # 3 minutes
@@ -2752,7 +2752,7 @@ class SessionUnit:
     # │   Session was interrupted 4x in 15 min = user-facing bug.  │
     # │                                                             │
     # │ On 36 GB: 7 GB = 19%. Even 2 sessions peaking = 38%.      │
-    # │ Still far below jetsam trigger (~85% system pressure).     │
+    # │ Still far below any memory-pressure crisis.                │
     # └─────────────────────────────────────────────────────────────┘
     STREAMING_RSS_KILL_THRESHOLD: int = 7_000_000_000  # 7GB
 
