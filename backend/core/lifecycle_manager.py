@@ -1058,18 +1058,22 @@ class LifecycleManager:
 
     # Two-tier memory thresholds (defaults from MEMORY_EVICT_PCT / MEMORY_CIRCUIT_BREAKER_PCT):
     #  tier 1 → evict IDLE only (gentle — session can resume cheaply)
-    #  tier 2 → KILL heaviest STREAMING session (circuit breaker —
-    #            sacrificing one session beats macOS killing everything)
+    #  tier 2 → LOG ONLY at critical pressure (the old "kill heaviest STREAMING"
+    #            circuit breaker was removed — killing STREAMING caused data loss;
+    #            L1 spawn-settle + L3 continuation + macOS jetsam handle recovery)
 
     async def _check_memory_pressure(self) -> None:
         """Two-tier memory pressure relief.
 
-        Tier 1 (>85%): Evict ALL IDLE units (heaviest first) until memory
+        Tier 1 (>90%): Evict ALL IDLE units (heaviest first) until memory
           drops below threshold or no IDLE units remain.  Previous behavior
           evicted only one per 60s cycle — too slow when memory spikes.
-        Tier 2 (>92%): Circuit breaker — kill heaviest STREAMING session.
-          Losing one streaming session is better than macOS jetsam killing
-          the entire app (and losing ALL sessions' in-flight data).
+        Tier 2 (>95%): LOG ONLY — all IDLE evicted but memory still critical.
+          Does NOT kill STREAMING sessions (the old circuit breaker that killed
+          the heaviest STREAMING session was removed — it caused data loss,
+          context truncation, and broken responses). Recovery is delegated to
+          L1 (spawn-settle window), L3 (session_unit continuation hint), and
+          macOS jetsam as the last resort.
 
         Non-fatal — failures are logged and skipped.
         """
