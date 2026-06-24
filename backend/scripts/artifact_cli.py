@@ -1233,11 +1233,17 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
         else:
             run_state["stages"].append(stage_record)
 
-        # Reset resume_attempts on successful stage completion — a stage advancing
+        # Reset resume counters on successful stage completion — a stage advancing
         # proves progress, so the pipeline deserves fresh auto-resume budget if it
-        # crashes again later at a different stage.
-        if stage_status in ("completed", "done") and run_state.get("resume_attempts", 0) > 0:
-            run_state["resume_attempts"] = 0
+        # crashes again later at a different stage. Both the emit-throttle
+        # (resume_attempts) AND the execution counter (resume_executions, R2) reset
+        # together — otherwise a stale execution count would make the exhausted
+        # diagnostic lie about a run that has since made progress.
+        if stage_status in ("completed", "done"):
+            if run_state.get("resume_attempts", 0) > 0:
+                run_state["resume_attempts"] = 0
+            if run_state.get("resume_executions", 0) > 0:
+                run_state["resume_executions"] = 0
 
     if args.taste_decision:
         decision = json.loads(args.taste_decision)
@@ -1816,6 +1822,19 @@ def cmd_run_resume(args, reg: ArtifactRegistry) -> None:
     # Keep checkpoint for reference but mark it resolved
     if "checkpoint" in run_state:
         run_state["checkpoint"]["resumed_at"] = now
+
+    # R2: count the REAL resume execution. resume_attempts (proactive_intelligence)
+    # counts directive EMITS (a throttle); this counts the agent ACTUALLY running
+    # run-resume — the true paused→running transition. The two answer different
+    # questions: emitted-3x-executed-0x = delivery broken (agent never picked up
+    # the briefing); executed-3x = pipeline broken (resume runs, keeps failing).
+    # No extra lock: cmd_run_resume is the sole writer of status→running ON THE
+    # RESUME PATH (the documented auto-resume flow + directive both use run-resume,
+    # not run-update --status running), and is not self-concurrent (one agent
+    # resumes one run). Placed AFTER the status!=paused early-exit so a no-op never
+    # counts as an execution. (The pre-existing unlocked write here is unchanged;
+    # this adds one field to it.)
+    run_state["resume_executions"] = run_state.get("resume_executions", 0) + 1
 
     run_file.write_text(json.dumps(run_state, indent=2), encoding="utf-8")
 

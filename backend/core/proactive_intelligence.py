@@ -724,8 +724,9 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
         # run is ever silently dropped from the briefing.
         # candidates: (mtime, line) for directives only.
         candidates: list[tuple[float, str]] = []
-        # exhausted: (project_name, run_id) — collapsed into one line below.
-        exhausted: list[tuple[str, str]] = []
+        # exhausted: (project_name, run_id, resume_executions) — collapsed into
+        # one line below. resume_executions drives the delivery-vs-pipeline diagnosis.
+        exhausted: list[tuple[str, str, int]] = []
 
         for project_dir in projects_dir.iterdir():
             if not project_dir.is_dir():
@@ -857,8 +858,12 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
                     candidates.append((mtime, line))
                 else:
                     # EXHAUSTED: collapse into one summary line below (NOT capped by
-                    # max_items — every stale run must stay visible).
-                    exhausted.append((project_name, run_id))
+                    # max_items — every stale run must stay visible). Carry the
+                    # execution count (R2) so the summary can diagnose WHICH failure
+                    # mode this is: executed-0x = delivery (agent never ran the
+                    # directive), executed-Nx = pipeline (resume runs, keeps failing).
+                    resume_execs = run_data.get("resume_executions", 0)
+                    exhausted.append((project_name, run_id, resume_execs))
 
         # Directives: rate-limited (STEERING #1), newest first, capped at max_items.
         # NOTE: max_items caps ONLY directives by design. The exhausted summary is
@@ -873,14 +878,42 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
         if exhausted:
             _ID_CAP = 10
             shown = exhausted[:_ID_CAP]
-            run_refs = ", ".join(f"{rid} [{proj}]" for proj, rid in shown)
+            # R2: per-run ref carries execution count so each run's failure mode
+            # is visible at a glance — "run_x [Proj] (executed 0×)" vs "(executed 3×)".
+            run_refs = ", ".join(
+                f"{rid} [{proj}] (executed {execs}×)" for proj, rid, execs in shown
+            )
             overflow = len(exhausted) - len(shown)
             if overflow > 0:
                 run_refs += f", +{overflow} more"
+
+            # Diagnose the dominant failure mode. R2: a run that emitted 3
+            # directives but was NEVER executed (execs==0) is a DELIVERY failure
+            # (the agent never picked up the briefing directive) — a different
+            # problem, with a different fix, than a run that resumed N times and
+            # kept crashing (a PIPELINE failure). Conflating them was the bug.
+            any_executed = any(execs > 0 for _, _, execs in exhausted)
+            all_never_executed = all(execs == 0 for _, _, execs in exhausted)
+            if all_never_executed:
+                diagnosis = (
+                    "directives emitted but NEVER executed (DELIVERY issue — the "
+                    "auto-resume directive is not being picked up; investigate why "
+                    "the briefing directive isn't acted on)"
+                )
+            elif any_executed:
+                diagnosis = (
+                    "resume executed but pipeline kept failing (PIPELINE issue — "
+                    "needs diagnosis of why the run can't progress)"
+                )
+            else:  # pragma: no cover — defensive
+                diagnosis = "mode unknown"
+            # NOTE: "exhausted" + "Manual intervention needed" substrings are a
+            # stable contract the briefing reader and tests key off — keep them.
+            # R2 appends the failure-mode diagnosis; it does not replace them.
             lines.append(
                 f"  - ⚠️ {len(exhausted)} pipeline(s) exhausted "
                 f"{_MAX_PIPELINE_RESUME_ATTEMPTS} auto-resume attempts — "
-                f"Manual intervention needed: {run_refs}."
+                f"Manual intervention needed [{diagnosis}]: {run_refs}."
             )
 
     except Exception as exc:
