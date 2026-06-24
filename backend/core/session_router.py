@@ -1731,6 +1731,81 @@ class SessionRouter:
             "subprocess_alive": survived,
         }
 
+    async def release_session(
+        self,
+        session_id: str,
+        *,
+        force: bool = False,
+        expected_generation: int | None = None,
+    ) -> dict:
+        """Free a session's concurrency slot on tab close (R6b).
+
+        This is the on-demand equivalent of ``_check_ttl``'s release recipe:
+        kill the subprocess (slot freed — ``alive_count`` counts ``is_alive``)
+        and clear per-session module state.  It does **NOT** delete DB messages,
+        so the conversation survives and the user can reopen it from history.
+
+        Safety (Gate-1 findings — see test_session_release.py):
+
+        - **IDLE unit** → kill + ``_release_session_state``.  This is the orphan
+          the feature fixes (a closed idle tab that would otherwise hold a slot
+          until the 12h TTL).
+        - **Generation stale-guard (2a/2c)** — if ``expected_generation`` is
+          supplied and no longer matches ``unit._send_generation``, a new
+          ``send()`` re-adopted this session between the close and the release.
+          Abort (``skipped_stale``) — never kill a re-adopted session-instance.
+        - **Active state (STREAMING / WAITING_INPUT)** — never raw-``kill()``:
+          that races ``_recover_streaming_on_disconnect`` (which the SSE abort on
+          tab close already triggers) and could destroy a freshly-reused slot.
+          Without ``force`` → ``skipped_active`` (leave it alone — the abort path
+          handles the slot).  With ``force=True`` (user confirmed closing a
+          streaming tab) → route through the generation-safe ``interrupt()``
+          primitive, then free state if it settled IDLE.
+
+        Returns a status dict; always best-effort (never raises to the caller).
+        """
+        from .lifecycle_manager import LifecycleManager
+
+        unit = self.get_unit(session_id)
+        if unit is None:
+            return {"status": "not_found", "alive_count": self.alive_count}
+
+        # Generation stale-guard: the slot was re-adopted by a new turn.
+        if (
+            expected_generation is not None
+            and unit._send_generation != expected_generation
+        ):
+            logger.info(
+                "session_router.release stale (gen %s≠%s) session_id=%s — "
+                "slot re-adopted, skipping",
+                expected_generation, unit._send_generation, session_id,
+            )
+            return {"status": "skipped_stale", "alive_count": self.alive_count}
+
+        # Active states are never raw-killed (races disconnect recovery).
+        if unit.state in (SessionState.STREAMING, SessionState.WAITING_INPUT):
+            if not force:
+                return {"status": "skipped_active", "alive_count": self.alive_count}
+            # Confirmed close of an active tab → generation-safe interrupt.
+            await unit.interrupt()
+            LifecycleManager._release_session_state(session_id)
+            logger.info(
+                "session_router.release interrupted active session_id=%s",
+                session_id,
+            )
+            return {"status": "released", "alive_count": self.alive_count}
+
+        # IDLE / COLD / DEAD → free the slot. kill() is idempotent and
+        # short-circuits when already COLD/DEAD, so this is safe on any of them.
+        if unit.is_alive:
+            await unit.kill()
+        LifecycleManager._release_session_state(session_id)
+        logger.info(
+            "session_router.release freed slot session_id=%s alive_count=%d",
+            session_id, self.alive_count,
+        )
+        return {"status": "released", "alive_count": self.alive_count}
+
     async def continue_with_answer(
         self, session_id: str, answer: str,
         tool_use_id: str | None = None,
