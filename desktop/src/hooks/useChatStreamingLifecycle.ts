@@ -2155,6 +2155,31 @@ export function useChatStreamingLifecycle(
           return; // side-channel handled; never falls through to stream logic
         }
 
+        // Long-running-turn notice. The backend emits this every
+        // LONG_TURN_HEARTBEAT_S during a silent step (it carries elapsed time,
+        // the oldest open tool, and a "press Stop to recover" hint). Surface it
+        // in-tab so a multi-minute turn reads as "still working", not a dead
+        // spinner. Handled HERE — before the generation guard and before the
+        // lastRealEventRef update — so it (a) is never discarded as stale and
+        // (b) does NOT reset the stall timer (a heartbeat is not SDK progress,
+        // same exclusion as 'heartbeat'). Active tab only: a background tab's
+        // notice would surface against the chat the user is actually viewing.
+        // Keyed + auto-dismiss so successive notices replace in place (no
+        // stacking) and clear on their own once the turn produces or ends.
+        if (event.type === 'still_working') {
+          // isActiveTab is derived further down; this side-channel runs early,
+          // so compare against the live active-tab ref directly.
+          if (capturedTabId === activeTabIdRef.current && event.message) {
+            addToast({
+              severity: 'info',
+              message: event.message,
+              id: `still-working-${capturedTabId ?? 'global'}`,
+              autoDismiss: true,
+            });
+          }
+          return; // side-channel handled; never falls through to stream logic
+        }
+
         // Generation guard: discard events from a previous stream.
         // This prevents cross-turn bleed where stale SSE events from an
         // interrupted response arrive after a new stream has started.

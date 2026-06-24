@@ -442,7 +442,7 @@ export interface CompactionGuardEvent {
 }
 
 export interface StreamEvent {
-  type: 'assistant' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'reconnecting' | 'session_resuming' | 'ask_user_question' | 'session_start' | 'session_cleared' | 'cmd_permission_request' | 'cmd_permission_decision' | 'cmd_permission_acknowledged' | 'heartbeat' | 'agent_activity' | 'tool_invocation' | 'capability_activated' | 'sources_updated' | 'summary_updated' | 'context_warning' | 'context_compacted' | 'compaction_guard' | 'mcp_health_warning' | 'recovery_exhausted' | (string & {});
+  type: 'assistant' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'reconnecting' | 'session_resuming' | 'ask_user_question' | 'session_start' | 'session_cleared' | 'cmd_permission_request' | 'cmd_permission_decision' | 'cmd_permission_acknowledged' | 'heartbeat' | 'agent_activity' | 'tool_invocation' | 'capability_activated' | 'sources_updated' | 'summary_updated' | 'context_warning' | 'context_compacted' | 'compaction_guard' | 'mcp_health_warning' | 'recovery_exhausted' | 'still_working' | (string & {});
   content?: ContentBlock[];
   model?: string;
   sessionId?: string;
@@ -466,6 +466,8 @@ export interface StreamEvent {
   newSessionId?: string;
   // Heartbeat fields
   timestamp?: number;
+  // Long-turn "still_working" notice fields
+  elapsedSeconds?: number;
   // Error fields
   error?: string;
   message?: string;
