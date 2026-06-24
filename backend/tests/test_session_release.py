@@ -213,15 +213,18 @@ async def test_release_waiting_input_without_force_does_not_kill():
 
 
 # ── AC1/AC4: POST /api/chat/release/{session_id} endpoint ─────────────────
-# Call the route HANDLER directly with a mocked router. We deliberately do NOT
-# use TestClient(app): booting the app lifespan runs the skill-projection
-# copytree (intermittently fails on s_docx/s_pollinate node_modules in this env)
-# and is unrelated to the endpoint contract under test. Direct async handler
-# call is the correct unit boundary — it exercises real body-parse + delegation.
+# Drive the endpoint over REAL HTTP via a minimal FastAPI app mounting ONLY the
+# release route. We do NOT use TestClient(main.app): booting the full app lifespan
+# runs the skill-projection copytree (intermittently fails on s_docx/s_pollinate
+# node_modules in this env). A minimal app gives us FastAPI's real body parsing —
+# which the meta-review flagged as the untested gap — without the lifespan hang.
 
-@pytest.mark.asyncio
-async def test_release_endpoint_calls_router_and_returns_200(monkeypatch):
-    """AC1: the endpoint delegates to router.release_session (unforced default)."""
+def _release_client(monkeypatch):
+    """Minimal FastAPI app with just POST /chat/release/{id} + a mocked router.
+    Returns (TestClient, fake_router) so tests can assert force/delegation over
+    a real HTTP request (real body deserialization, real content-type handling)."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
     import routers.chat as chat_mod
 
     fake_router = MagicMock()
@@ -230,74 +233,69 @@ async def test_release_endpoint_calls_router_and_returns_200(monkeypatch):
     )
     monkeypatch.setattr(chat_mod, "_get_router", lambda: fake_router)
 
-    result = await chat_mod.release_session("sess-X", body=None)
+    app = FastAPI()
+    app.post("/chat/release/{session_id}")(chat_mod.release_session)
+    return TestClient(app), fake_router
 
-    assert result["status"] == "released"
-    fake_router.release_session.assert_awaited_once()
-    # Default (no body) is an unforced release.
+
+def test_release_endpoint_no_body_returns_200_unforced(monkeypatch):
+    """AC1: idle close sends NO body → 200, unforced delegation."""
+    client, fake_router = _release_client(monkeypatch)
+    resp = client.post("/chat/release/sess-X")  # no body, like axios post(url, undefined)
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "released"
     _, kwargs = fake_router.release_session.call_args
-    assert kwargs.get("force", False) is False
+    assert kwargs.get("force") is False
 
 
-@pytest.mark.asyncio
-async def test_release_endpoint_passes_force_flag(monkeypatch):
-    """AC2: confirmed close of a streaming tab passes force=True."""
-    import routers.chat as chat_mod
-
-    fake_router = MagicMock()
-    fake_router.release_session = AsyncMock(
-        return_value={"status": "released", "alive_count": 0}
-    )
-    monkeypatch.setattr(chat_mod, "_get_router", lambda: fake_router)
-
-    await chat_mod.release_session("sess-X", body={"force": True})
-
+def test_release_endpoint_force_true_delegates_forced(monkeypatch):
+    """AC2: confirmed streaming close sends {force:true} → forced delegation."""
+    client, fake_router = _release_client(monkeypatch)
+    resp = client.post("/chat/release/sess-X", json={"force": True})
+    assert resp.status_code == 200
     _, kwargs = fake_router.release_session.call_args
     assert kwargs.get("force") is True
 
 
-@pytest.mark.asyncio
-async def test_release_endpoint_force_is_strict_boolean(monkeypatch):
-    """Adversarial LOW: force must be enabled ONLY by an explicit JSON `true`.
-    Truthiness-coercion (bool(body.get('force'))) would let {"force":"false"}
-    (a STRING) enable the destructive interrupt-active branch on this public
-    endpoint. Verify non-boolean truthy values do NOT force."""
-    import routers.chat as chat_mod
-
-    fake_router = MagicMock()
-    fake_router.release_session = AsyncMock(
-        return_value={"status": "released", "alive_count": 0}
-    )
-    monkeypatch.setattr(chat_mod, "_get_router", lambda: fake_router)
-
+def test_release_endpoint_force_is_strict_boolean(monkeypatch):
+    """Adversarial LOW: force enabled ONLY by an explicit JSON `true`. A STRING
+    {"force":"false"} (or any non-bool truthy) must NOT enable the destructive
+    interrupt-active branch — verified over real HTTP."""
+    client, fake_router = _release_client(monkeypatch)
     for bad in ({"force": "false"}, {"force": "true"}, {"force": 1}, {"force": "1"}, {}):
         fake_router.release_session.reset_mock()
-        await chat_mod.release_session("sess-X", body=bad)
+        resp = client.post("/chat/release/sess-X", json=bad)
+        assert resp.status_code == 200
         _, kwargs = fake_router.release_session.call_args
         assert kwargs.get("force") is False, f"non-bool {bad!r} must not force"
 
-    # Only an explicit boolean True forces.
-    fake_router.release_session.reset_mock()
-    await chat_mod.release_session("sess-X", body={"force": True})
+
+def test_release_endpoint_malformed_body_never_422(monkeypatch):
+    """Meta-review MED: a fire-and-forget endpoint must ALWAYS return 200. A
+    malformed/empty body with application/json content-type must degrade to an
+    unforced release, never a 422 (which would silently leave the slot held)."""
+    client, fake_router = _release_client(monkeypatch)
+    # malformed JSON
+    r1 = client.post("/chat/release/sess-X",
+                     headers={"Content-Type": "application/json"}, content=b"{bad json")
+    assert r1.status_code == 200
+    # empty body WITH json content-type
+    r2 = client.post("/chat/release/sess-X",
+                     headers={"Content-Type": "application/json"}, content=b"")
+    assert r2.status_code == 200
+    # both degrade to unforced
     _, kwargs = fake_router.release_session.call_args
-    assert kwargs.get("force") is True
+    assert kwargs.get("force") is False
 
 
-@pytest.mark.asyncio
-async def test_release_endpoint_does_not_delete_messages(monkeypatch):
+def test_release_endpoint_does_not_delete_messages(monkeypatch):
     """AC4: the release endpoint must NOT call db.messages.delete_by_session
     (history survives so the user can reopen the closed session)."""
-    import routers.chat as chat_mod
     from database import db
-
-    fake_router = MagicMock()
-    fake_router.release_session = AsyncMock(
-        return_value={"status": "released", "alive_count": 0}
-    )
-    monkeypatch.setattr(chat_mod, "_get_router", lambda: fake_router)
+    client, fake_router = _release_client(monkeypatch)
     delete_spy = AsyncMock()
     monkeypatch.setattr(db.messages, "delete_by_session", delete_spy)
 
-    await chat_mod.release_session("sess-X", body=None)
-
+    resp = client.post("/chat/release/sess-X")
+    assert resp.status_code == 200
     delete_spy.assert_not_awaited()

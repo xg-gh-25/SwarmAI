@@ -1032,7 +1032,7 @@ async def stop_session(session_id: str):
 
 
 @router.post("/release/{session_id}")
-async def release_session(session_id: str, body: Optional[dict] = None):
+async def release_session(session_id: str, request: Request):
     """Release a session's concurrency slot on tab close (R6b).
 
     Frees the backend SessionUnit's slot (kills the subprocess, clears
@@ -1040,19 +1040,30 @@ async def release_session(session_id: str, body: Optional[dict] = None):
     the 12h idle TTL.  Does NOT delete DB messages — the conversation survives
     and the user can reopen it from history.
 
-    Best-effort + idempotent: always returns 200 (the frontend fires this
-    fire-and-forget on close).  The router applies the generation/active-state
-    safety guards (see ``SessionRouter.release_session``).
+    Best-effort + idempotent: ALWAYS returns 200 (the frontend fires this
+    fire-and-forget on close).  The body is parsed defensively from the raw
+    Request — a missing, empty, or even malformed body degrades to force=False
+    rather than a 422, because a fire-and-forget release must never error.  The
+    router applies the channel/active-state safety guards (see
+    ``SessionRouter.release_session``).
 
     Optional JSON body:
         { "force": true }  — confirmed close of a STREAMING/WAITING_INPUT tab.
         Without force, an active session is left untouched (``skipped_active``)
         because the SSE-disconnect recovery path already handles it.
     """
-    # Strict: only an explicit JSON boolean true enables force. Avoid
-    # truthiness-coercion — {"force": "false"} (string) must NOT enable the
-    # destructive interrupt-active branch on this public endpoint.
-    force = bool(body.get("force") is True) if isinstance(body, dict) else False
+    # Defensive parse: never 422 on a fire-and-forget endpoint. Strict on force —
+    # only an explicit JSON boolean true enables the destructive interrupt-active
+    # branch; truthiness-coercion ({"force":"false"} → True) is rejected.
+    force = False
+    try:
+        raw = await request.body()
+        if raw:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                force = parsed.get("force") is True
+    except (ValueError, UnicodeDecodeError):
+        force = False  # malformed body → best-effort unforced release
     logger.info("Received release request for session %s (force=%s)", session_id, force)
     result = await _get_router().release_session(session_id, force=force)
     return result
