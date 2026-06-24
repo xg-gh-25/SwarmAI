@@ -108,6 +108,42 @@ async def test_release_already_cold_unit_is_noop_released():
     assert cold.kill.await_count == 0
 
 
+# ── Security HIGH: chat-tab release must NOT reap a channel session ────────
+
+@pytest.mark.asyncio
+async def test_release_channel_session_is_skipped():
+    """A chat-tab close fires release with a session_id from the URL. If that id
+    belongs to a Slack/channel session, release must NOT kill it — channel agents
+    persist for the daemon's life (mirrors _check_ttl's channel exemption). Without
+    this guard, closing a chat tab could tear down a live channel agent."""
+    router = _make_router()
+    unit = _add_unit(router, "chan-1", SessionState.IDLE)
+    unit.is_channel_session = True
+
+    result = await router.release_session("chan-1")
+
+    assert result["status"] == "skipped_channel"
+    assert unit.kill.await_count == 0
+    assert unit.interrupt.await_count == 0
+    assert unit.is_alive
+
+
+@pytest.mark.asyncio
+async def test_release_channel_session_skipped_even_with_force():
+    """Even a forced (confirmed-close) release must not reap a channel session —
+    a chat UI has no authority to kill a channel agent regardless of force."""
+    router = _make_router()
+    unit = _add_unit(router, "chan-2", SessionState.STREAMING)
+    unit.is_channel_session = True
+
+    result = await router.release_session("chan-2", force=True)
+
+    assert result["status"] == "skipped_channel"
+    assert unit.kill.await_count == 0
+    assert unit.interrupt.await_count == 0
+    assert unit.is_alive
+
+
 # ── AC3: isolation — release(A) never touches B ───────────────────────────
 
 @pytest.mark.asyncio
@@ -195,11 +231,15 @@ async def test_release_idle_aborts_if_generation_advanced():
 
 
 # ── AC1/AC4: POST /api/chat/release/{session_id} endpoint ─────────────────
-# Sync tests using the shared `client` fixture (conftest). TestClient inside an
-# async test deadlocks on the ASGI lifespan portal — match test_chat.py style.
+# Call the route HANDLER directly with a mocked router. We deliberately do NOT
+# use TestClient(app): booting the app lifespan runs the skill-projection
+# copytree (intermittently fails on s_docx/s_pollinate node_modules in this env)
+# and is unrelated to the endpoint contract under test. Direct async handler
+# call is the correct unit boundary — it exercises real body-parse + delegation.
 
-def test_release_endpoint_calls_router_and_returns_200(client, monkeypatch):
-    """AC1: the endpoint delegates to router.release_session and returns 200."""
+@pytest.mark.asyncio
+async def test_release_endpoint_calls_router_and_returns_200(monkeypatch):
+    """AC1: the endpoint delegates to router.release_session (unforced default)."""
     import routers.chat as chat_mod
 
     fake_router = MagicMock()
@@ -208,18 +248,17 @@ def test_release_endpoint_calls_router_and_returns_200(client, monkeypatch):
     )
     monkeypatch.setattr(chat_mod, "_get_router", lambda: fake_router)
 
-    resp = client.post("/api/chat/release/sess-X")
+    result = await chat_mod.release_session("sess-X", body=None)
 
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "released"
+    assert result["status"] == "released"
     fake_router.release_session.assert_awaited_once()
     # Default (no body) is an unforced release.
     _, kwargs = fake_router.release_session.call_args
     assert kwargs.get("force", False) is False
 
 
-def test_release_endpoint_passes_force_flag(client, monkeypatch):
+@pytest.mark.asyncio
+async def test_release_endpoint_passes_force_flag(monkeypatch):
     """AC2: confirmed close of a streaming tab passes force=True."""
     import routers.chat as chat_mod
 
@@ -229,14 +268,14 @@ def test_release_endpoint_passes_force_flag(client, monkeypatch):
     )
     monkeypatch.setattr(chat_mod, "_get_router", lambda: fake_router)
 
-    resp = client.post("/api/chat/release/sess-X", json={"force": True})
+    await chat_mod.release_session("sess-X", body={"force": True})
 
-    assert resp.status_code == 200
     _, kwargs = fake_router.release_session.call_args
     assert kwargs.get("force") is True
 
 
-def test_release_endpoint_does_not_delete_messages(client, monkeypatch):
+@pytest.mark.asyncio
+async def test_release_endpoint_does_not_delete_messages(monkeypatch):
     """AC4: the release endpoint must NOT call db.messages.delete_by_session
     (history survives so the user can reopen the closed session)."""
     import routers.chat as chat_mod
@@ -250,6 +289,6 @@ def test_release_endpoint_does_not_delete_messages(client, monkeypatch):
     delete_spy = AsyncMock()
     monkeypatch.setattr(db.messages, "delete_by_session", delete_spy)
 
-    client.post("/api/chat/release/sess-X")
+    await chat_mod.release_session("sess-X", body=None)
 
     delete_spy.assert_not_awaited()

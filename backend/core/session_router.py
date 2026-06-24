@@ -1770,6 +1770,14 @@ class SessionRouter:
         if unit is None:
             return {"status": "not_found", "alive_count": self.alive_count}
 
+        # Channel sessions (Slack, etc.) are exempt — they persist for the
+        # daemon's life and are NOT owned by any chat tab.  _check_ttl exempts
+        # them too; this endpoint, fired on chat-tab close, must be no more
+        # aggressive than the TTL reaper.  A chat UI has no authority to reap a
+        # channel agent, even with force.
+        if unit.is_channel_session:
+            return {"status": "skipped_channel", "alive_count": self.alive_count}
+
         # Generation stale-guard: the slot was re-adopted by a new turn.
         if (
             expected_generation is not None
