@@ -192,3 +192,64 @@ async def test_release_idle_aborts_if_generation_advanced():
     )
     assert result["status"] in ("skipped_stale", "skipped_active")
     assert a.kill.await_count == 0
+
+
+# ── AC1/AC4: POST /api/chat/release/{session_id} endpoint ─────────────────
+# Sync tests using the shared `client` fixture (conftest). TestClient inside an
+# async test deadlocks on the ASGI lifespan portal — match test_chat.py style.
+
+def test_release_endpoint_calls_router_and_returns_200(client, monkeypatch):
+    """AC1: the endpoint delegates to router.release_session and returns 200."""
+    import routers.chat as chat_mod
+
+    fake_router = MagicMock()
+    fake_router.release_session = AsyncMock(
+        return_value={"status": "released", "alive_count": 0}
+    )
+    monkeypatch.setattr(chat_mod, "_get_router", lambda: fake_router)
+
+    resp = client.post("/api/chat/release/sess-X")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "released"
+    fake_router.release_session.assert_awaited_once()
+    # Default (no body) is an unforced release.
+    _, kwargs = fake_router.release_session.call_args
+    assert kwargs.get("force", False) is False
+
+
+def test_release_endpoint_passes_force_flag(client, monkeypatch):
+    """AC2: confirmed close of a streaming tab passes force=True."""
+    import routers.chat as chat_mod
+
+    fake_router = MagicMock()
+    fake_router.release_session = AsyncMock(
+        return_value={"status": "released", "alive_count": 0}
+    )
+    monkeypatch.setattr(chat_mod, "_get_router", lambda: fake_router)
+
+    resp = client.post("/api/chat/release/sess-X", json={"force": True})
+
+    assert resp.status_code == 200
+    _, kwargs = fake_router.release_session.call_args
+    assert kwargs.get("force") is True
+
+
+def test_release_endpoint_does_not_delete_messages(client, monkeypatch):
+    """AC4: the release endpoint must NOT call db.messages.delete_by_session
+    (history survives so the user can reopen the closed session)."""
+    import routers.chat as chat_mod
+    from database import db
+
+    fake_router = MagicMock()
+    fake_router.release_session = AsyncMock(
+        return_value={"status": "released", "alive_count": 0}
+    )
+    monkeypatch.setattr(chat_mod, "_get_router", lambda: fake_router)
+    delete_spy = AsyncMock()
+    monkeypatch.setattr(db.messages, "delete_by_session", delete_spy)
+
+    client.post("/api/chat/release/sess-X")
+
+    delete_spy.assert_not_awaited()

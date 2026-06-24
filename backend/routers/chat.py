@@ -1031,6 +1031,30 @@ async def stop_session(session_id: str):
         return {"status": "not_found", "message": result["message"]}
 
 
+@router.post("/release/{session_id}")
+async def release_session(session_id: str, body: Optional[dict] = None):
+    """Release a session's concurrency slot on tab close (R6b).
+
+    Frees the backend SessionUnit's slot (kills the subprocess, clears
+    per-session module state) so a closed chat tab does not hold a slot until
+    the 12h idle TTL.  Does NOT delete DB messages — the conversation survives
+    and the user can reopen it from history.
+
+    Best-effort + idempotent: always returns 200 (the frontend fires this
+    fire-and-forget on close).  The router applies the generation/active-state
+    safety guards (see ``SessionRouter.release_session``).
+
+    Optional JSON body:
+        { "force": true }  — confirmed close of a STREAMING/WAITING_INPUT tab.
+        Without force, an active session is left untouched (``skipped_active``)
+        because the SSE-disconnect recovery path already handles it.
+    """
+    force = bool(body.get("force")) if body else False
+    logger.info("Received release request for session %s (force=%s)", session_id, force)
+    result = await _get_router().release_session(session_id, force=force)
+    return result
+
+
 @router.post("/refresh/{session_id}")
 async def refresh_session(session_id: str):
     """Refresh a session's context by killing subprocess and preparing for resume.
