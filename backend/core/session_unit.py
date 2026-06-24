@@ -2725,7 +2725,7 @@ class SessionUnit:
     # │ Safety layers (defense in depth):                           │
     # │   L1: This threshold — proactive compact+kill, IDLE only   │
     # │   L2: STREAMING_RSS_KILL — emergency kill during streaming │
-    # │   L3: lifecycle_manager system pressure (>85%) — any state │
+    # │   L3: lifecycle_manager system pressure (>90%) — any state │
     # │   L4: macOS jetsam — OS-level kill at memory crisis        │
     # │                                                             │
     # │ 36 GB machine: 3.5 GB = 10%. Two sessions at threshold =  │
