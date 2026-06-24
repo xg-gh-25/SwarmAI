@@ -510,6 +510,53 @@ describe('MessageStore single-writer behavior', () => {
     store.destroy();
   });
 
+  // ─── Regression: turn-end reconcile races in-flight fetch → tail lost ───
+  // Bug: a clean turn-end runs endStreaming() (flushes the queued thunk, which
+  // starts an async _fetchAndReconcile → _reconcileInFlight=1), then ~200ms
+  // later scheduleTurnEndReconcile calls reconcile(freshFullDb). That reconcile
+  // hits _reconcileInFlight>0 → NO-OPs and re-queues the thunk. The in-flight
+  // fetch then resolves with the OLD (truncated) snapshot, decrements inFlight,
+  // but NEVER drains the re-queued thunk (no further endStreaming on a finished
+  // turn). Result: the complete tail in fresh DB is dropped permanently — the
+  // user sees a truncated reply until tab-switch. Fix: drain the pending thunk
+  // in _fetchAndReconcile's finally when inFlight hits 0 at idle.
+  it('turn-end reconcile is not lost when it races an in-flight fetch (drains re-queued thunk)', async () => {
+    // First fetch (started by endStreaming flush) returns the TRUNCATED tail —
+    // simulates the stale in-flight read. Second fetch (the drained re-run)
+    // returns the FULL content from DB.
+    let call = 0;
+    let firstResolve: (m: ChatMessage[]) => void;
+    const firstFetch = new Promise<ChatMessage[]>((r) => { firstResolve = r; });
+    const fetchMock = vi.fn(() => {
+      call += 1;
+      if (call === 1) return firstFetch;
+      // Subsequent drained fetch sees the full DB content.
+      return Promise.resolve([makeChatMsg('a1', 'assistant', 'FULL complete reply tail')]);
+    });
+    const store = new MessageStore({ sessionId: 'sess-1', fetchMessages: fetchMock });
+    store.append(makeMsg('a1', 'assistant', 'FULL complete'));
+    store.startStreaming('a1');
+
+    // During streaming, a reconcile is requested → queued as thunk.
+    store.reconcile([makeChatMsg('a1', 'assistant', 'queued')]);
+
+    // Clean turn-end: flushes the thunk → starts async _fetchAndReconcile (inFlight=1).
+    store.endStreaming();
+
+    // The turn-end reconcile fires ~200ms later with fresh full DB data, but
+    // hits inFlight>0 → NO-OP + re-queue.
+    store.reconcile([makeChatMsg('a1', 'assistant', 'FULL complete reply tail')]);
+
+    // Now the in-flight fetch resolves with the stale/truncated read.
+    firstResolve!([makeChatMsg('a1', 'assistant', 'truncated')]);
+    await vi.waitFor(() => {
+      // The drained re-run must eventually land the full content.
+      expect((store.messages[0].content[0] as any).text).toBe('FULL complete reply tail');
+    });
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2); // proves drain re-ran
+    store.destroy();
+  });
+
   it('append() resets watchdog during streaming', () => {
     const store = new MessageStore({ watchdogTimeoutMs: 100 });
     store.append(makeMsg('a1', 'assistant'));

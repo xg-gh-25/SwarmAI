@@ -585,24 +585,39 @@ class StreamingOrchestrator:
             if isinstance(message, AssistantMessage):
                 saw_assistant_message = True
                 content_blocks = []
+                # ── Third leak signal: does this message have a REAL tool_use? ─
+                # If the model emitted an actual ToolUseBlock, any <invoke> text
+                # in a sibling TextBlock is the model TALKING about a tool call,
+                # not leaking one — so the text-shape guard must NOT fire. The
+                # leak is defined by malformed text WITH NO real tool call.
+                _has_real_tool_use = any(
+                    isinstance(b, ToolUseBlock) for b in message.content
+                )
                 for block in message.content:
                     if isinstance(block, TextBlock):
                         # ── Tool-call XML leak guard ──────────────────────
-                        # The model occasionally emits tool-call SYNTAX (a
-                        # "call" line + <invoke name=...>) as plain text instead
-                        # of a real tool_use block. The SDK hands it over as a
-                        # TextBlock, so without this guard the raw XML persists
-                        # to the messages DB, renders as half-finished XML, and
-                        # the turn ends with no tool execution ("response
-                        # stopped mid-way"). This is the DB-persist gate — drop
-                        # the block (don't append/yield it), then kill + raise a
-                        # retriable error so send() respawns with --resume and
-                        # the model re-attempts with a proper tool_use. The
-                        # double-condition matcher is false-positive-safe on
-                        # prose that merely discusses <invoke> inline.
+                        # The model occasionally emits tool-call SYNTAX
+                        # (<invoke name=...><parameter ...>) as RAW plain text
+                        # instead of a real tool_use block. The SDK hands it over
+                        # as a TextBlock, so without this guard the raw XML
+                        # persists to the messages DB, renders as half-finished
+                        # XML, and the turn ends with no tool execution
+                        # ("response stopped mid-way"). This is the DB-persist
+                        # gate — drop the block (don't append/yield it), then
+                        # kill + raise a retriable error so send() respawns with
+                        # --resume and the model re-attempts with a proper
+                        # tool_use. detect_tool_call_leak strips code fences /
+                        # inline backticks (documentation), and we additionally
+                        # require NO real tool_use in this message — both guard
+                        # against false-firing on a turn that discusses the
+                        # syntax. NOTE: the same text may have already streamed
+                        # live via text_delta; the kill+resume + turn-end
+                        # reconcile replaces that transient on-screen partial.
+                        # DB persistence (the durable harm) happens only on the
+                        # yielded `assistant` event, which we skip here.
                         from .session_utils import detect_tool_call_leak
 
-                        if detect_tool_call_leak(block.text):
+                        if not _has_real_tool_use and detect_tool_call_leak(block.text):
                             logger.warning(
                                 "session_unit.tool_call_leak_detected "
                                 "session_id=%s — model emitted tool-call XML as "
@@ -610,7 +625,19 @@ class StreamingOrchestrator:
                                 "killing for --resume respawn",
                                 self._parent.session_id, len(block.text),
                             )
-                            await self._parent.kill()
+                            # Exception-safe: guarantee the retriable RuntimeError
+                            # is raised even if kill() throws — otherwise a kill()
+                            # error would propagate as a NON-retriable error and
+                            # bypass the intended --resume retry path.
+                            try:
+                                await self._parent.kill()
+                            except Exception as kill_exc:
+                                logger.warning(
+                                    "session_unit.tool_call_leak_kill_failed "
+                                    "session_id=%s: %s",
+                                    self._parent.session_id,
+                                    f"{type(kill_exc).__name__}: {kill_exc}",
+                                )
                             raise RuntimeError(
                                 f"Tool-call XML leaked into text channel "
                                 f"(session_id={self._parent.session_id}) — "

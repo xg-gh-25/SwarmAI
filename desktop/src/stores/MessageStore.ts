@@ -455,6 +455,27 @@ export class MessageStore {
       console.error('[MessageStore] fetchAndReconcile failed:', err);
     } finally {
       this._reconcileInFlight--;
+      // Drain a reconcile that was re-queued because it raced THIS in-flight
+      // fetch. Without this, a turn-end reconcile (scheduleTurnEndReconcile) that
+      // arrived with fresh full DB data while inFlight>0 would NO-OP + re-queue
+      // (reconcile():209), and the thunk would never run again — no further
+      // endStreaming() flushes it on a finished turn — leaving the truncated
+      // streamed buffer permanently. Only drain at idle (a re-queue during
+      // streaming is owned by the next endStreaming flush) and when no other
+      // fetch is in flight, so the drained thunk's own inFlight++/-- can't
+      // recurse here. The drained thunk re-runs _fetchAndReconcile, which at
+      // idle applies the merge and does not re-queue (it only re-queues when
+      // phase==='streaming', :448) → terminates.
+      if (
+        this._reconcileInFlight === 0 &&
+        this._phase === 'idle' &&
+        this._pendingReconcileThunk &&
+        !this._destroyed
+      ) {
+        const thunk = this._pendingReconcileThunk;
+        this._pendingReconcileThunk = null;
+        thunk();
+      }
     }
   }
 

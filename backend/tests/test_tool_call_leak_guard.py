@@ -33,32 +33,45 @@ from core.session_utils import detect_tool_call_leak, _is_retriable_error
 
 # ── 1. Pure detector — table-driven ────────────────────────────────────────
 
-# Real leak shapes (DB-confirmed 2026-06-24, rowids 203549/204014/204018 etc.)
+# Real leak shapes — RAW <invoke> body in text (the durable harm). Detection
+# keys on the BODY (<invoke name="X"> + <parameter / </invoke>), NOT the optional
+# "call" prefix, so leaks without "call", with CRLF, or appearing late all match.
 LEAK_CASES = [
-    # Classic harness shape with a "call" line then line-start <invoke
+    # Classic harness shape with a "call" line (DB rowid 204014/203549 shape)
     'some text\n\ncall\n<invoke name="Bash">\n<parameter name="command">cd /x</parameter>',
     # Skill invocation variant
     'output:\n\ncall\n<invoke name="Skill">\n<parameter name="skill">foo</parameter>',
     # Leak at the very start of the block
     'call\n<invoke name="Bash">\n<parameter name="command">ls</parameter>',
-    # Extra inter-line whitespace / trailing spaces on the call line
-    'prefix\ncall  \n   <invoke name="Read">',
-    # Tabs around the call token
-    'x\n\tcall\t\n<invoke name="Edit">',
+    # NO "call" prefix at all (the 8th DB case + future variants) — MUST match
+    '<invoke name="Bash">\n<parameter name="command">ls</parameter>',
+    # CRLF line endings — must still match
+    'text\r\ncall\r\n<invoke name="Bash">\r\n<parameter name="command">ls</parameter>',
+    # Self-closing / empty invoke body
+    'doing the thing now\n<invoke name="Read"></invoke>',
+    # Leak AFTER 4000 chars (no scan-limit truncation) — MUST match
+    "x" * 4100 + '\n<invoke name="Bash">\n<parameter name="command">ls</parameter>',
 ]
 
-# Non-leak: prose discussing the syntax (must NOT trigger — false-positive safe)
+# Non-leak: prose / documentation discussing the syntax (must NOT trigger).
 NON_LEAK_CASES = [
     # Inline backtick mention (the rowid 204050 shape that must be rejected)
     '看两张截图,我的回复每次都在 `<invoke name="Bash">` 那一刻停了',
-    # Inline mention mid-sentence, no leading bare "call" line
-    'The harness emits <invoke name="Bash"> as the tool-call format.',
-    # Fenced code block discussing the syntax — preceded by ``` not a call line
-    'Example:\n```\n<invoke name="Bash">\n<parameter name="command">x</parameter>\n```',
-    # The word "call" appears but not as its own line before a line-start tag
-    'we call the <invoke name= matcher here inline',
-    # A "call" line but the next line is NOT an <invoke tag
+    # Inline mention mid-sentence, backtick-wrapped
+    'The harness emits `<invoke name="Bash">` as the tool-call format.',
+    # FENCED code block documenting the syntax — the critical false-positive
+    # the first design missed. A meta-heavy turn explaining THIS bug.
+    'Example of the leak:\n```\ncall\n<invoke name="Bash">\n<parameter name="command">x</parameter>\n```\nThat is what we guard against.',
+    # Fenced block WITHOUT a language tag, full body inside
+    '```\n<invoke name="Skill">\n<parameter name="skill">foo</parameter>\n</invoke>\n```',
+    # Self-explanation referencing the shape but backtick-wrapped
+    'My previous reply stopped at `<invoke name="Bash">` — that was a leak.',
+    # The word "call" as its own line but NO <invoke body follows
     'call\nthe function and see what happens',
+    # Mentions <invoke but never a real body (no <parameter, no close)
+    'the <invoke tag is interesting to discuss in the abstract',
+    # Different casing — harness emits lowercase only; this is prose, not a leak
+    'Prose: <INVOKE name="Bash"><PARAMETER name="command">ls</PARAMETER>',
     # Empty / trivial
     '',
     'just a normal assistant reply with no tool syntax at all',
@@ -67,20 +80,23 @@ NON_LEAK_CASES = [
 
 @pytest.mark.parametrize("text", LEAK_CASES)
 def test_detector_flags_real_leaks(text):
-    """INV1: every DB-confirmed leak shape is detected."""
+    """INV1: every raw-body leak shape is detected (with/without call prefix,
+    CRLF, late in block, case-variant)."""
     assert detect_tool_call_leak(text) is True
 
 
 @pytest.mark.parametrize("text", NON_LEAK_CASES)
 def test_detector_ignores_discussion(text):
-    """INV2: prose mentioning the syntax inline / in fences is NOT flagged."""
+    """INV2: prose mentioning the syntax inline / in fenced code is NOT flagged
+    (false-positive safety on the hottest path)."""
     assert detect_tool_call_leak(text) is False
 
 
-def test_detector_scan_limit_does_not_crash_on_large_text():
-    """A huge block with the leak near the front is still detected; a huge
-    block with no leak returns False quickly (bounded scan)."""
-    big_leak = "x" * 100 + "\ncall\n<invoke name=\"Bash\">" + "y" * 100_000
+def test_detector_handles_large_text_without_truncation():
+    """No scan-limit truncation: a leak anywhere in a large block is detected;
+    a huge clean block returns False (and the fast-path '<invoke' check keeps
+    it cheap)."""
+    big_leak = "x" * 100_000 + '\n<invoke name="Bash">\n<parameter name="command">ls</parameter>'
     assert detect_tool_call_leak(big_leak) is True
     big_clean = "z" * 500_000
     assert detect_tool_call_leak(big_clean) is False
@@ -184,9 +200,14 @@ def _make_orchestrator():
     parent._peak_tree_rss_bytes = 0
     parent._interrupted = False
     # Normal result-path stubs (clean-text test reaches ResultMessage handling)
+    from core.compaction_guard import EscalationLevel
+
     parent._compaction_guard = types.SimpleNamespace(
         record_tool_call=lambda *a, **k: None,
+        check=lambda: EscalationLevel.MONITORING,
     )
+    parent._open_tool_uses = {}
+    parent._active_agent_tools = {}
     parent._emit_post_stream_metadata = lambda *a, **k: iter(())
 
     async def _noop_async(*a, **k):
@@ -261,3 +282,28 @@ def test_orchestrator_passes_clean_text_block():
         and any(b.get("text") == clean for b in ev.get("content", []))
         for ev in events
     )
+
+
+def test_orchestrator_does_not_fire_when_real_tool_use_present():
+    """Third signal: if the message ALSO contains a real ToolUseBlock, a sibling
+    TextBlock containing <invoke> body text is the model TALKING about a tool
+    call, not leaking one — the guard must NOT fire."""
+    from claude_agent_sdk import AssistantMessage, TextBlock, ToolUseBlock
+
+    orch = _make_orchestrator()
+    orch._parent._streaming_start_time = 0.0
+    # Text that WOULD match the body matcher on its own ...
+    text_with_body = 'Here is what I ran:\n<invoke name="Bash">\n<parameter name="command">ls</parameter>'
+    msg = AssistantMessage(
+        content=[
+            TextBlock(text=text_with_body),
+            ToolUseBlock(id="toolu_1", name="Bash", input={"command": "ls"}),
+        ],
+        model="test-model",
+    )
+
+    events, raised = asyncio.run(_drive(orch, [msg, _make_result_message()]))
+
+    # ... but because a REAL tool_use is present, the guard must not fire.
+    assert orch._parent._kill_calls["n"] == 0
+    assert raised is None

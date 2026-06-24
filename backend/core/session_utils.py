@@ -347,55 +347,74 @@ def _is_retriable_error(raw_error: str, tb_str: str = "") -> bool:
 # parses it as a TextBlock, so the raw XML is persisted to the messages DB and
 # rendered on screen as a half-finished tag, and the turn ends with no tool
 # execution (user sees "response stopped mid-way").  Empirically (8 DB-confirmed
-# cases, 2026-06-24) the leak ALWAYS takes the harness's literal call shape:
+# cases, 2026-06-24) the leak takes the harness's literal call body:
 #
 #     call
 #     <invoke name="Bash">
 #     <parameter name="command">...
 #
-# i.e. a line that is exactly the token ``call`` immediately followed by a line
-# that STARTS with ``<invoke name=``.  The DOUBLE condition (the ``call`` prefix
-# line + the line-anchored ``<invoke name=``) is what distinguishes a real leak
-# from prose that merely DISCUSSES the syntax — the latter is backtick-wrapped
-# and inline (e.g. ``my reply stopped at `<invoke name="Bash">` ``), which has no
-# bare ``call`` line in front of a line-start tag.  This matcher was validated
-# against all 8 DB cases: 7 real leaks matched, 1 inline-discussion rejected.
+# DISCRIMINATION — the hard part.  This is a meta-heavy codebase: assistant turns
+# routinely DOCUMENT, review, or self-explain this exact shape.  An early version
+# keyed on a bare ``call`` line + ``<invoke name=`` — but that is *precisely* what
+# you type when explaining the bug, so it would wrongfully kill (kill + --resume)
+# any turn that discusses the syntax.  Two structural facts separate a real leak
+# from documentation:
 #
-# Anchored, no nested quantifiers → no catastrophic backtracking.  ``\s*`` only
-# spans the inter-line whitespace between the two anchors.
+#   1. Documentation lives in fenced code blocks (``` ... ```) or inline backtick
+#      spans; a REAL leak is RAW text (the model believes it is making a real
+#      call, so it does not fence it).  → strip fences + inline code first.
+#   2. A real leak is the FULL body — ``<invoke name="X">`` immediately followed
+#      by ``<parameter name=`` (or ``</invoke>``).  Keying on the body, NOT the
+#      optional ``call`` prefix, also catches leaks that omit ``call`` (the 8th
+#      DB case) and is robust to CRLF / casing.
+#
+# A third signal (no real ToolUseBlock in the same message) is checked by the
+# caller (the orchestrator) — if the model DID emit a real tool_use, text that
+# mentions <invoke> is discussion, not a leak.
+#
+# The regex has no nested quantifiers (``[^"]+`` is bounded by ``"``; ``\s*`` is
+# bounded by literals) → no catastrophic backtracking.
+_TOOL_CALL_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+_TOOL_CALL_INLINE_CODE_RE = re.compile(r"`[^`]*`")
+# Case-SENSITIVE on purpose: the harness emits lowercase <invoke>/<parameter>
+# literally. Prose discussing it may use other casing; matching only the exact
+# harness casing further narrows the false-positive surface. (\s spans the
+# inter-token whitespace incl. CRLF.)
 _TOOL_CALL_LEAK_RE = re.compile(
-    r"(?:^|\n)[ \t]*call[ \t]*\n[ \t]*<invoke name=",
-    re.MULTILINE,
+    r'<invoke\s+name="[^"]+"\s*>\s*(?:<parameter\s+name=|</invoke>)',
 )
-
-# Cap how much text we scan — a leak signature, if present, appears within the
-# first few hundred chars of the block (the "call\n<invoke" prefix leads the
-# tool call).  Scanning a bounded prefix keeps this O(1) on the hottest path
-# (every assistant text block) even for very large blocks.
-_TOOL_CALL_LEAK_SCAN_LIMIT = 4000
 
 
 def detect_tool_call_leak(text: str) -> bool:
     """Return True if ``text`` contains leaked tool-call XML in the text channel.
 
-    Detects the harness tool-call signature — a bare ``call`` line immediately
-    followed by a line-anchored ``<invoke name=`` — emitted as plain assistant
-    text instead of a real tool_use block.  Designed to be false-positive-safe
-    on prose that merely mentions ``<invoke name=`` inline (no leading ``call``
-    line), which is common in this meta-heavy codebase.
+    Detects the harness tool-call BODY — ``<invoke name="...">`` immediately
+    followed by ``<parameter name=`` or ``</invoke>`` — emitted as RAW assistant
+    text instead of a real tool_use block.
+
+    False-positive-safe on documentation: fenced code blocks and inline-backtick
+    spans (where assistant prose shows the syntax) are stripped before matching,
+    so a turn that merely *explains* the leak shape is not flagged.  This matters
+    because this is a meta-heavy codebase whose own turns routinely discuss this
+    exact syntax — a false positive would wrongfully kill a legitimate turn.
 
     Pure function (str -> bool) so it can be unit-tested in isolation.  Called
-    from the StreamingOrchestrator TextBlock branch (the DB-persist gate).
+    from the StreamingOrchestrator TextBlock branch (the DB-persist gate), which
+    additionally gates on the absence of a real ToolUseBlock in the message.
 
     Args:
         text: The assistant text block content to inspect.
 
     Returns:
-        True if a tool-call leak signature is present, else False.
+        True if a raw tool-call leak body is present (outside code fences).
     """
-    if not text:
-        return False
-    return _TOOL_CALL_LEAK_RE.search(text[:_TOOL_CALL_LEAK_SCAN_LIMIT]) is not None
+    if not text or "<invoke" not in text:
+        return False  # fast path — the overwhelming majority of blocks
+    # Strip documentation contexts so prose that SHOWS the syntax is ignored;
+    # a real leak is raw unfenced text.
+    stripped = _TOOL_CALL_FENCE_RE.sub("", text)
+    stripped = _TOOL_CALL_INLINE_CODE_RE.sub("", stripped)
+    return _TOOL_CALL_LEAK_RE.search(stripped) is not None
 
 
 def _build_error_event(
