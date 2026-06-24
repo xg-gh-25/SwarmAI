@@ -589,6 +589,14 @@ class SessionUnit:
         self._recovery_coordinator: RecoveryCoordinator = RecoveryCoordinator(
             self._healing_loop
         )
+        # High-water mark for the one-shot recovery_exhausted SSE event. The
+        # Coordinator's terminal_signal_count climbs by exactly 1 per exhaustion
+        # episode (monotonic; on_success resets the bool, not the count). We
+        # surface the user-facing event only when the count ADVANCES past this
+        # mark — so the recurring ESCALATE verdict (fires every tick while the
+        # breaker holds) yields the toast exactly once per episode, and a fresh
+        # episode after a successful heal re-fires. (run_d8dce02a, decision #3)
+        self._last_recovery_exhausted_signal: int = 0
         # Checkpoint built before heal-kill, consumed by next spawn to
         # inject continuation context. None = no pending heal context.
         self._heal_checkpoint: TaskCheckpoint | None = None
@@ -1682,15 +1690,19 @@ class SessionUnit:
                         )
                     # Next send() will detect state=COLD → _ensure_spawned
                 elif decision.verdict is RecoveryVerdict.ESCALATE:
-                    # Breaker tripped — recovery itself is failing. The Coordinator
-                    # has fired its one-shot terminal signal (R4 maps it to a
-                    # user-facing inline recovery_exhausted SSE event).
+                    # Breaker tripped — recovery itself is failing. Surface the
+                    # Coordinator's one-shot terminal signal to the USER as an
+                    # in-band recovery_exhausted SSE event (decision #3, pulled
+                    # forward from R4) so the session is not a silent dead-end.
                     logger.warning(
                         "session_unit.self_heal_exhausted session_id=%s "
                         "trigger=%s attempts=%d terminal=%s",
                         self.session_id, trigger, self._healing_loop.heal_attempts,
                         self._recovery_coordinator.terminal_recovery_reached,
                     )
+                    _rex_event = self._maybe_recovery_exhausted_event(trigger)
+                    if _rex_event is not None:
+                        yield _rex_event
                 # DEFER (cooldown) and SKIP (guard) → no action this tick.
         except Exception as exc:
             error_str = str(exc)
@@ -3265,6 +3277,39 @@ class SessionUnit:
         self._sdk_session_id = None
 
     _WRAPUP_CAP = 4000
+
+    def _maybe_recovery_exhausted_event(self, trigger: str) -> Optional[dict]:
+        """Return a one-shot ``recovery_exhausted`` SSE event when the recovery
+        breaker has JUST tripped, else ``None``.
+
+        Surfaces the Coordinator's terminal signal to the user (decision #3):
+        self-heal has given up, so the session is a silent dead-end unless the
+        user is told. Gated on the ``terminal_signal_count`` DELTA, not the
+        ``ESCALATE`` verdict — the verdict recurs every tick while the breaker
+        holds, but the signal count advances exactly once per exhaustion episode
+        (and again on a fresh episode after a successful heal, since the count is
+        monotonic). The high-water mark makes the yield idempotent across the
+        repeated ESCALATE ticks. Never raises — must not break the stream loop.
+        """
+        try:
+            sig = self._recovery_coordinator.terminal_signal_count
+            if sig <= self._last_recovery_exhausted_signal:
+                return None
+            self._last_recovery_exhausted_signal = sig
+            return {
+                "type": "recovery_exhausted",
+                # self.session_id is ALWAYS set; _sdk_session_id is None until a
+                # spawn assigns it (Gate-1 #5 correction).
+                "sessionId": self.session_id,
+                "trigger": trigger,
+                "message": (
+                    "Automatic recovery for this session has failed repeatedly "
+                    "and has stopped. Start a fresh session to continue — your "
+                    "conversation history is preserved."
+                ),
+            }
+        except Exception:
+            return None  # observability is best-effort; never break streaming
 
     def _capture_wrapup_text(self, event: dict) -> None:
         """Accumulate assistant text emitted during the graceful wrap-up turn.

@@ -963,6 +963,11 @@ export interface ChatStreamingLifecycleDeps {
   /** Callback to switch the active tab — used by the cross-tab AskUserQuestion
    *  toast so the user can click straight to the tab that is asking. */
   onSelectTab?: (tabId: string) => void;
+  /** Callback to start a fresh session for a tab — used by the
+   *  recovery_exhausted toast's "Start fresh session" action when automatic
+   *  recovery has given up. Clears the tab to a new session (history preserved
+   *  server-side). */
+  onStartFresh?: (tabId: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -979,6 +984,7 @@ export function useChatStreamingLifecycle(
     tabMapRef,
     activeTabIdRef,
     onSelectTab,
+    onStartFresh,
   } = deps;
 
   // --- Toast for reconnection notifications ---
@@ -2259,6 +2265,11 @@ export function useChatStreamingLifecycle(
               next.delete(capturedTabId);
               return next;
             });
+            // GUI28 backstop: a session_start means this tab spawned a fresh
+            // subprocess and is streaming again — any stale recovery_exhausted
+            // toast for this tab is now obsolete. Clear it even if the user
+            // recovered by some path other than the toast's own action.
+            removeToast(`recovery-exhausted-${capturedTabId}`);
           }
         } else if (event.type === 'session_cleared' && event.newSessionId) {
           // SDK compaction: session ID changed but conversation continues.
@@ -3255,6 +3266,35 @@ export function useChatStreamingLifecycle(
             severity: 'warning',
             message: msg,
             id: `mcp-health-${capturedTabId ?? 'global'}`,
+          });
+        }
+        // recovery_exhausted: the backend's self-heal breaker tripped — automatic
+        // recovery has given up, so the session is otherwise a silent dead-end.
+        // Surface a persistent, actionable toast (decision #3). The action is
+        // "Start fresh session" (the SAFE recovery — re-sending into a session
+        // that failed N heals risks re-wedging it; a clean session always works).
+        // GUI28: a persistent (autoDismiss:false) toast MUST have a paired clear
+        // path — we clear on the action click AND as a backstop on the next
+        // session_start for this tab (see SESSION_START handler).
+        else if (event.type === 'recovery_exhausted') {
+          const rexTabId = capturedTabId ?? 'global';
+          const rexToastId = `recovery-exhausted-${rexTabId}`;
+          const msg = event.message
+            ?? 'Automatic recovery for this session has stopped. Start a fresh session to continue.';
+          addToast({
+            severity: 'warning',
+            message: msg,
+            id: rexToastId,
+            autoDismiss: false,
+            action: onStartFresh
+              ? {
+                  label: 'Start fresh session',
+                  onClick: () => {
+                    removeToast(rexToastId);
+                    onStartFresh(rexTabId);
+                  },
+                }
+              : undefined,
           });
         }
         // Evolution SSE events — inject as standalone messages in the stream

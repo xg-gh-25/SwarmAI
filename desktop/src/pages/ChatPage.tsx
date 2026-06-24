@@ -230,6 +230,10 @@ export default function ChatPage() {
   // directly at hook-construction time. Instead we pass a stable wrapper that
   // reads from this ref, then update the ref once drainQueuedMessage is defined.
   const drainQueueRef = useRef<(tabId: string) => void>(() => {});
+  // Same forward-ref pattern for the recovery_exhausted toast's "Start fresh
+  // session" action — handleNewChat is defined below the hook call, so the hook
+  // gets a stable wrapper that reads this ref.
+  const startFreshRef = useRef<(tabId: string) => void>(() => {});
 
   // Streaming lifecycle hook — owns messages, sessionId, pendingQuestion,
   // isStreaming, refs, and stream handler factories (Phase 0 extraction).
@@ -275,6 +279,7 @@ export default function ChatPage() {
     activeTabIdRef,
     onDrainQueue: (tabId: string) => drainQueueRef.current(tabId),
     onSelectTab: (tabId: string) => selectTab(tabId),
+    onStartFresh: (tabId: string) => startFreshRef.current(tabId),
   });
 
   // TSCC state management — lifecycle state and UI preferences only.
@@ -1967,6 +1972,14 @@ export default function ChatPage() {
   // Bridge the ref so useChatStreamingLifecycle can drain via deps.onDrainQueue.
   // Must be assigned after drainQueuedMessage is defined (circular dep with hook).
   drainQueueRef.current = drainQueuedMessage;
+
+  // Bridge the recovery_exhausted "Start fresh session" action. Switch to the
+  // target tab first (the toast may belong to a non-active tab), then clear it
+  // to a new session via handleNewChat (operates on the active tab).
+  startFreshRef.current = (tabId: string) => {
+    selectTab(tabId);
+    handleNewChat();
+  };
 
   // Cancel a queued message: remove from chat, restore text + attachments to input.
   const handleCancelQueued = useCallback((tabId: string) => {
