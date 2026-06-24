@@ -112,12 +112,36 @@ export default function AskUserQuestion({
         <div className="space-y-2">
           {questions.map((q, qIndex) => {
             const chosen = submittedAnswers[q.question];
+            // Multi-select answers are persisted as a ", "-joined string. Split
+            // them back into individual chips so the summary is structurally
+            // faithful to what was chosen — and unambiguous when an option label
+            // itself contains a comma (a flat string would be unparseable).
+            const picks = chosen
+              ? q.multiSelect
+                ? chosen.split(', ').filter(Boolean)
+                : [chosen]
+              : [];
             return (
-              <div key={qIndex} className="flex flex-col gap-0.5">
+              <div key={qIndex} className="flex flex-col gap-1">
                 <p className="text-[var(--color-text-muted)] text-xs">{q.question}</p>
-                <p className="text-[var(--color-text)] text-sm font-medium">
-                  {chosen || <span className="text-[var(--color-text-muted)] italic">(no selection)</span>}
-                </p>
+                {picks.length === 0 ? (
+                  <p className="text-[var(--color-text)] text-sm font-medium">
+                    <span className="text-[var(--color-text-muted)] italic">(no selection)</span>
+                  </p>
+                ) : q.multiSelect ? (
+                  <div className="flex flex-wrap gap-1">
+                    {picks.map((p, i) => (
+                      <span
+                        key={i}
+                        className="text-[var(--color-text)] text-xs font-medium bg-primary/10 border border-primary/20 rounded px-2 py-0.5"
+                      >
+                        {p}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-[var(--color-text)] text-sm font-medium">{picks[0]}</p>
+                )}
               </div>
             );
           })}

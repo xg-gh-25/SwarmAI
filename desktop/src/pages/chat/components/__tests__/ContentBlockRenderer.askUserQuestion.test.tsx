@@ -123,6 +123,92 @@ describe('ContentBlockRenderer — ask_user_question (Root 3 / 3A)', () => {
     expect(optionA.disabled).toBe(false);
   });
 
+  it('multi-select answered summary shows ALL chosen options (as chips, not a flat string)', () => {
+    // Multi-select answers are persisted as a ", "-joined string. The summary
+    // must show every pick — not lose/truncate them — and split them so an
+    // option label containing a comma stays unambiguous.
+    const block = {
+      type: 'ask_user_question',
+      toolUseId: 'tu-ms',
+      questions: [
+        {
+          question: 'Pick services',
+          header: 'Services',
+          multiSelect: true,
+          options: [
+            { label: 'EC2', description: '' },
+            { label: 'S3', description: '' },
+            { label: 'Lambda', description: '' },
+          ],
+        },
+      ],
+      answers: { 'Pick services': 'EC2, S3, Lambda' },
+    } as unknown as ContentBlock;
+    render(
+      <ContentBlockRenderer
+        block={block}
+        resultMap={emptyResultMap}
+        allBlocks={[block]}
+        onAnswerQuestion={vi.fn()}
+        pendingToolUseId={undefined}
+        isStreaming={false}
+      />,
+    );
+    // All three picks must be individually present.
+    expect(screen.getByText('EC2')).toBeTruthy();
+    expect(screen.getByText('S3')).toBeTruthy();
+    expect(screen.getByText('Lambda')).toBeTruthy();
+    // No interactive option buttons (read-only summary).
+    expect(screen.queryByText(/Submit/i)).toBeNull();
+  });
+
+  it('multi-QUESTION block: answered summary renders each question with its own selection', () => {
+    const block = {
+      type: 'ask_user_question',
+      toolUseId: 'tu-mq',
+      questions: [
+        { question: 'Region?', header: 'Region', multiSelect: false,
+          options: [{ label: 'us-east-1', description: '' }, { label: 'eu-west-1', description: '' }] },
+        { question: 'Tier?', header: 'Tier', multiSelect: false,
+          options: [{ label: 'Free', description: '' }, { label: 'Pro', description: '' }] },
+      ],
+      answers: { 'Region?': 'eu-west-1', 'Tier?': 'Pro' },
+    } as unknown as ContentBlock;
+    render(
+      <ContentBlockRenderer
+        block={block}
+        resultMap={emptyResultMap}
+        allBlocks={[block]}
+        onAnswerQuestion={vi.fn()}
+        pendingToolUseId={undefined}
+        isStreaming={false}
+      />,
+    );
+    // Both question texts and both answers are shown.
+    expect(screen.getByText(/Region\?/)).toBeTruthy();
+    expect(screen.getByText('eu-west-1')).toBeTruthy();
+    expect(screen.getByText(/Tier\?/)).toBeTruthy();
+    expect(screen.getByText('Pro')).toBeTruthy();
+  });
+
+  it('answered summary takes precedence even while streaming (disabled && !hasAnswers)', () => {
+    // isStreaming=true would disable the interactive form, but an answered block
+    // must STILL render its read-only summary, not a greyed form.
+    const block = questionBlock('tu-1', { 'Which approach?': 'Option A' });
+    render(
+      <ContentBlockRenderer
+        block={block}
+        resultMap={emptyResultMap}
+        allBlocks={[block]}
+        onAnswerQuestion={vi.fn()}
+        pendingToolUseId={undefined}
+        isStreaming={true}
+      />,
+    );
+    expect(screen.getByText(/Option A/)).toBeTruthy();
+    expect(screen.queryByText(/Submit/i)).toBeNull();
+  });
+
   it('AC4: empty questions block logs a warning and renders nothing', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const badBlock = { type: 'ask_user_question', toolUseId: 'tu-bad', questions: [] } as unknown as ContentBlock;
