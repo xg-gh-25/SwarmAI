@@ -511,9 +511,13 @@ export function useUnifiedTabState(
       if (tab.busyPollInterval) clearInterval(tab.busyPollInterval);
       if (tab.busyPollTimeout) clearTimeout(tab.busyPollTimeout);
 
-      // Best-effort backend cleanup removed — backend LifecycleManager
-      // handles abandoned sessions via TTL (12hr) and orphan reaper (10min).
-      // Frontend-initiated DELETE is unreliable (crash, network failure).
+      // closeTab stays pure (no backend call). R6b: the backend slot release is
+      // fired from ChatPage.handleTabClose (which has access to streaming state
+      // and the confirm dialog), not here. Best-effort by design — on a hard
+      // crash/network failure the backend's 12h idle TTL is the backstop. NOTE:
+      // the 10-min "orphan reaper" only kills unowned OS processes, NOT tab-less
+      // SessionUnits — only the TTL reaps those, which is why R6b adds the
+      // explicit on-close release.
 
       // Capture ordered keys before removal for reselection
       const keys = [...map.keys()];

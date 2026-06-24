@@ -118,6 +118,10 @@ export default function ChatPage() {
   // Keyed by tabId so parallel tabs don't block each other.
   const permissionLoadingTabs = useRef(new Set<string>());
   const [deleteConfirmSession, setDeleteConfirmSession] = useState<ChatSession | null>(null);
+  // R6b: pending close-confirmation for a STREAMING tab. Closing an idle tab
+  // releases the backend slot silently; closing a streaming tab asks first so a
+  // half-finished response isn't silently discarded.
+  const [closeConfirmTab, setCloseConfirmTab] = useState<{ tabId: string; sessionId?: string } | null>(null);
   const [isEditAgentOpen, setIsEditAgentOpen] = useState(false);
 
   // File preview state
@@ -794,15 +798,13 @@ export default function ChatPage() {
     }
   }, [openTabs, selectTab, restoreTab, getTabState, initTabState, updateTabState, activeTabIdRef, tabMapRef, tabStatuses, updateTabStatus, pendingQuestion, setContextWarning]);
 
-  // Handle tab close - removes tab, handles last-tab case (Req 3.3)
-  // Fix 6: Clean up per-tab state map entry and abort controller
-  // Fix 10: Stop backend session for streaming tabs, clean up pendingStreamTabs
-  const handleTabClose = useCallback((tabId: string) => {
-    // Read tab state before cleanup to determine if backend stop is needed
-    const tab = tabMapRef.current.get(tabId);
-    const tabSessionId = tab?.sessionId;
-    const wasStreaming = tab?.isStreaming || pendingStreamTabs.has(tabId);
-
+  // R6b: shared close+release routine. Runs the FULL frontend cleanup, closes
+  // the tab, then fires a best-effort backend slot release. Both the idle path
+  // and the streaming-confirm path call this — keeping them identical prevents
+  // dropping a cleanup step (Gate-1 finding #4). `force` is true only when the
+  // user confirmed closing a STREAMING tab (server routes that through the
+  // generation-safe interrupt path).
+  const doCloseTab = useCallback((tabId: string, sessionId: string | undefined, force: boolean) => {
     // Clean up pendingStreamTabs entry for this tab (prevents stale entries)
     clearPendingStreamTab(tabId);
     // Clean up per-tab draft text to prevent unbounded memory growth
@@ -817,15 +819,21 @@ export default function ChatPage() {
     removeToast(`recovery-exhausted-${tabId}`);
 
     // Let closeTab handle map deletion + auto-create of last tab.
+    // closeTab also aborts the tab's in-flight stream (abortController.abort),
+    // which on the backend triggers _recover_streaming_on_disconnect
+    // (STREAMING→IDLE). The release below is ordered AFTER closeTab so it acts
+    // on a settling/idle unit, not racing a live stream (Gate-1 finding #5a).
     // Do NOT call cleanupTabState before closeTab — it deletes the tab
     // from the map, causing closeTab to early-return and skip the
     // "auto-create new tab when last one is closed" logic.
     closeTab(tabId);
 
-    // Fire-and-forget backend stop for tabs that were actively streaming.
-    if (wasStreaming && tabSessionId) {
-      chatService.stopSession(tabSessionId).catch((err) => {
-        console.warn('[handleTabClose] Failed to stop backend session:', err);
+    // Fire-and-forget backend slot release (R6b). Frees the concurrency slot
+    // without deleting messages. Guarded on sessionId — a brand-new tab has
+    // sessionId === undefined and nothing to release.
+    if (sessionId) {
+      chatService.releaseSession(sessionId, force).catch((err) => {
+        console.warn('[handleTabClose] Failed to release backend session:', err);
       });
     }
 
@@ -843,7 +851,37 @@ export default function ChatPage() {
         setIsExpanded(false);
       }
     }
-  }, [closeTab, clearPendingStreamTab, pendingStreamTabs, tabMapRef, activeTabIdRef, setMessages, setSessionId, setPendingQuestion, setContextWarning, removeToast]);
+  }, [closeTab, clearPendingStreamTab, tabMapRef, activeTabIdRef, setMessages, setSessionId, setPendingQuestion, setContextWarning, setPendingPermissionRequestId, setIsExpanded, removeToast]);
+
+  // Handle tab close - removes tab, handles last-tab case (Req 3.3)
+  // R6b: ANY close releases the backend slot. Idle tab → release silently.
+  // Streaming tab → confirm first (avoid silently discarding a live response).
+  const handleTabClose = useCallback((tabId: string) => {
+    const tab = tabMapRef.current.get(tabId);
+    const tabSessionId = tab?.sessionId;
+    const isStreaming = tab?.isStreaming || pendingStreamTabs.has(tabId);
+
+    if (isStreaming) {
+      // Defer close until the user confirms (handled by the ConfirmDialog).
+      setCloseConfirmTab({ tabId, sessionId: tabSessionId });
+      return;
+    }
+
+    doCloseTab(tabId, tabSessionId, false);
+  }, [doCloseTab, pendingStreamTabs, tabMapRef]);
+
+  // R6b: user confirmed closing a streaming tab. Re-read live state — the stream
+  // may have completed while the dialog was open (Gate-1 finding #2c), so only
+  // pass force=true if it's still streaming; the server's interrupt path is
+  // generation-safe either way.
+  const confirmCloseStreamingTab = useCallback(() => {
+    const pending = closeConfirmTab;
+    setCloseConfirmTab(null);
+    if (!pending) return;
+    const tab = tabMapRef.current.get(pending.tabId);
+    const stillStreaming = (tab?.isStreaming || pendingStreamTabs.has(pending.tabId)) ?? false;
+    doCloseTab(pending.tabId, pending.sessionId, stillStreaming);
+  }, [closeConfirmTab, doCloseTab, pendingStreamTabs, tabMapRef]);
 
   // Handle session selection
   const handleSelectSession = useCallback(async (session: ChatSession) => {
@@ -2546,6 +2584,21 @@ export default function ChatPage() {
           variant="danger"
           onConfirm={() => deleteConfirmSession && handleDeleteSession(deleteConfirmSession)}
           onClose={() => setDeleteConfirmSession(null)}
+        />
+
+        {/* R6b: Close-while-streaming Confirmation Dialog */}
+        <ConfirmDialog
+          isOpen={!!closeConfirmTab}
+          title={t('chat.closeStreamingTab', 'Close tab?')}
+          message={t(
+            'chat.closeStreamingTabConfirm',
+            'This tab is still generating a response. Closing it will stop the response. Close anyway?',
+          )}
+          confirmText={t('chat.closeAnyway', 'Close anyway')}
+          cancelText={t('common.button.cancel')}
+          variant="warning"
+          onConfirm={confirmCloseStreamingTab}
+          onClose={() => setCloseConfirmTab(null)}
         />
 
         {/* Main Chat Area */}

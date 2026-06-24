@@ -600,6 +600,21 @@ export const chatService = {
     return response.data;
   },
 
+  // Release a session's backend slot on tab close (R6b). Best-effort, idempotent:
+  // frees the concurrency slot without deleting messages, so a closed idle tab
+  // doesn't hold a slot until the 12h TTL. `force` confirms closing a streaming
+  // tab (routes through the generation-safe interrupt path server-side).
+  async releaseSession(
+    sessionId: string,
+    force = false,
+  ): Promise<{ status: string; alive_count?: number }> {
+    const response = await api.post<{ status: string; alive_count?: number }>(
+      `/chat/release/${sessionId}`,
+      force ? { force: true } : undefined,
+    );
+    return response.data;
+  },
+
   // Trigger manual compaction of a session's context window
   async compactSession(sessionId: string, instructions?: string): Promise<{ status: string; message: string }> {
     const body = instructions ? { instructions } : undefined;
