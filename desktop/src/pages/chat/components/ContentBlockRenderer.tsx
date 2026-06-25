@@ -8,12 +8,77 @@
  * @exports ContentBlockRenderer — The routing component
  */
 
+import { useState, useRef, useEffect } from 'react';
 import type { ContentBlock, ToolResultContent, EscalationContent } from '../../../types';
 import { MarkdownRenderer, AskUserQuestion } from '../../../components/common';
 import { MergedToolBlock } from './MergedToolBlock';
 import { ToolResultBlock } from './ToolResultBlock';
 import { InlinePermissionRequest } from './InlinePermissionRequest';
 import { EscalationBlock } from './EscalationBlock';
+
+/**
+ * Re-render budget while streaming. MarkdownRenderer re-parses the FULL string
+ * (4 remark/rehype plugins + KaTeX + highlight.js) whenever its `content` prop
+ * changes, and a streaming text block grows by a token on every SSE chunk. Parsing
+ * per-token is O(n²) over the stream (run_00e0e872 jank). Throttling the markdown
+ * INPUT to one update per window bounds the parse COUNT by elapsed time (~10/sec),
+ * not by token count — O(n²) → O(duration/window · n). 100ms ≈ 10fps: formatted
+ * markdown stays visibly live without the per-token reparse storm.
+ */
+const STREAM_RENDER_THROTTLE_MS = 100;
+
+/**
+ * Renders streaming markdown text, but throttles the value fed to MarkdownRenderer
+ * so the expensive parse runs at most once per STREAM_RENDER_THROTTLE_MS. This is a
+ * separate component (not an inline branch) so its hooks obey the Rules of Hooks —
+ * ContentBlockRenderer early-returns per block type and cannot host hooks itself.
+ *
+ * Leading + trailing edge: the first value renders immediately; subsequent rapid
+ * updates within a window are coalesced and the LATEST value is flushed when the
+ * window elapses (trailing edge) so the final token is never dropped.
+ */
+function StreamingMarkdownText({ text }: { text: string }) {
+  const [throttledText, setThrottledText] = useState(text);
+  // Timestamp of the last committed render (0 = none yet → leading edge fires now).
+  const lastRenderRef = useRef<number>(0);
+  // Pending trailing-edge timer + the latest text it should flush.
+  const trailingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestTextRef = useRef<string>(text);
+
+  useEffect(() => {
+    latestTextRef.current = text;
+    const now = Date.now();
+    const elapsed = now - lastRenderRef.current;
+
+    if (elapsed >= STREAM_RENDER_THROTTLE_MS) {
+      // Leading edge / window already elapsed → render immediately.
+      lastRenderRef.current = now;
+      setThrottledText(text);
+      if (trailingTimerRef.current) {
+        clearTimeout(trailingTimerRef.current);
+        trailingTimerRef.current = null;
+      }
+    } else if (!trailingTimerRef.current) {
+      // Inside an active window → schedule a single trailing flush of the LATEST text.
+      trailingTimerRef.current = setTimeout(() => {
+        lastRenderRef.current = Date.now();
+        trailingTimerRef.current = null;
+        setThrottledText(latestTextRef.current);
+      }, STREAM_RENDER_THROTTLE_MS - elapsed);
+    }
+    // else: a trailing flush is already pending; latestTextRef updated above, so it
+    // will flush the newest text when it fires. No extra timer (coalesced).
+  }, [text]);
+
+  // On unmount, drop any pending timer (avoids setState-after-unmount).
+  useEffect(() => {
+    return () => {
+      if (trailingTimerRef.current) clearTimeout(trailingTimerRef.current);
+    };
+  }, []);
+
+  return <MarkdownRenderer content={throttledText} />;
+}
 
 interface ContentBlockRendererProps {
   block: ContentBlock;
@@ -47,22 +112,15 @@ export function ContentBlockRenderer({
   lastPendingToolUseId,
 }: ContentBlockRendererProps) {
   if (block.type === 'text') {
-    // While streaming, render plaintext (whitespace-pre-wrap) instead of markdown.
-    // MarkdownRenderer re-parses the FULL string (4 remark/rehype plugins + KaTeX +
-    // highlight.js) on every token, and block.text grows per token — O(n²) jank on
-    // long replies. Plaintext is O(n) and visually close. On stream end (isStreaming
-    // false), we render via MarkdownRenderer — the same path every historical message
-    // already uses, so the resting state is unchanged. Typography is matched to the
-    // markdown <p> (text/leading) + wrapper (markdown-content min-w-0) to minimize the
-    // streaming→final reflow. (run_00e0e872)
+    // Render markdown in BOTH states so formatting (headings/lists/code/math) is
+    // visible live, not just at stream end. While streaming, the value fed to the
+    // markdown parser is THROTTLED (StreamingMarkdownText) so the O(n²) per-token
+    // reparse storm (run_00e0e872) is bounded by time (~10/sec). On stream end we
+    // render MarkdownRenderer directly with the full final text — the same resting
+    // path every historical message uses. (run_087e097e supersedes the plaintext
+    // branch of run_00e0e872.)
     if (isStreaming) {
-      return (
-        <div className="markdown-content min-w-0">
-          <p className="text-[var(--color-text)] mb-2 leading-normal whitespace-pre-wrap">
-            {block.text || ''}
-          </p>
-        </div>
-      );
+      return <StreamingMarkdownText text={block.text || ''} />;
     }
     return <MarkdownRenderer content={block.text || ''} />;
   }

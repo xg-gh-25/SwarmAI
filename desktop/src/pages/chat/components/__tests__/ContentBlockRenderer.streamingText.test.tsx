@@ -1,27 +1,30 @@
 /**
- * Streaming-jank fix — streaming text renders as lightweight plaintext.
+ * Streaming-render policy — markdown DURING streaming, throttled to bound reparse cost.
  *
- * Root cause (run_00e0e872): a text block streamed through MarkdownRenderer
- * re-parses the FULL markdown (4 remark/rehype plugins + KaTeX + highlight.js)
- * on every token, because block.text grows per token via MessageStore.updateLast.
- * That is O(n²) over the stream and causes perceptible jank on long replies.
+ * History: run_00e0e872 (e96b45a9) rendered streaming text as PLAINTEXT to kill
+ * O(n²) reparse jank — MarkdownRenderer re-parses the FULL string (4 remark/rehype
+ * plugins + KaTeX + highlight.js) on every token, and block.text grows per token via
+ * MessageStore.updateLast → O(n²). That fixed the jank but lost live markdown
+ * (headings/lists/code only appeared at stream end, with a visible reflow jump).
  *
- * Fix: while isStreaming=true, render the text block as plaintext
- * (whitespace-pre-wrap, no markdown parse). When isStreaming=false (final /
- * historical messages), render via MarkdownRenderer — the UNCHANGED production
- * path every historical message already uses.
+ * Current policy (run_087e097e): render MARKDOWN during streaming too, but THROTTLE
+ * the re-render to ~100ms so the expensive parse runs ~10×/sec instead of once per
+ * token. This keeps O(n²) away (parse count is bounded by time, not token count)
+ * while showing formatted markdown live.
  *
- * Behavioral discriminator (no mocks): markdown like "# Heading" parses to an
- * <h1> element when rendered as markdown, but appears as the literal text
- * "# Heading" (no <h1>) when rendered as plaintext. We assert:
- *   - streaming  → NO <h1>, literal "#" text present (plaintext branch)
- *   - not stream → <h1> present (markdown branch, content identical)
+ * Behavioral discriminator (no mocks): "# Heading" parses to an <h1> when rendered as
+ * markdown, but is literal "# Heading" text as plaintext. We assert:
+ *   - streaming  → <h1> present (markdown branch) once the throttle has settled
+ *   - not stream → <h1> present (markdown branch, identical resting state)
+ *   - throttle   → rapid token updates do NOT each trigger an immediate reparse;
+ *                  the rendered content lags until the throttle window elapses,
+ *                  then catches up to the latest text (trailing edge).
  *
  * This is the leaf-component behavior test. The block ASSEMBLY guard lives in
  * AssistantMessageView.renderFidelity.test.tsx (unchanged).
  */
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { render, screen, act } from '@testing-library/react';
 import React from 'react';
 import { ContentBlockRenderer } from '../ContentBlockRenderer';
 import type { ContentBlock, ToolResultContent } from '../../../../types';
@@ -43,48 +46,94 @@ function renderBlock(block: ContentBlock, isStreaming: boolean) {
   );
 }
 
-describe('ContentBlockRenderer — streaming text (jank fix run_00e0e872)', () => {
+describe('ContentBlockRenderer — streaming text (throttled markdown, run_087e097e)', () => {
   const MD = '# Heading\n\nSome **bold** body text.';
 
-  it('renders streaming text as PLAINTEXT — no markdown parse (no <h1>)', () => {
-    const { container } = renderBlock(textBlock(MD), /* isStreaming */ true);
-    // markdown would produce an <h1>; plaintext must not
-    expect(container.querySelector('h1')).toBeNull();
-    // the literal markdown source (including the '#') must be present verbatim
-    expect(screen.getByText(/# Heading/)).toBeTruthy();
+  describe('without fake timers (resting-state behavior)', () => {
+    it('renders FINAL (non-streaming) text as MARKDOWN — <h1> present (unchanged path)', () => {
+      const { container } = renderBlock(textBlock(MD), /* isStreaming */ false);
+      const h1 = container.querySelector('h1');
+      expect(h1).not.toBeNull();
+      expect(h1?.textContent).toContain('Heading');
+    });
+
+    it('handles empty / partial-markdown text safely while streaming (no crash)', () => {
+      const { container: c1 } = renderBlock(textBlock(''), true);
+      expect(c1).toBeTruthy(); // no throw on empty
+      // half-open markdown syntax (mid-stream token) must not crash and must show the text
+      const { container: c2 } = renderBlock(textBlock('```py\ndef f('), true);
+      expect(c2.textContent).toContain('def f(');
+    });
   });
 
-  it('renders FINAL (non-streaming) text as MARKDOWN — <h1> present (unchanged path)', () => {
-    const { container } = renderBlock(textBlock(MD), /* isStreaming */ false);
-    const h1 = container.querySelector('h1');
-    expect(h1).not.toBeNull();
-    expect(h1?.textContent).toContain('Heading');
-  });
+  describe('with fake timers (throttle behavior)', () => {
+    beforeEach(() => {
+      // Relies on vitest's default fakeTimers.toFake INCLUDING 'Date' — the throttle
+      // compares Date.now() against a ref, so Date must advance with the fake clock.
+      // If a future vite.config sets an explicit toFake list that omits 'Date', this
+      // throttle assertion would silently break — keep 'Date' faked.
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
 
-  it('streaming→final transition preserves the SAME content (no loss at boundary)', () => {
-    const block = textBlock(MD);
-    const { container, rerender } = render(
-      <ContentBlockRenderer block={block} resultMap={emptyResultMap} allBlocks={[block]} isStreaming={true} />,
-    );
-    // during streaming, full text present as plaintext
-    expect(container.textContent).toContain('Heading');
-    expect(container.textContent).toContain('Some');
-    expect(container.textContent).toContain('body text.');
-    // flip to final — same content, now markdown-formatted
-    rerender(
-      <ContentBlockRenderer block={block} resultMap={emptyResultMap} allBlocks={[block]} isStreaming={false} />,
-    );
-    expect(container.querySelector('h1')).not.toBeNull();
-    expect(container.textContent).toContain('Heading');
-    expect(container.textContent).toContain('body text.');
-  });
+    it('renders streaming text as MARKDOWN — <h1> present once throttle settles', () => {
+      const { container } = renderBlock(textBlock(MD), /* isStreaming */ true);
+      // advance past the throttle window so the trailing-edge render fires
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+      expect(container.querySelector('h1')).not.toBeNull();
+      expect(screen.getByText('Heading')).toBeTruthy();
+    });
 
-  it('handles empty / partial-markdown text safely while streaming', () => {
-    // empty
-    const { container: c1 } = renderBlock(textBlock(''), true);
-    expect(c1).toBeTruthy(); // no throw
-    // half-open markdown syntax (mid-stream token) must not crash and must show raw
-    const { container: c2 } = renderBlock(textBlock('```py\ndef f('), true);
-    expect(c2.textContent).toContain('def f(');
+    it('throttles reparse — rapid token growth does NOT render every intermediate state immediately', () => {
+      const block = textBlock('# H');
+      const { container, rerender } = render(
+        <ContentBlockRenderer block={block} resultMap={emptyResultMap} allBlocks={[block]} isStreaming={true} />,
+      );
+      // leading edge: first render shows initial content as markdown
+      act(() => { vi.advanceTimersByTime(200); });
+      expect(container.querySelector('h1')?.textContent).toContain('H');
+
+      // Now push 5 rapid token updates inside ONE throttle window (each < 100ms apart).
+      // The throttle must NOT immediately reflect each intermediate value.
+      for (let i = 0; i < 5; i++) {
+        rerender(
+          <ContentBlockRenderer
+            block={textBlock(`# H${'i'.repeat(i + 1)}`)}
+            resultMap={emptyResultMap}
+            allBlocks={[textBlock(`# H${'i'.repeat(i + 1)}`)]}
+            isStreaming={true}
+          />,
+        );
+        act(() => { vi.advanceTimersByTime(10); }); // 10ms between tokens, all within one 100ms window
+      }
+      // Within the window the rendered heading should still lag behind the latest "# Hiiiii".
+      const midText = container.querySelector('h1')?.textContent ?? '';
+      expect(midText.length).toBeLessThan('Hiiiii'.length);
+
+      // After the throttle window elapses, trailing edge catches up to the LATEST text.
+      act(() => { vi.advanceTimersByTime(200); });
+      expect(container.querySelector('h1')?.textContent).toContain('Hiiiii');
+    });
+
+    it('streaming→final transition preserves the latest content (no loss at boundary)', () => {
+      const block = textBlock(MD);
+      const { container, rerender } = render(
+        <ContentBlockRenderer block={block} resultMap={emptyResultMap} allBlocks={[block]} isStreaming={true} />,
+      );
+      act(() => { vi.advanceTimersByTime(200); });
+      expect(container.textContent).toContain('Heading');
+
+      // flip to final — same content, markdown-formatted, nothing dropped
+      rerender(
+        <ContentBlockRenderer block={block} resultMap={emptyResultMap} allBlocks={[block]} isStreaming={false} />,
+      );
+      expect(container.querySelector('h1')).not.toBeNull();
+      expect(container.textContent).toContain('Heading');
+      expect(container.textContent).toContain('body text.');
+    });
   });
 });
