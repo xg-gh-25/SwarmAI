@@ -68,6 +68,7 @@ def run_swarmai_monthly_report(config: dict | None = None) -> dict:
         "cultivation": _collect_cultivation_metrics(month_start, month_end),
         "evolution": _collect_evolution_metrics(),
         "health": _collect_health_metrics(),
+        "eval": _collect_eval_metrics(month_start, month_end),
         "jobs": _collect_job_metrics(month_start, month_end),
         "code_intel": _collect_code_intel_metrics(project_name),
         "skills": _collect_skill_metrics(),
@@ -286,6 +287,83 @@ def _collect_health_metrics() -> dict:
         return {"total_findings": len(findings), "by_severity": by_severity}
     except (json.JSONDecodeError, TypeError):
         return {"total_findings": 0, "by_severity": {}}
+
+
+def _collect_eval_metrics(month_start: datetime, month_end: datetime) -> dict:
+    """OS Eval proprioception: behavior-tier pass rate + overall self-eval health.
+
+    Behavior-tier cases (evaluator == "trajectory_capture") are the only eval
+    tier that proves the agent actually USES memory/knowledge/DDD — a real agent
+    is spawned and its tool calls observed. We surface that pass rate distinctly
+    from the static/programmatic score, since a healthy overall score can hide a
+    behavior regression (the agent stopped reading its own docs).
+
+    Scans EvalHistory/*.json for runs in the month; uses the LATEST behavior run
+    for the behavior-tier numbers and the latest run overall for the headline.
+    """
+    eval_dir = PROJECTS_DIR / "SwarmAI" / "EvalHistory"
+    result = {
+        "has_data": False,
+        "overall_score": None,
+        "behavior_total": 0,
+        "behavior_passed": 0,
+        "behavior_failed": 0,
+        "behavior_error": 0,
+        "behavior_pass_rate": None,
+        "behavior_last_run": None,
+    }
+    if not eval_dir.exists():
+        return result
+
+    runs: list[dict] = []
+    for jf in eval_dir.glob("*.json"):
+        try:
+            d = json.loads(jf.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        ts_str = d.get("triggered_at", "")
+        if not ts_str:
+            continue
+        try:
+            ts = datetime.fromisoformat(ts_str)
+        except (ValueError, TypeError):  # non-string triggered_at (e.g. numeric) → skip, don't crash
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        if month_start <= ts < month_end:
+            d["_ts"] = ts
+            runs.append(d)
+
+    if not runs:
+        return result
+
+    runs.sort(key=lambda r: r["_ts"])
+    result["has_data"] = True
+    result["overall_score"] = runs[-1].get("overall_score")
+
+    # Behavior tier: find the latest run that actually contains behavior cases
+    # (identified by evaluator == "trajectory_capture"). The monthly behavior
+    # job produces these; the bi-weekly default sweep excludes them.
+    for run in reversed(runs):
+        behavior_cases = [
+            c for c in run.get("cases", [])
+            if c.get("evaluator") == "trajectory_capture"
+        ]
+        if not behavior_cases:
+            continue
+        passed = sum(1 for c in behavior_cases if c.get("status") == "passed")
+        failed = sum(1 for c in behavior_cases if c.get("status") == "failed")
+        errored = sum(1 for c in behavior_cases if c.get("status") == "error")
+        scored = passed + failed  # error/skipped excluded from rate
+        result["behavior_total"] = len(behavior_cases)
+        result["behavior_passed"] = passed
+        result["behavior_failed"] = failed
+        result["behavior_error"] = errored
+        result["behavior_pass_rate"] = round(passed / scored * 100, 1) if scored else None
+        result["behavior_last_run"] = run["_ts"].strftime("%Y-%m-%d")
+        break
+
+    return result
 
 
 def _collect_job_metrics(month_start: datetime, month_end: datetime) -> dict:
@@ -514,6 +592,7 @@ def _generate_monthly_report(
     cult = metrics["cultivation"]
     evo = metrics["evolution"]
     health = metrics["health"]
+    ev = metrics.get("eval", {})
     jobs = metrics["jobs"]
     code = metrics["code_intel"]
     skills = metrics["skills"]
@@ -614,6 +693,23 @@ def _generate_monthly_report(
     health_status = "🟢" if health["total_findings"] < 5 else "🟡"
     lines.append(f"| **Self-Health** | Open findings | {health['total_findings']} | {health_status} |")
 
+    # OS Eval — proprioception. Behavior tier = "does the agent USE its docs?"
+    if ev.get("has_data"):
+        if ev.get("overall_score") is not None:
+            lines.append(f"| **OS Eval** | Self-eval score | {ev['overall_score']} | "
+                         f"{'🟢' if ev['overall_score'] >= 90 else '🟡' if ev['overall_score'] >= 70 else '🔴'} |")
+        if ev.get("behavior_total", 0) > 0:
+            br = ev.get("behavior_pass_rate")
+            if ev.get("behavior_error", 0) > 0:
+                b_status = "🔴"  # a spawn errored — result not trustworthy
+            elif br is None:
+                b_status = "—"
+            else:
+                b_status = "🟢" if br >= 100 else ("🟡" if br >= 75 else "🔴")
+            rate_str = f"{br}%" if br is not None else "n/a"
+            lines.append(f"| | Behavior tier (USES docs) | "
+                         f"{ev['behavior_passed']}/{ev['behavior_passed'] + ev['behavior_failed']} pass ({rate_str}) | {b_status} |")
+
     # Git
     lines.append(f"| **Codebase** | Commits | {git['commits']} | — |")
 
@@ -634,6 +730,28 @@ def _generate_monthly_report(
     if git["commits"] > 20:
         lines.append(f"**[HL] High velocity** — {git['commits']} commits this month.")
         lines.append("")
+
+    # Behavior tier — the only signal that proves the agent USES its knowledge.
+    if ev.get("behavior_total", 0) > 0:
+        br = ev.get("behavior_pass_rate")
+        if ev.get("behavior_error", 0) > 0:
+            lines.append(f"**[LL] Behavior eval degraded** — {ev['behavior_error']} of "
+                        f"{ev['behavior_total']} behavior cases ERRORED (spawn/infra failure) on "
+                        f"{ev.get('behavior_last_run', '?')}. The agent-uses-its-docs signal is "
+                        f"untrustworthy this month — investigate the scenario runner.")
+            lines.append("")
+        elif br is not None and br >= 100:
+            lines.append(f"**[HL] Agent provably uses its knowledge** — {ev['behavior_passed']}/"
+                        f"{ev['behavior_passed'] + ev['behavior_failed']} behavior-trajectory cases passed "
+                        f"({ev.get('behavior_last_run', '?')}): real agent spawns confirmed it Reads "
+                        f"SELF.md / DDD / IMPROVEMENT.md before deciding — not just that the docs exist.")
+            lines.append("")
+        elif br is not None:
+            lines.append(f"**[LL] Agent skipping its own knowledge** — only {ev['behavior_passed']}/"
+                        f"{ev['behavior_passed'] + ev['behavior_failed']} behavior cases passed ({br}%) on "
+                        f"{ev.get('behavior_last_run', '?')}. A real agent did NOT consult memory/DDD where "
+                        f"it should have. This is invisible to the static eval score — fix the regression.")
+            lines.append("")
 
     if jobs["failed"] > 3:
         lines.append(f"**[LL] Job failures elevated** — {jobs['failed']} failures out of "

@@ -556,67 +556,69 @@ class TestTrajectoryCaptureDispatch:
 
     # ── Decision-class gate: read must DRIVE the conclusion (Gate-2 MED) ──
 
+    # ── Decision-class gate: the read must DRIVE the decision, judged on the
+    #    REAL final answer by the LLM judge (stance detection = judgment, not
+    #    substring). We mock the judge to assert the WIRING, not the model. ──
+
     _DECISION_CASE = {
         "id": "GS_TRAJ_DEC",
         "scenario": {"prompt": "decide X; read IMPROVEMENT.md and let it drive you"},
         "expected_trajectory": ["Read IMPROVEMENT.md"],
-        "expected_response_contains": ["incremental", "strangler-fig", "phased"],
-        "forbidden_response_contains": ["big-bang rewrite", "rewrite from scratch"],
+        "decision_rubric": "PASS only if the final recommendation avoids big-bang and uses incremental.",
         "trajectory_match": "any_order",
         "evaluators": ["trajectory_capture"],
         "eval_method": "behavior",
         "allowed_tools": ["Read"],
     }
 
-    def test_decision_read_without_using_it_fails(self):
-        # Read happened, but the conclusion ignored the evidence (no required
-        # keyword) -> FAIL. Proving a Read is necessary but NOT sufficient.
+    def test_decision_judge_pass_when_direction_correct(self):
+        # Trajectory passes AND the decision judge says the stance is correct.
         traj = ['Read {"file_path": "/ws/Projects/SwarmAI/IMPROVEMENT.md"}']
         with patch("scripts.scenario_runner.run_scenario_full",
-                   return_value=(traj, "Yes, go ahead, it's fine.")):
-            r = evaluate_case(self._DECISION_CASE, Path("/tmp"))
-        assert r["status"] == "failed"
-
-    def test_decision_read_and_used_passes(self):
-        # Read happened AND the conclusion reflects the evidence -> PASS.
-        traj = ['Read {"file_path": "/ws/Projects/SwarmAI/IMPROVEMENT.md"}']
-        with patch("scripts.scenario_runner.run_scenario_full",
-                   return_value=(traj, "Per IMPROVEMENT.md, use the incremental strangler-fig approach.")):
+                   return_value=(traj, "NO to big-bang — use strangler-fig.")), \
+             patch("backend.scripts.eval_runner._judge_decision_direction",
+                   return_value={"status": "passed", "notes": "recommended incremental"}):
             r = evaluate_case(self._DECISION_CASE, Path("/tmp"))
         assert r["status"] == "passed"
 
-    def test_decision_synonym_passes_any_of(self):
-        # Gate-2 V3: a correct answer via SYNONYM (strangler-fig, no literal
-        # "incremental") must PASS under ANY-OF, not false-fail.
+    def test_decision_judge_fail_when_direction_wrong(self):
+        # Read happened, but the judge finds the stance went the WRONG way ->
+        # FAIL. This is the case substring matching could not reliably detect.
         traj = ['Read {"file_path": "/ws/Projects/SwarmAI/IMPROVEMENT.md"}']
         with patch("scripts.scenario_runner.run_scenario_full",
-                   return_value=(traj, "Migrate it phased, via the strangler-fig pattern.")):
+                   return_value=(traj, "Names incremental, but: do the big-bang rewrite.")), \
+             patch("backend.scripts.eval_runner._judge_decision_direction",
+                   return_value={"status": "failed", "notes": "recommended big-bang"}):
             r = evaluate_case(self._DECISION_CASE, Path("/tmp"))
-        assert r["status"] == "passed"
+        assert r["status"] == "failed"
+        assert "wrong way" in r["notes"].lower()
 
-    def test_decision_names_right_word_but_recommends_opposite_fails(self):
-        # Gate-2 HIGH V2: the answer NAMES "incremental" but recommends the
-        # REJECTED option -> the forbidden polarity guard must FAIL it. Substring
-        # presence of the right word must NOT pass a wrong decision.
+    def test_decision_judge_infra_failure_is_error(self):
+        # Decision judge itself failing (throttle/auth) -> error, not failed:
+        # a trajectory that passed must not be scored a behavior FAIL because the
+        # judge was down (would lie the score red).
         traj = ['Read {"file_path": "/ws/Projects/SwarmAI/IMPROVEMENT.md"}']
         with patch("scripts.scenario_runner.run_scenario_full",
-                   return_value=(traj, "I would NOT recommend the incremental approach — do the big-bang rewrite.")):
+                   return_value=(traj, "some answer")), \
+             patch("backend.scripts.eval_runner._judge_decision_direction",
+                   return_value={"status": "error", "notes": "judge throttled"}):
             r = evaluate_case(self._DECISION_CASE, Path("/tmp"))
-        assert r["status"] == "failed"
-        assert "wrong way" in r["notes"].lower() or "rejected" in r["notes"].lower()
+        assert r["status"] == "error"
 
-    def test_decision_no_read_fails_before_content_check(self):
-        # No Read at all -> fails on trajectory, content check never reached.
+    def test_decision_no_read_fails_before_judge(self):
+        # No Read at all -> fails on trajectory; decision judge never invoked.
         with patch("scripts.scenario_runner.run_scenario_full",
-                   return_value=([], "use the incremental approach")):
+                   return_value=([], "use the incremental approach")), \
+             patch("backend.scripts.eval_runner._judge_decision_direction") as dj:
             r = evaluate_case(self._DECISION_CASE, Path("/tmp"))
         assert r["status"] == "failed"
+        dj.assert_not_called()
 
-    def test_content_only_case_without_trajectory_is_error(self):
-        # Gate-2 V4: expected_response_contains but no expected_trajectory would
-        # silently never run -> must be a loud misconfiguration error, not skip.
+    def test_decision_rubric_without_trajectory_is_error(self):
+        # decision_rubric but no expected_trajectory -> would silently never run
+        # -> loud misconfiguration error, not skip (Gate-2 V4).
         bad = {"id": "X", "scenario": {"prompt": "decide"},
-               "expected_response_contains": ["incremental"],
+               "decision_rubric": "PASS if incremental",
                "evaluators": ["trajectory_capture"], "eval_method": "behavior",
                "dimension": "utility"}
         r = evaluate_case(bad, Path("/tmp"))
@@ -702,3 +704,43 @@ class TestBehaviorCaseDefaultGating:
         with patch("scripts.scenario_runner.run_scenario_full", return_value=(['Read X'], "ok")) as spawn:
             r = run_eval(gs, "manual", ["GS_TRAJ_X"], Path("/tmp"))
         spawn.assert_called_once()
+
+
+class TestDecisionJudgeUnit:
+    """_judge_decision_direction: judges the agent's REAL answer for stance,
+    replacing brittle substring/negation matching (stance = judgment). We mock
+    the Bedrock client to assert parse/verdict wiring, not the model."""
+
+    _CASE = {"id": "X", "decision_rubric": "PASS if incremental, FAIL if big-bang"}
+
+    def _mock_converse(self, verdict, notes="x", conf=0.9):
+        from unittest.mock import MagicMock
+        client = MagicMock()
+        client.converse.return_value = {"output": {"message": {"content": [
+            {"text": json.dumps({"verdict": verdict, "confidence": conf, "notes": notes})}
+        ]}}}
+        return client
+
+    def test_passed_verdict(self):
+        from backend.scripts import eval_runner as er
+        with patch.object(er, "_get_judge_model", return_value="us.anthropic.x"), \
+             patch("core.llm_optimizer._get_bedrock_client", return_value=self._mock_converse("passed")):
+            r = er._judge_decision_direction(self._CASE, "use strangler-fig, not big-bang")
+        assert r["status"] == "passed"
+
+    def test_failed_verdict(self):
+        from backend.scripts import eval_runner as er
+        with patch.object(er, "_get_judge_model", return_value="us.anthropic.x"), \
+             patch("core.llm_optimizer._get_bedrock_client", return_value=self._mock_converse("failed")):
+            r = er._judge_decision_direction(self._CASE, "do the big-bang rewrite")
+        assert r["status"] == "failed"
+
+    def test_empty_answer_skips(self):
+        from backend.scripts import eval_runner as er
+        r = er._judge_decision_direction(self._CASE, "")
+        assert r["status"] == "skipped"
+
+    def test_no_rubric_skips(self):
+        from backend.scripts import eval_runner as er
+        r = er._judge_decision_direction({"id": "X"}, "some answer")
+        assert r["status"] == "skipped"

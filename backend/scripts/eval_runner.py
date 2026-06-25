@@ -749,6 +749,79 @@ PROGRAMMATIC_EVALUATORS = {"canary_pass", "file_contains", "keyword_match",
 LLM_EVALUATORS = {"goal_success", "quality_score"}
 
 
+def _judge_decision_direction(case: dict, final_text: str) -> dict:
+    """LLM-judge whether the agent's REAL conclusion went the right way.
+
+    Stance detection ("did the conclusion recommend X or reject X?") is a
+    JUDGMENT problem — substring/negation heuristics provably fail it (a live
+    agent that correctly said "NO to big-bang — use strangler-fig" was wrongly
+    failed by substring matching; "do not do incremental — big-bang it" wrongly
+    passed). So for decision-class behavior cases we hand the AGENT'S ACTUAL
+    ANSWER to the pinned judge with an explicit rubric.
+
+    This is NOT the circular judge: that one judges a HYPOTHETICAL ("would a
+    compliant agent…"), handed the answer. THIS judges the REAL final_text the
+    agent actually produced — observation, not imagination.
+
+    The case declares `decision_rubric`: a one-line pass/fail criterion
+    (e.g. "PASS only if the final recommendation is the incremental/strangler-fig
+    approach; FAIL if it recommends a big-bang rewrite"). Returns passed/failed,
+    or error on judge-infra failure (so throttling can't lie the score).
+    """
+    rubric = case.get("decision_rubric", "")
+    if not rubric or not final_text.strip():
+        # No rubric, or the agent produced no answer to judge → caller decides.
+        return {"status": "skipped", "notes": "no decision_rubric or empty final_text"}
+
+    judge_prompt = f"""You are an eval judge for SwarmAI. An agent was asked to make a decision after consulting its own knowledge docs. Below is the agent's ACTUAL final answer. Judge ONLY whether it satisfies the rubric — do not judge style or completeness.
+
+RUBRIC (the single pass/fail criterion):
+{rubric}
+
+AGENT'S ACTUAL FINAL ANSWER:
+\"\"\"
+{final_text[:4000]}
+\"\"\"
+
+Judge the DIRECTION/STANCE of the recommendation, not whether keywords appear. An answer that NAMES an option while recommending AGAINST it does NOT recommend that option.
+
+Respond in this exact JSON format:
+{{"verdict": "passed" or "failed", "confidence": 0.0 to 1.0, "notes": "one-line: what did it actually recommend"}}"""
+
+    try:
+        judge_model = _get_judge_model()
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from core.llm_optimizer import _get_bedrock_client
+        client = _get_bedrock_client()
+        response = client.converse(
+            modelId=judge_model,
+            messages=[{"role": "user", "content": [{"text": judge_prompt}]}],
+            system=[{"text": "You are a precise eval judge. Respond only with the requested JSON."}],
+            inferenceConfig={"maxTokens": 400, "temperature": 0.0},
+        )
+        blocks = response.get("output", {}).get("message", {}).get("content", [])
+        response_text = next((b["text"] for b in blocks if "text" in b), "")
+        if not response_text:
+            return {"status": "error", "notes": "decision judge returned empty response"}
+        jt = response_text.strip()
+        if jt.startswith("```"):
+            ls = jt.split("\n")
+            jt = "\n".join(ls[1:-1] if ls[-1].strip() == "```" else ls[1:])
+        jr = json.loads(jt)
+        verdict = jr.get("verdict", "failed")
+        return {
+            "status": "passed" if verdict == "passed" else "failed",
+            "notes": f"[decision-judge conf={jr.get('confidence', 0.0):.2f}] {jr.get('notes', '')}",
+            "judge_detail": jr,
+        }
+    except ImportError:
+        return {"status": "error", "notes": "decision judge: Bedrock client unavailable"}
+    except json.JSONDecodeError as e:
+        return {"status": "error", "notes": f"decision judge: bad JSON: {str(e)[:80]}"}
+    except Exception as e:
+        return {"status": "error", "notes": f"decision judge call failed: {str(e)[:120]}"}
+
+
 def _eval_trajectory_tool_strict(case: dict, actual: list[str]) -> dict:
     """Tool-name-anchored trajectory match for behavior cases.
 
@@ -807,14 +880,13 @@ def eval_trajectory_capture(case: dict) -> dict:
     if not prompt:
         return {"status": "skipped", "notes": "No scenario.prompt for trajectory_capture"}
     if not case.get("expected_trajectory"):
-        # A content-only behavior case (expected_response_contains but no
-        # expected_trajectory) would silently NEVER run its content check —
-        # the assertion evaporates with no signal (adversarial Gate-2 MED V4).
-        # Make that a loud misconfiguration error, not a silent skip.
-        if case.get("expected_response_contains") or case.get("forbidden_response_contains"):
+        # A behavior case with a decision_rubric but no expected_trajectory would
+        # silently NEVER run its decision check — the assertion evaporates with no
+        # signal (adversarial Gate-2 MED V4). Make that a loud misconfig error.
+        if case.get("decision_rubric"):
             return {"status": "error",
-                    "notes": "behavior case has response assertions but no expected_trajectory "
-                             "— content check would never run; add expected_trajectory or remove the case"}
+                    "notes": "behavior case has decision_rubric but no expected_trajectory "
+                             "— decision check would never run; add expected_trajectory or remove the case"}
         return {"status": "skipped", "notes": "No expected_trajectory defined"}
 
     # Lock behavior cases to READ-ONLY tools at the dispatch layer. A behavior
@@ -852,49 +924,38 @@ def eval_trajectory_capture(case: dict) -> dict:
     result = _eval_trajectory_tool_strict(case, actual)
     result["observed_trajectory"] = actual
 
-    # Decision-class gate (adversarial Gate-2 MED→fixed, run_75b656c1): for cases
-    # whose point is "the read content DROVE the decision" — not merely "a Read
+    # Decision-class gate (adversarial Gate-2, run_75b656c1): for cases whose
+    # point is "the read content DROVE the decision" — not merely "a Read
     # happened" — proving the Read is necessary but NOT sufficient. An agent that
     # reads IMPROVEMENT.md then ignores it and recommends the big-bang rewrite
-    # would pass the trajectory check alone (same circularity, new form). When
-    # the trajectory PASSES, the final answer text is gated two ways:
+    # would pass the trajectory check alone (same circularity, new form).
     #
-    #   expected_response_contains  — ANY-OF (synonym-tolerant): at least one
-    #       token must appear. Avoids brittle false-fail when a correct answer
-    #       uses a synonym ("strangler-fig" for "incremental"). List all
-    #       acceptable phrasings (adversarial Gate-2 MED V3).
-    #   forbidden_response_contains — polarity guard: if ANY appears, FAIL even
-    #       if an expected token also appears. Kills the false-PASS where the
-    #       agent NAMES the right concept but recommends the OPPOSITE ("I would
-    #       NOT recommend incremental — do the big-bang rewrite"): substring
-    #       presence of "incremental" must not pass a wrong decision
-    #       (adversarial Gate-2 HIGH V2).
-    response_keywords = case.get("expected_response_contains") or []
-    forbidden = case.get("forbidden_response_contains") or []
-    if result.get("status") == "passed" and (response_keywords or forbidden):
-        ftl = (final_text or "").lower()
-        present_forbidden = [kw for kw in forbidden if kw.lower() in ftl]
-        # ANY-OF for expected: pass if at least one acceptable phrasing present.
-        expected_hit = (not response_keywords) or any(
-            kw.lower() in ftl for kw in response_keywords
-        )
-        if present_forbidden:
+    # Stance detection is a JUDGMENT problem — substring/negation heuristics
+    # provably fail it in BOTH directions (a live agent that correctly said "NO
+    # to big-bang — use strangler-fig" was wrongly FAILED by substring matching;
+    # "do not do incremental — big-bang it" wrongly PASSED). So when the
+    # trajectory PASSES and the case declares `decision_rubric`, we hand the
+    # agent's REAL final answer to the pinned judge with an explicit pass/fail
+    # rubric. This is NOT circular: it judges the actual produced output, not a
+    # hypothetical "would a compliant agent…". Judge-infra failure → error (not
+    # failed), so throttling can't lie the score (eval_llm_judge lesson).
+    if result.get("status") == "passed" and case.get("decision_rubric"):
+        dj = _judge_decision_direction(case, final_text or "")
+        if dj["status"] == "error":
+            result["status"] = "error"
+            result["notes"] = f"{dj['notes']} (trajectory passed but decision unjudgeable)"
+        elif dj["status"] == "failed":
             result["status"] = "failed"
             result["notes"] = (
-                f"Read occurred but conclusion went the WRONG way — answer "
-                f"contains rejected option(s): {present_forbidden}. {result.get('notes', '')}"
+                f"Read occurred but decision went the WRONG way — {dj['notes']}. "
+                f"{result.get('notes', '')}"
             ).strip()
-        elif not expected_hit:
-            result["status"] = "failed"
+        elif dj["status"] == "passed":
             result["notes"] = (
-                f"Read occurred but conclusion did not reflect it — none of "
-                f"{response_keywords} in answer. {result.get('notes', '')}"
+                f"Read occurred AND decision is correct — {dj['notes']}. "
+                f"{result.get('notes', '')}"
             ).strip()
-        else:
-            result["notes"] = (
-                f"Read occurred AND conclusion reflects it (expected present, "
-                f"no forbidden). {result.get('notes', '')}"
-            ).strip()
+        # dj skipped (empty answer / no rubric handled above) → leave trajectory verdict
         result["final_text_excerpt"] = (final_text or "")[:300]
     return result
 
