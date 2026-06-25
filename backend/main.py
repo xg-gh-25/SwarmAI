@@ -89,9 +89,12 @@ log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 # to ``backend-stderr.log``, which has NO rotation and grows unbounded (observed
 # at 132MB). The RotatingFileHandler below already keeps the full INFO stream
 # capped at ~40MB, so the console only needs WARNING+ for crash diagnosis in
-# daemon mode. In dev mode (``./dev.sh``) keep the full level for live console.
-_log_mode = os.environ.get("SWARMAI_MODE", "daemon")
-console_level = logging.WARNING if _log_mode == "daemon" else log_level
+# daemon mode. Require the EXPLICIT ``SWARMAI_MODE=daemon`` that the launchd
+# plist + wrapper set — never default to it here, or ``./dev.sh`` (which leaves
+# SWARMAI_MODE unset) would also be silenced to WARNING on its live console.
+console_level = (
+    logging.WARNING if os.environ.get("SWARMAI_MODE") == "daemon" else log_level
+)
 
 # Create handlers
 console_handler = logging.StreamHandler()

@@ -92,3 +92,48 @@ def test_ac3_negative_without_deployed_resources_returns_none(tmp_path, monkeypa
 
     found = bundle_paths.get_resource_file("default-agent.json", stale_dev)
     assert found is None
+
+
+def test_ac4_execution_get_resources_dir_uses_deployed_fallback(tmp_path, monkeypatch):
+    """AC4: the PRODUCTION path — agent_defaults._get_resources_dir() calls
+    get_resources_dir() (the *dir* function, not get_resource_file). Execution-
+    test THAT function directly: a frozen build-output binary with no resources/
+    sibling and a non-existent dev_path must resolve to the deployed daemon dir.
+
+    (AC2 covered get_resource_file; this covers the actual entry point that
+    produced the 32 default-agent.json errors — STEERING: test the path that runs.)
+    """
+    fake_home = tmp_path / "home"
+    deployed_res = fake_home / ".swarm-ai" / "daemon" / "resources"
+    deployed_res.mkdir(parents=True)
+    (deployed_res / "default-agent.json").write_text("{}")
+
+    build_out = tmp_path / "binaries" / "python-backend-x"
+    build_out.mkdir(parents=True)
+    fake_exe = build_out / "python-backend"
+    fake_exe.write_text("bin")
+    stale_dev = tmp_path / "src" / "desktop" / "resources"  # must NOT exist
+
+    monkeypatch.setattr(bundle_paths.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(bundle_paths.sys, "executable", str(fake_exe), raising=False)
+    monkeypatch.setattr(bundle_paths.Path, "home", classmethod(lambda cls: fake_home))
+
+    resolved = bundle_paths.get_resources_dir(stale_dev)
+    assert resolved == deployed_res, (
+        f"get_resources_dir must fall back to the deployed daemon dir "
+        f"{deployed_res}, got {resolved}"
+    )
+
+
+def test_ac5_get_resources_dir_prefers_real_dev_path(tmp_path, monkeypatch):
+    """AC5: the fallback is LAST-resort — a real dev_path still wins, so the
+    fallback can't hijack a correctly-configured environment (guards C5: only
+    fires when nothing else resolves)."""
+    real_dev = tmp_path / "desktop" / "resources"
+    real_dev.mkdir(parents=True)
+    fake_home = tmp_path / "home"
+    (fake_home / ".swarm-ai" / "daemon" / "resources").mkdir(parents=True)
+
+    monkeypatch.setattr(bundle_paths.Path, "home", classmethod(lambda cls: fake_home))
+    resolved = bundle_paths.get_resources_dir(real_dev)
+    assert resolved == real_dev, "a real dev_path must take priority over the fallback"

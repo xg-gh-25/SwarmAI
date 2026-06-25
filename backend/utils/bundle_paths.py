@@ -65,7 +65,7 @@ def get_python_executable() -> str:
 
 
 def _get_deployed_daemon_resources() -> Path:
-    """Canonical deployed-daemon resources dir: ``~/.swarm-ai/daemon/resources``.
+    """Canonical deployed-daemon resources dir: ``<app_data>/daemon/resources``.
 
     This is the single authoritative location the daemon is deployed to (see
     ``scripts/daemon-lib.sh`` DAEMON_DIR). Used as a last-resort candidate so a
@@ -73,8 +73,18 @@ def _get_deployed_daemon_resources() -> Path:
     ``__file__`` resolve to a stale build-output path (PyInstaller bakes the
     build-time source path into ``__file__``, and the build-output binary under
     ``desktop/src-tauri/binaries/...`` has no ``resources/`` sibling).
+
+    The app-data root comes from ``config.get_app_data_dir()`` (the SSOT for
+    ``~/.swarm-ai``) rather than re-deriving ``Path.home()`` here. Imported
+    lazily to keep this low-level util import-cycle-free.
     """
-    return Path.home() / ".swarm-ai" / "daemon" / "resources"
+    try:
+        from config import get_app_data_dir
+        app_data = get_app_data_dir()
+    except Exception:
+        # Last-ditch fallback if config is unavailable (e.g. very early import).
+        app_data = Path.home() / ".swarm-ai"
+    return app_data / "daemon" / "resources"
 
 
 def _get_tauri_bundle_resource_candidates(exe_dir: Path) -> list[Path]:
