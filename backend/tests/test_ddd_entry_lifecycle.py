@@ -601,3 +601,127 @@ class TestIsKeepClass:
         from core.ddd_entry_lifecycle import is_keep_class
         assert is_keep_class(_entry("a bug we hit", entry_type="pitfall",
                                     ref=0)) is False
+
+
+# ── M0 ② CLEAN: reclaim_noise_entries (selection + physical removal) ──────────
+#
+# Gate-1 finding (verified): neither archive_entries nor inject_entry_metadata
+# removes a bullet from the source doc — archived entries persist with
+# decay:archived and are still counted noisy. reclaim MUST physically strip.
+
+_RECLAIM_TODAY = date(2026, 6, 25)
+
+# 5 entries: 2 reclaimable (plain guideline/pitfall, ref0, dormant, old),
+# 3 protected (principle-type, ref>=2, COE-title).
+_RECLAIM_FIXTURE = """\
+## Key Lessons
+<!-- maturity: sparse | sources: 1 | verified: false | used: false | days: 0 | trust: moderate | promoted: none -->
+
+- [guideline] **Reclaim this plain lesson** — operational, no refs, old. (2025-01-01, run_a)
+  <!-- ref:0 | last:none | decay:dormant -->
+
+- [pitfall] **Reclaim this plain bug** — operational, no refs, old. (2025-02-01, run_b)
+  <!-- ref:0 | last:none | decay:dormant -->
+
+- [principle] **Keep this principle** — meta knowledge. (2025-01-01, run_c)
+  <!-- ref:0 | last:none | decay:dormant -->
+
+- [guideline] **Keep high ref** — load-bearing. (2025-01-01, run_d)
+  <!-- ref:5 | last:none | decay:dormant -->
+
+- [guideline] **COE07 keep me** — post-mortem in custom section. (2025-01-01, run_e)
+  <!-- ref:0 | last:none | decay:dormant -->
+"""
+
+
+class TestReclaimNoiseEntries:
+    def test_dry_run_selects_only_reclaimable(self, tmp_path):
+        from core.ddd_entry_lifecycle import reclaim_noise_entries
+        report = reclaim_noise_entries(
+            _RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path, dry_run=True,
+        )
+        assert set(report.candidates) == {
+            "Reclaim this plain lesson", "Reclaim this plain bug",
+        }
+        # kept_protected counts only NOISY-but-protected entries (principle +
+        # COE07). The high-ref entry has ref!=0 so it's never noisy → not counted.
+        assert report.kept_protected == 2
+
+    def test_dry_run_is_read_only(self, tmp_path):
+        from core.ddd_entry_lifecycle import reclaim_noise_entries
+        report = reclaim_noise_entries(
+            _RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path, dry_run=True,
+        )
+        # No archive file written, no content mutation returned.
+        assert not (tmp_path / "IMPROVEMENT-archive.md").exists()
+        assert report.new_content is None
+        assert report.archived == 0
+
+    def test_apply_strips_from_content_and_archives(self, tmp_path):
+        from core.ddd_entry_lifecycle import reclaim_noise_entries, compute_entry_noise
+        report = reclaim_noise_entries(
+            _RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path, dry_run=False,
+        )
+        assert report.archived == 2
+        assert report.new_content is not None
+        # Physically removed from source.
+        assert "Reclaim this plain lesson" not in report.new_content
+        assert "Reclaim this plain bug" not in report.new_content
+        # Protected entries survive.
+        assert "Keep this principle" in report.new_content
+        assert "COE07 keep me" in report.new_content
+        # Archived to file.
+        archive = (tmp_path / "IMPROVEMENT-archive.md").read_text()
+        assert "Reclaim this plain lesson" in archive
+        # Raw noise metric drops by exactly the reclaimed count. The 2 remaining
+        # noisy entries (principle + COE07) are PROTECTED — they stay noisy in
+        # the raw gauge but are not reclaimable. The CLI gate keys off
+        # reclaimable noise, not raw noise (see TestDddNoiseCli).
+        from core.ddd_entry_lifecycle import parse_entries
+        before = compute_entry_noise(parse_entries(_RECLAIM_FIXTURE), _RECLAIM_TODAY)
+        after = compute_entry_noise(parse_entries(report.new_content), _RECLAIM_TODAY)
+        assert before.noisy - after.noisy == 2  # the 2 reclaimable ones removed
+
+    def test_custom_archive_name(self, tmp_path):
+        from core.ddd_entry_lifecycle import reclaim_noise_entries
+        reclaim_noise_entries(
+            _RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path,
+            archive_name="MEMORY-archive.md", dry_run=False,
+        )
+        assert (tmp_path / "MEMORY-archive.md").exists()
+        assert not (tmp_path / "IMPROVEMENT-archive.md").exists()
+
+    def test_evergreen_sections_protect(self, tmp_path):
+        from core.ddd_entry_lifecycle import (
+            reclaim_noise_entries, MEMORY_EVERGREEN_SECTIONS,
+        )
+        content = """\
+## Principles
+<!-- maturity: sparse | sources: 1 | verified: false | used: false | days: 0 | trust: moderate | promoted: none -->
+
+- [guideline] **In evergreen section** — protected by section. (2025-01-01, run_x)
+  <!-- ref:0 | last:none | decay:dormant -->
+"""
+        report = reclaim_noise_entries(
+            content, _RECLAIM_TODAY, tmp_path,
+            evergreen_sections=MEMORY_EVERGREEN_SECTIONS, dry_run=True,
+        )
+        assert report.candidates == []
+        assert report.kept_protected == 1
+
+    def test_idempotent_second_call_reclaims_nothing(self, tmp_path):
+        from core.ddd_entry_lifecycle import reclaim_noise_entries
+        r1 = reclaim_noise_entries(
+            _RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path, dry_run=False,
+        )
+        r2 = reclaim_noise_entries(
+            r1.new_content, _RECLAIM_TODAY, tmp_path, dry_run=False,
+        )
+        assert r2.archived == 0
+        assert r2.candidates == []
+
+    def test_empty_content_no_crash(self, tmp_path):
+        from core.ddd_entry_lifecycle import reclaim_noise_entries
+        report = reclaim_noise_entries("", _RECLAIM_TODAY, tmp_path, dry_run=False)
+        assert report.archived == 0
+        assert report.candidates == []

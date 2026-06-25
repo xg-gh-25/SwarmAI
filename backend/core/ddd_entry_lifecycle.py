@@ -190,6 +190,15 @@ class DecayTransition:
 
 
 @dataclass
+class ReclaimReport:
+    """Result of a reclaim pass (CLEAN). dry_run leaves new_content None."""
+    candidates: list[str] = field(default_factory=list)   # titles selected for reclaim
+    archived: int = 0                                      # count actually moved (0 if dry_run)
+    kept_protected: int = 0                                # noisy-but-keep-class count
+    new_content: Optional[str] = None                      # source with bullets stripped (None if dry_run)
+
+
+@dataclass
 class NoiseReport:
     """Per-document entry-noise measurement (read-only diagnostic).
 
@@ -604,9 +613,10 @@ def assess_decay(
 
 
 def archive_entries(
-    project_dir: Path, entries: list[EntryMetadata]
+    project_dir: Path, entries: list[EntryMetadata],
+    archive_name: str = "IMPROVEMENT-archive.md",
 ) -> int:
-    """Move entries to IMPROVEMENT-archive.md and return count archived.
+    """Move entries to an archive file and return count archived.
 
     Creates archive file if it doesn't exist. Appends entries with their
     full raw_text + metadata comment. Marks entries as 'archived' in-place.
@@ -614,6 +624,8 @@ def archive_entries(
     Args:
         project_dir: Path to the project directory (e.g., Projects/SwarmAI/)
         entries: Entries to archive (should be dormant or otherwise marked)
+        archive_name: Archive filename (default IMPROVEMENT-archive.md;
+            MEMORY.md lifecycle passes "MEMORY-archive.md").
 
     Returns:
         Number of entries successfully archived.
@@ -621,7 +633,7 @@ def archive_entries(
     if not entries:
         return 0
 
-    archive_path = Path(project_dir) / "IMPROVEMENT-archive.md"
+    archive_path = Path(project_dir) / archive_name
 
     # Build archive content to append
     archive_lines: list[str] = []
@@ -776,6 +788,124 @@ def is_keep_class(
     if "COE" in entry.section or "COE" in entry.title:
         return True
     return False
+
+
+def reclaim_noise_entries(
+    content: str,
+    today: date,
+    project_dir: Path,
+    *,
+    grace_days: int = GRACE_PERIOD_DAYS,
+    evergreen_sections: "frozenset[str] | set[str] | None" = None,
+    archive_name: str = "IMPROVEMENT-archive.md",
+    dry_run: bool = True,
+) -> ReclaimReport:
+    """Reclaim (archive + physically strip) stale operational-noise entries.
+
+    Selection = exactly the set compute_entry_noise flags as noisy
+    (ref_count==0 AND age>=grace AND decay∈{dormant,archived}), MINUS any
+    entry protected by is_keep_class. This keeps the gauge and the action
+    consistent (measure == action).
+
+    Why a dedicated strip step (Gate-1 finding, verified): neither
+    archive_entries nor inject_entry_metadata removes a bullet from the
+    source — archived entries otherwise persist with decay:archived and are
+    still counted as noise. This function is the ONLY path that lowers a
+    doc's noise_rate.
+
+    dry_run=True (default): pure preview — selects candidates, counts
+    protected, writes nothing, returns new_content=None. dry_run=False:
+    archives the candidates to `archive_name` and returns new_content with
+    those bullets physically removed (caller persists it).
+
+    Idempotent: a second call on the stripped content reclaims nothing
+    (the noisy bullets are gone).
+    """
+    report = ReclaimReport()
+    if not content or not content.strip():
+        return report
+
+    entries = parse_entries(content)
+    if not entries:
+        return report
+
+    # Selection: the noisy set, minus keep-class.
+    selected: list[EntryMetadata] = []
+    for entry in entries:
+        # Mirror compute_entry_noise's "noisy" predicate exactly.
+        if entry.ref_count != 0:
+            continue
+        if entry.decay_state not in _NOISY_DECAY_STATES:
+            continue
+        if entry.created_date is not None:
+            if (today - entry.created_date).days < grace_days:
+                continue
+        # Noisy. Now apply the protection guard.
+        if is_keep_class(entry, evergreen_sections=evergreen_sections):
+            report.kept_protected += 1
+            continue
+        selected.append(entry)
+
+    report.candidates = [e.title for e in selected]
+
+    if dry_run or not selected:
+        return report
+
+    # Apply: archive to file, then physically strip from content.
+    archived = archive_entries(project_dir, selected, archive_name=archive_name)
+    report.archived = archived
+    report.new_content = _strip_entries(content, {e.title for e in selected})
+    return report
+
+
+def _strip_entries(content: str, titles: "set[str]") -> str:
+    """Return content with the bullet blocks for `titles` physically removed.
+
+    A "block" is the entry bullet line, its continuation/wrapped lines, and the
+    trailing metadata comment (mirrors parse_entries' block boundaries). Section
+    headers and non-matching entries are preserved verbatim.
+    """
+    if not titles:
+        return content
+
+    lines = content.splitlines()
+    result: list[str] = []
+    i = 0
+    n = len(lines)
+
+    while i < n:
+        line = lines[i]
+        m = _ENTRY_RE.match(line)
+        if m and m.group(2) in titles:
+            # Skip this entry's whole block: bullet + continuations + meta.
+            i += 1
+            while i < n:
+                nxt = lines[i]
+                if nxt.startswith("- ") or nxt.startswith("## "):
+                    break
+                if _META_RE.match(nxt):
+                    i += 1  # consume the metadata line, then stop
+                    break
+                if nxt.strip() == "":
+                    # Blank: stop unless it's the separator before this block's meta.
+                    peek = i + 1
+                    if peek < n and _META_RE.match(lines[peek]):
+                        i = peek + 1
+                    break
+                i += 1
+            # Drop a single trailing blank separator left behind, to avoid
+            # accumulating blank-line runs across repeated reclaims.
+            if result and result[-1].strip() == "" and i < n and lines[i].strip() == "":
+                i += 1
+            continue
+        result.append(line)
+        i += 1
+
+    trailing = content.endswith("\n")
+    out = "\n".join(result)
+    if trailing and not out.endswith("\n"):
+        out += "\n"
+    return out
 
 
 # ── Stage Knowledge Injection ─────────────────────────────────────────────────
