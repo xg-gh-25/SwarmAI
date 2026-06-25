@@ -27,6 +27,7 @@ LOG_DIR="${HOME}/.swarm-ai/logs"
 # ---------------------------------------------------------------------------
 
 _LOG_MAX_BYTES=$((20 * 1024 * 1024))   # rotate when a log exceeds 20MB
+_LOG_KEEP_BYTES=$((4 * 1024 * 1024))   # keep last 4MB as the .1 backup
 
 _rotate_log() {
     local f="$1"
@@ -34,10 +35,12 @@ _rotate_log() {
     local size
     size="$(stat -f%z "$f" 2>/dev/null || echo 0)"
     if [ "$size" -gt "$_LOG_MAX_BYTES" ]; then
-        # Keep ONE backup of recent history (.1); drop the older .2.
-        # .1/.2 are not held open by launchd, so mv is safe for them.
+        # Keep two bounded backups (.1/.2). Use `tail -c` rather than `cp` so a
+        # huge live file (132MB observed) never needs a transient 2x-disk copy —
+        # and the recent tail is the useful part anyway. .1/.2 are not held open
+        # by launchd, so mv is safe for them.
         [ -f "${f}.1" ] && mv -f "${f}.1" "${f}.2" 2>/dev/null || true
-        cp -f "$f" "${f}.1" 2>/dev/null || true
+        tail -c "$_LOG_KEEP_BYTES" "$f" > "${f}.1" 2>/dev/null || true
         # Truncate the LIVE inode in place — never mv it, or launchd's open
         # append fd would follow the inode and keep writing to the backup.
         : > "$f" 2>/dev/null || true

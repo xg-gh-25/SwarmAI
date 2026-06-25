@@ -61,6 +61,35 @@ if [ ! -f "${GUARD_PY}" ]; then
     exit 0
 fi
 
+# ---------------------------------------------------------------------------
+# Periodic log rotation — runs on EVERY probe (every StartInterval, ~30s),
+# BEFORE the healthy-path early-exit below, so it caps the launchd-captured
+# backend logs even when the daemon never restarts (the wrapper only rotates at
+# launch). launchd opens StandardOut/ErrorPath in APPEND mode, so truncating by
+# path is safe: the daemon's inherited fd re-seeks to EOF and resumes at 0 with
+# no sparse-file hole. Keep this in sync with swarmai_backend.sh::_rotate_log.
+# ---------------------------------------------------------------------------
+_LOG_DIR="${SWARM_HOME}/logs"
+_LOG_MAX_BYTES=$((20 * 1024 * 1024))   # rotate when a log exceeds 20MB
+_LOG_KEEP_BYTES=$((4 * 1024 * 1024))   # keep last 4MB as the .1 backup
+
+_rotate_log() {
+    local f="$1"
+    [ -f "$f" ] || return 0
+    local size
+    size="$(stat -f%z "$f" 2>/dev/null || echo 0)"
+    if [ "$size" -gt "$_LOG_MAX_BYTES" ]; then
+        [ -f "${f}.1" ] && mv -f "${f}.1" "${f}.2" 2>/dev/null || true
+        tail -c "$_LOG_KEEP_BYTES" "$f" > "${f}.1" 2>/dev/null || true
+        : > "$f" 2>/dev/null || true
+        echo "[guardian] $(date '+%Y-%m-%d %H:%M:%S') rotated $(basename "$f") (was ${size} bytes)"
+    fi
+    return 0
+}
+
+_rotate_log "${_LOG_DIR}/backend-stderr.log"
+_rotate_log "${_LOG_DIR}/backend-stdout.log"
+
 # Is the port alive? (cheap, no python needed)
 if nc -z 127.0.0.1 "${BACKEND_PORT}" 2>/dev/null; then
     # Healthy — reset the dead-probe counter and exit (no log line on healthy
