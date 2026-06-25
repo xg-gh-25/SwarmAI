@@ -82,6 +82,47 @@ class TestHookRegistry:
         assert hso["additionalContext"] == "from_b"
 
     @pytest.mark.asyncio
+    async def test_toplevel_additional_context_merged(self):
+        """Top-level additionalContext from an advisory hook must survive the
+        chain (regression: it was silently dropped — governance_file_gate's
+        advisory reminders never reached the agent. adversarial run_123a6530)."""
+        from core.hook_builder import HookRegistry
+
+        async def advisory(input_data, tool_use_id, context):
+            return {"decision": "approve", "additionalContext": "REMEMBER THIS"}
+
+        async def plain(input_data, tool_use_id, context):
+            return {"decision": "approve"}
+
+        registry = HookRegistry()
+        registry.register("PreToolUse", advisory, "advisory")
+        registry.register("PreToolUse", plain, "plain")
+        chained = registry.build_sdk_hooks()["PreToolUse"][0].hooks[0]
+        result = await chained({"tool_name": "Bash"}, None, MagicMock())
+
+        assert result.get("additionalContext") == "REMEMBER THIS"
+
+    @pytest.mark.asyncio
+    async def test_multiple_advisory_contexts_accumulate(self):
+        """Two advisory hooks each contribute their context (accumulated)."""
+        from core.hook_builder import HookRegistry
+
+        async def a(input_data, tool_use_id, context):
+            return {"decision": "approve", "additionalContext": "ctx_a"}
+
+        async def b(input_data, tool_use_id, context):
+            return {"decision": "approve", "additionalContext": "ctx_b"}
+
+        registry = HookRegistry()
+        registry.register("PreToolUse", a, "a")
+        registry.register("PreToolUse", b, "b")
+        chained = registry.build_sdk_hooks()["PreToolUse"][0].hooks[0]
+        result = await chained({"tool_name": "Bash"}, None, MagicMock())
+
+        assert "ctx_a" in result["additionalContext"]
+        assert "ctx_b" in result["additionalContext"]
+
+    @pytest.mark.asyncio
     async def test_block_decision_short_circuits(self):
         """First hook returning 'block' stops chain execution."""
         from core.hook_builder import HookRegistry

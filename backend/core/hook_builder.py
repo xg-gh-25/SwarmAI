@@ -132,6 +132,18 @@ class HookRegistry:
                     for key in ("decision", "reason", "systemMessage"):
                         if key in result and result[key] is not None:
                             combined[key] = result[key]
+                    # Merge additionalContext — advisory hooks (governance_file_gate,
+                    # apply_gate) return it top-level to inject a reminder to the
+                    # agent. Without this it was silently dropped (the docstring
+                    # promised "last non-empty additionalContext wins" but the code
+                    # never merged it — adversarial run_123a6530). Accumulate so
+                    # multiple advisory hooks can each contribute.
+                    if result.get("additionalContext"):
+                        prior = combined.get("additionalContext", "")
+                        combined["additionalContext"] = (
+                            (prior + "\n" + result["additionalContext"]).strip()
+                            if prior else result["additionalContext"]
+                        )
 
                 except asyncio.TimeoutError:
                     logger.warning(
