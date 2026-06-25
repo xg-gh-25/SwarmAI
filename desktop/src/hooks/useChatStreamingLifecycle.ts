@@ -1786,14 +1786,14 @@ export function useChatStreamingLifecycle(
             (msg) => ({ ...msg, content: [...msg.content, auqBlock] }),
             (msg) => msg.id === assistantMessageId,
           );
-          // CRITICAL parallel-write (matches the SSE handlers' store+cache writes):
-          // mirror the block into tabState.messages too. The store→tabState bridge
-          // only syncs the ACTIVE tab, so for a BACKGROUND tab tabState.messages
-          // would stay block-less → on switch-back handleSelectTab does
-          // store.replace(tabState.messages) (ChatPage.tsx:706) which clobbers the
-          // store, destroying the just-re-surfaced block (the form renders FROM the
-          // block, not pendingQuestion) → the question vanishes. persistPendingState
-          // below also serializes tabState.messages, so the mount-restore needs it.
+          // Parallel-write: mirror the block into tabState.messages too. Post
+          // reconcile-gap fix (run_9db9f987) the STORE is the single render
+          // source and switch-back no longer clobbers a populated store, so this
+          // mirror is NO LONGER needed to survive a reverse-flow replace. It is
+          // retained because persistPendingState below serializes
+          // tabState.messages — the mount-restore (and the cold-restore seed)
+          // needs the block present in the tabState snapshot. Keeping store and
+          // tabState in sync is belt-and-suspenders, not a clobber-guard.
           if (tabState) tabState.messages = store.messages;
         }
       } else if (tabState) {

@@ -710,19 +710,25 @@ export default function ChatPage() {
         // useLayoutEffect scroll restore fires.
         userScrolledUpRef.current = true;
 
-        // Seed the MessageStore ONLY when it is empty (cold/restore case: app
-        // restart repopulates tabState.messages from persistence, but the
-        // module-level store registry does not survive a process restart, so a
-        // never-yet-loaded tab's store starts empty). This was previously an
-        // UNCONDITIONAL `store.replace(tabState.messages)` — the reverse-flow
-        // half of the reconcile-gap split-brain: it overwrote a store that
-        // already held authoritative (streamed/loaded) content with a possibly
-        // staler tabState.messages mirror, truncating the visible reply.
-        // The empty-guard inverts the semantics: the store is the authority; we
-        // only POPULATE an empty one, never CLOBBER a populated one. Synchronous
-        // length-check + replace (no await between) → no TOCTOU. Streaming is
-        // skipped (store authoritative; replace() is a phase-gated no-op anyway).
-        // (run_9db9f987 — reconcile-gap structural fix)
+        // Defensive store seed — POPULATE an empty store, never CLOBBER a
+        // populated one. This was previously an UNCONDITIONAL
+        // `store.replace(tabState.messages)` — the reverse-flow half of the
+        // reconcile-gap split-brain: it overwrote a store that already held
+        // authoritative (streamed/loaded) content with a staler tabState.messages
+        // mirror, truncating the visible reply. The empty-guard inverts the
+        // semantics: the store is the authority.
+        //
+        // NOTE (verified run_9db9f987): the cold-restore path does NOT reach here
+        // — a hydrated tab has messages=[] (hydrateTab) and returns early at the
+        // `messages.length===0` branch above via loadSessionMessages (which seeds
+        // the store at line ~417). And tab-close destroys store + tabState
+        // together (ChatPage:823 / useUnifiedTabState:685-687), so a populated
+        // tabState never coexists with an empty store mid-session. This guard is
+        // therefore a near-dead belt-and-suspenders for the rare case where a
+        // store was emptied but its tabState retained content — kept (not deleted)
+        // so store-only render can never blank such a tab. Synchronous
+        // length-check + replace (no await between) → no TOCTOU. Streaming skipped
+        // (store authoritative; replace() is a phase-gated no-op anyway).
         if (!tabState.isStreaming) {
           const switchStore = messageStoreRegistry.getOrCreate(tabId);
           if (switchStore.messages.length === 0 && tabState.messages.length > 0) {

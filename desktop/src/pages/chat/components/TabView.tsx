@@ -172,7 +172,12 @@ function TabViewImpl({
     const propChars = lastAsstChars(messagesProp);
     const chosen = 'store'; // single source — render always reads the store now
     const renderedChars = lastAsstChars(messages);
-    if (storeChars !== propChars && storeChars >= 0 && propChars >= 0) {
+    // Gate on isActive: a BACKGROUND tab's messagesProp (tabState.messages ref
+    // snapshot) legitimately lags the store — the store→tabState bridge only
+    // syncs the active tab. Firing RENDER-DIVERGE there is expected prop-lag, NOT
+    // a render defect, and a WARN named after the hunted bug would mislead the
+    // next debugger. Only the active tab's prop is expected to track the store.
+    if (isActive && storeChars !== propChars && storeChars >= 0 && propChars >= 0) {
       console.warn('[reconcile-gap] RENDER-DIVERGE', {
         tabId,
         isActive,
