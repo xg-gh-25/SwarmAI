@@ -474,22 +474,29 @@ class EvalService:
 
         PURE function (no instance, no I/O) so divergence is assertable on
         synthetic state. Divergence = the per-case eval score reads CLEAN (high)
-        while a MECHANICAL signal says the loop is broken (a correction class
-        recurred past its deployed gate → 🔴 in the tracker). When that happens
-        the score must NOT be reported as a clean pass — the divergence OVERRIDES
-        it in the briefing headline.
+        while a MECHANICAL signal says the loop is broken: a DEPLOYED STRUCTURAL
+        GATE recurred past threshold (the fix that was supposed to hold, didn't).
+        When that happens the score must NOT be reported as a clean pass — the
+        divergence OVERRIDES it in the briefing headline.
+
+        `tracker_red` is the gate-FAILURE bool (caller passes
+        CorrectionClassTracker.has_gate_failure()), NOT generic redness. A
+        rule-only chronically-recurring class is a known-open item shown in the
+        per-class tracker line; if it owned this headline it would fire every
+        session forever (banner-blindness, meta-review HIGH run_cf491cab).
+        Divergence is event-like (a gate failed), not level-like (anything red).
 
         Deliberately ORTHOGONAL to the cases_error red-light: cases_error means
-        the JUDGE INFRA broke (score measured a subset); tracker_red means the
-        AGENT is still repeating a known mistake CLASS despite a green eval. Both
-        are "the gauge reads green on a broken loop" but with different causes,
-        so they are surfaced separately, never conflated.
+        the JUDGE INFRA broke (score measured a subset); tracker_red means a
+        STRUCTURAL GATE failed despite a green eval. Both are "the gauge reads
+        green on a broken loop" but with different causes, surfaced separately,
+        never conflated (both lines emit when both hold — adv #3).
 
         Args:
             health: get_health() output (reads `overall_score`; None/missing ok).
-            tracker_red: True if any tracked correction class shows 🔴 (recurrence
-                past a deployed gate/rule). Computed by the caller from
-                CorrectionClassTracker so this function stays pure + testable.
+            tracker_red: True if a deployed gate recurred past threshold
+                (CorrectionClassTracker.has_gate_failure()). Caller computes it so
+                this function stays pure + testable on synthetic state.
 
         Returns:
             {"diverged": bool, "reason": str}. reason is non-empty only when diverged.

@@ -1775,11 +1775,15 @@ def build_session_briefing(
                 try:
                     from core.evolution.correction_tracker import CorrectionClassTracker
 
-                    # Structural red signal (adversarial #2: format-independent) —
-                    # has_red() computes from state, NOT by substring-scanning the
-                    # briefing render, so a future glyph/format change can't
-                    # silently flip divergence on or off.
-                    tracker_red = CorrectionClassTracker().has_red()
+                    # GATE-FAILURE signal, not generic red (meta-review HIGH):
+                    # divergence headlines ONLY a deployed structural gate that
+                    # did not hold — the real "loop broken on a green score" event.
+                    # has_red() (which includes rule-only chronic recurrence like
+                    # the live OPERATIONAL class, 799x) would fire the banner EVERY
+                    # session forever → banner-blindness. Rule-only red stays in the
+                    # per-class tracker line; only gate-failure earns the headline.
+                    # Computed from state (format-independent), not by emoji-scan.
+                    tracker_red = CorrectionClassTracker().has_gate_failure()
                 except Exception:
                     tracker_red = False  # tracker absence must never break briefing
 
