@@ -63,6 +63,13 @@ class LifecycleManager:
     # session before the answer-wait could even fire.)
     WAITING_INPUT_TIMEOUT_SECONDS: float = 14700.0  # 4h05m — see note above
     STARTUP_BACKLOG_CAP: int = 5  # Max sessions to process on startup scan
+    # R6 (§9.9): an IDLE chat session that is owned by NO live window — not in
+    # open_tabs.json — and has sat unowned longer than this is an orphan
+    # (closed-window / crashed-frontend / SSE-drop). Reaped so it can't squat a
+    # concurrency slot once cross-tab eviction is deleted (R6 Step C). Generous
+    # vs the loop interval so a tab that is merely between open_tabs writes is
+    # never mistaken for an orphan; far shorter than the 12h TTL it backstops.
+    ORPHAN_GRACE_SECONDS: float = 600.0  # 10 min unowned + IDLE → orphan
 
     # Memory pressure thresholds (configurable via env vars).
     # SWARMAI_MEMORY_EVICT_PCT: % used → start evicting IDLE sessions
@@ -251,6 +258,7 @@ class LifecycleManager:
                     await self._check_waiting_input_timeout()
                     await self._fire_idle_hooks()
                     await self._check_ttl()
+                    await self._check_orphan_sessions()
                     await self._cleanup_dead()
                     await self._check_memory_pressure()
                     # Persist session state every cycle (~60s) for crash recovery (§2B PE F7)
@@ -749,6 +757,87 @@ class LifecycleManager:
                         await self.enqueue_hooks_for_unit(unit)
                     await unit.kill()
                     self._release_session_state(unit.session_id)
+
+    @staticmethod
+    def _owned_session_ids() -> set[str] | None:
+        """session_ids that a live frontend window currently has open.
+
+        Source of truth is ``open_tabs.json`` (written by the frontend on every
+        tab add/remove/switch — settings.py). Returns the set of session_ids
+        membership-tested by the orphan reaper.
+
+        Returns ``None`` (NOT an empty set) when ownership is UNKNOWABLE —
+        file missing, unreadable, or malformed. The reaper treats ``None`` as
+        "fail safe: reap nothing this cycle" so a transient read error can never
+        be misread as "no tabs are open → everything is an orphan". An empty set
+        is a DIFFERENT, trustworthy fact ("a window is connected and reports zero
+        open tabs") and is returned as ``set()``.
+        """
+        try:
+            from routers.settings import _get_open_tabs_path
+            path = _get_open_tabs_path()
+            if not path.exists():
+                return None  # unknowable — never reap on absence
+            data = json.loads(path.read_text(encoding="utf-8"))
+            tabs = (data or {}).get("tabs", [])
+            if not isinstance(tabs, list):
+                return None  # malformed — fail safe
+            return {
+                t["sessionId"]
+                for t in tabs
+                if isinstance(t, dict) and t.get("sessionId")
+            }
+        except Exception as exc:  # GC19: surface, never silently swallow
+            logger.warning("orphan reaper: open_tabs read failed (%s) — skipping reap cycle", exc)
+            return None
+
+    async def _check_orphan_sessions(self) -> None:
+        """Reap IDLE chat sessions owned by no live window (R6 §9.9).
+
+        The orphan class: a chat session left behind by a closed window, a
+        crashed frontend, or an SSE drop — it has no tab in any window to close
+        and no client to drive it, yet today only ``_evict_idle`` (cross-tab
+        kill, being deleted in R6 Step C) and the 12h TTL ever reclaim it. This
+        reaper is the replacement: it GC's a session *nobody owns*, which is NOT
+        the cross-tab eviction of a *user's* tab that the Multi-Tab Isolation
+        principle forbids.
+
+        Strict safety gates (each mirrors a Gate-1 skeptic finding):
+        - **IDLE only.** STREAMING and WAITING_INPUT are NEVER touched — a user
+          who stepped away mid-question (WAITING_INPUT, SSE closed, answer
+          arrives on a separate request) is NOT an orphan. Mirrors ``_check_ttl``
+          and ``_evict_idle``'s Rule-3 protection.
+        - **Channel-exempt.** Channel sessions have no window/tab and are owned
+          by the daemon for its lifetime.
+        - **Ownership fail-safe.** If open_tabs is unknowable (``None``), reap
+          NOTHING — never infer "no tabs ⇒ all orphans" from a read error.
+        - **Grace.** Must be unowned AND idle > ORPHAN_GRACE_SECONDS, so a tab
+          merely between open_tabs writes (or a just-created session whose id has
+          not yet been persisted to open_tabs) is never mistaken for an orphan.
+        """
+        owned = self._owned_session_ids()
+        if owned is None:
+            return  # ownership unknowable this cycle — fail safe, reap nothing
+
+        now = time.time()
+        for unit in self._router.list_units():
+            if unit.state != SessionState.IDLE:
+                continue  # protect STREAMING / WAITING_INPUT / COLD / DEAD
+            if unit.is_channel_session:
+                continue  # daemon-owned, no window
+            if unit.session_id in owned:
+                continue  # a live window holds this tab
+            if (now - unit.last_used) <= self.ORPHAN_GRACE_SECONDS:
+                continue  # within grace — not yet an orphan
+            logger.info(
+                "lifecycle_manager.orphan_reap session_id=%s idle=%.0fs "
+                "owned_tabs=%d — reaping unowned IDLE chat session",
+                unit.session_id, now - unit.last_used, len(owned),
+            )
+            if not unit._hooks_enqueued:
+                await self.enqueue_hooks_for_unit(unit)
+            await unit.kill()
+            self._release_session_state(unit.session_id)
 
     @staticmethod
     def _release_session_state(session_id: str) -> None:
