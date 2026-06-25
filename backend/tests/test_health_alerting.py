@@ -108,28 +108,75 @@ class TestHealthInBriefing:
         assert highlights == []
 
 
-# ── AC3: Critical findings create Radar todos ─────────────────────────
+# ── AC3: Critical findings create Radar todos (direct sqlite, run_e681a61d) ──
+# Rewritten from the old mock-based test: the prior version patched
+# ToDoManager.list_todos/create_todo — methods that DO NOT EXIST on the real
+# async ToDoManager (it has async create/list). The mock auto-created them, so
+# the test passed against a path that always threw in production. This version
+# exercises the REAL direct-sqlite insert against a tmp DB.
+
+@pytest.fixture
+def tmp_todo_db(tmp_path, monkeypatch):
+    """A real sqlite DB with the todos table, wired in as jobs.paths.DB_PATH."""
+    import sqlite3
+    db = tmp_path / "data.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        """CREATE TABLE todos (
+            id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL,
+            description TEXT, source TEXT, source_type TEXT NOT NULL DEFAULT 'manual',
+            status TEXT NOT NULL DEFAULT 'pending', priority TEXT NOT NULL DEFAULT 'none',
+            due_date TEXT, linked_context TEXT, task_id TEXT,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        )"""
+    )
+    conn.commit()
+    conn.close()
+    import jobs.paths
+    monkeypatch.setattr(jobs.paths, "DB_PATH", db)
+    return db
+
 
 class TestHealthRadarTodos:
-    def test_critical_finding_creates_todo(self, tmp_path):
-        """Critical health findings should create Radar todos."""
+    def _rows(self, db):
+        import sqlite3
+        conn = sqlite3.connect(str(db))
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT * FROM todos").fetchall()
+        conn.close()
+        return rows
+
+    def test_critical_finding_creates_todo(self, tmp_todo_db):
+        """A critical finding inserts exactly one Radar todo via direct sqlite."""
         from core.proactive_intelligence import _create_health_todo
+        _create_health_todo("Empty context file detected: MEMORY.md", severity="critical")
+        rows = self._rows(tmp_todo_db)
+        assert len(rows) == 1
+        assert "Health Alert" in rows[0]["title"]
+        # severity 'critical' must clamp to a valid priority (CHECK set has no 'critical')
+        assert rows[0]["priority"] in ("high", "medium", "low", "none")
+        assert rows[0]["workspace_id"]  # NOT NULL satisfied
+        assert rows[0]["status"] == "pending"
 
-        # Mock the todo creation — patched at import target
-        with patch("core.todo_manager.ToDoManager") as MockTodo:
-            mock_instance = MagicMock()
-            MockTodo.return_value = mock_instance
-            mock_instance.list_todos.return_value = []
-            mock_instance.create_todo.return_value = {"id": 1}
+    def test_warning_severity_does_not_create_by_default(self, tmp_todo_db):
+        """Default (non-escalated) warning must NOT create a todo — preserves the
+        existing ddd_orchestrator caller's no-op contract."""
+        from core.proactive_intelligence import _create_health_todo
+        _create_health_todo("some routine warning", severity="warning")
+        assert len(self._rows(tmp_todo_db)) == 0
 
-            _create_health_todo(
-                "Empty context file detected: MEMORY.md",
-                severity="critical",
-            )
+    def test_explicit_escalate_creates_todo(self, tmp_todo_db):
+        """An explicit escalate=True lets a high-priority warning create a todo."""
+        from core.proactive_intelligence import _create_health_todo
+        _create_health_todo("recurring high-priority gap", severity="warning", escalate=True)
+        assert len(self._rows(tmp_todo_db)) == 1
 
-            mock_instance.create_todo.assert_called_once()
-            call_args_str = str(mock_instance.create_todo.call_args)
-            assert "Health Alert" in call_args_str
+    def test_dedup_no_double_create(self, tmp_todo_db):
+        """The same finding must not create duplicate todos across calls."""
+        from core.proactive_intelligence import _create_health_todo
+        _create_health_todo("Empty context file detected: MEMORY.md", severity="critical")
+        _create_health_todo("Empty context file detected: MEMORY.md", severity="critical")
+        assert len(self._rows(tmp_todo_db)) == 1
 
 
 # ── AC4: Memory health results in briefing ────────────────────────────
@@ -164,6 +211,38 @@ class TestMemoryHealthInBriefing:
         assert any("gap" in h.lower() or "memory" in h.lower() for h in highlights)
         # Routine maintenance actions should NOT appear (noise suppression)
         assert not any("removed stale" in h.lower() for h in highlights)
+
+    def test_high_priority_gap_escalates_to_todo(self, tmp_path, tmp_todo_db):
+        """Active-maintenance reflex: a HIGH-priority capability gap escalates to
+        a Radar todo (not just passive display). Medium/low stay display-only."""
+        from core.proactive_intelligence import _get_health_highlights
+        import sqlite3
+
+        findings_dir = tmp_path / "Services" / "swarm-jobs"
+        findings_dir.mkdir(parents=True)
+        (findings_dir / "health_findings.json").write_text(json.dumps({
+            "timestamp": "2026-06-25T03:00:00Z",
+            "findings": [],
+            "memory_health": {
+                "capability_gaps": [
+                    {"pattern": "Mid-stream response halt requiring user intervention",
+                     "priority": "high", "occurrences": 4,
+                     "suggested_action": "add E2E streaming guard"},
+                    {"pattern": "minor formatting drift", "priority": "low",
+                     "occurrences": 2, "suggested_action": "lint"},
+                ],
+            },
+        }))
+
+        _get_health_highlights(str(tmp_path))
+
+        conn = sqlite3.connect(str(tmp_todo_db))
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT * FROM todos").fetchall()
+        conn.close()
+        # Exactly the HIGH gap escalated; the low one did not.
+        assert len(rows) == 1, f"expected 1 escalated todo, got {len(rows)}"
+        assert "Mid-stream" in rows[0]["title"]
 
 
 # ── AC5: Governance promotion signal in briefing ───────────────────────

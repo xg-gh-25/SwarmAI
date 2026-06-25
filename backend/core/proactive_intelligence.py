@@ -1147,6 +1147,19 @@ def _get_health_highlights(working_directory: str) -> list[str]:
             lines.append(
                 f"  - [gap/{priority}] {pattern} ({occurrences}x) — suggest: {action}"
             )
+            # Active-maintenance reflex (run_e681a61d): a HIGH-priority capability
+            # gap stops being passive display — escalate it to an actionable Radar
+            # todo so a recurring pain proposes its own fix. Dedup-guarded inside
+            # _create_health_todo; medium/low gaps stay display-only (no noise).
+            if priority == "high":
+                try:
+                    _create_health_todo(
+                        f"{pattern} ({occurrences}x) — {action}",
+                        severity="warning",
+                        escalate=True,
+                    )
+                except Exception:
+                    pass  # Non-blocking — escalation is best-effort
 
         # Stale corrections — corrections referencing deleted code
         stale = mem_health.get("stale_corrections", [])
@@ -1257,32 +1270,70 @@ def _get_health_highlights(working_directory: str) -> list[str]:
     return lines
 
 
-def _create_health_todo(message: str, severity: str = "warning") -> None:
-    """Create a Radar todo for critical health findings.
+def _create_health_todo(
+    message: str, severity: str = "warning", escalate: bool = False
+) -> None:
+    """Create a Radar todo for a health finding — the propose-action reflex.
 
-    Only creates for severity="critical". Deduplicates by checking
-    if an active todo with similar title already exists.
+    Creates a todo when the finding is `critical`, OR when a caller explicitly
+    opts in with `escalate=True` (a recurring/high-priority warning that should
+    stop being passive display and become an action item). A plain `warning`
+    with escalate=False is a no-op — this preserves the existing
+    ddd_orchestrator.py caller's contract (it passes severity="warning" and must
+    not flood todos every refresh).
+
+    Writes via DIRECT sync sqlite3 into data.db `todos` (the proven
+    `_get_todo_highlights` pattern). The previous implementation called
+    ToDoManager.list_todos/create_todo — methods that DO NOT EXIST on the async
+    ToDoManager, so the path threw on every call and was swallowed (a silent
+    no-op masked by a mock in tests). Direct sqlite is sync-safe from this
+    briefing context (no event loop bridging) and matches the read path.
+
+    Deduplicates against existing active todos with the same finding prefix.
+    Best-effort — never raises (briefing assembly must not break).
     """
-    if severity != "critical":
+    if severity != "critical" and not escalate:
         return
 
+    import sqlite3
+    import uuid
+    from datetime import datetime, timezone
+    from jobs.paths import DB_PATH as _db_path
+
+    if not _db_path.exists():
+        return
+
+    title = f"Health Alert: {message[:80]}"
+    dedup_key = message[:40]
     try:
-        from core.todo_manager import ToDoManager
-        mgr = ToDoManager()
-        title = f"Health Alert: {message[:80]}"
+        conn = sqlite3.connect(str(_db_path), timeout=5)
+        try:
+            # Dedup: skip if an active (pending/in_discussion) Health Alert todo
+            # already covers this finding.
+            existing = conn.execute(
+                "SELECT title FROM todos WHERE status IN ('pending','in_discussion') "
+                "AND title LIKE 'Health Alert:%'"
+            ).fetchall()
+            for (etitle,) in existing:
+                if dedup_key in (etitle or ""):
+                    return  # already tracked
 
-        # Check for existing active todo with same prefix
-        existing = mgr.list_todos(status="active")
-        for todo in existing:
-            if todo.get("title", "").startswith("Health Alert:") and \
-               message[:40] in todo.get("title", ""):
-                return  # Already exists, don't duplicate
-
-        mgr.create_todo(
-            title=title,
-            description=f"Auto-created by health alerting system.\n\nFinding: {message}",
-            priority="high",
-        )
+            now = datetime.now(timezone.utc).isoformat()
+            conn.execute(
+                "INSERT INTO todos (id, workspace_id, title, description, source, "
+                "source_type, status, priority, created_at, updated_at) "
+                "VALUES (?, 'swarmws', ?, ?, 'health-alert', 'ai_detected', "
+                "'pending', 'high', ?, ?)",
+                (
+                    str(uuid.uuid4()),
+                    title,
+                    f"Auto-created by health alerting system.\n\nFinding: {message}",
+                    now, now,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
     except Exception as exc:
         logger.warning("Failed to create health todo: %s", exc)
 

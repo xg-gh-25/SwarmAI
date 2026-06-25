@@ -61,6 +61,33 @@ _CORRECTION_PATTERNS_EN = re.compile(
     """
 )
 
+# Meta-cognitive / Socratic correction patterns (gap fix run_e681a61d).
+# These capture corrections phrased as a REDIRECT or REFRAME rather than an
+# explicit "you're wrong". COR02-disciplined: every pattern is a multi-word
+# phrase with correction-specific SEMANTICS — NOT a bare keyword (no lone 吗/去),
+# so genuine info-questions ("这个怎么用吗", "你能去查一下文档吗") don't trigger.
+_CORRECTION_PATTERNS_META = re.compile(
+    r"""(?ix)
+    (?:
+        # Investigate-redirect: imperative "go (and) look/check ..." — steering
+        # the agent to re-investigate. Requires the directive verb at a boundary.
+        (?:^|[\s,。，、]) (?:go\s+(?:and\s+)?(?:check|look|investigate|verify|dig)\b)
+      | (?:^|[\s,。，、]) (?:你\s*)?去\s*(?:查|看|核实|确认|检查|验证)
+        # "你看下/你看一下 X" — imperative "(you) take a look at" redirect. Requires
+        # the leading 你 (directive at the agent) so it doesn't match 我看下 (I'll
+        # look) or 看下面/看下文 (look below — a reference, not a correction).
+      | (?:^|[\s,。，、]) 你\s*看\s*(?:一)?下(?!面|文|方)
+        # Reframe: "rethink / reconsider / look again at ..." — discard current path.
+      | (?:^|\b) (?:re-?think|re-?consider|re-?examine|look\s+again)\b
+      | 重新\s*(?:想|看|考虑|检查|评估|分析|审视)
+        # Contrastive correction: "not X, (but) Y" / "不是 X，是 Y" — explicit
+        # redirect away from the agent's stated direction. Needs the paired marker.
+      | 不是.{0,30}(?:而是|应该|是别的|是另)
+      | (?:it'?s|that'?s)\s+not\s+.{0,40}\b(?:but|it'?s|rather)\b
+    )
+    """
+)
+
 
 def _append_correction(path: str, entry: dict) -> None:
     """Append a correction entry to JSONL file, rotating when oversized.
@@ -228,7 +255,7 @@ def create_user_correction_detector(
         if not prompt:
             return {}
 
-        if _CORRECTION_PATTERNS_EN.search(prompt):
+        if _CORRECTION_PATTERNS_EN.search(prompt) or _CORRECTION_PATTERNS_META.search(prompt):
             entry = {
                 "ts": time.time(),
                 "session_id": sid,

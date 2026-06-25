@@ -180,6 +180,49 @@ class TestUserCorrectionDetector:
 
         assert not corrections_file.exists()
 
+    # --- Meta-cognitive / Socratic correction capture (gap fix run_e681a61d) ---
+    # The keyword regex missed redirect/reframe corrections phrased WITHOUT an
+    # explicit error word. These are real corrections (the user is steering the
+    # agent), just expressed as a redirect-to-investigate or a reframe.
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("prompt", [
+        "去查 闭环审计现在报 unhealth",          # investigate-redirect (CN)
+        "你去看下另一个 session 在做什么",          # investigate-redirect (CN)
+        "go check why the audit is unhealthy",     # investigate-redirect (EN)
+        "重新想一下这个方案",                       # reframe (CN)
+        "rethink this approach",                   # reframe (EN)
+        "这不是该加 gate，是别的问题",              # contrastive 'not X, but Y' (CN)
+    ])
+    async def test_detects_meta_cognitive_redirect(self, prompt, corrections_file, session_context):
+        from core.runtime_hooks import create_user_correction_detector
+
+        hook = create_user_correction_detector(str(corrections_file), session_context)
+        await hook({"prompt": prompt}, None, MagicMock())
+        assert corrections_file.exists(), f"meta-cognitive correction not captured: {prompt!r}"
+        line = json.loads(corrections_file.read_text().strip().splitlines()[-1])
+        assert line["type"] == "user_correction"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("prompt", [
+        "这个函数怎么用",                          # genuine info-question (CN)
+        "你知道这个怎么用吗",                       # genuine info-question with 吗 (COR02 trap)
+        "how does this function work",             # genuine info-question (EN)
+        "你能帮我去查一下文档吗",                   # polite request, not a correction
+        "能解释下这段代码吗",                       # explanation request
+        "看下面的注释",                            # 看下面 = "look below" reference, not 看下 redirect
+        "我看下代码再说",                          # 我看下 = "I'll look", not directed at agent
+        "看下文档第三章",                          # 看下文 boundary guard
+    ])
+    async def test_info_questions_not_false_triggered(self, prompt, corrections_file, session_context):
+        """Precision guard (COR02): genuine info-seeking questions — even with 吗
+        or 去查 — must NOT be captured as corrections."""
+        from core.runtime_hooks import create_user_correction_detector
+
+        hook = create_user_correction_detector(str(corrections_file), session_context)
+        await hook({"prompt": prompt}, None, MagicMock())
+        assert not corrections_file.exists(), f"false-positive on info-question: {prompt!r}"
+
     @pytest.mark.asyncio
     async def test_rotation_triggers_on_oversize(self, corrections_file, session_context):
         """When file exceeds size threshold, oldest entries are dropped."""
