@@ -319,6 +319,20 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
         sys.exit(1)
 
 
+def cmd_schema(args, reg: "ArtifactRegistry | None") -> None:
+    """Print a stage's expected artifact schema + template as single-line JSON.
+
+    Read-only. Lets a caller see the required/recommended/depth/template for a
+    stage WITHOUT triggering a failed publish (the only way to see it before).
+    Reuses pipeline_validator.get_stage_schema as the single source of truth —
+    no duplicate schema definitions. Output is single-line (parse-proof, mirrors
+    publish --quiet) so orchestrators can json.load it directly. (run_88b9f986)
+    """
+    from pipeline_validator import get_stage_schema
+    info = get_stage_schema(args.stage)
+    print(json.dumps({"stage": args.stage, **info}))
+
+
 def cmd_state(args, reg: ArtifactRegistry) -> None:
     """Get pipeline state for a project."""
     state = reg.get_pipeline_state(args.project)
@@ -3139,6 +3153,11 @@ def main() -> None:
                                 "SHORT single-line {\"validation_failed\":true,\"errors\":[...]} "
                                 "instead of the verbose indented schema dump.")
 
+    # schema — fetch a stage's expected artifact template without a failed publish
+    p_schema = sub.add_parser("schema", help="Print a stage's expected artifact schema + template (single-line JSON)")
+    p_schema.add_argument("--stage", required=True,
+                          help="Pipeline stage (evaluate/think/plan/build/review/test/deliver)")
+
     # state
     p_state = sub.add_parser("state", help="Get pipeline state")
     p_state.add_argument("--project", required=True)
@@ -3283,6 +3302,7 @@ def main() -> None:
     handlers = {
         "discover": cmd_discover,
         "publish": cmd_publish,
+        "schema": cmd_schema,
         "learn": cmd_learn,
         "state": cmd_state,
         "advance": cmd_advance,

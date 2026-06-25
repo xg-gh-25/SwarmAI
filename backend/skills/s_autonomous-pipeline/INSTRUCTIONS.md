@@ -1251,8 +1251,26 @@ run-report  --project <P> --run-id <R>           # generate REPORT.md
 run-observe --project <P> --run-id <R> --event <E> [args]  # telemetry
 
 # ⚠️ CRITICAL: deliver stage-json MUST include artifact_id from publish output.
-# Pattern: ART_ID=$(publish ... | python3 -c "import sys,json; print(json.load(sys.stdin)['artifact_id'])")
+#
+# ALWAYS pass --quiet when publishing in a pipeline. On success it prints ONLY
+# {"artifact_id": "..."} (single line, parse-proof); on validation failure it
+# prints a SHORT single-line {"validation_failed":true,"errors":[...]}. Without
+# --quiet the failure path is multi-KB INDENTED JSON and the json.load() below
+# chokes (this caused 3 failed artifact_id captures in run_00e0e872).
+# Pattern: ART_ID=$(publish ... --quiet | python3 -c "import sys,json; print(json.load(sys.stdin)['artifact_id'])")
 #          run-update --stage-json '{"stage":"deliver","status":"completed","stage_doc_consumed":true,"artifact_id":"'$ART_ID'"}'
+
+# Fetch a stage's expected schema/template WITHOUT a failed publish (single-line JSON):
+schema --stage <stage>      # e.g. schema --stage deliver — build the payload from .template
+
+# Schema-correct DELIVER payload skeleton (build from this so the FIRST publish passes —
+# all fields below are required by the depth validator for full/bugfix profiles):
+#   {"title":"...","quality":{"tests_pass":true,"regressions":0,"smoke_pass":true},
+#    "adversarial_review":{"spawned":true,"profile_tier":"full|lite|skipped",
+#       "evidence":"Agent tool: <how spawned>","findings_total":N,"findings_fixed":N,
+#       "findings_remaining":0,"findings":[{"severity":"LOW","resolved":true,"finding":"file:line — what. Fixed: how."}]},
+#    "completion_audit":{"all_green":true,"requirements_met":N,"requirements_total":N},
+#    "ac_verification":{...},"meta_review":{...},"convergence":{"iterations":1,"final_status":"push-ready"}}
 ```
 
 # Background pipeline job
