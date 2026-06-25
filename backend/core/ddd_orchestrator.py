@@ -841,10 +841,12 @@ class DddCultivationOrchestrator:
                     # and keep counting as noise). is_keep_class protects permanent
                     # knowledge (COE/principle/correction/decision/model/ref>=2).
                     reclaim_report = reclaim_noise_entries(
-                        content, today, project_dir, dry_run=False,
+                        content, today, project_dir,
+                        source_path=imp_path, dry_run=False,
                     )
                     if reclaim_report.new_content is not None:
-                        imp_path.write_text(reclaim_report.new_content, encoding="utf-8")
+                        # reclaim_noise_entries already wrote imp_path + .bak
+                        # (source_path given). Just log.
                         findings.append(
                             f"ENTRY_RECLAIM: {reclaim_report.archived} stale entries "
                             f"archived+stripped from {project_dir.name} "

@@ -848,6 +848,7 @@ def reclaim_noise_entries(
     grace_days: int = GRACE_PERIOD_DAYS,
     evergreen_sections: "frozenset[str] | set[str] | None" = None,
     archive_name: str = "IMPROVEMENT-archive.md",
+    source_path: "Path | None" = None,
     dry_run: bool = True,
 ) -> ReclaimReport:
     """Reclaim (archive + physically strip) stale operational-noise entries.
@@ -912,6 +913,17 @@ def reclaim_noise_entries(
     archived = archive_entries(project_dir, selected, archive_name=archive_name)
     report.archived = archived
     report.new_content = _strip_entries(content, {e.title for e in selected})
+
+    # If the caller hands us the source path, own the full persist: snapshot
+    # the pre-write content to <name>.bak (belt-and-braces recovery for
+    # user-owned docs — the archive is forward-append, not a source snapshot),
+    # then write the stripped content. Without source_path, the caller persists
+    # new_content itself (and no backup is written here).
+    if source_path is not None:
+        bak = Path(source_path).with_name(Path(source_path).name + ".bak")
+        bak.write_text(content, encoding="utf-8")
+        Path(source_path).write_text(report.new_content, encoding="utf-8")
+
     return report
 
 

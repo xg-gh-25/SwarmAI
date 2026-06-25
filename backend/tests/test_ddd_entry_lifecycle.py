@@ -726,6 +726,31 @@ class TestReclaimNoiseEntries:
         assert report.archived == 0
         assert report.candidates == []
 
+    def test_apply_writes_source_backup(self, tmp_path):
+        # REVIEW finding #2: destructive reclaim must snapshot the source before
+        # overwrite. The archive holds removed entries (forward-append), but a
+        # full pre-write .bak is belt-and-braces recovery for the user-owned doc.
+        from core.ddd_entry_lifecycle import reclaim_noise_entries
+        src = tmp_path / "IMPROVEMENT.md"
+        src.write_text(_RECLAIM_FIXTURE)
+        report = reclaim_noise_entries(
+            _RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path,
+            source_path=src, dry_run=False,
+        )
+        assert report.archived == 2
+        bak = tmp_path / "IMPROVEMENT.md.bak"
+        assert bak.exists()
+        assert bak.read_text() == _RECLAIM_FIXTURE  # exact pre-write snapshot
+
+    def test_no_backup_when_dry_run_or_no_source_path(self, tmp_path):
+        from core.ddd_entry_lifecycle import reclaim_noise_entries
+        # dry_run → no backup
+        reclaim_noise_entries(_RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path, dry_run=True)
+        assert not (tmp_path / "IMPROVEMENT.md.bak").exists()
+        # no source_path → no backup (caller persists new_content itself)
+        reclaim_noise_entries(_RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path, dry_run=False)
+        assert not (tmp_path / "IMPROVEMENT.md.bak").exists()
+
     def test_dateless_entries_are_NOT_reclaimed(self, tmp_path):
         # SAFETY (run_94fd5597 dry-run finding): 96% of "noise" candidates were
         # date-LESS, not genuinely old — date-less means "nobody stamped a date",

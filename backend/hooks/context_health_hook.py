@@ -1535,10 +1535,11 @@ class ContextHealthHook:
             content, today, memory_path.parent,
             evergreen_sections=evergreen,
             archive_name="MEMORY-archive.md",
+            source_path=memory_path,
             dry_run=False,
         )
         if reclaim_report.new_content is not None:
-            memory_path.write_text(reclaim_report.new_content, encoding="utf-8")
+            # reclaim wrote memory_path + MEMORY.md.bak (source_path given).
             logger.info(
                 "context_health: MEMORY.md reclaim — %d archived+stripped, %d protected",
                 reclaim_report.archived, reclaim_report.kept_protected,
