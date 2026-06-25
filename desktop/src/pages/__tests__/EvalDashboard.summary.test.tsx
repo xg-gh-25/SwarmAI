@@ -9,7 +9,7 @@
  *  - empty input → all-empty breakdowns, no crash
  */
 import { describe, it, expect } from 'vitest';
-import { computeBreakdowns } from '../EvalDashboard';
+import { computeBreakdowns } from '../eval-breakdowns';
 import type { GoldenSetCase } from '../EvalDashboard';
 
 function mkCase(over: Partial<GoldenSetCase>): GoldenSetCase {
