@@ -374,7 +374,10 @@ STAGE_DEPTH: dict[str, dict[str, list[str]]] = {
 # fabrication backstop). Shared with the REPRO gate so both use one threshold.
 _EVIDENCE_MIN_CHARS = 20
 
-_STRICT_UNDERSTANDING_PROFILES = ("full", "bugfix", "goal", "")
+# Relaxed profiles are the ONLY exemption list — strict is the fail-closed
+# DEFAULT (any profile not explicitly relaxed is strict). This closes the
+# "standard" alias (rank-4, == full) AND any unknown/future profile in one move,
+# matching the design's "all work types" intent (adversarial HIGH, run_862fa4e0).
 _RELAXED_UNDERSTANDING_PROFILES = ("trivial", "docs", "research")
 
 # M1 — solution-INTENT phrases (not bare verbs: "the state change is not
@@ -382,20 +385,53 @@ _RELAXED_UNDERSTANDING_PROFILES = ("trivial", "docs", "research")
 # proposal to act, which belongs in THINK, not an understanding of the present.
 import re as _re
 
+# Action verbs that, with an object/target, signal a PLAN (belongs in THINK), not
+# a present-state description. "make/switch/use/move/persist/set" added after the
+# adversarial showed the flagship [DONE] case ("make X authoritative") slipped
+# through. Gerund forms ("adding a field fixes it") and "the fix:"/"fix:" too.
+_SOLUTION_VERBS = (
+    r"add|change|refactor|rewrite|replace|introduce|implement|create|"
+    r"make|switch|use|move|persist|set|remove|wrap|inject|extract"
+)
+_SOLUTION_GERUNDS = (
+    r"adding|changing|refactoring|rewriting|replacing|introducing|implementing|"
+    r"creating|making|switching|using|moving|persisting|setting|removing|wrapping"
+)
+# Negation lead-ins: a verb+object preceded by these is a present-state claim of
+# what the code does NOT do ("does not implement the retry") — must NOT false-block.
+_NEG_LEAD = r"(?:not|n't|fails?\s+to|never|does\s+not|did\s+not|doesn't|didn't|without)\s+"
+
 _SOLUTION_LANGUAGE_PATTERNS = [
     r"\bi\s+will\b",
     r"\bi'?ll\b",
-    r"\bwe\s+(?:will|should|need\s+to|could)\b",
+    r"\bwe\s+(?:will|should|need\s+to|could|can|must)\b",
     r"\blet'?s\b",
-    r"\bthe\s+fix\s+is\b",
-    r"\bthe\s+solution\s+is\b",
+    r"\bthe\s+fix\b",          # "the fix is" / "the fix:" / "the fix should"
+    r"\bthe\s+solution\b",
     r"\bto\s+fix\b",
-    r"\bshould\s+add\b",
-    r"\b(?:add|change|refactor|rewrite|replace|introduce|implement|create)\s+(?:a|an|the|to|it|this|that|"
-    r"per-|new\b|[A-Za-z_]+\s+to\b)",  # action-verb + object/target (plan), not noun usage
-    r"^\s*(?:add|change|refactor|rewrite|replace|introduce|implement|create)\b",  # imperative claim
+    r"\bshould\s+(?:add|change|use|make|be\s+changed)\b",
+    # action-verb + object/target (a plan). Negated forms are stripped BEFORE
+    # this scan (see _strip_negated_verbs) so "does not implement the retry" is
+    # a present-state claim and does NOT match.
+    rf"\b(?:{_SOLUTION_VERBS})\s+"
+    rf"(?:a|an|the|to|it|this|that|per-|new\b|[A-Za-z_]+\s+(?:to|authoritative|instead)\b)",
+    rf"^\s*(?:{_SOLUTION_VERBS})\s+\S",          # imperative claim ("Make the sentinel…", "Make [DONE]…")
+    rf"\b(?:{_SOLUTION_GERUNDS})\s+(?:a|an|the|it|this|that)\b",  # gerund plan
 ]
 _SOLUTION_LANGUAGE_RE = _re.compile("|".join(_SOLUTION_LANGUAGE_PATTERNS), _re.IGNORECASE)
+# Negated verb-phrase ("does not implement", "fails to add") — a present-state
+# claim of what the code does NOT do. Stripped before the M1 scan so it can't
+# false-trigger the verb+object pattern. (Python `re` forbids variable-width
+# lookbehind, so we excise rather than look-behind.)
+_NEG_VERB_PHRASE_RE = _re.compile(
+    rf"{_NEG_LEAD}(?:{_SOLUTION_VERBS})\b", _re.IGNORECASE
+)
+
+
+def _strip_negated_verbs(text: str) -> str:
+    """Remove 'does not implement' / 'fails to add' style negated verb phrases so
+    M1 sees only genuine plan-language, not present-state negations."""
+    return _NEG_VERB_PHRASE_RE.sub(" ", text)
 
 # M2 — hedge words (EN + CJK). An unresolved hedge = inference, not observation.
 _HEDGE_PATTERNS = [
@@ -432,7 +468,8 @@ def _check_understanding_gate(data: dict, profile: str) -> list[str]:
     evaluate.md, not here."""
     errs: list[str] = []
     und = data.get("understanding")
-    is_strict = profile in _STRICT_UNDERSTANDING_PROFILES
+    # Fail-closed: strict unless explicitly relaxed. "standard"/unknown → strict.
+    is_strict = profile not in _RELAXED_UNDERSTANDING_PROFILES
     has_block = isinstance(und, dict)
 
     # Presence: strict profiles MUST carry the block with real evidence. The
@@ -463,7 +500,8 @@ def _check_understanding_gate(data: dict, profile: str) -> list[str]:
         evidence = _resolve_understanding_evidence(data)
 
         # M1 — solution language in the claim = a plan, not present-state.
-        if claim_str and _SOLUTION_LANGUAGE_RE.search(claim_str):
+        # Strip negated verb phrases first ("does not implement X" is present-state).
+        if claim_str and _SOLUTION_LANGUAGE_RE.search(_strip_negated_verbs(claim_str)):
             errs.append(
                 "Understanding gate (M1 solution-language): understanding.claim contains "
                 "solution/plan language (e.g. 'I will / the fix is / add … / refactor …'). "

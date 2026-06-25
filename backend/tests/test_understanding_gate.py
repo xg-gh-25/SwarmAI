@@ -63,7 +63,9 @@ _GOOD_EVIDENCE = (
 # M0 — strict profiles require the understanding block
 # ---------------------------------------------------------------------------
 class TestRequiresUnderstandingOnStrictProfiles:
-    @pytest.mark.parametrize("profile", ["full", "bugfix", "goal"])
+    # adversarial HIGH: "standard" (alias for full, rank 4) + unknown profiles
+    # must be STRICT (fail-closed), not fall through both sets silently.
+    @pytest.mark.parametrize("profile", ["full", "bugfix", "goal", "standard", "complex", ""])
     def test_missing_block_blocks_on_strict(self, profile):
         data = {"recommendation": "GO", "scope": "standard", "acceptance_criteria": ["x"]}
         errors = validate_artifact_data("evaluate", data, profile=profile)
@@ -97,6 +99,14 @@ class TestM1SolutionLanguage:
         "Let's add a new understanding block to the schema.",
         "Refactor to a single render source.",
         "Change the trigger from bug-only to all profiles.",
+        # adversarial false-NEGATIVES the flagship [DONE] case must now catch:
+        "Make [DONE] authoritative in chat.ts.",
+        "Switch to a per-tab counter.",
+        "Use a circuit breaker on the resume path.",
+        "Persist the state to disk on every cycle.",
+        "Move the early-return below the guard.",
+        "Adding a latestCompleteGen field fixes it.",
+        "The fix: make the sentinel authoritative.",
     ])
     def test_solution_language_in_claim_blocks(self, bad_claim):
         data = _eval("existing-feature", bad_claim, _GOOD_EVIDENCE)
@@ -108,6 +118,11 @@ class TestM1SolutionLanguage:
         "The state change is not persisted across tab switches today.",
         "The render source falls back to a stale prop when the store is momentarily empty.",
         "chat.ts:276 already treats [DONE] as authoritative; the proposed change would be a no-op.",
+        # adversarial false-POSITIVES: negated present-state claims must pass M1
+        "The handler does not implement the retry interface.",
+        "The function does not create a new session.",
+        "The module fails to add the header today.",
+        "onComplete never persists the final gen.",
     ])
     def test_present_state_claim_passes_m1(self, ok_claim):
         data = _eval("existing-feature", ok_claim, _GOOD_EVIDENCE)
