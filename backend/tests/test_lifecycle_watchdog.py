@@ -456,6 +456,12 @@ class TestWaitingInputTimeout:
             - (LifecycleManager.WAITING_INPUT_TIMEOUT_SECONDS + 60)
         )
         unit.force_unstick_waiting_input = AsyncMock()
+        # R3c (M2): the recovery decision now routes through the unit's
+        # RecoveryCoordinator — give the mock a real one + a not-stopped turn so
+        # decide_bare returns PROCEED_KILL (behavior parity with pre-R3c).
+        unit._user_stopped_current_turn = False
+        from core.session_healing import HealingLoop, RecoveryCoordinator
+        unit._recovery_coordinator = RecoveryCoordinator(HealingLoop())
         router.list_units.return_value = [unit]
 
         mgr = LifecycleManager(router=router)
@@ -552,8 +558,8 @@ class TestStreamingRssRoutesCoordinator:
     not kill directly. These mock the RSS breach and assert the coordinator path
     actually executes — a kill that bypasses decide_bare is a regression."""
 
-    def _make_streaming_unit(self, *, rss_over: bool, user_stopped: bool):
-        from core.session_unit import SessionState, SessionUnit
+    def _make_streaming_unit(self, *, user_stopped: bool):
+        from core.session_unit import SessionState
 
         unit = MagicMock()
         unit.state = SessionState.STREAMING
@@ -569,22 +575,22 @@ class TestStreamingRssRoutesCoordinator:
         unit._recovery_coordinator.decide_bare = MagicMock(
             wraps=unit._recovery_coordinator.decide_bare
         )
-        self._rss = (
-            SessionUnit.STREAMING_RSS_KILL_THRESHOLD + 1
-            if rss_over
-            else SessionUnit.STREAMING_RSS_KILL_THRESHOLD - 1
-        )
         return unit
+
+    @staticmethod
+    def _rss_over():
+        from core.session_unit import SessionUnit
+        return SessionUnit.STREAMING_RSS_KILL_THRESHOLD + 1
 
     @pytest.mark.asyncio
     async def test_rss_breach_routes_through_decide_bare_and_kills(self):
-        unit = self._make_streaming_unit(rss_over=True, user_stopped=False)
+        unit = self._make_streaming_unit(user_stopped=False)
         mgr = _make_manager()
         mgr._router.list_units.return_value = [unit]
 
         with patch("core.resource_monitor.resource_monitor") as rm:
             rm.system_memory.return_value = SimpleNamespace(percent_used=20.0)
-            rm.process_tree_rss.return_value = self._rss
+            rm.process_tree_rss.return_value = self._rss_over()
             await mgr._streaming_rss_check()
 
         # FORCING assertion: the decision went through the coordinator...
@@ -599,16 +605,113 @@ class TestStreamingRssRoutesCoordinator:
     async def test_user_stopped_turn_skips_kill_via_coordinator(self):
         """If the user stopped this turn, the universal guard SKIPs — the bloated
         session is NOT killed (parity with self-heal's user-stop guard)."""
-        unit = self._make_streaming_unit(rss_over=True, user_stopped=True)
+        unit = self._make_streaming_unit(user_stopped=True)
         mgr = _make_manager()
         mgr._router.list_units.return_value = [unit]
 
         with patch("core.resource_monitor.resource_monitor") as rm:
             rm.system_memory.return_value = SimpleNamespace(percent_used=20.0)
-            rm.process_tree_rss.return_value = self._rss
+            rm.process_tree_rss.return_value = self._rss_over()
             await mgr._streaming_rss_check()
 
         unit._recovery_coordinator.decide_bare.assert_called_once()
         # SKIP verdict → NO kill.
         unit.kill.assert_not_awaited()
         unit._arm_recovery_checkpoint.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_system_pressure_kill_is_fleet_arbitration_not_coordinated(self):
+        """BOUNDARY INVARIANT (design §9): Trigger 2 (system-pressure > 90% →
+        kill heaviest) is FLEET ARBITRATION, deliberately NOT routed through the
+        coordinator and deliberately IGNORING the user_stopped guard. At >90%
+        system memory a user-Stop does not free the leaked RSS, so the heaviest
+        STREAMING session must still be killed to avoid machine-wide OOM (COE05).
+        This pins the intentional asymmetry vs Trigger 1 so a future edit can't
+        silently 'unify' it and re-introduce the OOM hazard."""
+        from core.session_unit import SessionState, SessionUnit
+        from core.session_healing import HealingLoop, RecoveryCoordinator
+
+        # user_stopped=True AND under-7GB (so Trigger 1 does NOT fire), but
+        # system memory is critical → Trigger 2 must kill the heaviest anyway.
+        unit = MagicMock()
+        unit.state = SessionState.STREAMING
+        unit.pid = 7777
+        unit.session_id = "sess_pressure_0001"
+        unit._user_stopped_current_turn = True
+        unit._arm_recovery_checkpoint = AsyncMock()
+        unit.kill = AsyncMock()
+        unit._recovery_coordinator = RecoveryCoordinator(HealingLoop())
+        unit._recovery_coordinator.decide_bare = MagicMock(
+            wraps=unit._recovery_coordinator.decide_bare
+        )
+        mgr = _make_manager()
+        mgr._router.list_units.return_value = [unit]
+
+        under_7gb = SessionUnit.STREAMING_RSS_KILL_THRESHOLD - 1
+        with patch("core.resource_monitor.resource_monitor") as rm:
+            rm.system_memory.return_value = SimpleNamespace(percent_used=95.0)
+            rm.process_tree_rss.return_value = under_7gb
+            await mgr._streaming_rss_check()
+
+        # Trigger 1 never reached PROCEED_KILL territory (under threshold), so
+        # decide_bare may be skipped entirely; the fleet-pressure kill fires
+        # regardless of user_stopped.
+        unit.kill.assert_awaited_once()
+
+
+# ── R3c (M2): stuck-WAITING_INPUT timeout routes through RecoveryCoordinator ──
+
+
+class TestStuckWaitingRoutesCoordinator:
+    """FORCING TESTS (STEERING #11): the stuck-WAITING_INPUT recovery must route
+    its DECISION through the unit's RecoveryCoordinator with eligible_states=
+    {waiting_input} — this trigger TARGETS waiting_input (opposite of self-heal,
+    which protects it). A recover that bypasses decide_bare is a regression."""
+
+    def _make_waiting_unit(self, *, state, user_stopped=False, waited_over=True):
+        from core.session_unit import SessionState
+
+        unit = MagicMock()
+        unit.state = state
+        unit.session_id = "sess_wait_forcing_0001"
+        unit._user_stopped_current_turn = user_stopped
+        # last_used far in the past → waited beyond timeout
+        unit.last_used = 0.0 if waited_over else 9_999_999_999.0
+        unit.force_unstick_waiting_input = AsyncMock()
+        from core.session_healing import HealingLoop, RecoveryCoordinator
+        unit._recovery_coordinator = RecoveryCoordinator(HealingLoop())
+        unit._recovery_coordinator.decide_bare = MagicMock(
+            wraps=unit._recovery_coordinator.decide_bare
+        )
+        return unit
+
+    @pytest.mark.asyncio
+    async def test_waiting_timeout_routes_through_decide_bare_and_unsticks(self):
+        from core.session_unit import SessionState
+
+        unit = self._make_waiting_unit(state=SessionState.WAITING_INPUT)
+        mgr = _make_manager()
+        mgr._router.list_units.return_value = [unit]
+
+        await mgr._check_waiting_input_timeout()
+
+        unit._recovery_coordinator.decide_bare.assert_called_once()
+        kwargs = unit._recovery_coordinator.decide_bare.call_args.kwargs
+        assert kwargs["trigger"] == "stuck_waiting"
+        assert kwargs["eligible_states"] == frozenset({"waiting_input"})
+        unit.force_unstick_waiting_input.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_user_stopped_skips_unstick(self):
+        from core.session_unit import SessionState
+
+        unit = self._make_waiting_unit(
+            state=SessionState.WAITING_INPUT, user_stopped=True
+        )
+        mgr = _make_manager()
+        mgr._router.list_units.return_value = [unit]
+
+        await mgr._check_waiting_input_timeout()
+
+        unit._recovery_coordinator.decide_bare.assert_called_once()
+        unit.force_unstick_waiting_input.assert_not_awaited()

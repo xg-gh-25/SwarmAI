@@ -524,6 +524,18 @@ class LifecycleManager:
             # Only fires AFTER IDLE eviction threshold (90% default).
             # This ensures IDLE sessions are evicted first; STREAMING kill
             # is the LAST resort when IDLE eviction wasn't enough.
+            #
+            # DELIBERATELY NOT routed through the RecoveryCoordinator (design
+            # §9 membership analysis): this is FLEET ARBITRATION (max()-over-N
+            # picks a victim under system-wide OOM pressure), NOT single-unit
+            # recovery. It fails the coordinator's membership test (it sacrifices
+            # one of N, not "recover THIS unit"). Crucially it must IGNORE the
+            # user_stopped guard that Trigger 1 honors: at >90% system memory a
+            # user-Stop does not free the leaked RSS, so refusing to kill the
+            # heaviest would let the whole machine OOM (COE05). The boundary is
+            # intentional — the per-session 7GB leak (Trigger 1) is recovery and
+            # is coordinated; the system-pressure last-resort kill is arbitration
+            # and is not. See design §9.2 + §9 "RSS-streaming fleet-pressure → OUT".
             if mem.percent_used > self.MEMORY_EVICT_PCT and rss_map:
                 heaviest = max(rss_map, key=rss_map.get)
                 logger.warning(
@@ -539,7 +551,16 @@ class LifecycleManager:
                 await heaviest.kill()
 
         except Exception as exc:
-            logger.debug("_streaming_rss_check failed (non-fatal): %s", exc)
+            # GC19: surface the failure type, not a bare swallow. This block now
+            # depends on unit._recovery_coordinator / _user_stopped_current_turn
+            # (R3b); if a future unit reaches STREAMING without them wired, the
+            # OOM-protection kill would silently no-op. Log at warning so a
+            # swallowed kill is observable (the loop must still not crash — the
+            # 7GB kill is best-effort, the next 60s tick retries).
+            logger.warning(
+                "_streaming_rss_check failed (non-fatal, kill skipped this tick): %s: %s",
+                type(exc).__name__, exc,
+            )
 
     async def _check_streaming_timeout(self) -> None:
         """Force-unstick sessions that have been STREAMING with no SDK
@@ -641,6 +662,21 @@ class LifecycleManager:
                 continue
             waiting_seconds = now - unit.last_used
             if waiting_seconds > self.WAITING_INPUT_TIMEOUT_SECONDS:
+                # R3c (M2): the recovery DECISION routes through the one authority
+                # (BareThresholdPolicy). The caller owns the timeout measurement
+                # above; the Coordinator owns the may-I-recover verdict. Unlike
+                # self-heal (which PROTECTS waiting_input), stuck-WAITING TARGETS
+                # it — eligible_states={"waiting_input"} encodes exactly that.
+                from .session_healing import RecoveryVerdict
+                _decision = unit._recovery_coordinator.decide_bare(
+                    trigger="stuck_waiting",
+                    enabled=True,
+                    user_stopped=unit._user_stopped_current_turn,
+                    state=unit.state.value,
+                    eligible_states=frozenset({"waiting_input"}),
+                )
+                if _decision.verdict is not RecoveryVerdict.PROCEED_KILL:
+                    continue  # SKIP (user stopped this turn) — leave it alone
                 logger.warning(
                     "lifecycle_manager.waiting_input_timeout session_id=%s "
                     "waiting=%.0fs > timeout=%.0fs — forcing unstick",
