@@ -233,6 +233,128 @@ class TestTriggerRun:
             svc.trigger_run(trigger="second")
 
 
+class TestPersistPreservesDiskOnlyCases:
+    """_persist_golden_set must NOT drop cases that exist on disk but not in
+    self._cases — i.e. cases added by another session/manual edit AFTER this
+    process loaded golden_set.yaml. Reproduces the data-loss corruption
+    (13 cases incl all GS_TRAJ behavior cases gutted, 2026-06-25). Radar b40b9545.
+
+    Invariant relied upon: delete_case is a SOFT delete (tier='archived', keeps
+    the case in self._cases). There is NO hard-remove path that shrinks
+    self._cases, so "on disk but not in memory" ALWAYS means externally-added,
+    never locally-deleted — making verbatim append safe.
+    """
+
+    def _external_add_case(self, eval_workspace, case):
+        """Simulate another session/manual edit appending a case to disk."""
+        import yaml
+        path = eval_workspace / "Projects" / "SwarmAI" / "golden_set.yaml"
+        data = yaml.safe_load(path.read_text())
+        data["cases"].append(case)
+        path.write_text(yaml.dump(data, default_flow_style=False))
+
+    def test_disk_only_case_survives_persist(self, svc, eval_workspace):
+        """AC1: a case on disk but absent from self._cases survives a persist.
+
+        This is the exact corruption: svc loaded {GS001,GS002}; an external
+        writer adds GS_EXTERNAL to disk; svc then persists (triggered by an
+        unrelated update) — GS_EXTERNAL must NOT be silently dropped.
+        """
+        external = {
+            "id": "GS_EXTERNAL",
+            "category": "compliance",
+            "dimension": "compliance",
+            "level": "session",
+            "title": "Added by a parallel session after svc loaded",
+            "source": "external",
+            "affected_by": ["STEERING.md"],
+            "evaluators": ["file_contains"],
+            "verification": {"file": "z.py", "grep": "z"},
+        }
+        self._external_add_case(eval_workspace, external)
+
+        # svc's in-memory _cases does NOT know about GS_EXTERNAL. Trigger a
+        # persist via an unrelated update to an in-memory case.
+        svc.update_case("GS001", {"title": "unrelated touch"})
+
+        # The disk-only case must still be on disk.
+        svc2 = EvalService(workspace_root=eval_workspace)
+        case = svc2.get_case_detail("GS_EXTERNAL")
+        assert case is not None, "disk-only case was silently dropped (data loss)"
+        assert case["title"] == "Added by a parallel session after svc loaded"
+        # And the unrelated update still took effect.
+        assert svc2.get_case_detail("GS001")["title"] == "unrelated touch"
+
+    def test_in_both_user_fields_preserved(self, svc, eval_workspace):
+        """AC2: for a case present in BOTH disk and memory, user-owned disk
+        fields (tags/notes/promoted_from) survive a persist that didn't touch them."""
+        import yaml
+        path = eval_workspace / "Projects" / "SwarmAI" / "golden_set.yaml"
+        data = yaml.safe_load(path.read_text())
+        for c in data["cases"]:
+            if c["id"] == "GS002":
+                c["tags"] = ["behavior_trajectory", "full"]
+                c["notes"] = "hand-written note"
+        path.write_text(yaml.dump(data, default_flow_style=False))
+
+        # svc (loaded BEFORE the tag edit) persists via an update to GS001.
+        svc.update_case("GS001", {"title": "touch"})
+
+        svc2 = EvalService(workspace_root=eval_workspace)
+        gs002 = svc2.get_case_detail("GS002")
+        assert gs002.get("tags") == ["behavior_trajectory", "full"], "user-owned tags lost"
+        assert gs002.get("notes") == "hand-written note", "user-owned notes lost"
+
+    def test_soft_deleted_not_duplicated(self, svc, eval_workspace):
+        """AC4: a soft-deleted (archived) case is preserved once, not resurrected
+        as active nor duplicated. delete_case keeps it in _cases as archived;
+        the disk-only append must not re-add it."""
+        svc.delete_case("GS002")  # tier -> archived, persisted
+        svc.update_case("GS001", {"title": "touch again"})  # another persist
+
+        svc2 = EvalService(workspace_root=eval_workspace)
+        gs = svc2.get_golden_set()
+        gs002_entries = [c for c in gs["cases"] if c["id"] == "GS002"]
+        assert len(gs002_entries) == 1, "soft-deleted case duplicated"
+        assert gs002_entries[0]["tier"] == "archived", "soft-deleted case resurrected as active"
+
+    def test_disk_read_failure_preserves_in_memory(self, svc, eval_workspace):
+        """AC5/edge: if the disk re-read fails, the append must no-op (disk_cases
+        empty) and in-memory cases are still written — current behavior preserved,
+        no crash."""
+        import core.eval_service as es_mod
+        # Force the disk re-read inside _persist to raise, exercising the
+        # except-branch where disk_cases stays empty.
+        orig_safe_load = es_mod.yaml.safe_load
+        calls = {"n": 0}
+
+        def flaky_safe_load(text):
+            calls["n"] += 1
+            raise ValueError("simulated corrupt disk read")
+
+        with patch.object(es_mod.yaml, "safe_load", side_effect=flaky_safe_load):
+            # Should not raise; in-memory cases written as-is.
+            svc.update_case("GS001", {"title": "survives disk-read-fail"})
+
+        assert calls["n"] >= 1, "disk re-read path not exercised"
+        svc2 = EvalService(workspace_root=eval_workspace)
+        assert svc2.get_case_detail("GS001")["title"] == "survives disk-read-fail"
+
+    def test_id_less_in_memory_case_still_written(self, svc, eval_workspace):
+        """Gate-1 edge: an in-memory case with a falsy/absent id must still be
+        written (falls to the else-branch), and must NOT poison the disk-only
+        dedup (it is never added to merged_ids, but disk_cases only keys truthy
+        ids so there is no collision)."""
+        svc._cases.append({"title": "no id here", "category": "compliance"})
+        svc.update_case("GS001", {"title": "touch"})  # triggers persist
+
+        import yaml
+        path = eval_workspace / "Projects" / "SwarmAI" / "golden_set.yaml"
+        data = yaml.safe_load(path.read_text())
+        titles = [c.get("title") for c in data["cases"]]
+        assert "no id here" in titles, "id-less in-memory case was dropped on persist"
+
+
 class TestCanaryRun:
     def test_canary_runs_synchronously(self, svc):
         """Canary runs only programmatic cases and returns immediately."""

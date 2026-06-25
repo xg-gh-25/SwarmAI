@@ -559,12 +559,23 @@ class EvalService:
     def _persist_golden_set(self) -> None:
         """Atomic write golden_set.yaml with merge-preserve pattern.
 
-        Before writing, re-reads the current disk state and merges:
-        - Existing cases: preserves all fields from disk (tags, promoted_from, etc.)
-          that we didn't explicitly modify in-memory. In-memory additions (new cases)
-          are appended.
-        - This prevents data loss when another session (or manual edit) added fields
-          that this process's in-memory state doesn't know about.
+        Before writing, re-reads the current disk state and merges, in two parts:
+        - Cases in BOTH disk and memory: preserves user-owned disk fields
+          (tags/notes/promoted_from) that this process didn't modify, overlaying
+          all other in-memory fields.
+        - Cases on disk but NOT in memory: appended verbatim. These were added by
+          another session (or manual edit) after this process loaded golden_set.yaml.
+          Without this, they would be silently dropped (the 2026-06-25 data-loss bug,
+          Radar b40b9545). Safe because delete_case is a soft delete — see the
+          INVARIANT comment at the disk-only append below.
+        - New in-memory cases (add_case/auto_seed_case) are written as-is.
+
+        Concurrency boundary: callers hold ``self._data_lock`` (a threading.Lock,
+        in-process only). The disk re-read + merge narrows but does NOT fully close
+        a CROSS-process TOCTOU window — if a separate OS process atomic-replaces the
+        file between this re-read and our replace, its just-added case can still be
+        lost. Closing that needs an OS-level file lock (fcntl.flock); tracked as a
+        follow-up, out of scope for the disk-only-preserve fix.
         """
         if yaml is None:
             raise RuntimeError("PyYAML not available, cannot persist")
@@ -585,6 +596,7 @@ class EvalService:
         # (fail-open = over-write, never lose), only user-owned fields are protected.
         _USER_OWNED_FIELDS = frozenset({"tags", "notes", "promoted_from"})
         merged_cases = []
+        merged_ids = set()
         for mem_case in self._cases:
             case_id = mem_case.get("id")
             if case_id and case_id in disk_cases:
@@ -598,6 +610,26 @@ class EvalService:
             else:
                 # New case (not on disk) — write as-is
                 merged_cases.append(mem_case)
+            if case_id:
+                merged_ids.add(case_id)
+
+        # Preserve disk-only cases: any case on disk but absent from self._cases
+        # was added by ANOTHER session (or manual edit) AFTER this process loaded
+        # golden_set.yaml. Writing only self._cases would silently drop them —
+        # the data-loss bug that gutted 13 cases incl all GS_TRAJ behavior cases
+        # (2026-06-25, Radar b40b9545). Append them verbatim.
+        #
+        # INVARIANT (why this can't resurrect a deleted case): delete_case is a
+        # SOFT delete (sets tier='archived', keeps the case IN self._cases). There
+        # is NO hard-remove path (.remove/.pop/del) that shrinks self._cases. So
+        # "on disk but not in memory" ALWAYS means externally-added, never
+        # locally-deleted. ⚠️ If a future hard-delete path is ever added, it MUST
+        # also record the deleted id here (e.g. a tombstone set) — otherwise this
+        # append will silently resurrect it.
+        for case_id, disk_case in disk_cases.items():
+            if case_id not in merged_ids:
+                merged_cases.append(disk_case)
+                merged_ids.add(case_id)
 
         self._golden_set["cases"] = merged_cases
         self._cases = merged_cases  # Keep in-memory in sync
