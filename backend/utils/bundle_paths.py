@@ -64,6 +64,19 @@ def get_python_executable() -> str:
     return "python3"
 
 
+def _get_deployed_daemon_resources() -> Path:
+    """Canonical deployed-daemon resources dir: ``~/.swarm-ai/daemon/resources``.
+
+    This is the single authoritative location the daemon is deployed to (see
+    ``scripts/daemon-lib.sh`` DAEMON_DIR). Used as a last-resort candidate so a
+    frozen binary still finds resources even when ``sys.executable`` /
+    ``__file__`` resolve to a stale build-output path (PyInstaller bakes the
+    build-time source path into ``__file__``, and the build-output binary under
+    ``desktop/src-tauri/binaries/...`` has no ``resources/`` sibling).
+    """
+    return Path.home() / ".swarm-ai" / "daemon" / "resources"
+
+
 def _get_tauri_bundle_resource_candidates(exe_dir: Path) -> list[Path]:
     """Get candidate paths for resources in Tauri bundle.
     
@@ -80,6 +93,10 @@ def _get_tauri_bundle_resource_candidates(exe_dir: Path) -> list[Path]:
         exe_dir.parent / "Resources" / "_up_" / "resources",
         # Alternative macOS path (using string navigation)
         (exe_dir / ".." / "Resources" / "_up_" / "resources").resolve(),
+        # Last resort: the canonical deployed-daemon location. Covers the case
+        # where exe_dir points at a build-output binary (smoke-test during
+        # `prod.sh build`) that has no resources/ sibling.
+        _get_deployed_daemon_resources(),
     ]
 
 
