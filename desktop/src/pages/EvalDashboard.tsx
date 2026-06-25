@@ -420,7 +420,7 @@ function ChipGroup({
               } ${interactive ? 'cursor-pointer hover:border-[var(--color-primary)]' : ''}`}
             >
               <span>{e.key.replace(/_/g, ' ')}</span>
-              <span className={`font-semibold ${isActive ? 'text-white' : 'text-[var(--color-text)]'}`}>{e.count}</span>
+              <span data-testid={`chip-${testidPrefix}-${e.key}-count`} className={`font-semibold ${isActive ? 'text-white' : 'text-[var(--color-text)]'}`}>{e.count}</span>
             </Tag>
           );
         })}

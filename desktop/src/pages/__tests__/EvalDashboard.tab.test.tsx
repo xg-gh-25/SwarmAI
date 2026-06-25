@@ -63,7 +63,8 @@ describe('GoldenSetTab summary + filters', () => {
     // compliance appears twice → chip shows "2"
     const compChip = within(summary).getByTestId('chip-category-compliance');
     expect(compChip).toHaveTextContent('compliance');
-    expect(compChip).toHaveTextContent('2');
+    // exact count assertion (substring '2' would also pass on 12/20 — guard against that)
+    expect(within(summary).getByTestId('chip-category-compliance-count')).toHaveTextContent(/^2$/);
     // surfaces the data-driven (non-enum) dimension value "utility"
     expect(within(summary).getByTestId('chip-dimension-utility')).toBeInTheDocument();
   });
@@ -97,6 +98,6 @@ describe('GoldenSetTab summary + filters', () => {
     const summary = await screen.findByTestId('golden-summary');
     fireEvent.click(within(summary).getByTestId('chip-category-decision'));
     // table now shows only decision, but the compliance chip still shows 2
-    expect(within(summary).getByTestId('chip-category-compliance')).toHaveTextContent('2');
+    expect(within(summary).getByTestId('chip-category-compliance-count')).toHaveTextContent(/^2$/);
   });
 });

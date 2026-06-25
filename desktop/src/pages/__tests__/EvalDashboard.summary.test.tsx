@@ -100,4 +100,21 @@ describe('computeBreakdowns', () => {
     expect(b.eval_method).toEqual([]);
     expect(b.dimension).toEqual([]);
   });
+
+  it('does not crash when category/tier/dimension are null or undefined (ties on count)', () => {
+    // Backend does not schema-validate these fields; a hand-edited YAML case
+    // can carry null/undefined. With ≥2 entries tied on count the sort
+    // comparator runs localeCompare on every key — a null key would throw.
+    const cases = [
+      mkCase({ id: 'a', category: null as unknown as string, tier: undefined as unknown as string, dimension: null as unknown as string }),
+      mkCase({ id: 'b', category: 'compliance', tier: 'active', dimension: 'compliance' }),
+    ];
+    expect(() => computeBreakdowns(cases)).not.toThrow();
+    const b = computeBreakdowns(cases);
+    // null/undefined are bucketed (not dropped), mirroring eval_method
+    expect(b.category.reduce((s, e) => s + e.count, 0)).toBe(2);
+    expect(b.category).toContainEqual({ key: '(unset)', count: 1 });
+    expect(b.tier).toContainEqual({ key: '(unset)', count: 1 });
+    expect(b.dimension).toContainEqual({ key: '(unset)', count: 1 });
+  });
 });

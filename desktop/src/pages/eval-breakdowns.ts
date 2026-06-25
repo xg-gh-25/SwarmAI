@@ -31,11 +31,18 @@ function countBy(cases: GoldenSetCase[], pick: (c: GoldenSetCase) => string): Br
     .sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
 }
 
+// All four facets bucket a missing/null/undefined value as "(unset)" rather
+// than dropping it or letting a null key reach localeCompare (which would throw
+// during the sort). The backend does not schema-validate category/tier/dimension,
+// so a hand-edited YAML case can carry null — the fallback keeps the count honest
+// and the render crash-free.
+const UNSET = '(unset)';
+
 export function computeBreakdowns(cases: GoldenSetCase[]): Breakdowns {
   return {
-    category: countBy(cases, (c) => c.category),
-    tier: countBy(cases, (c) => c.tier),
-    eval_method: countBy(cases, (c) => c.eval_method || '(unset)'),
-    dimension: countBy(cases, (c) => c.dimension),
+    category: countBy(cases, (c) => c.category || UNSET),
+    tier: countBy(cases, (c) => c.tier || UNSET),
+    eval_method: countBy(cases, (c) => c.eval_method || UNSET),
+    dimension: countBy(cases, (c) => c.dimension || UNSET),
   };
 }
