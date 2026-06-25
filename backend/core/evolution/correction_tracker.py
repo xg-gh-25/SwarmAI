@@ -415,6 +415,32 @@ class CorrectionClassTracker:
                 return True
         return False
 
+    def has_gate_failure(self) -> bool:
+        """True if any unresolved class recurred past a DEPLOYED GATE (post_gate >= RED).
+
+        Strictly narrower than has_red(): this is gate-failure ONLY, excluding
+        rule-only recurrence. It is the signal for the M4-3 score↔reality
+        DIVERGENCE headline — a deployed STRUCTURAL fix that did not hold is the
+        real "the loop is broken despite a green eval score" event.
+
+        Why not has_red() for divergence (meta-review HIGH, run_cf491cab): a
+        rule-only chronically-recurring class (e.g. live OPERATIONAL: post_rule=50,
+        799 recurrences, no gate) is a KNOWN-OPEN item already surfaced by its
+        per-class tracker line. Headlining it as DIVERGENCE on EVERY session
+        forever trains the operator to ignore the banner — destroying the signal
+        precisely when a real new gate-failure appears. Divergence must be
+        event-like (a gate that was supposed to hold and didn't), not level-like
+        (anything currently red). has_red() stays for the per-class red status;
+        has_gate_failure() gates the headline.
+        """
+        for entry in self._state.values():
+            if entry.get("resolved"):
+                continue
+            post_gate = entry.get("post_gate_count", 0) or 0
+            if entry.get("active_gate") and post_gate >= _RED_THRESHOLD:
+                return True
+        return False
+
     def briefing_lines(self) -> list[str]:
         """Generate status lines for session briefing.
 

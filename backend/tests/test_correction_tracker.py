@@ -273,6 +273,66 @@ class TestHasRed:
         assert tracker.has_red() == self._emoji_red(tracker)
 
 
+class TestHasGateFailure:
+    """has_gate_failure() — the DIVERGENCE signal (M4-3 meta-review fix).
+
+    Distinct from has_red(): divergence on a clean eval score must fire ONLY
+    when a deployed structural GATE failed (post_gate >= RED) — the real "the
+    loop is broken despite a green score" event. A rule-only chronically-recurring
+    class (post_rule >= RED, no gate) is a KNOWN-OPEN item already surfaced by the
+    per-class tracker line; headlining it as DIVERGENCE every session forever =
+    banner-blindness (meta-review HIGH, verified against live OPERATIONAL class
+    recurring 799x on a rule). So gate-failure ⊊ red.
+    """
+
+    def test_empty_not_gate_failure(self, tracker):
+        assert tracker.has_gate_failure() is False
+
+    def test_gate_recurrence_is_gate_failure(self, tmp_path):
+        state_path = tmp_path / "tracker.json"
+        state_path.write_text(json.dumps({
+            "CLASS_A": {
+                "count": 20, "last": "2026-06-01",
+                "active_gate": "GC12", "gate_deployed": "2026-06-01",
+                "post_gate_count": 2, "resolved": False,
+            }
+        }))
+        t = CorrectionClassTracker(state_path=state_path)
+        assert t.has_gate_failure() is True
+        assert t.has_red() is True  # gate-failure implies red
+
+    def test_rule_only_recurrence_is_NOT_gate_failure(self, tmp_path):
+        # The live OPERATIONAL case: rule recurring past threshold, NO gate.
+        # has_red() True (known-open) but has_gate_failure() False → no divergence
+        # headline. This is the banner-blindness fix.
+        state_path = tmp_path / "tracker.json"
+        state_path.write_text(json.dumps({
+            "OPERATIONAL": {
+                "count": 799, "last": "2026-06-25",
+                "active_rule": "RULE_OPERATIONAL", "rule_deployed": "2026-06-01",
+                "post_rule_count": 50, "resolved": False,
+            }
+        }))
+        t = CorrectionClassTracker(state_path=state_path)
+        assert t.has_red() is True, "rule recurrence is still red (known-open)"
+        assert t.has_gate_failure() is False, "but NOT a gate failure → no divergence headline"
+
+    def test_resolved_gate_excluded(self, tmp_path):
+        state_path = tmp_path / "tracker.json"
+        state_path.write_text(json.dumps({
+            "CLASS_A": {
+                "count": 20, "active_gate": "GC12", "gate_deployed": "2026-06-01",
+                "post_gate_count": 5, "resolved": True,
+            }
+        }))
+        t = CorrectionClassTracker(state_path=state_path)
+        assert t.has_gate_failure() is False
+
+    def test_amber_gate_not_failure(self, seeded_tracker):
+        seeded_tracker.record("CLASS_A", evidence="one slip")  # post_gate=1 → amber
+        assert seeded_tracker.has_gate_failure() is False
+
+
 class TestEdgeCases:
     """Edge cases and robustness."""
 
