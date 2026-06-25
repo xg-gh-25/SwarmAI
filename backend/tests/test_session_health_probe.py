@@ -135,6 +135,17 @@ def test_ac1_health_unreachable_is_degraded_not_crash():
 
 # ── AC3: job handler + red→notify path ─────────────────────────────────────
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolate_alert_state(tmp_path, monkeypatch):
+    """Each test gets a fresh alert-state file so M1 dedup never leaks across
+    tests (and never touches the real ~/.swarm-ai state)."""
+    from jobs.handlers import session_health_probe as h
+    monkeypatch.setattr(h, "_ALERT_STATE", tmp_path / ".session_health_alert")
+
+
 def test_ac3_handler_notifies_on_red():
     """A degraded probe result must trigger the notifier exactly once."""
     from jobs.handlers import session_health_probe as h
@@ -191,3 +202,97 @@ def test_ac3_dry_run_never_notifies():
 
     h.run_session_health_probe(dry_run=True, notifier=fake_notifier, probe_fn=fake_probe)
     assert called["n"] == 0
+
+
+# ── M1: alarm dedup (no 15-min storm) ──────────────────────────────────────
+
+def test_m1_no_alarm_storm_same_failure_notifies_once():
+    """A sustained identical degraded state must notify ONCE, not every tick."""
+    from jobs.handlers import session_health_probe as h
+    from core.session_health_probe import ProbeResult, Check
+
+    calls = {"n": 0}
+    def notifier(**kwargs):
+        calls["n"] += 1; return {}
+
+    def degraded():
+        return ProbeResult(status="degraded",
+                           checks=[Check("total_rss", False, "3600MB")],
+                           summary="FAILED: total_rss")
+
+    # Three consecutive identical degraded ticks → exactly one notification.
+    for _ in range(3):
+        h.run_session_health_probe(notifier=notifier, probe_fn=degraded)
+    assert calls["n"] == 1, f"alarm storm: notified {calls['n']}x for one sustained issue"
+
+
+def test_m1_recovery_sends_one_green_then_silent():
+    from jobs.handlers import session_health_probe as h
+    from core.session_health_probe import ProbeResult, Check
+
+    msgs = []
+    def notifier(**kwargs):
+        msgs.append(f"{kwargs['title']} | {kwargs['message']}"); return {}
+
+    def degraded():
+        return ProbeResult(status="degraded", checks=[Check("total_rss", False)], summary="bad")
+    def healthy():
+        return ProbeResult(status="healthy", checks=[Check("total_rss", True)], summary="ok")
+
+    h.run_session_health_probe(notifier=notifier, probe_fn=degraded)   # red → 1 alert
+    h.run_session_health_probe(notifier=notifier, probe_fn=healthy)    # green → 1 recovery
+    h.run_session_health_probe(notifier=notifier, probe_fn=healthy)    # still green → silent
+    assert len(msgs) == 2
+    assert "DEGRADED" in msgs[0] and "RECOVERED" in msgs[1]
+
+
+def test_m1_changed_failure_set_re_notifies():
+    from jobs.handlers import session_health_probe as h
+    from core.session_health_probe import ProbeResult, Check
+
+    calls = {"n": 0}
+    def notifier(**kwargs):
+        calls["n"] += 1; return {}
+
+    h.run_session_health_probe(notifier=notifier,
+        probe_fn=lambda: ProbeResult("degraded", [Check("total_rss", False)], "a"))
+    # A DIFFERENT failure set is a new condition → re-notify.
+    h.run_session_health_probe(notifier=notifier,
+        probe_fn=lambda: ProbeResult("degraded", [Check("daemon_health", False)], "b"))
+    assert calls["n"] == 2
+
+
+# ── C1/C2 regression: the REAL _fetch_rss wiring must work (not a fake) ─────
+
+def test_c1c2_real_fetch_rss_returns_positive_mb():
+    """Adversarial C1/C2: _fetch_rss called a non-existent method/field and was
+    silently dead. This exercises the REAL wiring against the live process."""
+    from jobs.handlers.session_health_probe import _fetch_rss
+    mb = _fetch_rss()
+    assert isinstance(mb, float)
+    assert mb > 0, "real process-tree RSS must be positive (was silently 0 → dead check)"
+
+
+# ── M2: session-correlated recovery (no cross-session false-green) ─────────
+
+def test_m2_unrelated_session_recovery_does_not_absolve():
+    """A Retry for a DIFFERENT session must NOT mark this session's failure recovered."""
+    log = ("force_unstick fired on session aaaaaaaa\n"
+           + "unrelated line\n" * 3
+           + "Retry 1/3 for session bbbbbbbb --resume\n")
+    out = shp.scan_unrecovered_events(log)
+    assert len(out) == 1 and "aaaaaaaa" in out[0], "cross-session recovery wrongly absolved"
+
+
+def test_m2_same_session_recovery_within_window_absolves():
+    log = ("streaming_timeout for session aaaaaaaa\n"
+           "Retry 1/3 for session aaaaaaaa --resume\n")
+    assert shp.scan_unrecovered_events(log) == []
+
+
+def test_m2_recovery_outside_window_does_not_absolve():
+    log = ("force_unstick on session aaaaaaaa\n"
+           + "filler\n" * 60
+           + "Retry 1/3 for session aaaaaaaa --resume\n")
+    out = shp.scan_unrecovered_events(log)
+    assert len(out) == 1, "recovery beyond the window must not absolve"

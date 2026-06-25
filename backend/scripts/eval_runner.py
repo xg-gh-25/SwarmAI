@@ -350,7 +350,10 @@ def eval_runtime_health(case: dict, root: Path, *, timeout_override: int | None 
     if safety_error:
         return {"status": "error", "notes": safety_error}
 
-    cmd_timeout = min(30, timeout_override) if timeout_override else 30
+    # H1: a fault-injection harness cold-imports the core session graph + SDK and
+    # runs a real retry backoff — it needs a floor well above the canary's ~3s
+    # per-case divider, or it false-times-out under load. Floor at 15s, cap 30s.
+    cmd_timeout = max(15, min(30, timeout_override)) if timeout_override else 30
 
     try:
         repo_root = _find_swarmai_repo()

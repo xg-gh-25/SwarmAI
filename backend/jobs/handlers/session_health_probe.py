@@ -41,10 +41,16 @@ def _fetch_streaming() -> list[dict]:
 
 
 def _fetch_rss() -> float:
+    """Total RSS (MB) of the daemon process tree (backend + CLI + MCP children).
+
+    The handler runs INSIDE the daemon, so os.getpid() is the daemon root.
+    process_tree_rss returns bytes (0 on failure → fail-safe: 0 < threshold
+    passes, matching the probe's no-alarm-on-unreadable philosophy).
+    """
+    import os
     from core.resource_monitor import resource_monitor
-    mem = resource_monitor.get_system_memory()
-    # Total RSS of the swarmai process tree if available, else system used.
-    return float(getattr(mem, "process_rss_mb", 0.0) or getattr(mem, "used_mb", 0.0))
+    rss_bytes = resource_monitor.process_tree_rss(os.getpid())
+    return rss_bytes / (1024 * 1024)
 
 
 def _cpu_sampler(pid: int) -> Optional[float]:
@@ -111,26 +117,60 @@ def run_session_health_probe(
     checks = [{"name": c.name, "ok": c.ok, "detail": c.detail} for c in result.checks]
     failed = [c for c in checks if not c["ok"]]
 
-    if result.red and not dry_run:
-        send = notifier or _default_notifier
-        title = "🔴 SwarmAI runtime health DEGRADED"
-        msg = result.summary + "\n" + "\n".join(
-            f"- {c['name']}: {c['detail']}" for c in failed
-        )
-        try:
-            send(message=msg, title=title, channels=["slack"])
-        except Exception as e:
-            logger.error("session-health notify failed: %s", e)
+    # M1: dedup — only notify when the set of failed checks CHANGES (or on a
+    # red→green recovery). Prevents a 15-min alarm storm on a sustained issue
+    # (notification fatigue → humans mute → probe effectively dead).
+    notified = False
+    if not dry_run:
+        fingerprint = ",".join(sorted(c["name"] for c in failed))  # "" when green
+        prev = _read_alert_state()
+        if result.red and fingerprint != prev:
+            send = notifier or _default_notifier
+            title = "🔴 SwarmAI runtime health DEGRADED"
+            msg = result.summary + "\n" + "\n".join(
+                f"- {c['name']}: {c['detail']}" for c in failed)
+            try:
+                send(message=msg, title=title, channels=["slack"])
+                notified = True
+            except Exception as e:
+                logger.error("session-health notify failed: %s", e)
+        elif not result.red and prev:
+            # red → green: one recovery message, then clear state.
+            send = notifier or _default_notifier
+            try:
+                send(message="✅ SwarmAI runtime health RECOVERED",
+                     title="SwarmAI runtime health", channels=["slack"])
+                notified = True
+            except Exception as e:
+                logger.error("session-health recovery notify failed: %s", e)
+        _write_alert_state(fingerprint)
 
     return {
-        "status": "skipped" if dry_run and result.red else (
-            "degraded" if result.red else "healthy"),
+        "status": "degraded" if result.red else "healthy",
         "probe_status": result.status,
         "summary": result.summary,
         "checks": checks,
         "failed": [c["name"] for c in failed],
-        "notified": bool(result.red and not dry_run),
+        "notified": notified,
     }
+
+
+_ALERT_STATE = Path.home() / ".swarm-ai" / "logs" / ".session_health_alert"
+
+
+def _read_alert_state() -> str:
+    try:
+        return _ALERT_STATE.read_text(encoding="utf-8").strip() if _ALERT_STATE.exists() else ""
+    except Exception:
+        return ""
+
+
+def _write_alert_state(fingerprint: str) -> None:
+    try:
+        _ALERT_STATE.parent.mkdir(parents=True, exist_ok=True)
+        _ALERT_STATE.write_text(fingerprint, encoding="utf-8")
+    except Exception:
+        pass  # state is best-effort; failure just means no dedup this tick
 
 
 def _default_notifier(**kwargs) -> dict:

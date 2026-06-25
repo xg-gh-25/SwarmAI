@@ -34,7 +34,14 @@ CPU_LIVE_EPSILON = 0.05                  # cpu-seconds delta above which = "work
 # Log events that indicate an UNRECOVERED failure in the window. A bare match is
 # not enough — see _scan_unrecovered_events for the "followed by recovery" logic.
 _FAILURE_MARKERS = ("force_unstick", "streaming_timeout", "SIGKILL", "stuck", "dumb-spawn-kill")
-_RECOVERY_MARKERS = ("Retry", "--resume", "recovered", "heal", "COLD")
+# Tightened recovery markers (M2): specific, low-false-positive forms — not bare
+# substrings like "COLD"/"heal" that appear in benign lines.
+_RECOVERY_PATTERN = re.compile(r"Retry \d+/\d+|--resume|recovered|_crash_to_cold|HealingLoop")
+# How many lines AFTER a failure marker count as "the recovery window". A
+# recovery for an UNRELATED later session must not absolve an earlier failure.
+_RECOVERY_WINDOW_LINES = 40
+# Extract a session-id-ish token to correlate failure↔recovery on the same session.
+_SID_RE = re.compile(r"\b([0-9a-f]{8})\b")
 
 
 @dataclass
@@ -105,10 +112,24 @@ def scan_unrecovered_events(log_text: str) -> list[str]:
     lines = log_text.splitlines()
     unrecovered: list[str] = []
     for i, line in enumerate(lines):
-        if any(m in line for m in _FAILURE_MARKERS):
-            tail = "\n".join(lines[i + 1 :])
-            if not any(r in tail for r in _RECOVERY_MARKERS):
-                unrecovered.append(line.strip()[:160])
+        if not any(m in line for m in _FAILURE_MARKERS):
+            continue
+        # Recovery must appear WITHIN a bounded window after the failure (M2) —
+        # an unrelated later session's Retry must not absolve this failure.
+        window = lines[i + 1 : i + 1 + _RECOVERY_WINDOW_LINES]
+        fail_sid = _SID_RE.search(line)
+        recovered = False
+        for wl in window:
+            if not _RECOVERY_PATTERN.search(wl):
+                continue
+            # If the failure line carried a session id, the recovery in the
+            # window must mention the SAME id (correlated). If no id was present,
+            # a windowed recovery marker is accepted (best effort).
+            if fail_sid is None or fail_sid.group(1) in wl:
+                recovered = True
+                break
+        if not recovered:
+            unrecovered.append(line.strip()[:160])
     return unrecovered
 
 
