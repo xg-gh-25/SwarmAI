@@ -736,6 +736,48 @@ def compute_entry_noise(
     )
 
 
+# ── Reclaim (CLEAN) — physically remove stale noise, protect permanent knowledge ─
+
+
+# Types that are NEVER reclaimed regardless of ref/age. Operational noise
+# (guideline/pitfall/process) is reclaimable; cognitive (decision/model) and
+# meta-cognitive (principle/correction) knowledge is permanent.
+_KEEP_TYPES = frozenset({"principle", "correction", "decision", "model"})
+
+# ref_count at or above this floor is treated as load-bearing → keep.
+_KEEP_REF_FLOOR = 2
+
+
+def is_keep_class(
+    entry: EntryMetadata,
+    evergreen_sections: "frozenset[str] | set[str] | None" = None,
+) -> bool:
+    """True if `entry` is permanent knowledge that must NEVER be reclaimed.
+
+    Errs toward KEEPING — a false-archive of a COE/principle/correction is
+    unrecoverable context loss. Four independent, layered rules (any → keep):
+
+      1. Section is evergreen (Principles/Corrections/COE Registry/...)
+      2. Type ∈ {principle, correction, decision, model} (cognitive+meta layers)
+      3. ref_count >= 2 (load-bearing — actively referenced)
+      4. "COE" appears in the section or title (post-mortem registry entries,
+         which may live in a custom section like "Key Lessons" with a
+         misclassified type — rule 4 is the backstop for rules 1-2)
+
+    Only plain operational entries (guideline/pitfall/process) with ref 0,
+    not in an evergreen section, and not COE-tagged are reclaimable.
+    """
+    if evergreen_sections and entry.section in evergreen_sections:
+        return True
+    if entry.entry_type in _KEEP_TYPES:
+        return True
+    if entry.ref_count >= _KEEP_REF_FLOOR:
+        return True
+    if "COE" in entry.section or "COE" in entry.title:
+        return True
+    return False
+
+
 # ── Stage Knowledge Injection ─────────────────────────────────────────────────
 
 # Pipeline stages get type-filtered knowledge sorted by relevance (ref count).

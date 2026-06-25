@@ -535,3 +535,69 @@ class TestComputeEntryNoise:
         entries = parse_entries(content)
         report = compute_entry_noise(entries, _NOISE_TODAY)
         assert report.noisy == 1
+
+
+# ── M0 ② CLEAN: keep-class predicate ─────────────────────────────────────────
+#
+# is_keep_class protects permanent knowledge from reclaim. It must err toward
+# KEEPING — a false-archive of a COE/principle/correction is unrecoverable
+# context loss. Detection is by SECTION, TYPE, ref_count, and COE substring —
+# layered so a misclassified entry in a custom section is still caught by ≥1 rule.
+
+def _entry(title, *, section="", entry_type="guideline", ref=0, decay="dormant",
+           created=None):
+    from core.ddd_entry_lifecycle import EntryMetadata
+    return EntryMetadata(
+        title=title, entry_type=entry_type, ref_count=ref,
+        decay_state=decay, created_date=created, section=section,
+    )
+
+
+class TestIsKeepClass:
+    def test_evergreen_section_is_kept(self):
+        from core.ddd_entry_lifecycle import is_keep_class, MEMORY_EVERGREEN_SECTIONS
+        e = _entry("x", section="Principles", entry_type="guideline", ref=0)
+        assert is_keep_class(e, evergreen_sections=MEMORY_EVERGREEN_SECTIONS) is True
+
+    def test_principle_type_is_kept_even_in_custom_section(self):
+        # Project IMPROVEMENT docs use custom section names; type must still protect.
+        from core.ddd_entry_lifecycle import is_keep_class
+        e = _entry("x", section="Key Lessons (from MEMORY.md)",
+                   entry_type="principle", ref=0)
+        assert is_keep_class(e) is True
+
+    def test_correction_type_is_kept(self):
+        from core.ddd_entry_lifecycle import is_keep_class
+        assert is_keep_class(_entry("x", entry_type="correction", ref=0)) is True
+
+    def test_decision_and_model_types_are_kept(self):
+        # Cognitive-layer knowledge is not operational noise — keep it.
+        from core.ddd_entry_lifecycle import is_keep_class
+        assert is_keep_class(_entry("x", entry_type="decision", ref=0)) is True
+        assert is_keep_class(_entry("x", entry_type="model", ref=0)) is True
+
+    def test_high_ref_is_kept(self):
+        from core.ddd_entry_lifecycle import is_keep_class
+        assert is_keep_class(_entry("x", entry_type="guideline", ref=2)) is True
+
+    def test_coe_in_title_is_kept(self):
+        from core.ddd_entry_lifecycle import is_keep_class
+        e = _entry("COE05: SIGKILL cascade", section="Key Lessons",
+                   entry_type="guideline", ref=0)
+        assert is_keep_class(e) is True
+
+    def test_coe_in_section_is_kept(self):
+        from core.ddd_entry_lifecycle import is_keep_class
+        e = _entry("something", section="COE Registry",
+                   entry_type="pitfall", ref=0)
+        assert is_keep_class(e) is True
+
+    def test_plain_guideline_zero_ref_is_NOT_kept(self):
+        from core.ddd_entry_lifecycle import is_keep_class
+        assert is_keep_class(_entry("plain old lesson", entry_type="guideline",
+                                    ref=0)) is False
+
+    def test_plain_pitfall_zero_ref_is_NOT_kept(self):
+        from core.ddd_entry_lifecycle import is_keep_class
+        assert is_keep_class(_entry("a bug we hit", entry_type="pitfall",
+                                    ref=0)) is False
