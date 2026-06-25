@@ -8,9 +8,15 @@ Tests the 3-layer memory system:
 
 Key invariants:
 - 100% recall coverage: every entry visible in index regardless of age
-- COEs and Key Decisions never age out (Permanent tier)
+- COEs and Principles never age out (Permanent tier)
 - Open Threads always loaded
 - Config flag=False preserves flat injection exactly
+
+Section names + ID prefixes track the current 7-type knowledge ontology in
+memory_index.py: Principles→PRI and COE Registry→COE are Permanent; Decisions→DEC,
+Guidelines→GUI, Pitfalls→PIT, Models→MOD, Processes→PRC are Active; Open Threads→OT
+always loaded. The older Recent Context / Key Decisions / Lessons Learned sections
+are no longer scanned — see PERMANENT_SECTIONS / ACTIVE_SECTIONS.
 """
 
 import textwrap
@@ -26,23 +32,19 @@ SAMPLE_MEMORY = textwrap.dedent("""\
 
     _Curated long-term memory. Distilled from DailyActivity, not raw logs._
 
-    ## Recent Context
+    ## Principles
+
+    - 2026-03-19: **Prevent, don't handle** — Prevention > detection > recovery.
+    - 2026-03-24: **Self-evolution focus** — Self-evolution and autonomous operation.
+
+    ## Decisions
 
     - 2026-03-30: **Slack bot users:read scope — BLOCKED.** AWS internal Slack doesn't allow adding custom scopes.
-    - 2026-03-29: **AIDLC Expert — marathon session shipped all materials.** LT Review v3 PDF, customer pitch PPTX.
-    - 2026-03-22: **Process Resource Management bugfix** — 7 interacting bugs fixed across 7 backend files.
-    - 2026-03-11: **P0 context files fix** — _build_system_prompt() was silently dropping all 11 context files.
-
-    ## Key Decisions
-
     - 2026-03-27: **Single-process architecture confirmed** — Slack adapter runs in backend process.
-    - 2026-03-24: **Two strategic focus areas** — Self-evolution and autonomous operation.
-    - 2026-03-19: **Design principle: prevent, don't handle** — Prevention > detection > recovery.
 
-    ## Lessons Learned
+    ## Guidelines
 
     - 2026-03-23: **Two credential chains coexist on this machine** — Claude CLI uses AWS SSO IdC tokens. boto3 uses credential_process. HTTP_PROXY issues. Isengard access blocked.
-    - 2026-03-22: **Constants correct at one scale become bugs at another** — 85% threshold for 200K, catastrophic for 1M.
     - 2026-03-22: **Don't parse OS internals when a library exists** — psutil over vm_stat.
 
     ## COE Registry
@@ -121,13 +123,13 @@ class TestGenerateMemoryIndex:
         assert len(lines_with_aliases) > 0, "No entries have keyword aliases"
 
     def test_entries_have_stable_keys(self):
-        """Index entries should have stable keys like [COE01], [KD01], [RC01]."""
+        """Index entries should have stable keys like [COE01], [DEC01], [GUI01]."""
         from core.memory_index import generate_memory_index
 
         index = generate_memory_index(SAMPLE_MEMORY)
         assert "[COE" in index
-        assert "[KD" in index
-        assert "[RC" in index
+        assert "[DEC" in index
+        assert "[GUI" in index
 
     def test_open_threads_in_index(self):
         from core.memory_index import generate_memory_index
@@ -140,8 +142,15 @@ class TestGenerateMemoryIndex:
         from core.memory_index import generate_memory_index
 
         index = generate_memory_index(SAMPLE_MEMORY)
-        # Should contain counts like "4 recent contexts | 3 decisions | ..."
-        assert "recent context" in index.lower() or "decision" in index.lower()
+        # The count header is line[1] (e.g. "2 principles | 2 decisions | ...").
+        # Assert against THAT line specifically — not the whole index — so the
+        # hardcoded tier labels ("### Permanent (COEs + Architectural Decisions)")
+        # can't satisfy this vacuously.
+        count_line = index.splitlines()[1]
+        assert "|" in count_line, f"expected pipe-delimited counts, got: {count_line!r}"
+        # at least one "<N> <section>" pair
+        import re
+        assert re.search(r"\d+\s+\w+", count_line), f"no numeric counts in: {count_line!r}"
 
     def test_empty_memory_returns_minimal_index(self):
         from core.memory_index import generate_memory_index
@@ -273,10 +282,10 @@ class TestSelectMemorySections:
             user_message="hello",
             session_signals={"is_channel": True},
         )
-        # Should have Open Threads but not full Recent Context section
+        # Should have Open Threads but not a full content section
         assert "Signal fetcher" in result or "Open Threads" in result
-        # Should NOT have full "## Recent Context" section loaded
-        assert "## Recent Context" not in result
+        # Should NOT have a full "## Decisions" section loaded
+        assert "## Decisions" not in result
 
     def test_no_match_returns_index_plus_open_threads(self):
         """When nothing matches, return index + Open Threads as minimum."""
@@ -300,11 +309,12 @@ class TestSelectMemorySections:
             user_message="tell me everything about all topics",
             session_signals={},
         )
-        # Full injection: all sections should be present
-        assert "Recent Context" in result
-        assert "Key Decisions" in result
-        assert "Lessons Learned" in result
-        assert "Open Threads" in result
+        # Full injection: all body section headers present (assert on "## " headers
+        # so the hardcoded index tier labels can't satisfy these vacuously)
+        assert "## Decisions" in result
+        assert "## Guidelines" in result
+        assert "## Principles" in result
+        assert "## Open Threads" in result
 
 
 # ── Integration: Index in MEMORY.md ──────────────────────────────────
@@ -320,7 +330,7 @@ class TestIndexInMemoryFile:
         assert "<!-- MEMORY_INDEX_START -->" in result
         assert "<!-- MEMORY_INDEX_END -->" in result
         # Original content preserved after index
-        assert "## Recent Context" in result
+        assert "## Decisions" in result
 
     def test_extract_index_from_memory(self):
         from core.memory_index import extract_index_from_memory, inject_index_into_memory
@@ -342,7 +352,7 @@ class TestIndexInMemoryFile:
         memory_with_index = inject_index_into_memory(SAMPLE_MEMORY)
         body = extract_body_without_index(memory_with_index)
         assert "<!-- MEMORY_INDEX_START -->" not in body
-        assert "## Recent Context" in body
+        assert "## Decisions" in body
 
     def test_extract_body_without_index_when_index_is_only_content(self):
         """Edge case: MEMORY.md contains only the index block and nothing else."""
