@@ -1482,68 +1482,91 @@ class ContextHealthHook:
         if not memory_path.exists():
             return
 
-        content = memory_path.read_text(encoding="utf-8")
-        entries = parse_entries(content)
-        if not entries:
-            return
-
-        today = date.today()
-
-        # ── Ref bump: scan recent DailyActivity for entry title mentions ──
-        daily_dir = root / "Knowledge" / "DailyActivity"
-        bump_text = ""
-        if daily_dir.is_dir():
-            cutoff = (today - timedelta(days=3)).isoformat()
-            for f in sorted(daily_dir.glob("*.md"), reverse=True)[:5]:
-                if f.stem < cutoff:
-                    break
-                try:
-                    bump_text += f.read_text(encoding="utf-8", errors="ignore")
-                except OSError:
-                    continue
-
-        bumped = 0
-        if bump_text:
-            bumped = bump_references(entries, bump_text, today)
-
-        # ── Decay: assess state transitions ──
         from core.ddd_entry_lifecycle import (
             MEMORY_EVERGREEN_SECTIONS,
             reclaim_noise_entries,
         )
         evergreen = MEMORY_EVERGREEN_SECTIONS
-        transitions = assess_decay(entries, today, evergreen_sections=evergreen)
 
-        # Only write if something changed
-        if bumped > 0 or transitions:
-            updated = inject_entry_metadata(content, entries)
-            memory_path.write_text(updated, encoding="utf-8")
-            content = updated  # reclaim operates on the latest content
-            if transitions:
-                logger.info(
-                    "context_health: MEMORY.md lifecycle — %d bumped, %d transitions (%s)",
-                    bumped, len(transitions),
-                    ", ".join(f"{t.entry.title[:30]}:{t.old_state}→{t.new_state}" for t in transitions[:3]),
-                )
+        # H1 (adversarial): MEMORY.md is user-owned and concurrently written
+        # (Edit tool, locked_write.py, distillation). The whole read-modify-write
+        # — bump, decay, AND the destructive reclaim — MUST hold the same
+        # MEMORY.md.lock that other writers use, else a reclaim overwrite races
+        # a concurrent edit (lost update). Read content INSIDE the lock so the
+        # strip is computed from the locked snapshot.
+        from utils.file_lock import flock_exclusive_nb, flock_unlock
+        lock_path = memory_path.with_suffix(".md.lock")
+        lock_fd = None
+        try:
+            lock_fd = open(lock_path, "w")  # noqa: SIM115
+            flock_exclusive_nb(lock_fd)
+        except OSError:
+            if lock_fd:
+                lock_fd.close()
+            logger.debug("context_health: MEMORY.md lock busy, skipping lifecycle")
+            return
 
-        # ── CLEAN (M0 ②): reclaim stale operational noise from MEMORY.md ──
-        # Archive to .context/MEMORY-archive.md and physically strip (decay +
-        # inject_entry_metadata never remove bullets). Evergreen sections
-        # (Principles/Corrections/COE Registry/...) AND keep-class types are
-        # protected — only plain dormant operational entries are reclaimed.
-        reclaim_report = reclaim_noise_entries(
-            content, today, memory_path.parent,
-            evergreen_sections=evergreen,
-            archive_name="MEMORY-archive.md",
-            source_path=memory_path,
-            dry_run=False,
-        )
-        if reclaim_report.new_content is not None:
-            # reclaim wrote memory_path + MEMORY.md.bak (source_path given).
-            logger.info(
-                "context_health: MEMORY.md reclaim — %d archived+stripped, %d protected",
-                reclaim_report.archived, reclaim_report.kept_protected,
+        try:
+            content = memory_path.read_text(encoding="utf-8")
+            entries = parse_entries(content)
+            if not entries:
+                return
+
+            today = date.today()
+
+            # ── Ref bump: scan recent DailyActivity for entry title mentions ──
+            daily_dir = root / "Knowledge" / "DailyActivity"
+            bump_text = ""
+            if daily_dir.is_dir():
+                cutoff = (today - timedelta(days=3)).isoformat()
+                for f in sorted(daily_dir.glob("*.md"), reverse=True)[:5]:
+                    if f.stem < cutoff:
+                        break
+                    try:
+                        bump_text += f.read_text(encoding="utf-8", errors="ignore")
+                    except OSError:
+                        continue
+
+            bumped = 0
+            if bump_text:
+                bumped = bump_references(entries, bump_text, today)
+
+            # ── Decay: assess state transitions ──
+            transitions = assess_decay(entries, today, evergreen_sections=evergreen)
+
+            # Only write if something changed
+            if bumped > 0 or transitions:
+                updated = inject_entry_metadata(content, entries)
+                memory_path.write_text(updated, encoding="utf-8")
+                content = updated  # reclaim operates on the latest content
+                if transitions:
+                    logger.info(
+                        "context_health: MEMORY.md lifecycle — %d bumped, %d transitions (%s)",
+                        bumped, len(transitions),
+                        ", ".join(f"{t.entry.title[:30]}:{t.old_state}→{t.new_state}" for t in transitions[:3]),
+                    )
+
+            # ── CLEAN (M0 ②): reclaim stale operational noise from MEMORY.md ──
+            # Archive to .context/MEMORY-archive.md and physically strip (decay +
+            # inject_entry_metadata never remove bullets). Evergreen sections
+            # (Principles/Corrections/COE Registry/...) AND keep-class types are
+            # protected — only plain dormant operational entries are reclaimed.
+            reclaim_report = reclaim_noise_entries(
+                content, today, memory_path.parent,
+                evergreen_sections=evergreen,
+                archive_name="MEMORY-archive.md",
+                source_path=memory_path,
+                dry_run=False,
             )
+            if reclaim_report.new_content is not None:
+                # reclaim wrote memory_path + dated .bak (source_path given).
+                logger.info(
+                    "context_health: MEMORY.md reclaim — %d archived+stripped, %d protected",
+                    reclaim_report.archived, reclaim_report.kept_protected,
+                )
+        finally:
+            flock_unlock(lock_fd)
+            lock_fd.close()
 
     def _run_knowledge_lifecycle(self, root: Path) -> None:
         """Run DDD lifecycle engine on KNOWLEDGE.md: ref bump + decay (Gap #5).

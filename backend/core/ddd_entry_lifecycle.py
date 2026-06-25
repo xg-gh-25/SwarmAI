@@ -775,13 +775,11 @@ def compute_reclaimable_noise(
     noisy_titles: list[str] = []
     by_section: dict[str, int] = {}
     for entry in entries:
-        if entry.ref_count != 0:
+        # Gate == action: use the SAME reclaimable predicate reclaim uses
+        # (date REQUIRED), so a date-less-dominant doc isn't stuck FAILing
+        # forever on noise no reclaim run can clean (adversarial H3).
+        if not _is_reclaimable_noise(entry, today, grace_days):
             continue
-        if entry.decay_state not in _NOISY_DECAY_STATES:
-            continue
-        if entry.created_date is not None:
-            if (today - entry.created_date).days < grace_days:
-                continue
         if is_keep_class(entry, evergreen_sections=evergreen_sections):
             continue
         noisy_titles.append(entry.title)
@@ -799,6 +797,28 @@ def compute_reclaimable_noise(
 
 
 # ── Reclaim (CLEAN) — physically remove stale noise, protect permanent knowledge ─
+
+
+def _is_reclaimable_noise(
+    entry: EntryMetadata, today: date, grace_days: int
+) -> bool:
+    """Single source of truth for "reclaimable noise" (gate AND action).
+
+    Stricter than compute_entry_noise's raw-noise predicate: destructive
+    reclaim requires a REAL created_date (date-less = unknown-age, NOT
+    proven-stale — see run_94fd5597). Both compute_reclaimable_noise (the gate)
+    and reclaim_noise_entries (the action) call this, so they can never drift.
+    Does NOT apply keep-class — callers layer that on top.
+    """
+    if entry.ref_count != 0:
+        return False
+    if entry.decay_state not in _NOISY_DECAY_STATES:
+        return False
+    if entry.created_date is None:
+        return False
+    if (today - entry.created_date).days < grace_days:
+        return False
+    return True
 
 
 # Types that are NEVER reclaimed regardless of ref/age. Operational noise
@@ -880,25 +900,13 @@ def reclaim_noise_entries(
     if not entries:
         return report
 
-    # Selection: the noisy set, minus keep-class.
+    # Selection: reclaimable-noise set (shared predicate — gate==action),
+    # minus keep-class.
     selected: list[EntryMetadata] = []
     for entry in entries:
-        # Mirror compute_entry_noise's "noisy" predicate exactly...
-        if entry.ref_count != 0:
+        if not _is_reclaimable_noise(entry, today, grace_days):
             continue
-        if entry.decay_state not in _NOISY_DECAY_STATES:
-            continue
-        # ...EXCEPT: destructive reclaim requires a REAL date. The read-only
-        # gauge treats date-less entries as "infinitely old", but for archival
-        # that is unsafe — date-less means "nobody stamped a date" (96% of real
-        # candidates, run_94fd5597), NOT "proven ancient". Reclaiming them would
-        # destroy unknown-age knowledge (e.g. core architecture notes). Require
-        # a genuine created_date past grace.
-        if entry.created_date is None:
-            continue
-        if (today - entry.created_date).days < grace_days:
-            continue
-        # Noisy AND genuinely old. Now apply the protection guard.
+        # Reclaimable. Now apply the protection guard.
         if is_keep_class(entry, evergreen_sections=evergreen_sections):
             report.kept_protected += 1
             continue
@@ -910,42 +918,70 @@ def reclaim_noise_entries(
         return report
 
     # Apply: archive to file, then physically strip from content.
+    # Strip by (title, section) identity — NOT title alone — so a keep-class
+    # entry that merely SHARES a title with a reclaimed one is never deleted
+    # (adversarial C1: title-only strip silently destroyed protected knowledge
+    # that wasn't even archived).
     archived = archive_entries(project_dir, selected, archive_name=archive_name)
     report.archived = archived
-    report.new_content = _strip_entries(content, {e.title for e in selected})
+    report.new_content = _strip_entries(
+        content, {(e.title, e.section) for e in selected}
+    )
 
     # If the caller hands us the source path, own the full persist: snapshot
-    # the pre-write content to <name>.bak (belt-and-braces recovery for
-    # user-owned docs — the archive is forward-append, not a source snapshot),
-    # then write the stripped content. Without source_path, the caller persists
-    # new_content itself (and no backup is written here).
+    # the pre-write content to a DATED <name>.<YYYY-MM-DD>.bak, then write the
+    # stripped content. Without source_path, the caller persists new_content
+    # itself (and no backup is written here).
+    #
+    # H2 (adversarial): a single rolling <name>.bak self-destructs — reclaim
+    # runs every TIMER_30MIN + SESSION_CLOSE, so run N's .bak (containing the
+    # entries run N-1 stripped) would overwrite run N-1's .bak. The dated name
+    # gives one stable snapshot per day; same-day re-runs only overwrite a
+    # backup already taken AFTER the first strip of the day (the pre-strip
+    # state for that day is preserved by the FIRST write, and we never rewrite
+    # an existing same-day .bak). Combined with the forward-append archive +
+    # git auto-commit, recovery is robust.
     if source_path is not None:
-        bak = Path(source_path).with_name(Path(source_path).name + ".bak")
-        bak.write_text(content, encoding="utf-8")
-        Path(source_path).write_text(report.new_content, encoding="utf-8")
+        src = Path(source_path)
+        bak = src.with_name(f"{src.name}.{today.isoformat()}.bak")
+        if not bak.exists():  # preserve the day's FIRST pre-strip snapshot
+            bak.write_text(content, encoding="utf-8")
+        src.write_text(report.new_content, encoding="utf-8")
 
     return report
 
 
-def _strip_entries(content: str, titles: "set[str]") -> str:
-    """Return content with the bullet blocks for `titles` physically removed.
+def _strip_entries(content: str, keys: "set[tuple[str, str]]") -> str:
+    """Return content with the bullet blocks for `keys` physically removed.
+
+    `keys` is a set of (title, section) pairs — NOT bare titles. Matching by
+    (title, section) ensures a keep-class entry that merely shares a title with
+    a reclaimed entry in a different section is never deleted (adversarial C1).
 
     A "block" is the entry bullet line, its continuation/wrapped lines, and the
     trailing metadata comment (mirrors parse_entries' block boundaries). Section
     headers and non-matching entries are preserved verbatim.
     """
-    if not titles:
+    if not keys:
         return content
 
     lines = content.splitlines()
     result: list[str] = []
     i = 0
     n = len(lines)
+    current_section = ""
 
     while i < n:
         line = lines[i]
+        # Track section headers exactly as parse_entries does, so the
+        # (title, section) key matches the parsed entry's section.
+        if line.startswith("## ") and not line.startswith("### "):
+            current_section = line[3:].strip()
+            result.append(line)
+            i += 1
+            continue
         m = _ENTRY_RE.match(line)
-        if m and m.group(2) in titles:
+        if m and (m.group(2), current_section) in keys:
             # Skip this entry's whole block: bullet + continuations + meta.
             i += 1
             while i < n:

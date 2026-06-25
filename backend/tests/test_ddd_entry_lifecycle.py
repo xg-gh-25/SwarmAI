@@ -726,6 +726,37 @@ class TestReclaimNoiseEntries:
         assert report.archived == 0
         assert report.candidates == []
 
+    def test_same_title_across_sections_only_strips_the_noise_one(self, tmp_path):
+        # Adversarial C1 (CRITICAL): _strip_entries matched title-only, so a
+        # keep-class entry sharing a title with a reclaimed one got deleted AND
+        # was not archived → unrecoverable loss of protected knowledge. Strip
+        # must match by (title, section) identity, not title alone.
+        from core.ddd_entry_lifecycle import reclaim_noise_entries
+        content = """\
+## Pitfalls
+<!-- maturity: sparse | sources: 1 | verified: false | used: false | days: 0 | trust: moderate | promoted: none -->
+
+- [pitfall] **Cache invalidation** — old operational bug. (2025-01-01, run_a)
+  <!-- ref:0 | last:none | decay:archived -->
+
+## Models
+<!-- maturity: sparse | sources: 1 | verified: false | used: false | days: 0 | trust: moderate | promoted: none -->
+
+- [model] **Cache invalidation** — load-bearing schema note. (2025-01-01, run_b)
+  <!-- ref:5 | last:none | decay:active -->
+"""
+        src = tmp_path / "IMPROVEMENT.md"
+        src.write_text(content)
+        report = reclaim_noise_entries(
+            content, _RECLAIM_TODAY, tmp_path, source_path=src, dry_run=False,
+        )
+        out = src.read_text()
+        # The ref:5 model entry (keep-class) MUST survive — it is NOT the noise.
+        assert "load-bearing schema note" in out
+        # The pitfall (the actual noise) IS removed.
+        assert "old operational bug" not in out
+        assert report.archived == 1
+
     def test_apply_writes_source_backup(self, tmp_path):
         # REVIEW finding #2: destructive reclaim must snapshot the source before
         # overwrite. The archive holds removed entries (forward-append), but a
@@ -738,18 +769,38 @@ class TestReclaimNoiseEntries:
             source_path=src, dry_run=False,
         )
         assert report.archived == 2
-        bak = tmp_path / "IMPROVEMENT.md.bak"
+        bak = tmp_path / f"IMPROVEMENT.md.{_RECLAIM_TODAY.isoformat()}.bak"
         assert bak.exists()
         assert bak.read_text() == _RECLAIM_FIXTURE  # exact pre-write snapshot
 
+    def test_second_run_same_day_does_not_clobber_backup(self, tmp_path):
+        # Adversarial H2: a single rolling .bak self-destructs — run 2's backup
+        # (post-strip content) would overwrite run 1's pre-strip snapshot. The
+        # day's FIRST snapshot must survive a same-day re-run.
+        from core.ddd_entry_lifecycle import reclaim_noise_entries
+        src = tmp_path / "IMPROVEMENT.md"
+        src.write_text(_RECLAIM_FIXTURE)
+        reclaim_noise_entries(_RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path,
+                              source_path=src, dry_run=False)
+        bak = tmp_path / f"IMPROVEMENT.md.{_RECLAIM_TODAY.isoformat()}.bak"
+        first_snapshot = bak.read_text()
+        # Run 2 on the already-stripped content (simulates the next timer tick).
+        reclaim_noise_entries(src.read_text(), _RECLAIM_TODAY, tmp_path,
+                              source_path=src, dry_run=False)
+        # The day's first pre-strip snapshot is preserved (still has both
+        # reclaimable entries), not overwritten with stripped content.
+        assert bak.read_text() == first_snapshot
+        assert "Reclaim this plain lesson" in bak.read_text()
+
     def test_no_backup_when_dry_run_or_no_source_path(self, tmp_path):
         from core.ddd_entry_lifecycle import reclaim_noise_entries
+        bak_glob = lambda: list(tmp_path.glob("IMPROVEMENT.md*.bak"))
         # dry_run → no backup
         reclaim_noise_entries(_RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path, dry_run=True)
-        assert not (tmp_path / "IMPROVEMENT.md.bak").exists()
+        assert bak_glob() == []
         # no source_path → no backup (caller persists new_content itself)
         reclaim_noise_entries(_RECLAIM_FIXTURE, _RECLAIM_TODAY, tmp_path, dry_run=False)
-        assert not (tmp_path / "IMPROVEMENT.md.bak").exists()
+        assert bak_glob() == []
 
     def test_dateless_entries_are_NOT_reclaimed(self, tmp_path):
         # SAFETY (run_94fd5597 dry-run finding): 96% of "noise" candidates were
@@ -791,6 +842,31 @@ class TestComputeReclaimableNoise:
         assert raw.noisy == 4  # 2 reclaimable + principle + COE07
         assert gate.noisy == 2  # only the 2 reclaimable
         assert gate.total == 5
+
+    def test_dateless_excluded_so_gate_matches_action(self):
+        # Adversarial H3: the gate (compute_reclaimable_noise) must measure ONLY
+        # what reclaim can act on. reclaim skips date-less entries, so the gate
+        # must too — else a date-less-dominant doc FAILs forever and no reclaim
+        # run can ever bring it to PASS (measure != action).
+        from core.ddd_entry_lifecycle import (
+            compute_reclaimable_noise, reclaim_noise_entries,
+        )
+        content = """\
+## Lessons
+<!-- maturity: sparse | sources: 1 | verified: false | used: false | days: 0 | trust: moderate | promoted: none -->
+
+- [guideline] **Dateless dormant noise** — no date stamp.
+  <!-- ref:0 | last:none | decay:dormant -->
+"""
+        gate = compute_reclaimable_noise(parse_entries(content), _RECLAIM_TODAY)
+        # Date-less → not reclaimable → must NOT count toward the gate.
+        assert gate.noisy == 0
+        # And consistency with the action: reclaim also skips it.
+        import tempfile, pathlib
+        with tempfile.TemporaryDirectory() as td:
+            rep = reclaim_noise_entries(content, _RECLAIM_TODAY, pathlib.Path(td),
+                                        dry_run=True)
+        assert rep.candidates == []  # gate.noisy == len(candidates): measure==action
 
     def test_doc_of_only_protected_is_zero_gate_noise(self):
         from core.ddd_entry_lifecycle import compute_reclaimable_noise
