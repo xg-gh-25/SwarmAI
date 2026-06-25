@@ -407,15 +407,19 @@ def test_proposal_dedup_kind_aware(tmp_path):
 # GS_C_test-ses_* pollution that the old blind hot-path seed produced.
 
 def _seed_spy(monkeypatch):
-    """Patch seed_from_correction at its source module and return the call log.
+    """Patch seed_from_correction + the batch flush at their source module and
+    return the seed call log.
 
-    classify_new_corrections imports it locally (from core.eval_hooks import
-    seed_from_correction), so patch core.eval_hooks.seed_from_correction.
+    classify_new_corrections imports both locally from core.eval_hooks, so patch
+    there: seed_from_correction (per-record) and get_eval_service_for_flush
+    (the single post-loop flush — stubbed so no real EvalService/disk is touched).
     """
     seeded = []
     import core.eval_hooks as eh
     monkeypatch.setattr(eh, "seed_from_correction",
                         lambda *a, **k: seeded.append(a))
+    monkeypatch.setattr(eh, "get_eval_service_for_flush",
+                        lambda: MagicMock())
     return seeded
 
 

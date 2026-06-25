@@ -747,6 +747,10 @@ Respond in this exact JSON format:
 PROGRAMMATIC_EVALUATORS = {"canary_pass", "file_contains", "keyword_match",
                            "trajectory_exact", "trajectory_in_order", "trajectory_any_order"}
 LLM_EVALUATORS = {"goal_success", "quality_score"}
+# Behavior evaluators spawn a real headless agent (see eval_trajectory_capture).
+# Dispatched inline at the evaluate_case switch; named here so callers/tests can
+# recognize them as valid evaluators without hard-coding the string.
+BEHAVIOR_EVALUATORS = {"trajectory_capture"}
 
 
 def _judge_decision_direction(case: dict, final_text: str) -> dict:
@@ -873,6 +877,20 @@ def eval_trajectory_capture(case: dict) -> dict:
     Never raises — a spawn failure yields an empty trajectory → fails the
     assertion cleanly (the run did not demonstrate the behavior).
     """
+    # Draft skeletons (auto-seeded from corrections, M5 Part 2) are UNREFINED
+    # to-dos, not finished tests: their generic "read the doc, don't repeat"
+    # rubric is a tautology a competent agent trivially passes. They self-mark as
+    # placeholders in prose, but prose the runner never reads is not a guard — so
+    # enforce it in CODE here. A draft must NEVER be graded, even on an explicit
+    # behavior_trajectory run (which bypasses the eval_method=behavior filter in
+    # run_eval). This makes the "refine before relying on this" warning
+    # self-enforcing and keeps unrefined skeletons out of every score path.
+    # (Adversarial Gate-2 HIGH, run_0305426d.)
+    if case.get("tier") == "draft":
+        return {"status": "skipped",
+                "notes": "unrefined auto-seed skeleton (tier=draft) — refine into a real "
+                         "pressure case before it is graded"}
+
     scenario = case.get("scenario", {})
     prompt = scenario.get("prompt") or (
         scenario.get("turns", [{}])[0].get("input") if scenario.get("turns") else None

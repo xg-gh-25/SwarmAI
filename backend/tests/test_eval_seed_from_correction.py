@@ -68,19 +68,37 @@ class TestSeededCaseStructurallyValid:
         assert missing == set(), f"seeded case would fail add_case: missing {missing}"
 
     def test_seeded_case_has_replayable_scenario(self, svc):
-        # eval_runner skips a case with no turns/assertions (eval_runner.py:628).
-        # A seeded case MUST carry both or it is dead-on-arrival.
+        # M5 Part 2: the seed is a trajectory_capture DRAFT skeleton. It must
+        # carry a non-empty scenario.prompt + a non-empty expected_trajectory
+        # (eval_runner.py:882 makes a decision_rubric with empty trajectory a
+        # hard ERROR). These are the fields the trajectory runner consumes.
         case = svc.auto_seed_case("C040", "correction body here", "CLASS_B")
-        turns = case.get("scenario", {}).get("turns", [])
-        assert turns and turns[0].get("input"), "seeded case has no usable scenario turn"
-        assert case.get("assertions"), "seeded case has no assertions → runner skips it"
+        prompt = case.get("scenario", {}).get("prompt", "")
+        assert prompt, "seeded case has no scenario.prompt → trajectory runner skips it"
+        assert case.get("expected_trajectory"), (
+            "seeded case has empty expected_trajectory → decision_rubric is a hard error"
+        )
+        assert case.get("decision_rubric"), "seeded skeleton has no decision_rubric"
 
     def test_seeded_case_evaluator_is_recognized(self, svc):
         case = svc.auto_seed_case("C041", "text", "CLASS_A")
         evs = set(case.get("evaluators", []))
-        known = eval_runner.PROGRAMMATIC_EVALUATORS | eval_runner.LLM_EVALUATORS
+        known = (eval_runner.PROGRAMMATIC_EVALUATORS | eval_runner.LLM_EVALUATORS
+                 | eval_runner.BEHAVIOR_EVALUATORS)
         assert evs, "seeded case has no evaluator"
         assert evs & known, f"seeded evaluators {evs} are none of the recognized {known}"
+
+    def test_seeded_case_is_behavior_draft_excluded_from_score(self, svc):
+        # M5 Part 2 core invariant: an auto-seeded skeleton is eval_method=behavior
+        # + tier=draft, so the normal score path filters it out (eval_runner.py:1189
+        # drops behavior cases unless the behavior_trajectory tag is requested).
+        # An unrefined skeleton must NEVER pollute the health number.
+        case = svc.auto_seed_case("C042", "some recurring failure", "CLASS_A")
+        assert case["eval_method"] == "behavior"
+        assert case["tier"] == "draft"
+        assert case["evaluators"] == ["trajectory_capture"]
+        # The governing doc for CLASS_A is STEERING.md → trajectory reads it.
+        assert case["expected_trajectory"] == ["Read STEERING.md"]
 
 
 class TestSeededCaseReplayable:
@@ -98,32 +116,58 @@ class TestSeededCaseReplayable:
         seeded = next(c for c in svc._cases if c["id"] == "GS_C100")
         assert seeded["tier"] == "draft"
 
-    def test_seeded_case_reaches_judge_not_skipped(self, svc):
-        # The core replayability proof: a goal_success case routes to the LLM
-        # judge. We STUB Bedrock (no real call) and assert the judge path is
-        # REACHED — i.e. the case is NOT skipped as malformed. If the seeded
-        # scenario were empty, eval_llm_judge returns status=skipped BEFORE the
-        # client is ever touched.
+    def test_seeded_draft_is_skipped_never_spawns(self, svc, monkeypatch):
+        # M5 Part 2 + adversarial Gate-2 HIGH (run_0305426d): an auto-seeded
+        # skeleton is tier=draft and must NEVER be graded — not even on an
+        # explicit behavior_trajectory run (which bypasses the eval_method filter
+        # in run_eval). eval_trajectory_capture must skip tier=draft BEFORE
+        # spawning, so an unrefined tautology-rubric skeleton can't fold a free
+        # pass into the score or spend Bedrock. The prose "refine before relying"
+        # is enforced in CODE here.
         case = svc.auto_seed_case("C200", "do not repeat the silent-fallback pattern", "CLASS_B")
+        assert case["tier"] == "draft"
 
-        fake_client = MagicMock()
-        fake_client.converse.return_value = {
-            "output": {"message": {"content": [{"text":
-                '{"verdict":"passed","assertion_results":[],"confidence":0.9,"notes":"ok"}'}]}}
-        }
-        with patch("core.llm_optimizer._get_bedrock_client", return_value=fake_client):
-            result = eval_runner.eval_llm_judge(case, "goal_success")
+        spawned = {"called": False}
+        def _fake_run(prompt, allowed_tools=None, timeout=120):
+            spawned["called"] = True
+            return [], "I would just do it."
+        monkeypatch.setattr("scripts.scenario_runner.run_scenario_full", _fake_run)
 
-        assert result.get("status") != "skipped", (
-            f"seeded case was SKIPPED (not replayable): {result.get('notes')}"
+        result = eval_runner.eval_trajectory_capture(case)
+
+        assert result["status"] == "skipped", (
+            f"tier=draft skeleton must be SKIPPED, got {result.get('status')}"
         )
-        # Proof the judge path was actually exercised, not short-circuited.
-        assert fake_client.converse.called, "judge prompt never sent — case not replayable"
+        assert not spawned["called"], "a draft skeleton must NEVER spawn a real agent"
 
-    def test_malformed_case_would_be_skipped(self, svc):
-        # Negative control: a case WITHOUT a scenario IS skipped — proving the
-        # above assertion is meaningful (the seeded case clears a real bar).
-        bad_case = {"id": "GS_BAD", "evaluators": ["goal_success"], "title": "x",
-                    "scenario": {"turns": []}, "assertions": []}
-        result = eval_runner.eval_llm_judge(bad_case, "goal_success")
-        assert result["status"] == "skipped"
+    def test_refined_draft_promoted_off_draft_does_spawn(self, svc, monkeypatch):
+        # Symmetry: once a human refines the skeleton and promotes it off draft
+        # tier, it DOES run — proving the guard keys on tier=draft specifically,
+        # not on the auto_seed_skeleton tag or behavior method (which a real
+        # refined case still carries).
+        case = svc.auto_seed_case("C201", "some failure", "CLASS_A")
+        case["tier"] = "active"  # human refined + promoted
+
+        spawned = {"called": False}
+        def _fake_run(prompt, allowed_tools=None, timeout=120):
+            spawned["called"] = True
+            return ["Read STEERING.md"], "I will not repeat it."
+        monkeypatch.setattr("scripts.scenario_runner.run_scenario_full", _fake_run)
+        # decision judge would fire after trajectory pass; stub it to avoid Bedrock.
+        monkeypatch.setattr(eval_runner, "_judge_decision_direction",
+                            lambda case, txt: {"status": "passed", "notes": "ok"})
+
+        result = eval_runner.eval_trajectory_capture(case)
+        assert spawned["called"], "a refined (non-draft) case must run"
+        assert result["status"] != "skipped"
+
+    def test_malformed_case_would_be_error(self, svc):
+        # Negative control: a trajectory case with a decision_rubric but EMPTY
+        # expected_trajectory IS a hard error (eval_runner.py:886) — proving the
+        # above assertion is meaningful (the seeded case clears a real bar that
+        # a malformed one does not).
+        bad_case = {"id": "GS_BAD", "evaluators": ["trajectory_capture"], "title": "x",
+                    "scenario": {"prompt": "do something"}, "expected_trajectory": [],
+                    "decision_rubric": "PASS if X"}
+        result = eval_runner.eval_trajectory_capture(bad_case)
+        assert result["status"] == "error"

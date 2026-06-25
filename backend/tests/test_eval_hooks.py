@@ -99,7 +99,11 @@ class TestAutoSeedCase:
         assert result["id"].startswith("GS_C037")
         assert result["tier"] == "draft"
         assert result["source"] == "C037"
-        assert "goal_success" in result["evaluators"]
+        # M5 Part 2: seeded skeleton is a trajectory_capture behavior draft
+        # (excluded from score), NOT the old goal_success+does-not-repeat shape.
+        assert result["evaluators"] == ["trajectory_capture"]
+        assert result["eval_method"] == "behavior"
+        assert result["expected_trajectory"], "skeleton needs a non-empty trajectory"
 
     def test_seed_does_not_duplicate(self, svc):
         """Same correction_id doesn't create duplicate case."""

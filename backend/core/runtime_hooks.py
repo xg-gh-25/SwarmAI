@@ -299,21 +299,20 @@ def create_user_correction_detector(
             # entry stuck at UNCLASSIFIED (never promoted). The corrections.jsonl append
             # above is the durable signal the classifier consumes. (Gate-1 fix, run_7a8f9866.)
 
-            # Persistent side-effects (golden seed + MEMORY pitfall) fire ONLY for
-            # explicit-error corrections — a recorded mistake. META-only redirects
-            # are steering, not pitfalls; seeding them would pollute golden_set +
-            # MEMORY with "Agent does NOT repeat: go check X" non-pitfalls.
+            # Persistent side-effects (MEMORY pitfall) fire ONLY for explicit-error
+            # corrections — a recorded mistake. META-only redirects are steering,
+            # not pitfalls; recording them would pollute MEMORY with non-pitfalls.
             if is_explicit_error:
-                # P4: Auto-seed golden set case from correction (best-effort).
-                # id keyed by session+count so cross-session C001s don't collide
-                # and silently drop (adversarial LOW, run_e681a61d).
-                try:
-                    correction_count = ctx.get("_corrections_count", 1)
-                    correction_id = f"C_{sid[:8]}_{correction_count:03d}"
-                    from core.eval_hooks import seed_from_correction
-                    seed_from_correction(correction_id, prompt[:200], "UNCLASSIFIED")
-                except Exception:
-                    pass  # Non-blocking
+                # NOTE (M5 Part 2, run_0305426d): golden-case seeding was REMOVED
+                # from this hot path. It used to fire seed_from_correction(...,
+                # "UNCLASSIFIED") synchronously on every explicit-error prompt —
+                # BEFORE any classification — which dumped unclassified test-session
+                # noise (GS_C_test-ses_*) straight into golden_set. Seeding now
+                # happens POST-SESSION via governance_router.classify_new_corrections
+                # (evolution_maintenance_hook), gated on a REAL CLASS
+                # (counter_state=pending_confirm) so operator/transient noise
+                # (counter_state=ignored) never seeds a case. The corrections.jsonl
+                # append above is the durable signal that path consumes.
 
                 # Gap #17: Immediate correction → MEMORY.md as [pitfall].
                 # Best-effort — failure must never break the hook chain.

@@ -218,17 +218,31 @@ class TestUserCorrectionDetector:
         assert seeded == [], "META-only redirect must not auto-seed a golden_set pitfall case"
 
     @pytest.mark.asyncio
-    async def test_explicit_error_correction_still_seeds(
+    async def test_explicit_error_correction_logs_not_synchronously_seeds(
         self, corrections_file, session_context, monkeypatch
     ):
-        """An EXPLICIT-error correction ('that's wrong') STILL seeds (regression guard)."""
+        """M5 Part 2: an EXPLICIT-error correction is LOGGED to corrections.jsonl
+        (the durable signal the post-session classifier consumes) but is NOT
+        synchronously seeded into golden_set from this hot path. Seeding moved to
+        governance_router.classify_new_corrections, gated on a real CLASS — so
+        unclassified test-session noise no longer dumps straight into golden_set
+        (run_0305426d). This replaces the old 'still seeds' regression guard,
+        which asserted the very blind-seed behavior we removed."""
+        import json
         import core.eval_hooks as eh
         seeded = []
+        # If seed_from_correction were still called here it would append; assert it ISN'T.
         monkeypatch.setattr(eh, "seed_from_correction", lambda *a, **k: seeded.append(a))
         from core.runtime_hooks import create_user_correction_detector
         hook = create_user_correction_detector(str(corrections_file), session_context)
         await hook({"prompt": "that's wrong, use async instead"}, None, MagicMock())
-        assert seeded, "explicit-error correction must still seed a golden case"
+
+        # Durable signal preserved: the correction IS logged for the classifier.
+        assert corrections_file.exists()
+        line = json.loads(corrections_file.read_text().strip().splitlines()[-1])
+        assert line["type"] == "user_correction"
+        # But NOT synchronously seeded from the hot path (noise gate moved downstream).
+        assert seeded == [], "explicit-error must NOT blind-seed from the hot path (M5 Part 2)"
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("prompt", [

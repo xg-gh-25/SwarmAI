@@ -238,6 +238,7 @@ def classify_new_corrections(
             new_records = new_records[:max_records]
 
         max_seen = last_ts
+        seeded_any = False  # batch flush flag (persist golden_set once after loop)
         for rec in new_records:
             max_seen = max(max_seen, float(rec.get("ts", 0.0)))
             jc = classify_correction(
@@ -268,16 +269,34 @@ def classify_new_corrections(
                 try:
                     from core.eval_hooks import seed_from_correction
 
+                    # persist=False: defer the golden_set.yaml write so M seeds in
+                    # this loop do ONE rewrite (flush after the loop), not M serial
+                    # O(cases) rewrites + M flock cycles (adversarial Gate-2 MED).
                     seed_from_correction(
                         jc.correction_ref,
                         jc.evidence[0] if jc.evidence else "",
                         jc.class_name or "UNCLASSIFIED",
+                        persist=False,
                     )
+                    seeded_any = True
                 except Exception as exc:  # noqa: BLE001 — seeding must not break routing
                     logger.debug(
                         "classify_new_corrections seed degraded: %s: %s",
                         type(exc).__name__, exc,
                     )
+
+        # Single golden_set flush for the whole batch (paired with persist=False).
+        # Best-effort: a flush failure loses the in-memory seeds for this run but
+        # the watermark below still advances — they will NOT re-seed (already past
+        # watermark). That is acceptable: a skeleton is a refine-me to-do, not
+        # durable signal; the durable signal (corrections.jsonl) is untouched.
+        if seeded_any:
+            try:
+                from core.eval_hooks import get_eval_service_for_flush
+                get_eval_service_for_flush().flush_golden_set()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("golden_set batch flush degraded: %s: %s",
+                             type(exc).__name__, exc)
 
         # Monotonic write: never regress below what's already on disk.
         on_disk = _read_watermark(watermark_path)
