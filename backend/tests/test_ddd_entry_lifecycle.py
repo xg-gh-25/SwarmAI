@@ -387,3 +387,151 @@ class TestGetStageKnowledge:
         entries = parse_entries(SAMPLE_CONTENT)
         result = get_stage_knowledge(entries, "nonexistent_stage")
         assert result == []
+
+
+# ── M0: compute_entry_noise — honest per-entry noise metric ──────────────────
+#
+# Neutral synthetic fixture (NOT the real IMPROVEMENT.md): every entry's
+# (ref_count, decay_state, created_date) is hand-set so the EXPECTED noisy
+# count is unambiguous and stable. Real-doc magnitude is reported separately
+# (build-time baseline), never asserted here.
+
+# today = 2026-06-25; grace = 30d → grace boundary is 2026-05-26.
+_NOISE_TODAY = date(2026, 6, 25)
+
+# 6 entries, exactly 2 are noisy (ref==0 AND dormant/archived AND past grace).
+_NOISE_FIXTURE = """\
+## Section A
+<!-- maturity: sparse | sources: 1 | verified: false | used: false | days: 0 | trust: moderate | promoted: none -->
+
+- [guideline] **Noisy dormant zero-ref old** — earns nothing. (2025-01-01, run_a)
+  <!-- ref:0 | last:none | decay:dormant -->
+
+- [pitfall] **Noisy archived zero-ref old** — cold. (2025-02-01, run_b)
+  <!-- ref:0 | last:none | decay:archived -->
+
+- [guideline] **Active zero-ref old not noisy yet** — still active so excluded. (2025-03-01, run_c)
+  <!-- ref:0 | last:none | decay:active -->
+
+- [decision] **Referenced dormant not noisy** — has refs. (2025-01-15, run_d)
+  <!-- ref:4 | last:2026-06-01 | decay:dormant -->
+
+## Section B
+<!-- maturity: sparse | sources: 1 | verified: false | used: false | days: 0 | trust: moderate | promoted: none -->
+
+- [guideline] **Fresh zero-ref dormant within grace** — protected by grace. (2026-06-20, run_e)
+  <!-- ref:0 | last:none | decay:dormant -->
+
+- [pitfall] **Active referenced healthy** — the good kind. (2026-06-10, run_f)
+  <!-- ref:9 | last:2026-06-22 | decay:active -->
+"""
+
+
+class TestComputeEntryNoise:
+    def _report(self):
+        from core.ddd_entry_lifecycle import compute_entry_noise
+        entries = parse_entries(_NOISE_FIXTURE)
+        return compute_entry_noise(entries, _NOISE_TODAY)
+
+    def test_counts_total_entries(self):
+        assert self._report().total == 6
+
+    def test_identifies_exactly_the_noisy_entries(self):
+        report = self._report()
+        assert report.noisy == 2
+        assert set(report.noisy_titles) == {
+            "Noisy dormant zero-ref old",
+            "Noisy archived zero-ref old",
+        }
+
+    def test_noise_rate_is_noisy_over_total(self):
+        report = self._report()
+        assert report.noise_rate == pytest.approx(2 / 6)
+
+    def test_active_entries_never_noisy(self):
+        # ref==0 + old but still 'active' must be excluded (decay engine
+        # hasn't judged it stale; evergreen sections rely on this).
+        report = self._report()
+        assert "Active zero-ref old not noisy yet" not in report.noisy_titles
+
+    def test_referenced_entries_never_noisy(self):
+        report = self._report()
+        assert "Referenced dormant not noisy" not in report.noisy_titles
+
+    def test_grace_period_protects_new_entries(self):
+        report = self._report()
+        assert "Fresh zero-ref dormant within grace" not in report.noisy_titles
+
+    def test_by_section_breakdown(self):
+        report = self._report()
+        # Both noisy entries are in Section A.
+        assert report.by_section == {"Section A": 2}
+
+    def test_empty_entries_returns_zero_rate(self):
+        from core.ddd_entry_lifecycle import compute_entry_noise
+        report = compute_entry_noise([], _NOISE_TODAY)
+        assert report.total == 0
+        assert report.noisy == 0
+        assert report.noise_rate == 0.0
+
+    def test_is_read_only_does_not_mutate_entries(self):
+        from core.ddd_entry_lifecycle import compute_entry_noise
+        entries = parse_entries(_NOISE_FIXTURE)
+        before = [(e.ref_count, e.decay_state, e.last_referenced) for e in entries]
+        compute_entry_noise(entries, _NOISE_TODAY)
+        after = [(e.ref_count, e.decay_state, e.last_referenced) for e in entries]
+        assert before == after
+
+    def test_grace_boundary_matches_assess_decay(self):
+        # At age == grace_days, assess_decay's immunity (age < grace) does NOT
+        # apply — so a zero-ref dormant entry at exactly the boundary IS noise.
+        # Regression guard for the <= vs < off-by-one (must stay aligned with
+        # assess_decay so a just-dormant entry is never invisible for a day).
+        from datetime import timedelta
+        from core.ddd_entry_lifecycle import (
+            compute_entry_noise, assess_decay, parse_entries, GRACE_PERIOD_DAYS,
+        )
+        boundary = _NOISE_TODAY - timedelta(days=GRACE_PERIOD_DAYS)  # age == 30
+        content = f"""\
+## S
+<!-- maturity: sparse | sources: 1 | verified: false | used: false | days: 0 | trust: moderate | promoted: none -->
+
+- [guideline] **Boundary dormant zero ref** — at exactly grace age. ({boundary.isoformat()}, run_g)
+  <!-- ref:0 | last:none | decay:dormant -->
+"""
+        entries = parse_entries(content)
+        report = compute_entry_noise(entries, _NOISE_TODAY)
+        assert report.noisy == 1  # not excluded at the boundary
+
+        # And one day younger (age == 29) IS still grace-protected.
+        younger = (_NOISE_TODAY - timedelta(days=GRACE_PERIOD_DAYS - 1)).isoformat()
+        c2 = content.replace(boundary.isoformat(), younger)
+        report2 = compute_entry_noise(parse_entries(c2), _NOISE_TODAY)
+        assert report2.noisy == 0
+
+    def test_section_blank_maps_to_sentinel(self):
+        # Entries before any ## header get section "" → reported under a
+        # human-readable sentinel, not an empty-string key.
+        from core.ddd_entry_lifecycle import compute_entry_noise
+        content = """\
+- [guideline] **Headerless dormant zero ref** — no section above it. (2025-01-01, run_h)
+  <!-- ref:0 | last:none | decay:dormant -->
+"""
+        report = compute_entry_noise(parse_entries(content), _NOISE_TODAY)
+        assert report.noisy == 1
+        assert report.by_section == {"(no section)": 1}
+
+    def test_dateless_entry_treated_as_past_grace(self):
+        # No (YYYY-MM-DD) in text → created_date None → past grace (matches
+        # assess_decay's "infinitely old" convention).
+        from core.ddd_entry_lifecycle import compute_entry_noise
+        content = """\
+## S
+<!-- maturity: sparse | sources: 1 | verified: false | used: false | days: 0 | trust: moderate | promoted: none -->
+
+- [guideline] **No date dormant zero ref** — should count as noisy.
+  <!-- ref:0 | last:none | decay:dormant -->
+"""
+        entries = parse_entries(content)
+        report = compute_entry_noise(entries, _NOISE_TODAY)
+        assert report.noisy == 1

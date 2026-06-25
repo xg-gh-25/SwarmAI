@@ -16,10 +16,12 @@ Decay rules:
 Public API:
     EntryMetadata        — dataclass for per-entry state
     DecayTransition      — dataclass for state change records
+    NoiseReport          — dataclass for per-doc noise measurement
     parse_entries(content) → list[EntryMetadata]
     inject_entry_metadata(content, entries) → str
     bump_references(entries, text, today) → int
     assess_decay(entries, today) → list[DecayTransition]
+    compute_entry_noise(entries, today) → NoiseReport
     classify_entry_type(text) → str
 """
 
@@ -185,6 +187,23 @@ class DecayTransition:
     old_state: str
     new_state: str
     reason: str
+
+
+@dataclass
+class NoiseReport:
+    """Per-document entry-noise measurement (read-only diagnostic).
+
+    Noise = entries that are demonstrably NOT earning their tokens:
+    zero references, past the new-entry grace period, AND already
+    decayed (dormant or archived). This is the HONEST signal — it does
+    not use the section-level `used`/`verified` field, which
+    context_health_hook auto-flips to true on any pipeline completion.
+    """
+    total: int = 0
+    noisy: int = 0
+    noise_rate: float = 0.0           # noisy / total (0.0 when total == 0)
+    noisy_titles: list[str] = field(default_factory=list)
+    by_section: dict[str, int] = field(default_factory=dict)  # section → noisy count
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -638,6 +657,83 @@ def archive_entries(
         )
 
     return len(entries)
+
+
+# ── Entry Noise Metric (read-only diagnostic) ─────────────────────────────────
+
+
+# An entry is "noisy" only after it has had a fair chance to prove its worth.
+# noisy ⇔ ref_count == 0  AND  age > grace  AND  decay ∈ {dormant, archived}.
+# The decay-state requirement means evergreen/permanent sections (which
+# assess_decay never transitions out of "active") are excluded automatically —
+# no special-casing needed here.
+_NOISY_DECAY_STATES = frozenset({"dormant", "archived"})
+
+# Eval threshold (design §3 ①): a document FAILS the noise gate above this.
+NOISE_FAIL_THRESHOLD = 0.30
+
+
+def compute_entry_noise(
+    entries: list[EntryMetadata],
+    today: date,
+    grace_days: int = GRACE_PERIOD_DAYS,
+) -> NoiseReport:
+    """Measure per-entry knowledge noise for a parsed DDD document.
+
+    READ-ONLY: never mutates `entries` (unlike bump_references/assess_decay).
+
+    An entry counts as noise when ALL hold:
+      1. ref_count == 0            — never influenced a decision
+      2. age >= grace_days         — past the grace window (same boundary as
+                                     assess_decay: age < grace ⇒ immune)
+      3. decay_state ∈ {dormant, archived} — the decay engine already
+         judged it stale (this also excludes evergreen sections, which
+         assess_decay leaves "active" forever)
+
+    Age is measured from created_date. Entries with no created_date are
+    treated as infinitely old (past grace) — consistent with assess_decay,
+    which treats date-less entries as decay-eligible.
+
+    Args:
+        entries: Parsed entries (from parse_entries). Not modified.
+        today: Reference date for age computation.
+        grace_days: New-entry immunity window (default GRACE_PERIOD_DAYS).
+
+    Returns:
+        NoiseReport. noise_rate is 0.0 when there are no entries.
+    """
+    total = len(entries)
+    if total == 0:
+        return NoiseReport()
+
+    noisy_titles: list[str] = []
+    by_section: dict[str, int] = {}
+
+    for entry in entries:
+        if entry.ref_count != 0:
+            continue
+        if entry.decay_state not in _NOISY_DECAY_STATES:
+            continue
+        # Age check: date-less entries are treated as past grace.
+        # Boundary MUST match assess_decay's immunity test (age < grace),
+        # so an entry the decay engine has just marked dormant at age==grace
+        # is not silently excluded here for a day.
+        if entry.created_date is not None:
+            age_days = (today - entry.created_date).days
+            if age_days < grace_days:
+                continue
+        noisy_titles.append(entry.title)
+        section_key = entry.section or "(no section)"
+        by_section[section_key] = by_section.get(section_key, 0) + 1
+
+    noisy = len(noisy_titles)
+    return NoiseReport(
+        total=total,
+        noisy=noisy,
+        noise_rate=noisy / total,
+        noisy_titles=noisy_titles,
+        by_section=by_section,
+    )
 
 
 # ── Stage Knowledge Injection ─────────────────────────────────────────────────
