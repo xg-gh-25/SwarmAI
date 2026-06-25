@@ -355,6 +355,114 @@ class TestPersistPreservesDiskOnlyCases:
         assert "no id here" in titles, "id-less in-memory case was dropped on persist"
 
 
+class TestPersistCrossProcessLock:
+    """_persist_golden_set must hold an OS-level exclusive lock spanning the
+    disk re-read THROUGH the atomic rename, so two concurrent SwarmAI processes
+    cannot lose each other's golden_set writes (cross-process TOCTOU). The
+    in-process threading.Lock does NOT protect across processes; flock does.
+    Follow-up to run_fb4b42d2 (todo 7e233ecb).
+    """
+
+    def _lock_path(self, eval_workspace):
+        return eval_workspace / "Projects" / "SwarmAI" / "golden_set.yaml.lock"
+
+    def test_persist_acquires_exclusive_lock(self, svc, eval_workspace):
+        """The persist must BLOCK while another fd holds the sidecar lock,
+        proving it actually acquires an OS-level exclusive lock (not just the
+        in-process threading.Lock). We hold the lock from the main thread, run
+        persist in a background thread, and assert it does not complete until
+        we release."""
+        import threading
+        import time
+        from utils.file_lock import flock_exclusive, flock_unlock
+
+        lock_path = self._lock_path(eval_workspace)
+        # Pre-create the sidecar so we can hold it before persist runs.
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        holder_fd = open(lock_path, "w")
+        flock_exclusive(holder_fd)  # main thread now holds the lock
+
+        done = threading.Event()
+
+        def run_persist():
+            # update_case triggers _persist_golden_set, which must block on the
+            # exclusive lock we hold.
+            svc.update_case("GS001", {"title": "blocked-until-release"})
+            done.set()
+
+        t = threading.Thread(target=run_persist, daemon=True)
+        t.start()
+
+        # While we hold the lock, persist must NOT complete.
+        assert not done.wait(timeout=0.8), (
+            "persist completed while another process held the exclusive lock — "
+            "it is not acquiring an OS-level lock (TOCTOU still open)"
+        )
+
+        # Release; persist should now proceed and finish promptly.
+        flock_unlock(holder_fd)
+        holder_fd.close()
+        assert done.wait(timeout=5.0), "persist did not complete after lock release (deadlock?)"
+
+        svc2 = EvalService(workspace_root=eval_workspace)
+        assert svc2.get_case_detail("GS001")["title"] == "blocked-until-release"
+
+    def test_lock_released_on_exception(self, svc, eval_workspace):
+        """If persist raises mid-write, the lock MUST be released (finally), so a
+        subsequent persist is not deadlocked."""
+        import core.eval_service as es_mod
+        from utils.file_lock import flock_exclusive_nb, flock_unlock
+
+        # Force the atomic write to blow up AFTER the lock is acquired.
+        orig_replace = es_mod.Path.replace
+
+        def boom(self, target):
+            raise OSError("simulated rename failure")
+
+        with patch.object(es_mod.Path, "replace", boom):
+            with pytest.raises(OSError, match="simulated rename failure"):
+                svc.update_case("GS001", {"title": "will fail"})
+
+        # Lock must be free now — prove by acquiring it non-blocking.
+        lock_path = self._lock_path(eval_workspace)
+        fd = open(lock_path, "w")
+        try:
+            flock_exclusive_nb(fd)  # raises if still held → deadlock regression
+        finally:
+            flock_unlock(fd)
+            fd.close()
+
+    def test_two_threads_no_data_loss(self, svc, eval_workspace):
+        """Two concurrent persists (each adding a distinct case) must both
+        survive — the lock serializes them so neither clobbers the other."""
+        import threading
+
+        def add(case_id):
+            svc.add_case({
+                "id": case_id,
+                "category": "compliance",
+                "dimension": "compliance",
+                "level": "session",
+                "title": f"case {case_id}",
+                "source": "concurrency",
+                "affected_by": ["AGENT.md"],
+                "evaluators": ["file_contains"],
+                "verification": {"file": "x.py", "grep": "y"},
+            })
+
+        # add_case holds _data_lock in-process; to exercise the cross-process
+        # lock we just confirm serialized adds don't lose data end-to-end.
+        threads = [threading.Thread(target=add, args=(f"GS_C{i}",)) for i in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5.0)
+
+        svc2 = EvalService(workspace_root=eval_workspace)
+        assert svc2.get_case_detail("GS_C0") is not None, "GS_C0 lost"
+        assert svc2.get_case_detail("GS_C1") is not None, "GS_C1 lost"
+
+
 class TestCanaryRun:
     def test_canary_runs_synchronously(self, svc):
         """Canary runs only programmatic cases and returns immediately."""

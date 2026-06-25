@@ -27,6 +27,8 @@ try:
 except ImportError:
     yaml = None  # type: ignore
 
+from utils.file_lock import flock_exclusive, flock_unlock
+
 logger = logging.getLogger(__name__)
 
 
@@ -570,16 +572,42 @@ class EvalService:
           INVARIANT comment at the disk-only append below.
         - New in-memory cases (add_case/auto_seed_case) are written as-is.
 
-        Concurrency boundary: callers hold ``self._data_lock`` (a threading.Lock,
-        in-process only). The disk re-read + merge narrows but does NOT fully close
-        a CROSS-process TOCTOU window — if a separate OS process atomic-replaces the
-        file between this re-read and our replace, its just-added case can still be
-        lost. Closing that needs an OS-level file lock (fcntl.flock); tracked as a
-        follow-up, out of scope for the disk-only-preserve fix.
+        Concurrency: in-process writers serialize on ``self._data_lock``; CROSS-process
+        writers serialize on an OS-level exclusive lock (a sidecar ``.lock`` file via
+        ``utils.file_lock.flock_exclusive``) held for the entire read-modify-write span
+        in ``_merge_and_write``. Together these close the TOCTOU window — a second
+        SwarmAI process cannot atomic-replace the file between our re-read and our
+        rename. flock auto-releases on holder death, so a crashed writer leaves no
+        stale lock. (run_0fac5a91 closed what run_fb4b42d2 only narrowed.)
         """
         if yaml is None:
             raise RuntimeError("PyYAML not available, cannot persist")
 
+        # Cross-process serialization: self._data_lock is a threading.Lock
+        # (in-process only). Two SwarmAI processes (e.g. daemon + a CLI eval run)
+        # can otherwise interleave the re-read→merge→rename below and lose each
+        # other's writes. Hold an OS-level exclusive lock on a sidecar .lock file
+        # for the WHOLE read-modify-write span (acquire BEFORE the disk re-read,
+        # release AFTER the rename) so the merge always sees a quiescent file.
+        # flock auto-releases if the holder process dies, so no stale lock.
+        # (run_0fac5a91, todo 7e233ecb — closes the TOCTOU narrowed by run_fb4b42d2.)
+        lock_path = self._golden_set_path.with_suffix(
+            self._golden_set_path.suffix + ".lock"
+        )
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_fd = open(lock_path, "w")
+        flock_exclusive(lock_fd)
+        try:
+            self._merge_and_write(yaml)
+        finally:
+            flock_unlock(lock_fd)
+            lock_fd.close()
+
+    def _merge_and_write(self, yaml) -> None:
+        """Read-modify-write body of _persist_golden_set. MUST be called only
+        while the caller holds the sidecar exclusive lock (see _persist_golden_set).
+        Re-reads disk, merges (in-both field-preserve + disk-only append), and
+        atomically renames the temp file into place."""
         # Read current disk state to preserve externally-added fields
         disk_cases = {}
         if self._golden_set_path.exists():
