@@ -79,12 +79,18 @@ asyncio_default_fixture_loop_scope = "session"
 python_files = ["test_*.py"]
 # Cache last-run results so --lf (last-failed) works out of the box
 cache_dir = ".pytest_cache"
-# Default: parallel with 4 workers. Conftest clamps to memory-safe count.
-# For single-file runs during coding: pytest -n 0 (conftest respects it).
-# xdist -n 4: conftest clamps to memory-safe count. Serial for small sets: -n 0.
+# Default: SERIAL (-n 0). xdist parallelism is OPT-IN, not default, because the
+# subprocess-/event-loop-/flock-heavy suites (recovery, healing, lifecycle,
+# session_unit, context_health) DEADLOCK under xdist: a worker crashes with an
+# execnet gateway read error and the controller hangs waiting on it — the
+# "30-min hang bug" documented in tests/conftest.py. Serial-by-default makes the
+# safe behavior the default so a careless/agent multi-file run can't wedge.
+# For a large, known-safe batch run, opt in explicitly: `pytest -n 4`
+# (conftest still clamps to a memory-safe worker count). Targeted single-file
+# runs during coding are already fast serial.
 # Per-test timeout: conftest SIGALRM at 30s (override with @pytest.mark.timeout(N)).
 # For coding loops: `make test-changed` (serial, only changed files).
-addopts = "-n 4 --maxfail=3 --tb=short -q"
+addopts = "-n 0 --maxfail=3 --tb=short -q"
 markers = [
     "pbt: property-based tests using Hypothesis (auto-applied by conftest)",
     "slow: marks tests as slow-running (deselect with '-m not slow')",
