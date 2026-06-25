@@ -241,6 +241,22 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
     # reliably with our get_mcp_status() health checks.
     os.environ.setdefault("MCP_CONNECTION_NONBLOCKING", "0")
 
+    # 6b. Bash tool timeout — bound EVERY Bash command so a runaway (a bare
+    # `find` that descends into node_modules, or anything blocked on a dead
+    # socket) can't hang a turn for minutes. The CLI applies
+    # BASH_DEFAULT_TIMEOUT_MS to any Bash call that doesn't request its own
+    # timeout and caps per-call requests at BASH_MAX_TIMEOUT_MS.
+    #   - default 120s: generous for ordinary commands (seconds), short enough
+    #     that a hang dies in ~2min not 10. Catches the busy-but-useless class
+    #     the CPU-liveness tool-hang watchdog CANNOT — a find scanning
+    #     node_modules burns CPU, looks "alive" to the probe, and is never
+    #     interrupted; only a wall-clock bound stops it.
+    #   - max 900s (15min): the escape hatch. Builds / full test suites /
+    #     sub-agents opt in with a higher per-call timeout, but nothing exceeds
+    #     15min. setdefault so ops can still override via the environment.
+    os.environ.setdefault("BASH_DEFAULT_TIMEOUT_MS", "120000")
+    os.environ.setdefault("BASH_MAX_TIMEOUT_MS", "900000")
+
     # 7. Pre-flight auth validation
     # AWS credentials are NOT checked here — the SDK resolves them via the
     # standard credential chain at query time. Auth errors from expired
