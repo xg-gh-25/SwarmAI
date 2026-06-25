@@ -516,6 +516,32 @@ def validate_artifact_data(stage: str, data: dict, profile: str = "full") -> lis
                     f"run smoke tests with real objects"
                 )
 
+    # ── REPRO gate (bug-class only) — diagnosis before build ──────────────
+    # A bug-fix evaluation must carry OBSERVATION evidence, not inference. This
+    # session twice shipped a confident-but-wrong root cause to BUILD (kernel-OOM
+    # narrative; "frontend ignores [DONE]") — both framing errors that a
+    # diagnosis-evidence requirement would have caught at EVALUATE. The fix that
+    # actually worked came from OBSERVING (ps / log-signal counting / live
+    # gauges), never from reading code and inferring. So: a bug-class evaluation
+    # is BLOCKED until it records what was OBSERVED. Scope-gated so feature/goal/
+    # research work is structurally untouched (DoD3b: no false-block on non-bug).
+    if stage == "evaluate":
+        _is_bug = (data.get("scope") == "bugfix") or (data.get("bug_class") is True)
+        if _is_bug:
+            obs = data.get("observation_evidence")
+            _has_obs = bool(obs) and (
+                not isinstance(obs, str) or len(obs.strip()) >= 20
+            )
+            if not _has_obs:
+                errors.append(
+                    "REPRO gate: bug-class evaluation (scope=bugfix) requires a non-empty "
+                    "'observation_evidence' field — what did you OBSERVE that proves this "
+                    "root cause (ps / log-signal counts / live gauge / repro), not what you "
+                    "inferred from reading code. Diagnosis-before-build (run_688b6487). "
+                    "Add observation_evidence, or set scope to a non-bug class if this is "
+                    "not a bug fix."
+                )
+
     return errors
 
 

@@ -35,6 +35,56 @@ gaps is higher-yield than human review. Without this step, EVALUATE scores a
 vague requirement as GO, acceptance criteria are under-specified, and BUILD
 delivers something technically correct but wrong.
 
+### Diagnostic-Challenge Gate (BUG-CLASS ONLY — root cause before build)
+
+`NO BUG-CLASS BUILD WITHOUT A CHALLENGED DIAGNOSIS`
+
+**Trigger:** the evaluation is a bug fix (`scope: bugfix`, or a `bug_class: true`
+marker). Skip entirely for feature/goal/research/docs work — their "diagnosis"
+is a design choice, not a root-cause claim.
+
+**The problem this prevents:** for a bug, the hard part is FRAMING — naming the
+true root cause — and it happens at EVALUATE, before any code. A confident-but-
+wrong frame sails through THINK/PLAN/BUILD and is only caught at the Gate-2
+adversarial (full pipeline cost) or by an external reviewer. Two run_688b6487-era
+failures: a fabricated kernel-OOM narrative, and "frontend ignores [DONE]" (a
+no-op — the code already did). Both were inference dressed as forensics; both
+would have been killed here for ~1 sub-agent's cost instead of a whole pipeline.
+
+**Mechanism — spawn a fresh-context skeptic (Agent tool, same pattern as
+deliver.md's adversarial gate):**
+
+After scoring a bug-class GO, BEFORE advancing to THINK, spawn ONE sub-agent with
+ZERO of your reasoning. Give it only: the symptom, your proposed root cause, and
+read access to the code/logs. Its job is to REFUTE, not agree:
+
+```
+You are a diagnostic skeptic. A bug was diagnosed as: <root cause>.
+Symptom: <observed symptom>. Do NOT trust the diagnosis.
+1. Is the root cause supported by OBSERVATION (ps / log-signal counts / live
+   gauge / repro), or only by reading code and inferring? Name the evidence.
+2. Construct the SIMPLEST alternative explanation that fits the same symptom.
+3. Is the proposed fix already implemented (a no-op)? grep and check.
+4. Verdict: SUPPORTED (evidence cited) | UNSUPPORTED (inference only) |
+   ALREADY-FIXED (fix is a no-op) | WRONG-LAYER (symptom not root).
+```
+
+**Route on verdict:**
+- **SUPPORTED** → proceed to THINK. Record the cited evidence as
+  `observation_evidence` in the evaluation artifact (the REPRO gate in
+  `pipeline_validator.validate_artifact_data` BLOCKS a bug-class eval that lacks
+  it — this gate and that field are the same requirement, one human-spawned, one
+  code-enforced).
+- **UNSUPPORTED / ALREADY-FIXED / WRONG-LAYER** → do NOT advance. Go OBSERVE
+  (run `ps`, count the log signals, read the live gauge, attempt a repro) and
+  re-frame. The cheapest insurance against building the wrong fix.
+
+**Relationship to the REPRO gate:** the challenge gate is the *human-spawned*
+skeptic; `observation_evidence` is the *code-enforced* artifact field it produces.
+A bug-class evaluation cannot be published without `observation_evidence`
+(validator BLOCK), and that field should be the evidence the skeptic accepted.
+Model proposes, the gate disposes.
+
 ### Subsystem Health Audit (P1)
 
 **Before scoring, if the requirement touches an existing subsystem** (not a
