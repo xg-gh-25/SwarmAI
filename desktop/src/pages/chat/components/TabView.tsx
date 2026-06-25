@@ -147,7 +147,14 @@ function TabViewImpl({
   // snapshot rendered a truncated reply whenever the store was momentarily
   // empty. Single source = divergence is structurally impossible.
   // (run_9db9f987 — Knowledge/Designs/2026-06-25-reconcile-gap-render-source-design.md)
-  const sub = useMessageStore(tabId);
+  //
+  // isActive gates the React re-render: a background (display:none) keep-mounted
+  // tab must NOT re-render its full non-virtualized list on every store rAF
+  // notification — N background streaming tabs doing so saturates the main
+  // thread and freezes the ACTIVE tab (run_5e248977). The store still accumulates
+  // (transport unaffected); this view re-syncs to the latest snapshot before
+  // paint on activation. The active tab always auto-refreshes in real-time.
+  const sub = useMessageStore(tabId, undefined, isActive);
   const storeMessages = sub?.messages;
   const messages = storeMessages ?? [];
 

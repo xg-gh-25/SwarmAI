@@ -230,3 +230,178 @@ describe('useMessageStore — live streaming integration (F7 gate)', () => {
     expect(hookB.result.current!.messages.map((m) => m.id)).toEqual(['b-only']);
   });
 });
+
+/**
+ * isActive render-gate (run_5e248977) — background keep-mounted tabs must NOT
+ * re-render per store notification; the active tab ALWAYS auto-refreshes in
+ * real-time with no tab-switch. Pins the cross-tab render-saturation fix.
+ *
+ * Signature under test: useMessageStore(tabId, options?, isActive=true).
+ */
+describe('useMessageStore — isActive render gate', () => {
+  beforeEach(() => {
+    messageStoreRegistry.clear();
+  });
+  afterEach(() => {
+    messageStoreRegistry.clear();
+  });
+
+  // AC1: a hook subscribed with isActive=false does NOT update its React mirror
+  // when the store mutates during streaming (background tab renders nothing).
+  it('AC1: isActive=false → store mutation does NOT update the hook mirror', async () => {
+    const tabId = 'tab-bg';
+    const { result } = renderHook(() => useMessageStore(tabId, undefined, false));
+    const store = result.current!.store;
+
+    act(() => {
+      store.append(makeMsg('u1', 'user', 'hi'));
+      store.append(makePlaceholder('a1'));
+      store.startStreaming('a1');
+      for (let i = 0; i < 5; i++) {
+        store.updateLast((m) => applyTextDelta(m, 'x'), (m) => m.id === 'a1');
+      }
+    });
+
+    // Give rAF + the 100ms fallback time to fire; the mirror must STAY empty
+    // because the tab is inactive (hidden) — no React render work.
+    await new Promise((r) => setTimeout(r, 150));
+    expect(result.current!.messages).toEqual([]);
+  });
+
+  // AC3: store CONTINUES to accumulate while isActive=false (transport unaffected).
+  it('AC3: isActive=false → store._messages still grows (SSE/transport unchanged)', async () => {
+    const tabId = 'tab-bg-accum';
+    const { result } = renderHook(() => useMessageStore(tabId, undefined, false));
+    const store = result.current!.store;
+
+    act(() => {
+      store.append(makeMsg('u1', 'user', 'hi'));
+      store.append(makePlaceholder('a1'));
+      store.startStreaming('a1');
+      for (let i = 0; i < 3; i++) {
+        store.updateLast((m) => applyTextDelta(m, 'y'), (m) => m.id === 'a1');
+      }
+    });
+
+    await new Promise((r) => setTimeout(r, 150));
+    // Store grew (transport works) but the React mirror did not (render gated).
+    expect(store.messages).toHaveLength(2);
+    expect(textOf(store.messages.find((m) => m.id === 'a1'))).toBe('yyy');
+    expect(result.current!.messages).toEqual([]);
+  });
+
+  // AC2: on activation (false→true) the hook re-syncs to the latest store
+  // snapshot BEFORE paint (useLayoutEffect) — content accumulated while hidden
+  // appears with no missed update.
+  it('AC2: isActive false→true → re-syncs to latest store snapshot on activation', async () => {
+    const tabId = 'tab-activate';
+    let isActive = false;
+    const { result, rerender } = renderHook(() =>
+      useMessageStore(tabId, undefined, isActive),
+    );
+    const store = result.current!.store;
+
+    // Mutate while hidden — mirror stays empty.
+    act(() => {
+      store.append(makeMsg('u1', 'user', 'hi'));
+      store.append(makeMsg('a1', 'assistant', 'done'));
+    });
+    await new Promise((r) => setTimeout(r, 150));
+    expect(result.current!.messages).toEqual([]);
+
+    // Activate the tab → re-render with isActive=true.
+    isActive = true;
+    act(() => {
+      rerender();
+    });
+
+    // Layout-effect re-sync runs before paint: mirror == latest store snapshot.
+    expect(result.current!.messages.map((m) => m.id)).toEqual(['u1', 'a1']);
+    expect(result.current!.messages.map((m) => m.id)).toEqual(
+      store.getSnapshot().map((m) => m.id),
+    );
+  });
+
+  // AC4 (AUTO-REFRESH CONTRACT — XG-mandated): an ACTIVE streaming tab
+  // re-renders on EVERY store update in real-time, NO tab-switch required.
+  // This pins that the active tab auto-refreshes; the switch-tab-to-see
+  // dependency cannot regress.
+  it('AC4: isActive=true → active streaming tab auto-refreshes on every update (no switch)', async () => {
+    const tabId = 'tab-active';
+    const { result } = renderHook(() => useMessageStore(tabId, undefined, true));
+    const store = result.current!.store;
+
+    act(() => {
+      store.append(makeMsg('u1', 'user', 'hi'));
+      store.append(makePlaceholder('a1'));
+      store.startStreaming('a1');
+    });
+    await waitFor(() => {
+      expect(result.current!.messages).toHaveLength(2);
+    });
+
+    // Each delta must reach the mirror in real-time — no manual activation.
+    act(() => {
+      store.updateLast((m) => applyTextDelta(m, 'z'), (m) => m.id === 'a1');
+    });
+    await waitFor(() => {
+      expect(textOf(result.current!.messages.find((m) => m.id === 'a1'))).toBe('z');
+    });
+    act(() => {
+      store.updateLast((m) => applyTextDelta(m, 'z'), (m) => m.id === 'a1');
+    });
+    await waitFor(() => {
+      expect(textOf(result.current!.messages.find((m) => m.id === 'a1'))).toBe('zz');
+    });
+  });
+
+  // AC4-default: omitting the isActive arg preserves current behavior (active).
+  it('AC4: omitted isActive defaults to active (backward-compatible)', async () => {
+    const tabId = 'tab-default';
+    const { result } = renderHook(() => useMessageStore(tabId));
+    const store = result.current!.store;
+    act(() => {
+      store.append(makeMsg('m1'));
+    });
+    await waitFor(() => {
+      expect(result.current!.messages).toHaveLength(1);
+    });
+  });
+
+  // Stale-closure guard (Gate-1 finding #2): a tab that flips active→false
+  // mid-stream must STOP rendering — the gate must read isActive live (ref),
+  // not a stale render closure. Without the ref fix, the callback keeps the
+  // old isActive=true and keeps rendering after deactivation.
+  it('reads isActive live: active→false mid-stream stops updating the mirror', async () => {
+    const tabId = 'tab-flip';
+    let isActive = true;
+    const { result, rerender } = renderHook(() =>
+      useMessageStore(tabId, undefined, isActive),
+    );
+    const store = result.current!.store;
+
+    act(() => {
+      store.append(makePlaceholder('a1'));
+      store.startStreaming('a1');
+      store.updateLast((m) => applyTextDelta(m, 'a'), (m) => m.id === 'a1');
+    });
+    await waitFor(() => {
+      expect(textOf(result.current!.messages.find((m) => m.id === 'a1'))).toBe('a');
+    });
+
+    // Deactivate (tab switched away) — subscription stays mounted (keep-mounted).
+    isActive = false;
+    act(() => {
+      rerender();
+    });
+
+    // Further deltas must NOT reach the mirror now that it is hidden.
+    act(() => {
+      store.updateLast((m) => applyTextDelta(m, 'b'), (m) => m.id === 'a1');
+    });
+    await new Promise((r) => setTimeout(r, 150));
+    expect(textOf(result.current!.messages.find((m) => m.id === 'a1'))).toBe('a');
+    // Store itself kept accumulating.
+    expect(textOf(store.messages.find((m) => m.id === 'a1'))).toBe('ab');
+  });
+});
