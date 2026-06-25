@@ -526,11 +526,25 @@ def validate_artifact_data(stage: str, data: dict, profile: str = "full") -> lis
     # is BLOCKED until it records what was OBSERVED. Scope-gated so feature/goal/
     # research work is structurally untouched (DoD3b: no false-block on non-bug).
     if stage == "evaluate":
-        _is_bug = (data.get("scope") == "bugfix") or (data.get("bug_class") is True)
+        # Relaxed profiles (trivial/research/docs) skip REPRO — matches the
+        # depth-check relaxation pattern above; a doc-typo "bugfix" shouldn't
+        # demand ps/log forensics. Adversarial LOW (run_688b6487).
+        _repro_skip = ("trivial", "research", "docs")
+        _is_bug = (
+            (data.get("scope") == "bugfix") or (data.get("bug_class") is True)
+        ) and profile not in _repro_skip
         if _is_bug:
             obs = data.get("observation_evidence")
-            _has_obs = bool(obs) and (
-                not isinstance(obs, str) or len(obs.strip()) >= 20
+            # A bare bool (observation_evidence:true) carries ZERO information —
+            # it must NOT satisfy "what did you observe" (adversarial MED). Strings
+            # need >=20 non-blank chars (anti-laziness floor — NOT anti-fabrication;
+            # a 20-char garbage string still passes, by design, the diagnostic-
+            # challenge sub-agent is the fabrication backstop). Non-empty list/dict
+            # of observations is accepted; empty collections fail via bool().
+            _has_obs = (
+                not isinstance(obs, bool)
+                and bool(obs)
+                and (not isinstance(obs, str) or len(obs.strip()) >= 20)
             )
             if not _has_obs:
                 errors.append(

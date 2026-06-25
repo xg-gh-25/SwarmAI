@@ -103,3 +103,54 @@ class TestReproGateDoesNotFalseBlock:
         }, profile="research")
         repro = [e for e in errors if "REPRO gate" in e]
         assert repro == [], f"research scope must not trip REPRO gate, got: {errors}"
+
+    def test_docs_profile_with_bugfix_scope_not_blocked(self):
+        """Relaxed profile (docs) + scope=bugfix → REPRO relaxed, matching the
+        depth-check relaxation pattern (adversarial LOW)."""
+        errors = validate_artifact_data(
+            "evaluate", _bug_eval(), profile="docs",
+        )
+        repro = [e for e in errors if "REPRO gate" in e]
+        assert repro == [], f"docs profile must relax REPRO gate, got: {errors}"
+
+
+class TestReproGateEvidenceTypes:
+    """Pin the exact accept/reject of non-string evidence types (adversarial MED)."""
+
+    def test_bare_true_blocks(self):
+        # observation_evidence:true carries zero information → must NOT satisfy.
+        errors = validate_artifact_data(
+            "evaluate", _bug_eval(observation_evidence=True), profile="bugfix",
+        )
+        assert [e for e in errors if "REPRO gate" in e], "bare True must block"
+
+    def test_empty_list_blocks(self):
+        errors = validate_artifact_data(
+            "evaluate", _bug_eval(observation_evidence=[]), profile="bugfix",
+        )
+        assert [e for e in errors if "REPRO gate" in e], "empty list must block"
+
+    def test_empty_dict_blocks(self):
+        errors = validate_artifact_data(
+            "evaluate", _bug_eval(observation_evidence={}), profile="bugfix",
+        )
+        assert [e for e in errors if "REPRO gate" in e], "empty dict must block"
+
+    def test_nonempty_list_passes(self):
+        errors = validate_artifact_data(
+            "evaluate", _bug_eval(observation_evidence=["ps: pid 33855 alive"]),
+            profile="bugfix",
+        )
+        assert [e for e in errors if "REPRO gate" in e] == [], "non-empty list must pass"
+
+    def test_twenty_char_string_passes_by_design(self):
+        """CONSCIOUS DECISION (not a gap): the length floor is anti-LAZINESS, not
+        anti-fabrication. A 20-char garbage string passes the validator; the
+        diagnostic-challenge sub-agent (evaluate.md) is the fabrication backstop.
+        Pinned so a future tightening is a deliberate choice, not an accident."""
+        errors = validate_artifact_data(
+            "evaluate", _bug_eval(observation_evidence="a" * 20), profile="bugfix",
+        )
+        assert [e for e in errors if "REPRO gate" in e] == [], (
+            "20-char string passes by design (length floor only)"
+        )

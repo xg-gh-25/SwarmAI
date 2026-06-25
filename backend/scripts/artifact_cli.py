@@ -226,12 +226,20 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
                 validate_delivery = _mod.validate_delivery
                 vresult = validate_delivery(content_dir)
                 if not vresult.get("valid", True):
-                    print(json.dumps({
+                    _pollinate_fail = {
                         "validation_failed": True,
                         "stage": "deliver",
                         "errors": [f"Pollinate validator: {e}" for e in vresult.get("errors", [])],
                         "hint": "Run: python pollinate_validator.py <content_dir> --json",
-                    }, indent=2), file=sys.stderr)
+                    }
+                    # --quiet ⇒ always single-line (no indent) so an orchestrator's
+                    # line-based JSON parse never chokes on this failure path either
+                    # (adversarial HIGH, run_688b6487 — the schema-fail path was
+                    # already quiet-aware; this sibling path was the hole).
+                    if getattr(args, "quiet", False):
+                        print(json.dumps(_pollinate_fail), file=sys.stderr)
+                    else:
+                        print(json.dumps(_pollinate_fail, indent=2), file=sys.stderr)
                     sys.exit(1)
             except (ImportError, FileNotFoundError):
                 pass  # Validator not available — skip (non-blocking)
