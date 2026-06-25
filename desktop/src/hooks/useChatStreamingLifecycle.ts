@@ -59,20 +59,29 @@ import { useToast } from '../contexts/ToastContext';
 // Reconnection constants
 // ---------------------------------------------------------------------------
 
-/** Maximum number of automatic reconnection attempts for connection-phase failures. */
-const RECONNECT_MAX_ATTEMPTS = 3;
+/** Maximum number of automatic reconnection attempts for connection-phase failures.
+ *  Sized (with the 10s delay cap below) to span ~65s so a typical daemon redeploy
+ *  (~60s: crash-loop + boot + context injection) is ridden out SILENTLY — the
+ *  stream just re-establishes and the user sees a "Reconnecting…" spinner, no
+ *  error, no resend needed. Outages LONGER than this fall through to the
+ *  auto-resend safety net (RESEND_MAX_ATTEMPTS, fired on swarm:backend-recovered). */
+const RECONNECT_MAX_ATTEMPTS = 9;
 
 /** Maximum number of auto-resends on backend-recovered for a single swallowed-question
- *  episode. The ~7s connection-phase reconnect budget can't ride out a ~60s daemon
- *  redeploy, so the exhausted send is re-sent when health flips back. Capped so a
- *  flapping backend (up/down/up) can't drive an unbounded resend loop. */
+ *  episode. The ~65s connection-phase reconnect budget covers a normal redeploy; this
+ *  is the fallback for outages that outlast it. The exhausted send is re-sent when
+ *  health flips back. Capped so a flapping backend (up/down/up) can't drive an
+ *  unbounded resend loop. */
 const RESEND_MAX_ATTEMPTS = 2;
 
 /** Base delay in ms for exponential backoff (attempt 0 → 1000ms). */
 const RECONNECT_BASE_DELAY_MS = 1000;
 
-/** Maximum delay cap in ms for exponential backoff. */
-const RECONNECT_MAX_DELAY_MS = 30000;
+/** Maximum delay cap in ms for exponential backoff. Capped at 10s (not 30s) so the
+ *  later retries stay responsive — once the backend is back, the next silent retry
+ *  fires within ≤10s instead of leaving a long blind gap. With 9 attempts the
+ *  schedule is 1,2,4,8,10,10,10,10,10 ≈ 65s total. */
+const RECONNECT_MAX_DELAY_MS = 10000;
 
 // ---------------------------------------------------------------------------
 // Stall detection constants
