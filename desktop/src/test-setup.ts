@@ -3,6 +3,25 @@
  * Extends expect with jest-dom matchers
  */
 import '@testing-library/jest-dom/vitest';
+import { afterEach } from 'vitest';
+import { messageStoreRegistry } from './stores/MessageStore';
+
+/**
+ * Global teardown — destroy all MessageStores after every test.
+ *
+ * MessageStore arms real setTimeout timers: a 100ms rAF fallback and a
+ * DEFAULT_WATCHDOG_MS=90_000 (90s) streaming watchdog. Tests that drive
+ * streaming through `messageStoreRegistry` (directly, or indirectly via
+ * ChatPage / useChatStreamingLifecycle) arm the 90s watchdog; if the test
+ * doesn't dispose the store, that pending timer keeps the worker process
+ * alive — so `vitest run` over src/pages/chat + src/stores PASSES then hangs
+ * up to 90s waiting to exit (the bulk-run "hang"). Clearing the registry here
+ * calls destroy() on every store (clears both timers) so the process exits.
+ * Idempotent — files that already clear() in their own afterEach are unaffected.
+ */
+afterEach(() => {
+  messageStoreRegistry.clear();
+});
 
 /**
  * Suppress JSDOM + Node.js undici compatibility errors.
