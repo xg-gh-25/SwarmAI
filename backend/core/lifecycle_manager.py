@@ -3,7 +3,7 @@
 Single background loop responsible for:
 - Per-session memory sampling (CLI + MCP tree RSS, peak watermark, 1.5GB warning)
 - Streaming timeout watchdog (5min no SDK events → force-unstick)
-- TTL-based session cleanup (12hr idle → kill)
+- TTL-based session cleanup (24hr idle → kill)
 - Serialized hook execution (auto-commit, daily activity, distillation, evolution)
 - Startup orphan reaper (one-shot, kills unowned claude CLI processes)
 
@@ -72,7 +72,7 @@ class LifecycleManager:
     # (closed-window / crashed-frontend / SSE-drop). Reaped so it can't squat a
     # concurrency slot once cross-tab eviction is deleted (R6 Step C). Generous
     # vs the loop interval so a tab that is merely between open_tabs writes is
-    # never mistaken for an orphan; far shorter than the 12h TTL it backstops.
+    # never mistaken for an orphan; far shorter than the 24h TTL it backstops.
     ORPHAN_GRACE_SECONDS: float = 600.0  # 10 min unowned + IDLE → orphan
 
     # Memory pressure thresholds (configurable via env vars).
@@ -653,7 +653,7 @@ class LifecycleManager:
         detector and PID watchdog correctly exclude it. But if the user
         disappears (closes laptop, browser tab crashes, frontend disconnect),
         the session stays in WAITING_INPUT permanently — consuming a slot
-        (max_tabs=2 → 50% capacity loss) until the 12h TTL kills it.
+        (max_tabs=2 → 50% capacity loss) until the 24h TTL kills it.
 
         This check provides a 120-minute fallback: long enough for a user
         to think about a permission or attend a meeting, short enough to
@@ -795,7 +795,7 @@ class LifecycleManager:
         The orphan class: a chat session left behind by a closed window, a
         crashed frontend, or an SSE drop — it has no tab in any window to close
         and no client to drive it, yet today only ``_evict_idle`` (cross-tab
-        kill, being deleted in R6 Step C) and the 12h TTL ever reclaim it. This
+        kill, being deleted in R6 Step C) and the 24h TTL ever reclaim it. This
         reaper is the replacement: it GC's a session *nobody owns*, which is NOT
         the cross-tab eviction of a *user's* tab that the Multi-Tab Isolation
         principle forbids.
