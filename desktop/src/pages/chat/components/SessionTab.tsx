@@ -86,9 +86,12 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
       className={clsx(
         'group/tab flex items-center gap-1.5 px-3 py-1 rounded cursor-pointer transition-colors',
         'min-w-0 max-w-[200px] flex-shrink-0',
+        // border-b-2 on ALL states (transparent when inactive) keeps the tab
+        // height constant so the active underline appears without layout shift (GUI12).
+        'border-b-2',
         isActive
-          ? 'bg-[var(--color-card)] text-[var(--color-text)] font-medium'
-          : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
+          ? 'border-blue-500 bg-[var(--color-card)] text-[var(--color-text)] font-medium'
+          : 'border-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
       )}
     >
       {/* Unread dot — 6px blue pulsing dot with glow */}
