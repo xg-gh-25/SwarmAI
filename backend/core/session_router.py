@@ -1020,14 +1020,22 @@ class SessionRouter:
     ) -> bool:
         """Evict the oldest IDLE unit to free a slot.
 
-        Returns True if a unit was evicted, False if no IDLE units available.
+        Returns True if a unit was evicted, False if none eligible.
         Only evicts units in IDLE state — STREAMING and WAITING_INPUT are
         protected (Rule 3).
 
+        R6 Step C (§9.9): for CHAT eviction, only ORPHAN sessions (owned by no
+        live window — not in open_tabs.json) are eligible. A window-owned chat
+        tab is NEVER evicted to make room for another tab (Multi-Tab Isolation
+        first principle). So `force=True` no longer means "kill any peer" — it
+        means "ignore the grace window AMONG ORPHANS". When every idle chat
+        session is owned, eviction refuses (returns False) and the requester
+        queues. This makes cross-tab eviction structurally impossible while
+        preserving anti-starvation against unowned squatters.
+
         When *channel_only* is True, only channel IDLE units are eligible
-        (used when acquiring a channel slot).  When False, only chat IDLE
-        units are eligible — channel units are never evicted for chat
-        (slot isolation guarantee).
+        (used when acquiring a channel slot); the orphan filter does NOT apply
+        (the channel pool is a 1-slot daemon-owned pool with no window).
 
         Grace period (chat only, not channel):
         - Sessions idle < EVICTION_GRACE_SECONDS are protected from eviction
@@ -1051,6 +1059,38 @@ class SessionRouter:
         ]
         if not idle_units:
             return False
+
+        # R6 Step C (§9.9): chat eviction may reclaim ONLY orphan sessions —
+        # ones owned by NO live window (not in open_tabs.json). A session a user
+        # still has open in a tab is NEVER force-killed to make room for another
+        # tab; that is the cross-tab eviction the Multi-Tab Isolation first
+        # principle forbids. When RAM is genuinely full of OWNED tabs, the
+        # requester queues (and the user is asked which tab to close) — the
+        # system never picks a victim. Channel eviction (1-slot pool, no window)
+        # is exempt from this filter — it has its own isolation semantics.
+        #
+        # Fail-safe: if ownership is unknowable (open_tabs missing/unreadable →
+        # None), evict NOTHING this call rather than guessing — a read error must
+        # never be misread as "no tabs open → all evictable". The orphan reaper
+        # (lifecycle_manager._check_orphan_sessions) is the periodic backstop.
+        if not channel_only:
+            from routers.settings import owned_session_ids
+            owned = owned_session_ids()
+            if owned is None:
+                logger.info(
+                    "session_router.evict_blocked: tab ownership unknowable "
+                    "(open_tabs unreadable) — refusing chat eviction this call",
+                )
+                return False
+            orphan_units = [u for u in idle_units if u.session_id not in owned]
+            if not orphan_units:
+                logger.info(
+                    "session_router.evict_blocked: all %d idle chat sessions are "
+                    "window-owned — refusing cross-tab eviction (R6 isolation)",
+                    len(idle_units),
+                )
+                return False
+            idle_units = orphan_units
 
         # Grace period: for chat eviction (not channel), filter out
         # sessions that have been idle less than EVICTION_GRACE_SECONDS

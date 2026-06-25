@@ -198,6 +198,38 @@ def _get_open_tabs_path():
     return get_app_data_dir() / _OPEN_TABS_FILE
 
 
+def owned_session_ids() -> set[str] | None:
+    """session_ids a live frontend window currently has open (R6 §9.9).
+
+    The canonical "is this chat session owned by a window?" signal, shared by
+    the orphan reaper (lifecycle_manager) and orphan-only eviction
+    (session_router). Source of truth is ``open_tabs.json`` (written by the
+    frontend on every tab add/remove/switch).
+
+    Returns ``None`` (NOT an empty set) when ownership is UNKNOWABLE — file
+    missing, unreadable, or malformed. Callers MUST treat ``None`` as "fail
+    safe: reap/evict no orphan this cycle" so a transient read error can never
+    be misread as "no tabs open → everything is an orphan". An empty set is a
+    DIFFERENT, trustworthy fact ("a window is connected, reports zero tabs").
+    """
+    try:
+        path = _get_open_tabs_path()
+        if not path.exists():
+            return None  # unknowable — never reap on absence
+        data = json.loads(path.read_text(encoding="utf-8"))
+        tabs = (data or {}).get("tabs", [])
+        if not isinstance(tabs, list):
+            return None  # malformed — fail safe
+        return {
+            t["sessionId"]
+            for t in tabs
+            if isinstance(t, dict) and t.get("sessionId")
+        }
+    except Exception as exc:  # GC19: surface, never silently swallow
+        logger.warning("owned_session_ids: open_tabs read failed (%s)", exc)
+        return None
+
+
 @router.get("/open-tabs")
 async def get_open_tabs():
     """Read persisted open-tab state from the filesystem."""
