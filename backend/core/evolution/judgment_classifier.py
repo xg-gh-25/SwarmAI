@@ -69,6 +69,10 @@ class JudgmentClassification:
       - "counted"          -> operational/low-risk; the router may record() immediately.
       - "pending_confirm"  -> cognitive/CLASS_*; the router parks it for human confirm,
                               NEVER auto-increments the 3x counter.
+      - "ignored"          -> operator/transient NOISE (file-not-found, user-interrupt,
+                              network transient, inline-probe traceback); the router
+                              neither counts nor parks it. Prevents noise from inflating
+                              the OPERATIONAL count + driving fake governance proposals.
     """
 
     correction_ref: str
@@ -80,7 +84,7 @@ class JudgmentClassification:
     evidence: list[str] = field(default_factory=list)
     tier: str = "mechanical"  # "mechanical" | "llm"
     confidence: float = 0.0
-    counter_state: str = "counted"  # "counted" | "pending_confirm"
+    counter_state: str = "counted"  # "counted" | "pending_confirm" | "ignored"
 
 
 def _ref(record: dict) -> str:
@@ -134,19 +138,21 @@ def _is_operational_noise(error_text: str) -> bool:
         return False
     low = error_text.lower()
 
-    if any(sig in low for sig in _OPERATIONAL_NOISE_SIGNATURES):
-        return True
-
-    # Traceback discriminator: inline-probe traceback = noise; real-file = genuine.
+    # Traceback discriminator FIRST (adversarial HIGH, b4eb5124): a real-source
+    # frame is a GENUINE defect even when the exception MESSAGE contains a noise
+    # phrase (e.g. "FileNotFoundError: No such file" raised from backend/core/...).
+    # The frame is the signal, not the message — so this must take precedence over
+    # the substring list below, or the most common real-defect class is silenced.
     # Noise iff every 'File "..."' frame is a <string>/<stdin> probe (a throwaway
-    # `python -c`); a real source-path frame (File "backend/...") = genuine defect.
+    # `python -c`); any real source-path frame ⇒ genuine ⇒ COUNT.
     if "traceback (most recent call last)" in low:
         frames = re.findall(r'file "([^"]*)"', low)
-        if frames and all(f in ("<string>", "<stdin>", "") for f in frames):
-            return True
-        return False
+        if frames and not all(f in ("<string>", "<stdin>", "") for f in frames):
+            return False  # ≥1 real-source frame → genuine defect, count it
+        return True       # probe-only (or frameless) traceback → noise
 
-    return False
+    # Non-traceback errors: operator/transient noise by substring signature.
+    return any(sig in low for sig in _OPERATIONAL_NOISE_SIGNATURES)
 
 
 def _classify_operational(record: dict) -> JudgmentClassification:

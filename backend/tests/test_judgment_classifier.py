@@ -173,6 +173,33 @@ def test_genuine_code_failure_still_counts():
     assert jc.counter_state == "counted", "a genuine code defect must still count"
 
 
+def test_real_file_traceback_with_noise_message_still_counts():
+    """HIGH (adversarial b4eb5124): a GENUINE defect raised from a real source
+    frame must COUNT even when its exception MESSAGE contains a noise phrase
+    (FileNotFoundError: No such file). The traceback frame discriminator must take
+    precedence over the substring noise list — else the most common real-defect
+    class (FileNotFoundError from our code) is silently silenced."""
+    rec = {"type": "tool_failure", "tool": "Bash", "error": (
+        "Traceback (most recent call last):\n"
+        '  File "backend/core/evolution_optimizer.py", line 1644, in _write\n'
+        "    open(health_json_path)\n"
+        "FileNotFoundError: [Errno 2] No such file or directory: '/bad/skill_health.json'"
+    )}
+    jc = classify_correction(rec, evolution_classes=[])
+    assert jc.counter_state == "counted", "real-file traceback must count despite 'No such file' in the message"
+
+
+def test_string_probe_traceback_with_noise_message_is_still_noise():
+    """Companion: a PROBE traceback (<string> frame) whose message ALSO contains a
+    noise phrase stays noise — the discriminator keys on the FRAME, not the message."""
+    rec = {"type": "tool_failure", "tool": "Bash", "error": (
+        "Traceback (most recent call last):\n"
+        '  File "<string>", line 1, in <module>\n'
+        "FileNotFoundError: No such file or directory: 'x'"
+    )}
+    assert classify_correction(rec, evolution_classes=[]).counter_state == "ignored"
+
+
 def test_string_probe_traceback_is_noise_but_real_file_traceback_is_not():
     """Discriminator: a traceback from <string> (inline -c probe) is noise; a
     traceback from a real source file is a genuine failure. Same 'Traceback' word,
