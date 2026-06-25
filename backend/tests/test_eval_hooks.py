@@ -173,3 +173,50 @@ class TestIntelligenceVelocity:
         assert "score" in breakdown
         assert "components" in breakdown
         assert "golden_set_size" in breakdown["components"]
+
+    # ─── Error-coverage discount (finding-1) ────────────────────────────────
+    # A run where the judge infra broke (cases_error > 0) measured only a
+    # subset; its IV must be discounted by COVERAGE, but pass_rate (quality)
+    # must stay honest so infra-broke and agent-bad remain distinguishable.
+
+    def _iv(self, svc, run):
+        svc._runs = [run]
+        return svc.compute_intelligence_velocity(detail=True)["components"]
+
+    def test_clean_run_full_coverage(self, svc):
+        c = self._iv(svc, {"overall_score": 100.0, "scored_count": 40,
+                           "cases_error": 0, "cases_passed": 40, "cases_failed": 0})
+        assert c["pass_rate"] == 100.0
+        assert c["coverage"] == 1.0
+
+    def test_judge_broke_discounts_iv_not_pass_rate(self, svc):
+        # 40 scored @100%, 88 errored. pass_rate stays 100 (honest quality);
+        # coverage drops; final IV is discounted.
+        full = self._iv(svc, {"overall_score": 100.0, "scored_count": 40,
+                              "cases_error": 0, "cases_passed": 40, "cases_failed": 0})
+        broke = self._iv(svc, {"overall_score": 100.0, "scored_count": 40,
+                               "cases_error": 88, "cases_passed": 40, "cases_failed": 0})
+        assert broke["pass_rate"] == 100.0, "quality axis must stay honest"
+        assert abs(broke["coverage"] - 40 / 128) < 0.01
+        # base score identical (quality+structure unchanged); only coverage moved it
+        assert broke["base_score_pre_coverage"] == full["base_score_pre_coverage"]
+
+    def test_bad_agent_distinct_from_infra_break(self, svc):
+        # Genuinely bad agent: low pass_rate, FULL coverage — must NOT look
+        # like an infra break (which has high pass_rate, low coverage).
+        bad = self._iv(svc, {"overall_score": 50.0, "scored_count": 40,
+                             "cases_error": 0, "cases_passed": 20, "cases_failed": 20})
+        assert bad["pass_rate"] == 50.0
+        assert bad["coverage"] == 1.0
+
+    def test_legacy_run_without_scored_count(self, svc):
+        # No scored_count key (legacy) → derive from pass+fail, 0 errors → full coverage.
+        c = self._iv(svc, {"overall_score": 90.0, "cases_passed": 9, "cases_failed": 1})
+        assert c["pass_rate"] == 90.0
+        assert c["coverage"] == 1.0
+
+    def test_no_runs_no_crash(self, svc):
+        svc._runs = []
+        c = svc.compute_intelligence_velocity(detail=True)["components"]
+        assert c["pass_rate"] == 0.0
+        assert c["coverage"] == 1.0

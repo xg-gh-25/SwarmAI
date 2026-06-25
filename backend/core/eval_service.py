@@ -175,6 +175,7 @@ class EvalService:
                 "cases_passed": r.get("cases_passed"),
                 "cases_failed": r.get("cases_failed"),
                 "cases_skipped": r.get("cases_skipped"),
+                "cases_error": r.get("cases_error", 0),
                 "duration_seconds": r.get("duration_seconds"),
                 "dimensions": r.get("dimensions", {}),
             }
@@ -400,10 +401,28 @@ class EvalService:
         stable_cases = [c for c in self._cases if c.get("tier") == "stable"]
         total = len(active_cases) or 1
 
-        # Pass rate from latest run
+        # pass_rate = QUALITY axis (honest, on scored cases only). Kept raw so
+        # IV stays readable as quality even when the judge infra partially fails.
+        # coverage = MEASUREMENT axis: fraction of intended-scorable cases that
+        # actually scored. A run where the judge broke (cases_error > 0) measured
+        # a non-representative subset, so its IV is untrustworthy — we discount
+        # the FINAL IV by coverage (applied once, named below), NOT pass_rate.
+        # This keeps the two failure modes separate: low pass_rate = agent bad;
+        # low coverage = infra broke. (errors only, NOT skips — skips can be
+        # legit: canary programmatic_only, pending behavior cases.)
         pass_rate = 0.0
+        n_error = 0
+        coverage = 1.0
         if self._runs:
-            pass_rate = self._runs[0].get("overall_score", 0) or 0
+            latest = self._runs[0]
+            pass_rate = latest.get("overall_score", 0) or 0
+            scored = latest.get("scored_count")
+            n_error = latest.get("cases_error", 0) or 0
+            if scored is None:
+                # Legacy run without scored_count — derive from pass+fail.
+                scored = (latest.get("cases_passed", 0) or 0) + (latest.get("cases_failed", 0) or 0)
+            intended = scored + n_error
+            coverage = (scored / intended) if intended > 0 else 1.0
 
         # Stability ratio
         stability_ratio = len(stable_cases) / total
@@ -416,16 +435,24 @@ class EvalService:
         draft_count = len([c for c in self._cases if c.get("tier") == "draft"])
         growth_score = min(100, draft_count * 20)  # Each draft case = 20 points, max 100
 
-        score = round(
-            pass_rate * 0.4 + stability_ratio * 100 * 0.3 + gs_score * 0.2 + growth_score * 0.1,
-            1
+        base_score = (
+            pass_rate * 0.4 + stability_ratio * 100 * 0.3
+            + gs_score * 0.2 + growth_score * 0.1
         )
+        # Apply measurement-coverage ONCE to the final IV: a run that couldn't
+        # evaluate part of its set yields an untrustworthy IV, so we discount it
+        # by coverage. pass_rate itself stays honest (quality), so the detail
+        # breakdown still reads "agent passed X% of what ran" independently.
+        score = round(base_score * coverage, 1)
 
         if detail:
             return {
                 "score": score,
                 "components": {
-                    "pass_rate": pass_rate,
+                    "pass_rate": round(pass_rate, 1),
+                    "coverage": round(coverage, 3),
+                    "cases_error": n_error,
+                    "base_score_pre_coverage": round(base_score, 1),
                     "stability_ratio": round(stability_ratio, 3),
                     "golden_set_size": total,
                     "golden_set_size_score": round(gs_score, 1),
