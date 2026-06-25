@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from backend.scripts.scenario_runner import (
     parse_trajectory,
+    parse_final_text,
     run_scenario,
     ScenarioInfraError,
 )
@@ -27,6 +28,42 @@ def _stream_line(tool_name, tool_input):
         "type": "assistant",
         "message": {"content": [{"type": "tool_use", "name": tool_name, "input": tool_input}]},
     })
+
+
+def _text_line(text):
+    return json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
+
+
+def _result_line(text):
+    return json.dumps({"type": "result", "subtype": "success", "result": text})
+
+
+class TestParseFinalText:
+    """parse_final_text: prefer the authoritative `result` event over text blocks."""
+
+    def test_prefers_result_event_no_double_count(self):
+        # result event + a duplicate trailing text block -> return ONLY the
+        # result (no double-count, Gate-2 V1).
+        stdout = "\n".join([_text_line("final answer"), _result_line("final answer")])
+        assert parse_final_text(stdout) == "final answer"
+
+    def test_intermediate_thinking_text_excluded_when_result_present(self):
+        # "thinking out loud" text must NOT pollute the matched corpus when a
+        # result event exists — only the result is authoritative.
+        stdout = "\n".join([
+            _text_line("a big-bang rewrite would be fast..."),
+            _result_line("Recommendation: use the incremental approach."),
+        ])
+        out = parse_final_text(stdout)
+        assert out == "Recommendation: use the incremental approach."
+        assert "big-bang" not in out
+
+    def test_falls_back_to_text_blocks_when_no_result(self):
+        stdout = _text_line("only a text block here")
+        assert parse_final_text(stdout) == "only a text block here"
+
+    def test_empty_when_no_text(self):
+        assert parse_final_text(_stream_line("Read", {"file_path": "x"})) == ""
 
 
 class TestParseTrajectory:

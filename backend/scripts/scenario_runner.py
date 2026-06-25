@@ -121,7 +121,15 @@ def parse_final_text(stdout: str) -> str:
     Returns "" if no assistant text is present (a caller asserting on content
     then fails closed — the agent produced no usable conclusion).
     """
-    texts: list[str] = []
+    # The terminal `result` event carries the final answer VERBATIM and is the
+    # authoritative conclusion. Assistant `text` blocks are emitted along the
+    # way and the LAST one is duplicated by the result event — and intermediate
+    # blocks may be discarded "thinking out loud" ("a big-bang would be fast…")
+    # that must NOT pollute a content-keyword match. So: prefer the result event
+    # when present; fall back to concatenated text blocks only if there is none
+    # (adversarial Gate-2 LOW V1: avoid double-count + thinking-text pollution).
+    result_text: str | None = None
+    block_texts: list[str] = []
     for line in stdout.splitlines():
         line = line.strip()
         if not line:
@@ -132,9 +140,8 @@ def parse_final_text(stdout: str) -> str:
             continue
         if not isinstance(event, dict):
             continue
-        # The terminal `result` event carries the final answer verbatim.
         if event.get("type") == "result" and isinstance(event.get("result"), str):
-            texts.append(event["result"])
+            result_text = event["result"]
             continue
         message = event.get("message")
         if not isinstance(message, dict):
@@ -146,8 +153,10 @@ def parse_final_text(stdout: str) -> str:
             if isinstance(block, dict) and block.get("type") == "text":
                 t = block.get("text")
                 if isinstance(t, str):
-                    texts.append(t)
-    return "\n".join(texts)
+                    block_texts.append(t)
+    if result_text is not None:
+        return result_text
+    return "\n".join(block_texts)
 
 
 def run_scenario_full(

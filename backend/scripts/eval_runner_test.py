@@ -560,7 +560,8 @@ class TestTrajectoryCaptureDispatch:
         "id": "GS_TRAJ_DEC",
         "scenario": {"prompt": "decide X; read IMPROVEMENT.md and let it drive you"},
         "expected_trajectory": ["Read IMPROVEMENT.md"],
-        "expected_response_contains": ["incremental"],
+        "expected_response_contains": ["incremental", "strangler-fig", "phased"],
+        "forbidden_response_contains": ["big-bang rewrite", "rewrite from scratch"],
         "trajectory_match": "any_order",
         "evaluators": ["trajectory_capture"],
         "eval_method": "behavior",
@@ -569,22 +570,40 @@ class TestTrajectoryCaptureDispatch:
 
     def test_decision_read_without_using_it_fails(self):
         # Read happened, but the conclusion ignored the evidence (no required
-        # keyword) -> FAIL. This closes the "same circularity in new form" gap:
-        # proving a Read is necessary but NOT sufficient for a decision case.
+        # keyword) -> FAIL. Proving a Read is necessary but NOT sufficient.
         traj = ['Read {"file_path": "/ws/Projects/SwarmAI/IMPROVEMENT.md"}']
         with patch("scripts.scenario_runner.run_scenario_full",
-                   return_value=(traj, "Yes, do the big-bang rewrite, it's fine.")):
+                   return_value=(traj, "Yes, go ahead, it's fine.")):
             r = evaluate_case(self._DECISION_CASE, Path("/tmp"))
         assert r["status"] == "failed"
-        assert "did not reflect" in r["notes"].lower() or "missing" in r["notes"].lower()
 
     def test_decision_read_and_used_passes(self):
         # Read happened AND the conclusion reflects the evidence -> PASS.
         traj = ['Read {"file_path": "/ws/Projects/SwarmAI/IMPROVEMENT.md"}']
         with patch("scripts.scenario_runner.run_scenario_full",
-                   return_value=(traj, "Per IMPROVEMENT.md, big-bang failed before — use the incremental strangler-fig approach.")):
+                   return_value=(traj, "Per IMPROVEMENT.md, use the incremental strangler-fig approach.")):
             r = evaluate_case(self._DECISION_CASE, Path("/tmp"))
         assert r["status"] == "passed"
+
+    def test_decision_synonym_passes_any_of(self):
+        # Gate-2 V3: a correct answer via SYNONYM (strangler-fig, no literal
+        # "incremental") must PASS under ANY-OF, not false-fail.
+        traj = ['Read {"file_path": "/ws/Projects/SwarmAI/IMPROVEMENT.md"}']
+        with patch("scripts.scenario_runner.run_scenario_full",
+                   return_value=(traj, "Migrate it phased, via the strangler-fig pattern.")):
+            r = evaluate_case(self._DECISION_CASE, Path("/tmp"))
+        assert r["status"] == "passed"
+
+    def test_decision_names_right_word_but_recommends_opposite_fails(self):
+        # Gate-2 HIGH V2: the answer NAMES "incremental" but recommends the
+        # REJECTED option -> the forbidden polarity guard must FAIL it. Substring
+        # presence of the right word must NOT pass a wrong decision.
+        traj = ['Read {"file_path": "/ws/Projects/SwarmAI/IMPROVEMENT.md"}']
+        with patch("scripts.scenario_runner.run_scenario_full",
+                   return_value=(traj, "I would NOT recommend the incremental approach — do the big-bang rewrite.")):
+            r = evaluate_case(self._DECISION_CASE, Path("/tmp"))
+        assert r["status"] == "failed"
+        assert "wrong way" in r["notes"].lower() or "rejected" in r["notes"].lower()
 
     def test_decision_no_read_fails_before_content_check(self):
         # No Read at all -> fails on trajectory, content check never reached.
@@ -592,6 +611,16 @@ class TestTrajectoryCaptureDispatch:
                    return_value=([], "use the incremental approach")):
             r = evaluate_case(self._DECISION_CASE, Path("/tmp"))
         assert r["status"] == "failed"
+
+    def test_content_only_case_without_trajectory_is_error(self):
+        # Gate-2 V4: expected_response_contains but no expected_trajectory would
+        # silently never run -> must be a loud misconfiguration error, not skip.
+        bad = {"id": "X", "scenario": {"prompt": "decide"},
+               "expected_response_contains": ["incremental"],
+               "evaluators": ["trajectory_capture"], "eval_method": "behavior",
+               "dimension": "utility"}
+        r = evaluate_case(bad, Path("/tmp"))
+        assert r["status"] == "error"
 
     def test_infra_failure_is_error_not_failed(self):
         # Spawn infra failure (CLI/timeout/throttle) -> error, NOT failed, so a

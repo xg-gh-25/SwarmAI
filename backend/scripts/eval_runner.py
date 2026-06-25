@@ -807,6 +807,14 @@ def eval_trajectory_capture(case: dict) -> dict:
     if not prompt:
         return {"status": "skipped", "notes": "No scenario.prompt for trajectory_capture"}
     if not case.get("expected_trajectory"):
+        # A content-only behavior case (expected_response_contains but no
+        # expected_trajectory) would silently NEVER run its content check —
+        # the assertion evaporates with no signal (adversarial Gate-2 MED V4).
+        # Make that a loud misconfiguration error, not a silent skip.
+        if case.get("expected_response_contains") or case.get("forbidden_response_contains"):
+            return {"status": "error",
+                    "notes": "behavior case has response assertions but no expected_trajectory "
+                             "— content check would never run; add expected_trajectory or remove the case"}
         return {"status": "skipped", "notes": "No expected_trajectory defined"}
 
     # Lock behavior cases to READ-ONLY tools at the dispatch layer. A behavior
@@ -844,29 +852,48 @@ def eval_trajectory_capture(case: dict) -> dict:
     result = _eval_trajectory_tool_strict(case, actual)
     result["observed_trajectory"] = actual
 
-    # Decision-class gate (adversarial Gate-2 MED, run_75b656c1): for cases whose
-    # point is "the read content DROVE the decision" — not merely "a Read
-    # happened" — the case declares expected_response_contains. Proving the Read
-    # is necessary but NOT sufficient: an agent that reads IMPROVEMENT.md then
-    # ignores it and recommends the big-bang rewrite would pass the trajectory
-    # check alone (same circularity in a new form). So when the trajectory PASSES
-    # AND expected_response_contains is set, the final answer text must ALSO
-    # contain those tokens, else the case FAILS — the evidence didn't drive the
-    # conclusion.
+    # Decision-class gate (adversarial Gate-2 MED→fixed, run_75b656c1): for cases
+    # whose point is "the read content DROVE the decision" — not merely "a Read
+    # happened" — proving the Read is necessary but NOT sufficient. An agent that
+    # reads IMPROVEMENT.md then ignores it and recommends the big-bang rewrite
+    # would pass the trajectory check alone (same circularity, new form). When
+    # the trajectory PASSES, the final answer text is gated two ways:
+    #
+    #   expected_response_contains  — ANY-OF (synonym-tolerant): at least one
+    #       token must appear. Avoids brittle false-fail when a correct answer
+    #       uses a synonym ("strangler-fig" for "incremental"). List all
+    #       acceptable phrasings (adversarial Gate-2 MED V3).
+    #   forbidden_response_contains — polarity guard: if ANY appears, FAIL even
+    #       if an expected token also appears. Kills the false-PASS where the
+    #       agent NAMES the right concept but recommends the OPPOSITE ("I would
+    #       NOT recommend incremental — do the big-bang rewrite"): substring
+    #       presence of "incremental" must not pass a wrong decision
+    #       (adversarial Gate-2 HIGH V2).
     response_keywords = case.get("expected_response_contains") or []
-    if result.get("status") == "passed" and response_keywords:
+    forbidden = case.get("forbidden_response_contains") or []
+    if result.get("status") == "passed" and (response_keywords or forbidden):
         ftl = (final_text or "").lower()
-        missing = [kw for kw in response_keywords if kw.lower() not in ftl]
-        if missing:
+        present_forbidden = [kw for kw in forbidden if kw.lower() in ftl]
+        # ANY-OF for expected: pass if at least one acceptable phrasing present.
+        expected_hit = (not response_keywords) or any(
+            kw.lower() in ftl for kw in response_keywords
+        )
+        if present_forbidden:
             result["status"] = "failed"
             result["notes"] = (
-                f"Read occurred but conclusion did not reflect it — "
-                f"missing from answer: {missing}. {result.get('notes', '')}"
+                f"Read occurred but conclusion went the WRONG way — answer "
+                f"contains rejected option(s): {present_forbidden}. {result.get('notes', '')}"
+            ).strip()
+        elif not expected_hit:
+            result["status"] = "failed"
+            result["notes"] = (
+                f"Read occurred but conclusion did not reflect it — none of "
+                f"{response_keywords} in answer. {result.get('notes', '')}"
             ).strip()
         else:
             result["notes"] = (
-                f"Read occurred AND conclusion reflects it "
-                f"({len(response_keywords)} keyword(s) present). {result.get('notes', '')}"
+                f"Read occurred AND conclusion reflects it (expected present, "
+                f"no forbidden). {result.get('notes', '')}"
             ).strip()
         result["final_text_excerpt"] = (final_text or "")[:300]
     return result
