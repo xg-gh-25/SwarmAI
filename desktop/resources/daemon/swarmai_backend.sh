@@ -17,6 +17,40 @@ DAEMON_BINARY="${HOME}/.swarm-ai/daemon/python-backend"
 LOG_DIR="${HOME}/.swarm-ai/logs"
 
 # ---------------------------------------------------------------------------
+# Log rotation — launchd has NO built-in rotation for StandardOut/ErrorPath,
+# so backend-stdout.log / backend-stderr.log grow unbounded (observed 132MB,
+# mixing months of bundled-CLI stderr + raw tracebacks that bypass Python's
+# RotatingFileHandler). launchd opens these in APPEND mode, so truncate-in-
+# place is safe: the kernel re-seeks to EOF on every write, so the inherited
+# fd resumes writing at offset 0 with no sparse-file hole. Runs at every launch
+# (RunAtLoad + each KeepAlive restart) → keeps these logs bounded over time.
+# ---------------------------------------------------------------------------
+
+_LOG_MAX_BYTES=$((20 * 1024 * 1024))   # rotate when a log exceeds 20MB
+
+_rotate_log() {
+    local f="$1"
+    [ -f "$f" ] || return 0
+    local size
+    size="$(stat -f%z "$f" 2>/dev/null || echo 0)"
+    if [ "$size" -gt "$_LOG_MAX_BYTES" ]; then
+        # Keep ONE backup of recent history (.1); drop the older .2.
+        # .1/.2 are not held open by launchd, so mv is safe for them.
+        [ -f "${f}.1" ] && mv -f "${f}.1" "${f}.2" 2>/dev/null || true
+        cp -f "$f" "${f}.1" 2>/dev/null || true
+        # Truncate the LIVE inode in place — never mv it, or launchd's open
+        # append fd would follow the inode and keep writing to the backup.
+        : > "$f" 2>/dev/null || true
+        echo "[swarmai-backend] Rotated $(basename "$f") (was ${size} bytes)"
+    fi
+    return 0
+}
+
+mkdir -p "${LOG_DIR}"
+_rotate_log "${LOG_DIR}/backend-stderr.log"
+_rotate_log "${LOG_DIR}/backend-stdout.log"
+
+# ---------------------------------------------------------------------------
 # Port conflict check — uses nc -z (instant, no hang unlike lsof on macOS)
 # ---------------------------------------------------------------------------
 

@@ -85,9 +85,17 @@ def get_log_file_path() -> Path:
 log_level = logging.DEBUG if settings.debug else logging.INFO
 log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
+# In daemon mode the StreamHandler's output (stderr) is redirected by launchd
+# to ``backend-stderr.log``, which has NO rotation and grows unbounded (observed
+# at 132MB). The RotatingFileHandler below already keeps the full INFO stream
+# capped at ~40MB, so the console only needs WARNING+ for crash diagnosis in
+# daemon mode. In dev mode (``./dev.sh``) keep the full level for live console.
+_log_mode = os.environ.get("SWARMAI_MODE", "daemon")
+console_level = logging.WARNING if _log_mode == "daemon" else log_level
+
 # Create handlers
 console_handler = logging.StreamHandler()
-console_handler.setLevel(log_level)
+console_handler.setLevel(console_level)
 console_handler.setFormatter(logging.Formatter(log_format))
 
 # File handler - write logs to file with rotation (10MB × 3 backups)
