@@ -139,6 +139,11 @@ class TestForceUnstickCircuitBreaker:
         unit._UNSTICK_CIRCUIT_BREAKER_THRESHOLD = 2
         unit._arm_recovery_checkpoint = AsyncMock()
         unit._crash_to_cold_async = AsyncMock()
+        # R3d (M3): KILL-vs-KILL_HARD escalation now routes through the unit's
+        # RecoveryCoordinator — give the mock a real one + a not-stopped turn.
+        unit._user_stopped_current_turn = False
+        from core.session_healing import HealingLoop, RecoveryCoordinator
+        unit._recovery_coordinator = RecoveryCoordinator(HealingLoop())
 
         # Call the real method
         await SessionUnit.force_unstick_streaming(unit)
@@ -162,6 +167,9 @@ class TestForceUnstickCircuitBreaker:
         unit._UNSTICK_CIRCUIT_BREAKER_THRESHOLD = 2
         unit._arm_recovery_checkpoint = AsyncMock()
         unit._crash_to_cold_async = AsyncMock()
+        unit._user_stopped_current_turn = False
+        from core.session_healing import HealingLoop, RecoveryCoordinator
+        unit._recovery_coordinator = RecoveryCoordinator(HealingLoop())
 
         await SessionUnit.force_unstick_streaming(unit)
         unit._crash_to_cold_async.assert_called_once_with(clear_identity=False)
@@ -180,6 +188,9 @@ class TestForceUnstickCircuitBreaker:
         unit._UNSTICK_CIRCUIT_BREAKER_THRESHOLD = 2
         unit._arm_recovery_checkpoint = AsyncMock()
         unit._crash_to_cold_async = AsyncMock()
+        unit._user_stopped_current_turn = False
+        from core.session_healing import HealingLoop, RecoveryCoordinator
+        unit._recovery_coordinator = RecoveryCoordinator(HealingLoop())
 
         await SessionUnit.force_unstick_streaming(unit)
 
@@ -221,6 +232,9 @@ class TestForceUnstickCircuitBreaker:
         unit._UNSTICK_CIRCUIT_BREAKER_THRESHOLD = 2
         unit._arm_recovery_checkpoint = AsyncMock()
         unit._crash_to_cold_async = AsyncMock()
+        unit._user_stopped_current_turn = False
+        from core.session_healing import HealingLoop, RecoveryCoordinator
+        unit._recovery_coordinator = RecoveryCoordinator(HealingLoop())
 
         await SessionUnit.force_unstick_streaming(unit)
 
@@ -287,3 +301,73 @@ class TestLifecycleManagerCircuitBreaker:
 
         # Should have called force_unstick
         unit.force_unstick_streaming.assert_called_once()
+
+
+# ── R3d (M3): force_unstick_streaming routes through RecoveryCoordinator ──
+
+
+class TestForceUnstickRoutesCoordinator:
+    """FORCING TESTS (STEERING #11): the streaming-timeout escalation (KILL vs
+    KILL_HARD) must route through the unit's RecoveryCoordinator
+    (GracefulEscalationPolicy), not a hardcoded `> threshold` branch. These use
+    a REAL coordinator so the policy logic executes."""
+
+    def _make_unit(self, *, attempt, user_stopped=False):
+        from unittest.mock import AsyncMock, MagicMock
+        from core.session_unit import SessionState, SessionUnit
+        from core.session_healing import HealingLoop, RecoveryCoordinator
+
+        unit = MagicMock(spec=SessionUnit)
+        unit.state = SessionState.STREAMING
+        unit.pid = 12345
+        unit.session_id = "test-session"
+        unit.streaming_stall_seconds = 400.0
+        unit._consecutive_unstick_timeouts = attempt
+        unit._UNSTICK_CIRCUIT_BREAKER_THRESHOLD = 2
+        unit._arm_recovery_checkpoint = AsyncMock()
+        unit._crash_to_cold_async = AsyncMock()
+        unit._user_stopped_current_turn = user_stopped
+        unit._recovery_coordinator = RecoveryCoordinator(HealingLoop())
+        unit._recovery_coordinator.decide_graceful = MagicMock(
+            wraps=unit._recovery_coordinator.decide_graceful
+        )
+        return unit
+
+    @pytest.mark.asyncio
+    async def test_base_rung_routes_through_decide_graceful_preserve_resume(self):
+        from core.session_unit import SessionUnit
+        from core.session_healing import RecoveryVerdict
+
+        unit = self._make_unit(attempt=0)  # → 1 after increment, <= threshold 2
+        await SessionUnit.force_unstick_streaming(unit)
+
+        unit._recovery_coordinator.decide_graceful.assert_called_once()
+        kwargs = unit._recovery_coordinator.decide_graceful.call_args.kwargs
+        assert kwargs["trigger"] == "streaming_timeout"
+        assert kwargs["base"] is RecoveryVerdict.PROCEED_KILL
+        assert kwargs["escalated"] is RecoveryVerdict.PROCEED_KILL_HARD
+        # base rung → preserve --resume
+        unit._crash_to_cold_async.assert_called_once_with(clear_identity=False)
+
+    @pytest.mark.asyncio
+    async def test_escalated_rung_drops_identity(self):
+        from core.session_unit import SessionUnit
+
+        unit = self._make_unit(attempt=2)  # → 3 after increment, > threshold 2
+        await SessionUnit.force_unstick_streaming(unit)
+
+        unit._recovery_coordinator.decide_graceful.assert_called_once()
+        # escalated rung → drop --resume identity
+        unit._crash_to_cold_async.assert_called_once_with(clear_identity=True)
+
+    @pytest.mark.asyncio
+    async def test_user_stopped_skips_and_backs_out_increment(self):
+        from core.session_unit import SessionUnit
+
+        unit = self._make_unit(attempt=0, user_stopped=True)
+        await SessionUnit.force_unstick_streaming(unit)
+
+        unit._recovery_coordinator.decide_graceful.assert_called_once()
+        # SKIP → no kill, and the speculative increment is backed out
+        unit._crash_to_cold_async.assert_not_called()
+        assert unit._consecutive_unstick_timeouts == 0

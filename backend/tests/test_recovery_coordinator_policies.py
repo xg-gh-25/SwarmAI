@@ -27,6 +27,7 @@ from core.session_healing import (
     AttemptBreakerPolicy,
     CooldownThresholdPolicy,
     BareThresholdPolicy,
+    GracefulEscalationPolicy,
     RecoveryContext,
 )
 
@@ -216,6 +217,100 @@ def test_coordinator_decide_bare_eligible_states():
         state="waiting_input", eligible_states=frozenset({"waiting_input"}),
     )
     assert d2.verdict is RecoveryVerdict.PROCEED_KILL
+
+
+# ─── R3d/R3e (M3/M4): GracefulEscalationPolicy (escalating-ladder shape) ──
+# Two-tier ladder: below threshold → base verdict (warm/preserve), at/above
+# threshold → escalated verdict (hard kill / drop identity). The CALLER owns
+# the attempt counter (ctx.attempt) + the threshold (ctx.threshold); the policy
+# owns only the ladder verdict. M3 streaming-timeout: base=PROCEED_KILL (keep
+# --resume), escalated=PROCEED_KILL_HARD (drop identity). M4 tool-hang:
+# base=PROCEED_INTERRUPT (warm), escalated=PROCEED_KILL (force kill).
+
+
+def test_graceful_escalation_base_below_threshold():
+    """attempt <= threshold → base verdict (M3: preserve --resume)."""
+    pol = GracefulEscalationPolicy(
+        base=RecoveryVerdict.PROCEED_KILL,
+        escalated=RecoveryVerdict.PROCEED_KILL_HARD,
+    )
+    ctx = RecoveryContext(
+        trigger="streaming_timeout", enabled=True, user_stopped=False,
+        state="streaming", attempt=1, threshold=2,
+    )
+    assert pol.decide(ctx).verdict is RecoveryVerdict.PROCEED_KILL
+    ctx2 = RecoveryContext(
+        trigger="streaming_timeout", enabled=True, user_stopped=False,
+        state="streaming", attempt=2, threshold=2,
+    )
+    # attempt == threshold is still base (escalate only when STRICTLY past).
+    assert pol.decide(ctx2).verdict is RecoveryVerdict.PROCEED_KILL
+
+
+def test_graceful_escalation_escalated_past_threshold():
+    """attempt > threshold → escalated verdict (M3: drop --resume identity)."""
+    pol = GracefulEscalationPolicy(
+        base=RecoveryVerdict.PROCEED_KILL,
+        escalated=RecoveryVerdict.PROCEED_KILL_HARD,
+    )
+    ctx = RecoveryContext(
+        trigger="streaming_timeout", enabled=True, user_stopped=False,
+        state="streaming", attempt=3, threshold=2,
+    )
+    assert pol.decide(ctx).verdict is RecoveryVerdict.PROCEED_KILL_HARD
+
+
+def test_graceful_escalation_tool_hang_ladder():
+    """M4 ladder: base=PROCEED_INTERRUPT (warm), escalated=PROCEED_KILL."""
+    pol = GracefulEscalationPolicy(
+        base=RecoveryVerdict.PROCEED_INTERRUPT,
+        escalated=RecoveryVerdict.PROCEED_KILL,
+    )
+    warm = RecoveryContext(
+        trigger="tool_hang", enabled=True, user_stopped=False,
+        state="streaming", attempt=1, threshold=1,
+    )
+    assert pol.decide(warm).verdict is RecoveryVerdict.PROCEED_INTERRUPT
+    force = RecoveryContext(
+        trigger="tool_hang", enabled=True, user_stopped=False,
+        state="streaming", attempt=2, threshold=1,
+    )
+    assert pol.decide(force).verdict is RecoveryVerdict.PROCEED_KILL
+
+
+def test_graceful_escalation_respects_universal_guards():
+    pol = GracefulEscalationPolicy(
+        base=RecoveryVerdict.PROCEED_KILL,
+        escalated=RecoveryVerdict.PROCEED_KILL_HARD,
+    )
+    disabled = RecoveryContext(
+        trigger="streaming_timeout", enabled=False, user_stopped=False,
+        state="streaming", attempt=5, threshold=2,
+    )
+    assert pol.decide(disabled).verdict is RecoveryVerdict.SKIP
+    stopped = RecoveryContext(
+        trigger="streaming_timeout", enabled=True, user_stopped=True,
+        state="streaming", attempt=5, threshold=2,
+    )
+    assert pol.decide(stopped).verdict is RecoveryVerdict.SKIP
+
+
+def test_coordinator_routes_graceful_escalation():
+    coord = RecoveryCoordinator(HealingLoop())
+    base = coord.decide_graceful(
+        trigger="streaming_timeout", enabled=True, user_stopped=False,
+        state="streaming", attempt=1, threshold=2,
+        base=RecoveryVerdict.PROCEED_KILL,
+        escalated=RecoveryVerdict.PROCEED_KILL_HARD,
+    )
+    assert base.verdict is RecoveryVerdict.PROCEED_KILL
+    hard = coord.decide_graceful(
+        trigger="streaming_timeout", enabled=True, user_stopped=False,
+        state="streaming", attempt=3, threshold=2,
+        base=RecoveryVerdict.PROCEED_KILL,
+        escalated=RecoveryVerdict.PROCEED_KILL_HARD,
+    )
+    assert hard.verdict is RecoveryVerdict.PROCEED_KILL_HARD
 
 
 # ─── AC2: AttemptBreakerPolicy is a pure extract of self-heal ─────────────

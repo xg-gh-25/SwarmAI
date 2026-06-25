@@ -490,6 +490,11 @@ class RecoveryContext:
     now: float = 0.0
     last_recovery: float = 0.0
     cooldown_s: float = 0.0
+    # GracefulEscalation ladder inputs (R3d/R3e): caller owns the attempt
+    # counter + the escalation threshold; the policy reads them to pick
+    # base-vs-escalated verdict. Ignored by the other three shapes.
+    attempt: int = 0
+    threshold: int = 0
 
 
 # Triggers that get the graceful two-phase wrap-up (subprocess still healthy,
@@ -632,6 +637,41 @@ class BareThresholdPolicy(RecoveryPolicy):
         return RecoveryDecision(RecoveryVerdict.PROCEED_KILL, "")
 
 
+class GracefulEscalationPolicy(RecoveryPolicy):
+    """streaming-timeout (#4) and tool-hang (#6) shape: escalating ladder.
+    A two-tier verdict: ``attempt <= threshold`` → ``base`` (the gentle action),
+    ``attempt > threshold`` → ``escalated`` (the destructive action). The CALLER
+    owns the attempt counter + threshold (it already tracks them as circuit
+    breakers today); the policy owns only which rung of the ladder applies.
+
+    The base/escalated verdicts are injected, NOT hardcoded — this is the
+    truly-universal escalation shape, while the SPECIFIC verdicts differ per
+    trigger (PIT06: share the shape, dispatch the difference):
+      - M3 streaming-timeout: base=PROCEED_KILL (keep --resume),
+        escalated=PROCEED_KILL_HARD (drop identity, break the resume-loop).
+      - M4 tool-hang: base=PROCEED_INTERRUPT (warm, non-destructive),
+        escalated=PROCEED_KILL (force kill the hung subprocess).
+
+    Stateless: holds only its two verdict constants; the counter lives in the
+    caller, so one instance is safe to construct per call."""
+
+    def __init__(self, *, base: "RecoveryVerdict", escalated: "RecoveryVerdict"):
+        self._base = base
+        self._escalated = escalated
+
+    def decide(self, ctx: "RecoveryContext") -> "RecoveryDecision":
+        guard = _universal_guard(ctx)
+        if guard is not None:
+            return guard
+        if ctx.attempt > ctx.threshold:
+            return RecoveryDecision(
+                self._escalated, f"escalated (attempt {ctx.attempt} > {ctx.threshold})"
+            )
+        return RecoveryDecision(
+            self._base, f"base (attempt {ctx.attempt} <= {ctx.threshold})"
+        )
+
+
 class RecoveryCoordinator:
     """Thin decision authority over recovery. Delegates breaker state to a
     HealingLoop (injected, not created) — so existing HealingLoop tests are
@@ -729,6 +769,30 @@ class RecoveryCoordinator:
             state=state,
         )
         return BareThresholdPolicy(eligible_states=eligible_states).decide(ctx)
+
+    # ── graceful-escalation decision (R3d/M3 + R3e/M4) ──
+    def decide_graceful(
+        self,
+        *,
+        trigger: str,
+        enabled: bool,
+        user_stopped: bool,
+        state: str,
+        attempt: int,
+        threshold: int,
+        base: RecoveryVerdict,
+        escalated: RecoveryVerdict,
+    ) -> RecoveryDecision:
+        """Escalating-ladder recovery decision. The CALLER owns the attempt
+        counter + threshold (its existing circuit breaker); the Coordinator owns
+        the base-vs-escalated verdict. base/escalated are injected so the SAME
+        shape serves M3 (KILL→KILL_HARD) and M4 (INTERRUPT→KILL) — PIT06: share
+        the shape, dispatch the trigger-specific verdicts."""
+        ctx = RecoveryContext(
+            trigger=trigger, enabled=enabled, user_stopped=user_stopped,
+            state=state, attempt=attempt, threshold=threshold,
+        )
+        return GracefulEscalationPolicy(base=base, escalated=escalated).decide(ctx)
 
     # ── breaker lifecycle passthroughs (delegate to the ONE held loop) ──
     def record_heal_start(self, trigger: str = "") -> None:

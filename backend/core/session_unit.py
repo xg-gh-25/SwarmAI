@@ -3514,8 +3514,35 @@ class SessionUnit:
 
         self._consecutive_unstick_timeouts += 1
 
-        # Circuit breaker: stop retrying with --resume if structurally doomed
-        if self._consecutive_unstick_timeouts > self._UNSTICK_CIRCUIT_BREAKER_THRESHOLD:
+        # R3d (M3): the KILL-vs-KILL_HARD escalation DECISION now routes through
+        # the one recovery authority (GracefulEscalationPolicy). The caller still
+        # owns the attempt counter (_consecutive_unstick_timeouts) + threshold;
+        # the Coordinator owns the ladder verdict:
+        #   attempt <= threshold  → PROCEED_KILL      (preserve --resume)
+        #   attempt >  threshold  → PROCEED_KILL_HARD (drop identity, break loop)
+        # The PROCEED_KILL vs PROCEED_KILL_HARD split = keep vs drop conversation
+        # context, the single most safety-relevant recovery distinction.
+        from .session_healing import RecoveryVerdict
+        _decision = self._recovery_coordinator.decide_graceful(
+            trigger="streaming_timeout",
+            enabled=True,
+            user_stopped=self._user_stopped_current_turn,
+            state=self.state.value,
+            attempt=self._consecutive_unstick_timeouts,
+            threshold=self._UNSTICK_CIRCUIT_BREAKER_THRESHOLD,
+            base=RecoveryVerdict.PROCEED_KILL,
+            escalated=RecoveryVerdict.PROCEED_KILL_HARD,
+        )
+
+        if _decision.verdict is RecoveryVerdict.SKIP:
+            # User stopped this turn — back out the increment (this was not a
+            # genuine unstick attempt) and leave the session alone.
+            self._consecutive_unstick_timeouts -= 1
+            return
+
+        if _decision.verdict is RecoveryVerdict.PROCEED_KILL_HARD:
+            # Circuit breaker tripped: stop retrying with --resume (structurally
+            # doomed — timeout → unstick → resume → same timeout).
             logger.warning(
                 "session_unit.force_unstick_circuit_breaker session_id=%s "
                 "consecutive_unsticks=%d > threshold=%d — "
@@ -3533,6 +3560,7 @@ class SessionUnit:
             self._consecutive_unstick_timeouts = 0
             return
 
+        # PROCEED_KILL (base rung): kill but preserve --resume identity.
         logger.warning(
             "session_unit.force_unstick session_id=%s pid=%s "
             "stall=%.0fs attempt=%d — forcing COLD for recovery",
