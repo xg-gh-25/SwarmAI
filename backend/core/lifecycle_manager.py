@@ -50,7 +50,11 @@ class LifecycleManager:
     - Startup orphan reaper runs ONCE at init.
     """
 
-    TTL_SECONDS: int = 43200  # 12 hours
+    TTL_SECONDS: int = 86400  # 24 hours (R6: bumped 12h→24h — the orphan reaper
+    # (_check_orphan_sessions, 10min) now reclaims unowned sessions, so TTL is a
+    # pure long-idle backstop for OWNED sessions and can be generous. Safe ONLY
+    # because the reaper landed first — bumping TTL without it would just extend
+    # an orphan's lifeline.
     LOOP_INTERVAL: float = 60.0  # Check every 60 seconds
     IDLE_HOOK_GRACE: float = 120.0  # Fire hooks after 120s idle (grace period)
     STREAMING_TIMEOUT_SECONDS: float = 300.0  # 5 min no SDK events → stuck stream
@@ -675,16 +679,26 @@ class LifecycleManager:
                 # above; the Coordinator owns the may-I-recover verdict. Unlike
                 # self-heal (which PROTECTS waiting_input), stuck-WAITING TARGETS
                 # it — eligible_states={"waiting_input"} encodes exactly that.
+                #
+                # user_stopped=False DELIBERATELY (adversarial final-gate Q3): a
+                # session sitting in WAITING_INPUT for 4h+ carries a STALE
+                # _user_stopped_current_turn from a prior STREAMING turn (the flag
+                # is cleared only at the next send(), which by definition never
+                # came for an abandoned session). Consulting it would let a
+                # stopped-then-abandoned session block its OWN 4h reclamation
+                # forever — the exact wedge this watchdog exists to clear. A
+                # genuinely stuck WAITING_INPUT with no client IS the target; the
+                # user's intent from hours ago is irrelevant to reclaiming the slot.
                 from .session_healing import RecoveryVerdict
                 _decision = unit._recovery_coordinator.decide_bare(
                     trigger="stuck_waiting",
                     enabled=True,
-                    user_stopped=unit._user_stopped_current_turn,
+                    user_stopped=False,
                     state=unit.state.value,
                     eligible_states=frozenset({"waiting_input"}),
                 )
                 if _decision.verdict is not RecoveryVerdict.PROCEED_KILL:
-                    continue  # SKIP (user stopped this turn) — leave it alone
+                    continue  # ineligible state (race: user answered) — leave it
                 logger.warning(
                     "lifecycle_manager.waiting_input_timeout session_id=%s "
                     "waiting=%.0fs > timeout=%.0fs — forcing unstick",
@@ -760,35 +774,19 @@ class LifecycleManager:
 
     @staticmethod
     def _owned_session_ids() -> set[str] | None:
-        """session_ids that a live frontend window currently has open.
+        """Delegate to the canonical ownership reader (routers.settings).
 
-        Source of truth is ``open_tabs.json`` (written by the frontend on every
-        tab add/remove/switch — settings.py). Returns the set of session_ids
-        membership-tested by the orphan reaper.
-
-        Returns ``None`` (NOT an empty set) when ownership is UNKNOWABLE —
-        file missing, unreadable, or malformed. The reaper treats ``None`` as
-        "fail safe: reap nothing this cycle" so a transient read error can never
-        be misread as "no tabs are open → everything is an orphan". An empty set
-        is a DIFFERENT, trustworthy fact ("a window is connected and reports zero
-        open tabs") and is returned as ``set()``.
+        Single source of truth shared with session_router's orphan-only
+        eviction — see ``routers.settings.owned_session_ids`` for the full
+        None-vs-empty-set fail-safe contract. Wrapped here so a settings-import
+        failure degrades to "unknowable" (None → reap nothing) rather than
+        crashing the maintenance loop.
         """
         try:
-            from routers.settings import _get_open_tabs_path
-            path = _get_open_tabs_path()
-            if not path.exists():
-                return None  # unknowable — never reap on absence
-            data = json.loads(path.read_text(encoding="utf-8"))
-            tabs = (data or {}).get("tabs", [])
-            if not isinstance(tabs, list):
-                return None  # malformed — fail safe
-            return {
-                t["sessionId"]
-                for t in tabs
-                if isinstance(t, dict) and t.get("sessionId")
-            }
+            from routers.settings import owned_session_ids
+            return owned_session_ids()
         except Exception as exc:  # GC19: surface, never silently swallow
-            logger.warning("orphan reaper: open_tabs read failed (%s) — skipping reap cycle", exc)
+            logger.warning("orphan reaper: ownership lookup failed (%s) — skipping cycle", exc)
             return None
 
     async def _check_orphan_sessions(self) -> None:

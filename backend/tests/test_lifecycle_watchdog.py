@@ -702,11 +702,17 @@ class TestStuckWaitingRoutesCoordinator:
         unit.force_unstick_waiting_input.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_user_stopped_skips_unstick(self):
+    async def test_stale_user_stopped_does_not_block_reclamation(self):
+        """REGRESSION GUARD (adversarial final-gate Q3): a session stuck in
+        WAITING_INPUT for 4h+ carries a STALE _user_stopped_current_turn from a
+        prior STREAMING turn (cleared only at the next send(), which never came
+        for an abandoned session). M2 must NOT consult it — otherwise a
+        stopped-then-abandoned session blocks its own 4h reclamation forever.
+        The 4h watchdog TARGETS exactly these abandoned sessions."""
         from core.session_unit import SessionState
 
         unit = self._make_waiting_unit(
-            state=SessionState.WAITING_INPUT, user_stopped=True
+            state=SessionState.WAITING_INPUT, user_stopped=True  # STALE flag
         )
         mgr = _make_manager()
         mgr._router.list_units.return_value = [unit]
@@ -714,4 +720,8 @@ class TestStuckWaitingRoutesCoordinator:
         await mgr._check_waiting_input_timeout()
 
         unit._recovery_coordinator.decide_bare.assert_called_once()
-        unit.force_unstick_waiting_input.assert_not_awaited()
+        # The stale flag must NOT prevent reclamation — unstick still fires.
+        unit.force_unstick_waiting_input.assert_awaited_once()
+        # And the decide_bare call passed user_stopped=False deliberately.
+        kwargs = unit._recovery_coordinator.decide_bare.call_args.kwargs
+        assert kwargs["user_stopped"] is False

@@ -3196,22 +3196,28 @@ class SessionUnit:
 
         State: any → DEAD → COLD.
 
-        Safe to call multiple times or from any state.  Tolerates
-        concurrent kills — if another coroutine transitions the state
-        during ``await _force_kill()``, we skip the redundant transition
-        instead of raising RuntimeError.
+        Safe to call multiple times or from any state. R4: shares the
+        ``self._lock`` recovery transaction with ``_crash_to_cold_async`` so
+        the two are MUTUALLY exclusive — ``kill()`` is the other kill entry
+        point (used by the lifecycle loop's RSS/TTL/pressure paths) while
+        ``_crash_to_cold_async`` is used by the per-session streaming/retry
+        paths. Without a shared lock these two tasks could both pass the
+        state guard and both run ``_force_kill`` on the same pid (the audit's
+        cross-task TOCTOU). Holding the SAME lock closes it for ALL kill paths,
+        making the R4 "single recovery transaction" invariant true end-to-end.
         """
-        if self.state in (SessionState.COLD, SessionState.DEAD):
-            # Already dead or never started — just ensure COLD
-            if self.state == SessionState.DEAD:
-                self._cleanup_internal()
-                self._transition(SessionState.COLD)
-            return
+        async with self._lock:
+            if self.state in (SessionState.COLD, SessionState.DEAD):
+                # Already dead or never started — just ensure COLD
+                if self.state == SessionState.DEAD:
+                    self._cleanup_internal()
+                    self._transition(SessionState.COLD)
+                return
 
-        self._transition(SessionState.DEAD)
-        await self._force_kill()
-        self._cleanup_internal()
-        self._transition(SessionState.COLD)
+            self._transition(SessionState.DEAD)
+            await self._force_kill()
+            self._cleanup_internal()
+            self._transition(SessionState.COLD)
 
     async def _force_kill(self) -> None:
         """Best-effort force-kill of the owned subprocess and its children.
@@ -3586,11 +3592,12 @@ class SessionUnit:
             clear_identity: If True, also clears ``_sdk_session_id``
                 via ``_full_cleanup()`` (non-retriable crashes).
 
-        R4 (RecoveryTransaction): this is the single convergence point of ALL
-        recovery kill paths (self-heal, RSS, streaming-timeout, tool-hang, OOM,
-        stuck-WAITING — every ``_crash_to_cold_async`` caller). Two async tasks
-        can reach it concurrently: the LifecycleManager background loop and the
-        per-session streaming task. The previous implementation was LOCKLESS —
+        R4 (RecoveryTransaction): this and ``kill()`` are the two kill entry
+        points, and BOTH hold ``self._lock`` so they are mutually exclusive —
+        the per-session streaming/retry paths converge here; the lifecycle
+        loop's RSS/TTL/pressure paths go through ``kill()``. Two async tasks
+        can reach a kill concurrently: the LifecycleManager background loop and
+        the per-session streaming task. The shared lock serializes them. The previous implementation was LOCKLESS —
         between ``_transition(DEAD)`` and the final ``_transition(COLD)`` a second
         task could interleave and run the whole sequence again (double
         ``_force_kill``, double cleanup, thrash). This is the TOCTOU window the
