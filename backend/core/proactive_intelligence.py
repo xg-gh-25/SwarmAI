@@ -1308,6 +1308,72 @@ def _build_suggestions(
     return _build_suggestions_raw(threads, continue_hints, signals, _DATE_REF_RE)
 
 
+# M3b: Recurrence Radar — known hot-zone keywords mapped to a display label.
+# A "zone" is a recurring failure cluster; the radar fires only when the
+# CURRENT session touches one AND it has recurred >= threshold DISTINCT times.
+# Keywords are COMPOUND/specific (not bare English) so generic mentions of
+# "resume"/"streaming" in prose don't false-fire (adversarial run_123a6530).
+_RADAR_ZONES: dict[str, tuple[str, ...]] = {
+    "reconcile": ("reconcile", "truncated render", "tab-switch render"),
+    "session lifecycle": ("session_unit", "session_router", "self-heal session"),
+    "streaming render": ("streaming content loss", "stream state machine", "isstreaming"),
+    "deploy": ("prod.sh build", "daemon restart", "deploy scope"),
+}
+_RADAR_THRESHOLD = 3  # a zone must have recurred this many DISTINCT times to warn
+
+
+def _extract_what_failed_lines(improvement_text: str) -> list[str]:
+    """Return the bullet lines under '## What Failed' (one line = one incident)."""
+    lines: list[str] = []
+    in_section = False
+    for ln in improvement_text.splitlines():
+        if ln.startswith("## "):
+            in_section = ln.strip().lower().startswith("## what failed")
+            continue
+        if in_section and ln.lstrip().startswith("- "):
+            lines.append(ln.lower())
+    return lines
+
+
+def compute_recurrence_radar(
+    improvement_text: str,
+    session_context: str,
+    threshold: int = _RADAR_THRESHOLD,
+) -> list[str]:
+    """Zone-gated recurrence warnings (self-knowledge-loop M3b).
+
+    Fires ONLY when the CURRENT session touches a tracked hot zone that has
+    recurred >= `threshold` DISTINCT incidents in IMPROVEMENT.md "## What
+    Failed". Count = number of distinct What-Failed BULLET LINES mentioning a
+    zone keyword (NOT substring frequency across the whole doc — adversarial
+    found that inflated counts 50-200x and fired on every session). Returns []
+    when the session touches no recurring hot zone.
+    """
+    if not improvement_text or not session_context:
+        return []
+    ctx_lower = session_context.lower()
+    failed_lines = _extract_what_failed_lines(improvement_text)
+    if not failed_lines:
+        return []
+
+    out: list[str] = []
+    for label, keywords in _RADAR_ZONES.items():
+        # Does the CURRENT session touch this zone?
+        if not any(kw in ctx_lower for kw in keywords):
+            continue
+        # Distinct prior incidents = What-Failed lines mentioning any keyword.
+        count = sum(
+            1 for line in failed_lines if any(kw in line for kw in keywords)
+        )
+        if count < threshold:
+            continue
+        out.append(
+            f"⚠️ {label}-class: {count} prior incidents — treat a new {label} bug "
+            f"as STRUCTURAL; before patching, ask if the underlying MODEL is wrong."
+        )
+    return out
+
+
 def _detect_active_project(workspace: Path) -> str | None:
     """Detect the active project from Projects/ directory.
 
@@ -1554,6 +1620,35 @@ def build_session_briefing(
         health_lines = _get_health_highlights(str(workspace))
         if health_lines:
             sections.append("**System health:**\n" + "\n".join(health_lines))
+
+        # M3b: Recurrence Radar — zone-gated structural warning. Fires only when
+        # the current session (recent DailyActivity) touches a hot zone that has
+        # recurred >= threshold times in IMPROVEMENT.md. Counts derived from doc.
+        try:
+            improvement_path = workspace / "Projects" / "SwarmAI" / "IMPROVEMENT.md"
+            if improvement_path.exists():
+                # session_context = the MOST-RECENT activity block only (what
+                # THIS session is doing) — NOT 2 days of history (adversarial:
+                # the rolling log mentions every zone, defeating the gate).
+                recent_ctx = ""
+                if daily_dir.is_dir():
+                    files = sorted(daily_dir.glob("*.md"), reverse=True)
+                    if files:
+                        try:
+                            text = files[0].read_text(encoding="utf-8", errors="ignore")
+                            # last "## HH:MM |" block = the current session's slice
+                            blocks = re.split(r"\n## \d\d:\d\d \|", text)
+                            recent_ctx = blocks[-1][:3000] if blocks else text[:3000]
+                        except OSError:
+                            recent_ctx = ""
+                radar_lines = compute_recurrence_radar(
+                    improvement_path.read_text(encoding="utf-8", errors="ignore"),
+                    recent_ctx,
+                )
+                if radar_lines:
+                    sections.append("**Recurrence Radar:**\n" + "\n".join(radar_lines))
+        except Exception as exc:
+            logger.debug("Recurrence radar failed: %s", exc)
 
         # L5: DDD escalations (risky changes needing human decision)
         # Only show escalations from the last 7 days — older ones are stale

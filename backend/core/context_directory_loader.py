@@ -197,6 +197,11 @@ CONTEXT_FILES: list[ContextFileSpec] = [
     ContextFileSpec("SWARMAI.md",           0,  "SwarmAI",            False, False, "tail"),
     ContextFileSpec("IDENTITY.md",          1,  "Identity",           False, False, "tail"),
     ContextFileSpec("SOUL.md",              2,  "Soul",               False, False, "tail"),
+    # SELF.md — resident self-portrait (self-knowledge-loop M3). Non-truncatable,
+    # always injected (priority 2 tier = strong attention). Runtime-owned:
+    # human/distill writes only; auto-cultivation is code-blocked (ddd_cultivation
+    # is_protected_zone). Small (~725 tok) so it never pressures the budget.
+    ContextFileSpec("SELF.md",              2,  "Self-Portrait",      False, True,  "tail"),
     ContextFileSpec("AGENT.md",             3,  "Agent Directives",   True,  False, "tail"),
     # ── User-owned (user edits, never overwritten) ───────────────────
     ContextFileSpec("USER.md",              4,  "User",               True,  True,  "tail"),
