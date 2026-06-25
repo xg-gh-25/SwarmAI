@@ -303,16 +303,18 @@ function NavSvgIcon({ name }: { name: string }) {
       );
     case 'graph':
       // Hub-and-spoke network for Code Intelligence — one central node linked
-      // to 3 satellites. Cleaner read at 19px than the old 5-corner grid.
+      // to 3 satellites at even 120° spacing (top, lower-left, lower-right),
+      // equal radius, spokes snapped to satellite centers. Reads as a balanced
+      // radial graph at 19px.
       return (
         <svg {...svgProps} aria-hidden="true">
-          <line x1="12" y1="12" x2="6" y2="6" />
-          <line x1="12" y1="12" x2="18.5" y2="9" />
-          <line x1="12" y1="12" x2="9" y2="18.5" />
+          <line x1="12" y1="12" x2="12" y2="5" />
+          <line x1="12" y1="12" x2="18" y2="15.5" />
+          <line x1="12" y1="12" x2="6" y2="15.5" />
           <circle cx="12" cy="12" r="2.4" />
-          <circle cx="5.5" cy="5.5" r="1.9" />
-          <circle cx="19" cy="8.5" r="1.9" />
-          <circle cx="8.5" cy="19" r="1.9" />
+          <circle cx="12" cy="5" r="1.9" />
+          <circle cx="18" cy="15.5" r="1.9" />
+          <circle cx="6" cy="15.5" r="1.9" />
         </svg>
       );
     case 'activity':
