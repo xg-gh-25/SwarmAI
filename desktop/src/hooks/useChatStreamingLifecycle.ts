@@ -1691,7 +1691,7 @@ export function useChatStreamingLifecycle(
             const dbAsstChars = Array.isArray(dbLastAsst?.content)
               ? dbLastAsst.content.reduce((n: number, b: unknown) => n + (b && typeof b === 'object' && 'text' in b ? (b as { text: string }).text.length : 0), 0)
               : 'n/a';
-            console.debug('[reconcile-gap] RECONCILE-FIRE', {
+            console.warn('[reconcile-gap] RECONCILE-FIRE', {
               sid: reconcileSid, tabId: reconcileTabId,
               storePhase: s.phase,
               dbRowCount: msgs.length,
@@ -1704,7 +1704,7 @@ export function useChatStreamingLifecycle(
             // Post-reconcile snapshot — did the store end up with full content?
             const snap = s.getSnapshot();
             const snapLastAsst = [...snap].reverse().find(m => m.role === 'assistant');
-            console.debug('[reconcile-gap] POST-RECONCILE', {
+            console.warn('[reconcile-gap] POST-RECONCILE', {
               sid: reconcileSid, tabId: reconcileTabId,
               storePhase: s.phase,
               snapLastAsstBlocks: snapLastAsst?.content?.length,
@@ -2579,7 +2579,7 @@ export function useChatStreamingLifecycle(
             // RECONCILE-GAP PROBE (run_2468422e): streamed buffer state at result time.
             // TEMP: ungated so it survives the prod .app build — remove with the whole probe commit.
             const lastAsst = [...resultStore.messages].reverse().find(m => m.role === 'assistant');
-            console.debug('[reconcile-gap] RESULT', {
+            console.warn('[reconcile-gap] RESULT', {
               sid, tabId: capturedTabId,
               lastAsstId: lastAsst?.id,
               lastAsstBlocks: lastAsst?.content?.length,
@@ -2617,7 +2617,7 @@ export function useChatStreamingLifecycle(
                 // (BEFORE the 200ms turn-end reconcile fires).
                 const syncSnap = resultStore.getSnapshot();
                 const syncLast = [...syncSnap].reverse().find(m => m.role === 'assistant');
-                console.debug('[reconcile-gap] RESULT-SYNC-REACT', {
+                console.warn('[reconcile-gap] RESULT-SYNC-REACT', {
                   sid, tabId: capturedTabId,
                   syncLastBlocks: syncLast?.content?.length,
                   syncLastChars: syncLast?.content?.reduce((n, b) => n + ('text' in b ? (b as { text: string }).text.length : 0), 0),

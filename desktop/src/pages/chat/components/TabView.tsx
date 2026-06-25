@@ -135,14 +135,54 @@ function TabViewImpl({
 }: TabViewProps) {
   const { t } = useTranslation();
 
-  // ── Per-tab store subscription (Migration Step 2) ──────────────────
-  // Primary message source is this tab's OWN MessageStore (per-tab isolation +
-  // reactivity). `useMessageStore(tabId)` returns null when there is no tabId
-  // or the store was destroyed — fall back to the transitional `messagesProp`
-  // so no pre-Step-4 writer-gap regresses. When the store has content it wins.
+  // ── Per-tab store subscription — SINGLE RENDER SOURCE ──────────────
+  // The rendered message list comes from EXACTLY ONE source: this tab's own
+  // MessageStore subscription (`useMessageStore(tabId)`). Every keep-mounted
+  // TabView (active AND background) has its own live subscription, and every
+  // session-load path seeds the store (loadSessionMessages, handleSelectTab,
+  // initTabState, reconcile/mergeTabFromDb), so the store is the consistent
+  // superset authority. `messagesProp` (a tabMapRef snapshot) is NO LONGER a
+  // render source — the former `(store.length>0) ? store : messagesProp`
+  // dual-source selector was the reconcile-gap split-brain: a stale prop
+  // snapshot rendered a truncated reply whenever the store was momentarily
+  // empty. Single source = divergence is structurally impossible.
+  // (run_9db9f987 — Knowledge/Designs/2026-06-25-reconcile-gap-render-source-design.md)
   const sub = useMessageStore(tabId);
   const storeMessages = sub?.messages;
-  const messages = (storeMessages && storeMessages.length > 0) ? storeMessages : messagesProp;
+  const messages = storeMessages ?? [];
+
+  // RECONCILE-GAP PROBE (verification gate, AC4): post-fix the render is ALWAYS
+  // the store, so `chosen` is always 'store' and renderedChars always == storeChars.
+  // If RENDER-DIVERGE still fires it only means the legacy tabState.messages
+  // snapshot (messagesProp) drifted from the store — informational, never a
+  // render defect, since the screen no longer reads the prop. Retained through
+  // the fix commit to prove the split-brain is gone, then removed.
+  // TEMP: remove with the whole reconcile-gap probe commit.
+  {
+    const lastAsstChars = (arr: Message[] | undefined): number => {
+      if (!arr) return -1;
+      const last = [...arr].reverse().find((m) => m.role === 'assistant');
+      if (!last) return -1;
+      return last.content.reduce(
+        (n, b) => n + (b && typeof b === 'object' && 'text' in b ? (b as { text: string }).text.length : 0),
+        0,
+      );
+    };
+    const storeChars = lastAsstChars(storeMessages);
+    const propChars = lastAsstChars(messagesProp);
+    const chosen = 'store'; // single source — render always reads the store now
+    const renderedChars = lastAsstChars(messages);
+    if (storeChars !== propChars && storeChars >= 0 && propChars >= 0) {
+      console.warn('[reconcile-gap] RENDER-DIVERGE', {
+        tabId,
+        isActive,
+        storeChars,
+        propChars,
+        chosen,
+        renderedChars,
+      });
+    }
+  }
 
   // ── Per-tab scroll (Migration Step 5.1) ────────────────────────────
   // Each keep-mounted TabView owns its OWN scroll container + bottom anchor and

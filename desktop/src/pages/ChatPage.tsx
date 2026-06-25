@@ -710,15 +710,24 @@ export default function ChatPage() {
         // useLayoutEffect scroll restore fires.
         userScrolledUpRef.current = true;
 
-        // Seed the MessageStore from the restored messages BEFORE the
-        // store→React sync effect re-subscribes (it re-runs on tab change and
-        // immediately calls setMessages(store.getSnapshot())). Without this, a
-        // tab whose store is empty/stale — while its tabState.messages holds the
-        // history — gets clobbered to [] → WelcomeScreen shows until a second
-        // switch. Skip during streaming: the store is authoritative then and
-        // replace() is a no-op mid-stream.
+        // Seed the MessageStore ONLY when it is empty (cold/restore case: app
+        // restart repopulates tabState.messages from persistence, but the
+        // module-level store registry does not survive a process restart, so a
+        // never-yet-loaded tab's store starts empty). This was previously an
+        // UNCONDITIONAL `store.replace(tabState.messages)` — the reverse-flow
+        // half of the reconcile-gap split-brain: it overwrote a store that
+        // already held authoritative (streamed/loaded) content with a possibly
+        // staler tabState.messages mirror, truncating the visible reply.
+        // The empty-guard inverts the semantics: the store is the authority; we
+        // only POPULATE an empty one, never CLOBBER a populated one. Synchronous
+        // length-check + replace (no await between) → no TOCTOU. Streaming is
+        // skipped (store authoritative; replace() is a phase-gated no-op anyway).
+        // (run_9db9f987 — reconcile-gap structural fix)
         if (!tabState.isStreaming) {
-          messageStoreRegistry.getOrCreate(tabId).replace(tabState.messages);
+          const switchStore = messageStoreRegistry.getOrCreate(tabId);
+          if (switchStore.messages.length === 0 && tabState.messages.length > 0) {
+            switchStore.replace(tabState.messages);
+          }
         }
         setMessages(tabState.messages);
         setSessionId(tabState.sessionId);
@@ -2092,10 +2101,13 @@ export default function ChatPage() {
     // Persist the submitted answers ONTO the ask_user_question block so the
     // renderer shows a read-only "Answered: …" summary instead of a disabled,
     // selection-less form. Written on the block (not component state) so it
-    // survives tab-switch + store reconcile. Mirror into tabState.messages too:
-    // handleSelectTab does store.replace(tabState.messages) on switch-back, which
-    // would otherwise clobber a store-only write (same parallel-write contract as
-    // the auqBlock append in useChatStreamingLifecycle.ts:1783-1791).
+    // survives tab-switch + store reconcile. The store write below is the
+    // authority (single render source); the tabState.messages mirror is kept in
+    // sync only so the cold-restore seed (handleSelectTab now seeds an EMPTY
+    // store from tabState.messages on app-restart) carries the answered state.
+    // Post reconcile-gap fix, switch-back no longer clobbers a populated store,
+    // so the mirror is belt-and-suspenders for the restart path, not a guard
+    // against reverse-flow truncation (run_9db9f987).
     if (tabId) {
       const writeAnswersOntoBlock = (msg: Message): Message => {
         let touched = false;
