@@ -164,10 +164,10 @@ describe('SessionTabBar', () => {
   });
 
   describe('active tab visual distinction', () => {
-    it('active tab carries the accent bottom-border class', () => {
+    it('active tab carries the blue bottom-border underline', () => {
       render(<SessionTabBar {...defaultProps} activeTabId="tab-1" />);
       const tabs = screen.getAllByRole('tab');
-      expect(tabs[1].className).toContain('border-[var(--color-primary)]');
+      expect(tabs[1].className).toContain('border-blue-500');
     });
 
     it('inactive tabs carry a transparent border placeholder (no layout shift)', () => {
@@ -183,10 +183,10 @@ describe('SessionTabBar', () => {
       tabs.forEach((t) => expect(t.className).toContain('border-b-2'));
     });
 
-    it('active tab uses the brighter hover-level background (fixes hover>selected inversion)', () => {
+    it('active tab uses the card-level background', () => {
       render(<SessionTabBar {...defaultProps} activeTabId="tab-1" />);
       const tabs = screen.getAllByRole('tab');
-      expect(tabs[1].className).toContain('bg-[var(--color-hover)]');
+      expect(tabs[1].className).toContain('bg-[var(--color-card)]');
     });
   });
 

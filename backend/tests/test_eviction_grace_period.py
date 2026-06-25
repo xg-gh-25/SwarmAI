@@ -17,6 +17,26 @@ from core.session_router import SessionRouter
 from core.session_unit import SessionState
 
 
+@pytest.fixture(autouse=True)
+def _owned_session_ids():
+    """Pin window-ownership to a deterministic empty set across platforms.
+
+    ``_evict_idle`` late-imports ``routers.settings.owned_session_ids`` to apply
+    the R6 §9.9 orphan-only filter (a window-owned chat tab is never evicted).
+    Its source of truth is ``open_tabs.json``: present on a dev macOS box (so
+    the real call returns live IDs and the synthetic test units look like
+    orphans → tests pass), but ABSENT on CI → the fail-safe returns ``None`` →
+    eviction refuses → the eviction-expecting tests fail. That divergence is an
+    environment leak, not a product bug (COE01 class). Pinning to ``set()`` =
+    "a window is connected and reports zero open tabs", so every synthetic unit
+    is an orphan and eviction logic is exercised deterministically. Tests that
+    don't reach the filter (channel_only, protected-state, all-fresh) are
+    unaffected.
+    """
+    with patch("routers.settings.owned_session_ids", return_value=set()):
+        yield
+
+
 @pytest.fixture
 def router():
     """Create a SessionRouter with mocked dependencies."""
