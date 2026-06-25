@@ -117,11 +117,76 @@ class CultivationProposal:
             return True  # Treat unparseable dates as expired (safe default)
 
     def is_safe_append(self) -> bool:
-        """Determine if this proposal is a safe additive change (auto-apply)."""
+        """Determine if this proposal is a safe additive change (auto-apply).
+
+        M2: authoritative zones (Architecture/Vision/Non-Goals/SELF.md) are NEVER
+        auto-applied — they fall through to escalation (or full block for SELF.md).
+        """
+        if is_protected_zone(self.target_doc, self.target_section):
+            return False  # authoritative zone — escalate, never auto-apply
         allowed = SAFE_APPEND_SECTIONS.get(self.target_doc)
         if allowed is None:
             return False  # PRODUCT.md, PROJECT.md changes need escalation
         return self.target_section in allowed
+
+
+# M2: authoritative zones — auto-cultivation is STRUCTURALLY blocked from these.
+# Only human edits / distillation may write here. (run_123a6530)
+# Intentionally a SUPERSET of ddd_orchestrator._SEMANTIC_SECTIONS (Non-Goals,
+# Vision, Architecture): cultivation also protects PRODUCT/Strategic Priorities
+# and the whole resident SELF.md. Broader-here is safe (more escalation, never
+# less). NOT a mirror — do not assume the two lists are identical.
+_PROTECTED_ZONES: dict[str, set[str] | None] = {
+    "SELF.md": None,  # None = whole doc protected (human/distill only)
+    "PRODUCT.md": {"Vision", "Non-Goals", "Strategic Priorities"},
+    "TECH.md": {"Architecture"},
+}
+
+# M2: instance-log / slip signatures — text that is an EVENT record, not a
+# generalizable lesson. These must never be cultivated into DDD.
+# ALL alternations are anchored to LINE-START (^\s*) so prose that merely
+# *mentions* "completed in 4s" / "exits 0" / "returncode" mid-sentence is NOT
+# wrongly dropped (adversarial: err toward accepting real lessons).
+_INSTANCE_LOG_RE = re.compile(
+    r"^\s*(stdout|stderr|exit|exit_code|EXIT)\s*[:=]"
+    r"|^\s*run_[0-9a-f]{6,}\b"
+    r"|^\s*\S+ completed in \d"      # a bare "<thing> completed in 4s" log line
+    r"|^\s*exits? \d"                 # a bare "exit 1" / "exits 0" log line
+    r"|^\s*returncode[:=\s]*\d",      # a bare "returncode: 0" log line
+    re.IGNORECASE,
+)
+
+
+def is_protected_zone(target_doc: str, target_section: str) -> bool:
+    """True if (doc, section) is an authoritative zone auto-cultivation must not touch."""
+    if target_doc not in _PROTECTED_ZONES:
+        return False
+    sections = _PROTECTED_ZONES[target_doc]
+    if sections is None:
+        return True  # whole-doc protection (e.g. SELF.md)
+    return target_section in sections
+
+
+def is_quality_lesson(lesson: str) -> bool:
+    """True if `lesson` is a generalizable, well-formed lesson worth cultivating.
+
+    Rejects (M2 gate):
+      - instance-logs / stdout fragments / run-id slips (event records, not lessons)
+      - fragments lacking a complete sentence (no clause of real length)
+    Errs toward ACCEPTING when ambiguous (knowledge loss > noise — like is_keep_class).
+    """
+    stripped = lesson.strip()
+    if not stripped:
+        return False
+    # Reject instance-logs / slips outright.
+    if _INSTANCE_LOG_RE.search(stripped):
+        return False
+    # Require at least one "sentence": >= 5 words AND ends like prose OR is long.
+    # A bare fragment ("done", "tests pass") has < 5 words and no sentence shape.
+    words = stripped.split()
+    if len(words) < 5:
+        return False
+    return True
 
 
 def _classify_lesson(lesson: str, project: str = "SwarmAI") -> Optional[tuple]:
@@ -134,6 +199,10 @@ def _classify_lesson(lesson: str, project: str = "SwarmAI") -> Optional[tuple]:
 
     # Reject empty or too short
     if len(stripped) < MIN_LESSON_LENGTH:
+        return None
+
+    # M2 quality gate: reject instance-logs / non-lesson fragments.
+    if not is_quality_lesson(stripped):
         return None
 
     result = classify_content(stripped, project=project)

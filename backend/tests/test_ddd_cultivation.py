@@ -775,3 +775,69 @@ class TestCultivateFromDecisions:
             )
             assert result["applied"] == 0
             assert result["escalated"] == 0
+
+
+# --- M2: lesson quality gate + authoritative-zone write-protect (run_123a6530) ---
+
+class TestLessonQualityGate:
+    """M2: auto-cultivation must reject instance-logs, require generalizable
+    class-tagged sentences, and never write to authoritative zones."""
+
+    def test_instance_log_rejected(self):
+        from core.ddd_cultivation import is_quality_lesson
+        # stdout fragment / instance log / slip — NOT a generalizable lesson
+        assert is_quality_lesson("stdout: foo=3 bar=7") is False
+        assert is_quality_lesson("EXIT:0") is False
+        assert is_quality_lesson("run_abc123 completed in 4.2s") is False
+
+    def test_no_sentence_rejected(self):
+        from core.ddd_cultivation import is_quality_lesson
+        # fragments without a complete sentence
+        assert is_quality_lesson("done") is False
+        assert is_quality_lesson("tests pass") is False
+
+    def test_generalizable_sentence_accepted(self):
+        from core.ddd_cultivation import is_quality_lesson
+        # a real lesson: generalizable claim, complete sentence
+        assert is_quality_lesson(
+            "Always verify a sub-agent's factual claims against the code before "
+            "acting on them, because the verdict can be right while a cited number is wrong."
+        ) is True
+
+    def test_authoritative_zone_blocks_autocultivation(self):
+        from core.ddd_cultivation import is_protected_zone
+        # NEGATIVE: auto-cultivation must be structurally blocked from these
+        assert is_protected_zone("TECH.md", "Architecture") is True
+        assert is_protected_zone("PRODUCT.md", "Vision") is True
+        assert is_protected_zone("PRODUCT.md", "Non-Goals") is True
+        # SELF.md is fully protected (human/distill only)
+        assert is_protected_zone("SELF.md", "anything") is True
+        # normal append target is NOT protected
+        assert is_protected_zone("IMPROVEMENT.md", "What Failed") is False
+
+    def test_classify_lesson_rejects_instance_log(self):
+        # Integration: the choke point _classify_lesson rejects an instance-log
+        # even if it is long enough to pass MIN_LESSON_LENGTH.
+        from core.ddd_cultivation import _classify_lesson
+        assert _classify_lesson("stdout: foo=3 bar=7 baz=9 qux=11 extra padding here") is None
+
+    def test_regex_does_not_overmatch_prose(self):
+        # Adversarial: prose that MENTIONS log-ish phrases mid-sentence must NOT
+        # be dropped — err toward accepting real lessons.
+        from core.ddd_cultivation import is_quality_lesson
+        assert is_quality_lesson(
+            "The build completed in 4s which is faster than before so caching works") is True
+        assert is_quality_lesson(
+            "The service exits 0 on success and 1 on any validation failure here") is True
+        assert is_quality_lesson(
+            "The returncode handling pattern is brittle and should be refactored") is True
+
+    def test_architecture_zone_blocks_auto_apply_integration(self):
+        # Adversarial #2 (load-bearing): TECH.md/Architecture IS in
+        # SAFE_APPEND_SECTIONS, so without the zone guard it would auto-apply.
+        # is_safe_append MUST return False for it (escalate, never auto-apply).
+        from core.ddd_cultivation import CultivationProposal
+        p = CultivationProposal(
+            target_doc="TECH.md", target_section="Architecture",
+            content="x" * 40, source_run_id="r", confidence=0.9)
+        assert p.is_safe_append() is False
