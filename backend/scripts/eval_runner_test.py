@@ -553,3 +553,84 @@ class TestTrajectoryCaptureDispatch:
         bad = dict(self._CASE, scenario={})
         r = evaluate_case(bad, Path("/tmp"))
         assert r["status"] == "skipped"
+
+    def test_infra_failure_is_error_not_failed(self):
+        # Spawn infra failure (CLI/timeout/throttle) -> error, NOT failed, so a
+        # transient outage can't lie the health score red (Gate-2 HIGH).
+        # Import via the SAME module path eval_trajectory_capture binds
+        # (scripts.scenario_runner) so the raised class identity matches the
+        # `except ScenarioInfraError` (avoids the dual-load identity trap).
+        import scripts.scenario_runner as sr
+        with patch("scripts.scenario_runner.run_scenario",
+                   side_effect=sr.ScenarioInfraError("claude CLI not found")):
+            r = evaluate_case(self._CASE, Path("/tmp"))
+        assert r["status"] == "error"
+
+    def test_grep_with_read_token_does_not_falsely_pass(self):
+        # Gate-2 MED: a Grep whose pattern contains "read" must NOT satisfy a
+        # "Read SELF.md" assertion — the agent never opened the file.
+        fake = ['Grep {"pattern": "read", "path": "/ws/.context/SELF.md"}']
+        with patch("scripts.scenario_runner.run_scenario", return_value=fake):
+            r = evaluate_case(self._CASE, Path("/tmp"))
+        assert r["status"] == "failed", "Grep != Read — must not false-pass"
+
+    def test_real_read_passes_under_tool_strict(self):
+        real = ['Read {"file_path": "/ws/.context/SELF.md"}']
+        with patch("scripts.scenario_runner.run_scenario", return_value=real):
+            r = evaluate_case(self._CASE, Path("/tmp"))
+        assert r["status"] == "passed"
+
+    def test_bash_tool_stripped_to_readonly(self):
+        # Gate-2 MED: a behavior case requesting Bash must be down-scoped to
+        # read-only before spawn (no arbitrary shell under bypassPermissions).
+        case = dict(self._CASE, allowed_tools=["Read", "Bash", "Write"])
+        captured = {}
+
+        def _spy(prompt, allowed_tools=None, timeout=120):
+            captured["tools"] = list(allowed_tools or [])
+            return ['Read {"file_path": "SELF.md"}']
+
+        with patch("scripts.scenario_runner.run_scenario", _spy):
+            evaluate_case(case, Path("/tmp"))
+        assert "Bash" not in captured["tools"]
+        assert "Write" not in captured["tools"]
+        assert "Read" in captured["tools"]
+
+
+class TestBehaviorCaseDefaultGating:
+    """Behavior cases must NOT run on a default/manual sweep (Gate-2 HIGH:
+    surprise 4-agent cost/flake bomb). Only with explicit behavior_trajectory
+    tag or case_filter."""
+
+    _BEHAVIOR = {"id": "GS_TRAJ_X", "eval_method": "behavior",
+                 "evaluators": ["trajectory_capture"], "dimension": "utility",
+                 "scenario": {"prompt": "read X"}, "expected_trajectory": ["Read X"]}
+    _NORMAL = {"id": "GS_NORM", "eval_method": "programmatic",
+               "evaluators": ["keyword_match"], "dimension": "recall",
+               "expected_response_contains": ["x"]}
+
+    def test_default_run_excludes_behavior_cases(self):
+        from backend.scripts.eval_runner import run_eval
+        gs = {"cases": [self._BEHAVIOR, self._NORMAL]}
+        with patch("scripts.scenario_runner.run_scenario") as spawn:
+            r = run_eval(gs, "manual", None, Path("/tmp"))
+        spawn.assert_not_called()
+        ran_ids = {c["id"] for c in r["cases"]}
+        assert "GS_TRAJ_X" not in ran_ids
+        assert "GS_NORM" in ran_ids
+
+    def test_explicit_tag_includes_behavior_cases(self):
+        from backend.scripts.eval_runner import run_eval
+        b = dict(self._BEHAVIOR, tags=["behavior_trajectory"])
+        gs = {"cases": [b]}
+        with patch("scripts.scenario_runner.run_scenario", return_value=['Read X']) as spawn:
+            r = run_eval(gs, "manual", None, Path("/tmp"), tags=["behavior_trajectory"])
+        spawn.assert_called_once()
+        assert "GS_TRAJ_X" in {c["id"] for c in r["cases"]}
+
+    def test_explicit_case_filter_includes_behavior_case(self):
+        from backend.scripts.eval_runner import run_eval
+        gs = {"cases": [self._BEHAVIOR]}
+        with patch("scripts.scenario_runner.run_scenario", return_value=['Read X']) as spawn:
+            r = run_eval(gs, "manual", ["GS_TRAJ_X"], Path("/tmp"))
+        spawn.assert_called_once()

@@ -749,6 +749,37 @@ PROGRAMMATIC_EVALUATORS = {"canary_pass", "file_contains", "keyword_match",
 LLM_EVALUATORS = {"goal_success", "quality_score"}
 
 
+def _eval_trajectory_tool_strict(case: dict, actual: list[str]) -> dict:
+    """Tool-name-anchored trajectory match for behavior cases.
+
+    The generic eval_trajectory matcher (substring + order-independent tokens)
+    is too loose for behavior verification: a `Grep {"pattern": "read", "path":
+    "IMPROVEMENT.md"}` step satisfies an expected `"Read IMPROVEMENT.md"` because
+    the tokens "read" + "improvement.md" both appear — even though the agent
+    NEVER read the file (adversarial Gate-2 MED, empirically confirmed false
+    positive). For behavior cases the FIRST token of each expected step is the
+    TOOL NAME and is mandatory: the actual step must start with that exact tool
+    name (case-insensitive). The remaining tokens fall through to the normal
+    matcher for the argument. This makes "did the agent actually Read X" mean
+    a real Read invocation, not a coincidental keyword.
+
+    Returns the standard eval_trajectory verdict dict.
+    """
+    expected = case.get("expected_trajectory", [])
+    if not expected:
+        return {"status": "skipped", "notes": "No expected_trajectory defined"}
+    # actual is always a list here (run_scenario returns list, infra-fail raised).
+    # Filter actual steps so only those headed by the expected tool name survive,
+    # THEN run the normal matcher. An expected step "Read X" with no actual Read
+    # step → no surviving candidate → matcher fails (correct: behavior absent).
+    def _tool_of(step: str) -> str:
+        return step.strip().split(None, 1)[0].lower() if step.strip() else ""
+
+    expected_tools = {e.strip().split(None, 1)[0].lower() for e in expected if e.strip()}
+    tool_anchored_actual = [s for s in actual if _tool_of(s) in expected_tools]
+    return eval_trajectory(case, actual_trajectory=tool_anchored_actual)
+
+
 def eval_trajectory_capture(case: dict) -> dict:
     """Behavior evaluator: spawn a real agent, observe its tool-call trajectory.
 
@@ -778,21 +809,39 @@ def eval_trajectory_capture(case: dict) -> dict:
     if not case.get("expected_trajectory"):
         return {"status": "skipped", "notes": "No expected_trajectory defined"}
 
-    allowed_tools = case.get("allowed_tools") or ["Read"]
+    # Lock behavior cases to READ-ONLY tools at the dispatch layer. A behavior
+    # case spawns with --permission-mode bypassPermissions; allowing Bash/Write
+    # there would let a future case author execute arbitrary shell. Intersect
+    # the case's request with a read-only allowlist (adversarial Gate-2 MED).
+    _READ_ONLY = {"Read", "Grep", "Glob"}
+    requested = case.get("allowed_tools") or ["Read"]
+    allowed_tools = [t for t in requested if t in _READ_ONLY] or ["Read"]
     timeout = case.get("scenario_timeout", 120)
 
     try:
-        from scripts.scenario_runner import run_scenario
+        from scripts.scenario_runner import run_scenario, ScenarioInfraError
     except ImportError:
         try:
-            from scenario_runner import run_scenario  # type: ignore
+            from scenario_runner import run_scenario, ScenarioInfraError  # type: ignore
         except ImportError:
             return {"status": "error", "notes": "scenario_runner unavailable"}
 
-    actual = run_scenario(prompt, allowed_tools=allowed_tools, timeout=timeout)
-    # Delegate the verdict to the existing trajectory matcher.
-    result = eval_trajectory(case, actual_trajectory=actual)
-    # Annotate so the report can show what was actually observed.
+    # Infra failure (CLI missing / timeout / spawn crash / unsafe prompt / exit
+    # with no tool calls) = `error`, NOT a behavior `failed`. Otherwise transient
+    # Bedrock throttling would lie the health score red (eval_llm_judge lesson).
+    try:
+        actual = run_scenario(prompt, allowed_tools=allowed_tools, timeout=timeout)
+    except ScenarioInfraError as e:
+        return {"status": "error", "notes": f"scenario infra failure: {e}",
+                "observed_trajectory": []}
+
+    # Behavior matcher: an expected "Read X" must be satisfied by an actual
+    # invocation of THAT tool, not a coincidental token match (a Grep whose
+    # pattern contains the word "read" must NOT satisfy a Read assertion —
+    # adversarial Gate-2 MED, empirically confirmed). We require the expected
+    # step's leading tool name to head an actual step before delegating to the
+    # substring/token matcher for the argument match.
+    result = _eval_trajectory_tool_strict(case, actual)
     result["observed_trajectory"] = actual
     return result
 
@@ -1004,6 +1053,15 @@ def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root
     # Then filter by specific case IDs
     if case_filter:
         cases = [c for c in cases if c["id"] in case_filter]
+
+    # Behavior cases (eval_method=behavior) spawn a REAL agent each (~17-120s +
+    # Bedrock cost) and are non-deterministic. They must NOT run on a default/
+    # manual sweep — only when EXPLICITLY requested via the behavior_trajectory
+    # tag or an explicit case_filter. Otherwise `eval_runner.py run` would be a
+    # surprise 4-agent cost/flake bomb (adversarial Gate-2 HIGH).
+    _behavior_requested = (tags and "behavior_trajectory" in tags) or bool(case_filter)
+    if not _behavior_requested:
+        cases = [c for c in cases if c.get("eval_method") != "behavior"]
 
     results = []
     for case in cases:

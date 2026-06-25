@@ -56,6 +56,16 @@ except Exception:  # pragma: no cover - import path fallback
 DEFAULT_TIMEOUT_SECONDS = 120
 
 
+class ScenarioInfraError(RuntimeError):
+    """The scenario could not be RUN (CLI missing, timeout, spawn crash, unsafe
+    prompt, or non-zero exit with zero tool calls) — an INFRA/config failure,
+    NOT "the agent ran and chose not to act". Callers must score this `error`
+    (red infra signal), never a behavior `failed`. Mirrors the eval_llm_judge
+    "infra failure = error not skip/fail" lesson so transient throttling can't
+    silently lie the health score.
+    """
+
+
 def parse_trajectory(stdout: str) -> list[str]:
     """Parse `claude --output-format stream-json` stdout into a trajectory.
 
@@ -120,13 +130,13 @@ def run_scenario(
     """
     # Defense-in-depth safety gate (prompts are trusted but bypassPermissions
     # is powerful — refuse a prompt embedding a destructive command). A rejected
-    # prompt returns [] (the scenario did not run -> assertion fails cleanly),
-    # never crashing the surrounding eval run.
+    # prompt is an INFRA/config problem, not "the agent chose not to act" —
+    # raise so the caller scores it `error`, never a misleading behavior `failed`.
     if _validate_canary_command is not None:
         safety_error = _validate_canary_command(prompt)
         if safety_error:
             logger.warning("scenario_runner: prompt rejected by safety filter: %s", safety_error)
-            return []
+            raise ScenarioInfraError(f"prompt rejected by safety filter: {safety_error}")
 
     claude_path = _resolve_claude_cli()
     if not claude_path:
@@ -134,7 +144,7 @@ def run_scenario(
             "scenario_runner: claude CLI not found — cannot run behavior scenario. "
             "Install: npm i -g @anthropic-ai/claude-code"
         )
-        return []
+        raise ScenarioInfraError("claude CLI not found")
 
     tools = allowed_tools or ["Read"]
     cmd = [
@@ -166,16 +176,25 @@ def run_scenario(
         )
     except subprocess.TimeoutExpired:
         logger.warning("scenario_runner: spawn timed out after %ss", timeout)
-        return []
-    except Exception as e:  # spawn failure -> no trajectory (assertion fails)
+        raise ScenarioInfraError(f"spawn timed out after {timeout}s")
+    except Exception as e:  # spawn failure = infra, not behavior
         logger.error("scenario_runner: spawn failed: %s: %s", type(e).__name__, e)
-        return []
+        raise ScenarioInfraError(f"spawn failed: {type(e).__name__}: {e}") from e
 
+    trajectory = parse_trajectory(proc.stdout or "")
     if proc.returncode != 0:
         logger.warning(
             "scenario_runner: claude exited %s: %s",
             proc.returncode, (proc.stderr or "")[:200],
         )
-        # Still attempt to parse — partial trajectory may have been emitted.
+        # Non-zero exit with NO tool calls parsed = the run did not actually
+        # execute (infra/auth/throttle), NOT "agent chose not to read". Raise
+        # so it scores `error`, not a misleading behavior `failed`. If tools
+        # WERE emitted before the failure, keep them (partial real behavior).
+        if not trajectory:
+            raise ScenarioInfraError(
+                f"claude exited {proc.returncode} with no tool calls: "
+                f"{(proc.stderr or '')[:150]}"
+            )
 
-    return parse_trajectory(proc.stdout or "")
+    return trajectory
