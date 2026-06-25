@@ -57,10 +57,10 @@ function multiBlockMessage(blocks: ContentBlock[]): Message {
   };
 }
 
-function renderView(blocks: ContentBlock[]) {
+function renderView(blocks: ContentBlock[], isStreaming = false) {
   return render(
     <ToastProvider>
-      <AssistantMessageView message={multiBlockMessage(blocks)} isStreaming={false} />
+      <AssistantMessageView message={multiBlockMessage(blocks)} isStreaming={isStreaming} />
     </ToastProvider>,
   );
 }
@@ -106,5 +106,23 @@ describe('AssistantMessageView — render fidelity (OT03 content-loss guard)', (
   it('an empty text block does not drop its sibling (graceful)', () => {
     renderView([textBlock(''), textBlock('SURVIVES_empty_sibling')]);
     expect(screen.getByText(/SURVIVES_empty_sibling/)).toBeTruthy();
+  });
+
+  it('renders EVERY text block while STREAMING (plaintext branch, no dropped block)', () => {
+    // run_00e0e872 added a streaming plaintext branch to the text ContentBlockRenderer
+    // (previously a pure markdown pass-through). This guard ensures the multi-block
+    // assembly still drops nothing on the streaming path — the OT01 content-loss class
+    // must hold for isStreaming=true too, not just the final render.
+    renderView(
+      [
+        textBlock('STREAM_FIRST_alpha analysis of the problem'),
+        textBlock('STREAM_SECOND_bravo intermediate reasoning step'),
+        textBlock('STREAM_THIRD_charlie the final conclusion'),
+      ],
+      /* isStreaming */ true,
+    );
+    expect(screen.getByText(/STREAM_FIRST_alpha/)).toBeTruthy();
+    expect(screen.getByText(/STREAM_SECOND_bravo/)).toBeTruthy();
+    expect(screen.getByText(/STREAM_THIRD_charlie/)).toBeTruthy();
   });
 });

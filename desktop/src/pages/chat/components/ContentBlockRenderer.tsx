@@ -58,7 +58,7 @@ export function ContentBlockRenderer({
     if (isStreaming) {
       return (
         <div className="markdown-content min-w-0">
-          <p className="text-[var(--color-text)] leading-normal whitespace-pre-wrap">
+          <p className="text-[var(--color-text)] mb-2 leading-normal whitespace-pre-wrap">
             {block.text || ''}
           </p>
         </div>
