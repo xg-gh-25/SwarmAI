@@ -747,11 +747,6 @@ Respond in this exact JSON format:
 PROGRAMMATIC_EVALUATORS = {"canary_pass", "file_contains", "keyword_match",
                            "trajectory_exact", "trajectory_in_order", "trajectory_any_order"}
 LLM_EVALUATORS = {"goal_success", "quality_score"}
-# Behavior evaluators spawn a REAL agent on a scenario and observe its actual
-# tool-call trajectory. Verdict is PROGRAMMATIC (trajectory match — no LLM
-# judge, no circularity), but the spawn is EXPENSIVE like the judge, so it is
-# gated by `programmatic_only` (the canary path must never spawn agents).
-BEHAVIOR_EVALUATORS = {"trajectory_capture"}
 
 
 def eval_trajectory_capture(case: dict) -> dict:
