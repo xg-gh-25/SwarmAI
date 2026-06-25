@@ -296,3 +296,166 @@ class TestPublishGate:
         passed, reason = quality_gate(confidence=9, repo="test/repo", body="short")
         assert not passed
         assert "too_short" in reason
+
+
+# --- FOLD: fold_patterns.fold_section (curation) ---
+
+_FOLD_DOC = """\
+# GitHub_Community — Improvement Log
+
+## What Worked
+- seed insight A (do not touch)
+
+## What Failed
+- failed thing B (do not touch)
+
+## Patterns Discovered
+
+- **Curated pattern one** — hand-written, keep.
+- **Curated pattern two** — also keep.
+- [auto 2026-05-01] New engagement pattern from a/b — old1
+- [auto 2026-05-02] New engagement pattern from a/c — old2
+- [auto 2026-06-20] New engagement pattern from d/e — recent1
+- [auto 2026-06-21] New engagement pattern from f/g — recent2
+
+## Publishing Rule
+- mirror to repo (do not touch)
+"""
+
+
+class TestFoldSection:
+    def _fold(self, keep_recent=2):
+        from datetime import date
+        from skills.s_github_community.scripts.fold_patterns import fold_section
+        return fold_section(_FOLD_DOC, "Patterns Discovered",
+                            keep_recent=keep_recent, today=date(2026, 6, 25))
+
+    def test_keeps_all_curated(self):
+        r = self._fold()
+        assert "Curated pattern one" in r.new_content
+        assert "Curated pattern two" in r.new_content
+        assert r.curated_kept == 2
+
+    def test_keeps_recent_auto_archives_old(self):
+        r = self._fold(keep_recent=2)
+        # 2 most-recent auto kept in doc
+        assert "recent1" in r.new_content and "recent2" in r.new_content
+        # 2 oldest auto moved out of doc
+        assert "old1" not in r.new_content and "old2" not in r.new_content
+        assert r.archived_count == 2
+        assert any("old1" in b for b in r.archived_bullets)
+
+    def test_sibling_sections_byte_identical(self):
+        # NEGATIVE: only Patterns Discovered may change.
+        r = self._fold()
+        for marker in ["## What Worked\n- seed insight A (do not touch)",
+                       "## What Failed\n- failed thing B (do not touch)",
+                       "## Publishing Rule\n- mirror to repo (do not touch)"]:
+            assert marker in r.new_content, f"section drifted: {marker!r}"
+
+    def test_pointer_line_added(self):
+        r = self._fold()
+        assert "folded to IMPROVEMENT-archive.md" in r.new_content
+
+    def test_absent_section_is_noop(self):
+        from datetime import date
+        from skills.s_github_community.scripts.fold_patterns import fold_section
+        r = fold_section(_FOLD_DOC, "Nonexistent Section", today=date(2026, 6, 25))
+        assert r.new_content == _FOLD_DOC
+        assert r.archived_count == 0
+
+
+# --- FIX: cultivate._apply_ddd_updates dedup + cap (治本) ---
+
+class TestApplyDddUpdatesDedupCap:
+    def _setup(self, tmp_path, monkeypatch, initial_md):
+        import skills.s_github_community.scripts.cultivate as cult
+        monkeypatch.setattr(cult, "DDD_DIR", tmp_path)
+        (tmp_path / "IMPROVEMENT.md").write_text(initial_md)
+        return cult
+
+    def _count_auto(self, tmp_path):
+        import re
+        t = (tmp_path / "IMPROVEMENT.md").read_text()
+        return len(re.findall(r"^- \[auto ", t, re.M))
+
+    def test_dedup_same_section_action_once(self, tmp_path, monkeypatch):
+        cult = self._setup(tmp_path, monkeypatch,
+                           "## Patterns Discovered\n\n- seed\n")
+        upd = [{"target": "IMPROVEMENT.md", "section": "Patterns Discovered",
+                "action": "New engagement pattern from a/b", "content_preview": "x"}]
+        cult._apply_ddd_updates(upd)
+        cult._apply_ddd_updates(upd)  # same (section, action) again
+        t = (tmp_path / "IMPROVEMENT.md").read_text()
+        assert t.count("New engagement pattern from a/b") == 1
+
+    def test_cap_keeps_max_auto_entries(self, tmp_path, monkeypatch):
+        from skills.s_github_community.scripts.cultivate import MAX_AUTO_ENTRIES
+        cult = self._setup(tmp_path, monkeypatch,
+                           "## Patterns Discovered\n\n- seed\n")
+        for i in range(50):
+            cult._apply_ddd_updates([{"target": "IMPROVEMENT.md",
+                "section": "Patterns Discovered",
+                "action": f"New engagement pattern from repo/{i}",
+                "content_preview": f"p{i}"}])
+        assert self._count_auto(tmp_path) == MAX_AUTO_ENTRIES
+
+    def test_multiline_preview_collapsed_to_single_line(self, tmp_path, monkeypatch):
+        # Adversarial B1: GitHub comment bodies contain newlines; a multi-line
+        # [auto] entry breaks the line-index CAP (orphans continuation lines).
+        # Preview must be collapsed to one line at write time.
+        cult = self._setup(tmp_path, monkeypatch,
+                           "## Patterns Discovered\n\n- seed\n")
+        cult._apply_ddd_updates([{"target": "IMPROVEMENT.md",
+            "section": "Patterns Discovered",
+            "action": "New engagement pattern from a/b",
+            "content_preview": "line one\n> quoted\n\nline two"}])
+        t = (tmp_path / "IMPROVEMENT.md").read_text()
+        auto_lines = [ln for ln in t.split("\n") if ln.lstrip().startswith("- [auto ")]
+        assert len(auto_lines) == 1
+        # The whole entry is on that one line — no orphaned continuation.
+        assert "line one" in auto_lines[0] and "line two" in auto_lines[0]
+        assert "\n> quoted" not in t  # no raw newline leaked into the doc
+
+    def test_dedup_applies_to_non_engagement_actions(self, tmp_path, monkeypatch):
+        # Adversarial B2: dedup was gated to "New engagement pattern" only;
+        # other auto actions (e.g. maintainer validation) must dedup too.
+        cult = self._setup(tmp_path, monkeypatch,
+                           "## Source Matrix\n\n- seed\n")
+        upd = [{"target": "IMPROVEMENT.md", "section": "Source Matrix",
+                "action": "Update x/y — maintainer confirmed approach",
+                "content_preview": "p"}]
+        cult._apply_ddd_updates(upd)
+        cult._apply_ddd_updates(upd)
+        t = (tmp_path / "IMPROVEMENT.md").read_text()
+        assert t.count("maintainer confirmed approach") == 1
+
+    def test_section_prefix_collision_targets_exact(self, tmp_path, monkeypatch):
+        # Adversarial B3: targeting "Patterns" must NOT write into "Patterns Discovered".
+        cult = self._setup(tmp_path, monkeypatch,
+            "## Patterns\n\n- short-sec seed\n\n## Patterns Discovered\n\n- long-sec seed\n")
+        cult._apply_ddd_updates([{"target": "IMPROVEMENT.md",
+            "section": "Patterns",
+            "action": "New engagement pattern from z/z", "content_preview": "p"}])
+        t = (tmp_path / "IMPROVEMENT.md").read_text()
+        # Entry must land in "## Patterns" body, before "## Patterns Discovered".
+        pat = t.index("## Patterns\n")
+        disc = t.index("## Patterns Discovered")
+        entry = t.index("z/z")
+        assert pat < entry < disc
+
+    def test_cap_never_drops_hand_written(self, tmp_path, monkeypatch):
+        # NEGATIVE: only [auto] entries are subject to the cap.
+        from skills.s_github_community.scripts.cultivate import MAX_AUTO_ENTRIES
+        hand = "\n".join(f"- **Curated {i}** — keep me." for i in range(5))
+        cult = self._setup(tmp_path, monkeypatch,
+                           f"## Patterns Discovered\n\n{hand}\n")
+        for i in range(50):
+            cult._apply_ddd_updates([{"target": "IMPROVEMENT.md",
+                "section": "Patterns Discovered",
+                "action": f"New engagement pattern from repo/{i}",
+                "content_preview": f"p{i}"}])
+        t = (tmp_path / "IMPROVEMENT.md").read_text()
+        for i in range(5):
+            assert f"Curated {i}" in t  # hand-written survive
+        assert self._count_auto(tmp_path) == MAX_AUTO_ENTRIES  # autos still capped

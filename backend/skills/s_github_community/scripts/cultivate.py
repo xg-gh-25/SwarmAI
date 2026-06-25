@@ -223,11 +223,22 @@ def _update_active_threads():
     project_path.write_text("\n".join(lines))
 
 
-def _apply_ddd_updates(updates: list[dict]):
-    """Append auto-generated insights to DDD docs.
+# Max [auto]-tagged entries kept per section. Beyond this the OLDEST auto
+# entries are dropped on append, so an unattended job can't grow a section
+# without bound (root cause of the 680-entry Patterns Discovered bloat,
+# run_4cbbc147). Hand-written (non-[auto]) entries are NEVER subject to this.
+MAX_AUTO_ENTRIES = 30
 
-    Each update is appended under the relevant section with an [auto] tag
-    and timestamp. Human can review/prune during weekly report review.
+
+def _apply_ddd_updates(updates: list[dict]):
+    """Append auto-generated insights to DDD docs (deduped + bounded).
+
+    Each update is appended under the relevant section with an [auto] tag and
+    timestamp. Two guards prevent unbounded growth (治本):
+      - DEDUP: if an entry for the same (section, action) already exists, skip.
+      - CAP:   after appending, keep only the newest MAX_AUTO_ENTRIES [auto]
+               entries in the section (oldest dropped). Hand-written entries
+               are never counted or dropped.
     """
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
@@ -238,42 +249,62 @@ def _apply_ddd_updates(updates: list[dict]):
 
         section = update["section"]
         action = update["action"]
-        preview = update.get("content_preview", "")[:150]
+        # B1 (adversarial): collapse preview to ONE line. GitHub comment bodies
+        # contain newlines; a multi-line [auto] entry breaks the line-index CAP
+        # (orphans continuation lines) and miscounts the cap. Single-line entries
+        # keep cultivate + fold_patterns agreeing on the data model.
+        preview = " ".join(update.get("content_preview", "").split())[:150]
 
-        # Format the auto-entry
-        entry = f"\n- [auto {today}] {action}"
+        entry = f"- [auto {today}] {action}"
         if preview:
             entry += f" — _{preview}_"
 
         content = target_file.read_text()
-
-        # Find the section header and append after existing content
         section_marker = f"## {section}"
-        if section_marker in content:
-            # Insert after the section's existing content (before next ## or EOF)
-            lines = content.split("\n")
-            insert_idx = None
-            in_section = False
-            for i, line in enumerate(lines):
-                if section_marker in line:
-                    in_section = True
-                    continue
-                if in_section and line.startswith("## "):
-                    insert_idx = i
-                    break
-            if insert_idx is None and in_section:
-                # Section goes to EOF — append at end
-                lines.append(entry)
-            elif insert_idx:
-                lines.insert(insert_idx, entry)
-            else:
-                # Section not found properly, append at end of file
-                lines.append(entry)
-            target_file.write_text("\n".join(lines))
-        else:
-            # Section doesn't exist — append at end of file
+        lines = content.split("\n")
+
+        # Locate the section header by EXACT match — B3 (adversarial): startswith
+        # would let target "Patterns" write into "Patterns Discovered".
+        sec_start = next(
+            (i for i, ln in enumerate(lines) if ln.strip() == section_marker),
+            None,
+        )
+        if sec_start is None:
+            # Section doesn't exist — create it with this entry.
             with open(target_file, "a") as f:
                 f.write(f"\n\n{section_marker}\n{entry}\n")
+            continue
+
+        end = next(
+            (i for i in range(sec_start + 1, len(lines)) if lines[i].startswith("## ")),
+            len(lines),
+        )
+
+        # DEDUP: same (section, action) already auto-logged in THIS section → skip.
+        # B2 (adversarial): dedup ALL auto actions, not just engagement patterns
+        # (maintainer-validation updates to Source Matrix were duplicating).
+        # Date-independent: match the action tail so re-logging across days dedups.
+        if any(
+            action in lines[i] and lines[i].lstrip().startswith("- [auto ")
+            for i in range(sec_start + 1, end)
+        ):
+            continue
+
+        # Insert the new entry at the end of the section body.
+        lines.insert(end, entry)
+        end += 1  # span grew by one
+
+        # CAP: within the section body, find [auto] entry line indices in order
+        # (oldest→newest = document order). Drop the oldest beyond the cap.
+        auto_idx = [
+            i for i in range(sec_start + 1, end)
+            if lines[i].lstrip().startswith("- [auto ")
+        ]
+        if len(auto_idx) > MAX_AUTO_ENTRIES:
+            drop = set(auto_idx[: len(auto_idx) - MAX_AUTO_ENTRIES])
+            lines = [ln for i, ln in enumerate(lines) if i not in drop]
+
+        target_file.write_text("\n".join(lines))
 
 
 if __name__ == "__main__":
