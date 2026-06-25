@@ -1376,6 +1376,18 @@ def _get_health_highlights(working_directory: str) -> list[str]:
     except Exception:
         pass  # Non-blocking — tracker absence must never break briefing
 
+    # L4.3b: Growth report headline — constitution (SOUL/AGENT/STEERING) writes
+    # since last week, git-tracked + visible. This is the "what I grew" mirror:
+    # the agent shapes its own root, and every such write surfaces here as a
+    # flagged headline (run_448a4f7f, D3) — report-after, not approve-before.
+    try:
+        from core.eval_service import EvalService
+        gr = EvalService().growth_report(since_days=7)
+        for gl in EvalService._growth_briefing_lines(gr):
+            lines.append(gl)
+    except Exception:
+        pass  # Non-blocking — growth report must never break briefing
+
     # L4.4: Evolution governance proposals (L1) pending review
     evolution_proposals_path = (
         Path(working_directory) / ".context" / ".evolution_proposals.json"
@@ -1707,7 +1719,7 @@ def _detect_active_coding_project_impl(workspace: Path) -> str | None:
 # ---------------------------------------------------------------------------
 
 def _render_self_eval_lines(
-    health: dict, tracker_red: bool, case_count: int
+    health: dict, tracker_red: bool, case_count: int, draft_skeletons: int = 0
 ) -> list[str]:
     """Render the briefing self-eval line(s) with divergence awareness (M4-3).
 
@@ -1762,7 +1774,17 @@ def _render_self_eval_lines(
         if lines:
             return lines
 
-        return [f"**Self-Eval:** {case_count} cases | Score: {score} | Last: {last_date}"]
+        line = f"**Self-Eval:** {case_count} cases | Score: {score} | Last: {last_date}"
+        # M5 Part 2 breadcrumb: auto-seeded DRAFT skeletons are excluded from the
+        # score (behavior cases). They are a refine-me to-do — the machine found
+        # WHAT to test (a recurring CLASS), the human designs HOW (a real pressure
+        # scenario). Surface the backlog so it doesn't rot silently.
+        if draft_skeletons > 0:
+            line += (
+                f"\n  - ⚗️ {draft_skeletons} auto-seeded draft skeleton(s) await "
+                f"refinement into pressure cases (run pipeline / edit golden_set)"
+            )
+        return [line]
     except Exception:
         # Briefing helpers must never raise.
         return []
@@ -1990,8 +2012,22 @@ def build_session_briefing(
                 except Exception:
                     tracker_red = False  # tracker absence must never break briefing
 
+                # M5 Part 2: count auto-seeded draft skeletons (behavior drafts
+                # tagged auto_seed_skeleton) so the briefing surfaces the
+                # refine-me backlog. Best-effort — never break the section.
+                draft_skeletons = 0
+                try:
+                    draft_skeletons = sum(
+                        1 for c in svc._cases
+                        if c.get("tier") == "draft"
+                        and "auto_seed_skeleton" in (c.get("tags") or [])
+                    )
+                except Exception:
+                    draft_skeletons = 0
                 sections.extend(
-                    _render_self_eval_lines(health, tracker_red, svc.case_count)
+                    _render_self_eval_lines(
+                        health, tracker_red, svc.case_count, draft_skeletons
+                    )
                 )
         except Exception as exc:
             logger.debug("Self-eval briefing failed: %s", exc)

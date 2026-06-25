@@ -2,16 +2,23 @@
 
 The router takes a JudgmentClassification and decides:
   - operational / counter_state="counted"  -> tracker.record() ONCE (auto-count)
-  - cognitive / counter_state="pending_confirm" -> park in pending queue,
-    tracker.record() NEVER called, emit a SOUL Intake Gate brief.
+  - cognitive / counter_state="pending_confirm" -> RECORD (idempotent by
+    correction_ref, confidence>=0.6) AND park in pending queue + emit Intake brief.
 
-DoD negative tests:
-  - AC3: CLASS_A classification NEVER auto-increments the counter.
+CONTRACT CHANGE (run_448a4f7f, XG directive): the prior invariant "cognitive
+NEVER records; counter is human-verified" was deliberately overridden —
+recording a recurring mistake is cognition, not a permission item. The human
+gate moves to the constitution-WRITE step (git+report), not the recording step.
+
+DoD tests:
+  - AC1: cognitive (conf>=0.6) records WITH correction_ref AND parks.
+  - confidence floor: cognitive below 0.6 parks but does NOT record.
   - AC4: operational classification calls record() exactly once (auto path live).
   - AC6: cognitive routing emits an Intake brief (classify/parent/conflict/budget).
 
-Safety (design §9): router NEVER writes SOUL/AGENT/STEERING. The pending queue
-is the only persistence; promotion happens later through the human gate.
+Safety (design §9): router NEVER writes SOUL/AGENT/STEERING. It records the
+counter + persists the pending queue; constitution writes happen elsewhere,
+git-tracked + report-surfaced; the human gate is veto-via-revert.
 """
 
 from __future__ import annotations
@@ -79,24 +86,63 @@ def pending_path(tmp_path):
     return tmp_path / "governance_pending.json"
 
 
-# --- AC3 (NEGATIVE): CLASS_A NEVER auto-increments the counter ---
+# --- AC1 (run_448a4f7f): cognitive NOW auto-records AND parks (two views) ---
+# CONTRACT CHANGE (XG directive): the prior invariant "cognitive never records"
+# was deliberately overridden. Recording a recurring mistake is an act of
+# self-awareness (cognition), not a permission item — the human gate moves to
+# the constitution-WRITE step, not the recording step. So a cognitive record now
+# BOTH advances the counter (with correction_ref dedup + confidence floor teeth)
+# AND parks for the Intake brief. record() is called WITH correction_ref so the
+# autonomous escalate loop fires on real recurrence without being asked.
 
-def test_ac3_class_a_never_calls_record(pending_path):
-    """AC3: a CLASS_A (cognitive) classification must NOT call tracker.record()."""
+def test_cognitive_now_records_with_ref(pending_path):
+    """A CLASS_A (cognitive, confidence>=0.6) classification calls record() WITH
+    its correction_ref (idempotency teeth), and STILL parks."""
     tracker = MagicMock()
-    route_classification(_cognitive("CLASS_A"), tracker, pending_path=pending_path)
-    tracker.record.assert_not_called()
+    jc = _cognitive("CLASS_A")
+    route_classification(jc, tracker, pending_path=pending_path)
+    tracker.record.assert_called_once()
+    # record must carry the correction_ref so re-routing is idempotent
+    _, kwargs = tracker.record.call_args
+    assert kwargs.get("correction_ref") == jc.correction_ref, \
+        "cognitive record must pass correction_ref for dedup"
+    # AND it still parks (two views: counter + human dashboard)
+    queue = json.loads(pending_path.read_text())
+    assert len(queue) == 1 and queue[0]["class_name"] == "CLASS_A"
 
 
-def test_ac3_all_cognitive_classes_park(pending_path):
-    """Every cognitive CLASS parks in pending_confirm, none auto-count."""
+def test_all_cognitive_classes_record_and_park(pending_path):
+    """Every cognitive CLASS both records (with ref) and parks."""
     tracker = MagicMock()
     for cls in ("CLASS_A", "CLASS_B", "CLASS_C"):
         route_classification(_cognitive(cls), tracker, pending_path=pending_path)
+    assert tracker.record.call_count == 3
+    queue = json.loads(pending_path.read_text())
+    assert {item["class_name"] for item in queue} == {"CLASS_A", "CLASS_B", "CLASS_C"}
+
+
+def test_low_confidence_cognitive_parks_but_does_not_record(pending_path):
+    """Confidence floor: a cognitive item below 0.6 is PARKED (human can still
+    see/confirm it) but does NOT auto-record — a low-confidence LLM guess must
+    not silently advance the autonomous counter toward a proposal."""
+    tracker = MagicMock()
+    jc = _cognitive("CLASS_A")
+    jc.confidence = 0.4
+    route_classification(jc, tracker, pending_path=pending_path)
     tracker.record.assert_not_called()
     queue = json.loads(pending_path.read_text())
-    assert len(queue) == 3
-    assert {item["class_name"] for item in queue} == {"CLASS_A", "CLASS_B", "CLASS_C"}
+    assert len(queue) == 1, "low-confidence item still parks for human review"
+
+
+def test_cognitive_record_degrades_gracefully(pending_path):
+    """If record() raises, routing must still park + return the brief (counting
+    must never break routing — mirrors the operational path's guard)."""
+    tracker = MagicMock()
+    tracker.record.side_effect = RuntimeError("tracker locked")
+    jc = _cognitive("CLASS_A")
+    brief = route_classification(jc, tracker, pending_path=pending_path)
+    assert brief is not None, "record failure must not lose the Intake brief"
+    assert len(json.loads(pending_path.read_text())) == 1
 
 
 # --- AC4: operational calls record() exactly once (auto-count path LIVE) ---
@@ -351,3 +397,76 @@ def test_proposal_dedup_kind_aware(tmp_path):
     escalate_class("CLASS_B", tracker, proposals_path=proposals)
     written = json.loads(proposals.read_text())
     assert len(written) == 1  # deduped by (source_class, kind)
+
+
+# --- M5 Part 2 (run_0305426d): the NOISE GATE ---------------------------------
+# Auto-grow the eval suite ONLY from CLASSIFIED non-noise corrections. The
+# classifier's counter_state is the single gate: pending_confirm (cognitive
+# CLASS_A/B/C) seeds a draft skeleton; ignored (operator/transient noise) and
+# counted (low-stakes operational) NEVER seed. This is what stopped the
+# GS_C_test-ses_* pollution that the old blind hot-path seed produced.
+
+def _seed_spy(monkeypatch):
+    """Patch seed_from_correction at its source module and return the call log.
+
+    classify_new_corrections imports it locally (from core.eval_hooks import
+    seed_from_correction), so patch core.eval_hooks.seed_from_correction.
+    """
+    seeded = []
+    import core.eval_hooks as eh
+    monkeypatch.setattr(eh, "seed_from_correction",
+                        lambda *a, **k: seeded.append(a))
+    return seeded
+
+
+def _route_one(monkeypatch, jc, tmp_path):
+    """Drive classify_new_corrections with a single record whose classification
+    is forced to `jc` (bypass the real classifier / Bedrock).
+
+    classify_new_corrections imports classify_correction LOCALLY from
+    judgment_classifier, so patch it at that source module (not on the router).
+    """
+    import core.evolution.judgment_classifier as jc_mod
+    monkeypatch.setattr(jc_mod, "classify_correction", lambda rec, **k: jc)
+    corpus = tmp_path / "corrections.jsonl"
+    _write_corpus(corpus, [{"ts": 100.0, "session_id": "z", "type": "user_correction",
+                            "prompt": "that's wrong"}])
+    return classify_new_corrections(
+        corrections_path=corpus,
+        watermark_path=tmp_path / "wm.json",
+        pending_path=tmp_path / "pending.json",
+        tracker=MagicMock(),
+    )
+
+
+def test_noise_gate_pending_confirm_seeds_one(tmp_path, monkeypatch):
+    seeded = _seed_spy(monkeypatch)
+    _route_one(monkeypatch, _cognitive("CLASS_A"), tmp_path)
+    assert len(seeded) == 1, "a classified CLASS_A cognitive correction must seed a draft"
+    # seeded with the real class + correction_ref, not UNCLASSIFIED
+    args = seeded[0]
+    assert args[0] == "1781696331.24:e95e5923"  # correction_ref
+    assert args[2] == "CLASS_A"
+
+
+def test_noise_gate_ignored_seeds_nothing(tmp_path, monkeypatch):
+    seeded = _seed_spy(monkeypatch)
+    _route_one(monkeypatch, _ignored(), tmp_path)
+    assert seeded == [], "operator/transient NOISE (ignored) must NEVER seed a case"
+
+
+def test_noise_gate_operational_seeds_nothing(tmp_path, monkeypatch):
+    seeded = _seed_spy(monkeypatch)
+    _route_one(monkeypatch, _operational(), tmp_path)
+    assert seeded == [], "low-stakes operational (counted) must NEVER seed a case"
+
+
+def test_noise_gate_seed_failure_does_not_break_routing(tmp_path, monkeypatch):
+    """A seeding exception is swallowed (degrade-to-log) — routing still completes."""
+    import core.eval_hooks as eh
+    def _boom(*a, **k):
+        raise RuntimeError("golden_set locked")
+    monkeypatch.setattr(eh, "seed_from_correction", _boom)
+    s = _route_one(monkeypatch, _cognitive("CLASS_B"), tmp_path)
+    assert s["processed"] == 1, "routing must complete even if seeding raises"
+    assert s["cognitive"] == 1

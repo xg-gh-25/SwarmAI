@@ -6,15 +6,27 @@ Takes a :class:`JudgmentClassification` and routes it by ``counter_state``
   - counter_state="counted"  (operational / low-risk)
         -> ``tracker.record(class)`` ONCE. Auto-counts toward the 3x threshold.
   - counter_state="pending_confirm"  (cognitive / CLASS_*)
-        -> append to the pending-confirm queue (flock-safe JSON), build a SOUL
-           Intake Gate brief, and return it. ``tracker.record`` is NEVER called.
-           The 3x counter for judgment patterns is human-verified by construction —
-           a misclassification cannot silently mature toward a governance proposal.
+        -> RECORD (idempotent by correction_ref, confidence>=0.6) AND append to
+           the pending-confirm queue (flock-safe JSON) + build a SOUL Intake Gate
+           brief. Two views: the counter feeds the autonomous escalate loop; the
+           queue feeds the human dashboard.
 
-Safety invariants (design §9):
-  - NEVER writes to SOUL/AGENT/STEERING. Only the pending queue is persisted.
-  - The pending queue is the P3 dashboard's input; promotion happens there,
-    through the human Intake Gate, which fires record() on accept (not here).
+CONTRACT CHANGE (run_448a4f7f, XG directive): the prior invariant —
+"cognitive NEVER records; the counter is human-verified" — was deliberately
+overridden. Recording a recurring mistake is an act of self-awareness
+(cognition), not a permission item. The human mentor's oversight moves to the
+constitution-WRITE step (git-tracked + surfaced in the growth report), NOT a gate
+on whether the agent may COUNT its own mistakes. Misclassification is bounded not
+by withholding the count but by precision teeth: correction_ref dedup +
+confidence floor + the upstream is_cognitive_class axis guard.
+
+Safety invariants (design §9, still hold):
+  - This module NEVER writes to SOUL/AGENT/STEERING. It records the counter and
+    persists the pending queue; constitution writes happen elsewhere, git-tracked
+    and report-surfaced.
+  - The human Intake Gate (eval_service.decide_governance) remains the accept path
+    (register_rule/register_gate); it is now a mentor veto-via-revert over an
+    autonomous proposal, not a blocking pre-count approval.
 
 Key public symbols:
     route_classification — route one classification; returns Intake brief | None
@@ -39,6 +51,13 @@ _BUDGET_NOTE = (
     "Principles 5/5 (full), AGENT rules <=25, STEERING 15/15 (full). "
     "Full slot -> propose retire-one before promote."
 )
+
+# Confidence floor for autonomous cognitive recording (run_448a4f7f). A cognitive
+# classification below this still PARKS for human review but does NOT auto-advance
+# the counter — a low-confidence LLM guess must not mature toward a proposal on its
+# own. Live pending items run 0.82-0.93, so 0.6 admits genuine signal and rejects
+# malformed/uncertain guesses. The human can still confirm a parked low-conf item.
+_COGNITIVE_RECORD_CONFIDENCE_FLOOR = 0.6
 
 
 def _default_pending_path() -> Path:
@@ -233,6 +252,32 @@ def classify_new_corrections(
                 summary["cognitive"] += 1
             else:
                 summary["operational"] += 1
+
+            # M5 Part 2 (run_0305426d): auto-grow the eval suite from REAL,
+            # CLASSIFIED failures — the noise gate. Seed a golden-case DRAFT
+            # skeleton ONLY for cognitive CLASS_A/B/C corrections (counter_state
+            # == "pending_confirm"). Operator/transient noise (counter_state ==
+            # "ignored") and low-stakes operational failures ("counted") never
+            # seed — that is what stopped the GS_C_test-ses_* pollution. The
+            # classifier (run above) IS the single noise gate; we route seeding
+            # through it instead of the old blind UNCLASSIFIED hot-path seed.
+            # Idempotent (auto_seed_case skips an existing GS_<id>) + watermark-
+            # gated (each record processed once). Best-effort: a seeding failure
+            # must never break classification/routing (degrade-to-log).
+            if jc.counter_state == "pending_confirm":
+                try:
+                    from core.eval_hooks import seed_from_correction
+
+                    seed_from_correction(
+                        jc.correction_ref,
+                        jc.evidence[0] if jc.evidence else "",
+                        jc.class_name or "UNCLASSIFIED",
+                    )
+                except Exception as exc:  # noqa: BLE001 — seeding must not break routing
+                    logger.debug(
+                        "classify_new_corrections seed degraded: %s: %s",
+                        type(exc).__name__, exc,
+                    )
 
         # Monotonic write: never regress below what's already on disk.
         on_disk = _read_watermark(watermark_path)
@@ -448,7 +493,38 @@ def route_classification(jc, tracker, pending_path: Path | None = None) -> dict 
             logger.debug("router record() degraded: %s: %s", type(exc).__name__, exc)
         return None
 
-    # counter_state == "pending_confirm": cognitive. Park, NEVER auto-count.
+    # counter_state == "pending_confirm": cognitive. RECORD (autonomous
+    # self-awareness) AND park (human-visible Intake brief) — two views.
+    #
+    # CONTRACT CHANGE (run_448a4f7f, XG directive): the prior invariant was
+    # "cognitive parks but NEVER records — the counter is human-verified." That
+    # is deliberately overridden: recording a recurring mistake is cognition, not
+    # a permission item. The human mentor's oversight moves to the constitution-
+    # WRITE step (git-tracked + surfaced in the growth report), NOT a gate on
+    # whether the agent may COUNT its own mistakes. So the live cognitive stream
+    # now advances the counter, and the existing autonomous escalate_class loop
+    # (evolution_maintenance_hook) proposes a structural fix on real recurrence
+    # WITHOUT being asked.
+    #
+    # Precision teeth (Gate-1, so misclassification can't flood the counter):
+    #   - correction_ref dedup: record() is idempotent by ref. The live pending
+    #     queue parked ONE correction_ref 3x with 3 different evidence strings —
+    #     text-dedup would triple-count; ref-dedup counts it once.
+    #   - confidence floor (0.6): a low-confidence LLM guess parks for human
+    #     review but does NOT auto-advance the autonomous counter.
+    # The axis guard upstream (is_cognitive_class) already makes operational
+    # noise structurally unable to reach this branch.
+    if jc.confidence >= _COGNITIVE_RECORD_CONFIDENCE_FLOOR:
+        try:
+            tracker.record(
+                jc.class_name,
+                evidence=(jc.evidence[0] if jc.evidence else ""),
+                correction_ref=jc.correction_ref,
+            )
+        except Exception as exc:  # noqa: BLE001 — counting must never break routing
+            logger.debug("router cognitive record() degraded: %s: %s",
+                         type(exc).__name__, exc)
+
     item = {
         "correction_ref": jc.correction_ref,
         "axis": jc.axis,

@@ -52,6 +52,7 @@ def _fresh_entry() -> dict:
         "post_gate_count": 0,
         "resolved": False,
         "evidence": [],
+        "recorded_refs": [],  # seen correction_refs for idempotent recording
     }
 
 
@@ -259,8 +260,21 @@ class CorrectionClassTracker:
             _flock_unlock(fd)
             fd.close()
 
-    def record(self, class_name: str, evidence: str = "") -> None:
-        """Record a correction event for a class."""
+    def record(self, class_name: str, evidence: str = "",
+               correction_ref: str | None = None) -> None:
+        """Record a correction event for a class.
+
+        ``correction_ref`` (optional): a stable id for the underlying correction.
+        When provided, recording is IDEMPOTENT by ref — re-recording the same
+        correction_ref is a no-op (no count increment, no evidence append). This
+        is the precision teeth for autonomous cognitive recording (run_448a4f7f):
+        the live pending queue parked ONE correction_ref 3x with 3 different
+        evidence strings, so text-dedup would triple-count. The seen-ref ledger
+        (``recorded_refs``) persists in the entry — separate from the 10-cap
+        evidence list — so dedup survives evidence roll-off AND process reloads
+        (the maintenance hook builds a fresh tracker each session). When omitted
+        (the operational ``counted`` path), behavior is unchanged: every call counts.
+        """
         ckey = canonical_class_key(class_name)
         if not ckey:
             # Blank/whitespace class name -> nothing to record (Gate-1 AC5: no crash).
@@ -274,6 +288,17 @@ class CorrectionClassTracker:
                 self._state[ckey] = _fresh_entry()
 
             entry = self._state[ckey]
+
+            # Idempotency by correction_ref (precision teeth). The ledger lives in
+            # the entry so it persists to disk and is checked under the same lock
+            # as the count mutation (atomic). Unbounded by design — it must NOT
+            # share the 10-cap evidence window, or an aged-off ref re-inflates.
+            if correction_ref is not None:
+                seen = entry.setdefault("recorded_refs", [])
+                if correction_ref in seen:
+                    return  # already counted this correction — no-op
+                seen.append(correction_ref)
+
             entry["count"] += 1
             entry["last"] = today
 

@@ -96,6 +96,56 @@ class TestRecordCorrection:
         assert state["evidence"] == []
 
 
+class TestRecordIdempotentByRef:
+    """run_448a4f7f: autonomous cognitive recording must be idempotent by
+    correction_ref. The live data showed ONE correction_ref (d6d44889) parked
+    3x in governance_pending.json with 3 DIFFERENT evidence strings — text-dedup
+    would triple-count it. Dedup MUST key on the stable correction_ref, with a
+    persisted seen-ref ledger separate from the 10-cap evidence list (Gate-1)."""
+
+    def test_record_with_ref_counts_once(self, tracker):
+        """Same correction_ref recorded twice → count increments ONCE."""
+        tracker.record("CLASS_A", evidence="symptom phrasing 1", correction_ref="r-abc")
+        tracker.record("CLASS_A", evidence="symptom phrasing 2 (different text)",
+                       correction_ref="r-abc")
+        state = tracker.get_class("CLASS_A")
+        assert state["count"] == 1, "same correction_ref must not double-count"
+
+    def test_distinct_refs_count_separately(self, tracker):
+        tracker.record("CLASS_A", evidence="e1", correction_ref="r-1")
+        tracker.record("CLASS_A", evidence="e2", correction_ref="r-2")
+        assert tracker.get_class("CLASS_A")["count"] == 2
+
+    def test_ref_dedup_survives_evidence_cap_rolloff(self, tracker):
+        """The seen-ref ledger must NOT be the 10-cap evidence list: after >10
+        distinct refs, re-recording the FIRST ref must still be a no-op even
+        though its evidence aged out of the rolling window."""
+        for i in range(12):
+            tracker.record("CLASS_A", evidence=f"e{i}", correction_ref=f"r-{i}")
+        assert tracker.get_class("CLASS_A")["count"] == 12
+        # r-0's evidence has rolled off the 10-cap; re-record must still no-op
+        tracker.record("CLASS_A", evidence="e0-again", correction_ref="r-0")
+        assert tracker.get_class("CLASS_A")["count"] == 12, \
+            "ref dedup must persist beyond the evidence-retention window"
+
+    def test_ref_dedup_persists_across_reload(self, tmp_path):
+        """The seen-ref ledger persists to disk — a new tracker instance still
+        dedupes (cross-session: the maintenance hook builds a fresh tracker)."""
+        sp = tmp_path / "tracker.json"
+        t1 = CorrectionClassTracker(state_path=sp)
+        t1.record("CLASS_A", evidence="e", correction_ref="r-x")
+        t2 = CorrectionClassTracker(state_path=sp)
+        t2.record("CLASS_A", evidence="e again", correction_ref="r-x")
+        assert t2.get_class("CLASS_A")["count"] == 1
+
+    def test_no_ref_preserves_legacy_behavior(self, tracker):
+        """record() without a correction_ref keeps current behavior (the
+        operational 'counted' path passes no ref) — every call counts."""
+        tracker.record("CLASS_A", evidence="a")
+        tracker.record("CLASS_A", evidence="b")
+        assert tracker.get_class("CLASS_A")["count"] == 2
+
+
 class TestRegisterGate:
     """Test gate registration."""
 
