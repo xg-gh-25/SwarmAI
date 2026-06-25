@@ -69,6 +69,13 @@ def _make_unit(state: SessionState = SessionState.STREAMING) -> SessionUnit:
     unit._streaming_start_time = None
     unit._consecutive_unstick_timeouts = 0
     unit._UNSTICK_CIRCUIT_BREAKER_THRESHOLD = 3
+    # R3d/R4: recovery decisions now route through the RecoveryCoordinator, and
+    # _crash_to_cold_async serializes under _lock. Give the bare unit a real
+    # coordinator + lock + not-stopped turn.
+    unit._user_stopped_current_turn = False
+    unit._lock = asyncio.Lock()
+    from core.session_healing import HealingLoop, RecoveryCoordinator
+    unit._recovery_coordinator = RecoveryCoordinator(HealingLoop())
     return unit
 
 

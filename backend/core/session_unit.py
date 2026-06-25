@@ -129,6 +129,36 @@ _OOM_COOLDOWN_CAP: float = 120.0  # max backoff cap for OOM retries
 # See: 2026-04-02 diagnosis — auto_recover_stuck killed session with stall=1s.
 AUTO_RECOVER_STALL_THRESHOLD: float = 180.0
 
+# ── R6 Step B: concurrent-streaming admission cap (peak-OOM guard) ──────────
+# The two-limit split (design §9.4): spawn_budget governs how many sessions may
+# EXIST (idle ≈ 600-800MB → cheap → follows real RAM, NO ceiling). This separate
+# cap governs how many may STREAM AT ONCE (streaming ≈ 2GB peak → expensive →
+# locked). They are ORTHOGONAL — Step B does NOT touch spawn_budget's penalty
+# (R6a lesson: _CONCURRENT_PENALTY_FACTOR IS the COE05 simultaneous-peak floor;
+# changing it reopens COE05). 3027ea6c failed by conflating both into one number.
+#
+# _streaming_count is the single source of truth, mutated ONLY inside
+# _transition() (the one sync state chokepoint — verified: :779 self.state= is
+# the ONLY direct assignment, so every STREAMING entry/exit, incl kill/crash/
+# disconnect, routes through it → the counter cannot leak). A new send() turn
+# waits (poll) when the count is at the cap; continue_with_answer / permission /
+# retry paths COUNT toward the cap but are NEVER blocked (a user waiting on their
+# own answer must not queue behind others). Poll (not Event) is deliberate:
+# _transition is sync, and an Event notify from sync code is the lost-wakeup race
+# that bit run_002eca4c. A 100ms poll on a rare (>cap concurrent) condition is
+# negligible and has zero lost-wakeup surface.
+_streaming_count: int = 0
+MAX_CONCURRENT_STREAMS: int = int(
+    os.environ.get("SWARMAI_MAX_CONCURRENT_STREAMS", "3")
+)
+_STREAM_ADMIT_POLL_INTERVAL: float = 0.1   # seconds between cap re-checks
+_STREAM_ADMIT_TIMEOUT: float = 120.0       # max wait for a streaming slot
+
+
+def _get_streaming_count() -> int:
+    """Current number of sessions in STREAMING state (daemon-wide)."""
+    return _streaming_count
+
 
 # ── Streaming timeout resilience (2026-05-19) ────────────────────
 # Circuit breaker for high-context timeout dead loops.
@@ -3496,14 +3526,45 @@ class SessionUnit:
         Args:
             clear_identity: If True, also clears ``_sdk_session_id``
                 via ``_full_cleanup()`` (non-retriable crashes).
+
+        R4 (RecoveryTransaction): this is the single convergence point of ALL
+        recovery kill paths (self-heal, RSS, streaming-timeout, tool-hang, OOM,
+        stuck-WAITING — every ``_crash_to_cold_async`` caller). Two async tasks
+        can reach it concurrently: the LifecycleManager background loop and the
+        per-session streaming task. The previous implementation was LOCKLESS —
+        between ``_transition(DEAD)`` and the final ``_transition(COLD)`` a second
+        task could interleave and run the whole sequence again (double
+        ``_force_kill``, double cleanup, thrash). This is the TOCTOU window the
+        hang-class audit flagged.
+
+        The transaction now holds ``self._lock`` (previously dead code) across
+        the entire arm→DEAD→kill→cleanup→COLD sequence and is IDEMPOTENT: a unit
+        already COLD (no subprocess to kill) returns immediately. Result: N
+        concurrent callers ⇒ exactly ONE teardown, the rest no-op. The kill
+        MECHANICS are unchanged — only the atomicity is new.
         """
-        self._transition(SessionState.DEAD)
-        await self._force_kill()
-        if clear_identity:
-            self._full_cleanup()
-        else:
-            self._cleanup_internal()
-        self._transition(SessionState.COLD)
+        async with self._lock:
+            # Idempotent: already torn down (another task won the race, or this
+            # unit never spawned). Nothing to KILL — but a clear_identity=True
+            # call on an already-COLD unit must STILL drop the --resume identity.
+            # The retry-exhausted / give-up paths (retry_manager give-up, buffer
+            # overflow, budget denial) reach here AFTER a failed re-spawn already
+            # left the unit COLD; skipping the identity drop would silently revive
+            # the doomed --resume the give-up was meant to break (adversarial M5
+            # Q3 regression). _full_cleanup's other resets are no-ops on an
+            # already-clean unit, so clearing _sdk_session_id is the load-bearing
+            # part to honor here.
+            if self.state == SessionState.COLD:
+                if clear_identity:
+                    self._sdk_session_id = None
+                return
+            self._transition(SessionState.DEAD)
+            await self._force_kill()
+            if clear_identity:
+                self._full_cleanup()
+            else:
+                self._cleanup_internal()
+            self._transition(SessionState.COLD)
 
     @property
     def streaming_stall_seconds(self) -> Optional[float]:

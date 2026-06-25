@@ -76,6 +76,7 @@ def _make_unit(
     unit._app_session_id = "app-sess-456"
     unit._model_name = "claude-opus-4-8"
     unit._lock = asyncio.Lock()
+    unit._on_state_change = None
     unit._client = None
     unit.is_channel_session = is_channel
     unit._channel_history_injected = False
@@ -637,3 +638,115 @@ class TestT7ChannelWrapUpOneShot:
             and not unit._graceful_wrap_pending
         )
         assert not should_inject
+
+
+# ═══════════════════════════════════════════════════════════════════
+# R4 (M5): RecoveryTransaction — _crash_to_cold_async TOCTOU lock
+# Path: _crash_to_cold_async (the single convergence point of all 15
+#       recovery callers). Two async tasks (lifecycle bg loop + streaming
+#       task) can race it; the lock must serialize + make it idempotent.
+# Guards against: double _force_kill, double transition, the TOCTOU window
+#       between transition(DEAD) and transition(COLD).
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestR4RecoveryTransaction:
+    """FORCING TESTS (STEERING #11): the crash→COLD transaction must serialize
+    concurrent entries and run the kill exactly once."""
+
+    @pytest.mark.asyncio
+    async def test_concurrent_crashes_serialize_single_kill(self):
+        """Two tasks entering _crash_to_cold_async concurrently must result in
+        exactly ONE _force_kill and ONE transition to DEAD — not two."""
+        unit = _make_unit(state=SessionState.STREAMING)
+
+        force_kill_calls = []
+
+        async def _slow_force_kill():
+            # Simulate real teardown taking time → widens the TOCTOU window so a
+            # lockless impl would let the 2nd task interleave.
+            force_kill_calls.append(1)
+            await asyncio.sleep(0.02)
+
+        unit._force_kill = _slow_force_kill
+        unit._cleanup_internal = MagicMock()
+        unit._full_cleanup = MagicMock()
+        transitions = []
+        unit._transition = lambda s: (transitions.append(s), setattr(unit, "state", s))[-1]
+
+        # Launch two concurrent crashes.
+        await asyncio.gather(
+            unit._crash_to_cold_async(clear_identity=False),
+            unit._crash_to_cold_async(clear_identity=False),
+        )
+
+        # Exactly one real teardown — the 2nd entry must no-op (already COLD).
+        assert len(force_kill_calls) == 1, (
+            f"expected 1 force_kill, got {len(force_kill_calls)} "
+            "— TOCTOU window not closed (lockless double-kill)"
+        )
+        # Ends COLD.
+        assert unit.state == SessionState.COLD
+
+    @pytest.mark.asyncio
+    async def test_crash_is_idempotent_when_already_cold(self):
+        """Calling _crash_to_cold_async on an already-COLD unit is a no-op
+        (no kill, no exception)."""
+        unit = _make_unit(state=SessionState.COLD)
+        unit._force_kill = AsyncMock()
+        unit._cleanup_internal = MagicMock()
+        unit._full_cleanup = MagicMock()
+
+        await unit._crash_to_cold_async(clear_identity=False)
+
+        unit._force_kill.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_clear_identity_on_cold_unit_still_drops_resume(self):
+        """REGRESSION GUARD (adversarial M5 Q3): the retry-exhausted give-up path
+        calls _crash_to_cold_async(clear_identity=True) AFTER a failed re-spawn
+        already left the unit COLD. The idempotent guard must STILL drop the
+        --resume identity, or the give-up silently revives the doomed session."""
+        unit = _make_unit(state=SessionState.COLD)
+        unit._sdk_session_id = "doomed-sdk-session"
+        unit._force_kill = AsyncMock()
+        unit._cleanup_internal = MagicMock()
+        unit._full_cleanup = MagicMock()
+
+        await unit._crash_to_cold_async(clear_identity=True)
+
+        # No re-kill (already COLD)...
+        unit._force_kill.assert_not_awaited()
+        # ...but the --resume identity MUST be dropped.
+        assert unit._sdk_session_id is None, (
+            "clear_identity=True on a COLD unit must still drop _sdk_session_id "
+            "(else the retry-exhausted give-up revives the doomed --resume)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_crash_still_kills_and_cleans_normally(self):
+        """Single crash path unchanged: transitions DEAD→COLD, force-kills,
+        cleans (parity with pre-R4)."""
+        unit = _make_unit(state=SessionState.STREAMING)
+        unit._force_kill = AsyncMock()
+        unit._cleanup_internal = MagicMock()
+        unit._full_cleanup = MagicMock()
+
+        await unit._crash_to_cold_async(clear_identity=False)
+        unit._force_kill.assert_awaited_once()
+        unit._cleanup_internal.assert_called_once()
+        unit._full_cleanup.assert_not_called()
+        assert unit.state == SessionState.COLD
+
+    @pytest.mark.asyncio
+    async def test_crash_clear_identity_uses_full_cleanup(self):
+        """clear_identity=True → _full_cleanup (drops --resume identity)."""
+        unit = _make_unit(state=SessionState.STREAMING)
+        unit._force_kill = AsyncMock()
+        unit._cleanup_internal = MagicMock()
+        unit._full_cleanup = MagicMock()
+
+        await unit._crash_to_cold_async(clear_identity=True)
+        unit._full_cleanup.assert_called_once()
+        unit._cleanup_internal.assert_not_called()
+        assert unit.state == SessionState.COLD
