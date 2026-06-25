@@ -148,11 +148,6 @@ AUTO_RECOVER_STALL_THRESHOLD: float = 180.0
 # that bit run_002eca4c. A 100ms poll on a rare (>cap concurrent) condition is
 # negligible and has zero lost-wakeup surface.
 _streaming_count: int = 0
-MAX_CONCURRENT_STREAMS: int = int(
-    os.environ.get("SWARMAI_MAX_CONCURRENT_STREAMS", "3")
-)
-_STREAM_ADMIT_POLL_INTERVAL: float = 0.1   # seconds between cap re-checks
-_STREAM_ADMIT_TIMEOUT: float = 120.0       # max wait for a streaming slot
 
 
 def _get_streaming_count() -> int:
@@ -808,6 +803,18 @@ class SessionUnit:
 
         self.state = new_state
 
+        # R6 Step B: maintain the daemon-wide concurrent-streaming counter HERE,
+        # inside the one sync state chokepoint, so every STREAMING entry/exit —
+        # including kill / crash / disconnect (all route through _transition) —
+        # keeps it accurate. old_state != new_state is guaranteed here (the
+        # same-state early-return above already fired), so each STREAMING entry
+        # increments exactly once and its matching exit decrements exactly once.
+        global _streaming_count
+        if new_state == SessionState.STREAMING and old_state != SessionState.STREAMING:
+            _streaming_count += 1
+        elif old_state == SessionState.STREAMING and new_state != SessionState.STREAMING:
+            _streaming_count = max(0, _streaming_count - 1)  # clamp: never negative
+
         # Reset hook tracking when entering STREAMING — the next IDLE
         # period is a fresh conversation turn that deserves its own hooks.
         if new_state == SessionState.STREAMING:
@@ -853,6 +860,41 @@ class SessionUnit:
                     old_state.value,
                     new_state.value,
                 )
+
+    async def _await_streaming_slot(self) -> None:
+        """Block a NEW send() turn until a concurrent-streaming slot is free.
+
+        R6 Step B admission gate (peak-OOM guard). Returns immediately when the
+        daemon-wide streaming count is below MAX_CONCURRENT_STREAMS; otherwise
+        polls every _STREAM_ADMIT_POLL_INTERVAL until a slot frees or
+        _STREAM_ADMIT_TIMEOUT elapses. On timeout it PROCEEDS rather than failing
+        the user (the cap is a soft peak-OOM hedge backed by the hard per-session
+        7GB RSS kill + system-pressure last-resort kill, not a correctness gate)
+        — but logs so sustained saturation is observable.
+
+        Poll (not asyncio.Event): _transition decrements the counter from sync
+        code; an Event.set() from there is the lost-wakeup race that bit
+        run_002eca4c. A 100ms poll on a rare (>cap concurrent streams) condition
+        is negligible cost and has zero lost-wakeup surface.
+        """
+        if _get_streaming_count() < self.MAX_CONCURRENT_STREAMS:
+            return
+        waited = 0.0
+        logger.info(
+            "session_unit.stream_admit_wait session_id=%s streaming=%d/%d — queuing new turn",
+            self.session_id, _get_streaming_count(), self.MAX_CONCURRENT_STREAMS,
+        )
+        while _get_streaming_count() >= self.MAX_CONCURRENT_STREAMS:
+            if waited >= self._STREAM_ADMIT_TIMEOUT:
+                logger.warning(
+                    "session_unit.stream_admit_timeout session_id=%s streaming=%d/%d "
+                    "after %.0fs — proceeding (RSS kills remain the hard OOM guard)",
+                    self.session_id, _get_streaming_count(),
+                    self.MAX_CONCURRENT_STREAMS, waited,
+                )
+                return
+            await asyncio.sleep(self._STREAM_ADMIT_POLL_INTERVAL)
+            waited += self._STREAM_ADMIT_POLL_INTERVAL
 
     def __repr__(self) -> str:
         return (
@@ -1555,6 +1597,13 @@ class SessionUnit:
                 if event.get("_abort"):
                     return  # spawn failed after retries
                 yield event
+
+        # R6 Step B: concurrent-streaming admission gate (peak-OOM guard).
+        # A NEW user turn waits if the daemon is already at MAX_CONCURRENT_STREAMS
+        # simultaneous streams. continue_with_answer / continue_with_permission /
+        # retry paths deliberately do NOT call this — they count toward the cap
+        # but a user waiting on their own answer must never queue behind others.
+        await self._await_streaming_slot()
 
         # IDLE → STREAMING
         self._transition(SessionState.STREAMING)
@@ -2835,6 +2884,16 @@ class SessionUnit:
     # │ Still far below any memory-pressure crisis.                │
     # └─────────────────────────────────────────────────────────────┘
     STREAMING_RSS_KILL_THRESHOLD: int = 7_000_000_000  # 7GB
+
+    # R6 Step B: concurrent-streaming admission cap (peak-OOM guard). Class attrs
+    # (not module-level) so tests can patch.object(SessionUnit, ...) and the
+    # _await_streaming_slot helper reads them via self. See the module-level
+    # _streaming_count / _get_streaming_count for the daemon-wide counter.
+    MAX_CONCURRENT_STREAMS: int = int(
+        os.environ.get("SWARMAI_MAX_CONCURRENT_STREAMS", "3")
+    )
+    _STREAM_ADMIT_POLL_INTERVAL: float = 0.1   # seconds between cap re-checks
+    _STREAM_ADMIT_TIMEOUT: float = 120.0       # max wait for a streaming slot
 
     async def _check_rss_and_proactive_restart(self) -> None:
         """Proactive restart: if tree RSS > threshold, compact → kill.
