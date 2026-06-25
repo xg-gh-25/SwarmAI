@@ -157,6 +157,7 @@ class EvalService:
                 "cases_passed": latest.get("cases_passed", 0),
                 "cases_failed": latest.get("cases_failed", 0),
                 "cases_skipped": latest.get("cases_skipped", 0),
+                "cases_error": latest.get("cases_error", 0),
             },
             "total_cases": len(self._cases),
             "trend": trend,

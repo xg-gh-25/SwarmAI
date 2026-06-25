@@ -13,16 +13,21 @@ import pytest
 # Add parent to path for import
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+from unittest.mock import patch
+
 from backend.scripts.eval_runner import (
     load_golden_set,
     compute_scores,
     eval_keyword_match,
     eval_trajectory,
+    eval_llm_judge,
     evaluate_case,
     filter_cases_by_tags,
     _find_workspace_root,
     _find_swarmai_repo,
+    _get_judge_model,
 )
+import backend.scripts.eval_runner as eval_runner_mod
 
 # Committed fixture path (always available, even in CI)
 FIXTURE_PATH = Path(__file__).resolve().parent / "testdata" / "golden_set_fixture.yaml"
@@ -392,3 +397,87 @@ class TestEvalHistoryOutput:
         assert "total_cases" in data
         assert isinstance(data["overall_score"], (int, float))
         assert isinstance(data["cases"], list)
+
+
+class TestJudgeModelResolution:
+    """_get_judge_model() must resolve short names to full Bedrock IDs.
+
+    Regression: it used to return the raw config short name, so converse()
+    threw "model identifier is invalid" → every judge call silently skipped
+    → 88 LLM cases never ran → a fake 100/100 (run_123a6530).
+    """
+
+    def _cfg(self, **kw):
+        """Patch config + map for _get_judge_model (reads config.json directly)."""
+        base = {"eval_judge_model": "claude-opus-4-6",
+                "bedrock_model_map": {
+                    "claude-opus-4-8": "us.anthropic.claude-opus-4-8",
+                    "claude-opus-4-6": "us.anthropic.claude-opus-4-6-v1",
+                    "claude-sonnet-4-6": "us.anthropic.claude-sonnet-4-6"}}
+        base.update(kw)
+        m = patch.object(Path, "exists", return_value=True)
+        r = patch.object(Path, "read_text", return_value=json.dumps(base))
+        return m, r
+
+    def test_short_name_resolves_to_full_bedrock_id(self):
+        m, r = self._cfg(eval_judge_model="claude-opus-4-6")
+        with m, r:
+            assert _get_judge_model() == "us.anthropic.claude-opus-4-6-v1"
+
+    def test_full_id_passes_through(self):
+        m, r = self._cfg(eval_judge_model="us.anthropic.claude-opus-4-6-v1")
+        with m, r:
+            assert _get_judge_model() == "us.anthropic.claude-opus-4-6-v1"
+
+    def test_null_map_falls_back_to_known_good_not_invalid_guess(self):
+        # Degraded config: map is null. Must NOT synthesize the invalid
+        # "us.anthropic.claude-opus-4-6" (missing -v1) — fall back to known-good.
+        m, r = self._cfg(eval_judge_model="claude-opus-4-6", bedrock_model_map=None)
+        with m, r:
+            assert _get_judge_model() == "us.anthropic.claude-opus-4-6-v1"
+
+    def test_unmapped_short_name_uses_safe_default(self):
+        m, r = self._cfg(eval_judge_model="totally-unknown", bedrock_model_map={})
+        with m, r:
+            # Never an unverifiable us.anthropic.{guess}; a known-good full ID.
+            assert _get_judge_model().startswith("us.anthropic.claude-")
+            assert "totally-unknown" not in _get_judge_model()
+
+
+class TestJudgeFailureIsErrorNotSkip:
+    """Judge-infra failures must be status='error' (red), not 'skipped' (green).
+
+    The skip→drop path is exactly how a broken judge produced a clean 100/100.
+    Legit malformed-case skips (no turns/assertions) must STAY skipped.
+    """
+
+    _CASE = {"id": "X", "scenario": {"turns": [{"input": "hi"}]},
+             "assertions": ["must do Y"], "evaluators": ["goal_success"], "title": "t"}
+
+    def test_invalid_model_is_error(self):
+        with patch.object(eval_runner_mod, "_get_judge_model",
+                          return_value="us.anthropic.bogus-model-does-not-exist"):
+            r = eval_llm_judge(self._CASE, "goal_success")
+        assert r["status"] == "error", f"judge infra fail must be error, got {r['status']}"
+
+    def test_malformed_case_still_skips(self):
+        bad = {"id": "X", "scenario": {"turns": []}, "assertions": [],
+               "evaluators": ["goal_success"], "title": "t"}
+        r = eval_llm_judge(bad, "goal_success")
+        assert r["status"] == "skipped", "malformed case is a legit skip, not error"
+
+    def test_error_excluded_from_score_no_inflation(self):
+        # 1 mechanical pass + 1 judge error must NOT yield 100% on the error.
+        cases = [{"id": "A", "dimension": "d"}, {"id": "B", "dimension": "d"}]
+        results = [{"id": "A", "status": "passed"}, {"id": "B", "status": "error"}]
+        s = compute_scores(cases, results)
+        assert s["scored_count"] == 1  # only the pass counts
+        assert s["overall"] == 100.0   # of the 1 SCORED case
+        # The red-light lives in cases_error surfacing, not the % — verified
+        # in run_eval/get_health/briefing wiring (separate integration path).
+
+    def test_all_error_does_not_count_as_passed(self):
+        cases = [{"id": "A", "dimension": "d"}]
+        results = [{"id": "A", "status": "error"}]
+        s = compute_scores(cases, results)
+        assert s["scored_count"] == 0

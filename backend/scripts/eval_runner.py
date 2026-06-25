@@ -707,7 +707,8 @@ Respond in this exact JSON format:
                 break
 
         if not response_text:
-            return {"status": "skipped", "notes": "Judge returned empty response"}
+            # Infra failure, NOT a legit skip — surface as error (red light).
+            return {"status": "error", "notes": "Judge returned empty response"}
 
         # Parse JSON from response (handle markdown code blocks)
         json_text = response_text.strip()
@@ -728,13 +729,17 @@ Respond in this exact JSON format:
         }
 
     except ImportError:
-        return {"status": "skipped", "notes": "Bedrock client not available (missing boto3 or core module)"}
+        # Judge infra unavailable = misconfiguration, not a legit skip. Red light.
+        return {"status": "error", "notes": "Bedrock client not available (missing boto3 or core module)"}
     except json.JSONDecodeError as e:
-        return {"status": "skipped", "notes": f"Judge response not valid JSON: {str(e)[:100]}"}
+        return {"status": "error", "notes": f"Judge response not valid JSON: {str(e)[:100]}"}
     except Exception as e:
         error_msg = str(e)[:200]
-        # Auth errors, throttling, etc — skip gracefully
-        return {"status": "skipped", "notes": f"Judge call failed: {error_msg}"}
+        # Auth errors, throttling, invalid model ID, etc. These previously
+        # returned "skipped" → silently dropped by compute_scores → a clean
+        # 100/100 while every LLM-judge case never actually ran. Surface as
+        # error so the briefing/canary turn red instead of lying green.
+        return {"status": "error", "notes": f"Judge call failed: {error_msg}"}
 
 
 # ─── Case Dispatch ────────────────────────────────────────────────────────────
@@ -745,29 +750,49 @@ LLM_EVALUATORS = {"goal_success", "quality_score"}
 
 
 def _get_judge_model() -> str:
-    """Read pinned judge model from config.json (prevents observer effect).
+    """Read pinned judge model from config.json and resolve to a Bedrock ID.
 
     The judge model is intentionally pinned to a specific version/tier
     different from the production model. This prevents simultaneous drift
     in both the agent and the evaluator — the one external factor in
     the self-eval system.
 
+    config stores a SHORT name (e.g. "claude-opus-4-6"); converse() needs the
+    full Bedrock ID (e.g. "us.anthropic.claude-opus-4-6-v1"). The previous
+    version returned the raw short name, so every judge call died with
+    "model identifier is invalid" → silently skipped 88 LLM-judge cases →
+    a 100/100 health score computed on ~39 mechanical cases only. We now
+    resolve through bedrock_model_map (the same path llm_optimizer uses).
+
     Returns the full Bedrock model ID (us.anthropic.* format).
     """
+    short_name = "claude-opus-4-6"
+    model_map: dict = {}
     try:
         config_path = Path.home() / ".swarm-ai" / "SwarmWS" / "config.json"
         if config_path.exists():
             import json as _json
             config = _json.loads(config_path.read_text())
-            model = config.get("eval_judge_model")
-            if model:
-                return model
+            short_name = config.get("eval_judge_model") or short_name
+            model_map = config.get("bedrock_model_map") or {}
     except Exception:
         pass
-    # Default: Use production model as judge until a different tier is available.
-    # Ideally judge != production (prevents observer effect), but having eval
-    # running is more valuable than having it not running due to model access.
-    return "us.anthropic.claude-opus-4-6-v1"
+    # Already a full Bedrock ID? pass through. Otherwise map the short name.
+    if short_name.startswith("us.") or short_name.startswith("anthropic."):
+        return short_name
+    if short_name in model_map:
+        return model_map[short_name]
+    # Map missing/null (degraded config) OR unmapped short name. Do NOT
+    # synthesize f"us.anthropic.{short_name}" — Bedrock inference-profile IDs
+    # are not mechanically derivable (e.g. 4-6 needs a "-v1" suffix, 4-8 does
+    # not), so a guess yields an invalid ID and every judge call errors. Fall
+    # back to a hardcoded known-good full ID (matches bedrock_model_map default).
+    _KNOWN_GOOD = {
+        "claude-opus-4-8": "us.anthropic.claude-opus-4-8",
+        "claude-opus-4-6": "us.anthropic.claude-opus-4-6-v1",
+        "claude-sonnet-4-6": "us.anthropic.claude-sonnet-4-6",
+    }
+    return _KNOWN_GOOD.get(short_name, "us.anthropic.claude-opus-4-6-v1")
 
 
 def evaluate_case(case: dict, root: Path, *,
@@ -1112,6 +1137,7 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
         passed = 0
         failed = 0
         skipped = 0
+        errored = 0
         failures = []
         all_case_details = []
         for c in dim_cases:
@@ -1122,6 +1148,12 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
             elif status == "failed":
                 failed += 1
                 failures.append({"id": c["id"], "title": c.get("title", "(untitled)"), "notes": r.get("notes", "")})
+            elif status == "error":
+                # Judge infra broke — NOT "pending". Surface as a failure-class
+                # row so the dimension shows red, not a benign "go run it later".
+                errored += 1
+                failures.append({"id": c["id"], "title": c.get("title", "(untitled)"),
+                                 "notes": "🔴 ERROR: " + r.get("notes", "judge infra failed")})
             else:
                 skipped += 1
             all_case_details.append({
@@ -1133,6 +1165,7 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
 
         dim_stats.append({
             **dim,
+            "errored": errored,
             "passed": passed,
             "failed": failed,
             "skipped": skipped,
@@ -1147,6 +1180,7 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
     total_passed = run_result["cases_passed"]
     total_failed = run_result["cases_failed"]
     total_skipped = run_result["cases_skipped"]
+    total_error = run_result.get("cases_error", 0)
     duration = run_result["duration_seconds"]
     triggered_at = run_result["triggered_at"][:19].replace("T", " ")
     trigger = run_result["triggered_by"]
@@ -1244,7 +1278,7 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
         # Expandable case list
         case_list_html = f'<details class="case-details"><summary>{d["case_count"]} cases in this dimension</summary><ul class="case-list">'
         for c in d["all_cases"]:
-            icon = "✅" if c["status"] == "passed" else ("❌" if c["status"] == "failed" else "⏸️")
+            icon = {"passed": "✅", "failed": "❌", "error": "🔴"}.get(c["status"], "⏸️")
             method_badge = f'<span class="badge badge-{c["eval_method"]}">{c["eval_method"]}</span>'
             case_list_html += f'<li>{icon} <code>{html_mod.escape(c["id"])}</code> {html_mod.escape(c["title"])} {method_badge}</li>'
         case_list_html += "</ul></details>"
@@ -1255,7 +1289,10 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
             staleness_html = '<div class="staleness-warn">⚠️ Never evaluated — run LLM judge to unlock this dimension</div>'
 
         # Progress bar
-        if d["total"] == 0 and d["skipped"] > 0:
+        if d.get("errored", 0) > 0:
+            # Judge infra broke — loud red, NOT "pending / go run it later".
+            bar_html = f'<div class="error-bar" style="background:#ef4444;color:#fff;padding:4px 8px;border-radius:4px;"><span>🔴 {d["errored"]} case(s) ERRORED — judge infra failed, score excludes them</span></div>'
+        elif d["total"] == 0 and d["skipped"] > 0:
             bar_html = f'<div class="pending-bar"><span class="pending-text">⏳ {d["skipped"]} cases await LLM judge evaluation</span></div>'
         elif d["total"] == 0:
             bar_html = '<span class="pending">── no cases ──</span>'
@@ -1438,11 +1475,13 @@ body {{ font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); 
     <div class="header">
         <h1>OS Eval — "我还是我吗？还好吗？"</h1>
         <p class="subtitle">SwarmAI Proprioception System — Continuous Self-Evaluation</p>
-        <div class="score-ring">{overall:.0f}%</div>
+        <div class="score-ring">{overall:.0f}%{' ⚠️' if total_error else ''}</div>
+        {f'<div class="error-banner" style="background:#ef4444;color:#fff;padding:8px 12px;border-radius:6px;margin:8px 0;font-weight:600;">🔴 {total_error} case(s) ERRORED — judge infra failed. This {overall:.0f}% EXCLUDES them and is NOT a clean pass.</div>' if total_error else ''}
         <div class="meta-row">
             <span>Trigger: <strong>{html_mod.escape(trigger)}</strong></span>
             <span>Passed: <strong>{total_passed}</strong></span>
             <span>Failed: <strong>{total_failed}</strong></span>
+            {f'<span style="color:#ef4444;">Errored: <strong>{total_error}</strong></span>' if total_error else ''}
             <span>Pending: <strong>{total_skipped}</strong></span>
             <span>Duration: <strong>{duration:.1f}s</strong></span>
         </div>
@@ -1495,8 +1534,9 @@ def cmd_run(args):
         print(f"  WARNING: HTML report generation failed: {e}", file=sys.stderr)
 
     print(f"\n{'='*60}")
-    print(f"  OS Health Score: {run_result['overall_score']}%")
-    print(f"  Passed: {run_result['cases_passed']} | Failed: {run_result['cases_failed']} | Skipped: {run_result['cases_skipped']}")
+    _n_err = run_result.get('cases_error', 0)
+    print(f"  OS Health Score: {run_result['overall_score']}%" + (f"  🔴 ({_n_err} ERRORED — judge infra failed, score excludes them)" if _n_err else ""))
+    print(f"  Passed: {run_result['cases_passed']} | Failed: {run_result['cases_failed']} | Errored: {_n_err} | Skipped: {run_result['cases_skipped']}")
     print(f"  Dimensions: {json.dumps(run_result['dimensions'], indent=None)}")
     print(f"  Duration: {run_result['duration_seconds']}s")
     print(f"  JSON:  {out_path}")

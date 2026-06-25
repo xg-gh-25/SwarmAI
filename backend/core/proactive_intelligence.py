@@ -1708,11 +1708,23 @@ def build_session_briefing(
                 if health.get("overall_score") is not None:
                     last_run = health.get("last_run", {})
                     last_date = (last_run.get("triggered_at") or "")[:10]
-                    sections.append(
-                        f"**Self-Eval:** {svc.case_count} cases | "
-                        f"Score: {health['overall_score']} | "
-                        f"Last: {last_date or 'never'}"
-                    )
+                    n_error = last_run.get("cases_error", 0)
+                    # Red light: judge-infra failures (invalid model / auth /
+                    # throttle) mean the score was computed on only the
+                    # mechanical cases — the LLM-judge layer never ran. Without
+                    # this, a broken judge shows a clean "100" (the lie).
+                    if n_error:
+                        sections.append(
+                            f"**Self-Eval:** 🔴 {n_error} case(s) ERRORED (judge infra "
+                            f"failed — score {health['overall_score']} excludes them, "
+                            f"NOT a clean pass). {svc.case_count} cases | Last: {last_date or 'never'}"
+                        )
+                    else:
+                        sections.append(
+                            f"**Self-Eval:** {svc.case_count} cases | "
+                            f"Score: {health['overall_score']} | "
+                            f"Last: {last_date or 'never'}"
+                        )
                 elif svc.case_count > 0:
                     sections.append(f"**Self-Eval:** {svc.case_count} cases (no runs yet)")
         except Exception as exc:
