@@ -1057,11 +1057,23 @@ def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root
     # Behavior cases (eval_method=behavior) spawn a REAL agent each (~17-120s +
     # Bedrock cost) and are non-deterministic. They must NOT run on a default/
     # manual sweep — only when EXPLICITLY requested via the behavior_trajectory
-    # tag or an explicit case_filter. Otherwise `eval_runner.py run` would be a
-    # surprise 4-agent cost/flake bomb (adversarial Gate-2 HIGH).
-    _behavior_requested = (tags and "behavior_trajectory" in tags) or bool(case_filter)
-    if not _behavior_requested:
-        cases = [c for c in cases if c.get("eval_method") != "behavior"]
+    # tag or by being NAMED INDIVIDUALLY in case_filter. Otherwise this would be
+    # a surprise 4-agent cost/flake bomb (adversarial Gate-2 HIGH).
+    #
+    # Structural safety (adversarial Gate-2 MED, run_75b656c1): we do NOT treat
+    # a non-empty case_filter as blanket consent. The change-trigger hook
+    # (eval_hooks → get_affected_cases) builds a broad affected_by filter; if a
+    # behavior case ever declares affected_by:[AGENT.md], a governance-file edit
+    # would silently spawn agents from a PostToolUse hook. So a behavior case
+    # runs via case_filter ONLY when its OWN id is explicitly in that filter —
+    # an affected_by sweep that happens to include it does NOT auto-spawn.
+    _tag_requested = bool(tags and "behavior_trajectory" in tags)
+    if not _tag_requested:
+        _filter_set = set(case_filter) if case_filter else set()
+        cases = [
+            c for c in cases
+            if c.get("eval_method") != "behavior" or c["id"] in _filter_set
+        ]
 
     results = []
     for case in cases:
