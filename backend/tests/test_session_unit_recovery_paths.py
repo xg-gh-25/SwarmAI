@@ -87,6 +87,7 @@ def _make_unit(
     unit._peak_tree_rss_bytes = 0
     unit._recall_injected = False
     unit._pid_watchdog_task = None
+    unit._pipe_flush_task = None
     unit._send_generation = 0
     # Extracted modules need to be instantiated for delegation stubs
     from core.streaming_orchestrator import StreamingOrchestrator
