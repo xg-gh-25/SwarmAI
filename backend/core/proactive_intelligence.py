@@ -692,6 +692,87 @@ def _get_job_result_highlights(working_directory: str, max_items: int = 5) -> li
 _MAX_PIPELINE_RESUME_ATTEMPTS = 3
 # Exponential cooldown between resume attempts (seconds): 30s, 60s, 120s
 _RESUME_COOLDOWN_SECONDS = [30, 60, 120]
+# A "running" run updated within this window is actively executing in THIS
+# session — not a crash orphan. Surfacing/mutating it produces a false
+# "AUTO-RESUME the run that's running right now" alarm (run_0c8e007a).
+# Kept SHORT (90s): an actively-running pipeline rewrites run.json on every
+# stage boundary (run-update), so a live run's updated_at is always seconds
+# old. A run untouched for >90s has genuinely stalled/crashed and SHOULD be
+# surfaced as a resume orphan (preserves the existing 5-min-orphan contract in
+# test_running_orphan_transitions_to_paused). The window only needs to exceed
+# the longest single-stage gap between run-update calls, not the session length.
+_ACTIVE_RUN_THRESHOLD_SECONDS = 90
+
+
+def _newest_completed_updated_at(runs_dir: Path) -> float:
+    """Return the max updated_at (epoch seconds) across all COMPLETED runs in a
+    project's runs dir, or 0.0 if none. Pure read — no mutation.
+
+    Used as a recency-based supersede signal: a paused run older than the newest
+    completed run in the SAME project is superseded (its work was finished by a
+    later run). Recency, NOT requirement-text similarity — text overlap
+    false-matches genuinely-different runs that share boilerplate words
+    ("Fix session_unit.py crash" vs "...timeout"), which would destructively
+    archive live work (Gate-1 finding, run_0c8e007a).
+    """
+    from datetime import datetime, timezone
+    newest = 0.0
+    if not runs_dir.exists():
+        return newest
+    for rd in runs_dir.iterdir():
+        rf = rd / "run.json"
+        if not rf.exists():
+            continue
+        try:
+            data = json.loads(rf.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if data.get("status") not in ("completed", "complete"):
+            continue
+        upd = data.get("updated_at", "") or data.get("completed_at", "")
+        if not upd:
+            continue
+        try:
+            dt = datetime.fromisoformat(upd.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            newest = max(newest, dt.timestamp())
+        except (ValueError, TypeError):
+            continue
+    return newest
+
+
+def _superseding_completed_id(runs_dir: Path, before_ts: float) -> "str | None":
+    """Return the id of a COMPLETED run in this project whose updated_at is the
+    newest one strictly after ``before_ts``, or None. Used to label WHICH run
+    superseded a stale paused run (for the abandon_reason marker)."""
+    from datetime import datetime, timezone
+    best_id, best_ts = None, before_ts
+    if not runs_dir.exists():
+        return None
+    for rd in runs_dir.iterdir():
+        rf = rd / "run.json"
+        if not rf.exists():
+            continue
+        try:
+            data = json.loads(rf.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if data.get("status") not in ("completed", "complete"):
+            continue
+        upd = data.get("updated_at", "") or data.get("completed_at", "")
+        if not upd:
+            continue
+        try:
+            dt = datetime.fromisoformat(upd.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            ts = dt.timestamp()
+        except (ValueError, TypeError):
+            continue
+        if ts > best_ts:
+            best_ts, best_id = ts, data.get("id", rd.name)
+    return best_id
 
 
 def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list[str]:
@@ -735,6 +816,11 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
             if not runs_dir.exists():
                 continue
 
+            # Supersede signal (computed ONCE per project): the newest updated_at
+            # across all COMPLETED runs. A paused run older than this was finished
+            # by a later run — surfacing it is a false alarm (run_0c8e007a).
+            newest_completed_ts = _newest_completed_updated_at(runs_dir)
+
             for run_dir in runs_dir.iterdir():
                 run_file = run_dir / "run.json"
                 if not run_file.exists():
@@ -750,14 +836,72 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
 
                 # Check freshness FIRST — skip old runs before any mutation
                 updated = run_data.get("updated_at", "")
+                run_ts = None
                 if updated:
                     try:
                         dt = datetime.fromisoformat(updated.replace("Z", "+00:00"))
-                        age = now - dt.timestamp()
+                        run_ts = dt.timestamp()
+                        age = now - run_ts
                         if age > max_age_seconds:
                             continue
                     except (ValueError, TypeError):
                         pass  # Can't parse date — include it anyway
+
+                # ACTIVE-RUN SKIP: a "running" run updated within the active
+                # window is executing in THIS session, not a crash orphan. Do NOT
+                # surface OR mutate it (the gauge was telling the user to
+                # AUTO-RESUME the run that's running right now — run_0c8e007a).
+                if (
+                    status == "running"
+                    and run_ts is not None
+                    and (now - run_ts) <= _ACTIVE_RUN_THRESHOLD_SECONDS
+                ):
+                    continue
+
+                # SUPERSEDED SKIP + MARK: a paused/running run older than the
+                # newest COMPLETED run in this project was finished by a later
+                # run. Mark it abandoned (reusing the _auto_abandon_stale_runs
+                # convention: status=abandoned + abandon_reason=superseded_by_<id>)
+                # so the gauge stops re-scanning it, and skip surfacing it.
+                # Recency signal only — NOT requirement-text similarity (Gate-1:
+                # text overlap destructively false-archives different-but-similar
+                # runs). File-locked + re-read-under-lock to avoid racing a
+                # parallel session that may have just resumed this run.
+                if (
+                    run_ts is not None
+                    and newest_completed_ts > run_ts
+                ):
+                    sup_id = _superseding_completed_id(runs_dir, run_ts)
+                    lock_file = run_dir / ".resume.lock"
+                    fd = None
+                    try:
+                        fd = lock_file.open("w")
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        # Re-read under lock — a parallel session may have changed
+                        # status (e.g. resumed → running anew) since the scan.
+                        fresh = json.loads(run_file.read_text(encoding="utf-8"))
+                        if fresh.get("status") in ("paused", "running"):
+                            fresh["status"] = "abandoned"
+                            fresh["abandon_reason"] = (
+                                f"superseded_by_{sup_id}" if sup_id
+                                else "superseded_by_completed_run"
+                            )
+                            fresh["abandoned_at"] = datetime.now(
+                                timezone.utc
+                            ).isoformat()
+                            run_file.write_text(
+                                json.dumps(fresh, indent=2), encoding="utf-8"
+                            )
+                        fd.close()
+                    except OSError:
+                        # Lock held / IO error — skip surfacing regardless (the
+                        # run is superseded; another session owns the write).
+                        if fd is not None:
+                            try:
+                                fd.close()
+                            except Exception:
+                                pass
+                    continue
 
                 # Save original updated_at BEFORE any mutation — used for cooldown check
                 original_updated_at = run_data.get("updated_at", "")

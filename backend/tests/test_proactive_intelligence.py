@@ -1143,6 +1143,125 @@ class TestPipelineAutoResume:
             assert f"run_ex{i}" in summaries[0]  # all exhausted listed
 
 
+class TestPipelineSupersedeAndActiveSkip:
+    """run_0c8e007a: gauge must not surface (a) the currently-active run, or
+    (b) a paused run already superseded by a newer completed run. Both were
+    false-alarm sources: the gauge read dirty data without a freshness/supersede
+    check (same disease class as finding-1/M4-3/noise-gate)."""
+
+    def _make_run(self, workspace, project="TestProj", run_id="run_abc",
+                  status="paused", requirement="Fix bug", resume_attempts=0,
+                  next_stage="build", updated_at=None, minutes_ago=5):
+        from datetime import datetime, timezone, timedelta
+        runs_dir = workspace / "Projects" / project / ".artifacts" / "runs" / run_id
+        runs_dir.mkdir(parents=True, exist_ok=True)
+        if updated_at is None:
+            updated_at = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
+        run_data = {
+            "id": run_id, "status": status, "requirement": requirement,
+            "resume_attempts": resume_attempts, "updated_at": updated_at,
+            "stages": [{"stage": "evaluate", "status": "completed"}],
+            "checkpoint": {"next_stage": next_stage, "reason": "session crash"},
+        }
+        run_file = runs_dir / "run.json"
+        run_file.write_text(json.dumps(run_data, indent=2))
+        return run_file
+
+    # ── AC2: active-run skip (running + fresh = executing this session) ──
+    def test_active_running_run_not_surfaced(self, tmp_path):
+        """A 'running' run updated seconds ago is actively executing — must NOT
+        be surfaced as an AUTO-RESUME directive."""
+        self._make_run(tmp_path, status="running", run_id="run_active",
+                       updated_at=None, minutes_ago=0)  # ~now
+        result = _get_paused_pipeline_highlights(tmp_path)
+        assert result == [], f"active run should not be surfaced, got: {result}"
+
+    def test_active_running_run_not_mutated(self, tmp_path):
+        """The active run's resume_attempts/status must NOT be mutated by the gauge."""
+        run_file = self._make_run(tmp_path, status="running", run_id="run_active",
+                                  resume_attempts=0, minutes_ago=0)
+        _get_paused_pipeline_highlights(tmp_path)
+        data = json.loads(run_file.read_text())
+        assert data["status"] == "running", "active run must not be transitioned to paused"
+        assert data["resume_attempts"] == 0, "active run attempts must not be incremented"
+
+    def test_crashed_running_run_still_surfaced(self, tmp_path):
+        """A 'running' run NOT fresh (older than active threshold, but <24h) is a
+        genuine crash orphan — must STILL be surfaced (don't over-suppress)."""
+        self._make_run(tmp_path, status="running", run_id="run_crashed",
+                       minutes_ago=30)  # >600s, <24h
+        result = _get_paused_pipeline_highlights(tmp_path)
+        assert any("AUTO-RESUME" in ln for ln in result), \
+            f"crashed orphan should still surface, got: {result}"
+
+    # ── AC1 + AC4: superseded paused run skipped + marked ──
+    def test_superseded_paused_run_not_surfaced(self, tmp_path):
+        """A paused run with a newer same-project COMPLETED run is superseded —
+        must NOT be surfaced."""
+        from datetime import datetime, timezone, timedelta
+        older = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        newer = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        self._make_run(tmp_path, run_id="run_old_paused", status="paused",
+                       resume_attempts=0, updated_at=older)
+        self._make_run(tmp_path, run_id="run_new_done", status="completed",
+                       updated_at=newer)
+        result = _get_paused_pipeline_highlights(tmp_path)
+        assert result == [], f"superseded paused run should not surface, got: {result}"
+
+    def test_superseded_paused_run_marked_abandoned(self, tmp_path):
+        """AC4: the superseded paused run is marked status=abandoned with
+        abandon_reason=superseded_by_<id> (reusing the existing convention)."""
+        from datetime import datetime, timezone, timedelta
+        older = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        newer = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        sup = self._make_run(tmp_path, run_id="run_old_paused", status="paused",
+                             updated_at=older)
+        self._make_run(tmp_path, run_id="run_new_done", status="completed",
+                       updated_at=newer)
+        _get_paused_pipeline_highlights(tmp_path)
+        data = json.loads(sup.read_text())
+        assert data["status"] == "abandoned", f"expected abandoned, got {data['status']}"
+        assert data.get("abandon_reason") == "superseded_by_run_new_done", \
+            f"expected superseded_by marker, got {data.get('abandon_reason')}"
+
+    # ── AC3: precision — genuine open run still surfaced ──
+    def test_genuine_open_paused_run_still_surfaced(self, tmp_path):
+        """A paused run with NO newer completed run is genuinely open — must
+        still surface. This is the precision guard against over-suppression."""
+        self._make_run(tmp_path, run_id="run_genuine", status="paused",
+                       resume_attempts=0)
+        result = _get_paused_pipeline_highlights(tmp_path)
+        assert any("AUTO-RESUME" in ln for ln in result), \
+            f"genuine open run must still surface, got: {result}"
+
+    def test_older_completed_does_not_supersede(self, tmp_path):
+        """A completed run OLDER than the paused run does NOT supersede it —
+        the paused work came after, so it's still open."""
+        from datetime import datetime, timezone, timedelta
+        old_done = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+        recent_paused = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        self._make_run(tmp_path, run_id="run_old_done", status="completed",
+                       updated_at=old_done)
+        self._make_run(tmp_path, run_id="run_paused", status="paused",
+                       updated_at=recent_paused, resume_attempts=0)
+        result = _get_paused_pipeline_highlights(tmp_path)
+        assert any("AUTO-RESUME" in ln for ln in result), \
+            "paused run newer than the completed run must still surface"
+
+    def test_completed_in_other_project_does_not_supersede(self, tmp_path):
+        """Supersede is scoped per-project: a newer completed run in a DIFFERENT
+        project does not supersede this project's paused run."""
+        from datetime import datetime, timezone, timedelta
+        newer = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+        self._make_run(tmp_path, project="ProjA", run_id="run_paused",
+                       status="paused", resume_attempts=0)
+        self._make_run(tmp_path, project="ProjB", run_id="run_done",
+                       status="completed", updated_at=newer)
+        result = _get_paused_pipeline_highlights(tmp_path)
+        assert any("AUTO-RESUME" in ln for ln in result), \
+            "cross-project completed run must not supersede"
+
+
 # --- M3b: Recurrence Radar (zone-gated) (run_123a6530) ---
 
 class TestRecurrenceRadar:
