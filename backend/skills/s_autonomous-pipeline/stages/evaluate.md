@@ -35,55 +35,106 @@ gaps is higher-yield than human review. Without this step, EVALUATE scores a
 vague requirement as GO, acceptance criteria are under-specified, and BUILD
 delivers something technically correct but wrong.
 
-### Diagnostic-Challenge Gate (BUG-CLASS ONLY — root cause before build)
+### Understanding Gate (ALL work types — understand the present before proposing a fix)
 
-`NO BUG-CLASS BUILD WITHOUT A CHALLENGED DIAGNOSIS`
+`NO BUILD WITHOUT AN OBSERVATION-BACKED, REFUTED UNDERSTANDING OF THE PRESENT`
 
-**Trigger:** the evaluation is a bug fix (`scope: bugfix`, or a `bug_class: true`
-marker). Skip entirely for feature/goal/research/docs work — their "diagnosis"
-is a design choice, not a root-cause claim.
+**Trigger:** EVERY evaluation, not just bug fixes. Before the pipeline proposes
+*how* to fix/build (THINK), EVALUATE must produce a falsifiable claim about the
+**current state of the world**, backed by an **observation** (not inference),
+that has **survived a refutation attempt**. The *form of evidence* varies by
+work type; the gate itself is universal.
 
-**The problem this prevents:** for a bug, the hard part is FRAMING — naming the
-true root cause — and it happens at EVALUATE, before any code. A confident-but-
-wrong frame sails through THINK/PLAN/BUILD and is only caught at the Gate-2
-adversarial (full pipeline cost) or by an external reviewer. Two run_688b6487-era
-failures: a fabricated kernel-OOM narrative, and "frontend ignores [DONE]" (a
-no-op — the code already did). Both were inference dressed as forensics; both
-would have been killed here for ~1 sub-agent's cost instead of a whole pipeline.
+**The problem this prevents:** the hard part is FRAMING — and it happens at
+EVALUATE, before any code. A confident-but-wrong frame sails through
+THINK/PLAN/BUILD and is only caught at the Gate-2 adversarial (full pipeline cost)
+or by an external reviewer. This is NOT bug-specific: run_6adee7d5 framed a
+**feature** change as "frontend ignores [DONE]" — but `chat.ts:276` *already*
+treated `[DONE]` as authoritative, so the "fix" was a **no-op**. The understanding
+of the existing system was wrong, and a bug-only gate would never have caught it.
+Understanding-error crosses every work type, so the gate must too.
 
-**Mechanism — spawn a fresh-context skeptic (Agent tool, same pattern as
-deliver.md's adversarial gate):**
+**The universal `understanding` block (produce in the evaluation artifact):**
 
-After scoring a bug-class GO, BEFORE advancing to THINK, spawn ONE sub-agent with
-ZERO of your reasoning. Give it only: the symptom, your proposed root cause, and
-read access to the code/logs. Its job is to REFUTE, not agree:
+```json
+"understanding": {
+  "work_type": "bugfix | existing-feature | greenfield | refactor | research | docs",
+  "claim": "A falsifiable statement about the CURRENT state (present-tense, NOT a plan)",
+  "evidence": "An OBSERVATION supporting the claim — form varies by work_type (below)",
+  "evidence_kind": "observation | code-trace | repro | premortem | characterization",
+  "skeptic_verdict": "SUPPORTED | UNSUPPORTED | ALREADY-SATISFIED | WRONG-FRAME",
+  "alternative_considered": "The simplest competing framing, and why it loses"
+}
+```
+
+The **claim is about the present, not the plan.** "The spinner hangs because
+`onComplete` early-returns on a stale `streamGen`" is a claim about the present.
+"I will add a per-tab `latestCompleteGen`" is a plan — that belongs in THINK, on
+the other side of the wall.
+
+**Evidence form varies by work type — THIS is the key:**
+
+| `work_type` | "Understanding" means | Required `evidence_kind` | Concrete form |
+|-------------|----------------------|--------------------------|---------------|
+| **bugfix** | the **root cause** | `observation` / `repro` | `ps` output, log-signal counts, live gauge read, a reproduction *(the REPRO gate)* |
+| **existing-feature** | how the **current system actually works** + where the change fits | `code-trace` | the real call path / data flow read from source (cite file:line), NOT "I assume it works like…" |
+| **refactor** | the **current behavior that must be preserved** | `characterization` | a characterization test or an input→output matrix traced against `git show HEAD` |
+| **greenfield** | the **problem and who has it** | `premortem` | problem statement + "top 3 reasons this fails" |
+| **research** | the **actual question** + what's known | `premortem` (scope) | the question restated falsifiably + what makes it a wrong/unanswerable question |
+| **docs** | what's **true about the code** being documented | `code-trace` (relaxed) | file refs to the code each doc claim describes |
+
+**Three mechanisms — all mechanical, none rely on agent discipline:**
+
+- **M1 — Separation (the wall).** The `claim` must describe the PRESENT, not a
+  fix. The validator BLOCKS a claim containing solution language ("I will / the
+  fix is / add … / refactor …"). THINK is the first stage allowed to propose a fix.
+- **M2 — Observation-not-inference (R16b mechanized).** A hedge in the claim or
+  evidence (`似乎 / 可能 / probably / should be / I think / likely`) BLOCKS unless
+  the `evidence` is a concrete, non-hedged observation that resolves it. Validator-enforced.
+- **M3 — Refutation (the skeptic, BEHAVIORAL — spawn Agent tool, same pattern as
+  deliver.md's adversarial gate).** For bugfix/full/goal, after scoring a GO and
+  BEFORE advancing to THINK, spawn ONE fresh-context sub-agent with ZERO of your
+  reasoning. Its job is to REFUTE:
 
 ```
-You are a diagnostic skeptic. A bug was diagnosed as: <root cause>.
-Symptom: <observed symptom>. Do NOT trust the diagnosis.
-1. Is the root cause supported by OBSERVATION (ps / log-signal counts / live
-   gauge / repro), or only by reading code and inferring? Name the evidence.
-2. Construct the SIMPLEST alternative explanation that fits the same symptom.
-3. Is the proposed fix already implemented (a no-op)? grep and check.
+You are a skeptic. The understanding is: <claim>. Work type: <work_type>.
+Do NOT trust it.
+1. Is the claim supported by OBSERVATION matching <evidence_kind> (code-trace
+   file:line / ps / log counts / repro / characterization), or only inference? Name it.
+2. Construct the SIMPLEST alternative framing that fits the same facts.
+3. Is the implied change already true / a no-op? grep and check.
 4. Verdict: SUPPORTED (evidence cited) | UNSUPPORTED (inference only) |
-   ALREADY-FIXED (fix is a no-op) | WRONG-LAYER (symptom not root).
+   ALREADY-SATISFIED (no-op) | WRONG-FRAME (symptom / wrong layer, not the real state).
 ```
 
 **Route on verdict:**
-- **SUPPORTED** → proceed to THINK. Record the cited evidence as
-  `observation_evidence` in the evaluation artifact (the REPRO gate in
-  `pipeline_validator.validate_artifact_data` BLOCKS a bug-class eval that lacks
-  it — this gate and that field are the same requirement, one human-spawned, one
-  code-enforced).
-- **UNSUPPORTED / ALREADY-FIXED / WRONG-LAYER** → do NOT advance. Go OBSERVE
-  (run `ps`, count the log signals, read the live gauge, attempt a repro) and
-  re-frame. The cheapest insurance against building the wrong fix.
+- **SUPPORTED** → proceed to THINK. Record the cited evidence in
+  `understanding.evidence` (bug-class evals may use the legacy `observation_evidence`
+  alias — both satisfy the validator).
+- **UNSUPPORTED / ALREADY-SATISFIED / WRONG-FRAME** → do NOT advance. Go OBSERVE
+  (code-trace the real path, run `ps`, count the log signals, attempt a repro) and
+  re-frame. The cheapest insurance against building the wrong thing.
 
-**Relationship to the REPRO gate:** the challenge gate is the *human-spawned*
-skeptic; `observation_evidence` is the *code-enforced* artifact field it produces.
-A bug-class evaluation cannot be published without `observation_evidence`
-(validator BLOCK), and that field should be the evidence the skeptic accepted.
-Model proposes, the gate disposes.
+**Rigor tiers (cost-proportionate — §3.5 of the design):**
+
+| Profile | M1 wall | M2 hedge-scan | M3 skeptic sub-agent |
+|---------|:-------:|:-------------:|:--------------------:|
+| trivial | ✅ | ✅ | ❌ (claim + scan only) |
+| docs | ✅ | ✅ | ❌ (code-trace refs only) |
+| research | ✅ | ✅ | 🟡 scope-challenge (refute the *question*) |
+| bugfix / full / goal | ✅ | ✅ | ✅ |
+
+> Trivial/docs/research are NOT *forced* to carry the block (anti-ceremony) — but
+> if a block IS present, M1+M2 still scan it. Strict profiles (full/bugfix/goal)
+> REQUIRE the block with real evidence. The existing trivial-profile adversarial
+> (Gate-2) remains the back-stop for relaxed profiles.
+
+**Relationship to the validator:** M1+M2 + the presence requirement are
+*code-enforced* by `pipeline_validator.validate_artifact_data` at publish time
+(the "Understanding gate:" markers; the bug-class subset keeps the "REPRO gate:"
+marker via the `observation_evidence` alias). M3 (the skeptic) is the
+*human-spawned* verifier that produces the verdict the field records. Model
+proposes, the gate disposes.
 
 ### Subsystem Health Audit (P1)
 

@@ -274,8 +274,8 @@ python backend/scripts/artifact_cli.py discover --project <PROJECT> --types <com
 
 | Stage | Must Consume (STAGE_ROUTING) | Must Produce |
 |-------|------------------------------|--------------|
-| evaluate | — | evaluation |
-| think | evaluation | research |
+| evaluate | — | evaluation (+ `understanding` block — Understanding Gate, below) |
+| think | evaluation (`understanding` must be SUPPORTED) | research |
 | plan | evaluation, research | design_doc |
 | build | design_doc | changeset |
 | review | changeset | review |
@@ -307,6 +307,24 @@ python backend/scripts/artifact_cli.py run-update --project <PROJECT> --run-id <
 If an upstream artifact is **stale** (DDD docs changed since it was created, or
 age > 7 days), the validator will WARN. You may still proceed — staleness is a
 signal, not a blocker — but acknowledge it in your stage notes.
+
+#### Understanding Gate (EVALUATE→THINK boundary — ALL work types)
+
+THINK (proposing *how* to fix/build) **cannot load** until EVALUATE produces an
+observation-backed, refuted **understanding of the present**. This generalizes
+the old bug-only REPRO gate to every work type — the form of evidence varies
+(code-trace for existing-feature, repro for bugfix, characterization for
+refactor, premortem for greenfield/research), the gate is universal. See
+`stages/evaluate.md` § "Understanding Gate" for the `understanding` block shape,
+the work-type evidence table, and the M1/M2/M3 mechanisms.
+
+Code-enforced at publish time by `pipeline_validator.validate_artifact_data`:
+strict profiles (full/bugfix/goal) BLOCK without an `understanding` block carrying
+real `evidence` ("Understanding gate:" marker); M1 blocks a solution-language
+`claim`, M2 blocks an unresolved hedge. Bug-class evals may use the legacy
+`observation_evidence` alias (keeps the "REPRO gate:" marker). Relaxed profiles
+(trivial/docs/research) aren't forced to carry the block, but a present block is
+still scanned. M3 (the skeptic sub-agent) is behavioral, spawned in evaluate.md.
 
 ### 3c. Execute Stage Behavior
 

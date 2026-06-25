@@ -260,6 +260,17 @@ STAGE_TEMPLATES: dict[str, dict] = {
         "scope": "trivial|standard|complex",
         "acceptance_criteria": ["AC1: ...", "AC2: ..."],
         "scores": {"strategic": 0, "priority": 0, "feasibility": 0},
+        # Understanding gate (strict profiles): a present-tense, observation-backed,
+        # refuted claim about the CURRENT state — before THINK proposes a fix.
+        # Bug-class evals may instead use the observation_evidence alias.
+        "understanding": {
+            "work_type": "bugfix|existing-feature|greenfield|refactor|research|docs",
+            "claim": "A falsifiable statement about the CURRENT state (present-tense, NOT a plan)",
+            "evidence": "An OBSERVATION: code-trace file:line / ps / log counts / repro / characterization",
+            "evidence_kind": "observation|code-trace|repro|premortem|characterization",
+            "skeptic_verdict": "SUPPORTED|UNSUPPORTED|ALREADY-SATISFIED|WRONG-FRAME",
+            "alternative_considered": "The simplest competing framing, and why it loses",
+        },
     },
     "think": {
         "key_findings": ["finding 1", "finding 2"],
@@ -333,6 +344,152 @@ STAGE_DEPTH: dict[str, dict[str, list[str]]] = {
         "ac_verification": ["status"],  # F8: enforce AC verification step was recorded
     },
 }
+
+
+# ---------------------------------------------------------------------------
+# Understanding gate — universal diagnosis/framing-before-build (run_862fa4e0)
+# Design: Knowledge/Designs/2026-06-26-understanding-gate-design.md
+#
+# Generalizes the bug-only REPRO gate into a work-type-shaped understanding gate
+# at the EVALUATE→THINK boundary. Three mechanical checks, none rely on agent
+# discipline (SOUL "I am the OS, not the model"):
+#   M1 — solution-language scan: the claim must describe the PRESENT state, not
+#        the plan ("I will / the fix is / add a …"). THINK is where fixes live.
+#   M2 — hedge-word scan: an unresolved hedge (似乎/probably/should be …) BLOCKS
+#        unless the evidence field is a concrete observation that resolves it.
+#   M3 — skeptic sub-agent: BEHAVIORAL (evaluate.md), NOT enforced here. The
+#        validator can only check the artifact field exists; the human-spawned
+#        skeptic produces the verdict — same split as Diagnostic-Challenge Gate
+#        vs observation_evidence.
+#
+# Profiles: strict (full/bugfix/goal) REQUIRE the understanding block; relaxed
+# (trivial/docs/research) do NOT mandate it (anti-ceremony, Gap 3) but M1/M2
+# still scan it when present (cheap). Bug-class back-compat: observation_evidence
+# is a recognized ALIAS for understanding.evidence, and the bug-class REPRO marker
+# is preserved (see the REPRO block in validate_artifact_data).
+# ---------------------------------------------------------------------------
+
+# Min non-blank chars for an evidence string — anti-LAZINESS floor, NOT
+# anti-fabrication (a 20-char garbage string passes by design; M3 skeptic is the
+# fabrication backstop). Shared with the REPRO gate so both use one threshold.
+_EVIDENCE_MIN_CHARS = 20
+
+_STRICT_UNDERSTANDING_PROFILES = ("full", "bugfix", "goal", "")
+_RELAXED_UNDERSTANDING_PROFILES = ("trivial", "docs", "research")
+
+# M1 — solution-INTENT phrases (not bare verbs: "the state change is not
+# persisted" must NOT false-block — 'change' there is a noun). These match a
+# proposal to act, which belongs in THINK, not an understanding of the present.
+import re as _re
+
+_SOLUTION_LANGUAGE_PATTERNS = [
+    r"\bi\s+will\b",
+    r"\bi'?ll\b",
+    r"\bwe\s+(?:will|should|need\s+to|could)\b",
+    r"\blet'?s\b",
+    r"\bthe\s+fix\s+is\b",
+    r"\bthe\s+solution\s+is\b",
+    r"\bto\s+fix\b",
+    r"\bshould\s+add\b",
+    r"\b(?:add|change|refactor|rewrite|replace|introduce|implement|create)\s+(?:a|an|the|to|it|this|that|"
+    r"per-|new\b|[A-Za-z_]+\s+to\b)",  # action-verb + object/target (plan), not noun usage
+    r"^\s*(?:add|change|refactor|rewrite|replace|introduce|implement|create)\b",  # imperative claim
+]
+_SOLUTION_LANGUAGE_RE = _re.compile("|".join(_SOLUTION_LANGUAGE_PATTERNS), _re.IGNORECASE)
+
+# M2 — hedge words (EN + CJK). An unresolved hedge = inference, not observation.
+_HEDGE_PATTERNS = [
+    r"\bprobably\b", r"\blikely\b", r"\bmaybe\b", r"\bperhaps\b",
+    r"\bshould\s+be\b", r"\bi\s+think\b", r"\bi\s+guess\b",
+    r"\bseems?\s+(?:to|like)\b", r"\bmight\s+be\b", r"\bcould\s+be\b",
+    r"似乎", r"可能", r"应该是", r"大概", r"也许", r"估计",
+]
+_HEDGE_RE = _re.compile("|".join(_HEDGE_PATTERNS), _re.IGNORECASE)
+
+
+def _resolve_understanding_evidence(data: dict) -> object:
+    """Return the evidence value, preferring understanding.evidence, falling back
+    to the legacy observation_evidence alias (bug-class back-compat)."""
+    und = data.get("understanding")
+    if isinstance(und, dict) and "evidence" in und:
+        return und.get("evidence")
+    return data.get("observation_evidence")
+
+
+def _has_real_evidence(obs: object) -> bool:
+    """True iff obs is a non-empty observation: a >=20-char string, or a non-empty
+    list/dict. A bare bool carries zero information → False (REPRO + UG share this)."""
+    return (
+        not isinstance(obs, bool)
+        and bool(obs)
+        and (not isinstance(obs, str) or len(obs.strip()) >= _EVIDENCE_MIN_CHARS)
+    )
+
+
+def _check_understanding_gate(data: dict, profile: str) -> list[str]:
+    """Universal understanding gate (M1 + M2 + presence). Returns error strings
+    tagged 'Understanding gate:'. M3 (skeptic) is behavioral, enforced in
+    evaluate.md, not here."""
+    errs: list[str] = []
+    und = data.get("understanding")
+    is_strict = profile in _STRICT_UNDERSTANDING_PROFILES
+    has_block = isinstance(und, dict)
+
+    # Presence: strict profiles MUST carry the block with real evidence. The
+    # observation_evidence alias satisfies this for bug-class evals that haven't
+    # migrated to the block (back-compat — no double-blocking with REPRO).
+    if is_strict:
+        evidence = _resolve_understanding_evidence(data)
+        if not _has_real_evidence(evidence):
+            errs.append(
+                "Understanding gate: strict profile requires an 'understanding' block "
+                "with a non-empty 'evidence' field — an OBSERVATION of the CURRENT state "
+                "(code-trace file:line / ps / log counts / repro / characterization), not "
+                "an inference. THINK (the fix) cannot load until EVALUATE states what IS. "
+                "Add understanding.{work_type,claim,evidence,evidence_kind,skeptic_verdict}, "
+                "or use observation_evidence for a bug-class eval. "
+                "(design 2026-06-26-understanding-gate)."
+            )
+            # No block / no evidence at all → presence error is the actionable one;
+            # M1/M2 have nothing to scan. Return early.
+            if not has_block:
+                return errs
+
+    # M1 + M2 scan the claim when a block is present (strict AND relaxed — cheap,
+    # catches a solution-language / hedged claim even on a docs profile).
+    if has_block:
+        claim = und.get("claim")
+        claim_str = claim.strip() if isinstance(claim, str) else ""
+        evidence = _resolve_understanding_evidence(data)
+
+        # M1 — solution language in the claim = a plan, not present-state.
+        if claim_str and _SOLUTION_LANGUAGE_RE.search(claim_str):
+            errs.append(
+                "Understanding gate (M1 solution-language): understanding.claim contains "
+                "solution/plan language (e.g. 'I will / the fix is / add … / refactor …'). "
+                "The claim must describe the CURRENT state of the world (present-tense), not "
+                "the proposed change — the fix belongs in THINK, on the other side of the wall."
+            )
+
+        # M2 — a hedge (in the claim OR the evidence) is inference, resolved ONLY
+        # by a concrete, NON-hedged observation in evidence. A hedged evidence
+        # string ("probably the same thing, not sure") does NOT resolve a hedged
+        # claim — it is the same inference restated. (design §3.4: "paired with an
+        # explicit OBSERVATION that resolves it").
+        evidence_str = evidence.strip() if isinstance(evidence, str) else ""
+        claim_hedged = bool(claim_str) and bool(_HEDGE_RE.search(claim_str))
+        evidence_hedged = bool(evidence_str) and bool(_HEDGE_RE.search(evidence_str))
+        evidence_is_observation = _has_real_evidence(evidence) and not evidence_hedged
+        if (claim_hedged or evidence_hedged) and not evidence_is_observation:
+            errs.append(
+                "Understanding gate (M2 hedge-scan): the claim or evidence contains an "
+                "unresolved hedge (似乎/可能/probably/should be/I think…) with no concrete, "
+                "non-hedged observation in 'evidence' to resolve it. Either OBSERVE "
+                "(ps/log counts/gauge/code-trace) and cite it, or remove the hedge. "
+                "R16b mechanized — observe before asserting."
+            )
+
+    return errs
 
 
 def get_stage_schema(stage: str) -> dict:
@@ -534,19 +691,15 @@ def validate_artifact_data(stage: str, data: dict, profile: str = "full") -> lis
             (data.get("scope") == "bugfix") or (data.get("bug_class") is True)
         ) and profile not in _repro_skip
         if _is_bug:
-            obs = data.get("observation_evidence")
-            # A bare bool (observation_evidence:true) carries ZERO information —
-            # it must NOT satisfy "what did you observe" (adversarial MED). Strings
-            # need >=20 non-blank chars (anti-laziness floor — NOT anti-fabrication;
-            # a 20-char garbage string still passes, by design, the diagnostic-
-            # challenge sub-agent is the fabrication backstop). Non-empty list/dict
-            # of observations is accepted; empty collections fail via bool().
-            _has_obs = (
-                not isinstance(obs, bool)
-                and bool(obs)
-                and (not isinstance(obs, str) or len(obs.strip()) >= 20)
-            )
-            if not _has_obs:
+            # Resolve via the shared alias resolver: a bug-class eval may carry its
+            # observation either in the legacy observation_evidence field OR in the
+            # new understanding.evidence block. Either satisfies REPRO (back-compat).
+            obs = _resolve_understanding_evidence(data)
+            # _has_real_evidence: a bare bool carries ZERO info (adversarial MED);
+            # strings need >=20 non-blank chars (anti-laziness floor — NOT anti-
+            # fabrication; the diagnostic-challenge sub-agent is the fabrication
+            # backstop). Non-empty list/dict accepted; empty collections fail.
+            if not _has_real_evidence(obs):
                 errors.append(
                     "REPRO gate: bug-class evaluation (scope=bugfix) requires a non-empty "
                     "'observation_evidence' field — what did you OBSERVE that proves this "
@@ -555,6 +708,15 @@ def validate_artifact_data(stage: str, data: dict, profile: str = "full") -> lis
                     "Add observation_evidence, or set scope to a non-bug class if this is "
                     "not a bug fix."
                 )
+
+        # ── Universal Understanding gate (ALL work types) ─────────────────
+        # Generalizes REPRO beyond bug-class: strict profiles require an
+        # observation-backed, present-tense (M1), non-hedged (M2) understanding
+        # block before THINK. Relaxed profiles aren't forced to carry it, but a
+        # present block is still scanned. The bug-class REPRO marker above and
+        # this share the alias resolver, so a single understanding.evidence
+        # satisfies both without double-blocking.
+        errors.extend(_check_understanding_gate(data, profile))
 
     return errors
 
