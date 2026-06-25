@@ -1252,13 +1252,22 @@ run-observe --project <P> --run-id <R> --event <E> [args]  # telemetry
 
 # ⚠️ CRITICAL: deliver stage-json MUST include artifact_id from publish output.
 #
-# ALWAYS pass --quiet when publishing in a pipeline. On success it prints ONLY
-# {"artifact_id": "..."} (single line, parse-proof); on validation failure it
-# prints a SHORT single-line {"validation_failed":true,"errors":[...]}. Without
-# --quiet the failure path is multi-KB INDENTED JSON and the json.load() below
-# chokes (this caused 3 failed artifact_id captures in run_00e0e872).
-# Pattern: ART_ID=$(publish ... --quiet | python3 -c "import sys,json; print(json.load(sys.stdin)['artifact_id'])")
-#          run-update --stage-json '{"stage":"deliver","status":"completed","stage_doc_consumed":true,"artifact_id":"'$ART_ID'"}'
+# ALWAYS pass --quiet when publishing in a pipeline. On SUCCESS it prints ONLY
+# {"artifact_id": "..."} (single line, parse-proof) to STDOUT. On validation
+# FAILURE it writes a SHORT {"validation_failed":true,"errors":[...]} to STDERR
+# and STDOUT IS EMPTY, exit code 1.
+#
+# 🚫 FOOTGUN: never pipe stdout straight into json.load — on failure stdin is
+# EMPTY and you get an opaque `JSONDecodeError: Expecting value` with the real
+# reason hidden on stderr. ALWAYS guard on the exit code and surface stderr:
+#
+#   OUT=$(publish ... --quiet 2>/tmp/pub.err) || { echo "PUBLISH FAILED:"; cat /tmp/pub.err; exit 1; }
+#   ART_ID=$(printf '%s' "$OUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['artifact_id'])")
+#   run-update --stage-json '{"stage":"deliver","status":"completed","stage_doc_consumed":true,"artifact_id":"'$ART_ID'"}'
+#
+# If the publish fails: read the errors from /tmp/pub.err, fix the payload (use
+# `schema --stage <s>` below to see the expected shape), re-publish. The
+# exit-code guard means you SEE the reason instead of a cryptic parse crash.
 
 # Fetch a stage's expected schema/template WITHOUT a failed publish (single-line JSON):
 schema --stage <stage>      # e.g. schema --stage deliver — build the payload from .template

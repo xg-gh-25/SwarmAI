@@ -70,3 +70,46 @@ class TestSchemaSubcommand:
         parsed = json.loads(capsys.readouterr().out.strip())
         assert parsed["stage"] == "not_a_real_stage"
         assert parsed.get("required", []) == []
+
+
+class TestQuietFailureContract:
+    """Pin the --quiet validation-FAILURE contract the INSTRUCTIONS.md pattern
+    relies on (adversarial MED-1 on run_88b9f986): on a quiet validation failure,
+    STDOUT must be EMPTY and the error JSON goes to STDERR with exit 1. If this
+    regresses, the documented `OUT=$(publish --quiet) || ...` guard breaks and
+    callers get an opaque JSONDecodeError with the reason hidden — the exact
+    run_00e0e872 footgun. This test makes that contract non-regressable.
+    """
+
+    def test_quiet_validation_failure_empty_stdout_error_on_stderr(self, capsys, monkeypatch):
+        import pipeline_validator
+        # Force a validation failure regardless of stage schema details.
+        monkeypatch.setattr(
+            pipeline_validator, "validate_artifact_data",
+            lambda *a, **k: ["Missing required field 'x' for stage 'deliver'"],
+        )
+
+        class _Args:
+            project = "TestProject"
+            type = "delivery"
+            data = '{"incomplete": true}'
+            producer = "s_autonomous-pipeline"
+            summary = "quiet failure repro"
+            topic = ""
+            stage = "deliver"
+            run_id = None
+            quiet = True
+
+        with pytest.raises(SystemExit) as exc:
+            cli.cmd_publish(_Args(), None)
+        assert exc.value.code == 1  # fail-loud exit
+
+        captured = capsys.readouterr()
+        # STDOUT must be empty — the documented guard depends on this
+        assert captured.out.strip() == "", f"expected empty stdout, got: {captured.out!r}"
+        # The error JSON (with reasons) must be on STDERR, single-line, parseable
+        err = captured.err.strip()
+        assert err, "validation errors must be surfaced on stderr"
+        parsed = json.loads(err)
+        assert parsed["validation_failed"] is True
+        assert parsed["errors"]  # non-empty reasons present
