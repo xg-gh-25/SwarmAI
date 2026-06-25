@@ -51,10 +51,26 @@ def _operational():
         parent_principle=None,
         skill_spread=["Bash"],
         blast_radius=1,
-        evidence=["Exit code 2: no such file"],
+        evidence=["Exit code 2: genuine defect"],
         tier="mechanical",
         confidence=0.5,
         counter_state="counted",
+    )
+
+
+def _ignored():
+    """Operational NOISE — counter_state='ignored'. Must neither count nor park."""
+    return JudgmentClassification(
+        correction_ref="1781055459.99:cbcf9db7",
+        axis="operational",
+        class_name=None,
+        parent_principle=None,
+        skill_spread=["Bash"],
+        blast_radius=1,
+        evidence=["File does not exist. current working directory is /Users/..."],
+        tier="mechanical",
+        confidence=0.5,
+        counter_state="ignored",
     )
 
 
@@ -90,6 +106,30 @@ def test_ac4_operational_records_once(pending_path):
     tracker = MagicMock()
     route_classification(_operational(), tracker, pending_path=pending_path)
     tracker.record.assert_called_once()
+
+
+# --- Noise gate: counter_state='ignored' neither counts NOR parks ---
+
+def test_ignored_does_not_call_record(pending_path):
+    """An 'ignored' (noise) classification must NOT increment the tracker."""
+    tracker = MagicMock()
+    route_classification(_ignored(), tracker, pending_path=pending_path)
+    tracker.record.assert_not_called()
+
+
+def test_ignored_does_not_park(pending_path):
+    """An 'ignored' classification must NOT fall through into the pending queue
+    (the latent PARK bug: without an explicit guard, ignored would be treated as
+    the pending_confirm fallthrough and wrongly parked as cognitive)."""
+    tracker = MagicMock()
+    brief = route_classification(_ignored(), tracker, pending_path=pending_path)
+    assert brief is None
+    assert not pending_path.exists() or json.loads(pending_path.read_text()) == []
+
+
+def test_ignored_returns_none(pending_path):
+    """Ignored routes to a clean no-op (returns None, no Intake brief)."""
+    assert route_classification(_ignored(), MagicMock(), pending_path=pending_path) is None
 
 
 def test_ac4_operational_does_not_park(pending_path):

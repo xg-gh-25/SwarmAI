@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from typing import Callable
 
+from core.evolution.class_key import is_cognitive_class
+
 # Mirror correction_tracker's RED threshold: post_gate/post_rule >= this means
 # the class recurred past its structural fix (the fix did not hold).
 _RECURRENCE_RED = 2
@@ -48,14 +50,18 @@ def audit_recurrence(tracker_state: dict, capture_stats: dict) -> dict:
         reason_class ∈ {fewer_mistakes, logged_less, gate_failed, recurring,
                         no_activity}.
     """
-    # Filter None entries: the wiring builds tracker_state from
-    # {name: get_class(name)}, and get_class returns None when a raw class_names()
-    # key doesn't survive canonicalization. A None value here would crash
-    # `.get()` and turn the whole Phase-3d audit into a permanent silent no-op
-    # (caught by the caller's try/except). Skip None + resolved entries. (adv #2)
+    # Filter to ACTIVE COGNITIVE classes only:
+    #  - None entries: the wiring builds tracker_state from {name: get_class(name)},
+    #    and get_class returns None for a key that doesn't survive canonicalization.
+    #    A None value would crash `.get()` → permanent silent no-op (adv #2).
+    #  - resolved: already closed out.
+    #  - non-cognitive (OPERATIONAL/UNCLASSIFIED): the audit judges whether the
+    #    COGNITIVE evolution loop is closing. Operator-noise axes (even at count=802,
+    #    post_rule=53) are not loop-closure signal and must not force unhealthy
+    #    forever — same axis boundary the escalation ladder uses (one definition).
     active = {
         name: e for name, e in (tracker_state or {}).items()
-        if e and not e.get("resolved")
+        if e and not e.get("resolved") and is_cognitive_class(name)
     }
 
     prev = capture_stats.get("total_prev_period", 0) or 0

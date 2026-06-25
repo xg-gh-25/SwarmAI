@@ -38,7 +38,10 @@ from dataclasses import dataclass
 # canonical_class_key now lives in class_key.py (single normalization home, shared
 # with correction_tracker). Re-exported here for back-compat: governance_router,
 # governance_miner, and tests import it from this module.
-from core.evolution.class_key import canonical_class_key  # noqa: F401  (re-export)
+from core.evolution.class_key import (  # noqa: F401  (canonical re-exported)
+    canonical_class_key,
+    is_cognitive_class,
+)
 
 # Mirror correction_tracker's promotion threshold. A class must recur >=3 times
 # before any governance proposal is worth a human's attention.
@@ -46,6 +49,12 @@ _PROPOSE_THRESHOLD = 3
 # Recurrences AFTER a rule is accepted that mean "the rule failed -> escalate to a
 # gate". Mirrors correction_tracker._RED_THRESHOLD (kept in sync; both = 2).
 _RED_THRESHOLD = 2
+
+# Non-cognitive axis guard: governance (AGENT/STEERING rules) is a COGNITIVE
+# concern (a recurring JUDGMENT pattern, CLASS_A/B/C). OPERATIONAL/UNCLASSIFIED
+# never escalate, regardless of count — without this an OPERATIONAL count >= 3
+# emits "Recurring OPERATIONAL Nx — propose an L1 rule" (fake-governance pollution).
+# Shared definition lives in class_key (one home for escalation + closed-loop audit).
 
 
 @dataclass
@@ -94,6 +103,12 @@ def decide_escalation(class_state: dict, class_name: str = "") -> EscalationDeci
 
     # Resolved classes are dormant — never re-propose.
     if resolved:
+        return EscalationDecision(kind="none")
+
+    # Axis guard: non-cognitive classes (OPERATIONAL/UNCLASSIFIED) never escalate
+    # to a governance proposal regardless of count. is_cognitive_class normalizes
+    # ("operational" == "OPERATIONAL") and defaults empty/unknown to cognitive.
+    if class_name and not is_cognitive_class(class_name):
         return EscalationDecision(kind="none")
 
     # Below the promotion threshold — log only.

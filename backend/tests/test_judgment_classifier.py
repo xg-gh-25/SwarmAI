@@ -50,6 +50,41 @@ REAL_TOOL_FAILURE = {
     "error": "Exit code 2\npython: can't open file 'artifact_cli.py': No such file",
 }
 
+# Real operator/transient NOISE samples drawn verbatim from the live 802-record
+# OPERATIONAL pollution (corrections.jsonl). These are NOT recurring tool-misuse
+# patterns — they are one-off operator slips / transient infra. They must be
+# IGNORED (not counted), or they inflate the tracker and drive fake governance
+# proposals ("Recurring OPERATIONAL 749x — propose an L1 rule").
+NOISE_SAMPLES = {
+    "file-not-found": "File does not exist. Note: your current working directory is /Users/gawan/.swarm-ai",
+    "no-such-file": "ls: backend/scripts/scenario_runner.py: No such file or directory",
+    "python-traceback-probe": (
+        "Exit code 1\nTraceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n"
+        "KeyError: 'artifact_id'"
+    ),
+    "shell-arg-too-long": "xargs: command line cannot be assembled, too long",
+    "user-interrupt": "[Request interrupted by user for tool use]",
+    "git-rpc-408": "Exit code 1\nerror: RPC failed; HTTP 408 curl 22 The requested URL returned error: 408",
+    "ripgrep-timeout": "Ripgrep search timed out after 20 seconds. The search may have matched files",
+    "glob-no-match": "(eval):1: no matches found: http://127.0.0.1:18321/api/workspace/tree?depth=10",
+}
+
+# A GENUINE in-our-code defect (not operator noise): a real AttributeError raised
+# by SwarmAI code. This is the one operational shape that COULD be worth counting
+# if it recurred — so the gate must NOT over-filter it to ignored.
+GENUINE_CODE_FAILURE = {
+    "ts": 1781055460.0,
+    "session_id": "abcd1234-0000-0000-0000-000000000000",
+    "type": "tool_failure",
+    "tool": "Bash",
+    "input_summary": "{'command': 'python -c ...'}",
+    "error": (
+        "Exit code 1\nTraceback (most recent call last):\n"
+        "  File \"backend/core/session_unit.py\", line 1894, in _acquire\n"
+        "AttributeError: 'SessionUnit' object has no attribute '_pid'"
+    ),
+}
+
 
 def _fake_bedrock_returning(label_json: dict):
     """Build a MagicMock bedrock client whose .converse returns labeled JSON."""
@@ -96,7 +131,12 @@ def test_ac1_classify_real_user_correction_cognitive():
 # --- AC2 (NEGATIVE): operational tool_failure NOT escalated to cognitive ---
 
 def test_ac2_operational_tool_failure_not_escalated():
-    """AC2 negative: a single-tool tool_failure stays operational, no LLM, no class."""
+    """AC2 negative: a single-tool tool_failure stays operational, no LLM, no class.
+
+    REAL_TOOL_FAILURE's error is "No such file" — operator NOISE — so post-fix it
+    classifies operational but counter_state='ignored' (not counted). It still must
+    NOT be escalated to cognitive / call the LLM.
+    """
     # No bedrock client passed at all — operational path must not need one.
     jc = classify_correction(REAL_TOOL_FAILURE, evolution_classes=["CLASS_A"])
     assert jc is not None
@@ -104,8 +144,45 @@ def test_ac2_operational_tool_failure_not_escalated():
     assert jc.class_name is None  # operational has no cognitive class
     assert jc.tier == "mechanical"
     assert jc.blast_radius == 1  # single tool
-    # operational auto-counts (low stakes)
-    assert jc.counter_state == "counted"
+    # "No such file" is operator noise → ignored, NOT counted (the fix).
+    assert jc.counter_state == "ignored"
+
+
+# --- Noise quality-gate: operator/transient noise is IGNORED, not counted ---
+
+@pytest.mark.parametrize("label,error_text", list(NOISE_SAMPLES.items()))
+def test_operational_noise_is_ignored(label, error_text):
+    """Each real noise sample → operational axis but counter_state='ignored'.
+
+    Ignored = will not feed the recurrence counter that drives fake governance.
+    """
+    record = {"ts": 1.0, "session_id": "x", "type": "tool_failure",
+              "tool": "Bash", "error": error_text}
+    jc = classify_correction(record, evolution_classes=[])
+    assert jc is not None, f"{label}: must still classify (not None)"
+    assert jc.axis == "operational", f"{label}: stays operational"
+    assert jc.counter_state == "ignored", f"{label}: noise must be ignored, not counted"
+
+
+def test_genuine_code_failure_still_counts():
+    """A real in-our-code AttributeError (traceback from backend/core/...) is NOT
+    operator noise → counter_state='counted'. The gate must not over-filter."""
+    jc = classify_correction(GENUINE_CODE_FAILURE, evolution_classes=[])
+    assert jc is not None
+    assert jc.axis == "operational"
+    assert jc.counter_state == "counted", "a genuine code defect must still count"
+
+
+def test_string_probe_traceback_is_noise_but_real_file_traceback_is_not():
+    """Discriminator: a traceback from <string> (inline -c probe) is noise; a
+    traceback from a real source file is a genuine failure. Same 'Traceback' word,
+    opposite verdict — proves the gate is not a blunt keyword match (run_76273219)."""
+    probe = {"type": "tool_failure", "tool": "Bash",
+             "error": "Traceback (most recent call last):\n  File \"<string>\", line 1\nKeyError: 'x'"}
+    real = {"type": "tool_failure", "tool": "Bash",
+            "error": "Traceback (most recent call last):\n  File \"backend/core/x.py\", line 9\nValueError: bad"}
+    assert classify_correction(probe, evolution_classes=[]).counter_state == "ignored"
+    assert classify_correction(real, evolution_classes=[]).counter_state == "counted"
 
 
 def test_ac2_operational_never_calls_llm():

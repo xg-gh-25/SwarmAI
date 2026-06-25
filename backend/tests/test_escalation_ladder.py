@@ -56,6 +56,42 @@ def test_threshold_no_fix_proposes_rule(count):
     assert d.proposal["occurrence_count"] == count
 
 
+# --- Axis guard: non-cognitive classes (OPERATIONAL/UNCLASSIFIED) never escalate ---
+# Governance proposals (AGENT/STEERING rules) are a COGNITIVE concern. An
+# operational tool_failure accumulating to count>=3 must NEVER emit a "Recurring
+# OPERATIONAL Nx — propose an L1 rule" proposal — that is the fake-governance
+# pollution the noise gate + this guard exist to kill.
+
+@pytest.mark.parametrize("noncog", ["OPERATIONAL", "UNCLASSIFIED", "operational"])
+def test_noncognitive_class_never_escalates(noncog):
+    d = decide_escalation(_state(count=802, active_gate=None), class_name=noncog)
+    assert d.kind == "none", f"{noncog} must not propose governance"
+    assert d.proposal is None
+
+
+def test_noncognitive_with_failed_rule_still_none():
+    # Even OPERATIONAL with a recurring 'rule' (the live post_rule=53 state) must
+    # not escalate to a gate proposal — operational is not a governance axis.
+    state = _state(count=802, active_gate=None)
+    state["active_rule"] = "RULE_OPERATIONAL"
+    state["post_rule_count"] = 53
+    d = decide_escalation(state, class_name="OPERATIONAL")
+    assert d.kind == "none"
+
+
+def test_cognitive_classes_still_escalate():
+    # The guard must NOT break the real path: CLASS_A/B/C still propose.
+    for cls in ("CLASS_A", "CLASS_B", "CLASS_C"):
+        d = decide_escalation(_state(count=5, active_gate=None), class_name=cls)
+        assert d.kind == "rule", f"{cls} must still escalate"
+
+
+def test_empty_class_name_still_escalates():
+    # Backward-compat: no class_name (legacy/miner forms) keeps the old default
+    # behavior (treated as escalatable) — the guard only EXCLUDES known non-cognitive.
+    assert decide_escalation({"count": 5}).kind == "rule"
+
+
 # --- AC1 (NEGATIVE): no existing fix never yields a gate ---
 
 def test_ac1_no_fix_never_gate():

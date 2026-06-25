@@ -432,6 +432,13 @@ def route_classification(jc, tracker, pending_path: Path | None = None) -> dict 
 
     pending_path = pending_path or _default_pending_path()
 
+    # counter_state == "ignored": operator/transient NOISE. Neither count nor
+    # park — a clean no-op. MUST short-circuit BEFORE the pending_confirm
+    # fallthrough below, else an ignored record would be wrongly parked as a
+    # cognitive pending-confirm item (the latent PARK bug, Gate-1 Check 5).
+    if jc.counter_state == "ignored":
+        return None
+
     if jc.counter_state == "counted":
         # Operational / low-risk: auto-count toward the 3x threshold.
         try:

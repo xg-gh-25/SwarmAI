@@ -25,6 +25,40 @@ def _cls(count, post_gate=0, post_rule=0, active_gate=None, resolved=False):
     }
 
 
+class TestAuditAxisAwareness:
+    """Non-cognitive classes (OPERATIONAL/UNCLASSIFIED) must NOT drive the verdict.
+
+    The closed-loop audit judges whether the COGNITIVE evolution loop is closing.
+    A polluted OPERATIONAL class (count=802, post_rule=53 — operator-noise that
+    pre-dates the noise gate) must not force the audit to report unhealthy forever.
+    """
+
+    def test_operational_only_recurrence_is_healthy(self):
+        # The exact live pollution: OPERATIONAL recurring, no real cognitive issue.
+        state = {"OPERATIONAL": {"count": 802, "post_gate_count": 0, "post_rule_count": 53,
+                                 "active_gate": None, "active_rule": "RULE_OPERATIONAL", "resolved": False}}
+        verdict = audit_recurrence(state, capture_stats={"total_this_period": 802, "total_prev_period": 802})
+        assert verdict["healthy"] is True, "operational-only recurrence must not fail the cognitive loop audit"
+
+    def test_unclassified_only_recurrence_is_healthy(self):
+        state = {"UNCLASSIFIED": {"count": 87, "post_gate_count": 0, "post_rule_count": 5,
+                                  "active_gate": None, "active_rule": "R", "resolved": False}}
+        verdict = audit_recurrence(state, capture_stats={"total_this_period": 87, "total_prev_period": 87})
+        assert verdict["healthy"] is True
+
+    def test_cognitive_recurrence_still_unhealthy_amid_operational(self):
+        # A REAL cognitive recurrence must still surface even with OPERATIONAL noise present.
+        state = {
+            "OPERATIONAL": {"count": 802, "post_gate_count": 0, "post_rule_count": 53,
+                            "active_gate": None, "active_rule": "RULE_OPERATIONAL", "resolved": False},
+            "CLASS_A": {"count": 5, "post_gate_count": 3, "post_rule_count": 0,
+                        "active_gate": "GC12", "active_rule": None, "resolved": False},
+        }
+        verdict = audit_recurrence(state, capture_stats={"total_this_period": 807, "total_prev_period": 807})
+        assert verdict["healthy"] is False
+        assert verdict["reason_class"] == "gate_failed"
+
+
 class TestAuditRecurrence:
     def test_fewer_mistakes_is_healthy(self):
         # Known class CLASS_A: gated, zero recurrence since gate. Capture total

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -89,14 +90,80 @@ def _ref(record: dict) -> str:
     return f"{ts}:{sid}"
 
 
+# Operator/transient NOISE signatures (substring match, case-insensitive).
+# A tool_failure whose error matches any of these is a one-off operator slip or
+# transient infra hiccup — NOT a recurring tool-misuse pattern. It must be
+# IGNORED (not counted), else it inflates the OPERATIONAL tracker count and
+# drives fake governance proposals ("Recurring OPERATIONAL Nx — propose a rule").
+#
+# Conservative by design (Gate-1: default-to-COUNT on uncertainty): a missed
+# noise line just over-counts by 1 (benign, self-correcting on re-mine); a real
+# recurring failure wrongly silenced is the only harmful direction, so these are
+# all UNAMBIGUOUS transients pinned to the verified 802-record corpus. NOT a
+# blunt keyword match — see _is_operational_noise for the traceback discriminator
+# (probe-traceback is noise; a traceback from a real source file is genuine).
+_OPERATIONAL_NOISE_SIGNATURES = (
+    "file does not exist",
+    "no such file",                               # covers "...or directory" and python's bare variant
+    "can't open file",                            # python: can't open file '...'
+    "command line cannot be assembled",          # xargs too long
+    "argument list too long",
+    "interrupted by user",
+    "doesn't want to proceed",
+    "does not want to take this action",
+    "current working directory is",               # CWD hint on a path miss
+    "rpc failed",                                  # git push transient
+    "http 408",
+    "search timed out",                            # ripgrep timeout
+    "no matches found",                            # zsh glob no-match
+    "connection refused",
+    "could not resolve host",
+    "operation timed out",
+)
+
+
+def _is_operational_noise(error_text: str) -> bool:
+    """True if a tool_failure error is operator/transient noise (→ ignore, don't count).
+
+    Discriminator (anti run_76273219 blunt-keyword failure): a Python traceback is
+    noise ONLY when it originates from an inline probe (``File "<string>"``) — i.e.
+    a throwaway ``python -c`` the operator typed. A traceback that names a REAL
+    source file (``File "backend/...``) is a genuine code defect and must COUNT.
+    """
+    if not error_text:
+        return False
+    low = error_text.lower()
+
+    if any(sig in low for sig in _OPERATIONAL_NOISE_SIGNATURES):
+        return True
+
+    # Traceback discriminator: inline-probe traceback = noise; real-file = genuine.
+    # Noise iff every 'File "..."' frame is a <string>/<stdin> probe (a throwaway
+    # `python -c`); a real source-path frame (File "backend/...") = genuine defect.
+    if "traceback (most recent call last)" in low:
+        frames = re.findall(r'file "([^"]*)"', low)
+        if frames and all(f in ("<string>", "<stdin>", "") for f in frames):
+            return True
+        return False
+
+    return False
+
+
 def _classify_operational(record: dict) -> JudgmentClassification:
     """Tier-1 mechanical: a tool_failure is operational. No LLM.
 
     blast_radius for a single record is 1 (one tool). Cross-record clustering
     (blast_radius >= 3 => promote to cognitive) is a Phase-2 concern; Phase 1
     classifies one record at a time, so a lone tool_failure is operational.
+
+    Noise gate: operator/transient noise (file-not-found, user-interrupt, network
+    transients, inline-probe tracebacks) is classified operational but
+    counter_state='ignored' so it never feeds the recurrence counter. A genuine
+    failure counts. See _is_operational_noise.
     """
     tool = record.get("tool", "")
+    error_text = str(record.get("error", ""))
+    is_noise = _is_operational_noise(error_text)
     return JudgmentClassification(
         correction_ref=_ref(record),
         axis="operational",
@@ -104,10 +171,12 @@ def _classify_operational(record: dict) -> JudgmentClassification:
         parent_principle=None,
         skill_spread=[tool] if tool else [],
         blast_radius=1,
-        evidence=[str(record.get("error", ""))[:120]],
+        evidence=[error_text[:120]],
         tier="mechanical",
         confidence=0.5,
-        counter_state="counted",  # operational auto-counts (low stakes)
+        # Noise → ignored (never counts toward recurrence/governance); a genuine
+        # operational failure still auto-counts (low stakes).
+        counter_state="ignored" if is_noise else "counted",
     )
 
 

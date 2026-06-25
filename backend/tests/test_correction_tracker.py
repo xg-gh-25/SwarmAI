@@ -601,20 +601,36 @@ class TestLadderReconnect:
     """AC4: the actual bug — record->register_rule->record x2 reaches the gate rung."""
 
     def test_full_reconnect_chain_reaches_gate(self, tmp_path):
+        # Uses a COGNITIVE class (CLASS_A) — governance escalation is cognitive-only
+        # (OPERATIONAL/UNCLASSIFIED are axis-guarded out, see escalation_ladder).
+        # This test verifies the RECONNECT MECHANISM: record (drifted casing) →
+        # register_rule (canonical) → record x2 → all land on ONE canonical entry
+        # and reach the gate rung. The class choice is incidental to that mechanism;
+        # it must be cognitive so the axis guard doesn't (correctly) short-circuit it.
         from core.evolution.escalation_ladder import canonical_class_key, decide_escalation
         tr = CorrectionClassTracker(state_path=tmp_path / "t.json")
-        # accumulate under the raw axis name (as the router does)
+        # accumulate under a drifted-casing name (as raw signal sources do)
         for _ in range(3):
-            tr.record("operational")
+            tr.record("class a")  # canonicalizes to CLASS_A
         # accept a rule (dashboard passes the canonical source_class)
-        tr.register_rule("OPERATIONAL", "RULE_OPERATIONAL")
-        # class recurs twice MORE (raw axis name again)
-        tr.record("operational")
-        tr.record("operational")
-        st = tr.get_class("OPERATIONAL")
+        tr.register_rule("CLASS_A", "GC-CLASSA")
+        # class recurs twice MORE (drifted name again)
+        tr.record("class a")
+        tr.record("class a")
+        st = tr.get_class("CLASS_A")
         assert st["post_rule_count"] == 2, "recurrence post-rule must land on the ruled entry"
-        decision = decide_escalation(st, class_name=canonical_class_key("operational"))
+        decision = decide_escalation(st, class_name=canonical_class_key("class a"))
         assert decision.kind == "gate", "ladder must escalate rule->gate after RED recurrence"
+
+    def test_operational_axis_never_escalates_even_after_rule_recurrence(self):
+        """Companion to the above: the SAME reconnect chain on OPERATIONAL must
+        NOT reach a gate — operator-noise axes are guarded out of governance.
+        Documents the deliberate contract change (was: OPERATIONAL escalated)."""
+        from core.evolution.escalation_ladder import canonical_class_key, decide_escalation
+        st = {"count": 5, "active_gate": None, "active_rule": "RULE_OPERATIONAL",
+              "post_rule_count": 2, "resolved": False}
+        decision = decide_escalation(st, class_name=canonical_class_key("operational"))
+        assert decision.kind == "none", "OPERATIONAL must never escalate to governance"
 
 
 class TestEmptyClassName:
