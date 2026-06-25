@@ -450,6 +450,94 @@ def create_dangerous_command_gate(
 
 
 # ---------------------------------------------------------------------------
+# Background-command guard — runaway/hang prevention (PreToolUse, Bash)
+# ---------------------------------------------------------------------------
+# The CLI's per-command timeout (BASH_DEFAULT_TIMEOUT_MS=120s) bounds FOREGROUND
+# commands only. Background commands (run_in_background, or shell &/nohup/disown/
+# setsid) ignore it and can run indefinitely with no visibility
+# (anthropics/claude-code#61568) — exactly how a bare `find` scanning
+# node_modules hung ~10min. Prose rules don't hold (the agent backgrounded it
+# despite AGENT.md); a PreToolUse hook is the only deterministic enforcement.
+#
+# Policy: DEFAULT-DENY backgrounding. Only a narrow allowlist of genuinely
+# long-lived services (dev servers, --watch, tail -f) may background. Everything
+# else (find/grep/pytest/build/install — all result-bearing) runs foreground,
+# where the 120s timeout applies and the agent sees the result. Truly long
+# detached work belongs on the daemon job system, not a background shell.
+
+_BG_KEYWORD_RE = re.compile(r"\b(?:nohup|disown|setsid)\b")
+# Narrow allowlist: deliberately long-lived services that SHOULD background.
+_BG_SERVICE_ALLOWLIST_RE = re.compile(
+    r"\b(?:npm|yarn|pnpm)\s+(?:run\s+)?(?:dev|start|serve)\b"
+    r"|\bvite\b|\bnodemon\b|\bnext\s+dev\b"
+    r"|\buvicorn\b|--reload\b|\bflask\s+run\b"
+    r"|\bhttp\.server\b|\bhttp-server\b"
+    r"|--watch\b"
+    r"|\btail\s+-[fF]\b"
+    r"|\./dev\.sh\b",
+    re.IGNORECASE,
+)
+
+
+def _is_backgrounded(command: str, tool_input: dict[str, Any]) -> bool:
+    """True if the Bash call would run in the background (tool flag OR shell).
+
+    Shell detection strips every NON-backgrounding use of ``&`` — logical-AND
+    (``&&``), redirects (``&>``/``&>>``), fd-dups (``2>&1``), and quoted literals
+    — so any ``&`` left over is a backgrounding control operator (``cmd &`` or
+    ``cmd & next``). Plus nohup/disown/setsid.
+    """
+    if tool_input.get("run_in_background") is True:
+        return True
+    if _BG_KEYWORD_RE.search(command):
+        return True
+    s = re.sub(r"'[^']*'", "", command)   # strip single-quoted literals
+    s = re.sub(r'"[^"]*"', "", s)         # strip double-quoted literals
+    s = s.replace("&&", "")               # logical-AND, not background
+    s = re.sub(r"&>>?", "", s)            # &> / &>> redirect
+    s = re.sub(r"\d*>&\d*", "", s)        # 2>&1 / >&2 fd dup
+    return "&" in s                        # any remaining & = backgrounding
+
+
+async def background_command_guard(
+    input_data: dict[str, Any],
+    tool_use_id: str | None,
+    context: Any,
+) -> dict[str, Any]:
+    """PreToolUse (Bash): default-deny backgrounding except long-lived services.
+
+    Closes the background-runaway hole (#61568) the foreground 120s timeout
+    cannot: a backgrounded command escapes the timeout and can hang forever.
+    """
+    if input_data.get("tool_name") != "Bash":
+        return {"decision": "approve"}
+    tool_input = input_data.get("tool_input", {}) or {}
+    command = tool_input.get("command", "") or ""
+    if not command:
+        return {"decision": "approve"}
+    if not _is_backgrounded(command, tool_input):
+        return {"decision": "approve"}
+    # Backgrounded — allow only genuine long-lived services.
+    if _BG_SERVICE_ALLOWLIST_RE.search(command):
+        return {"decision": "approve"}
+    logger.warning("[BLOCKED] Background execution denied: %s", command[:80])
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": (
+                "Background execution is disabled for this command. Re-run it in "
+                "the FOREGROUND (remove run_in_background and any trailing "
+                "'&'/nohup/setsid) — the 120s timeout then bounds it and you see "
+                "the result. Background is reserved for long-lived services "
+                "(dev servers, --watch, tail -f). For genuinely long detached "
+                "work use the daemon job system, not a background shell."
+            ),
+        }
+    }
+
+
+# ---------------------------------------------------------------------------
 # Governance file gate — Three-Layer Governance enforcement
 # ---------------------------------------------------------------------------
 

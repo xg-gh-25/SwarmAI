@@ -24,6 +24,7 @@ from claude_agent_sdk import HookMatcher
 from .security_hooks import (
     pre_tool_logger,
     create_dangerous_command_gate,
+    background_command_guard,
     create_ask_question_gate,
     create_governance_file_gate,
     create_skill_access_checker,
@@ -187,6 +188,15 @@ async def build_hooks(
     # ── PreToolUse: tool logger ──────────────────────────────
     if agent_config.get("enable_tool_logging", True):
         registry.register("PreToolUse", pre_tool_logger, "pre_tool_logger")
+
+    # ── PreToolUse: background-command guard (Bash-scoped) ──
+    # Default-deny backgrounding (run_in_background / trailing &/nohup/setsid)
+    # except a narrow long-lived-service allowlist. Closes the background
+    # runaway hole the foreground 120s timeout can't bound (claude-code#61568).
+    registry.register(
+        "PreToolUse", background_command_guard,
+        "background_command_guard", matcher="Bash",
+    )
 
     # ── PreToolUse: dangerous command gate (Bash-scoped) ─────
     agent_id = agent_config.get("id", "default")
