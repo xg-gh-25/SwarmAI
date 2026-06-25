@@ -160,6 +160,18 @@ def _merge_drift(raw_state: dict) -> dict:
         all_evidence.sort(key=lambda e: str(e.get("date", "")))
         out["evidence"] = all_evidence[-_MAX_EVIDENCE:]
 
+        # recorded_refs: order-preserving UNION across ALL members (Gate-2 M1).
+        # The merge sums count across members, so the dedup ledger MUST also union
+        # across members — keeping only members[0]'s refs while summing all counts
+        # would let a dropped ref re-record and inflate the counter past true
+        # recurrence (the exact "false structural proposal fires" failure mode).
+        seen_refs: list = []
+        for m in members:
+            for r in (m.get("recorded_refs") or []):
+                if r not in seen_refs:
+                    seen_refs.append(r)
+        out["recorded_refs"] = seen_refs
+
         merged[ckey] = out
 
     return merged

@@ -145,6 +145,26 @@ class TestRecordIdempotentByRef:
         tracker.record("CLASS_A", evidence="b")
         assert tracker.get_class("CLASS_A")["count"] == 2
 
+    def test_drift_merge_unions_recorded_refs(self, tmp_path):
+        """Gate-2 M1: when two raw keys canonicalize to one class, _merge_drift
+        sums count — so it MUST also UNION recorded_refs across all members. If
+        it kept only members[0]'s refs, a dropped ref could re-record and inflate
+        the counter past true recurrence (false structural proposal)."""
+        sp = tmp_path / "tracker.json"
+        # Two raw keys that canonicalize to CLASS_A (drift), each with distinct refs.
+        sp.write_text(json.dumps({
+            "CLASS_A": {"count": 2, "recorded_refs": ["r-1", "r-2"], "evidence": []},
+            "class a": {"count": 1, "recorded_refs": ["r-3"], "evidence": []},
+        }))
+        tracker = CorrectionClassTracker(state_path=sp)
+        state = tracker.get_class("CLASS_A")
+        assert state["count"] == 3, "merge sums count"
+        assert set(state["recorded_refs"]) == {"r-1", "r-2", "r-3"}, \
+            "merge must UNION refs — a dropped ref re-inflates the counter"
+        # And the union holds: re-recording any merged ref is a no-op.
+        tracker.record("CLASS_A", evidence="dup", correction_ref="r-3")
+        assert tracker.get_class("CLASS_A")["count"] == 3, "merged ref stays deduped"
+
 
 class TestRegisterGate:
     """Test gate registration."""

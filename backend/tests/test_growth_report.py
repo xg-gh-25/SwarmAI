@@ -61,6 +61,42 @@ class TestGrowthReportFormatter:
         assert report["headline"] == "" or "no" in report["headline"].lower()
 
 
+class TestConstitutionChurnFilter:
+    """The growth report must show DELIBERATE self-writes, not auto-bundled
+    refresh-churn (framework:/chore:/project:/content: prefixes). Surfacing churn
+    as 'what I grew' is the gauge-reads-polluted-data disease — 100% of the live
+    7d window was auto-bundle (run_448a4f7f SMOKE)."""
+
+    def test_churn_prefixes_are_filtered(self, tmp_path):
+        """A git repo whose constitution commits are all auto-bundle churn yields
+        ZERO growth-report constitution changes."""
+        import subprocess
+        from core.eval_service import EvalService
+        repo = tmp_path / "ws"
+        ctx = repo / ".context"
+        ctx.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"], check=True)
+        subprocess.run(["git", "-C", str(repo), "config", "user.name", "t"], check=True)
+        (ctx / "AGENT.md").write_text("v1\n")
+        subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+        # churn-prefixed commit (the auto-bundle hook shape)
+        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m",
+                        "framework: framework (4), chore (1)"], check=True)
+        (ctx / "AGENT.md").write_text("v2\n")
+        subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+        # a DELIBERATE self-write
+        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m",
+                        "governance(AGENT): add R-foo pre-write reflex"], check=True)
+        svc = EvalService.__new__(EvalService)  # bypass __init__ (no full workspace)
+        commits = EvalService._constitution_commits(svc, since_days=3650,
+                                                     workspace_root=repo)
+        subjects = [c["subject"] for c in commits]
+        assert any("R-foo" in s for s in subjects), "deliberate write must surface"
+        assert not any(s.startswith("framework:") for s in subjects), \
+            "auto-bundle churn must be filtered out"
+
+
 class TestGrowthReportBriefingLines:
     """The briefing surface: constitution changes render as a flagged headline."""
 

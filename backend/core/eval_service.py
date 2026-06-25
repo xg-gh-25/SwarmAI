@@ -320,7 +320,8 @@ class EvalService:
     # ─── P4: Auto-Growth Methods ─────────────────────────────────────────
 
     def auto_seed_case(
-        self, correction_id: str, correction_text: str, class_name: str = "UNCLASSIFIED"
+        self, correction_id: str, correction_text: str, class_name: str = "UNCLASSIFIED",
+        persist: bool = True,
     ) -> Optional[dict]:
         """Auto-seed a DRAFT trajectory skeleton from a classified correction.
 
@@ -389,7 +390,13 @@ class EvalService:
                 ),
             }
             self._cases.append(case)
-            self._persist_golden_set()
+            # persist=False lets a batch caller (classify_new_corrections seeding
+            # M pending_confirm corrections in one loop) defer the full
+            # golden_set.yaml rewrite to a single flush after the loop, instead
+            # of M serial O(cases) rewrites + M flock cycles (adversarial Gate-2
+            # MED, run_0305426d). The caller MUST call flush_golden_set() after.
+            if persist:
+                self._persist_golden_set()
 
         logger.info(
             "eval_service: auto-seeded DRAFT skeleton %s from %s correction %s "
@@ -397,6 +404,15 @@ class EvalService:
             case_id, class_name, correction_id,
         )
         return case
+
+    def flush_golden_set(self) -> None:
+        """Persist in-memory cases to disk once (for batch auto_seed_case callers).
+
+        Pairs with auto_seed_case(persist=False): seed many in a loop, flush once.
+        Idempotent and safe to call even if nothing changed.
+        """
+        with self._data_lock:
+            self._persist_golden_set()
 
     def get_affected_cases(self, changed_files: list[str]) -> list[dict]:
         """Return cases whose affected_by intersects with changed files.
@@ -591,6 +607,16 @@ class EvalService:
     # of these is the headline of the growth report — visible + reversible.
     _CONSTITUTION_FILES = ("SOUL.md", "AGENT.md", "STEERING.md")
 
+    # The workspace auto-commit hook bundles context-file syncs under conventional
+    # prefixes (framework:/chore:/project:/content:). Those are refresh-churn, NOT
+    # deliberate self-evolution writes — surfacing them as "what I grew" would be
+    # the gauge-reads-polluted-data disease (233 churn commits in 180d on the live
+    # repo, 100% of the 7d window). The growth report shows DELIBERATE constitution
+    # writes only; a real self-evolution edit carries a substantive message, not a
+    # bundled-sync prefix. (Verified live: every recent .context constitution touch
+    # was an auto-bundle, run_448a4f7f SMOKE.)
+    _CHURN_SUBJECT_PREFIXES = ("framework:", "chore:", "project:", "content:")
+
     @staticmethod
     def _format_growth_report(
         autonomous_records: list,
@@ -610,6 +636,11 @@ class EvalService:
             )
             headline = f"{len(constitution_commits)} constitution change(s): {files}"
         elif autonomous_records or proposals:
+            # report-API-only headline (Gate-2 L2): records + proposals already
+            # surface in the briefing via the L4.3 tracker lines + L4.4 proposal
+            # lines, so _growth_briefing_lines deliberately does NOT re-emit them
+            # (avoids banner-blindness). This headline is for programmatic callers
+            # of growth_report() (e.g. the monthly report), not the briefing.
             headline = (
                 f"{len(autonomous_records)} self-recorded pattern(s), "
                 f"{len(proposals)} autonomous proposal(s)"
@@ -636,9 +667,14 @@ class EvalService:
             )
         return lines
 
-    def growth_report(self, since_days: int = 7) -> dict:
+    def growth_report(self, since_days: int = 7, workspace_root=None) -> dict:
         """Gather + format the growth report: autonomous records, escalation
         proposals, and constitution-file git commits in the last ``since_days``.
+
+        ``workspace_root`` (optional): the repo to read constitution commits from.
+        Defaults to the canonical SwarmWS. Threaded so callers (and tests) can
+        point it at their own workspace — without it, tests would shell git
+        against the real ~/.swarm-ai/SwarmWS (non-hermetic, Gate-2 L3).
 
         Thin adapter around the pure _format_growth_report. Degrades to an
         honest-empty report on any I/O failure (never raises into the briefing).
@@ -660,7 +696,7 @@ class EvalService:
         except Exception as exc:  # noqa: BLE001
             logger.debug("growth_report proposals degraded: %s", exc)
         try:
-            commits = self._constitution_commits(since_days)
+            commits = self._constitution_commits(since_days, workspace_root)
         except Exception as exc:  # noqa: BLE001
             logger.debug("growth_report commits degraded: %s", exc)
         return self._format_growth_report(records, proposals, commits)
@@ -679,59 +715,59 @@ class EvalService:
         # Only governance (structural) proposals — skip skill-opt rows.
         return [r for r in rows if r.get("target") == "governance" or r.get("kind") in ("rule", "gate")]
 
-    def _constitution_commits(self, since_days: int) -> list:
+    def _constitution_commits(self, since_days: int, workspace_root=None) -> list:
         """git log of SOUL/AGENT/STEERING commits in the workspace, last N days.
 
         The workspace .context/ copies ARE git-tracked here and ARE the edit+
         commit target (backend/context/ lives in the code repo, no history here).
         `git log -- <paths>` filters to commits that actually touched a
         constitution file — refresh-churn that didn't touch them is excluded
-        (Gate-1 finding 5: don't read the whole noisy history)."""
+        (Gate-1 finding 5: don't read the whole noisy history).
+
+        ONE subprocess (Gate-2 L1): `--name-status` carries the touched files in
+        the same log output, so per-commit file attribution needs no N+1 `git
+        show` spawns on the session-start hot path.
+        """
         import subprocess
-        ws = self._workspace_root()
+        # EvalService already holds the workspace Path as self._workspace_root
+        # (set in __init__). Use it directly — do NOT shadow it with a method.
+        ws = workspace_root or self._workspace_root
         paths = [f".context/{f}" for f in self._CONSTITUTION_FILES]
         try:
             out = subprocess.run(
                 ["git", "-C", str(ws), "log", f"--since={since_days} days ago",
-                 "--pretty=format:%h\x1f%ad\x1f%s", "--date=short", "--", *paths],
+                 "--name-status", "--pretty=format:%x1e%h\x1f%ad\x1f%s",
+                 "--date=short", "--", *paths],
                 capture_output=True, text=True, timeout=10,
             )
         except (OSError, subprocess.SubprocessError):
             return []
         if out.returncode != 0 or not out.stdout.strip():
             return []
+        # Records are \x1e-delimited; each = header line (%h\x1f%ad\x1f%s) then
+        # name-status lines ("M\t.context/AGENT.md"). Parse files from the same output.
         commits: list = []
-        for line in out.stdout.strip().splitlines():
-            parts = line.split("\x1f")
-            if len(parts) == 3:
-                h, date, subject = parts
-                # Attribute to the constitution file(s) the commit touched.
-                file = self._commit_constitution_file(ws, h)
-                commits.append({"hash": h, "date": date, "subject": subject, "file": file})
-        return commits
-
-    @staticmethod
-    def _commit_constitution_file(ws, commit_hash: str) -> str:
-        """Which constitution file(s) a commit touched (for the headline label)."""
-        import subprocess
-        try:
-            out = subprocess.run(
-                ["git", "-C", str(ws), "show", "--name-only", "--pretty=format:",
-                 commit_hash],
-                capture_output=True, text=True, timeout=10,
-            )
+        for block in out.stdout.split("\x1e"):
+            block = block.strip("\n")
+            if not block:
+                continue
+            blines = block.splitlines()
+            parts = blines[0].split("\x1f")
+            if len(parts) != 3:
+                continue
+            h, date, subject = parts
+            # Skip auto-bundled refresh-churn — show deliberate self-writes only.
+            if subject.lstrip().lower().startswith(self._CHURN_SUBJECT_PREFIXES):
+                continue
             touched = [
-                f for f in EvalService._CONSTITUTION_FILES
-                if any(f in ln for ln in out.stdout.splitlines())
+                f for f in self._CONSTITUTION_FILES
+                if any(f in ln for ln in blines[1:])
             ]
-            return ", ".join(touched) if touched else "?"
-        except (OSError, subprocess.SubprocessError):
-            return "?"
-
-    def _workspace_root(self):
-        """Resolve the SwarmWS workspace root (where .context/ is git-tracked)."""
-        from pathlib import Path
-        return Path.home() / ".swarm-ai" / "SwarmWS"
+            commits.append({
+                "hash": h, "date": date, "subject": subject,
+                "file": ", ".join(touched) if touched else "?",
+            })
+        return commits
 
     def _count_consecutive_passes(self, case_id: str) -> int:
         """Count consecutive passes in runs that INCLUDE this case.
