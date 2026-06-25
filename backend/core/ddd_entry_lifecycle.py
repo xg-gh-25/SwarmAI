@@ -748,6 +748,56 @@ def compute_entry_noise(
     )
 
 
+def compute_reclaimable_noise(
+    entries: list[EntryMetadata],
+    today: date,
+    grace_days: int = GRACE_PERIOD_DAYS,
+    evergreen_sections: "frozenset[str] | set[str] | None" = None,
+) -> NoiseReport:
+    """The GATE metric: raw noise MINUS keep-class (reclaimable noise only).
+
+    compute_entry_noise is the HONEST raw gauge — it counts even
+    permanent-but-dormant knowledge (a dormant COE, an unreferenced
+    principle) as noise, which is correct for measurement but wrong for a
+    pass/fail gate: a doc that is healthy but principle-heavy would FAIL.
+
+    This gate metric excludes is_keep_class entries from the numerator, so it
+    measures only noise that reclaim_noise_entries could actually remove.
+    noise_rate denominator stays `total` (the whole doc) so the rate is
+    comparable across docs.
+
+    READ-ONLY: never mutates `entries`.
+    """
+    total = len(entries)
+    if total == 0:
+        return NoiseReport()
+
+    noisy_titles: list[str] = []
+    by_section: dict[str, int] = {}
+    for entry in entries:
+        if entry.ref_count != 0:
+            continue
+        if entry.decay_state not in _NOISY_DECAY_STATES:
+            continue
+        if entry.created_date is not None:
+            if (today - entry.created_date).days < grace_days:
+                continue
+        if is_keep_class(entry, evergreen_sections=evergreen_sections):
+            continue
+        noisy_titles.append(entry.title)
+        section_key = entry.section or "(no section)"
+        by_section[section_key] = by_section.get(section_key, 0) + 1
+
+    noisy = len(noisy_titles)
+    return NoiseReport(
+        total=total,
+        noisy=noisy,
+        noise_rate=noisy / total,
+        noisy_titles=noisy_titles,
+        by_section=by_section,
+    )
+
+
 # ── Reclaim (CLEAN) — physically remove stale noise, protect permanent knowledge ─
 
 

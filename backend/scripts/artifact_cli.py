@@ -2950,6 +2950,65 @@ def cmd_ddd_health(args, reg) -> None:
     print(json.dumps(result, indent=2, default=str))
 
 
+def cmd_ddd_noise(args, reg) -> None:
+    """Per-doc DDD noise gate (M0 ②): reclaimable noise_rate + PASS/FAIL verdict.
+
+    Measures the GATE metric (raw noise MINUS keep-class) so a doc heavy in
+    permanent-but-dormant knowledge (COE/principles) doesn't FAIL spuriously.
+    Verdict string (PASS/FAIL) is in stdout for the golden_set canary to assert.
+    Always exits 0 — the canary keys off the string, not the exit code.
+    """
+    from datetime import date
+    from core.ddd_entry_lifecycle import (
+        parse_entries, compute_reclaimable_noise, NOISE_FAIL_THRESHOLD,
+        MEMORY_EVERGREEN_SECTIONS,
+    )
+
+    ws = _get_workspace()
+    today = date.today()
+
+    # Build the doc list: --doc (one file) or default scan (MEMORY + all IMPROVEMENT).
+    docs: list[tuple[str, "Path", "frozenset[str] | None"]] = []
+    if getattr(args, "doc", None):
+        p = Path(args.doc)
+        if not p.is_absolute():
+            p = ws / args.doc
+        ever = MEMORY_EVERGREEN_SECTIONS if p.name == "MEMORY.md" else None
+        docs.append((args.doc, p, ever))
+    else:
+        mem = ws / ".context" / "MEMORY.md"
+        if mem.exists():
+            docs.append(("MEMORY.md", mem, MEMORY_EVERGREEN_SECTIONS))
+        proj_dir = ws / "Projects"
+        if proj_dir.is_dir():
+            for imp in sorted(proj_dir.glob("*/IMPROVEMENT.md")):
+                docs.append((str(imp.relative_to(ws)), imp, None))
+
+    results = []
+    worst_fail = False
+    for name, path, ever in docs:
+        if not path.exists():
+            results.append({"doc": name, "error": "not found"})
+            continue
+        report = compute_reclaimable_noise(
+            parse_entries(path.read_text(encoding="utf-8")), today,
+            evergreen_sections=ever,
+        )
+        verdict = "FAIL" if report.noise_rate > NOISE_FAIL_THRESHOLD else "PASS"
+        if verdict == "FAIL":
+            worst_fail = True
+        results.append({
+            "doc": name, "total": report.total, "noisy": report.noisy,
+            "noise_rate": round(report.noise_rate, 4), "verdict": verdict,
+        })
+
+    print(json.dumps({
+        "threshold": NOISE_FAIL_THRESHOLD,
+        "overall": "FAIL" if worst_fail else "PASS",
+        "docs": results,
+    }, indent=2))
+
+
 def cmd_ddd_stage_inject(args, reg) -> None:
     """F2: Output type-filtered DDD knowledge for a pipeline stage.
 
@@ -3178,6 +3237,11 @@ def main() -> None:
     p_ddd_health = sub.add_parser("ddd-health", help="5-dimensional DDD health scoring per section")
     p_ddd_health.add_argument("--project", required=True)
 
+    # ddd-noise (M0 ②: per-doc reclaimable-noise gate)
+    p_ddd_noise = sub.add_parser("ddd-noise", help="Per-doc DDD noise gate (reclaimable noise_rate + PASS/FAIL)")
+    p_ddd_noise.add_argument("--project", default=None, help="(unused; scans MEMORY + all IMPROVEMENT by default)")
+    p_ddd_noise.add_argument("--doc", default=None, help="Single doc path (relative to workspace or absolute)")
+
     # ddd-stage-inject (F2: type-filtered knowledge for pipeline stages)
     p_ddd_inject = sub.add_parser("ddd-stage-inject", help="Output type-filtered DDD knowledge for a pipeline stage")
     p_ddd_inject.add_argument("--project", required=True)
@@ -3209,6 +3273,7 @@ def main() -> None:
         "cleanup-orphans": cmd_cleanup_orphans,
         "run-observe": cmd_run_observe,
         "ddd-health": cmd_ddd_health,
+        "ddd-noise": cmd_ddd_noise,
         "ddd-stage-inject": cmd_ddd_stage_inject,
     }
     handlers[args.command](args, reg)

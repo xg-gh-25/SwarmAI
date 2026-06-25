@@ -736,6 +736,7 @@ class DddCultivationOrchestrator:
             bump_references,
             inject_entry_metadata,
             parse_entries,
+            reclaim_noise_entries,
         )
 
         findings: list[str] = []
@@ -832,6 +833,23 @@ class DddCultivationOrchestrator:
                     updated = inject_entry_metadata(content, active_entries)
                     if updated != content:
                         imp_path.write_text(updated, encoding="utf-8")
+                        content = updated  # reclaim operates on the latest content
+
+                    # CLEAN (M0 ②): reclaim stale operational noise — archive
+                    # AND physically strip (inject_entry_metadata only annotates,
+                    # it never removes, so archived entries would otherwise persist
+                    # and keep counting as noise). is_keep_class protects permanent
+                    # knowledge (COE/principle/correction/decision/model/ref>=2).
+                    reclaim_report = reclaim_noise_entries(
+                        content, today, project_dir, dry_run=False,
+                    )
+                    if reclaim_report.new_content is not None:
+                        imp_path.write_text(reclaim_report.new_content, encoding="utf-8")
+                        findings.append(
+                            f"ENTRY_RECLAIM: {reclaim_report.archived} stale entries "
+                            f"archived+stripped from {project_dir.name} "
+                            f"({reclaim_report.kept_protected} protected)"
+                        )
 
             except Exception as exc:
                 logger.debug(

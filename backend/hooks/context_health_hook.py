@@ -1507,7 +1507,10 @@ class ContextHealthHook:
             bumped = bump_references(entries, bump_text, today)
 
         # ── Decay: assess state transitions ──
-        from core.ddd_entry_lifecycle import MEMORY_EVERGREEN_SECTIONS
+        from core.ddd_entry_lifecycle import (
+            MEMORY_EVERGREEN_SECTIONS,
+            reclaim_noise_entries,
+        )
         evergreen = MEMORY_EVERGREEN_SECTIONS
         transitions = assess_decay(entries, today, evergreen_sections=evergreen)
 
@@ -1515,12 +1518,31 @@ class ContextHealthHook:
         if bumped > 0 or transitions:
             updated = inject_entry_metadata(content, entries)
             memory_path.write_text(updated, encoding="utf-8")
+            content = updated  # reclaim operates on the latest content
             if transitions:
                 logger.info(
                     "context_health: MEMORY.md lifecycle — %d bumped, %d transitions (%s)",
                     bumped, len(transitions),
                     ", ".join(f"{t.entry.title[:30]}:{t.old_state}→{t.new_state}" for t in transitions[:3]),
                 )
+
+        # ── CLEAN (M0 ②): reclaim stale operational noise from MEMORY.md ──
+        # Archive to .context/MEMORY-archive.md and physically strip (decay +
+        # inject_entry_metadata never remove bullets). Evergreen sections
+        # (Principles/Corrections/COE Registry/...) AND keep-class types are
+        # protected — only plain dormant operational entries are reclaimed.
+        reclaim_report = reclaim_noise_entries(
+            content, today, memory_path.parent,
+            evergreen_sections=evergreen,
+            archive_name="MEMORY-archive.md",
+            dry_run=False,
+        )
+        if reclaim_report.new_content is not None:
+            memory_path.write_text(reclaim_report.new_content, encoding="utf-8")
+            logger.info(
+                "context_health: MEMORY.md reclaim — %d archived+stripped, %d protected",
+                reclaim_report.archived, reclaim_report.kept_protected,
+            )
 
     def _run_knowledge_lifecycle(self, root: Path) -> None:
         """Run DDD lifecycle engine on KNOWLEDGE.md: ref bump + decay (Gap #5).

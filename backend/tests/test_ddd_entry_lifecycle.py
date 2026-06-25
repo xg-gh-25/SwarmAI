@@ -725,3 +725,34 @@ class TestReclaimNoiseEntries:
         report = reclaim_noise_entries("", _RECLAIM_TODAY, tmp_path, dry_run=False)
         assert report.archived == 0
         assert report.candidates == []
+
+
+# ── M0 ② CLEAN: reclaimable-noise gate metric ────────────────────────────────
+#
+# The GATE must not FAIL a doc just because it holds permanent-but-dormant
+# knowledge (COE/principles). compute_reclaimable_noise = raw noise MINUS
+# keep-class. This is what the ddd-noise CLI and canary assert on.
+
+class TestComputeReclaimableNoise:
+    def test_excludes_protected_from_rate(self):
+        from core.ddd_entry_lifecycle import (
+            compute_reclaimable_noise, compute_entry_noise,
+        )
+        raw = compute_entry_noise(parse_entries(_RECLAIM_FIXTURE), _RECLAIM_TODAY)
+        gate = compute_reclaimable_noise(parse_entries(_RECLAIM_FIXTURE), _RECLAIM_TODAY)
+        # Raw counts principle + COE07 (protected) as noisy; gate does not.
+        assert raw.noisy == 4  # 2 reclaimable + principle + COE07
+        assert gate.noisy == 2  # only the 2 reclaimable
+        assert gate.total == 5
+
+    def test_doc_of_only_protected_is_zero_gate_noise(self):
+        from core.ddd_entry_lifecycle import compute_reclaimable_noise
+        content = """\
+## COE Registry
+<!-- maturity: sparse | sources: 1 | verified: false | used: false | days: 0 | trust: moderate | promoted: none -->
+
+- [pitfall] **COE05 cascade** — permanent post-mortem. (2025-01-01, run_x)
+  <!-- ref:0 | last:none | decay:dormant -->
+"""
+        gate = compute_reclaimable_noise(parse_entries(content), _RECLAIM_TODAY)
+        assert gate.noisy == 0  # protected → gate clean even though raw would flag it
