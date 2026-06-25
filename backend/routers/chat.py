@@ -752,6 +752,63 @@ async def list_sessions(
     ]
 
 
+@router.get("/sessions/admission-state")
+async def get_admission_state_endpoint():
+    """Return daemon-wide concurrent-streaming admission state (OT03).
+
+    Read-only probe that exposes the R6 concurrent-streaming cap so a health
+    check can tell SATURATED (busy — a new turn would queue) apart from a broken
+    daemon. Critically it consumes NO streaming slot: it only READS the
+    module-level counter + the cap constant, never starts a stream.
+
+    Used by ``scripts/smoke_e2e.py`` to skip (not fail) the chat_stream check
+    when the daemon is already at ``MAX_CONCURRENT_STREAMS`` — preventing the
+    false-red where a busy-but-healthy daemon looked broken (the smoke would
+    queue behind the cap and hit its wall-clock timeout).
+
+    Returns:
+        streaming_count: sessions currently in STREAMING state (daemon-wide)
+        max_concurrent: the cap (SessionUnit.MAX_CONCURRENT_STREAMS)
+        saturated: streaming_count >= max_concurrent (a new turn would queue)
+        stalled_streaming: count of STREAMING sessions whose last SDK event is
+            older than AUTO_RECOVER_STALL_THRESHOLD — i.e. WEDGED, not working.
+            This is the discriminator between "legitimately busy" (advancing
+            streams) and "stuck" (the OT01/recovery wedge): a smoke probe must
+            FAIL on saturation-by-stall, only SKIP on saturation-by-advancing.
+        idle_live_units: count of non-streaming live units (advisory — NOT a
+            queue depth; most idle units never intend to stream. Renamed from
+            the misleading 'queued' per adversarial review).
+
+    Must be registered BEFORE /sessions/{session_id} so the path param doesn't
+    capture 'admission-state' as a session ID.
+    """
+    from core.session_unit import _get_streaming_count, SessionUnit, AUTO_RECOVER_STALL_THRESHOLD
+
+    streaming_count = _get_streaming_count()
+    max_concurrent = SessionUnit.MAX_CONCURRENT_STREAMS
+    sr = _get_router()
+    idle_live_units = 0
+    stalled_streaming = 0
+    for u in sr.list_units():
+        if not u.session_id or u.session_id.startswith("prewarm"):
+            continue
+        if u.state.value == "streaming":
+            # streaming_stall_seconds is None if not streaming or no events yet;
+            # a long stall while STREAMING = the wedge signature (OT01 class).
+            stall = getattr(u, "streaming_stall_seconds", None)
+            if stall is not None and stall > AUTO_RECOVER_STALL_THRESHOLD:
+                stalled_streaming += 1
+        else:
+            idle_live_units += 1
+    return {
+        "streaming_count": streaming_count,
+        "max_concurrent": max_concurrent,
+        "saturated": streaming_count >= max_concurrent,
+        "stalled_streaming": stalled_streaming,
+        "idle_live_units": idle_live_units,
+    }
+
+
 @router.get("/sessions/streaming-state")
 async def get_streaming_state_endpoint():
     """Return the streaming state for all active sessions.

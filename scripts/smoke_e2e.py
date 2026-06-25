@@ -35,29 +35,97 @@ SMOKE_SESSION_PREFIX = "__smoke_test__"
 
 
 class SmokeResult:
-    """Accumulates pass/fail results for each check."""
+    """Accumulates pass/fail/skip results for each check.
+
+    Three statuses (PIT49 taxonomy — distinguish busy from broken):
+      - "pass": check succeeded.
+      - "fail": check genuinely failed → exit 1.
+      - "skip": check could not run for a NON-failure reason (e.g. the daemon
+        was at MAX_CONCURRENT_STREAMS so a chat_stream would only queue). A skip
+        is NOT a failure — it must never flip exit code to 1. This is the OT03
+        fix: a busy-but-healthy daemon scores green-with-skip, never false-red.
+    """
 
     def __init__(self, verbose: bool = False):
-        self.results: list[tuple[str, bool, str]] = []
+        # (name, status, detail) where status in {"pass","fail","skip"}
+        self.results: list[tuple[str, str, str]] = []
         self.verbose = verbose
 
     def record(self, name: str, passed: bool, detail: str = ""):
-        self.results.append((name, passed, detail))
+        status = "pass" if passed else "fail"
+        self.results.append((name, status, detail))
         icon = "\033[32m✓\033[0m" if passed else "\033[31m✗\033[0m"
         if self.verbose or not passed:
             print(f"  {icon} {name}" + (f" — {detail}" if detail else ""))
         elif passed:
             print(f"  {icon} {name}")
 
+    def skip(self, name: str, detail: str = ""):
+        """Record a check as skipped (not run, not failed). Never affects
+        all_passed/exit code — a saturated daemon is healthy, just busy."""
+        self.results.append((name, "skip", detail))
+        icon = "\033[33m⊘\033[0m"  # yellow circle-slash = skipped
+        print(f"  {icon} {name} (skipped)" + (f" — {detail}" if detail else ""))
+
     @property
     def all_passed(self) -> bool:
-        return all(passed for _, passed, _ in self.results)
+        # Skips do NOT count as failures — only an explicit "fail" fails the run.
+        return all(status != "fail" for _, status, _ in self.results)
 
     @property
     def summary(self) -> str:
         total = len(self.results)
-        passed = sum(1 for _, p, _ in self.results if p)
-        return f"{passed}/{total} checks passed"
+        passed = sum(1 for _, s, _ in self.results if s == "pass")
+        failed = sum(1 for _, s, _ in self.results if s == "fail")
+        skipped = sum(1 for _, s, _ in self.results if s == "skip")
+        parts = [f"{passed}/{total} passed"]
+        if failed:
+            parts.append(f"{failed} failed")
+        if skipped:
+            parts.append(f"{skipped} skipped")
+        return ", ".join(parts)
+
+
+def _extract_event_text(event: dict) -> str:
+    """Pull assistant text out of an SSE event, tolerant of both shapes:
+      - {"type":"assistant","content":[{"type":"text","text":"..."}, ...]}
+      - {"type":"assistant","content":"plain string"}
+    Non-text blocks (tool_use, thinking) contribute no text. Used by the
+    content-shape check (OT03) to verify the backend delivered real content.
+    """
+    content = event.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+        return "".join(parts)
+    # Some events carry top-level "text" (e.g. text_delta)
+    if isinstance(event.get("text"), str):
+        return event["text"]
+    return ""
+
+
+async def _check_no_stuck_streaming(base_url: str, result: "SmokeResult") -> None:
+    """Probe for wedged streaming sessions (OT01/recovery class) via the
+    admission-state stalled_streaming signal. Runs even when the daemon is
+    saturated — the saturation path must NOT lose the wedge detector (Q1).
+    Records a passing/failing 'no_stuck_streaming' check; never raises."""
+    try:
+        async with httpx.AsyncClient(base_url=base_url, timeout=HEALTH_TIMEOUT) as c:
+            r = await c.get("/api/chat/sessions/admission-state")
+            adm = r.json()
+            stalled = adm.get("stalled_streaming", 0)
+            result.record(
+                "no_stuck_streaming",
+                stalled == 0,
+                "no stalled streams" if stalled == 0
+                else f"{stalled} STALLED streaming session(s) — wedge",
+            )
+    except Exception as e:
+        result.record("no_stuck_streaming", False, f"probe failed: {e}")
 
 
 async def cleanup_orphans(base_url: str) -> int:
@@ -212,6 +280,51 @@ async def run_smoke(
         result.record("default_agent", False, str(e))
         return result
 
+    # ── 4b. Admission pre-flight (OT03) ──
+    # Before spending a model call + a wall-clock timeout, check whether the
+    # daemon is at the R6 concurrent-streaming cap. If saturated, a chat_stream
+    # would only QUEUE behind the cap and hit our TIMEOUT — looking broken when
+    # the daemon is merely busy. Skip (not fail) in that case. Read-only probe,
+    # consumes no slot.
+    try:
+        async with httpx.AsyncClient(base_url=base_url, timeout=HEALTH_TIMEOUT) as c:
+            r = await c.get("/api/chat/sessions/admission-state")
+            adm = r.json()
+            if adm.get("saturated"):
+                stalled = adm.get("stalled_streaming", 0)
+                if stalled > 0:
+                    # CRITICAL distinction (adversarial Q1): saturation caused by
+                    # STALLED streams is the OT01/recovery WEDGE — the exact bug
+                    # this smoke exists to catch. Skipping here would MASK it.
+                    # Fail loudly instead.
+                    result.record(
+                        "chat_stream",
+                        False,
+                        f"saturated by {stalled} STALLED streaming session(s) "
+                        f"(>{adm.get('streaming_count')}/{adm.get('max_concurrent')}) "
+                        f"— WEDGE suspected, not legitimate load",
+                    )
+                else:
+                    # Saturated by ADVANCING streams = legitimately busy. A new
+                    # turn would only queue → skip (not fail). Endpoint checks
+                    # above already proved the daemon is responsive.
+                    result.skip(
+                        "chat_stream",
+                        f"daemon busy ({adm.get('streaming_count')}/"
+                        f"{adm.get('max_concurrent')} streaming, 0 stalled) — a "
+                        f"new turn would queue; not a failure",
+                    )
+                # Either way we do NOT run a model call this turn (no free slot).
+                # But still run the stuck-session probe (Q1: don't lose the only
+                # wedge detector to an early return).
+                await _check_no_stuck_streaming(base_url, result)
+                return result
+    except Exception as e:
+        # Endpoint missing/unreachable → don't skip, fall through to the real
+        # stream test (degrade gracefully; old behavior).
+        if verbose:
+            print(f"  ℹ admission-state unavailable ({e}) — running full stream test")
+
     # ── 5. Chat stream with wall-clock timeout ──
     session_id = None
     try:
@@ -261,6 +374,40 @@ async def run_smoke(
                     f"{len(events)} events, result={'yes' if has_result else 'NO'}, "
                     f"assistant={'yes' if has_assistant else 'NO'}",
                 )
+
+                # ── 5b. Content-shape check (OT03 — backend layer of the
+                # content-loss guard). The events we already captured must
+                # carry non-empty assistant content with no truncation
+                # sentinel. This is the cheap backend half of the OT01
+                # content-loss class (frontend render half lives in the
+                # vitest render-fidelity test). Shape, not exact text — AI
+                # output varies run to run.
+                if has_assistant:
+                    assistant_text = "".join(
+                        _extract_event_text(e)
+                        for e in events
+                        if e.get("type") == "assistant"
+                    )
+                    # Q2 fix: assert the EXPECTED token, not arbitrary sentinels.
+                    # The prompt demands the exact word SMOKE_OK; a truncated
+                    # response ("SMOK", "SMOKE_O", or empty) FAILS this — which
+                    # generic non-empty + sentinel-scan did NOT catch. Tolerate
+                    # surrounding whitespace/markdown but require the full token.
+                    expected = "SMOKE_OK"
+                    delivered_full = expected in assistant_text
+                    result.record(
+                        "content_shape",
+                        delivered_full,
+                        f"assistant_len={len(assistant_text)}, "
+                        f"expected_token={'present' if delivered_full else 'MISSING/truncated'}",
+                    )
+                elif has_result:
+                    # result but no assistant content block = empty/dropped
+                    # response (a content-loss failure, not a skip).
+                    result.record(
+                        "content_shape", False,
+                        "result event but no assistant content block",
+                    )
     except (httpx.ReadTimeout, TimeoutError):
         result.record("chat_stream", False, f"timeout after {TIMEOUT}s")
     except Exception as e:
