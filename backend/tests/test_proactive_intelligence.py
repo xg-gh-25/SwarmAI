@@ -1261,6 +1261,58 @@ class TestPipelineSupersedeAndActiveSkip:
         assert any("AUTO-RESUME" in ln for ln in result), \
             "cross-project completed run must not supersede"
 
+    # ── Gate-2 HIGH regression: a slow-but-LIVE running run must NEVER be
+    #    archived even if an older completed twin exists. Supersede is
+    #    paused-only; a stalled running run goes through orphan-transition. ──
+    def test_slow_running_run_not_archived_by_supersede(self, tmp_path):
+        """A 'running' run older than the active window (slow stage, e.g. BUILD)
+        with a newer completed run in the same project must NOT be marked
+        abandoned — it's live, not superseded. (Gate-2 HIGH, run_0c8e007a.)"""
+        from datetime import datetime, timezone, timedelta
+        # running run last wrote run.json 5 min ago (slow stage > 90s window)
+        run_old = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        # a completed run in the same project, NEWER than the running run's write
+        done_newer = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+        live = self._make_run(tmp_path, run_id="run_live", status="running",
+                              updated_at=run_old)
+        self._make_run(tmp_path, run_id="run_done", status="completed",
+                       updated_at=done_newer)
+        _get_paused_pipeline_highlights(tmp_path)
+        data = json.loads(live.read_text())
+        assert data["status"] != "abandoned", \
+            "a slow-but-live running run must NOT be archived as superseded"
+
+    def test_equal_timestamp_does_not_supersede(self, tmp_path):
+        """Boundary: a completed run with the EXACT same updated_at as a paused
+        run does NOT supersede it (strict-greater guard — avoids false-archive
+        on same-second unrelated writes)."""
+        from datetime import datetime, timezone, timedelta
+        same = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        paused = self._make_run(tmp_path, run_id="run_paused", status="paused",
+                               updated_at=same, resume_attempts=0)
+        self._make_run(tmp_path, run_id="run_done", status="completed",
+                       updated_at=same)
+        result = _get_paused_pipeline_highlights(tmp_path)
+        data = json.loads(paused.read_text())
+        assert data["status"] == "paused", "equal-ts must not supersede"
+        assert any("AUTO-RESUME" in ln for ln in result), \
+            "equal-ts paused run still surfaces"
+
+    def test_malformed_updated_at_not_archived(self, tmp_path):
+        """A paused run with an unparseable updated_at (run_ts=None) is NOT
+        archived (can't establish supersede ordering) — it falls through and
+        surfaces rather than being silently destroyed."""
+        from datetime import datetime, timezone, timedelta
+        newer = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
+        bad = self._make_run(tmp_path, run_id="run_bad", status="paused",
+                            updated_at="not-a-date", resume_attempts=0)
+        self._make_run(tmp_path, run_id="run_done", status="completed",
+                       updated_at=newer)
+        _get_paused_pipeline_highlights(tmp_path)
+        data = json.loads(bad.read_text())
+        assert data["status"] != "abandoned", \
+            "malformed-date run must not be archived (no supersede ordering)"
+
 
 # --- M3b: Recurrence Radar (zone-gated) (run_123a6530) ---
 

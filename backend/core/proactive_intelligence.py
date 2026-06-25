@@ -833,17 +833,27 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
                 ):
                     continue
 
-                # SUPERSEDED SKIP + MARK: a paused/running run older than the
-                # newest COMPLETED run in this project was finished by a later
-                # run. Mark it abandoned (reusing the _auto_abandon_stale_runs
-                # convention: status=abandoned + abandon_reason=superseded_by_<id>)
-                # so the gauge stops re-scanning it, and skip surfacing it.
+                # SUPERSEDED SKIP + MARK: a PAUSED run older than the newest
+                # COMPLETED run in this project was finished by a later run. Mark
+                # it abandoned (reusing the _auto_abandon_stale_runs convention:
+                # status=abandoned + abandon_reason=superseded_by_<id>) so the
+                # gauge stops re-scanning it, and skip surfacing it.
                 # Recency signal only — NOT requirement-text similarity (Gate-1:
                 # text overlap destructively false-archives different-but-similar
                 # runs). File-locked + re-read-under-lock to avoid racing a
                 # parallel session that may have just resumed this run.
+                #
+                # PAUSED-ONLY (Gate-2 HIGH): never supersede a "running" run. A
+                # live pipeline in a slow stage (BUILD/TEST/research >90s) is
+                # past the active-skip window but is NOT crashed — archiving its
+                # run.json mid-execution is the exact data-loss this fix exists
+                # to prevent, from the opposite direction. A genuinely-stalled
+                # running run is handled by the orphan-transition path below
+                # (running→paused), and becomes supersede-eligible only on the
+                # NEXT session once it is paused.
                 if (
-                    run_ts is not None
+                    status == "paused"
+                    and run_ts is not None
                     and newest_completed_ts > run_ts
                 ):
                     sup_id = newest_completed_id
@@ -854,8 +864,10 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
                         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                         # Re-read under lock — a parallel session may have changed
                         # status (e.g. resumed → running anew) since the scan.
+                        # Re-check status==paused under lock: if it resumed to
+                        # running, leave it alone (don't archive a now-live run).
                         fresh = json.loads(run_file.read_text(encoding="utf-8"))
-                        if fresh.get("status") in ("paused", "running"):
+                        if fresh.get("status") == "paused":
                             fresh["status"] = "abandoned"
                             fresh["abandon_reason"] = (
                                 f"superseded_by_{sup_id}" if sup_id
@@ -867,10 +879,14 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
                             run_file.write_text(
                                 json.dumps(fresh, indent=2), encoding="utf-8"
                             )
-                        fd.close()
-                    except OSError:
-                        # Lock held / IO error — skip surfacing regardless (the
-                        # run is superseded; another session owns the write).
+                    except (OSError, json.JSONDecodeError):
+                        # Lock held / IO error / corrupt run.json — skip
+                        # surfacing regardless (the run is superseded; another
+                        # session owns the write, or the file is unreadable).
+                        pass
+                    finally:
+                        # Always release the lock fd — JSONDecodeError (a
+                        # ValueError, not OSError) would otherwise leak it.
                         if fd is not None:
                             try:
                                 fd.close()
