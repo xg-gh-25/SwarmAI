@@ -108,30 +108,71 @@ def parse_trajectory(stdout: str) -> list[str]:
     return trajectory
 
 
-def run_scenario(
+def parse_final_text(stdout: str) -> str:
+    """Extract the agent's final assistant text from stream-json stdout.
+
+    Used by the decision-class behavior case: proving a Read happened is not
+    enough — we must check the agent's CONCLUSION actually reflects the read
+    content (else "read IMPROVEMENT.md then ignored it and recommended the
+    big-bang rewrite" would falsely pass). This returns the concatenated text
+    blocks of assistant messages (the agent's spoken answer), so a caller can
+    assert expected_response_contains against it.
+
+    Returns "" if no assistant text is present (a caller asserting on content
+    then fails closed — the agent produced no usable conclusion).
+    """
+    texts: list[str] = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(event, dict):
+            continue
+        # The terminal `result` event carries the final answer verbatim.
+        if event.get("type") == "result" and isinstance(event.get("result"), str):
+            texts.append(event["result"])
+            continue
+        message = event.get("message")
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                t = block.get("text")
+                if isinstance(t, str):
+                    texts.append(t)
+    return "\n".join(texts)
+
+
+def run_scenario_full(
     prompt: str,
     allowed_tools: list[str] | None = None,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
-) -> list[str]:
-    """Spawn a headless agent on ``prompt`` and return its tool-call trajectory.
+) -> tuple[list[str], str]:
+    """Spawn a headless agent and return BOTH its tool-call trajectory AND its
+    final answer text.
 
-    Args:
-        prompt: The scenario the agent should act on (from golden_set case).
-        allowed_tools: Tools the agent may use (e.g. ["Read", "Grep"]). Limits
-            blast radius and keeps the trajectory focused on the behavior tested.
-        timeout: Hard cap in seconds. On timeout, returns [] (the run did not
-            demonstrate the behavior -> the assertion correctly fails).
+    The decision-class behavior case needs the answer text to verify the read
+    content actually DROVE the conclusion (not just that a Read happened). Most
+    callers only need the trajectory and use ``run_scenario`` (which wraps this).
 
     Returns:
-        list[str]: tool-call trajectory, one string per tool_use. Empty list if
-        the agent used no tools, the prompt failed the safety filter, the CLI
-        is missing, or the spawn timed out/failed. An empty trajectory makes a
-        Read-assertion fail cleanly rather than crashing the eval run.
+        (trajectory, final_text). Raises ScenarioInfraError on any infra failure
+        (CLI missing, timeout, spawn crash, unsafe prompt, or non-zero exit with
+        zero tool calls) so the caller scores `error`, never a misleading `failed`.
     """
-    # Defense-in-depth safety gate (prompts are trusted but bypassPermissions
-    # is powerful — refuse a prompt embedding a destructive command). A rejected
-    # prompt is an INFRA/config problem, not "the agent chose not to act" —
-    # raise so the caller scores it `error`, never a misleading behavior `failed`.
+    # Defense-in-depth: this filter is a SHELL-command blocklist (curl/rm -rf/…).
+    # Against a natural-language prompt it catches only accidentally-embedded
+    # shell strings — it is NOT the real safety boundary. The real protection is
+    # the read-only tool lock applied by the caller (eval_trajectory_capture
+    # intersects allowed_tools with {Read,Grep,Glob}) + bypassPermissions only
+    # granting those. Kept as cheap belt-and-suspenders (adversarial Gate-2 LOW).
     if _validate_canary_command is not None:
         safety_error = _validate_canary_command(prompt)
         if safety_error:
@@ -182,6 +223,7 @@ def run_scenario(
         raise ScenarioInfraError(f"spawn failed: {type(e).__name__}: {e}") from e
 
     trajectory = parse_trajectory(proc.stdout or "")
+    final_text = parse_final_text(proc.stdout or "")
     if proc.returncode != 0:
         logger.warning(
             "scenario_runner: claude exited %s: %s",
@@ -197,4 +239,22 @@ def run_scenario(
                 f"{(proc.stderr or '')[:150]}"
             )
 
+    return trajectory, final_text
+
+
+def run_scenario(
+    prompt: str,
+    allowed_tools: list[str] | None = None,
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+) -> list[str]:
+    """Spawn a headless agent on ``prompt`` and return its tool-call trajectory.
+
+    Thin wrapper over ``run_scenario_full`` for the common case (trajectory
+    only). Signature preserved for existing callers.
+
+    Returns:
+        list[str]: tool-call trajectory, one string per tool_use. Raises
+        ScenarioInfraError on infra failure (caller scores `error`).
+    """
+    trajectory, _ = run_scenario_full(prompt, allowed_tools=allowed_tools, timeout=timeout)
     return trajectory

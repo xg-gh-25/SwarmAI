@@ -351,13 +351,23 @@ class EvalService:
         return case
 
     def get_affected_cases(self, changed_files: list[str]) -> list[dict]:
-        """Return cases whose affected_by intersects with changed files."""
+        """Return cases whose affected_by intersects with changed files.
+
+        Excludes behavior cases (eval_method=behavior): they spawn a REAL agent
+        (~17-120s + Bedrock cost) and must NEVER be auto-triggered by a file
+        edit via the change-trigger hook. They run only on explicit opt-in
+        (behavior_trajectory tag or named case_filter). Without this filter, a
+        behavior case declaring affected_by:[AGENT.md] would silently spawn
+        agents from a PostToolUse hook on every governance edit (adversarial
+        Gate-2 MED, run_75b656c1).
+        """
         # Normalize: strip paths, keep filename only
         filenames = {f.split("/")[-1] for f in changed_files}
 
         return [
             c for c in self._cases
             if c.get("tier") not in ("archived", "stable")
+            and c.get("eval_method") != "behavior"
             and any(af in filenames for af in c.get("affected_by", []))
         ]
 

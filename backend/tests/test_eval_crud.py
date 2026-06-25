@@ -247,3 +247,27 @@ class TestCanaryRun:
         result = svc.run_canary()
         for case_result in result["cases"]:
             assert case_result["status"] in ("passed", "failed", "skipped", "error")
+
+
+class TestAffectedCasesExcludesBehavior:
+    """get_affected_cases must NEVER return behavior cases (Gate-2 MED,
+    run_75b656c1): they spawn real agents and must not be auto-triggered by a
+    file-edit hook. Only explicit opt-in (tag / named filter) may run them."""
+
+    def _svc(self):
+        from core.eval_service import EvalService
+        svc = EvalService.__new__(EvalService)
+        svc._cases = [
+            {"id": "NORM", "eval_method": "programmatic", "tier": "active",
+             "affected_by": ["AGENT.md"]},
+            {"id": "BEHAV", "eval_method": "behavior", "tier": "active",
+             "affected_by": ["AGENT.md"]},
+        ]
+        return svc
+
+    def test_behavior_case_never_auto_triggered_by_file_edit(self):
+        svc = self._svc()
+        affected = svc.get_affected_cases(["backend/context/AGENT.md"])
+        ids = {c["id"] for c in affected}
+        assert "NORM" in ids, "programmatic case should be triggered"
+        assert "BEHAV" not in ids, "behavior case must NOT auto-spawn from a file edit"

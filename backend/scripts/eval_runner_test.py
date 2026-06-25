@@ -510,10 +510,10 @@ class TestTrajectoryCaptureDispatch:
     }
 
     def test_dispatch_passes_when_expected_tool_observed(self):
-        # Mock the spawn to return a trajectory containing the expected Read.
-        # Also asserts the observed_trajectory annotation is surfaced verbatim.
+        # Mock the spawn to return (trajectory, final_text). Trajectory contains
+        # the expected Read. Asserts observed_trajectory is surfaced verbatim.
         captured = ['Read {"file_path": "/ws/.context/SELF.md"}']
-        with patch("scripts.scenario_runner.run_scenario", return_value=captured):
+        with patch("scripts.scenario_runner.run_scenario_full", return_value=(captured, "summary")):
             r = evaluate_case(self._CASE, Path("/tmp"))
         assert r["status"] == "passed"
         assert r["evaluator"] == "trajectory_capture"
@@ -522,29 +522,29 @@ class TestTrajectoryCaptureDispatch:
     def test_fails_when_expected_read_absent_negative_control(self):
         # Agent used a DIFFERENT tool (didn't read the file) -> must FAIL,
         # not pass, not skip. This is the whole point: observe real usage.
-        with patch("scripts.scenario_runner.run_scenario",
-                   return_value=['Grep {"pattern": "foo"}']):
+        with patch("scripts.scenario_runner.run_scenario_full",
+                   return_value=(['Grep {"pattern": "foo"}'], "")):
             r = evaluate_case(self._CASE, Path("/tmp"))
         assert r["status"] == "failed"
 
     def test_empty_trajectory_fails_not_skips(self):
         # Spawn failed / agent did nothing -> empty trajectory ([], NOT None)
         # -> FAIL (the expected Read did not happen), never a silent skip.
-        with patch("scripts.scenario_runner.run_scenario", return_value=[]):
+        with patch("scripts.scenario_runner.run_scenario_full", return_value=([], "")):
             r = evaluate_case(self._CASE, Path("/tmp"))
         assert r["status"] == "failed", "empty trajectory must fail a Read assertion"
 
     def test_never_calls_llm_judge(self):
         # trajectory_capture is programmatic — must NOT fall through to the
         # circular LLM judge, even when the trajectory is empty.
-        with patch("scripts.scenario_runner.run_scenario", return_value=[]), \
+        with patch("scripts.scenario_runner.run_scenario_full", return_value=([], "")), \
              patch("backend.scripts.eval_runner.eval_llm_judge") as judge:
             evaluate_case(self._CASE, Path("/tmp"))
         judge.assert_not_called()
 
     def test_gated_off_under_programmatic_only(self):
         # Canary path (programmatic_only=True) must NOT spawn an agent.
-        with patch("scripts.scenario_runner.run_scenario") as spawn:
+        with patch("scripts.scenario_runner.run_scenario_full") as spawn:
             r = evaluate_case(self._CASE, Path("/tmp"), programmatic_only=True)
         spawn.assert_not_called()
         assert r["status"] == "skipped"
@@ -554,6 +554,45 @@ class TestTrajectoryCaptureDispatch:
         r = evaluate_case(bad, Path("/tmp"))
         assert r["status"] == "skipped"
 
+    # ── Decision-class gate: read must DRIVE the conclusion (Gate-2 MED) ──
+
+    _DECISION_CASE = {
+        "id": "GS_TRAJ_DEC",
+        "scenario": {"prompt": "decide X; read IMPROVEMENT.md and let it drive you"},
+        "expected_trajectory": ["Read IMPROVEMENT.md"],
+        "expected_response_contains": ["incremental"],
+        "trajectory_match": "any_order",
+        "evaluators": ["trajectory_capture"],
+        "eval_method": "behavior",
+        "allowed_tools": ["Read"],
+    }
+
+    def test_decision_read_without_using_it_fails(self):
+        # Read happened, but the conclusion ignored the evidence (no required
+        # keyword) -> FAIL. This closes the "same circularity in new form" gap:
+        # proving a Read is necessary but NOT sufficient for a decision case.
+        traj = ['Read {"file_path": "/ws/Projects/SwarmAI/IMPROVEMENT.md"}']
+        with patch("scripts.scenario_runner.run_scenario_full",
+                   return_value=(traj, "Yes, do the big-bang rewrite, it's fine.")):
+            r = evaluate_case(self._DECISION_CASE, Path("/tmp"))
+        assert r["status"] == "failed"
+        assert "did not reflect" in r["notes"].lower() or "missing" in r["notes"].lower()
+
+    def test_decision_read_and_used_passes(self):
+        # Read happened AND the conclusion reflects the evidence -> PASS.
+        traj = ['Read {"file_path": "/ws/Projects/SwarmAI/IMPROVEMENT.md"}']
+        with patch("scripts.scenario_runner.run_scenario_full",
+                   return_value=(traj, "Per IMPROVEMENT.md, big-bang failed before — use the incremental strangler-fig approach.")):
+            r = evaluate_case(self._DECISION_CASE, Path("/tmp"))
+        assert r["status"] == "passed"
+
+    def test_decision_no_read_fails_before_content_check(self):
+        # No Read at all -> fails on trajectory, content check never reached.
+        with patch("scripts.scenario_runner.run_scenario_full",
+                   return_value=([], "use the incremental approach")):
+            r = evaluate_case(self._DECISION_CASE, Path("/tmp"))
+        assert r["status"] == "failed"
+
     def test_infra_failure_is_error_not_failed(self):
         # Spawn infra failure (CLI/timeout/throttle) -> error, NOT failed, so a
         # transient outage can't lie the health score red (Gate-2 HIGH).
@@ -561,7 +600,7 @@ class TestTrajectoryCaptureDispatch:
         # (scripts.scenario_runner) so the raised class identity matches the
         # `except ScenarioInfraError` (avoids the dual-load identity trap).
         import scripts.scenario_runner as sr
-        with patch("scripts.scenario_runner.run_scenario",
+        with patch("scripts.scenario_runner.run_scenario_full",
                    side_effect=sr.ScenarioInfraError("claude CLI not found")):
             r = evaluate_case(self._CASE, Path("/tmp"))
         assert r["status"] == "error"
@@ -570,13 +609,13 @@ class TestTrajectoryCaptureDispatch:
         # Gate-2 MED: a Grep whose pattern contains "read" must NOT satisfy a
         # "Read SELF.md" assertion — the agent never opened the file.
         fake = ['Grep {"pattern": "read", "path": "/ws/.context/SELF.md"}']
-        with patch("scripts.scenario_runner.run_scenario", return_value=fake):
+        with patch("scripts.scenario_runner.run_scenario_full", return_value=(fake, "")):
             r = evaluate_case(self._CASE, Path("/tmp"))
         assert r["status"] == "failed", "Grep != Read — must not false-pass"
 
     def test_real_read_passes_under_tool_strict(self):
         real = ['Read {"file_path": "/ws/.context/SELF.md"}']
-        with patch("scripts.scenario_runner.run_scenario", return_value=real):
+        with patch("scripts.scenario_runner.run_scenario_full", return_value=(real, "ok")):
             r = evaluate_case(self._CASE, Path("/tmp"))
         assert r["status"] == "passed"
 
@@ -588,9 +627,9 @@ class TestTrajectoryCaptureDispatch:
 
         def _spy(prompt, allowed_tools=None, timeout=120):
             captured["tools"] = list(allowed_tools or [])
-            return ['Read {"file_path": "SELF.md"}']
+            return (['Read {"file_path": "SELF.md"}'], "ok")
 
-        with patch("scripts.scenario_runner.run_scenario", _spy):
+        with patch("scripts.scenario_runner.run_scenario_full", _spy):
             evaluate_case(case, Path("/tmp"))
         assert "Bash" not in captured["tools"]
         assert "Write" not in captured["tools"]
@@ -612,7 +651,7 @@ class TestBehaviorCaseDefaultGating:
     def test_default_run_excludes_behavior_cases(self):
         from backend.scripts.eval_runner import run_eval
         gs = {"cases": [self._BEHAVIOR, self._NORMAL]}
-        with patch("scripts.scenario_runner.run_scenario") as spawn:
+        with patch("scripts.scenario_runner.run_scenario_full") as spawn:
             r = run_eval(gs, "manual", None, Path("/tmp"))
         spawn.assert_not_called()
         ran_ids = {c["id"] for c in r["cases"]}
@@ -623,7 +662,7 @@ class TestBehaviorCaseDefaultGating:
         from backend.scripts.eval_runner import run_eval
         b = dict(self._BEHAVIOR, tags=["behavior_trajectory"])
         gs = {"cases": [b]}
-        with patch("scripts.scenario_runner.run_scenario", return_value=['Read X']) as spawn:
+        with patch("scripts.scenario_runner.run_scenario_full", return_value=(['Read X'], "ok")) as spawn:
             r = run_eval(gs, "manual", None, Path("/tmp"), tags=["behavior_trajectory"])
         spawn.assert_called_once()
         assert "GS_TRAJ_X" in {c["id"] for c in r["cases"]}
@@ -631,6 +670,6 @@ class TestBehaviorCaseDefaultGating:
     def test_explicit_case_filter_includes_behavior_case(self):
         from backend.scripts.eval_runner import run_eval
         gs = {"cases": [self._BEHAVIOR]}
-        with patch("scripts.scenario_runner.run_scenario", return_value=['Read X']) as spawn:
+        with patch("scripts.scenario_runner.run_scenario_full", return_value=(['Read X'], "ok")) as spawn:
             r = run_eval(gs, "manual", ["GS_TRAJ_X"], Path("/tmp"))
         spawn.assert_called_once()

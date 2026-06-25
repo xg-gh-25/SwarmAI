@@ -819,10 +819,10 @@ def eval_trajectory_capture(case: dict) -> dict:
     timeout = case.get("scenario_timeout", 120)
 
     try:
-        from scripts.scenario_runner import run_scenario, ScenarioInfraError
+        from scripts.scenario_runner import run_scenario_full, ScenarioInfraError
     except ImportError:
         try:
-            from scenario_runner import run_scenario, ScenarioInfraError  # type: ignore
+            from scenario_runner import run_scenario_full, ScenarioInfraError  # type: ignore
         except ImportError:
             return {"status": "error", "notes": "scenario_runner unavailable"}
 
@@ -830,7 +830,7 @@ def eval_trajectory_capture(case: dict) -> dict:
     # with no tool calls) = `error`, NOT a behavior `failed`. Otherwise transient
     # Bedrock throttling would lie the health score red (eval_llm_judge lesson).
     try:
-        actual = run_scenario(prompt, allowed_tools=allowed_tools, timeout=timeout)
+        actual, final_text = run_scenario_full(prompt, allowed_tools=allowed_tools, timeout=timeout)
     except ScenarioInfraError as e:
         return {"status": "error", "notes": f"scenario infra failure: {e}",
                 "observed_trajectory": []}
@@ -843,6 +843,32 @@ def eval_trajectory_capture(case: dict) -> dict:
     # substring/token matcher for the argument match.
     result = _eval_trajectory_tool_strict(case, actual)
     result["observed_trajectory"] = actual
+
+    # Decision-class gate (adversarial Gate-2 MED, run_75b656c1): for cases whose
+    # point is "the read content DROVE the decision" — not merely "a Read
+    # happened" — the case declares expected_response_contains. Proving the Read
+    # is necessary but NOT sufficient: an agent that reads IMPROVEMENT.md then
+    # ignores it and recommends the big-bang rewrite would pass the trajectory
+    # check alone (same circularity in a new form). So when the trajectory PASSES
+    # AND expected_response_contains is set, the final answer text must ALSO
+    # contain those tokens, else the case FAILS — the evidence didn't drive the
+    # conclusion.
+    response_keywords = case.get("expected_response_contains") or []
+    if result.get("status") == "passed" and response_keywords:
+        ftl = (final_text or "").lower()
+        missing = [kw for kw in response_keywords if kw.lower() not in ftl]
+        if missing:
+            result["status"] = "failed"
+            result["notes"] = (
+                f"Read occurred but conclusion did not reflect it — "
+                f"missing from answer: {missing}. {result.get('notes', '')}"
+            ).strip()
+        else:
+            result["notes"] = (
+                f"Read occurred AND conclusion reflects it "
+                f"({len(response_keywords)} keyword(s) present). {result.get('notes', '')}"
+            ).strip()
+        result["final_text_excerpt"] = (final_text or "")[:300]
     return result
 
 
