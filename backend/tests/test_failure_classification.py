@@ -400,3 +400,66 @@ class TestZombieClassification:
         """An OOM message must still classify as OOM, not zombie."""
         ft, _ = classify_failure("Command failed with exit code -9")
         assert ft == FailureType.OOM
+
+
+# ---------------------------------------------------------------------------
+# Adversarial — try to break the zombie classification / ordering
+# ---------------------------------------------------------------------------
+
+class TestZombieAdversarial:
+    """Probe the failure modes of Fix B: message-drift, ordering shadow,
+    over-broad matching, and OOM precedence."""
+
+    # The EXACT messages raised by streaming_orchestrator (both sites). If these
+    # drift, classification silently regresses to UNKNOWN (5s backoff) — so pin
+    # both real shapes here.
+    ERROR_PATH = (
+        "Zombie subprocess detected: error_during_execution with no content "
+        "in 0.0s (session_id=4ffe4100-005b-4211-b489-fda503c5374b)"
+    )
+    EMPTY_STREAM = (
+        "Zombie subprocess detected: stream ended in 0.1s with no content "
+        "(session_id=4ffe4100-005b-4211-b489-fda503c5374b)"
+    )
+
+    def test_both_raise_sites_classify_zombie(self):
+        assert classify_failure(self.ERROR_PATH)[0] == FailureType.ZOMBIE
+        assert classify_failure(self.EMPTY_STREAM)[0] == FailureType.ZOMBIE
+
+    def test_session_id_containing_dash_9_still_zombie_not_oom(self):
+        """A UUID segment starting with 9 yields the substring '-9' (an OOM
+        token). Zombie-first ordering must still win — this IS a zombie, and a
+        0.5s respawn is correct, not the 30s OOM cooldown."""
+        msg = (
+            "Zombie subprocess detected: stream ended in 0.0s with no content "
+            "(session_id=4ffe4100-005b-4211-b489-9da503c5374b)"  # '-9da' → '-9'
+        )
+        assert "-9" in msg.lower()  # the trap is real
+        assert classify_failure(msg)[0] == FailureType.ZOMBIE
+
+    def test_real_oom_is_NOT_shadowed_by_zombie_first_ordering(self):
+        """The reverse must hold: a genuine OOM (no zombie phrase) must NOT be
+        captured by the zombie branch — it must still get the 30s OOM cooldown,
+        or fast respawn re-introduces the death spiral the OOM backoff prevents."""
+        for oom_msg in (
+            "Command failed with exit code -9",
+            "Process received SIGKILL",
+            "jetsam killed the process",
+        ):
+            ft, _ = classify_failure(oom_msg)
+            assert ft == FailureType.OOM, f"{oom_msg!r} must stay OOM, got {ft}"
+            # And its backoff must be the slow OOM one, never the 0.5s zombie path.
+            assert compute_backoff(ft, {}, 1, 5.0) >= 30.0
+
+    def test_error_during_execution_alone_is_not_zombie(self):
+        """Over-broad-match guard: only the explicit 'zombie subprocess detected'
+        phrase triggers the fast path. A bare error_during_execution string (no
+        zombie prefix) must NOT be classified ZOMBIE."""
+        ft, _ = classify_failure("error_during_execution: something went wrong")
+        assert ft != FailureType.ZOMBIE
+
+    def test_rate_limit_not_misread_as_zombie(self):
+        """A normal rate-limit error must keep its long backoff, not the 0.5s."""
+        ft, _ = classify_failure("rate limit exceeded, throttled")
+        assert ft == FailureType.RATE_LIMIT
+        assert compute_backoff(ft, {}, 1, 5.0) >= 30.0
