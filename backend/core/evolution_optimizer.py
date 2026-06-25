@@ -1593,6 +1593,39 @@ def _run_evolution_cycle_locked(
         errors.append(f"Governance mining failed: {exc}")
         logger.warning("Governance mining error: %s", exc)
 
+    # ── Phase 3d: CLOSED-LOOP AUDIT (⑥→① feedback edge, design §5) ──
+    # The Goodhart guard: a falling correction count is only real evolution if it
+    # falls from FEWER MISTAKES (known-class recurrence dropped after a gate), not
+    # from LOGGING LESS (capture collapsed). Pure audit over live tracker state;
+    # logs the verdict (unhealthy → escalate signal). Non-blocking by design.
+    try:
+        from core.evolution.correction_tracker import CorrectionClassTracker
+        from core.evolution.closed_loop import audit_recurrence
+
+        tracker = CorrectionClassTracker()
+        tracker_state = {name: tracker.get_class(name) for name in tracker.class_names()}
+        # Capture-rate snapshot: total recorded corrections across tracked classes.
+        # prev==cur here (single-cycle view) so capture-collapse cannot false-fire;
+        # the cross-period delta is the scheduled-job's concern. This in-cycle audit
+        # surfaces gate_failed / recurring, which are period-independent.
+        total = sum((e or {}).get("count", 0) for e in tracker_state.values())
+        recurrence_audit = audit_recurrence(
+            tracker_state,
+            capture_stats={"total_this_period": total, "total_prev_period": total},
+        )
+        if not recurrence_audit["healthy"]:
+            logger.warning(
+                "Closed-loop audit UNHEALTHY [%s]: %s",
+                recurrence_audit["reason_class"], recurrence_audit["detail"],
+            )
+        else:
+            logger.info(
+                "Closed-loop audit healthy [%s]", recurrence_audit["reason_class"]
+            )
+    except Exception as exc:
+        errors.append(f"Closed-loop audit failed: {exc}")
+        logger.warning("Closed-loop audit error: %s", exc)
+
     # ── Phase 4: AUDIT ──
     duration = time.monotonic() - start_time
 
