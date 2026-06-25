@@ -342,7 +342,14 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
       fc.assert(
         fc.property(narrowWindowWidthArb, (narrowWidth) => {
           mockStorage.clear();
-          
+          // Default is now collapsed; this test verifies narrow-viewport
+          // AUTO-collapse, so explicitly start EXPANDED to make the collapse
+          // observable (not masked by the new collapsed-by-default).
+          mockStorage.setItem(
+            LAYOUT_CONSTANTS.STORAGE_KEYS.WORKSPACE_EXPLORER_COLLAPSED,
+            'false'
+          );
+
           Object.defineProperty(window, 'innerWidth', {
             value: 1200,
             writable: true,
@@ -373,10 +380,18 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
       );
     });
 
-    it('should keep workspace explorer expanded when width is above 768px', () => {
+    it('should keep workspace explorer expanded on wide width when user has expanded it', () => {
       fc.assert(
         fc.property(wideWindowWidthArb, (wideWidth) => {
           mockStorage.clear();
+          // Default is now collapsed; this test verifies that a WIDE viewport
+          // does NOT force-collapse an explorer the user has expanded. Set the
+          // expanded preference explicitly so we're testing viewport behavior,
+          // not the default.
+          mockStorage.setItem(
+            LAYOUT_CONSTANTS.STORAGE_KEYS.WORKSPACE_EXPLORER_COLLAPSED,
+            'false'
+          );
 
           Object.defineProperty(window, 'innerWidth', {
             value: wideWidth,

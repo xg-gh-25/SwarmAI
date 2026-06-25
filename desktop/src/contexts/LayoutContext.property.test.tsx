@@ -208,7 +208,7 @@ describe('Layout Context - Property-Based Tests', () => {
       );
     });
 
-    it('should default to false when localStorage has no stored collapsed state', () => {
+    it('should default to true (collapsed) when localStorage has no stored collapsed state', () => {
       fc.assert(
         fc.property(fc.constant(null), () => {
           mockStorage.clear();
@@ -219,8 +219,9 @@ describe('Layout Context - Property-Based Tests', () => {
 
           const { result, unmount } = renderHook(() => useLayout(), { wrapper });
 
-          // Should default to false (not collapsed)
-          expect(result.current.workspaceExplorerCollapsed).toBe(false);
+          // Default = collapsed (Explorer is auxiliary; first launch focuses on
+          // chat). A persisted preference still wins — see the round-trip test.
+          expect(result.current.workspaceExplorerCollapsed).toBe(true);
 
           unmount();
         }),

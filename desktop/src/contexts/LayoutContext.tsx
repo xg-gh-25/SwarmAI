@@ -113,9 +113,13 @@ interface LayoutProviderProps {
 }
 
 export function LayoutProvider({ children }: LayoutProviderProps) {
-  // Workspace Explorer collapsed state with localStorage persistence
+  // Workspace Explorer collapsed state with localStorage persistence.
+  // Default = collapsed (true): the Explorer is an auxiliary panel; first launch
+  // (and any window with no stored preference) should focus on chat, not the file
+  // tree. A user who has explicitly expanded/collapsed it keeps that choice
+  // (persisted value wins — getStoredBoolean returns the stored value when present).
   const [workspaceExplorerCollapsed, setWorkspaceExplorerCollapsedState] = useState<boolean>(() =>
-    getStoredBoolean(STORAGE_KEYS.WORKSPACE_EXPLORER_COLLAPSED, false)
+    getStoredBoolean(STORAGE_KEYS.WORKSPACE_EXPLORER_COLLAPSED, true)
   );
 
   // Workspace Explorer width with localStorage persistence
