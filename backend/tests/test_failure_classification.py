@@ -357,3 +357,46 @@ class TestHookBuilderFailureHooks:
         assert "Notification" not in hooks
         assert "Stop" not in hooks
         assert "PreCompact" not in hooks
+
+
+# ---------------------------------------------------------------------------
+# Zombie subprocess (Fix B) — deterministic poison, near-zero backoff
+# ---------------------------------------------------------------------------
+
+class TestZombieClassification:
+    """A reused-then-poisoned subprocess must skip the exponential backoff."""
+
+    ZOMBIE_MSG = (
+        "Zombie subprocess detected: error_during_execution with no content "
+        "in 0.0s (session_id=4ffe4100-005b-4211-b489-fda503c5374b)"
+    )
+
+    def test_zombie_classified_as_zombie(self):
+        ft, _ = classify_failure(self.ZOMBIE_MSG)
+        assert ft == FailureType.ZOMBIE
+
+    def test_zombie_case_insensitive(self):
+        ft, _ = classify_failure(self.ZOMBIE_MSG.upper())
+        assert ft == FailureType.ZOMBIE
+
+    def test_zombie_backoff_is_near_zero(self):
+        """The whole point of Fix B: respawn at once, not after 5s/10s/15s."""
+        for retry_count in (1, 2, 3):
+            backoff = compute_backoff(
+                FailureType.ZOMBIE, {}, retry_count, base_backoff=5.0
+            )
+            assert backoff <= 1.0, (
+                f"zombie backoff must be near-zero, got {backoff}s at retry {retry_count}"
+            )
+
+    def test_zombie_backoff_far_below_unknown(self):
+        """Regression guard: zombie must be much faster than the old UNKNOWN path
+        (which is what it used to classify as → 5s base exponential)."""
+        zombie = compute_backoff(FailureType.ZOMBIE, {}, 1, base_backoff=5.0)
+        unknown = compute_backoff(FailureType.UNKNOWN, {}, 1, base_backoff=5.0)
+        assert zombie < unknown
+
+    def test_zombie_does_not_shadow_oom(self):
+        """An OOM message must still classify as OOM, not zombie."""
+        ft, _ = classify_failure("Command failed with exit code -9")
+        assert ft == FailureType.OOM

@@ -42,6 +42,7 @@ class FailureType(Enum):
     - RATE_LIMIT  → wait until resets_at (or 60s default)
     - API_ERROR   → standard exponential backoff
     - TIMEOUT     → exponential backoff, abandon --resume after 2x
+    - ZOMBIE      → near-zero backoff (deterministic poison, respawn at once)
     - UNKNOWN     → standard exponential backoff (conservative)
     """
 
@@ -49,6 +50,7 @@ class FailureType(Enum):
     RATE_LIMIT = "rate_limit"
     API_ERROR = "api_error"
     TIMEOUT = "timeout"
+    ZOMBIE = "zombie"
     UNKNOWN = "unknown"
 
 
@@ -70,6 +72,16 @@ def classify_failure(
     """
     error_lower = error_str.lower()
     metadata: dict = {}
+
+    # ── 0. Zombie subprocess (deterministic poison after interrupt) ──
+    # streaming_orchestrator raises RuntimeError("Zombie subprocess detected: ...")
+    # when a reused subprocess returns an instant empty error_during_execution.
+    # This is NOT transient — the subprocess is already dead/poisoned, so the
+    # standard exponential backoff is pure dead time. Classify it first (the
+    # message never overlaps OOM/rate-limit/timeout patterns) so compute_backoff
+    # can respawn near-immediately.
+    if "zombie subprocess detected" in error_lower:
+        return FailureType.ZOMBIE, metadata
 
     # ── 1. Hook context: rate limit notification ──────────────
     if hook_context:
@@ -156,6 +168,13 @@ def compute_backoff(
             # Cap at 5 minutes — if resets_at is far future, don't block forever
             return min(wait + 2.0, 300.0)  # +2s buffer
         return 60.0  # Default rate limit backoff
+
+    if failure_type == FailureType.ZOMBIE:
+        # Deterministic poison: the subprocess is already killed and a fresh
+        # one will --resume cleanly. No point waiting — respawn near-instantly.
+        # A small non-zero value avoids a hot spin if the fresh subprocess also
+        # zombies; MAX_RETRY_ATTEMPTS still bounds the loop.
+        return 0.5
 
     # Exponential for everything else
     return min(base_backoff * retry_count, 60.0)
