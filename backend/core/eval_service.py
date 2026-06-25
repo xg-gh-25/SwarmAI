@@ -201,6 +201,7 @@ class EvalService:
                     "title": c.get("title"),
                     "source": c.get("source"),
                     "tier": c.get("tier", "active"),
+                    "eval_method": c.get("eval_method"),
                     "affected_by": c.get("affected_by", []),
                     "evaluators": c.get("evaluators", []),
                     "last_result": self._get_case_last_result(c.get("id")),

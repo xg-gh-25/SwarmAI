@@ -35,6 +35,7 @@ def eval_workspace(tmp_path):
                 "level": "session",
                 "title": "Pipeline mandatory for code changes",
                 "source": "C011",
+                "eval_method": "programmatic",
                 "affected_by": ["AGENT.md"],
                 "evaluators": ["file_contains"],
                 "scenario": {"turns": [{"input": "Fix typo"}]},
@@ -194,6 +195,26 @@ class TestDeleteCase:
         gs = svc.get_golden_set()
         active_ids = [c["id"] for c in gs["cases"] if c.get("tier") != "archived"]
         assert "GS002" not in active_ids
+
+
+class TestGoldenSetEvalMethod:
+    """G3: get_golden_set must expose eval_method per case (frontend summary needs it)."""
+
+    def test_golden_set_cases_include_eval_method_key(self, svc):
+        gs = svc.get_golden_set()
+        for c in gs["cases"]:
+            assert "eval_method" in c, f"case {c['id']} missing eval_method key"
+
+    def test_eval_method_value_passed_through(self, svc):
+        gs = svc.get_golden_set()
+        by_id = {c["id"]: c for c in gs["cases"]}
+        assert by_id["GS001"]["eval_method"] == "programmatic"
+
+    def test_missing_eval_method_is_none_not_dropped(self, svc):
+        # GS002 fixture has no eval_method → key present, value None (never KeyError)
+        gs = svc.get_golden_set()
+        by_id = {c["id"]: c for c in gs["cases"]}
+        assert by_id["GS002"]["eval_method"] is None
 
 
 # ─── Run Triggers ────────────────────────────────────────────────────────────
