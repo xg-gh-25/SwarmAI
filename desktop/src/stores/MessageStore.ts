@@ -361,6 +361,29 @@ export class MessageStore {
   // ─── Private Methods ───
 
   /**
+   * Force-drain any pending rAF/timeout-gated notification synchronously.
+   *
+   * macOS App Nap throttles BOTH requestAnimationFrame AND setTimeout on a
+   * backgrounded Tauri WebView, so the rAF-gated `_notify` (and even its 100ms
+   * setTimeout fallback) can stall indefinitely while a tab/window is in the
+   * background — the React mirror then lags the store's actual content. Call
+   * this on foreground (visibilitychange → visible / window focus) to guarantee
+   * listeners observe the latest snapshot immediately. No-op if nothing pending.
+   */
+  flush(): void {
+    if (this._destroyed) return;
+    if (this._rafId !== null) {
+      cancelAnimationFrame(this._rafId);
+      this._rafId = null;
+    }
+    if (this._fallbackTimerId !== null) {
+      clearTimeout(this._fallbackTimerId);
+      this._fallbackTimerId = null;
+    }
+    this._flush();
+  }
+
+  /**
    * rAF-gated notification — coalesces rapid updates into one callback per frame.
    * Re-entrancy guard prevents infinite loops during migration (R8).
    */
@@ -945,5 +968,16 @@ export const messageStoreRegistry = {
   /** Number of active stores (diagnostic). */
   get size(): number {
     return _registry.size;
+  },
+
+  /**
+   * Force-flush every registered store (foreground resume). Drains any
+   * App-Nap-throttled rAF/timeout notifications so the React mirror catches up
+   * to store content the moment the window returns to the foreground.
+   */
+  flushAll(): void {
+    for (const store of _registry.values()) {
+      store.flush();
+    }
   },
 };

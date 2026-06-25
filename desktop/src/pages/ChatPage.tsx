@@ -470,17 +470,23 @@ export default function ChatPage() {
   // old `messages.length === 0` gate was guarding against — now handled by
   // _applyMerge's resume-boundary + DB-wins-by-id logic). Idempotent; phase-gated
   // (no-op while streaming); fully error-guarded (never aborts the live stream).
-  const mergeTabFromDb = useCallback(async (tabId: string) => {
+  const mergeTabFromDb = useCallback(async (tabId: string, force = false) => {
     const tab = tabMapRef.current.get(tabId);
-    if (!tab || !tab.sessionId || tab.isStreaming) return;
+    // `force` bypasses the isStreaming gate — used ONLY by the foreground-resume
+    // reconcile AFTER the backend has confirmed (via streaming-state) that this
+    // session is no longer streaming, so it cannot clobber a genuinely live stream.
+    if (!tab || !tab.sessionId || (tab.isStreaming && !force)) return;
     const sid = tab.sessionId;
     try {
       const msgs = await chatService.getSessionMessagesPaginated(sid, INITIAL_MESSAGE_LOAD_LIMIT);
       const tabNow = tabMapRef.current.get(tabId);
       // Re-guard: tab gone, session changed, or streaming restarted during fetch.
-      if (!tabNow || tabNow.sessionId !== sid || tabNow.isStreaming) return;
+      if (!tabNow || tabNow.sessionId !== sid || (tabNow.isStreaming && !force)) return;
       const store = messageStoreRegistry.getOrCreate(tabId);
-      // reconcile() is a no-op (queues a thunk) while phase==='streaming'.
+      // reconcile() is a no-op (queues a thunk) while phase==='streaming'. On the
+      // force path the store may still be stuck in 'streaming' (the App-Nap bug),
+      // so end it first — the backend is confirmed idle, the turn is over.
+      if (force) store.endStreaming();
       store.reconcile(msgs);
       // Bridge store → tabState cache for legacy readers.
       tabNow.messages = store.messages;
@@ -612,6 +618,56 @@ export default function ChatPage() {
     window.addEventListener('swarm:backend-recovered', handleBackendRecovered);
     return () => window.removeEventListener('swarm:backend-recovered', handleBackendRecovered);
   }, [loadSessionMessages, reconcileTabFromDb, mergeTabFromDb, resendTabOnRecovery]);
+
+  // Foreground-resume reconcile (OT01 recurrence — App Nap stale store).
+  // macOS App Nap throttles requestAnimationFrame AND setTimeout AND suspends
+  // SSE reading on a backgrounded Tauri WebView. A tab that streamed while the
+  // window was backgrounded can land with its MessageStore stuck behind the
+  // backend (which kept running and persisting to the DB) and isStreaming
+  // falsely true → the !isStreaming gate makes mergeTabFromDb skip → the tab
+  // renders frozen on its last pre-background snapshot (verified: session
+  // 98610bf9 — store showed 1 Read, DB had 60+ messages).
+  //
+  // On foreground we: (1) flush EVERY store (drain App-Nap-throttled rAF/timeout
+  // notifications so the React mirror catches up to store content), and (2) for
+  // the active tab, ask the backend whether the session is STILL streaming. The
+  // backend is the SOLE authority on streaming-ness, so this can NEVER clobber a
+  // live stream: only when the backend reports NOT-streaming do we clear the
+  // stale flag and force-reconcile the authoritative DB content into the store.
+  useEffect(() => {
+    const onForeground = async () => {
+      if (document.hidden) return;
+      // (1) Drain throttled notifications across all tabs (cheap, always safe).
+      messageStoreRegistry.flushAll();
+      // (2) Active-tab backend-truth reconcile.
+      const activeId = activeTabIdRef.current;
+      if (!activeId) return;
+      const tab = tabMapRef.current.get(activeId);
+      if (!tab?.sessionId) return;
+      try {
+        const state = await chatService.getStreamingState();
+        const backendStreaming = state[tab.sessionId]?.streaming === true;
+        if (backendStreaming) return; // genuine live stream — flush above suffices, don't touch
+        // Backend is idle/done. If the frontend still shows streaming, this is
+        // the App-Nap stuck case: clear the stale flag + force-merge DB content.
+        const tabNow = tabMapRef.current.get(activeId);
+        if (tabNow?.isStreaming) {
+          setIsStreaming(false, activeId);
+          updateTabStatus(activeId, 'idle');
+        }
+        await mergeTabFromDb(activeId, true);
+        console.log(`[ChatPage] Foreground reconcile — active tab ${activeId} re-synced from DB (backend idle)`);
+      } catch {
+        // Backend unreachable — leave state as-is; backend-recovered handles it.
+      }
+    };
+    document.addEventListener('visibilitychange', onForeground);
+    window.addEventListener('focus', onForeground);
+    return () => {
+      document.removeEventListener('visibilitychange', onForeground);
+      window.removeEventListener('focus', onForeground);
+    };
+  }, [mergeTabFromDb, setIsStreaming, updateTabStatus]);
 
   // Load older messages for infinite scroll (paginated)
   const loadOlderMessages = useCallback(async () => {
