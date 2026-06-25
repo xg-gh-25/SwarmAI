@@ -295,6 +295,31 @@ def test_graceful_escalation_respects_universal_guards():
     assert pol.decide(stopped).verdict is RecoveryVerdict.SKIP
 
 
+def test_oom_ladder_gives_up_at_limit():
+    """M4 OOM give-up ladder (forcing): threshold = _OOM_KILL_LIMIT - 1 = 2, so
+    the 3rd consecutive OOM (attempt=3 > 2) escalates to PROCEED_KILL_HARD (drop
+    --resume identity, give up), while attempts 1-2 stay PROCEED_KILL (cooldown +
+    retry). Pins parity with the old `consecutive_oom_kills >= _OOM_KILL_LIMIT(3)`."""
+    coord = RecoveryCoordinator(HealingLoop())
+    OOM_KILL_LIMIT = 3  # matches SessionUnit._OOM_KILL_LIMIT
+    for attempt in (1, 2):
+        d = coord.decide_graceful(
+            trigger="oom", enabled=True, user_stopped=False, state="streaming",
+            attempt=attempt, threshold=OOM_KILL_LIMIT - 1,
+            base=RecoveryVerdict.PROCEED_KILL,
+            escalated=RecoveryVerdict.PROCEED_KILL_HARD,
+        )
+        assert d.verdict is RecoveryVerdict.PROCEED_KILL, f"attempt {attempt} should retry"
+    # 3rd OOM → give up (drop identity)
+    d3 = coord.decide_graceful(
+        trigger="oom", enabled=True, user_stopped=False, state="streaming",
+        attempt=3, threshold=OOM_KILL_LIMIT - 1,
+        base=RecoveryVerdict.PROCEED_KILL,
+        escalated=RecoveryVerdict.PROCEED_KILL_HARD,
+    )
+    assert d3.verdict is RecoveryVerdict.PROCEED_KILL_HARD
+
+
 def test_coordinator_routes_graceful_escalation():
     coord = RecoveryCoordinator(HealingLoop())
     base = coord.decide_graceful(

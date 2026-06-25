@@ -1136,11 +1136,44 @@ class SessionUnit:
         # unreachable for a still-wedged tool (F2).
         self._tool_hang_episodes += 1
 
+        # R3e (M4): the INTERRUPT-vs-force-kill escalation DECISION routes through
+        # the one recovery authority (GracefulEscalationPolicy) — same shape as M3
+        # streaming-timeout, different ladder: base=PROCEED_INTERRUPT (warm,
+        # non-destructive), escalated=PROCEED_KILL (force-kill for fresh respawn).
+        # The caller still owns the episode counter + limit + the increment-before
+        # semantics above; the Coordinator owns only the ladder verdict.
+        from .session_healing import RecoveryVerdict
+        try:
+            _decision = self._recovery_coordinator.decide_graceful(
+                trigger="tool_hang",
+                enabled=True,
+                user_stopped=self._user_stopped_current_turn,
+                state=self.state.value,
+                attempt=self._tool_hang_episodes,
+                threshold=self._TOOL_HANG_EPISODE_LIMIT,
+                base=RecoveryVerdict.PROCEED_INTERRUPT,
+                escalated=RecoveryVerdict.PROCEED_KILL,
+            )
+        except Exception:
+            # The policy is pure (no I/O), so this is defensive: a coordinator
+            # failure must NOT leave the speculative increment (line above)
+            # inflated, which would skew the next escalation boundary. Back it
+            # out and bail — the hard-ceiling backstop + _compute_message_timeout
+            # force-kill still own a truly-wedged tool as last resort.
+            self._tool_hang_episodes -= 1
+            raise
+
+        if _decision.verdict is RecoveryVerdict.SKIP:
+            # User stopped this turn — back out the speculative episode increment
+            # (this was not a genuine escalation episode) and leave it alone.
+            self._tool_hang_episodes -= 1
+            return
+
         # AC4 escalation: if warm interrupts keep failing to clear the hang
         # (the model reroutes straight back into a wedging tool), a warm
         # interrupt is no longer helping — escalate to the destructive
         # force-kill so the retry path can respawn fresh, instead of looping.
-        if self._tool_hang_episodes > self._TOOL_HANG_EPISODE_LIMIT:
+        if _decision.verdict is RecoveryVerdict.PROCEED_KILL:
             logger.error(
                 "session_unit.tool_hang_escalate session_id=%s episodes=%d "
                 "> limit=%d — force-killing for fresh respawn",
@@ -1152,6 +1185,7 @@ class SessionUnit:
             await self._force_kill()
             return
 
+        # PROCEED_INTERRUPT (base rung): warm, non-destructive interrupt.
         try:
             ok = await self.interrupt(autonomous=True)
         except Exception as exc:

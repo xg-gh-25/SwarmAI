@@ -65,6 +65,11 @@ def _make_unit(session_id: str = "test-session", pid: int | None = 12345) -> Ses
     unit._consecutive_unstick_timeouts = 0
     unit._force_kill = AsyncMock()
     unit.interrupt = AsyncMock(return_value=True)
+    # R3e (M4): tool-hang escalation (INTERRUPT vs force-kill) now routes through
+    # the unit's RecoveryCoordinator. Give it a real one + a not-stopped turn.
+    unit._user_stopped_current_turn = False
+    from core.session_healing import HealingLoop, RecoveryCoordinator
+    unit._recovery_coordinator = RecoveryCoordinator(HealingLoop())
     # Shorten the CPU probe sleep so tests run fast.
     unit.CPU_PROBE_INTERVAL_S = 0.02
     return unit

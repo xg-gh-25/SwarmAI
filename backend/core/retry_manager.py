@@ -233,8 +233,34 @@ class RetryManager:
                     "code": "OOM_DETECTED",
                 }
 
-                # Stop retrying after too many consecutive OOMs
-                if self._parent._consecutive_oom_kills >= self._parent._OOM_KILL_LIMIT:
+                # Stop retrying after too many consecutive OOMs.
+                # R3e (M4): the give-up DECISION (keep retrying w/ --resume vs
+                # drop identity) routes through the one recovery authority
+                # (GracefulEscalationPolicy). The caller owns the OOM counter +
+                # limit; the Coordinator owns the ladder verdict:
+                #   attempt <= limit-1 → PROCEED_KILL      (cooldown + retry, keep --resume)
+                #   attempt >  limit-1 → PROCEED_KILL_HARD (give up, drop identity)
+                from .session_healing import RecoveryVerdict as _RV
+                _oom_decision = self._parent._recovery_coordinator.decide_graceful(
+                    trigger="oom",
+                    enabled=True,
+                    user_stopped=self._parent._user_stopped_current_turn,
+                    state=self._parent.state.value,
+                    attempt=self._parent._consecutive_oom_kills,
+                    threshold=self._parent._OOM_KILL_LIMIT - 1,
+                    base=_RV.PROCEED_KILL,
+                    escalated=_RV.PROCEED_KILL_HARD,
+                )
+                # NOTE on counter asymmetry vs tool-hang: the OOM counter
+                # (_consecutive_oom_kills, incremented above) is INTENTIONALLY
+                # NOT backed out on a SKIP/base verdict — unlike the tool-hang
+                # episode counter. Memory pressure is a real physical event
+                # regardless of user intent: an OOM that happened, happened, and
+                # must count toward the give-up limit even if the user also
+                # stopped the turn. On SKIP (user_stopped) or base PROCEED_KILL,
+                # we correctly fall through to the cooldown + retry path below;
+                # only PROCEED_KILL_HARD (>= limit) takes the destructive give-up.
+                if _oom_decision.verdict is _RV.PROCEED_KILL_HARD:
                     logger.warning(
                         "session_unit: %d consecutive OOM kills for session %s — "
                         "giving up (system cannot sustain this session)",
