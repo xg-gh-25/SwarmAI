@@ -494,6 +494,21 @@ class LifecycleManager:
                     # RSS sampling and now (TOCTOU mitigation).
                     if unit.state != SessionState.STREAMING:
                         continue
+                    # R3b (M1): the kill DECISION routes through the one recovery
+                    # authority (BareThresholdPolicy). The caller still owns the
+                    # RSS threshold measurement above; the Coordinator owns the
+                    # may-I-kill verdict (universal guard: enabled / user_stopped).
+                    # eligible_states=None — the STREAMING-only unit list already
+                    # gates state.
+                    from .session_healing import RecoveryVerdict
+                    _decision = unit._recovery_coordinator.decide_bare(
+                        trigger="rss_streaming",
+                        enabled=True,
+                        user_stopped=unit._user_stopped_current_turn,
+                        state=unit.state.value,
+                    )
+                    if _decision.verdict is not RecoveryVerdict.PROCEED_KILL:
+                        continue  # SKIP (user stopped this turn) — leave it alone
                     logger.warning(
                         "lifecycle.streaming_rss_kill session=%s "
                         "rss=%dMB > threshold=%dMB — killing bloated STREAMING session",

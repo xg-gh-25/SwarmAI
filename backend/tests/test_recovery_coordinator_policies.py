@@ -26,6 +26,7 @@ from core.session_healing import (
     RecoveryDecision,
     AttemptBreakerPolicy,
     CooldownThresholdPolicy,
+    BareThresholdPolicy,
     RecoveryContext,
 )
 
@@ -113,6 +114,108 @@ def test_cooldown_policy_never_escalates_or_graceful():
         )
         v = pol.decide(ctx).verdict
         assert v in (RecoveryVerdict.PROCEED_KILL, RecoveryVerdict.DEFER)
+
+
+# ─── R3b (M1): BareThresholdPolicy (RSS-streaming / stuck-WAITING shape) ──
+# Bare-threshold = no cooldown, no attempt-breaker, no escalation, no graceful.
+# The caller owns the threshold measurement; the policy answers only "given the
+# caller already decided the threshold is met, may I kill in THIS state?".
+
+
+def test_bare_threshold_proceeds_when_eligible():
+    """Caller has measured the threshold breach; policy says PROCEED_KILL."""
+    pol = BareThresholdPolicy()
+    ctx = RecoveryContext(
+        trigger="rss_streaming", enabled=True, user_stopped=False,
+        state="streaming",
+    )
+    assert pol.decide(ctx).verdict is RecoveryVerdict.PROCEED_KILL
+
+
+def test_bare_threshold_no_cooldown_no_escalation():
+    """Bare shape imposes NO cooldown, NO breaker — many consecutive proceeds."""
+    pol = BareThresholdPolicy()
+    for i in range(10):
+        ctx = RecoveryContext(
+            trigger="rss_streaming", enabled=True, user_stopped=False,
+            state="streaming", now=1000.0 + i * 5, last_recovery=999.0,
+        )
+        # Even back-to-back (now≈last_recovery), bare threshold never DEFERs.
+        assert pol.decide(ctx).verdict is RecoveryVerdict.PROCEED_KILL
+
+
+def test_bare_threshold_respects_universal_guards():
+    """enabled=False and user_stopped=True still SKIP (shared guard)."""
+    pol = BareThresholdPolicy()
+    disabled = RecoveryContext(
+        trigger="rss_streaming", enabled=False, user_stopped=False,
+        state="streaming",
+    )
+    assert pol.decide(disabled).verdict is RecoveryVerdict.SKIP
+    stopped = RecoveryContext(
+        trigger="rss_streaming", enabled=True, user_stopped=True,
+        state="streaming",
+    )
+    assert pol.decide(stopped).verdict is RecoveryVerdict.SKIP
+
+
+def test_bare_threshold_eligible_states_configurable():
+    """A bare policy can RESTRICT to specific states (default: any non-guarded).
+    stuck-WAITING (M2) will use eligible_states={waiting_input}; RSS-streaming
+    (M1) targets streaming. A state outside the set → SKIP."""
+    pol = BareThresholdPolicy(eligible_states=frozenset({"streaming"}))
+    ok = RecoveryContext(
+        trigger="rss_streaming", enabled=True, user_stopped=False,
+        state="streaming",
+    )
+    assert pol.decide(ok).verdict is RecoveryVerdict.PROCEED_KILL
+    wrong = RecoveryContext(
+        trigger="rss_streaming", enabled=True, user_stopped=False,
+        state="idle",
+    )
+    assert wrong.state not in pol._eligible_states
+    assert pol.decide(wrong).verdict is RecoveryVerdict.SKIP
+
+
+def test_bare_threshold_default_any_state():
+    """Default (no eligible_states) = eligible in any non-guarded state."""
+    pol = BareThresholdPolicy()
+    for st in ("streaming", "waiting_input", "idle"):
+        ctx = RecoveryContext(
+            trigger="rss_streaming", enabled=True, user_stopped=False, state=st,
+        )
+        assert pol.decide(ctx).verdict is RecoveryVerdict.PROCEED_KILL
+
+
+def test_coordinator_routes_bare_threshold():
+    """Coordinator.decide_bare dispatches to the bare policy."""
+    coord = RecoveryCoordinator(HealingLoop())
+    d = coord.decide_bare(
+        trigger="rss_streaming", enabled=True, user_stopped=False,
+        state="streaming",
+    )
+    assert d.verdict is RecoveryVerdict.PROCEED_KILL
+    # guard still applies through the coordinator
+    d2 = coord.decide_bare(
+        trigger="rss_streaming", enabled=True, user_stopped=True,
+        state="streaming",
+    )
+    assert d2.verdict is RecoveryVerdict.SKIP
+
+
+def test_coordinator_decide_bare_eligible_states():
+    """Coordinator.decide_bare forwards eligible_states restriction."""
+    coord = RecoveryCoordinator(HealingLoop())
+    d = coord.decide_bare(
+        trigger="stuck_waiting", enabled=True, user_stopped=False,
+        state="idle", eligible_states=frozenset({"waiting_input"}),
+    )
+    assert d.verdict is RecoveryVerdict.SKIP
+    d2 = coord.decide_bare(
+        trigger="stuck_waiting", enabled=True, user_stopped=False,
+        state="waiting_input", eligible_states=frozenset({"waiting_input"}),
+    )
+    assert d2.verdict is RecoveryVerdict.PROCEED_KILL
 
 
 # ─── AC2: AttemptBreakerPolicy is a pure extract of self-heal ─────────────

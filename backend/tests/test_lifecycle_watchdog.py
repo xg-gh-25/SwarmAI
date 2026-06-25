@@ -541,3 +541,74 @@ class TestWaitingInputTimeoutVsAskTimeout:
         from core.ask_question_manager import ASK_ANSWER_TIMEOUT_SECONDS
 
         assert LifecycleManager.WAITING_INPUT_TIMEOUT_SECONDS > ASK_ANSWER_TIMEOUT_SECONDS
+
+
+# ── R3b (M1): per-session-7GB RSS kill routes through RecoveryCoordinator ──
+
+
+class TestStreamingRssRoutesCoordinator:
+    """FORCING TESTS (STEERING #11): the per-session-7GB RSS streaming kill must
+    route its DECISION through the unit's RecoveryCoordinator (BareThresholdPolicy),
+    not kill directly. These mock the RSS breach and assert the coordinator path
+    actually executes — a kill that bypasses decide_bare is a regression."""
+
+    def _make_streaming_unit(self, *, rss_over: bool, user_stopped: bool):
+        from core.session_unit import SessionState, SessionUnit
+
+        unit = MagicMock()
+        unit.state = SessionState.STREAMING
+        unit.pid = 4242
+        unit.session_id = "sess_rss_forcing_0001"
+        unit._user_stopped_current_turn = user_stopped
+        unit._arm_recovery_checkpoint = AsyncMock()
+        unit.kill = AsyncMock()
+        # Real coordinator so decide_bare actually runs (forcing, not mock-through).
+        from core.session_healing import HealingLoop, RecoveryCoordinator
+        unit._recovery_coordinator = RecoveryCoordinator(HealingLoop())
+        # Spy on decide_bare to prove the path went through it.
+        unit._recovery_coordinator.decide_bare = MagicMock(
+            wraps=unit._recovery_coordinator.decide_bare
+        )
+        self._rss = (
+            SessionUnit.STREAMING_RSS_KILL_THRESHOLD + 1
+            if rss_over
+            else SessionUnit.STREAMING_RSS_KILL_THRESHOLD - 1
+        )
+        return unit
+
+    @pytest.mark.asyncio
+    async def test_rss_breach_routes_through_decide_bare_and_kills(self):
+        unit = self._make_streaming_unit(rss_over=True, user_stopped=False)
+        mgr = _make_manager()
+        mgr._router.list_units.return_value = [unit]
+
+        with patch("core.resource_monitor.resource_monitor") as rm:
+            rm.system_memory.return_value = SimpleNamespace(percent_used=20.0)
+            rm.process_tree_rss.return_value = self._rss
+            await mgr._streaming_rss_check()
+
+        # FORCING assertion: the decision went through the coordinator...
+        unit._recovery_coordinator.decide_bare.assert_called_once()
+        kwargs = unit._recovery_coordinator.decide_bare.call_args.kwargs
+        assert kwargs["trigger"] == "rss_streaming"
+        # ...and the kill executed because the verdict was PROCEED_KILL.
+        unit._arm_recovery_checkpoint.assert_awaited_once()
+        unit.kill.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_user_stopped_turn_skips_kill_via_coordinator(self):
+        """If the user stopped this turn, the universal guard SKIPs — the bloated
+        session is NOT killed (parity with self-heal's user-stop guard)."""
+        unit = self._make_streaming_unit(rss_over=True, user_stopped=True)
+        mgr = _make_manager()
+        mgr._router.list_units.return_value = [unit]
+
+        with patch("core.resource_monitor.resource_monitor") as rm:
+            rm.system_memory.return_value = SimpleNamespace(percent_used=20.0)
+            rm.process_tree_rss.return_value = self._rss
+            await mgr._streaming_rss_check()
+
+        unit._recovery_coordinator.decide_bare.assert_called_once()
+        # SKIP verdict → NO kill.
+        unit.kill.assert_not_awaited()
+        unit._arm_recovery_checkpoint.assert_not_awaited()

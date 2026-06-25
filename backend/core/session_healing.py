@@ -604,6 +604,34 @@ class CooldownThresholdPolicy(RecoveryPolicy):
         return RecoveryDecision(RecoveryVerdict.PROCEED_KILL, "")
 
 
+class BareThresholdPolicy(RecoveryPolicy):
+    """RSS-streaming (#3-T1) and stuck-WAITING (#7) shape: bare threshold.
+    No cooldown, no attempt-breaker, no escalation, no graceful. The CALLER
+    owns the threshold measurement (RSS>7GB / waited>timeout) and only invokes
+    the policy once the breach is already established; the policy answers the
+    narrow question "given the breach, may I kill in THIS state?".
+
+    State eligibility is policy-configured, NOT a coordinator constant — this is
+    the mechanism that lets RSS-streaming TARGET ``streaming`` while stuck-WAITING
+    TARGETS ``waiting_input`` (the exact opposite of self-heal, which PROTECTS it).
+    Default ``eligible_states=None`` → eligible in any non-guarded state.
+    Stateless: holds no breaker/timestamp, so one instance is reusable across
+    callers with differing thresholds."""
+
+    def __init__(self, eligible_states: "frozenset[str] | None" = None):
+        self._eligible_states = eligible_states
+
+    def decide(self, ctx: "RecoveryContext") -> "RecoveryDecision":
+        guard = _universal_guard(ctx)
+        if guard is not None:
+            return guard
+        if self._eligible_states is not None and ctx.state not in self._eligible_states:
+            return RecoveryDecision(
+                RecoveryVerdict.SKIP, f"ineligible_state:{ctx.state}"
+            )
+        return RecoveryDecision(RecoveryVerdict.PROCEED_KILL, "")
+
+
 class RecoveryCoordinator:
     """Thin decision authority over recovery. Delegates breaker state to a
     HealingLoop (injected, not created) — so existing HealingLoop tests are
@@ -677,6 +705,30 @@ class RecoveryCoordinator:
             state=state, now=now, last_recovery=last_recovery, cooldown_s=cooldown_s,
         )
         return self._cooldown_policy.decide(ctx)
+
+    # ── bare-threshold decision (R3b/M1 + M2 — dispatches to the bare policy) ──
+    def decide_bare(
+        self,
+        *,
+        trigger: str,
+        enabled: bool,
+        user_stopped: bool,
+        state: str,
+        eligible_states: "frozenset[str] | None" = None,
+    ) -> RecoveryDecision:
+        """Bare-threshold recovery decision: no cooldown, no breaker, no
+        escalation. The CALLER owns the threshold measurement (RSS>7GB for
+        RSS-streaming #3-T1, waited>timeout for stuck-WAITING #7); the
+        Coordinator owns only the may-I-kill-in-this-state verdict.
+
+        ``eligible_states`` lets the caller TARGET a state (M2 stuck-WAITING
+        passes ``{"waiting_input"}``); None = any non-guarded state (M1
+        RSS-streaming, gated upstream by the STREAMING-only unit list)."""
+        ctx = RecoveryContext(
+            trigger=trigger, enabled=enabled, user_stopped=user_stopped,
+            state=state,
+        )
+        return BareThresholdPolicy(eligible_states=eligible_states).decide(ctx)
 
     # ── breaker lifecycle passthroughs (delegate to the ONE held loop) ──
     def record_heal_start(self, trigger: str = "") -> None:
