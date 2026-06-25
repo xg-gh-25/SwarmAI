@@ -404,4 +404,42 @@ describe('useMessageStore — isActive render gate', () => {
     // Store itself kept accumulating.
     expect(textOf(store.messages.find((m) => m.id === 'a1'))).toBe('ab');
   });
+
+  // Sibling-fix interaction (meta-review): flush() (the foreground-resume path,
+  // commit 90537c91 — visibilitychange → flushAll → store.flush()) fires the
+  // store's listener synchronously. For a BACKGROUND tab the isActive gate must
+  // still skip the React commit (flush drains the store's rAF backlog but must
+  // NOT force a wasted hidden render); for an ACTIVE tab flush() must update the
+  // mirror. Pins the cross-fix contract against future refactors.
+  it('flush() respects isActive: drains store but does NOT render a background tab', async () => {
+    const tabId = 'tab-flush-bg';
+    const { result } = renderHook(() => useMessageStore(tabId, undefined, false));
+    const store = result.current!.store;
+
+    act(() => {
+      store.append(makeMsg('u1', 'user', 'hi'));
+      store.append(makeMsg('a1', 'assistant', 'done'));
+      // Force-drain like the foreground-resume path does on a still-hidden tab.
+      store.flush();
+    });
+
+    // flush ran the listener, but the tab is inactive → mirror stays empty.
+    expect(result.current!.messages).toEqual([]);
+    // Store itself is fully populated (flush drained it).
+    expect(store.messages).toHaveLength(2);
+  });
+
+  it('flush() respects isActive: updates the mirror for an active tab', async () => {
+    const tabId = 'tab-flush-active';
+    const { result } = renderHook(() => useMessageStore(tabId, undefined, true));
+    const store = result.current!.store;
+
+    act(() => {
+      store.append(makeMsg('u1', 'user', 'hi'));
+      store.append(makeMsg('a1', 'assistant', 'done'));
+      store.flush();
+    });
+
+    expect(result.current!.messages.map((m) => m.id)).toEqual(['u1', 'a1']);
+  });
 });
