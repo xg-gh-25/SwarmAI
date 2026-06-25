@@ -488,6 +488,79 @@ describe('useChatStreamingLifecycle', () => {
 
       expect(result.current.isStreaming).toBe(false);
     });
+
+    // ── [DONE] authority vs stale-gen guard (run_6adee7d5) ──────────────
+    // ROOT CAUSE: createCompleteHandler captured streamGen at SEND time, then
+    // early-returned when tabState.streamGen !== capturedGen. But streamGen is
+    // bumped mid-stream by reconnect / result / error (incrementStreamGen at 7
+    // sites). So a turn that reconnected once → its own [DONE]'s completeHandler
+    // is "stale" → early-returns BEFORE setIsStreaming(false) → spinner spins
+    // forever, rescued only by the 30s reconcile force-clear backstop (~109 of
+    // 114 idle force-clears, 3-signal log analysis). Fix: a per-tab
+    // latestCompleteGen marks the LIVE completer; reconnect churn no longer
+    // invalidates it, but a genuinely NEW send (which creates a new handler and
+    // advances latestCompleteGen) correctly supersedes the old one.
+
+    it('AC1: clears isStreaming on [DONE] even after reconnect churned streamGen', () => {
+      const tabId = 'tab-ch-ac1';
+      initTestTab(tabId);
+      const { result } = renderHook(() =>
+        useChatStreamingLifecycle(createMockDeps()),
+      );
+
+      // Handler created at send time (captures current gen as the live completer).
+      const completeHandler = result.current.createCompleteHandler(tabId);
+      act(() => { result.current.setIsStreaming(true, tabId); });
+      expect(result.current.isStreaming).toBe(true);
+
+      // Mid-stream reconnect/result bumps streamGen — but NO new send happened,
+      // so this handler is still the live completer for the tab's only stream.
+      act(() => { result.current.incrementStreamGen(); });
+
+      act(() => { completeHandler(); });
+
+      // [DONE] is authoritative: streaming must clear despite the gen churn.
+      expect(result.current.isStreaming).toBe(false);
+    });
+
+    it('AC2: stale handler no-ops after a genuinely NEW send supersedes it', () => {
+      const tabId = 'tab-ch-ac2';
+      initTestTab(tabId);
+      const { result } = renderHook(() =>
+        useChatStreamingLifecycle(createMockDeps()),
+      );
+
+      // First turn's handler.
+      const oldHandler = result.current.createCompleteHandler(tabId);
+      act(() => { result.current.setIsStreaming(true, tabId); });
+
+      // A NEW send arrives: it bumps gen THEN creates a new handler (mirrors the
+      // send path: incrementStreamGen() precedes createCompleteHandler()).
+      act(() => { result.current.incrementStreamGen(); });
+      result.current.createCompleteHandler(tabId); // new live completer
+      act(() => { result.current.setIsStreaming(true, tabId); });
+      expect(result.current.isStreaming).toBe(true);
+
+      // The OLD turn's [DONE] arrives late — it must NOT clear the NEW stream.
+      act(() => { oldHandler(); });
+
+      expect(result.current.isStreaming).toBe(true);
+    });
+
+    it('AC4: closed tab (no tabState) → handler no-ops without throwing', () => {
+      const tabId = 'tab-ch-ac4';
+      initTestTab(tabId);
+      const { result } = renderHook(() =>
+        useChatStreamingLifecycle(createMockDeps()),
+      );
+      const completeHandler = result.current.createCompleteHandler(tabId);
+      // Tab closed before [DONE] arrives.
+      testTabMap.delete(tabId);
+
+      expect(() => {
+        act(() => { completeHandler(); });
+      }).not.toThrow();
+    });
   });
 
   describe('createErrorHandler', () => {
@@ -748,7 +821,13 @@ describe('Fix 1: Stream generation counter', () => {
       expect(result.current.isStreaming).toBe(false);
     });
 
-    it('is a no-op when generation has been incremented (stale handler)', () => {
+    it('is a no-op when a NEW send superseded this handler (stale handler)', () => {
+      // run_6adee7d5: "new stream" in production = a new send, which bumps
+      // incrementStreamGen() THEN calls createCompleteHandler() — advancing the
+      // tab's latestCompleteGen. The OLD handler is then stale and must no-op.
+      // (Previously this test bumped gen WITHOUT a new handler; that no longer
+      // models how production supersedes a completer — a bare reconnect gen-bump
+      // must NOT invalidate the turn's own [DONE]. See AC1/AC2.)
       const { result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
@@ -758,20 +837,18 @@ describe('Fix 1: Stream generation counter', () => {
         result.current.setIsStreaming(true);
       });
 
-      // Create complete handler at generation 0
+      // Old turn's complete handler.
       const staleHandler = result.current.createCompleteHandler('tab-1');
 
-      // Simulate new stream starting — increments generation
-      act(() => {
-        result.current.incrementStreamGen();
-      });
+      // A genuinely NEW send: bump gen, THEN create a new handler (mirrors the
+      // ChatPage send path ordering). This advances latestCompleteGen.
+      act(() => { result.current.incrementStreamGen(); });
+      result.current.createCompleteHandler('tab-1'); // new live completer
+      act(() => { result.current.setIsStreaming(true); });
 
-      // Stale handler fires — should be a no-op
-      act(() => {
-        staleHandler();
-      });
+      // Stale handler fires — should be a no-op (does not clear the NEW stream).
+      act(() => { staleHandler(); });
 
-      // isStreaming should still be true (stale handler didn't clear it)
       expect(result.current.isStreaming).toBe(true);
     });
 
@@ -838,15 +915,15 @@ describe('Fix 1: Stream generation counter', () => {
 
       expect(result.current.streamGenRef.current).toBeGreaterThan(genBefore);
 
-      // Now start a new stream (user answers the question)
-      act(() => {
-        result.current.setIsStreaming(true);
-      });
+      // User answers → a NEW send: bump gen THEN create a new completer
+      // (production ordering). This advances latestCompleteGen, superseding the
+      // pre-question handler.
+      act(() => { result.current.incrementStreamGen(); });
+      result.current.createCompleteHandler('tab-1');
+      act(() => { result.current.setIsStreaming(true); });
 
-      // Stale complete handler fires — should be no-op
-      act(() => {
-        completeHandler();
-      });
+      // Stale pre-question complete handler fires — must NOT clear the new stream.
+      act(() => { completeHandler(); });
 
       expect(result.current.isStreaming).toBe(true);
     });
@@ -875,15 +952,14 @@ describe('Fix 1: Stream generation counter', () => {
 
       expect(result.current.streamGenRef.current).toBeGreaterThan(genBefore);
 
-      // Start a new stream
-      act(() => {
-        result.current.setIsStreaming(true);
-      });
+      // A NEW send after the error: bump gen THEN create a new completer
+      // (production ordering) → advances latestCompleteGen, supersedes the old.
+      act(() => { result.current.incrementStreamGen(); });
+      result.current.createCompleteHandler('tab-1');
+      act(() => { result.current.setIsStreaming(true); });
 
-      // Stale complete handler fires — should be no-op
-      act(() => {
-        completeHandler();
-      });
+      // Stale pre-error complete handler fires — must NOT clear the new stream.
+      act(() => { completeHandler(); });
 
       expect(result.current.isStreaming).toBe(true);
     });

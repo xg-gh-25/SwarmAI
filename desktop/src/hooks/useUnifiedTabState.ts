@@ -103,6 +103,14 @@ export interface UnifiedTab {
   readonly isStreaming: boolean;
   abortController: AbortController | null;
   streamGen: number;
+  /** Generation of the LIVE complete-handler for this tab's current turn.
+   *  Set by createCompleteHandler at creation (i.e. at send time, after the
+   *  send path's incrementStreamGen). The [DONE] handler clears streaming iff
+   *  its capturedGen === latestCompleteGen — making it immune to mid-stream
+   *  streamGen churn (reconnect/result/error) while still letting a genuinely
+   *  NEW send supersede the old handler. Fixes the stale-gen early-return that
+   *  left isStreaming pinned true → spinner-hang (run_6adee7d5). */
+  latestCompleteGen?: number;
   status: TabStatus;
   /** Per-tab context warning from backend context monitor (null = no warning). */
   contextWarning: ContextWarning | null;

@@ -3753,6 +3753,19 @@ export function useChatStreamingLifecycle(
     const capturedGen = streamGenRef.current;
     const capturedTabId = tabId ?? activeTabIdRef.current;
 
+    // Mark THIS handler as the live completer for the tab. The send path bumps
+    // incrementStreamGen() BEFORE calling createCompleteHandler (ChatPage send
+    // sites), so a genuinely NEW send always advances latestCompleteGen past an
+    // older handler's capturedGen — that older handler then correctly no-ops.
+    // Mid-stream churn (reconnect/result/error) bumps streamGen but does NOT
+    // create a new handler, so latestCompleteGen stays == capturedGen and this
+    // handler remains authoritative. This is what makes [DONE] survive the
+    // stale-gen guard (run_6adee7d5).
+    if (capturedTabId) {
+      const liveTab = tabMapRef.current.get(capturedTabId);
+      if (liveTab) liveTab.latestCompleteGen = capturedGen;
+    }
+
     return () => {
       // --- Pre-guard drain: rescue orphaned queued messages ---
       // When an SSE-level error event fires without a subsequent
@@ -3778,10 +3791,25 @@ export function useChatStreamingLifecycle(
       // then pins the spinner true forever (confirmed spinner-hang root cause).
       if (capturedTabId) {
         const tabState = tabMapRef.current.get(capturedTabId);
-        // Per-tab gen check: if this tab started a new stream, this handler
-        // is stale. A new stream on a DIFFERENT tab does not invalidate this
-        // tab's completion, so we intentionally do NOT consult the global gen.
-        if (!tabState || tabState.streamGen !== capturedGen) return; // stale or closed tab
+        // Live-completer check (run_6adee7d5): clear streaming iff THIS handler
+        // is still the tab's live completer. We compare against latestCompleteGen
+        // (advanced only by a NEW send), NOT streamGen (churned mid-stream by
+        // reconnect/result/error). The old `streamGen !== capturedGen` check
+        // self-invalidated a turn's own [DONE] after a single reconnect → the
+        // setIsStreaming(false) below was skipped → spinner pinned true, rescued
+        // only by the 30s reconcile force-clear (~109/114 idle force-clears).
+        // Closed tab (no tabState) → no-op, as before.
+        if (!tabState) return; // closed tab
+        const liveGen = tabState.latestCompleteGen ?? capturedGen;
+        if (capturedGen !== liveGen) {
+          // A genuinely newer send superseded this handler — correct no-op.
+          if (import.meta.env.DEV) {
+            console.warn('[StreamComplete] stale handler no-op (superseded by newer send)', {
+              tabId: capturedTabId, capturedGen, liveGen, streamGen: tabState.streamGen,
+            });
+          }
+          return;
+        }
 
         // Clear resume indicator + sessionStorage (not part of streaming flag).
         tabState.isResuming = false;
