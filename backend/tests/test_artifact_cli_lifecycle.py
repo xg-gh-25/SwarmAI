@@ -313,6 +313,90 @@ class TestAutoRecordStage:
         assert "stage_doc_consumed" not in build
 
 
+class TestPublishQuietMode:
+    """--quiet: parse-proof output for orchestrators (run_688b6487 DoD1).
+
+    Success → ONLY {"artifact_id": ...} single line. Schema failure → a SHORT
+    single-line {"validation_failed":true,"errors":[...]} instead of the verbose
+    multi-KB indented schema dump that choked the orchestrator's JSON parse.
+    """
+
+    def _import_cli(self):
+        import sys
+        from pathlib import Path as _P
+        _scripts_dir = str(_P(__file__).resolve().parent.parent / "scripts")
+        if _scripts_dir not in sys.path:
+            sys.path.insert(0, _scripts_dir)
+        import scripts.artifact_cli as cli
+        return cli
+
+    def test_quiet_success_emits_only_artifact_id(self, workspace, capsys, monkeypatch):
+        cli = self._import_cli()
+        from core.artifact_registry import ArtifactRegistry
+        import pipeline_validator
+        _create_run(workspace, "TestProject", "run_q1", "running", stages=[])
+        reg = ArtifactRegistry(workspace)
+        monkeypatch.setattr(pipeline_validator, "validate_artifact_data", lambda *a, **k: [])
+
+        class _Args:
+            project = "TestProject"; type = "research"; producer = "test"
+            summary = "t"; topic = ""; stage = "think"; run_id = "run_q1"
+            data = '{"key_findings":["x"]}'; quiet = True
+
+        cli.cmd_publish(_Args(), reg)
+        out = capsys.readouterr().out.strip()
+        parsed = json.loads(out)  # single line, parseable
+        assert list(parsed.keys()) == ["artifact_id"], parsed
+        assert out.count("\n") == 0
+
+    def test_quiet_schema_failure_is_short_single_line(self, workspace, capsys, monkeypatch):
+        cli = self._import_cli()
+        from core.artifact_registry import ArtifactRegistry
+        import pipeline_validator
+        _create_run(workspace, "TestProject", "run_q2", "running", stages=[])
+        reg = ArtifactRegistry(workspace)
+        # Force a schema failure.
+        monkeypatch.setattr(pipeline_validator, "validate_artifact_data",
+                            lambda *a, **k: ["missing required field 'recommendation'"])
+
+        class _Args:
+            project = "TestProject"; type = "evaluation"; producer = "test"
+            summary = "t"; topic = ""; stage = "evaluate"; run_id = "run_q2"
+            data = '{"missing":"fields"}'; quiet = True
+
+        with pytest.raises(SystemExit):
+            cli.cmd_publish(_Args(), reg)
+        err = capsys.readouterr().err.strip()
+        parsed = json.loads(err)  # short + parseable
+        assert parsed["validation_failed"] is True
+        assert "expected_schema" not in parsed  # the verbose dump is suppressed
+        assert err.count("\n") == 0
+        assert len(err) < 300
+
+    def test_non_quiet_schema_failure_keeps_verbose_schema(self, workspace, capsys, monkeypatch):
+        """Regression guard: WITHOUT --quiet the verbose schema dump is preserved
+        (humans still get the template). Proves --quiet is the discriminator, not
+        a blanket truncation."""
+        cli = self._import_cli()
+        from core.artifact_registry import ArtifactRegistry
+        import pipeline_validator
+        _create_run(workspace, "TestProject", "run_q3", "running", stages=[])
+        reg = ArtifactRegistry(workspace)
+        monkeypatch.setattr(pipeline_validator, "validate_artifact_data",
+                            lambda *a, **k: ["missing required field"])
+
+        class _Args:
+            project = "TestProject"; type = "evaluation"; producer = "test"
+            summary = "t"; topic = ""; stage = "evaluate"; run_id = "run_q3"
+            data = '{"missing":"fields"}'; quiet = False
+
+        with pytest.raises(SystemExit):
+            cli.cmd_publish(_Args(), reg)
+        err = capsys.readouterr().err
+        parsed = json.loads(err)
+        assert "expected_schema" in parsed  # verbose template retained for humans
+
+
 class TestAutoAggregateDelivery:
     """Regression: the completion-time auto-aggregate of the delivery artifact
     must call reg.publish() with VALID kwargs. A prior bug passed stage="deliver"

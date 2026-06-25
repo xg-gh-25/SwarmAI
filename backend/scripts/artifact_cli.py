@@ -182,13 +182,23 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
             pass  # Default to "full" if can't determine profile
         errors = validate_artifact_data(stage, data, profile=_pub_profile)
         if errors:
-            schema_info = get_stage_schema(stage)
-            print(json.dumps({
-                "validation_failed": True,
-                "stage": stage,
-                "errors": errors,
-                "expected_schema": schema_info.get("template", {}),
-            }, indent=2), file=sys.stderr)
+            if getattr(args, "quiet", False):
+                # Quiet mode: a SHORT single-line failure (no verbose schema
+                # dump). Orchestrators parse this without choking on a multi-KB
+                # indented template; re-run without --quiet to see the schema.
+                print(json.dumps({
+                    "validation_failed": True,
+                    "stage": stage,
+                    "errors": errors,
+                }), file=sys.stderr)
+            else:
+                schema_info = get_stage_schema(stage)
+                print(json.dumps({
+                    "validation_failed": True,
+                    "stage": stage,
+                    "errors": errors,
+                    "expected_schema": schema_info.get("template", {}),
+                }, indent=2), file=sys.stderr)
             sys.exit(1)
 
     # ── Pollinate delivery gate: mechanical validation ────────────────────
@@ -289,7 +299,13 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
                     "detail": str(e),
                 }), file=sys.stderr)
 
-        print(json.dumps(result))
+        if getattr(args, "quiet", False):
+            # Parse-proof success: ONLY the artifact_id, single line. The
+            # auto-record into run.json still happened above (side effect); the
+            # orchestrator just doesn't need project/run_id/auto_recorded echoed.
+            print(json.dumps({"artifact_id": artifact_id}))
+        else:
+            print(json.dumps(result))
     except (ValueError, FileNotFoundError) as e:
         print(json.dumps({"error": str(e)}), file=sys.stderr)
         sys.exit(1)
@@ -3109,6 +3125,11 @@ def main() -> None:
     p_publish.add_argument("--topic", default="")
     p_publish.add_argument("--run-id", default=None, help="Pipeline run ID (stores in runs/<id>/ subdir)")
     p_publish.add_argument("--stage", default=None, help="Pipeline stage for schema validation (validates BEFORE publishing)")
+    p_publish.add_argument("--quiet", action="store_true",
+                           help="Emit ONLY a single-line {\"artifact_id\": ...} on success "
+                                "(parse-proof for orchestrators); on validation failure emit a "
+                                "SHORT single-line {\"validation_failed\":true,\"errors\":[...]} "
+                                "instead of the verbose indented schema dump.")
 
     # state
     p_state = sub.add_parser("state", help="Get pipeline state")
