@@ -163,6 +163,33 @@ describe('SessionTabBar', () => {
     });
   });
 
+  describe('active tab visual distinction', () => {
+    it('active tab carries the accent bottom-border class', () => {
+      render(<SessionTabBar {...defaultProps} activeTabId="tab-1" />);
+      const tabs = screen.getAllByRole('tab');
+      expect(tabs[1].className).toContain('border-[var(--color-primary)]');
+    });
+
+    it('inactive tabs carry a transparent border placeholder (no layout shift)', () => {
+      render(<SessionTabBar {...defaultProps} activeTabId="tab-1" />);
+      const tabs = screen.getAllByRole('tab');
+      expect(tabs[0].className).toContain('border-transparent');
+      expect(tabs[2].className).toContain('border-transparent');
+    });
+
+    it('all tabs reserve border height via border-b-2 (active and inactive)', () => {
+      render(<SessionTabBar {...defaultProps} activeTabId="tab-1" />);
+      const tabs = screen.getAllByRole('tab');
+      tabs.forEach((t) => expect(t.className).toContain('border-b-2'));
+    });
+
+    it('active tab uses the brighter hover-level background (fixes hover>selected inversion)', () => {
+      render(<SessionTabBar {...defaultProps} activeTabId="tab-1" />);
+      const tabs = screen.getAllByRole('tab');
+      expect(tabs[1].className).toContain('bg-[var(--color-hover)]');
+    });
+  });
+
   describe('single tab behavior', () => {
     it('handles keyboard navigation with single tab', () => {
       const singleTab = createMockTabs(1);
