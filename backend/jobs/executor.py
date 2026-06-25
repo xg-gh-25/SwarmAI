@@ -232,6 +232,21 @@ def execute_job(
                 duration_seconds=duration,
             )
 
+        elif job.type == "session_health_probe":
+            from .handlers.session_health_probe import run_session_health_probe
+            probe_result = run_session_health_probe(
+                expected_commit=job.config.get("expected_commit") if job.config else None,
+            )
+            duration = (datetime.now(timezone.utc) - start).total_seconds()
+            p_status = probe_result.get("probe_status", "unknown")
+            result = JobResult(
+                job_id=job.id, timestamp=datetime.now(timezone.utc),
+                # healthy → success; degraded → failed (surfaces red in job dashboard)
+                status="success" if p_status == "healthy" else "failed",
+                summary=probe_result.get("summary", "runtime health probe"),
+                duration_seconds=duration,
+            )
+
         elif job.type == "skill_proposer":
             from .handlers.skill_proposer import run_skill_proposer
             skill_result = run_skill_proposer()

@@ -323,6 +323,58 @@ def eval_canary_pass(case: dict, root: Path, *, timeout_override: int | None = N
         return {"status": "failed", "notes": f"Error: {str(e)[:200]}"}
 
 
+def eval_runtime_health(case: dict, root: Path, *, timeout_override: int | None = None) -> dict:
+    """Runtime-health evaluator (run_f646b175).
+
+    A first-class, NAMED eval category for runtime/recovery contracts — so daemon
+    + session liveness and the self-healing recovery paths are VISIBLE in the eval
+    output, not buried as a generic canary_pass. Like canary_pass it runs a
+    deterministic command and checks the result, but its semantics are
+    fault-injection regression: the command ACTIVELY triggers a fault on an
+    ISOLATED/mocked subprocess and asserts the recovery path EXECUTES (STEERING #11
+    — a passive "no zombie happened" observation proves nothing). Exit 0 +
+    expected_contains = recovery path ran and recovered.
+
+    verification:
+        command: a fault-injection harness (e.g. fault_inject_recovery.py)
+        expected_contains: marker the harness prints ONLY when recovery executed
+    """
+    verification = case.get("verification", {})
+    command = verification.get("command", "")
+    expected = verification.get("expected_contains", "")
+
+    if not command:
+        return {"status": "error", "notes": "runtime_health case has no verification.command"}
+
+    safety_error = _validate_canary_command(command)
+    if safety_error:
+        return {"status": "error", "notes": safety_error}
+
+    cmd_timeout = min(30, timeout_override) if timeout_override else 30
+
+    try:
+        repo_root = _find_swarmai_repo()
+        result = subprocess.run(
+            command, shell=True, capture_output=True, text=True,
+            timeout=cmd_timeout, cwd=str(repo_root)
+        )
+        output = result.stdout + result.stderr
+        # Recovery contract: exit 0 AND the recovery-executed marker present.
+        if result.returncode == 0 and (not expected or expected in output):
+            return {"status": "passed",
+                    "notes": f"recovery path executed; '{expected}' confirmed" if expected
+                             else "runtime health probe exited 0"}
+        return {
+            "status": "failed",
+            "notes": (f"recovery NOT confirmed (exit {result.returncode}); "
+                      f"expected '{expected}'. Output: {output[:200]}")
+        }
+    except subprocess.TimeoutExpired:
+        return {"status": "failed", "notes": f"runtime_health command timed out ({cmd_timeout}s)"}
+    except Exception as e:
+        return {"status": "error", "notes": f"runtime_health error: {str(e)[:200]}"}
+
+
 def eval_file_contains(case: dict, root: Path) -> dict:
     """Check if a file contains expected content.
 
@@ -745,7 +797,8 @@ Respond in this exact JSON format:
 # ─── Case Dispatch ────────────────────────────────────────────────────────────
 
 PROGRAMMATIC_EVALUATORS = {"canary_pass", "file_contains", "keyword_match",
-                           "trajectory_exact", "trajectory_in_order", "trajectory_any_order"}
+                           "trajectory_exact", "trajectory_in_order", "trajectory_any_order",
+                           "runtime_health"}
 LLM_EVALUATORS = {"goal_success", "quality_score"}
 # Behavior evaluators spawn a real headless agent (see eval_trajectory_capture).
 # Dispatched inline at the evaluate_case switch; named here so callers/tests can
@@ -1060,6 +1113,13 @@ def evaluate_case(case: dict, root: Path, *,
             result = eval_canary_pass(case, root, timeout_override=canary_timeout)
             if result["status"] != "skipped":
                 result["evaluator"] = "canary_pass"
+                result["duration_ms"] = int((time.time() - start) * 1000)
+                return result
+
+        elif ev == "runtime_health":
+            result = eval_runtime_health(case, root, timeout_override=canary_timeout)
+            if result["status"] != "skipped":
+                result["evaluator"] = "runtime_health"
                 result["duration_ms"] = int((time.time() - start) * 1000)
                 return result
 

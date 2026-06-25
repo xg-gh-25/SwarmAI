@@ -1,0 +1,6 @@
+name: session-health-probe
+scripts:
+  - name: session_health_probe
+    path: ../../jobs/handlers/session_health_probe.py
+    description: "Zero-LLM runtime probe: daemon/health + session liveness (RP41 double-signal) + RSS + unrecovered-events"
+    entry_point: run_session_health_probe

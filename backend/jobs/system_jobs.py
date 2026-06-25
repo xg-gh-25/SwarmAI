@@ -108,6 +108,21 @@ SYSTEM_JOBS: list[Job] = [
         config={},
     ),
 
+    # --- Runtime Session-Health Probe (zero-LLM daemon+session liveness) ---
+    # Distinct axis from loops-health (static self-cognition): this is the
+    # DYNAMIC runtime snapshot — daemon up, sessions progressing (not wedged,
+    # RP41 double-signal), RSS under budget, no unrecovered failure events.
+    # Red → Slack. (run_f646b175)
+    Job(
+        id="session-health-probe",
+        name="Runtime Session-Health Probe",
+        type="session_health_probe",
+        schedule="*/15 * * * *",       # every 15 minutes
+        enabled=True,
+        category="system",
+        config={},
+    ),
+
     # --- DDD Auto-Refresh (detect stale project docs, generate proposals) ---
     Job(
         id="ddd-refresh",

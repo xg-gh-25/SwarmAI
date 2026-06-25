@@ -1,0 +1,138 @@
+"""Job handler for the runtime session-health probe (run_f646b175).
+
+Wires the real runtime fetchers (localhost daemon /health + /sessions/streaming-state,
+resource_monitor RSS, tree_cpu_seconds, daemon log tail) into the pure-logic
+``core.session_health_probe.session_health_probe`` and, on a RED result, sends a
+Slack notification via s_notify.
+
+Scheduled every ~15 min (system_jobs.py). Zero-LLM, deterministic.
+"""
+from __future__ import annotations
+
+import logging
+import os
+import urllib.request
+from pathlib import Path
+from typing import Callable, Optional
+
+logger = logging.getLogger(__name__)
+
+_DAEMON_BASE = os.environ.get("SWARMAI_HEALTH_BASE", "http://127.0.0.1:18321")
+_LOG_PATH = Path.home() / ".swarm-ai" / "logs" / "daemon.log"
+_LOG_TAIL_BYTES = 200_000  # ~last 200KB window
+
+
+def _http_json(path: str, timeout: float = 4.0) -> dict:
+    with urllib.request.urlopen(f"{_DAEMON_BASE}{path}", timeout=timeout) as r:
+        import json
+        return json.loads(r.read().decode("utf-8"))
+
+
+def _fetch_health() -> dict:
+    return _http_json("/health")
+
+
+def _fetch_streaming() -> list[dict]:
+    data = _http_json("/api/chat/sessions/streaming-state")
+    # endpoint returns {"sessions": [...]} or a list; normalize.
+    if isinstance(data, dict):
+        return data.get("sessions", [])
+    return data if isinstance(data, list) else []
+
+
+def _fetch_rss() -> float:
+    from core.resource_monitor import resource_monitor
+    mem = resource_monitor.get_system_memory()
+    # Total RSS of the swarmai process tree if available, else system used.
+    return float(getattr(mem, "process_rss_mb", 0.0) or getattr(mem, "used_mb", 0.0))
+
+
+def _cpu_sampler(pid: int) -> Optional[float]:
+    from core.resource_monitor import resource_monitor
+    return resource_monitor.tree_cpu_seconds(pid)
+
+
+def _read_log() -> str:
+    try:
+        if not _LOG_PATH.exists():
+            return ""
+        size = _LOG_PATH.stat().st_size
+        with open(_LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
+            if size > _LOG_TAIL_BYTES:
+                f.seek(size - _LOG_TAIL_BYTES)
+            return f.read()
+    except Exception:
+        return ""  # fail-safe: unreadable log → probe treats as no-progress-unknown
+
+
+def _deployed_commit() -> Optional[str]:
+    try:
+        vp = Path.home() / ".swarm-ai" / "daemon" / ".version"
+        if vp.exists():
+            return vp.read_text(encoding="utf-8").strip()
+    except Exception:
+        pass
+    return None
+
+
+def run_session_health_probe(
+    dry_run: bool = False,
+    *,
+    expected_commit: Optional[str] = None,
+    notifier: Optional[Callable[..., dict]] = None,
+    probe_fn: Optional[Callable[..., object]] = None,
+) -> dict:
+    """Run the runtime probe; on RED, notify Slack. Returns a JobResult dict.
+
+    Args:
+        dry_run: if True, never send a notification (still returns the result).
+        expected_commit: if set, the probe checks deployed==expected.
+        notifier: injected send fn (test seam); defaults to s_notify.
+        probe_fn: injected probe (test seam); defaults to the real probe wired
+            to the live daemon fetchers.
+    """
+    from core.session_health_probe import session_health_probe
+
+    probe = probe_fn or session_health_probe
+    try:
+        result = probe(
+            health_fetcher=_fetch_health,
+            streaming_fetcher=_fetch_streaming,
+            rss_fetcher=_fetch_rss,
+            cpu_sampler=_cpu_sampler,
+            log_reader=_read_log,
+            expected_commit=expected_commit,
+            deployed_commit_fetcher=_deployed_commit if expected_commit else None,
+        ) if probe_fn is None else probe()
+    except Exception as e:
+        logger.error("session-health probe crashed: %s", e)
+        return {"status": "error", "reason": f"probe crashed: {type(e).__name__}: {e}"}
+
+    checks = [{"name": c.name, "ok": c.ok, "detail": c.detail} for c in result.checks]
+    failed = [c for c in checks if not c["ok"]]
+
+    if result.red and not dry_run:
+        send = notifier or _default_notifier
+        title = "🔴 SwarmAI runtime health DEGRADED"
+        msg = result.summary + "\n" + "\n".join(
+            f"- {c['name']}: {c['detail']}" for c in failed
+        )
+        try:
+            send(message=msg, title=title, channels=["slack"])
+        except Exception as e:
+            logger.error("session-health notify failed: %s", e)
+
+    return {
+        "status": "skipped" if dry_run and result.red else (
+            "degraded" if result.red else "healthy"),
+        "probe_status": result.status,
+        "summary": result.summary,
+        "checks": checks,
+        "failed": [c["name"] for c in failed],
+        "notified": bool(result.red and not dry_run),
+    }
+
+
+def _default_notifier(**kwargs) -> dict:
+    from skills.s_notify.notify import send_notification
+    return send_notification(**kwargs)
