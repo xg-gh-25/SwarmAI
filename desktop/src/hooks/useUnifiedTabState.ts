@@ -159,6 +159,12 @@ export interface UnifiedTab {
   /** Reconciliation race guard: set ONLY by setIsStreaming(true). Never touched by
    *  elapsed-timer effects or selectTab. Used by reconcile loop to skip fresh streams. */
   _reconcileStreamStart?: number;
+  /** Timestamp of the most recent setIsStreaming(false) (any clear: user Stop,
+   *  turn end, force-clear). Flap-guard for the reconcile loop's idle→streaming
+   *  re-arm: the loop must NOT re-arm the spinner within the settle window after
+   *  a clear, or the ~5s gap between a user Stop (frontend idle) and the backend
+   *  transitioning STREAMING→IDLE would let a poll re-light a just-stopped tab. */
+  _streamClearedAt?: number;
   /** Reconcile-OWNED backstop clock. Stamped by the 15s reconcile poll the FIRST
    *  time it observes the stuck condition (frontend=streaming + backend NOT
    *  streaming + NOT an active backend state). Reset to undefined by the same poll

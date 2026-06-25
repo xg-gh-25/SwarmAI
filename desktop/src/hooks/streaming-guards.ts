@@ -239,3 +239,65 @@ export function computeDrainRetirement(input: DrainRetirementInput): DrainRetire
   const resetToEmpty = priorDrainedSeqs.length > 0 && currentDrainedSeqs.length === 0;
   return { retire: additive || resetToEmpty, serverPendingCount };
 }
+
+
+// ── Symmetric reconcile: backend-streaming → arm the spinner ──────────────────
+
+/** Inputs to the idle→streaming re-arm decision (reconcile loop). */
+export interface ArmSpinnerInput {
+  /** Backend mirror reports state === 'streaming' for this tab's session. */
+  backendStreaming: boolean;
+  /** The tab currently shows a spinner (isStreaming flag). */
+  tabIsStreaming: boolean;
+  /** The tab has a backend session id to mirror. */
+  hasSessionId: boolean;
+  /** Tab is in post-disconnect recovery (owns its own reconcile path). */
+  postDisconnectUncertain: boolean;
+  /** Tab is in SESSION_BUSY polling (busy-poll owns its display). */
+  isWaitingForBusy: boolean;
+  /** Tab has a queued/optimistic message (queue/drain owns its display). */
+  hasQueuedMessage: boolean;
+  /** Timestamp of the last setIsStreaming(false), or undefined if never. */
+  streamClearedAt: number | undefined;
+  /** Current time (injected for deterministic tests). */
+  now: number;
+  /** Settle window after a clear during which a re-arm is suppressed (ms). */
+  settleMs?: number;
+}
+
+/**
+ * Decide whether the reconcile loop should turn the spinner ON for a tab whose
+ * frontend shows idle while the backend mirror reports it is actively streaming.
+ *
+ * This is the SYMMETRIC partner of the force-clear path (which turns a stuck
+ * spinner OFF when the backend is idle). It fixes "response renders but no
+ * spinner" after a restart — restored tabs init isStreaming=false while their
+ * backend session resume-streams, and no SSE session_start arrives to set it.
+ *
+ * Arm ONLY when ALL hold:
+ *  - backend is genuinely streaming (authoritative)
+ *  - the tab is NOT already showing a spinner (no-op otherwise)
+ *  - the tab has a session id to mirror
+ *  - the tab is not in a path that owns its own display (post-disconnect,
+ *    busy-poll, queued/drain) — those must not be overridden
+ *  - the flap-guard window has elapsed since the last clear, so a user Stop
+ *    (frontend idle) is not re-lit during the ~5s before the backend goes IDLE
+ *
+ * Safe by construction: if a re-arm is ever wrong, the backend will report idle
+ * and the force-clear path turns the spinner back off — never a permanent hang.
+ */
+export function shouldArmSpinnerFromBackend(input: ArmSpinnerInput): boolean {
+  const {
+    backendStreaming, tabIsStreaming, hasSessionId,
+    postDisconnectUncertain, isWaitingForBusy, hasQueuedMessage,
+    streamClearedAt, now, settleMs = 12_000,
+  } = input;
+  if (!backendStreaming) return false;
+  if (tabIsStreaming) return false;       // already showing — no-op
+  if (!hasSessionId) return false;
+  if (postDisconnectUncertain) return false;
+  if (isWaitingForBusy) return false;
+  if (hasQueuedMessage) return false;
+  if (now - (streamClearedAt ?? 0) <= settleMs) return false; // flap-guard
+  return true;
+}

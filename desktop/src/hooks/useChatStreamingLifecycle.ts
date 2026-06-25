@@ -48,7 +48,7 @@ import type {
   CompactionGuardEvent,
 } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
-import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurfaceQuestion, computeDrainRetirement } from './streaming-guards';
+import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurfaceQuestion, computeDrainRetirement, shouldArmSpinnerFromBackend } from './streaming-guards';
 import { chatService } from '../services/chat';
 import { messageStoreRegistry } from '../stores/MessageStore';
 import type { UnifiedTab } from './useUnifiedTabState';
@@ -1368,6 +1368,38 @@ export function useChatStreamingLifecycle(
             }
           }
 
+          // ── Symmetric re-arm: backend streaming but tab shows idle ─────────
+          // The mirror is authoritative BOTH ways. The force-clear below handles
+          // frontend=streaming + backend=idle (the stuck-spinner case). This
+          // handles the OPPOSITE: backend IS streaming but the tab shows no
+          // spinner — which happens after a RESTART (restored tabs init
+          // isStreaming=false while their backend session resume-streams) or a
+          // lost session_start SSE. Without this the response renders (via the DB
+          // reconcile above) with NO spinner. Self-healing: once the backend goes
+          // idle the force-clear branch turns it back off, so a wrong re-arm can
+          // never become a permanent hang.
+          if (
+            shouldArmSpinnerFromBackend({
+              backendStreaming: mirrorState?.streaming === true,
+              tabIsStreaming: tabState.isStreaming,
+              hasSessionId: !!mirrorSid,
+              postDisconnectUncertain: !!tabState._postDisconnectUncertain,
+              isWaitingForBusy: !!tabState.isWaitingForBusy,
+              hasQueuedMessage: !!tabState.queuedMessage,
+              streamClearedAt: tabState._streamClearedAt,
+              now: Date.now(),
+            })
+          ) {
+            console.warn(
+              '[StreamReconcile] Backend streaming but tab idle — arming spinner',
+              { tabId, sessionId: mirrorSid },
+            );
+            // Atomic primitive (flag + Set + re-render + state machine).
+            // NEVER mutate tabState.isStreaming directly.
+            setIsStreaming(true, tabId);
+            continue;  // re-armed — nothing else to reconcile for this tab this tick
+          }
+
           if (!tabState.isStreaming) continue;  // only check streaming tabs
 
           // DRAIN/QUEUE IMMUNITY: never force-clear a tab that has a pending
@@ -1603,6 +1635,10 @@ export function useChatStreamingLifecycle(
             }
           } else {
             tabState.streamStartTime = undefined;
+            // Flap-guard stamp: the reconcile loop's idle→streaming re-arm skips
+            // a tab cleared within the settle window, so a Stop (frontend idle)
+            // is not re-lit during the ~5s before the backend transitions to IDLE.
+            tabState._streamClearedAt = Date.now();
           }
         }
       }
