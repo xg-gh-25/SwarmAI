@@ -232,6 +232,23 @@ export interface UnifiedTab {
    *  The backend-recovered handler retries the DB reconcile for flagged tabs. */
   _dbReconcileFailed?: boolean;
 
+  /** Set when a CONNECTION-PHASE send exhausted all reconnect attempts while the
+   *  backend was unreachable (e.g. a daemon redeploy ~60s outage >> the ~7s
+   *  connection-phase reconnect budget). The question never reached the backend,
+   *  so mergeTabFromDb has nothing to recover. The backend-recovered handler
+   *  auto-resends via retryStreamFn so the user's question isn't silently
+   *  swallowed. Connection-phase ONLY — never armed for mid-stream failures
+   *  (those may have persisted partial work; resending would double-answer). */
+  _pendingResendOnRecovery?: boolean;
+  /** The assistant placeholder id of the swallowed turn. On auto-resend the
+   *  placeholder's error content is stripped so the fresh response lands in a
+   *  clean bubble (retryStreamFn reuses this same id). */
+  _pendingResendAssistantId?: string;
+  /** Number of auto-resends performed for the current swallowed-question episode.
+   *  Capped (RESEND_MAX_ATTEMPTS) so a flapping backend can't drive a resend loop.
+   *  Reset on the next manual send. */
+  _pendingResendAttempts?: number;
+
   // ── Per-tab Streaming State Machine (P5) ──────────────────────────
   /** Explicit state machine tracking this tab's streaming mode.
    *  Authoritative for mode queries (streamState.mode === 'streaming').

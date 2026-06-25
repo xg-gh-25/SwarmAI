@@ -62,6 +62,12 @@ import { useToast } from '../contexts/ToastContext';
 /** Maximum number of automatic reconnection attempts for connection-phase failures. */
 const RECONNECT_MAX_ATTEMPTS = 3;
 
+/** Maximum number of auto-resends on backend-recovered for a single swallowed-question
+ *  episode. The ~7s connection-phase reconnect budget can't ride out a ~60s daemon
+ *  redeploy, so the exhausted send is re-sent when health flips back. Capped so a
+ *  flapping backend (up/down/up) can't drive an unbounded resend loop. */
+const RESEND_MAX_ATTEMPTS = 2;
+
 /** Base delay in ms for exponential backoff (attempt 0 → 1000ms). */
 const RECONNECT_BASE_DELAY_MS = 1000;
 
@@ -3498,6 +3504,26 @@ export function useChatStreamingLifecycle(
           }
         }
 
+        // ── AUTO-RESEND ARMING (swallowed-question fix) ───────────────────
+        // CONNECTION-PHASE failure means the question never produced any data —
+        // very likely it never reached the backend (e.g. daemon redeploy ~60s
+        // outage >> the ~7s reconnect budget). Arm a one-shot auto-resend that
+        // the backend-recovered handler fires once health flips back, so the
+        // user's question isn't silently swallowed. Gated to connection-phase
+        // ONLY (never mid-stream — that may have persisted partial work, and
+        // mergeTabFromDb recovers it; resending would double-answer). Bounded by
+        // RESEND_MAX_ATTEMPTS so a flapping backend can't loop. Never for a
+        // user-stopped stream.
+        const canArmResend =
+          !hadData &&
+          !!tabState?.retryStreamFn &&
+          !tabState?.userStopped &&
+          (tabState?._pendingResendAttempts ?? 0) < RESEND_MAX_ATTEMPTS;
+        if (tabState && canArmResend) {
+          tabState._pendingResendOnRecovery = true;
+          tabState._pendingResendAssistantId = assistantMessageId;
+        }
+
         // NOTE (2026-06-21, zombie-poison fix): do NOT POST /stop here.
         // This was a stale "Gap 2 fix" that explicitly stopped the backend
         // session on mid-stream disconnect. But /stop → interrupt_session →
@@ -3522,8 +3548,14 @@ export function useChatStreamingLifecycle(
         // The original code suppressed error.message entirely — that made debugging
         // impossible and showed a blank-looking generic message.
         const realError = error.message || 'Unknown connection error';
+        // If an auto-resend is armed, tell the user it will retry itself when the
+        // backend returns (and leave the placeholder so it's visible meanwhile).
+        // If the backend never comes back, this message stays as the fallback.
+        const willAutoResend = tabState?._pendingResendOnRecovery === true;
         const errorContent: ContentBlock[] = [
-          { type: 'text' as const, text: `⚠️ Connection interrupted: ${realError}\n\n💡 Your conversation is saved — send your message again to continue.` },
+          { type: 'text' as const, text: willAutoResend
+              ? `⏳ Backend unreachable — your message will be re-sent automatically as soon as it's back. (${realError})`
+              : `⚠️ Connection interrupted: ${realError}\n\n💡 Your conversation is saved — send your message again to continue.` },
         ];
 
         // Same pattern as createStreamHandler error path: APPEND error

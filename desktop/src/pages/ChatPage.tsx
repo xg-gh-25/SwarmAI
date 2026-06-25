@@ -483,6 +483,70 @@ export default function ChatPage() {
     }
   }, [tabMapRef, activeTabIdRef, setMessages]);
 
+  // Auto-resend a swallowed question (option A): a CONNECTION-PHASE send that
+  // exhausted its ~7s reconnect budget while the backend was down (e.g. a ~60s
+  // daemon redeploy) is flagged with _pendingResendOnRecovery by the streaming
+  // error handler. When health flips back, re-issue the SAME stream via the tab's
+  // stored retryStreamFn so the question isn't silently lost. Returns true if a
+  // resend was started (caller then SKIPS mergeTabFromDb for this tab — the merge
+  // would only re-surface DB content, which has no response for a question that
+  // never reached the backend). Tab-scoped per isolation Principles 1/3/4/8:
+  // retryStreamFn re-resolves the tab's OWN sessionId and reuses the same
+  // assistant placeholder id.
+  const resendTabOnRecovery = useCallback((tabId: string): boolean => {
+    const tab = tabMapRef.current.get(tabId);
+    if (!tab || !tab._pendingResendOnRecovery || !tab.retryStreamFn || tab.isStreaming) {
+      return false;
+    }
+    // Clear the flag + bump the attempt count ATOMICALLY before resending so a
+    // duplicate 'backend-recovered' event can't double-fire the same resend.
+    tab._pendingResendOnRecovery = false;
+    tab._pendingResendAttempts = (tab._pendingResendAttempts ?? 0) + 1;
+    const asstId = tab._pendingResendAssistantId;
+    tab._pendingResendAssistantId = undefined;
+
+    // Strip the error placeholder so the fresh response lands in a clean bubble
+    // (retryStreamFn writes streamed tokens to this same assistant id). The store
+    // is idle here (onError called endStreaming), so replace() applies immediately.
+    if (asstId) {
+      const store = messageStoreRegistry.get(tabId);
+      if (store) {
+        const cleaned = store.messages.map((m) =>
+          m.id === asstId ? { ...m, content: [], isError: false } : m,
+        );
+        store.replace(cleaned);
+        tab.messages = store.messages;
+        if (tabId === activeTabIdRef.current) setMessages(store.messages);
+      }
+    }
+
+    // Fresh attempt — reset reconnection bookkeeping so the new stream's error
+    // handler treats it as connection-phase again.
+    tab.reconnectionAttempt = 0;
+    tab.isReconnecting = false;
+    tab.hasReceivedData = false;
+
+    // Mark THIS tab streaming (explicit tabId per Principle 1) and re-initiate.
+    setIsStreaming(true, tabId);
+    updateTabStatus(tabId, 'streaming');
+    try {
+      const newAbort = tab.retryStreamFn();
+      tab.abortController = {
+        abort: () => { newAbort(); },
+        signal: { aborted: false },
+      } as unknown as AbortController;
+      console.log(
+        `[ChatPage] Backend recovered — auto-resent swallowed question for tab ${tabId} (attempt ${tab._pendingResendAttempts}/${2})`,
+      );
+      return true;
+    } catch (err) {
+      console.warn(`[ChatPage] Auto-resend failed for tab ${tabId}:`, err);
+      setIsStreaming(false, tabId);
+      updateTabStatus(tabId, 'error');
+      return false;
+    }
+  }, [tabMapRef, activeTabIdRef, setMessages, setIsStreaming, updateTabStatus]);
+
   // Backend recovery: when health transitions disconnected → connected,
   // useHealthMonitor dispatches 'swarm:backend-recovered'. We clear
   // any error state on the active tab and re-sync messages (the last
@@ -495,28 +559,36 @@ export default function ChatPage() {
       if (!tabState) return;
       tabState.reconnectionAttempt = 0;
       tabState.isReconnecting = false;
-      // CONTENT RECONCILE (root-cause fix): on reconnect, the backend may have
-      // produced & persisted responses while the SSE stream was detached (it
-      // keeps running post-disconnect). Previously we SKIPPED refetch whenever a
-      // tab had any in-memory messages → those responses were stuck in the DB and
-      // never displayed ("前端好多没 response"). Now:
-      //   - empty tab → full load (loadSessionMessages)
-      //   - non-empty, non-streaming tab → safe MERGE (mergeTabFromDb / _applyMerge)
-      // The merge is boundary-aware, so it does NOT re-surface scrolled-past
-      // prior-session history (the bug the old gate guarded against).
-      if (tabState.sessionId && !tabState.isStreaming) {
-        if (!tabState.messages || tabState.messages.length === 0) {
-          loadSessionMessages(tabState.sessionId);
-          console.log(`[ChatPage] Backend recovered — active tab ${activeId}, full load (empty state)`);
-        } else {
-          mergeTabFromDb(activeId);
-          console.log(`[ChatPage] Backend recovered — active tab ${activeId}, content reconcile (merge)`);
+      // AUTO-RESEND (option A) takes precedence over merge: if this tab's
+      // connection-phase send was swallowed during the outage, re-issue it.
+      // mergeTabFromDb would only surface DB content, which has no response for
+      // a question that never reached the backend.
+      if (!resendTabOnRecovery(activeId)) {
+        // CONTENT RECONCILE (root-cause fix): on reconnect, the backend may have
+        // produced & persisted responses while the SSE stream was detached (it
+        // keeps running post-disconnect). Previously we SKIPPED refetch whenever a
+        // tab had any in-memory messages → those responses were stuck in the DB and
+        // never displayed ("前端好多没 response"). Now:
+        //   - empty tab → full load (loadSessionMessages)
+        //   - non-empty, non-streaming tab → safe MERGE (mergeTabFromDb / _applyMerge)
+        // The merge is boundary-aware, so it does NOT re-surface scrolled-past
+        // prior-session history (the bug the old gate guarded against).
+        if (tabState.sessionId && !tabState.isStreaming) {
+          if (!tabState.messages || tabState.messages.length === 0) {
+            loadSessionMessages(tabState.sessionId);
+            console.log(`[ChatPage] Backend recovered — active tab ${activeId}, full load (empty state)`);
+          } else {
+            mergeTabFromDb(activeId);
+            console.log(`[ChatPage] Backend recovered — active tab ${activeId}, content reconcile (merge)`);
+          }
         }
       }
       // Reconcile EVERY other non-streaming tab from DB too — background tabs also
       // lose responses during a disconnect window.
       for (const [tabId, ts] of tabMapRef.current.entries()) {
         if (tabId === activeId) continue; // handled above
+        // Background tab with a swallowed question → resend first.
+        if (resendTabOnRecovery(tabId)) continue;
         if (!ts.sessionId || ts.isStreaming) continue;
         if (ts._dbReconcileFailed) {
           // Frozen-PARTIAL tab whose earlier force-clear fetch failed: use the
@@ -530,7 +602,7 @@ export default function ChatPage() {
     };
     window.addEventListener('swarm:backend-recovered', handleBackendRecovered);
     return () => window.removeEventListener('swarm:backend-recovered', handleBackendRecovered);
-  }, [loadSessionMessages, reconcileTabFromDb, mergeTabFromDb]);
+  }, [loadSessionMessages, reconcileTabFromDb, mergeTabFromDb, resendTabOnRecovery]);
 
   // Load older messages for infinite scroll (paginated)
   const loadOlderMessages = useCallback(async () => {
@@ -1816,6 +1888,12 @@ export default function ChatPage() {
         isReconnecting: false,
         reconnectionAttempt: 0,
         retryStreamFn,
+        // A manual send supersedes any armed auto-resend for this tab: clear the
+        // flag (so a late 'backend-recovered' can't double-send) and reset the
+        // episode attempt counter.
+        _pendingResendOnRecovery: false,
+        _pendingResendAssistantId: undefined,
+        _pendingResendAttempts: 0,
       });
     }
   }, [selectedAgentId, enableSkills, enableMCP, handlePluginCommand, buildContentArray, clearAttachments, resetUserScroll, incrementStreamGen, setIsStreaming, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, createDisconnectHandler, activeTabIdRef, tabMapRef, pendingStreamTabs, queryClient, t]);
