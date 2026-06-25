@@ -704,9 +704,9 @@ _RESUME_COOLDOWN_SECONDS = [30, 60, 120]
 _ACTIVE_RUN_THRESHOLD_SECONDS = 90
 
 
-def _newest_completed_updated_at(runs_dir: Path) -> float:
-    """Return the max updated_at (epoch seconds) across all COMPLETED runs in a
-    project's runs dir, or 0.0 if none. Pure read — no mutation.
+def _newest_completed_run(runs_dir: Path) -> "tuple[float, str | None]":
+    """Return (max_updated_at_epoch, run_id) across all COMPLETED runs in a
+    project's runs dir, or (0.0, None) if none. ONE pass — pure read, no mutation.
 
     Used as a recency-based supersede signal: a paused run older than the newest
     completed run in the SAME project is superseded (its work was finished by a
@@ -714,42 +714,16 @@ def _newest_completed_updated_at(runs_dir: Path) -> float:
     false-matches genuinely-different runs that share boilerplate words
     ("Fix session_unit.py crash" vs "...timeout"), which would destructively
     archive live work (Gate-1 finding, run_0c8e007a).
+
+    Computed ONCE per project (not per run) to keep the gauge's no-op path O(runs)
+    not O(runs²) — the gauge already iterates every run once; this is one extra
+    pass, and the id is returned alongside the ts so the supersede marker needs
+    no second scan (RP30: 208 runs in SwarmAI — a per-run rescan would be O(n²)).
     """
     from datetime import datetime, timezone
-    newest = 0.0
+    newest_ts, newest_id = 0.0, None
     if not runs_dir.exists():
-        return newest
-    for rd in runs_dir.iterdir():
-        rf = rd / "run.json"
-        if not rf.exists():
-            continue
-        try:
-            data = json.loads(rf.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
-        if data.get("status") not in ("completed", "complete"):
-            continue
-        upd = data.get("updated_at", "") or data.get("completed_at", "")
-        if not upd:
-            continue
-        try:
-            dt = datetime.fromisoformat(upd.replace("Z", "+00:00"))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            newest = max(newest, dt.timestamp())
-        except (ValueError, TypeError):
-            continue
-    return newest
-
-
-def _superseding_completed_id(runs_dir: Path, before_ts: float) -> "str | None":
-    """Return the id of a COMPLETED run in this project whose updated_at is the
-    newest one strictly after ``before_ts``, or None. Used to label WHICH run
-    superseded a stale paused run (for the abandon_reason marker)."""
-    from datetime import datetime, timezone
-    best_id, best_ts = None, before_ts
-    if not runs_dir.exists():
-        return None
+        return newest_ts, newest_id
     for rd in runs_dir.iterdir():
         rf = rd / "run.json"
         if not rf.exists():
@@ -770,9 +744,9 @@ def _superseding_completed_id(runs_dir: Path, before_ts: float) -> "str | None":
             ts = dt.timestamp()
         except (ValueError, TypeError):
             continue
-        if ts > best_ts:
-            best_ts, best_id = ts, data.get("id", rd.name)
-    return best_id
+        if ts > newest_ts:
+            newest_ts, newest_id = ts, data.get("id", rd.name)
+    return newest_ts, newest_id
 
 
 def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list[str]:
@@ -817,9 +791,10 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
                 continue
 
             # Supersede signal (computed ONCE per project): the newest updated_at
-            # across all COMPLETED runs. A paused run older than this was finished
-            # by a later run — surfacing it is a false alarm (run_0c8e007a).
-            newest_completed_ts = _newest_completed_updated_at(runs_dir)
+            # across all COMPLETED runs + that run's id. A paused run older than
+            # this was finished by a later run — surfacing it is a false alarm
+            # (run_0c8e007a). One pass; id carried so marking needs no rescan.
+            newest_completed_ts, newest_completed_id = _newest_completed_run(runs_dir)
 
             for run_dir in runs_dir.iterdir():
                 run_file = run_dir / "run.json"
@@ -871,7 +846,7 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
                     run_ts is not None
                     and newest_completed_ts > run_ts
                 ):
-                    sup_id = _superseding_completed_id(runs_dir, run_ts)
+                    sup_id = newest_completed_id
                     lock_file = run_dir / ".resume.lock"
                     fd = None
                     try:
