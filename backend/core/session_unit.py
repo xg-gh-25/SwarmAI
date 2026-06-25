@@ -2491,6 +2491,22 @@ class SessionUnit:
                 "session_unit.flush_pipe session_id=%s — pipe flushed",
                 self.session_id,
             )
+            # ── Recycle-on-flush (PIT01 zombie fix, disconnect path) ────────
+            # A CLEAN interrupt return means the turn actually stopped (no tool
+            # mid-flight — that path times out and is handled below). The
+            # subprocess is now in the same corrupt turn-state as a user Stop,
+            # so the next send() would reuse a poisoned process → zombie. Recycle
+            # it via the same blessed kill path (preserves --resume identity).
+            # Only on the IDLE-alive state: if the flush already drove us elsewhere
+            # (DEAD/COLD via a concurrent kill), there is nothing warm to recycle.
+            if self.state == SessionState.IDLE and self._client is not None:
+                await self._arm_recovery_checkpoint("flush_recycle")
+                await self._crash_to_cold_async(clear_identity=False)
+                logger.info(
+                    "session_unit.flush_recycle session_id=%s — poisoned "
+                    "subprocess recycled to COLD after clean flush",
+                    self.session_id,
+                )
         except asyncio.CancelledError:
             # Cancelled externally (e.g. timeout wrapper or session teardown).
             logger.info(
@@ -2629,6 +2645,46 @@ class SessionUnit:
                 "session_unit.interrupt succeeded session_id=%s pid=%s",
                 self.session_id, self.pid,
             )
+
+            # ── Recycle-on-interrupt (PIT01 zombie fix) ─────────────────────
+            # A soft interrupt leaves the CLI subprocess in a corrupt turn-state.
+            # If left warm (IDLE), the next send() reuses it and the CLI returns
+            # an INSTANT empty error_during_execution → the zombie detector kills
+            # + respawns (a ~10s stall on the user's next turn). Every zombie in
+            # the daemon log is preceded by a user Stop. So for a USER Stop we
+            # recycle the poisoned subprocess NOW via the blessed kill path
+            # (_crash_to_cold_async: real kill + FD cleanup, holds _lock).
+            # clear_identity=False preserves _sdk_session_id, so the next send()
+            # (COLD → _ensure_spawned at line ~1617) respawns clean WITH --resume
+            # and the conversation continues seamlessly.
+            #
+            # AUTONOMOUS interrupts (autonomous=True) are EXCLUDED: the tool-hang
+            # watchdog (line ~1284) deliberately leaves the process warm and does
+            # NOT return — it lets the model reroute mid-stream without a full
+            # respawn. Recycling there would collapse the warm "base rung" into
+            # the escalated kill rung.
+            #
+            # NOTE on compaction: the CompactionGuard escalation
+            # (streaming_orchestrator.py ~754) calls interrupt() with NO autonomous
+            # arg → autonomous=False → it RECYCLES, and that is CORRECT: compaction
+            # `return`s immediately after the interrupt (the turn ENDS — no warm
+            # reroute), and compaction_guard.py's own note confirms a compaction
+            # interrupt poisons the subprocess (instant error_during_execution on
+            # reuse) — i.e. it IS a PIT01 source. So recycle covers user Stop AND
+            # compaction (both end the turn); only the watchdog (keeps streaming)
+            # stays warm.
+            #
+            # _arm_recovery_checkpoint enriches the next send()'s resume context
+            # with "where I left off" (NO new kill — it only annotates the kill
+            # that's about to happen here).
+            if not autonomous:
+                await self._arm_recovery_checkpoint("interrupt_recycle")
+                await self._crash_to_cold_async(clear_identity=False)
+                logger.info(
+                    "session_unit.interrupt_recycle session_id=%s — poisoned "
+                    "subprocess recycled to COLD (resume id preserved)",
+                    self.session_id,
+                )
             return True
         except asyncio.TimeoutError:
             # ── Stale-interrupt check before kill ─────────────────

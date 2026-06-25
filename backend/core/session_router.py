@@ -1764,11 +1764,14 @@ class SessionRouter:
         unit = self.get_unit(session_id)
         if unit is None:
             return {"success": False, "message": f"Session {session_id} not found"}
-        survived = await unit.interrupt()
+        interrupted = await unit.interrupt()
+        # PIT01 recycle: a user Stop now recycles the poisoned subprocess to COLD,
+        # so `interrupted=True` (the turn was stopped) no longer implies the
+        # process is alive. Re-read is_alive for the accurate liveness signal.
         return {
             "success": True,
-            "message": "Interrupted" if survived else "Killed (interrupt timed out)",
-            "subprocess_alive": survived,
+            "message": "Interrupted" if interrupted else "Killed (interrupt timed out)",
+            "subprocess_alive": unit.is_alive,
         }
 
     async def release_session(

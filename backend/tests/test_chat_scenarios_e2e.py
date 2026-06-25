@@ -427,8 +427,14 @@ class TestScenario3_StopThenNewMessage:
     """User stops streaming, then sends a new message."""
 
     @pytest.mark.asyncio
-    async def test_interrupt_transitions_to_idle(self, _reset_session_infrastructure):
-        """interrupt() from STREAMING should transition to IDLE."""
+    async def test_interrupt_transitions_to_cold_on_user_stop(self, _reset_session_infrastructure):
+        """A user Stop (autonomous=False) recycles the subprocess → COLD.
+
+        PIT01 recycle fix: leaving the poisoned subprocess warm (IDLE) caused
+        the next send() to reuse it into a zombie. A user Stop now recycles to
+        COLD via the blessed kill path; resume identity is preserved so the
+        next send() respawns clean with --resume.
+        """
         from core.session_unit import SessionUnit, SessionState
 
         unit = SessionUnit(session_id="test-stop", agent_id="default")
@@ -441,8 +447,9 @@ class TestScenario3_StopThenNewMessage:
 
         survived = await unit.interrupt(timeout=2.0)
 
-        assert survived is True
-        assert unit.state == SessionState.IDLE
+        assert survived is True  # the turn was stopped
+        assert unit.state == SessionState.COLD
+        assert unit._client is None
 
     @pytest.mark.asyncio
     async def test_send_after_stop_succeeds(self, _reset_session_infrastructure):

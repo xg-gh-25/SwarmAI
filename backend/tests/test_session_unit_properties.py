@@ -261,7 +261,14 @@ class TestInterruptPreservesSubprocess:
 
     @pytest.mark.asyncio
     async def test_interrupt_success_keeps_subprocess_warm(self):
-        """After successful interrupt, state is IDLE and PID unchanged."""
+        """After a successful AUTONOMOUS interrupt, state is IDLE, PID unchanged.
+
+        PIT01 recycle fix: only AUTONOMOUS interrupts (watchdog tool-hang escape,
+        compaction ladder) keep the subprocess warm — the interrupt-before-
+        escalate ladder relies on warm reroute. A USER Stop (autonomous=False)
+        recycles the poisoned subprocess to COLD instead (covered by
+        test_interrupt_recycle.py).
+        """
         unit = SessionUnit(session_id="test-interrupt", agent_id="default")
         unit._transition(SessionState.IDLE)       # COLD→IDLE
         unit._transition(SessionState.STREAMING)   # IDLE→STREAMING
@@ -273,11 +280,11 @@ class TestInterruptPreservesSubprocess:
         unit._client = mock_client
         unit._wrapper = mock_wrapper
 
-        result = await unit.interrupt(timeout=5.0)
+        result = await unit.interrupt(timeout=5.0, autonomous=True)
 
         assert result is True
         assert unit.state == SessionState.IDLE
-        assert unit.pid == 99999  # Same PID — subprocess survived
+        assert unit.pid == 99999  # Same PID — subprocess survived (warm)
 
     @pytest.mark.asyncio
     async def test_interrupt_timeout_kills_subprocess(self):

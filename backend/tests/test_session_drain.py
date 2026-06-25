@@ -396,8 +396,13 @@ async def test_interrupt_clears_outstanding_tool_use_on_success():
 
     result = await unit.interrupt(timeout=1.0)
 
-    assert result is True, "interrupt should report subprocess stayed alive (IDLE)"
-    assert unit.state == SessionState.IDLE
+    assert result is True, "interrupt should report the turn was stopped"
+    # PIT01 recycle fix: a user Stop (autonomous=False) now recycles the
+    # poisoned subprocess to COLD instead of leaving it warm (IDLE). The
+    # outstanding-tool_use guard MUST still be released (the GAP2 invariant
+    # this test protects) — the interrupt success branch clears it BEFORE the
+    # recycle, so a queued message after the Stop can still drain.
+    assert unit.state == SessionState.COLD
     assert unit.has_outstanding_tool_use is False, \
         "interrupt success must release the outstanding-tool_use guard or drains hang"
     assert unit._pending_question is None
