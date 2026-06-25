@@ -394,6 +394,27 @@ class CorrectionClassTracker:
         """List all tracked class names (for escalation iteration)."""
         return list(self._state.keys())
 
+    def has_red(self) -> bool:
+        """True if any unresolved class is in the 🔴 state (recurrence past fix).
+
+        Structural signal — computed from state (post_gate/post_rule >= RED),
+        NOT by string-matching the emoji in briefing_lines(). Consumers (e.g. the
+        session-briefing divergence check, M4-3) must use THIS, not substring-scan
+        the render output, so the signal survives any future format change to
+        briefing_lines(). Same threshold the render uses: a gate that did not hold
+        (post_gate >= RED) or a rule that did not hold (post_rule >= RED).
+        """
+        for entry in self._state.values():
+            if entry.get("resolved"):
+                continue
+            post_gate = entry.get("post_gate_count", 0) or 0
+            post_rule = entry.get("post_rule_count", 0) or 0
+            if entry.get("active_gate") and post_gate >= _RED_THRESHOLD:
+                return True
+            if entry.get("active_rule") and post_rule >= _RED_THRESHOLD:
+                return True
+        return False
+
     def briefing_lines(self) -> list[str]:
         """Generate status lines for session briefing.
 

@@ -214,6 +214,65 @@ class TestBriefingSummary:
         assert "\U0001f534" in lines[0]  # 🔴
 
 
+class TestHasRed:
+    """has_red() — structural red signal (M4-3), format-independent.
+
+    Replaces the briefing's old substring-scan of the 🔴 emoji in briefing_lines.
+    Each test asserts has_red() AGREES with the emoji presence so the structural
+    signal is provably equivalent to (and more robust than) the render scan.
+    """
+
+    def _emoji_red(self, tracker) -> bool:
+        return any("\U0001f534" in ln for ln in tracker.briefing_lines())
+
+    def test_empty_tracker_not_red(self, tracker):
+        assert tracker.has_red() is False
+        assert tracker.has_red() == self._emoji_red(tracker)
+
+    def test_green_gate_not_red(self, seeded_tracker):
+        assert seeded_tracker.has_red() is False
+        assert seeded_tracker.has_red() == self._emoji_red(seeded_tracker)
+
+    def test_amber_not_red(self, seeded_tracker):
+        seeded_tracker.record("CLASS_A", evidence="one slip")  # post_gate=1 → ⚠️
+        assert seeded_tracker.has_red() is False
+        assert seeded_tracker.has_red() == self._emoji_red(seeded_tracker)
+
+    def test_red_at_threshold(self, seeded_tracker):
+        seeded_tracker.record("CLASS_A", evidence="slip 1")
+        seeded_tracker.record("CLASS_A", evidence="slip 2")  # post_gate=2 → 🔴
+        assert seeded_tracker.has_red() is True
+        assert seeded_tracker.has_red() == self._emoji_red(seeded_tracker)
+
+    def test_resolved_red_class_excluded(self, tmp_path):
+        # A resolved class at red count must NOT register as red.
+        state_path = tmp_path / "tracker.json"
+        state_path.write_text(json.dumps({
+            "CLASS_A": {
+                "count": 20, "last": "2026-06-01",
+                "active_gate": "GC12", "gate_deployed": "2026-06-01",
+                "post_gate_count": 5, "resolved": True,
+            }
+        }))
+        tracker = CorrectionClassTracker(state_path=state_path)
+        assert tracker.has_red() is False
+        assert tracker.has_red() == self._emoji_red(tracker)
+
+    def test_rule_recurrence_red(self, tmp_path):
+        # No gate, but rule recurrence past threshold → red (matches briefing_lines).
+        state_path = tmp_path / "tracker.json"
+        state_path.write_text(json.dumps({
+            "CLASS_B": {
+                "count": 10, "last": "2026-06-01",
+                "active_rule": "R16b", "rule_deployed": "2026-06-01",
+                "post_rule_count": 2, "resolved": False,
+            }
+        }))
+        tracker = CorrectionClassTracker(state_path=state_path)
+        assert tracker.has_red() is True
+        assert tracker.has_red() == self._emoji_red(tracker)
+
+
 class TestEdgeCases:
     """Edge cases and robustness."""
 
