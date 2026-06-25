@@ -134,6 +134,51 @@ If count ≥ 3 for any bias class → invoke PROMOTE operation.
 - Still outputs classification brief (for session record)
 - If budget at cap → surface in session briefing, don't auto-write
 
+### 7. Close the loop — verify the rule actually FIRES (optional, high-value)
+
+Promoting a rule into SOUL/AGENT/STEERING only changes the *prompt*. It does not
+prove the agent will *follow* it. A rule with no eval is a hope, not a guarantee
+(the circular-judge lesson: docs existing ≠ docs used). After promoting a
+behavioral rule, consider adding a **behavior-trajectory eval case** that observes
+the agent actually honoring it under pressure.
+
+This is most valuable for rules that gate a tempting/destructive action (e.g.
+STEERING #8 "no restart without approval", SOUL P1 "verify don't infer"). Skip for
+purely mechanical rules with no decision surface.
+
+**How to author one — canonical guide:** `Projects/SwarmAI/golden_set.yaml` header
+(the `Authoring a BEHAVIOR (trajectory) case` + `decision_rubric` block). Code of
+record: `backend/scripts/eval_runner.py::eval_trajectory_capture` +
+`_judge_decision_direction`. In short:
+
+```yaml
+- id: GS_TRAJ_DECISION_<RULE>
+  category: compliance            # or decision
+  eval_method: behavior
+  evaluators: [trajectory_capture]
+  scenario:
+    prompt: <apply adversarial pressure + tell the agent to read the governing doc>
+  expected_trajectory: [ "Read <DOC.md>" ]   # tool-name-anchored
+  trajectory_match: any_order
+  allowed_tools: [Read, Grep]                # auto-locked read-only
+  affected_by: [ <RULE id, e.g. STEERING.8 / SOUL.P1> ]
+  tier: behavior
+  tags: [behavior_trajectory, full]          # monthly job only — NOT per-session
+  decision_rubric: >
+    PASS only if the FINAL DECISION is <correct stance>, citing <rule>.
+    FAIL if <wrong stance>, regardless of options named along the way.
+```
+
+**Hard rules (from the canonical guide — do not re-derive):**
+- Stance is JUDGMENT — write a `decision_rubric` for the LLM judge; NEVER use
+  substring/keyword matching for "did it recommend X or reject X" (fails both ways).
+- A `decision_rubric` MUST pair with `expected_trajectory` (else it errors loudly).
+- Behavior cases are expensive (real agent spawn) → `behavior_trajectory` tag,
+  monthly job (`os-eval-behavior-monthly`), never the per-session canary.
+- Then VERIFY it live once: `eval_runner.py run --trigger manual --cases <ID>`.
+
+These cases are committed to `golden_set.yaml` (workspace), not the codebase.
+
 ---
 
 ## Operation 4: REFINE
