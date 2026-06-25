@@ -726,6 +726,28 @@ class TestReclaimNoiseEntries:
         assert report.archived == 0
         assert report.candidates == []
 
+    def test_dateless_entries_are_NOT_reclaimed(self, tmp_path):
+        # SAFETY (run_94fd5597 dry-run finding): 96% of "noise" candidates were
+        # date-LESS, not genuinely old — date-less means "nobody stamped a date",
+        # not "ancient". Destructive reclaim MUST require a real created_date,
+        # even though the read-only gauge treats date-less as old. A date-less
+        # dormant ref0 guideline (e.g. "4-component session architecture") is NOT
+        # reclaimable — it's unknown-age, not proven-stale.
+        from core.ddd_entry_lifecycle import reclaim_noise_entries
+        content = """\
+## Lessons
+<!-- maturity: sparse | sources: 1 | verified: false | used: false | days: 0 | trust: moderate | promoted: none -->
+
+- [guideline] **Dateless dormant lesson** — no date in text.
+  <!-- ref:0 | last:none | decay:dormant -->
+
+- [guideline] **Dated old dormant lesson** — genuinely old. (2025-01-01, run_x)
+  <!-- ref:0 | last:none | decay:dormant -->
+"""
+        report = reclaim_noise_entries(content, _RECLAIM_TODAY, tmp_path, dry_run=True)
+        # Only the DATED old entry is reclaimable; the date-less one is spared.
+        assert report.candidates == ["Dated old dormant lesson"]
+
 
 # ── M0 ② CLEAN: reclaimable-noise gate metric ────────────────────────────────
 #

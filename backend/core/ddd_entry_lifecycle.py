@@ -882,15 +882,22 @@ def reclaim_noise_entries(
     # Selection: the noisy set, minus keep-class.
     selected: list[EntryMetadata] = []
     for entry in entries:
-        # Mirror compute_entry_noise's "noisy" predicate exactly.
+        # Mirror compute_entry_noise's "noisy" predicate exactly...
         if entry.ref_count != 0:
             continue
         if entry.decay_state not in _NOISY_DECAY_STATES:
             continue
-        if entry.created_date is not None:
-            if (today - entry.created_date).days < grace_days:
-                continue
-        # Noisy. Now apply the protection guard.
+        # ...EXCEPT: destructive reclaim requires a REAL date. The read-only
+        # gauge treats date-less entries as "infinitely old", but for archival
+        # that is unsafe — date-less means "nobody stamped a date" (96% of real
+        # candidates, run_94fd5597), NOT "proven ancient". Reclaiming them would
+        # destroy unknown-age knowledge (e.g. core architecture notes). Require
+        # a genuine created_date past grace.
+        if entry.created_date is None:
+            continue
+        if (today - entry.created_date).days < grace_days:
+            continue
+        # Noisy AND genuinely old. Now apply the protection guard.
         if is_keep_class(entry, evergreen_sections=evergreen_sections):
             report.kept_protected += 1
             continue
