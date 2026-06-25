@@ -484,71 +484,18 @@ class TestJudgeFailureIsErrorNotSkip:
 
 
 class TestTrajectoryCaptureDispatch:
-    """trajectory_capture evaluator (behavior-observed eval).
+    """trajectory_capture: real-behavior eval method (run_75b656c1).
 
     The fix for the circular judge: a case with eval_method=behavior +
     evaluators=[trajectory_capture] spawns a REAL agent (via scenario_runner),
     captures its tool-call trajectory, and delegates to the existing
-    eval_trajectory matcher. Critical safety: it MUST NOT spawn under
+    eval_trajectory matcher. The verdict is programmatic (trajectory match,
+    NOT the circular LLM judge). Critical safety: it MUST NOT spawn under
     programmatic_only=True (the every-session canary path).
-    """
 
-    _CASE = {
-        "id": "GS_TRAJ_X",
-        "scenario": {"prompt": "Read .context/SELF.md and summarize"},
-        "expected_trajectory": ["Read SELF.md"],
-        "trajectory_match": "any_order",
-        "evaluators": ["trajectory_capture"],
-        "eval_method": "behavior",
-        "allowed_tools": ["Read"],
-    }
-
-    def test_passes_when_expected_read_observed(self):
-        captured = ["Read {\"file_path\": \"/ws/.context/SELF.md\"}"]
-        with patch("backend.scripts.scenario_runner.run_scenario", return_value=captured):
-            r = eval_runner_mod.evaluate_case(self._CASE, Path("/tmp"))
-        assert r["status"] == "passed"
-        assert r["evaluator"] == "trajectory_capture"
-        assert r["observed_trajectory"] == captured
-
-    def test_fails_when_expected_read_absent_negative_control(self):
-        # Agent answered from memory WITHOUT reading the file -> must FAIL,
-        # not pass, not skip. This is the whole point: observe real usage.
-        captured = ["Grep {\"pattern\": \"foo\"}"]
-        with patch("backend.scripts.scenario_runner.run_scenario", return_value=captured):
-            r = eval_runner_mod.evaluate_case(self._CASE, Path("/tmp"))
-        assert r["status"] == "failed"
-
-    def test_empty_trajectory_fails_not_skips(self):
-        # Spawn failed / agent did nothing -> empty trajectory ([], NOT None)
-        # -> FAIL (the expected Read did not happen), never a silent skip.
-        with patch("backend.scripts.scenario_runner.run_scenario", return_value=[]):
-            r = eval_runner_mod.evaluate_case(self._CASE, Path("/tmp"))
-        assert r["status"] == "failed"
-
-    def test_programmatic_only_does_not_spawn(self):
-        # Canary path: trajectory_capture must NOT spawn a real agent.
-        spy = MagicMock(return_value=["Read SELF.md"])
-        with patch("backend.scripts.scenario_runner.run_scenario", spy):
-            r = eval_runner_mod.evaluate_case(self._CASE, Path("/tmp"), programmatic_only=True)
-        spy.assert_not_called()
-        assert r["status"] == "skipped"
-
-    def test_never_falls_through_to_llm_judge(self):
-        # trajectory_capture is programmatic — must never call the LLM judge.
-        judge_spy = MagicMock()
-        with patch("backend.scripts.scenario_runner.run_scenario", return_value=[]), \
-             patch.object(eval_runner_mod, "eval_llm_judge", judge_spy):
-            eval_runner_mod.evaluate_case(self._CASE, Path("/tmp"))
-        judge_spy.assert_not_called()
-
-
-class TestTrajectoryCaptureDispatch:
-    """trajectory_capture: real-behavior eval method (run_75b656c1).
-
-    Spawns a real agent to observe tool calls — but verdict is programmatic
-    (trajectory match, NOT the circular LLM judge). Gated by programmatic_only
-    so the canary path never spawns agents.
+    NOTE: eval_trajectory_capture imports `from scripts.scenario_runner import
+    run_scenario` at call time, so the patch target MUST be
+    `scripts.scenario_runner.run_scenario` (not `backend.scripts....`).
     """
 
     _CASE = {
@@ -557,31 +504,40 @@ class TestTrajectoryCaptureDispatch:
         "expected_trajectory": ["Read SELF.md"],
         "trajectory_match": "any_order",
         "evaluators": ["trajectory_capture"],
+        "eval_method": "behavior",
         "allowed_tools": ["Read"],
         "dimension": "utility",
     }
 
     def test_dispatch_passes_when_expected_tool_observed(self):
         # Mock the spawn to return a trajectory containing the expected Read.
-        with patch("backend.scripts.eval_runner.eval_trajectory_capture",
-                   wraps=None) as _unused:
-            pass
-        with patch("scripts.scenario_runner.run_scenario",
-                   return_value=['Read {"file_path": "/ws/.context/SELF.md"}']):
+        # Also asserts the observed_trajectory annotation is surfaced verbatim.
+        captured = ['Read {"file_path": "/ws/.context/SELF.md"}']
+        with patch("scripts.scenario_runner.run_scenario", return_value=captured):
             r = evaluate_case(self._CASE, Path("/tmp"))
         assert r["status"] == "passed"
         assert r["evaluator"] == "trajectory_capture"
+        assert r["observed_trajectory"] == captured
 
-    def test_negative_control_no_read_fails(self):
-        # Agent answered from memory (empty trajectory) → MUST fail, not pass.
+    def test_fails_when_expected_read_absent_negative_control(self):
+        # Agent used a DIFFERENT tool (didn't read the file) -> must FAIL,
+        # not pass, not skip. This is the whole point: observe real usage.
+        with patch("scripts.scenario_runner.run_scenario",
+                   return_value=['Grep {"pattern": "foo"}']):
+            r = evaluate_case(self._CASE, Path("/tmp"))
+        assert r["status"] == "failed"
+
+    def test_empty_trajectory_fails_not_skips(self):
+        # Spawn failed / agent did nothing -> empty trajectory ([], NOT None)
+        # -> FAIL (the expected Read did not happen), never a silent skip.
         with patch("scripts.scenario_runner.run_scenario", return_value=[]):
             r = evaluate_case(self._CASE, Path("/tmp"))
         assert r["status"] == "failed", "empty trajectory must fail a Read assertion"
 
     def test_never_calls_llm_judge(self):
-        # trajectory_capture must NOT fall through to the circular LLM judge.
-        with patch("scripts.scenario_runner.run_scenario",
-                   return_value=['Read {"file_path": "SELF.md"}']), \
+        # trajectory_capture is programmatic — must NOT fall through to the
+        # circular LLM judge, even when the trajectory is empty.
+        with patch("scripts.scenario_runner.run_scenario", return_value=[]), \
              patch("backend.scripts.eval_runner.eval_llm_judge") as judge:
             evaluate_case(self._CASE, Path("/tmp"))
         judge.assert_not_called()
