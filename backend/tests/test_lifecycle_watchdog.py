@@ -505,11 +505,19 @@ class TestWaitingInputTimeout:
 
 # ── Dumb-spawn watchdog (run_6c482b10) ─────────────────────────────────
 #
-# A STREAMING subprocess that produced ZERO events since spawn
-# (_last_event_time is None — "dumb": alive but silent, no open tool) must
-# be force-unstuck on a SHORT threshold (DUMB_SPAWN_TIMEOUT), NOT the
-# 600-1800s adaptive _compute_message_timeout designed for slow inference.
+# A STREAMING subprocess that produced ZERO SDK events since spawn ("dumb":
+# alive but silent, no open tool) must be force-unstuck on a SHORT threshold
+# (DUMB_SPAWN_TIMEOUT), NOT the 600-1800s adaptive _compute_message_timeout
+# designed for slow inference.
 # Evidence: pid 33855 / session 89b71059, 2026-06-25 — zero events for 15+min.
+#
+# CRITICAL FIXTURE FIDELITY (run_6c482b10 REVIEW catch): production sets BOTH
+# _streaming_start_time AND _last_event_time to the SAME timestamp on STREAMING
+# entry (session_unit.py _transition), then advances ONLY _last_event_time on
+# each real SDK event. So a dumb spawn is NOT _last_event_time is None — it is
+# _last_event_time == _streaming_start_time (unchanged since entry). Tests MUST
+# reproduce that exact state, or they validate a dead `is None` branch that can
+# never fire in production. The original tests used None and masked this bug.
 
 
 def _make_streaming_unit(
@@ -554,6 +562,19 @@ def _make_streaming_unit(
     return unit
 
 
+def _dumb_unit(*, stall, sdk_session_id=None, adaptive_timeout=600.0):
+    """Dumb spawn: _last_event_time == _streaming_start_time (no event since
+    entry), both `stall` seconds in the past — exactly what _transition sets."""
+    import time as _t
+    t = _t.time() - stall
+    return _make_streaming_unit(
+        last_event_time=t,
+        streaming_start_time=t,
+        sdk_session_id=sdk_session_id,
+        adaptive_timeout=adaptive_timeout,
+    )
+
+
 class TestDumbSpawnWatchdog:
     """Zero-event-since-spawn must recover on the short threshold."""
 
@@ -564,36 +585,41 @@ class TestDumbSpawnWatchdog:
         asyncio.run(mgr._check_streaming_timeout())
 
     def test_ac1_dumb_spawn_unstuck_after_short_timeout(self):
-        """No first event + stall > DUMB_SPAWN_TIMEOUT → force_unstick fires."""
-        import time as _t
+        """No event since spawn + stall > DUMB_SPAWN_TIMEOUT → force_unstick."""
         from core.session_unit import DUMB_SPAWN_TIMEOUT_SECONDS
-        unit = _make_streaming_unit(
-            last_event_time=None,
-            streaming_start_time=_t.time() - (DUMB_SPAWN_TIMEOUT_SECONDS + 5),
-            sdk_session_id=None,
-        )
+        unit = _dumb_unit(stall=DUMB_SPAWN_TIMEOUT_SECONDS + 5, sdk_session_id=None)
         self._run_with_unit(unit)
         unit.force_unstick_streaming.assert_awaited_once()
 
     def test_ac1_dumb_spawn_not_unstuck_before_short_timeout(self):
-        """No first event but stall < DUMB_SPAWN_TIMEOUT → do NOT unstick."""
-        import time as _t
+        """No event since spawn but stall < DUMB_SPAWN_TIMEOUT → do NOT unstick."""
         from core.session_unit import DUMB_SPAWN_TIMEOUT_SECONDS
-        unit = _make_streaming_unit(
-            last_event_time=None,
-            streaming_start_time=_t.time() - (DUMB_SPAWN_TIMEOUT_SECONDS - 30),
-            sdk_session_id=None,
-        )
+        unit = _dumb_unit(stall=DUMB_SPAWN_TIMEOUT_SECONDS - 30, sdk_session_id=None)
         self._run_with_unit(unit)
         unit.force_unstick_streaming.assert_not_called()
 
+    def test_regression_dumb_state_is_equal_timestamps_not_none(self):
+        """REGRESSION GUARD (run_6c482b10): the dumb state in production is
+        _last_event_time == _streaming_start_time (NOT None). A dumb spawn with
+        EQUAL non-None timestamps past the threshold MUST still be unstuck. If
+        this fails, the discriminator regressed to a dead `is None` check that
+        never fires in production (the bug REVIEW caught)."""
+        from core.session_unit import DUMB_SPAWN_TIMEOUT_SECONDS
+        unit = _dumb_unit(stall=DUMB_SPAWN_TIMEOUT_SECONDS + 5, sdk_session_id=None)
+        # Prove the fixture reproduces production state, not the None shortcut.
+        assert unit._last_event_time is not None
+        assert unit._last_event_time == unit._streaming_start_time
+        self._run_with_unit(unit)
+        unit.force_unstick_streaming.assert_awaited_once()
+
     def test_ac2_slow_inference_not_killed_by_short_timeout(self):
-        """Events FLOWING (last_event set) but stalled just past the dumb
-        threshold must NOT be unstuck — slow inference keeps the 600-1800s
-        adaptive tolerance. This is the regression guard against false-kill."""
+        """Events FLOWING (last_event advanced past start) but stalled just past
+        the dumb threshold must NOT be unstuck — slow inference keeps the
+        600-1800s adaptive tolerance. Regression guard against false-kill."""
         import time as _t
         from core.session_unit import DUMB_SPAWN_TIMEOUT_SECONDS
         unit = _make_streaming_unit(
+            # event arrived well after spawn (last_event > start) → events flowing
             last_event_time=_t.time() - (DUMB_SPAWN_TIMEOUT_SECONDS + 30),
             streaming_start_time=_t.time() - 5000,
             sdk_session_id="resume-xyz",
@@ -619,24 +645,18 @@ class TestDumbSpawnWatchdog:
         """Resume dumb spawn (sdk_session_id set): stall between 1x and 2x
         DUMB_SPAWN_TIMEOUT must NOT be unstuck (resume replays full convo
         before first token — GUI66)."""
-        import time as _t
         from core.session_unit import DUMB_SPAWN_TIMEOUT_SECONDS
-        unit = _make_streaming_unit(
-            last_event_time=None,
-            streaming_start_time=_t.time() - (DUMB_SPAWN_TIMEOUT_SECONDS + 20),
-            sdk_session_id="resume-abc",
+        unit = _dumb_unit(
+            stall=DUMB_SPAWN_TIMEOUT_SECONDS + 20, sdk_session_id="resume-abc",
         )
         self._run_with_unit(unit)
         unit.force_unstick_streaming.assert_not_called()
 
     def test_ac4_resume_dumb_spawn_unstuck_past_2x(self):
         """Resume dumb spawn stalled past 2x DUMB_SPAWN_TIMEOUT → unstick."""
-        import time as _t
         from core.session_unit import DUMB_SPAWN_TIMEOUT_SECONDS
-        unit = _make_streaming_unit(
-            last_event_time=None,
-            streaming_start_time=_t.time() - (2 * DUMB_SPAWN_TIMEOUT_SECONDS + 20),
-            sdk_session_id="resume-abc",
+        unit = _dumb_unit(
+            stall=2 * DUMB_SPAWN_TIMEOUT_SECONDS + 20, sdk_session_id="resume-abc",
         )
         self._run_with_unit(unit)
         unit.force_unstick_streaming.assert_awaited_once()
