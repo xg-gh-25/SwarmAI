@@ -647,8 +647,28 @@ class LifecycleManager:
             )
             if no_event_since_spawn:
                 from .session_unit import DUMB_SPAWN_TIMEOUT_SECONDS
-                resume_multiplier = 2 if getattr(unit, "_sdk_session_id", None) else 1
-                effective_timeout = DUMB_SPAWN_TIMEOUT_SECONDS * resume_multiplier
+                adaptive = (
+                    unit._compute_message_timeout()
+                    if hasattr(unit, "_compute_message_timeout")
+                    else self.STREAMING_TIMEOUT_SECONDS
+                )
+                if getattr(unit, "_sdk_session_id", None):
+                    # A --resume spawn replays the FULL conversation before the
+                    # first token (GUI66) — a large replay legitimately emits no
+                    # SDK event for a long time. Killing it at a flat short
+                    # timeout would false-abort a healthy large resume → respawn
+                    # → replay → kill loop (run_6c482b10 adversarial MED). So a
+                    # dumb resume gets the SAME replay budget as a slow resume:
+                    # the adaptive timeout (up to 1800s), floored at 2x the
+                    # dumb threshold so a TINY resume still recovers reasonably
+                    # fast. The incident (89b71059) was a WARM continuation
+                    # (is_cold_resume=False), not a replay — it falls in the
+                    # non-resume branch below and gets the fast 120s.
+                    effective_timeout = max(DUMB_SPAWN_TIMEOUT_SECONDS * 2, adaptive)
+                else:
+                    # Fresh (non-resume) spawn: no replay, first token should
+                    # arrive in seconds. Zero events past 120s = genuinely dumb.
+                    effective_timeout = DUMB_SPAWN_TIMEOUT_SECONDS
             else:
                 # Use adaptive timeout from the unit (context-aware) if available,
                 # otherwise fall back to static threshold.

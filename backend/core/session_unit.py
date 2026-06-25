@@ -833,8 +833,16 @@ class SessionUnit:
         # period is a fresh conversation turn that deserves its own hooks.
         if new_state == SessionState.STREAMING:
             self._hooks_enqueued = False
-            self._streaming_start_time = time.time()
-            self._last_event_time = time.time()
+            # ONE timestamp for both — the dumb-spawn watchdog discriminates
+            # "no event since spawn" by `_last_event_time <= _streaming_start_time`
+            # (lifecycle_manager._check_streaming_timeout). Two separate
+            # time.time() calls would make _last_event_time microseconds GREATER
+            # than _streaming_start_time, so the discriminator would read every
+            # fresh spawn as "events already flowing" and the watchdog would
+            # never fire (run_6c482b10 adversarial HIGH). Capture once.
+            _stream_entry_ts = time.time()
+            self._streaming_start_time = _stream_entry_ts
+            self._last_event_time = _stream_entry_ts
             # Root 2 / AC5: fresh heartbeat throttle for this turn.
             self._last_heartbeat_elapsed = 0.0
             # Fresh tool-hang episode for this turn (run_fb6e94a9).

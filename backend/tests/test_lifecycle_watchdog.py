@@ -871,22 +871,66 @@ class TestDumbSpawnWatchdog:
         self._run_with_unit(unit)
         unit.force_unstick_streaming.assert_awaited_once()
 
-    def test_ac4_resume_dumb_spawn_uses_2x_threshold(self):
-        """Resume dumb spawn (sdk_session_id set): stall between 1x and 2x
-        DUMB_SPAWN_TIMEOUT must NOT be unstuck (resume replays full convo
-        before first token — GUI66)."""
-        from core.session_unit import DUMB_SPAWN_TIMEOUT_SECONDS
+    def test_ac4_resume_dumb_spawn_gets_full_adaptive_budget(self):
+        """Resume dumb spawn (sdk_session_id set): a large --resume replays the
+        full conversation before the first token (GUI66) and emits no SDK event
+        meanwhile. It must get max(2x DUMB, adaptive) — NOT a flat short kill,
+        else a healthy large resume false-kills → respawn → replay → kill loop
+        (run_6c482b10 adversarial MED). adaptive=1800 here → stall 300s must NOT
+        unstick."""
         unit = _dumb_unit(
-            stall=DUMB_SPAWN_TIMEOUT_SECONDS + 20, sdk_session_id="resume-abc",
+            stall=300, sdk_session_id="resume-abc", adaptive_timeout=1800.0,
         )
         self._run_with_unit(unit)
         unit.force_unstick_streaming.assert_not_called()
 
-    def test_ac4_resume_dumb_spawn_unstuck_past_2x(self):
-        """Resume dumb spawn stalled past 2x DUMB_SPAWN_TIMEOUT → unstick."""
-        from core.session_unit import DUMB_SPAWN_TIMEOUT_SECONDS
+    def test_ac4_resume_dumb_spawn_unstuck_past_adaptive(self):
+        """Resume dumb spawn stalled past its adaptive replay budget → unstick."""
         unit = _dumb_unit(
-            stall=2 * DUMB_SPAWN_TIMEOUT_SECONDS + 20, sdk_session_id="resume-abc",
+            stall=1900, sdk_session_id="resume-abc", adaptive_timeout=1800.0,
         )
         self._run_with_unit(unit)
         unit.force_unstick_streaming.assert_awaited_once()
+
+    def test_integration_real_transition_produces_dumb_detectable_state(self):
+        """CRITICAL REGRESSION GUARD (run_6c482b10 adversarial HIGH): the unit
+        fixtures above set the two timestamps EQUAL by hand. That is only valid
+        if the REAL _transition() actually produces equal timestamps. The
+        original bug: _transition set _streaming_start_time and _last_event_time
+        via TWO separate time.time() calls, so _last_event_time was microseconds
+        GREATER and the discriminator (last_t <= start_t) NEVER fired in
+        production — the whole feature was dead while every unit test passed.
+
+        This test drives the REAL SessionUnit._transition into STREAMING and
+        asserts the discriminator the watchdog uses actually holds. If someone
+        re-splits the assignment into two time.time() calls, this FAILS — the
+        only test that catches the production-vs-fixture gap."""
+        from core.session_unit import SessionState
+        import core.session_unit as su
+
+        # Build a minimal real SessionUnit without running __init__ side effects.
+        unit = su.SessionUnit.__new__(su.SessionUnit)
+        unit.session_id = "integ-dumb"
+        unit.state = SessionState.IDLE
+        unit._streaming_start_time = None
+        unit._last_event_time = None
+        unit._hooks_enqueued = False
+        unit._last_heartbeat_elapsed = 0.0
+        unit._wrapper = None            # .pid property reads this during logging
+        unit._on_state_change = None    # observability callback — none in test
+        unit._tool_hang_interrupted = False
+        unit._tool_hang_interrupt_at = None
+        # Neutralize the PID watchdog side effect on STREAMING entry.
+        unit._start_pid_watchdog = lambda: None
+
+        unit._transition(SessionState.STREAMING)
+
+        # The exact predicate lifecycle_manager._check_streaming_timeout uses.
+        start_t = unit._streaming_start_time
+        last_t = unit._last_event_time
+        assert start_t is not None and last_t is not None
+        assert last_t <= start_t, (
+            "real _transition must leave _last_event_time <= _streaming_start_time "
+            "so the dumb-spawn discriminator fires; got "
+            f"last={last_t!r} start={start_t!r} (re-split into two time.time() calls?)"
+        )

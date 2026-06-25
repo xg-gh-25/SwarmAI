@@ -262,6 +262,13 @@ class TestLifecycleManagerCircuitBreaker:
         unit._consecutive_unstick_timeouts = 3  # CB already tripped
         unit._UNSTICK_CIRCUIT_BREAKER_THRESHOLD = 2
         unit.force_unstick_streaming = AsyncMock()
+        # Events-flowing (slow-inference) case: last_event advanced past start,
+        # no open tool. Exercises the adaptive-timeout branch, not dumb-spawn.
+        import time as _t
+        unit._streaming_start_time = _t.time() - 600
+        unit._last_event_time = _t.time() - 100
+        unit._open_tool_uses = None
+        unit._sdk_session_id = None
 
         router = MagicMock()
         router.list_units = MagicMock(return_value=[unit])
@@ -289,6 +296,13 @@ class TestLifecycleManagerCircuitBreaker:
         unit._consecutive_unstick_timeouts = 0  # Fresh
         unit._UNSTICK_CIRCUIT_BREAKER_THRESHOLD = 2
         unit.force_unstick_streaming = AsyncMock()
+        # Events-flowing (slow-inference) case: last_event advanced past start,
+        # no open tool. Exercises the adaptive-timeout branch, not dumb-spawn.
+        import time as _t
+        unit._streaming_start_time = _t.time() - 600
+        unit._last_event_time = _t.time() - 100
+        unit._open_tool_uses = None
+        unit._sdk_session_id = None
 
         router = MagicMock()
         router.list_units = MagicMock(return_value=[unit])
