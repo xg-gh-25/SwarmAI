@@ -186,6 +186,51 @@ class TestUserCorrectionDetector:
     # agent), just expressed as a redirect-to-investigate or a reframe.
 
     @pytest.mark.asyncio
+    async def test_meta_redirect_logged_but_not_seeded_as_pitfall(
+        self, corrections_file, session_context, tmp_path, monkeypatch
+    ):
+        """A META-only redirect ('go check X') IS logged to corrections.jsonl (for
+        the post-session classifier) but must NOT auto-seed a golden_set case or a
+        MEMORY [pitfall] — a redirect is steering, not a recorded mistake. Only
+        explicit-error (EN) corrections seed those persistent side-effects.
+        (Adversarial MED, run_e681a61d — same anti-noise discipline as the tracker fix.)"""
+        import core.eval_hooks as eh
+        seeded = []
+        monkeypatch.setattr(eh, "seed_from_correction",
+                            lambda *a, **k: seeded.append(a))
+        # point MEMORY at a tmp file so we can assert no pitfall append
+        mem = tmp_path / ".context" / "MEMORY.md"
+        mem.parent.mkdir(parents=True)
+        mem.write_text("## Pitfalls\n")
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path.parent)
+        # (home() is used to locate MEMORY; we only assert seed is skipped, which
+        #  is the deterministic part — MEMORY path resolution varies by env.)
+
+        from core.runtime_hooks import create_user_correction_detector
+        hook = create_user_correction_detector(str(corrections_file), session_context)
+        await hook({"prompt": "去查一下另一个 session 在做什么"}, None, MagicMock())
+
+        # logged for the classifier...
+        assert corrections_file.exists()
+        line = json.loads(corrections_file.read_text().strip().splitlines()[-1])
+        assert line["type"] == "user_correction"
+        # ...but NOT seeded as a golden case (redirect != pitfall)
+        assert seeded == [], "META-only redirect must not auto-seed a golden_set pitfall case"
+
+    @pytest.mark.asyncio
+    async def test_explicit_error_correction_still_seeds(
+        self, corrections_file, session_context, monkeypatch
+    ):
+        """An EXPLICIT-error correction ('that's wrong') STILL seeds (regression guard)."""
+        import core.eval_hooks as eh
+        seeded = []
+        monkeypatch.setattr(eh, "seed_from_correction", lambda *a, **k: seeded.append(a))
+        from core.runtime_hooks import create_user_correction_detector
+        hook = create_user_correction_detector(str(corrections_file), session_context)
+        await hook({"prompt": "that's wrong, use async instead"}, None, MagicMock())
+        assert seeded, "explicit-error correction must still seed a golden case"
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("prompt", [
         "去查 闭环审计现在报 unhealth",          # investigate-redirect (CN)
         "你去看下另一个 session 在做什么",          # investigate-redirect (CN)

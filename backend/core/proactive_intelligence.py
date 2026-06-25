@@ -1305,11 +1305,17 @@ def _create_health_todo(
 
     title = f"Health Alert: {message[:80]}"
     dedup_key = message[:40]
+    # Cooldown for recently-HANDLED findings: a recurring source signal (e.g. a
+    # capability gap that persists until the underlying pattern stops) would
+    # otherwise recreate a todo the instant the user completes it (status=handled
+    # leaves the active-only dedup) — recreate-forever. So a finding handled within
+    # this window is NOT re-escalated; the user's action sticks. (adversarial HIGH)
+    _HANDLED_COOLDOWN_DAYS = 7
     try:
+        from datetime import timedelta
         conn = sqlite3.connect(str(_db_path), timeout=5)
         try:
-            # Dedup: skip if an active (pending/in_discussion) Health Alert todo
-            # already covers this finding.
+            # Dedup: skip if an ACTIVE Health Alert todo already covers this finding.
             existing = conn.execute(
                 "SELECT title FROM todos WHERE status IN ('pending','in_discussion') "
                 "AND title LIKE 'Health Alert:%'"
@@ -1317,6 +1323,17 @@ def _create_health_todo(
             for (etitle,) in existing:
                 if dedup_key in (etitle or ""):
                     return  # already tracked
+
+            # Cooldown: skip if the SAME finding was handled/cancelled recently.
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=_HANDLED_COOLDOWN_DAYS)).isoformat()
+            recently_closed = conn.execute(
+                "SELECT title FROM todos WHERE status IN ('handled','cancelled','deleted') "
+                "AND title LIKE 'Health Alert:%' AND updated_at >= ?",
+                (cutoff,),
+            ).fetchall()
+            for (etitle,) in recently_closed:
+                if dedup_key in (etitle or ""):
+                    return  # user acted recently — respect it, don't resurrect
 
             now = datetime.now(timezone.utc).isoformat()
             conn.execute(

@@ -255,7 +255,17 @@ def create_user_correction_detector(
         if not prompt:
             return {}
 
-        if _CORRECTION_PATTERNS_EN.search(prompt) or _CORRECTION_PATTERNS_META.search(prompt):
+        # Two tiers of match (adversarial MED, run_e681a61d):
+        #  - explicit_error: "that's wrong / 不对 / 应该是" — a recorded MISTAKE.
+        #    Logs AND seeds a golden case AND writes a MEMORY [pitfall].
+        #  - meta_only: a redirect/reframe ("去查 X / 重新想 / go check") — STEERING,
+        #    not a mistake. Logs to corrections.jsonl (for the post-session
+        #    classifier to judge) but does NOT seed a golden pitfall or a MEMORY
+        #    [pitfall] — a redirect is not a "do not repeat" pattern, and seeding
+        #    one pollutes golden_set/MEMORY exactly like the tracker-noise bug.
+        is_explicit_error = bool(_CORRECTION_PATTERNS_EN.search(prompt))
+        is_meta = bool(_CORRECTION_PATTERNS_META.search(prompt))
+        if is_explicit_error or is_meta:
             entry = {
                 "ts": time.time(),
                 "session_id": sid,
@@ -274,35 +284,41 @@ def create_user_correction_detector(
             # entry stuck at UNCLASSIFIED (never promoted). The corrections.jsonl append
             # above is the durable signal the classifier consumes. (Gate-1 fix, run_7a8f9866.)
 
-            # P4: Auto-seed golden set case from correction (best-effort)
-            try:
-                correction_count = ctx.get("_corrections_count", 1)
-                correction_id = f"C{correction_count:03d}"
-                from core.eval_hooks import seed_from_correction
-                seed_from_correction(correction_id, prompt[:200], "UNCLASSIFIED")
-            except Exception:
-                pass  # Non-blocking
+            # Persistent side-effects (golden seed + MEMORY pitfall) fire ONLY for
+            # explicit-error corrections — a recorded mistake. META-only redirects
+            # are steering, not pitfalls; seeding them would pollute golden_set +
+            # MEMORY with "Agent does NOT repeat: go check X" non-pitfalls.
+            if is_explicit_error:
+                # P4: Auto-seed golden set case from correction (best-effort).
+                # id keyed by session+count so cross-session C001s don't collide
+                # and silently drop (adversarial LOW, run_e681a61d).
+                try:
+                    correction_count = ctx.get("_corrections_count", 1)
+                    correction_id = f"C_{sid[:8]}_{correction_count:03d}"
+                    from core.eval_hooks import seed_from_correction
+                    seed_from_correction(correction_id, prompt[:200], "UNCLASSIFIED")
+                except Exception:
+                    pass  # Non-blocking
 
-            # Gap #17: Immediate correction → MEMORY.md as [pitfall]
-            # Write the correction as a pitfall entry so it persists across sessions.
-            # Best-effort — failure must never break the hook chain.
-            try:
-                from pathlib import Path as _Path
-                from scripts.locked_write import locked_read_modify_write
-                ws = _Path.home() / ".swarm-ai" / "SwarmWS"
-                memory_path = ws / ".context" / "MEMORY.md"
-                if memory_path.exists():
-                    summary = prompt[:150].replace("\n", " ").strip()
-                    today = time.strftime("%Y-%m-%d")
-                    entry_text = (
-                        f"\n- [pitfall] **{summary}** — "
-                        f"({today}, {sid[:8]}, correction)\n"
-                    )
-                    locked_read_modify_write(
-                        memory_path, "## Pitfalls", entry_text, mode="append"
-                    )
-            except Exception:
-                pass  # Non-blocking — MEMORY write is best-effort
+                # Gap #17: Immediate correction → MEMORY.md as [pitfall].
+                # Best-effort — failure must never break the hook chain.
+                try:
+                    from pathlib import Path as _Path
+                    from scripts.locked_write import locked_read_modify_write
+                    ws = _Path.home() / ".swarm-ai" / "SwarmWS"
+                    memory_path = ws / ".context" / "MEMORY.md"
+                    if memory_path.exists():
+                        summary = prompt[:150].replace("\n", " ").strip()
+                        today = time.strftime("%Y-%m-%d")
+                        entry_text = (
+                            f"\n- [pitfall] **{summary}** — "
+                            f"({today}, {sid[:8]}, correction)\n"
+                        )
+                        locked_read_modify_write(
+                            memory_path, "## Pitfalls", entry_text, mode="append"
+                        )
+                except Exception:
+                    pass  # Non-blocking — MEMORY write is best-effort
 
         return {}
 

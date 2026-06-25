@@ -178,6 +178,26 @@ class TestHealthRadarTodos:
         _create_health_todo("Empty context file detected: MEMORY.md", severity="critical")
         assert len(self._rows(tmp_todo_db)) == 1
 
+    def test_completed_todo_not_recreated_immediately(self, tmp_todo_db):
+        """HIGH (adversarial run_e681a61d): after a user COMPLETES (status=handled)
+        an escalated todo, the same recurring finding must NOT immediately recreate
+        it next briefing — else the user can never make it go away by acting.
+        Dedup must consider recently-handled todos, not only pending/in_discussion."""
+        import sqlite3
+        from core.proactive_intelligence import _create_health_todo
+        msg = "Mid-stream halt requiring user intervention (4x)"
+        _create_health_todo(msg, severity="critical")
+        # user completes it
+        conn = sqlite3.connect(str(tmp_todo_db))
+        conn.execute("UPDATE todos SET status='handled' WHERE title LIKE 'Health Alert:%'")
+        conn.commit(); conn.close()
+        # next briefing, same finding recurs
+        _create_health_todo(msg, severity="critical")
+        rows = self._rows(tmp_todo_db)
+        # Must NOT have a 2nd (pending) recreate of the just-handled finding
+        pending = [r for r in rows if r["status"] == "pending"]
+        assert len(pending) == 0, "recently-handled finding must not be immediately recreated"
+
 
 # ── AC4: Memory health results in briefing ────────────────────────────
 
