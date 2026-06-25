@@ -2545,13 +2545,27 @@ class SessionUnit:
         eligible. Default False preserves the user-Stop semantics for all
         existing callers.
 
-        State transitions:
+        State transitions (success path):
 
-        - STREAMING → IDLE (interrupt succeeded, subprocess warm)
-        - STREAMING → DEAD → COLD (interrupt timed out, subprocess killed)
-        - WAITING_INPUT → IDLE (interrupt succeeded)
+        - autonomous=False (user Stop / compaction): STREAMING → IDLE →
+          (recycle) → COLD. A soft interrupt leaves the subprocess in a
+          corrupt turn-state, so it is immediately recycled via
+          ``_crash_to_cold_async(clear_identity=False)`` (PIT01 zombie fix).
+          ``_sdk_session_id`` is preserved, so the next ``send()`` respawns
+          clean WITH ``--resume``. The subprocess does NOT stay warm.
+        - autonomous=True (tool-hang watchdog only): STREAMING → IDLE,
+          subprocess stays WARM and reusable so the model can reroute
+          mid-stream without a respawn (recycling would collapse the warm
+          base rung of the escalation ladder).
+        - timeout / error: STREAMING → DEAD → COLD (subprocess force-killed).
+        - WAITING_INPUT → IDLE (then the same autonomous-gated recycle).
 
-        Returns True if subprocess stayed alive (IDLE).
+        Returns True if the interrupt SUCCEEDED (the turn stopped) — this is
+        NOT a subprocess-alive signal. After a non-autonomous interrupt the
+        subprocess has been recycled to COLD, so callers needing the live
+        process state must re-read ``is_alive`` (``interrupt_session`` does
+        this), never the return value. Returns False if the interrupt timed
+        out or errored and the subprocess was force-killed.
 
         **Stale-interrupt guard:** Captures ``_send_generation`` at entry.
         If a new ``send()`` starts while this method is awaiting
