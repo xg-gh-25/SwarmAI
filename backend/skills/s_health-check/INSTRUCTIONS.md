@@ -105,9 +105,14 @@ else:
 PYEOF
 ```
 
-### 4. MCP Servers Connected (requires running backend)
+### 4. MCP Servers Enabled (requires running backend)
 ```bash
-# Uses dynamic port discovery from Check 1
+# Uses dynamic port discovery from Check 1.
+# NOTE: the backend has no runtime "connected" endpoint — MCP connections are
+# managed by the Claude SDK subprocess, not surfaced via HTTP. GET /api/mcp
+# returns the MERGED config, which already pre-filters out disabled entries
+# (merge_layers keeps only enabled != False), so it reports ACTIVE servers only
+# — it cannot surface a disabled one. We report the active count as the signal.
 source $SWARMAI_ROOT/backend/.venv/bin/activate && python3 << 'PYEOF'
 import psutil, urllib.request, json
 
@@ -128,20 +133,19 @@ def find_backend_port():
 port = find_backend_port()
 if port:
     try:
-        resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/api/mcp/status", timeout=2)
+        resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/api/mcp", timeout=2)
         data = json.loads(resp.read())
         servers = data if isinstance(data, list) else data.get("servers", [])
         for s in servers:
-            name = s.get("name", "?")
-            status = s.get("status", "?")
-            icon = "OK" if status == "connected" else "FAIL"
-            print(f"  {icon} {name}: {status}")
+            print(f"  OK {s.get('name', '?')}: active")
         if not servers:
-            print("  WARN No MCP servers reported")
+            print("  WARN No active MCP servers")
+        else:
+            print(f"  -> {len(servers)} active MCP server(s)")
     except Exception as e:
-        print(f"  WARN Cannot reach MCP status: {e}")
+        print(f"  WARN Cannot reach /api/mcp: {e}")
 else:
-    print("SKIP Backend not running — cannot check MCP connections")
+    print("SKIP Backend not running — cannot check MCP config")
 PYEOF
 ```
 
@@ -164,12 +168,13 @@ PYEOF
 
 ### 6. Streaming Config
 ```bash
-# agent_manager.py was replaced by session_unit.py in v7 re-architecture (March 2026)
-SESSION_UNIT="$HOME/Desktop/SwarmAI-Workspace/swarmai/backend/core/session_unit.py"
-if grep -q "include_partial_messages.*True\|output_format.*streaming" "$SESSION_UNIT" 2>/dev/null; then
-  echo "OK Streaming config found in session_unit.py"
+# include_partial_messages=True is set where ClaudeAgentOptions is built:
+# prompt_builder.py (NOT session_unit.py — that file only consumes the stream).
+PROMPT_BUILDER="$HOME/Desktop/SwarmAI-Workspace/swarmai/backend/core/prompt_builder.py"
+if grep -Eq "include_partial_messages\s*=\s*True" "$PROMPT_BUILDER" 2>/dev/null; then
+  echo "OK Streaming config (include_partial_messages=True) found in prompt_builder.py"
 else
-  echo "WARN Cannot verify streaming config in session_unit.py — check manually"
+  echo "WARN Cannot verify streaming config in prompt_builder.py — check manually"
 fi
 ```
 
@@ -248,14 +253,17 @@ PYEOF
 ### 10. Dev Tools
 ```bash
 echo "OK dev.sh exists" && test -x "$HOME/Desktop/SwarmAI-Workspace/swarmai/dev.sh" && echo "  executable: yes" || echo "  WARN not executable"
-# Check backend binary age
-BINARY="$HOME/Desktop/SwarmAI-Workspace/swarmai/desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin"
-if [ -f "$BINARY" ]; then
-  AGE=$(( ($(date +%s) - $(stat -f %m "$BINARY")) / 3600 ))
-  SIZE=$(du -h "$BINARY" | cut -f1)
-  echo "OK Backend binary: $SIZE, ${AGE}h old"
+# Check backend binary age. PyInstaller builds in ONEDIR mode: the artifact is a
+# DIRECTORY (python-backend-aarch64-apple-darwin/) containing the python-backend
+# executable + _internal/. Use test -d on the dir; age from the inner executable.
+BINDIR="$HOME/Desktop/SwarmAI-Workspace/swarmai/desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin"
+BINEXE="$BINDIR/python-backend"
+if [ -d "$BINDIR" ] && [ -x "$BINEXE" ]; then
+  AGE=$(( ($(date +%s) - $(stat -f %m "$BINEXE")) / 3600 ))
+  SIZE=$(du -sh "$BINDIR" | cut -f1)
+  echo "OK Backend binary (onedir): $SIZE, ${AGE}h old"
 else
-  echo "WARN No backend binary — run ./dev.sh build"
+  echo "WARN No backend binary dir — run ./dev.sh build"
 fi
 ```
 
