@@ -6,9 +6,10 @@
  *
  * Data fetched from /api/eval/* endpoints via TanStack Query.
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import api from '../services/api';
+import { computeBreakdowns, type Breakdowns, type BreakdownEntry } from './eval-breakdowns';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -54,13 +55,14 @@ interface EvalRun {
   dimensions: Record<string, number>;
 }
 
-interface GoldenSetCase {
+export interface GoldenSetCase {
   id: string;
   category: string;
   dimension: string;
   level: string;
   title: string;
   tier: string;
+  eval_method?: string;
   evaluators: string[];
   affected_by: string[];
   last_result: { status: string; run_id: string; triggered_at: string } | null;
@@ -70,6 +72,7 @@ interface GoldenSetResponse {
   total_cases: number;
   filtered_count: number;
   categories: string[];
+  dimensions: string[];
   cases: GoldenSetCase[];
 }
 
@@ -378,7 +381,79 @@ function OverviewTab() {
 
 // ─── Golden Set Tab ───────────────────────────────────────────────────────────
 
-function GoldenSetTab() {
+// ─── Summary Chips ────────────────────────────────────────────────────────
+// A compact, scannable distribution of the golden set across four facets.
+// Category chips are interactive (drill into the table); the other three are
+// read-only at-a-glance counts. All counts come from the live cases[] data.
+
+function ChipGroup({
+  label,
+  entries,
+  testidPrefix,
+  activeKey,
+  onClick,
+}: {
+  label: string;
+  entries: BreakdownEntry[];
+  testidPrefix: string;
+  activeKey?: string;
+  onClick?: (key: string) => void;
+}) {
+  const interactive = !!onClick;
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-[9px] uppercase tracking-wide text-[var(--color-text-muted)] font-medium">{label}</span>
+      <div className="flex flex-wrap gap-1">
+        {entries.map((e) => {
+          const isActive = activeKey === e.key;
+          const Tag = interactive ? 'button' : 'div';
+          return (
+            <Tag
+              key={e.key}
+              data-testid={`chip-${testidPrefix}-${e.key}`}
+              {...(interactive ? { onClick: () => onClick!(e.key), type: 'button' as const } : {})}
+              title={interactive ? `Filter by ${label.toLowerCase()}: ${e.key}` : `${e.key}: ${e.count}`}
+              className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border transition-colors ${
+                isActive
+                  ? 'bg-[var(--color-primary)] text-white border-[var(--color-primary)]'
+                  : 'bg-[var(--color-bg)] border-[var(--color-border)] text-[var(--color-text-secondary)]'
+              } ${interactive ? 'cursor-pointer hover:border-[var(--color-primary)]' : ''}`}
+            >
+              <span>{e.key.replace(/_/g, ' ')}</span>
+              <span data-testid={`chip-${testidPrefix}-${e.key}-count`} className={`font-semibold ${isActive ? 'text-white' : 'text-[var(--color-text)]'}`}>{e.count}</span>
+            </Tag>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function SummaryChips({
+  breakdowns,
+  activeCategory,
+  onCategoryClick,
+}: {
+  breakdowns: Breakdowns;
+  activeCategory: string;
+  onCategoryClick: (key: string) => void;
+}) {
+  return (
+    <div
+      data-testid="golden-summary"
+      className="mb-3 p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] flex flex-col gap-2.5"
+    >
+      <ChipGroup label="Category" entries={breakdowns.category} testidPrefix="category" activeKey={activeCategory || undefined} onClick={onCategoryClick} />
+      <div className="flex flex-wrap gap-x-6 gap-y-2.5">
+        <ChipGroup label="Tier" entries={breakdowns.tier} testidPrefix="tier" />
+        <ChipGroup label="Eval Method" entries={breakdowns.eval_method} testidPrefix="eval_method" />
+        <ChipGroup label="Dimension" entries={breakdowns.dimension} testidPrefix="dimension" />
+      </div>
+    </div>
+  );
+}
+
+export function GoldenSetTab() {
   const { data: gs } = useGoldenSet();
   const deleteCase = useDeleteCase();
   const triggerRun = useTriggerRun();
@@ -387,6 +462,12 @@ function GoldenSetTab() {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
+  const [filterTier, setFilterTier] = useState('');
+
+  // Breakdown counts are computed from the FULL set (not the filtered view) so
+  // the user always sees the whole distribution to drill into. Hooks must run
+  // before the early return, so guard against undefined data inside the memo.
+  const breakdowns = useMemo(() => computeBreakdowns(gs?.cases ?? []), [gs?.cases]);
 
   if (!gs) return <Loading />;
 
@@ -394,6 +475,7 @@ function GoldenSetTab() {
   const filtered = gs.cases.filter((c) => {
     if (searchQuery && !c.id.toLowerCase().includes(searchQuery.toLowerCase()) && !c.title.toLowerCase().includes(searchQuery.toLowerCase())) return false;
     if (filterCategory && c.category !== filterCategory) return false;
+    if (filterTier && c.tier !== filterTier) return false;
     if (filterStatus === 'passed' && c.last_result?.status !== 'passed') return false;
     if (filterStatus === 'failed' && c.last_result?.status !== 'failed') return false;
     if (filterStatus === 'skipped' && c.last_result?.status !== 'skipped') return false;
@@ -404,6 +486,14 @@ function GoldenSetTab() {
     <div className="flex h-full">
       {/* Main table */}
       <div className={`flex-1 p-6 overflow-hidden flex flex-col ${selectedCaseId ? 'pr-3' : ''}`}>
+        {/* Summary breakdown — counts by category / tier / eval method / dimension,
+            computed live from cases[]. Category chips drill into the table. */}
+        <SummaryChips
+          breakdowns={breakdowns}
+          activeCategory={filterCategory}
+          onCategoryClick={(cat) => setFilterCategory((prev) => (prev === cat ? '' : cat))}
+        />
+
         {/* Filter bar (matches mockup) */}
         <div className="flex items-center gap-2 mb-3">
           <input
@@ -430,6 +520,15 @@ function GoldenSetTab() {
             <option value="passed">Passed</option>
             <option value="failed">Failed</option>
             <option value="skipped">Skipped</option>
+          </select>
+          <select
+            data-testid="filter-tier"
+            value={filterTier}
+            onChange={(e) => setFilterTier(e.target.value)}
+            className="px-2.5 py-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-xs text-[var(--color-text)] outline-none cursor-pointer"
+          >
+            <option value="">All Tiers</option>
+            {breakdowns.tier.map((t) => <option key={t.key} value={t.key}>{t.key}</option>)}
           </select>
           <div className="flex-1" />
           <span className="text-[10px] text-[var(--color-text-muted)]">

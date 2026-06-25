@@ -16,6 +16,7 @@ import {
   retryPayloadHasAttachments,
   shouldResurfaceQuestion,
   computeDrainRetirement,
+  shouldArmSpinnerFromBackend,
   type QueueGuardState,
 } from '../streaming-guards';
 
@@ -376,5 +377,69 @@ describe('computeDrainRetirement (AC4 — server pending_count / last_drained_se
       currentDrainedSeqs: [],
       serverPendingCount: 0,
     }).retire).toBe(false);
+  });
+});
+
+
+describe('shouldArmSpinnerFromBackend (symmetric reconcile: backend streaming → spinner ON)', () => {
+  const base = {
+    backendStreaming: true,
+    tabIsStreaming: false,
+    hasSessionId: true,
+    postDisconnectUncertain: false,
+    isWaitingForBusy: false,
+    hasQueuedMessage: false,
+    streamClearedAt: undefined as number | undefined,
+    now: 1_000_000,
+  };
+
+  it('THE FIX: restored tab (idle) whose backend resume-streams → ARM (true)', () => {
+    // Restored tabs init isStreaming=false, _streamClearedAt undefined.
+    expect(shouldArmSpinnerFromBackend(base)).toBe(true);
+  });
+
+  it('backend NOT streaming → do not arm', () => {
+    expect(shouldArmSpinnerFromBackend({ ...base, backendStreaming: false })).toBe(false);
+  });
+
+  it('tab already streaming → no-op (false)', () => {
+    expect(shouldArmSpinnerFromBackend({ ...base, tabIsStreaming: true })).toBe(false);
+  });
+
+  it('no session id → cannot mirror → false', () => {
+    expect(shouldArmSpinnerFromBackend({ ...base, hasSessionId: false })).toBe(false);
+  });
+
+  it('post-disconnect tab owns its own recovery → do not override', () => {
+    expect(shouldArmSpinnerFromBackend({ ...base, postDisconnectUncertain: true })).toBe(false);
+  });
+
+  it('busy-poll owns its display → do not override', () => {
+    expect(shouldArmSpinnerFromBackend({ ...base, isWaitingForBusy: true })).toBe(false);
+  });
+
+  it('queued/drain owns its display → do not override', () => {
+    expect(shouldArmSpinnerFromBackend({ ...base, hasQueuedMessage: true })).toBe(false);
+  });
+
+  it('FLAP-GUARD: a tab cleared 3s ago (user just Stopped, backend not yet IDLE) → do NOT re-light', () => {
+    // The dangerous race: setIsStreaming(false) stamped _streamClearedAt; the
+    // backend interrupt (≤5s) has not yet flipped STREAMING→IDLE, so a poll in
+    // this window still sees backendStreaming=true. Must NOT re-arm.
+    expect(shouldArmSpinnerFromBackend({
+      ...base, streamClearedAt: base.now - 3_000,
+    })).toBe(false);
+  });
+
+  it('FLAP-GUARD boundary: exactly at the settle window → still suppressed', () => {
+    expect(shouldArmSpinnerFromBackend({
+      ...base, streamClearedAt: base.now - 12_000,
+    })).toBe(false);
+  });
+
+  it('after the settle window a still-streaming backend → ARM (lost session_start, not a Stop)', () => {
+    expect(shouldArmSpinnerFromBackend({
+      ...base, streamClearedAt: base.now - 12_001,
+    })).toBe(true);
   });
 });

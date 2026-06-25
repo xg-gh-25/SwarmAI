@@ -155,6 +155,20 @@ def _get_streaming_count() -> int:
     return _streaming_count
 
 
+# Threshold for a "dumb spawn": a subprocess that entered STREAMING but
+# produced ZERO SDK events since spawn (_last_event_time is None) — alive
+# but silent, with no open tool_use. This is distinct from slow inference
+# (events flowing, just slow) which the adaptive 600-1800s
+# _compute_message_timeout legitimately tolerates. A dumb spawn produces
+# nothing — not even a first token — so it must be recovered on a much
+# shorter window. Resume spawns get 2x (they replay the full conversation
+# before the first token — see GUI66), still far below the 1800s ceiling.
+# Evidence: pid 33855 / session 89b71059 (2026-06-25) — STREAMING with zero
+# events for 15+ min; the only backstop was the 1800s adaptive timeout, so
+# the frontend spinner spun indefinitely (run_6c482b10).
+DUMB_SPAWN_TIMEOUT_SECONDS: float = 120.0
+
+
 # ── Streaming timeout resilience (2026-05-19) ────────────────────
 # Circuit breaker for high-context timeout dead loops.
 # See: Knowledge/Designs/2026-05-19-streaming-timeout-resilience-design.md

@@ -87,9 +87,12 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
         // border-b-2 on ALL tabs reserves the underline height → no layout shift
         // between active/inactive. Inactive uses a transparent placeholder.
         'group/tab flex items-center gap-1.5 px-3 py-1 rounded cursor-pointer transition-colors',
-        'min-w-0 max-w-[200px] flex-shrink-0 border-b-2',
+        'min-w-0 max-w-[200px] flex-shrink-0',
+        // border-b-2 on ALL states (transparent when inactive) keeps the tab
+        // height constant so the active underline appears without layout shift (GUI12).
+        'border-b-2',
         isActive
-          ? 'bg-[var(--color-hover)] text-[var(--color-text)] font-medium border-[var(--color-primary)]'
+          ? 'border-blue-500 bg-[var(--color-card)] text-[var(--color-text)] font-medium'
           : 'border-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
       )}
     >

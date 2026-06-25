@@ -614,13 +614,49 @@ class LifecycleManager:
                     unit.session_id, stall,
                 )
                 continue
-            # Use adaptive timeout from the unit (context-aware) if available,
-            # otherwise fall back to static threshold.
-            effective_timeout = (
-                unit._compute_message_timeout()
-                if hasattr(unit, "_compute_message_timeout")
-                else self.STREAMING_TIMEOUT_SECONDS
+            # Two distinct stall classes — different thresholds:
+            #  (a) DUMB SPAWN: the subprocess entered STREAMING but produced
+            #      ZERO SDK events (not even a first token), no open tool.
+            #      "Alive but silent" → recover fast. Reusing the 600-1800s
+            #      adaptive timeout left the frontend spinner spinning 15+ min
+            #      (run_6c482b10: pid 33855). Resume gets 2x (replays the full
+            #      conversation before the first token — GUI66).
+            #  (b) SLOW INFERENCE: events ARE flowing, the turn is just slow.
+            #      Keep the adaptive 600-1800s tolerance — killing here would
+            #      false-abort a healthy large-context turn.
+            #
+            #  Discriminator: _transition() sets BOTH _streaming_start_time and
+            #  _last_event_time to the SAME timestamp on STREAMING entry
+            #  (session_unit.py); the orchestrator then advances ONLY
+            #  _last_event_time on each real SDK event. So "no event since
+            #  spawn" == _last_event_time has not moved past _streaming_start_time.
+            #  (NOT `is None` — that is only true AFTER leaving STREAMING.)
+            start_t = getattr(unit, "_streaming_start_time", None)
+            last_t = getattr(unit, "_last_event_time", None)
+            # "No event since spawn" == _last_event_time has not advanced past
+            # _streaming_start_time. Numeric-safe: only the (float, float) case
+            # can be a dumb spawn; anything else (None, or non-numeric) falls
+            # through to the adaptive path — the conservative default that never
+            # applies the aggressive short timeout to an ambiguous unit.
+            no_event_since_spawn = (
+                last_t is None and start_t is not None
+            ) or (
+                isinstance(last_t, (int, float))
+                and isinstance(start_t, (int, float))
+                and last_t <= start_t
             )
+            if no_event_since_spawn:
+                from .session_unit import DUMB_SPAWN_TIMEOUT_SECONDS
+                resume_multiplier = 2 if getattr(unit, "_sdk_session_id", None) else 1
+                effective_timeout = DUMB_SPAWN_TIMEOUT_SECONDS * resume_multiplier
+            else:
+                # Use adaptive timeout from the unit (context-aware) if available,
+                # otherwise fall back to static threshold.
+                effective_timeout = (
+                    unit._compute_message_timeout()
+                    if hasattr(unit, "_compute_message_timeout")
+                    else self.STREAMING_TIMEOUT_SECONDS
+                )
             if stall > effective_timeout:
                 # Circuit breaker: if this session has already been unstuck
                 # multiple times without success, don't keep trying — it's

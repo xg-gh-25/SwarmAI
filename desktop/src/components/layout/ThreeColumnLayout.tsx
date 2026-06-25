@@ -159,7 +159,7 @@ function LeftSidebar() {
       </button>
 
       {/* Navigation icons */}
-      <nav className="flex-1 pt-2 pb-1 space-y-1 overflow-y-auto flex flex-col items-center" data-testid="nav-icons">
+      <nav className="flex-1 pt-2.5 pb-1 space-y-1.5 overflow-y-auto flex flex-col items-center" data-testid="nav-icons">
         {/* Tools group */}
         {toolItems.map((item) => (
           <NavIconButton
@@ -172,8 +172,9 @@ function LeftSidebar() {
           />
         ))}
 
-        {/* Separator */}
-        <div className="w-5 border-t border-[var(--color-border)] my-1.5" />
+        {/* Group separator — inset rule with extra vertical breathing room
+            to visually distinguish the Tools group from the Insights group. */}
+        <div className="w-4 my-1 border-t border-[var(--color-border)]" aria-hidden="true" />
 
         {/* Insights group */}
         <NavIconButton
@@ -274,12 +275,12 @@ interface NavIconButtonProps {
 /** SVG stroke icon lookup — AC6: replace Material Symbols with inline SVGs. */
 function NavSvgIcon({ name }: { name: string }) {
   const svgProps = {
-    width: 18,
-    height: 18,
+    width: 19,
+    height: 19,
     viewBox: '0 0 24 24',
     fill: 'none',
     stroke: 'currentColor',
-    strokeWidth: 2,
+    strokeWidth: 1.75,
     strokeLinecap: 'round' as const,
     strokeLinejoin: 'round' as const,
   };
@@ -301,33 +302,36 @@ function NavSvgIcon({ name }: { name: string }) {
         </svg>
       );
     case 'graph':
-      // Network/nodes icon for Code Intelligence
+      // Hub-and-spoke network for Code Intelligence — one central node linked
+      // to 3 satellites at even 120° spacing (top, lower-left, lower-right),
+      // equal radius, spokes snapped to satellite centers. Reads as a balanced
+      // radial graph at 19px.
       return (
         <svg {...svgProps} aria-hidden="true">
-          <circle cx="6" cy="6" r="2" />
-          <circle cx="18" cy="6" r="2" />
-          <circle cx="6" cy="18" r="2" />
-          <circle cx="18" cy="18" r="2" />
-          <circle cx="12" cy="12" r="2" />
-          <line x1="7.5" y1="7.5" x2="10.5" y2="10.5" />
-          <line x1="13.5" y1="10.5" x2="16.5" y2="7.5" />
-          <line x1="7.5" y1="16.5" x2="10.5" y2="13.5" />
-          <line x1="13.5" y1="13.5" x2="16.5" y2="16.5" />
+          <line x1="12" y1="12" x2="12" y2="5" />
+          <line x1="12" y1="12" x2="18" y2="15.5" />
+          <line x1="12" y1="12" x2="6" y2="15.5" />
+          <circle cx="12" cy="12" r="2.4" />
+          <circle cx="12" cy="5" r="1.9" />
+          <circle cx="18" cy="15.5" r="1.9" />
+          <circle cx="6" cy="15.5" r="1.9" />
         </svg>
       );
     case 'activity':
-      // Pulse/heartbeat icon for Engine Metrics
+      // Single centered pulse line for Engine Metrics — symmetric baseline
+      // with one spike, no off-center kink.
       return (
         <svg {...svgProps} aria-hidden="true">
-          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+          <polyline points="2 12 7 12 10 5 14 19 17 12 22 12" />
         </svg>
       );
     case 'heartbeat':
-      // Heart with pulse line for OS Eval
+      // Heart with a clean pulse notch for OS Eval — pulse sits inside the
+      // heart instead of overlapping a second full-width polyline.
       return (
         <svg {...svgProps} aria-hidden="true">
-          <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z" fill="none" />
-          <polyline points="4 12 8 12 10 8 14 16 16 12 20 12" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M19.5 12.6 12 20l-7.5-7.4a4.6 4.6 0 0 1 6.5-6.5l1 1 1-1a4.6 4.6 0 0 1 6.5 6.5z" />
+          <polyline points="6.5 12.5 9.5 12.5 11 9.8 13 14.5 14.5 12.5 17.5 12.5" />
         </svg>
       );
     case 'book':
@@ -370,12 +374,21 @@ function NavIconButton({ icon, label, isActive, onClick, 'data-testid': testId }
       title={label}
       data-testid={testId}
       aria-pressed={isActive}
-      className={`flex items-center justify-center w-8 h-8 rounded-lg transition-colors ${
+      className={`relative flex items-center justify-center w-8 h-8 rounded-lg transition-colors ${
         isActive
           ? 'bg-[var(--color-primary)]/15 text-[var(--color-sidebar-icon-active)] ring-1 ring-[var(--color-primary)]/30'
           : 'text-[var(--color-sidebar-icon)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
       }`}
     >
+      {/* Active indicator bar — always present (layout-shift-free, GUI10):
+          visible only when active, transparent otherwise. */}
+      <span
+        data-testid="active-bar"
+        aria-hidden="true"
+        className={`pointer-events-none absolute left-0 top-1/2 -translate-y-1/2 h-4 w-[3px] rounded-r-full bg-[var(--color-primary)] transition-opacity ${
+          isActive ? 'opacity-100' : 'opacity-0'
+        }`}
+      />
       <NavSvgIcon name={icon} />
     </button>
   );

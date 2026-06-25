@@ -48,7 +48,7 @@ import type {
   CompactionGuardEvent,
 } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
-import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurfaceQuestion, computeDrainRetirement } from './streaming-guards';
+import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurfaceQuestion, computeDrainRetirement, shouldArmSpinnerFromBackend } from './streaming-guards';
 import { chatService } from '../services/chat';
 import { messageStoreRegistry } from '../stores/MessageStore';
 import type { UnifiedTab } from './useUnifiedTabState';
@@ -59,14 +59,29 @@ import { useToast } from '../contexts/ToastContext';
 // Reconnection constants
 // ---------------------------------------------------------------------------
 
-/** Maximum number of automatic reconnection attempts for connection-phase failures. */
-const RECONNECT_MAX_ATTEMPTS = 3;
+/** Maximum number of automatic reconnection attempts for connection-phase failures.
+ *  Sized (with the 10s delay cap below) to span ~65s so a typical daemon redeploy
+ *  (~60s: crash-loop + boot + context injection) is ridden out SILENTLY — the
+ *  stream just re-establishes and the user sees a "Reconnecting…" spinner, no
+ *  error, no resend needed. Outages LONGER than this fall through to the
+ *  auto-resend safety net (RESEND_MAX_ATTEMPTS, fired on swarm:backend-recovered). */
+const RECONNECT_MAX_ATTEMPTS = 9;
+
+/** Maximum number of auto-resends on backend-recovered for a single swallowed-question
+ *  episode. The ~65s connection-phase reconnect budget covers a normal redeploy; this
+ *  is the fallback for outages that outlast it. The exhausted send is re-sent when
+ *  health flips back. Capped so a flapping backend (up/down/up) can't drive an
+ *  unbounded resend loop. */
+const RESEND_MAX_ATTEMPTS = 2;
 
 /** Base delay in ms for exponential backoff (attempt 0 → 1000ms). */
 const RECONNECT_BASE_DELAY_MS = 1000;
 
-/** Maximum delay cap in ms for exponential backoff. */
-const RECONNECT_MAX_DELAY_MS = 30000;
+/** Maximum delay cap in ms for exponential backoff. Capped at 10s (not 30s) so the
+ *  later retries stay responsive — once the backend is back, the next silent retry
+ *  fires within ≤10s instead of leaving a long blind gap. With 9 attempts the
+ *  schedule is 1,2,4,8,10,10,10,10,10 ≈ 65s total. */
+const RECONNECT_MAX_DELAY_MS = 10000;
 
 // ---------------------------------------------------------------------------
 // Stall detection constants
@@ -1374,6 +1389,38 @@ export function useChatStreamingLifecycle(
             }
           }
 
+          // ── Symmetric re-arm: backend streaming but tab shows idle ─────────
+          // The mirror is authoritative BOTH ways. The force-clear below handles
+          // frontend=streaming + backend=idle (the stuck-spinner case). This
+          // handles the OPPOSITE: backend IS streaming but the tab shows no
+          // spinner — which happens after a RESTART (restored tabs init
+          // isStreaming=false while their backend session resume-streams) or a
+          // lost session_start SSE. Without this the response renders (via the DB
+          // reconcile above) with NO spinner. Self-healing: once the backend goes
+          // idle the force-clear branch turns it back off, so a wrong re-arm can
+          // never become a permanent hang.
+          if (
+            shouldArmSpinnerFromBackend({
+              backendStreaming: mirrorState?.streaming === true,
+              tabIsStreaming: tabState.isStreaming,
+              hasSessionId: !!mirrorSid,
+              postDisconnectUncertain: !!tabState._postDisconnectUncertain,
+              isWaitingForBusy: !!tabState.isWaitingForBusy,
+              hasQueuedMessage: !!tabState.queuedMessage,
+              streamClearedAt: tabState._streamClearedAt,
+              now: Date.now(),
+            })
+          ) {
+            console.warn(
+              '[StreamReconcile] Backend streaming but tab idle — arming spinner',
+              { tabId, sessionId: mirrorSid },
+            );
+            // Atomic primitive (flag + Set + re-render + state machine).
+            // NEVER mutate tabState.isStreaming directly.
+            setIsStreaming(true, tabId);
+            continue;  // re-armed — nothing else to reconcile for this tab this tick
+          }
+
           if (!tabState.isStreaming) continue;  // only check streaming tabs
 
           // DRAIN/QUEUE IMMUNITY: never force-clear a tab that has a pending
@@ -1609,6 +1656,10 @@ export function useChatStreamingLifecycle(
             }
           } else {
             tabState.streamStartTime = undefined;
+            // Flap-guard stamp: the reconcile loop's idle→streaming re-arm skips
+            // a tab cleared within the settle window, so a Stop (frontend idle)
+            // is not re-lit during the ~5s before the backend transitions to IDLE.
+            tabState._streamClearedAt = Date.now();
           }
         }
       }
@@ -3534,6 +3585,26 @@ export function useChatStreamingLifecycle(
           }
         }
 
+        // ── AUTO-RESEND ARMING (swallowed-question fix) ───────────────────
+        // CONNECTION-PHASE failure means the question never produced any data —
+        // very likely it never reached the backend (e.g. daemon redeploy ~60s
+        // outage >> the ~7s reconnect budget). Arm a one-shot auto-resend that
+        // the backend-recovered handler fires once health flips back, so the
+        // user's question isn't silently swallowed. Gated to connection-phase
+        // ONLY (never mid-stream — that may have persisted partial work, and
+        // mergeTabFromDb recovers it; resending would double-answer). Bounded by
+        // RESEND_MAX_ATTEMPTS so a flapping backend can't loop. Never for a
+        // user-stopped stream.
+        const canArmResend =
+          !hadData &&
+          !!tabState?.retryStreamFn &&
+          !tabState?.userStopped &&
+          (tabState?._pendingResendAttempts ?? 0) < RESEND_MAX_ATTEMPTS;
+        if (tabState && canArmResend) {
+          tabState._pendingResendOnRecovery = true;
+          tabState._pendingResendAssistantId = assistantMessageId;
+        }
+
         // NOTE (2026-06-21, zombie-poison fix): do NOT POST /stop here.
         // This was a stale "Gap 2 fix" that explicitly stopped the backend
         // session on mid-stream disconnect. But /stop → interrupt_session →
@@ -3558,8 +3629,14 @@ export function useChatStreamingLifecycle(
         // The original code suppressed error.message entirely — that made debugging
         // impossible and showed a blank-looking generic message.
         const realError = error.message || 'Unknown connection error';
+        // If an auto-resend is armed, tell the user it will retry itself when the
+        // backend returns (and leave the placeholder so it's visible meanwhile).
+        // If the backend never comes back, this message stays as the fallback.
+        const willAutoResend = tabState?._pendingResendOnRecovery === true;
         const errorContent: ContentBlock[] = [
-          { type: 'text' as const, text: `⚠️ Connection interrupted: ${realError}\n\n💡 Your conversation is saved — send your message again to continue.` },
+          { type: 'text' as const, text: willAutoResend
+              ? `⏳ Backend unreachable — your message will be re-sent automatically as soon as it's back. (${realError})`
+              : `⚠️ Connection interrupted: ${realError}\n\n💡 Your conversation is saved — send your message again to continue.` },
         ];
 
         // Same pattern as createStreamHandler error path: APPEND error

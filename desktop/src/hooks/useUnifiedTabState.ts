@@ -159,6 +159,12 @@ export interface UnifiedTab {
   /** Reconciliation race guard: set ONLY by setIsStreaming(true). Never touched by
    *  elapsed-timer effects or selectTab. Used by reconcile loop to skip fresh streams. */
   _reconcileStreamStart?: number;
+  /** Timestamp of the most recent setIsStreaming(false) (any clear: user Stop,
+   *  turn end, force-clear). Flap-guard for the reconcile loop's idle→streaming
+   *  re-arm: the loop must NOT re-arm the spinner within the settle window after
+   *  a clear, or the ~5s gap between a user Stop (frontend idle) and the backend
+   *  transitioning STREAMING→IDLE would let a poll re-light a just-stopped tab. */
+  _streamClearedAt?: number;
   /** Reconcile-OWNED backstop clock. Stamped by the 15s reconcile poll the FIRST
    *  time it observes the stuck condition (frontend=streaming + backend NOT
    *  streaming + NOT an active backend state). Reset to undefined by the same poll
@@ -225,6 +231,23 @@ export interface UnifiedTab {
    *  fetch failed (backend unreachable) — leaving a frozen partial response.
    *  The backend-recovered handler retries the DB reconcile for flagged tabs. */
   _dbReconcileFailed?: boolean;
+
+  /** Set when a CONNECTION-PHASE send exhausted all reconnect attempts while the
+   *  backend was unreachable (e.g. a daemon redeploy ~60s outage >> the ~7s
+   *  connection-phase reconnect budget). The question never reached the backend,
+   *  so mergeTabFromDb has nothing to recover. The backend-recovered handler
+   *  auto-resends via retryStreamFn so the user's question isn't silently
+   *  swallowed. Connection-phase ONLY — never armed for mid-stream failures
+   *  (those may have persisted partial work; resending would double-answer). */
+  _pendingResendOnRecovery?: boolean;
+  /** The assistant placeholder id of the swallowed turn. On auto-resend the
+   *  placeholder's error content is stripped so the fresh response lands in a
+   *  clean bubble (retryStreamFn reuses this same id). */
+  _pendingResendAssistantId?: string;
+  /** Number of auto-resends performed for the current swallowed-question episode.
+   *  Capped (RESEND_MAX_ATTEMPTS) so a flapping backend can't drive a resend loop.
+   *  Reset on the next manual send. */
+  _pendingResendAttempts?: number;
 
   // ── Per-tab Streaming State Machine (P5) ──────────────────────────
   /** Explicit state machine tracking this tab's streaming mode.
