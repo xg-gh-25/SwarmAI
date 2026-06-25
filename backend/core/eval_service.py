@@ -463,6 +463,51 @@ class EvalService:
             }
         return score
 
+    # High-score threshold: at/above this the eval score reads as "clean pass",
+    # so a red mechanical link makes the score a LIE worth overriding. Below it
+    # the score already tells the truth — nothing to override.
+    DIVERGENCE_HIGH_SCORE = 85.0
+
+    @staticmethod
+    def compute_score_divergence(health: dict, tracker_red: bool) -> dict:
+        """Detect score↔reality divergence (closed-loop design §6b).
+
+        PURE function (no instance, no I/O) so divergence is assertable on
+        synthetic state. Divergence = the per-case eval score reads CLEAN (high)
+        while a MECHANICAL signal says the loop is broken (a correction class
+        recurred past its deployed gate → 🔴 in the tracker). When that happens
+        the score must NOT be reported as a clean pass — the divergence OVERRIDES
+        it in the briefing headline.
+
+        Deliberately ORTHOGONAL to the cases_error red-light: cases_error means
+        the JUDGE INFRA broke (score measured a subset); tracker_red means the
+        AGENT is still repeating a known mistake CLASS despite a green eval. Both
+        are "the gauge reads green on a broken loop" but with different causes,
+        so they are surfaced separately, never conflated.
+
+        Args:
+            health: get_health() output (reads `overall_score`; None/missing ok).
+            tracker_red: True if any tracked correction class shows 🔴 (recurrence
+                past a deployed gate/rule). Computed by the caller from
+                CorrectionClassTracker so this function stays pure + testable.
+
+        Returns:
+            {"diverged": bool, "reason": str}. reason is non-empty only when diverged.
+        """
+        score = health.get("overall_score") if isinstance(health, dict) else None
+        if score is None or not tracker_red:
+            return {"diverged": False, "reason": ""}
+        if score < EvalService.DIVERGENCE_HIGH_SCORE:
+            # Score already low — it isn't lying, so there's nothing to override.
+            return {"diverged": False, "reason": ""}
+        return {
+            "diverged": True,
+            "reason": (
+                f"eval score {score} reads clean but a correction class is 🔴 "
+                f"(recurred past its gate) — score does NOT prove the loop is closed"
+            ),
+        }
+
     def _count_consecutive_passes(self, case_id: str) -> int:
         """Count consecutive passes in runs that INCLUDE this case.
 

@@ -1503,6 +1503,61 @@ def _detect_active_coding_project_impl(workspace: Path) -> str | None:
 # Briefing builder — main entry point
 # ---------------------------------------------------------------------------
 
+def _render_self_eval_lines(
+    health: dict, tracker_red: bool, case_count: int
+) -> list[str]:
+    """Render the briefing self-eval line(s) with divergence awareness (M4-3).
+
+    Pure (no I/O) so the rendering — especially the score↔reality divergence
+    OVERRIDE — is testable on synthetic state. Two independent red signals,
+    surfaced separately, NEVER conflated:
+
+      - cases_error > 0  → judge INFRA broke (score measured a subset). Existing
+        finding-1 red-light, preserved here.
+      - tracker_red      → the AGENT is still repeating a known correction CLASS
+        past its deployed gate (🔴) while the eval reads clean. This is the NEW
+        M4-3 divergence: a high score that does NOT prove the loop is closed.
+
+    Divergence takes the headline (it OVERRIDES the clean number) because a
+    green score next to a recurring failure class is the precise "100/100 on a
+    dead loop" lie the closed-loop design exists to expose.
+    """
+    try:
+        if health.get("overall_score") is None:
+            if case_count > 0:
+                return [f"**Self-Eval:** {case_count} cases (no runs yet)"]
+            return []
+
+        score = health["overall_score"]
+        last_run = health.get("last_run") or {}
+        last_date = (last_run.get("triggered_at") or "")[:10] or "never"
+        n_error = last_run.get("cases_error", 0) or 0
+
+        # M4-3 divergence OVERRIDE — highest priority: the score lies while a
+        # correction class recurs. Computed by the pure EvalService helper.
+        from core.eval_service import EvalService
+
+        div = EvalService.compute_score_divergence(health, tracker_red)
+        if div["diverged"]:
+            return [
+                f"**Self-Eval:** 🔴 DIVERGENCE — {div['reason']}. "
+                f"{case_count} cases | Last: {last_date}"
+            ]
+
+        # Existing infra-break red-light (finding-1) — score excludes errored cases.
+        if n_error:
+            return [
+                f"**Self-Eval:** 🔴 {n_error} case(s) ERRORED (judge infra failed — "
+                f"score {score} excludes them, NOT a clean pass). "
+                f"{case_count} cases | Last: {last_date}"
+            ]
+
+        return [f"**Self-Eval:** {case_count} cases | Score: {score} | Last: {last_date}"]
+    except Exception:
+        # Briefing helpers must never raise.
+        return []
+
+
 def build_session_briefing(
     workspace_dir: str | Path,
 ) -> Optional[str]:
@@ -1705,28 +1760,24 @@ def build_session_briefing(
                 from core.eval_service import get_eval_service
                 svc = get_eval_service()
                 health = svc.get_health()
-                if health.get("overall_score") is not None:
-                    last_run = health.get("last_run", {})
-                    last_date = (last_run.get("triggered_at") or "")[:10]
-                    n_error = last_run.get("cases_error", 0)
-                    # Red light: judge-infra failures (invalid model / auth /
-                    # throttle) mean the score was computed on only the
-                    # mechanical cases — the LLM-judge layer never ran. Without
-                    # this, a broken judge shows a clean "100" (the lie).
-                    if n_error:
-                        sections.append(
-                            f"**Self-Eval:** 🔴 {n_error} case(s) ERRORED (judge infra "
-                            f"failed — score {health['overall_score']} excludes them, "
-                            f"NOT a clean pass). {svc.case_count} cases | Last: {last_date or 'never'}"
-                        )
-                    else:
-                        sections.append(
-                            f"**Self-Eval:** {svc.case_count} cases | "
-                            f"Score: {health['overall_score']} | "
-                            f"Last: {last_date or 'never'}"
-                        )
-                elif svc.case_count > 0:
-                    sections.append(f"**Self-Eval:** {svc.case_count} cases (no runs yet)")
+                # M4-3: compute the mechanical red signal — is any correction
+                # class recurring past its deployed gate? If so, a clean eval
+                # score is a LIE worth overriding. Kept out of the pure renderer
+                # (which must stay I/O-free + testable on synthetic state).
+                tracker_red = False
+                try:
+                    from core.evolution.correction_tracker import CorrectionClassTracker
+
+                    tracker_red = any(
+                        "\U0001f534" in ln
+                        for ln in CorrectionClassTracker().briefing_lines()
+                    )
+                except Exception:
+                    tracker_red = False  # tracker absence must never break briefing
+
+                sections.extend(
+                    _render_self_eval_lines(health, tracker_red, svc.case_count)
+                )
         except Exception as exc:
             logger.debug("Self-eval briefing failed: %s", exc)
 
