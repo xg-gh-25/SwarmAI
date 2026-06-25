@@ -93,8 +93,12 @@ SOFT_COMPACT_PCT: int = 60
 # # assumes: 60s is short enough that a stuck tool (e.g. an unbounded grep) is
 # visibly flagged quickly, but long enough that normal fast tools never bubble.
 # This is a VISIBILITY signal only — it never kills anything (no false-kill
-# risk). Auto-abort of provably-stuck tools (CPU/IO-silent) is a separate
-# follow-up for headless/autonomous modes where no human watches the spinner.
+# risk). Auto-abort of provably-stuck tools IS implemented separately: see the
+# "Tool-aware hang tier v2 — CPU-liveness gated (run_fb6e94a9)" constants below
+# (TOOL_HANG_OPEN_S / CPU_LIVE_EPSILON / TOOL_HANG_HARD_CEILING_S) and the PID
+# watchdog. That path warm-interrupts a tool whose process tree burns ~0 CPU and
+# works headless (no human required) — this heartbeat is the visibility layer
+# on top of it, not a substitute for it.
 LONG_TURN_HEARTBEAT_S: float = 60.0
 
 # Cooldown between context-ring SOFT compactions (seconds). Prevents back-to-back
