@@ -2064,4 +2064,79 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
       );
     });
   });
+
+
+  /**
+   * Property 6: Active Indicator Bar is Layout-Shift-Free (leftnav-redesign)
+   * **Feature: leftnav-redesign, Property 6: Active Left Bar**
+   * **Validates: AC4**
+   *
+   * Every nav button SHALL contain an active-indicator bar element that is
+   * PRESENT in both active and inactive states (so toggling does not shift
+   * layout — GUI10). The bar SHALL be visible (opacity-100) only when the
+   * button is active, and hidden (opacity-0) otherwise.
+   */
+  describe('Feature: leftnav-redesign, Property 6: Active Left Bar', () => {
+    const navTestIds = ['nav-skills', 'nav-mcp'] as const;
+    const navTestIdArb = fc.constantFrom(...navTestIds);
+
+    it('should render an active-bar element inside every nav button (present in all states)', () => {
+      fc.assert(
+        fc.property(fc.integer({ min: 1, max: 100 }), (_iteration) => {
+          mockStorage.clear();
+
+          const { unmount } = renderWithCleanup(
+            <div data-testid="chat-content">Chat Content</div>
+          );
+
+          // Property: every nav button SHALL contain an active-bar element,
+          // regardless of active state (layout-shift-free invariant)
+          const navContainer = document.querySelector('[data-testid="nav-icons"]');
+          const navButtons = navContainer?.querySelectorAll('button[data-testid^="nav-"]') ?? [];
+          expect(navButtons.length).toBeGreaterThanOrEqual(2);
+          for (const btn of Array.from(navButtons)) {
+            const bar = btn.querySelector('[data-testid="active-bar"]');
+            expect(bar).not.toBeNull();
+          }
+
+          unmount();
+        }),
+        { numRuns: 30 }
+      );
+    });
+
+    it('should show the bar (opacity-100) only on the active button, hidden (opacity-0) otherwise', () => {
+      fc.assert(
+        fc.property(navTestIdArb, (clickedTestId) => {
+          mockStorage.clear();
+
+          const { unmount } = renderWithCleanup(
+            <div data-testid="chat-content">Chat Content</div>
+          );
+
+          const clickedButton = screen.getByTestId(clickedTestId);
+          act(() => {
+            clickedButton.click();
+          });
+
+          // Active button's bar SHALL be visible
+          const activeBar = clickedButton.querySelector('[data-testid="active-bar"]');
+          expect(activeBar).not.toBeNull();
+          expect(activeBar?.className).toContain('opacity-100');
+
+          // Inactive buttons' bars SHALL be present but hidden
+          for (const testId of navTestIds) {
+            if (testId === clickedTestId) continue;
+            const otherButton = screen.getByTestId(testId);
+            const otherBar = otherButton.querySelector('[data-testid="active-bar"]');
+            expect(otherBar).not.toBeNull();
+            expect(otherBar?.className).toContain('opacity-0');
+          }
+
+          unmount();
+        }),
+        { numRuns: 30 }
+      );
+    });
+  });
 });

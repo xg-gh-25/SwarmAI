@@ -19,7 +19,9 @@
   --color-status-warning: #d97706;
   --color-input-bg: #ffffff;
   --color-input-border: #cbd5e1;
-  --color-sidebar-icon: #94a3b8;
+  /* Resting sidebar icon: bumped #94a3b8 → #5b6573 for >=3:1 contrast vs
+   * --color-bg-chrome #eef1f5 (was ~1.9:1, now ~5.1:1). WCAG UI min is 3:1. */
+  --color-sidebar-icon: #5b6573;
   --color-sidebar-icon-active: #2b6cee;
   --color-code-bg: #1e293b;
   --color-status-online: #16a34a;
@@ -106,7 +108,9 @@
   --color-status-warning: #f59e0b;
   --color-input-bg: #191e28;
   --color-input-border: #2a3040;
-  --color-sidebar-icon: #545d68;
+  /* Resting sidebar icon: bumped #545d68 → #8b95a3 for >=3:1 contrast vs
+   * --color-bg-chrome #161a21 (was ~2.6:1, now ~4.9:1). WCAG UI min is 3:1. */
+  --color-sidebar-icon: #8b95a3;
   --color-sidebar-icon-active: #e6edf3;
   --color-code-bg: #111318;
   --color-status-online: #22c55e;
