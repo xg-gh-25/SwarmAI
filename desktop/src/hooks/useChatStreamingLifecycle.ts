@@ -2821,6 +2821,13 @@ export function useChatStreamingLifecycle(
               const currentTabState = tabMapRef.current.get(capturedTabId);
               if (!currentTabState) return;
               currentTabState.hasReceivedData = false;
+              // Bump gen BEFORE retry so the retry's fresh handlers (created
+              // inside retryFn) capture+stamp a NEWER latestCompleteGen than the
+              // original turn's handlers — a late [DONE] from the original
+              // connection then correctly no-ops instead of clearing the retry's
+              // live stream (adversarial LOW, run_6adee7d5). Mirrors the send
+              // path's bump-before-createCompleteHandler ordering.
+              incrementStreamGen();
               const newAbort = retryFn();
               currentTabState.abortController = {
                 abort: () => { newAbort(); },
@@ -3506,6 +3513,12 @@ export function useChatStreamingLifecycle(
             // error handler can distinguish connection-phase again
             currentTabState.hasReceivedData = false;
 
+            // Bump gen BEFORE retry so the retry's fresh handlers supersede the
+            // original turn's — a late [DONE] from the original connection then
+            // no-ops instead of clearing the retry's live stream (adversarial
+            // LOW, run_6adee7d5). Mirrors send-path bump-before-handler ordering.
+            incrementStreamGen();
+
             // Re-initiate the stream via the stored retry function
             const newAbort = retryFn();
 
@@ -3800,11 +3813,21 @@ export function useChatStreamingLifecycle(
         // only by the 30s reconcile force-clear (~109/114 idle force-clears).
         // Closed tab (no tabState) → no-op, as before.
         if (!tabState) return; // closed tab
-        const liveGen = tabState.latestCompleteGen ?? capturedGen;
-        if (capturedGen !== liveGen) {
-          // A genuinely newer send superseded this handler — correct no-op.
+        // Fail-SAFE liveness check (adversarial MED, run_6adee7d5): treat an
+        // UNSET latestCompleteGen as NON-authoritative, not authoritative. The
+        // stamp at handler creation only writes when the tab already exists in
+        // the map; if it was never stamped (deferred tab registration, legacy
+        // null-tab path), a `?? capturedGen` fallback would make the gate
+        // `capturedGen === capturedGen` = always-true = always-clear, which
+        // could wrongly clear a NEWER stream's spinner. An unset marker means
+        // "I cannot prove I am the live completer" → no-op (the 30s reconcile
+        // backstop still covers the genuinely-stuck case).
+        const liveGen = tabState.latestCompleteGen;
+        if (liveGen === undefined || capturedGen !== liveGen) {
+          // Either liveness unknown, or a genuinely newer send superseded this
+          // handler — correct no-op.
           if (import.meta.env.DEV) {
-            console.warn('[StreamComplete] stale handler no-op (superseded by newer send)', {
+            console.warn('[StreamComplete] handler no-op (not the live completer)', {
               tabId: capturedTabId, capturedGen, liveGen, streamGen: tabState.streamGen,
             });
           }
