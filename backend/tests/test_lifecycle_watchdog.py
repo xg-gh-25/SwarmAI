@@ -501,3 +501,142 @@ class TestWaitingInputTimeout:
 
         idle_unit.force_unstick_waiting_input.assert_not_called()
         streaming_unit.force_unstick_waiting_input.assert_not_called()
+
+
+# ── Dumb-spawn watchdog (run_6c482b10) ─────────────────────────────────
+#
+# A STREAMING subprocess that produced ZERO events since spawn
+# (_last_event_time is None — "dumb": alive but silent, no open tool) must
+# be force-unstuck on a SHORT threshold (DUMB_SPAWN_TIMEOUT), NOT the
+# 600-1800s adaptive _compute_message_timeout designed for slow inference.
+# Evidence: pid 33855 / session 89b71059, 2026-06-25 — zero events for 15+min.
+
+
+def _make_streaming_unit(
+    *,
+    last_event_time,
+    streaming_start_time,
+    sdk_session_id=None,
+    adaptive_timeout=600.0,
+):
+    """Build a MagicMock STREAMING unit with real streaming_stall_seconds.
+
+    streaming_stall_seconds is computed the same way the real property does
+    (session_unit.py:3055) so the watchdog sees a realistic stall.
+    """
+    import time as _t
+    from core.session_unit import SessionState, SessionUnit
+
+    unit = MagicMock()
+    unit.state = SessionState.STREAMING
+    unit.session_id = "dumb-test"
+    unit.pid = 99999
+    unit._last_event_time = last_event_time
+    unit._streaming_start_time = streaming_start_time
+    unit._sdk_session_id = sdk_session_id
+    unit._consecutive_unstick_timeouts = 0
+    # Real circuit-breaker threshold (production reads it via getattr) — a bare
+    # MagicMock attribute would break the int comparison in _check_streaming_timeout.
+    unit._UNSTICK_CIRCUIT_BREAKER_THRESHOLD = 2
+    unit._compute_message_timeout = MagicMock(return_value=adaptive_timeout)
+    unit.force_unstick_streaming = AsyncMock()
+
+    # Use the REAL stall computation (bound to our mock's attributes).
+    def _stall():
+        now = _t.time()
+        if unit._last_event_time is None:
+            if unit._streaming_start_time is not None:
+                return now - unit._streaming_start_time
+            return None
+        return now - unit._last_event_time
+
+    type(unit).streaming_stall_seconds = property(lambda self: _stall())
+    return unit
+
+
+class TestDumbSpawnWatchdog:
+    """Zero-event-since-spawn must recover on the short threshold."""
+
+    def _run_with_unit(self, unit):
+        router = MagicMock()
+        router.list_units.return_value = [unit]
+        mgr = LifecycleManager(router=router)
+        asyncio.run(mgr._check_streaming_timeout())
+
+    def test_ac1_dumb_spawn_unstuck_after_short_timeout(self):
+        """No first event + stall > DUMB_SPAWN_TIMEOUT → force_unstick fires."""
+        import time as _t
+        from core.session_unit import DUMB_SPAWN_TIMEOUT_SECONDS
+        unit = _make_streaming_unit(
+            last_event_time=None,
+            streaming_start_time=_t.time() - (DUMB_SPAWN_TIMEOUT_SECONDS + 5),
+            sdk_session_id=None,
+        )
+        self._run_with_unit(unit)
+        unit.force_unstick_streaming.assert_awaited_once()
+
+    def test_ac1_dumb_spawn_not_unstuck_before_short_timeout(self):
+        """No first event but stall < DUMB_SPAWN_TIMEOUT → do NOT unstick."""
+        import time as _t
+        from core.session_unit import DUMB_SPAWN_TIMEOUT_SECONDS
+        unit = _make_streaming_unit(
+            last_event_time=None,
+            streaming_start_time=_t.time() - (DUMB_SPAWN_TIMEOUT_SECONDS - 30),
+            sdk_session_id=None,
+        )
+        self._run_with_unit(unit)
+        unit.force_unstick_streaming.assert_not_called()
+
+    def test_ac2_slow_inference_not_killed_by_short_timeout(self):
+        """Events FLOWING (last_event set) but stalled just past the dumb
+        threshold must NOT be unstuck — slow inference keeps the 600-1800s
+        adaptive tolerance. This is the regression guard against false-kill."""
+        import time as _t
+        from core.session_unit import DUMB_SPAWN_TIMEOUT_SECONDS
+        unit = _make_streaming_unit(
+            last_event_time=_t.time() - (DUMB_SPAWN_TIMEOUT_SECONDS + 30),
+            streaming_start_time=_t.time() - 5000,
+            sdk_session_id="resume-xyz",
+            adaptive_timeout=1800.0,
+        )
+        self._run_with_unit(unit)
+        unit.force_unstick_streaming.assert_not_called()
+
+    def test_ac2_slow_inference_killed_only_past_adaptive(self):
+        """Events flowing + stall past the adaptive timeout → unstick (existing
+        behavior preserved)."""
+        import time as _t
+        unit = _make_streaming_unit(
+            last_event_time=_t.time() - 700,
+            streaming_start_time=_t.time() - 5000,
+            sdk_session_id=None,
+            adaptive_timeout=600.0,
+        )
+        self._run_with_unit(unit)
+        unit.force_unstick_streaming.assert_awaited_once()
+
+    def test_ac4_resume_dumb_spawn_uses_2x_threshold(self):
+        """Resume dumb spawn (sdk_session_id set): stall between 1x and 2x
+        DUMB_SPAWN_TIMEOUT must NOT be unstuck (resume replays full convo
+        before first token — GUI66)."""
+        import time as _t
+        from core.session_unit import DUMB_SPAWN_TIMEOUT_SECONDS
+        unit = _make_streaming_unit(
+            last_event_time=None,
+            streaming_start_time=_t.time() - (DUMB_SPAWN_TIMEOUT_SECONDS + 20),
+            sdk_session_id="resume-abc",
+        )
+        self._run_with_unit(unit)
+        unit.force_unstick_streaming.assert_not_called()
+
+    def test_ac4_resume_dumb_spawn_unstuck_past_2x(self):
+        """Resume dumb spawn stalled past 2x DUMB_SPAWN_TIMEOUT → unstick."""
+        import time as _t
+        from core.session_unit import DUMB_SPAWN_TIMEOUT_SECONDS
+        unit = _make_streaming_unit(
+            last_event_time=None,
+            streaming_start_time=_t.time() - (2 * DUMB_SPAWN_TIMEOUT_SECONDS + 20),
+            sdk_session_id="resume-abc",
+        )
+        self._run_with_unit(unit)
+        unit.force_unstick_streaming.assert_awaited_once()

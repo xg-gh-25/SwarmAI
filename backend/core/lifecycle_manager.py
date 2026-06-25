@@ -542,13 +542,30 @@ class LifecycleManager:
             stall = unit.streaming_stall_seconds
             if stall is None:
                 continue
-            # Use adaptive timeout from the unit (context-aware) if available,
-            # otherwise fall back to static threshold.
-            effective_timeout = (
-                unit._compute_message_timeout()
-                if hasattr(unit, "_compute_message_timeout")
-                else self.STREAMING_TIMEOUT_SECONDS
-            )
+            # Two distinct stall classes — different thresholds:
+            #  (a) DUMB SPAWN: _last_event_time is None → the subprocess
+            #      entered STREAMING but produced ZERO events (not even a
+            #      first token), no open tool. This is "alive but silent" and
+            #      must be recovered fast. Reusing the 600-1800s adaptive
+            #      timeout left the frontend spinner spinning 15+ min
+            #      (run_6c482b10: pid 33855). Resume gets 2x (replays the full
+            #      conversation before the first token — GUI66).
+            #  (b) SLOW INFERENCE: events ARE flowing (_last_event_time set),
+            #      the turn is just slow. Keep the adaptive 600-1800s
+            #      tolerance — killing here would false-abort a healthy
+            #      large-context turn.
+            if getattr(unit, "_last_event_time", None) is None:
+                from .session_unit import DUMB_SPAWN_TIMEOUT_SECONDS
+                resume_multiplier = 2 if getattr(unit, "_sdk_session_id", None) else 1
+                effective_timeout = DUMB_SPAWN_TIMEOUT_SECONDS * resume_multiplier
+            else:
+                # Use adaptive timeout from the unit (context-aware) if available,
+                # otherwise fall back to static threshold.
+                effective_timeout = (
+                    unit._compute_message_timeout()
+                    if hasattr(unit, "_compute_message_timeout")
+                    else self.STREAMING_TIMEOUT_SECONDS
+                )
             if stall > effective_timeout:
                 # Circuit breaker: if this session has already been unstuck
                 # multiple times without success, don't keep trying — it's
