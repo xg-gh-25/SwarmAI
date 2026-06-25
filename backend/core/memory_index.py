@@ -69,6 +69,11 @@ DEFAULT_MAX_TOKENS = 50_000
 # Below this, Claude reads everything — no selection needed.
 FULL_INJECTION_THRESHOLD = 30_000
 
+# Reversible Context Recall (run_9de88af9): max excluded section NAMES listed in
+# the selective-injection manifest before collapsing to "+N more". Keeps the
+# manifest to a single cache-friendly tail line.
+MANIFEST_MAX_NAMES = 8
+
 # Maximum additional sections to load via EntryRefs 1-hop expansion.
 # Scale up as MEMORY.md grows and token budget allows.
 MAX_REF_SECTIONS = 3
@@ -998,9 +1003,18 @@ def select_memory_sections(
     }
     unloaded = set(sections.keys()) - loaded_section_names - {"Memory"}
     if unloaded:
+        # Named manifest (Reversible Context Recall, run_9de88af9): emit the
+        # excluded section NAMES — not just a count — plus the recall path, so
+        # the agent knows WHICH sections it can retrieve and HOW. Sorted + capped
+        # for a stable, ≤1-line, cache-friendly tail (never perturbs the prefix).
+        names = sorted(unloaded)
+        shown = names[: MANIFEST_MAX_NAMES]
+        more = len(names) - len(shown)
+        suffix = f" +{more} more" if more > 0 else ""
         parts.append(
-            f"\n[Full MEMORY.md available via Read tool — "
-            f"{len(unloaded)} sections not loaded]"
+            f"\n[Not loaded ({len(unloaded)}): {', '.join(shown)}{suffix} — "
+            f"recall_context(\"MEMORY.md\", query) to retrieve, "
+            f"or Read .context/MEMORY.md]"
         )
 
     return "\n\n".join(parts)

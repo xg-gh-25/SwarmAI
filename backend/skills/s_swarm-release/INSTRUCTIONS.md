@@ -238,8 +238,11 @@ cd $SWARMAI_ROOT/desktop
 find src-tauri/target/release/bundle -name "*.dmg" -newer src-tauri/Cargo.toml | head -3
 ```
 
-**Pass:** DMG exists, >30MB.
-**Fail:** No DMG found → ask user to check build output.
+**Pass:** DMG exists, >5MB. (Baseline: v1.18.0–v1.21.0 DMGs are all ~10.3MB.
+The PyInstaller backend ships separately via daemon auto-install — it is NOT
+bundled in the DMG, which is just the Rust Tauri shell. So >5MB is a broken/empty-
+build floor, not a "backend is included" check. Do NOT raise this toward 30MB.)
+**Fail:** No DMG found, or DMG <5MB → ask user to check build output.
 
 ---
 
