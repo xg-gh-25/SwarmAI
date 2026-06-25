@@ -48,13 +48,46 @@ class TestAuditRecurrence:
         assert verdict["reason_class"] == "logged_less"
 
     def test_recurrence_rising_despite_gate_is_unhealthy(self):
-        # Gate deployed but class keeps recurring — the gate FAILED, escalate.
+        # Gate deployed but class keeps recurring (capture stable) — gate FAILED.
+        # Tightened from `in (...)` to exact match (adv #5) so a gate_failed→recurring
+        # routing regression is actually caught.
         state = {"CLASS_A": _cls(count=20, post_gate=5, active_gate="GC12")}
         verdict = audit_recurrence(
             state, capture_stats={"total_this_period": 40, "total_prev_period": 40}
         )
         assert verdict["healthy"] is False
-        assert verdict["reason_class"] in ("gate_failed", "recurring")
+        assert verdict["reason_class"] == "gate_failed"
+
+    def test_recurring_without_gate_is_distinct_from_gate_failed(self):
+        # No gate yet, recurrence past RULE, capture stable → "recurring"
+        # (NOT gate_failed). Dedicated coverage of the standalone branch (adv #5).
+        state = {"CLASS_B": _cls(count=10, post_rule=3, active_gate=None)}
+        verdict = audit_recurrence(
+            state, capture_stats={"total_this_period": 30, "total_prev_period": 30}
+        )
+        assert verdict["healthy"] is False
+        assert verdict["reason_class"] == "recurring"
+
+    def test_none_entry_skipped(self):
+        # get_class can return None for a class_names() key that fails
+        # canonicalization. audit_recurrence must skip None, not crash (adv #2).
+        state = {"CLASS_A": _cls(count=12, post_gate=0, active_gate="GC12"), "GHOST": None}
+        verdict = audit_recurrence(
+            state, capture_stats={"total_this_period": 40, "total_prev_period": 42}
+        )
+        assert verdict["healthy"] is True  # only the valid gated-quiet class counts
+
+    def test_capture_collapsed_no_recurrence_detail_not_misleading(self):
+        # Healthy verdict, but detail must NOT claim "capture is stable" when it
+        # collapsed (adv #4).
+        state = {"CLASS_A": _cls(count=12, post_gate=0, active_gate="GC12")}
+        verdict = audit_recurrence(
+            state, capture_stats={"total_this_period": 5, "total_prev_period": 40}
+        )
+        assert verdict["healthy"] is True
+        assert verdict["reason_class"] == "fewer_mistakes"
+        assert "capture is stable" not in verdict["detail"]
+        assert "watch next period" in verdict["detail"]
 
     def test_empty_state_is_vacuously_healthy(self):
         verdict = audit_recurrence({}, capture_stats={"total_this_period": 0, "total_prev_period": 0})

@@ -48,6 +48,19 @@ class TestSelfEvalRendering:
         # The raw "Score: 100.0 | clean" framing must NOT be the headline.
         assert "recurred" in text.lower() or "correction class" in text.lower()
 
+    def test_divergence_and_cases_error_both_surface(self):
+        # Both orthogonal red signals present → user must see BOTH lines, not
+        # have cases_error suppressed by the divergence early-return (adv #3).
+        health = {
+            "overall_score": 100.0,
+            "last_run": {"triggered_at": "2026-06-25T00:00:00", "cases_error": 88},
+        }
+        lines = _render_self_eval_lines(health, tracker_red=True, case_count=128)
+        text = "\n".join(lines)
+        assert len(lines) == 2, f"expected divergence + infra-break lines, got {lines}"
+        assert any("DIVERG" in ln.upper() for ln in lines)
+        assert any("ERRORED" in ln or "judge infra" in ln for ln in lines)
+
     def test_divergence_independent_of_cases_error(self):
         # tracker_red divergence fires even when cases_error == 0 — proves it is
         # orthogonal to the infra-break light, not a duplicate of it.

@@ -1533,24 +1533,31 @@ def _render_self_eval_lines(
         last_date = (last_run.get("triggered_at") or "")[:10] or "never"
         n_error = last_run.get("cases_error", 0) or 0
 
-        # M4-3 divergence OVERRIDE — highest priority: the score lies while a
-        # correction class recurs. Computed by the pure EvalService helper.
         from core.eval_service import EvalService
 
         div = EvalService.compute_score_divergence(health, tracker_red)
+
+        # Two ORTHOGONAL red signals — surfaced separately, NEVER conflated by
+        # suppression (adversarial #3): cases_error = judge INFRA broke (score
+        # measured a subset); divergence = the AGENT is still recurring a known
+        # class despite a clean score. When BOTH hold the user must see BOTH —
+        # an early-return on divergence would hide the infra-break the design
+        # promises to keep distinct. Divergence leads (it reframes the headline),
+        # the infra-break follows as a second line.
+        lines: list[str] = []
         if div["diverged"]:
-            return [
+            lines.append(
                 f"**Self-Eval:** 🔴 DIVERGENCE — {div['reason']}. "
                 f"{case_count} cases | Last: {last_date}"
-            ]
-
-        # Existing infra-break red-light (finding-1) — score excludes errored cases.
+            )
         if n_error:
-            return [
+            lines.append(
                 f"**Self-Eval:** 🔴 {n_error} case(s) ERRORED (judge infra failed — "
                 f"score {score} excludes them, NOT a clean pass). "
                 f"{case_count} cases | Last: {last_date}"
-            ]
+            )
+        if lines:
+            return lines
 
         return [f"**Self-Eval:** {case_count} cases | Score: {score} | Last: {last_date}"]
     except Exception:
@@ -1768,10 +1775,11 @@ def build_session_briefing(
                 try:
                     from core.evolution.correction_tracker import CorrectionClassTracker
 
-                    tracker_red = any(
-                        "\U0001f534" in ln
-                        for ln in CorrectionClassTracker().briefing_lines()
-                    )
+                    # Structural red signal (adversarial #2: format-independent) —
+                    # has_red() computes from state, NOT by substring-scanning the
+                    # briefing render, so a future glyph/format change can't
+                    # silently flip divergence on or off.
+                    tracker_red = CorrectionClassTracker().has_red()
                 except Exception:
                     tracker_red = False  # tracker absence must never break briefing
 

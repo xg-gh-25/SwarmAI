@@ -55,6 +55,19 @@ class TestComputeScoreDivergence:
         v = EvalService.compute_score_divergence({}, tracker_red=True)
         assert v["diverged"] is False
 
+    def test_string_score_does_not_crash(self):
+        # Run records come from json.loads — a legacy/hand-edited run could carry
+        # overall_score as a string. Must not crash on `score < threshold` (adv #1).
+        v = EvalService.compute_score_divergence({"overall_score": "90"}, tracker_red=True)
+        # Numeric-coercible string → diverges (90 >= 85). Either way: no crash.
+        assert v["diverged"] is True
+        bad = EvalService.compute_score_divergence({"overall_score": "n/a"}, tracker_red=True)
+        assert bad["diverged"] is False  # non-numeric → uninterpretable → no diverge
+
+    def test_int_score(self):
+        v = EvalService.compute_score_divergence({"overall_score": 100}, tracker_red=True)
+        assert v["diverged"] is True
+
     def test_is_static_pure(self):
         # Callable without an instance; identical inputs → identical output.
         a = EvalService.compute_score_divergence({"overall_score": 90.0}, tracker_red=True)

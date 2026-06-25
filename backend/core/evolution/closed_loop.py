@@ -48,9 +48,14 @@ def audit_recurrence(tracker_state: dict, capture_stats: dict) -> dict:
         reason_class ∈ {fewer_mistakes, logged_less, gate_failed, recurring,
                         no_activity}.
     """
+    # Filter None entries: the wiring builds tracker_state from
+    # {name: get_class(name)}, and get_class returns None when a raw class_names()
+    # key doesn't survive canonicalization. A None value here would crash
+    # `.get()` and turn the whole Phase-3d audit into a permanent silent no-op
+    # (caught by the caller's try/except). Skip None + resolved entries. (adv #2)
     active = {
         name: e for name, e in (tracker_state or {}).items()
-        if not e.get("resolved")
+        if e and not e.get("resolved")
     }
 
     prev = capture_stats.get("total_prev_period", 0) or 0
@@ -100,12 +105,22 @@ def audit_recurrence(tracker_state: dict, capture_stats: dict) -> dict:
         return {"healthy": True, "reason_class": "no_activity",
                 "detail": "no unresolved correction classes"}
 
-    return {
-        "healthy": True,
-        "reason_class": "fewer_mistakes",
-        "detail": "known classes are gated/quiet and capture is stable — "
-                  "the falling correction count reflects fewer mistakes",
-    }
+    # Healthy: known classes are gated/quiet AND no class is recurring. The
+    # detail must NOT claim "capture is stable" when it collapsed without
+    # recurrence (adv #4) — that's a contradictory log line. Branch the wording
+    # on the actual capture state.
+    if capture_collapsed:
+        detail = (
+            f"known classes are gated/quiet and no class recurs, but capture fell "
+            f"{prev}->{cur} — plausibly fewer mistakes; watch next period in case "
+            f"it is logging less"
+        )
+    else:
+        detail = (
+            "known classes are gated/quiet and capture is stable — "
+            "the falling correction count reflects fewer mistakes"
+        )
+    return {"healthy": True, "reason_class": "fewer_mistakes", "detail": detail}
 
 
 def loop_closed_meta_test(

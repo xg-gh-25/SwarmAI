@@ -497,6 +497,13 @@ class EvalService:
         score = health.get("overall_score") if isinstance(health, dict) else None
         if score is None or not tracker_red:
             return {"diverged": False, "reason": ""}
+        # Defensive coercion: run records come from json.loads — a legacy or
+        # hand-edited run could carry overall_score as a string. A non-numeric
+        # score is uninterpretable → treat as "no divergence" rather than crash.
+        try:
+            score = float(score)
+        except (TypeError, ValueError):
+            return {"diverged": False, "reason": ""}
         if score < EvalService.DIVERGENCE_HIGH_SCORE:
             # Score already low — it isn't lying, so there's nothing to override.
             return {"diverged": False, "reason": ""}

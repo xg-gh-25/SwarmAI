@@ -747,6 +747,59 @@ Respond in this exact JSON format:
 PROGRAMMATIC_EVALUATORS = {"canary_pass", "file_contains", "keyword_match",
                            "trajectory_exact", "trajectory_in_order", "trajectory_any_order"}
 LLM_EVALUATORS = {"goal_success", "quality_score"}
+# Behavior evaluators spawn a REAL agent on a scenario and observe its actual
+# tool-call trajectory. Verdict is PROGRAMMATIC (trajectory match — no LLM
+# judge, no circularity), but the spawn is EXPENSIVE like the judge, so it is
+# gated by `programmatic_only` (the canary path must never spawn agents).
+BEHAVIOR_EVALUATORS = {"trajectory_capture"}
+
+
+def eval_trajectory_capture(case: dict) -> dict:
+    """Behavior evaluator: spawn a real agent, observe its tool-call trajectory.
+
+    This is the answer to "does the agent actually USE memory/knowledge/DDD?"
+    — NOT the circular LLM judge (which is handed the answer and asked "would a
+    compliant agent do X"). It runs the scenario prompt through a real headless
+    agent and matches the OBSERVED tool calls against expected_trajectory using
+    the existing eval_trajectory() matcher.
+
+    The case must declare:
+      - scenario.prompt        — what the agent is asked to do
+      - expected_trajectory    — tool-call substrings that must appear (e.g.
+                                 ["Read SELF.md"]) — see eval_trajectory()
+      - trajectory_match       — exact | in_order | any_order (default in_order)
+      - allowed_tools (opt)    — tools the agent may use (default ["Read"])
+
+    Returns passed/failed (behavior observed or not) or skipped (misconfigured).
+    Never raises — a spawn failure yields an empty trajectory → fails the
+    assertion cleanly (the run did not demonstrate the behavior).
+    """
+    scenario = case.get("scenario", {})
+    prompt = scenario.get("prompt") or (
+        scenario.get("turns", [{}])[0].get("input") if scenario.get("turns") else None
+    )
+    if not prompt:
+        return {"status": "skipped", "notes": "No scenario.prompt for trajectory_capture"}
+    if not case.get("expected_trajectory"):
+        return {"status": "skipped", "notes": "No expected_trajectory defined"}
+
+    allowed_tools = case.get("allowed_tools") or ["Read"]
+    timeout = case.get("scenario_timeout", 120)
+
+    try:
+        from scripts.scenario_runner import run_scenario
+    except ImportError:
+        try:
+            from scenario_runner import run_scenario  # type: ignore
+        except ImportError:
+            return {"status": "error", "notes": "scenario_runner unavailable"}
+
+    actual = run_scenario(prompt, allowed_tools=allowed_tools, timeout=timeout)
+    # Delegate the verdict to the existing trajectory matcher.
+    result = eval_trajectory(case, actual_trajectory=actual)
+    # Annotate so the report can show what was actually observed.
+    result["observed_trajectory"] = actual
+    return result
 
 
 def _get_judge_model() -> str:
@@ -854,6 +907,19 @@ def evaluate_case(case: dict, root: Path, *,
                 result["evaluator"] = ev
                 result["duration_ms"] = int((time.time() - start) * 1000)
                 return result
+
+    # Phase 1.5: Behavior evaluators — spawn a REAL agent and observe its
+    # tool-call trajectory. Verdict is programmatic (no LLM judge), but the
+    # spawn is expensive, so it is gated by `programmatic_only` exactly like
+    # the LLM judge — the canary/every-session path must NEVER spawn agents.
+    if not programmatic_only:
+        for ev in evaluators:
+            if ev == "trajectory_capture":
+                result = eval_trajectory_capture(case)
+                if result["status"] != "skipped":
+                    result["evaluator"] = ev
+                    result["duration_ms"] = int((time.time() - start) * 1000)
+                    return result
 
     # Phase 2: Fall through to LLM judge (expensive, non-deterministic)
     # Structurally blocked when programmatic_only=True (canary path).
@@ -1279,7 +1345,9 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
         case_list_html = f'<details class="case-details"><summary>{d["case_count"]} cases in this dimension</summary><ul class="case-list">'
         for c in d["all_cases"]:
             icon = {"passed": "✅", "failed": "❌", "error": "🔴"}.get(c["status"], "⏸️")
-            method_badge = f'<span class="badge badge-{c["eval_method"]}">{c["eval_method"]}</span>'
+            _em = c["eval_method"]
+            _label = "behavior-observed" if _em == "behavior" else ("config-static" if _em in ("programmatic", "llm") else _em)
+            method_badge = f'<span class="badge badge-{_em}">{_label}</span>'
             case_list_html += f'<li>{icon} <code>{html_mod.escape(c["id"])}</code> {html_mod.escape(c["title"])} {method_badge}</li>'
         case_list_html += "</ul></details>"
 
@@ -1341,9 +1409,10 @@ def generate_html_report(run_result: dict, golden_set: dict, root: Path) -> Path
                 <p><strong>115 behavioral contracts</strong> crystallized from past failures (corrections, COEs, decisions). Each case = "in this situation, I must do X."</p>
             </div>
             <div class="method-card">
-                <h4>⚡ Two Evaluation Tiers</h4>
-                <p><strong>Programmatic (31 cases):</strong> grep/import checks, 0 cost, every session.<br>
-                <strong>LLM Judge (84 cases):</strong> behavioral scenarios judged by pinned model, monthly, ~$0.05.</p>
+                <h4>⚡ Three Evaluation Tiers</h4>
+                <p><strong>Programmatic:</strong> grep/import checks, 0 cost, every session — <em>configuration present</em>.<br>
+                <strong>LLM Judge:</strong> scenarios judged by pinned model — <em>configuration would comply</em> (static: judge is given the rules + asked "would a compliant agent do X").<br>
+                <strong>Behavior (trajectory):</strong> a REAL agent is spawned on the scenario and its actual tool calls are observed — <em>behavior observed</em>. The only tier that proves the agent USES its memory/knowledge/DDD, not just that the docs exist.</p>
             </div>
             <div class="method-card">
                 <h4>🔄 Flywheel</h4>
@@ -1435,6 +1504,7 @@ body {{ font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); 
 .badge {{ font-size: 0.65rem; padding: 0.1rem 0.4rem; border-radius: 10px; margin-left: 0.3rem; }}
 .badge-llm {{ background: rgba(99,102,241,0.2); color: #a5b4fc; }}
 .badge-programmatic {{ background: rgba(16,185,129,0.2); color: #6ee7b7; }}
+.badge-behavior {{ background: rgba(244,114,182,0.25); color: #f9a8d4; font-weight:600; }}
 
 /* Methodology */
 .methodology {{ margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--border); }}
