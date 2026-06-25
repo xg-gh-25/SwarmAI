@@ -32,6 +32,19 @@ from core.context_directory_loader import ContextDirectoryLoader
 RECALL_MAX_TOKENS = 2000
 
 
+def _basename_key(name: str) -> str:
+    """Normalize a filename to a case-insensitive basename for the privacy gate.
+
+    Strips any directory component (``../MEMORY.md`` → ``memory.md``) and
+    lowercases, so neither path-traversal nor case tricks can dodge the gate.
+    """
+    from pathlib import PurePosixPath, PureWindowsPath
+
+    # Handle both separators regardless of host OS.
+    base = PureWindowsPath(PurePosixPath(name).name).name
+    return base.casefold()
+
+
 @dataclass
 class RecallResult:
     """Outcome of a recall_context call.
@@ -73,7 +86,13 @@ def recall_context(
         otherwise the top-N matched sections, capped at RECALL_MAX_TOKENS.
     """
     # ── AC4: privacy gate (hard-deny, leak nothing) ──
-    if file in policy_excluded_files:
+    # CRITICAL: compare case-insensitively. The filesystem (APFS/NTFS) is
+    # case-insensitive, so "memory.md" reads the same file as "MEMORY.md" — an
+    # exact-string gate would let `recall_context("memory.md", ...)` bypass a
+    # policy that excludes "MEMORY.md". Normalize the basename on BOTH sides.
+    requested = _basename_key(file)
+    denied = {_basename_key(f) for f in policy_excluded_files}
+    if requested in denied:
         return RecallResult(
             allowed=False,
             content="",
@@ -85,26 +104,35 @@ def recall_context(
 
     # Recall is currently MEMORY-shaped (section-structured). Other files fall
     # back to the agent's Read tool; we only special-case the structured store.
+    # All helper calls are wrapped: a helper failure must return a structured
+    # result (the gate already passed, so allowed=True leaks nothing), never a
+    # bare traceback that crashes the agent's Bash call (HIGH-3).
     from core import memory_index
 
-    sections = memory_index.parse_memory_sections(memory_content)
-    if not sections:
-        return RecallResult(allowed=True, content="", reason="no sections parsed")
+    try:
+        sections = memory_index.parse_memory_sections(memory_content)
+        if not sections:
+            return RecallResult(allowed=True, content="", reason="no sections parsed")
 
-    index_block = memory_index.extract_index_from_memory(memory_content)
-    if not index_block:
-        index_block = (
-            memory_index.MEMORY_INDEX_START
-            + "\n"
-            + memory_index.generate_memory_index(memory_content)
-            + "\n"
-            + memory_index.MEMORY_INDEX_END
+        index_block = memory_index.extract_index_from_memory(memory_content)
+        if not index_block:
+            index_block = (
+                memory_index.MEMORY_INDEX_START
+                + "\n"
+                + memory_index.generate_memory_index(memory_content)
+                + "\n"
+                + memory_index.MEMORY_INDEX_END
+            )
+
+        superseded = memory_index._extract_superseded_keys(memory_content)
+
+        # Reuse the EXACT selective-injection scorer — no new ranking logic (STEERING #3).
+        scores = memory_index._keyword_section_scores(query, index_block, superseded)
+    except Exception as exc:  # noqa: BLE001 — fail-safe: structured result, no leak
+        return RecallResult(
+            allowed=True, content="",
+            reason=f"recall failed: {type(exc).__name__}: {exc}",
         )
-
-    superseded = memory_index._extract_superseded_keys(memory_content)
-
-    # Reuse the EXACT selective-injection scorer — no new ranking logic (STEERING #3).
-    scores = memory_index._keyword_section_scores(query, index_block, superseded)
 
     ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
 

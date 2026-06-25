@@ -176,3 +176,90 @@ def test_ac4_recall_denies_nonowner_channel_files():
                          max_sections=3)
     assert res.allowed is False
     assert res.content == ""
+
+
+# ── AC4 hardening: Gate-2 adversarial findings (CRITICAL 1 + 2) ────────────
+
+def test_ac4_gate_is_case_insensitive():
+    """CRITICAL-1: a case variant must NOT bypass the gate (APFS reads same file)."""
+    from core.context_recall import recall_context
+
+    mem = _large_memory()
+    for variant in ("memory.md", "MEMORY.MD", "Memory.md"):
+        res = recall_context(variant, "exit code -9", memory_content=mem,
+                             policy_excluded_files=frozenset({"MEMORY.md"}),
+                             max_sections=3)
+        assert res.allowed is False, f"case variant {variant!r} bypassed the gate"
+        assert res.content == ""
+
+
+def test_ac4_gate_resists_path_traversal_in_recall():
+    """CRITICAL-2 (recall layer): a dir-prefixed name normalizes to the basename."""
+    from core.context_recall import recall_context
+
+    mem = _large_memory()
+    res = recall_context("../MEMORY.md", "exit code -9", memory_content=mem,
+                         policy_excluded_files=frozenset({"MEMORY.md"}), max_sections=3)
+    assert res.allowed is False
+    assert res.content == ""
+
+
+def test_cli_group_channel_denies_case_and_traversal(tmp_path):
+    """CRITICAL-1+2 at the CLI (the production enforcement point)."""
+    import json as _json
+    import io
+    from contextlib import redirect_stdout
+    from scripts import context_recall_cli as cli
+
+    # Plant a sensitive file in a fake context dir.
+    (tmp_path / "MEMORY.md").write_text(_large_memory(), encoding="utf-8")
+
+    def run(file_arg):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            cli.main(["--file", file_arg, "--query", "exit code -9",
+                      "--session-type", "group_channel", "--context-dir", str(tmp_path)])
+        return _json.loads(buf.getvalue())
+
+    for variant in ("MEMORY.md", "memory.md", "../MEMORY.md", "./MEMORY.md"):
+        out = run(variant)
+        assert out["allowed"] is False, f"{variant!r} leaked in group channel"
+        assert out["content"] == ""
+
+
+def test_cli_desktop_serves_and_requires_session_type(tmp_path):
+    import json as _json
+    import io
+    import pytest
+    from contextlib import redirect_stdout
+    from scripts import context_recall_cli as cli
+
+    (tmp_path / "MEMORY.md").write_text(_large_memory(), encoding="utf-8")
+
+    # Desktop: serves (no policy exclusions).
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        cli.main(["--file", "MEMORY.md", "--query", "exit code -9 sigkill",
+                  "--session-type", "desktop", "--context-dir", str(tmp_path)])
+    out = _json.loads(buf.getvalue())
+    assert out["allowed"] is True
+
+    # MEDIUM-4: session-type is REQUIRED (no permissive default).
+    with pytest.raises(SystemExit):
+        cli.main(["--file", "MEMORY.md", "--query", "x", "--context-dir", str(tmp_path)])
+
+
+def test_recall_helper_failure_is_structured_not_crash(monkeypatch):
+    """HIGH-3: a helper exception returns a structured result, never a traceback."""
+    from core import memory_index
+    from core import context_recall
+
+    def boom(*a, **k):
+        raise RuntimeError("simulated helper failure")
+
+    monkeypatch.setattr(memory_index, "parse_memory_sections", boom)
+    res = context_recall.recall_context("MEMORY.md", "q", memory_content="## A\nbody\n",
+                                        policy_excluded_files=frozenset(), max_sections=3)
+    assert res.allowed is True
+    assert res.content == ""
+    assert "recall failed" in res.reason

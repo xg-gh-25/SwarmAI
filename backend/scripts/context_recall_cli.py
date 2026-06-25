@@ -55,9 +55,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--query", required=True, help="What to retrieve")
     p.add_argument(
         "--session-type",
-        default="desktop",
+        required=True,  # default-DENY: a privacy gate must never default permissive
         choices=sorted(_POLICY_EXCLUSIONS),
-        help="Session type (determines the privacy gate).",
+        help="Session type (determines the privacy gate). REQUIRED — no default.",
     )
     p.add_argument("--max-sections", type=int, default=3)
     p.add_argument(
@@ -69,33 +69,49 @@ def main(argv: list[str] | None = None) -> int:
 
     policy_excluded = _POLICY_EXCLUSIONS[args.session_type]
 
-    # Fast-path denial: don't even read the file if policy forbids recall.
-    if args.file in policy_excluded:
-        res = recall_context(
-            args.file, args.query, memory_content="",
+    try:
+        context_dir = Path(args.context_dir).resolve()
+        # CRITICAL: confine to context_dir and use the RESOLVED basename for both
+        # the policy check and the read. Blocks `../MEMORY.md`, absolute paths,
+        # and case tricks (recall_context casefolds the basename internally).
+        resolved = (context_dir / args.file).resolve()
+        if not resolved.is_relative_to(context_dir):
+            print(json.dumps({"allowed": False, "content": "",
+                              "reason": "path escapes context directory — denied"}))
+            return 0
+        safe_name = resolved.name  # bare basename; recall_context normalizes case
+
+        # Fast-path denial: don't even read the file if policy forbids recall.
+        # recall_context applies the canonical (casefold + basename) gate.
+        gate = recall_context(
+            safe_name, args.query, memory_content="",
             policy_excluded_files=policy_excluded, max_sections=args.max_sections,
         )
-        print(json.dumps({"allowed": False, "reason": res.reason, "content": ""}))
-        return 0
+        if gate.allowed is False:
+            print(json.dumps({"allowed": False, "reason": gate.reason, "content": ""}))
+            return 0
 
-    path = Path(args.context_dir) / args.file
-    if not path.exists():
-        print(json.dumps({"allowed": True, "content": "",
-                          "reason": f"file not found: {path}"}))
-        return 0
+        if not resolved.exists():
+            print(json.dumps({"allowed": True, "content": "",
+                              "reason": f"file not found: {safe_name}"}))
+            return 0
 
-    content = path.read_text(encoding="utf-8")
-    res = recall_context(
-        args.file, args.query, memory_content=content,
-        policy_excluded_files=policy_excluded, max_sections=args.max_sections,
-    )
-    print(json.dumps({
-        "allowed": res.allowed,
-        "reason": res.reason,
-        "sections": list(res.sections),
-        "content": res.content,
-    }))
-    return 0
+        content = resolved.read_text(encoding="utf-8")
+        res = recall_context(
+            safe_name, args.query, memory_content=content,
+            policy_excluded_files=policy_excluded, max_sections=args.max_sections,
+        )
+        print(json.dumps({
+            "allowed": res.allowed,
+            "reason": res.reason,
+            "sections": list(res.sections),
+            "content": res.content,
+        }))
+        return 0
+    except Exception as exc:  # noqa: BLE001 — never emit a bare traceback to the agent
+        print(json.dumps({"allowed": False, "content": "",
+                          "reason": f"recall error: {type(exc).__name__}: {exc}"}))
+        return 0
 
 
 if __name__ == "__main__":
