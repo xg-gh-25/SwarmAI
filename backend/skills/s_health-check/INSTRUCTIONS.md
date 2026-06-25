@@ -19,6 +19,48 @@ Verify that SwarmAI critical subsystems are working after a build. Run all check
 
 Run checks in parallel where possible (1-3 have no dependencies). Use Bash tool for each.
 
+### 0. Probe Self-Validation [run FIRST]
+
+Several checks below grep live code / context files by path or section name. When
+those refactor (file moves, MEMORY.md schema change), the probe silently mis-reports
+— false-FAIL (section gone) or false-PASS (no match treated as fine). This block
+validates the probe TARGETS before the checks trust them. Any `DRIFTED` line means
+realign the corresponding check before believing its result (mirrors the Q0 gate in
+s_chat-brain-check, and the loops-health P0 check).
+
+```bash
+python3 << 'PYEOF'
+from pathlib import Path
+root = Path.home() / "Desktop/SwarmAI-Workspace/swarmai"
+ctx = Path.home() / ".swarm-ai/SwarmWS/.context"
+drift = []
+# Path-anchored probes
+checks = [
+    ("Check 6 streaming", root / "backend/core/prompt_builder.py", "include_partial_messages"),
+    ("Check 10 binary dir", root / "desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin", None),
+]
+for name, path, needle in checks:
+    if not path.exists():
+        drift.append(f"{name}: path missing {path}")
+    elif needle and needle not in path.read_text(errors="ignore"):
+        drift.append(f"{name}: '{needle}' not in {path.name}")
+# Schema-anchored probes (Check 9): MEMORY.md / EVOLUTION.md live sections
+mem = (ctx / "MEMORY.md").read_text(errors="ignore")
+for sec in ["## Memory Index", "## Decisions", "## Open Threads"]:
+    if sec not in mem:
+        drift.append(f"Check 9 MEMORY: '{sec}' missing (schema drifted)")
+evo = (ctx / "EVOLUTION.md").read_text(errors="ignore")
+if "### CLASS A" not in evo and "### E001" not in evo:
+    drift.append("Check 9 EVOLUTION: no CLASS/E### anchors (format drifted)")
+if drift:
+    print("FAIL Probe self-validation — DRIFTED targets:")
+    for d in drift:
+        print(f"  - {d}")
+else:
+    print("OK Probe self-validation — all probe targets present")
+PYEOF
+```
+
 ### 1. Backend Health (Dynamic Port Discovery)
 ```bash
 # Port is RANDOM in production (Tauri portpicker). Dev mode uses 8000.
@@ -223,9 +265,12 @@ import re
 
 ctx = Path.home() / ".swarm-ai/SwarmWS/.context"
 
-# MEMORY.md
+# MEMORY.md — live 7-type governance schema (PRI01, 2026-06-17). The legacy
+# "Recent Context / Key Decisions / Lessons Learned" sections were REMOVED;
+# checking for them here made mem_ok permanently FALSE (stale probe). Assert
+# the sections that actually exist today.
 mem = (ctx / "MEMORY.md").read_text()
-sections = ["Recent Context", "Key Decisions", "Lessons Learned", "COE Registry", "Open Threads"]
+sections = ["## Memory Index", "## Decisions", "## Guidelines", "## Pitfalls", "## Open Threads"]
 mem_ok = all(s in mem for s in sections)
 p0 = mem.count("\N{LARGE RED CIRCLE}")
 p1 = mem.count("\N{LARGE YELLOW CIRCLE}")
@@ -233,15 +278,18 @@ p2 = mem.count("\N{LARGE BLUE CIRCLE}")
 print(f"{'OK' if mem_ok else 'FAIL'} MEMORY.md — all sections present: {mem_ok}")
 print(f"  Open Threads: {p0} P0, {p1} P1, {p2} P2")
 
-# EVOLUTION.md
+# EVOLUTION.md — live format: capability registry "### E0NN", correction ids
+# "C0NN" inline + "### CLASS A/B/C" taxonomy. Legacy "### C\d+ / ### K\d+"
+# headers no longer exist.
 evo = (ctx / "EVOLUTION.md").read_text()
 counts = {
-    "E": len(re.findall(r"### E\d+", evo)),
-    "O": len(re.findall(r"### O\d+", evo)),
-    "C": len(re.findall(r"### C\d+", evo)),
-    "K": len(re.findall(r"### K\d+", evo)),
+    "E (capabilities)": len(re.findall(r"### E\d+", evo)),
+    "O (optimizations)": len(re.findall(r"### O\d+", evo)),
+    "C0NN (corrections)": len(set(re.findall(r"\bC0\d{2}\b", evo))),
+    "CLASS": len(re.findall(r"^### CLASS [ABC]", evo, re.MULTILINE)),
 }
-print(f"OK EVOLUTION.md — E:{counts['E']} O:{counts['O']} C:{counts['C']} K:{counts['K']}")
+evo_ok = counts["E (capabilities)"] >= 1 and counts["CLASS"] >= 1
+print(f"{'OK' if evo_ok else 'FAIL'} EVOLUTION.md — " + " ".join(f"{k}:{v}" for k, v in counts.items()))
 
 # STEERING.md weight
 steer = (ctx / "STEERING.md").read_text()

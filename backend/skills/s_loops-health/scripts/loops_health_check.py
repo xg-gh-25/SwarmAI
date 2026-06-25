@@ -40,6 +40,43 @@ HISTORY_FILE = WORKSPACE / ".loops-health-history.json"
 # Subprocess timeout per check (PE-11)
 CHECK_TIMEOUT = 10
 
+# ─── 7-type governance schema (MEMORY.md / EVOLUTION.md live structure) ────────
+# MEMORY.md was restructured to the 7-type knowledge-governance schema (PRI01,
+# 2026-06-17). The legacy "## Recent Context / ## Key Decisions / ## Lessons
+# Learned" sections NO LONGER EXIST. Probes that grep those headers silently
+# false-fail (gap=999) and _fix_commit_context's integrity gate permanently
+# returns False. These constants are the single source of truth for the live
+# section names; _validate_probes() asserts they still exist before any memory
+# check trusts its result (Q0-style probe self-validation, mirrors s_chat-brain-check).
+MEMORY_SECTIONS = [
+    "## Memory Index", "## Principles", "## Corrections", "## Decisions",
+    "## Guidelines", "## Pitfalls", "## Open Threads",
+]
+# Dated-entry sections used for distillation-recency + section-cap checks.
+# Entries look like:  - [DEC01] ... | ..., 2026-06-25, ...
+# Caps set with runway above current live counts (≈ Decisions 36, Guidelines
+# 183, Pitfalls 139, Corrections 4 as of 2026-06-26) so M3 does not immediately
+# false-warn / trigger auto-eviction of real entries on the next distillation.
+MEMORY_ENTRY_SECTIONS = {
+    "Decisions": 60, "Guidelines": 250, "Pitfalls": 200, "Corrections": 30,
+}
+# EVOLUTION.md correction marker: the live format is inline "C0NN" ids (e.g.
+# C037) + "### CLASS A/B/C" headers, NOT the legacy "### C\d+ | YYYY-MM".
+EVOLUTION_CORRECTION_RE = r"\bC0\d{2}\b"
+EVOLUTION_CLASS_RE = r"^### CLASS [ABC]"
+
+# Probe self-validation registry: (probe_id, file, anchor_substring). If an
+# anchor is missing the corpus structure drifted out from under the probe →
+# emit a P0 finding instead of silently false-passing/failing. Add a row when
+# a check starts depending on a new section/marker.
+PROBE_REGISTRY = [
+    ("M1/M3", "MEMORY.md", "## Decisions"),
+    ("M4", "MEMORY.md", "## Open Threads"),
+    ("E3/E4", "EVOLUTION.md", "### CLASS A"),
+    ("X1", "KNOWLEDGE.md", "## Knowledge Index"),
+    ("commit-context", "MEMORY.md", "## Memory Index"),
+]
+
 
 # ─── Data Classes ────────────────────────────────────────────────────────────
 
@@ -100,6 +137,7 @@ class SelfLoopsHealthEngine:
         self.report = HealthReport()
 
     def run(self, auto_fix: bool = False) -> HealthReport:
+        self._validate_probes()
         self._check_context()
         self._check_memory()
         self._check_knowledge()
@@ -113,6 +151,57 @@ class SelfLoopsHealthEngine:
 
         self._record_history()
         return self.report
+
+    # ─── Shared coherence helper ──────────────────────────────────────────────
+
+    @staticmethod
+    def _capability_sync_gaps(evolution: str, knowledge: str):
+        """Return (gaps, sample) for capability→KNOWLEDGE coherence.
+
+        Single source of truth shared by X1 and K3 so they cannot disagree.
+        Capabilities come from EVOLUTION's "**Capability**: <Name>" lines; a
+        capability is "synced" if a distinctive 2-word prefix of its name
+        appears in the KNOWLEDGE architecture text. (1 word is too loose —
+        matches common nouns like 'session'; the full name is too strict —
+        rarely verbatim.)"""
+        cap_names = re.findall(r"\*\*Capability\*\*:\s*([^—\-\n]+?)(?:\s*[—\-])", evolution)
+        arch = knowledge[:knowledge.find("## Knowledge Index")] if "## Knowledge Index" in knowledge else knowledge
+        arch_l = arch.lower()
+        sample = [c.strip() for c in cap_names[:6] if c.strip()]
+        gaps = 0
+        for name in sample:
+            words = name.split()
+            probe = " ".join(words[:2]).lower() if len(words) >= 2 else words[0].lower()
+            if probe not in arch_l:
+                gaps += 1
+        return gaps, sample
+
+    # ─── Dimension 0: Probe Self-Validation ──────────────────────────────────
+
+    def _validate_probes(self):
+        """Q0-style guardrail: before trusting any memory/evolution probe,
+        assert its anchor section/marker still exists in the live corpus.
+
+        A drifted anchor (corpus restructured) makes downstream greps return
+        empty → false-fail (gap=999) or false-pass. This check converts that
+        silent failure into a loud P0 finding naming the drifted target, so the
+        skill's own probes are validated before the skill validates the system
+        (mirrors the Q0 gate added to s_chat-brain-check, run_aeab16f1)."""
+        drifted = []
+        cache = {}
+        for probe_id, fname, anchor in PROBE_REGISTRY:
+            content = cache.get(fname)
+            if content is None:
+                content = self._read_safe(CONTEXT_DIR / fname)
+                cache[fname] = content
+            if anchor not in content:
+                drifted.append(f"{probe_id}: '{anchor}' missing in {fname}")
+        self.report.findings.append(Finding(
+            id="P0", name="Probe self-validation", dimension="meta",
+            status="pass" if not drifted else "fail",
+            detail="All probe anchors present" if not drifted
+            else "DRIFTED — probes target stale structure: " + "; ".join(drifted),
+        ))
 
     # ─── Dimension 1: Self-Context ───────────────────────────────────────────
 
@@ -166,10 +255,14 @@ class SelfLoopsHealthEngine:
     def _check_memory(self):
         memory = self._read_safe(CONTEXT_DIR / "MEMORY.md")
 
-        # M1: Distillation recency — parse dates from Recent Context + Key Decisions
-        rc_section = self._extract_section(memory, "## Recent Context", "## Key Decisions")
-        kd_section = self._extract_section(memory, "## Key Decisions", "## Lessons Learned")
-        dates = re.findall(r"20\d{2}-\d{2}-\d{2}", rc_section + kd_section)
+        # M1: Distillation recency — parse dates from the live dated-entry
+        # sections (7-type schema: Decisions/Guidelines/Pitfalls/Corrections).
+        # Legacy "## Recent Context / ## Key Decisions" no longer exist (PRI01).
+        entry_text = "".join(
+            self._extract_section(memory, f"## {name}", "## ")
+            for name in MEMORY_ENTRY_SECTIONS
+        )
+        dates = re.findall(r"20\d{2}-\d{2}-\d{2}", entry_text)
         if dates:
             newest = max(dates)
             gap = (date.today() - date.fromisoformat(newest)).days
@@ -196,8 +289,8 @@ class SelfLoopsHealthEngine:
             auto_fixable=undistilled > 3,
         ))
 
-        # M3: Section caps
-        caps = {"Key Decisions": 40, "Lessons Learned": 35, "Recent Context": 20, "COE Registry": 15}
+        # M3: Section caps (live 7-type sections, not legacy headers)
+        caps = MEMORY_ENTRY_SECTIONS
         over_cap = []
         for section_name, cap in caps.items():
             section = self._extract_section(memory, f"## {section_name}", "## ")
@@ -241,21 +334,23 @@ class SelfLoopsHealthEngine:
                 status="n/a", detail="DailyActivity dir not found",
             ))
 
-        # M6: Content dedup — detect duplicate entries in MEMORY.md body
-        # Extracts **bold titles** from Lessons Learned and Key Decisions;
-        # exact title duplicates indicate distillation promoted the same lesson twice.
+        # M6: Content dedup — detect duplicate entries in MEMORY.md body.
+        # Live 7-type entries are "- [DEC01] <title> | ..." / "- [GUI12] ...";
+        # a repeated entry id OR repeated leading title indicates distillation
+        # promoted the same item twice. (Legacy bold-title scan over Lessons
+        # Learned/Key Decisions no longer applies — those sections were removed.)
         dupes_found: list[str] = []
-        for section_name in ("Lessons Learned", "Key Decisions", "Recent Context"):
+        for section_name in MEMORY_ENTRY_SECTIONS:
             section = self._extract_section(memory, f"## {section_name}", "## ")
-            titles_seen: dict[str, int] = {}
+            ids_seen: dict[str, int] = {}
             for line in section.split("\n"):
-                m = re.search(r"\*\*(.+?)\*\*", line)
+                m = re.match(r"\s*- \[([A-Z]+\d+)\]\s*(.+?)(?:\s*\||$)", line)
                 if m:
-                    title = m.group(1).strip().lower()
-                    if title in titles_seen:
-                        dupes_found.append(f"{section_name}: '{title[:50]}...'")
+                    key = m.group(1).strip().lower()  # entry id, e.g. dec01
+                    if key in ids_seen:
+                        dupes_found.append(f"{section_name}: '[{m.group(1)}]'")
                     else:
-                        titles_seen[title] = 1
+                        ids_seen[key] = 1
         self.report.findings.append(Finding(
             id="M6", name="Content dedup", dimension="memory",
             status="pass" if not dupes_found else "warn",
@@ -314,15 +409,17 @@ class SelfLoopsHealthEngine:
             detail=f"Last change: {last_change or 'unknown'}",
         ))
 
-        # K3: Capability coverage (RC entries reflected)
-        memory = self._read_safe(CONTEXT_DIR / "MEMORY.md")
-        rc_terms = re.findall(r"\[RC\d+\] 20\d{2}-\d{2}-\d{2} (.+?)(?:\s*[—|])", memory[:5000])
-        arch_section = knowledge[:knowledge.find("## Knowledge Index")] if "## Knowledge Index" in knowledge else knowledge
-        gaps = sum(1 for term in rc_terms[:5] if term[:20].lower() not in arch_section.lower())
+        # K3: Capability coverage. Same source + SHARED helper as X1 (they must
+        # not disagree). Legacy "[RC\d+]" MEMORY probe was a vacuous always-pass
+        # (no [RC] entries exist in the 7-type schema). n/a when no registry.
+        evolution = self._read_safe(CONTEXT_DIR / "EVOLUTION.md")
+        gaps, sample = self._capability_sync_gaps(evolution, knowledge)
         self.report.findings.append(Finding(
             id="K3", name="Capability coverage", dimension="knowledge",
-            status="pass" if gaps <= 1 else ("warn" if gaps <= 3 else "fail"),
-            detail=f"{gaps}/{min(5, len(rc_terms))} recent capabilities not in architecture",
+            status="n/a" if not sample else (
+                "pass" if gaps <= 2 else ("warn" if gaps <= 4 else "fail")),
+            detail=f"{gaps}/{len(sample)} capabilities not in architecture"
+            if sample else "No capability registry entries to check",
         ))
 
         # K4: Codebase nav valid
@@ -376,22 +473,25 @@ class SelfLoopsHealthEngine:
                 status="fail", detail="Missing",
             ))
 
-        # E3: Correction capture this month
-        current_month = date.today().strftime("%Y-%m")
-        c_count = len(re.findall(rf"### C\d+ \| {current_month}", evolution))
+        # E3: Correction capture — live format is inline "C0NN" ids (e.g. C037)
+        # under "### CLASS A/B/C", NOT the legacy "### C\d+ | YYYY-MM" headers.
+        # Count distinct correction ids present (capture is healthy if the
+        # registry holds corrections at all; recency is measured by M1 dates).
+        c_ids = set(re.findall(EVOLUTION_CORRECTION_RE, evolution))
         self.report.findings.append(Finding(
             id="E3", name="Correction capture", dimension="evolution",
-            status="pass" if c_count >= 1 else "warn",
-            detail=f"{c_count} this month",
+            status="pass" if len(c_ids) >= 1 else "warn",
+            detail=f"{len(c_ids)} distinct corrections tracked (C0NN)",
         ))
 
-        # E4: Competence growth
-        k_this = len(re.findall(rf"### K\d+ \| {current_month}", evolution))
-        k_last = len(re.findall(rf"### K\d+ \| {(date.today().replace(day=1) - timedelta(days=1)).strftime('%Y-%m')}", evolution))
+        # E4: Class-based correction taxonomy present (CLASS A/B/C). The legacy
+        # "### K\d+" competence entries were removed in the 7-type schema; the
+        # live signal that evolution-tracking is alive is the CLASS taxonomy.
+        class_count = len(re.findall(EVOLUTION_CLASS_RE, evolution, re.MULTILINE))
         self.report.findings.append(Finding(
-            id="E4", name="Competence growth", dimension="evolution",
-            status="pass" if k_this >= 1 else ("warn" if k_last >= 1 else "fail"),
-            detail=f"This month: {k_this}, last month: {k_last}",
+            id="E4", name="Correction taxonomy (CLASS A/B/C)", dimension="evolution",
+            status="pass" if class_count >= 1 else "warn",
+            detail=f"{class_count} CLASS sections present",
         ))
 
     # ─── Dimension 5: Cross-Loop Coherence ───────────────────────────────────
@@ -401,24 +501,30 @@ class SelfLoopsHealthEngine:
         knowledge = self._read_safe(CONTEXT_DIR / "KNOWLEDGE.md")
         evolution = self._read_safe(CONTEXT_DIR / "EVOLUTION.md")
 
-        # X1: Memory→Knowledge sync
-        rc_terms = re.findall(r"\[RC\d+\] 20\d{2}-\d{2}-\d{2} (.+?)(?:\s*[—|])", memory[:5000])
-        arch = knowledge[:knowledge.find("## Knowledge Index")] if "## Knowledge Index" in knowledge else ""
-        unsynced = sum(1 for t in rc_terms[:5] if t[:15].lower() not in arch.lower())
+        # X1: Capability→Knowledge sync. Capability registry = EVOLUTION's
+        # "**Capability**: <Name>" lines (legacy "[RC\d+]" MEMORY entries no
+        # longer exist; DEC entries are session decisions NOT capabilities, so
+        # matching them would always false-fail — the trap in pass 1). Uses the
+        # SHARED _capability_sync_gaps helper so X1 and K3 cannot disagree.
+        unsynced, sample = self._capability_sync_gaps(evolution, knowledge)
         self.report.findings.append(Finding(
-            id="X1", name="Memory→Knowledge sync", dimension="coherence",
-            status="pass" if unsynced <= 1 else ("warn" if unsynced <= 3 else "fail"),
-            detail=f"{unsynced}/{min(5, len(rc_terms))} capabilities not in KNOWLEDGE",
+            id="X1", name="Capability→Knowledge sync", dimension="coherence",
+            status="n/a" if not sample else (
+                "pass" if unsynced <= 2 else ("warn" if unsynced <= 4 else "fail")),
+            detail=f"{unsynced}/{len(sample)} capabilities not reflected in KNOWLEDGE"
+            if sample else "No capability registry entries to check",
         ))
 
-        # X2: Memory→Evolution sync
-        evo_corrections = len(re.findall(r"### C\d+", evolution))
-        mem_lessons = len(re.findall(r"\[LL\d+\]", memory))
-        synced = evo_corrections >= mem_lessons * 0.3
+        # X2: Memory↔Evolution sync. Live formats: EVOLUTION uses inline "C0NN"
+        # correction ids; MEMORY uses "[COR\d+]" correction entries. Healthy if
+        # EVOLUTION tracks at least as many corrections as MEMORY surfaces.
+        evo_corrections = len(set(re.findall(EVOLUTION_CORRECTION_RE, evolution)))
+        mem_corrections = len(re.findall(r"\[COR\d+\]", memory))
+        synced = evo_corrections >= max(1, mem_corrections)
         self.report.findings.append(Finding(
             id="X2", name="Memory→Evolution sync", dimension="coherence",
             status="pass" if synced else "warn",
-            detail=f"EVOLUTION C-entries: {evo_corrections}, MEMORY LL: {mem_lessons}",
+            detail=f"EVOLUTION corrections: {evo_corrections}, MEMORY [COR]: {mem_corrections}",
         ))
 
         # X3: DA→Memory lag
@@ -673,7 +779,12 @@ class SelfLoopsHealthEngine:
         mem = CONTEXT_DIR / "MEMORY.md"
         if mem.exists():
             content = mem.read_text(encoding="utf-8")
-            required = ["## Recent Context", "## Key Decisions", "## Lessons Learned"]
+            # Integrity gate against the LIVE 7-type schema. The legacy headers
+            # (Recent Context/Key Decisions/Lessons Learned) were removed (PRI01);
+            # gating on them made this return False unconditionally → auto-commit
+            # was permanently dead. Require the structural anchors that actually
+            # exist today.
+            required = ["## Memory Index", "## Decisions", "## Open Threads"]
             if not all(h in content for h in required):
                 return False  # Possible corruption — don't commit
             if len(content) < 100:
@@ -977,18 +1088,32 @@ class SelfLoopsHealthEngine:
         """
         signals: dict[str, float] = {}
 
-        # Signal 1: Correction rate trend (EVOLUTION.md)
+        # Signal 1: Correction rate trend (EVOLUTION.md). Live format: inline
+        # "C0NN" ids on lines that also carry a date (e.g. "**C037** (06-17):").
+        # Legacy "### C\d+ | YYYY-MM" headers were removed (PRI01) — counting
+        # them pinned this signal at 100 (vacuous). Count distinct correction
+        # ids whose line carries a date in the target month.
         evolution = self._read_safe(CONTEXT_DIR / "EVOLUTION.md")
+
+        def _corrections_in_month(text: str, ym: str) -> int:
+            # ym e.g. "2026-06"; match C0NN ids on a line mentioning that month
+            # (either YYYY-MM or the (MM-DD) shorthand used in CLASS chains).
+            mm = ym.split("-")[1]
+            ids = set()
+            for line in text.splitlines():
+                if (ym in line) or re.search(rf"\((?:{mm})-\d{{2}}\)", line):
+                    ids.update(re.findall(r"\bC0\d{2}\b", line))
+            return len(ids)
+
         current_month = date.today().strftime("%Y-%m")
-        corrections_this_month = len(re.findall(rf"### C\d+ \| {current_month}", evolution))
+        corrections_this_month = _corrections_in_month(evolution, current_month)
         # Count last 3 months for baseline
         corrections_3mo = 0
         months_counted = 0
         for i in range(1, 4):
             d = date.today().replace(day=1) - timedelta(days=i * 28)
             m = d.strftime("%Y-%m")
-            count = len(re.findall(rf"### C\d+ \| {m}", evolution))
-            corrections_3mo += count
+            corrections_3mo += _corrections_in_month(evolution, m)
             months_counted += 1
         avg_3mo = corrections_3mo / max(months_counted, 1)
 
