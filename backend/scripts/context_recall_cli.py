@@ -91,6 +91,28 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"allowed": False, "reason": gate.reason, "content": ""}))
             return 0
 
+        # Inode-identity gate: a HARDLINK is a second directory entry for the
+        # same inode that .resolve() cannot detect (no symlink to follow), so a
+        # name-only gate would serve `NOTES.md` hardlinked to MEMORY.md. Deny if
+        # the resolved target shares an inode with ANY policy-excluded file.
+        if resolved.exists() and policy_excluded:
+            try:
+                target_id = resolved.stat()
+                target_key = (target_id.st_dev, target_id.st_ino)
+                for excluded in policy_excluded:
+                    ex_path = context_dir / excluded
+                    if ex_path.exists():
+                        ex_id = ex_path.stat()
+                        if (ex_id.st_dev, ex_id.st_ino) == target_key:
+                            print(json.dumps({
+                                "allowed": False, "content": "",
+                                "reason": (f"'{args.file}' resolves to the same inode as "
+                                           f"policy-excluded '{excluded}' — denied."),
+                            }))
+                            return 0
+            except OSError:
+                pass  # stat failure → fall through to normal not-found handling
+
         if not resolved.exists():
             print(json.dumps({"allowed": True, "content": "",
                               "reason": f"file not found: {safe_name}"}))

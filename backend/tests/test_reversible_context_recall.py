@@ -227,6 +227,29 @@ def test_cli_group_channel_denies_case_and_traversal(tmp_path):
         assert out["content"] == ""
 
 
+def test_cli_denies_hardlink_alias_to_policy_file(tmp_path):
+    """Gate-2 residual: a hardlink is a 2nd name for the same inode that
+    .resolve() can't unmask. The inode-identity gate must still deny it."""
+    import json as _json
+    import io
+    import os
+    from contextlib import redirect_stdout
+    from scripts import context_recall_cli as cli
+
+    mem = tmp_path / "MEMORY.md"
+    mem.write_text(_large_memory(), encoding="utf-8")
+    alias = tmp_path / "NOTES.md"
+    os.link(mem, alias)  # hardlink: same inode, different name
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        cli.main(["--file", "NOTES.md", "--query", "exit code -9",
+                  "--session-type", "group_channel", "--context-dir", str(tmp_path)])
+    out = _json.loads(buf.getvalue())
+    assert out["allowed"] is False, "hardlink alias bypassed the privacy gate"
+    assert out["content"] == ""
+
+
 def test_cli_desktop_serves_and_requires_session_type(tmp_path):
     import json as _json
     import io
