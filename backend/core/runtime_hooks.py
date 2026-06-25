@@ -66,6 +66,21 @@ _CORRECTION_PATTERNS_EN = re.compile(
 # explicit "you're wrong". COR02-disciplined: every pattern is a multi-word
 # phrase with correction-specific SEMANTICS — NOT a bare keyword (no lone 吗/去),
 # so genuine info-questions ("这个怎么用吗", "你能去查一下文档吗") don't trigger.
+#
+# KNOWN, DELIBERATE RECALL GAP — pure question-form challenges are NOT captured.
+# Corrections phrased as a bare interrogative — "你知道X吗", "你确定X吗",
+# "你是不是X" — are intentionally LEFT OUT. They are structurally identical to
+# benign info-questions ("你知道这个怎么用吗"), so a pure regex cannot tell a
+# challenge from a question without false positives — exactly the COR02 class.
+# This is an accepted recall gap, NOT a bug: precision is held over recall here.
+# Capturing question-form challenges requires SEMANTIC judgment (interrogative +
+# reference to the agent's own prior claim/action), which belongs on a different
+# surface (see Designs/2026-06-25-self-evolution-closed-loop-design.md, M3.5
+# APPLY-gate / Stop-hook), NOT in this hot-path regex. Do NOT "fix" this by
+# adding 你知道/你确定/吗 here — that re-opens COR02. The boundary is locked in
+# BOTH directions by test_runtime_hooks.py: test_detects_meta_cognitive_redirect
+# (imperatives MUST fire) + test_question_form_challenges_are_a_known_recall_gap
+# (interrogatives MUST NOT fire).
 _CORRECTION_PATTERNS_META = re.compile(
     r"""(?ix)
     (?:

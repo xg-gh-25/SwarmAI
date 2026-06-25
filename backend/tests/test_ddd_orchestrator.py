@@ -145,10 +145,12 @@ class TestDeepCheckDelegation:
         dispatcher.loop = None  # Force legacy fallback
 
         try:
-            with patch("core.ddd_orchestrator.DddCultivationOrchestrator") as MockOrch:
-                mock_instance = MagicMock()
+            # autospec=True: bind to the real DddCultivationOrchestrator API so a
+            # renamed/removed/signature-changed .run() fails this test rather than
+            # silently passing (mock-masks-breakage precedent — _create_health_todo).
+            with patch("core.ddd_orchestrator.DddCultivationOrchestrator", autospec=True) as MockOrch:
+                mock_instance = MockOrch.return_value
                 mock_instance.run.return_value = ["test_finding"]
-                MockOrch.return_value = mock_instance
 
                 hook._deep_check(tmp_path, str(tmp_path))
 

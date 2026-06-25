@@ -269,6 +269,39 @@ class TestUserCorrectionDetector:
         assert not corrections_file.exists(), f"false-positive on info-question: {prompt!r}"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("prompt", [
+        "你知道去用这些信息做判断吗",      # the actual session correction we MISS
+        "你确定 single-writer 贯彻到所有 consumer 了吗",  # COE10-shape challenge
+        "你凭记忆还是查了代码",            # Socratic challenge, no imperative verb
+        "你是不是又跳过了 pipeline",       # interrogative challenge
+    ])
+    async def test_question_form_challenges_are_a_known_recall_gap(
+        self, prompt, corrections_file, session_context
+    ):
+        """KNOWN, DELIBERATE recall gap (NOT a bug). These ARE real corrections —
+        Socratic challenges phrased as bare interrogatives — but they are
+        structurally identical to benign info-questions ('你知道这个怎么用吗'),
+        so a pure hot-path regex cannot separate them without re-opening COR02.
+
+        This test pins the boundary in BOTH directions:
+          - it asserts these do NOT trigger (precision held)
+          - paired with test_detects_meta_cognitive_redirect (imperative redirects
+            MUST trigger), it locks the regex's scope so a future 'recall fix'
+            that adds 你知道/你确定/吗 here will FAIL loudly here AND there.
+        Capturing these needs SEMANTIC judgment on a different surface (M3.5
+        APPLY-gate / Stop-hook), never this regex.
+        """
+        from core.runtime_hooks import create_user_correction_detector
+
+        hook = create_user_correction_detector(str(corrections_file), session_context)
+        await hook({"prompt": prompt}, None, MagicMock())
+        assert not corrections_file.exists(), (
+            f"question-form challenge {prompt!r} was captured — this re-opens the "
+            f"COR02 false-positive class. If intentional, it needs a semantic gate, "
+            f"not a regex addition."
+        )
+
+    @pytest.mark.asyncio
     async def test_rotation_triggers_on_oversize(self, corrections_file, session_context):
         """When file exceeds size threshold, oldest entries are dropped."""
         import core.runtime_hooks as rh

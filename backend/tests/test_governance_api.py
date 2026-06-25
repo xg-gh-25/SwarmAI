@@ -12,7 +12,7 @@ target=='governance'). DoD negatives:
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -50,9 +50,11 @@ def test_get_pending_filters_to_governance_with_ids(svc):
 # --- AC6: accept rule -> register_rule + removed ---
 
 def test_accept_rule_calls_register_rule_and_removes(svc):
-    with patch("core.evolution.correction_tracker.CorrectionClassTracker") as TrackerCls:
-        tracker = MagicMock()
-        TrackerCls.return_value = tracker
+    # autospec=True: bind the mock to the REAL CorrectionClassTracker API so a
+    # renamed/removed register_rule/register_gate fails this test instead of
+    # silently passing (mock-masks-breakage precedent — _create_health_todo).
+    with patch("core.evolution.correction_tracker.CorrectionClassTracker", autospec=True) as TrackerCls:
+        tracker = TrackerCls.return_value
         res = svc.decide_governance("CLASS_B:rule", "accept")
     assert res["action_taken"] == "registered_rule"
     tracker.register_rule.assert_called_once()
@@ -64,9 +66,8 @@ def test_accept_rule_calls_register_rule_and_removes(svc):
 # --- AC6 + Gate-1 Check-4: accept gate -> register_GATE (not a dead rung) ---
 
 def test_accept_gate_calls_register_gate(svc):
-    with patch("core.evolution.correction_tracker.CorrectionClassTracker") as TrackerCls:
-        tracker = MagicMock()
-        TrackerCls.return_value = tracker
+    with patch("core.evolution.correction_tracker.CorrectionClassTracker", autospec=True) as TrackerCls:
+        tracker = TrackerCls.return_value
         res = svc.decide_governance("CLASS_A:gate", "accept")
     assert res["action_taken"] == "registered_gate"
     tracker.register_gate.assert_called_once()
@@ -76,9 +77,8 @@ def test_accept_gate_calls_register_gate(svc):
 # --- AC6: reject -> removed, NO register, NO counter ---
 
 def test_reject_removes_without_register(svc):
-    with patch("core.evolution.correction_tracker.CorrectionClassTracker") as TrackerCls:
-        tracker = MagicMock()
-        TrackerCls.return_value = tracker
+    with patch("core.evolution.correction_tracker.CorrectionClassTracker", autospec=True) as TrackerCls:
+        tracker = TrackerCls.return_value
         svc.decide_governance("CLASS_B:rule", "reject")
         tracker.register_rule.assert_not_called()
         tracker.register_gate.assert_not_called()
@@ -112,7 +112,7 @@ def test_ac7_never_writes_governance_files(svc, tmp_path):
         f = tmp_path / ".context" / name
         f.write_text("ORIGINAL\n")
         gov[name] = f.read_text()
-    with patch("core.evolution.correction_tracker.CorrectionClassTracker"):
+    with patch("core.evolution.correction_tracker.CorrectionClassTracker", autospec=True):
         svc.decide_governance("CLASS_A:gate", "accept")
         svc.decide_governance("CLASS_B:rule", "reject")
     for name, original in gov.items():
