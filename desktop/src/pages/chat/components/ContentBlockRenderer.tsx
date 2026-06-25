@@ -47,6 +47,23 @@ export function ContentBlockRenderer({
   lastPendingToolUseId,
 }: ContentBlockRendererProps) {
   if (block.type === 'text') {
+    // While streaming, render plaintext (whitespace-pre-wrap) instead of markdown.
+    // MarkdownRenderer re-parses the FULL string (4 remark/rehype plugins + KaTeX +
+    // highlight.js) on every token, and block.text grows per token — O(n²) jank on
+    // long replies. Plaintext is O(n) and visually close. On stream end (isStreaming
+    // false), we render via MarkdownRenderer — the same path every historical message
+    // already uses, so the resting state is unchanged. Typography is matched to the
+    // markdown <p> (text/leading) + wrapper (markdown-content min-w-0) to minimize the
+    // streaming→final reflow. (run_00e0e872)
+    if (isStreaming) {
+      return (
+        <div className="markdown-content min-w-0">
+          <p className="text-[var(--color-text)] leading-normal whitespace-pre-wrap">
+            {block.text || ''}
+          </p>
+        </div>
+      );
+    }
     return <MarkdownRenderer content={block.text || ''} />;
   }
 
