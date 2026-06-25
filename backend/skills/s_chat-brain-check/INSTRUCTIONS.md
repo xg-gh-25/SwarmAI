@@ -11,7 +11,50 @@ SwarmAI's chat is its brain. This skill validates chat correctness at two tiers:
 
 ## Quick Check (default)
 
-Run phases Q1-Q4 in order. Any BLOCK failure = do not ship.
+Run phases Q0-Q4 in order. Any BLOCK failure = do not ship.
+
+### Q0: Probe Self-Validation [BLOCK]
+
+This skill's invariant probes grep live code. When code is refactored (file moves,
+symbol renames), a probe silently greps nothing -> false-green ("no hits, must be
+fine") or false-red ("symbol gone, must be broken"). Q0 catches that BEFORE any
+invariant is trusted. **It validates the TOOL before using the tool** (PIT07).
+
+Run this first. If any file or anchor symbol is MISSING, STOP -- the skill is stale
+against the current architecture and must be realigned (re-run this skill's own
+pipeline) before its verdict means anything.
+
+```bash
+cd $SWARMAI_ROOT/desktop/src
+
+echo "=== Q0.1: Probe target FILES exist ==="
+for f in \
+  hooks/useChatStreamingLifecycle.ts \
+  hooks/useStreamingActivity.ts \
+  pages/ChatPage.tsx \
+  pages/chat/components/TabView.tsx \
+  services/chat.ts ; do
+  [ -f "$f" ] && echo "OK  $f" || echo "MISSING  $f  <-- skill stale, STOP"
+done
+
+echo "=== Q0.2: Anchor SYMBOLS present at their expected home ==="
+# (symbol, file) pairs -- assert presence only, never line numbers
+check() { grep -q "$1" "$2" && echo "OK  $1  in  $2" || echo "DRIFTED  $1  expected in  $2  <-- skill stale, STOP"; }
+check 'isLastAssistantForStreaming'   pages/chat/components/TabView.tsx
+check 'const lastAssistantIdx'        pages/chat/components/TabView.tsx
+check 'function deriveStreamingActivity' hooks/useChatStreamingLifecycle.ts
+check 'ELAPSED_DISPLAY_THRESHOLD_MS'  hooks/useChatStreamingLifecycle.ts
+check 'bumpStreamingDerivation'       hooks/useChatStreamingLifecycle.ts
+check 'hasQueuedMessage'              hooks/useChatStreamingLifecycle.ts
+check 'cleanupStreamingState'         pages/ChatPage.tsx
+# Load-bearing symbols for the un-rewritten Q2/Q3 probes (catch B1-class drift):
+check 'onDrainQueue'                  hooks/useChatStreamingLifecycle.ts
+check 'incrementStreamGen'            hooks/useChatStreamingLifecycle.ts
+check 'capturedGen !== liveGen'       hooks/useChatStreamingLifecycle.ts
+```
+
+Any `MISSING` or `DRIFTED` line = **BLOCK**. The architecture moved out from under
+the probes; realign the skill (its targets) before trusting Q1-Q4.
 
 ### Q1: Automated Tests [BLOCK]
 
@@ -42,8 +85,9 @@ Run all checks. Any failure = BLOCK.
 cd $SWARMAI_ROOT/desktop/src
 
 echo "=== 2.1: Drain preserves streaming (no false-to-true gap) ==="
-# Must find: if (!hasQueuedMessage) { setIsStreaming(false, ...) }
-grep -A2 'hasQueuedMessage' hooks/useChatStreamingLifecycle.ts | grep 'setIsStreaming(false'
+# Must find: if (!hasQueuedMessage) { ...; setIsStreaming(false, ...) }
+# -A4 (not -A2): a 2-line comment sits between the guard and the call.
+grep -A4 'hasQueuedMessage' hooks/useChatStreamingLifecycle.ts | grep 'setIsStreaming(false'
 
 echo "=== 2.2: Generation guard in completeHandler ==="
 # Must find 2 guards: tabState.streamGen and streamGenRef.current
@@ -57,13 +101,14 @@ echo "=== 2.3: 3 drain sites present ==="
 grep -n 'onDrainQueue' hooks/useChatStreamingLifecycle.ts
 
 echo "=== 2.4: Pre-guard drain before gen check ==="
-# Must appear BEFORE the 'tabState.streamGen !== capturedGen' line
-grep -n 'preGuardTab\|streamGen !== capturedGen' hooks/useChatStreamingLifecycle.ts | head -4
-# preGuardTab line number must be LESS than streamGen check line number
+# Must appear BEFORE the live gen guard. NOTE: the guard was renamed from the old
+# 'streamGen !== capturedGen' to 'capturedGen !== liveGen' -- anchor on the LIVE one.
+grep -n 'preGuardTab\|capturedGen !== liveGen' hooks/useChatStreamingLifecycle.ts | head -4
+# preGuardTab line number must be LESS than the gen-check line number
 
 echo "=== 2.5: Drain failure cleanup ==="
 # cleanupStreamingState called in empty-content return AND catch block
-grep -c 'cleanupStreamingState' ../pages/ChatPage.tsx
+grep -c 'cleanupStreamingState' pages/ChatPage.tsx
 # Expected: >= 3 (declaration + 2 call sites)
 
 echo "=== 2.6: isStreaming derived from ref (not useState) ==="
@@ -72,11 +117,14 @@ grep 'const isStreaming =' hooks/useChatStreamingLifecycle.ts
 # Must NOT be: useState
 
 echo "=== 2.7: No dead event handlers ==="
-grep -c 'cmd_permission_acknowledged' ../pages/ChatPage.tsx hooks/useChatStreamingLifecycle.ts
-# Expected: 0 for both files
+# A real dead handler = a 'case' switch arm for the event. Type-union members
+# (types/index.ts) and explanatory comments are NOT dead code -- discriminate.
+grep -rn "case 'cmd_permission_acknowledged'" pages hooks
+# Expected: NO output (no case-arm handler). Bare mentions in a type union or a
+# comment are fine -- the architecture intentionally references the event name.
 
 echo "=== 2.8: Permission uses standard handler ==="
-grep -A5 'streamCmdPermissionContinue' ../pages/ChatPage.tsx | grep 'streamHandler'
+grep -A5 'streamCmdPermissionContinue' pages/ChatPage.tsx | grep 'streamHandler'
 # Must find: streamHandler passed directly as onMessage (no wrapper)
 ```
 
@@ -108,8 +156,11 @@ grep -c 'incrementStreamGen' desktop/src/hooks/useChatStreamingLifecycle.ts \
 #   handleRetryQueueTimeout, handlePermissionDecision
 
 echo "=== 3.4: userStopped guard present [WARN] ==="
-grep -c 'userStopped' desktop/src/hooks/useChatStreamingLifecycle.ts
-# Expected: >= 4 (check in streamHandler, check in errorHandler, set in handleStop, clear in drain/send)
+# The 4 roles are SPLIT across two files post-refactor: the CHECK guards live in
+# the lifecycle hook; the SET (handleStop) + CLEAR (drain/send) live in ChatPage.
+# Count across both -- a single-file count under-counts and false-WARNs.
+grep -c 'userStopped' desktop/src/hooks/useChatStreamingLifecycle.ts desktop/src/pages/ChatPage.tsx
+# Expected: combined total >= 4 (lifecycle: checks; ChatPage: set + clear)
 ```
 
 ### Q4: TypeScript [BLOCK]
@@ -127,6 +178,7 @@ Must be clean. Pre-existing `stall` warnings in chat.ts are acceptable.
 
 | Phase | Status | Details |
 |-------|--------|---------|
+| Q0 Probe self-validation | PASS/BLOCK | files exist, anchors present (else skill stale) |
 | Q1 Tests | PASS/BLOCK | backend N/N, frontend N/N |
 | Q2 Invariants | PASS/BLOCK | 8/8 checks passed |
 | Q3 Regressions | PASS/WARN/BLOCK | null bytes, binaries, patterns |
@@ -253,29 +305,35 @@ grep -n "event.type === 'heartbeat'" desktop/src/services/chat.ts
 ```bash
 cd $SWARMAI_ROOT/desktop/src
 
-# Render condition
-grep 'isLastAssistantForStreaming' pages/ChatPage.tsx | head -2
-# Derivation
-grep -A3 'const lastAssistantIdx' pages/ChatPage.tsx
-# Null cases
+# NOTE: post render-source-split (OT01 fix, 2026-06-25), the indicator RENDER
+# moved out of ChatPage.tsx into pages/chat/components/TabView.tsx (single render
+# authority). The DERIVATION pure-function `deriveStreamingActivity` is DEFINED in
+# the lifecycle hook and CONSUMED by the hooks/useStreamingActivity.ts wrapper hook.
+# Constants + debounce ref + bumpStreamingDerivation stayed in the lifecycle hook.
+
+# Render condition (now in TabView)
+grep 'isLastAssistantForStreaming' pages/chat/components/TabView.tsx | head -2
+# Derivation index (now in TabView)
+grep -A3 'const lastAssistantIdx' pages/chat/components/TabView.tsx
+# Null cases (pure fn DEFINED in lifecycle, consumed by useStreamingActivity.ts hook)
 grep -A6 'function deriveStreamingActivity' hooks/useChatStreamingLifecycle.ts
-# Debounce reset
+# Debounce reset (stayed in lifecycle)
 grep -B1 -A3 'lastActivityChangeTimeRef.current = 0' hooks/useChatStreamingLifecycle.ts
-# Constants
+# Constants (stayed in lifecycle)
 grep 'ELAPSED_DISPLAY_THRESHOLD_MS\|MIN_ACTIVITY_DISPLAY_MS' hooks/useChatStreamingLifecycle.ts | head -2
-# Tab switch sync
+# Tab switch sync (stayed in lifecycle)
 grep -A8 'bumpStreamingDerivation' hooks/useChatStreamingLifecycle.ts | head -10
-# Fallback
-grep 'lastAssistantIdx < 0' pages/ChatPage.tsx
+# Fallback (now in TabView)
+grep 'lastAssistantIdx < 0' pages/chat/components/TabView.tsx
 ```
 
-- [ ] `isLastAssistantForStreaming = isStreaming && assistant && idx === lastAssistantIdx`
-- [ ] `lastAssistantIdx` via `useMemo([messages])` with `.reduce()`
-- [ ] `deriveStreamingActivity` null for: !isStreaming, no assistant, empty content
-- [ ] Debounce resets `lastActivityChangeTimeRef = 0` on `!isStreaming`
-- [ ] `ELAPSED_DISPLAY_THRESHOLD_MS = 10000`, `MIN_ACTIVITY_DISPLAY_MS = 1500`
-- [ ] `bumpStreamingDerivation` derives immediately (no useEffect lag)
-- [ ] Fallback "Thinking..." when `isStreaming && lastAssistantIdx < 0`
+- [ ] `isLastAssistantForStreaming = isStreaming && assistant && idx === lastAssistantIdx` (in TabView)
+- [ ] `lastAssistantIdx` via `useMemo([messages])` with `.reduce()` (in TabView)
+- [ ] `deriveStreamingActivity` null for: !isStreaming, no assistant, empty content (defined in lifecycle, consumed by useStreamingActivity.ts)
+- [ ] Debounce resets `lastActivityChangeTimeRef = 0` on `!isStreaming` (in lifecycle)
+- [ ] `ELAPSED_DISPLAY_THRESHOLD_MS = 10000`, `MIN_ACTIVITY_DISPLAY_MS = 1500` (in lifecycle)
+- [ ] `bumpStreamingDerivation` derives immediately (no useEffect lag) (in lifecycle)
+- [ ] Fallback "Thinking..." when `isStreaming && lastAssistantIdx < 0` (in TabView)
 
 ### F4: Live Smoke Test
 
@@ -375,5 +433,18 @@ Every call site. Update this table when adding new sites.
 | Weekly proactive | Quick Check |
 | Major refactor (session, streaming, SSE) | Full Audit |
 
-**Chat files:** session_unit.py, session_router.py, chat.py, useChatStreamingLifecycle.ts, ChatPage.tsx, chat.ts, context_injector.py, prompt_builder.py
+**Chat files:** session_unit.py, session_router.py, chat.py, useChatStreamingLifecycle.ts, useStreamingActivity.ts, ChatPage.tsx, pages/chat/components/TabView.tsx, chat.ts, context_injector.py, prompt_builder.py
+
+---
+
+## Probe Freshness
+
+**Architecture baseline: 2026-06-26** (MessageStore single-writer, 2026-06-17;
+render-source split / OT01 fix, 2026-06-25). The Q0-Q4 invariant probes are greps
+against the frontend tree as of this baseline. If you change the chat architecture
+(move a file, rename a symbol, relocate the indicator render), the matching probe
+goes stale and silently false-greens/reds (PIT07). **Q0 is the guardrail** -- it
+fails loudly when a probe target drifts. When Q0 BLOCKs, realign this skill's
+targets (re-run its own pipeline) and bump this baseline date. The probes assert
+file + symbol presence only -- never line numbers, which rot on every edit.
 

@@ -442,6 +442,14 @@ async def reset_database():
     import aiosqlite
     _delete_script = ";\n".join(f"DELETE FROM {t}" for t in _TABLES_TO_CLEAR)
     async with aiosqlite.connect(str(_test_db.db_path)) as conn:
+        # Match production _WALConnection (database/sqlite.py): a raw aiosqlite
+        # connection defaults to busy_timeout=0, so this autouse fixture fails
+        # immediately with "database is locked" whenever it races the WAL-mode
+        # connections the app-under-test opens on the same (isolated tempfile)
+        # DB — intra-process contention, surfacing as repeated setup errors that
+        # time the suite out. busy_timeout=5000 waits the lock out, exactly as
+        # every production connection already does. Inert under no contention.
+        await conn.execute("PRAGMA busy_timeout=5000")
         await conn.executescript(_delete_script)
 
     from datetime import datetime
