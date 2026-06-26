@@ -676,7 +676,7 @@ _SOLUTION_LANGUAGE_PATTERNS = [
     r"\bi\s+will\b",
     r"\bi'?ll\b",
     r"\bwe\s+(?:will|should|need\s+to|could|can|must)\b",
-    r"\blet'?s\b",
+    r"\blet's\b",  # mandatory apostrophe: the suggestion "let's" — NOT the verb "lets" (run_b9452eb9)
     r"\bthe\s+fix\b",          # "the fix is" / "the fix:" / "the fix should"
     r"\bthe\s+solution\b",
     r"\bto\s+fix\b",

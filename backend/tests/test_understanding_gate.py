@@ -123,6 +123,10 @@ class TestM1SolutionLanguage:
         "The function does not create a new session.",
         "The module fails to add the header today.",
         "onComplete never persists the final gen.",
+        # the present-tense VERB 'lets' must not collide with the suggestion "let's"
+        # (run_b9452eb9: \blet'?s\b had an optional apostrophe → matched the verb).
+        "No tool lets a solo builder run team-scale AI today.",
+        "The OS lets users edit files without a restart.",
     ])
     def test_present_state_claim_passes_m1(self, ok_claim):
         data = _eval("existing-feature", ok_claim, _GOOD_EVIDENCE)
