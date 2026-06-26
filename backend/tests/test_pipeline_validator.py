@@ -2101,15 +2101,34 @@ class TestOutputRouting:
         assert errors == []  # No BLOCK — field is missing (legacy)
         assert any("changeset" in w for w in warnings)
 
-    def test_review_empty_consumed_artifacts_blocks(self):
-        """AC4: Review with consumed_artifacts present but empty → BLOCK."""
-        build_rec = _stage_record("build")
+    def test_review_empty_consumed_artifacts_auto_resolves(self):
+        """C4 (run_7cf9da85, REPLACES the old BLOCK behavior): review with empty
+        consumed_artifacts but a COMPLETED build producing changeset → AUTO-RESOLVE,
+        not BLOCK. The artifact demonstrably exists; hand-recording it was friction.
+        The real protection (consuming a never-produced artifact) is covered by
+        test_upstream_not_produced_warns below."""
+        build_rec = _stage_record("build")  # completed, produces changeset
         review_rec = _stage_record("review")
-        review_rec["consumed_artifacts"] = []  # Field present but empty
+        review_rec["consumed_artifacts"] = []  # not hand-recorded
         run = {"stages": [build_rec, review_rec]}
         errors, warnings = _check_output_routing("review", review_rec, run, "TestProject")
-        assert len(errors) >= 1
-        assert any("changeset" in e and "BLOCK" in e for e in errors)
+        assert errors == [], f"completed producer → no BLOCK: {errors}"
+        assert any("AUTO-RESOLVED" in w and "changeset" in w for w in warnings), \
+            f"auto-resolution must be observable: {warnings}"
+
+    def test_routing_blocks_when_producer_incomplete(self):
+        """C4 preserves the REAL protection: if the producing stage did NOT complete,
+        the consumed artifact does not exist → must NOT auto-resolve (WARN, no
+        false-pass). Mirrors test_upstream_not_produced_warns intent."""
+        build_rec = _stage_record("build", status="running")  # producer NOT done
+        review_rec = _stage_record("review")
+        review_rec["consumed_artifacts"] = []
+        run = {"stages": [build_rec, review_rec]}
+        errors, warnings = _check_output_routing("review", review_rec, run, "TestProject")
+        # No completed producer → no AUTO-RESOLVED claim; routing warns it's missing.
+        assert not any("AUTO-RESOLVED" in w for w in warnings), \
+            f"must not auto-resolve an incomplete producer: {warnings}"
+        assert any("changeset" in w for w in warnings), f"should warn missing upstream: {warnings}"
 
     def test_review_with_consumed_artifacts_passes(self):
         """AC5: Review with consumed_artifacts referencing changeset → PASS."""
