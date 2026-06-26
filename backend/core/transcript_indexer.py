@@ -450,6 +450,46 @@ class TranscriptStore:
         ).fetchall()
         return {row[0] for row in rows}
 
+    def backfill_orphan_vectors(self, embed_fn, limit: int = 10) -> int:
+        """Re-embed chunks that have a row but no vector (orphaned by a prior
+        failed embed, e.g. Bedrock down at index time). Returns count healed.
+
+        This is the recovery path for the transcript per-FILE skip: once a
+        session is in the index, `sync_transcript_index` skips its whole file,
+        so an orphaned chunk would otherwise NEVER get its vector. Operating on
+        chunk rows directly (not files) bypasses that skip entirely. Mirrors
+        KnowledgeStore.backfill_orphan_vectors + the memory_vec recovery.
+        Maintenance-layer only. Embed failure → chunk left orphaned (uncorrupted)
+        for the next pass, never a partial write.
+        """
+        try:
+            orphans = self._conn.execute(
+                "SELECT tc.id, tc.content FROM transcript_chunks tc "
+                "LEFT JOIN transcript_vec tv ON tc.id = tv.id "
+                "WHERE tv.id IS NULL LIMIT ?",
+                (limit,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return 0  # transcript_vec unavailable (sqlite-vec not loaded)
+        healed = 0
+        for rowid, content in orphans:
+            try:
+                vec = embed_fn(content)
+            except Exception:  # noqa: BLE001 — best-effort; retry next pass
+                vec = None
+            if vec is not None:
+                try:
+                    self._conn.execute(
+                        "INSERT OR REPLACE INTO transcript_vec(id, embedding) VALUES (?, ?)",
+                        (rowid, _serialize_f32(vec)),
+                    )
+                    healed += 1
+                except sqlite3.OperationalError:
+                    pass
+        if healed:
+            self._conn.commit()
+        return healed
+
     def remove_session(self, session_id: str) -> None:
         """Remove all chunks for a session from all tables."""
         # Get row IDs first

@@ -1862,6 +1862,17 @@ class ContextHealthHook:
 
             stats = sync_knowledge_index(store, knowledge_dir, embed_fn=_safe_embed)
 
+            # R4a: heal chunks orphaned by a prior failed embed (Bedrock down at
+            # index time). Without this the delta-sync content_hash check skips
+            # them forever → permanently keyword-only. Mirrors the memory_vec
+            # orphan recovery above. Best-effort, capped per session.
+            try:
+                recovered = store.backfill_orphan_vectors(_safe_embed, limit=10)
+                if recovered:
+                    logger.info("context_health: knowledge_vec orphan-backfill — recovered=%d", recovered)
+            except Exception as exc:  # noqa: BLE001 — backfill is best-effort
+                logger.warning("context_health: knowledge_vec backfill failed: %s", exc)
+
         if stats.get("chunks_added", 0) > 0 or stats.get("files_removed", 0) > 0:
             logger.info(
                 "context_health: knowledge library synced — "
@@ -1961,6 +1972,17 @@ class ContextHealthHook:
                 return client.embed_text(text)
 
             stats = sync_transcript_index(store, transcripts_dir, embed_fn=_safe_embed)
+
+            # R4b: heal chunks orphaned by a prior failed embed. CRITICAL for
+            # transcripts specifically: sync skips by whole session_id, so an
+            # orphaned chunk would otherwise NEVER get re-embedded. Operating on
+            # chunk rows directly bypasses the per-file skip. Best-effort, capped.
+            try:
+                recovered = store.backfill_orphan_vectors(_safe_embed, limit=10)
+                if recovered:
+                    logger.info("context_health: transcript_vec orphan-backfill — recovered=%d", recovered)
+            except Exception as exc:  # noqa: BLE001 — best-effort
+                logger.warning("context_health: transcript_vec backfill failed: %s", exc)
 
         if stats.get("files_indexed", 0) > 0:
             logger.info(

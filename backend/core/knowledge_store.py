@@ -236,6 +236,36 @@ class KnowledgeStore:
             (rowid, blob),
         )
 
+    def backfill_orphan_vectors(self, embed_fn, limit: int = 10) -> int:
+        """Re-embed chunks that have a row but no vector (orphaned by a prior
+        failed embed, e.g. Bedrock down at index time). Returns count healed.
+
+        Without this, the delta-sync content_hash check (sync_knowledge_index)
+        skips an un-embedded chunk forever → it stays permanently keyword-only.
+        Mirrors the memory_vec orphan recovery (context_health_hook.py:1782-1796).
+        MUST be called from the maintenance layer, not the recall read path.
+        Embed failures are tolerated: a chunk whose embed_fn still returns None is
+        left orphaned (uncorrupted) for the next pass — never a partial write.
+        """
+        orphans = self._conn.execute(
+            "SELECT kc.id, kc.content FROM knowledge_chunks kc "
+            "LEFT JOIN knowledge_vec kv ON kc.id = kv.id "
+            "WHERE kv.id IS NULL LIMIT ?",
+            (limit,),
+        ).fetchall()
+        healed = 0
+        for rowid, content in orphans:
+            try:
+                vec = embed_fn(content)
+            except Exception:  # noqa: BLE001 — embed is best-effort; retry next pass
+                vec = None
+            if vec is not None:
+                self._upsert_vec(rowid, vec)
+                healed += 1
+        if healed:
+            self._conn.commit()
+        return healed
+
     def get_existing_hashes(self, source_file: str) -> dict[int, str]:
         """Get content_hash for all chunks of a file. Returns {chunk_index: hash}."""
         rows = self._conn.execute(

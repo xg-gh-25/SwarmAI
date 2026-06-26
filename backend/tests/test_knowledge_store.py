@@ -173,6 +173,58 @@ class TestKnowledgeStore:
         ).fetchall()
         assert len(vec_rows) == 1
 
+    def test_backfill_orphan_vectors_heals_embed_failure(self):
+        """R4a: a chunk indexed while Bedrock was down (embedding=None) gets its
+        vector backfilled on a later healthy pass. Without this, the delta-sync
+        content_hash check skips it forever → permanently keyword-only. Mirrors
+        the memory_vec orphan recovery (context_health_hook.py:1782)."""
+        from core.knowledge_store import KnowledgeStore
+        import struct
+
+        conn = _make_conn()
+        store = KnowledgeStore(conn)
+        store.ensure_tables()
+
+        store.upsert_chunk("Notes/x.md", 0, "## X", "race condition fix", "h1", embedding=None)
+
+        orphans_before = conn.execute(
+            "SELECT kc.id FROM knowledge_chunks kc "
+            "LEFT JOIN knowledge_vec kv ON kc.id = kv.id WHERE kv.id IS NULL"
+        ).fetchall()
+        assert len(orphans_before) == 1, "expected 1 orphaned chunk"
+
+        healed = store.backfill_orphan_vectors(lambda text: [0.2] * 1024, limit=10)
+        assert healed == 1
+
+        query_blob = struct.pack("1024f", *([0.2] * 1024))
+        vec_rows = conn.execute(
+            "SELECT id FROM knowledge_vec WHERE embedding MATCH ? LIMIT 1", (query_blob,)
+        ).fetchall()
+        assert len(vec_rows) == 1
+        orphans_after = conn.execute(
+            "SELECT kc.id FROM knowledge_chunks kc "
+            "LEFT JOIN knowledge_vec kv ON kc.id = kv.id WHERE kv.id IS NULL"
+        ).fetchall()
+        assert orphans_after == []
+
+    def test_backfill_orphan_vectors_skips_on_embed_failure(self):
+        """R4a negative: if the embedder still fails (returns None), backfill
+        does NOT crash and leaves the orphan for the next pass (no partial/bad write)."""
+        from core.knowledge_store import KnowledgeStore
+
+        conn = _make_conn()
+        store = KnowledgeStore(conn)
+        store.ensure_tables()
+        store.upsert_chunk("Notes/y.md", 0, "## Y", "still down", "h2", embedding=None)
+
+        healed = store.backfill_orphan_vectors(lambda text: None, limit=10)
+        assert healed == 0
+        orphans = conn.execute(
+            "SELECT kc.id FROM knowledge_chunks kc "
+            "LEFT JOIN knowledge_vec kv ON kc.id = kv.id WHERE kv.id IS NULL"
+        ).fetchall()
+        assert len(orphans) == 1
+
     def test_delta_sync_skips_unchanged(self):
         """Delta sync should skip chunks with same content_hash."""
         from core.knowledge_store import KnowledgeStore

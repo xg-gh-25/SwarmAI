@@ -34,7 +34,16 @@ Persist knowledge to the correct destination. Routes content based on type and p
 | **Project decision** | Yes → `Projects/<X>/PROJECT.md` § Recent Decisions | No → skip |
 | **Cross-project principle** | — | `.context/MEMORY.md` § Principles |
 | **Self-correction/bias** | — | `.context/EVOLUTION.md` § Corrections Captured |
-| **Reference/fact/spec** | — | `KNOWLEDGE.md` or `Knowledge/Library/` |
+| **Reference/fact/spec** | — | `Knowledge/Library/` (searchable store — recall can find it) |
+
+> **⚠️ Routing fix (run_794adfaf, R4c):** reference/fact content goes to
+> `Knowledge/Library/`, **NOT** `.context/KNOWLEDGE.md`. KNOWLEDGE.md is an
+> always-injected *index/cache* file (one of the 11 context files) — it is a
+> **sibling** of `Knowledge/`, so `sync_knowledge_index` (which scans `Knowledge/`
+> only) never chunks it. Content written to KNOWLEDGE.md is injected-as-context but
+> **invisible to FTS5/vector recall**. Write durable reference material to
+> `Knowledge/Library/` so it enters the searchable store; KNOWLEDGE.md stays the
+> curated index the agent reads at session start.
 
 ### The Key Question
 

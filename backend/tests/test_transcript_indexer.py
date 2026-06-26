@@ -291,6 +291,49 @@ class TestTranscriptStore:
         count = conn.execute("SELECT COUNT(*) FROM transcript_chunks").fetchone()[0]
         assert count == 0
 
+    def test_backfill_orphan_vectors_heals_and_bypasses_file_skip(self):
+        """R4b: a chunk indexed while Bedrock was down (no vector) gets backfilled
+        even though sync skips the whole file by session_id. Operating on chunk
+        rows directly is what bypasses the per-file skip."""
+        from core.transcript_indexer import TranscriptStore
+
+        conn = _make_conn()
+        store = TranscriptStore(conn)
+        store.ensure_tables()
+
+        # embed-fail: chunk written without a vector
+        store.upsert_chunk("s1", "a.jsonl", 0, "mixed", "race condition fix", "h1", embedding=None)
+        orphans = conn.execute(
+            "SELECT tc.id FROM transcript_chunks tc "
+            "LEFT JOIN transcript_vec tv ON tc.id = tv.id WHERE tv.id IS NULL"
+        ).fetchall()
+        assert len(orphans) == 1
+
+        healed = store.backfill_orphan_vectors(lambda t: [0.3] * 1024, limit=10)
+        assert healed == 1
+        orphans_after = conn.execute(
+            "SELECT tc.id FROM transcript_chunks tc "
+            "LEFT JOIN transcript_vec tv ON tc.id = tv.id WHERE tv.id IS NULL"
+        ).fetchall()
+        assert orphans_after == []
+
+    def test_backfill_orphan_vectors_safe_on_embed_failure(self):
+        """R4b negative: embedder still down → no crash, orphan preserved."""
+        from core.transcript_indexer import TranscriptStore
+
+        conn = _make_conn()
+        store = TranscriptStore(conn)
+        store.ensure_tables()
+        store.upsert_chunk("s1", "a.jsonl", 0, "mixed", "down", "h1", embedding=None)
+
+        healed = store.backfill_orphan_vectors(lambda t: None, limit=10)
+        assert healed == 0
+        orphans = conn.execute(
+            "SELECT tc.id FROM transcript_chunks tc "
+            "LEFT JOIN transcript_vec tv ON tc.id = tv.id WHERE tv.id IS NULL"
+        ).fetchall()
+        assert len(orphans) == 1
+
     def test_upsert_update_reverses_old_fts_postings(self):
         """AC1: updating a chunk with CHANGED content must reverse the OLD
         posting lists. The bug: INSERT OR REPLACE on an external-content FTS5
