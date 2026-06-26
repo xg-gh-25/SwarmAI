@@ -75,3 +75,81 @@ def test_ac6_fault_injection_harness_recovers_and_exits_zero():
     assert "RECOVERY_EXECUTED ok" in proc.stdout
     # The marker reports the real recovery metrics — recovery within MAX retries.
     assert "respawns=" in proc.stdout and "restreams=" in proc.stdout
+
+
+# ── run_4596411e: ① schedule-lock + ② new fault-injection harnesses ────────
+
+import subprocess as _sp
+import sys as _sys
+
+
+def test_ac1_rth_cases_in_biweekly_scheduled_set():
+    """① GS_RTH001/002/003 must survive the biweekly (non-behavior) filter — so
+    they run automatically in CI, not just on-demand. Loads the REAL golden_set."""
+    from pathlib import Path as _P
+    from scripts.eval_runner import load_golden_set
+    gs_path = _P.home() / ".swarm-ai" / "SwarmWS" / "Projects" / "SwarmAI" / "golden_set.yaml"
+    gs = load_golden_set(gs_path)
+    nonbehavior = {c["id"] for c in gs["cases"] if c.get("eval_method") != "behavior"}
+    for cid in ("GS_RTH001", "GS_RTH002", "GS_RTH003"):
+        assert cid in nonbehavior, f"{cid} not in biweekly scheduled set"
+
+
+def test_ac1_runtime_health_timeout_is_adequate():
+    """The biweekly path passes no override → runtime_health gets ≥15s (the cold
+    harness needs it; the 3s canary divider would false-time-out)."""
+    from scripts import eval_runner
+    # No override → 30s default.
+    case = {"id": "T", "evaluators": ["runtime_health"],
+            "verification": {"command": "python -c \"print('RECOVERY_EXECUTED ok')\"",
+                             "expected_contains": "RECOVERY_EXECUTED ok"}, "affected_by": []}
+    r = eval_runner.eval_runtime_health(case, _REPO, timeout_override=None)
+    assert r["status"] == "passed"
+    # A tiny override must be floored to ≥15, not capped to 3.
+    import inspect
+    src = inspect.getsource(eval_runner.eval_runtime_health)
+    assert "max(15" in src, "runtime_health timeout must floor at 15s (H1)"
+
+
+def _run_harness(name: str, *args) -> _sp.CompletedProcess:
+    path = _BACKEND / "scripts" / name
+    return _sp.run([_sys.executable, str(path), *args],
+                   capture_output=True, text=True, timeout=40, cwd=str(_REPO))
+
+
+def test_ac2_dual_tab_harness_isolation_holds():
+    p = _run_harness("fault_inject_dual_tab.py")
+    assert p.returncode == 0, f"{p.stdout}\n{p.stderr}"
+    assert "ISOLATION_OK" in p.stdout
+
+
+def test_ac3_dual_tab_harness_non_vacuous():
+    """Negative mode: an orphan MUST be evictable, proving the guard discriminates."""
+    p = _run_harness("fault_inject_dual_tab.py", "--negative")
+    assert p.returncode == 0, f"{p.stdout}\n{p.stderr}"
+    assert "NON_VACUOUS ok" in p.stdout
+
+
+def test_ac4_dumb_spawn_harness_watchdog_fires():
+    p = _run_harness("fault_inject_dumb_spawn.py")
+    assert p.returncode == 0, f"{p.stdout}\n{p.stderr}"
+    assert "WATCHDOG_KILLED" in p.stdout
+
+
+def test_ac5_dumb_spawn_harness_non_vacuous():
+    """Negative mode: a within-window spawn must NOT be killed (discrimination)."""
+    p = _run_harness("fault_inject_dumb_spawn.py", "--negative")
+    assert p.returncode == 0, f"{p.stdout}\n{p.stderr}"
+    assert "NON_VACUOUS ok" in p.stdout
+
+
+def test_ac6_all_three_rth_cases_pass_via_evaluate_case():
+    """All 3 runtime_health cases dispatch + pass through evaluate_case."""
+    from pathlib import Path as _P
+    from scripts.eval_runner import load_golden_set, evaluate_case
+    gs = load_golden_set(_P.home() / ".swarm-ai" / "SwarmWS" / "Projects" / "SwarmAI" / "golden_set.yaml")
+    by_id = {c["id"]: c for c in gs["cases"]}
+    for cid in ("GS_RTH001", "GS_RTH002", "GS_RTH003"):
+        r = evaluate_case(by_id[cid], _REPO)
+        assert r["status"] == "passed", f"{cid}: {r}"
+        assert r["evaluator"] == "runtime_health"
