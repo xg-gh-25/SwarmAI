@@ -123,6 +123,23 @@ SYSTEM_JOBS: list[Job] = [
         config={},
     ),
 
+    # --- Nightly Full Eval + Drift Alert (run_5edf2cc0 G7) ---
+    # Runs the FULL golden set (programmatic + LLM judge — Bedrock cost is fine
+    # nightly, never gates) and compares the overall score vs the prior run.
+    # Alerts Slack on BVT-red (spine regression) OR score-drift below baseline.
+    # The gate (ci_eval_gate / prod.sh release) is the HARD stop; this is the
+    # continuous-monitoring eye that catches model/dependency drift (AWS
+    # Eval-First: "baseline is a drifting quantity, retest continuously").
+    Job(
+        id="eval-nightly",
+        name="Nightly Full Eval + Drift Alert",
+        type="eval_nightly",
+        schedule="0 6 * * *",           # daily 06:00 UTC = 14:00 ICT
+        enabled=True,
+        category="system",
+        config={},
+    ),
+
     # --- DDD Auto-Refresh (detect stale project docs, generate proposals) ---
     Job(
         id="ddd-refresh",

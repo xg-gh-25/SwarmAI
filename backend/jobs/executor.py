@@ -247,6 +247,23 @@ def execute_job(
                 duration_seconds=duration,
             )
 
+        elif job.type == "eval_nightly":
+            from .handlers.eval_nightly import run_eval_nightly
+            eval_result = run_eval_nightly(
+                dry_run=bool(job.config.get("dry_run", False)) if job.config else False,
+            )
+            duration = (datetime.now(timezone.utc) - start).total_seconds()
+            e_status = eval_result.get("status", "unknown")
+            result = JobResult(
+                job_id=job.id, timestamp=datetime.now(timezone.utc),
+                status="success" if e_status == "healthy" else "failed",
+                summary=(f"nightly eval: {e_status}, score={eval_result.get('overall_score')}%, "
+                         f"bvt_green={eval_result.get('bvt_green')}"
+                         + (f" — {'; '.join(eval_result.get('reasons', []))}"
+                            if eval_result.get('reasons') else "")),
+                duration_seconds=duration,
+            )
+
         elif job.type == "skill_proposer":
             from .handlers.skill_proposer import run_skill_proposer
             skill_result = run_skill_proposer()
