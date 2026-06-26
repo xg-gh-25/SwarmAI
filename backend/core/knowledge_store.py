@@ -182,12 +182,23 @@ class KnowledgeStore:
 
         if existing:
             rowid = existing[0]
-            # Delete old FTS5 entry before update
-            self._conn.execute(
-                "INSERT INTO knowledge_fts(knowledge_fts, rowid, content, heading, source_file) "
-                "VALUES('delete', ?, ?, ?, ?)",
-                (rowid, content, heading or "", source_file),
-            )
+            # Delete the OLD FTS5 entry before update. CRITICAL: external-content
+            # FTS5 'delete' must be given the OLD column values currently stored
+            # for this rowid — it reverses the posting lists using them. Binding
+            # the NEW content here desyncs the index → progressive
+            # "database disk image is malformed" (run_1d198980 root cause).
+            # Mirrors remove_stale_chunks/remove_file_entries + the messages_fts
+            # trigger (sqlite.py:1977 uses old.content).
+            _old = self._conn.execute(
+                "SELECT content, heading, source_file FROM knowledge_chunks WHERE id = ?",
+                (rowid,),
+            ).fetchone()
+            if _old is not None:
+                self._conn.execute(
+                    "INSERT INTO knowledge_fts(knowledge_fts, rowid, content, heading, source_file) "
+                    "VALUES('delete', ?, ?, ?, ?)",
+                    (rowid, _old[0], _old[1] or "", _old[2]),
+                )
             # Update the chunk
             self._conn.execute(
                 "UPDATE knowledge_chunks SET heading = ?, content = ?, content_hash = ?, "
@@ -278,6 +289,74 @@ class KnowledgeStore:
         )
         self._conn.commit()
         return len(rows)
+
+    def _fts_is_healthy(self) -> bool:
+        """Probe: does the FTS5 index answer a ranked query without a malformed/
+        corrupt error? Returns False on DatabaseError (the corruption signal),
+        True otherwise. Used by the maintenance layer (NOT the read path) to
+        decide whether to repair. A no-data index is still 'healthy'.
+
+        CRITICAL: the probe term must EXIST in the index so the query actually
+        traverses the (possibly-corrupt) posting lists + rank structure. A
+        no-match term short-circuits before touching them and would report a
+        corrupt index as healthy (observed run_1d198980). So derive the probe
+        term from a real stored chunk; if the store is empty, it is trivially
+        healthy.
+        """
+        row = self._conn.execute(
+            "SELECT content FROM knowledge_chunks "
+            "WHERE content IS NOT NULL AND length(content) > 0 LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return True  # empty index — nothing to corrupt
+        # First alphanumeric token of a real chunk → guaranteed to exist.
+        import re as _re
+        m = _re.search(r"[A-Za-z0-9]{3,}", row[0])
+        probe = m.group(0) if m else None
+        if probe is None:
+            return True
+        try:
+            self._conn.execute(
+                "SELECT kc.id FROM knowledge_fts fts "
+                "JOIN knowledge_chunks kc ON kc.id = fts.rowid "
+                'WHERE knowledge_fts MATCH ? ORDER BY rank LIMIT 1',
+                (f'"{probe}"',),
+            ).fetchall()
+            return True
+        except sqlite3.DatabaseError:
+            return False
+
+    def repair_fts_index(self) -> None:
+        """Repair the external-content FTS5 index from knowledge_chunks.
+
+        Zero data loss — the content lives in knowledge_chunks; the FTS index
+        carries no unique data. Two-tier:
+          1. ``'rebuild'`` re-derives the index in place (fast, fixes a stale /
+             mildly-desynced index).
+          2. If 'rebuild' ITSELF raises malformed (the shadow tables are
+             corrupt enough that even rebuild can't read them), DROP + recreate
+             the virtual table and rebuild fresh — the nuclear option that
+             always works because the source data is external.
+        MUST be called from the maintenance layer (context_health_hook), not the
+        recall read path — it takes a write lock + re-tokenizes every chunk.
+        See run_1d198980.
+        """
+        try:
+            self._conn.execute("INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild')")
+            self._conn.commit()
+            return
+        except sqlite3.DatabaseError:
+            # Shadow tables too corrupt for in-place rebuild — drop & recreate.
+            self._conn.rollback()
+        self._conn.execute("DROP TABLE IF EXISTS knowledge_fts")
+        self._conn.execute("""
+            CREATE VIRTUAL TABLE knowledge_fts USING fts5(
+                content, heading, source_file,
+                content=knowledge_chunks, content_rowid=id
+            )
+        """)
+        self._conn.execute("INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild')")
+        self._conn.commit()
 
     def fts5_search(
         self,

@@ -1811,6 +1811,21 @@ class ContextHealthHook:
             store = KnowledgeStore(conn)
             store.ensure_tables()
 
+            # Self-heal a malformed FTS index (run_1d198980). This is the RIGHT
+            # layer for repair — off the event loop, single-flight per session,
+            # already a write context — NOT the recall read path (which must
+            # stay read-only; rebuild takes a write lock + re-tokenizes all
+            # chunks). A corrupt index otherwise makes Library recall silently
+            # empty until the next full re-index.
+            if not store._fts_is_healthy():
+                logger.warning("context_health: knowledge_fts malformed — rebuilding index")
+                try:
+                    store.repair_fts_index()
+                    logger.info("context_health: knowledge_fts rebuilt from content table")
+                except Exception as exc:  # noqa: BLE001 — repair is best-effort
+                    logger.error("context_health: knowledge_fts repair failed: %s: %s",
+                                 type(exc).__name__, exc)
+
             # Create embedding function (graceful fallback if Bedrock unavailable)
             client = EmbeddingClient()
 

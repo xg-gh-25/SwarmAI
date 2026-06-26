@@ -345,3 +345,98 @@ class TestSyncKnowledgeIndex:
         embed_fn = MagicMock(return_value=[0.1] * 1024)
         sync_knowledge_index(store, knowledge_dir, embed_fn=embed_fn)
         assert embed_fn.call_count >= 1
+
+
+# ── knowledge_fts corruption fix (run_1d198980) ──
+
+class TestFtsCorruptionFix:
+    """The external-content FTS5 index desynced because upsert_chunk's update
+    branch bound the NEW content to the FTS5 'delete' command instead of the OLD
+    stored values. FTS5 needs the OLD values to reverse posting lists; new!=old
+    progressively corrupts the index → 'database disk image is malformed'."""
+
+    def _query_fts(self, store, term):
+        """Drive the real fts5_search rank path (the one that goes malformed)."""
+        return store.fts5_search(term, limit=5)
+
+    def test_double_content_update_keeps_fts_queryable(self):
+        """AC1 (root-cause regression): updating a chunk's content TWICE must
+        leave the FTS index queryable. Under the old code (delete bound NEW
+        values) the posting lists desync; the query path eventually corrupts."""
+        from core.knowledge_store import KnowledgeStore
+
+        conn = _make_conn()
+        store = KnowledgeStore(conn)
+        store.ensure_tables()
+
+        # Same (source_file, chunk_index) → exercises the UPDATE branch twice.
+        for i, body in enumerate(["alpha beta gamma", "delta epsilon zeta",
+                                   "eta theta iota kappa"]):
+            store.upsert_chunk(source_file="Notes/x.md", chunk_index=0,
+                               heading="## H", content=body,
+                               content_hash=f"h{i}")
+
+        # The index must reflect the LATEST content and stay queryable.
+        hits = self._query_fts(store, "theta")      # latest body term → should hit
+        assert any("theta" in h.get("content", "") for h in hits), \
+            "latest content must be findable after repeated updates"
+        # Stale terms from overwritten versions must NOT linger as phantom hits.
+        stale = self._query_fts(store, "alpha")
+        assert not any(h.get("content") == "alpha beta gamma" for h in stale), \
+            "overwritten content must be removed from the index (no posting desync)"
+
+    def test_repair_fts_index_restores_after_corruption(self):
+        """AC2: repair_fts_index() rebuilds from the content table; data-loss-free."""
+        from core.knowledge_store import KnowledgeStore
+
+        conn = _make_conn()
+        store = KnowledgeStore(conn)
+        store.ensure_tables()
+        store.upsert_chunk(source_file="Notes/y.md", chunk_index=0,
+                           heading="## H", content="quokka wombat",
+                           content_hash="h0")
+        before = conn.execute("SELECT COUNT(*) FROM knowledge_chunks").fetchone()[0]
+
+        store.repair_fts_index()  # must not raise; rebuilds from content
+
+        after = conn.execute("SELECT COUNT(*) FROM knowledge_chunks").fetchone()[0]
+        assert after == before, "repair must be data-loss-free"
+        hits = store.fts5_search("quokka", limit=5)
+        assert len(hits) >= 1, "content is findable after repair"
+
+    def test_fts_health_probe_distinguishes_healthy(self):
+        """AC5: a healthy index reports healthy (probe doesn't false-positive)."""
+        from core.knowledge_store import KnowledgeStore
+
+        conn = _make_conn()
+        store = KnowledgeStore(conn)
+        store.ensure_tables()
+        store.upsert_chunk(source_file="Notes/z.md", chunk_index=0,
+                           heading="## H", content="narwhal", content_hash="h0")
+        assert store._fts_is_healthy() is True
+
+    def test_fts_health_probe_DETECTS_corruption(self):
+        """AC5 (the probe's whole point): a desynced index must report UNhealthy.
+        Regression for the weak-probe bug (run_1d198980): a no-match probe term
+        short-circuits before touching posting lists → false 'healthy'. The probe
+        must use a REAL stored term so it traverses the corrupt structure."""
+        from core.knowledge_store import KnowledgeStore
+
+        conn = _make_conn()
+        store = KnowledgeStore(conn)
+        store.ensure_tables()
+        store.upsert_chunk(source_file="n.md", chunk_index=0, heading="H",
+                           content="alpha beta gamma", content_hash="h0")
+        assert store._fts_is_healthy() is True
+
+        # Desync the external-content index: 'delete' with values never indexed.
+        conn.execute(
+            "INSERT INTO knowledge_fts(knowledge_fts, rowid, content, heading, source_file) "
+            "VALUES('delete', 1, 'zzz nonexistent qqq', '', 'n.md')"
+        )
+        assert store._fts_is_healthy() is False, \
+            "probe must DETECT a desynced index (must query a real term, not a no-match)"
+
+        # And repair recovers it.
+        store.repair_fts_index()
+        assert store._fts_is_healthy() is True
