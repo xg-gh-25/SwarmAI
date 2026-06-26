@@ -3866,6 +3866,45 @@ export function useChatStreamingLifecycle(
       if (capturedTabId) {
         updateTabStatus(capturedTabId, 'idle');
       }
+
+      // DEFINITIVE QUEUE DRAIN backstop (stranded-queue fix): the completeHandler
+      // is the authoritative "stream is over" signal. The two existing drain
+      // triggers each have a gap:
+      //   • the `result` event branch schedules a drain, but it lives under the
+      //     raw streamGen staleness guard — if streamGen was bumped mid-turn the
+      //     final `result` is discarded as stale and the drain never schedules,
+      //     while isStreaming was never cleared (stays true);
+      //   • the pre-guard above only drains when isStreaming is ALREADY false,
+      //     so it misses the case where isStreaming is still true at [DONE].
+      // This block — AFTER the atomic setIsStreaming(false) — closes that gap.
+      //
+      // Guards:
+      //   • !drainPending: the `result` path sets drainPending when it schedules
+      //     a drain, so we don't double up on the normal path. (drainQueuedMessage
+      //     is idempotent regardless — it clears queuedMessage synchronously
+      //     before its first await — so a redundant schedule never double-sends.)
+      //   • !pendingQuestion && !pendingPermissionRequestId: ask_user_question and
+      //     cmd_permission_request are TERMINAL (they clear isStreaming) and the
+      //     backend then sends [DONE], so the completeHandler runs while the agent
+      //     is suspended awaiting the user. Draining here would fire the queued
+      //     follow-up and abandon the open question/permission. Skip — the queue
+      //     drains after the user answers and the turn truly completes.
+      // We deliberately do NOT set drainPending here: a drainQueuedMessage that
+      // early-returns (queue already gone) does not clear it, and a stale
+      // drainPending=true would make this very check skip the drain on the next
+      // turn — silently regressing the fix.
+      if (capturedTabId) {
+        const finalTab = tabMapRef.current.get(capturedTabId);
+        if (
+          finalTab?.queuedMessage &&
+          !finalTab.drainPending &&
+          !finalTab.pendingQuestion &&
+          !finalTab.pendingPermissionRequestId &&
+          deps.onDrainQueue
+        ) {
+          setTimeout(() => deps.onDrainQueue?.(capturedTabId), 0);
+        }
+      }
     };
   }, [setIsStreaming, updateTabStatus]); // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
 

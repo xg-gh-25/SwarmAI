@@ -288,3 +288,123 @@ describe('Regression guard: exact 2026-06-08 scenario', () => {
     expect(wouldReconcileClear(afterResult, 999_999)).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Transition: completeHandler ([DONE]) definitive drain
+//
+// Regression for the "stranded queue" bug: a queued follow-up was not
+// auto-drained when the previous turn ended; the user had to re-send manually.
+//
+// Root cause: the `result` event branch (which normally schedules the drain and
+// sets drainPending) is gated by a raw streamGen staleness check. During long
+// autonomous turns, streamGen is bumped mid-turn by the cmd_permission_request /
+// ask_user_question handlers, so the final `result` event is discarded as stale
+// → the drain is never scheduled. The completeHandler then clears isStreaming
+// and the queue is stranded.
+//
+// Fix: the completeHandler ([DONE], the definitive "stream is over" signal)
+// drains AFTER clearing streaming, iff a message is queued and no drain is
+// already in flight (drainPending). drainQueuedMessage is idempotent, so this
+// never double-sends with the normal result-handler path.
+// ---------------------------------------------------------------------------
+
+/**
+ * Mirrors the completeHandler tail in useChatStreamingLifecycle.ts:
+ *   if (queuedMessage && !drainPending
+ *       && !pendingQuestion && !pendingPermissionRequestId) -> schedule drain
+ * Returns true iff the completeHandler should schedule a drain.
+ */
+function completeHandlerDrains(state: {
+  queuedMessage: string | null;
+  drainPending: boolean;
+  pendingQuestion?: boolean;
+  pendingPermissionRequestId?: boolean;
+}): boolean {
+  return (
+    !!state.queuedMessage &&
+    !state.drainPending &&
+    !state.pendingQuestion &&
+    !state.pendingPermissionRequestId
+  );
+}
+
+describe('Drain lifecycle: completeHandler definitive drain', () => {
+  it('result discarded (streamGen bumped) → drainPending never set → completeHandler drains', () => {
+    // The bug scenario: the result event was discarded as stale, so it never
+    // ran its drain-scheduling branch. drainPending stays false, queue remains.
+    const atDone: StreamingState = {
+      isStreaming: true,        // never cleared — the discarded result kept it true
+      drainPending: false,      // result branch never ran → flag never set
+      queuedMessage: 'user follow-up',
+      backendState: 'idle',
+      reconcileWouldClear: false,
+    };
+
+    // completeHandler must rescue the stranded queue.
+    expect(completeHandlerDrains(atDone)).toBe(true);
+  });
+
+  it('normal result path (drainPending already set) → completeHandler does NOT double-drain', () => {
+    // The result handler already scheduled the drain and set drainPending.
+    const atDone: StreamingState = {
+      isStreaming: true,
+      drainPending: true,       // result handler set this when it scheduled
+      queuedMessage: 'user follow-up',
+      backendState: 'idle',
+      reconcileWouldClear: false,
+    };
+
+    // No double schedule — the result-handler drain owns it.
+    expect(completeHandlerDrains(atDone)).toBe(false);
+  });
+
+  it('no queued message → completeHandler does nothing', () => {
+    const atDone: StreamingState = {
+      isStreaming: true,
+      drainPending: false,
+      queuedMessage: null,
+      backendState: 'idle',
+      reconcileWouldClear: false,
+    };
+
+    expect(completeHandlerDrains(atDone)).toBe(false);
+  });
+
+  // ── Adversarial: premature-drain protection ──
+  // ask_user_question / cmd_permission_request are TERMINAL (clear isStreaming),
+  // then the backend sends [DONE] → completeHandler runs while the agent is
+  // suspended awaiting the user. Draining here would abandon the open
+  // question/permission. Must NOT drain.
+  it('pendingQuestion set → completeHandler does NOT drain (would abandon the question)', () => {
+    expect(
+      completeHandlerDrains({
+        queuedMessage: 'user follow-up',
+        drainPending: false,
+        pendingQuestion: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('pendingPermissionRequestId set → completeHandler does NOT drain (would abandon the approval)', () => {
+    expect(
+      completeHandlerDrains({
+        queuedMessage: 'user follow-up',
+        drainPending: false,
+        pendingPermissionRequestId: true,
+      }),
+    ).toBe(false);
+  });
+
+  it('question answered (pendingQuestion cleared) + queue present → drains on the completing turn', () => {
+    // After the user answers, pendingQuestion is cleared and the resumed turn
+    // completes; the queued follow-up should then drain.
+    expect(
+      completeHandlerDrains({
+        queuedMessage: 'user follow-up',
+        drainPending: false,
+        pendingQuestion: false,
+        pendingPermissionRequestId: false,
+      }),
+    ).toBe(true);
+  });
+});
