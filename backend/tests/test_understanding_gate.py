@@ -127,6 +127,18 @@ class TestM1SolutionLanguage:
         # (run_b9452eb9: \blet'?s\b had an optional apostrophe → matched the verb).
         "No tool lets a solo builder run team-scale AI today.",
         "The OS lets users edit files without a restart.",
+        # run_b9452eb9 same-class hunt (adversarial): the following present-state
+        # shapes were false-positives in SIBLING M1 patterns, now fixed.
+        # \bi'?ll\b → \bi'll\b: the adjective "ill-*" must not match the "I'll" plan.
+        "The design is ill-suited to the present render path.",
+        "Skill registration is ill-defined; the loader skips malformed entries today.",
+        # "we can/could" dropped: "we can see/observe" is present-state observation.
+        "We can see the spinner hang in the current build.",
+        "We could observe the race only under load today.",
+        # imperative ^VERB+\S tightened to require a determiner/bracket object:
+        # sentence-initial noun homographs of action verbs must pass.
+        "Use of the lock is inconsistent across handlers.",
+        "Set operations dominate the current hot path.",
     ])
     def test_present_state_claim_passes_m1(self, ok_claim):
         data = _eval("existing-feature", ok_claim, _GOOD_EVIDENCE)

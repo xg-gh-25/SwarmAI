@@ -674,8 +674,8 @@ _NEG_LEAD = r"(?:not|n't|fails?\s+to|never|does\s+not|did\s+not|doesn't|didn't|w
 
 _SOLUTION_LANGUAGE_PATTERNS = [
     r"\bi\s+will\b",
-    r"\bi'?ll\b",
-    r"\bwe\s+(?:will|should|need\s+to|could|can|must)\b",
+    r"\bi'll\b",  # mandatory apostrophe: contraction "I'll" — NOT the adjective "ill" in ill-suited/ill-defined (run_b9452eb9 same-class)
+    r"\bwe\s+(?:will|should|need\s+to|must)\b",  # NOT can/could — "we can see/observe" is present-state observation, not a plan (run_b9452eb9)
     r"\blet's\b",  # mandatory apostrophe: the suggestion "let's" — NOT the verb "lets" (run_b9452eb9)
     r"\bthe\s+fix\b",          # "the fix is" / "the fix:" / "the fix should"
     r"\bthe\s+solution\b",
@@ -686,8 +686,18 @@ _SOLUTION_LANGUAGE_PATTERNS = [
     # a present-state claim and does NOT match.
     rf"\b(?:{_SOLUTION_VERBS})\s+"
     rf"(?:a|an|the|to|it|this|that|per-|new\b|[A-Za-z_]+\s+(?:to|authoritative|instead)\b)",
-    rf"^\s*(?:{_SOLUTION_VERBS})\s+\S",          # imperative claim ("Make the sentinel…", "Make [DONE]…")
-    rf"\b(?:{_SOLUTION_GERUNDS})\s+(?:a|an|the|it|this|that)\b",  # gerund plan
+    # imperative claim ("Make the sentinel…", "Make [DONE]…", "Use a circuit breaker…").
+    # The object must be a real imperative target — a determiner/pronoun/bracket/quote —
+    # NOT a preposition or noun (so sentence-initial noun homographs "Use of the lock…",
+    # "Set operations dominate…" are present-state, not plans). \S was too loose; do NOT
+    # use [A-Z] here — the regex is IGNORECASE so it would match any letter (run_b9452eb9).
+    rf"^\s*(?:{_SOLUTION_VERBS})\s+(?:a|an|the|to|it|this|that|per-|new\b|[\[\"'])",
+    # gerund plan ("Adding a field fixes it"). KNOWN LIMITATION (run_b9452eb9): a
+    # gerund-as-SUBJECT present-state claim ("Adding the header is handled by
+    # middleware today") is structurally identical to a gerund-plan and cannot be
+    # disambiguated by regex without losing the L108 block-case. Author workaround:
+    # phrase present-state behavior without a sentence-initial gerund+determiner.
+    rf"\b(?:{_SOLUTION_GERUNDS})\s+(?:a|an|the|it|this|that)\b",
 ]
 _SOLUTION_LANGUAGE_RE = _re.compile("|".join(_SOLUTION_LANGUAGE_PATTERNS), _re.IGNORECASE)
 # Negated verb-phrase ("does not implement", "fails to add") — a present-state
