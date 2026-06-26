@@ -230,11 +230,14 @@ _AMBIGUITY_TERMS = (
 # Working-Backwards lens (greenfield-only) — defined above STAGE_SCHEMAS for the
 # template reference. Helper _check_working_backwards lives with the other gate
 # logic below; full rationale is in the comment above that function.
-# The 4 ECONOMIC/value fields — the NOVEL slice the EVALUATE skeptic confirmed is
-# NOT already covered by the greenfield Understanding row (who/problem) or the
-# Pre-mortem Gate (top-3 failures). "who has it" + "failure reasons" are REUSED
-# (understanding + pre_mortem), never re-asked here.
-_WB_ECONOMIC_FIELDS = ("target_customer", "current_workaround", "why_better", "must_be_true")
+# The ECONOMIC/value fields that are GENUINELY NOT covered by the greenfield
+# Understanding row or the Pre-mortem Gate. Adversarial (run_b5b26ebe) flagged that
+# `target_customer` overlaps the Understanding "who has it" — so it is NOT enforced
+# here (it stays in the doc/template as framing context, captured by understanding).
+# The 3 ENFORCED fields are the value-economics the other gates do NOT capture:
+# current_workaround (incumbent), why_better (differentiation), must_be_true
+# (adoption assumption). "who" → understanding; "top-3 failures" → pre_mortem (reused).
+_WB_ECONOMIC_FIELDS = ("current_workaround", "why_better", "must_be_true")
 # Min non-blank chars per economic field — anti-laziness floor (a one-word
 # "faster" is not a value proposition). Shares the spirit of the ambiguity floor.
 _WB_FIELD_MIN_CHARS = 12
@@ -317,14 +320,19 @@ STAGE_TEMPLATES: dict[str, dict] = {
             "all_resolved": True,
         },
         # Working-Backwards lens (GREENFIELD-only, strict): customer/value framing.
-        # Only required when understanding.work_type=='greenfield'. The 4 economic
-        # fields are the novel slice; pre_mortem (top-level) is reused for failures.
+        # Only required when understanding.work_type=='greenfield'. The 3 ENFORCED
+        # economic fields are the novel slice; target_customer is context only (the
+        # "who" is captured by understanding); pre_mortem (top-level, below) is the
+        # reused top-3-failures and is ALSO required for greenfield.
         "working_backwards": {
-            "target_customer": "the specific segment with the problem",
+            "target_customer": "(context only — the 'who' is captured by understanding) the specific segment",
             "current_workaround": "how they solve / work around it today",
             "why_better": "why this is faster / cheaper / better than the alternative",
             "must_be_true": "the adoption assumption that must hold for success",
         },
+        # Reused as the greenfield top-3 failure reasons (Pre-mortem Gate). The
+        # Working-Backwards gate requires this non-empty when work_type=='greenfield'.
+        "pre_mortem": ["reason this fails 1", "reason 2", "reason 3"],
     },
     "think": {
         "key_findings": ["finding 1", "finding 2"],
@@ -579,12 +587,14 @@ def _check_working_backwards(data: dict, profile: str) -> list[str]:
     apply to ALL strict profiles, customer/value framing is only meaningful for
     NET-NEW features, so non-greenfield work is structurally untouched.
 
-    Scope (EVALUATE-skeptic-sharpened, run_b5b26ebe WRONG-FRAME): the NOVEL fields
-    are the 4 ECONOMIC questions (_WB_ECONOMIC_FIELDS) that the greenfield
-    Understanding row (evaluate.md:140, 'problem and who has it') and the Pre-mortem
-    Gate (top-3 failures) do NOT capture. "who has it" + "failure reasons" are
-    REUSED — the gate also requires a non-empty pre_mortem (its FIRST enforcement;
-    evaluate.md:493 mandates it doc-side but the validator never checked it).
+    Scope (EVALUATE-skeptic + adversarial sharpened, run_b5b26ebe): the NOVEL slice
+    is the 3 ECONOMIC questions (_WB_ECONOMIC_FIELDS: current_workaround / why_better
+    / must_be_true) that the greenfield Understanding row (evaluate.md:140) and the
+    Pre-mortem Gate do NOT capture. `target_customer` ("who") was DROPPED from
+    enforcement — adversarial flagged it overlaps the Understanding "who has it"; it
+    stays in the template as context. "failure reasons" are REUSED — the gate also
+    requires a non-empty pre_mortem (its FIRST enforcement; evaluate.md:493 mandates
+    it doc-side but the validator never checked it).
 
     Fail-open by design: a missing/typo'd work_type simply means no WB requirement.
     This is a framing-QUALITY lens, not a safety gate — consistent with the

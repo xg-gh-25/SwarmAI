@@ -103,7 +103,11 @@ class TestGreenfieldStrictRequiresBlock:
 # Economic fields — each must be non-empty (the NOVEL, non-redundant slice)
 # ---------------------------------------------------------------------------
 class TestEconomicFieldsEnforced:
-    @pytest.mark.parametrize("field", ["target_customer", "current_workaround", "why_better", "must_be_true"])
+    # NOTE: target_customer is NOT enforced (adversarial: overlaps Understanding
+    # "who"). The 3 enforced novel fields are current_workaround/why_better/must_be_true.
+    ENFORCED = ["current_workaround", "why_better", "must_be_true"]
+
+    @pytest.mark.parametrize("field", ENFORCED)
     def test_missing_economic_field_blocks(self, field):
         wb = _good_wb()
         del wb[field]
@@ -111,7 +115,7 @@ class TestEconomicFieldsEnforced:
         errors = validate_artifact_data("evaluate", data, profile="full")
         assert _wb_errors(errors), f"missing {field} must block: {errors}"
 
-    @pytest.mark.parametrize("field", ["target_customer", "current_workaround", "why_better", "must_be_true"])
+    @pytest.mark.parametrize("field", ENFORCED)
     def test_empty_economic_field_blocks(self, field):
         wb = _good_wb()
         wb[field] = "  "
@@ -119,19 +123,36 @@ class TestEconomicFieldsEnforced:
         errors = validate_artifact_data("evaluate", data, profile="full")
         assert _wb_errors(errors), f"empty {field} must block: {errors}"
 
-    def test_too_short_economic_field_blocks(self):
+    def test_target_customer_not_enforced(self):
+        """target_customer is dropped from enforcement (adversarial: overlaps the
+        Understanding 'who'). A WB block WITHOUT it must still pass."""
         wb = _good_wb()
-        wb["why_better"] = "faster"  # < floor
+        del wb["target_customer"]
         data = _eval("greenfield", wb=wb, pre_mortem=_GOOD_PREMORTEM)
         errors = validate_artifact_data("evaluate", data, profile="full")
-        assert _wb_errors(errors), f"sub-floor field must block: {errors}"
+        assert _wb_errors(errors) == [], f"target_customer must NOT be enforced: {errors}"
 
-    def test_bare_true_economic_field_blocks(self):
+    @pytest.mark.parametrize("val,should_block", [
+        ("a" * 11, True),    # 11 < floor → block
+        ("a" * 12, False),   # 12 == floor → pass
+    ])
+    def test_floor_boundary(self, val, should_block):
         wb = _good_wb()
-        wb["target_customer"] = True
+        wb["why_better"] = val
         data = _eval("greenfield", wb=wb, pre_mortem=_GOOD_PREMORTEM)
         errors = validate_artifact_data("evaluate", data, profile="full")
-        assert _wb_errors(errors), f"bare True field must block: {errors}"
+        if should_block:
+            assert _wb_errors(errors), f"11-char field must block: {errors}"
+        else:
+            assert _wb_errors(errors) == [], f"12-char field must pass: {errors}"
+
+    @pytest.mark.parametrize("bad", [True, None, 12345, ["a list"], {"k": "v"}])
+    def test_non_string_economic_field_blocks(self, bad):
+        wb = _good_wb()
+        wb["why_better"] = bad
+        data = _eval("greenfield", wb=wb, pre_mortem=_GOOD_PREMORTEM)
+        errors = validate_artifact_data("evaluate", data, profile="full")
+        assert _wb_errors(errors), f"non-string field {bad!r} must block: {errors}"
 
 
 # ---------------------------------------------------------------------------
@@ -205,10 +226,29 @@ class TestNoTagCollision:
 # Dogfood — this run is existing-feature, so its own EVALUATE is exempt
 # ---------------------------------------------------------------------------
 class TestSelfDogfood:
-    def test_run_b5b26ebe_existing_feature_exempt(self):
+    def test_run_b5b26ebe_existing_feature_validates_clean_end_to_end(self):
         """This very feature is an existing-feature extension of EVALUATE, NOT
-        greenfield — so its own evaluate artifact must NOT be required to carry a
-        working_backwards block. Proves the work_type gate is correct."""
-        data = _eval("existing-feature", wb=None, pre_mortem=None)
+        greenfield. Assert its FULL evaluate artifact (the real shape this run
+        published — understanding + ambiguity_scan, NO working_backwards) validates
+        with zero errors of ANY gate on a strict profile. Distinct from the
+        work_type-gating unit test: this proves the whole evaluate contract holds
+        for a non-greenfield strict run, not just that the WB sub-check is silent."""
+        data = {
+            "recommendation": "GO",
+            "scope": "standard",
+            "acceptance_criteria": ["AC1", "AC2"],
+            "understanding": {
+                "work_type": "existing-feature",
+                "claim": "The validator has no enforcement keyed on work_type today.",
+                "evidence": "code-trace: grep work_type in pipeline_validator.py = template + error string only, never a branch.",
+                "evidence_kind": "code-trace",
+                "skeptic_verdict": "SUPPORTED",
+                "alternative_considered": "redundant-with-Understanding-Gate loses: different field.",
+            },
+            "ambiguity_scan": {
+                "scanned_fields": ["requirement"], "terms_checked": ["standard"],
+                "hits": [], "hit_count": 0, "all_resolved": True,
+            },
+        }
         errors = validate_artifact_data("evaluate", data, profile="full")
-        assert _wb_errors(errors) == [], f"existing-feature run must be WB-exempt: {errors}"
+        assert errors == [], f"existing-feature strict evaluate must validate clean: {errors}"

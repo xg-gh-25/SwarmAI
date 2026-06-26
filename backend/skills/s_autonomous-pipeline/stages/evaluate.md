@@ -524,12 +524,17 @@ For each field below, write your **best-guess answer derived from PRODUCT.md / D
 the requirement**. The human reviews and overrides at REVIEW as a *taste decision* —
 they are NOT a `⛔` blocking gate.
 
-| Field | Question | Self-answer from |
-|-------|----------|------------------|
-| `target_customer` | Who specifically has this problem? (a precise segment, not "users") | PRODUCT.md Target Users / Audience Map |
-| `current_workaround` | How do they solve / work around it TODAY? | the requirement + domain knowledge |
-| `why_better` | Why is this faster / cheaper / better than that workaround? | PRODUCT.md differentiation |
-| `must_be_true` | What adoption assumption MUST hold for this to succeed? | pre-mortem inversions |
+| Field | Question | Enforced? | Self-answer from |
+|-------|----------|-----------|------------------|
+| `target_customer` | Who specifically has this problem? (a precise segment, not "users") | context only¹ | PRODUCT.md Target Users / Audience Map |
+| `current_workaround` | How do they solve / work around it TODAY? | ✅ required | the requirement + domain knowledge |
+| `why_better` | Why is this faster / cheaper / better than that workaround? | ✅ required | PRODUCT.md differentiation |
+| `must_be_true` | What adoption assumption MUST hold for this to succeed? | ✅ required | pre-mortem inversions |
+
+¹ `target_customer` is **not validator-enforced** — the "who has it" is already
+captured by the greenfield Understanding row (work_type=greenfield, "problem and
+who has it"). Record it for framing context, but the gate only enforces the 3
+economic fields the other gates don't capture.
 
 The **top-3 failure reasons** are NOT re-asked here — they are **reused** from the
 mandatory `pre_mortem` array (Pre-mortem Gate above). This gate also makes
