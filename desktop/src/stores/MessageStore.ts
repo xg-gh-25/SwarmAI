@@ -372,8 +372,10 @@ export class MessageStore {
         return;
       }
       const convert = this._toDisplayMessage || this._defaultToDisplay;
+      const _prevInitClobber = this._lastAsstChars(this._messages);
       this._messages = dbMessages.map(convert);
       this._initialLoadComplete = true;
+      this._probeClobber(_prevInitClobber, 'initialize');
       this._notify();
     } catch (err) {
       console.error('[MessageStore] initialize failed:', err);
@@ -385,6 +387,16 @@ export class MessageStore {
    */
   destroy(): void {
     this._destroyed = true;
+    // [clobber probe] A populated store being destroyed (then recreated empty
+    // by the registry on next get) is a prime "answer vanished" suspect.
+    const _prevDestroyChars = this._lastAsstChars(this._messages);
+    if (_prevDestroyChars >= 200) {
+      console.warn('[reconcile-gap] STORE-CLOBBER', {
+        sessionId: this._sessionId, reason: 'destroy', phase: this._phase,
+        prevChars: _prevDestroyChars, nowChars: 0, msgCount: this._messages.length,
+        stack: new Error().stack?.split('\n').slice(2, 7).join(' | '),
+      });
+    }
     this._clearWatchdog();
     if (this._rafId !== null) {
       cancelAnimationFrame(this._rafId);
