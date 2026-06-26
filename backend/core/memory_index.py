@@ -810,14 +810,24 @@ def _keyword_section_scores(
     return matched
 
 
-def _hybrid_section_scores(user_message: str) -> dict[str, float]:
+def _hybrid_section_scores(user_message: str, allow_embed: bool = True) -> dict[str, float]:
     """Score sections using hybrid vector+keyword search.
 
     Queries the memory_vec SQLite table for vector similarity, combines
     with keyword scores, and returns section-level max scores.
 
     Falls back to empty dict on any failure (caller will use keyword-only).
+
+    Args:
+        allow_embed: When False, the function short-circuits and returns ``{}``
+            WITHOUT computing a query embedding (no Bedrock call). This is the
+            READ-only / anti-scope guard (run_4358cc95): a caller that must not
+            trigger an embed (e.g. multi-domain ``recall_all``) passes False.
+            Default True preserves the existing keyword-miss → hybrid behavior.
     """
+    if not allow_embed:
+        return {}
+
     import sqlite3 as _sqlite3
     from pathlib import Path
     from jobs.paths import DB_PATH as _db_path

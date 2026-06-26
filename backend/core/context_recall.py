@@ -74,6 +74,7 @@ def recall_context(
     memory_content: str,
     policy_excluded_files: frozenset[str] = frozenset(),
     max_sections: int = 3,
+    allow_embed: bool = True,
 ) -> RecallResult:
     """Return the top relevant EXCLUDED sections of ``file`` for ``query``.
 
@@ -146,7 +147,7 @@ def recall_context(
         # whatever live sections matched). See design DP-v stale-index hazard.
         if not scores:
             try:
-                hybrid = memory_index._hybrid_section_scores(query)
+                hybrid = memory_index._hybrid_section_scores(query, allow_embed=allow_embed)
             except Exception as exc:  # noqa: BLE001 — hybrid is best-effort; keyword already empty
                 logger.debug("hybrid recall escalation failed (best-effort): %s: %s",
                              type(exc).__name__, exc)
