@@ -743,3 +743,41 @@ class TestProjectsRefreshAfterCultivation:
             # No cultivation happened AND no Projects/ mtime change — no refresh
             assert hook._ddd_docs_modified is False
             mock_refresh.assert_not_called()
+
+
+class TestExtractLessonsNoOrphan:
+    """R-1 C2: _extract_lessons_to_memory must not orphan an existing meta.
+
+    Root cause (run_55c02bbe): the raw-splice insert math landed a new entry+meta
+    BETWEEN an existing bullet and its meta, orphaning the existing meta as a 2nd
+    consecutive metadata line. Fix routes through _modify_content (section-boundary
+    insert) so the orphan is structurally impossible.
+    """
+
+    def test_extract_does_not_orphan_existing_meta(self, hook, tmp_path):
+        ws = tmp_path / "SwarmWS"
+        ctx = ws / ".context"
+        ctx.mkdir(parents=True)
+        # MEMORY.md with an existing Guidelines entry that already has its meta
+        (ctx / "MEMORY.md").write_text(
+            "## Guidelines\n"
+            "_Operational lessons._\n\n"
+            "- [guideline] **Existing entry** — prior lesson (2026-06-01)\n"
+            "  <!-- ref:3 | last:2026-06-20 | decay:active -->\n"
+        )
+        # Extract a new confident lesson into MEMORY.md
+        hook._extract_lessons_to_memory(
+            ws, ["Always verify before asserting — a new guideline lesson here"],
+            "run_test", "TestProject",
+        )
+        content = (ctx / "MEMORY.md").read_text()
+        # No bullet may be followed by TWO consecutive metadata lines
+        import re
+        lines = content.splitlines()
+        stacked = sum(
+            1 for i in range(1, len(lines))
+            if re.match(r"\s*<!-- ref:", lines[i]) and re.match(r"\s*<!-- ref:", lines[i - 1])
+        )
+        assert stacked == 0, f"writer orphaned a meta — {stacked} stacked pairs:\n{content}"
+        # The pre-existing entry's real-date meta must survive intact
+        assert "last:2026-06-20" in content

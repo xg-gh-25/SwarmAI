@@ -836,29 +836,18 @@ class ContextHealthHook:
         if not by_section:
             return
 
-        # Insert each group into its target section
+        # Insert each group at the section boundary via _modify_content (append).
+        # R-1 (run_55c02bbe): the prior raw-splice insert math had an off-by-one
+        # that landed the new entry+meta BETWEEN an existing bullet and its meta,
+        # orphaning the existing meta as a 2nd consecutive line (120 stacks in
+        # live MEMORY.md). _modify_content("append") inserts at the section's
+        # END boundary (before the next header), which structurally cannot orphan
+        # an existing entry's meta. Reuses the same writer distillation uses.
+        from scripts.locked_write import _modify_content
+
         for section_name, entries in by_section.items():
-            marker = f"## {section_name}"
-            idx = content.find(marker)
-            if idx < 0:
-                continue
-            # Find insertion point (after header + description line + blank)
-            after_header = content[idx + len(marker):]
-            # Skip to first entry (past description italic + blank lines)
-            lines_after = after_header.split("\n")
-            skip = 0
-            for line in lines_after[1:]:  # skip header line itself
-                skip += 1
-                if line.startswith("- [") or line.strip() == "":
-                    if line.startswith("- ["):
-                        break
-                    # blank line before first entry
-                    continue
-                # description line (italic) — skip it
-                continue
-            insert_pos = idx + len(marker) + sum(len(l) + 1 for l in lines_after[:skip + 1])
-            new_block = "\n".join(entries) + "\n"
-            content = content[:insert_pos] + new_block + content[insert_pos:]
+            new_block = "\n".join(entries)
+            content = _modify_content(content, section_name, new_block, "append")
 
         memory_path.write_text(content, encoding="utf-8")
         logger.debug(
