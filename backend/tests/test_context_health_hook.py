@@ -781,3 +781,41 @@ class TestExtractLessonsNoOrphan:
         assert stacked == 0, f"writer orphaned a meta — {stacked} stacked pairs:\n{content}"
         # The pre-existing entry's real-date meta must survive intact
         assert "last:2026-06-20" in content
+        # R-1 Gate-2 #2/#3: NEW lessons must land at section TOP (newest-first),
+        # matching distillation_hook._write_section's prepend convention and the
+        # newest-at-top assumption _enforce_section_caps relies on (it trims the
+        # bottom = oldest). The new lesson must appear ABOVE the pre-existing one.
+        new_pos = content.find("Always verify before asserting")
+        old_pos = content.find("Existing entry")
+        assert new_pos != -1, "new lesson not written"
+        assert new_pos < old_pos, (
+            "new lesson must be prepended (newest-at-top) — found below the "
+            f"existing entry:\n{content}"
+        )
+
+    def test_memory_lifecycle_auto_heals_stacked_metadata(self, hook, tmp_path):
+        # R-1 Gate-2 #1: collapse_stacked_metadata must be WIRED into the
+        # per-session lifecycle, not just a manually-invoked helper. A MEMORY.md
+        # that already carries an orphan stack must come out healed after one
+        # _run_memory_lifecycle pass.
+        ws = tmp_path / "SwarmWS"
+        ctx = ws / ".context"
+        ctx.mkdir(parents=True)
+        (ctx / "MEMORY.md").write_text(
+            "## Guidelines\n"
+            "_Operational lessons._\n\n"
+            "- [guideline] **Stacked entry** — a lesson (2026-06-01)\n"
+            "  <!-- ref:3 | last:2026-06-20 | decay:active -->\n"
+            "  <!-- ref:0 | last:none | decay:active -->\n"
+        )
+        hook._run_memory_lifecycle(ws)
+        content = (ctx / "MEMORY.md").read_text()
+        import re
+        lines = content.splitlines()
+        stacked = sum(
+            1 for i in range(1, len(lines))
+            if re.match(r"\s*<!-- ref:", lines[i]) and re.match(r"\s*<!-- ref:", lines[i - 1])
+        )
+        assert stacked == 0, f"lifecycle did not auto-heal the orphan:\n{content}"
+        assert "last:2026-06-20" in content, "must keep the real-date meta"
+        assert "last:none" not in content, "must drop the orphan default"

@@ -915,6 +915,20 @@ class TestCollapseStackedMetadata:
         assert "last:2026-06-20" in out, "prefer real-date over none regardless of order"
         assert "last:none" not in out
 
+    def test_two_real_dates_keeps_highest_ref(self):
+        # R-1 Gate-2 #5: when two real-dated metas stack, keep the richer
+        # (highest-ref) survivor, never silently discard the more-referenced one.
+        from core.ddd_entry_lifecycle import collapse_stacked_metadata
+        content = """## Decisions
+- [decision] **T** — d (2026-06-01)
+  <!-- ref:1 | last:2026-06-01 | decay:active -->
+  <!-- ref:9 | last:2026-06-30 | decay:active -->
+"""
+        out = collapse_stacked_metadata(content)
+        assert out.count("<!-- ref:") == 1
+        assert "ref:9" in out and "last:2026-06-30" in out, "keep highest-ref real meta"
+        assert "ref:1 | last:2026-06-01" not in out
+
     def test_idempotent(self):
         from core.ddd_entry_lifecycle import collapse_stacked_metadata
         content = """## Guidelines

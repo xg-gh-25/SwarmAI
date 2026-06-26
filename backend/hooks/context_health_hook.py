@@ -836,18 +836,21 @@ class ContextHealthHook:
         if not by_section:
             return
 
-        # Insert each group at the section boundary via _modify_content (append).
+        # Insert each group at the section boundary via _modify_content (prepend).
         # R-1 (run_55c02bbe): the prior raw-splice insert math had an off-by-one
         # that landed the new entry+meta BETWEEN an existing bullet and its meta,
         # orphaning the existing meta as a 2nd consecutive line (120 stacks in
-        # live MEMORY.md). _modify_content("append") inserts at the section's
-        # END boundary (before the next header), which structurally cannot orphan
-        # an existing entry's meta. Reuses the same writer distillation uses.
+        # live MEMORY.md). _modify_content inserts at a clean section boundary
+        # (right after the header), which structurally cannot orphan an existing
+        # entry's meta. PREPEND (not append) keeps newest-at-TOP — the convention
+        # distillation_hook._write_section uses for these same sections, and the
+        # one _enforce_section_caps relies on (it trims the BOTTOM = oldest).
+        # Reuses the same locked writer distillation uses (R-1 Gate-2 #2/#3).
         from scripts.locked_write import _modify_content
 
         for section_name, entries in by_section.items():
             new_block = "\n".join(entries)
-            content = _modify_content(content, section_name, new_block, "append")
+            content = _modify_content(content, section_name, new_block, "prepend")
 
         memory_path.write_text(content, encoding="utf-8")
         logger.debug(
@@ -1463,6 +1466,7 @@ class ContextHealthHook:
         from core.ddd_entry_lifecycle import (
             assess_decay,
             bump_references,
+            collapse_stacked_metadata,
             inject_entry_metadata,
             parse_entries,
         )
@@ -1497,6 +1501,19 @@ class ContextHealthHook:
 
         try:
             content = memory_path.read_text(encoding="utf-8")
+
+            # ── HEAL (R-1, run_55c02bbe): collapse any stacked/orphaned metadata
+            # before parse. A historical off-by-one splice could orphan an
+            # existing entry's meta as a 2nd consecutive line; parse_entries +
+            # inject_entry_metadata are orphan-blind, so this dedicated sweep is
+            # the auto-heal that keeps new orphans from accumulating. Pure +
+            # idempotent: a no-op once clean. Runs under the same MEMORY.md.lock.
+            healed = collapse_stacked_metadata(content)
+            if healed != content:
+                memory_path.write_text(healed, encoding="utf-8")
+                content = healed
+                logger.info("context_health: MEMORY.md healed stacked metadata")
+
             entries = parse_entries(content)
             if not entries:
                 return

@@ -1064,16 +1064,24 @@ def collapse_stacked_metadata(content: str) -> str:
 def _pick_meta(run: list[str]) -> str:
     """Pick the surviving metadata line from a run of consecutive metas.
 
-    Prefer the FIRST line whose ``last:`` is a real date (not ``none``);
-    fall back to the first line if all are ``last:none``.
+    Priority: among lines with a real ``last:`` date (not ``none``), keep the
+    one with the highest ``ref:`` count (the most-referenced lifecycle meta);
+    ties broken by first occurrence. If every line is ``last:none``, keep the
+    highest-ref one, else the first. This never discards a real date in favour
+    of an orphan default, and prefers the richer (higher-ref) survivor when two
+    real metas ever stack (R-1 Gate-2 #5).
     """
     if len(run) == 1:
         return run[0]
-    for line in run:
+
+    def ref_of(line: str) -> int:
         m = _META_RE.match(line)
-        if m and m.group(2) != "none":
-            return line
-    return run[0]
+        return int(m.group(1)) if m else -1
+
+    real = [ln for ln in run if (_META_RE.match(ln) and _META_RE.match(ln).group(2) != "none")]
+    candidates = real if real else run
+    # max() is stable on ties → keeps first occurrence among equal-ref lines.
+    return max(candidates, key=ref_of)
 
 
 # ── Stage Knowledge Injection ─────────────────────────────────────────────────
