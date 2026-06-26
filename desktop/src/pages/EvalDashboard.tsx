@@ -63,6 +63,7 @@ export interface GoldenSetCase {
   title: string;
   tier: string;
   eval_method?: string;
+  _origin?: string; // "public" | "private" — ship tag, set by backend
   evaluators: string[];
   affected_by: string[];
   last_result: { status: string; run_id: string; triggered_at: string } | null;
@@ -463,6 +464,8 @@ export function GoldenSetTab() {
   const [filterCategory, setFilterCategory] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [filterTier, setFilterTier] = useState('');
+  // Collapsed category sections (default: all expanded). Orthogonal to filters.
+  const [collapsedCats, setCollapsedCats] = useState<Set<string>>(new Set());
 
   // Breakdown counts are computed from the FULL set (not the filtered view) so
   // the user always sees the whole distribution to drill into. Hooks must run
@@ -481,6 +484,23 @@ export function GoldenSetTab() {
     if (filterStatus === 'skipped' && c.last_result?.status !== 'skipped') return false;
     return true;
   });
+
+  // Group the FILTERED set by category (not the full set) so filters and
+  // grouping agree — zero-count groups are simply absent. Sorted by count desc.
+  const groupedByCat = (() => {
+    const m = new Map<string, GoldenSetCase[]>();
+    for (const c of filtered) {
+      const k = c.category || 'uncategorized';
+      (m.get(k) ?? m.set(k, []).get(k)!).push(c);
+    }
+    return [...m.entries()].sort((a, b) => b[1].length - a[1].length);
+  })();
+  const toggleCat = (cat: string) =>
+    setCollapsedCats((prev) => {
+      const next = new Set(prev);
+      next.has(cat) ? next.delete(cat) : next.add(cat);
+      return next;
+    });
 
   return (
     <div className="flex h-full">
@@ -536,50 +556,66 @@ export function GoldenSetTab() {
           </span>
         </div>
 
-        {/* Table */}
-        <div className="border border-[var(--color-border)] rounded-lg overflow-y-auto flex-1 min-h-0">
-          <table className="w-full text-xs">
-            <thead className="sticky top-0 z-10 bg-[var(--color-bg)]">
-              <tr className="bg-[var(--color-bg)] border-b border-[var(--color-border)]">
-                <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">ID</th>
-                <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Title</th>
-                <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Category</th>
-                <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Dimension</th>
-                <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Tier</th>
-                <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Status</th>
-                <th className="text-left px-3 py-2 font-medium text-[var(--color-text-muted)]">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((c) => (
-                <tr
-                  key={c.id}
-                  onClick={() => setSelectedCaseId(c.id)}
-                  className={`border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-hover)] cursor-pointer ${selectedCaseId === c.id ? 'bg-[var(--color-primary)]/5' : ''}`}
+        {/* Grouped case list — collapsible category sections. Each row shows an
+            origin badge (public/private) + eval_method so curated vs instance and
+            test type are distinguishable at a glance (fixes "傻傻分不清"). */}
+        <div className="border border-[var(--color-border)] rounded-lg overflow-y-auto flex-1 min-h-0" data-testid="golden-set-groups">
+          {groupedByCat.length === 0 && (
+            <div className="px-3 py-8 text-center text-xs text-[var(--color-text-muted)]">No cases match the current filters.</div>
+          )}
+          {groupedByCat.map(([cat, cases]) => {
+            const collapsed = collapsedCats.has(cat);
+            return (
+              <div key={cat} data-testid={`cat-group-${cat}`}>
+                {/* Group header */}
+                <button
+                  onClick={() => toggleCat(cat)}
+                  className="w-full flex items-center gap-2 px-3 py-2 bg-[var(--color-bg)] border-b border-[var(--color-border)] sticky top-0 z-10 hover:bg-[var(--color-hover)] transition-colors text-left"
                 >
-                  <td className="px-3 py-2 font-mono font-semibold">{c.id}</td>
-                  <td className="px-3 py-2 max-w-[250px] truncate">{c.title}</td>
-                  <td className="px-3 py-2">
-                    <span className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-[10px]">{c.category}</span>
-                  </td>
-                  <td className="px-3 py-2 text-[var(--color-text-muted)]">{c.dimension?.replace(/_/g, ' ')}</td>
-                  <td className="px-3 py-2 text-[var(--color-text-muted)]">{c.tier}</td>
-                  <td className="px-3 py-2">
-                    <StatusBadge status={c.last_result?.status} />
-                  </td>
-                  <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      onClick={() => { if (confirm(`Archive case ${c.id}?`)) deleteCase.mutate(c.id); }}
-                      className="text-[var(--color-text-muted)] hover:text-red-500 transition-colors"
-                      title="Archive"
-                    >
-                      <span className="material-symbols-outlined text-sm">archive</span>
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  <span className="material-symbols-outlined text-sm text-[var(--color-text-muted)]">
+                    {collapsed ? 'chevron_right' : 'expand_more'}
+                  </span>
+                  <span className="font-semibold text-xs">{cat}</span>
+                  <span className="px-1.5 py-0.5 rounded-full bg-[var(--color-hover)] text-[10px] text-[var(--color-text-muted)]">{cases.length}</span>
+                </button>
+                {/* Group rows */}
+                {!collapsed && (
+                  <table className="w-full text-xs">
+                    <tbody>
+                      {cases.map((c) => (
+                        <tr
+                          key={c.id}
+                          onClick={() => setSelectedCaseId(c.id)}
+                          className={`border-b border-[var(--color-border)] last:border-0 hover:bg-[var(--color-hover)] cursor-pointer ${selectedCaseId === c.id ? 'bg-[var(--color-primary)]/5' : ''}`}
+                        >
+                          <td className="pl-9 pr-3 py-2 font-mono font-semibold whitespace-nowrap">{c.id}</td>
+                          <td className="px-3 py-2 max-w-[220px] truncate" title={c.title}>{c.title}</td>
+                          <td className="px-3 py-2"><OriginBadge origin={c._origin} /></td>
+                          <td className="px-3 py-2">
+                            {c.eval_method && (
+                              <span className="px-1.5 py-0.5 rounded bg-[var(--color-hover)] text-[10px] text-[var(--color-text-secondary)]">{c.eval_method}</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-[var(--color-text-muted)] whitespace-nowrap">{c.dimension?.replace(/_/g, ' ')}</td>
+                          <td className="px-3 py-2 text-[var(--color-text-muted)]">{c.tier}</td>
+                          <td className="px-3 py-2"><StatusBadge status={c.last_result?.status} /></td>
+                          <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              onClick={() => { if (confirm(`Archive case ${c.id}?`)) deleteCase.mutate(c.id); }}
+                              className="text-[var(--color-text-muted)] hover:text-red-500 transition-colors"
+                              title="Archive"
+                            >
+                              <span className="material-symbols-outlined text-sm">archive</span>
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            );
+          })}
         </div>
 
         {/* Footer action buttons (matches mockup) */}
@@ -1664,6 +1700,20 @@ function StatusBadge({ status }: { status?: string }) {
     : status === 'failed' ? 'bg-red-500/10 text-red-500'
     : 'bg-[var(--color-hover)] text-[var(--color-text-muted)]';
   return <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase ${cls}`}>{status}</span>;
+}
+
+// Distinguishes curated public cases (ship in the repo) from private instance
+// cases (gitignored). The single most-requested distinction for the golden set.
+function OriginBadge({ origin }: { origin?: string }) {
+  if (!origin) return <span className="text-[10px] text-[var(--color-text-muted)]">—</span>;
+  const isPublic = origin === 'public';
+  const cls = isPublic ? 'bg-green-500/10 text-green-600' : 'bg-[var(--color-hover)] text-[var(--color-text-muted)]';
+  return (
+    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold ${cls}`} title={isPublic ? 'Public — ships in the repo' : 'Private — gitignored instance case'}>
+      <span className="material-symbols-outlined text-[11px]">{isPublic ? 'public' : 'lock'}</span>
+      {origin}
+    </span>
+  );
 }
 
 function GuideCard({ icon, title, desc }: { icon: string; title: string; desc: string }) {
