@@ -219,10 +219,89 @@ def _missing_vector() -> int:
     return 1
 
 
+def _knowledge_live() -> int:
+    """Knowledge/Library WIRE: the REAL RecallEngine hybrid (FTS5 + sqlite-vec
+    over a real KnowledgeStore) must surface the SPECIFIC chunk a zero-lexical-
+    overlap query can only reach via the VECTOR leg. The only mocked thing is the
+    Bedrock query embedding (the network boundary); entry vectors live in a real
+    knowledge_vec table and the merge is the real 0.6·vec+0.4·bm25 in
+    recall_engine.RecallEngine.search. A broken vector leg (or embed_fn not
+    threaded through) drops the chunk → marker absent. Prints KNOWLEDGE_LIVE_OK."""
+    import sqlite3
+
+    import sqlite_vec
+
+    from core.knowledge_store import KnowledgeStore
+    from core.recall_engine import RecallEngine
+
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+        store = KnowledgeStore(conn)
+        store.ensure_tables()
+        # Target chunk embedded at one-hot e_5; query embeds to e_5 → exact
+        # vector neighbour. Its TEXT shares zero lexical overlap with the query,
+        # so FTS5/BM25 ≈ 0 and the hit is genuinely vector-carried.
+        store.upsert_chunk(
+            "Designs/quokka.md", 0, "## Quokka Design",
+            "marsupial habitat rottnest island foliage", "kh1",
+            embedding=_onehot(5),
+        )
+        store.upsert_chunk(
+            "Notes/unrelated.md", 0, "## Unrelated",
+            "kubernetes ingress controller tls termination", "kh2",
+            embedding=_onehot(700),
+        )
+        engine = RecallEngine(store)
+        # embed_fn IS the Bedrock boundary — fixed query vector, real merge.
+        results = engine.search(
+            "application crash exit code sigkill",
+            embed_fn=lambda _t: _onehot(5),
+            top_k=5,
+        )
+    finally:
+        conn.close()
+
+    # Non-vacuous: the exact vector-neighbour chunk must win, and its vector_score
+    # must dominate its fts_score (proves the VECTOR leg carried it, not keyword).
+    if results:
+        top = results[0]
+        if (top.get("source_file") == "Designs/quokka.md"
+                and top.get("vector_score", 0) > top.get("fts_score", 0)):
+            print("KNOWLEDGE_LIVE_OK")
+            return 0
+    print(f"KNOWLEDGE_LIVE_FAIL results={[(r.get('source_file'), r.get('vector_score'), r.get('fts_score')) for r in results[:3]]}")
+    return 1
+
+
+def _codeintel_live() -> int:
+    """CodeIntel WIRE: the REAL recall_multi._codeintel_recall must drive the
+    REAL load_project_graph().search_symbols over the LIVE SwarmAI code graph
+    for a known symbol and return a hit (with 1-hop caller enrichment). Nothing
+    is mocked — if the graph is absent or search_symbols is broken, the bucket is
+    empty → marker absent. Prints CODEINTEL_LIVE_OK."""
+    from core import recall_multi
+
+    # "recall_all" is a real public symbol in core/recall_multi.py — it MUST be
+    # in the live SwarmAI code graph. A real graph search returns it; a broken
+    # wire (no graph / search_symbols error) returns [].
+    bucket = recall_multi._codeintel_recall("recall_all", project="SwarmAI")
+
+    if bucket and any("recall" in str(h.get("name", "")).lower() for h in bucket):
+        print("CODEINTEL_LIVE_OK")
+        return 0
+    print(f"CODEINTEL_LIVE_FAIL bucket={bucket[:3] if bucket else bucket}")
+    return 1
+
+
 _SCENARIOS = {
     "synonym_guard": _synonym_guard,
     "stale_index": _stale_index,
     "missing_vector": _missing_vector,
+    "knowledge_live": _knowledge_live,
+    "codeintel_live": _codeintel_live,
 }
 
 

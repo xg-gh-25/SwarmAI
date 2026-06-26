@@ -78,8 +78,13 @@ def gate_non_vacuous(case: dict) -> tuple[bool, list[str]]:
     # echo/printf that just re-emits the asserted literal = tests nothing
     if cmd and _VACUOUS_CMDS.match(cmd) and exp and exp in cmd:
         return False, [f"vacuous: command '{cmd}' trivially echoes its own assertion '{exp}'"]
-    # grep that matches anything
-    if grep in (".", ".*", "", "^"):
+    # grep that matches anything — only when a grep field is ACTUALLY present.
+    # A missing grep ("" after .get) is NOT vacuous: canary_pass cases assert via
+    # command/expected_contains and legitimately have no grep field. The prior
+    # `grep in (..., "", ...)` conflated "no grep field" with "grep matches
+    # anything" and false-killed every canary case (incl. the existing
+    # GS_RCHAIN_* probes).
+    if "grep" in v and grep in (".", ".*", "", "^"):
         return False, [f"vacuous: grep '{grep}' matches anything"]
     return True, []
 

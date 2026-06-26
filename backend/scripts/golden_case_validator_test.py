@@ -51,6 +51,20 @@ def test_non_vacuous_passes_real_assertion():
     ok, errs = gate_non_vacuous(_ok_case(verification={"file": "x.py", "grep": "class MessageStore"}))
     assert ok, errs
 
+def test_non_vacuous_present_empty_grep_still_vacuous():
+    # An ACTUAL grep field that matches anything is still vacuous.
+    ok, errs = gate_non_vacuous(_ok_case(verification={"file": "x.py", "grep": ""}))
+    assert not ok and "vacuous" in " ".join(errs).lower()
+
+def test_non_vacuous_canary_without_grep_is_not_vacuous():
+    # run_b2d62f47 fix: a canary_pass case asserts via command/expected_contains
+    # and has NO grep field. The missing field must NOT be treated as
+    # "grep matches anything" (the old bug false-killed every GS_RCHAIN_* probe).
+    ok, errs = gate_non_vacuous(_ok_case(verification={
+        "command": "cd backend && .venv/bin/python scripts/recall_chain_probe.py knowledge_live",
+        "expected_contains": "KNOWLEDGE_LIVE_OK"}))
+    assert ok, errs
+
 
 # ── privacy scan (the ship-boundary gate for PROMOTE) ──
 def test_privacy_rejects_sensitive_word():
