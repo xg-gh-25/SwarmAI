@@ -6,6 +6,11 @@ __pycache__/
 Projects/*
 !Projects/SwarmAI/
 Projects/*/code_intel.db
+# Eval private golden set — instance-specific cases (ref local MEMORY/STEERING).
+# Public golden_set.yaml ships; this gitignored sibling never leaves the laptop.
+# (Must come AFTER !Projects/SwarmAI/ to re-exclude just this one file.)
+Projects/SwarmAI/golden_set.private.yaml
+Projects/SwarmAI/golden_set.private.yaml.lock
 *$py.class
 *.so
 .Python

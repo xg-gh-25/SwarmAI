@@ -87,14 +87,39 @@ def _eval_history_dir(root: Path) -> Path:
 # ─── Load & Validate ─────────────────────────────────────────────────────────
 
 def load_golden_set(path: Path) -> dict:
-    """Parse golden_set.yaml and validate basic structure."""
+    """Parse golden_set.yaml (public) merged with a sibling golden_set.private.yaml
+    (private instance cases, OPTIONAL) and validate basic structure.
+
+    Decouple v3 (run_69b1c644): private instance cases live in a gitignored
+    sibling file so they don't ship in the public repo, but they must still RUN
+    here. The runner only READS the golden set (write_run targets EvalHistory,
+    not golden_set) — so merging here carries no public/private leak risk; the
+    leak guard lives in eval_service's split-WRITE. Private absent → public only
+    (clone-safe). An id present in BOTH files is a migration error → fail loud.
+    """
     if not path.exists():
         raise FileNotFoundError(f"Golden set not found: {path}")
 
     with open(path) as f:
         data = yaml.safe_load(f)
 
-    # Basic schema validation
+    # Merge sibling private file if present
+    private_path = path.with_name("golden_set.private.yaml")
+    if private_path.exists():
+        with open(private_path) as f:
+            private_data = yaml.safe_load(f) or {}
+        pub_cases = data.get("cases", []) or []
+        priv_cases = private_data.get("cases", []) or []
+        pub_ids = {c.get("id") for c in pub_cases if c.get("id")}
+        for pc in priv_cases:
+            if pc.get("id") in pub_ids:
+                raise AssertionError(
+                    f"golden-set id collision '{pc.get('id')}' in both public and "
+                    f"private files — an id must live in exactly one file"
+                )
+        data["cases"] = pub_cases + priv_cases
+
+    # Basic schema validation (applies to the MERGED set)
     assert data.get("version") == 2, f"Expected version 2, got {data.get('version')}"
     assert "cases" in data, "Missing 'cases' key"
     assert len(data["cases"]) > 0, "No cases defined"
