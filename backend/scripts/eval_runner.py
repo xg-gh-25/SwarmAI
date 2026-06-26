@@ -103,10 +103,13 @@ _GATE_CODE_PATHS = [
 
 # Fast-deterministic evaluators eligible for the BVT gate. Excludes runtime_health
 # (subprocess, ~30s, load-flaky) and all LLM evaluators (non-deterministic, read
-# instance DDD). These are sub-second, pure, reproducible (Gate-1 #3).
+# instance DDD). canary_pass is INCLUDED (run_5edf2cc0 G5): deterministic, just
+# slower — bounded by a per-case timeout. The gate reads the COMMITTED report
+# (ci_eval_gate), not the per-session canary, so a generous timeout never flakes
+# the gate. MUST mirror golden_case_validator._GATE_ELIGIBLE_EVALUATORS.
 _GATE_ELIGIBLE_EVALUATORS = frozenset(
     {"file_contains", "keyword_match", "trajectory_exact",
-     "trajectory_in_order", "trajectory_any_order"}
+     "trajectory_in_order", "trajectory_any_order", "canary_pass"}
 )
 
 
@@ -159,12 +162,22 @@ def compute_bvt(cases: list, results: list[dict]) -> dict:
       AND passed > 0  (all-skipped is RED, not green)
       AND failed == 0 AND error == 0  (any regression = RED).
     """
+    from scripts.golden_case_validator import compute_case_stamp
+
     by_id = {r["id"]: r for r in results}
     total = passed = failed = error = skipped = 0
     for c in cases:
         if c.get("eval_method") == "llm":
             continue
         if not (set(c.get("evaluators", [])) & _GATE_ELIGIBLE_EVALUATORS):
+            continue
+        # G2: draft cases are not yet trustworthy — never in the gate set.
+        if c.get("tier") == "draft":
+            continue
+        # G1/G8: only cases carrying a CURRENT validated_by_4gate stamp (matching
+        # the canonical body hash) count. A case edited outside the sanctioned
+        # 4-gate path (stamp absent or stale) drifts out — drift-detection.
+        if c.get("validated_by_4gate") != compute_case_stamp(c):
             continue
         st = by_id.get(c["id"], {}).get("status")
         total += 1
