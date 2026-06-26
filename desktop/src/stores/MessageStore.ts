@@ -287,6 +287,26 @@ export class MessageStore {
     }
   }
 
+  /**
+   * Liveness ping — reset the streaming watchdog WITHOUT mutating content.
+   *
+   * The watchdog force-ends streaming after _watchdogTimeoutMs (90s) of no
+   * updateLast()/append(). A long SILENT step — a multi-minute tool, slow Opus
+   * thinking — emits heartbeat (every 15s) and still_working (every 60s) SSE
+   * events but NO content, so without this the watchdog fired mid-turn → the UI
+   * read "done" while the backend was still working (frontend.log: repeated
+   * "Watchdog: no update for 90000ms, forcing endStreaming" inside a live turn).
+   * touch() lets ANY liveness signal keep the watchdog armed, so it now only
+   * fires on a genuinely dead stream (no content AND no heartbeat for 90s).
+   * Pure timer reset: no content change, no _notify(), and a hard NO-OP unless
+   * streaming — a dropped connection stops BOTH content and heartbeats, so
+   * real-disconnect detection (R3) is fully preserved.
+   */
+  touch(): void {
+    if (this._destroyed || this._phase !== 'streaming') return;
+    this._resetWatchdog();
+  }
+
   /** Last assistant message's total text length. Used by the clobber probe. */
   private _lastAsstChars(msgs: Message[]): number {
     for (let i = msgs.length - 1; i >= 0; i--) {

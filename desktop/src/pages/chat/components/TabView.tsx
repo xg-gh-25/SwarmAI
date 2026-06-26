@@ -156,36 +156,52 @@ function TabViewImpl({
   // paint on activation. The active tab always auto-refreshes in real-time.
   const sub = useMessageStore(tabId, undefined, isActive);
   const storeMessages = sub?.messages;
-  const messages = storeMessages ?? [];
 
-  // RECONCILE-GAP PROBE: the store is the single render source. The empty-store
-  // truncation/blank this once exposed is now fixed at the SOURCE — the merge no
-  // longer lets a shorter/stale DB row overwrite more-complete local content
-  // (MessageStore._mergePreservingInteractive persist-lag guard) — so the store
-  // stays complete and store-only render is correct. Probe retained to verify
-  // store/prop divergence on the active tab during rollout, then removed.
-  {
-    const lastAsstChars = (arr: Message[] | undefined): number => {
-      if (!arr || arr.length === 0) return -1;
-      const last = [...arr].reverse().find((m) => m.role === 'assistant');
-      if (!last) return -1;
-      return last.content.reduce(
-        (n, b) => n + (b && typeof b === 'object' && 'text' in b ? (b as { text: string }).text.length : 0),
-        0,
-      );
-    };
-    const storeChars = lastAsstChars(storeMessages);
-    const propChars = lastAsstChars(messagesProp);
-    if (isActive && storeChars !== propChars && storeChars >= 0 && propChars >= 0) {
-      console.warn('[reconcile-gap] RENDER-DIVERGE', {
-        tabId,
-        isActive,
-        storeChars,
-        propChars,
-        chosen: 'store',
-        renderedChars: storeChars,
-      });
-    }
+  // Last assistant message's total renderable text length (-1 if none).
+  const lastAsstChars = (arr: Message[] | undefined): number => {
+    if (!arr || arr.length === 0) return -1;
+    const last = [...arr].reverse().find((m) => m.role === 'assistant');
+    if (!last) return -1;
+    return last.content.reduce(
+      (n, b) => n + (b && typeof b === 'object' && 'text' in b ? (b as { text: string }).text.length : 0),
+      0,
+    );
+  };
+
+  // ── Render source: MORE-COMPLETE WINS, but the prop is NEVER used while
+  //    streaming. ───────────────────────────────────────────────────────────
+  // The store is the authoritative live-turn source. DURING streaming we render
+  // store-only: the prop (a tabMapRef snapshot) lags the store mid-stream, and a
+  // longer PREVIOUS answer sitting in the prop must never overwrite the
+  // in-progress reply. WHILE IDLE we render whichever source has the
+  // more-complete LAST ASSISTANT message. This rescues the cold-start / restore
+  // gap that store-only rendering left blank: on launch the store lazy-loads
+  // from the backend (momentarily empty, or a shorter/incompletely-persisted
+  // row) while the restored prop already holds the full last answer — store-only
+  // showed a blank/truncated bubble for the whole load window (frontend.log:
+  // storeChars 0→155 vs propChars 1860, rendered 0/155). Preferring the
+  // more-complete source is symmetric with the store-vs-DB merge guard
+  // (MessageStore._mergePreservingInteractive). Safe across turns: while idle the
+  // prop tracks the store (both converge on the same last message), so a longer
+  // prop only wins when it is genuinely the more-complete copy, never a stale
+  // older turn.
+  const storeChars = lastAsstChars(storeMessages);
+  const propChars = lastAsstChars(messagesProp);
+  const preferProp = !isStreaming && propChars > storeChars;
+  const messages = preferProp ? messagesProp : (storeMessages ?? []);
+
+  // RECONCILE-GAP PROBE: verify the chosen source actually rendered the
+  // more-complete content. Retained through rollout, then removed.
+  if (isActive && storeChars !== propChars && storeChars >= 0 && propChars >= 0) {
+    console.warn('[reconcile-gap] RENDER-DIVERGE', {
+      tabId,
+      isActive,
+      isStreaming,
+      storeChars,
+      propChars,
+      chosen: preferProp ? 'prop' : 'store',
+      renderedChars: preferProp ? propChars : storeChars,
+    });
   }
 
   // ── Per-tab scroll (Migration Step 5.1) ────────────────────────────

@@ -2224,6 +2224,14 @@ export function useChatStreamingLifecycle(
         // Keyed + auto-dismiss so successive notices replace in place (no
         // stacking) and clear on their own once the turn produces or ends.
         if (event.type === 'still_working') {
+          // Liveness → keep this tab's MessageStore watchdog armed. still_working
+          // (every 60s) proves the backend is mid-turn on a long SILENT step;
+          // touch() resets the 90s force-end watchdog so it can't fire on a live
+          // turn. Done for capturedTabId's store regardless of active (the
+          // watchdog is per-tab; a background streaming tab needs it too), and
+          // BEFORE the early return below (this is why the prior heartbeat-only
+          // wiring was ineffective — still_working never reached it).
+          if (capturedTabId) messageStoreRegistry.get(capturedTabId)?.touch();
           // isActiveTab is derived further down; this side-channel runs early,
           // so compare against the live active-tab ref directly.
           if (capturedTabId === activeTabIdRef.current && event.message) {
@@ -2338,6 +2346,17 @@ export function useChatStreamingLifecycle(
         // progress. Only real events reset the stall timer.
         if (event.type !== 'heartbeat') {
           lastRealEventRef.current = Date.now();
+        } else if (capturedTabId) {
+          // Liveness → keep this tab's MessageStore watchdog armed. A heartbeat
+          // (every 15s) proves the SSE connection is alive during a long silent
+          // step, so it MUST reset the store's 90s force-end watchdog — even
+          // though it is NOT SDK progress (the stall detector above correctly
+          // ignores it; the watchdog and the stall detector track different
+          // signals: connection-liveness vs SDK-progress). Without this the
+          // watchdog force-ended a live long turn → premature "done while the
+          // backend kept working". touch() is a NO-OP unless the store is
+          // streaming, so a stale/idle heartbeat is harmless.
+          messageStoreRegistry.get(capturedTabId)?.touch();
         }
 
         // Track tool execution state for context-aware stall thresholds.

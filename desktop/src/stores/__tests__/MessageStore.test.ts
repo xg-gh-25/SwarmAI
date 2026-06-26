@@ -253,6 +253,39 @@ describe('MessageStore watchdog', () => {
 
     store.destroy();
   });
+
+  it('touch() resets the watchdog without mutating content (long silent step)', () => {
+    const store = new MessageStore({ watchdogTimeoutMs: 100 });
+    store.append(makeMsg('1', 'assistant'));
+    store.startStreaming('1');
+    const before = store.messages;
+
+    // Simulate a long silent step: only liveness pings (heartbeat/still_working),
+    // no content. Each touch() keeps the watchdog armed past the 100ms window.
+    vi.advanceTimersByTime(90);
+    store.touch();
+    vi.advanceTimersByTime(90);
+    store.touch();
+    vi.advanceTimersByTime(90);
+    expect(store.phase).toBe('streaming'); // never force-ended despite >200ms silence
+    expect(store.messages).toBe(before);   // content untouched (no new array ref)
+
+    // Stop pinging → a genuinely dead stream (no content, no heartbeat) still fires.
+    vi.advanceTimersByTime(101);
+    expect(store.phase).toBe('idle');
+
+    store.destroy();
+  });
+
+  it('touch() is a NO-OP when not streaming', () => {
+    const store = new MessageStore({ watchdogTimeoutMs: 100 });
+    store.append(makeMsg('1', 'assistant'));
+    // idle phase — touch must not arm a watchdog or change phase
+    store.touch();
+    vi.advanceTimersByTime(200);
+    expect(store.phase).toBe('idle');
+    store.destroy();
+  });
 });
 
 // ─── rAF-gated Notifications ───
