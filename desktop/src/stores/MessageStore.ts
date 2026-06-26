@@ -287,31 +287,6 @@ export class MessageStore {
     }
   }
 
-  /**
-   * Register backend liveness WITHOUT mutating content.
-   *
-   * The watchdog (_resetWatchdog) only counts content updates (updateLast)
-   * and appends — it is blind to non-content liveness signals. During a long
-   * silent step (a >90s tool execution, or slow cross-region thinking between
-   * tokens), no content arrives, so the watchdog force-ends streaming and the
-   * turn looks DONE in the UI even though the backend is still working. The
-   * backend DOES tell us it is alive — it emits `still_working`/`heartbeat`
-   * every ~60s — but those events never reached the store, so the watchdog
-   * fired anyway and the remaining answer only surfaced later via DB reconcile
-   * ("response 一half就停了 / backend 其实在做事 / 过很久又蹦出来").
-   *
-   * Call this on every backend-liveness event so an actively-working backend
-   * keeps the streaming phase alive. NO-OP unless streaming (never resurrects
-   * an ended turn) and emits NO notification (pure timer reset, zero re-render).
-   * The watchdog's real purpose — detecting a dead SSE with no close event —
-   * is preserved: a genuine disconnect stops BOTH content AND heartbeats, so
-   * the watchdog still fires after the timeout of total silence.
-   */
-  touch(): void {
-    if (this._destroyed || this._phase !== 'streaming') return;
-    this._resetWatchdog();
-  }
-
   /** Last assistant message's total text length. Used by the clobber probe. */
   private _lastAsstChars(msgs: Message[]): number {
     for (let i = msgs.length - 1; i >= 0; i--) {
@@ -621,6 +596,14 @@ export class MessageStore {
     return `${block.type}:${id ?? ''}`;
   }
 
+  /** Total renderable text length of a message — basis for "more-complete
+   *  content wins" in the persist-lag guard below. */
+  private static _textLen(m: Message): number {
+    return Array.isArray(m.content)
+      ? m.content.reduce((n, b) => n + ('text' in b ? (b as { text: string }).text.length : 0), 0)
+      : 0;
+  }
+
   /**
    * Merge a canonical DB assistant message with the local one it replaces,
    * carrying forward any local-only interactive blocks the DB version lacks.
@@ -630,6 +613,22 @@ export class MessageStore {
    * turn-terminal block in practice).
    */
   private static _mergePreservingInteractive(dbMsg: Message, localMsg: Message): Message {
+    // ── Persist-lag guard (THE reconcile race / #1 recurring "答到一半/白屏") ──
+    // The 200ms turn-end reconcile can fetch the DB BEFORE the backend finishes
+    // persisting this assistant message → a shorter/empty DB row. Plain DB-wins
+    // would then OVERWRITE the complete streamed answer already in the store
+    // with that stale row, truncating/blanking the reply. Rule: MORE-COMPLETE
+    // CONTENT WINS. If the local message has more text than the DB row, the DB
+    // is stale (persist hasn't caught up) — keep the DB's canonical id/metadata
+    // but the local (complete) content. A legitimate server-side edit on a
+    // completed turn only adds/keeps content (>= chars → DB still wins); a
+    // content-SHORTENING edit is vanishingly rare and far less harmful than the
+    // constant truncation race this kills at the source.
+    if (MessageStore._textLen(localMsg) > MessageStore._textLen(dbMsg)) {
+      // local already carries its own interactive blocks, so no further merge.
+      return { ...dbMsg, content: localMsg.content };
+    }
+
     const localInteractive = localMsg.content.filter((b) =>
       MessageStore._INTERACTIVE_BLOCK_TYPES.has(b.type),
     );

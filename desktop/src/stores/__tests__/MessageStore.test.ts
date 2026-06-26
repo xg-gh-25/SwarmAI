@@ -241,54 +241,6 @@ describe('MessageStore watchdog', () => {
     store.destroy();
   });
 
-  it('watchdog is reset by touch() (backend liveness — heartbeat/still_working)', () => {
-    // Regression: a long silent step (no content token for >timeout) used to
-    // force-end streaming even while the backend emitted heartbeats proving it
-    // was still working → turn looked "done", rest surfaced later via reconcile.
-    const store = new MessageStore({ watchdogTimeoutMs: 100 });
-    store.append(makeMsg('1', 'assistant'));
-    store.startStreaming('1');
-
-    vi.advanceTimersByTime(90);
-    store.touch(); // backend liveness signal — no content, but still alive
-    vi.advanceTimersByTime(90);
-    expect(store.phase).toBe('streaming'); // watchdog reset → still streaming
-
-    vi.advanceTimersByTime(11);
-    expect(store.phase).toBe('idle'); // genuine silence (no content+no liveness) → fires
-
-    store.destroy();
-  });
-
-  it('repeated touch() keeps a long no-content turn alive (heartbeats < timeout)', () => {
-    const store = new MessageStore({ watchdogTimeoutMs: 100 });
-    store.append(makeMsg('1', 'assistant'));
-    store.startStreaming('1');
-
-    // Simulate 5 heartbeats at 60% of the timeout each — backend working, no content.
-    for (let i = 0; i < 5; i++) {
-      vi.advanceTimersByTime(60);
-      store.touch();
-    }
-    expect(store.phase).toBe('streaming'); // never force-ended despite 300ms of no content
-
-    store.destroy();
-  });
-
-  it('touch() is a NO-OP when idle (never resurrects an ended turn)', () => {
-    const store = new MessageStore({ watchdogTimeoutMs: 100 });
-    store.append(makeMsg('1', 'assistant'));
-    store.startStreaming('1');
-    store.endStreaming();
-    expect(store.phase).toBe('idle');
-
-    store.touch(); // must not re-arm the watchdog or change phase
-    vi.advanceTimersByTime(200);
-    expect(store.phase).toBe('idle');
-
-    store.destroy();
-  });
-
   it('watchdog is cleared by endStreaming', () => {
     const store = new MessageStore({ watchdogTimeoutMs: 100 });
     store.append(makeMsg('1', 'assistant'));
@@ -1158,6 +1110,45 @@ describe('MessageStore clientId dedup', () => {
 
     // Both exist (no dedup possible without clientId — this is expected prior behavior)
     expect(store.messages).toHaveLength(2);
+    store.destroy();
+  });
+});
+
+// ─── Reconcile persist-lag guard (THE reconcile race fix) ───
+describe('MessageStore reconcile — persist-lag guard (more-complete content wins)', () => {
+  beforeEach(() => { messageStoreRegistry.clear(); });
+  afterEach(() => { messageStoreRegistry.clear(); });
+
+  it('a SHORTER/stale DB row does NOT overwrite the complete streamed answer', () => {
+    // THE #1 recurring bug: the 200ms turn-end reconcile fetches the DB before
+    // the backend finished persisting the final assistant message → a short/
+    // empty DB row. Plain DB-wins truncated/blanked the complete reply already
+    // in the store. The merge must keep the more-complete local content.
+    const store = new MessageStore();
+    const full = 'A'.repeat(500);
+    store.append(makeMsg('user-1', 'user', 'q'));
+    store.append(makeMsg('m1', 'assistant', full)); // complete streamed answer (idle)
+
+    // DB row for the SAME message id is still short (persist lagged).
+    store.reconcile([makeChatMsg('user-1', 'user', 'q'), makeChatMsg('m1', 'assistant', 'AA')]);
+
+    const asst = store.messages.find((m) => m.id === 'm1');
+    const chars = asst?.content.reduce((n, b) => n + ('text' in b ? (b as { text: string }).text.length : 0), 0);
+    expect(chars).toBe(500); // kept complete content, NOT truncated to 2
+    store.destroy();
+  });
+
+  it('a LONGER DB row (legitimate server-side edit) STILL wins', () => {
+    // The guard must not break real DB-wins: when the DB has MORE content
+    // (server edit / fuller persist), it replaces the shorter local copy.
+    const store = new MessageStore();
+    store.append(makeMsg('m1', 'assistant', 'short'));
+
+    store.reconcile([makeChatMsg('m1', 'assistant', 'B'.repeat(300))]);
+
+    const asst = store.messages.find((m) => m.id === 'm1');
+    const chars = asst?.content.reduce((n, b) => n + ('text' in b ? (b as { text: string }).text.length : 0), 0);
+    expect(chars).toBe(300); // DB (more complete) wins
     store.destroy();
   });
 });
