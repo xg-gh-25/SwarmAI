@@ -11,8 +11,8 @@ isolation — analogous to closing your eyes to check balance. The isolation
 prevents attention contamination from prior user turns while testing
 canonical behavior.
 
-Reads Projects/SwarmAI/golden_set.yaml, runs programmatic evaluators,
-outputs JSON to Projects/SwarmAI/EvalHistory/{date}_{trigger}.json.
+Reads Eval/golden_set.yaml, runs programmatic evaluators,
+outputs JSON to Eval/EvalHistory/{date}_{trigger}.json.
 
 Usage:
     python backend/scripts/eval_runner.py run --trigger manual
@@ -1958,7 +1958,7 @@ body {{ font-family: 'Inter', -apple-system, sans-serif; background: var(--bg); 
     <div class="footer">
         <p>Generated: {triggered_at} UTC | {run_result["total_cases"]} cases (Golden Set v2) | {len(history)} historical runs</p>
         <p>Programmatic: every session, $0, &lt;1s | LLM Judge: monthly, ~$0.05, ~2min</p>
-        <p>Source: Projects/SwarmAI/golden_set.yaml | Engine: backend/scripts/eval_runner.py</p>
+        <p>Source: Eval/golden_set.yaml | Engine: backend/scripts/eval_runner.py</p>
     </div>
 </div>
 </body>

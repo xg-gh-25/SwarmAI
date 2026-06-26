@@ -6,8 +6,8 @@ equal in ontological status to SOUL/AGENT/STEERING. This service manages
 that contract and the history of self-evaluation runs.
 
 Parsed on startup from:
-  - Projects/SwarmAI/golden_set.yaml (behavioral contract)
-  - Projects/SwarmAI/EvalHistory/*.json (self-eval run results)
+  - Eval/golden_set.yaml (behavioral contract)
+  - Eval/EvalHistory/*.json (self-eval run results)
 
 Serves the Eval Dashboard API with zero-latency reads.
 Cache invalidated on: eval run completion, manual reload.
