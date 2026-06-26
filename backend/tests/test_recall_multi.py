@@ -201,6 +201,39 @@ class TestRecallAll:
         # AC4: per-domain hit_layer.
         assert hasattr(result, "hit_layers")
 
+    def test_policy_excluded_context_files_returns_empty(self, monkeypatch):
+        """PRIVACY (Gate-2 leak fix): when MEMORY.md is policy-excluded for the
+        session (e.g. group_channel), the context_files bucket must be EMPTY —
+        multi-domain recall must enforce the SAME gate as single-file recall.
+        Without the fix, --domains leaked MEMORY to sessions --file denies."""
+        from core import recall_multi
+
+        monkeypatch.setattr(recall_multi, "_codeintel_recall", lambda q, project=None: [])
+        # MEMORY.md excluded by policy → context_files bucket must be empty.
+        result = recall_multi.recall_all(
+            "exit code sigkill oom", project="SwarmAI", allow_embed=False,
+            domains=("context_files",),
+            policy_excluded_files=frozenset({"memory.md"}),
+        )
+        assert result.buckets["context_files"] == [], \
+            "policy-excluded MEMORY must NOT leak through multi-domain recall"
+        assert result.hit_layers["context_files"] == "none"
+
+    def test_no_exclusion_allows_context_files(self, monkeypatch):
+        """Counterpart: with NO exclusion, context_files recall works normally
+        (proves the empty result above is the GATE, not an unrelated break)."""
+        from core import recall_multi
+
+        monkeypatch.setattr(recall_multi, "_codeintel_recall", lambda q, project=None: [])
+        result = recall_multi.recall_all(
+            "exit code sigkill oom", project="SwarmAI", allow_embed=False,
+            domains=("context_files",),
+            policy_excluded_files=frozenset(),  # nothing excluded
+        )
+        # Live MEMORY.md has a COE Registry section matching this query.
+        assert result.buckets["context_files"], \
+            "with no exclusion, context_files should return hits (gate is the discriminator)"
+
     def test_recall_all_embed_free_by_default(self, monkeypatch):
         """AC5 at the fan-out level: recall_all(allow_embed=False) never embeds."""
         from core import memory_index, recall_multi

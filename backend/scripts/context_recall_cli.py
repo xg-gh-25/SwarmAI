@@ -81,6 +81,11 @@ def main(argv: list[str] | None = None) -> int:
                           "reason": "exactly one of --file or --domains is required"}))
         return 2
 
+    # Compute the privacy exclusion set up-front so BOTH modes enforce the SAME
+    # gate. (Previously the --domains branch returned before this line and leaked
+    # MEMORY to group_channel — run_4358cc95 Gate-2.)
+    policy_excluded = _POLICY_EXCLUSIONS[args.session_type]
+
     # ── Multi-domain mode: fan across READ domains via recall_all (embed-free) ──
     if args.domains:
         from core.recall_multi import recall_all, DOMAINS
@@ -92,7 +97,8 @@ def main(argv: list[str] | None = None) -> int:
                               "reason": f"unknown domain(s): {bad}; valid: {list(DOMAINS)}"}))
             return 2
         r = recall_all(args.query, project=args.project, domains=sel,
-                       allow_embed=False, max_sections=args.max_sections)
+                       allow_embed=False, max_sections=args.max_sections,
+                       policy_excluded_files=policy_excluded)
         print(json.dumps({
             "allowed": True,
             "query": r.query,
@@ -102,8 +108,7 @@ def main(argv: list[str] | None = None) -> int:
         }))
         return 0
 
-    policy_excluded = _POLICY_EXCLUSIONS[args.session_type]
-
+    # (policy_excluded already computed above — shared by both modes)
     try:
         context_dir = Path(args.context_dir).resolve()
         # CRITICAL: confine to context_dir and use the RESOLVED basename for both

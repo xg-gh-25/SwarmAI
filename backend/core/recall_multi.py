@@ -138,6 +138,7 @@ def recall_all(
     domains: tuple[str, ...] = DOMAINS,
     allow_embed: bool = False,
     max_sections: int = 3,
+    policy_excluded_files: frozenset[str] = frozenset(),
 ) -> BucketedRecall:
     """Fan ``query`` across all (or the requested) READ recall domains.
 
@@ -150,9 +151,17 @@ def recall_all(
         query: natural-language recall query.
         project: project name for the DDD + codeintel domains (e.g. "SwarmAI").
         domains: subset of DOMAINS to fan across (default: all 5).
-        allow_embed: when True, the vector legs are enabled (Bedrock). Default
-            False keeps the call provably embed-free (anti-scope).
+        allow_embed: when True, the context_files vector leg is enabled (Bedrock).
+            Default False keeps the call provably embed-free (anti-scope). NOTE:
+            the ddd/library/session legs are keyword/FTS-only and have no vector
+            path — only context_files honors this flag.
         max_sections: per-text-domain section cap.
+        policy_excluded_files: files the current session excludes by POLICY
+            (privacy), passed through to the file-reading legs so multi-domain
+            recall enforces the SAME privacy gate as single-file recall_context.
+            A leg whose source file is excluded returns an empty bucket. This
+            closes the privacy leak where --domains bypassed the gate that --file
+            enforces (run_4358cc95 Gate-2).
 
     Returns:
         BucketedRecall with one bucket + hit_layer per requested domain.
@@ -162,7 +171,8 @@ def recall_all(
     # context_files + ddd are markdown ##-section domains.
     if "context_files" in domains:
         result.buckets["context_files"], result.hit_layers["context_files"] = \
-            _recall_context_files(query, allow_embed, max_sections)
+            _recall_context_files(query, allow_embed, max_sections,
+                                  policy_excluded_files)
 
     if "ddd" in domains:
         result.buckets["ddd"], result.hit_layers["ddd"] = \
@@ -184,13 +194,20 @@ def recall_all(
     return result
 
 
-def _recall_context_files(query: str, allow_embed: bool,
-                          max_sections: int) -> tuple[list, str]:
+def _recall_context_files(query: str, allow_embed: bool, max_sections: int,
+                          policy_excluded_files: frozenset[str] = frozenset(),
+                          ) -> tuple[list, str]:
     """Recall over the 11 context files via the existing recall_context verb.
 
     Reads the live MEMORY.md (the highest-value excluded-section domain). Other
     context files are policy/budget-excluded per session; MEMORY is the canonical
     one a recall query targets. Keyword-only when allow_embed=False.
+
+    Privacy: ``policy_excluded_files`` is passed to ``recall_context``, which
+    HARD-DENIES (returns allowed=False, empty) when MEMORY.md is policy-excluded
+    for this session (e.g. group_channel). This makes multi-domain recall enforce
+    the same privacy gate as single-file recall — without it, --domains leaked
+    MEMORY to sessions that --file correctly denies (run_4358cc95 Gate-2).
     """
     from pathlib import Path
     from core.context_recall import recall_context
@@ -205,6 +222,7 @@ def _recall_context_files(query: str, allow_embed: bool,
     except OSError:
         return hits, layer
     res = recall_context("MEMORY.md", query, memory_content=content,
+                         policy_excluded_files=policy_excluded_files,
                          max_sections=max_sections, allow_embed=allow_embed)
     if res.allowed and res.sections:
         hits = [{"section": s} for s in res.sections]
