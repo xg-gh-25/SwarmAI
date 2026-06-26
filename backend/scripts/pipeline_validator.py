@@ -213,9 +213,6 @@ except Exception:
 # rationale is in the comment above that function.
 # ---------------------------------------------------------------------------
 
-# Stages the ambiguity scan applies to.
-_AMBIGUITY_SCAN_STAGES = ("evaluate", "think")
-
 # Min non-blank chars for a hit's resolution — anti-laziness floor (a hit MUST be
 # resolved by a real self-answer or escalation, not "ok").
 _AMBIGUITY_RESOLUTION_MIN_CHARS = 12
@@ -450,8 +447,8 @@ _RELAXED_UNDERSTANDING_PROFILES = ("trivial", "docs", "research")
 # resolution-on-every-hit is what proves the loop RAN, not just that a block was
 # pasted in. NOT in scope: an interactive user-ask gate (rejected) or PR/FAQ
 # Working-Backwards (greenfield-only follow-up).
-# (Constants _AMBIGUITY_SCAN_STAGES / _AMBIGUITY_RESOLUTION_MIN_CHARS /
-# _AMBIGUITY_TERMS are defined above STAGE_SCHEMAS for module-load ordering.)
+# (Constants _AMBIGUITY_RESOLUTION_MIN_CHARS / _AMBIGUITY_TERMS are defined above
+# STAGE_SCHEMAS for module-load ordering.)
 # ---------------------------------------------------------------------------
 
 
@@ -502,18 +499,22 @@ def _check_ambiguity_scan(data: dict, profile: str) -> list[str]:
         )
         return errs
 
+    unresolved = 0
     for idx, hit in enumerate(hits):
         if not isinstance(hit, dict):
             errs.append(f"Ambiguity scan: hit[{idx}] must be a dict.")
+            unresolved += 1
             continue
         resolution = hit.get("resolution")
-        # A bare bool / non-string carries zero info; a string must clear the floor.
+        # A string resolution must clear the anti-laziness floor. (A bare bool is
+        # already excluded — bool is not a str subclass — so the str check alone
+        # rejects True/False; no separate bool guard needed.)
         resolved = (
-            not isinstance(resolution, bool)
-            and isinstance(resolution, str)
+            isinstance(resolution, str)
             and len(resolution.strip()) >= _AMBIGUITY_RESOLUTION_MIN_CHARS
         )
         if not resolved:
+            unresolved += 1
             term = hit.get("term", "?")
             errs.append(
                 f"Ambiguity scan: hit[{idx}] (term={term!r}) has no real 'resolution' "
@@ -521,6 +522,26 @@ def _check_ambiguity_scan(data: dict, profile: str) -> list[str]:
                 f"string). An unresolved hit means the self-answer loop did NOT run — "
                 f"either self-resolve via code/DDD, or record why it must escalate."
             )
+
+    # Self-report consistency (adversarial LOW, run_932c0991): the agent-supplied
+    # summary fields must AGREE with the hits list, so a "hits:[…unresolved…]" can't
+    # be masked by a hand-set all_resolved:true / hit_count:0. This is the only
+    # cross-check that gives the summary fields teeth — without it they are
+    # decorative. (We do NOT independently regex the requirement text here; that is
+    # the agent's scanning job — the resolution-floor + this consistency check are
+    # the validator's teeth.)
+    declared_count = scan.get("hit_count")
+    if isinstance(declared_count, int) and declared_count != len(hits):
+        errs.append(
+            f"Ambiguity scan: hit_count={declared_count} disagrees with len(hits)="
+            f"{len(hits)}. The summary must match the recorded hits."
+        )
+    declared_all_resolved = scan.get("all_resolved")
+    if declared_all_resolved is True and unresolved > 0:
+        errs.append(
+            f"Ambiguity scan: all_resolved=true but {unresolved} hit(s) lack a valid "
+            f"resolution. Do not self-report resolved while unresolved hits remain."
+        )
 
     return errs
 

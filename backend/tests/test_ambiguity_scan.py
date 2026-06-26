@@ -225,6 +225,44 @@ class TestRelaxedProfiles:
 
 
 # ---------------------------------------------------------------------------
+# Self-report consistency — summary fields must agree with hits (adversarial LOW)
+# ---------------------------------------------------------------------------
+class TestSelfReportConsistency:
+    def test_hit_count_mismatch_blocks(self):
+        scan = _clean_scan(
+            hits=[{"term": "standard", "where": "w",
+                   "resolution": "self-answer: pinned exact meaning via code read.",
+                   "kind": "self-answer"}],
+            hit_count=0,  # lies: says 0 but there's 1 hit
+            all_resolved=True,
+        )
+        errors = validate_artifact_data("evaluate", _eval(ambiguity_scan=scan), profile="full")
+        assert _as_errors(errors), f"hit_count disagreeing with len(hits) must block: {errors}"
+
+    def test_all_resolved_true_with_unresolved_hit_blocks(self):
+        scan = _clean_scan(
+            hits=[{"term": "maybe", "where": "w", "resolution": "", "kind": "self-answer"}],
+            hit_count=1,
+            all_resolved=True,  # lies: says resolved but resolution is empty
+        )
+        errors = validate_artifact_data("evaluate", _eval(ambiguity_scan=scan), profile="full")
+        # Two errors expected: the unresolved-hit error AND the all_resolved lie.
+        assert _as_errors(errors), f"all_resolved=true with unresolved hit must block: {errors}"
+        assert any("all_resolved" in e for e in _as_errors(errors)), f"consistency error expected: {errors}"
+
+    def test_consistent_summary_passes(self):
+        scan = _clean_scan(
+            hits=[{"term": "standard", "where": "w",
+                   "resolution": "self-answer: read retry_manager.py:40 — exponential backoff, not generic.",
+                   "kind": "self-answer"}],
+            hit_count=1,
+            all_resolved=True,
+        )
+        errors = validate_artifact_data("evaluate", _eval(ambiguity_scan=scan), profile="full")
+        assert _as_errors(errors) == [], f"consistent summary must pass: {errors}"
+
+
+# ---------------------------------------------------------------------------
 # Scope — the gate only fires on evaluate + think, never other stages
 # ---------------------------------------------------------------------------
 class TestScopeIsolation:
@@ -281,6 +319,22 @@ class TestSelfDogfood:
         data = _eval(ambiguity_scan=scan)
         errors = validate_artifact_data("evaluate", data, profile="full")
         assert _as_errors(errors) == [], f"self-dogfood evaluate scan must pass: {errors}"
+
+    def test_run_932c0991_evaluate_scan_floor_boundary(self):
+        """Pin the resolution floor exactly: 11 chars blocks, 12 passes (adversarial
+        noted no boundary test existed)."""
+        below = "x" * (11)   # 11 < 12 → block
+        at = "y" * 12         # 12 == floor → pass
+        scan_below = _clean_scan(
+            hits=[{"term": "standard", "where": "w", "resolution": below, "kind": "self-answer"}],
+            hit_count=1,
+        )
+        scan_at = _clean_scan(
+            hits=[{"term": "standard", "where": "w", "resolution": at, "kind": "self-answer"}],
+            hit_count=1,
+        )
+        assert _as_errors(validate_artifact_data("evaluate", _eval(ambiguity_scan=scan_below), profile="full")), "11-char resolution must block"
+        assert _as_errors(validate_artifact_data("evaluate", _eval(ambiguity_scan=scan_at), profile="full")) == [], "12-char resolution must pass"
 
     def test_run_932c0991_think_scan_passes(self):
         scan = {
