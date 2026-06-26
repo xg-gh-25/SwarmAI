@@ -156,34 +156,42 @@ function TabViewImpl({
   // paint on activation. The active tab always auto-refreshes in real-time.
   const sub = useMessageStore(tabId, undefined, isActive);
   const storeMessages = sub?.messages;
-  const messages = storeMessages ?? [];
 
-  // RECONCILE-GAP PROBE (verification gate, AC4): post-fix the render is ALWAYS
-  // the store, so `chosen` is always 'store' and renderedChars always == storeChars.
-  // If RENDER-DIVERGE still fires it only means the legacy tabState.messages
-  // snapshot (messagesProp) drifted from the store — informational, never a
-  // render defect, since the screen no longer reads the prop. Retained through
-  // the fix commit to prove the split-brain is gone, then removed.
-  // TEMP: remove with the whole reconcile-gap probe commit.
+  // ── Render source: store-authoritative with an empty-store rescue ──────────
+  // The store is authoritative WHENEVER it holds renderable content. But it can
+  // transiently empty out (reconcile timing / placeholder reset / underflow)
+  // while the prop snapshot (messagesProp = tabState.messages) still holds the
+  // just-completed answer. The previous "store-only single source" assumed the
+  // store is always the superset — FALSE in practice: confirmed live with
+  // storeChars:0 / propChars:2788 on the ACTIVE tab, rendering blank, and
+  // switching tabs did not recover it. So: render the store, but if the store
+  // has nothing renderable AND we're idle (live streaming tokens must always
+  // win — never fall back mid-stream) AND the prop actually has content, render
+  // the prop. A populated store is NEVER overridden (so a stale-longer prop can
+  // never truncate a fresh store — the bug the single-source change addressed).
+  const lastAsstChars = (arr: Message[] | undefined): number => {
+    if (!arr || arr.length === 0) return -1;
+    const last = [...arr].reverse().find((m) => m.role === 'assistant');
+    if (!last) return -1;
+    return last.content.reduce(
+      (n, b) => n + (b && typeof b === 'object' && 'text' in b ? (b as { text: string }).text.length : 0),
+      0,
+    );
+  };
+  const storeChars = lastAsstChars(storeMessages);
+  const propChars = lastAsstChars(messagesProp);
+  const rescueFromProp = !isStreaming && storeChars <= 0 && propChars > 0;
+  const messages = rescueFromProp ? messagesProp : (storeMessages ?? []);
+
+  // RECONCILE-GAP PROBE: logs when store and prop diverge on the active tab.
+  // `chosen` now reflects the real selection (store, or prop-rescue when the
+  // store blanked). Retained to verify the rescue fires exactly on the blank.
   {
-    const lastAsstChars = (arr: Message[] | undefined): number => {
-      if (!arr) return -1;
-      const last = [...arr].reverse().find((m) => m.role === 'assistant');
-      if (!last) return -1;
-      return last.content.reduce(
-        (n, b) => n + (b && typeof b === 'object' && 'text' in b ? (b as { text: string }).text.length : 0),
-        0,
-      );
-    };
-    const storeChars = lastAsstChars(storeMessages);
-    const propChars = lastAsstChars(messagesProp);
-    const chosen = 'store'; // single source — render always reads the store now
+    const chosen = rescueFromProp ? 'prop-rescue' : 'store';
     const renderedChars = lastAsstChars(messages);
     // Gate on isActive: a BACKGROUND tab's messagesProp (tabState.messages ref
     // snapshot) legitimately lags the store — the store→tabState bridge only
-    // syncs the active tab. Firing RENDER-DIVERGE there is expected prop-lag, NOT
-    // a render defect, and a WARN named after the hunted bug would mislead the
-    // next debugger. Only the active tab's prop is expected to track the store.
+    // syncs the active tab. Firing RENDER-DIVERGE there is expected prop-lag.
     if (isActive && storeChars !== propChars && storeChars >= 0 && propChars >= 0) {
       console.warn('[reconcile-gap] RENDER-DIVERGE', {
         tabId,

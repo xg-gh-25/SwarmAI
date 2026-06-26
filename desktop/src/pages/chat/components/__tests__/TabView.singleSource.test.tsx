@@ -9,13 +9,14 @@
  * rendered a stale `messagesProp` (a tabMapRef snapshot) whenever the store was
  * momentarily empty — the split-brain that truncated complete replies.
  *
- * These tests assert the store is the SOLE authority:
+ * These tests assert the store is the authority WITH an empty-store rescue:
  *  - When store has content, store wins regardless of messagesProp (even if
- *    messagesProp is longer/different — the old selector's prop-fallback must
- *    NOT resurface).
- *  - When store is empty, an empty list renders (NOT messagesProp) — the prop
- *    is no longer a render source. (Active tab: a truly empty store means no
- *    messages; the prop snapshot must not paper over it.)
+ *    messagesProp is longer/different — a stale prop must NOT override a
+ *    populated store, the truncation bug the single-source change fixed).
+ *  - When store is EMPTY and idle, the prop rescues the render (an empty store
+ *    must never BLANK a completed answer the prop still holds — confirmed live:
+ *    storeChars:0 / propChars:2788, switch did not recover). The rescue is gated
+ *    on !isStreaming so live tokens always win and no stale prop flashes.
  *
  * Heavy children mocked (MessageBubble → MarkdownRenderer) for speed.
  */
@@ -95,16 +96,32 @@ describe('TabView — single render source (reconcile-gap structural fix)', () =
     expect(queryByTestId('bubble-stale-1')).toBeNull();
   });
 
-  it('empty store does NOT fall back to messagesProp (prop is not a render source)', () => {
-    // Store is empty (e.g. fresh/cleared). The old dual-source selector would
-    // render messagesProp here — the split-brain. Single-source must render
-    // empty (WelcomeScreen), never the prop snapshot.
+  it('empty store rescues from messagesProp when IDLE (cannot blank a completed answer)', () => {
+    // Confirmed-live bug: the store transiently empties (reconcile timing /
+    // placeholder reset / underflow) on the ACTIVE tab while the prop snapshot
+    // still holds the completed answer (storeChars:0 / propChars:2788). Pure
+    // store-only render then showed BLANK and switching tabs did not recover it.
+    // Idle + empty store + prop-has-content → render the prop so the answer shows.
     messageStoreRegistry.getOrCreate('A').replace([]);
-    const propSnapshot = [msg('prop-only', 'should not render')];
+    const propSnapshot = [msg('prop-rescue', 'completed answer')];
 
     const { queryByTestId } = render(<TabView {...props('A', true, propSnapshot)} />);
 
-    expect(queryByTestId('bubble-prop-only')).toBeNull(); // prop fallback gone
+    expect(queryByTestId('bubble-prop-rescue')).not.toBeNull(); // rescued, not blank
+  });
+
+  it('empty store does NOT rescue from prop while STREAMING (live tokens must win)', () => {
+    // During streaming the store is the live source — its last assistant starts
+    // empty and fills token-by-token. Falling back to the prop here would flash
+    // the PREVIOUS turn's answer and hide live tokens. So the rescue is gated on
+    // !isStreaming.
+    messageStoreRegistry.getOrCreate('A').replace([]);
+    const propSnapshot = [msg('prop-stale', 'previous turn')];
+
+    const streamingProps = { ...props('A', true, propSnapshot), isStreaming: true };
+    const { queryByTestId } = render(<TabView {...streamingProps} />);
+
+    expect(queryByTestId('bubble-prop-stale')).toBeNull(); // no mid-stream prop flash
   });
 
   it('switch-back hydrates from the live store, not a reverse-flow replace', () => {
