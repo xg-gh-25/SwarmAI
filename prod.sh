@@ -59,6 +59,37 @@ cmd_build() {
     echo "════════════════════════"
     echo ""
 
+    # Step -1: Eval gate (git-bound). Block the build if the committed eval
+    # report is stale (code/golden_set changed since last eval) or red. This
+    # enforces "本地必须跑完 Eval 出 report 才放行". Pure check — no Bedrock cost.
+    #   exit 0 = fresh + green        → proceed
+    #   exit 1 = stale OR red         → HARD BLOCK (developer has a report; fix/re-run)
+    #   exit 2 = no report / pre-gate → SOFT WARN + proceed (bootstrap / fresh clone)
+    # Escape hatch: SWARMAI_SKIP_EVAL_GATE=1 (CI / emergency).
+    if [ "${SWARMAI_SKIP_EVAL_GATE:-}" = "1" ]; then
+        _warn "Eval gate SKIPPED (SWARMAI_SKIP_EVAL_GATE=1)"
+    else
+        _log "Step -1: Eval gate (git-bound freshness + BVT)..."
+        local _gate_out _gate_rc
+        # `set -e` is active (top of file): a non-zero command substitution would
+        # abort the script AT this assignment, before $? is captured — turning the
+        # exit-2 soft-warn into a silent hard-abort and swallowing the exit-1
+        # guidance. Disable errexit around the gate so we can inspect its rc.
+        set +e
+        _gate_out=$(cd "$BACKEND_DIR" && python scripts/ci_eval_gate.py 2>&1)
+        _gate_rc=$?
+        set -e
+        case "$_gate_rc" in
+            0) _ok "$_gate_out" ;;
+            2) _warn "$_gate_out"
+               _warn "Proceeding (no gate-readable report yet — run 'python backend/scripts/eval_runner.py run' to enable the gate)." ;;
+            *) _err "$_gate_out"
+               _err "Eval gate BLOCKED the build. Re-run eval, or set SWARMAI_SKIP_EVAL_GATE=1 to override."
+               exit 1 ;;
+        esac
+        echo ""
+    fi
+
     # Step 0: Sync versions from VERSION file
     _log "Step 0: Syncing version from VERSION file..."
     bash "$PROJECT_ROOT/scripts/sync-version.sh"
