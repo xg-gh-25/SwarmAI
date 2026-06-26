@@ -51,7 +51,16 @@ _DEFAULT_CONTEXT_DIR = Path.home() / ".swarm-ai" / "SwarmWS" / ".context"
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Recall an excluded context section.")
-    p.add_argument("--file", required=True, help="Context filename, e.g. MEMORY.md")
+    # --file (single-file mode) and --domains (multi-domain mode) are mutually
+    # exclusive; exactly one is required. Single-file stays the default surface
+    # for the privacy-gated MEMORY-recall manifest pointer.
+    p.add_argument("--file", help="Context filename, e.g. MEMORY.md (single-file mode)")
+    p.add_argument("--domains",
+                   help="Comma-separated domains for multi-domain recall_all "
+                        "(any of: context_files,ddd,library,session,codeintel; "
+                        "or 'all'). Mutually exclusive with --file.")
+    p.add_argument("--project", default="SwarmAI",
+                   help="Project for ddd/codeintel domains (multi-domain mode).")
     p.add_argument("--query", required=True, help="What to retrieve")
     p.add_argument(
         "--session-type",
@@ -66,6 +75,32 @@ def main(argv: list[str] | None = None) -> int:
         help="Directory holding the context files.",
     )
     args = p.parse_args(argv)
+
+    if bool(args.file) == bool(args.domains):
+        print(json.dumps({"allowed": False, "content": "",
+                          "reason": "exactly one of --file or --domains is required"}))
+        return 2
+
+    # ── Multi-domain mode: fan across READ domains via recall_all (embed-free) ──
+    if args.domains:
+        from core.recall_multi import recall_all, DOMAINS
+        sel = DOMAINS if args.domains.strip() == "all" else tuple(
+            d.strip() for d in args.domains.split(",") if d.strip())
+        bad = [d for d in sel if d not in DOMAINS]
+        if bad:
+            print(json.dumps({"allowed": False, "content": "",
+                              "reason": f"unknown domain(s): {bad}; valid: {list(DOMAINS)}"}))
+            return 2
+        r = recall_all(args.query, project=args.project, domains=sel,
+                       allow_embed=False, max_sections=args.max_sections)
+        print(json.dumps({
+            "allowed": True,
+            "query": r.query,
+            "buckets": r.buckets,
+            "hit_layers": r.hit_layers,
+            "any_hits": r.any_hits(),
+        }))
+        return 0
 
     policy_excluded = _POLICY_EXCLUSIONS[args.session_type]
 
