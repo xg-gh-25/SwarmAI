@@ -812,7 +812,6 @@ class ContextHealthHook:
         if not memory_path.exists():
             return
 
-        content = memory_path.read_text(encoding="utf-8")
         today = date.today().isoformat()
 
         # Route each lesson to its correct section (type → section mapping)
@@ -848,11 +847,34 @@ class ContextHealthHook:
         # Reuses the same locked writer distillation uses (R-1 Gate-2 #2/#3).
         from scripts.locked_write import _modify_content
 
-        for section_name, entries in by_section.items():
-            new_block = "\n".join(entries)
-            content = _modify_content(content, section_name, new_block, "prepend")
+        # R-1 Gate-2 meta-review (MED interaction): MEMORY.md is concurrently
+        # written by distillation + _run_memory_lifecycle, both under MEMORY.md.lock.
+        # This writer previously read+wrote UNLOCKED → lost-update race. Take the
+        # SAME lock and read INSIDE it so the modify is computed from the locked
+        # snapshot. Non-blocking: if busy, skip (best-effort — caller wraps in
+        # try/except and DDD cultivation is the primary destination).
+        from utils.file_lock import flock_exclusive_nb, flock_unlock
+        lock_path = memory_path.with_suffix(".md.lock")
+        lock_fd = None
+        try:
+            lock_fd = open(lock_path, "w")  # noqa: SIM115
+            flock_exclusive_nb(lock_fd)
+        except OSError:
+            if lock_fd:
+                lock_fd.close()
+            logger.debug("context_health: MEMORY.md lock busy, skipping lesson extract")
+            return
 
-        memory_path.write_text(content, encoding="utf-8")
+        try:
+            content = memory_path.read_text(encoding="utf-8")
+            for section_name, entries in by_section.items():
+                new_block = "\n".join(entries)
+                content = _modify_content(content, section_name, new_block, "prepend")
+            memory_path.write_text(content, encoding="utf-8")
+        finally:
+            flock_unlock(lock_fd)
+            lock_fd.close()
+
         logger.debug(
             "context_health: extracted %d lessons to MEMORY.md from %s/%s",
             len(by_section), project, run_id,
