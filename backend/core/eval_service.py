@@ -251,6 +251,10 @@ class EvalService:
                     "source": c.get("source"),
                     "tier": c.get("tier", "active"),
                     "eval_method": c.get("eval_method"),
+                    # _origin is the public|private TAG only (never private content) —
+                    # lets the UI visually distinguish curated public cases from
+                    # gitignored instance cases. Allowlist projection, so no content leaks.
+                    "_origin": c.get("_origin"),
                     "affected_by": c.get("affected_by", []),
                     "evaluators": c.get("evaluators", []),
                     "last_result": self._get_case_last_result(c.get("id")),
@@ -259,16 +263,30 @@ class EvalService:
             ],
         }
 
+    # Sensitive fields stripped from PRIVATE case detail — these can reference
+    # instance state (MEMORY/STEERING/local paths). The public/private split keeps
+    # them out of git; this keeps their CONTENT out of the API response too, so a
+    # "private" badge in the UI can't be used to fish for instance data. Metadata
+    # (id/category/dimension/title/tier/eval_method/affected_by/evaluators/history)
+    # stays — enough to render the drawer; the body sections render conditionally.
+    _PRIVATE_SENSITIVE_FIELDS = (
+        "scenario", "verification", "assertions", "expected_trajectory",
+        "decision_rubric", "allowed_tools",
+    )
+
     def get_case_detail(self, case_id: str) -> Optional[dict]:
-        """Return full case detail including scenario + history."""
+        """Return case detail + history. For PRIVATE cases, strip sensitive
+        content fields (keep metadata) so instance data never leaves via the API."""
         case = next((c for c in self._cases if c.get("id") == case_id), None)
         if not case:
             return None
 
-        return {
-            **case,
-            "history": self._get_case_history(case_id),
-        }
+        detail = {**case, "history": self._get_case_history(case_id)}
+        if case.get("_origin") == "private":
+            for f in self._PRIVATE_SENSITIVE_FIELDS:
+                detail.pop(f, None)
+            detail["_content_redacted"] = True
+        return detail
 
     # ─── CRUD Operations (P3) ───────────────────────────────────────────────
 
