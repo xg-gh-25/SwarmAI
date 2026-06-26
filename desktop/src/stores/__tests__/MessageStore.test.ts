@@ -241,6 +241,54 @@ describe('MessageStore watchdog', () => {
     store.destroy();
   });
 
+  it('watchdog is reset by touch() (backend liveness — heartbeat/still_working)', () => {
+    // Regression: a long silent step (no content token for >timeout) used to
+    // force-end streaming even while the backend emitted heartbeats proving it
+    // was still working → turn looked "done", rest surfaced later via reconcile.
+    const store = new MessageStore({ watchdogTimeoutMs: 100 });
+    store.append(makeMsg('1', 'assistant'));
+    store.startStreaming('1');
+
+    vi.advanceTimersByTime(90);
+    store.touch(); // backend liveness signal — no content, but still alive
+    vi.advanceTimersByTime(90);
+    expect(store.phase).toBe('streaming'); // watchdog reset → still streaming
+
+    vi.advanceTimersByTime(11);
+    expect(store.phase).toBe('idle'); // genuine silence (no content+no liveness) → fires
+
+    store.destroy();
+  });
+
+  it('repeated touch() keeps a long no-content turn alive (heartbeats < timeout)', () => {
+    const store = new MessageStore({ watchdogTimeoutMs: 100 });
+    store.append(makeMsg('1', 'assistant'));
+    store.startStreaming('1');
+
+    // Simulate 5 heartbeats at 60% of the timeout each — backend working, no content.
+    for (let i = 0; i < 5; i++) {
+      vi.advanceTimersByTime(60);
+      store.touch();
+    }
+    expect(store.phase).toBe('streaming'); // never force-ended despite 300ms of no content
+
+    store.destroy();
+  });
+
+  it('touch() is a NO-OP when idle (never resurrects an ended turn)', () => {
+    const store = new MessageStore({ watchdogTimeoutMs: 100 });
+    store.append(makeMsg('1', 'assistant'));
+    store.startStreaming('1');
+    store.endStreaming();
+    expect(store.phase).toBe('idle');
+
+    store.touch(); // must not re-arm the watchdog or change phase
+    vi.advanceTimersByTime(200);
+    expect(store.phase).toBe('idle');
+
+    store.destroy();
+  });
+
   it('watchdog is cleared by endStreaming', () => {
     const store = new MessageStore({ watchdogTimeoutMs: 100 });
     store.append(makeMsg('1', 'assistant'));

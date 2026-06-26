@@ -2218,6 +2218,15 @@ export function useChatStreamingLifecycle(
         // Keyed + auto-dismiss so successive notices replace in place (no
         // stacking) and clear on their own once the turn produces or ends.
         if (event.type === 'still_working') {
+          // Backend liveness: this turn is actively working through a long
+          // silent step. Reset the captured tab's MessageStore watchdog so it
+          // does NOT force-end streaming (turn looks "done" while the backend
+          // is still running). Touch regardless of active/background — the
+          // backend is alive for whichever tab owns this stream. NO-OP unless
+          // that store is in the streaming phase. See MessageStore.touch().
+          if (capturedTabId) {
+            messageStoreRegistry.get(capturedTabId)?.touch();
+          }
           // isActiveTab is derived further down; this side-channel runs early,
           // so compare against the live active-tab ref directly.
           if (capturedTabId === activeTabIdRef.current && event.message) {
@@ -2332,6 +2341,12 @@ export function useChatStreamingLifecycle(
         // progress. Only real events reset the stall timer.
         if (event.type !== 'heartbeat') {
           lastRealEventRef.current = Date.now();
+        } else if (capturedTabId) {
+          // Heartbeat = backend liveness. Reset the MessageStore watchdog so a
+          // long silent step (>90s with no content token) does not force-end
+          // streaming and make the turn look "done" while the backend is still
+          // running. NO-OP unless that store is streaming. See MessageStore.touch().
+          messageStoreRegistry.get(capturedTabId)?.touch();
         }
 
         // Track tool execution state for context-aware stall thresholds.

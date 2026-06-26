@@ -283,6 +283,31 @@ export class MessageStore {
     }
   }
 
+  /**
+   * Register backend liveness WITHOUT mutating content.
+   *
+   * The watchdog (_resetWatchdog) only counts content updates (updateLast)
+   * and appends — it is blind to non-content liveness signals. During a long
+   * silent step (a >90s tool execution, or slow cross-region thinking between
+   * tokens), no content arrives, so the watchdog force-ends streaming and the
+   * turn looks DONE in the UI even though the backend is still working. The
+   * backend DOES tell us it is alive — it emits `still_working`/`heartbeat`
+   * every ~60s — but those events never reached the store, so the watchdog
+   * fired anyway and the remaining answer only surfaced later via DB reconcile
+   * ("response 一half就停了 / backend 其实在做事 / 过很久又蹦出来").
+   *
+   * Call this on every backend-liveness event so an actively-working backend
+   * keeps the streaming phase alive. NO-OP unless streaming (never resurrects
+   * an ended turn) and emits NO notification (pure timer reset, zero re-render).
+   * The watchdog's real purpose — detecting a dead SSE with no close event —
+   * is preserved: a genuine disconnect stops BOTH content AND heartbeats, so
+   * the watchdog still fires after the timeout of total silence.
+   */
+  touch(): void {
+    if (this._destroyed || this._phase !== 'streaming') return;
+    this._resetWatchdog();
+  }
+
   // ─── Lifecycle ───
 
   /**
