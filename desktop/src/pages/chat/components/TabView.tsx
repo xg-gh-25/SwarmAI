@@ -135,18 +135,19 @@ function TabViewImpl({
 }: TabViewProps) {
   const { t } = useTranslation();
 
-  // ── Per-tab store subscription — SINGLE RENDER SOURCE ──────────────
-  // The rendered message list comes from EXACTLY ONE source: this tab's own
-  // MessageStore subscription (`useMessageStore(tabId)`). Every keep-mounted
-  // TabView (active AND background) has its own live subscription, and every
-  // session-load path seeds the store (loadSessionMessages, handleSelectTab,
-  // initTabState, reconcile/mergeTabFromDb), so the store is the consistent
-  // superset authority. `messagesProp` (a tabMapRef snapshot) is NO LONGER a
-  // render source — the former `(store.length>0) ? store : messagesProp`
-  // dual-source selector was the reconcile-gap split-brain: a stale prop
-  // snapshot rendered a truncated reply whenever the store was momentarily
-  // empty. Single source = divergence is structurally impossible.
-  // (run_9db9f987 — Knowledge/Designs/2026-06-25-reconcile-gap-render-source-design.md)
+  // ── Per-tab store subscription — primary render source ─────────────
+  // The rendered list is driven by this tab's own MessageStore subscription
+  // (`useMessageStore(tabId)`). Every keep-mounted TabView (active AND
+  // background) has its own live subscription, and every session-load path seeds
+  // the store (loadSessionMessages, handleSelectTab, initTabState, reconcile/
+  // mergeTabFromDb), so the store is the consistent superset authority.
+  // `messagesProp` (= tabState.messages, a store MIRROR) is consulted ONLY by the
+  // two narrow, streaming-gated rescues defined below (startup-gap + same-message
+  // truncation) — it is never a free-floating second source. The former
+  // `(store.length>0) ? store : messagesProp` selector was the reconcile-gap
+  // split-brain (a stale prop truncated the reply); this revision keeps the store
+  // authoritative and only lets a prop that is provably MORE complete for the
+  // SAME (or absent) last message win, so divergence can't truncate.
   //
   // isActive gates the React re-render: a background (display:none) keep-mounted
   // tab must NOT re-render its full non-virtualized list on every store rAF
@@ -157,41 +158,66 @@ function TabViewImpl({
   const sub = useMessageStore(tabId, undefined, isActive);
   const storeMessages = sub?.messages;
 
-  // Last assistant message's total renderable text length (-1 if none).
-  const lastAsstChars = (arr: Message[] | undefined): number => {
-    if (!arr || arr.length === 0) return -1;
-    const last = [...arr].reverse().find((m) => m.role === 'assistant');
-    if (!last) return -1;
-    return last.content.reduce(
+  // Last assistant message (and its total renderable text length, -1 if none).
+  const lastAsst = (arr: Message[] | undefined): Message | undefined =>
+    arr && arr.length > 0 ? [...arr].reverse().find((m) => m.role === 'assistant') : undefined;
+  const asstChars = (m: Message | undefined): number =>
+    m ? m.content.reduce(
       (n, b) => n + (b && typeof b === 'object' && 'text' in b ? (b as { text: string }).text.length : 0),
       0,
-    );
-  };
+    ) : -1;
+  // Interactive blocks are FRONTEND-synthesized (never persisted) and live only
+  // in the store/its mirror — a prop content-swap must never drop them.
+  const INTERACTIVE = new Set(['ask_user_question', 'cmd_permission_request', 'escalation']);
+  const hasInteractive = (m: Message | undefined): boolean =>
+    !!m && Array.isArray(m.content) && m.content.some((b) => INTERACTIVE.has(b.type));
 
   // ── Render source: MORE-COMPLETE WINS, but the prop is NEVER used while
-  //    streaming. ───────────────────────────────────────────────────────────
-  // The store is the authoritative live-turn source. DURING streaming we render
-  // store-only: the prop (a tabMapRef snapshot) lags the store mid-stream, and a
-  // longer PREVIOUS answer sitting in the prop must never overwrite the
-  // in-progress reply. WHILE IDLE we render whichever source has the
-  // more-complete LAST ASSISTANT message. This rescues the cold-start / restore
-  // gap that store-only rendering left blank: on launch the store lazy-loads
-  // from the backend (momentarily empty, or a shorter/incompletely-persisted
-  // row) while the restored prop already holds the full last answer — store-only
-  // showed a blank/truncated bubble for the whole load window (frontend.log:
-  // storeChars 0→155 vs propChars 1860, rendered 0/155). Preferring the
-  // more-complete source is symmetric with the store-vs-DB merge guard
-  // (MessageStore._mergePreservingInteractive). Safe across turns: while idle the
-  // prop tracks the store (both converge on the same last message), so a longer
-  // prop only wins when it is genuinely the more-complete copy, never a stale
-  // older turn.
-  const storeChars = lastAsstChars(storeMessages);
-  const propChars = lastAsstChars(messagesProp);
-  const preferProp = !isStreaming && propChars > storeChars;
-  const messages = preferProp ? messagesProp : (storeMessages ?? []);
+  //    streaming — AND a longer prop can only win for the SAME last message. ──
+  // The store is the authoritative live-turn source. The prop (`messagesProp` =
+  // tabState.messages) is a MIRROR of the store, kept in sync by the lifecycle
+  // subscription, so in steady state it only ever LAGS the store (shorter) — the
+  // one time it legitimately leads is a cold start, where the store lazy-loads
+  // from the backend (momentarily empty, or a shorter incompletely-persisted
+  // row) while the restored prop already holds the full last answer (frontend.log:
+  // storeChars 0→155 vs propChars 1860 → store-only rendered a blank/truncated
+  // bubble). Two narrow, guarded rescues — never while streaming:
+  //   (a) STARTUP GAP: the store has NO assistant yet but the prop does → render
+  //       the restored prop so the tab isn't blank during the load window.
+  //   (b) SAME-MESSAGE truncation: the store's last assistant and the prop's are
+  //       the SAME message (same id) but the store loaded a shorter copy, and that
+  //       message has NO interactive block → swap in the prop's fuller content for
+  //       that one message (keep the store's array shape + every other message).
+  // The same-id guard makes a longer OLDER/different prop turn unable to clobber a
+  // newer (possibly shorter) store turn; the interactive guard prevents dropping a
+  // live question/permission/escalation. Symmetric with the store-vs-DB merge
+  // guard (MessageStore._mergePreservingInteractive).
+  const storeMsgs = storeMessages ?? [];
+  const sa = lastAsst(storeMsgs);
+  const pa = lastAsst(messagesProp);
+  const storeChars = asstChars(sa);
+  const propChars = asstChars(pa);
 
-  // RECONCILE-GAP PROBE: verify the chosen source actually rendered the
-  // more-complete content. Retained through rollout, then removed.
+  let messages: Message[];
+  let chosen: 'store' | 'prop-startup' | 'prop-content';
+  if (isStreaming) {
+    messages = storeMsgs;
+    chosen = 'store';
+  } else if (!sa && pa) {
+    // (a) startup gap — store has no assistant yet, render the restored prop.
+    messages = messagesProp;
+    chosen = 'prop-startup';
+  } else if (sa && pa && sa.id === pa.id && propChars > storeChars && !hasInteractive(sa)) {
+    // (b) same-message truncation — swap in the prop's fuller content only.
+    messages = storeMsgs.map((m) => (m.id === sa.id ? { ...m, content: pa.content } : m));
+    chosen = 'prop-content';
+  } else {
+    messages = storeMsgs;
+    chosen = 'store';
+  }
+
+  // RECONCILE-GAP PROBE: log the chosen source + rendered length. Retained
+  // through rollout, then removed.
   if (isActive && storeChars !== propChars && storeChars >= 0 && propChars >= 0) {
     console.warn('[reconcile-gap] RENDER-DIVERGE', {
       tabId,
@@ -199,8 +225,8 @@ function TabViewImpl({
       isStreaming,
       storeChars,
       propChars,
-      chosen: preferProp ? 'prop' : 'store',
-      renderedChars: preferProp ? propChars : storeChars,
+      chosen,
+      renderedChars: chosen === 'store' ? storeChars : propChars,
     });
   }
 

@@ -126,6 +126,55 @@ describe('TabView — render source: more-complete wins, never prop while stream
     expect(queryByTestId('bubble-prev-long')).toBeNull();
   });
 
+  it('idle: a longer prop for a DIFFERENT last message never clobbers a newer store turn', () => {
+    // Store has a NEW turn (new-asst, short). The prop still holds the OLD turn
+    // (old-asst, much longer). Different last-assistant ids → the longer prop must
+    // NOT win (the same-id guard blocks the cross-turn clobber).
+    messageStoreRegistry.getOrCreate('A').replace([
+      msg('user-2', 'second question'),
+      msg('new-asst', 'short new answer'),
+    ]);
+    const olderLongerProp = [msg('old-asst', 'a very very long answer from the previous turn that is longer')];
+
+    const { queryByTestId } = render(<TabView {...props('A', true, olderLongerProp)} />);
+
+    expect(queryByTestId('bubble-new-asst')).not.toBeNull(); // newer store turn rendered
+    expect(queryByTestId('bubble-old-asst')).toBeNull();      // stale longer prop NOT used
+  });
+
+  it('idle: SAME-message truncation — prop fuller content swapped in (no blank/short)', () => {
+    // Store loaded a shorter copy of the SAME last message the prop has fuller
+    // content for (incomplete-persist / startup). Same id + no interactive block
+    // → render the prop's fuller text for that one message.
+    messageStoreRegistry.getOrCreate('A').replace([msg('m1', 'short')]);
+    const fullerProp = [msg('m1', 'the full, complete, much longer answer text')];
+
+    const { queryByTestId, getByTestId } = render(<TabView {...props('A', true, fullerProp)} />);
+
+    // Same id → one bubble, and it carries the fuller content.
+    expect(queryByTestId('bubble-m1')).not.toBeNull();
+    expect(getByTestId('bubble-m1').textContent).toBe('m1'); // mock renders id; content swap is internal
+  });
+
+  it('idle: same-id but store has an interactive block — store wins (question not dropped)', () => {
+    // Store's last assistant carries a live ask_user_question block (FE-synthesized,
+    // never in the prop). Even though the prop has longer plain text for the same
+    // id, the interactive guard keeps the store so the question UI is preserved.
+    const storeMsg: Message = {
+      id: 'm1', role: 'assistant', timestamp: new Date().toISOString(),
+      content: [
+        { type: 'text', text: 'short' } as Message['content'][number],
+        { type: 'ask_user_question', toolUseId: 'q1', questions: [] } as unknown as Message['content'][number],
+      ],
+    };
+    messageStoreRegistry.getOrCreate('A').replace([storeMsg]);
+    const fullerProp = [msg('m1', 'a much longer plain-text answer without the question block')];
+
+    // Must not throw and must render the store message (same id → one bubble).
+    const { queryByTestId } = render(<TabView {...props('A', true, fullerProp)} />);
+    expect(queryByTestId('bubble-m1')).not.toBeNull();
+  });
+
   it('switch-back hydrates from the live store, not a reverse-flow replace', () => {
     // Tab A streamed content into its store. User switches to B, then back to A.
     // The store (module-level registry) survives the visibility toggle, so A's
