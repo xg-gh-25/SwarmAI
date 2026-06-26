@@ -805,7 +805,7 @@ function GovernanceTab() {
 
 // ─── Trends Tab ───────────────────────────────────────────────────────────────
 
-function TrendsTab() {
+export function TrendsTab() {
   const { data: history } = useEvalHistory();
   const [detailRunId, setDetailRunId] = useState<string | null>(null);
 

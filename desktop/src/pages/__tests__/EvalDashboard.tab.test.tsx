@@ -25,10 +25,10 @@ vi.mock('../../services/api', () => ({
 }));
 
 const CASES = [
-  { id: 'a', category: 'compliance', dimension: 'compliance', level: 'session', title: 'Comp A', tier: 'active', eval_method: 'llm', evaluators: [], affected_by: [], last_result: { status: 'passed', run_id: 'r', triggered_at: 't' } },
-  { id: 'b', category: 'compliance', dimension: 'capability', level: 'session', title: 'Comp B', tier: 'stable', eval_method: 'programmatic', evaluators: [], affected_by: [], last_result: { status: 'failed', run_id: 'r', triggered_at: 't' } },
-  { id: 'c', category: 'decision', dimension: 'judgment_quality', level: 'session', title: 'Dec C', tier: 'active', eval_method: 'llm', evaluators: [], affected_by: [], last_result: null },
-  { id: 'd', category: 'recall', dimension: 'utility', level: 'trace', title: 'Rec D', tier: 'draft', evaluators: [], affected_by: [], last_result: null },
+  { id: 'a', category: 'compliance', dimension: 'compliance', level: 'session', title: 'Comp A', tier: 'active', eval_method: 'llm', _origin: 'public', evaluators: [], affected_by: [], last_result: { status: 'passed', run_id: 'r', triggered_at: 't' } },
+  { id: 'b', category: 'compliance', dimension: 'capability', level: 'session', title: 'Comp B', tier: 'stable', eval_method: 'programmatic', _origin: 'private', evaluators: [], affected_by: [], last_result: { status: 'failed', run_id: 'r', triggered_at: 't' } },
+  { id: 'c', category: 'decision', dimension: 'judgment_quality', level: 'session', title: 'Dec C', tier: 'active', eval_method: 'llm', _origin: 'private', evaluators: [], affected_by: [], last_result: null },
+  { id: 'd', category: 'recall', dimension: 'utility', level: 'trace', title: 'Rec D', tier: 'draft', _origin: 'public', evaluators: [], affected_by: [], last_result: null },
 ];
 
 const GS_RESPONSE = {
@@ -99,5 +99,49 @@ describe('GoldenSetTab summary + filters', () => {
     fireEvent.click(within(summary).getByTestId('chip-category-decision'));
     // table now shows only decision, but the compliance chip still shows 2
     expect(within(summary).getByTestId('chip-category-compliance-count')).toHaveTextContent(/^2$/);
+  });
+});
+
+describe('GoldenSetTab grouping + origin badge (run_1f588e53)', () => {
+  it('groups cases into collapsible category sections', async () => {
+    renderTab();
+    await screen.findByTestId('golden-set-groups');
+    // 3 category groups present (compliance, decision, recall)
+    expect(screen.getByTestId('cat-group-compliance')).toBeInTheDocument();
+    expect(screen.getByTestId('cat-group-decision')).toBeInTheDocument();
+    expect(screen.getByTestId('cat-group-recall')).toBeInTheDocument();
+  });
+
+  it('collapsing a category group hides its rows but keeps the header', async () => {
+    renderTab();
+    await screen.findByTestId('golden-set-groups');
+    expect(screen.getByText('Comp A')).toBeInTheDocument();
+    // click the compliance group header button (first button in the group = header;
+    // subsequent buttons are per-row archive actions)
+    const group = screen.getByTestId('cat-group-compliance');
+    fireEvent.click(within(group).getAllByRole('button')[0]);
+    // rows gone, header button (with count) stays
+    expect(screen.queryByText('Comp A')).not.toBeInTheDocument();
+    expect(within(group).getAllByRole('button')[0]).toBeInTheDocument();
+    // other groups unaffected
+    expect(screen.getByText('Dec C')).toBeInTheDocument();
+  });
+
+  it('renders public/private origin badges distinguishing curated vs instance', async () => {
+    renderTab();
+    await screen.findByTestId('golden-set-groups');
+    // public + private both appear as badge text (Comp A=public, Comp B=private)
+    expect(screen.getAllByText('public').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('private').length).toBeGreaterThan(0);
+  });
+
+  it('filtering to a category shows only that group (grouping agrees with filter)', async () => {
+    renderTab();
+    const summary = await screen.findByTestId('golden-summary');
+    fireEvent.click(within(summary).getByTestId('chip-category-decision'));
+    // only the decision group remains — compliance/recall groups absent (zero-count hidden)
+    expect(screen.getByTestId('cat-group-decision')).toBeInTheDocument();
+    expect(screen.queryByTestId('cat-group-compliance')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('cat-group-recall')).not.toBeInTheDocument();
   });
 });
