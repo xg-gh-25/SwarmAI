@@ -105,11 +105,15 @@ class TestAddCase:
             "affected_by": ["SOUL.md"],
             "evaluators": ["file_contains"],
             "scenario": {"turns": [{"input": "test"}]},
-            "verification": {"file": "x.py", "grep": "y"},
+            # gate-eligible (file_contains) → teeth gate requires a negative_command
+            # (run_5edf2cc0 G3). Auto-stamped on add.
+            "verification": {"file": "x.py", "grep": "y", "negative_command": "false"},
         }
         result = svc.add_case(new_case)
         assert result["id"] == "GS003"
         assert svc.case_count == 3
+        # G3/G8: gate-eligible case auto-stamped on add
+        assert result.get("validated_by_4gate")
 
     def test_add_case_duplicate_id_fails(self, svc):
         duplicate = {
@@ -119,6 +123,7 @@ class TestAddCase:
             "title": "Duplicate",
             "evaluators": ["file_contains"],
             "affected_by": ["AGENT.md"],
+            "verification": {"file": "x.py", "grep": "y", "negative_command": "false"},
         }
         with pytest.raises(ValueError, match="already exists"):
             svc.add_case(duplicate)
@@ -138,7 +143,8 @@ class TestAddCase:
             "source": "test",
             "affected_by": ["KNOWLEDGE.md"],
             "evaluators": ["canary_pass"],
-            "verification": {"command": "echo hi", "expected_contains": "hi"},
+            "verification": {"command": "echo hi", "expected_contains": "hi",
+                             "negative_command": "false"},
         }
         svc.add_case(new_case)
 
@@ -474,7 +480,7 @@ class TestPersistCrossProcessLock:
                 "source": "concurrency",
                 "affected_by": ["AGENT.md"],
                 "evaluators": ["file_contains"],
-                "verification": {"file": "x.py", "grep": "y"},
+                "verification": {"file": "x.py", "grep": "y", "negative_command": "false"},
             })
 
         # add_case holds _data_lock in-process; to exercise the cross-process

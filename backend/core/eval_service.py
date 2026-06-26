@@ -296,10 +296,29 @@ class EvalService:
     _REQUIRED_CASE_FIELDS = {"id", "category", "dimension", "evaluators", "affected_by"}
 
     def add_case(self, case_data: dict) -> dict:
-        """Add a new case to golden set. Raises ValueError on invalid input."""
+        """Add a new case to golden set. Raises ValueError on invalid input.
+
+        Gate enforcement (run_5edf2cc0 G2/G3/G6/G8 — code, not convention): a
+        GATE-ELIGIBLE case (fast deterministic evaluator, would enter the BVT) MUST
+        pass the teeth gate (declare a negative_command) and is auto-stamped with
+        its content-bound validated_by_4gate hash. Without this, a new gate-eligible
+        case lands unstamped → compute_bvt drops it → the gate silently shrinks
+        (adversarial HIGH #2/#6). Non-gate-eligible cases (e.g. auto-seed behavior
+        cases) are unaffected — teeth/stamp do not apply to them."""
         missing = self._REQUIRED_CASE_FIELDS - set(case_data.keys())
         if missing:
             raise ValueError(f"Missing required fields: {missing}")
+
+        from scripts.golden_case_validator import (
+            _is_gate_eligible, gate_teeth, compute_case_stamp,
+        )
+        if _is_gate_eligible(case_data):
+            ok, errs = gate_teeth(case_data, grandfathered=False)
+            if not ok:
+                raise ValueError(f"Gate-eligible case rejected: {'; '.join(errs)}")
+            # Auto-stamp so it enters the BVT (and re-stamps on any later edit via
+            # update_case, which recomputes nothing — drift is caught at compute_bvt).
+            case_data = {**case_data, "validated_by_4gate": compute_case_stamp(case_data)}
 
         with self._data_lock:
             case_id = case_data["id"]

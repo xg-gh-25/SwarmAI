@@ -51,7 +51,8 @@ def _default_runner(root: Path) -> dict:
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from scripts.eval_runner import (
-        load_golden_set, _golden_set_path, run_eval, write_run, load_history,
+        load_golden_set, _golden_set_path, run_eval, write_run,
+        _load_history as load_history,
     )
     gs = load_golden_set(_golden_set_path(root))
     history = load_history(root)  # prior runs, newest last

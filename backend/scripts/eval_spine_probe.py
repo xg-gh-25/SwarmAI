@@ -32,30 +32,36 @@ def _fail(name: str, why: str) -> int:
     return 1
 
 
+def _check_exclude(name: str, attr: str, required: set, negative: bool) -> int:
+    """Assert the REAL context_directory_loader exclude-set covers `required`.
+
+    negative mode: monkeypatch the actual module attribute to a BROKEN set
+    (missing one required file) and assert this very check then returns FAIL.
+    This tests the REAL invariant + the check's own teeth (not local set-arithmetic
+    — adversarial MEDIUM #4: the prior version subtracted from a local copy, a
+    tautology of set semantics that never touched the imported symbol)."""
+    import core.context_directory_loader as cdl
+    if negative:
+        saved = getattr(cdl, attr)
+        try:
+            setattr(cdl, attr, frozenset(set(saved) - {next(iter(required))}))
+            broke = _check_exclude(name, attr, required, negative=False)
+        finally:
+            setattr(cdl, attr, saved)
+        # The positive check MUST have failed (rc 1) on the broken set.
+        return _ok(name) if broke != 0 else _fail(name, "negative did not break the real invariant")
+    current = set(getattr(cdl, attr))
+    return _ok(name) if required.issubset(current) else _fail(name, f"{attr} missing {required - current}")
+
+
 def safe_group_exclude(negative: bool) -> int:
     """Group-channel prompts must exclude MEMORY.md + USER.md (privacy)."""
-    from core.context_directory_loader import GROUP_CHANNEL_EXCLUDE
-    name = "SAFE_GROUP"
-    required = {"MEMORY.md", "USER.md"}
-    covers = required.issubset(set(GROUP_CHANNEL_EXCLUDE))
-    if negative:
-        # Broken invariant: pretend the exclude set lost MEMORY.md. The probe
-        # must report FAIL (proving it has teeth).
-        broken = set(GROUP_CHANNEL_EXCLUDE) - {"MEMORY.md"}
-        return _ok(name) if not required.issubset(broken) else _fail(name, "negative did not break")
-    return _ok(name) if covers else _fail(name, f"GROUP_CHANNEL_EXCLUDE missing {required - set(GROUP_CHANNEL_EXCLUDE)}")
+    return _check_exclude("SAFE_GROUP", "GROUP_CHANNEL_EXCLUDE", {"MEMORY.md", "USER.md"}, negative)
 
 
 def safe_nonowner_exclude(negative: bool) -> int:
     """Non-owner light-channel prompts must exclude EVOLUTION.md + PROJECTS.md."""
-    from core.context_directory_loader import CHANNEL_LIGHT_EXCLUDE
-    name = "SAFE_NONOWNER"
-    required = {"EVOLUTION.md", "PROJECTS.md"}
-    covers = required.issubset(set(CHANNEL_LIGHT_EXCLUDE))
-    if negative:
-        broken = set(CHANNEL_LIGHT_EXCLUDE) - {"EVOLUTION.md"}
-        return _ok(name) if not required.issubset(broken) else _fail(name, "negative did not break")
-    return _ok(name) if covers else _fail(name, f"CHANNEL_LIGHT_EXCLUDE missing {required - set(CHANNEL_LIGHT_EXCLUDE)}")
+    return _check_exclude("SAFE_NONOWNER", "CHANNEL_LIGHT_EXCLUDE", {"EVOLUTION.md", "PROJECTS.md"}, negative)
 
 
 def gate_freshness(negative: bool) -> int:
@@ -94,16 +100,26 @@ def prompt_budget(negative: bool) -> int:
     name = "PROMPT_BUDGET"
     loader = ContextDirectoryLoader(Path.home() / ".swarm-ai" / "SwarmWS" / ".context")
     window = 1_000_000
-    budget = loader.compute_token_budget(window)
+
+    def _within(w: int) -> bool:
+        # Real invariant: the REAL compute_token_budget must return a positive
+        # budget strictly inside the window (over-budget = silent truncation).
+        b = loader.compute_token_budget(w)
+        return 0 < b < w
+
     if negative:
-        # Broken invariant: a budget >= the window would mean no headroom for the
-        # conversation. Assert the probe catches an over-window budget.
-        bad = window + 1
-        return _ok(name) if not (0 < bad < window) else _fail(name, "negative did not break")
-    # Real invariant: the static-context budget must leave room within the window
-    # (0 < budget < window) — over-budget = silent truncation = degraded cognition.
-    ok = 0 < budget < window
-    return _ok(name) if ok else _fail(name, f"budget {budget} out of bounds for window {window}")
+        # compute_token_budget is correctly bounded at every real window (it scales
+        # the tier DOWN), so there is no breaking INPUT. To prove the check has
+        # teeth, monkeypatch the REAL method to an over-window impl and assert this
+        # very check then catches it (same discipline as the exclude probes).
+        saved = loader.compute_token_budget
+        try:
+            loader.compute_token_budget = lambda w: w + 1  # broken: exceeds window
+            broke = _within(window)
+        finally:
+            loader.compute_token_budget = saved
+        return _ok(name) if not broke else _fail(name, "negative did not break the real budget check")
+    return _ok(name) if _within(window) else _fail(name, f"budget out of bounds for window {window}")
 
 
 _PROBES = {

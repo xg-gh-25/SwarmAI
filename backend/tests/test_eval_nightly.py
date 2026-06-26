@@ -104,3 +104,19 @@ def test_runner_crash_returns_error(tmp_path):
         raise RuntimeError("eval blew up")
     r = run_eval_nightly(runner=boom, notifier=_Spy(), root=tmp_path)
     assert r["status"] == "error" and "eval blew up" in r["reason"]
+
+
+def test_default_runner_imports_resolve():
+    """REGRESSION GUARD (adversarial CRITICAL #3): the prior tests all injected a
+    fake runner=, so the REAL _default_runner's imports were never exercised —
+    a `load_history` vs `_load_history` typo shipped a dead-on-arrival nightly job.
+    This forces the real import path to resolve (without running the heavy eval)."""
+    import jobs.handlers.eval_nightly as mod
+    import inspect
+    src = inspect.getsource(mod._default_runner)
+    # the names _default_runner imports must all exist in eval_runner
+    import scripts.eval_runner as er
+    for name in ("load_golden_set", "_golden_set_path", "run_eval", "write_run", "_load_history"):
+        assert hasattr(er, name), f"eval_runner missing {name} — _default_runner import would crash"
+    # and the buggy bare name must NOT be what we import
+    assert "import load_history" not in src or "_load_history as load_history" in src
