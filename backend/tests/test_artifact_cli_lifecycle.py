@@ -579,6 +579,95 @@ class TestAdvanceDriftGuard:
         # str key_findings coerced to a single rendered item; int fields skipped cleanly.
         assert "one big finding" in body
 
+    def _c2_run(self, workspace, reg, run_id, profile, evaluate_data, monkeypatch):
+        """Build a run with ALL profile stages completed (so the stage-completeness
+        gate passes) and a given evaluate artifact, for C2 backstop testing."""
+        import json as _json
+        from datetime import datetime, timezone
+        from core.pipeline_profiles import get_profile_stages
+        # The completion gate loads pipeline_validator as a FRESH module whose
+        # _load_artifact_data/_get_workspace resolve via SWARM_WORKSPACE env (not the
+        # monkeypatched cli._get_workspace). Point it at the test workspace so the C2
+        # backstop can load stage artifacts (in prod both resolve to the same dir).
+        monkeypatch.setenv("SWARM_WORKSPACE", str(workspace))
+        run_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        ev = reg.publish(project="TestProject", artifact_type="evaluation",
+                         producer="test", summary="c2", data=evaluate_data)
+        ev_id = ev["id"] if isinstance(ev, dict) else ev
+        dv = reg.publish(project="TestProject", artifact_type="delivery",
+                         producer="test", summary="ok",
+                         data={"title": "x",
+                               "quality": {"tests_pass": True, "regressions": 0, "smoke_pass": True},
+                               "adversarial_review": {"spawned": True, "profile_tier": "full",
+                                                      "evidence": "Agent tool", "findings": []},
+                               "completion_audit": {"all_green": True}, "meta_review": "CLEAR",
+                               "convergence": {"iterations": 1, "all_pass": True, "final_status": "push-ready"}})
+        dv_id = dv["id"] if isinstance(dv, dict) else dv
+        stages = []
+        for stg in get_profile_stages(profile):
+            rec = {"stage": stg, "status": "completed"}
+            if stg == "evaluate":
+                rec["artifact_id"] = ev_id
+            elif stg == "deliver":
+                rec["artifact_id"] = dv_id
+            elif stg == "reflect":
+                rec["lessons"] = ["C2 backstop integration fixture — a substantive "
+                                  "lesson over twenty chars so the reflect gate passes."]
+            stages.append(rec)
+        today = datetime.now(timezone.utc)
+        (run_dir / "run.json").write_text(_json.dumps({
+            "id": run_id, "project": "TestProject", "requirement": "x",
+            "profile": profile, "status": "running", "stages": stages,
+            "created_at": today.isoformat(), "updated_at": today.isoformat(),
+        }))
+        # Satisfy the REPORT.md completion gate (not what C2 tests).
+        (run_dir / "REPORT.md").write_text("# Pipeline Report\n\n" + ("detail. " * 100))
+        import argparse
+        attrs = ("active_only actual_effort adversarial_count alternatives backend "
+                 "categories command context data ddd_checksums dismissed escalated "
+                 "evaluation_id event files_estimated fixed frontend full indicators "
+                 "lessons limit modules outcome overlap partial probes producer profile "
+                 "project reason requirement resolved retries review_count rp_violations "
+                 "run_id scope stage stage_json state status summary taste_decision "
+                 "timestamp tokens_consumed topic type types user_override").split()
+        ns = argparse.Namespace(**{a: None for a in attrs})
+        ns.project = "TestProject"
+        ns.run_id = run_id
+        ns.status = "completed"
+        return ns
+
+    def test_completion_blocks_gateless_strict_evaluate(self, workspace, capsys, monkeypatch):
+        """C2 backstop (run_7cf9da85): a strict-profile run whose EVALUATE artifact
+        was published WITHOUT the gate fields (publish-bypass / hand-edit) must be
+        BLOCKED at completion. Before C2 the completion gate hardcoded stage='deliver'
+        so a gateless evaluate sailed through (skeptic-confirmed hole)."""
+        import scripts.artifact_cli as cli
+        from core.artifact_registry import ArtifactRegistry
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        reg = ArtifactRegistry(workspace)
+        # bugfix profile = strict for the Understanding gate; gateless evaluate data.
+        args = self._c2_run(workspace, reg, "run_c2block", "bugfix",
+                            {"recommendation": "GO", "scope": "standard"}, monkeypatch)  # no understanding block
+        cli.cmd_run_update(args, reg)
+        out = capsys.readouterr().out
+        assert "Cannot mark completed" in out and "valuate" in out, \
+            f"gateless strict evaluate must BLOCK completion: {out}"
+
+    def test_completion_allows_relaxed_gateless_evaluate(self, workspace, capsys, monkeypatch):
+        """C2 must NOT over-block: a RELAXED profile (research) legitimately exempts
+        the Understanding gate, so a gateless evaluate completes fine."""
+        import scripts.artifact_cli as cli
+        from core.artifact_registry import ArtifactRegistry
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        reg = ArtifactRegistry(workspace)
+        args = self._c2_run(workspace, reg, "run_c2ok", "research",
+                            {"recommendation": "GO", "scope": "research"}, monkeypatch)
+        cli.cmd_run_update(args, reg)
+        out = capsys.readouterr().out
+        assert "Cannot mark completed" not in out, \
+            f"relaxed-profile gateless evaluate must NOT be blocked by C2: {out}"
+
     def test_advance_no_warn_for_goal_cycle(self, workspace, capsys, monkeypatch):
         """goal_cycle commits incrementally and has no artifact — no drift warning."""
         import scripts.artifact_cli as cli

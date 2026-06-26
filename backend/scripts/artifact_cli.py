@@ -1170,6 +1170,39 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                         for err in errors_list:
                             validator_errors.append(f"[deliver] {err}")
 
+                # ── C2 completion backstop (run_7cf9da85) ──────────────────────
+                # The deliver gate above only re-checks the deliver artifact. The 3
+                # EVALUATE-stage gates (Understanding / Ambiguity / Working-Backwards)
+                # ran ONLY at publish time — so an evaluate (or any non-deliver)
+                # artifact that bypassed `publish --stage` (hand-edit, ignored exit
+                # code) reaches completion unguarded. Close the hole at the SAME
+                # single-source function the publish path uses: re-run
+                # validate_artifact_data over every completed stage's artifact.
+                # (The skeptic, run_7cf9da85, proved mirroring into _check_depth is
+                # dead code — completion hardcodes stage='deliver' + _check_depth
+                # excludes evaluate. This is the correct layer.)
+                _validate_data = getattr(_validator_mod, "validate_artifact_data", None)
+                _load_adata = getattr(_validator_mod, "_load_artifact_data", None)
+                if _validate_data is not None and _load_adata is not None:
+                    _profile = run_state.get("profile", "full")
+                    for _s in run_state.get("stages", []):
+                        _name = _s.get("stage", _s.get("name", ""))
+                        # deliver already re-validated above; skip artifactless stages.
+                        if _name in ("deliver", "reflect") or _s.get("status") not in ("completed", "done"):
+                            continue
+                        _aid = _s.get("artifact_id")
+                        if not _aid:
+                            continue
+                        _adata = _load_adata(args.project, args.run_id, _aid)
+                        if not isinstance(_adata, dict):
+                            continue  # unloadable → not this gate's concern (publish gate covers shape)
+                        try:
+                            _stage_errs = _validate_data(_name, _adata, profile=_profile)
+                        except Exception:
+                            continue  # never let the backstop itself crash completion
+                        for _e in _stage_errs or []:
+                            validator_errors.append(f"[{_name}] {_e}")
+
                 if validator_errors:
                     print(json.dumps({
                         "error": "Cannot mark completed: pipeline validator found BLOCKING errors. "
