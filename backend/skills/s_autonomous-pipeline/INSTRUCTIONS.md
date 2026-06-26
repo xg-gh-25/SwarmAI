@@ -750,7 +750,8 @@ Profile: <profile> | Stages: <N>/10 completed
 Commit: <git hash> | Files: <N> changed, +<A>/-<D> lines
 
 Phase A (Decision):
-  ① EVALUATE → GO | ② THINK → <approach> | ③ PLAN → <N> AC
+  ① EVALUATE → GO | ★ Gate 0 → <PASS/BLOCK> (diagnose-before-build, in EVALUATE)
+  ② THINK → <approach> | ③ PLAN → <N> AC
   ④ ★ Gate 1 → <PASS/WARN/BLOCK>
 
 Phase B (Execution):
@@ -777,7 +778,8 @@ For **goal profile**, use this variant:
 Profile: goal | DoD: <X>/<Y> met in <N> cycles
 
 Phase A (Decision):
-  ① EVALUATE → GO | ② THINK → <approach> | ③ PLAN → DoD defined
+  ① EVALUATE → GO | ★ Gate 0 → <PASS/BLOCK> (diagnose-before-build, in EVALUATE)
+  ② THINK → <approach> | ③ PLAN → DoD defined
   ④ ★ Gate 1 → <verdict>
 
 Phase B (Execution — <N> cycles):
@@ -801,7 +803,7 @@ For **trivial/bugfix** (compact — no phase headers in body):
 
 <1-2 sentence TL;DR>
 
-A: ①GO ③<N>AC ④★<verdict> | B: ⑤<N>R<N>G ⑥<findings> ⑦<pass> | C: ⑧★<findings> ⑨push-ready ⑩<N>lessons
+A: ①GO ★G0<verdict> ③<N>AC ④★<verdict> | B: ⑤<N>R<N>G ⑥<findings> ⑦<pass> | C: ⑧★<findings> ⑨push-ready ⑩<N>lessons
 Commit: <hash> | Files: <N> changed
 Report: .artifacts/runs/<run_id>/REPORT.md
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

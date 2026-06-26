@@ -22,6 +22,11 @@
 
 ### 🚨 CRITICAL: Adversarial Review is NON-NEGOTIABLE
 
+> **This is Gate 2 of the pipeline's 3-gate family** (Gate 0 = diagnose-before-build,
+> inside EVALUATE; Gate 1 = Skeptic + SSA, after PLAN; **Gate 2 = Adversarial Review,
+> here inside DELIVER**). Gate 0 guards the *framing*, Gate 1 the *plan*, Gate 2 the
+> *code*. See INSTRUCTIONS.md "Progress Display — 3 Gates" + TECH.md "diagnose-before-build gate family".
+
 **STOP. Before you proceed past step 2, confirm:** Will you spawn adversarial
 sub-agents in step 3? If the answer is anything other than "yes, spawning now"
 — you are rationalizing. Read C011, C021, C025 below.
