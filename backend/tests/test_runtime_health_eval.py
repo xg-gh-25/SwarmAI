@@ -84,15 +84,25 @@ import sys as _sys
 
 
 def test_ac1_rth_cases_in_biweekly_scheduled_set():
-    """① GS_RTH001/002/003 must survive the biweekly (non-behavior) filter — so
-    they run automatically in CI, not just on-demand. Loads the REAL golden_set."""
+    """① GS_RTH001/002/003 must survive the biweekly (non-behavior) filter AND be
+    GRADED (not tier:draft, which evaluate_case silently skips) — so they actually
+    run + score in CI, not just on-demand. Loads the REAL golden_set.
+
+    The tier:draft guard is Gate-2 MEDIUM (run_4596411e): a future demotion to
+    tier:draft would still 'survive the filter' but be silently skipped (skipped !=
+    failed), losing the guard with NO failing signal in the sweep. Locking
+    tier!=draft here makes that demotion fail loudly in CI.
+    """
     from pathlib import Path as _P
     from scripts.eval_runner import load_golden_set
     gs_path = _P.home() / ".swarm-ai" / "SwarmWS" / "Projects" / "SwarmAI" / "golden_set.yaml"
     gs = load_golden_set(gs_path)
-    nonbehavior = {c["id"] for c in gs["cases"] if c.get("eval_method") != "behavior"}
+    by_id = {c["id"]: c for c in gs["cases"]}
     for cid in ("GS_RTH001", "GS_RTH002", "GS_RTH003"):
-        assert cid in nonbehavior, f"{cid} not in biweekly scheduled set"
+        assert cid in by_id, f"{cid} missing from golden_set"
+        case = by_id[cid]
+        assert case.get("eval_method") != "behavior", f"{cid} excluded from biweekly (behavior)"
+        assert case.get("tier") != "draft", f"{cid} is tier:draft → silently skipped, not graded"
 
 
 def test_ac1_runtime_health_timeout_is_adequate():
@@ -153,3 +163,17 @@ def test_ac6_all_three_rth_cases_pass_via_evaluate_case():
         r = evaluate_case(by_id[cid], _REPO)
         assert r["status"] == "passed", f"{cid}: {r}"
         assert r["evaluator"] == "runtime_health"
+
+
+def test_ac6_rth_cases_score_into_recovery_dimension():
+    """Gate-2 LOW: a passed case that maps to no scored dimension inflates
+    confidence without moving the health score. Assert the 3 RTH cases actually
+    produce a 'recovery' dimension in a real run_eval output."""
+    from pathlib import Path as _P
+    from scripts.eval_runner import load_golden_set, run_eval
+    gs = load_golden_set(_P.home() / ".swarm-ai" / "SwarmWS" / "Projects" / "SwarmAI" / "golden_set.yaml")
+    result = run_eval(gs, trigger="manual",
+                      case_filter=["GS_RTH001", "GS_RTH002", "GS_RTH003"],
+                      root=_REPO, programmatic_only=True)
+    assert "recovery" in result.get("dimensions", {}), \
+        f"runtime_health cases did not score into 'recovery': {result.get('dimensions')}"
