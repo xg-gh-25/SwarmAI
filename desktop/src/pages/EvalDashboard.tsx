@@ -191,6 +191,40 @@ function useCaseDetail(caseId: string | null) {
   });
 }
 
+// Per-case results from a single run. NOTE: run cases carry NO `dimension` field
+// (only id/status/evaluator/duration_ms/notes) — to label by dimension we join
+// against the golden set by id at render time (Gate-1 BLOCK#1).
+interface RunCaseResult {
+  id: string;
+  status: string;
+  evaluator?: string;
+  duration_ms?: number;
+  notes?: string;
+}
+interface RunDetailData {
+  run_id: string;
+  triggered_by?: string;
+  triggered_at?: string;
+  overall_score?: number | null;
+  dimensions?: Record<string, number>;
+  total_cases?: number;
+  cases_passed?: number;
+  cases_failed?: number;
+  cases_skipped?: number;
+  cases_error?: number;
+  duration_seconds?: number;
+  cases?: RunCaseResult[];
+}
+
+function useRunDetail(runId: string | null) {
+  return useQuery<RunDetailData>({
+    queryKey: ['eval-run-detail', runId],
+    queryFn: async () => (await api.get<RunDetailData>(`/eval/runs/${runId}`)).data,
+    enabled: !!runId,
+    staleTime: 30_000,
+  });
+}
+
 // ─── Tabs ─────────────────────────────────────────────────────────────────────
 
 const TABS = [
@@ -773,6 +807,7 @@ function GovernanceTab() {
 
 function TrendsTab() {
   const { data: history } = useEvalHistory();
+  const [detailRunId, setDetailRunId] = useState<string | null>(null);
 
   if (!history || history.length === 0) {
     return (
@@ -786,9 +821,37 @@ function TrendsTab() {
 
   const runs = [...history].reverse().slice(-10); // oldest→newest, max 10
   const allDims = Object.keys(history[0]?.dimensions || {});
+  const recent = history.slice(0, 3); // newest-first, top 3 for visualized detail
 
   return (
     <div className="max-w-5xl mx-auto p-6">
+      {/* Recent runs — click to visualize per-case results */}
+      <h3 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-4">Recent Runs</h3>
+      <div className="grid grid-cols-3 gap-3 mb-8" data-testid="recent-runs">
+        {recent.map((r) => {
+          const score = r.overall_score ?? 0;
+          const sc = score >= 80 ? '#22c55e' : score >= 60 ? '#eab308' : '#ef4444';
+          return (
+            <button
+              key={r.run_id}
+              onClick={() => setDetailRunId(r.run_id)}
+              className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] hover:border-[var(--color-primary)] transition-colors text-left"
+            >
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] font-mono text-[var(--color-text-muted)]">{r.triggered_at?.slice(0, 10)}</span>
+                <span className="text-sm font-mono font-semibold" style={{ color: sc }}>{Math.round(score)}%</span>
+              </div>
+              <div className="text-[10px] text-[var(--color-text-muted)]">{r.triggered_by}</div>
+              <div className="flex gap-2 mt-1 text-[9px]">
+                <span className="text-green-500">{r.cases_passed ?? 0}✓</span>
+                <span className="text-red-500">{r.cases_failed ?? 0}✗</span>
+                <span className="text-[var(--color-text-muted)]">{r.cases_skipped ?? 0}skip</span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
       <h3 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-4">Overall Score Trend</h3>
       <div className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] mb-8">
         <Sparkline
@@ -820,6 +883,80 @@ function TrendsTab() {
             </div>
           );
         })}
+      </div>
+
+      {/* Per-run detail drawer — visualizes per-case pass/fail for a chosen run */}
+      {detailRunId && (
+        <RunDetailPanel runId={detailRunId} onClose={() => setDetailRunId(null)} />
+      )}
+    </div>
+  );
+}
+
+// Visualizes a single run's per-case results. Run cases have NO dimension field,
+// so we group by STATUS (available) and join the golden set by id only to show a
+// dimension label per case (Gate-1 BLOCK#1 — never assume per-case dimension).
+function RunDetailPanel({ runId, onClose }: { runId: string; onClose: () => void }) {
+  const { data: run, isLoading } = useRunDetail(runId);
+  const { data: gs } = useGoldenSet();
+  const dimById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of gs?.cases ?? []) m.set(c.id, c.dimension);
+    return m;
+  }, [gs?.cases]);
+
+  const STATUS_ORDER = ['failed', 'error', 'skipped', 'passed'];
+  const grouped = useMemo(() => {
+    const m = new Map<string, RunCaseResult[]>();
+    for (const c of run?.cases ?? []) {
+      const k = c.status || 'unknown';
+      (m.get(k) ?? m.set(k, []).get(k)!).push(c);
+    }
+    return [...m.entries()].sort((a, b) => STATUS_ORDER.indexOf(a[0]) - STATUS_ORDER.indexOf(b[0]));
+  }, [run?.cases]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={onClose}>
+      <div className="w-[460px] h-full bg-[var(--color-card)] border-l border-[var(--color-border)] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="sticky top-0 bg-[var(--color-card)] border-b border-[var(--color-border)] px-4 py-3 flex items-center justify-between">
+          <div>
+            <div className="text-xs font-mono font-semibold">{runId}</div>
+            {run && <div className="text-[10px] text-[var(--color-text-muted)]">{run.triggered_at?.slice(0, 19).replace('T', ' ')} · {run.triggered_by}</div>}
+          </div>
+          <button onClick={onClose} className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
+            <span className="material-symbols-outlined text-base">close</span>
+          </button>
+        </div>
+        {isLoading || !run ? <Loading /> : (
+          <div className="p-4">
+            {/* Run summary */}
+            <div className="flex gap-3 mb-4 text-xs">
+              <span className="font-mono font-semibold" style={{ color: (run.overall_score ?? 0) >= 80 ? '#22c55e' : '#eab308' }}>{Math.round(run.overall_score ?? 0)}%</span>
+              <span className="text-green-500">{run.cases_passed ?? 0} passed</span>
+              <span className="text-red-500">{run.cases_failed ?? 0} failed</span>
+              <span className="text-[var(--color-text-muted)]">{run.cases_skipped ?? 0} skipped</span>
+              {(run.cases_error ?? 0) > 0 && <span className="text-orange-500">{run.cases_error} error</span>}
+            </div>
+            {/* Per-case grouped by status */}
+            {grouped.map(([status, cases]) => (
+              <div key={status} className="mb-4" data-testid={`run-status-${status}`}>
+                <div className="flex items-center gap-2 mb-1.5">
+                  <StatusBadge status={status} />
+                  <span className="text-[10px] text-[var(--color-text-muted)]">{cases.length}</span>
+                </div>
+                <div className="space-y-1">
+                  {cases.map((c) => (
+                    <div key={c.id} className="flex items-center gap-2 px-2 py-1 rounded bg-[var(--color-bg)] text-[10px]">
+                      <span className="font-mono font-semibold">{c.id}</span>
+                      {dimById.get(c.id) && <span className="text-[var(--color-text-muted)]">{dimById.get(c.id)?.replace(/_/g, ' ')}</span>}
+                      {c.evaluator && <span className="ml-auto text-[var(--color-text-muted)]">{c.evaluator}</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
