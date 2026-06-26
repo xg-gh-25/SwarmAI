@@ -723,9 +723,14 @@ def _strip_negated_verbs(text: str) -> str:
 # ordinary prose ("don't", "the OS's lock") — only matches a quote-pair on one line
 # with no apostrophe-as-contraction ambiguity (paired ' ... ').
 _QUOTED_SPAN_RE = _re.compile(
-    r"`[^`]*`"           # backtick code span
-    r"|\"[^\"]*\""       # double-quoted span
-    r"|'[^']*'",          # single-quoted span (paired)
+    r"`[^`]*`"                          # backtick code span
+    r"|\"[^\"]*\""                      # double-quoted span
+    # single-quoted span: the opening ' must NOT be preceded by a letter and the
+    # closing ' must NOT be followed by a letter — so a contraction apostrophe
+    # ("that's", "it's") can never open/close a span and swallow plan-language
+    # between two contractions (adversarial HIGH, run_7cf9da85). Bounded length
+    # avoids a greedy run across the whole claim.
+    r"|(?<![A-Za-z])'[^'\n]{0,80}'(?![A-Za-z])",
 )
 
 
@@ -1908,19 +1913,29 @@ def _check_output_routing(
                         prior_produced = True
                         break
 
-            if prior_produced:
-                # C4 auto-resolve (run_7cf9da85): a prior COMPLETED stage produced
-                # this type, so the artifact demonstrably exists and is consumable.
-                # Auto-resolve instead of demanding the agent hand-record it in
-                # consumed_artifacts — that ceremony was pure friction (the author
-                # hit it: deliver BLOCKED until review/test_report ids were manually
-                # filled, even though both stages had completed with artifacts). The
-                # REAL protection (cannot consume an artifact that was never made) is
-                # preserved by the `else` branch below: no completed producer → WARN.
-                # Record the auto-resolution so it is observable, not silent.
+            if prior_produced and has_consumed_field:
+                # C4 narrowed (adversarial HIGH, run_7cf9da85): the field is PRESENT
+                # but omits a type a completed producer made → positive evidence the
+                # agent recorded consumption yet skipped a KNOWN input. Keep the
+                # BLOCK — auto-resolving here would defang Check 13 entirely (it is
+                # SEVERITY_HARD; without this branch it could never block).
+                errors.append(
+                    f"BLOCK: Stage '{stage}' must consume '{required_type}' artifact "
+                    f"but didn't reference it in consumed_artifacts. "
+                    f"Run `discover --types {required_type} --full` and record consumption."
+                )
+            elif prior_produced:
+                # C4 auto-resolve (run_7cf9da85): the consumed_artifacts field is
+                # ABSENT entirely AND a prior COMPLETED stage produced this type, so
+                # the artifact demonstrably exists and is consumable. Auto-resolve
+                # instead of demanding hand-recording — that ceremony was pure
+                # friction (the author hit it: deliver BLOCKED until review/test_report
+                # ids were manually filled, though both stages had completed). This
+                # is the missing-field path ONLY; a present-but-incomplete field still
+                # BLOCKs above (the real protection). Record it observably.
                 warnings.append(
                     f"AUTO-RESOLVED: Stage '{stage}' consumes '{required_type}' from a "
-                    f"completed upstream producer (not hand-recorded in consumed_artifacts)."
+                    f"completed upstream producer (consumed_artifacts field absent)."
                 )
             else:
                 # Upstream didn't produce it — warn (might be skipped stage)

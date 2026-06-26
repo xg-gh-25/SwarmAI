@@ -1200,6 +1200,16 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
                             _stage_errs = _validate_data(_name, _adata, profile=_profile)
                         except Exception:
                             continue  # never let the backstop itself crash completion
+                        # KNOWN LIMITATION (adversarial MED, run_7cf9da85): a strict-
+                        # profile evaluate artifact PREDATING the gate regime (no
+                        # understanding/ambiguity/WB fields) would be re-blocked here on
+                        # a resumed completion. We deliberately do NOT add a legacy
+                        # bypass: a hand-edited bypass (the exact attack C2 closes) and
+                        # a legacy artifact are field-indistinguishable, so a legacy
+                        # exemption would re-open the hole. Current exposure is ZERO
+                        # (0 in-flight pre-gate runs, measured run_7cf9da85); a resumed
+                        # pre-gate run is fixed by re-publishing its evaluate artifact.
+                        # Protecting the real bypass wins over a zero-exposure edge.
                         for _e in _stage_errs or []:
                             validator_errors.append(f"[{_name}] {_e}")
 

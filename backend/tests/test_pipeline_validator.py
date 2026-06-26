@@ -2101,20 +2101,32 @@ class TestOutputRouting:
         assert errors == []  # No BLOCK — field is missing (legacy)
         assert any("changeset" in w for w in warnings)
 
-    def test_review_empty_consumed_artifacts_auto_resolves(self):
-        """C4 (run_7cf9da85, REPLACES the old BLOCK behavior): review with empty
-        consumed_artifacts but a COMPLETED build producing changeset → AUTO-RESOLVE,
-        not BLOCK. The artifact demonstrably exists; hand-recording it was friction.
-        The real protection (consuming a never-produced artifact) is covered by
-        test_upstream_not_produced_warns below."""
+    def test_review_absent_consumed_artifacts_auto_resolves(self):
+        """C4 (run_7cf9da85): review with consumed_artifacts field ABSENT but a
+        COMPLETED build producing changeset → AUTO-RESOLVE (the friction case).
+        Field absent + producer completed = artifact exists, hand-recording was
+        pure ceremony."""
         build_rec = _stage_record("build")  # completed, produces changeset
-        review_rec = _stage_record("review")
-        review_rec["consumed_artifacts"] = []  # not hand-recorded
+        review_rec = _stage_record("review")  # NO consumed_artifacts field at all
+        review_rec.pop("consumed_artifacts", None)
         run = {"stages": [build_rec, review_rec]}
         errors, warnings = _check_output_routing("review", review_rec, run, "TestProject")
-        assert errors == [], f"completed producer → no BLOCK: {errors}"
+        assert errors == [], f"absent field + completed producer → no BLOCK: {errors}"
         assert any("AUTO-RESOLVED" in w and "changeset" in w for w in warnings), \
             f"auto-resolution must be observable: {warnings}"
+
+    def test_review_present_but_incomplete_consumed_artifacts_blocks(self):
+        """C4 narrowed (adversarial HIGH, run_7cf9da85): consumed_artifacts PRESENT
+        but omitting a type a completed producer made → still BLOCK. The field being
+        present is positive evidence the agent recorded consumption yet skipped a
+        known input; auto-resolving here would defang Check 13 (SEVERITY_HARD)."""
+        build_rec = _stage_record("build")  # completed, produces changeset
+        review_rec = _stage_record("review")
+        review_rec["consumed_artifacts"] = []  # present but empty → omits changeset
+        run = {"stages": [build_rec, review_rec]}
+        errors, warnings = _check_output_routing("review", review_rec, run, "TestProject")
+        assert any("changeset" in e and "BLOCK" in e for e in errors), \
+            f"present-but-incomplete field must still BLOCK: {errors}"
 
     def test_routing_blocks_when_producer_incomplete(self):
         """C4 preserves the REAL protection: if the producing stage did NOT complete,

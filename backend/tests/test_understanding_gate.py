@@ -91,6 +91,18 @@ class TestRequiresUnderstandingOnStrictProfiles:
 # M1 — solution-language scan (claim must be present-state, not a plan)
 # ---------------------------------------------------------------------------
 class TestM1SolutionLanguage:
+    @pytest.mark.parametrize("contraction_plan", [
+        # adversarial HIGH (run_7cf9da85): two contractions must NOT pair their
+        # apostrophes and delete the plan-language between them. These are REAL plans
+        # that must still BLOCK after the C3 single-quote strip was bounded.
+        "that's fine today; we will replace the parser and it's shipped",
+        "it's stable now but we will add the retry layer and that's it",
+    ])
+    def test_contractions_do_not_hide_plan(self, contraction_plan):
+        data = _eval("existing-feature", contraction_plan, _GOOD_EVIDENCE)
+        errors = validate_artifact_data("evaluate", data, profile="full")
+        assert _ug_errors(errors), f"contraction-spanning plan must still BLOCK: {contraction_plan!r} -> {errors}"
+
     @pytest.mark.parametrize("bad_claim", [
         "I will add a per-tab latestCompleteGen to fix the stale render.",
         "I'll refactor TabView to use the store as sole source.",
