@@ -233,8 +233,10 @@ export class MessageStore {
     // then replace() sets error content. Without this, the flushed thunk's
     // async result could overwrite the error content (adversarial finding).
     this._reconcileGen++;
+    const _prevClobber = this._lastAsstChars(this._messages);
     this._messages = messages;
     this._initialLoadComplete = true;
+    this._probeClobber(_prevClobber, 'replace');
     this._notify();
   }
 
@@ -244,7 +246,9 @@ export class MessageStore {
    */
   remove(predicate: (msg: Message) => boolean): void {
     if (this._destroyed) return;
+    const _prevClobber = this._lastAsstChars(this._messages);
     this._messages = this._messages.filter(m => !predicate(m));
+    this._probeClobber(_prevClobber, 'remove');
     this._notify();
   }
 
@@ -306,6 +310,42 @@ export class MessageStore {
   touch(): void {
     if (this._destroyed || this._phase !== 'streaming') return;
     this._resetWatchdog();
+  }
+
+  /** Last assistant message's total text length. Used by the clobber probe. */
+  private _lastAsstChars(msgs: Message[]): number {
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m.role === 'assistant') {
+        return Array.isArray(m.content)
+          ? m.content.reduce((n, b) => n + ('text' in b ? (b as { text: string }).text.length : 0), 0)
+          : 0;
+      }
+    }
+    return 0;
+  }
+
+  /**
+   * [clobber probe] Log when a mutation sharply shrinks a COMPLETED assistant
+   * answer (>=200 chars → <=20). This is the "background-completed answer
+   * vanished from the store" bug (frontend.log: store had 1453 chars at turn
+   * end, then 0 chars ~14s later, with no logged cause). Logging-only, zero
+   * behavior change — the stack pinpoints which caller clobbered it so the fix
+   * can be surgical instead of a symptom patch. Remove with the root-cause fix.
+   */
+  private _probeClobber(prevChars: number, reason: string): void {
+    const nowChars = this._lastAsstChars(this._messages);
+    if (prevChars >= 200 && nowChars <= 20) {
+      console.warn('[reconcile-gap] STORE-CLOBBER', {
+        sessionId: this._sessionId,
+        reason,
+        phase: this._phase,
+        prevChars,
+        nowChars,
+        msgCount: this._messages.length,
+        stack: new Error().stack?.split('\n').slice(2, 7).join(' | '),
+      });
+    }
   }
 
   // ─── Lifecycle ───
@@ -624,6 +664,7 @@ export class MessageStore {
   }
 
   private _applyMerge(dbMessages: ChatMessage[]): void {
+    const _prevMergeClobber = this._lastAsstChars(this._messages);
     const convert = this._toDisplayMessage || this._defaultToDisplay;
     const dbConverted = dbMessages.map(convert);
 
@@ -779,6 +820,7 @@ export class MessageStore {
 
     this._messages = merged;
     this._initialLoadComplete = true;
+    this._probeClobber(_prevMergeClobber, 'reconcile/_applyMerge');
     this._notify();
   }
 

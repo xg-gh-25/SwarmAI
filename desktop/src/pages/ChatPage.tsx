@@ -898,6 +898,17 @@ export default function ChatPage() {
       // Fix 8: Clear unread indicator when switching to a tab with 'complete_unread' status
       if (tabStatuses[tabId] === 'complete_unread') {
         updateTabStatus(tabId, 'idle');
+        // RECOVERY: a turn completed while this tab was backgrounded. The
+        // store/cache content can have been clobbered (frontend.log: a
+        // background-completed answer present at turn-end vanished from the
+        // store ~14s later), so the just-rendered tabState.messages may show a
+        // blank/empty assistant even though the full answer is persisted in the
+        // DB — the "后台答了、前端没显示、要重发" bug. Authoritatively reload from
+        // the DB (fully guarded: NO-OP if streaming / tab switched away; also
+        // re-seeds the store + cache). Re-sending is no longer required.
+        if (targetTabState?.sessionId && !targetTabState.isStreaming) {
+          loadSessionMessages(targetTabState.sessionId);
+        }
       }
       return;
     }
