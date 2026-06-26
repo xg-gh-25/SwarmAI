@@ -405,7 +405,11 @@ class TestStalenessCancellation:
             updated_days_ago=25,
         )
 
-        result = run_todo_resolution(db_path=db_path, artifacts_root=tmp_path / "artifacts")
+        # Neutralize Layer-2 (git keyword match) so this test isolates
+        # Layer-3 staleness behavior — otherwise the real repo git log can
+        # match a title keyword and move the todo before staleness runs.
+        with patch("jobs.todo_resolution._get_recent_commits", return_value=""):
+            result = run_todo_resolution(db_path=db_path, artifacts_root=tmp_path / "artifacts")
         assert _get_todo_status(db_path, "stale-1") == "cancelled"
         assert result["stale_cancelled"] >= 1
 
@@ -423,7 +427,11 @@ class TestStalenessCancellation:
             updated_days_ago=5,  # Recently touched
         )
 
-        run_todo_resolution(db_path=db_path, artifacts_root=tmp_path / "artifacts")
+        # Neutralize Layer-2 — the generic title ("work") otherwise matches
+        # recent commits (e.g. "Working-Backwards") and moves it to
+        # in_discussion, masking the Layer-3 assertion.
+        with patch("jobs.todo_resolution._get_recent_commits", return_value=""):
+            run_todo_resolution(db_path=db_path, artifacts_root=tmp_path / "artifacts")
         assert _get_todo_status(db_path, "stale-2") == "pending"
 
     def test_stale_in_discussion_cancelled_at_working_threshold(self, tmp_path):
@@ -450,10 +458,14 @@ class TestStalenessCancellation:
             updated_days_ago=7,
         )
 
-        result = run_todo_resolution(
-            db_path=db_path, artifacts_root=tmp_path / "artifacts",
-            working_stale_days=14,
-        )
+        # Neutralize Layer-2 — "working" in the stale-3a title otherwise
+        # matches recent commits and could move it to handled, masking the
+        # Layer-3 working-threshold assertion.
+        with patch("jobs.todo_resolution._get_recent_commits", return_value=""):
+            result = run_todo_resolution(
+                db_path=db_path, artifacts_root=tmp_path / "artifacts",
+                working_stale_days=14,
+            )
         assert _get_todo_status(db_path, "stale-3a") == "cancelled"
         assert _get_todo_status(db_path, "stale-3b") == "in_discussion"
         assert result["stale_cancelled"] >= 1
