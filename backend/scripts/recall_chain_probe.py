@@ -219,14 +219,18 @@ def _missing_vector() -> int:
     return 1
 
 
-def _knowledge_live() -> int:
+def _knowledge_live(negative: bool = False) -> int:
     """Knowledge/Library WIRE: the REAL RecallEngine hybrid (FTS5 + sqlite-vec
     over a real KnowledgeStore) must surface the SPECIFIC chunk a zero-lexical-
     overlap query can only reach via the VECTOR leg. The only mocked thing is the
     Bedrock query embedding (the network boundary); entry vectors live in a real
     knowledge_vec table and the merge is the real 0.6·vec+0.4·bm25 in
     recall_engine.RecallEngine.search. A broken vector leg (or embed_fn not
-    threaded through) drops the chunk → marker absent. Prints KNOWLEDGE_LIVE_OK."""
+    threaded through) drops the chunk → marker absent. Prints KNOWLEDGE_LIVE_OK.
+
+    negative=True (teeth): embed_fn returns None → vector leg dead (FTS5-only).
+    The zero-lexical-overlap query then cannot reach the chunk → OK condition
+    cannot hold → exits 1 with the FAIL marker, proving the case has teeth."""
     import sqlite3
 
     import sqlite_vec
@@ -256,9 +260,10 @@ def _knowledge_live() -> int:
         )
         engine = RecallEngine(store)
         # embed_fn IS the Bedrock boundary — fixed query vector, real merge.
+        # negative: embed_fn=None kills the vector leg (FTS5-only fallback).
         results = engine.search(
             "application crash exit code sigkill",
-            embed_fn=lambda _t: _onehot(5),
+            embed_fn=(lambda _t: None) if negative else (lambda _t: _onehot(5)),
             top_k=5,
         )
     finally:
@@ -276,18 +281,23 @@ def _knowledge_live() -> int:
     return 1
 
 
-def _codeintel_live() -> int:
+def _codeintel_live(negative: bool = False) -> int:
     """CodeIntel WIRE: the REAL recall_multi._codeintel_recall must drive the
     REAL load_project_graph().search_symbols over the LIVE SwarmAI code graph
     for a known symbol and return a hit (with 1-hop caller enrichment). Nothing
     is mocked — if the graph is absent or search_symbols is broken, the bucket is
-    empty → marker absent. Prints CODEINTEL_LIVE_OK."""
+    empty → marker absent. Prints CODEINTEL_LIVE_OK.
+
+    negative=True (teeth): query a symbol that does NOT exist in the graph → the
+    bucket must be empty → OK condition cannot hold → exits 1, proving teeth."""
     from core import recall_multi
 
     # "recall_all" is a real public symbol in core/recall_multi.py — it MUST be
     # in the live SwarmAI code graph. A real graph search returns it; a broken
-    # wire (no graph / search_symbols error) returns [].
-    bucket = recall_multi._codeintel_recall("recall_all", project="SwarmAI")
+    # wire (no graph / search_symbols error) returns []. negative: a nonexistent
+    # symbol must yield an empty bucket.
+    query = "zzz_nonexistent_symbol_qqq_xyzzy" if negative else "recall_all"
+    bucket = recall_multi._codeintel_recall(query, project="SwarmAI")
 
     if bucket and any("recall" in str(h.get("name", "")).lower() for h in bucket):
         print("CODEINTEL_LIVE_OK")
@@ -304,13 +314,22 @@ _SCENARIOS = {
     "codeintel_live": _codeintel_live,
 }
 
+# Scenarios that accept a 2nd arg "negative" (teeth mode): break the wire →
+# the OK marker must NOT appear → exit 1. Used as each case's negative_command.
+_NEGATIVE_CAPABLE = {"knowledge_live", "codeintel_live"}
+
 
 def main(argv: list[str] | None = None) -> int:
     argv = argv if argv is not None else sys.argv[1:]
-    if len(argv) != 1 or argv[0] not in _SCENARIOS:
-        print(f"usage: recall_chain_probe.py <{'|'.join(_SCENARIOS)}>")
+    if not (1 <= len(argv) <= 2) or argv[0] not in _SCENARIOS:
+        print(f"usage: recall_chain_probe.py <{'|'.join(_SCENARIOS)}> [negative]")
         return 2
-    return _SCENARIOS[argv[0]]()
+    scenario, negative = argv[0], (len(argv) == 2 and argv[1] == "negative")
+    if negative and scenario not in _NEGATIVE_CAPABLE:
+        print(f"scenario '{scenario}' has no negative (teeth) mode")
+        return 2
+    fn = _SCENARIOS[scenario]
+    return fn(negative=negative) if scenario in _NEGATIVE_CAPABLE else fn()
 
 
 if __name__ == "__main__":
