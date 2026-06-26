@@ -2124,12 +2124,12 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> None:
     review_severity = review_data.get("severity", "?")
 
     adversarial = delivery.get("adversarial_review", {})
-    adversarial_findings = adversarial.get("findings", [])
+    adversarial_findings = _as_list(adversarial.get("findings", []))
     adversarial_verdict = adversarial.get("verdict", "?")
 
     completion_audit = delivery.get("completion_audit", {})
-    criteria_met = completion_audit.get("criteria_met", [])
-    criteria_unmet = completion_audit.get("criteria_unmet", [])
+    criteria_met = _as_list(completion_audit.get("criteria_met", []))
+    criteria_unmet = _as_list(completion_audit.get("criteria_unmet", []))
 
     confidence_score = delivery.get("confidence_score", 0)
     if isinstance(confidence_score, dict):
@@ -2218,8 +2218,8 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> None:
         for sc in success_criteria[:10]:
             design_section += f"- {sc}\n"
     if boundaries and isinstance(boundaries, dict):
-        always_rules = boundaries.get("always", [])
-        never_rules = boundaries.get("never", [])
+        always_rules = _as_list(boundaries.get("always", []))
+        never_rules = _as_list(boundaries.get("never", []))
         if always_rules:
             design_section += "\n**Always:**\n"
             for r in always_rules[:5]:

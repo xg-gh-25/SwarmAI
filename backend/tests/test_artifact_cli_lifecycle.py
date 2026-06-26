@@ -557,6 +557,13 @@ class TestAdvanceDriftGuard:
                 {"stage": "think", "status": "completed",
                  "alternatives": 3,                  # the original crash input
                  "key_findings": "one big finding"},  # str, not list — was sliced [:8]
+                # adversarial completeness: sibling agent-freedom fields of the
+                # SAME provenance that the first fix missed (Gate-2 finding).
+                {"stage": "plan", "status": "completed",
+                 "boundaries": {"always": 1, "never": "no big-bang"}},  # scalar always/never
+                {"stage": "deliver", "status": "completed",
+                 "adversarial_review": {"findings": 4},                 # int findings
+                 "completion_audit": {"criteria_met": 5, "criteria_unmet": "none"}},
             ],
             "created_at": today.isoformat(), "updated_at": today.isoformat(),
         }))
