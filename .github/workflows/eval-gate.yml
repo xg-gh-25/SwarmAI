@@ -1,0 +1,94 @@
+name: Eval Gate
+
+# Guards the EVAL GATE'S MACHINERY on every PR/push that touches eval code.
+#
+# HONEST SCOPE (read this before assuming it gates eval results):
+#   The golden_set + EvalHistory reports live in the SwarmWS *workspace*, which is
+#   NOT in this code repo (private, gitignored). So CI CANNOT verify a real eval
+#   report here — ci_eval_gate.py honestly soft-passes (exit 2 / "cannot locate
+#   workspace") on a fresh checkout. The real result-gate is local: prod.sh
+#   release runs ci_eval_gate against the committed workspace report.
+#
+#   What CI *can* and *does* gate: the gate's own LOGIC — the stamp canonicaliser,
+#   BVT admission (tier/stamp/canary), and gate_teeth. If that logic regresses,
+#   every downstream GREEN is fake. These are pure unit tests: zero Bedrock, zero
+#   workspace data, deterministic. This job catches a broken gate; it does not
+#   pretend to catch a broken eval run (which it structurally can't from here).
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/scripts/eval_runner.py'
+      - 'backend/scripts/ci_eval_gate.py'
+      - 'backend/scripts/golden_case_validator.py'
+      - 'backend/scripts/stamp_golden_cases.py'
+      - 'backend/scripts/eval_spine_probe.py'
+      - 'backend/core/eval_service.py'
+      - 'backend/tests/test_bvt_admission.py'
+      - 'backend/tests/test_golden_case_stamp.py'
+      - '.github/workflows/eval-gate.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'backend/scripts/eval_runner.py'
+      - 'backend/scripts/ci_eval_gate.py'
+      - 'backend/scripts/golden_case_validator.py'
+      - 'backend/core/eval_service.py'
+
+concurrency:
+  group: eval-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate-machinery:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        working-directory: ./backend
+        run: |
+          pip install uv
+          uv venv .venv
+          source .venv/bin/activate
+          uv pip install -e ".[dev]"
+          echo "$VIRTUAL_ENV/bin" >> $GITHUB_PATH
+
+      - name: Create .env
+        working-directory: ./backend
+        run: cp .env.example .env
+
+      # The REAL gate: the gate's own logic must not regress. Zero Bedrock,
+      # zero workspace data — pure deterministic unit tests.
+      - name: Gate machinery — stamp / BVT admission / teeth
+        working-directory: ./backend
+        run: |
+          python -m pytest -p no:cacheprovider \
+            tests/test_golden_case_stamp.py \
+            tests/test_bvt_admission.py \
+            scripts/golden_case_validator_test.py \
+            -q --timeout=60
+
+      # ci_eval_gate against whatever report exists. On CI there is no workspace
+      # report → it soft-passes (exit 2 / cannot-locate). This step documents that
+      # the gate binary RUNS clean; it does not (and cannot) verify a real result
+      # here. exit 1 (a readable-but-RED/stale report) would still fail the job.
+      - name: ci_eval_gate dry check (soft-pass without workspace report)
+        working-directory: ./backend
+        run: |
+          set +e
+          OUT=$(python scripts/ci_eval_gate.py 2>&1); RC=$?
+          echo "$OUT"
+          echo "gate_rc=$RC"
+          # 0 = fresh+green, 2 = no/locate-fail report (expected on CI) → OK.
+          # 1 = readable report that is STALE or RED → real failure, block.
+          if [ "$RC" = "1" ]; then
+            echo "::error::eval gate RED/stale — a committed report regressed"
+            exit 1
+          fi
+          exit 0
