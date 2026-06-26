@@ -227,6 +227,18 @@ _AMBIGUITY_TERMS = (
     "看情况", "可能", "大概", "差不多", "视情况", "标准做法", "一般",
 )
 
+# Working-Backwards lens (greenfield-only) — defined above STAGE_SCHEMAS for the
+# template reference. Helper _check_working_backwards lives with the other gate
+# logic below; full rationale is in the comment above that function.
+# The 4 ECONOMIC/value fields — the NOVEL slice the EVALUATE skeptic confirmed is
+# NOT already covered by the greenfield Understanding row (who/problem) or the
+# Pre-mortem Gate (top-3 failures). "who has it" + "failure reasons" are REUSED
+# (understanding + pre_mortem), never re-asked here.
+_WB_ECONOMIC_FIELDS = ("target_customer", "current_workaround", "why_better", "must_be_true")
+# Min non-blank chars per economic field — anti-laziness floor (a one-word
+# "faster" is not a value proposition). Shares the spirit of the ambiguity floor.
+_WB_FIELD_MIN_CHARS = 12
+
 
 STAGE_SCHEMAS: dict[str, dict[str, list[str]]] = {
     "evaluate": {
@@ -303,6 +315,15 @@ STAGE_TEMPLATES: dict[str, dict] = {
                       "kind": "self-answer|escalation"}],
             "hit_count": 1,
             "all_resolved": True,
+        },
+        # Working-Backwards lens (GREENFIELD-only, strict): customer/value framing.
+        # Only required when understanding.work_type=='greenfield'. The 4 economic
+        # fields are the novel slice; pre_mortem (top-level) is reused for failures.
+        "working_backwards": {
+            "target_customer": "the specific segment with the problem",
+            "current_workaround": "how they solve / work around it today",
+            "why_better": "why this is faster / cheaper / better than the alternative",
+            "must_be_true": "the adoption assumption that must hold for success",
         },
     },
     "think": {
@@ -541,6 +562,80 @@ def _check_ambiguity_scan(data: dict, profile: str) -> list[str]:
         errs.append(
             f"Ambiguity scan: all_resolved=true but {unresolved} hit(s) lack a valid "
             f"resolution. Do not self-report resolved while unresolved hits remain."
+        )
+
+    return errs
+
+
+def _check_working_backwards(data: dict, profile: str) -> list[str]:
+    """Greenfield-only Working-Backwards lens (presence + economic-field + pre_mortem
+    reuse). Returns error strings tagged 'Working-Backwards:'. Plan B follow-up to
+    the ambiguity scan (run_b5b26ebe).
+
+    THE KEY DIFFERENCE FROM THE SIBLING GATES: this fires ONLY when
+    understanding.work_type == 'greenfield' AND the profile is strict — it is the
+    FIRST gate keyed on work_type (previously a cosmetic, never-read field). Where
+    the Understanding Gate (diagnosis-hedge) and Ambiguity Scan (spec-ambiguity)
+    apply to ALL strict profiles, customer/value framing is only meaningful for
+    NET-NEW features, so non-greenfield work is structurally untouched.
+
+    Scope (EVALUATE-skeptic-sharpened, run_b5b26ebe WRONG-FRAME): the NOVEL fields
+    are the 4 ECONOMIC questions (_WB_ECONOMIC_FIELDS) that the greenfield
+    Understanding row (evaluate.md:140, 'problem and who has it') and the Pre-mortem
+    Gate (top-3 failures) do NOT capture. "who has it" + "failure reasons" are
+    REUSED — the gate also requires a non-empty pre_mortem (its FIRST enforcement;
+    evaluate.md:493 mandates it doc-side but the validator never checked it).
+
+    Fail-open by design: a missing/typo'd work_type simply means no WB requirement.
+    This is a framing-QUALITY lens, not a safety gate — consistent with the
+    relaxed-profile exemption philosophy. Intelligent-Default (self-answer each
+    question, human confirms at REVIEW as a taste decision) is a STAGE-DOC behavior;
+    the validator only checks structure (block present + fields non-empty), never
+    content-truth.
+    """
+    errs: list[str] = []
+    und = data.get("understanding")
+    work_type = und.get("work_type") if isinstance(und, dict) else None
+    is_strict = profile not in _RELAXED_UNDERSTANDING_PROFILES
+
+    # Gate fires ONLY for greenfield + strict. Everything else: structurally exempt.
+    if work_type != "greenfield" or not is_strict:
+        return errs
+
+    wb = data.get("working_backwards")
+    if not isinstance(wb, dict):
+        errs.append(
+            "Working-Backwards: greenfield (work_type=='greenfield') in a strict "
+            "profile requires a 'working_backwards' block — the customer/value framing "
+            "for a net-new feature. Record {target_customer, current_workaround, "
+            "why_better, must_be_true} (each a real sentence) PLUS a non-empty "
+            "pre_mortem (top-3 failure reasons — reused from the Pre-mortem Gate). "
+            "Use Intelligent-Default: self-answer each from PRODUCT.md/DDD first, the "
+            "human confirms at REVIEW. (run_b5b26ebe)"
+        )
+        return errs
+
+    # The 4 ECONOMIC fields — each must be a real, non-empty sentence (the novel,
+    # non-redundant slice). A bare bool / sub-floor string carries no value framing.
+    for field in _WB_ECONOMIC_FIELDS:
+        val = wb.get(field)
+        ok = isinstance(val, str) and len(val.strip()) >= _WB_FIELD_MIN_CHARS
+        if not ok:
+            errs.append(
+                f"Working-Backwards: '{field}' is missing or too thin (needs a "
+                f">={_WB_FIELD_MIN_CHARS}-char answer). This is the value-framing the "
+                f"Understanding/Pre-mortem gates do NOT capture — answer it concretely."
+            )
+
+    # pre_mortem REUSE — required + non-empty for greenfield (first enforcement).
+    # Read from the top-level artifact (the Pre-mortem Gate's output), not from wb,
+    # so it is genuinely the SAME array, not a duplicate.
+    pre_mortem = data.get("pre_mortem")
+    if not isinstance(pre_mortem, list) or len([p for p in pre_mortem if p]) == 0:
+        errs.append(
+            "Working-Backwards: greenfield requires a non-empty 'pre_mortem' list "
+            "(top-3 reasons this fails) — reused from the mandatory Pre-mortem Gate "
+            "(evaluate.md:493). This gate is its first code-enforcement for greenfield."
         )
 
     return errs
@@ -926,6 +1021,12 @@ def validate_artifact_data(stage: str, data: dict, profile: str = "full") -> lis
         # Re-scan the requirement-clarification output for residual ambiguity.
         # Distinct field + tag from the Understanding Gate (run_932c0991).
         errors.extend(_check_ambiguity_scan(data, profile))
+
+        # ── Working-Backwards lens (greenfield-only) ──────────────────────
+        # Customer/value framing for NET-NEW features only. Fires ONLY when
+        # understanding.work_type=='greenfield' AND strict — the first gate keyed
+        # on work_type. Distinct 'Working-Backwards:' tag (run_b5b26ebe).
+        errors.extend(_check_working_backwards(data, profile))
 
     # ── Self-Socratic ambiguity scan (think) ──────────────────────────────
     # THINK re-scans its risk-probe assumptions + recommendation. THINK has no

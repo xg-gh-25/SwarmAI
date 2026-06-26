@@ -499,13 +499,71 @@ Step 3.5 (Pre-mortem) is **mandatory** in the pipeline. The pre-mortem output
 If the pre-mortem triggers a score adjustment or escalation, update the
 artifact accordingly before publishing.
 
+### Working-Backwards Lens (GREENFIELD ONLY)
+
+`INTERROGATE THE CUSTOMER VALUE — SELF-ANSWER FIRST, HUMAN CONFIRMS AT REVIEW`
+
+**Trigger:** ONLY when `understanding.work_type == "greenfield"` AND the profile
+is strict (full/goal — not trivial/docs/research). For every other work type
+(bugfix, existing-feature, refactor, research, docs) this section does NOT apply —
+skip it. This is the deliberate difference from the always-on Understanding Gate
+and Ambiguity Scan: customer/value framing is only meaningful for a NET-NEW
+feature.
+
+**Why this exists:** a greenfield "GO" can be technically sound yet build something
+nobody adopts. The Understanding Gate already captures *the problem and who has it*
+(work_type=greenfield row above) and the Pre-mortem Gate already captures *top-3
+failure reasons* — so this lens does **not** re-ask those. It adds the **economic /
+value framing** neither gate captures, ported from Amazon Working-Backwards / the
+aws-samples PR-FAQ pattern but adapted to an AUTONOMOUS pipeline: **you self-answer
+(Intelligent-Default), the human confirms at REVIEW** — never a blocking file-based
+user interview (that's the grill-protocol / aidlc-#366 rubber-stamp failure).
+
+**Process (Intelligent-Default — self-answer each, do NOT block on the user):**
+For each field below, write your **best-guess answer derived from PRODUCT.md / DDD /
+the requirement**. The human reviews and overrides at REVIEW as a *taste decision* —
+they are NOT a `⛔` blocking gate.
+
+| Field | Question | Self-answer from |
+|-------|----------|------------------|
+| `target_customer` | Who specifically has this problem? (a precise segment, not "users") | PRODUCT.md Target Users / Audience Map |
+| `current_workaround` | How do they solve / work around it TODAY? | the requirement + domain knowledge |
+| `why_better` | Why is this faster / cheaper / better than that workaround? | PRODUCT.md differentiation |
+| `must_be_true` | What adoption assumption MUST hold for this to succeed? | pre-mortem inversions |
+
+The **top-3 failure reasons** are NOT re-asked here — they are **reused** from the
+mandatory `pre_mortem` array (Pre-mortem Gate above). This gate also makes
+`pre_mortem` **code-enforced for greenfield** (the validator now requires it
+non-empty when work_type=greenfield — its first enforcement).
+
+**Output (in the evaluation artifact `working_backwards` field):**
+```json
+{
+  "working_backwards": {
+    "target_customer": "solo technical founders who want team-scale output without hiring",
+    "current_workaround": "juggling ChatGPT tabs + manual copy-paste, losing context each switch",
+    "why_better": "persistent memory + autonomous pipeline = 10x less context re-establishment",
+    "must_be_true": "users must trust an autonomous agent to act without per-step confirmation"
+  }
+}
+```
+(plus the existing `pre_mortem` array — reused as the top-3 failure reasons.)
+
+**Validator-enforced (`_check_working_backwards`):** greenfield + strict → the
+block is required, each of the 4 economic fields must be a real answer (≥12 chars),
+and `pre_mortem` must be non-empty. Every other work_type / relaxed profile → not
+required, never false-blocked. Distinct `Working-Backwards:` error tag (no overlap
+with the Understanding / Ambiguity / REPRO gates). Fail-open on a missing/typo'd
+work_type — this is a framing-quality lens, not a safety gate.
+
 ### Artifact Publish
 
 ```bash
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
   --type evaluation --producer s_autonomous-pipeline \
   --summary "<GO/DEFER/REJECT>: <one-line>" --stage evaluate \
-  --data '{"requirement":"...","scores":{...},"recommendation":"GO","scope":"standard","acceptance_criteria":[...],"understanding":{...},"ambiguity_scan":{"scanned_fields":["who","what","why","when","acceptance_criteria"],"terms_checked":[...],"hits":[...],"hit_count":0,"all_resolved":true}}'
+  --data '{"requirement":"...","scores":{...},"recommendation":"GO","scope":"standard","acceptance_criteria":[...],"understanding":{...},"ambiguity_scan":{"scanned_fields":["who","what","why","when","acceptance_criteria"],"terms_checked":[...],"hits":[...],"hit_count":0,"all_resolved":true},"pre_mortem":["..."],"working_backwards":{"target_customer":"...","current_workaround":"...","why_better":"...","must_be_true":"..."}}'
+# NOTE: working_backwards is REQUIRED only when understanding.work_type=="greenfield" (+ strict profile); omit for all other work types.
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state think
 ```
 
