@@ -214,6 +214,145 @@ class TestRecallKeywordFirst:
             assert "COE Registry" in res.sections
 
 
+# ===========================================================================
+# Follow-up F1: BM25 normalization — degenerate set must NOT over-promote to 1.0
+# (run_aba4f77a, Gate-2 MEDIUM). Saturation s/(s+K1) on RAW bm25, applied at the
+# scorer-output layer; _minmax_normalize stays a generic [0,1] normalizer.
+# ===========================================================================
+
+class TestBM25Normalization:
+    """A single-candidate or all-equal BM25 set must map by SATURATION of the
+    raw score (a weak lone match → small, a strong lone match → near-1), NOT
+    blanket 1.0. Multi-candidate spread still min-max normalizes."""
+
+    def test_single_weak_candidate_not_promoted_to_one(self):
+        """F1 core: a lone candidate with a SMALL raw BM25 score must get a
+        small normalized score (saturation), not 1.0."""
+        from core.memory_index import _normalize_bm25_scores, BM25_K1
+
+        raw = {"A": 0.3}  # single weak candidate
+        out = _normalize_bm25_scores(raw)
+        # saturation: 0.3/(0.3+1.5) = 0.1667 — NOT 1.0
+        assert out["A"] == pytest.approx(0.3 / (0.3 + BM25_K1), abs=0.001)
+        assert out["A"] < 0.5, "a weak lone candidate must not get full weight"
+
+    def test_single_strong_candidate_approaches_one(self):
+        """A lone candidate with a LARGE raw score saturates toward 1.0."""
+        from core.memory_index import _normalize_bm25_scores, BM25_K1
+
+        raw = {"A": 30.0}  # single strong candidate
+        out = _normalize_bm25_scores(raw)
+        assert out["A"] == pytest.approx(30.0 / (30.0 + BM25_K1), abs=0.001)
+        assert out["A"] > 0.9, "a strong lone candidate should be near full weight"
+
+    def test_all_equal_candidates_use_saturation(self):
+        """All-equal (hi<=lo) set → saturation of the shared raw value, not 1.0."""
+        from core.memory_index import _normalize_bm25_scores, BM25_K1
+
+        raw = {"A": 0.5, "B": 0.5}
+        out = _normalize_bm25_scores(raw)
+        expected = 0.5 / (0.5 + BM25_K1)
+        assert out["A"] == pytest.approx(expected, abs=0.001)
+        assert out["B"] == pytest.approx(expected, abs=0.001)
+        assert out["A"] < 1.0
+
+    def test_multi_candidate_spread_minmax_normalizes(self):
+        """A real spread (hi>lo) still min-max normalizes: top→1.0, bottom→0.0."""
+        from core.memory_index import _normalize_bm25_scores
+
+        raw = {"A": 5.0, "B": 1.0, "C": 3.0}
+        out = _normalize_bm25_scores(raw)
+        assert out["A"] == pytest.approx(1.0, abs=0.001)
+        assert out["B"] == pytest.approx(0.0, abs=0.001)
+        assert out["C"] == pytest.approx(0.5, abs=0.001)
+
+    def test_empty_returns_empty(self):
+        from core.memory_index import _normalize_bm25_scores
+        assert _normalize_bm25_scores({}) == {}
+
+
+# ===========================================================================
+# Follow-up F4: temporal down-weight on the BM25 leg — superseded entries must
+# be down-weighted in _hybrid_section_scores (run_aba4f77a, Gate-2 MEDIUM).
+# Driven through the REAL scorer (GUI32/PIT13: no mocking the function under
+# change — only the Bedrock network boundary is stubbed).
+# ===========================================================================
+
+def _onehot(idx: int, dim: int = 1024) -> list[float]:
+    v = [0.0] * dim
+    v[idx] = 1.0
+    return v
+
+
+class _FixedEmbedder:
+    """Stub ONLY the Bedrock network boundary — returns a fixed query vector."""
+
+    def __init__(self, query_vec):
+        self._q = query_vec
+
+    def embed_text(self, text):  # noqa: ARG002 — fixed by design
+        return self._q
+
+
+class TestTemporalDownweightBM25:
+    """A superseded entry (full_text carries `superseded_by: <key>`) must have
+    its BM25 leg down-weighted by SUPERSEDED_WEIGHT, so an ACTIVE entry with the
+    same keyword match out-ranks it in the section scores."""
+
+    def test_superseded_entry_downweighted_vs_active(self, tmp_path, monkeypatch):
+        """F4 core: active entry beats superseded peer with identical keyword
+        match, driven through the real _hybrid_section_scores assembly."""
+        import sqlite_vec
+        from core import memory_index
+        from core.memory_embeddings import MemoryEmbeddingStore
+        from core.memory_index import format_temporal_metadata
+
+        db_path = tmp_path / "f4_memory.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+        store = MemoryEmbeddingStore(conn)
+        store.ensure_tables()
+
+        # Two entries, IDENTICAL discriminative keyword "zephyr". Neither embedded
+        # (no vector) → ranking decided purely by the BM25 leg. One is superseded.
+        active_meta = format_temporal_metadata("2026-06-01", superseded_by=None)
+        superseded_meta = format_temporal_metadata("2026-01-01", superseded_by="ACT")
+        store.upsert_entry(
+            "ACT", "Active Sec", "zephyr quartz",
+            f"zephyr quartz {active_meta}", ["zephyr", "quartz"], embedding=None,
+        )
+        store.upsert_entry(
+            "SUP", "Superseded Sec", "zephyr quartz",
+            f"zephyr quartz {superseded_meta}", ["zephyr", "quartz"], embedding=None,
+        )
+        # Decoy embedded entry: only purpose is to make memory_vec non-empty so
+        # _hybrid_section_scores doesn't early-return. Its vector (one-hot @15)
+        # is orthogonal to the query vector (one-hot @0) and its keywords don't
+        # match, so it does not interfere with the ACT-vs-SUP BM25 ranking.
+        store.upsert_entry(
+            "DEC", "Decoy Sec", "unrelated topic",
+            "unrelated topic", ["unrelated"], embedding=_onehot(15),
+        )
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setattr("jobs.paths.DB_PATH", db_path)
+        monkeypatch.setattr(memory_index, "_embedding_client_cache",
+                            _FixedEmbedder(_onehot(0)))
+
+        scores = memory_index._hybrid_section_scores("zephyr quartz")
+
+        # Active must out-rank superseded. Without F4 the two have IDENTICAL raw
+        # BM25 (same keyword match) → a tie; with F4 the superseded leg is ×0.1
+        # pre-normalization, so Active strictly wins (and Superseded may floor to
+        # 0 / drop out). A floored/absent superseded section counts as 0.0.
+        assert scores.get("Active Sec", 0.0) > scores.get("Superseded Sec", 0.0), (
+            "superseded entry's BM25 leg must be down-weighted below the active peer"
+        )
+
+
 class TestRecallHitLog:
     """recall_context surfaces hit-log fields for the CLI / ingestion Darwin."""
 

@@ -23,10 +23,13 @@ doesn't know the session type.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Optional
 
 from core.context_directory_loader import ContextDirectoryLoader
+
+logger = logging.getLogger(__name__)
 
 # Hard ceiling on a recall response so it can never re-inject a whole file.
 RECALL_MAX_TOKENS = 2000
@@ -144,7 +147,9 @@ def recall_context(
         if not scores:
             try:
                 hybrid = memory_index._hybrid_section_scores(query)
-            except Exception:  # noqa: BLE001 — hybrid is best-effort; keyword already empty
+            except Exception as exc:  # noqa: BLE001 — hybrid is best-effort; keyword already empty
+                logger.debug("hybrid recall escalation failed (best-effort): %s: %s",
+                             type(exc).__name__, exc)
                 hybrid = {}
             if hybrid:
                 scores = hybrid

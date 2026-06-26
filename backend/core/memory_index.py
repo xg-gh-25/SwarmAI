@@ -631,6 +631,27 @@ def _minmax_normalize(scores: dict[str, float]) -> dict[str, float]:
     return {k: (v - lo) / span for k, v in scores.items()}
 
 
+def _normalize_bm25_scores(raw: dict[str, float]) -> dict[str, float]:
+    """Make raw Okapi-BM25 scores commensurable with the absolute [0,1] vector
+    leg (§3.6), without over-promoting a degenerate candidate set.
+
+    - Spread set (hi > lo): min-max to [0, 1].
+    - Degenerate set (single candidate or all-equal): saturation ``s/(s+K1)``
+      of the RAW score. A lone WEAK match gets a small score; a lone STRONG
+      match approaches 1. This fixes the prior ``→ 1.0`` blanket, which gave a
+      weak single candidate full keyword weight (run_aba4f77a F1). K1 is the
+      same TF-saturation constant BM25 already uses, so this BM25-aware
+      transform lives here — ``_minmax_normalize`` stays a generic normalizer.
+    """
+    if not raw:
+        return {}
+    vals = list(raw.values())
+    lo, hi = min(vals), max(vals)
+    if hi <= lo:
+        return {k: v / (v + BM25_K1) for k, v in raw.items()}
+    return _minmax_normalize(raw)
+
+
 # ── Section Selection ─────────────────────────────────────────────────
 
 
@@ -843,14 +864,19 @@ def _hybrid_section_scores(user_message: str) -> dict[str, float]:
             # plus the entry→section map and the set of embedded keys.
             entry_sections: dict[str, str] = {}
             bm25_docs: dict[str, str] = {}
+            entry_temporal: dict[str, float] = {}
             rows = conn.execute(
-                "SELECT key, section, title, keywords FROM memory_entries"
+                "SELECT key, section, title, keywords, full_text FROM memory_entries"
             ).fetchall()
             for row in rows:
-                key, section, title, kw_json = row
+                key, section, title, kw_json, full_text = row
                 entry_sections[key] = section
                 aliases = json.loads(kw_json) if kw_json else []
                 bm25_docs[key] = f"{title} {' '.join(aliases)}".strip()
+                # F4: superseded entries (full_text carries `superseded_by: <key>`)
+                # are down-weighted on the BM25 leg, so a stale entry cannot
+                # out-rank its active replacement on keyword match alone.
+                entry_temporal[key] = _entry_temporal_weight(full_text or "")
 
             embedded_keys: set[str] = {
                 r[0] for r in conn.execute("SELECT key FROM memory_vec").fetchall()
@@ -858,9 +884,13 @@ def _hybrid_section_scores(user_message: str) -> dict[str, float]:
         finally:
             conn.close()
 
-        # Keyword leg: Okapi-BM25+IDF over the candidate set, then min-max
-        # normalized so it is commensurable with the absolute [0,1] vector leg.
-        keyword_scores = _minmax_normalize(_bm25_scores(user_message, bm25_docs))
+        # Keyword leg: Okapi-BM25+IDF over the candidate set. Down-weight
+        # superseded entries on the RAW score (F4), THEN normalize — so the
+        # 0.1 multiplier survives normalization and a lone superseded candidate
+        # cannot be re-promoted to full weight by the degenerate-set branch.
+        raw_bm25 = _bm25_scores(user_message, bm25_docs)
+        raw_bm25 = {k: v * entry_temporal.get(k, 1.0) for k, v in raw_bm25.items()}
+        keyword_scores = _normalize_bm25_scores(raw_bm25)
 
         # Hybrid merge — missing-vector renorm via embedded_keys (§3.6.1).
         ranked = hybrid_memory_search(
