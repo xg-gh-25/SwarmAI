@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -101,15 +101,29 @@ class _patch_sdk_modules:
             "core.permission_manager.permission_manager.get_session_queue",
             return_value=asyncio.Queue(),
         )
+        # Mock the fire-and-forget token-usage DB write. The orchestrator
+        # schedules `asyncio.get_running_loop().create_task(db.record_token_usage(...))`
+        # after a result yield; with the real coroutine it outlives the
+        # function-scoped event loop → "Task was destroyed but it is pending"
+        # unraisable warnings that pytest escalates to ERRORs on a later test
+        # whose abandoned async generator triggers the GC (the blank-result
+        # ordering tests below). An AsyncMock resolves instantly → no pending
+        # task at loop close. Test-only hygiene; does not touch prod behavior.
+        self._db_patch = patch(
+            "database.db.record_token_usage",
+            new=AsyncMock(return_value=None),
+        )
         self._dict_patch.start()
         try:
             self._pm_patch.start()
+            self._db_patch.start()
         except Exception:
             self._dict_patch.stop()
             raise
         return self
 
     def __exit__(self, *exc):
+        self._db_patch.stop()
         self._pm_patch.stop()
         self._dict_patch.stop()
         return False
@@ -221,6 +235,106 @@ class TestResultMessageNoUsagePreservation:
         result_events = [e for e in events if e.get("type") == "result"]
         assert len(result_events) == 1
         assert result_events[0]["usage"]["input_tokens"] == 0
+        assert unit.state == SessionState.IDLE
+
+
+class TestBlankResultDoesNotYieldResultEvent:
+    """Regression: a blank / blank-success result must RAISE for retry BEFORE
+    yielding any ``result`` event.
+
+    THE BUG (frontend/backend desync, observed live on session 2e87b27f):
+    the orchestrator used to yield the ``result`` SSE event and THEN run the
+    blank-result guard. A ``result`` is the frontend's definitive turn-end
+    signal — it stops the spinner, marks the tab idle, and clears pending
+    state. So the blank turn was finalized in the UI; the subsequent send()
+    respawn then streamed the retry into a tab the UI believed was done (the
+    retry's ``session_start`` arrives in ``idle`` mode → the streaming reducer
+    no-ops it and nothing re-arms ``isStreaming``). Moving the guard BEFORE the
+    yield means a blank turn never reaches the frontend as a turn-end: send()
+    respawns and the retry's ``session_start`` lands while the UI is still
+    STREAMING, so spinner/input/tab-status stay consistent with the backend.
+
+    These tests assert the ORDERING (no ``result`` leaks to the stream before
+    the raise) — something the pure-predicate tests in
+    test_blank_api_result_retry.py cannot check (they only verify the boolean).
+    """
+
+    async def _collect_until_raise(self, unit) -> list[dict]:
+        """Iterate _read_formatted_response, accumulating every event yielded
+        BEFORE the expected blank-result RuntimeError fires."""
+        events: list[dict] = []
+        with pytest.raises(RuntimeError, match="API returned empty response"):
+            async for event in unit._read_formatted_response():
+                events.append(event)
+        return events
+
+    @pytest.mark.asyncio
+    async def test_blank_success_yields_no_result_event(self):
+        """subtype="success" + 0 output + no content → raises, no result event."""
+        unit = _make_unit(session_id="test-blank-noyield")
+        msg = _make_result_message(usage={"input_tokens": 0, "output_tokens": 0})
+        msg.subtype = "success"  # the live prod signature (2e87b27f)
+        _set_mock_client(unit, [msg])
+
+        with _patch_sdk_modules():
+            events = await self._collect_until_raise(unit)
+
+        assert not any(e.get("type") == "result" for e in events), (
+            "blank-success result must NOT be yielded before the retry raises — "
+            "a result event finalizes the turn in the UI and desyncs the retry"
+        )
+
+    @pytest.mark.asyncio
+    async def test_blank_empty_subtype_yields_no_result_event(self):
+        """Empty subtype (Bedrock 429/503/timeout) → raises, no result event."""
+        unit = _make_unit(session_id="test-blank-empty")
+        msg = _make_result_message(usage={"input_tokens": 0, "output_tokens": 0})
+        msg.subtype = ""
+        _set_mock_client(unit, [msg])
+
+        with _patch_sdk_modules():
+            events = await self._collect_until_raise(unit)
+
+        assert not any(e.get("type") == "result" for e in events)
+
+    @pytest.mark.asyncio
+    async def test_blank_after_init_emits_session_start_but_not_result(self):
+        """The stream still emits session_start (the turn genuinely started),
+        but the blank result raises before any result — proving the absent
+        result event is the guard firing, not an early bail before streaming."""
+        unit = _make_unit(session_id="test-blank-init")
+
+        sys_msg = _MockSystemMessage()
+        sys_msg.subtype = "init"
+        sys_msg.data = {"session_id": "sdk-xyz"}
+        sys_msg.session_id = None
+
+        result_msg = _make_result_message(usage={"input_tokens": 0, "output_tokens": 0})
+        result_msg.subtype = "success"
+
+        _set_mock_client(unit, [sys_msg, result_msg])
+
+        with _patch_sdk_modules():
+            events = await self._collect_until_raise(unit)
+
+        types = [e.get("type") for e in events]
+        assert "session_start" in types
+        assert "result" not in types
+
+    @pytest.mark.asyncio
+    async def test_nonblank_result_still_yields_result_event(self):
+        """Guard must NOT over-capture: a normal result (output_tokens>0) still
+        yields exactly one result event and transitions to IDLE."""
+        unit = _make_unit(session_id="test-nonblank")
+        msg = _make_result_message(usage={"input_tokens": 10, "output_tokens": 50})
+        msg.subtype = "success"
+        _set_mock_client(unit, [msg])
+
+        with _patch_sdk_modules():
+            events = await _collect_events(unit)
+
+        result_events = [e for e in events if e.get("type") == "result"]
+        assert len(result_events) == 1
         assert unit.state == SessionState.IDLE
 
 

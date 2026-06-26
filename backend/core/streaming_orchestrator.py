@@ -1164,6 +1164,75 @@ class StreamingOrchestrator:
                         self._parent._content_emitted,
                     )
 
+                # ── Retry guards — MUST run BEFORE yielding `result` ──
+                # A `result` event is the definitive turn-end signal for the
+                # frontend (it stops the spinner, marks the tab idle, clears
+                # pending state). If we yield it and THEN raise-for-retry, the
+                # frontend finalizes the turn while the backend respawns and
+                # keeps streaming — a torn state: the retry's `session_start`
+                # arrives in idle mode (reducer no-op, no setIsStreaming(true))
+                # so the retried content streams into a tab the UI thinks is
+                # done. Raising HERE means a blank/degraded turn never reaches
+                # the frontend as a turn-end; send() respawns and the retry's
+                # session_start lands while still STREAMING → UI stays armed.
+                streaming_dur = (
+                    time.time() - self._parent._streaming_start_time
+                    if self._parent._streaming_start_time else None
+                )
+                output_tok = (usage.get("output_tokens") or 0) if usage else 0
+
+                # (a) Post-interrupt corruption: warm-but-broken subprocess
+                # returns an empty ResultMessage instantly (<2s, no content).
+                # See: 2026-03-22 12:36:08 instant idle after interrupt.
+                if (
+                    streaming_dur is not None
+                    and streaming_dur < 2.0
+                    and not self._parent._content_emitted
+                    and not is_error
+                    and saw_assistant_message  # Only degraded if LLM tried to respond
+                ):
+                    logger.warning(
+                        "session_unit.empty_result_detected "
+                        "session_id=%s duration=%.3fs — subprocess "
+                        "degraded after interrupt, killing for respawn",
+                        self._parent.session_id, streaming_dur,
+                    )
+                    await self._parent.kill()
+                    raise RuntimeError(
+                        f"Empty result from degraded subprocess: "
+                        f"stream ended in {streaming_dur:.1f}s with no "
+                        f"content (session_id={self._parent.session_id})"
+                    )
+
+                # (b) API empty / blank-success no-op at any duration:
+                # Bedrock 429/503/timeout (empty subtype) OR a subtype="success"
+                # envelope with 0 output tokens and no content — the live
+                # blank-turn bug (session 2e87b27f 2026-06-26 17:43). Raising
+                # triggers the send() retry loop (string matched by
+                # _is_retriable_error). Predicate shared with the regression
+                # test via _is_blank_api_result so the two can never drift.
+                if _is_blank_api_result(
+                    content_emitted=self._parent._content_emitted,
+                    is_error=is_error,
+                    interrupted=self._parent._interrupted,
+                    output_tokens=output_tok,
+                    subtype=subtype,
+                ):
+                    logger.warning(
+                        "session_unit.api_empty_response session_id=%s "
+                        "duration=%.1fs output_tokens=0 subtype='%s' — "
+                        "raising for retry (before result yield)",
+                        self._parent.session_id,
+                        streaming_dur or 0,
+                        subtype,
+                    )
+                    raise RuntimeError(
+                        f"API returned empty response (output_tokens=0, "
+                        f"duration={(streaming_dur or 0):.1f}s) — likely "
+                        f"transient 429/503/timeout "
+                        f"(session_id={self._parent.session_id})"
+                    )
+
                 yield {
                     "type": "result",
                     "subtype": subtype,
@@ -1233,68 +1302,11 @@ class StreamingOrchestrator:
                             self._parent.session_id, mcp_exc,
                         )
 
-                # ── Post-interrupt corruption detection ────────────
-                # After a CompactionGuard interrupt, the CLI subprocess
-                # may stay alive but return empty ResultMessages instantly
-                # (<2s, no content).  The subprocess is "warm but broken."
-                # Kill it so the retry logic can respawn a fresh process.
-                # See: 2026-03-22 12:36:08 instant idle after interrupt.
-                streaming_dur = (
-                    time.time() - self._parent._streaming_start_time
-                    if self._parent._streaming_start_time else None
-                )
-                if (
-                    streaming_dur is not None
-                    and streaming_dur < 2.0
-                    and not self._parent._content_emitted
-                    and not is_error
-                    and saw_assistant_message  # Only degraded if LLM tried to respond
-                ):
-                    logger.warning(
-                        "session_unit.empty_result_detected "
-                        "session_id=%s duration=%.3fs — subprocess "
-                        "degraded after interrupt, killing for respawn",
-                        self._parent.session_id, streaming_dur,
-                    )
-                    await self._parent.kill()
-                    raise RuntimeError(
-                        f"Empty result from degraded subprocess: "
-                        f"stream ended in {streaming_dur:.1f}s with no "
-                        f"content (session_id={self._parent.session_id})"
-                    )
-
-                # ── API empty / blank-success response detection ──────
-                # Catches: (a) Bedrock 429/503/timeout that returns a
-                # ResultMessage with empty subtype + 0 output, and (b) a
-                # subtype="success" envelope that nonetheless produced 0 output
-                # tokens and no content — the live blank-turn bug (session
-                # 2e87b27f 2026-06-26 17:43: 0in/0out success → blank, no retry).
-                # The <2s guard above catches subprocess corruption; this catches
-                # API-level no-ops at any duration. Raising triggers the existing
-                # send() retry loop (string matched by _is_retriable_error).
-                # Predicate lives in _is_blank_api_result so guard + test share it.
-                output_tok = (usage.get("output_tokens") or 0) if usage else 0
-                if _is_blank_api_result(
-                    content_emitted=self._parent._content_emitted,
-                    is_error=is_error,
-                    interrupted=self._parent._interrupted,
-                    output_tokens=output_tok,
-                    subtype=subtype,
-                ):
-                    logger.warning(
-                        "session_unit.api_empty_response session_id=%s "
-                        "duration=%.1fs output_tokens=0 subtype='%s' — "
-                        "raising for retry",
-                        self._parent.session_id,
-                        streaming_dur or 0,
-                        subtype,
-                    )
-                    raise RuntimeError(
-                        f"API returned empty response (output_tokens=0, "
-                        f"duration={(streaming_dur or 0):.1f}s) — likely "
-                        f"transient 429/503/timeout "
-                        f"(session_id={self._parent.session_id})"
-                    )
+                # ── Post-interrupt corruption & blank-result retry guards ──
+                # MOVED earlier — these now run BEFORE the `result` yield above
+                # (a blank/degraded turn must never reach the frontend as a
+                # turn-end, or the retry streams into a UI that thinks it's
+                # done). See the "Retry guards" block above the yield.
 
                 self._parent._transition(SessionState.IDLE)
                 self._parent.last_used = time.time()
