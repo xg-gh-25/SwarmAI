@@ -791,7 +791,13 @@ function TrendsTab() {
     <div className="max-w-5xl mx-auto p-6">
       <h3 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wide mb-4">Overall Score Trend</h3>
       <div className="p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] mb-8">
-        <Sparkline values={runs.map(r => r.overall_score ?? 0)} height={48} color="var(--color-primary)" />
+        <Sparkline
+          values={runs.map(r => r.overall_score ?? 0)}
+          dates={runs.map(r => r.triggered_at?.slice(0, 10) ?? '')}
+          axis
+          height={48}
+          color="var(--color-primary)"
+        />
         <div className="flex justify-between text-[9px] text-[var(--color-text-muted)] mt-1 font-mono">
           <span>{runs[0]?.triggered_at?.slice(0, 10)}</span>
           <span>{runs[runs.length - 1]?.triggered_at?.slice(0, 10)}</span>
@@ -1744,7 +1750,7 @@ function ErrorState({ message }: { message: string }) {
 
 // ─── Sparkline SVG ──────────────────────────────────────────────────────────
 
-function Sparkline({ values, height = 32, color = 'var(--color-primary)' }: { values: number[]; height?: number; color?: string }) {
+function Sparkline({ values, height = 32, color = 'var(--color-primary)', dates, axis = false }: { values: number[]; height?: number; color?: string; dates?: string[]; axis?: boolean }) {
   if (values.length < 2) return null;
 
   const width = 200;
@@ -1752,29 +1758,48 @@ function Sparkline({ values, height = 32, color = 'var(--color-primary)' }: { va
   const max = Math.max(...values);
   const range = max - min || 1;
 
-  const points = values.map((v, i) => {
-    const x = (i / (values.length - 1)) * width;
-    const y = height - ((v - min) / range) * (height - 4) - 2;
-    return `${x},${y}`;
-  });
+  const coords = values.map((v, i) => ({
+    x: (i / (values.length - 1)) * width,
+    y: height - ((v - min) / range) * (height - 4) - 2,
+    v,
+    // dates is optional + may not line up 1:1 with values — guard the lookup.
+    d: dates && dates.length === values.length ? dates[i] : undefined,
+  }));
+  const points = coords.map((p) => `${p.x},${p.y}`);
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="w-full" style={{ height }} preserveAspectRatio="none">
-      <polyline
-        points={points.join(' ')}
-        fill="none"
-        stroke={color}
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      {/* Fill area under the line */}
-      <polygon
-        points={`0,${height} ${points.join(' ')} ${width},${height}`}
-        fill={color}
-        opacity="0.1"
-      />
-    </svg>
+    <div className={axis ? 'flex items-stretch gap-1.5' : ''}>
+      {/* Optional y-axis min/max labels (only when axis requested) */}
+      {axis && (
+        <div className="flex flex-col justify-between text-[8px] text-[var(--color-text-muted)] font-mono py-0.5 shrink-0" style={{ height }}>
+          <span>{Math.round(max)}</span>
+          <span>{Math.round(min)}</span>
+        </div>
+      )}
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full" style={{ height }} preserveAspectRatio="none">
+        <polyline
+          points={points.join(' ')}
+          fill="none"
+          stroke={color}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        {/* Fill area under the line */}
+        <polygon
+          points={`0,${height} ${points.join(' ')} ${width},${height}`}
+          fill={color}
+          opacity="0.1"
+        />
+        {/* Data points with hover tooltip (date + score). Non-scaling radius via
+            vector-effect so points stay round despite preserveAspectRatio=none. */}
+        {coords.map((p, i) => (
+          <circle key={i} cx={p.x} cy={p.y} r={2.5} fill={color} vectorEffect="non-scaling-stroke" style={{ transformBox: 'fill-box' }}>
+            <title>{p.d ? `${p.d}: ${Math.round(p.v)}` : `${Math.round(p.v)}`}</title>
+          </circle>
+        ))}
+      </svg>
+    </div>
   );
 }
 
