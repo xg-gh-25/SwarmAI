@@ -45,6 +45,7 @@ Public symbols:
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -863,6 +864,26 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
     run_state = json.loads(run_file.read_text(encoding="utf-8"))
 
     if args.status:
+        # ── Single choke-point for the paused transition (COE10 dual-write guard) ──
+        # run-update --status paused is the OTHER door to a pause; it must honor the
+        # same confabulation gate as run-checkpoint, or the gate is trivially bypassed
+        # (adversarial run_a822b3e8 finding F). run-checkpoint is the sanctioned pause
+        # path (it also writes the checkpoint artifact + Radar todo); a bare status
+        # flip to paused is refused unless it already measures should_checkpoint=true
+        # or carries --force-checkpoint.
+        if args.status == "paused" and not getattr(args, "force_checkpoint", False):
+            _info = _compute_should_checkpoint(run_state, args.project)
+            if not _info["should_checkpoint"]:
+                print(json.dumps({
+                    "blocked": True,
+                    "error": "PAUSE REFUSED via run-update — use `run-checkpoint` "
+                             "(the sanctioned pause path) or pass --force-checkpoint. "
+                             "should_checkpoint=false. continue, period.",
+                    "measurement": {"should_checkpoint": False,
+                                    "pct_consumed": _info["pct_consumed"],
+                                    "consumed": _info["consumed"]},
+                }), file=sys.stderr)
+                sys.exit(2)
         run_state["status"] = args.status
         if args.status == "running":
             # ── Lifecycle: auto-abandon stale same-project running runs ──
@@ -1484,33 +1505,142 @@ def _run_summary(state: dict) -> dict:
     }
 
 
+# ── Checkpoint guard vocabulary (single source of truth) ──────────────
+# True triggers: a checkpoint with any of these in its reason is a REAL,
+# measurement- or event-backed pause and is always allowed.
+_CHECKPOINT_TRUE_TRIGGERS = (
+    "budget", "l2", "block", "error", "crash", "escalat", "stuck",
+    "judgment", "retry", "gate_spawn_blocked", "exhaust",
+    "git revert", "external", "mutation", "re-baseline",  # event-triggers (GC11 kept half)
+)
+# Confabulation denylist: self-state narratives that are NOT measurable signals.
+# A reason matching these is force-blocked (overridable ONLY by --force-checkpoint),
+# even if it ALSO contains a true-trigger word — fake caution must never ride in
+# on a borrowed justification. This is the structural fix for the
+# "confabulated-self-state" bug class (CLASS A's evasion-mirror): the agent has no
+# fatigue/session-length state to report; such claims are confabulation, not data.
+_CHECKPOINT_CONFABULATION_DENYLIST = (
+    r"\bfatigue\b", r"\btired\b", "疲劳", "疲倦", "累了", "累。",
+    r"session\b.*\blong\b", r"\blong\b.*\bsession\b", "session 长", "长 session", "很长",
+    r"\bbeen at this\b", r"\ba while\b", r"\bstepping back\b",
+    "quality risk", r"quality.*degrad", "降智",
+    r"context\b.*\bfull\b", "context 满", r"context.*getting full", r"lots of context",
+    "clean attention", "fresh-context", "fresh context", "fresh session", "fresh start",
+    r"\bfresh\b.*\bstart\b", r"\bclarity\b", r"\bbreather\b",
+    r"\bfeeling\b", r"\bi feel\b", r"sense that", r"i think we should pause",
+)
+
+
+def _checkpoint_reason_has_true_trigger(reason: str) -> bool:
+    """True iff reason contains a true-trigger as a WHOLE WORD (not substring).
+
+    Substring matching let 'blocked'/'roadblock' satisfy 'block' and 'budget hygiene'
+    satisfy 'budget' — a confabulation reason rode a borrowed keyword (adversarial
+    run_a822b3e8). Word-boundary match closes that.
+    """
+    r = reason.lower()
+    for t in _CHECKPOINT_TRUE_TRIGGERS:
+        # multi-word/event triggers (e.g. "git revert", "re-baseline") match as phrase;
+        # single tokens must match on a word boundary.
+        pat = re.escape(t) if " " in t or "-" in t or "_" in t else rf"\b{re.escape(t)}\b"
+        if re.search(pat, r):
+            return True
+    return False
+
+
+def _checkpoint_reason_hits_denylist(reason: str) -> bool:
+    """True iff reason matches any confabulation pattern (already word-bounded)."""
+    r = reason.lower()
+    return any(re.search(p, r) for p in _CHECKPOINT_CONFABULATION_DENYLIST)
+
+
+def _compute_should_checkpoint(run_state: dict, project: str) -> dict:
+    """Compute should_checkpoint + budget numbers for a run (single source).
+
+    Extracted so cmd_run_budget AND the checkpoint guard share ONE calculation
+    (STEERING #3 — no duplicate logic). Returns the dict run-budget reports.
+    """
+    budget = run_state.get("budget", _estimate_session_budget(project))
+    consumed = sum(s.get("token_cost", 0) for s in run_state.get("stages", []))
+    remaining = budget["session_total"] - consumed
+    usable = remaining - budget["checkpoint_reserve"]
+
+    completed_stages = {s.get("stage", s.get("name", "unknown")) for s in run_state.get("stages", []) if s.get("status") == "completed"}
+    profile_stages = _get_profile_stages(run_state.get("profile", "full"))
+    next_stage = next((s for s in profile_stages if s not in completed_stages), None)
+    next_stage_estimate = budget.get("stage_estimates", DEFAULT_STAGE_BUDGETS).get(next_stage, 30_000) if next_stage else 0
+
+    should_checkpoint = next_stage is not None and usable < next_stage_estimate
+    pct_consumed = consumed / budget["session_total"] if budget["session_total"] > 0 else 0
+    if pct_consumed > 0.7 and next_stage:
+        should_checkpoint = True
+
+    return {
+        "consumed": consumed, "remaining": remaining, "usable": usable,
+        "pct_consumed": round(pct_consumed * 100, 1), "next_stage": next_stage,
+        "next_stage_estimate": next_stage_estimate, "should_checkpoint": should_checkpoint,
+        "budget_total": budget["session_total"],
+        "calibration_source": budget.get("calibration_source", "defaults"),
+    }
+
+
 def cmd_run_checkpoint(args, reg: ArtifactRegistry) -> None:
     """Atomic checkpoint: pause run + publish checkpoint artifact + create Radar todo.
 
-    LL07 enforcement: emits warning if checkpoint is called without run-budget
-    showing should_checkpoint=true. Prevents feeling-based checkpoints that
-    waste context restart overhead (~15K tokens per resume).
+    HARD GATE (was a steamroll-able warning until run_a822b3e8): a checkpoint is
+    BLOCKED — exit 2, before ANY state mutation — when the measurement says there
+    is no reason to pause (should_checkpoint=false) AND the reason carries no true
+    trigger AND --force-checkpoint was not passed. A confabulation-denylist reason
+    (fatigue / "session long" / "fresh-context" / quality-risk) is force-blocked
+    regardless of should_checkpoint, overridable only by --force-checkpoint.
+
+    Why a block, not a warning: the prior warning fired and was ignored in the
+    very session this fix was built (run_1e2e663b checkpointed at 3.4% budget on
+    a "fresh-context clean attention" reason). Model proposes; the OS, reading the
+    measurement, disposes. A judgment class that has misfired repeatedly does not
+    get to make the call — the gate makes it.
     """
     import sys as _sys
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat()
 
-    # ── LL07: Checkpoint without evidence warning ──
-    # The agent MUST run run-budget before checkpointing. If reason doesn't
-    # mention budget/L2/error/crash, it's likely a feeling-based checkpoint.
-    _valid_reasons = ("budget", "l2", "block", "error", "crash", "escalat", "stuck")
-    reason_lower = (args.reason or "").lower()
-    if not any(r in reason_lower for r in _valid_reasons):
-        print(json.dumps({
-            "warning": "LL07: Checkpoint called without budget/L2/error justification. "
-                       "Did you run `run-budget` first? Context restart costs ~15K tokens. "
-                       "If context is actually fine, consider continuing instead of checkpointing.",
-            "pipeline_id": args.run_id,
-            "reason_given": args.reason,
-        }), file=_sys.stderr)
-
     run_file = _resolve_run_file(args.project, args.run_id)
     run_state = json.loads(run_file.read_text(encoding="utf-8"))
+
+    # ── CONFABULATION GUARD (hard block, before any mutation) ──
+    forced = getattr(args, "force_checkpoint", False)
+    budget_info = _compute_should_checkpoint(run_state, args.project)
+    measured_checkpoint = budget_info["should_checkpoint"]
+    has_true_trigger = _checkpoint_reason_has_true_trigger(args.reason or "")
+    hits_denylist = _checkpoint_reason_hits_denylist(args.reason or "")
+
+    # Block conditions (either one), unless explicitly forced:
+    #  (a) confabulation reason — fake self-state caution
+    #  (b) no measured need AND no true trigger — feeling-based pause
+    block = (not forced) and (
+        hits_denylist or (not measured_checkpoint and not has_true_trigger)
+    )
+    if block:
+        why = ("reason matches the confabulation denylist (self-state is not a "
+               "measurable signal — you are stateless per-turn)" if hits_denylist
+               else "should_checkpoint=false and no true-trigger reason")
+        print(json.dumps({
+            "blocked": True,
+            "error": "CHECKPOINT REFUSED — " + why + ". continue, period.",
+            "measurement": {
+                "should_checkpoint": measured_checkpoint,
+                "pct_consumed": budget_info["pct_consumed"],
+                "consumed": budget_info["consumed"],
+                "usable": budget_info["usable"],
+                "next_stage": budget_info["next_stage"],
+            },
+            "reason_given": args.reason,
+            "remedy": ("If this is a REAL pause, state a true trigger "
+                       "(judgment-class decision / L2 block / retry-exhausted / "
+                       "budget / external-git-mutation) or pass --force-checkpoint "
+                       "with a measurement-backed justification."),
+        }), file=_sys.stderr)
+        _sys.exit(2)
 
     # 1. Pause the run
     run_state["status"] = "paused"
@@ -1524,6 +1654,8 @@ def cmd_run_checkpoint(args, reg: ArtifactRegistry) -> None:
         "checkpointed_at": now,
         "completed_stages": completed_stages,
         "taste_decisions_pending": len(run_state.get("taste_decisions", [])),
+        "forced": forced,  # True = guard overridden via --force-checkpoint (auditable)
+        "should_checkpoint_at_pause": measured_checkpoint,
     }
     run_state["checkpoint"] = checkpoint_meta
     run_file.write_text(json.dumps(run_state, indent=2), encoding="utf-8")
@@ -1734,48 +1866,28 @@ def cmd_run_budget(args, reg: ArtifactRegistry) -> None:
     """
     run_file = _resolve_run_file(args.project, args.run_id)
     run_state = json.loads(run_file.read_text(encoding="utf-8"))
-    budget = run_state.get("budget", _estimate_session_budget(args.project))
 
-    # Calculate consumed from completed stages
-    consumed = sum(s.get("token_cost", 0) for s in run_state.get("stages", []))
-    remaining = budget["session_total"] - consumed
-    usable = remaining - budget["checkpoint_reserve"]
-
-    # Determine next stage
-    completed_stages = {s.get("stage", s.get("name", "unknown")) for s in run_state.get("stages", []) if s.get("status") == "completed"}
-    profile_stages = _get_profile_stages(run_state.get("profile", "full"))
-    next_stage = None
-    for s in profile_stages:
-        if s not in completed_stages:
-            next_stage = s
-            break
-
-    next_stage_estimate = budget.get("stage_estimates", DEFAULT_STAGE_BUDGETS).get(next_stage, 30_000) if next_stage else 0
-    should_checkpoint = next_stage is not None and usable < next_stage_estimate
-
-    # Quality check: checkpoint if >70% consumed (context degradation)
-    pct_consumed = consumed / budget["session_total"] if budget["session_total"] > 0 else 0
-    if pct_consumed > 0.7 and next_stage:
-        should_checkpoint = True
-
+    # Single source of truth for should_checkpoint + budget numbers (STEERING #3).
+    info = _compute_should_checkpoint(run_state, args.project)
+    next_stage = info["next_stage"]
     result = {
         "pipeline_id": args.run_id,
-        "budget_total": budget["session_total"],
-        "consumed": consumed,
-        "remaining": remaining,
-        "usable": usable,
-        "pct_consumed": round(pct_consumed * 100, 1),
+        "budget_total": info["budget_total"],
+        "consumed": info["consumed"],
+        "remaining": info["remaining"],
+        "usable": info["usable"],
+        "pct_consumed": info["pct_consumed"],
         "next_stage": next_stage,
-        "next_stage_estimate": next_stage_estimate,
-        "should_checkpoint": should_checkpoint,
+        "next_stage_estimate": info["next_stage_estimate"],
+        "should_checkpoint": info["should_checkpoint"],
         "reason": (
-            f"Budget insufficient for {next_stage} (need {next_stage_estimate}, have {usable})"
-            if should_checkpoint and usable < next_stage_estimate
-            else f"Context quality degradation (>{int(pct_consumed*100)}% consumed)"
-            if should_checkpoint
+            f"Budget insufficient for {next_stage} (need {info['next_stage_estimate']}, have {info['usable']})"
+            if info["should_checkpoint"] and info["usable"] < info["next_stage_estimate"]
+            else f"Context quality degradation (>{int(info['consumed'] / info['budget_total'] * 100) if info['budget_total'] else 0}% consumed)"
+            if info["should_checkpoint"]
             else "Budget OK"
         ),
-        "calibration_source": budget.get("calibration_source", "defaults"),
+        "calibration_source": info["calibration_source"],
     }
     print(json.dumps(result, indent=2))
 
@@ -3258,6 +3370,7 @@ def main() -> None:
     p_run_update.add_argument("--taste-decision", default=None, help="Taste decision JSON to append")
     p_run_update.add_argument("--profile", default=None, help="Pipeline profile override")
     p_run_update.add_argument("--ddd-checksums", default=None, help="DDD doc checksums JSON (from ddd-check)")
+    p_run_update.add_argument("--force-checkpoint", action="store_true", help="Override the confabulation guard when setting --status paused")
 
     # run-get
     p_run_get = sub.add_parser("run-get", help="Get pipeline run state")
@@ -3270,6 +3383,12 @@ def main() -> None:
     p_run_cp.add_argument("--run-id", required=True, help="Pipeline run ID")
     p_run_cp.add_argument("--stage", required=True, help="Stage where pipeline paused")
     p_run_cp.add_argument("--reason", required=True, help="Why the pipeline paused")
+    p_run_cp.add_argument(
+        "--force-checkpoint", action="store_true",
+        help="Override the confabulation guard. Required to checkpoint when "
+             "should_checkpoint=false and the reason is not a true trigger. "
+             "Use ONLY for a deliberate checkpoint you can justify with a measurement.",
+    )
 
     # run-history
     p_run_hist = sub.add_parser("run-history", help="Historical token costs for calibration")

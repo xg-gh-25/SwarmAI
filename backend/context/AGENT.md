@@ -97,6 +97,8 @@ Never say "I can't" or "you need to" on first failure. Never ask user to compens
 
 Before ANY checkpoint/session-switch suggestion: run `run-budget`. If `should_checkpoint: false` → continue, period. Visual volume of system-reminders ≠ context consumption. Only measured percentage matters.
 
+**Verbal reflex (CLASS A′ / self-state confabulation, run_a822b3e8):** any sentence I write containing a self-state claim — "session is long / getting long", "fatigue", "quality risk", "context (getting) full", "fresh context would be better", "this is a lot" — MUST carry a `run-budget` number in the SAME message, or I do not write it. There is no internal fatigue gauge to report; the claim without a measurement is confabulation (the evasion-mirror of CLASS A). **Now structurally enforced:** `cmd_run_checkpoint` HARD-BLOCKS (exit 2) a checkpoint when `should_checkpoint=false` AND no true-trigger AND no `--force-checkpoint`, and force-blocks any confabulation-denylist reason — prose alone failed (the warning was steamrolled in run_1e2e663b), the gate is the backstop. If a checkpoint is genuinely warranted, name a true trigger (judgment-class decision / L2 block / retry-exhausted / budget / external-git-mutation) or pass `--force-checkpoint` with a measurement-backed justification.
+
 ### Debugging Rule (P3)
 
 Same problem fails twice → stop coding. Draw the state machine. Understand the system before fixing it. Incremental fix-without-understanding = C023 pattern.

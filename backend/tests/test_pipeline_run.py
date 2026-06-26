@@ -719,16 +719,107 @@ class TestRunCheckpoint:
         assert artifacts["count"] >= 1
 
     def test_checkpoint_without_db_still_works(self, workspace, run_with_stages):
-        """Checkpoint should succeed even if todo DB doesn't exist (no Radar todo)."""
+        """Checkpoint should succeed even if todo DB doesn't exist (no Radar todo).
+
+        Uses --force-checkpoint: this is a MECHANISM test (not a real decay event),
+        and the reason 'Test without DB' has no true-trigger, so the confabulation
+        guard (run_a822b3e8) would otherwise block it. Forcing is the correct,
+        auditable way to checkpoint deliberately in a test.
+        """
         # The workspace tmp_path won't have ~/.swarm-ai/data.db
         result = _run_cli(workspace, "run-checkpoint",
                           "--project", "TestProject",
                           "--run-id", run_with_stages,
                           "--stage", "plan",
-                          "--reason", "Test without DB")
+                          "--reason", "Test without DB",
+                          "--force-checkpoint")
         assert result["status"] == "paused"
         # radar_todo may be None or have an error — that's fine
         assert result["checkpoint_artifact"] is not None
+
+    # ── Confabulation guard (run_a822b3e8): warning -> hard block ──
+
+    def test_checkpoint_blocked_on_confabulation_reason(self, workspace, run_with_stages):
+        """A fatigue/'fresh-context' reason at should_checkpoint=false is REFUSED
+        (exit 2, run NOT paused). This is the exact bug from run_1e2e663b."""
+        result = _run_cli(workspace, "run-checkpoint",
+                          "--project", "TestProject",
+                          "--run-id", run_with_stages,
+                          "--stage", "build",
+                          "--reason", "Fresh-context BUILD — clean attention, session long")
+        assert result.get("blocked") is True
+        assert "CHECKPOINT REFUSED" in result["error"]
+        assert "measurement" in result
+        # Run must NOT be paused — the block happens before any mutation.
+        state = _run_cli(workspace, "run-get",
+                         "--project", "TestProject", "--run-id", run_with_stages)
+        assert state["status"] != "paused"
+
+    def test_checkpoint_blocked_when_no_trigger_and_budget_ok(self, workspace, run_with_stages):
+        """No true-trigger + should_checkpoint=false (tiny consumed) -> blocked,
+        even without a denylist word."""
+        result = _run_cli(workspace, "run-checkpoint",
+                          "--project", "TestProject",
+                          "--run-id", run_with_stages,
+                          "--stage", "build",
+                          "--reason", "just pausing here")
+        assert result.get("blocked") is True
+
+    def test_checkpoint_allowed_on_true_trigger(self, workspace, run_with_stages):
+        """A true-trigger reason (L2 block) checkpoints normally even at low budget."""
+        result = _run_cli(workspace, "run-checkpoint",
+                          "--project", "TestProject",
+                          "--run-id", run_with_stages,
+                          "--stage", "build",
+                          "--reason", "L2 BLOCK: genuine judgment-class decision")
+        assert result["status"] == "paused"
+
+    def test_runupdate_paused_blocked_without_force(self, workspace, run_with_stages):
+        """The SECOND pause door — run-update --status paused — honors the same
+        guard (adversarial run_a822b3e8 finding F: COE10 dual-write class)."""
+        result = _run_cli(workspace, "run-update",
+                          "--project", "TestProject",
+                          "--run-id", run_with_stages,
+                          "--status", "paused")
+        assert result.get("blocked") is True
+        state = _run_cli(workspace, "run-get",
+                         "--project", "TestProject", "--run-id", run_with_stages)
+        assert state["status"] != "paused"
+
+    def test_runupdate_paused_allowed_with_force(self, workspace, run_with_stages):
+        """run-update --status paused --force-checkpoint is allowed (deliberate)."""
+        _run_cli(workspace, "run-update",
+                 "--project", "TestProject",
+                 "--run-id", run_with_stages,
+                 "--status", "paused", "--force-checkpoint")
+        state = _run_cli(workspace, "run-get",
+                         "--project", "TestProject", "--run-id", run_with_stages)
+        assert state["status"] == "paused"
+
+    def test_checkpoint_keyword_stuffing_blocked(self, workspace, run_with_stages):
+        """A confabulation reason that merely CONTAINS a trigger substring
+        ('blocked' / 'budget hygiene') no longer rides through (word-boundary +
+        denylist precedence — adversarial finding B)."""
+        result = _run_cli(workspace, "run-checkpoint",
+                          "--project", "TestProject",
+                          "--run-id", run_with_stages,
+                          "--stage", "build",
+                          "--reason", "I feel mentally blocked and need a fresh start")
+        assert result.get("blocked") is True
+
+    def test_checkpoint_force_overrides_block(self, workspace, run_with_stages):
+        """--force-checkpoint bypasses the guard even on a confabulation reason,
+        and the override is recorded as auditable."""
+        result = _run_cli(workspace, "run-checkpoint",
+                          "--project", "TestProject",
+                          "--run-id", run_with_stages,
+                          "--stage", "build",
+                          "--reason", "fatigue — I feel this is getting long",
+                          "--force-checkpoint")
+        assert result["status"] == "paused"
+        state = _run_cli(workspace, "run-get",
+                         "--project", "TestProject", "--run-id", run_with_stages)
+        assert state["checkpoint"]["forced"] is True
 
 
 # ── v3 Tests: Status, Resume, Multi-Project ─────────────────────────
@@ -813,7 +904,8 @@ class TestRunResume:
                  }))
         _run_cli(workspace, "run-checkpoint", "--project", "TestProject",
                  "--run-id", rid, "--stage", "think",
-                 "--reason", "Test checkpoint for resume")
+                 "--reason", "Test checkpoint for resume",
+                 "--force-checkpoint")  # mechanism fixture — guard would block otherwise
         return rid
 
     def test_resume_sets_running(self, workspace, paused_run):
