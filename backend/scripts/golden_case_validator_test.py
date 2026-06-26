@@ -13,7 +13,13 @@ def _ok_case(cid="GS_NEW", **over):
         "id": cid, "category": "compliance", "dimension": "compliance",
         "eval_method": "programmatic", "affected_by": ["backend/core/x.py"],
         "evaluators": ["file_contains"],
-        "verification": {"file": "backend/core/x.py", "grep": "class Foo"},
+        # gate-eligible (programmatic + file_contains) → gate_teeth requires a
+        # negative_command (added when run_5edf2cc0 wired gate_teeth into
+        # validate_case). Tests that call gate_* helpers directly override
+        # verification and bypass teeth; the validate_case-level tests use this
+        # default and need the field present.
+        "verification": {"file": "backend/core/x.py", "grep": "class Foo",
+                         "negative_command": "grep -q 'class Foo' /dev/null"},
     }
     c.update(over)
     return c
