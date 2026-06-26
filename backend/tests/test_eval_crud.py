@@ -363,17 +363,23 @@ class TestPersistPreservesDiskOnlyCases:
 
     def test_id_less_in_memory_case_still_written(self, svc, eval_workspace):
         """Gate-1 edge: an in-memory case with a falsy/absent id must still be
-        written (falls to the else-branch), and must NOT poison the disk-only
-        dedup (it is never added to merged_ids, but disk_cases only keys truthy
-        ids so there is no collision)."""
+        PRESERVED on persist (not dropped). Under the public/private split
+        (run_69b1c644), an untagged case routes to the PRIVATE file (fail-closed
+        default — never auto-publish a case that didn't go through PROMOTE).
+        The data-loss guard still holds; only the destination is private."""
         svc._cases.append({"title": "no id here", "category": "compliance"})
         svc.update_case("GS001", {"title": "touch"})  # triggers persist
 
         import yaml
-        path = eval_workspace / "Projects" / "SwarmAI" / "golden_set.yaml"
-        data = yaml.safe_load(path.read_text())
-        titles = [c.get("title") for c in data["cases"]]
-        assert "no id here" in titles, "id-less in-memory case was dropped on persist"
+        proj = eval_workspace / "Projects" / "SwarmAI"
+        pub = yaml.safe_load((proj / "golden_set.yaml").read_text())
+        priv_path = proj / "golden_set.private.yaml"
+        priv = yaml.safe_load(priv_path.read_text()) if priv_path.exists() else {"cases": []}
+        all_titles = [c.get("title") for c in pub["cases"] + priv.get("cases", [])]
+        assert "no id here" in all_titles, "id-less in-memory case was dropped on persist"
+        # fail-closed: untagged case must NOT auto-land in the tracked public file
+        pub_titles = [c.get("title") for c in pub["cases"]]
+        assert "no id here" not in pub_titles, "untagged case leaked into public file"
 
 
 class TestPersistCrossProcessLock:

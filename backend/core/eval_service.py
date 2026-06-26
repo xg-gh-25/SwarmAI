@@ -52,6 +52,7 @@ class EvalService:
             self._workspace_root = Path.home()
             self._project_dir = self._workspace_root / "nonexistent"
             self._golden_set_path = self._project_dir / "golden_set.yaml"
+            self._private_golden_set_path = self._project_dir / "golden_set.private.yaml"
             self._history_dir = self._project_dir / "EvalHistory"
             return
         else:
@@ -59,6 +60,9 @@ class EvalService:
 
         self._project_dir = self._workspace_root / "Projects" / "SwarmAI"
         self._golden_set_path = self._project_dir / "golden_set.yaml"
+        # Private (gitignored) instance cases — merged at load, written back to
+        # their OWN file so they never leak into the tracked public file.
+        self._private_golden_set_path = self._project_dir / "golden_set.private.yaml"
         self._history_dir = self._project_dir / "EvalHistory"
         self._load()
 
@@ -80,28 +84,66 @@ class EvalService:
         self._load_history()
 
     def _load_golden_set(self) -> None:
-        """Parse golden_set.yaml."""
-        if not self._golden_set_path.exists():
-            logger.warning("eval_service: golden_set.yaml not found at %s", self._golden_set_path)
-            self._golden_set = {"version": 2, "cases": []}
-            self._cases = []
-            return
+        """Parse golden_set.yaml (public) + golden_set.private.yaml (private),
+        merging both into self._cases with an internal ``_origin`` tag on each
+        case ("public" | "private"). The private file is OPTIONAL — when absent
+        (e.g. someone clones the public repo) only public cases load.
 
+        ``_origin`` drives the split-write (_merge_and_write) so a private case
+        is never serialized into the tracked public file (Gate-1 CRITICAL).
+        It is stripped on serialize — never written to disk.
+        """
         if yaml is None:
             logger.warning("eval_service: PyYAML not available, golden set not loaded")
             self._golden_set = {"version": 2, "cases": []}
             self._cases = []
             return
 
-        try:
-            with open(self._golden_set_path, encoding="utf-8") as f:
-                self._golden_set = yaml.safe_load(f) or {}
-            self._cases = self._golden_set.get("cases", [])
-            logger.info("eval_service: loaded %d cases from golden_set.yaml", len(self._cases))
-        except Exception as e:
-            logger.error("eval_service: failed to parse golden_set.yaml: %s", e)
-            self._golden_set = {"version": 2, "cases": []}
-            self._cases = []
+        def _read(path: Path) -> dict:
+            if not path.exists():
+                return {}
+            try:
+                with open(path, encoding="utf-8") as f:
+                    return yaml.safe_load(f) or {}
+            except Exception as e:
+                logger.error("eval_service: failed to parse %s: %s", path.name, e)
+                return {}
+
+        public_data = _read(self._golden_set_path)
+        private_data = _read(self._private_golden_set_path)
+
+        if not self._golden_set_path.exists() and not self._private_golden_set_path.exists():
+            logger.warning("eval_service: no golden_set.yaml found at %s", self._golden_set_path)
+
+        # Keep the public dict as the canonical container metadata (version,
+        # categories, dimensions). Private contributes only cases.
+        self._golden_set = public_data or {"version": 2, "cases": []}
+
+        merged: list[dict] = []
+        seen: dict[str, str] = {}  # id -> origin (collision detection)
+        for origin, data in (("public", public_data), ("private", private_data)):
+            for case in data.get("cases", []) or []:
+                cid = case.get("id")
+                if cid and cid in seen:
+                    raise ValueError(
+                        f"eval_service: golden-set id collision '{cid}' present in "
+                        f"both {seen[cid]} and {origin} files — fix the migration "
+                        f"(an id must live in exactly one file)."
+                    )
+                if cid:
+                    seen[cid] = origin
+                tagged = dict(case)
+                tagged["_origin"] = origin
+                merged.append(tagged)
+
+        self._cases = merged
+        self._golden_set["cases"] = merged
+        logger.info(
+            "eval_service: loaded %d cases (%d public, %d private)",
+            len(merged),
+            sum(1 for c in merged if c.get("_origin") == "public"),
+            sum(1 for c in merged if c.get("_origin") == "private"),
+        )
 
     def _load_history(self) -> None:
         """Parse all JSON files in EvalHistory/."""
@@ -827,90 +869,106 @@ class EvalService:
         # release AFTER the rename) so the merge always sees a quiescent file.
         # flock auto-releases if the holder process dies, so no stale lock.
         # (run_0fac5a91, todo 7e233ecb — closes the TOCTOU narrowed by run_fb4b42d2.)
-        lock_path = self._golden_set_path.with_suffix(
-            self._golden_set_path.suffix + ".lock"
+        # Lock BOTH files for the whole split read-modify-write (public + private).
+        # Acquire in a fixed order (public then private) to avoid deadlock between
+        # two processes. flock auto-releases on holder death (no stale lock).
+        public_lock = open(
+            self._golden_set_path.with_suffix(self._golden_set_path.suffix + ".lock"), "w"
         )
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        lock_fd = open(lock_path, "w")
-        flock_exclusive(lock_fd)
+        private_lock = open(
+            self._private_golden_set_path.with_suffix(
+                self._private_golden_set_path.suffix + ".lock"
+            ),
+            "w",
+        )
+        flock_exclusive(public_lock)
+        flock_exclusive(private_lock)
         try:
             self._merge_and_write(yaml)
         finally:
-            flock_unlock(lock_fd)
-            lock_fd.close()
+            flock_unlock(private_lock)
+            private_lock.close()
+            flock_unlock(public_lock)
+            public_lock.close()
 
     def _merge_and_write(self, yaml) -> None:
         """Read-modify-write body of _persist_golden_set. MUST be called only
-        while the caller holds the sidecar exclusive lock (see _persist_golden_set).
-        Re-reads disk, merges (in-both field-preserve + disk-only append), and
-        atomically renames the temp file into place."""
-        # Read current disk state to preserve externally-added fields
-        disk_cases = {}
-        if self._golden_set_path.exists():
-            try:
-                disk_data = yaml.safe_load(self._golden_set_path.read_text()) or {}
-                for case in disk_data.get("cases", []):
-                    if case.get("id"):
-                        disk_cases[case["id"]] = case
-            except Exception:
-                pass  # If disk read fails, proceed with in-memory only
+        while the caller holds BOTH sidecar exclusive locks (see _persist_golden_set).
 
-        # Merge: for each in-memory case, preserve user-owned disk fields
-        # Inversion: exclude-list is safer — new fields default to "write through"
-        # (fail-open = over-write, never lose), only user-owned fields are protected.
+        Split-write: partition in-memory cases by ``_origin`` and write each
+        partition back to ITS OWN file, each with an independent disk re-read +
+        merge-preserve + atomic rename. A private case is therefore NEVER written
+        into the tracked public file (Gate-1 CRITICAL). ``_origin`` is stripped
+        before serialize — it is an in-memory routing tag, never persisted.
+        """
+        # Partition memory by origin. A case missing _origin defaults to public
+        # ONLY if it has no instance-coupling signal — but since all loaded cases
+        # are tagged, an untagged case here is a newly-added one: default private
+        # (fail-closed — never auto-publish a case that didn't go through PROMOTE).
+        public_mem = [c for c in self._cases if c.get("_origin", "private") == "public"]
+        private_mem = [c for c in self._cases if c.get("_origin", "private") != "public"]
+
+        public_meta = {k: v for k, v in self._golden_set.items() if k != "cases"}
+        self._write_partition(yaml, self._golden_set_path, public_mem, public_meta)
+        # Private file carries only cases (no shared container metadata needed).
+        self._write_partition(yaml, self._private_golden_set_path, private_mem, {"version": 2})
+
+    @staticmethod
+    def _merge_partition_cases(disk_cases: dict, mem_cases: list) -> list:
+        """Merge one file's in-memory cases with its own disk state: preserve
+        user-owned disk fields on in-both cases, append disk-only (externally
+        added) cases. Same data-loss guard as before (Radar b40b9545), but
+        scoped to a SINGLE file's disk contents — never the union."""
         _USER_OWNED_FIELDS = frozenset({"tags", "notes", "promoted_from"})
-        merged_cases = []
-        merged_ids = set()
-        for mem_case in self._cases:
+        merged_cases: list[dict] = []
+        merged_ids: set[str] = set()
+        for mem_case in mem_cases:
             case_id = mem_case.get("id")
             if case_id and case_id in disk_cases:
-                # Start with disk version (preserves user-owned fields like tags)
                 merged = dict(disk_cases[case_id])
-                # Overlay all in-memory fields EXCEPT user-owned ones
                 for key, value in mem_case.items():
                     if key not in _USER_OWNED_FIELDS:
                         merged[key] = value
                 merged_cases.append(merged)
             else:
-                # New case (not on disk) — write as-is
                 merged_cases.append(mem_case)
             if case_id:
                 merged_ids.add(case_id)
-
-        # Preserve disk-only cases: any case on disk but absent from self._cases
-        # was added by ANOTHER session (or manual edit) AFTER this process loaded
-        # golden_set.yaml. Writing only self._cases would silently drop them —
-        # the data-loss bug that gutted 13 cases incl all GS_TRAJ behavior cases
-        # (2026-06-25, Radar b40b9545). Append them verbatim.
-        #
-        # INVARIANT (why this can't resurrect a deleted case): delete_case is a
-        # SOFT delete (sets tier='archived', keeps the case IN self._cases). There
-        # is NO hard-remove path (.remove/.pop/del) that shrinks self._cases. So
-        # "on disk but not in memory" ALWAYS means externally-added, never
-        # locally-deleted. ⚠️ If a future hard-delete path is ever added, it MUST
-        # also record the deleted id here (e.g. a tombstone set) — otherwise this
-        # append will silently resurrect it.
+        # Disk-only (externally-added) cases for THIS file — append verbatim.
         for case_id, disk_case in disk_cases.items():
             if case_id not in merged_ids:
                 merged_cases.append(disk_case)
                 merged_ids.add(case_id)
+        return merged_cases
 
-        self._golden_set["cases"] = merged_cases
-        self._cases = merged_cases  # Keep in-memory in sync
-        content = yaml.dump(self._golden_set, default_flow_style=False, allow_unicode=True, sort_keys=False)
+    def _write_partition(self, yaml, path: Path, mem_cases: list, meta: dict) -> None:
+        """Re-read ONE file, merge its own cases, strip _origin, atomic-write."""
+        disk_cases = {}
+        if path.exists():
+            try:
+                disk_data = yaml.safe_load(path.read_text()) or {}
+                for case in disk_data.get("cases", []):
+                    if case.get("id"):
+                        disk_cases[case["id"]] = case
+            except Exception:
+                pass
 
-        # Atomic write: write to temp, then rename
+        merged_cases = self._merge_partition_cases(disk_cases, mem_cases)
+        # Strip the internal routing tag — never persist _origin to disk.
+        clean_cases = [{k: v for k, v in c.items() if k != "_origin"} for c in merged_cases]
+        out = dict(meta)
+        out["cases"] = clean_cases
+        content = yaml.dump(out, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+        path.parent.mkdir(parents=True, exist_ok=True)
         tmp_fd = tempfile.NamedTemporaryFile(
-            mode="w",
-            dir=str(self._golden_set_path.parent),
-            suffix=".yaml.tmp",
-            delete=False,
+            mode="w", dir=str(path.parent), suffix=".yaml.tmp", delete=False
         )
         try:
             tmp_fd.write(content)
             tmp_fd.flush()
             tmp_fd.close()
-            Path(tmp_fd.name).replace(self._golden_set_path)
+            Path(tmp_fd.name).replace(path)
         except Exception:
             Path(tmp_fd.name).unlink(missing_ok=True)
             raise
