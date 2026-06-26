@@ -33,6 +33,20 @@ from httpx import AsyncClient, ASGITransport
 
 import database as database_module
 
+# NOTE on loop scope (root cause of the cross-test "database is locked" errors,
+# run_6a4402cb): pyproject.toml sets asyncio_default_fixture_loop_scope=session
+# but leaves the TEST loop at the default function scope. Each test thus ran on
+# its own loop that closed at test end — while the aiosqlite connection
+# worker-threads opened during the request had not finished closing. The
+# orphaned worker thread kept the OS write-lock, so the NEXT test's
+# reset_database fixture failed instantly with "database is locked". The fix:
+# every async test below carries @pytest.mark.asyncio(loop_scope="session") so
+# the test loop matches the (session-scoped) fixture loop — ONE loop stays alive
+# across the file and connections close cleanly. Applied per-test (NOT as a
+# module-level pytestmark, which would also tag the SYNC tests in this file and
+# emit spurious warnings, and NOT globally in pyproject, which would change loop
+# scope for the other ~124 async test files).
+
 
 # ---------------------------------------------------------------------------
 # Mock SDK types — must be defined before importing session_unit
@@ -208,16 +222,25 @@ def _patch_sdk():
 
 @pytest.fixture()
 def _reset_session_infrastructure():
-    """Reset the session_router singleton between tests."""
+    """Reset the session_router singleton between tests.
+
+    NOTE: the real singleton names are ``session_router`` and
+    ``lifecycle_manager`` (session_registry.py:42-47). A prior version reset
+    ``_router``/``_lifecycle_manager`` — phantom attributes that never reset the
+    real singletons, so the router (and its drain worker) leaked across tests.
+    The cross-test DB lock is fixed at the loop-scope layer (module ``pytestmark``
+    above), not here; this reset is correctness hygiene so each test starts from
+    a clean registry.
+    """
     from core import session_registry
     # Clear any existing singletons
-    session_registry._router = None
-    session_registry._lifecycle_manager = None
+    session_registry.session_router = None
+    session_registry.lifecycle_manager = None
     session_registry._initialized = False
     yield
     # Cleanup after test
-    session_registry._router = None
-    session_registry._lifecycle_manager = None
+    session_registry.session_router = None
+    session_registry.lifecycle_manager = None
     session_registry._initialized = False
 
 
@@ -269,7 +292,7 @@ def event_types(events: list[dict]) -> list[str]:
 class TestScenario1_FreshSend:
     """New session, subprocess not running. Full cold-start path."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio(loop_scope="session")
     async def test_fresh_send_produces_correct_event_sequence(
         self, async_client, _reset_session_infrastructure
     ):
@@ -310,7 +333,7 @@ class TestScenario1_FreshSend:
             assert result_evt.get("session_id") is not None
             assert result_evt.get("usage") is not None
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio(loop_scope="session")
     async def test_fresh_send_with_chinese_text(
         self, async_client, _reset_session_infrastructure
     ):
@@ -337,7 +360,7 @@ class TestScenario1_FreshSend:
             types = event_types(events)
             assert "result" in types
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio(loop_scope="session")
     async def test_null_bytes_stripped_from_system_prompt(
         self, _reset_session_infrastructure
     ):
@@ -387,7 +410,7 @@ class TestScenario1_FreshSend:
 class TestScenario2_WarmSend:
     """Session already warm (subprocess alive, IDLE). No re-spawn needed."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio(loop_scope="session")
     async def test_warm_send_reuses_subprocess(self, _reset_session_infrastructure):
         """send() from IDLE must NOT spawn a new subprocess."""
         from core.session_unit import SessionUnit, SessionState
@@ -426,7 +449,7 @@ class TestScenario2_WarmSend:
 class TestScenario3_StopThenNewMessage:
     """User stops streaming, then sends a new message."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio(loop_scope="session")
     async def test_interrupt_transitions_to_cold_on_user_stop(self, _reset_session_infrastructure):
         """A user Stop (autonomous=False) recycles the subprocess → COLD.
 
@@ -451,7 +474,7 @@ class TestScenario3_StopThenNewMessage:
         assert unit.state == SessionState.COLD
         assert unit._client is None
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio(loop_scope="session")
     async def test_send_after_stop_succeeds(self, _reset_session_infrastructure):
         """send() after interrupt (IDLE) should stream normally."""
         from core.session_unit import SessionUnit, SessionState
@@ -486,7 +509,7 @@ class TestScenario3_StopThenNewMessage:
 class TestScenario4_AutoRecoverStuck:
     """If previous stream got stuck (STREAMING), next send() auto-recovers."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio(loop_scope="session")
     async def test_send_from_stuck_streaming_auto_recovers(
         self, _reset_session_infrastructure
     ):
@@ -545,7 +568,7 @@ class TestScenario4_AutoRecoverStuck:
 class TestScenario5_ResumeWithinTTL:
     """Subprocess alive, within 12hr TTL. Same as warm send path."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio(loop_scope="session")
     async def test_resume_within_ttl_no_context_injection(
         self, _reset_session_infrastructure
     ):
@@ -585,7 +608,7 @@ class TestScenario5_ResumeWithinTTL:
 class TestScenario6_ResumePostTTL:
     """Subprocess killed by TTL. Cold resume with context injection."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio(loop_scope="session")
     async def test_cold_resume_detects_prior_messages(
         self, async_client, _reset_session_infrastructure
     ):
@@ -652,7 +675,7 @@ class TestScenario6_ResumePostTTL:
                 f"Expected session_start or session_resuming. Got: {types}"
             assert "result" in types
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio(loop_scope="session")
     async def test_cold_resume_inserts_boundary_marker(
         self, async_client, _reset_session_infrastructure
     ):
@@ -719,7 +742,7 @@ class TestScenario6_ResumePostTTL:
         assert len(content) == 1
         assert content[0].get("type") == "resume_boundary"
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio(loop_scope="session")
     async def test_cold_resume_with_null_bytes_in_context(
         self, _reset_session_infrastructure
     ):
@@ -759,7 +782,7 @@ class TestScenario6_ResumePostTTL:
 class TestDoneSentinel:
     """Backend must send data: [DONE] at end of SSE stream."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.asyncio(loop_scope="session")
     async def test_sse_stream_ends_with_done(
         self, async_client, _reset_session_infrastructure
     ):

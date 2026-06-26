@@ -59,10 +59,12 @@ the probes; realign the skill (its targets) before trusting Q1-Q4.
 ### Q1: Automated Tests [BLOCK]
 
 ```bash
-# Backend E2E (14 scenarios)
+# Backend E2E (all chat scenarios). MUST run serial (-n 0): these tests share a
+# session-scoped event loop + a single temp DB; xdist parallel workers (auto-
+# injected by pyproject) would reintroduce cross-process "database is locked".
 cd $SWARMAI_ROOT/backend && \
 source .venv/bin/activate && \
-python -m pytest tests/test_chat_scenarios_e2e.py -v --tb=short 2>&1
+python -m pytest tests/test_chat_scenarios_e2e.py -n 0 -v --tb=short 2>&1
 
 # Backend chat-related
 python -m pytest tests/ -k "chat or session or stream or sse or context_warning or context_inject" -v --tb=short 2>&1
