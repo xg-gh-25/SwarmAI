@@ -1869,7 +1869,14 @@ class ContextHealthHook:
             try:
                 recovered = store.backfill_orphan_vectors(_safe_embed, limit=10)
                 if recovered:
-                    logger.info("context_health: knowledge_vec orphan-backfill — recovered=%d", recovered)
+                    remaining = conn.execute(
+                        "SELECT COUNT(*) FROM knowledge_chunks kc "
+                        "LEFT JOIN knowledge_vec kv ON kc.id = kv.id WHERE kv.id IS NULL"
+                    ).fetchone()[0]
+                    logger.info(
+                        "context_health: knowledge_vec orphan-backfill — recovered=%d, remaining=%d",
+                        recovered, remaining,
+                    )
             except Exception as exc:  # noqa: BLE001 — backfill is best-effort
                 logger.warning("context_health: knowledge_vec backfill failed: %s", exc)
 
@@ -1980,7 +1987,14 @@ class ContextHealthHook:
             try:
                 recovered = store.backfill_orphan_vectors(_safe_embed, limit=10)
                 if recovered:
-                    logger.info("context_health: transcript_vec orphan-backfill — recovered=%d", recovered)
+                    remaining = conn.execute(
+                        "SELECT COUNT(*) FROM transcript_chunks tc "
+                        "LEFT JOIN transcript_vec tv ON tc.id = tv.id WHERE tv.id IS NULL"
+                    ).fetchone()[0]
+                    logger.info(
+                        "context_health: transcript_vec orphan-backfill — recovered=%d, remaining=%d",
+                        recovered, remaining,
+                    )
             except Exception as exc:  # noqa: BLE001 — best-effort
                 logger.warning("context_health: transcript_vec backfill failed: %s", exc)
 
