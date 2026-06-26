@@ -1013,6 +1013,69 @@ def _strip_entries(content: str, keys: "set[tuple[str, str]]") -> str:
     return out
 
 
+# ── Stacked-Metadata Heal (R-1, run_55c02bbe) ─────────────────────────────────
+
+
+def collapse_stacked_metadata(content: str) -> str:
+    """Collapse consecutive ``<!-- ref ... -->`` metadata lines to ONE per entry.
+
+    Heals the orphan-metadata bug: ``_extract_lessons_to_memory``'s off-by-one
+    splice inserted a new entry+meta BETWEEN an existing bullet and its meta,
+    orphaning the existing meta as a 2nd consecutive metadata line.
+    ``inject_entry_metadata`` is orphan-blind (consumes only the first meta), so
+    a dedicated sweep is required.
+
+    Rule: within a run of consecutive metadata lines (no bullet/section between),
+    keep exactly ONE — preferring a real ``last:DATE`` over ``last:none`` (an
+    un-referenced orphan default). When multiple real dates collide, keep the
+    FIRST (it is the entry's own lifecycle-injected meta; later ones are
+    displaced neighbors). Bullets and single-meta entries are untouched.
+
+    Pure function (no I/O). Idempotent: a second call is a no-op.
+    """
+    if not content:
+        return content
+
+    lines = content.splitlines()
+    out: list[str] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        if _META_RE.match(lines[i]):
+            # Gather the full run of consecutive metadata lines.
+            run = [lines[i]]
+            j = i + 1
+            while j < n and _META_RE.match(lines[j]):
+                run.append(lines[j])
+                j += 1
+            out.append(_pick_meta(run))
+            i = j
+        else:
+            out.append(lines[i])
+            i += 1
+
+    trailing = content.endswith("\n")
+    result = "\n".join(out)
+    if trailing and not result.endswith("\n"):
+        result += "\n"
+    return result
+
+
+def _pick_meta(run: list[str]) -> str:
+    """Pick the surviving metadata line from a run of consecutive metas.
+
+    Prefer the FIRST line whose ``last:`` is a real date (not ``none``);
+    fall back to the first line if all are ``last:none``.
+    """
+    if len(run) == 1:
+        return run[0]
+    for line in run:
+        m = _META_RE.match(line)
+        if m and m.group(2) != "none":
+            return line
+    return run[0]
+
+
 # ── Stage Knowledge Injection ─────────────────────────────────────────────────
 
 # Pipeline stages get type-filtered knowledge sorted by relevance (ref count).

@@ -879,3 +879,60 @@ class TestComputeReclaimableNoise:
 """
         gate = compute_reclaimable_noise(parse_entries(content), _RECLAIM_TODAY)
         assert gate.noisy == 0  # protected → gate clean even though raw would flag it
+
+
+class TestCollapseStackedMetadata:
+    """R-1: heal the metadata-orphan bug — collapse consecutive metas, prefer real-date.
+
+    Root cause (run_55c02bbe): _extract_lessons_to_memory's off-by-one splice
+    orphaned an existing entry's meta as a 2nd consecutive line. inject_entry_metadata
+    is orphan-blind (consumes only the first meta). This sweep heals existing stacks.
+    """
+
+    def test_collapse_two_metas_keeps_real_date(self):
+        from core.ddd_entry_lifecycle import collapse_stacked_metadata
+        # live shape: real-date meta on top, orphan (last:none) below
+        content = """## Corrections
+- [correction] **Some title** — desc (2026-06-01)
+  <!-- ref:3 | last:2026-06-25 | decay:active -->
+  <!-- ref:0 | last:none | decay:active -->
+"""
+        out = collapse_stacked_metadata(content)
+        assert out.count("<!-- ref:") == 1, "must collapse 2 metas to 1"
+        assert "last:2026-06-25" in out, "must keep the real-date meta"
+        assert "last:none" not in out, "must drop the orphan"
+
+    def test_prefers_real_date_even_if_orphan_is_first(self):
+        from core.ddd_entry_lifecycle import collapse_stacked_metadata
+        # robustness: if the none-meta were on top, still keep the real-date one
+        content = """## Guidelines
+- [guideline] **T** — d (2026-06-01)
+  <!-- ref:0 | last:none | decay:active -->
+  <!-- ref:2 | last:2026-06-20 | decay:active -->
+"""
+        out = collapse_stacked_metadata(content)
+        assert out.count("<!-- ref:") == 1
+        assert "last:2026-06-20" in out, "prefer real-date over none regardless of order"
+        assert "last:none" not in out
+
+    def test_idempotent(self):
+        from core.ddd_entry_lifecycle import collapse_stacked_metadata
+        content = """## Guidelines
+- [guideline] **T** — d (2026-06-01)
+  <!-- ref:1 | last:2026-06-20 | decay:active -->
+  <!-- ref:0 | last:none | decay:active -->
+"""
+        once = collapse_stacked_metadata(content)
+        twice = collapse_stacked_metadata(once)
+        assert once == twice, "second run must be a no-op"
+
+    def test_does_not_touch_bullets_or_single_metas(self):
+        from core.ddd_entry_lifecycle import collapse_stacked_metadata
+        content = """## Guidelines
+- [guideline] **A** — d (2026-06-01)
+  <!-- ref:1 | last:2026-06-20 | decay:active -->
+- [guideline] **B** — d (2026-06-02)
+  <!-- ref:0 | last:none | decay:active -->
+"""
+        out = collapse_stacked_metadata(content)
+        assert out == content, "clean content (no stacks) must be unchanged; bullets untouched"
