@@ -415,7 +415,11 @@ class TestSystemMessagePreservation:
         sys_msg.data = {"session_id": "sdk-session-123"}
         sys_msg.session_id = None
 
-        result_msg = _make_result_message(usage=None)
+        # Non-empty usage so the result terminates the stream normally. An
+        # empty/zero-output result would (correctly) trip the blank-result
+        # retry guard — but this test is about SystemMessage(init) → session_start,
+        # not empty-result handling (covered by test_result_message_* above).
+        result_msg = _make_result_message(usage={"output_tokens": 50})
 
         _set_mock_client(unit, [sys_msg, result_msg])
 
