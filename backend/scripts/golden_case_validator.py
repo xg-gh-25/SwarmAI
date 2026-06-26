@@ -19,12 +19,69 @@ this validator enforces the *non-vacuous* static check. Full mutation-testing of
 LLM/behavior cases is intentionally weaker (judge-fixture) — see the design.
 """
 import argparse
+import hashlib
 import json
 import re
 import sys
 from pathlib import Path
 
 _REQUIRED = ("id", "category", "dimension", "eval_method", "affected_by", "evaluators")
+
+# Fields excluded from the content-bound stamp. _origin is injected by
+# eval_service on load + stripped on write; validated_by_4gate is the stamp
+# itself (circularity); tags/notes/promoted_from are eval_service
+# _USER_OWNED_FIELDS — merge-mutable, never part of body identity. Excluding
+# these makes the stamp invariant to a yaml round-trip (Gate-1 BLOCK-A: a naive
+# sha256(dict) mismatches after the first CRUD re-serialize → BVT empties → gate
+# RED forever).
+_STAMP_EXCLUDED_FIELDS = frozenset(
+    {"_origin", "validated_by_4gate", "tags", "notes", "promoted_from"}
+)
+
+# Fast-deterministic evaluators that make a case BVT-gate-eligible. MUST mirror
+# eval_runner._GATE_ELIGIBLE_EVALUATORS — gate_teeth only applies to these.
+_GATE_ELIGIBLE_EVALUATORS = frozenset(
+    {"file_contains", "keyword_match", "trajectory_exact",
+     "trajectory_in_order", "trajectory_any_order", "canary_pass"}
+)
+
+
+def compute_case_stamp(case: dict) -> str:
+    """Content-bound stamp = sha256 of the CANONICAL case body.
+
+    Canonical = JSON with sorted keys (order-invariant) over the body with
+    _STAMP_EXCLUDED_FIELDS removed. This is the SAME function eval_runner.compute_bvt
+    uses to recompute-and-compare, so a case whose body was edited outside the
+    sanctioned 4-gate path (validated_by_4gate not updated) no longer matches →
+    drops out of the BVT. Drift/negligence detection, NOT tamper-resistance
+    (the algorithm is public; a deliberate editor can re-stamp — the freshness
+    backstop for that is compute_code_digest)."""
+    body = {k: v for k, v in case.items() if k not in _STAMP_EXCLUDED_FIELDS}
+    canonical = json.dumps(body, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def _is_gate_eligible(case: dict) -> bool:
+    return (case.get("eval_method") != "llm"
+            and bool(set(case.get("evaluators", [])) & _GATE_ELIGIBLE_EVALUATORS))
+
+
+def gate_teeth(case: dict, grandfathered: bool = False) -> tuple[bool, list[str]]:
+    """G3 teeth — a gate-eligible programmatic case must declare a negative check
+    (verification.negative_command) so it can be proven to go RED on broken input.
+
+    Only enforced on NEW (non-grandfathered) gate-eligible cases. Legacy cases
+    predate this requirement and have zero negatives; enforcing it on them would
+    fail-all → can't stamp → BVT empties (Gate-1 BLOCK-D). They are grandfathered
+    until retrofitted. Non-gate-eligible cases (llm/behavior) never gate, so teeth
+    does not apply."""
+    if grandfathered or not _is_gate_eligible(case):
+        return True, []
+    v = case.get("verification", {}) or {}
+    if not (v.get("negative_command") or "").strip():
+        return False, ["teeth: gate-eligible case must declare verification.negative_command "
+                       "(a command that proves the case goes RED on broken input)"]
+    return True, []
 
 # Privacy: sensitive words OR instance-structure references. Word-only is
 # insufficient (Gate-1 #5: 145 cases ref instance paths w/o a sensitive word).
@@ -100,18 +157,24 @@ def privacy_scan(case: dict) -> tuple[bool, list[str]]:
     return (not hits, hits)
 
 
-def validate_case(case: dict, existing: list[dict], for_public: bool) -> tuple[bool, dict]:
-    """Run all gates. privacy_scan runs ONLY for_public (PROMOTE). Returns
-    (ok, report) where report maps gate name → (ok, errors)."""
+def validate_case(case: dict, existing: list[dict], for_public: bool,
+                  grandfathered: bool = False) -> tuple[bool, dict]:
+    """Run all gates. privacy_scan runs ONLY for_public (PROMOTE). gate_teeth is
+    skipped for grandfathered (legacy) cases (Gate-1 BLOCK-D). Returns (ok, report)
+    where report maps gate name → (ok, errors). On a clean pass, report["stamp"]
+    carries the content-bound validated_by_4gate value for the caller to persist."""
     report = {}
     g1 = gate_schema(case); report["schema"] = g1
     g2 = gate_duplicate(case, existing); report["duplicate"] = g2
     g3 = gate_non_vacuous(case); report["non_vacuous"] = g3
-    gates = [g1, g2, g3]
+    g4 = gate_teeth(case, grandfathered=grandfathered); report["teeth"] = g4
+    gates = [g1, g2, g3, g4]
     if for_public:
         gp = privacy_scan(case); report["privacy"] = gp
         gates.append(gp)
     ok = all(g[0] for g in gates)
+    if ok:
+        report["stamp"] = compute_case_stamp(case)
     return ok, report
 
 
