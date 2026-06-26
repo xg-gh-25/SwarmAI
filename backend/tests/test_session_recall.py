@@ -169,6 +169,33 @@ def test_search_no_matches(recall: SessionRecall):
     assert result.sessions == []
 
 
+def test_multiword_query_recalls_via_or(db_path: Path, recall: SessionRecall):
+    """R3 (real FTS): a multi-word query whose words are SCATTERED across
+    messages (never verbatim+adjacent) must still recall via OR-join. The old
+    phrase-wrap required all words consecutive → 0 matches; OR matches any term.
+    """
+    _insert_message(db_path, "sess-r3", "user", "the deploy pipeline crashed")
+    _insert_message(db_path, "sess-r3", "assistant", "check the goal cycle config")
+    _insert_message(db_path, "sess-r3", "user", "recall was empty afterwards")
+
+    # No single message contains "pipeline goal cycle recall" as a phrase.
+    result = recall.search("pipeline goal cycle recall")
+    assert result.total_matches >= 1, "OR-join must recall scattered terms (was 0 under phrase-wrap)"
+    assert result.sessions[0].session_id == "sess-r3"
+
+
+def test_multiword_phrase_only_no_longer_required(db_path: Path, recall: SessionRecall):
+    """Counterpart proving the fix is the discriminator: a 3-word query where
+    the words live in DIFFERENT messages returns matches (OR), whereas an exact
+    phrase that appears NOWHERE still returns 0 (so it's not matching everything).
+    """
+    _insert_message(db_path, "sess-r3b", "user", "alpha configuration")
+    _insert_message(db_path, "sess-r3b", "assistant", "beta deployment")
+
+    assert recall.search("alpha beta").total_matches >= 1  # scattered terms → OR hit
+    assert recall.search("zzzznope qqqnope").total_matches == 0  # genuinely absent → still 0
+
+
 def test_max_sessions_limit(db_path: Path, recall: SessionRecall):
     """Only top N sessions returned."""
     for i in range(5):
