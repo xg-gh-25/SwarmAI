@@ -146,7 +146,7 @@ This is most valuable for rules that gate a tempting/destructive action (e.g.
 STEERING #8 "no restart without approval", SOUL P1 "verify don't infer"). Skip for
 purely mechanical rules with no decision surface.
 
-**How to author one — canonical guide:** `Projects/SwarmAI/golden_set.yaml` header
+**How to author one — canonical guide:** `Eval/golden_set.yaml` header
 (the `Authoring a BEHAVIOR (trajectory) case` + `decision_rubric` block). Code of
 record: `backend/scripts/eval_runner.py::eval_trajectory_capture` +
 `_judge_decision_direction`. In short:

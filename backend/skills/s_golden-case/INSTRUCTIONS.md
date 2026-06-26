@@ -13,7 +13,7 @@ The sanctioned path to add/validate/promote SwarmAI eval golden cases. Mechanism
    echo '<case-json>' > /tmp/case.json
    python backend/scripts/golden_case_validator.py --case-file /tmp/case.json
    ```
-3. PASS → append to `Projects/SwarmAI/golden_set.private.yaml` (default, fail-closed —
+3. PASS → append to `Eval/golden_set.private.yaml` (default, fail-closed —
    never auto-publish). FAIL → fix the reported gate and re-validate.
 
 ### PROMOTE — move a private case to public (runs the PRIVACY gate)

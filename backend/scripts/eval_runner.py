@@ -51,10 +51,12 @@ except ImportError:
 def _find_workspace_root() -> Path:
     """Find SwarmWS root by what eval actually reads (Eval/golden_set.yaml).
     Decoupled from Projects/ — eval is a top-level system subsystem now."""
+    # Candidates resolve to SwarmWS (the workspace), NOT the code repo — the old
+    # __file__.parent.parent.parent candidate pointed at the code repo root, which
+    # has no Eval/ and could never match post-decouple (removed, was dead code).
     candidates = [
         Path.home() / ".swarm-ai" / "SwarmWS",
         Path.cwd(),
-        Path(__file__).resolve().parent.parent.parent,  # backend/scripts/ → repo root → SwarmWS
     ]
     for c in candidates:
         if (c / "Eval" / "golden_set.yaml").exists():
