@@ -300,6 +300,27 @@ class TranscriptStore:
             row_id, old_hash = existing
             if old_hash == content_hash:
                 return row_id  # Unchanged
+            # Reverse the OLD FTS5 posting lists BEFORE the UPDATE. CRITICAL:
+            # transcript_fts is external-content (content=transcript_chunks), so
+            # the 'delete' command must be given the OLD column values currently
+            # stored for this rowid — it reverses the posting lists using them.
+            # The previous `INSERT OR REPLACE` bound the NEW content, which leaves
+            # the OLD tokens' postings in the index → progressive "database disk
+            # image is malformed" (mirrors knowledge_store.py:185 / the
+            # messages_fts trigger which uses old.content).
+            _old = self._conn.execute(
+                "SELECT content, source_file FROM transcript_chunks WHERE id = ?",
+                (row_id,),
+            ).fetchone()
+            if _old is not None:
+                try:
+                    self._conn.execute(
+                        "INSERT INTO transcript_fts(transcript_fts, rowid, content, source_file) "
+                        "VALUES('delete', ?, ?, ?)",
+                        (row_id, _old[0], _old[1]),
+                    )
+                except sqlite3.OperationalError:
+                    pass  # FTS5 not available
             # Update
             self._conn.execute(
                 "UPDATE transcript_chunks SET source_file=?, role=?, content=?, "
@@ -316,10 +337,12 @@ class TranscriptStore:
             )
             row_id = cursor.lastrowid
 
-        # Sync FTS5
+        # Sync FTS5 — plain INSERT (never INSERT OR REPLACE on an external-content
+        # FTS5 table: the UPDATE branch above has already reversed the old
+        # postings, and a brand-new rowid has none to reverse).
         try:
             self._conn.execute(
-                "INSERT OR REPLACE INTO transcript_fts(rowid, content, source_file) "
+                "INSERT INTO transcript_fts(rowid, content, source_file) "
                 "VALUES (?, ?, ?)",
                 (row_id, content, source_file),
             )
@@ -450,6 +473,87 @@ class TranscriptStore:
             (session_id,),
         )
         self._conn.commit()
+
+    def _fts_is_healthy(self) -> bool:
+        """Probe: does transcript_fts answer a ranked query without a malformed/
+        corrupt error? Returns False on DatabaseError (the corruption signal),
+        True otherwise. Used by the maintenance layer (NOT the read path) to
+        decide whether to repair. A no-data index is still 'healthy'.
+
+        CRITICAL: the probe term must EXIST in the index so the query actually
+        traverses the (possibly-corrupt) posting lists + rank structure. A
+        no-match term short-circuits before touching them and would report a
+        corrupt index as healthy (run_1d198980). So derive the probe term from a
+        real stored chunk; if the store is empty, it is trivially healthy.
+        Mirrors knowledge_store._fts_is_healthy.
+        """
+        row = self._conn.execute(
+            "SELECT content FROM transcript_chunks "
+            "WHERE content IS NOT NULL AND length(content) > 0 LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return True  # empty index — nothing to corrupt
+        import re as _re
+        m = _re.search(r"[A-Za-z0-9]{3,}", row[0])
+        probe = m.group(0) if m else None
+        if probe is None:
+            return True
+        try:
+            self._conn.execute(
+                "SELECT tc.id FROM transcript_fts fts "
+                "JOIN transcript_chunks tc ON tc.id = fts.rowid "
+                "WHERE transcript_fts MATCH ? ORDER BY rank LIMIT 1",
+                (f'"{probe}"',),
+            ).fetchall()
+            return True
+        except sqlite3.DatabaseError:
+            return False
+
+    def repair_fts_index(self) -> None:
+        """Repair the external-content FTS5 index from transcript_chunks.
+
+        Zero data loss — the content lives in transcript_chunks; the FTS index
+        carries no unique data. Two-tier (mirrors knowledge_store.repair_fts_index):
+          1. ``'rebuild'`` re-derives the index in place (fast, fixes a stale /
+             mildly-desynced index).
+          2. If 'rebuild' ITSELF raises malformed, DROP + recreate the virtual
+             table and rebuild fresh — the nuclear option that always works
+             because the source data is external.
+        MUST be called from the maintenance layer (context_health_hook), not the
+        recall read path — it takes a write lock + re-tokenizes every chunk.
+        """
+        try:
+            self._conn.execute("INSERT INTO transcript_fts(transcript_fts) VALUES('rebuild')")
+            self._conn.commit()
+            return
+        except sqlite3.DatabaseError as exc:
+            # Only escalate to the destructive DROP path on genuine corruption.
+            # A transient lock / disk error must NOT trigger a nuclear rebuild —
+            # re-raise anything that isn't a malformed/corrupt signal so the
+            # caller (best-effort health hook) logs + retries later.
+            msg = str(exc).lower()
+            if "malformed" not in msg and "corrupt" not in msg:
+                raise
+            self._conn.rollback()
+        # Shadow tables too corrupt for in-place rebuild — drop & recreate, all
+        # inside one transaction so a mid-repair crash cannot leave the table
+        # missing (rolls back to the old — still-corrupt but present — table,
+        # which the next health-hook pass re-probes and repairs). NOTE: 2-column
+        # schema (content, source_file) — transcript_fts, NOT knowledge's 3-col.
+        self._conn.execute("BEGIN")
+        try:
+            self._conn.execute("DROP TABLE IF EXISTS transcript_fts")
+            self._conn.execute("""
+                CREATE VIRTUAL TABLE transcript_fts USING fts5(
+                    content, source_file,
+                    content=transcript_chunks, content_rowid=id
+                )
+            """)
+            self._conn.execute("INSERT INTO transcript_fts(transcript_fts) VALUES('rebuild')")
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
 
 
 # ── Sync ─────────────────────────────────────────────────────────────

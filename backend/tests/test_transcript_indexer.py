@@ -291,6 +291,62 @@ class TestTranscriptStore:
         count = conn.execute("SELECT COUNT(*) FROM transcript_chunks").fetchone()[0]
         assert count == 0
 
+    def test_upsert_update_reverses_old_fts_postings(self):
+        """AC1: updating a chunk with CHANGED content must reverse the OLD
+        posting lists. The bug: INSERT OR REPLACE on an external-content FTS5
+        table reverses postings using the NEW values, leaving stale OLD tokens
+        in the index → progressive 'database disk image is malformed' and a
+        search for an old-only token wrongly still matches.
+        """
+        from core.transcript_indexer import TranscriptStore
+
+        conn = _make_conn()
+        store = TranscriptStore(conn)
+        store.ensure_tables()
+
+        # Insert, then update SAME (session, chunk_index) with disjoint content.
+        store.upsert_chunk("s1", "a.jsonl", 0, "mixed", "alpha zebra", "h1")
+        store.upsert_chunk("s1", "a.jsonl", 0, "mixed", "gamma delta", "h2")
+
+        # external-content FTS5 integrity must be intact after the update.
+        integrity = conn.execute(
+            "INSERT INTO transcript_fts(transcript_fts) VALUES('integrity-check')"
+        )  # raises sqlite3.DatabaseError('malformed') if postings desynced
+        assert integrity is not None
+
+        # An OLD-only token must NO LONGER match (postings reversed).
+        old_hits = store.fts5_search("zebra", limit=5)
+        assert old_hits == [], f"stale OLD posting still matches: {old_hits}"
+
+        # A NEW token must match exactly once.
+        new_hits = store.fts5_search("gamma", limit=5)
+        assert len(new_hits) == 1
+        assert "gamma delta" in new_hits[0]["content"]
+
+    def test_repair_fts_index_restores_after_desync(self):
+        """AC2: repair_fts_index() rebuilds transcript_fts from the source
+        table (zero data loss — content lives in transcript_chunks)."""
+        from core.transcript_indexer import TranscriptStore
+
+        conn = _make_conn()
+        store = TranscriptStore(conn)
+        store.ensure_tables()
+
+        store.upsert_chunk("s1", "a.jsonl", 0, "mixed", "race condition fix", "h1")
+
+        # Force a desync: write a bogus FTS row whose content does not match
+        # the source row, simulating the legacy corruption.
+        conn.execute(
+            "INSERT INTO transcript_fts(rowid, content, source_file) VALUES (999, 'phantom token', 'x')"
+        )
+
+        store.repair_fts_index()
+
+        # After repair the phantom must be gone and the real content searchable.
+        assert store.fts5_search("phantom", limit=5) == []
+        hits = store.fts5_search("race condition", limit=5)
+        assert len(hits) == 1
+
 
 # ── Test: sync_transcript_index (integration) ────────────────────────
 

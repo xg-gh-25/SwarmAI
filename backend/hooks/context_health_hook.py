@@ -1941,6 +1941,20 @@ class ContextHealthHook:
             store = TranscriptStore(conn)
             store.ensure_tables()
 
+            # Self-heal a malformed transcript_fts (same external-content FTS5
+            # corruption class as knowledge_fts, run_1d198980). Maintenance layer
+            # is the RIGHT place — off the event loop, single-flight, already a
+            # write context — NOT the recall read path. A corrupt index otherwise
+            # makes transcript recall silently empty until the next full re-index.
+            if not store._fts_is_healthy():
+                logger.warning("context_health: transcript_fts malformed — rebuilding index")
+                try:
+                    store.repair_fts_index()
+                    logger.info("context_health: transcript_fts rebuilt from content table")
+                except Exception as exc:  # noqa: BLE001 — repair is best-effort
+                    logger.error("context_health: transcript_fts repair failed: %s: %s",
+                                 type(exc).__name__, exc)
+
             client = EmbeddingClient()
 
             def _safe_embed(text: str) -> list[float] | None:
