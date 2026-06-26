@@ -516,6 +516,62 @@ class TestAdvanceDriftGuard:
         assert "high" in body
         assert "3.00" in body
 
+    def test_as_list_coerces_nonlist_values(self):
+        """_as_list: list passes through; non-empty str → [str]; everything else → [].
+
+        The pure coercion that makes cmd_run_report's slices crash-proof against
+        agent-freedom stage-json fields recorded with the wrong type.
+        """
+        import scripts.artifact_cli as cli
+        assert cli._as_list([1, 2]) == [1, 2]
+        assert cli._as_list("hello") == ["hello"]
+        assert cli._as_list(3) == []          # the run_932c0991 crash input
+        assert cli._as_list(0) == []
+        assert cli._as_list("") == []         # empty str is not a useful 1-item list
+        assert cli._as_list(None) == []
+        assert cli._as_list({"a": 1}) == []   # dict is not a list of render items
+        assert cli._as_list(()) == []         # non-list iterable → [] (only list passes through)
+
+    def test_run_report_survives_nonlist_alternatives(self, workspace, capsys, monkeypatch):
+        """run-report must not crash when a sliced think field is a truthy scalar.
+
+        Regression (run_932c0991): cmd_run_report sliced `alternatives[:4]` (and
+        key_findings[:8], eval_criteria[:12]) with NO container-level isinstance
+        guard. A think stage-json recording `alternatives: 3` (an int) raised
+        `TypeError: 'int' object is not subscriptable`, aborting REPORT.md
+        generation. Same bug class as test_run_report_survives_qualitative_dimension_score.
+        """
+        import scripts.artifact_cli as cli
+        from datetime import datetime, timezone
+
+        today = datetime.now(timezone.utc)
+        run_id = "run_nonlist"
+        run_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "run.json").write_text(json.dumps({
+            "id": run_id, "project": "TestProject",
+            "requirement": "x", "profile": "bugfix", "status": "running",
+            "stages": [
+                {"stage": "evaluate", "status": "completed",
+                 "acceptance_criteria": 2},          # int, not list — was sliced [:12]
+                {"stage": "think", "status": "completed",
+                 "alternatives": 3,                  # the original crash input
+                 "key_findings": "one big finding"},  # str, not list — was sliced [:8]
+            ],
+            "created_at": today.isoformat(), "updated_at": today.isoformat(),
+        }))
+        monkeypatch.setattr(cli, "_get_workspace", lambda: workspace)
+        args = type("A", (), {"project": "TestProject", "run_id": run_id, "force": True})()
+
+        # On buggy code this raises TypeError before REPORT.md is written.
+        cli.cmd_run_report(args, None)
+
+        report_path = run_dir / "REPORT.md"
+        assert report_path.exists(), "REPORT.md should be written despite non-list fields"
+        body = report_path.read_text()
+        # str key_findings coerced to a single rendered item; int fields skipped cleanly.
+        assert "one big finding" in body
+
     def test_advance_no_warn_for_goal_cycle(self, workspace, capsys, monkeypatch):
         """goal_cycle commits incrementally and has no artifact — no drift warning."""
         import scripts.artifact_cli as cli

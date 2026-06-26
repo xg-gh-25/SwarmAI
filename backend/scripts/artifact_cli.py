@@ -129,6 +129,30 @@ def _find_active_run(project: str, reg: ArtifactRegistry) -> dict | None:
     return active_runs[0][1]
 
 
+def _as_list(v) -> list:
+    """Coerce an agent-supplied stage-json field into a list safe to slice/iterate.
+
+    cmd_run_report reads several fields (alternatives, key_findings, eval_criteria,
+    success_criteria) straight from raw stage-json — which agents populate freely
+    and which bypasses validate_artifact_data's type checks. A field recorded as a
+    truthy scalar (e.g. ``alternatives: 3``) crashed report generation at
+    ``alternatives[:4]`` with ``TypeError: 'int' object is not subscriptable``
+    (run_932c0991). This guards at the consumer — the layer where the crash occurs.
+
+    - list → returned unchanged
+    - non-empty str → ``[str]`` (a single render item; matches the prior
+      success_criteria str-guard)
+    - anything else (int, dict, None, empty str, tuple, …) → ``[]`` (skip the
+      section rather than crash; a scalar in a list-field is malformed by
+      definition and its section is purely descriptive)
+    """
+    if isinstance(v, list):
+        return v
+    if isinstance(v, str) and v:
+        return [v]
+    return []
+
+
 def _append_stage_to_run(
     project: str, run_id: str, stage_record: dict, reg: ArtifactRegistry
 ) -> None:
@@ -2000,7 +2024,7 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> None:
     eval_scores = eval_data.get("scores", {})
     eval_recommendation = _eval_stage_rec.get("recommendation") or eval_data.get("recommendation", "?")
     eval_scope = _eval_stage_rec.get("scope") or eval_data.get("scope", "?")
-    eval_criteria = _eval_stage_rec.get("acceptance_criteria") or eval_data.get("acceptance_criteria", [])
+    eval_criteria = _as_list(_eval_stage_rec.get("acceptance_criteria") or eval_data.get("acceptance_criteria", []))
 
     eval_table_lines = []
     for dim in ["strategic", "priority", "historical", "feasibility"]:
@@ -2025,14 +2049,12 @@ def cmd_run_report(args, reg: ArtifactRegistry) -> None:
         design = art_data.get("think", {})
     approach = _plan_stage_rec.get("approach_chosen") or _think_stage_rec.get("approach_chosen") or design.get("approach", "")
     boundaries = design.get("boundaries", {})
-    success_criteria = _plan_stage_rec.get("spec_summary") or design.get("success_criteria", design.get("acceptance_criteria", []))
-    if isinstance(success_criteria, str):
-        success_criteria = [success_criteria]
+    success_criteria = _as_list(_plan_stage_rec.get("spec_summary") or design.get("success_criteria", design.get("acceptance_criteria", [])))
     files_to_change = _plan_stage_rec.get("files_planned") or design.get("files_to_change", [])
     # Think stage research findings
     think_data = art_data.get("think", {})
-    key_findings = _think_stage_rec.get("key_findings") or think_data.get("key_findings", [])
-    alternatives = _think_stage_rec.get("alternatives") or think_data.get("alternatives", [])
+    key_findings = _as_list(_think_stage_rec.get("key_findings") or think_data.get("key_findings", []))
+    alternatives = _as_list(_think_stage_rec.get("alternatives") or think_data.get("alternatives", []))
 
     # ── Section 4: Pipeline Execution ─────────────────────────────────
     # Show ALL 8 standard stages — executed ones with data, skipped with reason
