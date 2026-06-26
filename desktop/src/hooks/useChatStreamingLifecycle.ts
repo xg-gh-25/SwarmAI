@@ -2343,19 +2343,24 @@ export function useChatStreamingLifecycle(
 
         // Track last real (non-heartbeat) event for stall detection.
         // Heartbeats keep the SSE connection alive but don't indicate SDK
-        // progress. Only real events reset the stall timer.
+        // progress. Only real events reset the stall timer. (thinking_progress
+        // IS progress → it falls in here and correctly resets the stall timer.)
         if (event.type !== 'heartbeat') {
           lastRealEventRef.current = Date.now();
-        } else if (capturedTabId) {
-          // Liveness → keep this tab's MessageStore watchdog armed. A heartbeat
-          // (every 15s) proves the SSE connection is alive during a long silent
-          // step, so it MUST reset the store's 90s force-end watchdog — even
-          // though it is NOT SDK progress (the stall detector above correctly
-          // ignores it; the watchdog and the stall detector track different
-          // signals: connection-liveness vs SDK-progress). Without this the
-          // watchdog force-ended a live long turn → premature "done while the
-          // backend kept working". touch() is a NO-OP unless the store is
-          // streaming, so a stale/idle heartbeat is harmless.
+        }
+
+        // Liveness → keep this tab's MessageStore watchdog armed. heartbeat (15s,
+        // connection alive) AND thinking_progress (15s, model actively thinking —
+        // emitted in place of heartbeat during an extended-thinking phase) both
+        // carry NO content, so without resetting the watchdog a long thinking/
+        // silent step force-ends a live turn. This is exactly what tripped the one
+        // residual fire: a heavy cold-resume thinks for 90s+ before any output, so
+        // only thinking_progress arrived and the content-only watchdog fired.
+        // still_working (60s) is touched in its own early-return block above.
+        // touch() is a NO-OP unless the store is streaming, so stale/idle pings are
+        // harmless. The watchdog and the stall detector track different signals
+        // (connection-liveness vs SDK-progress) — heartbeat resets only the former.
+        if (capturedTabId && (event.type === 'heartbeat' || event.type === 'thinking_progress')) {
           messageStoreRegistry.get(capturedTabId)?.touch();
         }
 
