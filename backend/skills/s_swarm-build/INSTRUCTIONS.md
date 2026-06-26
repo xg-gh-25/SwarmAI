@@ -61,9 +61,7 @@ FAIL:  ABORT with "s_swarm-build is SwarmAI-only."
 cd $SWARMAI_ROOT && \
   echo "Version: $(cat VERSION)" && \
   echo "Tree: $(git status --porcelain | wc -l | tr -d ' ') uncommitted" && \
-  nc -z 127.0.0.1 18321 2>/dev/null && echo "Daemon: UP" || echo "Daemon: DOWN" ; \
-  echo "--- Eval gate ---" ; \
-  (cd backend && python scripts/ci_eval_gate.py ; echo "gate_rc=$?")
+  nc -z 127.0.0.1 18321 2>/dev/null && echo "Daemon: UP" || echo "Daemon: DOWN"
 ```
 
 **Report:**
@@ -72,15 +70,11 @@ Stage 1 PREFLIGHT: PASS
   Version: 1.17.2
   Tree: clean | N uncommitted
   Daemon: UP | DOWN
-  Eval gate: PASS (rc=0) | WARN no-report (rc=2) | BLOCK stale/red (rc=1)
 ```
 
-**Eval gate semantics** (mirrors `prod.sh` Step -1, which enforces it for real):
-- `rc=0` fresh + green → build will proceed
-- `rc=2` no gate-readable report (bootstrap / fresh clone) → `prod.sh` SOFT-warns and proceeds; tell the user to run `python backend/scripts/eval_runner.py run` to enable the gate
-- `rc=1` stale (code/golden_set changed since last eval) OR red (BVT failing) → `prod.sh` will **HARD-BLOCK** the build. The user must re-run eval (`python backend/scripts/eval_runner.py run`) before building, or set `SWARMAI_SKIP_EVAL_GATE=1` to override (CI/emergency).
-
-If PREFLIGHT shows `gate_rc=1`, warn the user that `./prod.sh build` will block until eval is re-run — surface this BEFORE the handoff so they fix it in one trip.
+> **Note:** the eval gate does NOT run on `build` — `build` is a high-frequency dev
+> action and gating it stalls iteration. The eval gate runs at the **release**
+> boundary (`s_swarm-release` PREFLIGHT / `prod.sh release`). See that skill.
 
 Then immediately hand off to user for build.
 
@@ -89,7 +83,6 @@ Then immediately hand off to user for build.
 ## Stage 2: BUILD + DEPLOY (User, 2-5 min)
 
 `./prod.sh build` is a single command that does:
-0. **Eval gate** (git-bound): block if the committed eval report is stale/red (rc=1); soft-warn if no report yet (rc=2); pass if fresh+green (rc=0). Override: `SWARMAI_SKIP_EVAL_GATE=1`.
 1. Sync versions from VERSION file
 2. PyInstaller build → binary at `desktop/src-tauri/binaries/python-backend-aarch64-apple-darwin/`
 3. Run `verify_build.py` (46 capability checks) — fails fast if broken

@@ -80,6 +80,10 @@ cat VERSION
 
 # 5. CI status
 gh run list --branch main --limit 3 --json status,conclusion,name
+
+# 6. Eval gate (git-bound) — RELEASE-only. Enforces "本地必须跑完 Eval 才放行"
+#    at the ship boundary (NOT on build, which is high-frequency).
+(cd backend && python scripts/ci_eval_gate.py ; echo "gate_rc=$?")
 ```
 
 **Pass criteria:**
@@ -87,6 +91,7 @@ gh run list --branch main --limit 3 --json status,conclusion,name
 - **On main branch (BLOCK if not — releases MUST ship from main)**
 - ≤20 commits (or user approved >20, >40 = BLOCK)
 - CI green
+- **Eval gate (`gate_rc`): rc=0 fresh+green → PASS; rc=1 stale/red → BLOCK (re-run `python backend/scripts/eval_runner.py run`); rc=2 no report → WARN (interactive: ask; non-TTY/CI: fail-closed → re-run eval or set `SWARMAI_SKIP_EVAL_GATE=1`). The shared `_eval_gate` in `prod.sh` enforces this on `release`/`release-all`/`release-hive` (1e); the raw `gate_rc` you print here is advisory — if it's `1`, BLOCK now rather than handing off.**
 
 **Report:**
 ```
@@ -95,12 +100,14 @@ Stage 1 PREFLIGHT: PASS
   Current version: X.Y.Z
   Commits since vX.Y.Z: N
   CI: 3/3 green
+  Eval gate: PASS (rc=0) | WARN no-report (rc=2) | BLOCK stale/red (rc=1)
 ```
 
 If not on main: **BLOCK** — switch to main first.
 If dirty tree: commit housekeeping changes and continue.
 If >20 ≤40 commits: ask for sign-off.
 If >40: BLOCK — must split.
+If `gate_rc=1`: **BLOCK** — re-run eval before releasing.
 
 ---
 

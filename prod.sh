@@ -46,6 +46,55 @@ _build_time() {
     echo "${min}m ${sec}s"
 }
 
+# Eval gate (git-bound) — RELEASE-only. Enforces "本地必须跑完 Eval 出 report
+# 才放行" at every ship boundary (NOT on `build`, which is high-frequency). Shared
+# by cmd_release + cmd_release_hive so no release path ships ungated.
+#   gate rc 0 = fresh + green  → return 0 (proceed)
+#   gate rc 1 = stale OR red   → return 1 (caller BLOCKS the release)
+#   gate rc 2 = no report      → interactive: ask (Y proceeds); non-TTY: return 1
+# Escape hatch: SWARMAI_SKIP_EVAL_GATE=1 (CI / emergency).
+_eval_gate() {
+    # Once-per-process: release-all calls cmd_release THEN cmd_release_hive — both
+    # gate. Skip the redundant 2nd run (same git tree → same verdict; avoids a
+    # double rc=2 prompt). Standalone release-hive still gates (flag unset).
+    if [ "${_EVAL_GATE_PASSED:-}" = "1" ]; then
+        return 0
+    fi
+    if [ "${SWARMAI_SKIP_EVAL_GATE:-}" = "1" ]; then
+        _warn "Eval gate SKIPPED (SWARMAI_SKIP_EVAL_GATE=1)"
+        return 0
+    fi
+    _log "Eval gate (git-bound freshness + BVT)..."
+    # `set -e` is active (top of file): a non-zero command substitution aborts the
+    # script AT the assignment before $? is read — wrap in set +e/set -e.
+    local _gate_out _gate_rc answer
+    set +e
+    _gate_out=$(cd "$BACKEND_DIR" && python scripts/ci_eval_gate.py 2>&1)
+    _gate_rc=$?
+    set -e
+    case "$_gate_rc" in
+        0) _ok "$_gate_out"; _EVAL_GATE_PASSED=1; return 0 ;;
+        2) _warn "$_gate_out"
+           # No TTY (CI / piped stdin): can't ask — fail closed with a clear message
+           # instead of dying opaquely at `read` under set -e.
+           if [ ! -t 0 ]; then
+               _err "No eval report and no TTY — run eval first, or set SWARMAI_SKIP_EVAL_GATE=1 to bypass (CI)."
+               return 1
+           fi
+           echo -n "  No gate-readable eval report (run 'python backend/scripts/eval_runner.py run' first). Release anyway? [y/N] "
+           read -r answer
+           if [[ ! "$answer" =~ ^[Yy] ]]; then
+               _err "Aborted — run eval to produce a gate-readable report"
+               return 1
+           fi
+           _EVAL_GATE_PASSED=1
+           return 2 ;;  # proceed-with-warning (caller marks preflight degraded)
+        *) _err "$_gate_out"
+           _err "Eval gate BLOCKED the release. Re-run eval, or set SWARMAI_SKIP_EVAL_GATE=1 to override."
+           return 1 ;;
+    esac
+}
+
 # ── Daemon (shared library) ────────────────────────────────
 _DAEMON_CMD="prod.sh"
 source "$PROJECT_ROOT/scripts/daemon-lib.sh"
@@ -59,36 +108,10 @@ cmd_build() {
     echo "════════════════════════"
     echo ""
 
-    # Step -1: Eval gate (git-bound). Block the build if the committed eval
-    # report is stale (code/golden_set changed since last eval) or red. This
-    # enforces "本地必须跑完 Eval 出 report 才放行". Pure check — no Bedrock cost.
-    #   exit 0 = fresh + green        → proceed
-    #   exit 1 = stale OR red         → HARD BLOCK (developer has a report; fix/re-run)
-    #   exit 2 = no report / pre-gate → SOFT WARN + proceed (bootstrap / fresh clone)
-    # Escape hatch: SWARMAI_SKIP_EVAL_GATE=1 (CI / emergency).
-    if [ "${SWARMAI_SKIP_EVAL_GATE:-}" = "1" ]; then
-        _warn "Eval gate SKIPPED (SWARMAI_SKIP_EVAL_GATE=1)"
-    else
-        _log "Step -1: Eval gate (git-bound freshness + BVT)..."
-        local _gate_out _gate_rc
-        # `set -e` is active (top of file): a non-zero command substitution would
-        # abort the script AT this assignment, before $? is captured — turning the
-        # exit-2 soft-warn into a silent hard-abort and swallowing the exit-1
-        # guidance. Disable errexit around the gate so we can inspect its rc.
-        set +e
-        _gate_out=$(cd "$BACKEND_DIR" && python scripts/ci_eval_gate.py 2>&1)
-        _gate_rc=$?
-        set -e
-        case "$_gate_rc" in
-            0) _ok "$_gate_out" ;;
-            2) _warn "$_gate_out"
-               _warn "Proceeding (no gate-readable report yet — run 'python backend/scripts/eval_runner.py run' to enable the gate)." ;;
-            *) _err "$_gate_out"
-               _err "Eval gate BLOCKED the build. Re-run eval, or set SWARMAI_SKIP_EVAL_GATE=1 to override."
-               exit 1 ;;
-        esac
-        echo ""
-    fi
+    # NOTE: the eval gate lives in `cmd_release` (Phase 1), NOT here. `build` is a
+    # high-frequency dev action (run many times a day) — gating it stalls iteration.
+    # The "本地必须跑完 Eval 才放行" enforcement belongs at the release boundary
+    # (shipping to others), which is where ci_eval_gate.py now runs.
 
     # Step 0: Sync versions from VERSION file
     _log "Step 0: Syncing version from VERSION file..."
@@ -211,6 +234,16 @@ cmd_release() {
         fi
         preflight_ok=false
     fi
+
+    # 1e. Eval gate (git-bound) — RELEASE-only (see _eval_gate). Capture rc under
+    # set -e: 0=proceed, 1=BLOCK (return), 2=proceed-with-warning (mark degraded).
+    local _eg_rc
+    set +e; _eval_gate; _eg_rc=$?; set -e
+    case "$_eg_rc" in
+        0) ;;
+        2) preflight_ok=false ;;
+        *) return 1 ;;
+    esac
 
     echo ""
 
@@ -776,6 +809,13 @@ cmd_release_hive() {
 
     local version
     version=$(tr -d '[:space:]' < "$PROJECT_ROOT/VERSION")
+
+    # Eval gate — Hive is a shippable target; don't let `release-hive` bypass it.
+    # (release-all already gates via cmd_release, but standalone release-hive must
+    # gate too.) rc 2 = proceed-with-warning is acceptable for a package build.
+    local _eg_rc
+    set +e; _eval_gate; _eg_rc=$?; set -e
+    [ "$_eg_rc" = "1" ] && return 1
 
     # Step 1: Package
     _log "Step 1/2: Building Hive tar.gz (v${version})..."
