@@ -248,7 +248,9 @@ class EvalService:
                     "dimension": c.get("dimension"),
                     "level": c.get("level"),
                     "title": c.get("title"),
-                    "source": c.get("source"),
+                    # `source` (e.g. "STEERING R1 + C011") is instance-identifying
+                    # governance state — expose only for public cases (Gate-2 leak).
+                    "source": c.get("source") if c.get("_origin") != "private" else None,
                     "tier": c.get("tier", "active"),
                     "eval_method": c.get("eval_method"),
                     # _origin is the public|private TAG only (never private content) —
@@ -263,30 +265,31 @@ class EvalService:
             ],
         }
 
-    # Sensitive fields stripped from PRIVATE case detail — these can reference
-    # instance state (MEMORY/STEERING/local paths). The public/private split keeps
-    # them out of git; this keeps their CONTENT out of the API response too, so a
-    # "private" badge in the UI can't be used to fish for instance data. Metadata
-    # (id/category/dimension/title/tier/eval_method/affected_by/evaluators/history)
-    # stays — enough to render the drawer; the body sections render conditionally.
-    _PRIVATE_SENSITIVE_FIELDS = (
-        "scenario", "verification", "assertions", "expected_trajectory",
-        "decision_rubric", "allowed_tools",
+    # ALLOWLIST (not denylist) of fields kept in PRIVATE case detail. A denylist
+    # leaks any NEW content field by default (Gate-2 run_1f588e53: expected_response_contains
+    # + source slipped a denylist); an allowlist fails closed — an unanticipated
+    # field is dropped, never exposed. Private cases can reference instance state
+    # (MEMORY/STEERING/local governance), so only safe rendering metadata survives.
+    # NOTE: `source` (e.g. "STEERING R1 + C011") is instance-identifying → NOT kept.
+    _PRIVATE_DETAIL_ALLOWED = (
+        "id", "category", "dimension", "level", "title", "tier",
+        "eval_method", "affected_by", "evaluators", "_origin",
     )
 
     def get_case_detail(self, case_id: str) -> Optional[dict]:
-        """Return case detail + history. For PRIVATE cases, strip sensitive
-        content fields (keep metadata) so instance data never leaves via the API."""
+        """Return case detail + history. For PRIVATE cases, return ONLY an
+        allowlist of rendering metadata (fail-closed) so instance content never
+        leaves via the API; PUBLIC cases return in full."""
         case = next((c for c in self._cases if c.get("id") == case_id), None)
         if not case:
             return None
 
-        detail = {**case, "history": self._get_case_history(case_id)}
         if case.get("_origin") == "private":
-            for f in self._PRIVATE_SENSITIVE_FIELDS:
-                detail.pop(f, None)
+            detail = {k: case[k] for k in self._PRIVATE_DETAIL_ALLOWED if k in case}
+            detail["history"] = self._get_case_history(case_id)
             detail["_content_redacted"] = True
-        return detail
+            return detail
+        return {**case, "history": self._get_case_history(case_id)}
 
     # ─── CRUD Operations (P3) ───────────────────────────────────────────────
 

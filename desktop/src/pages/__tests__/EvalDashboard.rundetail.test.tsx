@@ -90,9 +90,12 @@ describe('TrendsTab recent runs → RunDetailPanel', () => {
     // detail calls /eval/runs/run_3 and groups by status
     await waitFor(() => expect(screen.getByTestId('run-status-failed')).toBeInTheDocument());
     expect(screen.getByTestId('run-status-passed')).toBeInTheDocument();
-    // the failed case 'b' is shown, with its dimension joined from golden set
+    // the failed case 'b' is shown, with its dimension joined from golden set.
+    // case 'b' has dimension 'compliance' in GS_RESPONSE → must render that label
+    // (proves the dimById join is live, not vacuous — Gate-2 test-gap fix).
     const failedGroup = screen.getByTestId('run-status-failed');
     expect(within(failedGroup).getByText('b')).toBeInTheDocument();
+    expect(within(failedGroup).getByText('compliance')).toBeInTheDocument();
   });
 
   it('calls GET /eval/runs/{run_id} (the previously-unused endpoint)', async () => {
