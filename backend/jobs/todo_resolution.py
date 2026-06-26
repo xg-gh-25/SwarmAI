@@ -184,6 +184,23 @@ def _resolve_completed_pipelines(
         if not pipeline_id:
             continue
 
+        # Reject crafted pipeline_id that would escape artifacts_root (path
+        # traversal). pipeline_id is a single run-dir segment (run_<hex>); a
+        # value containing a separator, '..', or an absolute path is malformed
+        # and must never be used to build a read path. Pre-existing sink also
+        # reachable via escalation:-source todos — guarded here for both.
+        if (
+            "/" in pipeline_id
+            or "\\" in pipeline_id
+            or ".." in pipeline_id
+            or Path(pipeline_id).is_absolute()
+        ):
+            logger.warning(
+                "todo-resolution: skipping todo %s — unsafe pipeline_id %r",
+                todo_id[:8], pipeline_id[:40],
+            )
+            continue
+
         # Check run.json status
         run_json = artifacts_root / "runs" / pipeline_id / "run.json"
         if not run_json.exists():

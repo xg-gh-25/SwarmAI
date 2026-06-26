@@ -191,7 +191,14 @@ class TestPipelineCompletion:
         Regression for the source-prefix mismatch: artifact_cli.py writes
         source='pipeline:<run_id>' but the Layer-1 filter only matched
         'escalation:%', so pipeline-paused todos were never auto-closed.
+
+        This is the TRUE fix-prover: it FAILS without the widened filter (the
+        pipeline:-sourced row is never SELECTed → stays in_discussion).
+        Layer-2 (git keyword) is mocked off so ONLY Layer-1 is exercised —
+        otherwise real `git log` could move the todo independently (adversarial
+        finding, run_af5ad227).
         """
+        from unittest.mock import patch
         from jobs.todo_resolution import run_todo_resolution
 
         db_path = _create_test_db(tmp_path)
@@ -212,15 +219,22 @@ class TestPipelineCompletion:
             "id": run_id, "status": "completed", "project": "SwarmAI",
         }))
 
-        result = run_todo_resolution(
-            db_path=db_path, artifacts_root=tmp_path / "artifacts",
-        )
+        with patch("jobs.todo_resolution._get_recent_commits", return_value=""):
+            result = run_todo_resolution(
+                db_path=db_path, artifacts_root=tmp_path / "artifacts",
+            )
         assert _get_todo_status(db_path, "pipe-src-1") == "handled"
         assert result["pipeline_resolved"] >= 1
 
     def test_pipeline_source_running_run_not_closed(self, tmp_path):
-        """source='pipeline:<run_id>' but run still running → todo NOT closed
-        (guards against the widened filter over-matching)."""
+        """source='pipeline:<run_id>' but run still running → todo NOT closed.
+
+        Guards the status==completed gate: even though the widened filter now
+        SELECTs this pipeline:-sourced row (verified — Layer-2 mocked off so the
+        only path that could touch it is Layer-1), the running run must NOT
+        close it. Without the status gate this would wrongly close.
+        """
+        from unittest.mock import patch
         from jobs.todo_resolution import run_todo_resolution
 
         db_path = _create_test_db(tmp_path)
@@ -241,8 +255,32 @@ class TestPipelineCompletion:
             "id": run_id, "status": "running",
         }))
 
-        run_todo_resolution(db_path=db_path, artifacts_root=tmp_path / "artifacts")
+        with patch("jobs.todo_resolution._get_recent_commits", return_value=""):
+            run_todo_resolution(db_path=db_path, artifacts_root=tmp_path / "artifacts")
         assert _get_todo_status(db_path, "pipe-src-2") == "in_discussion"
+
+    def test_pipeline_source_unsafe_pipeline_id_skipped(self, tmp_path):
+        """A crafted pipeline_id with path-traversal must be skipped, never used
+        to build a read path outside artifacts_root (adversarial security finding,
+        run_af5ad227). The todo stays untouched and the job does not crash."""
+        from unittest.mock import patch
+        from jobs.todo_resolution import run_todo_resolution
+
+        db_path = _create_test_db(tmp_path)
+        _insert_todo(
+            db_path,
+            todo_id="pipe-src-evil",
+            title="Pipeline paused: traversal",
+            status="in_discussion",
+            source="pipeline:run_evil",
+            linked_context={"pipeline_id": "../../../../../../etc", "project": "SwarmAI"},
+        )
+
+        with patch("jobs.todo_resolution._get_recent_commits", return_value=""):
+            result = run_todo_resolution(db_path=db_path, artifacts_root=tmp_path / "artifacts")
+        # Untouched — unsafe id rejected before any path read.
+        assert _get_todo_status(db_path, "pipe-src-evil") == "in_discussion"
+        assert result["pipeline_resolved"] == 0
 
 
 # ── Layer 2: Git Keyword Match ───────────────────────────────────────
