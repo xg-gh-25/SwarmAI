@@ -58,6 +58,10 @@ class RecallResult:
     content: str = ""
     reason: str = ""
     sections: tuple[str, ...] = ()
+    # Hit-log surface (run_1e2e663b, §6c) — recall PRODUCES these; ingestion's
+    # Darwinian promotion CONSUMES them. recall itself never reads them.
+    hit_layer: str = "none"  # "keyword" | "hybrid" | "none"
+    drilled: bool = False    # True once a section body was sliced out
 
 
 def recall_context(
@@ -126,8 +130,25 @@ def recall_context(
 
         superseded = memory_index._extract_superseded_keys(memory_content)
 
-        # Reuse the EXACT selective-injection scorer — no new ranking logic (STEERING #3).
+        # Keyword-first (no Bedrock on the hot path — the embed leg is the
+        # measured 2.65s/query cost). Reuse the EXACT selective-injection scorer.
         scores = memory_index._keyword_section_scores(query, index_block, superseded)
+        hit_layer = "keyword" if scores else "none"
+
+        # Hybrid-on-miss: only when keyword finds nothing do we pay the embed
+        # cost. The hybrid (DB-backed) path ranks DB-stored entries → section
+        # names; those names may be STALE (MEMORY.md edited after the last embed
+        # sync), so the slice loop below verifies each ranked section exists in
+        # the LIVE passed string and silently-drops nothing (it falls through to
+        # whatever live sections matched). See design DP-v stale-index hazard.
+        if not scores:
+            try:
+                hybrid = memory_index._hybrid_section_scores(query)
+            except Exception:  # noqa: BLE001 — hybrid is best-effort; keyword already empty
+                hybrid = {}
+            if hybrid:
+                scores = hybrid
+                hit_layer = "hybrid"
     except Exception as exc:  # noqa: BLE001 — fail-safe: structured result, no leak
         return RecallResult(
             allowed=True, content="",
@@ -144,6 +165,9 @@ def recall_context(
             break
         body = sections.get(sec_name, "")
         if not body.strip():
+            # Stale-index guard: a DB-ranked section absent from the live string
+            # is skipped (never returned as an empty slice) — the loop continues
+            # to the next live section, so a real match still surfaces.
             continue
         block = f"## {sec_name}\n{body.strip()}"
         block_tokens = ContextDirectoryLoader.estimate_tokens(block)
@@ -173,4 +197,8 @@ def recall_context(
         content="\n\n".join(parts),
         reason="" if parts else "no excluded section matched the query",
         sections=tuple(chosen),
+        # A scored-but-undrilled result (all ranked sections stale/empty) still
+        # reports its layer, but drilled reflects whether a body was sliced out.
+        hit_layer=hit_layer if parts else "none",
+        drilled=bool(parts),
     )

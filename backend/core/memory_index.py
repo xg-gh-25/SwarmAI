@@ -528,6 +528,109 @@ def keyword_relevance(
     return min(score, 1.0)
 
 
+# ── Okapi-BM25 keyword scorer (run_1e2e663b, recall semantic upgrade) ──
+
+# Standard Okapi-BM25 free parameters (Robertson/Sparck-Jones defaults).
+BM25_K1 = 1.5  # term-frequency saturation
+BM25_B = 0.75  # document-length normalization strength
+
+
+def _bm25_tokenize(text: str) -> list[str]:
+    """Tokenize for BM25: reuse the lexical tokenizer, but expand CJK runs into
+    character bigrams so partial CJK matches still score (token-exact BM25 would
+    miss '竞品分析陷阱' vs '竞品分析的结论' — they share no whole token, only the
+    bigrams 竞品/品分/分析). Mirrors the CJK-flexibility ``keyword_relevance`` has,
+    keeping the recall upgrade from REGRESSING bilingual matching.
+    """
+    out: list[str] = []
+    for tok in _tokenize_lower(text):
+        if _CJK_RE.search(tok) and len(tok) >= 2:
+            # Emit character bigrams for the CJK run (overlapping).
+            out.extend(tok[i:i + 2] for i in range(len(tok) - 1))
+        else:
+            out.append(tok)
+    return out
+
+
+def _bm25_scores(query: str, docs: dict[str, str]) -> dict[str, float]:
+    """Score each doc against the query with Okapi-BM25 + corpus-relative IDF.
+
+    IDF is computed over ``docs`` (the candidate set), so common terms are
+    down-weighted relative to THIS corpus — the property the old token-overlap
+    leg lacked. Returns raw BM25 scores (>= 0); the caller min-max normalizes
+    them to make the leg commensurable with the absolute vector leg (§3.6).
+
+    Args:
+        query: The user/recall query.
+        docs: Mapping of doc key → doc text (the candidate set).
+
+    Returns:
+        Dict key → BM25 score (>= 0). Empty query or empty corpus → {}.
+    """
+    import math
+
+    if not docs:
+        return {}
+    q_terms = _bm25_tokenize(query)
+    if not q_terms:
+        return {}
+
+    doc_tokens = {k: _bm25_tokenize(text) for k, text in docs.items()}
+    doc_len = {k: len(toks) for k, toks in doc_tokens.items()}
+    n_docs = len(docs)
+    avgdl = (sum(doc_len.values()) / n_docs) if n_docs else 0.0
+
+    # Document frequency per query term.
+    doc_term_sets = {k: set(toks) for k, toks in doc_tokens.items()}
+    q_unique = set(q_terms)
+    df: dict[str, int] = {}
+    for term in q_unique:
+        df[term] = sum(1 for s in doc_term_sets.values() if term in s)
+
+    # IDF: ln(1 + (N - df + 0.5)/(df + 0.5)) — the +1 form keeps IDF >= 0.
+    idf: dict[str, float] = {}
+    for term in q_unique:
+        d = df[term]
+        idf[term] = math.log(1.0 + (n_docs - d + 0.5) / (d + 0.5))
+
+    scores: dict[str, float] = {}
+    for key, toks in doc_tokens.items():
+        if not toks:
+            continue
+        # term frequency in this doc
+        tf: dict[str, int] = {}
+        for t in toks:
+            if t in q_unique:
+                tf[t] = tf.get(t, 0) + 1
+        if not tf:
+            continue
+        dl = doc_len[key]
+        score = 0.0
+        for term, f in tf.items():
+            denom = f + BM25_K1 * (1.0 - BM25_B + BM25_B * (dl / avgdl if avgdl else 1.0))
+            score += idf[term] * (f * (BM25_K1 + 1.0)) / denom
+        if score > 0:
+            scores[key] = score
+    return scores
+
+
+def _minmax_normalize(scores: dict[str, float]) -> dict[str, float]:
+    """Min-max normalize scores to [0, 1] over the candidate set.
+
+    Makes an unbounded leg (BM25) commensurable with the absolute [0,1] vector
+    leg (§3.6). A single-candidate or all-equal set maps to 1.0 (it is the only
+    / a co-best option, so it deserves full weight, not 0).
+    """
+    if not scores:
+        return {}
+    vals = list(scores.values())
+    lo, hi = min(vals), max(vals)
+    if hi <= lo:
+        return {k: 1.0 for k in scores}
+    span = hi - lo
+    return {k: (v - lo) / span for k, v in scores.items()}
+
+
 # ── Section Selection ─────────────────────────────────────────────────
 
 
@@ -736,9 +839,10 @@ def _hybrid_section_scores(user_message: str) -> dict[str, float]:
                 # sqlite-vec cosine distance = 2*(1-cos_sim). Convert to similarity.
                 vector_scores = {key: max(0.0, 1.0 - dist / 2.0) for key, dist in raw}
 
-            # Get keyword scores + entry→section mapping from stored entries
-            keyword_scores: dict[str, float] = {}
+            # Build the BM25 candidate corpus (title + aliases) per stored entry,
+            # plus the entry→section map and the set of embedded keys.
             entry_sections: dict[str, str] = {}
+            bm25_docs: dict[str, str] = {}
             rows = conn.execute(
                 "SELECT key, section, title, keywords FROM memory_entries"
             ).fetchall()
@@ -746,16 +850,23 @@ def _hybrid_section_scores(user_message: str) -> dict[str, float]:
                 key, section, title, kw_json = row
                 entry_sections[key] = section
                 aliases = json.loads(kw_json) if kw_json else []
-                score = keyword_relevance(user_message, title, aliases)
-                if score > 0:
-                    keyword_scores[key] = score
+                bm25_docs[key] = f"{title} {' '.join(aliases)}".strip()
+
+            embedded_keys: set[str] = {
+                r[0] for r in conn.execute("SELECT key FROM memory_vec").fetchall()
+            }
         finally:
             conn.close()
 
-        # Hybrid merge
+        # Keyword leg: Okapi-BM25+IDF over the candidate set, then min-max
+        # normalized so it is commensurable with the absolute [0,1] vector leg.
+        keyword_scores = _minmax_normalize(_bm25_scores(user_message, bm25_docs))
+
+        # Hybrid merge — missing-vector renorm via embedded_keys (§3.6.1).
         ranked = hybrid_memory_search(
             keyword_scores=keyword_scores,
             vector_scores=vector_scores,
+            embedded_keys=embedded_keys,
         )
 
         # Aggregate to section level (max score per section)

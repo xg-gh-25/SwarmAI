@@ -1,23 +1,37 @@
 #!/usr/bin/env python3
 """Deterministic probe harness for the recall-chain GS_RCHAIN_* eval cases.
 
-Each GS_RCHAIN_* case (canary_pass) runs ONE scenario here against a FIXED
-in-memory fixture (never the live, drifting MEMORY.md), drives the REAL recall
-code path (no mocked scorer — design §4.3 / GUI26 prompt-source = answer-source),
-and prints a single marker the case asserts via `expected_contains`. A
-regression that breaks the guarded behavior makes the marker absent → the case
-FAILS. Markers are unique per scenario so a flat/empty result cannot pass.
+Each GS_RCHAIN_* case (canary_pass) runs ONE scenario here. Every scenario
+drives the REAL hybrid recall code path — real sqlite-vec DB assembly, real
+Okapi-BM25 + min-max keyword leg, real ``embedded_keys`` merge, real section
+aggregation (design §4.3 / GUI26 prompt-source = answer-source, GUI32 render-
+fidelity must exercise the real assembly path, NOT a mocked scorer).
 
-Scenarios:
-  synonym_guard  — hybrid (semantic) recall returns the SPECIFIC expected
-                   section for a query with ZERO keyword overlap. Prints
-                   SYNONYM_GUARD_OK only if the right section drilled.
-  stale_index    — hybrid ranks a section ABSENT from the live string (DB
-                   stale); recall must NOT silently drop — a live section still
-                   surfaces and the stale one does not. Prints STALE_INDEX_OK.
-  missing_vector — an un-embedded but keyword-strong entry must out-rank an
-                   embedded weak-keyword peer under the renorm (§3.6.1), driven
-                   through hybrid_memory_search. Prints MISSING_VECTOR_OK.
+The ONLY thing mocked is the network boundary: the Bedrock query embedding
+(``_embedding_client_cache.embed_text``) returns a controlled vector, and the
+on-disk DB path is redirected to a per-scenario temp DB. Entry vectors are
+inserted into a real ``memory_vec`` table; the ranking is produced by the real
+``_hybrid_section_scores`` / ``recall_context`` code, not by a stub.
+
+Determinism: vectors are one-hot 1024-d, so nearest-neighbour is exact and
+metric-agnostic (identical vector → distance 0; orthogonal → larger). The fixed
+in-memory MEMORY string never drifts with the live MEMORY.md.
+
+Scenarios (each is non-vacuous — a mutation that disables the guarded behavior
+makes the marker absent → the eval case FAILS):
+  synonym_guard  — keyword-first MISSES a zero-overlap synonym query; the real
+                   hybrid VECTOR leg finds the SPECIFIC COE section. Disabling
+                   the vector leg / mis-renorming the embedded entry drops it
+                   below threshold. Prints SYNONYM_GUARD_OK.
+  stale_index    — real hybrid ranks a section ABSENT from the live string #1
+                   (DB stale); the stale-index guard must skip it and still
+                   surface the live section. Removing the guard surfaces an
+                   empty "Deleted Section". Prints STALE_INDEX_OK.
+  missing_vector — an un-embedded keyword-strong entry must out-rank an embedded
+                   peer that has BOTH a strong vector AND wins the no-renorm
+                   merge. Only the §3.6.1 renorm flips the ranking; disabling it
+                   makes the embedded entry win. Driven through the real
+                   _hybrid_section_scores assembly. Prints MISSING_VECTOR_OK.
 
 Usage: python backend/scripts/recall_chain_probe.py <scenario>
 Exit 0 + marker on PASS; exit 1 (no marker) on regression.
@@ -25,6 +39,8 @@ Exit 0 + marker on PASS; exit 1 (no marker) on regression.
 from __future__ import annotations
 
 import sys
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -32,8 +48,8 @@ _BACKEND = Path(__file__).resolve().parents[1]
 if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
-# Fixed fixture — section names + bodies are stable, so the cases never drift
-# with the live MEMORY.md.
+# Fixed live-MEMORY string for the recall_context scenarios. Section names +
+# bodies are stable, so the cases never drift with the real MEMORY.md.
 _FIXTURE = """\
 <!-- MEMORY_INDEX_START -->
 ## Memory Index
@@ -48,20 +64,91 @@ _FIXTURE = """\
 - 2026-03-22: **Sync wrappers around async cleanup = resource leaks** — async callers.
 """
 
+_DIM = 1024
+
+
+def _onehot(idx: int) -> list[float]:
+    """Deterministic 1024-d one-hot unit vector (metric-agnostic nearest-NN)."""
+    v = [0.0] * _DIM
+    v[idx % _DIM] = 1.0
+    return v
+
+
+class _FakeEmbedClient:
+    """Stands in for the Bedrock EmbeddingClient — the network boundary. Returns
+    a fixed query vector regardless of text (only the query is embedded; entry
+    vectors come from the real DB)."""
+
+    def __init__(self, query_vec: list[float]) -> None:
+        self._q = query_vec
+
+    def embed_text(self, text: str) -> list[float]:  # noqa: ARG002 — fixed by design
+        return self._q
+
+
+def _build_db(db_path: Path, entries: list[tuple]) -> None:
+    """Create a real memory_entries + memory_vec DB at db_path.
+
+    entries: list of (key, section, title, keywords, vector_or_None). A None
+    vector means the entry is un-embedded (present in memory_entries only).
+    """
+    import sqlite3
+
+    import sqlite_vec
+
+    from core.memory_embeddings import MemoryEmbeddingStore
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+        store = MemoryEmbeddingStore(conn)
+        store.ensure_tables()
+        for key, section, title, keywords, vec in entries:
+            store.upsert_entry(
+                key=key, section=section, title=title,
+                full_text=f"{title} body", keywords=keywords, embedding=vec,
+            )
+    finally:
+        conn.close()
+
+
+@contextmanager
+def _real_hybrid(db_path: Path, query_vec: list[float]):
+    """Redirect the DB path + Bedrock embedder so the REAL _hybrid_section_scores
+    runs against our fixture. Nothing in the scoring path is mocked."""
+    from core import memory_index
+
+    with patch("jobs.paths.DB_PATH", db_path), \
+            patch.object(memory_index, "_embedding_client_cache",
+                         _FakeEmbedClient(query_vec)):
+        yield
+
 
 def _synonym_guard() -> int:
-    """Keyword misses a synonym query; hybrid returns the SPECIFIC COE section."""
+    """Keyword-first misses a zero-overlap synonym query; the real hybrid VECTOR
+    leg returns the SPECIFIC COE section through the full recall_context chain."""
     from core.context_recall import recall_context
 
-    # Query has zero keyword overlap with the index; hybrid 'finds' COE.
-    with patch("core.memory_index._hybrid_section_scores",
-               return_value={"COE Registry": 0.82}):
-        res = recall_context(
-            "MEMORY.md", "application abruptly terminates at boot time",
-            memory_content=_FIXTURE,
-        )
-    # Non-vacuous: assert the EXACT expected section + that it actually drilled
-    # via the hybrid layer (a keyword-only impl would have hit_layer != hybrid).
+    with tempfile.TemporaryDirectory() as d:
+        db = Path(d) / "mem.db"
+        # COE embedded at e_5; LL embedded at e_10. Query embeds to e_5 → COE
+        # is the exact vector neighbour. BM25 is ~0 (zero lexical overlap), so
+        # the match is genuinely carried by the vector leg.
+        _build_db(db, [
+            ("COE01", "COE Registry", "exit code -9 cascading SIGKILL failure",
+             ["sigkill", "oom", "crash"], _onehot(5)),
+            ("LL01", "Lessons Learned", "Sync wrappers around async cleanup leak",
+             ["async", "cleanup", "leak"], _onehot(10)),
+        ])
+        with _real_hybrid(db, _onehot(5)):
+            res = recall_context(
+                "MEMORY.md", "application abruptly terminates at boot time",
+                memory_content=_FIXTURE,
+            )
+    # Non-vacuous: the EXACT section must surface AND via the hybrid layer (a
+    # broken vector leg / wrong renorm drops COE below threshold → not hybrid).
     if (res.allowed and res.hit_layer == "hybrid"
             and "COE Registry" in res.sections and res.drilled):
         print("SYNONYM_GUARD_OK")
@@ -71,44 +158,64 @@ def _synonym_guard() -> int:
 
 
 def _stale_index() -> int:
-    """Hybrid ranks a section absent from the live string → must not silently
-    drop; a live section still surfaces, the stale one does not."""
+    """Real hybrid ranks a section absent from the live string #1 (DB stale).
+    The stale-index guard must skip it and still surface the live section."""
     from core.context_recall import recall_context
 
-    with patch("core.memory_index._hybrid_section_scores",
-               return_value={"Deleted Section": 0.9, "COE Registry": 0.4}):
-        res = recall_context(
-            "MEMORY.md", "unrelated semantic query xyzzy qqq",
-            memory_content=_FIXTURE,
-        )
+    with tempfile.TemporaryDirectory() as d:
+        db = Path(d) / "mem.db"
+        # "Deleted Section" embedded at e_5 (matches the query vector, ranks
+        # #1) but does NOT exist in the live _FIXTURE → must be guarded out.
+        # "COE Registry" embedded at e_10 (ranks lower) and IS in the fixture.
+        _build_db(db, [
+            ("DEL01", "Deleted Section", "ghost entry removed from live memory",
+             ["ghost", "removed"], _onehot(5)),
+            ("COE01", "COE Registry", "exit code -9 cascading SIGKILL failure",
+             ["sigkill", "oom", "crash"], _onehot(10)),
+        ])
+        with _real_hybrid(db, _onehot(5)):
+            res = recall_context(
+                "MEMORY.md", "unrelated semantic query xyzzy qqq",
+                memory_content=_FIXTURE,
+            )
     if ("Deleted Section" not in res.sections
             and "COE Registry" in res.sections and res.content.strip()):
         print("STALE_INDEX_OK")
         return 0
-    print(f"STALE_INDEX_FAIL sections={res.sections}")
+    print(f"STALE_INDEX_FAIL sections={res.sections} layer={res.hit_layer}")
     return 1
 
 
 def _missing_vector() -> int:
-    """Un-embedded keyword-strong entry must out-rank an embedded weak-keyword
-    peer once the §3.6.1 renorm fires (driven through the real merge)."""
-    from core.memory_embeddings import hybrid_memory_search
+    """Un-embedded keyword-strong entry out-ranks an embedded peer through the
+    REAL _hybrid_section_scores assembly. Tuned so ONLY the §3.6.1 renorm flips
+    the ranking: with renorm U1=1.0 > E1=0.6; without it U1=0.4 < E1=0.6."""
+    from core.memory_index import _hybrid_section_scores
 
-    keyword_scores = {"E1": 0.2, "U1": 0.8}
-    vector_scores = {"E1": 0.5}
-    embedded_keys = {"E1"}  # U1 un-embedded
+    with tempfile.TemporaryDirectory() as d:
+        db = Path(d) / "mem.db"
+        # E1 embedded at e_5 with a weak-keyword title; U1 un-embedded with a
+        # strong unique-term title matching the query. Query embeds to e_5 so
+        # E1 gets a STRONG vector (vs≈1.0) — without renorm E1 wins (0.6 > 0.4);
+        # with renorm U1 competes on keyword alone (1.0) and wins.
+        _build_db(db, [
+            ("E1", "Embedded Sec", "alpha", ["alpha"], _onehot(5)),
+            ("U1", "Unembedded Sec", "zephyr quartz nimbus",
+             ["zephyr", "quartz", "nimbus"], None),
+        ])
+        with _real_hybrid(db, _onehot(5)):
+            section_scores = _hybrid_section_scores("zephyr quartz nimbus")
 
-    ranked = hybrid_memory_search(
-        keyword_scores=keyword_scores,
-        vector_scores=vector_scores,
-        embedded_keys=embedded_keys,
-    )
-    # Non-vacuous: the SPECIFIC un-embedded id must be rank-1 (a "non-empty"
-    # check would pass even with the rank-suppression bug).
-    if ranked and ranked[0].key == "U1":
+    if not section_scores:
+        print("MISSING_VECTOR_FAIL empty")
+        return 1
+    top = max(section_scores.items(), key=lambda kv: kv[1])[0]
+    # Non-vacuous: the un-embedded entry's section must be rank-1. Disabling the
+    # renorm makes "Embedded Sec" win (strong vector) → FAIL.
+    if top == "Unembedded Sec":
         print("MISSING_VECTOR_OK")
         return 0
-    print(f"MISSING_VECTOR_FAIL order={[r.key for r in ranked]}")
+    print(f"MISSING_VECTOR_FAIL top={top} scores={section_scores}")
     return 1
 
 

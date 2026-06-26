@@ -128,6 +128,11 @@ def main(argv: list[str] | None = None) -> int:
             "reason": res.reason,
             "sections": list(res.sections),
             "content": res.content,
+            # Hit-log surface (§6c): the observable the GS_RCHAIN eval cases
+            # assert against, and the signal ingestion's Darwin will consume.
+            "hit_layer": res.hit_layer,
+            "hit_section": res.sections[0] if res.sections else "",
+            "drilled": res.drilled,
         }))
         return 0
     except Exception as exc:  # noqa: BLE001 — never emit a bare traceback to the agent

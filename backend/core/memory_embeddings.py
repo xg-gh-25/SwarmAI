@@ -56,15 +56,33 @@ def hybrid_memory_search(
     keyword_scores: dict[str, float],
     vector_scores: dict[str, float],
     threshold: float = HYBRID_THRESHOLD,
+    embedded_keys: Optional[set[str]] = None,
 ) -> list[ScoredEntry]:
     """Merge keyword and vector scores into a ranked list.
 
-    Formula: hybrid = 0.6 * vector + 0.4 * keyword
+    Formula: hybrid = 0.6 * vector + 0.4 * keyword.
+
+    Missing-vector renorm (§3.6.1, lazy-embed safety): an entry that is NOT
+    embedded yet (key absent from ``embedded_keys``) is scored on the keyword
+    leg ALONE (``hybrid = keyword``) instead of ``0.6*0 + 0.4*kw``. Without this,
+    keyword-strong un-embedded entries are systematically out-ranked by embedded
+    peers and fall below the top-k cut during the lazy-embed rollout window —
+    the semantic upgrade would REGRESS recall@k for most of the corpus.
+
+    The renorm fires ONLY for truly un-embedded keys, NOT for embedded entries
+    that merely fell out of the vector top-k this query (those keep the normal
+    merge with vs=0). This distinction requires the explicit ``embedded_keys``
+    signal — dict-membership in ``vector_scores`` cannot tell the two apart.
 
     Args:
-        keyword_scores: Dict mapping entry key → keyword relevance (0-1).
-        vector_scores: Dict mapping entry key → vector similarity (0-1).
+        keyword_scores: Dict mapping entry key → keyword relevance (0-1, expected
+            already min-max normalized by the caller so it is commensurable with
+            the absolute vector leg).
+        vector_scores: Dict mapping entry key → vector similarity (0-1, absolute).
         threshold: Minimum hybrid score to include.
+        embedded_keys: Set of keys that HAVE a vector embedding in the store.
+            When None (default), behavior is identical to the pre-upgrade merge
+            (no renorm) — preserves all existing callers/tests.
 
     Returns:
         Sorted list of ScoredEntry (highest score first).
@@ -75,7 +93,14 @@ def hybrid_memory_search(
     for key in all_keys:
         ks = keyword_scores.get(key, 0.0)
         vs = vector_scores.get(key, 0.0)
-        hybrid = VECTOR_WEIGHT * vs + KEYWORD_WEIGHT * ks
+
+        # Missing-vector renorm: un-embedded entry competes on keyword alone.
+        # Only applies when the caller supplies embedded_keys AND this key is
+        # not in it (truly un-embedded, not just below the vector top-k).
+        if embedded_keys is not None and key not in embedded_keys:
+            hybrid = ks
+        else:
+            hybrid = VECTOR_WEIGHT * vs + KEYWORD_WEIGHT * ks
 
         if hybrid >= threshold:
             results.append(ScoredEntry(
