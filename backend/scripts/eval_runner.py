@@ -1998,7 +1998,8 @@ def cmd_run(args):
 
     case_filter = args.cases.split(",") if args.cases else None
     tags = args.tags.split(",") if args.tags else None
-    run_result = run_eval(golden_set, args.trigger, case_filter, root, tags=tags)
+    run_result = run_eval(golden_set, args.trigger, case_filter, root, tags=tags,
+                          programmatic_only=getattr(args, "programmatic_only", False))
 
     out_path = write_run(run_result, root)
 
@@ -2051,6 +2052,9 @@ def main():
     run_p.add_argument("--trigger", required=True, help="Trigger type: manual|weekly|monthly|steering_edit|model_change")
     run_p.add_argument("--cases", help="Comma-separated case IDs to run (default: all)")
     run_p.add_argument("--tags", help="Comma-separated tags to filter (smoke,full,regression)")
+    run_p.add_argument("--programmatic-only", action="store_true",
+                       help="Skip LLM-judge cases — run only fast deterministic evaluators "
+                            "(the BVT gate set). Zero Bedrock cost; refreshes the gate report.")
     run_p.add_argument("--json", action="store_true", help="Print full JSON to stdout")
 
     sub.add_parser("validate", help="Validate golden_set.yaml schema")
