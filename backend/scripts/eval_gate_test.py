@@ -64,6 +64,17 @@ def test_digest_changes_when_public_golden_set_changes(git_repo):
     assert d1 != d2, "editing the public golden set must invalidate the digest"
 
 
+def test_digest_changes_when_private_golden_set_changes(git_repo):
+    """Gate-2 C1: bvt counts gate-eligible cases from the MERGED set, so a
+    changed PRIVATE case must also invalidate the digest (else stale-green)."""
+    priv = git_repo / "Projects" / "SwarmAI" / "golden_set.private.yaml"
+    priv.write_text("version: 2\ncases: []\n")
+    d1 = compute_code_digest(git_repo, code_root=git_repo)
+    priv.write_text("version: 2\ncases: [{id: PRIV_CHANGED}]\n")
+    d2 = compute_code_digest(git_repo, code_root=git_repo)
+    assert d1 != d2, "editing the private golden set must invalidate the digest"
+
+
 def _cases_results(specs):
     """specs: list of (eval_method, evaluators, status)."""
     cases, results = [], []

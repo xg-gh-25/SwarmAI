@@ -31,7 +31,11 @@ _REQUIRED = ("id", "category", "dimension", "eval_method", "affected_by", "evalu
 _SENSITIVE = re.compile(r"gawan|amazon\.com|cmhk|password|secret|aws_access|api_key", re.I)
 _INSTANCE = re.compile(
     r"\.context/|(STEERING|AGENT|SOUL|MEMORY|EVOLUTION|USER|PRODUCT|TECH|IMPROVEMENT|PROJECT)"
-    r"\.(md|R\d|P\d|PIT\d|DEC\d|PRI\d)|Projects/(SwarmAI|Rocky|CMHK|BMS|AIDLC|PhysicalAI|Quick|GitHub)",
+    r"\.(md|R\d|P\d|PIT\d|DEC\d|PRI\d)|"
+    # ANY project (not a hardcoded allowlist — a new project must not leak, Gate-2 M2)
+    r"Projects/[A-Za-z0-9_-]+|"
+    # other instance-only roots that carry workspace structure
+    r"Knowledge/|Services/|\.artifacts/|EvalHistory/",
     re.I,
 )
 

@@ -29,7 +29,10 @@ from scripts.eval_runner import (  # noqa: E402
 
 def _latest_report(root: Path) -> dict | None:
     hist = _eval_history_dir(root)
-    reports = sorted(hist.glob("*.json"), reverse=True)
+    # Sort by mtime, NOT filename (Gate-2 H1): two filename formats coexist
+    # ({date}_{trigger} and {date}_{time}_{trigger}) so lexical sort can rank a
+    # stale same-day report above a fresher one. mtime is format-agnostic.
+    reports = sorted(hist.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
     for p in reports:
         try:
             return json.loads(p.read_text())

@@ -132,11 +132,18 @@ def compute_code_digest(root: Path, code_root: Path | None = None) -> str:
             parts.append(f"{rel}:{hashlib.sha256(p.read_bytes()).hexdigest()}")
         except Exception:
             parts.append(f"{rel}:MISSING")
-    gs = _golden_set_path(root)
-    try:
-        parts.append("golden_set:" + hashlib.sha256(gs.read_bytes()).hexdigest())
-    except Exception:
-        parts.append("golden_set:MISSING")
+    # Hash BOTH golden sets: bvt counts gate-eligible cases from the MERGED set
+    # (public + private), so a changed PRIVATE gate-eligible case must also
+    # invalidate the digest — else a stale report stays green (Gate-2 C1).
+    # Consequence (correct): a public-only clone produces a different digest than
+    # the instance, because it runs a different bvt set — they SHOULD NOT collide.
+    gs_pub = _golden_set_path(root)
+    gs_priv = gs_pub.with_name("golden_set.private.yaml")
+    for gs, tag in ((gs_pub, "golden_set"), (gs_priv, "golden_set_private")):
+        try:
+            parts.append(f"{tag}:" + hashlib.sha256(gs.read_bytes()).hexdigest())
+        except Exception:
+            parts.append(f"{tag}:MISSING")
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:16]
 
 
@@ -1395,7 +1402,7 @@ def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root
     now = datetime.now(timezone.utc)
 
     run_result = {
-        "run_id": f"eval_{now.strftime('%Y%m%d')}_{trigger}",
+        "run_id": f"eval_{now.strftime('%Y%m%d_%H%M%S')}_{trigger}",
         "triggered_by": trigger,
         "triggered_at": now.isoformat(),
         "status": "completed",
@@ -1432,7 +1439,10 @@ def write_run(run_result: dict, root: Path) -> Path:
     """Save run result to EvalHistory/."""
     hist_dir = _eval_history_dir(root)
     trigger = run_result["triggered_by"]
-    date = datetime.now().strftime("%Y-%m-%d")
+    # Include time to avoid same-day overwrite collisions (Gate-2 H2). Matches
+    # eval_service's {date}_{time}_{trigger} format so _latest_report sorting is
+    # consistent across both writers.
+    date = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     filename = f"{date}_{trigger}.json"
     path = hist_dir / filename
 
