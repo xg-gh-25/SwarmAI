@@ -90,8 +90,18 @@ class SessionRecall:
         conn = self._open_conn()
         conn.row_factory = sqlite3.Row
         try:
-            # Escape FTS5 special characters by quoting the query
-            safe_query = '"' + query.replace('"', '""') + '"'
+            # OR-join per-quoted-term so a multi-word query recalls sessions
+            # matching ANY term, ranked by BM25 (fts.rank). Wrapping the whole
+            # query as ONE phrase required all words verbatim+adjacent → near-0
+            # recall for multi-word queries (R3, run_c730a9c0). Each term stays
+            # individually quoted so an FTS5 keyword term (OR/NEAR/NOT) is a
+            # phrase-literal, never an operator (injection-safe). Single term →
+            # OR-of-one → identical to the old single-term behavior.
+            _terms = [t for t in query.split() if t]
+            if _terms:
+                safe_query = " OR ".join('"' + t.replace('"', '""') + '"' for t in _terms)
+            else:
+                safe_query = '"' + query.replace('"', '""') + '"'
 
             # Step 1-2: FTS5 search joined with messages.
             # Root-1 SSOT Phase 2: the FTS insert trigger indexes ALL message

@@ -715,9 +715,14 @@ class GraphStore:
         safe = _sanitize_name(query).strip()
         if not safe:
             return []
-        # Quote individual tokens for FTS5 safety.
+        # Quote individual tokens for FTS5 safety, then OR-join so a multi-word
+        # query matches symbols containing ANY term (ranked by BM25), not only
+        # symbols containing ALL terms. Space-join was an implicit AND →
+        # multi-word symbol queries returned near-0 (R3, run_c730a9c0). Per-term
+        # quoting keeps FTS5 keywords (OR/NEAR) as phrase-literals. Single token
+        # → OR-of-one → identical to the old behavior.
         tokens = safe.split()
-        fts_query = " ".join(f'"{t}"' for t in tokens if t)
+        fts_query = " OR ".join(f'"{t}"' for t in tokens if t)
         if not fts_query:
             return []
         try:

@@ -181,6 +181,76 @@ class TestCodeIntelRecall:
 # Cycle 4 — AC3+AC4: recall_all fans 5 domains into one BucketedRecall
 # ===========================================================================
 
+class TestMultiWordFTSRecall:
+    """R3: multi-word recall must not be starved by over-strict FTS query
+    construction. session_recall wrapped the whole query as one PHRASE;
+    code_intel quoted each token = implicit AND. Fix = OR-join per-quoted-term,
+    keeping BM25 rank-order + single-term identity + injection safety."""
+
+    def _live_graph(self):
+        """The live SwarmAI code graph (read-only). External-content FTS5 is
+        awkward to populate in a tmp fixture, and the value here is the OR-join
+        QUERY semantics over a real populated index — so drive the real graph,
+        skip if unbuilt (CI without code-intel)."""
+        from core.code_intel import load_project_graph
+        g = load_project_graph("SwarmAI")
+        if g is None or not g.search_symbols("recall", limit=1):
+            pytest.skip("SwarmAI code graph not built in this environment")
+        return g
+
+    def test_codeintel_multiword_returns_hits(self):
+        """AC2: a multi-word query where NO single symbol contains all terms
+        still returns hits (OR), ranked. Under the old implicit-AND this was ~0.
+        Mutation-checked: with space-join (AND), 'recall hybrid section score'
+        returns 0/1; with OR it returns many."""
+        g = self._live_graph()
+        hits = g.search_symbols("recall hybrid section score", limit=10)
+        assert len(hits) >= 2, "multi-word query must return multiple hits via OR-join"
+
+    def test_codeintel_singleterm_unchanged(self):
+        """AC3 regression: single-term query still works (OR-of-one = the term)."""
+        g = self._live_graph()
+        hits = g.search_symbols("recall", limit=10)
+        assert len(hits) >= 1
+        assert all("name" in h and "file_path" in h for h in hits)
+
+    def test_codeintel_injection_safe_with_or(self):
+        """AC3: FTS5 keyword terms (OR/NEAR/NOT) stay quoted phrase-literals,
+        never operators — no raise (the OR-join only adds OR BETWEEN quoted terms)."""
+        g = self._live_graph()
+        # Must not raise; these are quoted literals after _sanitize_name + quoting.
+        g.search_symbols("OR NEAR drop", limit=5)
+        g.search_symbols("NOT match", limit=5)
+
+    def test_session_multiword_query_construction(self):
+        """AC1: SessionRecall builds an OR query for multi-word input (each term
+        quoted, joined by OR) — not one verbatim phrase. Verified by patching the
+        DB execute to capture the MATCH string the real search() builds."""
+        import sqlite3
+        from unittest.mock import MagicMock
+        from core.session_recall import SessionRecall
+
+        captured = {}
+
+        sr = SessionRecall.__new__(SessionRecall)  # bypass __init__ (no DB needed)
+
+        fake_conn = MagicMock()
+        def _exec(sql, params=None):
+            if params and "MATCH" in sql:
+                captured["match"] = params[0]
+            m = MagicMock(); m.fetchall.return_value = []; return m
+        fake_conn.execute.side_effect = _exec
+        fake_conn.row_factory = None
+        sr._open_conn = lambda: fake_conn  # type: ignore
+
+        sr.search("pipeline goal cycle", max_sessions=2)
+        match = captured.get("match", "")
+        # OR-joined per-quoted-term, NOT one big phrase.
+        assert " OR " in match, f"expected OR-join, got: {match!r}"
+        assert match.count('"') >= 6, "each term must stay individually quoted"
+        assert '"pipeline goal cycle"' not in match, "must NOT be one verbatim phrase"
+
+
 class TestRecallAll:
     """AC3/AC4: recall_all returns a BucketedRecall with per-domain buckets +
     per-domain hit_layer, fanning across all 5 domains, embed-free by default."""
