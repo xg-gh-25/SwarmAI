@@ -95,7 +95,7 @@ def test_ac1_rth_cases_in_biweekly_scheduled_set():
     """
     from pathlib import Path as _P
     from scripts.eval_runner import load_golden_set
-    gs_path = _P.home() / ".swarm-ai" / "SwarmWS" / "Projects" / "SwarmAI" / "golden_set.yaml"
+    gs_path = _P.home() / ".swarm-ai" / "SwarmWS" / "Eval" / "golden_set.yaml"
     gs = load_golden_set(gs_path)
     by_id = {c["id"]: c for c in gs["cases"]}
     for cid in ("GS_RTH001", "GS_RTH002", "GS_RTH003"):
@@ -157,7 +157,7 @@ def test_ac6_all_three_rth_cases_pass_via_evaluate_case():
     """All 3 runtime_health cases dispatch + pass through evaluate_case."""
     from pathlib import Path as _P
     from scripts.eval_runner import load_golden_set, evaluate_case
-    gs = load_golden_set(_P.home() / ".swarm-ai" / "SwarmWS" / "Projects" / "SwarmAI" / "golden_set.yaml")
+    gs = load_golden_set(_P.home() / ".swarm-ai" / "SwarmWS" / "Eval" / "golden_set.yaml")
     by_id = {c["id"]: c for c in gs["cases"]}
     for cid in ("GS_RTH001", "GS_RTH002", "GS_RTH003"):
         r = evaluate_case(by_id[cid], _REPO)
@@ -171,7 +171,7 @@ def test_ac6_rth_cases_score_into_recovery_dimension():
     produce a 'recovery' dimension in a real run_eval output."""
     from pathlib import Path as _P
     from scripts.eval_runner import load_golden_set, run_eval
-    gs = load_golden_set(_P.home() / ".swarm-ai" / "SwarmWS" / "Projects" / "SwarmAI" / "golden_set.yaml")
+    gs = load_golden_set(_P.home() / ".swarm-ai" / "SwarmWS" / "Eval" / "golden_set.yaml")
     result = run_eval(gs, trigger="manual",
                       case_filter=["GS_RTH001", "GS_RTH002", "GS_RTH003"],
                       root=_REPO, programmatic_only=True)

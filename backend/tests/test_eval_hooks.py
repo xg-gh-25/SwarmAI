@@ -17,7 +17,7 @@ from core.eval_service import EvalService
 @pytest.fixture
 def eval_workspace(tmp_path):
     """Minimal eval workspace."""
-    project_dir = tmp_path / "Projects" / "SwarmAI"
+    project_dir = tmp_path / "Eval"
     project_dir.mkdir(parents=True)
     history_dir = project_dir / "EvalHistory"
     history_dir.mkdir()

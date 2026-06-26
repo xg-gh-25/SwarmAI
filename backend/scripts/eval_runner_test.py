@@ -75,7 +75,7 @@ class TestLoadGoldenSet:
     def test_live_workspace_loads(self):
         """Smoke test: live workspace golden_set parses without error."""
         root = _find_workspace_root()
-        gs_path = root / "Projects" / "SwarmAI" / "golden_set.yaml"
+        gs_path = root / "Eval" / "golden_set.yaml"
         data = load_golden_set(gs_path)
         assert data["version"] == 2
         assert len(data["cases"]) >= 10
@@ -376,14 +376,14 @@ class TestEvalHistoryOutput:
     @pytest.mark.skipif(not _workspace_available(), reason="Live workspace not available (CI)")
     def test_output_file_exists(self):
         root = _find_workspace_root()
-        hist_dir = root / "Projects" / "SwarmAI" / "EvalHistory"
+        hist_dir = root / "Eval" / "EvalHistory"
         json_files = list(hist_dir.glob("*.json"))
         assert len(json_files) > 0, "No eval history files found"
 
     @pytest.mark.skipif(not _workspace_available(), reason="Live workspace not available (CI)")
     def test_output_schema_valid(self):
         root = _find_workspace_root()
-        hist_dir = root / "Projects" / "SwarmAI" / "EvalHistory"
+        hist_dir = root / "Eval" / "EvalHistory"
         json_files = sorted(hist_dir.glob("*.json"))
         if not json_files:
             pytest.skip("No eval history files to validate")

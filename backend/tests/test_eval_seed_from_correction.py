@@ -31,7 +31,7 @@ from scripts import eval_runner
 
 @pytest.fixture
 def eval_workspace(tmp_path):
-    project_dir = tmp_path / "Projects" / "SwarmAI"
+    project_dir = tmp_path / "Eval"
     project_dir.mkdir(parents=True)
     (project_dir / "EvalHistory").mkdir()
     golden_set = {

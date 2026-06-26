@@ -18,7 +18,7 @@ from core.eval_service import EvalService
 @pytest.fixture
 def eval_workspace(tmp_path):
     """Create a minimal eval workspace with golden_set.yaml and EvalHistory."""
-    project_dir = tmp_path / "Projects" / "SwarmAI"
+    project_dir = tmp_path / "Eval"
     project_dir.mkdir(parents=True)
     history_dir = project_dir / "EvalHistory"
     history_dir.mkdir()
@@ -269,7 +269,7 @@ class TestPersistPreservesDiskOnlyCases:
     def _external_add_case(self, eval_workspace, case):
         """Simulate another session/manual edit appending a case to disk."""
         import yaml
-        path = eval_workspace / "Projects" / "SwarmAI" / "golden_set.yaml"
+        path = eval_workspace / "Eval" / "golden_set.yaml"
         data = yaml.safe_load(path.read_text())
         data["cases"].append(case)
         path.write_text(yaml.dump(data, default_flow_style=False))
@@ -310,7 +310,7 @@ class TestPersistPreservesDiskOnlyCases:
         """AC2: for a case present in BOTH disk and memory, user-owned disk
         fields (tags/notes/promoted_from) survive a persist that didn't touch them."""
         import yaml
-        path = eval_workspace / "Projects" / "SwarmAI" / "golden_set.yaml"
+        path = eval_workspace / "Eval" / "golden_set.yaml"
         data = yaml.safe_load(path.read_text())
         for c in data["cases"]:
             if c["id"] == "GS002":
@@ -371,7 +371,7 @@ class TestPersistPreservesDiskOnlyCases:
         svc.update_case("GS001", {"title": "touch"})  # triggers persist
 
         import yaml
-        proj = eval_workspace / "Projects" / "SwarmAI"
+        proj = eval_workspace / "Eval"
         pub = yaml.safe_load((proj / "golden_set.yaml").read_text())
         priv_path = proj / "golden_set.private.yaml"
         priv = yaml.safe_load(priv_path.read_text()) if priv_path.exists() else {"cases": []}
@@ -391,7 +391,7 @@ class TestPersistCrossProcessLock:
     """
 
     def _lock_path(self, eval_workspace):
-        return eval_workspace / "Projects" / "SwarmAI" / "golden_set.yaml.lock"
+        return eval_workspace / "Eval" / "golden_set.yaml.lock"
 
     def test_persist_acquires_exclusive_lock(self, svc, eval_workspace):
         """The persist must BLOCK while another fd holds the sidecar lock,

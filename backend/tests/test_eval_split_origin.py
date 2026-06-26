@@ -41,7 +41,7 @@ def _mk_case(cid: str, affected: list[str]) -> dict:
 @pytest.fixture
 def split_workspace(tmp_path):
     """Workspace with BOTH public and private golden-set files."""
-    proj = tmp_path / "Projects" / "SwarmAI"
+    proj = tmp_path / "Eval"
     proj.mkdir(parents=True)
     (proj / "EvalHistory").mkdir()
     # public: a code-affected case
@@ -65,7 +65,7 @@ def test_merge_load_tags_origin_and_merges_both(split_workspace):
 
 
 def test_private_absent_loads_public_only(tmp_path):
-    proj = tmp_path / "Projects" / "SwarmAI"
+    proj = tmp_path / "Eval"
     proj.mkdir(parents=True)
     (proj / "EvalHistory").mkdir()
     (proj / "golden_set.yaml").write_text(
@@ -105,7 +105,7 @@ def test_origin_never_serialized(split_workspace):
 
 
 def test_cross_file_id_collision_fails_loud(tmp_path):
-    proj = tmp_path / "Projects" / "SwarmAI"
+    proj = tmp_path / "Eval"
     proj.mkdir(parents=True)
     (proj / "EvalHistory").mkdir()
     (proj / "golden_set.yaml").write_text(
