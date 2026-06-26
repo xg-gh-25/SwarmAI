@@ -84,6 +84,95 @@ def _eval_history_dir(root: Path) -> Path:
     return d
 
 
+# ─── Git-Bound Gate: code_digest + bvt (run_69b1c644 Cycle 4) ──────────────────
+
+# Eval-relevant paths the gate's freshness binds to. Scoped (NOT all of backend/)
+# so unrelated churn doesn't make the gate perpetually stale (Gate-1 #2). The
+# public golden_set content is hashed separately (it lives in the workspace repo,
+# not necessarily the code repo). git-ls-tree respects .gitignore by construction
+# and is O(1) subprocess vs hashing GBs of artifacts (Gate-1 #1).
+_GATE_CODE_PATHS = [
+    "backend/scripts/eval_runner.py",
+    "backend/scripts/ci_eval_gate.py",
+    "backend/scripts/scenario_runner.py",
+    "backend/core/eval_service.py",
+]
+
+# Fast-deterministic evaluators eligible for the BVT gate. Excludes runtime_health
+# (subprocess, ~30s, load-flaky) and all LLM evaluators (non-deterministic, read
+# instance DDD). These are sub-second, pure, reproducible (Gate-1 #3).
+_GATE_ELIGIBLE_EVALUATORS = frozenset(
+    {"file_contains", "keyword_match", "trajectory_exact",
+     "trajectory_in_order", "trajectory_any_order"}
+)
+
+
+def compute_code_digest(root: Path, code_root: Path | None = None) -> str:
+    """SHA-256 of eval-relevant code + public golden_set, hashing WORKING-TREE
+    content (the bytes on disk that eval actually ran against — Gate-1: git HEAD
+    sees only committed, the index only staged; neither reflects unstaged edits).
+
+    Binds the gate to its INPUTS, not to HEAD — so committing the eval report (an
+    unrelated tracked file) does NOT change the digest, while editing eval code or
+    the public golden_set DOES. code_root defaults to the swarmai repo (where
+    backend/ lives); pass it explicitly in tests. Missing files hash as a marker
+    rather than crashing (gate degrades to 'cannot verify' not exception)."""
+    import hashlib
+
+    if code_root is None:
+        try:
+            code_root = _find_swarmai_repo()
+        except Exception:
+            code_root = root
+
+    parts: list[str] = []
+    for rel in _GATE_CODE_PATHS:
+        p = code_root / rel
+        try:
+            parts.append(f"{rel}:{hashlib.sha256(p.read_bytes()).hexdigest()}")
+        except Exception:
+            parts.append(f"{rel}:MISSING")
+    gs = _golden_set_path(root)
+    try:
+        parts.append("golden_set:" + hashlib.sha256(gs.read_bytes()).hexdigest())
+    except Exception:
+        parts.append("golden_set:MISSING")
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:16]
+
+
+def compute_bvt(cases: list, results: list[dict]) -> dict:
+    """Build Verification Test summary over GATE-ELIGIBLE cases only.
+
+    Eligible = at least one evaluator in _GATE_ELIGIBLE_EVALUATORS (fast,
+    deterministic) AND eval_method != 'llm'. green requires:
+      total > 0  (non-empty — empty set is RED, never vacuous-green)
+      AND passed > 0  (all-skipped is RED, not green)
+      AND failed == 0 AND error == 0  (any regression = RED).
+    """
+    by_id = {r["id"]: r for r in results}
+    total = passed = failed = error = skipped = 0
+    for c in cases:
+        if c.get("eval_method") == "llm":
+            continue
+        if not (set(c.get("evaluators", [])) & _GATE_ELIGIBLE_EVALUATORS):
+            continue
+        st = by_id.get(c["id"], {}).get("status")
+        total += 1
+        if st == "passed":
+            passed += 1
+        elif st == "failed":
+            failed += 1
+        elif st == "error":
+            error += 1
+        elif st == "skipped":
+            skipped += 1
+    green = total > 0 and passed > 0 and failed == 0 and error == 0
+    return {
+        "total": total, "passed": passed, "failed": failed,
+        "error": error, "skipped": skipped, "green": green,
+    }
+
+
 # ─── Load & Validate ─────────────────────────────────────────────────────────
 
 def load_golden_set(path: Path) -> dict:
@@ -1329,6 +1418,11 @@ def run_eval(golden_set: dict, trigger: str, case_filter: list[str] | None, root
         "cases_error": sum(1 for r in results if r["status"] == "error"),
         "scored_count": scores["scored_count"],
         "duration_seconds": round(sum(r.get("duration_ms", 0) for r in results) / 1000, 2),
+        # Git-bound gate fields (run_69b1c644 Cycle 4). code_digest binds the
+        # report to the eval-relevant code+golden_set INPUTS; bvt is the
+        # binary gate the ci_eval_gate.py / build step reads.
+        "code_digest": compute_code_digest(root),
+        "bvt": compute_bvt(cases, results),
     }
 
     return run_result
