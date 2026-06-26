@@ -184,6 +184,66 @@ class TestPipelineCompletion:
         )
         assert _get_todo_status(db_path, "pipe-todo-3") == "in_discussion"
 
+    def test_pipeline_source_completed_run_handled(self, tmp_path):
+        """Todo created by _create_checkpoint_todo (source='pipeline:<run_id>',
+        NOT 'escalation:') → resolved when its run completes.
+
+        Regression for the source-prefix mismatch: artifact_cli.py writes
+        source='pipeline:<run_id>' but the Layer-1 filter only matched
+        'escalation:%', so pipeline-paused todos were never auto-closed.
+        """
+        from jobs.todo_resolution import run_todo_resolution
+
+        db_path = _create_test_db(tmp_path)
+        run_id = "run_pipeprefix1"
+
+        _insert_todo(
+            db_path,
+            todo_id="pipe-src-1",
+            title="Pipeline paused: widen filter",
+            status="in_discussion",
+            source=f"pipeline:{run_id}",  # the REAL prefix _create_checkpoint_todo writes
+            linked_context={"pipeline_id": run_id, "project": "SwarmAI"},
+        )
+
+        run_dir = tmp_path / "artifacts" / "runs" / run_id
+        run_dir.mkdir(parents=True)
+        (run_dir / "run.json").write_text(json.dumps({
+            "id": run_id, "status": "completed", "project": "SwarmAI",
+        }))
+
+        result = run_todo_resolution(
+            db_path=db_path, artifacts_root=tmp_path / "artifacts",
+        )
+        assert _get_todo_status(db_path, "pipe-src-1") == "handled"
+        assert result["pipeline_resolved"] >= 1
+
+    def test_pipeline_source_running_run_not_closed(self, tmp_path):
+        """source='pipeline:<run_id>' but run still running → todo NOT closed
+        (guards against the widened filter over-matching)."""
+        from jobs.todo_resolution import run_todo_resolution
+
+        db_path = _create_test_db(tmp_path)
+        run_id = "run_pipeprefix2"
+
+        _insert_todo(
+            db_path,
+            todo_id="pipe-src-2",
+            title="Pipeline paused: still running",
+            status="in_discussion",
+            source=f"pipeline:{run_id}",
+            linked_context={"pipeline_id": run_id, "project": "SwarmAI"},
+        )
+
+        run_dir = tmp_path / "artifacts" / "runs" / run_id
+        run_dir.mkdir(parents=True)
+        (run_dir / "run.json").write_text(json.dumps({
+            "id": run_id, "status": "running",
+        }))
+
+        run_todo_resolution(db_path=db_path, artifacts_root=tmp_path / "artifacts")
+        assert _get_todo_status(db_path, "pipe-src-2") == "in_discussion"
+
 
 # ── Layer 2: Git Keyword Match ───────────────────────────────────────
 

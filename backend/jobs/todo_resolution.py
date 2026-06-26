@@ -154,10 +154,16 @@ def _resolve_completed_pipelines(
     if artifacts_root is None:
         return 0
 
+    # Both pause/todo-create doors must be matched: escalation.py writes
+    # source='escalation:<id>', artifact_cli._create_checkpoint_todo writes
+    # source='pipeline:<run_id>'. Both carry linked_context.pipeline_id and are
+    # closed by the SAME run.json status==completed check below. Matching only
+    # 'escalation:%' left pipeline-paused todos to fall through to Layer-3
+    # staleness cancellation (21d → cancelled, never handled).
     rows = conn.execute(
         """SELECT id, source, linked_context FROM todos
            WHERE status IN ('pending', 'in_discussion')
-             AND source LIKE 'escalation:%'"""
+             AND (source LIKE 'escalation:%' OR source LIKE 'pipeline:%')"""
     ).fetchall()
 
     resolved = 0
