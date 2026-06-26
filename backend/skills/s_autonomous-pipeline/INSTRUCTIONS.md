@@ -10,16 +10,19 @@ For every pipeline run, follow this loop:
 
 ```
 1. INIT     -- parse requirement, detect project, load or create pipeline run
-2. PROFILE  -- select pipeline profile (full/trivial/research/docs/bugfix)
+2. PROFILE  -- select pipeline profile (full/trivial/research/docs/bugfix/goal)
 3. STAGE    -- for each stage in profile (evaluate → ... → deliver → reflect):
                a. Feedback Loop preamble (SIGNAL/CHECK/FAIL for this stage)
                b. Gate check (budget, escalations, retries)
                c. Load stage context (DDD docs + upstream artifacts)
                d. Execute stage behavior (read stage doc, then execute)
+                  └─ ★ Gate 0 fires INSIDE evaluate (diagnose-before-build family);
+                     ★ Gate 1 fires after plan, before build (Skeptic + SSA)
                e. Classify decisions (mechanical/taste/judgment)
                f. Verify output (artifact published + schema valid)
                g. Handle result (advance / retry / checkpoint)
-4. DELIVER  -- Delivery Gate → Completion Audit → AC Verification → Adversarial Review →
+4. DELIVER  -- Delivery Gate → Completion Audit → AC Verification →
+               ★ Gate 2: Adversarial Review (spawn sub-agent) →
                Quality Convergence Loop (6-layer gate × max 3 iterations) →
                push-ready or escalate. Then: Report, CI.
 5. REFLECT  -- Read stages/reflect.md, execute: lessons → IMPROVEMENT.md → DDD loop closed
@@ -62,11 +65,32 @@ This creates `Projects/<project>/.artifacts/runs/<run_id>/run.json` with proper
 defaults, sets status=running, auto-abandons stale same-project runs (>2h), and
 returns the run_id. Profile is set later after EVALUATE classifies scope.
 
-Announce:
+**Briefing (emit at INIT — orient the user before any work runs).** The profile is
+not known until EVALUATE classifies scope, so emit the run header now and the
+profile/mode line the moment EVALUATE returns (Step 2). Tell the user *what is
+about to run and why*, not just that it started:
+
 ```
-Pipeline started: <requirement> (run_<id>)
-Project: <PROJECT>
+🚀 Pipeline started: <requirement> (run_<id>) · Project: <PROJECT>
+
+   Architecture: 3 gates · 10 stages · 2 execution modes
+   • Gate 0 (EVALUATE→THINK) — is the problem/framing understood? (diagnose-before-build family)
+   • Gate 1 (after PLAN)      — is the plan sound, root not symptom? (Skeptic + SSA)
+   • Gate 2 (in DELIVER)      — is the build actually correct? (Adversarial sub-agent)
+   Profile: <set after EVALUATE> · Mode: <full = one-shot | goal = iterative loop>
 ```
+
+After EVALUATE selects the profile (Step 2), state it explicitly with the reason:
+```
+   Profile: <profile> (scope=<scope>) — <one-line why, e.g. "standard feature → full">
+   Mode: <full: BUILD→REVIEW→TEST once | goal: goal_cycle iterates to a measurable DoD>
+   Stages this run: <the profile's stage list>
+```
+
+**Profile vs mode (don't conflate):** there are **6 profiles** (full, trivial,
+research, docs, bugfix, goal — the *stage set* + rigor, table in Step 2) and **2
+execution modes** (full = one-shot, goal = iterative; how BUILD/REVIEW/TEST run).
+Every profile passes through the 3 gates that apply to its stages.
 
 ### Resuming a Pipeline
 
@@ -99,10 +123,21 @@ based on the evaluation's scope classification:
 | bugfix | **bugfix** | evaluate, think, plan, build, review, test, deliver, reflect |
 | goal | **goal** | evaluate, think, plan, goal_cycle, deliver, reflect |
 
-> **Why 8 entries, not 9?** The architecture is 9 stages (ADVERSARIAL is stage 7).
-> In execution, ADVERSARIAL is a mandatory blocking gate *inside* the DELIVER stage
-> (spawn fresh-context sub-agent). It's not a separate orchestration step — see
-> `stages/deliver.md` § "Adversarial Review Gate (BLOCKING)". All external docs say 9.
+> **Why ≤8 stage entries, not 10?** The architecture is **10 stages across 3 gates**,
+> but two of them are *gate moments inside* an existing stage, not separate
+> orchestration steps:
+> - **Gate 0** — the diagnose-before-build family (Understanding + Ambiguity scan +
+>   greenfield Working-Backwards) fires *inside EVALUATE*, at the EVALUATE→THINK
+>   boundary. Code-enforced by `pipeline_validator.py` at publish time. See TECH.md
+>   "diagnose-before-build gate family" + `stages/evaluate.md`.
+> - **Gate 2 — ADVERSARIAL** fires *inside DELIVER* (spawn fresh-context sub-agent),
+>   a mandatory blocking gate, not a row in the profile stage list. See
+>   `stages/deliver.md` § "Adversarial Review Gate (BLOCKING)".
+>
+> So a profile's stage list shows the orchestration steps (≤8); the 3 gates
+> (Gate 0 in EVALUATE, Gate 1 after PLAN, Gate 2 in DELIVER) ride *within* them.
+> `★ Gate 1`/`★ Gate 2` are wired into the ④/⑧ landmarks, GS021, and tests — do
+> not renumber them; `★ Gate 0` is the EVALUATE-stage landmark.
 
 ### Profile Selection Principle
 
@@ -963,11 +998,16 @@ Reason: <why>
 
 ---
 
-## Progress Display — 3 Phases, 10 Stages, 2 Gates
+## Progress Display — 3 Phases, 10 Stages, 3 Gates
 
 > **Principle:** The pipeline execution IS the live demo. A user reading the chat
-> window should understand: which phase, which stage, what Gate 1/Gate 2 decided,
-> and what each stage produced — without needing to read INSTRUCTIONS.md.
+> window should understand: which phase, which stage, what Gate 0 / Gate 1 / Gate 2
+> decided, and what each stage produced — without needing to read INSTRUCTIONS.md.
+>
+> **3 gates, 3 moments of truth:** Gate 0 guards the *framing* (inside EVALUATE),
+> Gate 1 guards the *plan* (after PLAN), Gate 2 guards the *code* (inside DELIVER).
+> Gate 0 and Gate 2 ride *within* a stage (no own circled number); Gate 1 is the
+> ④ landmark.
 
 ### Architecture (shown to user via output structure)
 
@@ -995,6 +1035,13 @@ PHASE C: DELIVERY    ⑧⑨⑩     — shared quality gate + knowledge loop
 
 **Gate verdicts** — output with visual prominence when gates fire:
 ```
+## ★ GATE 0: UNDERSTANDING (diagnose-before-build, inside EVALUATE)
+→ PASS | work_type: greenfield | understanding SUPPORTED (skeptic), ambiguity 0 hits, WB block ✓
+  (or) → BLOCK | Understanding gate: claim is a plan, not present-state (M1)
+         Re-frame: describe what IS, move the fix to THINK
+```
+
+```
 ## ★ GATE 1: SKEPTIC + SSA
 → PASS | all 5 checks clean
   (or) → BLOCK | Check 4 SSA: plan targets symptom, not root cause
@@ -1012,7 +1059,7 @@ PHASE C: DELIVERY    ⑧⑨⑩     — shared quality gate + knowledge loop
 
 | # | Stage | Phase | Output line format |
 |---|-------|-------|-------------------|
-| ① | EVALUATE | A | `→ GO \| profile: full \| scope: standard` |
+| ① | EVALUATE | A | `→ GO \| profile: full \| scope: standard` + `★ GATE 0: {PASS/BLOCK}` (diagnose-before-build family fires here, inside EVALUATE→THINK) |
 | ② | THINK | A | `→ 3 alternatives explored, 2 risk probes, approach: X` |
 | ③ | PLAN | A | `→ 4 AC, 3 files, spec: {one-line description}` |
 | ④ | PRE-CHECK | A | `★ GATE 1: {PASS/WARN/BLOCK} \| {detail}` |
