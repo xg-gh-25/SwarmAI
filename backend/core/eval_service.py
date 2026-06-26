@@ -58,7 +58,9 @@ class EvalService:
         else:
             self._workspace_root = workspace_root
 
-        self._project_dir = self._workspace_root / "Projects" / "SwarmAI"
+        # Eval is a SYSTEM-LEVEL subsystem (top-level Eval/, sibling of Projects/),
+        # decoupled from DDD — it does NOT live under Projects/SwarmAI/ anymore.
+        self._project_dir = self._workspace_root / "Eval"
         self._golden_set_path = self._project_dir / "golden_set.yaml"
         # Private (gitignored) instance cases — merged at load, written back to
         # their OWN file so they never leak into the tracked public file.
@@ -68,13 +70,14 @@ class EvalService:
 
     @staticmethod
     def _find_workspace() -> Path:
-        """Find SwarmWS root."""
+        """Find SwarmWS root by what eval actually reads (Eval/golden_set.yaml),
+        NOT a DDD folder — keeps eval-root discovery decoupled from Projects/."""
         candidates = [
             Path.home() / ".swarm-ai" / "SwarmWS",
             Path.cwd(),
         ]
         for c in candidates:
-            if (c / "Projects" / "SwarmAI").is_dir():
+            if (c / "Eval" / "golden_set.yaml").exists():
                 return c
         raise FileNotFoundError("Cannot locate SwarmWS")
 

@@ -35,7 +35,7 @@ _INSTANCE = re.compile(
     # ANY project (not a hardcoded allowlist — a new project must not leak, Gate-2 M2)
     r"Projects/[A-Za-z0-9_-]+|"
     # other instance-only roots that carry workspace structure
-    r"Knowledge/|Services/|\.artifacts/|EvalHistory/",
+    r"Knowledge/|Services/|\.artifacts/|Eval/|EvalHistory/",
     re.I,
 )
 

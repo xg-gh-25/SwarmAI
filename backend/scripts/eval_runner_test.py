@@ -37,7 +37,7 @@ def _workspace_available() -> bool:
     """Check if live workspace golden_set exists (not available in CI)."""
     try:
         root = _find_workspace_root()
-        return (root / "Projects" / "SwarmAI" / "golden_set.yaml").exists()
+        return (root / "Eval" / "golden_set.yaml").exists()
     except FileNotFoundError:
         return False
 
@@ -118,9 +118,10 @@ class TestComputeScores:
 class TestPathResolution:
     """Test workspace/repo discovery."""
 
+    @pytest.mark.skipif(not _workspace_available(), reason="needs live Eval/golden_set.yaml")
     def test_workspace_found(self):
         root = _find_workspace_root()
-        assert (root / "Projects" / "SwarmAI").is_dir()
+        assert (root / "Eval" / "golden_set.yaml").exists()
 
     def test_swarmai_repo_found(self):
         repo = _find_swarmai_repo()

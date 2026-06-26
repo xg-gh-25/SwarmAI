@@ -12,7 +12,7 @@ from scripts import eval_runner  # noqa: E402
 
 @pytest.fixture
 def ws(tmp_path, monkeypatch):
-    proj = tmp_path / "Projects" / "SwarmAI"
+    proj = tmp_path / "Eval"
     (proj / "EvalHistory").mkdir(parents=True)
     (proj / "golden_set.yaml").write_text("version: 2\ncases: []\n")
     # pin the digest to a known value so we control fresh vs stale

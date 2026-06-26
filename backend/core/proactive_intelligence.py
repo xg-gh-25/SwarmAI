@@ -1987,7 +1987,7 @@ def build_session_briefing(
 
         # L4: Self-Eval awareness (golden set health — lightweight, ~1 line)
         try:
-            golden_path = workspace / "Projects" / "SwarmAI" / "golden_set.yaml"
+            golden_path = workspace / "Eval" / "golden_set.yaml"
             if golden_path.exists():
                 from core.eval_service import get_eval_service
                 svc = get_eval_service()

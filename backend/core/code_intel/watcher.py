@@ -42,7 +42,7 @@ _SKIP_DIRS = {
 _SKIP_PATH_SEGMENTS = {
     "Knowledge", "DailyActivity", ".context", ".swarm-ai",
     "Attachments", "DailyBriefs", "JobResults", "Signals",
-    "EvalHistory", ".artifacts", "Services",
+    "EvalHistory", "Eval", ".artifacts", "Services",
 }
 
 

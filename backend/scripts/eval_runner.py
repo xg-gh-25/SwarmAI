@@ -49,16 +49,17 @@ except ImportError:
 # ─── Paths ────────────────────────────────────────────────────────────────────
 
 def _find_workspace_root() -> Path:
-    """Find SwarmWS root (has Projects/ directory)."""
+    """Find SwarmWS root by what eval actually reads (Eval/golden_set.yaml).
+    Decoupled from Projects/ — eval is a top-level system subsystem now."""
     candidates = [
         Path.home() / ".swarm-ai" / "SwarmWS",
         Path.cwd(),
         Path(__file__).resolve().parent.parent.parent,  # backend/scripts/ → repo root → SwarmWS
     ]
     for c in candidates:
-        if (c / "Projects" / "SwarmAI").is_dir():
+        if (c / "Eval" / "golden_set.yaml").exists():
             return c
-    raise FileNotFoundError("Cannot locate SwarmWS with Projects/SwarmAI/")
+    raise FileNotFoundError("Cannot locate SwarmWS with Eval/golden_set.yaml")
 
 
 def _find_swarmai_repo() -> Path:
@@ -75,11 +76,11 @@ def _find_swarmai_repo() -> Path:
 
 
 def _golden_set_path(root: Path) -> Path:
-    return root / "Projects" / "SwarmAI" / "golden_set.yaml"
+    return root / "Eval" / "golden_set.yaml"
 
 
 def _eval_history_dir(root: Path) -> Path:
-    d = root / "Projects" / "SwarmAI" / "EvalHistory"
+    d = root / "Eval" / "EvalHistory"
     d.mkdir(parents=True, exist_ok=True)
     return d
 

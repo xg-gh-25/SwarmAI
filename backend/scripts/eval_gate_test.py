@@ -30,7 +30,7 @@ def git_repo(tmp_path):
     (tmp_path / "backend" / "scripts").mkdir(parents=True)
     # eval_runner.py is in _GATE_CODE_PATHS — create it so the digest has content
     (tmp_path / "backend" / "scripts" / "eval_runner.py").write_text("v1\n")
-    proj = tmp_path / "Projects" / "SwarmAI"
+    proj = tmp_path / "Eval"
     proj.mkdir(parents=True)
     (proj / "golden_set.yaml").write_text("version: 2\ncases: []\n")
     _git(["add", "-A"], tmp_path)
@@ -42,8 +42,8 @@ def test_digest_stable_across_unrelated_commit(git_repo):
     """Committing a NON-code file (e.g. the eval report) must NOT change the digest."""
     d1 = compute_code_digest(git_repo, code_root=git_repo)
     # add an unrelated tracked file (mimics committing an EvalHistory report)
-    (git_repo / "Projects" / "SwarmAI" / "EvalHistory").mkdir()
-    (git_repo / "Projects" / "SwarmAI" / "EvalHistory" / "r.json").write_text("{}")
+    (git_repo / "Eval" / "EvalHistory").mkdir()
+    (git_repo / "Eval" / "EvalHistory" / "r.json").write_text("{}")
     _git(["add", "-A"], git_repo)
     _git(["commit", "-m", "report"], git_repo)
     d2 = compute_code_digest(git_repo, code_root=git_repo)
@@ -59,7 +59,7 @@ def test_digest_changes_when_code_changes(git_repo):
 
 def test_digest_changes_when_public_golden_set_changes(git_repo):
     d1 = compute_code_digest(git_repo, code_root=git_repo)
-    (git_repo / "Projects" / "SwarmAI" / "golden_set.yaml").write_text("version: 2\ncases: [{id: X}]\n")
+    (git_repo / "Eval" / "golden_set.yaml").write_text("version: 2\ncases: [{id: X}]\n")
     d2 = compute_code_digest(git_repo, code_root=git_repo)
     assert d1 != d2, "editing the public golden set must invalidate the digest"
 
@@ -67,7 +67,7 @@ def test_digest_changes_when_public_golden_set_changes(git_repo):
 def test_digest_changes_when_private_golden_set_changes(git_repo):
     """Gate-2 C1: bvt counts gate-eligible cases from the MERGED set, so a
     changed PRIVATE case must also invalidate the digest (else stale-green)."""
-    priv = git_repo / "Projects" / "SwarmAI" / "golden_set.private.yaml"
+    priv = git_repo / "Eval" / "golden_set.private.yaml"
     priv.write_text("version: 2\ncases: []\n")
     d1 = compute_code_digest(git_repo, code_root=git_repo)
     priv.write_text("version: 2\ncases: [{id: PRIV_CHANGED}]\n")

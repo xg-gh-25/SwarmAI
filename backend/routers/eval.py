@@ -387,7 +387,7 @@ async def list_reports():
     if not ws_path:
         return []
 
-    reports_dir = Path(ws_path) / "Projects" / "SwarmAI" / "EvalHistory"
+    reports_dir = Path(ws_path) / "Eval" / "EvalHistory"
     if not reports_dir.is_dir():
         return []
 
@@ -417,7 +417,7 @@ async def get_report(filename: str):
     if not ws_path:
         raise HTTPException(status_code=404, detail="Workspace not found")
 
-    reports_dir = Path(ws_path) / "Projects" / "SwarmAI" / "EvalHistory"
+    reports_dir = Path(ws_path) / "Eval" / "EvalHistory"
     report_path = reports_dir / filename
 
     # Defense in depth: resolve symlinks and verify path stays within reports_dir

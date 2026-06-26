@@ -301,7 +301,7 @@ def _collect_eval_metrics(month_start: datetime, month_end: datetime) -> dict:
     Scans EvalHistory/*.json for runs in the month; uses the LATEST behavior run
     for the behavior-tier numbers and the latest run overall for the headline.
     """
-    eval_dir = PROJECTS_DIR / "SwarmAI" / "EvalHistory"
+    eval_dir = SWARMWS / "Eval" / "EvalHistory"
     result = {
         "has_data": False,
         "overall_score": None,
