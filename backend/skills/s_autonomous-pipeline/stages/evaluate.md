@@ -35,6 +35,64 @@ gaps is higher-yield than human review. Without this step, EVALUATE scores a
 vague requirement as GO, acceptance criteria are under-specified, and BUILD
 delivers something technically correct but wrong.
 
+#### Self-Socratic Ambiguity Re-Scan (after filling the clarification output)
+
+`INTERROGATE THE SPEC AND YOUR OWN FRAMING — NOT THE USER`
+
+Once you have FILLED the WHO/WHAT/WHY/WHEN and noted assumptions above, **re-scan
+THAT output** (and the acceptance criteria you're about to write) for residual
+ambiguity. This is one self-answer round, not a loop and not a user interview.
+
+**The philosophy (this run's design conviction — run_932c0991):** the Socratic
+method in an AUTONOMOUS pipeline means interrogating the *requirement and your own
+framing*, NOT "asking the user more questions". This is the **Understanding Gate's
+"refute your claim" discipline shifted LEFT** to the requirement-clarification
+layer — same family, narrower target. The source repos (aws-samples/sample-ai-plc,
+awslabs/aidlc-workflows) Socratically question the *human*; we are autonomous, so
+we self-answer (read code / DDD) and escalate only what is genuinely unknowable.
+That is also why this is mechanical + validator-enforced, not behavioral — the
+old behavioral grill protocol (see think.md) was "almost always skipped".
+
+**Process (ONE round):**
+1. Scan the filled clarification fields for ambiguity/hedge terms:
+   `depends`, `maybe`, `not sure`, `mix of`, `somewhere between`, `standard`,
+   `typical` — plus CJK `看情况 / 可能 / 大概 / 差不多 / 视情况 / 标准做法 / 一般`.
+   (Canonical list: `pipeline_validator._AMBIGUITY_TERMS` — single source of truth.)
+2. For each hit, force it concrete with a **self-answer** (read the code / DDD
+   docs to pin the exact meaning) — escalate to the user ONLY if the answer is
+   genuinely user-intent that cannot be derived. Self-answer is the default.
+3. Record the scan in the evaluation artifact.
+
+**Output (in the evaluation artifact `ambiguity_scan` field):**
+
+```json
+{
+  "ambiguity_scan": {
+    "scanned_fields": ["who", "what", "why", "when", "acceptance_criteria"],
+    "terms_checked": ["depends", "maybe", "standard", "typical", "可能", "..."],
+    "hits": [
+      {"term": "standard", "where": "what — 'standard retry'",
+       "resolution": "self-answer: read retry_manager.py:40 — means exponential backoff w/ --resume, NOT a generic 'standard'.",
+       "kind": "self-answer"}
+    ],
+    "hit_count": 1,
+    "all_resolved": true
+  }
+}
+```
+
+**Rules (validator-enforced — `_check_ambiguity_scan`):**
+- Strict profiles (full/bugfix/goal) REQUIRE the `ambiguity_scan` block; **trivial/
+  docs/research are exempt** (anti-ceremony — same rigor tiers as the Understanding
+  Gate).
+- **Every hit MUST carry a non-empty `resolution`** (self-answer OR escalation
+  reason, ≥12 chars). An unresolved hit BLOCKS — that is what proves the loop RAN.
+- `hits: []` is valid (scanned, found nothing). Record it anyway — proves the
+  scan ran, not that it was skipped.
+- This is DISTINCT from the Acceptance Criteria Quality Gate (which catches weak
+  ACs) and the Understanding Gate (which scans the *diagnosis* for hedge). Here you
+  scan the *requirement clarification output* for residual spec ambiguity.
+
 ### Understanding Gate (ALL work types — understand the present before proposing a fix)
 
 `NO BUILD WITHOUT AN OBSERVATION-BACKED, REFUTED UNDERSTANDING OF THE PRESENT`
@@ -447,7 +505,7 @@ artifact accordingly before publishing.
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
   --type evaluation --producer s_autonomous-pipeline \
   --summary "<GO/DEFER/REJECT>: <one-line>" --stage evaluate \
-  --data '{"requirement":"...","scores":{...},"recommendation":"GO","scope":"standard","acceptance_criteria":[...]}'
+  --data '{"requirement":"...","scores":{...},"recommendation":"GO","scope":"standard","acceptance_criteria":[...],"understanding":{...},"ambiguity_scan":{"scanned_fields":["who","what","why","when","acceptance_criteria"],"terms_checked":[...],"hits":[...],"hit_count":0,"all_resolved":true}}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state think
 ```
 

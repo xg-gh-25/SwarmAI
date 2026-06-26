@@ -103,6 +103,32 @@ at a time, provide your recommended answer, wait for confirmation. Max 5 questio
 - User already specified the approach ("use pipeline", "just do it")
 - Only one viable approach exists (mechanical, no design choice)
 
+### Self-Socratic Ambiguity Re-Scan (after the risk probe)
+
+`INTERROGATE YOUR OWN ASSUMPTIONS — NOT THE USER`
+
+After the Design Risk Probe produces its `verification` text and you've chosen a
+recommendation, **re-scan the probe assumptions + recommendation** for residual
+ambiguity. One self-answer round — the THINK-side mirror of EVALUATE's ambiguity
+scan (see `evaluate.md` § "Self-Socratic Ambiguity Re-Scan" for the full
+philosophy: interrogate the framing, not the user; this is the Understanding
+Gate's "refute your claim" discipline at the design layer).
+
+**Process (ONE round):**
+1. Scan the `risk_probe[].verification` strings and the `recommendation` for
+   ambiguity/hedge terms: `depends`, `maybe`, `not sure`, `mix of`, `somewhere
+   between`, `standard`, `typical` + CJK `看情况 / 可能 / 大概 / 差不多 / 视情况 /
+   标准做法 / 一般` (canonical: `pipeline_validator._AMBIGUITY_TERMS`).
+2. For each hit: self-answer by reading code/DDD (e.g. a "standard pattern" must
+   name the EXACT pattern + file). Escalate only genuinely user-intent ambiguity.
+3. Record the scan in the research artifact `ambiguity_scan` field (same shape as
+   EVALUATE — `{scanned_fields, terms_checked, hits[{term,where,resolution,kind}],
+   hit_count, all_resolved}`).
+
+**Validator-enforced (`_check_ambiguity_scan`):** strict profiles REQUIRE the
+block; trivial/docs/research exempt; every hit needs a non-empty resolution
+(≥12 chars) or it BLOCKS. `hits: []` is valid (scanned, clean).
+
 ### Minimum Depth Gate (Meta-Intelligence L3)
 
 THINK must produce substantive analysis, not a token-saving shortcut. Historical
@@ -130,7 +156,7 @@ python backend/scripts/artifact_cli.py run-observe --project <PROJECT> --run-id 
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
   --type research --producer s_autonomous-pipeline \
   --summary "3 alternatives for <topic>. Recommending: <approach>" --stage think \
-  --data '{"key_findings":[...],"alternatives":[...],"recommendation":"...","risk_probe":[...],"sources":[...]}'
+  --data '{"key_findings":[...],"alternatives":[...],"recommendation":"...","risk_probe":[...],"ambiguity_scan":{"scanned_fields":["recommendation","risk_probe.verification"],"terms_checked":[...],"hits":[...],"hit_count":0,"all_resolved":true},"sources":[...]}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state plan
 ```
 

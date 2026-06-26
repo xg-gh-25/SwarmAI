@@ -206,6 +206,31 @@ except Exception:
 # Stage artifact schemas — required fields produce BLOCK, recommended produce WARN
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Self-Socratic ambiguity scan constants — defined BEFORE STAGE_TEMPLATES so the
+# template can reference _AMBIGUITY_TERMS at module load. The gate helper
+# (_check_ambiguity_scan) lives further down with the other gate logic; full
+# rationale is in the comment above that function.
+# ---------------------------------------------------------------------------
+
+# Stages the ambiguity scan applies to.
+_AMBIGUITY_SCAN_STAGES = ("evaluate", "think")
+
+# Min non-blank chars for a hit's resolution — anti-laziness floor (a hit MUST be
+# resolved by a real self-answer or escalation, not "ok").
+_AMBIGUITY_RESOLUTION_MIN_CHARS = 12
+
+# Ambiguity trigger terms (EN + CJK) — the vocabulary the stage scans its OWN
+# output against. Sourced from awslabs/aidlc-workflows overconfidence-prevention.md
+# plus CJK equivalents. Single source of truth so stage docs + validator never
+# drift (PIT21: derive from one table).
+_AMBIGUITY_TERMS = (
+    "depends", "maybe", "not sure", "mix of", "somewhere between",
+    "standard", "typical",
+    "看情况", "可能", "大概", "差不多", "视情况", "标准做法", "一般",
+)
+
+
 STAGE_SCHEMAS: dict[str, dict[str, list[str]]] = {
     "evaluate": {
         "required": ["recommendation", "scope"],
@@ -271,11 +296,29 @@ STAGE_TEMPLATES: dict[str, dict] = {
             "skeptic_verdict": "SUPPORTED|UNSUPPORTED|ALREADY-SATISFIED|WRONG-FRAME",
             "alternative_considered": "The simplest competing framing, and why it loses",
         },
+        # Self-Socratic ambiguity scan (strict profiles): re-scan the filled
+        # clarification output for residual ambiguity; every hit must be resolved.
+        "ambiguity_scan": {
+            "scanned_fields": ["who", "what", "why", "when", "acceptance_criteria"],
+            "terms_checked": list(_AMBIGUITY_TERMS),
+            "hits": [{"term": "standard", "where": "what",
+                      "resolution": "self-answer: read file:line — exact meaning, not vague.",
+                      "kind": "self-answer|escalation"}],
+            "hit_count": 1,
+            "all_resolved": True,
+        },
     },
     "think": {
         "key_findings": ["finding 1", "finding 2"],
         "alternatives": [{"constraint": "SPEED|QUALITY|SIMPLICITY", "what": "...", "effort": "S|M|L"}],
         "recommendation": "Approach X because...",
+        "ambiguity_scan": {
+            "scanned_fields": ["recommendation", "risk_probe.verification"],
+            "terms_checked": list(_AMBIGUITY_TERMS),
+            "hits": [],
+            "hit_count": 0,
+            "all_resolved": True,
+        },
     },
     "plan": {
         "acceptance_criteria": ["AC1: testable statement"],
@@ -379,6 +422,108 @@ _EVIDENCE_MIN_CHARS = 20
 # "standard" alias (rank-4, == full) AND any unknown/future profile in one move,
 # matching the design's "all work types" intent (adversarial HIGH, run_862fa4e0).
 _RELAXED_UNDERSTANDING_PROFILES = ("trivial", "docs", "research")
+
+# ---------------------------------------------------------------------------
+# Self-Socratic ambiguity scan — interrogate the SPEC/framing, not the user
+# (design: plan art_ea9701a1, run_932c0991). The EVALUATE Requirement
+# Clarification Check and THINK Design Risk Probe re-scan their OWN filled output
+# for ambiguity/hedge wording and force ONE self-answer round; the validator
+# enforces the loop RAN (an `ambiguity_scan` block, every hit RESOLVED).
+#
+# This is the Understanding Gate's "refute your claim" discipline shifted LEFT to
+# the requirement layer — SAME family, DISTINCT field + DISTINCT error tag
+# ('Ambiguity scan:' vs 'Understanding gate'):
+#   Understanding Gate → diagnosis-hedge in understanding.claim/evidence (INPUT
+#       epistemics: observe before asserting what IS).
+#   Ambiguity Scan     → spec-ambiguity in the stage's own clarification output /
+#       probe assumptions (OUTPUT completeness: is what you're about to build
+#       under-specified?). Verified non-overlapping by the skeptic (run_932c0991).
+#
+# Profile policy mirrors the Understanding Gate EXACTLY: strict (any profile NOT
+# in _RELAXED_UNDERSTANDING_PROFILES) REQUIRES the block; relaxed profiles are
+# exempt when it is absent but a present block is still scanned (cheap). The gate
+# fires ONLY on the evaluate + think stages.
+#
+# Anti-ceremony (the failure modes this guards against): a stage-doc-only
+# instruction with no validator marker is the grill-protocol failure (think.md:96
+# "almost always skipped") and the aidlc #366 ceremonial gate. Enforcing
+# resolution-on-every-hit is what proves the loop RAN, not just that a block was
+# pasted in. NOT in scope: an interactive user-ask gate (rejected) or PR/FAQ
+# Working-Backwards (greenfield-only follow-up).
+# (Constants _AMBIGUITY_SCAN_STAGES / _AMBIGUITY_RESOLUTION_MIN_CHARS /
+# _AMBIGUITY_TERMS are defined above STAGE_SCHEMAS for module-load ordering.)
+# ---------------------------------------------------------------------------
+
+
+def _check_ambiguity_scan(data: dict, profile: str) -> list[str]:
+    """Self-Socratic ambiguity gate (presence + per-hit resolution). Returns error
+    strings tagged 'Ambiguity scan:'. Distinct from the Understanding Gate — see
+    the module comment above. Profile policy mirrors _check_understanding_gate.
+
+    Logic:
+      - strict profile (not in _RELAXED_UNDERSTANDING_PROFILES) → the block MUST
+        be present and a dict; absence/wrong-type BLOCKS.
+      - relaxed profile → exempt when absent, but a PRESENT block is still scanned.
+      - for ANY present block: every entry in `hits` must carry a non-empty
+        resolution (>= _AMBIGUITY_RESOLUTION_MIN_CHARS, not a bare bool). An
+        unresolved hit BLOCKS — that is what proves the self-answer loop RAN.
+    """
+    errs: list[str] = []
+    scan = data.get("ambiguity_scan")
+    is_strict = profile not in _RELAXED_UNDERSTANDING_PROFILES
+    has_block = isinstance(scan, dict)
+
+    if is_strict and not has_block:
+        errs.append(
+            "Ambiguity scan: strict profile requires an 'ambiguity_scan' block. "
+            "After filling the clarification output (EVALUATE: WHO/WHAT/WHY/WHEN) or "
+            "the risk-probe assumptions + recommendation (THINK), re-scan THAT output "
+            "for ambiguity/hedge terms (depends/maybe/not sure/mix of/somewhere "
+            "between/standard/typical + CJK 看情况/可能/大概/差不多/视情况/标准做法/一般) "
+            "and record {scanned_fields, terms_checked, hits, hit_count, all_resolved}. "
+            "Each hit needs a resolution (self-answer via code/DDD, or escalation). "
+            "Self-Socratic: interrogate the spec, not the user (run_932c0991)."
+        )
+        return errs
+
+    if not has_block:
+        return errs  # relaxed + absent → exempt
+
+    # Wrong-type block (e.g. a bare string "ran it") — can't carry hits.
+    if not isinstance(scan, dict):  # defensive; has_block already gates this
+        errs.append("Ambiguity scan: 'ambiguity_scan' must be a dict.")
+        return errs
+
+    hits = scan.get("hits", [])
+    if not isinstance(hits, list):
+        errs.append(
+            "Ambiguity scan: 'hits' must be a list (use [] when no ambiguity term "
+            "was found in the scanned output)."
+        )
+        return errs
+
+    for idx, hit in enumerate(hits):
+        if not isinstance(hit, dict):
+            errs.append(f"Ambiguity scan: hit[{idx}] must be a dict.")
+            continue
+        resolution = hit.get("resolution")
+        # A bare bool / non-string carries zero info; a string must clear the floor.
+        resolved = (
+            not isinstance(resolution, bool)
+            and isinstance(resolution, str)
+            and len(resolution.strip()) >= _AMBIGUITY_RESOLUTION_MIN_CHARS
+        )
+        if not resolved:
+            term = hit.get("term", "?")
+            errs.append(
+                f"Ambiguity scan: hit[{idx}] (term={term!r}) has no real 'resolution' "
+                f"(needs a >={_AMBIGUITY_RESOLUTION_MIN_CHARS}-char self-answer or escalation "
+                f"string). An unresolved hit means the self-answer loop did NOT run — "
+                f"either self-resolve via code/DDD, or record why it must escalate."
+            )
+
+    return errs
+
 
 # M1 — solution-INTENT phrases (not bare verbs: "the state change is not
 # persisted" must NOT false-block — 'change' there is a noun). These match a
@@ -755,6 +900,17 @@ def validate_artifact_data(stage: str, data: dict, profile: str = "full") -> lis
         # this share the alias resolver, so a single understanding.evidence
         # satisfies both without double-blocking.
         errors.extend(_check_understanding_gate(data, profile))
+
+        # ── Self-Socratic ambiguity scan (evaluate) ───────────────────────
+        # Re-scan the requirement-clarification output for residual ambiguity.
+        # Distinct field + tag from the Understanding Gate (run_932c0991).
+        errors.extend(_check_ambiguity_scan(data, profile))
+
+    # ── Self-Socratic ambiguity scan (think) ──────────────────────────────
+    # THINK re-scans its risk-probe assumptions + recommendation. THINK has no
+    # understanding block, so this is its only self-Socratic gate.
+    if stage == "think":
+        errors.extend(_check_ambiguity_scan(data, profile))
 
     return errors
 
