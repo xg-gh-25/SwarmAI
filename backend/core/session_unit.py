@@ -643,6 +643,13 @@ class SessionUnit:
         # Checkpoint built before heal-kill, consumed by next spawn to
         # inject continuation context. None = no pending heal context.
         self._heal_checkpoint: TaskCheckpoint | None = None
+        # Set True when the most recent kill was an APP-INITIATED fast recycle
+        # (flush_recycle / interrupt_recycle of a poisoned subprocess). Read by
+        # classify_failure so the resulting "exit code -9" is treated as ZOMBIE
+        # (near-instant respawn) instead of OOM (30/60/120s backoff). Consumed
+        # (reset) at classification and cleared at each new turn. RSS-driven
+        # kills do NOT set this — they are real memory pressure (keep OOM).
+        self._recycle_kill_pending: bool = False
         # Graceful pre-kill: when turn_approaching fires, set this flag
         # so next send() injects WRAP_UP_PROMPT before the actual kill.
         # One turn of grace for the agent to finish its thought.
@@ -1418,6 +1425,9 @@ class SessionUnit:
         # (e.g. RSS spike armed checkpoint → spike subsided → kill didn't fire).
         # Prevents an unrelated later restart from injecting stale context.
         self._heal_checkpoint = None
+        # Clear any stale recycle-kill marker so a prior turn's recycle can't
+        # mislabel a genuine OOM on this turn as ZOMBIE.
+        self._recycle_kill_pending = False
 
         # Store app_session_id for downstream use by _retry_with_resume's
         # abandon-fallback path (build_resume_context needs the stable
@@ -1985,8 +1995,11 @@ class SessionUnit:
                 and self._retry_count < self.MAX_RETRY_ATTEMPTS
             ):
                 self._retry_count += 1
+                _recycle = self._recycle_kill_pending
+                self._recycle_kill_pending = False
                 failure_type, failure_meta = classify_failure(
                     error_str, self._hook_session_context,
+                    recycle_kill=_recycle,
                 )
                 # Spawn retries use 15s base (heavier than stream retries)
                 # because each spawn starts a full CLI process.
@@ -3630,6 +3643,14 @@ class SessionUnit:
         Mirrors the self-heal logging style: field names + lengths only,
         never raw content/PII.
         """
+        # Tag fast-recycle kills so the resulting SIGKILL ("exit code -9") is
+        # classified ZOMBIE (~0.5s respawn) not OOM (30/60/120s backoff). Set
+        # BEFORE the idempotency early-return so it reflects the latest kill
+        # reason even when a checkpoint is already armed. ONLY the poisoned/
+        # corrupt-turn-state recycles — NOT rss_*/stuck_*/watchdog (those are
+        # real memory pressure / genuine hangs that keep their own semantics).
+        self._recycle_kill_pending = trigger in ("flush_recycle", "interrupt_recycle")
+
         if self._heal_checkpoint is not None:
             return  # Don't clobber a richer voluntary checkpoint
         try:

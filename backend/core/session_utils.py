@@ -57,18 +57,29 @@ class FailureType(Enum):
 def classify_failure(
     error_str: str,
     hook_context: Optional[dict] = None,
+    *,
+    recycle_kill: bool = False,
 ) -> tuple[FailureType, dict]:
     """Classify a failure using hook-captured context first, string fallback second.
 
     Returns ``(failure_type, metadata)`` where metadata contains type-specific
     info (e.g. ``resets_at`` for rate limits, ``pressure_level`` for OOM).
 
+    ``recycle_kill`` marks that the immediately-preceding kill was an
+    APP-INITIATED fast recycle of a poisoned/corrupt subprocess (post-interrupt
+    or clean-flush). Such a kill surfaces as ``exit code -9`` (SIGKILL) — the
+    SAME string an OS/Jetsam OOM kill produces — but it is OUR kill, not memory
+    pressure, so it must respawn near-instantly (ZOMBIE) instead of eating the
+    OOM 30/60/120s backoff. RSS-driven kills do NOT set this flag (they are real
+    memory pressure and keep the OOM cooldown).
+
     Priority order:
-    1. Hook-captured ``_last_notification`` with rate limit info → RATE_LIMIT
-    2. OOM string patterns + memory pressure heuristic → OOM
-    3. Timeout string patterns → TIMEOUT
-    4. API error string patterns → API_ERROR
-    5. Fallback → UNKNOWN
+    1. Zombie / app-initiated recycle SIGKILL → ZOMBIE (fast respawn)
+    2. Hook-captured ``_last_notification`` with rate limit info → RATE_LIMIT
+    3. OOM string patterns + memory pressure heuristic → OOM
+    4. Timeout string patterns → TIMEOUT
+    5. API error string patterns → API_ERROR
+    6. Fallback → UNKNOWN
     """
     error_lower = error_str.lower()
     metadata: dict = {}
@@ -81,6 +92,22 @@ def classify_failure(
     # message never overlaps OOM/rate-limit/timeout patterns) so compute_backoff
     # can respawn near-immediately.
     if "zombie subprocess detected" in error_lower:
+        return FailureType.ZOMBIE, metadata
+
+    # ── 0b. App-initiated fast recycle (flush_recycle / interrupt_recycle) ──
+    # A poisoned/corrupt subprocess (left after a Stop/interrupt or a clean
+    # pipe-flush) is force-killed by us; the SDK then reports "exit code -9".
+    # That -9 is INDISTINGUISHABLE by string from an OS OOM SIGKILL, so it used
+    # to fall through to the OOM branch below and get a 30/60/120s cooldown —
+    # turning a recycle that should --resume in ~0.5s into tens of seconds of
+    # dead air ("回答死/卡半路"). When the caller tells us this -9 was our own
+    # recycle (NOT memory pressure), classify it ZOMBIE → near-instant respawn.
+    # Gated on the SIGKILL signature so a coincident rate-limit/timeout that
+    # happens to carry the flag is still classified on its real merits.
+    if recycle_kill and any(
+        p in error_lower for p in ("exit code -9", "exit code: -9", "exit code=-9", "sigkill", "signal 9")
+    ):
+        metadata["recycle_kill"] = True
         return FailureType.ZOMBIE, metadata
 
     # ── 1. Hook context: rate limit notification ──────────────

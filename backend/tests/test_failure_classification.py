@@ -39,6 +39,47 @@ class TestClassifyFailure:
         ft, _ = classify_failure("Cannot write to terminated process")
         assert ft == FailureType.OOM
 
+    # ── Recycle-kill (-9) must NOT be classified OOM ──────────────────
+    # An app-initiated fast recycle (flush_recycle / interrupt_recycle of a
+    # poisoned subprocess) force-kills the tree → "exit code -9", the SAME
+    # string as an OS OOM SIGKILL. Without the recycle_kill flag it fell into
+    # the OOM branch → 30/60/120s cooldown → tens of seconds of dead air on a
+    # recycle that should --resume in ~0.5s ("回答死/卡半路").
+
+    def test_recycle_kill_minus9_is_zombie_not_oom(self):
+        ft, meta = classify_failure(
+            "Command failed with exit code -9", recycle_kill=True,
+        )
+        assert ft == FailureType.ZOMBIE
+        assert meta.get("recycle_kill") is True
+
+    def test_recycle_kill_sigkill_is_zombie(self):
+        ft, _ = classify_failure("Process received SIGKILL", recycle_kill=True)
+        assert ft == FailureType.ZOMBIE
+
+    def test_minus9_without_recycle_flag_stays_oom(self):
+        # A real OS/Jetsam OOM kill (no recycle flag) must STILL be OOM so the
+        # memory-pressure cooldown protects against death spirals.
+        ft, _ = classify_failure(
+            "Command failed with exit code -9", recycle_kill=False,
+        )
+        assert ft == FailureType.OOM
+
+    def test_recycle_flag_only_reclassifies_sigkill(self):
+        # The flag must NOT turn a coincident rate-limit/timeout into ZOMBIE —
+        # only the -9/SIGKILL signature is reclassified.
+        ft, _ = classify_failure("rate limit exceeded", recycle_kill=True)
+        assert ft == FailureType.RATE_LIMIT
+        ft2, _ = classify_failure("The operation timed out", recycle_kill=True)
+        assert ft2 == FailureType.TIMEOUT
+
+    def test_recycle_zombie_backoff_is_fast_vs_oom(self):
+        # The whole point: recycle -9 respawns near-instantly, not after 30s.
+        zombie_wait = compute_backoff(FailureType.ZOMBIE, {}, retry_count=1)
+        oom_wait = compute_backoff(FailureType.OOM, {}, retry_count=1)
+        assert zombie_wait <= 1.0
+        assert oom_wait >= 30.0
+
     def test_rate_limit_string_pattern(self):
         ft, _ = classify_failure("rate limit exceeded")
         assert ft == FailureType.RATE_LIMIT
