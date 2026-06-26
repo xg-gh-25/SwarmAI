@@ -719,9 +719,8 @@ def _strip_negated_verbs(text: str) -> str:
 # not plan intent. A claim describing the `let's` pattern or quoting "add a guard"
 # is present-state, not a proposal. Strip them before M1 (run_7cf9da85 C3 — the
 # author hit this live: an evaluate claim describing the very pattern under fix
-# self-blocked M1). Single-quote run is bounded to avoid eating apostrophes in
-# ordinary prose ("don't", "the OS's lock") — only matches a quote-pair on one line
-# with no apostrophe-as-contraction ambiguity (paired ' ... ').
+# self-blocked M1). The single-quote span is boundary-gated (see the regex's inline
+# note) so contraction apostrophes never open/close a span — the detail lives there.
 _QUOTED_SPAN_RE = _re.compile(
     r"`[^`]*`"                          # backtick code span
     r"|\"[^\"]*\""                      # double-quoted span
