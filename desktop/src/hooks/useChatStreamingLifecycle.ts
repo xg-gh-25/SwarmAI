@@ -1761,6 +1761,12 @@ export function useChatStreamingLifecycle(
               snapLastAsstBlocks: snapLastAsst?.content?.length,
               snapLastAsstChars: snapLastAsst?.content?.reduce((n, b) => n + ('text' in b ? (b as { text: string }).text.length : 0), 0),
               willSyncReact: s.phase === 'idle' && reconcileTabId === activeTabIdRef.current,
+              // Disambiguator: is the tab GENUINELY backgrounded (activeTabId is a
+              // different real tab → switch-reload is the legit path) or is
+              // activeTabIdRef STALE while the user is looking at this tab
+              // (→ real bug: a completed answer not rendered where you ARE)?
+              activeTabId: activeTabIdRef.current,
+              tabMatchesActive: reconcileTabId === activeTabIdRef.current,
             });
           }
           // Only sync React/cache if reconcile actually executed (phase=idle).
