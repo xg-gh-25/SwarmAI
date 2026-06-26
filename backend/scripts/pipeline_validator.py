@@ -714,6 +714,26 @@ def _strip_negated_verbs(text: str) -> str:
     M1 sees only genuine plan-language, not present-state negations."""
     return _NEG_VERB_PHRASE_RE.sub(" ", text)
 
+
+# Quoted spans — `backtick`, "double", 'single' — are CITATIONS of code/patterns,
+# not plan intent. A claim describing the `let's` pattern or quoting "add a guard"
+# is present-state, not a proposal. Strip them before M1 (run_7cf9da85 C3 — the
+# author hit this live: an evaluate claim describing the very pattern under fix
+# self-blocked M1). Single-quote run is bounded to avoid eating apostrophes in
+# ordinary prose ("don't", "the OS's lock") — only matches a quote-pair on one line
+# with no apostrophe-as-contraction ambiguity (paired ' ... ').
+_QUOTED_SPAN_RE = _re.compile(
+    r"`[^`]*`"           # backtick code span
+    r"|\"[^\"]*\""       # double-quoted span
+    r"|'[^']*'",          # single-quoted span (paired)
+)
+
+
+def _strip_quoted_spans(text: str) -> str:
+    """Remove backtick/double/single-quoted spans so M1 scans only UNQUOTED prose.
+    Quoted text is a citation (code, a pattern, a quoted phrase), not plan intent."""
+    return _QUOTED_SPAN_RE.sub(" ", text)
+
 # M2 — hedge words (EN + CJK). An unresolved hedge = inference, not observation.
 _HEDGE_PATTERNS = [
     r"\bprobably\b", r"\blikely\b", r"\bmaybe\b", r"\bperhaps\b",
@@ -781,8 +801,12 @@ def _check_understanding_gate(data: dict, profile: str) -> list[str]:
         evidence = _resolve_understanding_evidence(data)
 
         # M1 — solution language in the claim = a plan, not present-state.
-        # Strip negated verb phrases first ("does not implement X" is present-state).
-        if claim_str and _SOLUTION_LANGUAGE_RE.search(_strip_negated_verbs(claim_str)):
+        # Strip quoted spans (citations of code/patterns) AND negated verb phrases
+        # first, so M1 scans only genuine UNQUOTED plan-language ("does not implement
+        # X" is present-state; "`let's`" is a citation, not a suggestion).
+        if claim_str and _SOLUTION_LANGUAGE_RE.search(
+            _strip_negated_verbs(_strip_quoted_spans(claim_str))
+        ):
             errs.append(
                 "Understanding gate (M1 solution-language): understanding.claim contains "
                 "solution/plan language (e.g. 'I will / the fix is / add … / refactor …'). "

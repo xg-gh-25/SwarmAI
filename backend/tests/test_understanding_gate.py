@@ -139,6 +139,12 @@ class TestM1SolutionLanguage:
         # sentence-initial noun homographs of action verbs must pass.
         "Use of the lock is inconsistent across handlers.",
         "Set operations dominate the current hot path.",
+        # run_7cf9da85 C3: a claim that QUOTES code/a pattern in backticks or quotes
+        # is a citation, not plan intent — the quoted span must be stripped before M1.
+        # (I hit this live: an evaluate claim describing the `let's` pattern self-blocked.)
+        "The M1 regex `\\blet's\\b` matches the contraction but not the verb today.",
+        "The current pattern is \"add a guard\" which already exists in the validator.",
+        "Today the gate treats `i'll` and `ill` identically — that is the bug.",
     ])
     def test_present_state_claim_passes_m1(self, ok_claim):
         data = _eval("existing-feature", ok_claim, _GOOD_EVIDENCE)
