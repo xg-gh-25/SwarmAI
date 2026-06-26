@@ -32,6 +32,46 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _is_blank_api_result(
+    *,
+    content_emitted: bool,
+    is_error: bool,
+    interrupted: bool,
+    output_tokens: int,
+    subtype: str,
+) -> bool:
+    """True when a non-error ResultMessage produced NOTHING renderable → retry.
+
+    The "前端没渲染、后端正常" (blank turn) signature: the SDK returned a clean
+    ResultMessage but no assistant content reached the user. By the time the
+    orchestrator evaluates this, the error subtypes have already returned/raised
+    upstream (``error_max_turns`` → turn_limit_reached; ``error_during_execution``
+    / ``is_error`` → error path), so ``subtype`` here is only ever ``""`` or
+    ``"success"`` — BOTH warrant a retry when empty.
+
+    The original guard only fired on an empty subtype (``not subtype``), which let
+    a ``subtype="success"`` envelope with 0 output tokens slip through silently.
+    Observed live (run_7cf9da85 follow-up): session 2e87b27f, 2026-06-26 17:43 —
+    a 68s turn returned input=0/output=0, subtype=success, no content; it passed
+    both empty-guards, transitioned cleanly to IDLE, and the user saw a blank turn
+    with no retry. This predicate is shared verbatim by the orchestrator guard and
+    its regression test so the two can never drift (the project's recurring
+    mirror-drift trap).
+
+    Args mirror the orchestrator's locals at the result point. Returns True only
+    for the blank-success/blank-empty case; any streamed content, any output
+    tokens, an interrupt, an error, or an unrecognised subtype → False (do not
+    retry).
+    """
+    return (
+        not content_emitted
+        and not is_error
+        and not interrupted
+        and output_tokens == 0
+        and subtype in ("", "success")
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════
 # Callbacks Protocol (Phase 3 target — not used yet)
 # ═══════════════════════════════════════════════════════════════════
@@ -1223,20 +1263,23 @@ class StreamingOrchestrator:
                         f"content (session_id={self._parent.session_id})"
                     )
 
-                # ── API empty response detection (any duration) ───────
-                # Catches: Bedrock 429/503/timeout that returns a
-                # ResultMessage with output_tokens=0 and no content
-                # emitted.  The fast-empty guard above catches subprocess
-                # corruption (<2s).  This catches API-level failures that
-                # take longer (e.g. connection held open then dropped).
-                # Raising triggers the existing retry loop in send().
+                # ── API empty / blank-success response detection ──────
+                # Catches: (a) Bedrock 429/503/timeout that returns a
+                # ResultMessage with empty subtype + 0 output, and (b) a
+                # subtype="success" envelope that nonetheless produced 0 output
+                # tokens and no content — the live blank-turn bug (session
+                # 2e87b27f 2026-06-26 17:43: 0in/0out success → blank, no retry).
+                # The <2s guard above catches subprocess corruption; this catches
+                # API-level no-ops at any duration. Raising triggers the existing
+                # send() retry loop (string matched by _is_retriable_error).
+                # Predicate lives in _is_blank_api_result so guard + test share it.
                 output_tok = (usage.get("output_tokens") or 0) if usage else 0
-                if (
-                    not self._parent._content_emitted
-                    and not is_error
-                    and not self._parent._interrupted
-                    and output_tok == 0
-                    and not subtype  # empty subtype = API didn't respond
+                if _is_blank_api_result(
+                    content_emitted=self._parent._content_emitted,
+                    is_error=is_error,
+                    interrupted=self._parent._interrupted,
+                    output_tokens=output_tok,
+                    subtype=subtype,
                 ):
                     logger.warning(
                         "session_unit.api_empty_response session_id=%s "
