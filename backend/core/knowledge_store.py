@@ -345,18 +345,33 @@ class KnowledgeStore:
             self._conn.execute("INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild')")
             self._conn.commit()
             return
-        except sqlite3.DatabaseError:
-            # Shadow tables too corrupt for in-place rebuild — drop & recreate.
+        except sqlite3.DatabaseError as exc:
+            # Only escalate to the destructive DROP path on genuine corruption.
+            # A transient lock / disk error must NOT trigger a nuclear rebuild
+            # (Gate-2 hardening): re-raise anything that isn't a malformed/corrupt
+            # signal so the caller (best-effort health hook) logs + retries later.
+            msg = str(exc).lower()
+            if "malformed" not in msg and "corrupt" not in msg:
+                raise
             self._conn.rollback()
-        self._conn.execute("DROP TABLE IF EXISTS knowledge_fts")
-        self._conn.execute("""
-            CREATE VIRTUAL TABLE knowledge_fts USING fts5(
-                content, heading, source_file,
-                content=knowledge_chunks, content_rowid=id
-            )
-        """)
-        self._conn.execute("INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild')")
-        self._conn.commit()
+        # Shadow tables too corrupt for in-place rebuild — drop & recreate, all
+        # inside one transaction so a mid-repair crash cannot leave the table
+        # missing (it rolls back to the old — still-corrupt but present — table,
+        # which the next health-hook pass re-probes and repairs).
+        self._conn.execute("BEGIN")
+        try:
+            self._conn.execute("DROP TABLE IF EXISTS knowledge_fts")
+            self._conn.execute("""
+                CREATE VIRTUAL TABLE knowledge_fts USING fts5(
+                    content, heading, source_file,
+                    content=knowledge_chunks, content_rowid=id
+                )
+            """)
+            self._conn.execute("INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild')")
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
 
     def fts5_search(
         self,
