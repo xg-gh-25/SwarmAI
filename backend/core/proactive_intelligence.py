@@ -834,10 +834,12 @@ def _get_paused_pipeline_highlights(workspace: Path, max_items: int = 3) -> list
                     continue
 
                 # SUPERSEDED SKIP + MARK: a PAUSED run older than the newest
-                # COMPLETED run in this project was finished by a later run. Mark
-                # it abandoned (reusing the _auto_abandon_stale_runs convention:
-                # status=abandoned + abandon_reason=superseded_by_<id>) so the
-                # gauge stops re-scanning it, and skip surfacing it.
+                # COMPLETED run in this project WAS finished by a later run. Mark
+                # it abandoned (status=abandoned + abandon_reason=superseded_by_<id>)
+                # so the gauge stops re-scanning it, and skip surfacing it. This is
+                # a genuine supersession (a completed run did the work) — distinct
+                # from _auto_abandon_stale_runs in artifact_cli.py, which labels a
+                # stale *running* orphan 'orphaned_no_resume' (no run finished it).
                 # Recency signal only — NOT requirement-text similarity (Gate-1:
                 # text overlap destructively false-archives different-but-similar
                 # runs). File-locked + re-read-under-lock to avoid racing a

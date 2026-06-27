@@ -172,6 +172,7 @@ def _to_response(raw: dict) -> PipelineRunResponse:
         tokens_consumed=consumed,
         taste_decisions=len(raw.get("taste_decisions", [])),
         checkpoint=checkpoint,
+        abandon_reason=raw.get("abandon_reason"),
         created_at=raw.get("created_at", ""),
         updated_at=raw.get("updated_at", ""),
     )
@@ -246,6 +247,7 @@ async def list_pipelines(
         running=sum(1 for r in responses if r.status == PipelineRunStatus.RUNNING),
         paused=sum(1 for r in responses if r.status == PipelineRunStatus.PAUSED),
         completed=sum(1 for r in responses if r.status == PipelineRunStatus.COMPLETED),
+        abandoned=sum(1 for r in responses if r.status == PipelineRunStatus.ABANDONED),
         total_tokens=sum(r.tokens_consumed for r in responses),
     )
 

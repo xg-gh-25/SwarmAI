@@ -65,6 +65,8 @@ def _create_run(workspace: Path, project: str, run_id: str, **overrides) -> Path
         "updated_at": overrides.get("updated_at", now_iso),
         "completed_at": overrides.get("completed_at", None),
     }
+    if "abandon_reason" in overrides:
+        state["abandon_reason"] = overrides["abandon_reason"]
 
     run_file = artifacts_dir / f"pipeline-run-{run_id}.json"
     run_file.write_text(json.dumps(state), encoding="utf-8")
@@ -186,6 +188,28 @@ class TestPipelinesEndpoint:
 
         resp = client.get("/api/pipelines")
         assert resp.json()["pipelines"][0]["stages_total"] == 6  # trivial has 6 stages
+
+    def test_abandoned_surfaced_in_http_dashboard(self, client, workspace):
+        """AC2 parity: the HTTP dashboard (consumed by the Radar sidebar) must
+        surface abandoned runs — both the summary count and per-run abandon_reason
+        — distinguishing an unrecovered orphan from a real supersession. Before
+        the fix, 'abandoned' fell back to 'running' (no enum value) and the
+        reason was dropped entirely."""
+        _create_run(workspace, "Proj", "run_orphan", status="abandoned",
+                    abandon_reason="orphaned_no_resume")
+        _create_run(workspace, "Proj", "run_superseded", status="abandoned",
+                    abandon_reason="superseded_by_run_xyz")
+
+        resp = client.get("/api/pipelines")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["summary"]["abandoned"] == 2, \
+            f"expected 2 abandoned, got {body['summary'].get('abandoned')}"
+        by_id = {p["id"]: p for p in body["pipelines"]}
+        # status must render as 'abandoned', not fall back to 'running'
+        assert by_id["run_orphan"]["status"] == "abandoned"
+        assert by_id["run_orphan"]["abandon_reason"] == "orphaned_no_resume"
+        assert by_id["run_superseded"]["abandon_reason"] == "superseded_by_run_xyz"
 
     def test_taste_decisions_counted(self, client, workspace):
         _create_run(workspace, "Proj", "run_taste",

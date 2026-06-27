@@ -28,6 +28,12 @@ class PipelineRunStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    # An abandoned run: a stale orphan that was never resumed, OR a paused run
+    # superseded by a later completed run. The distinction lives in
+    # `abandon_reason` (orphaned_no_resume vs superseded_by_<id>). Without this
+    # enum value, _to_response silently fell abandoned→RUNNING, mis-rendering
+    # abandoned runs as active in the dashboard.
+    ABANDONED = "abandoned"
 
 
 class PipelineCheckpoint(BaseModel):
@@ -56,6 +62,12 @@ class PipelineRunResponse(BaseModel):
     tokens_consumed: int = Field(0, description="Total tokens used across all stages")
     taste_decisions: int = Field(0, description="Number of pending taste decisions")
     checkpoint: Optional[PipelineCheckpoint] = Field(None, description="Checkpoint info if paused")
+    abandon_reason: Optional[str] = Field(
+        None,
+        description="Why an abandoned run was abandoned: 'orphaned_no_resume' "
+                    "(unrecovered crash-orphan) vs 'superseded_by_<id>' "
+                    "(finished by a later run). None for non-abandoned runs.",
+    )
     created_at: str = Field(..., description="ISO timestamp")
     updated_at: str = Field(..., description="ISO timestamp")
 
@@ -65,6 +77,7 @@ class PipelineStatusSummary(BaseModel):
     running: int = 0
     paused: int = 0
     completed: int = 0
+    abandoned: int = 0
     total_tokens: int = 0
 
 
