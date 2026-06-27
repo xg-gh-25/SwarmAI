@@ -301,3 +301,89 @@ export function shouldArmSpinnerFromBackend(input: ArmSpinnerInput): boolean {
   if (now - (streamClearedAt ?? 0) <= settleMs) return false; // flap-guard
   return true;
 }
+
+
+// ── Force-clear reconcile decision (extracted for test-locking) ───────────────
+
+/** Inputs to the force-clear decision (the reconcile loop's stuck-spinner path).
+ *  All values are read by the caller from tab state + the backend mirror; the
+ *  decision itself is pure so the IDLE/warm-resume invariant can be locked by a
+ *  unit test (a force-clear during a live turn was the recurring regression). */
+export interface ForceClearStreamInput {
+  /** Tab has a drain scheduled (result arrived, new stream not yet started). */
+  drainPending: boolean;
+  /** Tab has an optimistic queued message. */
+  hasQueuedMessage: boolean;
+  /** ms since the message was queued (0 if none). */
+  queueAge: number;
+  /** Tab has a backend session id to mirror. */
+  hasSessionId: boolean;
+  /** Backend mirror reports state === 'streaming' for this tab's session. */
+  backendIsStreaming: boolean;
+  /** Backend mirror's reported state string (e.g. 'cold','idle','streaming',
+   *  'waiting_input'), or undefined if the session is missing/evicted. */
+  reportedState: string | undefined;
+  /** ms since the tab's reconcile stream-start stamp (for the active-state cap). */
+  activeGuardAge: number;
+  /** Reconcile-owned stamp of when the stuck condition was first observed. */
+  idleStreamingSince: number | undefined;
+  /** Current time (injected for deterministic tests). */
+  now: number;
+  /** Queue immunity window (ms). Default 60s. */
+  queueImmunityMs?: number;
+  /** Settle window before force-clear (ms). Default 30s. */
+  settleMs?: number;
+  /** Cap on the active-state guard (ms) so a lost waiting_input can't hang
+   *  forever. Default 120min. */
+  activeGuardMaxMs?: number;
+}
+
+/** Verdict for the reconcile loop's stuck-spinner path.
+ *  - 'reset-and-skip': condition does NOT hold — clear the backstop clock, skip.
+ *  - 'wait-settle': stuck but within the settle window — keep the clock, skip
+ *    (caller stamps idleStreamingSince if undefined).
+ *  - 'force-clear': stuck past the settle window — force endStreaming. */
+export type ForceClearVerdict = 'reset-and-skip' | 'wait-settle' | 'force-clear';
+
+/**
+ * Decide whether the reconcile loop should force-clear a tab's spinner.
+ *
+ * INVARIANT (the one this exists to protect): a tab whose backend is genuinely
+ * streaming — i.e. a normal warm IDLE→streaming resume, a live long turn — must
+ * NEVER be force-cleared. `backendIsStreaming` (and the active-state guard for
+ * waiting_input) short-circuit to 'reset-and-skip' before any settle/clear path.
+ *
+ * Faithful extraction of the prior inline logic (order preserved):
+ *   drain → queue(<60s) → no-sid → backend-streaming → active-state(capped)
+ *   → settle-window → force-clear.
+ */
+export function forceClearStreamVerdict(input: ForceClearStreamInput): ForceClearVerdict {
+  const {
+    drainPending, hasQueuedMessage, queueAge, hasSessionId,
+    backendIsStreaming, reportedState, activeGuardAge,
+    idleStreamingSince, now,
+    queueImmunityMs = 60_000, settleMs = 30_000, activeGuardMaxMs = 7_200_000,
+  } = input;
+
+  // Drain gap / fresh queue / no session = intentional or unknown, never stuck.
+  if (drainPending) return 'reset-and-skip';
+  if (hasQueuedMessage && queueAge < queueImmunityMs) return 'reset-and-skip';
+  if (!hasSessionId) return 'reset-and-skip';
+
+  // Backend genuinely streaming → the spinner is CORRECT. Never clear.
+  if (backendIsStreaming) return 'reset-and-skip';
+
+  // Active backend states (subprocess alive + working) are exempt, time-capped
+  // so a lost waiting_input event can't hang the spinner forever.
+  const ACTIVE_BACKEND_STATES = new Set(['waiting_input', 'streaming']);
+  if (reportedState && ACTIVE_BACKEND_STATES.has(reportedState)
+      && activeGuardAge < activeGuardMaxMs) {
+    return 'reset-and-skip';
+  }
+
+  // Stuck condition holds (frontend streaming, backend not). Honor the settle
+  // window anchored to the reconcile-owned stamp.
+  const streamAge = idleStreamingSince === undefined ? 0 : now - idleStreamingSince;
+  if (streamAge < settleMs) return 'wait-settle';
+  return 'force-clear';
+}

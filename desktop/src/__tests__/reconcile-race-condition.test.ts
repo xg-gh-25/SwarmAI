@@ -404,12 +404,20 @@ describe('Reconcile force-clear — reconcile-owned backstop immune to reconnect
       resolve(here, '../hooks/useChatStreamingLifecycle.ts'),
       'utf8',
     );
-    // The force-clear backstop MUST compute streamAge from the reconcile-owned
-    // clock, NOT from any setIsStreaming-written clock.
-    expect(src).toMatch(/const streamAge = Date\.now\(\)\s*-\s*tabState\._idleStreamingSince/);
-    // Negative guard: the backstop must NOT be anchored to a re-armable clock.
-    expect(src).not.toMatch(/const streamAge = Date\.now\(\)\s*-\s*\(tabState\.streamStartTime/);
-    expect(src).not.toMatch(/const streamAge = Date\.now\(\)\s*-\s*\(tabState\._reconcileStreamStart/);
+    // The force-clear decision is extracted to forceClearStreamVerdict (pure,
+    // test-locked in streaming-guards.test.ts). The hook MUST feed it the
+    // reconcile-owned clock — NOT a setIsStreaming-written, re-armable one.
+    expect(src).toMatch(/idleStreamingSince:\s*tabState\._idleStreamingSince/);
+    // Negative guard: the clock fed in must NOT be a re-armable one.
+    expect(src).not.toMatch(/idleStreamingSince:\s*tabState\.streamStartTime/);
+    expect(src).not.toMatch(/idleStreamingSince:\s*tabState\._reconcileStreamStart/);
+    // And the deadline math itself (now in the extracted pure fn) MUST derive
+    // streamAge from idleStreamingSince — locking the invariant where it lives.
+    const guardsSrc = readFileSync(
+      resolve(here, '../hooks/streaming-guards.ts'),
+      'utf8',
+    );
+    expect(guardsSrc).toMatch(/streamAge =\s*idleStreamingSince === undefined\s*\?\s*0\s*:\s*now - idleStreamingSince/);
     // The clock must be stamped once when stuck is first observed.
     expect(src).toMatch(/tabState\._idleStreamingSince === undefined/);
     // Turn-boundary reset (adversarial HIGH #4): the result handler must clear

@@ -17,7 +17,9 @@ import {
   shouldResurfaceQuestion,
   computeDrainRetirement,
   shouldArmSpinnerFromBackend,
+  forceClearStreamVerdict,
   type QueueGuardState,
+  type ForceClearStreamInput,
 } from '../streaming-guards';
 
 const idle: QueueGuardState = {
@@ -441,5 +443,86 @@ describe('shouldArmSpinnerFromBackend (symmetric reconcile: backend streaming �
     expect(shouldArmSpinnerFromBackend({
       ...base, streamClearedAt: base.now - 12_001,
     })).toBe(true);
+  });
+});
+
+
+// ── forceClearStreamVerdict: the IDLE / warm-resume protection net ────────────
+//
+// THE INVARIANT under test: the reconcile loop must NEVER force-clear a tab
+// whose backend is genuinely streaming (normal warm IDLE→streaming resume, a
+// live long turn). A force-clear there is the recurring "spinner vanished while
+// the backend was still working" regression. These tests lock that BEFORE any
+// change to the reconcile/cold-resume behavior — if a future edit makes the
+// function clear a streaming/warm tab, the first test goes red.
+describe('forceClearStreamVerdict — IDLE/warm-resume protection', () => {
+  // A tab that has been "stuck" long enough to clear IF the condition held.
+  const base: ForceClearStreamInput = {
+    drainPending: false,
+    hasQueuedMessage: false,
+    queueAge: 0,
+    hasSessionId: true,
+    backendIsStreaming: false,
+    reportedState: 'idle',
+    activeGuardAge: 0,
+    idleStreamingSince: 1_000,     // stamped long ago
+    now: 1_000_000,                // far past the 30s settle window
+  };
+
+  it('NEVER force-clears when the backend is genuinely streaming (warm IDLE resume)', () => {
+    // The load-bearing invariant: backend streaming === spinner is correct.
+    expect(
+      forceClearStreamVerdict({ ...base, backendIsStreaming: true, reportedState: 'streaming' }),
+    ).toBe('reset-and-skip');
+  });
+
+  it('NEVER force-clears while the backend is waiting_input (within the cap)', () => {
+    expect(
+      forceClearStreamVerdict({ ...base, reportedState: 'waiting_input' }),
+    ).toBe('reset-and-skip');
+  });
+
+  it('NEVER force-clears during a brief drain gap', () => {
+    expect(forceClearStreamVerdict({ ...base, drainPending: true })).toBe('reset-and-skip');
+  });
+
+  it('NEVER force-clears with a fresh queued message (<60s)', () => {
+    expect(
+      forceClearStreamVerdict({ ...base, hasQueuedMessage: true, queueAge: 10_000 }),
+    ).toBe('reset-and-skip');
+  });
+
+  it('skips (no clear) when the tab has no backend session id', () => {
+    expect(forceClearStreamVerdict({ ...base, hasSessionId: false })).toBe('reset-and-skip');
+  });
+
+  it('force-clears a genuinely stuck spinner (idle backend, settled, no immunity)', () => {
+    // The legitimate purpose MUST be preserved: a stale stream still clears.
+    expect(forceClearStreamVerdict(base)).toBe('force-clear');
+  });
+
+  it('waits out the settle window before clearing (no premature clear)', () => {
+    expect(
+      forceClearStreamVerdict({ ...base, idleStreamingSince: base.now - 5_000 }),
+    ).toBe('wait-settle');
+    // undefined stamp = first observation → treat age as 0 → wait
+    expect(
+      forceClearStreamVerdict({ ...base, idleStreamingSince: undefined }),
+    ).toBe('wait-settle');
+  });
+
+  it('active-state guard expires after the cap (lost waiting_input cannot hang forever)', () => {
+    expect(
+      forceClearStreamVerdict({ ...base, reportedState: 'waiting_input', activeGuardAge: 7_200_001 }),
+    ).toBe('force-clear');
+  });
+
+  // CURRENT (pre-fix) behavior on a COLD-resume spawn window. Documented here so
+  // the upcoming cold-resume fix is a VISIBLE, intentional change to this case
+  // (cold should become exempt while a resume is genuinely in progress). Today
+  // it force-clears, which is the "resume needs two sends / spinner vanished"
+  // bug — NOT yet fixed by this protection-net commit.
+  it('DOCUMENTS current cold-resume behavior: cold + settled → force-clear (the bug)', () => {
+    expect(forceClearStreamVerdict({ ...base, reportedState: 'cold' })).toBe('force-clear');
   });
 });

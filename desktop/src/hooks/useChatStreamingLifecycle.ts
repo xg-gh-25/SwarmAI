@@ -48,7 +48,7 @@ import type {
   CompactionGuardEvent,
 } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
-import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurfaceQuestion, computeDrainRetirement, shouldArmSpinnerFromBackend } from './streaming-guards';
+import { queuedMessageFromRetryPayload, retryPayloadHasAttachments, shouldResurfaceQuestion, computeDrainRetirement, shouldArmSpinnerFromBackend, forceClearStreamVerdict } from './streaming-guards';
 import { chatService } from '../services/chat';
 import { messageStoreRegistry } from '../stores/MessageStore';
 import type { UnifiedTab } from './useUnifiedTabState';
@@ -1432,122 +1432,94 @@ export function useChatStreamingLifecycle(
           // Without this override, queuedMessage creates a deadlock:
           // streaming(wrong) → queue msg → reconcile skips → never clears.
           const queueAge = tabState._queuedAt ? Date.now() - tabState._queuedAt : 0;
-          // Immunity guards: a drain/queue gap is NOT the stuck condition, so the
-          // backstop clock must NOT keep aging through it (else the first poll
-          // after the immunity window force-clears with no settle window — adversarial
-          // MED #2). Reset it here so a genuine stall AFTER the gap restarts the 30s
-          // window from a fresh stamp.
-          if (tabState.drainPending) { tabState._idleStreamingSince = undefined; continue; }  // drain is always brief (<1s)
-          if (tabState.queuedMessage && queueAge < 60_000) { tabState._idleStreamingSince = undefined; continue; }
-
           const sid = tabState.sessionId;
           if (!sid) { tabState._idleStreamingSince = undefined; continue; }
-
           const backendState = states[sid];
-          // Missing from backend = session GC'd/evicted = certainly not streaming.
-          // Treat as idle (adversarial finding #4: don't skip unknown sessions).
-          const backendIsStreaming = backendState?.streaming ?? false;
 
-          if (!backendIsStreaming) {
-            // ── Active-state guard (2026-06-20) ─────────────────────────
-            // Backend states that mean "subprocess is alive and doing work"
-            // must NEVER trigger force-clear. waiting_input = permission
-            // prompt pending; streaming = actively generating (defense-in-depth,
-            // backendIsStreaming should already be true but guard anyway).
-            // Time-capped at 120min to prevent infinite stuck state if the
-            // waiting_input SSE event was lost and user never answers.
-            const ACTIVE_BACKEND_STATES = new Set(['waiting_input', 'streaming']);
-            const reportedState = backendState?.state;
-            const activeGuardAge = Date.now() - (tabState._reconcileStreamStart ?? 0);
-            if (reportedState && ACTIVE_BACKEND_STATES.has(reportedState) && activeGuardAge < 7_200_000) {
-              // Subprocess alive — not a stale stream. The stuck condition does
-              // NOT hold, so clear the backstop clock: a genuinely-active backend
-              // (e.g. a long deep-research tool turn that reports streaming
-              // between tool calls) must get a FRESH grace window each time it
-              // is observed active, never accumulate toward force-clear.
-              tabState._idleStreamingSince = undefined;
-              continue;
-            }
+          // Decision extracted to forceClearStreamVerdict (pure, test-locked in
+          // streaming-guards.test.ts: "backend streaming → NEVER force-clear" is
+          // the load-bearing invariant). The hook only APPLIES side effects per
+          // verdict — the stuck-vs-live judgement lives in the tested function.
+          const verdict = forceClearStreamVerdict({
+            drainPending: !!tabState.drainPending,
+            hasQueuedMessage: !!tabState.queuedMessage,
+            queueAge,
+            hasSessionId: true,
+            backendIsStreaming: backendState?.streaming ?? false,
+            reportedState: backendState?.state,
+            activeGuardAge: Date.now() - (tabState._reconcileStreamStart ?? 0),
+            idleStreamingSince: tabState._idleStreamingSince,
+            now: Date.now(),
+          });
 
-            // ── Hard-deadline backstop — RECONCILE-OWNED clock (re-arm-immune) ──
-            // The stuck condition now holds: frontend=streaming, backend NOT
-            // streaming, and NOT an active backend state. Anchor the deadline to
-            // a timestamp OWNED BY THIS POLL (_idleStreamingSince), stamped the
-            // first time we observe the condition and cleared above whenever it
-            // doesn't hold.
-            //
-            // Why NOT streamStartTime or _reconcileStreamStart: BOTH are written
-            // by setIsStreaming, which the reconnect machinery churns. A daemon
-            // restart mid-thinking emits error → setIsStreaming(false) (clears
-            // streamStartTime) → reconnecting → setIsStreaming(true) (re-arms
-            // BOTH clocks). Anchoring to either lets a restart loop postpone the
-            // deadline forever (observed: "Thinking…" stuck at 6m16s). This clock
-            // is touched ONLY by the reconcile loop, so no reconnect/heal-grace/
-            // elapsed-timer write can reset it — the deadline always advances.
+          if (verdict === 'reset-and-skip') {
+            // Condition does NOT hold (drain gap / fresh queue / backend
+            // streaming / active state). Clear the reconcile-owned backstop
+            // clock so a later genuine stall restarts the 30s window fresh.
+            tabState._idleStreamingSince = undefined;
+            continue;
+          }
+          if (verdict === 'wait-settle') {
+            // Stuck but within the settle window — stamp on first observation,
+            // keep aging the clock (touched ONLY here, so reconnect/heal churn
+            // can't postpone the deadline forever).
             if (tabState._idleStreamingSince === undefined) {
               tabState._idleStreamingSince = Date.now();
             }
-            const streamAge = Date.now() - tabState._idleStreamingSince;
-            if (streamAge < 30_000) continue;  // too fresh — let it settle (was 10s, raised to 30s to avoid killing pipeline tool calls)
-
-            console.warn(
-              '[StreamReconcile] Backend idle but tab streaming — forcing clear',
-              { tabId, sessionId: sid, backendState: backendState?.state ?? 'evicted',
-                hasQueuedMessage: !!tabState.queuedMessage },
-            );
-            // Use atomic primitive — handles flag + Set + re-render.
-            // Direct mutation here was the root cause of background-tab hang.
-            setIsStreaming(false, tabId);
-            tabState.isReconnecting = false;
-            tabState.isResuming = false;
-            tabState._idleStreamingSince = undefined;  // condition resolved
-            if (tabState._resumeTimeoutId) { clearTimeout(tabState._resumeTimeoutId); tabState._resumeTimeoutId = undefined; }
-            anyCleared = true;
-
-            // Auto-drain: if a queued message was waiting (deadlock scenario),
-            // trigger drain now that streaming is cleared. Without this, the
-            // user is unstuck (can type) but the already-queued message stays unsent.
-            if (tabState.queuedMessage && deps.onDrainQueue) {
-              // Schedule drain after a tick to let React state settle
-              setTimeout(() => { if (!cancelled) deps.onDrainQueue?.(tabId); }, 100);
-            }
-
-            // Sync messages from DB for this tab (content is there, event was lost).
-            // Phase-gated via MessageStore.reconcile(): preserves local-only
-            // messages (queued, synthetic) and respects streaming gate.
-            chatService.invalidateMessageCache(sid);
-            chatService.getSessionMessages(sid).then((msgs) => {
-              if (cancelled) return;
-              // Route through store — reconcile handles:
-              // - Dedup by ID (no duplicates)
-              // - Preserve local-only queued messages natively
-              // - Phase gate (NO-OP if streaming restarted between fetch and resolve)
-              const store = messageStoreRegistry.getOrCreate(tabId, { sessionId: sid });
-              store.reconcile(msgs);
-              // Only sync back if reconcile actually executed (not queued).
-              // If streaming restarted, reconcile queued a thunk — don't overwrite
-              // live streaming messages with stale store snapshot.
-              if (store.phase === 'idle') {
-                if (tabId === activeTabIdRef.current) {
-                  setMessages(() => store.messages);
-                } else {
-                  tabState.messages = store.messages;
-                }
-                // Recovery succeeded — clear any prior failure flag.
-                tabState._dbReconcileFailed = false;
-              }
-            }).catch((err) => {
-              console.warn('[useChatStreamingLifecycle] Recovery sync failed:', err);
-              // Backend unreachable — the force-clear left a frozen partial.
-              // Flag for retry; the backend-recovered handler re-reconciles
-              // from DB once the daemon is back.
-              tabState._dbReconcileFailed = true;
-            });
-          } else {
-            // Backend IS streaming — the stuck condition does not hold. Clear the
-            // backstop clock so a later genuine stall starts its 30s window fresh.
-            tabState._idleStreamingSince = undefined;
+            continue;
           }
+
+          // verdict === 'force-clear': frontend=streaming, backend idle, settled.
+          console.warn(
+            '[StreamReconcile] Backend idle but tab streaming — forcing clear',
+            { tabId, sessionId: sid, backendState: backendState?.state ?? 'evicted',
+              hasQueuedMessage: !!tabState.queuedMessage },
+          );
+          // Use atomic primitive — handles flag + Set + re-render.
+          // Direct mutation here was the root cause of background-tab hang.
+          setIsStreaming(false, tabId);
+          tabState.isReconnecting = false;
+          tabState.isResuming = false;
+          tabState._idleStreamingSince = undefined;  // condition resolved
+          if (tabState._resumeTimeoutId) { clearTimeout(tabState._resumeTimeoutId); tabState._resumeTimeoutId = undefined; }
+          anyCleared = true;
+
+          // Auto-drain: if a queued message was waiting (deadlock scenario),
+          // trigger drain now that streaming is cleared. Without this, the
+          // user is unstuck (can type) but the already-queued message stays unsent.
+          if (tabState.queuedMessage && deps.onDrainQueue) {
+            // Schedule drain after a tick to let React state settle
+            setTimeout(() => { if (!cancelled) deps.onDrainQueue?.(tabId); }, 100);
+          }
+
+          // Sync messages from DB for this tab (content is there, event was lost).
+          // Phase-gated via MessageStore.reconcile(): preserves local-only
+          // messages (queued, synthetic) and respects streaming gate.
+          chatService.invalidateMessageCache(sid);
+          chatService.getSessionMessages(sid).then((msgs) => {
+            if (cancelled) return;
+            // Route through store — reconcile handles dedup by ID, preserves
+            // local-only queued messages, and phase-gates (NO-OP if streaming
+            // restarted between fetch and resolve).
+            const store = messageStoreRegistry.getOrCreate(tabId, { sessionId: sid });
+            store.reconcile(msgs);
+            // Only sync back if reconcile actually executed (not queued).
+            if (store.phase === 'idle') {
+              if (tabId === activeTabIdRef.current) {
+                setMessages(() => store.messages);
+              } else {
+                tabState.messages = store.messages;
+              }
+              // Recovery succeeded — clear any prior failure flag.
+              tabState._dbReconcileFailed = false;
+            }
+          }).catch((err) => {
+            console.warn('[useChatStreamingLifecycle] Recovery sync failed:', err);
+            // Backend unreachable — the force-clear left a frozen partial.
+            // Flag for retry; the backend-recovered handler re-reconciles
+            // from DB once the daemon is back.
+            tabState._dbReconcileFailed = true;
+          });
         }
 
         // Force re-render if any tab was cleared
