@@ -102,8 +102,27 @@ SOFT_COMPACT_PCT: int = 60
 LONG_TURN_HEARTBEAT_S: float = 60.0
 
 # Cooldown between context-ring SOFT compactions (seconds). Prevents back-to-back
-# compaction if context% stays high right after a compact.
+# compaction if context% stays high right after a SUCCESSFUL compact.
 SOFT_COMPACT_COOLDOWN: float = 180.0
+
+# Hang ceiling for the SOFT (never-kill) compaction path (run_37822fae). A real
+# LLM /compact of ~600K tokens (SOFT_COMPACT_PCT=60% of a 1M window) legitimately
+# takes well over 30s — the old 30s bound was COPIED from the proactive-restart
+# KILL path (lifecycle_manager), where "proceed to kill on timeout" justifies a
+# tight bound. On the soft path there is no kill, so a tight bound only abandons
+# a slow-but-progressing compact mid-flight, leaving the in-flight /compact in a
+# half-state. This ceiling exists ONLY to bound a genuine HANG (SDK deadlock), not
+# to guillotine a slow compact. The soft path is awaited in the post-turn IDLE
+# hook (user not blocked), so a generous ceiling is safe.
+SOFT_COMPACT_HANG_S: float = 300.0
+
+# Retry backoff after a FAILED/timed-out soft compaction (seconds). Distinct from
+# SOFT_COMPACT_COOLDOWN (the post-SUCCESS cooldown): on failure we must NOT stamp
+# the full 180s success-cooldown (that was the bug — a timed-out compact marked
+# "handled" and wouldn't retry for 180s while context kept growing). A short
+# backoff retries soon (fail-safe: context left fully intact, try again shortly)
+# without hammering a persistently-failing compact every turn.
+SOFT_COMPACT_FAIL_BACKOFF: float = 30.0
 
 # Module-level lock that serializes subprocess spawn operations.
 # Held during _configure_claude_environment + wrapper.__aenter__() to
@@ -509,6 +528,17 @@ class SessionUnit:
         # LifecycleManager checks this to detect stuck streams that
         # never produced a ResultMessage (e.g. SDK hang, Bedrock timeout).
         self._last_event_time: Optional[float] = None
+        # Progress clock (distinct from _last_event_time): advanced ONLY on real
+        # content progress (text/thinking deltas, AssistantMessage, sub-agent
+        # tool_result), NEVER on framing / SystemMessage(init) / sub-agent noise.
+        # streaming_stall_seconds reads THIS so the lifecycle watchdog measures
+        # "content stopped flowing" not "the SDK pipe went quiet" — the latter
+        # stays fresh on non-content messages and made real freezes undetectable
+        # (假 streaming → spinner pinned + _streaming_count slot leak). The
+        # any-event _last_event_time is left for the PID watchdog / HealthSensor
+        # / dumb-spawn discriminator, whose "any event = subprocess alive"
+        # semantics are correct and must stay wide.
+        self._last_progress_time: Optional[float] = None
         self._streaming_start_time: Optional[float] = None
 
         # ── Compaction loop guard (3-layer anti-loop) ──────────────
@@ -853,6 +883,10 @@ class SessionUnit:
             _stream_entry_ts = time.time()
             self._streaming_start_time = _stream_entry_ts
             self._last_event_time = _stream_entry_ts
+            # Progress clock starts unset: until the first REAL content event,
+            # streaming_stall_seconds falls back to _streaming_start_time, which
+            # preserves the dumb-spawn "no token since spawn" detection.
+            self._last_progress_time = None
             # Root 2 / AC5: fresh heartbeat throttle for this turn.
             self._last_heartbeat_elapsed = 0.0
             # Fresh tool-hang episode for this turn (run_fb6e94a9).
@@ -865,6 +899,7 @@ class SessionUnit:
         if old_state == SessionState.STREAMING and new_state != SessionState.STREAMING:
             self._streaming_start_time = None
             self._last_event_time = None
+            self._last_progress_time = None
 
         # Stop PID watchdog when leaving any watchable state to a non-watchable one.
         # Watchable = STREAMING, WAITING_INPUT. Non-watchable = IDLE, COLD, DEAD.
@@ -3153,20 +3188,52 @@ class SessionUnit:
             "tokens=%d window=%d — compacting (no kill)",
             self.session_id, pct, tokens, window,
         )
+        # Re-entrancy stamp BEFORE awaiting (Gate-2 F5, run_37822fae): compact()
+        # stays IDLE for its whole (long) duration and does NOT _transition, so the
+        # state gate above provides NO mutual exclusion. Stamp the cooldown now so a
+        # concurrent post-turn hook (or a racing manual /compact) is cooldown-blocked
+        # and can't fire a second /compact at the same subprocess. Corrected below
+        # to the fail-backoff if this attempt does not succeed.
+        self._last_soft_compact = time.monotonic()
+
+        # Bound a genuine HANG only (run_37822fae). The old 30s was copied from
+        # the proactive-restart KILL path; on this soft (never-kill) path it only
+        # guillotined a slow-but-progressing compact. SOFT_COMPACT_HANG_S is
+        # generous (the post-turn hook isn't user-blocking) so a real LLM summary
+        # of ~600K tokens can COMPLETE — carry task-needed context across.
+        succeeded = False
         try:
-            await asyncio.wait_for(self.compact(), timeout=30.0)
+            result = await asyncio.wait_for(
+                self.compact(), timeout=SOFT_COMPACT_HANG_S
+            )
+            # Gate-2 F1: compact() SWALLOWS failures and returns {"success": False}
+            # (no subprocess / not IDLE / internal SDK error) — it does NOT raise.
+            # "did not raise" ≠ "compacted". Inspect the return value, else a
+            # logical failure would stamp the full success cooldown = the very bug
+            # this run fixes, for the MOST COMMON failure path.
+            succeeded = bool(result and result.get("success"))
         except asyncio.TimeoutError:
             logger.warning(
-                "session_unit.context_soft_compact timed out session_id=%s",
-                self.session_id,
+                "session_unit.context_soft_compact timed out (>%.0fs) session_id=%s",
+                SOFT_COMPACT_HANG_S, self.session_id,
             )
         except Exception as exc:
             logger.warning(
                 "session_unit.context_soft_compact failed session_id=%s: %s",
                 self.session_id, exc,
             )
-        # Stamp cooldown even on failure — don't hammer a failing compact.
-        self._last_soft_compact = time.monotonic()
+        # Fail-SAFE cooldown (run_37822fae): SUCCESS keeps the full
+        # SOFT_COMPACT_COOLDOWN (already stamped above). On FAILURE/timeout the
+        # context is in an unknown-but-recoverable state (the in-flight /compact may
+        # have completed, partially completed, or not — wait_for cancels the WAIT,
+        # not the subprocess-side command). Stamping the full cooldown was the bug
+        # (marked "handled", no retry for 180s while context grew). Back-date so
+        # only SOFT_COMPACT_FAIL_BACKOFF remains: a near-term retry reconciles the
+        # state without hammering a persistently-failing compact every turn.
+        if not succeeded:
+            self._last_soft_compact = time.monotonic() - max(
+                0.0, SOFT_COMPACT_COOLDOWN - SOFT_COMPACT_FAIL_BACKOFF
+            )
 
     def _should_inject_hard_floor_wrap(self) -> bool:
         """AC3 (G2) predicate: should a desktop hard-floor wrap-up be injected?
@@ -3776,19 +3843,28 @@ class SessionUnit:
 
     @property
     def streaming_stall_seconds(self) -> Optional[float]:
-        """Seconds since last SDK event while in STREAMING state.
+        """Seconds since the last REAL CONTENT PROGRESS while STREAMING.
 
-        Returns ``None`` if not currently streaming or no events yet.
-        Used by ``LifecycleManager`` to detect stuck streams.
+        Reads ``_last_progress_time`` (advanced only on text/thinking deltas,
+        AssistantMessage, sub-agent tool_result) — NOT ``_last_event_time``
+        (which any SDK message refreshes). This is the discriminator that makes
+        the lifecycle watchdog measure "content stopped" instead of "pipe went
+        quiet": a frozen turn whose subprocess keeps emitting framing/non-content
+        messages would keep _last_event_time fresh forever (假 streaming →
+        spinner pinned + slot leak); the progress clock goes stale correctly.
+
+        Falls back to ``_streaming_start_time`` before the first progress event
+        (preserves dumb-spawn "no token since spawn" detection). Returns ``None``
+        if not streaming.
         """
         if self.state != SessionState.STREAMING:
             return None
-        if self._last_event_time is None:
-            # Streaming but no events yet — measure from streaming start
+        if self._last_progress_time is None:
+            # No real progress yet — measure from streaming start (dumb-spawn).
             if self._streaming_start_time is not None:
                 return time.time() - self._streaming_start_time
             return None
-        return time.time() - self._last_event_time
+        return time.time() - self._last_progress_time
 
     # Circuit breaker threshold for force_unstick_streaming.
     # After this many consecutive unstick attempts without a successful
