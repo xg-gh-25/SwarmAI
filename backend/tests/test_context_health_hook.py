@@ -1058,68 +1058,8 @@ class TestUsageDecayGate:
         meta = _json.loads((ctx / ".memory-usage-meta.json").read_text())
         assert meta["last_decay"] == date.today().isoformat()
 
-
-# ── M1 backfill convergence (run_e9b15722) ──
-#
-# The OLD recovery loop drained LIMIT 10 orphans serially per session → with
-# ~425 orphans it never converged (daemon logged "recovered=10" every run, vec
-# coverage frozen ~5% for months). The fix drains _RECOVERY_DRAIN_BUDGET (200)
-# CONCURRENTLY via embed_batch. This test proves a single sync pass clears far
-# more than the old 10 — i.e. it actually converges.
-
-def test_memory_embedding_recovery_converges(tmp_path):
-    """A single _sync_memory_embeddings pass must drain the WHOLE orphan backlog
-    (up to _RECOVERY_DRAIN_BUDGET), not just 10 — proving convergence.
-
-    Drives the REAL method: real MEMORY.md content (so sync_from_memory KEEPS the
-    entries instead of purging them as stale), embed_text returns None during sync
-    (leaving them as orphans, exactly the prod 'embed_failed' state), then the
-    recovery loop must embed ALL of them concurrently via embed_batch. The OLD
-    LIMIT-10 loop would leave N-10 orphans; the fix clears all N.
-    """
-    import sqlite3
-    import core.vec_db as vdb
-    from unittest.mock import patch, MagicMock
-    from hooks.context_health_hook import ContextHealthHook, _RECOVERY_DRAIN_BUDGET
-
-    db = tmp_path / "data.db"
-
-    # N > old LIMIT 10 to prove convergence. Build REAL MEMORY.md content so
-    # sync_from_memory parses + keeps these entries (empty content would purge them).
-    N = 50
-    assert N <= _RECOVERY_DRAIN_BUDGET, "test N must fit one drain budget"
-    lines = ["## Pitfalls", ""]
-    for i in range(N):
-        lines.append(f"- 2026-06-{(i % 27) + 1:02d}: **conv entry {i}** — orphan entry number {i} content for convergence test")
-    memory_content = "\n".join(lines) + "\n"
-
-    # embed_text returns None (sync leaves entries as orphans — the prod
-    # embed_failed state). embed_batch SUCCEEDS (the recovery drain path).
-    fake_client = MagicMock()
-    fake_client.embed_text.side_effect = lambda t: None
-    fake_client.embed_batch.side_effect = lambda texts, max_concurrent=5: [[0.01] * 1024 for _ in texts]
-
-    hook = ContextHealthHook()
-    with patch.object(vdb, "_DEFAULT_DB_PATH", db), \
-         patch("core.embedding_client.EmbeddingClient", return_value=fake_client):
-        hook._sync_memory_embeddings(memory_content)
-
-    # Verify: ALL N orphans now have vectors (drained in ONE pass, not 10).
-    conn = sqlite3.connect(str(db))
-    conn.enable_load_extension(True)
-    import sqlite_vec
-    sqlite_vec.load(conn)
-    conn.enable_load_extension(False)
-    entries = conn.execute("SELECT COUNT(*) FROM memory_entries").fetchone()[0]
-    vec = conn.execute("SELECT COUNT(*) FROM memory_vec").fetchone()[0]
-    orphan = conn.execute(
-        "SELECT COUNT(*) FROM memory_entries me LEFT JOIN memory_vec mv "
-        "ON me.key = mv.key WHERE mv.key IS NULL"
-    ).fetchone()[0]
-    conn.close()
-
-    assert entries == N, f"sync should keep all {N} entries, got {entries}"
-    assert vec == N, f"expected all {N} orphans embedded in one pass, got {vec} (old bug: capped at 10)"
-    assert orphan == 0, f"expected 0 orphans after convergence, got {orphan}"
-    # embed_batch must have been the drain path (not N serial embed_text calls).
-    assert fake_client.embed_batch.called, "recovery must use concurrent embed_batch, not serial"
+# NOTE: test_memory_embedding_recovery_converges (M1 backfill convergence,
+# run_e9b15722) was RETIRED in the pure-filesystem READ-line finalize
+# (run_2f621986, design 2026-06-28 §3): _sync_memory_embeddings and the
+# memory_vec writer it drove were physically removed — recall is keyword/FTS5
+# only. There is no embedding-orphan backlog to converge anymore.

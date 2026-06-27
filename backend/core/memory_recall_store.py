@@ -1,24 +1,20 @@
 """MemoryRecallStore — adapter exposing MEMORY.md entries to RecallEngine.
 
 Why this exists (run_bbd79e84, Gate-1 finding 3):
-    RecallEngine.search() calls each store as
-        store.fts5_search(query, limit=top_k)        -> list[dict]
-        store.vector_search(query_embedding, top_k)  -> list[dict]
+    RecallEngine.search() calls each store's ``fts5_search(query, limit)``
     and consumes dicts with keys ``id / source_file / heading / content /
-    fts_rank`` (keyword) and ``id / content / vector_score`` (vector).
+    fts_rank``. This adapter gives Memory a REAL keyword leg — memory has no
+    FTS5 table, so keyword search is a LIKE scan over ``memory_entries``
+    (title + keywords + full_text). For a ~400-entry table this is
+    sub-millisecond and is the genuine recall value.
 
-    MemoryEmbeddingStore does NOT match that contract: it has no
-    ``fts5_search`` at all, and its ``vector_search`` takes (text, embed_fn)
-    and returns ``ScoredEntry`` objects — not the dict shape. Wiring it directly
-    into ``additional_stores`` would be silently swallowed by RecallEngine's
-    blanket try/except and contribute ZERO recall while *looking* wired (the
-    exact "empty-but-looks-wired" half-product class).
-
-    This adapter bridges the gap. It also gives Memory a REAL keyword leg —
-    memory has no FTS5 table, so keyword search is a LIKE scan over
-    ``memory_entries`` (title + keywords + full_text). For a ~400-entry table
-    this is sub-millisecond and is the genuine value today (memory_vec is only
-    ~5% populated, so the vector leg helps few queries until backfill).
+    NOTE (run_2f621986, design 2026-06-28 §3): the vector leg is GONE. This
+    store once also implemented ``vector_search`` over memory_vec, but the
+    pure-filesystem READ-line finalize removed every recall vector path (no
+    recall query embeds). RecallEngine only calls a store's vector_search when
+    query_embedding is not None, and every production caller passes
+    allow_embed=False → embed_fn=None → that branch never fires. Recall is
+    keyword/FTS5 only. fts5_search below is the sole live method.
 """
 
 from __future__ import annotations
@@ -39,8 +35,9 @@ _WORD_RE = re.compile(r"[A-Za-z0-9一-鿿]+")
 class MemoryRecallStore:
     """RecallEngine-compatible store over MEMORY.md entries (memory_entries table).
 
-    Implements the two methods RecallEngine.search() calls, returning the dict
-    contract it consumes. No FTS5 table required — keyword leg is a LIKE scan.
+    Implements the keyword leg (fts5_search) RecallEngine.search() calls,
+    returning the dict contract it consumes. No FTS5 table required — keyword
+    leg is a LIKE scan. (The vector leg was removed — see module docstring.)
     """
 
     def __init__(self, conn: sqlite3.Connection):
@@ -100,55 +97,13 @@ class MemoryRecallStore:
         results.sort(key=lambda r: r["fts_rank"])
         return results[:limit]
 
-    def vector_search(self, query_embedding: list[float], top_k: int = 20) -> list[dict]:
-        """Vector search over memory_vec, returned in RecallEngine's dict contract.
-
-        Wraps MemoryEmbeddingStore.vector_search_raw (returns (key, distance))
-        and joins memory_entries for content/heading. ``query_embedding`` is a
-        raw vector (RecallEngine already embedded the query), matching the
-        TranscriptStore signature — NOT MemoryEmbeddingStore.vector_search's
-        (text, embed_fn) signature.
-        """
-        if query_embedding is None or not self._table_exists():
-            return []
-
-        try:
-            from .memory_embeddings import MemoryEmbeddingStore
-            raw = MemoryEmbeddingStore(self._conn).vector_search_raw(query_embedding, top_k)
-        except Exception as exc:
-            logger.debug("MemoryRecallStore.vector_search raw failed: %s", exc)
-            return []
-
-        if not raw:
-            return []
-
-        # Join entry metadata for the matched keys.
-        keys = [k for k, _ in raw]
-        placeholders = ",".join("?" * len(keys))
-        meta: dict[str, tuple] = {}
-        try:
-            for key, section, title, full_text in self._conn.execute(
-                f"SELECT key, section, title, full_text FROM memory_entries "
-                f"WHERE key IN ({placeholders})",
-                keys,
-            ).fetchall():
-                meta[key] = (section, title, full_text)
-        except sqlite3.Error as exc:
-            logger.debug("MemoryRecallStore.vector_search meta join failed: %s", exc)
-            return []
-
-        results: list[dict] = []
-        for key, distance in raw:
-            if key not in meta:
-                continue
-            section, title, full_text = meta[key]
-            # sqlite-vec cosine distance = 2*(1-cos_sim) → similarity = 1 - dist/2.
-            similarity = max(0.0, 1.0 - distance / 2.0)
-            results.append({
-                "id": key,
-                "source_file": _SOURCE_FILE,
-                "heading": section or "",
-                "content": (full_text or title or "").strip(),
-                "vector_score": similarity,
-            })
-        return results
+    # NOTE: vector_search REMOVED (pure-filesystem READ-line finalize, run_2f621986,
+    # design 2026-06-28 §3). The memory vector leg was dead in production —
+    # RecallEngine only calls vector_search when query_embedding is not None, and
+    # every production caller passes allow_embed=False → embed_fn=None → no
+    # embedding → vector_search never reached. This store's LIVE value is the
+    # keyword leg (fts5_search above): MEMORY.md has no FTS5 table, so the LIKE
+    # scan is its only real keyword recall. That stays. RecallEngine never reaches
+    # this store's vector leg: search() only calls store.vector_search when
+    # query_embedding is not None, and the call is wrapped in try/except — so a
+    # store lacking the method is doubly safe (short-circuit + caught AttributeError).

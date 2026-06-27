@@ -27,13 +27,6 @@ from core.session_hooks import HookContext
 
 logger = logging.getLogger(__name__)
 
-# Max orphaned memory entries to embed per session-close cycle (run_e9b15722).
-# Drained CONCURRENTLY (embed_batch, 5 at a time) so this clears a ~425-entry
-# backlog in ~3 cycles (425/200), then stays converged on incremental drift. The OLD value
-# was an implicit LIMIT 10 drained serially → never converged (coverage frozen
-# ~5% for months). 200 @ 5-concurrent ≈ ~20s of background hook time, bounded.
-_RECOVERY_DRAIN_BUDGET = 200
-
 
 def _is_cjk_like(c: str) -> bool:
     """Check if character is CJK-like (tokenized at ~1.5 tokens by BPE).
@@ -1853,117 +1846,23 @@ class ContextHealthHook:
                 memory_file.write_text(updated, encoding="utf-8")
                 logger.info("context_health: MEMORY.md index regenerated")
 
-            # WRITER STOPPED (pure-filesystem recall design §5.5/DoD8, 2026-06-28):
-            # the memory_vec embedding sync is no longer called. The READ side
+            # WRITER REMOVED (pure-filesystem READ-line finalize, run_2f621986,
+            # design 2026-06-28 §3): the memory_vec embedding sync method
+            # (_sync_memory_embeddings) is physically deleted. The READ side
             # removed all vector legs (no recall path embeds), so keeping this
             # writer would burn Bedrock cost writing vectors nobody reads. Memory
-            # recall is now keyword/BM25/FTS5 only. (The _sync_memory_embeddings
-            # method is retained but unused — physical removal of the method +
-            # memory_vec table is a ToDo, design §5.12.)
+            # recall is now keyword/BM25/FTS5 only.
         finally:
             flock_unlock(lock_fd)
             lock_fd.close()
 
-    def _sync_memory_embeddings(self, memory_content: str) -> None:
-        """Delta-sync MEMORY.md entries into sqlite-vec for hybrid retrieval.
-
-        Always-on: keeps memory_entries indexed regardless of MEMORY.md size.
-        Power-first (KD03) — infrastructure stays warm so selective injection
-        has zero cold-start when MEMORY.md grows, and vector search is
-        available for user recall queries even in full-injection mode.
-
-        Only re-embeds entries whose content changed (via content_hash).
-
-        Recovery: detects entries with metadata but no vector (embed_failed
-        on a prior run) and retries them. This prevents the "stuck forever"
-        state where delta-sync skips because hash matches but vector is empty.
-
-        Rate-limiting: on cold-start (>20 entries to embed), processes max 10
-        per session to avoid blocking session close. Full sync completes over
-        multiple sessions (~9 sessions for 85 entries).
-        """
-        try:
-            from core.memory_embeddings import MemoryEmbeddingStore
-            from core.embedding_client import EmbeddingClient
-            from core.vec_db import open_vec_db
-
-            with open_vec_db() as conn:
-                if conn is None:
-                    logger.warning("context_health: vec_db conn is None — sqlite-vec not available")
-                    return
-
-                store = MemoryEmbeddingStore(conn)
-                store.ensure_tables()
-
-                client = EmbeddingClient()
-                embed_failures = 0
-
-                def _safe_embed(text: str) -> list[float] | None:
-                    """Embed text, returning None on failure. Tracks failures."""
-                    nonlocal embed_failures
-                    result = client.embed_text(text)
-                    if result is None:
-                        embed_failures += 1
-                    return result
-
-                stats = store.sync_from_memory(
-                    memory_content,
-                    embed_fn=_safe_embed,
-                )
-
-                # Recovery: embed entries that have metadata but no vector
-                # (orphaned from prior failed/rate-limited embed attempts).
-                #
-                # CONVERGENCE FIX (run_e9b15722): the old code drained LIMIT 10
-                # ONE-AT-A-TIME per session. With ~425 orphans that never caught
-                # up to drift — daemon logs showed "recovered=10" EVERY run, vec
-                # coverage frozen at ~5% for months. Now we drain a much larger
-                # budget per cycle using CONCURRENT embedding (embed_batch, 5 at a
-                # time, ~45s for hundreds), so the backlog clears in 1-2 cycles and
-                # then stays converged on incremental drift. Capped at
-                # _RECOVERY_DRAIN_BUDGET to bound session-close time.
-                orphaned = conn.execute(
-                    """
-                    SELECT me.key, me.full_text FROM memory_entries me
-                    LEFT JOIN memory_vec mv ON me.key = mv.key
-                    WHERE mv.key IS NULL
-                    LIMIT ?
-                    """,
-                    (_RECOVERY_DRAIN_BUDGET,),
-                ).fetchall()
-
-                recovery_count = 0
-                if orphaned:
-                    keys = [k for k, _ in orphaned]
-                    texts = [t for _, t in orphaned]
-                    vecs = client.embed_batch(texts, max_concurrent=5)
-                    for key, vec in zip(keys, vecs):
-                        if vec is not None:
-                            store._upsert_vec(key, vec)
-                            recovery_count += 1
-                        else:
-                            embed_failures += 1
-                    if recovery_count:
-                        conn.commit()
-
-            # Always log at INFO level so failures are visible in daemon logs
-            total_actioned = stats["embedded"] + recovery_count
-            if total_actioned > 0 or embed_failures > 0:
-                logger.info(
-                    "context_health: memory embeddings — "
-                    "embedded=%d, recovered=%d, skipped=%d, removed=%d, failed=%d",
-                    stats["embedded"], recovery_count,
-                    stats["skipped"], stats["removed"], embed_failures,
-                )
-            elif stats["skipped"] > 0:
-                logger.debug(
-                    "context_health: memory embeddings — all %d entries up-to-date",
-                    stats["skipped"],
-                )
-        except Exception as exc:
-            # Log at WARNING (not debug!) — silent failures here caused memory_vec
-            # to stay empty for weeks. This is P0 infrastructure.
-            logger.warning("context_health: memory embedding sync FAILED: %s", exc)
+    # _sync_memory_embeddings REMOVED (pure-filesystem READ-line finalize,
+    # run_2f621986, design 2026-06-28 §3). It was the memory_vec WRITER and had
+    # ZERO production callers (the call site was already removed when the read
+    # side went keyword-only; only the dead method body remained). Memory recall
+    # is keyword/FTS5 only — no embedding writer needed. The _RECOVERY_DRAIN_BUDGET
+    # constant and the MemoryEmbeddingStore/EmbeddingClient imports it used are
+    # gone with it.
 
     def _sync_knowledge_library(self, root: Path, deadline: float | None = None) -> None:
         """Incremental sync of Knowledge/ files into FTS5 + sqlite-vec.
