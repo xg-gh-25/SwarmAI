@@ -316,3 +316,80 @@ class TestUsageRefBridge:
         )
         m = build_usage_ref_map(memory, {"DEC01": 20}, threshold=10)
         assert ("Decisions", "A or B decision") in m
+
+
+class TestUsageDecay:
+    """Write-time exponential decay that kills the cumulative ratchet (run_81f6d20c).
+
+    The producer (.memory-usage.json) counts every [ID] citation cumulatively and
+    never decremented → a once-hot-now-cold entry stayed protected forever.
+    decay_usage_counts applies 0.5**(days/halflife) at write time so cold entries
+    fade below the protection threshold (10) and eventually below epsilon (dropped).
+    """
+
+    def test_halflife_halves_count(self):
+        """After exactly one half-life, a count is halved."""
+        from core.memory_decay import decay_usage_counts, USAGE_HALFLIFE_DAYS
+
+        out = decay_usage_counts({"PIT07": 40.0}, int(USAGE_HALFLIFE_DAYS))
+        assert out["PIT07"] == pytest.approx(20.0, rel=0.01)
+
+    def test_zero_or_negative_elapsed_is_identity(self):
+        """days_elapsed <= 0 → unchanged (same-day re-run must not double-decay)."""
+        from core.memory_decay import decay_usage_counts
+
+        src = {"PIT07": 40.0, "GUI99": 12.0}
+        assert decay_usage_counts(src, 0) == src
+        assert decay_usage_counts(src, -5) == src
+
+    def test_epsilon_drops_faded_keys(self):
+        """A key decayed below epsilon is removed entirely (file hygiene + window-out)."""
+        from core.memory_decay import decay_usage_counts, USAGE_HALFLIFE_DAYS
+
+        # 1.0 count, 5 half-lives → 0.03125 < 0.5 epsilon → dropped
+        out = decay_usage_counts({"DEC01": 1.0}, int(USAGE_HALFLIFE_DAYS) * 5, epsilon=0.5)
+        assert "DEC01" not in out
+
+    def test_ratchet_broken_cold_entry_loses_protection(self):
+        """THE GOAL: a once-hot entry uncited long enough drops below threshold=10.
+
+        30 citations, decayed enough half-lives, falls under USAGE_REF_THRESHOLD →
+        build_usage_ref_map no longer protects it.
+        """
+        from core.memory_decay import (
+            decay_usage_counts,
+            build_usage_ref_map,
+            USAGE_HALFLIFE_DAYS,
+            USAGE_REF_THRESHOLD,
+        )
+
+        # 30 → after 2 half-lives = 7.5 < 10 threshold
+        decayed = decay_usage_counts({"PIT07": 30.0}, int(USAGE_HALFLIFE_DAYS) * 2)
+        assert decayed["PIT07"] < USAGE_REF_THRESHOLD
+
+        memory = (
+            "<!-- MEMORY_INDEX_START -->\n- [PIT07] Cold entry | x\n<!-- MEMORY_INDEX_END -->\n"
+            "## Pitfalls\n- [pitfall] **Cold entry** — body (2026-06-01)\n"
+        )
+        # below threshold → not protected (ratchet broken)
+        assert build_usage_ref_map(memory, decayed) == {}
+
+    def test_in_window_entry_stays_protected(self):
+        """COMPANION: an entry cited recently (small elapsed) keeps its count above threshold."""
+        from core.memory_decay import decay_usage_counts, USAGE_REF_THRESHOLD
+
+        # 30 citations, only 3 days elapsed → barely decays, stays well above 10
+        out = decay_usage_counts({"PIT07": 30.0}, 3)
+        assert out["PIT07"] >= USAGE_REF_THRESHOLD
+
+    def test_readers_float_safe_after_decay(self):
+        """build_usage_ref_map handles float values produced by decay (round(log2)) without error."""
+        from core.memory_decay import build_usage_ref_map
+
+        memory = (
+            "<!-- MEMORY_INDEX_START -->\n- [MOD00] Hot | x\n<!-- MEMORY_INDEX_END -->\n"
+            "## Models\n- [model] **Hot** — body (2026-06-01)\n"
+        )
+        # float usage (post-decay) must not crash and must still damp
+        m = build_usage_ref_map(memory, {"MOD00": 51.7})
+        assert m[("Models", "Hot")] == round(math.log2(52.7))

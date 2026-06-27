@@ -1427,14 +1427,48 @@ class ContextHealthHook:
         """
         _KEY_RE = re.compile(r"\[([A-Z]{2,3}\d{2,3})\]")
 
-        # Load existing usage (cumulative — don't reset each session)
+        # Load existing usage. Values may be int (legacy) or float (post-decay) —
+        # the decay below turns them to float; all readers are float-safe.
         usage_path = root / ".context" / ".memory-usage.json"
-        usage: dict[str, int] = {}
+        usage: dict[str, float] = {}
         if usage_path.exists():
             try:
                 usage = json.loads(usage_path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 pass
+
+        # ── Write-time decay (run_81f6d20c) — break the cumulative ratchet ──
+        # The counts above were ADD-only and never decremented, so a once-hot
+        # entry stayed reclaim-protected forever and the file grew unbounded.
+        # Apply exponential decay ONCE per calendar day, gated by a sidecar
+        # last_decay date (the producer runs on every session close). A legacy
+        # file with NO sidecar is treated as last_decay=today → NO decay on the
+        # first upgrade, so currently-used entries lose no protection. A corrupt
+        # sidecar fails safe (no decay).
+        #
+        # Decay happens here (before the increment, so we fade OLD counts then add
+        # fresh citations), but the sidecar last_decay is written AFTER the counts
+        # file at the end of this method (see `_meta_to_write`). Write-ORDER matters
+        # (Gate-1 flaw 3): counts-then-meta means a crash between writes re-decays
+        # next run (over-decay, self-correcting) instead of marking decay done while
+        # the on-disk counts are still undecayed (silent skip forever).
+        meta_path = root / ".context" / ".memory-usage-meta.json"
+        _meta_to_write: str | None = None
+        if usage:
+            from core.memory_decay import decay_usage_counts
+            today = date.today()
+            last_decay = today
+            if meta_path.exists():
+                try:
+                    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                    last_decay = date.fromisoformat(meta["last_decay"])
+                except (json.JSONDecodeError, OSError, KeyError, ValueError):
+                    last_decay = today  # corrupt sidecar → fail safe, no decay
+            days_elapsed = (today - last_decay).days
+            if days_elapsed > 0:
+                usage = decay_usage_counts(usage, days_elapsed)
+            if days_elapsed > 0 or not meta_path.exists():
+                _meta_to_write = today.isoformat()
 
         # Source 1: Recent session transcripts (last 7 days)
         transcripts_dir = Path.home() / ".claude" / "projects"
@@ -1501,6 +1535,18 @@ class ContextHealthHook:
 
         usage_path.parent.mkdir(parents=True, exist_ok=True)
         usage_path.write_text(json.dumps(usage, indent=2, sort_keys=True), encoding="utf-8")
+
+        # Write the decay sidecar AFTER the counts (Gate-1 flaw 3 write-order):
+        # if a crash lands between these two writes, next run sees an UNADVANCED
+        # last_decay and re-decays (self-correcting) — never marks decay done over
+        # undecayed counts.
+        if _meta_to_write is not None:
+            try:
+                meta_path.write_text(
+                    json.dumps({"last_decay": _meta_to_write}), encoding="utf-8"
+                )
+            except OSError:
+                pass
 
     def _run_memory_lifecycle(self, root: Path) -> None:
         """Run DDD lifecycle engine on MEMORY.md: ref bump + decay.

@@ -323,6 +323,52 @@ def bump_entry_references(
 _INDEX_ID_TITLE_RE = re.compile(r"^- \[([A-Z]{2,3}\d{2,3})\]\s+(.+)$", re.MULTILINE)
 USAGE_REF_THRESHOLD = 10  # min cumulative usage to earn reclaim-protection
 
+# ── Write-time decay of the usage signal (run_81f6d20c) ──────────────────────
+# .memory-usage.json counted every [ID] citation cumulatively and NEVER
+# decremented — a one-way ratchet, so a once-hot-now-cold entry stayed
+# reclaim-protected (usage>=USAGE_REF_THRESHOLD) forever and the file grew
+# unbounded. decay_usage_counts is the fix: the producer applies it ONCE per
+# calendar day (gated by a sidecar last_decay date) so counts exponentially
+# fade. A cold entry sinks below USAGE_REF_THRESHOLD (loses protection — the
+# actual ratchet break) and eventually below USAGE_EPSILON (dropped — file
+# hygiene + true window-out). half-life > the producer's 7d scan window
+# (context_health_hook.py:1417) so an entry re-cited within a few weeks stays
+# protected; the producer counts EVERY citation occurrence per transcript, so
+# active entries get multi-point bursts that clear the threshold easily.
+# Pure function (no I/O) — the producer owns sidecar read/write + write order.
+USAGE_HALFLIFE_DAYS = 30.0  # count halves every 30 idle days
+USAGE_EPSILON = 0.5         # below this a faded key is dropped from the file
+
+
+def decay_usage_counts(
+    usage: "dict[str, float]",
+    days_elapsed: int,
+    halflife_days: float = USAGE_HALFLIFE_DAYS,
+    epsilon: float = USAGE_EPSILON,
+) -> "dict[str, float]":
+    """Exponentially decay every usage count by elapsed idle days; drop faded keys.
+
+    factor = 0.5 ** (days_elapsed / halflife_days). Each value is multiplied by
+    factor; keys whose decayed value falls below ``epsilon`` are removed entirely
+    (the window-out that breaks the cumulative ratchet and bounds file growth).
+
+    ``days_elapsed <= 0`` returns a shallow copy unchanged — idempotent for
+    same-day re-runs (the producer runs on every session close, but the sidecar
+    last_decay gate means decay is requested at most once per calendar day; this
+    guard is the second line of defence against double-decay).
+
+    Pure: no I/O, no mutation of the input dict.
+    """
+    if days_elapsed <= 0:
+        return dict(usage)
+    factor = 0.5 ** (days_elapsed / halflife_days)
+    decayed: dict[str, float] = {}
+    for key, value in usage.items():
+        new_value = value * factor
+        if new_value >= epsilon:
+            decayed[key] = new_value
+    return decayed
+
 
 def build_usage_ref_map(
     memory_content: str,

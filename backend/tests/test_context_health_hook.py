@@ -887,3 +887,93 @@ class TestUsageRefBridge:
         entries = {e.title: e.ref_count for e in parse_entries(content)}
         assert entries.get("Gate caught a real bug", 0) > 0, f"used entry not bridged:\n{content}"
         assert entries.get("Rarely used note", 0) == 0, "below-threshold entry wrongly protected"
+
+
+class TestUsageDecayGate:
+    """run_81f6d20c: _track_memory_usage applies write-time decay ONCE per calendar
+    day, gated by a sidecar .memory-usage-meta.json last_decay date. Legacy flat-int
+    files (no sidecar) get NO decay on first upgrade → currently-used entries keep
+    full count (no mass unprotect). The cumulative ratchet is broken without
+    re-scanning transcripts (scanned-marker preserved)."""
+
+    def _empty_transcripts(self, monkeypatch, tmp_path):
+        """Point the transcript scan at an empty dir so counts only come from the file."""
+        empty = tmp_path / "no_transcripts"
+        empty.mkdir()
+        monkeypatch.setattr(
+            "hooks.context_health_hook.Path.home", staticmethod(lambda: tmp_path)
+        )
+        # Path.home()/.claude/projects must be absent/empty → no increments
+        return empty
+
+    def test_legacy_file_no_sidecar_no_decay_first_run(self, hook, tmp_path, monkeypatch):
+        import json as _json
+        ws = tmp_path / "SwarmWS"
+        ctx = ws / ".context"
+        ctx.mkdir(parents=True)
+        (ctx / ".memory-usage.json").write_text(_json.dumps({"PIT07": 40, "COE02": 100}))
+        self._empty_transcripts(monkeypatch, tmp_path)
+
+        hook._track_memory_usage(ws)
+
+        usage = _json.loads((ctx / ".memory-usage.json").read_text())
+        # No sidecar existed → first run treats last_decay=today → NO decay applied.
+        assert usage["PIT07"] == 40
+        assert usage["COE02"] == 100
+        # Sidecar is now created with today's date.
+        meta = _json.loads((ctx / ".memory-usage-meta.json").read_text())
+        assert "last_decay" in meta
+
+    def test_stale_sidecar_triggers_decay_once(self, hook, tmp_path, monkeypatch):
+        import json as _json
+        from datetime import date, timedelta
+        ws = tmp_path / "SwarmWS"
+        ctx = ws / ".context"
+        ctx.mkdir(parents=True)
+        (ctx / ".memory-usage.json").write_text(_json.dumps({"PIT07": 40.0}))
+        # Sidecar says last decayed exactly one half-life ago → expect halving.
+        from core.memory_decay import USAGE_HALFLIFE_DAYS
+        old = (date.today() - timedelta(days=int(USAGE_HALFLIFE_DAYS))).isoformat()
+        (ctx / ".memory-usage-meta.json").write_text(_json.dumps({"last_decay": old}))
+        self._empty_transcripts(monkeypatch, tmp_path)
+
+        hook._track_memory_usage(ws)
+
+        usage = _json.loads((ctx / ".memory-usage.json").read_text())
+        assert usage["PIT07"] == pytest.approx(20.0, rel=0.05)
+        # last_decay advanced to today → a second same-day run won't re-decay.
+        meta = _json.loads((ctx / ".memory-usage-meta.json").read_text())
+        assert meta["last_decay"] == date.today().isoformat()
+
+    def test_same_day_rerun_idempotent(self, hook, tmp_path, monkeypatch):
+        import json as _json
+        from datetime import date
+        ws = tmp_path / "SwarmWS"
+        ctx = ws / ".context"
+        ctx.mkdir(parents=True)
+        (ctx / ".memory-usage.json").write_text(_json.dumps({"PIT07": 40.0}))
+        (ctx / ".memory-usage-meta.json").write_text(
+            _json.dumps({"last_decay": date.today().isoformat()})
+        )
+        self._empty_transcripts(monkeypatch, tmp_path)
+
+        hook._track_memory_usage(ws)
+
+        usage = _json.loads((ctx / ".memory-usage.json").read_text())
+        # last_decay == today → no decay this run.
+        assert usage["PIT07"] == 40.0
+
+    def test_corrupt_sidecar_fails_safe_no_decay(self, hook, tmp_path, monkeypatch):
+        import json as _json
+        ws = tmp_path / "SwarmWS"
+        ctx = ws / ".context"
+        ctx.mkdir(parents=True)
+        (ctx / ".memory-usage.json").write_text(_json.dumps({"PIT07": 40.0}))
+        (ctx / ".memory-usage-meta.json").write_text("{not valid json")
+        self._empty_transcripts(monkeypatch, tmp_path)
+
+        hook._track_memory_usage(ws)  # must not raise
+
+        usage = _json.loads((ctx / ".memory-usage.json").read_text())
+        # Corrupt sidecar → fail safe → no decay, counts intact.
+        assert usage["PIT07"] == 40.0
