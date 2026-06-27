@@ -1735,40 +1735,7 @@ export function useChatStreamingLifecycle(
         chatService.getSessionMessages(reconcileSid).then((msgs) => {
           const s = messageStoreRegistry.get(reconcileTabId);
           if (!s) return;
-          {
-            // RECONCILE-GAP PROBE (run_2468422e): what the DB fetch returned + pre-reconcile state.
-            const dbLastAsst = [...msgs].reverse().find(m => m.role === 'assistant');
-            const dbAsstBlocks = Array.isArray(dbLastAsst?.content) ? dbLastAsst.content.length : 'n/a';
-            const dbAsstChars = Array.isArray(dbLastAsst?.content)
-              ? dbLastAsst.content.reduce((n: number, b: unknown) => n + (b && typeof b === 'object' && 'text' in b ? (b as { text: string }).text.length : 0), 0)
-              : 'n/a';
-            console.warn('[reconcile-gap] RECONCILE-FIRE', {
-              sid: reconcileSid, tabId: reconcileTabId,
-              storePhase: s.phase,
-              dbRowCount: msgs.length,
-              dbLastAsstBlocks: dbAsstBlocks,
-              dbLastAsstChars: dbAsstChars,
-            });
-          }
           s.reconcile(msgs);
-          {
-            // Post-reconcile snapshot — did the store end up with full content?
-            const snap = s.getSnapshot();
-            const snapLastAsst = [...snap].reverse().find(m => m.role === 'assistant');
-            console.warn('[reconcile-gap] POST-RECONCILE', {
-              sid: reconcileSid, tabId: reconcileTabId,
-              storePhase: s.phase,
-              snapLastAsstBlocks: snapLastAsst?.content?.length,
-              snapLastAsstChars: snapLastAsst?.content?.reduce((n, b) => n + ('text' in b ? (b as { text: string }).text.length : 0), 0),
-              willSyncReact: s.phase === 'idle' && reconcileTabId === activeTabIdRef.current,
-              // Disambiguator: is the tab GENUINELY backgrounded (activeTabId is a
-              // different real tab → switch-reload is the legit path) or is
-              // activeTabIdRef STALE while the user is looking at this tab
-              // (→ real bug: a completed answer not rendered where you ARE)?
-              activeTabId: activeTabIdRef.current,
-              tabMatchesActive: reconcileTabId === activeTabIdRef.current,
-            });
-          }
           // Only sync React/cache if reconcile actually executed (phase=idle).
           // If a new stream restarted in the 200ms window, reconcile() queued a
           // thunk (NO-OP now) and the snapshot is mid-stream — pushing it would
@@ -2657,18 +2624,6 @@ export function useChatStreamingLifecycle(
           // and flushes any pending reconcile thunk.
           const resultStore = capturedTabId ? messageStoreRegistry.get(capturedTabId) : null;
           if (resultStore) {
-            // RECONCILE-GAP PROBE (run_2468422e): streamed buffer state at result time.
-            // TEMP: ungated so it survives the prod .app build — remove with the whole probe commit.
-            const lastAsst = [...resultStore.messages].reverse().find(m => m.role === 'assistant');
-            console.warn('[reconcile-gap] RESULT', {
-              sid, tabId: capturedTabId,
-              lastAsstId: lastAsst?.id,
-              lastAsstBlocks: lastAsst?.content?.length,
-              lastAsstChars: lastAsst?.content?.reduce((n, b) => n + ('text' in b ? (b as { text: string }).text.length : 0), 0),
-              phase: resultStore.phase,
-            });
-          }
-          if (resultStore) {
             resultStore.endStreaming();
           }
 
@@ -2693,17 +2648,6 @@ export function useChatStreamingLifecycle(
             // Only sync to React if THIS tab is currently displayed
             if (isActiveTab || capturedTabId === activeTabIdRef.current) {
               if (sid) setSessionId(sid);
-              {
-                // RECONCILE-GAP PROBE (run_2468422e): what we sync to React at result time
-                // (BEFORE the 200ms turn-end reconcile fires).
-                const syncSnap = resultStore.getSnapshot();
-                const syncLast = [...syncSnap].reverse().find(m => m.role === 'assistant');
-                console.warn('[reconcile-gap] RESULT-SYNC-REACT', {
-                  sid, tabId: capturedTabId,
-                  syncLastBlocks: syncLast?.content?.length,
-                  syncLastChars: syncLast?.content?.reduce((n, b) => n + ('text' in b ? (b as { text: string }).text.length : 0), 0),
-                });
-              }
               setMessages(resultStore.getSnapshot());
             }
           } else if (isActiveTab) {

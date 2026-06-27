@@ -202,35 +202,16 @@ function TabViewImpl({
   const propChars = asstChars(pa);
 
   let messages: Message[];
-  let chosen: 'store' | 'prop-startup' | 'prop-content';
   if (isStreaming) {
     messages = storeMsgs;
-    chosen = 'store';
   } else if (!sa && pa) {
     // (a) startup gap — store has no assistant yet, render the restored prop.
     messages = messagesProp;
-    chosen = 'prop-startup';
   } else if (sa && pa && sa.id === pa.id && propChars > storeChars && isPlainAnswer(sa)) {
     // (b) same-message truncation — swap in the prop's fuller content only.
     messages = storeMsgs.map((m) => (m.id === sa.id ? { ...m, content: pa.content } : m));
-    chosen = 'prop-content';
   } else {
     messages = storeMsgs;
-    chosen = 'store';
-  }
-
-  // RECONCILE-GAP PROBE: log the chosen source + rendered length. Retained
-  // through rollout, then removed.
-  if (isActive && storeChars !== propChars && storeChars >= 0 && propChars >= 0) {
-    console.warn('[reconcile-gap] RENDER-DIVERGE', {
-      tabId,
-      isActive,
-      isStreaming,
-      storeChars,
-      propChars,
-      chosen,
-      renderedChars: chosen === 'store' ? storeChars : propChars,
-    });
   }
 
   // ── Per-tab scroll (Migration Step 5.1) ────────────────────────────
