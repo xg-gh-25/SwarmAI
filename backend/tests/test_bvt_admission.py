@@ -58,6 +58,17 @@ def test_draft_excluded():
     assert bvt["total"] == 0
 
 
+def test_archived_excluded():
+    """delete-semantics consistency: a soft-deleted (tier='archived') case must
+    NOT count in the BVT — every other golden-set reader (eval_service get_golden_set
+    :386, active_cases :560) already excludes archived; compute_bvt was the one gate
+    path that didn't, so a soft-deleted gate-eligible+stamped case leaked into the
+    gate (run_5edf2cc0 follow-up; empirically counted=True before this fix)."""
+    c = _stamped(id="GS_ARCH", tier="archived")
+    bvt = compute_bvt([c], [_result("GS_ARCH")])
+    assert bvt["total"] == 0
+
+
 def test_unstamped_excluded():
     """G1/G8: a case with NO stamp is not in the BVT (unsanctioned/un-validated)."""
     c = _stamped(id="GS_NOSTAMP")
