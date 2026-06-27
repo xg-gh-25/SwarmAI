@@ -2143,6 +2143,27 @@ export function useChatStreamingLifecycle(
       }
 
       return (event: StreamEvent) => {
+        // ╔══════════════════════════════════════════════════════════════╗
+        // ║ CRITICAL — watchdog liveness reset. Keep this FIRST.           ║
+        // ╚══════════════════════════════════════════════════════════════╝
+        // ANY inbound SSE event = the connection is alive. Reset this tab's
+        // 90s force-end watchdog up front — BEFORE any type-check, the
+        // recovery_exhausted/still_working early-returns, AND the generation
+        // guard. The backend emits a heartbeat every 15s (and thinking_progress
+        // during a think), so a long-but-LIVE operation (heavy cold --resume
+        // that replays the transcript for minutes before the first token, a
+        // multi-minute silent tool) must NEVER be force-ended while bytes are
+        // still flowing. The watchdog then fires ONLY on true silence (no event
+        // at all for 90s = dead stream).
+        //
+        // Why up here and not type-gated: the old wiring touched the watchdog
+        // for heartbeat/thinking_progress AFTER the generation guard, so a
+        // heartbeat dropped by that guard left the watchdog un-reset → it
+        // force-ended a live resume mid-replay ("resume 看起来根本起不来"). touch()
+        // is a NO-OP unless the store is streaming, so idle/stale pings are
+        // harmless. Do NOT move this below the guards.
+        if (capturedTabId) messageStoreRegistry.get(capturedTabId)?.touch();
+
         // recovery_exhausted is a pure side-channel signal (toast only — no
         // store/streamState writes) and is yielded from the self-heal block
         // AFTER the turn's `result` event, which has already bumped streamGen.
@@ -2191,14 +2212,9 @@ export function useChatStreamingLifecycle(
         // Keyed + auto-dismiss so successive notices replace in place (no
         // stacking) and clear on their own once the turn produces or ends.
         if (event.type === 'still_working') {
-          // Liveness → keep this tab's MessageStore watchdog armed. still_working
-          // (every 60s) proves the backend is mid-turn on a long SILENT step;
-          // touch() resets the 90s force-end watchdog so it can't fire on a live
-          // turn. Done for capturedTabId's store regardless of active (the
-          // watchdog is per-tab; a background streaming tab needs it too), and
-          // BEFORE the early return below (this is why the prior heartbeat-only
-          // wiring was ineffective — still_working never reached it).
-          if (capturedTabId) messageStoreRegistry.get(capturedTabId)?.touch();
+          // The 90s force-end watchdog is already reset at the TOP of this
+          // handler for every event, so no touch() is needed here. This block
+          // just surfaces the long-turn "still working" notice in-tab.
           // isActiveTab is derived further down; this side-channel runs early,
           // so compare against the live active-tab ref directly.
           if (capturedTabId === activeTabIdRef.current && event.message) {
@@ -2316,20 +2332,11 @@ export function useChatStreamingLifecycle(
           lastRealEventRef.current = Date.now();
         }
 
-        // Liveness → keep this tab's MessageStore watchdog armed. heartbeat (15s,
-        // connection alive) AND thinking_progress (15s, model actively thinking —
-        // emitted in place of heartbeat during an extended-thinking phase) both
-        // carry NO content, so without resetting the watchdog a long thinking/
-        // silent step force-ends a live turn. This is exactly what tripped the one
-        // residual fire: a heavy cold-resume thinks for 90s+ before any output, so
-        // only thinking_progress arrived and the content-only watchdog fired.
-        // still_working (60s) is touched in its own early-return block above.
-        // touch() is a NO-OP unless the store is streaming, so stale/idle pings are
-        // harmless. The watchdog and the stall detector track different signals
-        // (connection-liveness vs SDK-progress) — heartbeat resets only the former.
-        if (capturedTabId && (event.type === 'heartbeat' || event.type === 'thinking_progress')) {
-          messageStoreRegistry.get(capturedTabId)?.touch();
-        }
+        // Liveness: the per-tab force-end watchdog is already reset at the TOP
+        // of this handler for EVERY event (heartbeat/thinking_progress included),
+        // so no type-gated touch() is needed here. The stall detector
+        // (lastRealEventRef, above) is a DIFFERENT signal — SDK progress — and
+        // deliberately excludes heartbeat; do not conflate the two.
 
         // Track tool execution state for context-aware stall thresholds.
         // tool_use → tool is running (may take minutes), tool_result → done.
