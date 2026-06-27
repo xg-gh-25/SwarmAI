@@ -1,32 +1,33 @@
-"""Regression tests for warm-resume-on-interrupt (reverts the PIT01 over-fix).
+"""Regression tests for subprocess-recycle-on-interrupt (PIT01 zombie fix).
 
 WHAT IS TESTED
 --------------
-``SessionUnit.interrupt()`` and how it leaves the Claude SDK subprocess after a
-user Stop, a compaction interrupt, and an autonomous (watchdog) interrupt.
+A user Stop calls ``SessionUnit.interrupt(autonomous=False)``. The PRE-FIX
+behavior left the Claude SDK subprocess alive + IDLE ("warm") so the next
+``send()`` reused it. But a soft interrupt leaves the CLI in a corrupt
+turn-state, so the reused subprocess returns an INSTANT empty
+``error_during_execution`` → the zombie detector kills + respawns. Every
+zombie in the daemon log is preceded by a user Stop on the same session.
 
-THE REGRESSION THESE TESTS GUARD AGAINST
-----------------------------------------
-Commit 3b030f41 (2026-06-26, "PIT01 zombie") made EVERY user Stop recycle the
-subprocess to COLD via ``_crash_to_cold_async``. The next ``send()`` then had to
-cold ``--resume`` the entire transcript. To dodge a RARE, already-handled zombie
-(~10s self-heal) it imposed an ALWAYS-PAID cold replay — catastrophic on heavy
-sessions (session 7f755afa, ~1.9M tokens, streamed 6.5 MINUTES with no output
-after a Stop, then the 90s FE watchdog force-ended it → "resume 根本起不来").
-
-THE FIX (warm by default; recycle only when the turn truly ends)
-----------------------------------------------------------------
-A user Stop keeps the subprocess WARM in IDLE → the next send continues in the
-SAME live process, instant, no ``--resume`` replay. The rare genuine poison is
-caught lazily + tightly by the orchestrator's zombie self-heal
-(streaming_orchestrator ``zombie_via_error``). Only callers that KNOW the turn
-ends and poisons the process (COMPACTION) pass ``recycle_after=True``.
+THE FIX (lazy recycle, user-Stop only)
+---------------------------------------
+``interrupt(autonomous=False)`` success now recycles the poisoned subprocess
+eagerly via the BLESSED kill path ``_crash_to_cold_async(clear_identity=False)``
+(real kill + FD cleanup, preserves ``_sdk_session_id`` for --resume). State
+ends at COLD with ``_client is None`` → the next ``send()`` (line 1615/1617)
+spawns fresh with --resume. No poisoned process is ever reused.
 
 KEY INVARIANTS
 --------------
-1. USER Stop (default ``interrupt()``)        → WARM: IDLE, _client alive, id kept.
-2. COMPACTION (``interrupt(recycle_after=True)``) → COLD, _client None, id kept.
-3. WATCHDOG (``interrupt(autonomous=True)``)   → WARM: IDLE, _client alive.
+1. USER Stop (autonomous=False) → state COLD, _client None, resume id preserved.
+2. AUTONOMOUS interrupt (autonomous=True: the tool-hang watchdog ONLY) keeps the
+   subprocess WARM (IDLE) — the watchdog interrupts but does NOT return, letting
+   the model reroute mid-stream. (Compaction calls interrupt() WITHOUT autonomous
+   → it recycles, which is correct: compaction returns immediately = turn ends =
+   the subprocess is poisoned and must not be reused. Only the still-streaming
+   watchdog stays warm.)
+3. The recycle uses the existing _crash_to_cold_async path (no new kill path);
+   _sdk_session_id survives so context is restored on the next send via --resume.
 """
 
 import pytest
@@ -50,56 +51,56 @@ def _streaming_unit(session_id: str) -> SessionUnit:
 
 
 @pytest.mark.asyncio
-async def test_user_stop_keeps_subprocess_warm():
-    """User Stop (default interrupt()) keeps the subprocess WARM in IDLE.
+async def test_user_stop_recycles_subprocess_to_cold():
+    """User Stop (autonomous=False) recycles the poisoned subprocess → COLD.
 
-    This is the core warm-resume mechanism. COLD-recycle here was the 3b030f41
-    regression (forced a multi-minute cold --resume on every Stop). The next
-    send() must be able to continue in the SAME live process — instant.
+    PRE-FIX: state stayed IDLE, _client warm (poisoned, reused next send).
+    POST-FIX: state COLD, _client None — next send respawns clean via --resume.
     """
-    unit = _streaming_unit("test-user-stop-warm")
+    unit = _streaming_unit("test-user-stop-recycle")
     unit._sdk_session_id = "resume-abc123"  # context identity must survive
 
     result = await unit.interrupt(timeout=5.0, autonomous=False)
 
     # Interrupt "succeeded" — the turn was stopped.
     assert result is True
-    # The subprocess is kept WARM (IDLE), NOT recycled to COLD.
-    assert unit.state == SessionState.IDLE, (
-        "user Stop must keep the subprocess WARM (IDLE) for instant resume — "
-        "recycling to COLD was the 3b030f41 regression (heavy-session resume "
-        "took minutes via cold --resume)"
+    # The poisoned subprocess is recycled, NOT left warm for reuse.
+    assert unit.state == SessionState.COLD, (
+        "user Stop must recycle the poisoned subprocess to COLD, not leave it "
+        "warm (IDLE) for the next send() to reuse into a zombie"
     )
-    assert unit._client is not None, (
-        "user Stop must NOT clear the client — the warm process is reused on "
-        "the next send (zombie self-heal catches the rare real poison lazily)"
+    assert unit._client is None, "recycled subprocess client must be cleared"
+    # Resume identity preserved → next send() restores context via --resume.
+    assert unit._sdk_session_id == "resume-abc123", (
+        "recycle must preserve _sdk_session_id (clear_identity=False) so the "
+        "next send resumes the conversation"
     )
-    assert unit._sdk_session_id == "resume-abc123", "resume identity preserved"
 
 
 @pytest.mark.asyncio
-async def test_compaction_recycle_after_goes_cold():
-    """interrupt(recycle_after=True) (compaction's signature) recycles → COLD.
+async def test_default_interrupt_recycles_like_compaction():
+    """interrupt() with DEFAULT args (how compaction calls it) recycles → COLD.
 
-    Compaction ENDS the turn and returns immediately, and genuinely poisons the
-    subprocess, so it opts into the recycle. This is the ONLY non-autonomous
-    recycle source — user Stop must NOT do this (see the warm test above).
+    Adversarial Gate-2 caught that the compaction escalation
+    (streaming_orchestrator.py ~754) calls `interrupt()` with NO autonomous arg.
+    This test pins the REAL call signature the compaction path uses (not the
+    autonomous=True a watchdog uses), proving compaction's poisoned subprocess
+    is recycled, not reused into a zombie.
     """
-    unit = _streaming_unit("test-compaction-recycle")
+    unit = _streaming_unit("test-compaction-default")
     unit._sdk_session_id = "resume-compaction"
 
-    result = await unit.interrupt(recycle_after=True)
+    # Exactly how compaction calls it: positional/default, no autonomous kwarg.
+    result = await unit.interrupt()
 
     assert result is True
     assert unit.state == SessionState.COLD, (
-        "recycle_after=True (compaction) must recycle the poisoned subprocess "
-        "to COLD — the turn ended and the process must not be reused"
+        "default interrupt() (compaction's call signature) must recycle the "
+        "poisoned subprocess — compaction returns after interrupt, ending the "
+        "turn, so the process must not be reused"
     )
-    assert unit._client is None, "recycled subprocess client must be cleared"
-    assert unit._sdk_session_id == "resume-compaction", (
-        "recycle must preserve _sdk_session_id (clear_identity=False) so the "
-        "next send resumes via --resume"
-    )
+    assert unit._client is None
+    assert unit._sdk_session_id == "resume-compaction"
 
 
 @pytest.mark.asyncio
@@ -107,8 +108,11 @@ async def test_autonomous_interrupt_keeps_subprocess_warm():
     """Autonomous interrupt (tool-hang watchdog ONLY) keeps the subprocess WARM.
 
     The watchdog interrupts a wedged tool but does NOT return — it lets the
-    model reroute mid-stream, so the process must stay warm. recycle_after is
-    irrelevant here (autonomous always stays warm).
+    model reroute mid-stream, so the process must stay warm. Recycling here
+    would collapse the warm base rung into the escalated kill rung.
+
+    (Compaction is NOT autonomous — it returns after interrupting, ending the
+    turn, so its poisoned subprocess IS recycled. See module docstring.)
     """
     unit = _streaming_unit("test-autonomous-warm")
 
@@ -117,22 +121,6 @@ async def test_autonomous_interrupt_keeps_subprocess_warm():
     assert result is True
     assert unit.state == SessionState.IDLE, (
         "autonomous interrupt must keep the subprocess warm (IDLE) — the "
-        "watchdog ladder relies on warm reroute, not kill"
+        "watchdog/compaction ladder relies on warm reroute, not kill"
     )
     assert unit._client is not None, "autonomous interrupt must not clear client"
-
-
-@pytest.mark.asyncio
-async def test_autonomous_overrides_recycle_after():
-    """autonomous=True keeps warm even if recycle_after=True is passed.
-
-    Guards the gate order: `recycle_after and not autonomous`. The watchdog's
-    warm-reroute invariant wins over a stray recycle request.
-    """
-    unit = _streaming_unit("test-autonomous-no-recycle")
-
-    result = await unit.interrupt(autonomous=True, recycle_after=True)
-
-    assert result is True
-    assert unit.state == SessionState.IDLE
-    assert unit._client is not None

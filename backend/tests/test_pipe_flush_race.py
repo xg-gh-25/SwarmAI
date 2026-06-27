@@ -121,12 +121,19 @@ class TestFlushGenerationGuardInterruptPath:
 
     @pytest.mark.asyncio
     async def test_flush_proceeds_when_generation_stable(self, unit):
-        """Normal case: generation doesn't change, flush completes normally."""
+        """Normal case: clean interrupt → recycle the poisoned subprocess to COLD.
+
+        A clean interrupt return means the turn stopped with the subprocess in a
+        corrupt turn-state, so flush recycles it via _crash_to_cold_async (PIT01),
+        preserving _sdk_session_id for --resume on the next send.
+        """
+        client = unit._client  # capture before recycle nulls the ref
         await unit.flush_subprocess_pipe(timeout=3.0)
 
-        # interrupt was called
-        unit._client.interrupt.assert_called_once()
-        assert unit.state == SessionState.IDLE
+        # interrupt was called, then the poisoned subprocess is recycled to COLD
+        client.interrupt.assert_called_once()
+        assert unit.state == SessionState.COLD
+        assert unit._client is None
 
 
 class TestFlushGenerationGuardTimeoutPath:
@@ -242,13 +249,18 @@ class TestSchedulePipeFlush:
     @pytest.mark.asyncio
     async def test_schedule_without_coro_uses_flush_directly(self, unit):
         """Without cleanup_coro, should call flush_subprocess_pipe directly."""
+        client = unit._client  # capture before recycle nulls the ref
         loop = asyncio.get_running_loop()
         unit.schedule_pipe_flush(loop)
 
         assert unit._pipe_flush_task is not None
 
-        # Wait for completion
-        await unit._pipe_flush_task
+        # Wait for completion. The clean-interrupt recycle (_crash_to_cold_async)
+        # tears the subprocess down, which may cancel this flush task — expected.
+        try:
+            await unit._pipe_flush_task
+        except asyncio.CancelledError:
+            pass
 
-        # interrupt was called (from flush_subprocess_pipe)
-        unit._client.interrupt.assert_called_once()
+        # interrupt was called (from flush_subprocess_pipe) before the recycle
+        client.interrupt.assert_called_once()
