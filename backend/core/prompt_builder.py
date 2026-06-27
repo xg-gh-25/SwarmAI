@@ -836,6 +836,14 @@ class PromptBuilder:
                 # suggestion). We surface the overshoot so it is VISIBLE instead of
                 # silently eating the context-file budget. The 1M model absorbs it;
                 # the warning is the signal to revisit what ephemeral content costs.
+                #
+                # NOTE (conservative threshold): EPHEMERAL_HEADROOM also reserves
+                # RESUME_CONTEXT_HEADROOM (5K), but resume context is appended LATER
+                # (into system_prompt, not context_text) and is NOT in _ephemeral_tok
+                # here. So the threshold is intentionally LOOSER than what's measured
+                # — this UNDER-warns (fires only on real briefing/digest blowups),
+                # never false-alarms. That bias is deliberate: a spurious warning
+                # every session would be worse than missing a marginal overshoot.
                 if _ephemeral_tok > EPHEMERAL_HEADROOM:
                     logger.warning(
                         "ephemeral context (%d tok) exceeds reserved headroom "
